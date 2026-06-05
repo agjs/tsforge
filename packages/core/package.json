@@ -1,0 +1,13 @@
+{
+  "name": "@tsforge/core",
+  "type": "module",
+  "private": true,
+  "version": "0.0.0",
+  "description": "tsforge core — the walking skeleton of the spec-driven implement loop.",
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "cli-highlight": "2.1.11"
+  }
+}

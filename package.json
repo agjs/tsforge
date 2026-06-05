@@ -1,0 +1,36 @@
+{
+  "name": "tsforge",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "A specialized local AI coding harness for TypeScript web development, built around Qwen3.6-27B. Built greenfield to be understood inside out.",
+  "scripts": {
+    "typecheck": "tsc -p packages/core/tsconfig.json",
+    "lint": "eslint packages",
+    "lint:fix": "eslint packages --fix",
+    "format": "prettier --write \"packages/**/*.ts\"",
+    "format:check": "prettier --check \"packages/**/*.ts\"",
+    "test": "bun test packages",
+    "validate": "bun run typecheck && bun run lint && bun run format:check && bun run test"
+  },
+  "workspaces": ["apps/*", "packages/*"],
+  "packageManager": "bun@1.3.14",
+  "engines": {
+    "node": ">=24.0.0",
+    "bun": "1.3.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "bun-types": "1.3.14",
+    "eslint": "10.4.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-prettier": "5.5.5",
+    "globals": "17.6.0",
+    "prettier": "3.8.3",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.60.0"
+  },
+  "overrides": {
+    "@typescript-eslint/utils": "8.60.0"
+  }
+}

@@ -1,0 +1,52 @@
+export type Role = "system" | "user" | "assistant" | "tool";
+
+export interface IChatMessage {
+  role: Role;
+  content: string;
+  /** Assistant only: the tool calls it emitted (kept in history so the model
+   *  sees what it asked for and the results that came back). */
+  toolCalls?: IToolCall[];
+  /** Tool messages only: the id of the call this message is the result of. */
+  toolCallId?: string;
+}
+
+/** A parsed tool call from the model (name + decoded JSON arguments). */
+export interface IToolCall {
+  /** Correlation id so a tool-result message can reference it. */
+  id?: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface IModelResponse {
+  content: string;
+  toolCalls: IToolCall[];
+}
+
+export interface ICompleteOptions {
+  temperature?: number;
+  /** OpenAI-style tool schemas to advertise (opaque JSON). */
+  tools?: unknown[];
+  /**
+   * How hard to push the model to call a tool. `required` forces a tool call —
+   * which suppresses chat-style "here is my answer" prose the harness discards
+   * anyway. Defaults to `auto`. Ignored when no tools are advertised.
+   */
+  toolChoice?: "auto" | "required" | "none";
+  /** Per-request thinking toggle (Qwen `chat_template_kwargs.enable_thinking`).
+   *  Omitted = server default. Off for mechanical work, on for hard reasoning. */
+  enableThinking?: boolean;
+  /** Cap reasoning tokens before the model must answer (vLLM
+   *  `thinking_token_budget`). Omitted = unbounded. The lever for turn *time*. */
+  thinkingTokenBudget?: number;
+  /** When set, the request streams and each token (reasoning + content) is delivered here as it arrives. */
+  onToken?: (text: string) => void;
+}
+
+/** The model seam. Implementations talk to a local server (vLLM/Ollama/...). */
+export interface IProvider {
+  complete(
+    messages: IChatMessage[],
+    opts?: ICompleteOptions
+  ): Promise<IModelResponse>;
+}

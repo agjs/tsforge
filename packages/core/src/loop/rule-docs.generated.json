@@ -1,0 +1,112 @@
+{
+  "@typescript-eslint/no-explicit-any": {
+    "what": "Disallow the `any` type.",
+    "bad": "const age: any = 'seventeen';",
+    "good": "const age: number = 17;"
+  },
+  "@typescript-eslint/no-unsafe-argument": {
+    "what": "Disallow calling a function with a value with type `any`.",
+    "bad": "declare function foo(arg1: string, arg2: number, arg3: string): void;\n\nconst anyTyped = 1 as any;\n\nfoo(...anyTyped);\nfoo(anyTyped, 1, 'a');\n\nconst anyArray: any[] = [];",
+    "good": "declare function foo(arg1: string, arg2: number, arg3: string): void;\n\nfoo('a', 1, 'b');\n\nconst tuple1 = ['a', 1, 'b'] as const;\nfoo(...tuple1);\n\ndeclare function bar(arg1: string, arg2: number, ...rest: string[]): void;"
+  },
+  "@typescript-eslint/no-unsafe-assignment": {
+    "what": "Disallow assigning a value with type `any` to variables and properties.",
+    "bad": "const x = 1 as any,\n  y = 1 as any;\nconst [x] = 1 as any;\nconst [x] = [] as any[];\nconst [x] = [1 as any];\n[x] = [1] as [any];\n\nfunction foo(a = 1 as any) {}",
+    "good": "const x = 1,\n  y = 1;\nconst [x] = [1];\n[x] = [1] as [number];\n\nfunction foo(a = 1) {}\nclass Foo {\n  constructor(private a = 1) {}"
+  },
+  "@typescript-eslint/no-unsafe-call": {
+    "what": "Disallow calling a value with type `any`.",
+    "bad": "declare const anyVar: any;\ndeclare const nestedAny: { prop: any };\n\nanyVar();\nanyVar.a.b();\n\nnestedAny.prop();\nnestedAny.prop['a']();",
+    "good": "declare const typedVar: () => void;\ndeclare const typedNested: { prop: { a: () => void } };\n\ntypedVar();\ntypedNested.prop.a();\n\n(() => {})();\n"
+  },
+  "@typescript-eslint/no-unsafe-member-access": {
+    "what": "Disallow member access on a value with type `any`.",
+    "bad": "declare const anyVar: any;\ndeclare const nestedAny: { prop: any };\n\nanyVar.a;\nanyVar.a.b;\nanyVar['a'];\nanyVar['a']['b'];\n",
+    "good": "declare const properlyTyped: { prop: { a: string } };\n\nproperlyTyped.prop.a;\nproperlyTyped.prop['a'];\n\nconst key = 'a';\nproperlyTyped.prop[key];\n"
+  },
+  "@typescript-eslint/no-unsafe-return": {
+    "what": "Disallow returning a value with type `any` from a function.",
+    "bad": "function foo1() {\n  return 1 as any;\n}\nfunction foo2() {\n  return Object.create(null);\n}\nconst foo3 = () => {\n  return 1 as any;",
+    "good": "function foo1() {\n  return 1;\n}\nfunction foo2() {\n  return Object.create(null) as Record<string, unknown>;\n}\n\nconst foo3 = () => [];"
+  },
+  "@typescript-eslint/no-non-null-assertion": {
+    "what": "Disallow non-null assertions using the `!` postfix operator.",
+    "bad": "interface Example {\n  property?: string;\n}\n\ndeclare const example: Example;\nconst includesBaz = example.property!.includes('baz');",
+    "good": "interface Example {\n  property?: string;\n}\n\ndeclare const example: Example;\nconst includesBaz = example.property?.includes('baz') ?? false;"
+  },
+  "@typescript-eslint/restrict-plus-operands": {
+    "what": "Require both operands of addition to be the same type and be `bigint`, `number`, or `string`.",
+    "bad": "let foo = 1n + 1;\nlet fn = (a: string, b: never) => a + b;",
+    "good": "let foo = 1n + 1n;\nlet fn = (a: string, b: string) => a + b;"
+  },
+  "@typescript-eslint/restrict-template-expressions": {
+    "what": "Enforce template literal expressions to be of `string` type.",
+    "bad": "const arg1 = [1, 2];\nconst msg1 = `arg1 = ${arg1}`;\n\nconst arg2 = { name: 'Foo' };\nconst msg2 = `arg2 = ${arg2 || null}`;",
+    "good": "const arg = 'foo';\nconst msg1 = `arg = ${arg}`;\nconst msg2 = `arg = ${arg || 'default'}`;\n\nconst stringWithKindProp: string & { _kind?: 'MyString' } = 'foo';\nconst msg3 = `stringWithKindProp = ${stringWithKindProp}`;"
+  },
+  "@typescript-eslint/no-floating-promises": {
+    "what": "Require Promise-like statements to be handled appropriately.",
+    "bad": "const promise = new Promise((resolve, reject) => resolve('value'));\npromise;\n\nasync function returnsPromise() {\n  return 'value';\n}\nreturnsPromise().then(() => {});\n",
+    "good": "const promise = new Promise((resolve, reject) => resolve('value'));\nawait promise;\n\nasync function returnsPromise() {\n  return 'value';\n}\n\nvoid returnsPromise();"
+  },
+  "@typescript-eslint/await-thenable": {
+    "what": "Disallow awaiting a value that is not a Thenable.",
+    "bad": "await 'value';\n\nconst createValue = () => 'value';\nawait createValue();",
+    "good": "await Promise.resolve('value');\n\nconst createValue = async () => 'value';\nawait createValue();"
+  },
+  "@typescript-eslint/no-for-in-array": {
+    "what": "Disallow iterating over an array with a for-in loop.",
+    "bad": "declare const array: string[];\n\nfor (const i in array) {\n  console.log(array[i]);\n}\n\nfor (const i in array) {\n  console.log(i, array[i]);",
+    "good": "declare const array: string[];\n\nfor (const value of array) {\n  console.log(value);\n}\n\nfor (let i = 0; i < array.length; i += 1) {\n  console.log(i, array[i]);"
+  },
+  "@typescript-eslint/prefer-nullish-coalescing": {
+    "what": "Enforce using the nullish coalescing operator instead of logical assignments or chaining.",
+    "bad": "declare const a: string | null;\ndeclare const b: string | null;\n\nconst c = a || b;\n\ndeclare let foo: { a: string } | null;\ndeclare function makeFoo(): { a: string };\n",
+    "good": "declare const a: string | null;\ndeclare const b: string | null;\n\nconst c = a ?? b;\n\ndeclare let foo: { a: string } | null;\ndeclare function makeFoo(): { a: string };\n"
+  },
+  "@typescript-eslint/prefer-optional-chain": {
+    "what": "Enforce using concise optional chain expressions instead of chained logical ands, negated logical ors, or empty objects.",
+    "bad": "foo && foo.a && foo.a.b && foo.a.b.c;\nfoo && foo['a'] && foo['a'].b && foo['a'].b.c;\nfoo && foo.a && foo.a.b && foo.a.b.method && foo.a.b.method();\n\n// With empty objects\n(((foo || {}).a || {}).b || {}).c;\n(((foo || {})['a'] || {}).b || {}).c;\n",
+    "good": "foo?.a?.b?.c;\nfoo?.['a']?.b?.c;\nfoo?.a?.b?.method?.();\n\nfoo?.a?.b?.c?.d?.e;\n\n!foo?.bar;\n!foo?.[bar];"
+  },
+  "@typescript-eslint/no-unnecessary-condition": {
+    "what": "Disallow conditionals where the type is always truthy or always falsy.",
+    "bad": "function head<T>(items: T[]) {\n  // items can never be nullable, so this is unnecessary\n  if (items) {\n    return items[0].toUpperCase();\n  }\n}\n\nfunction foo(arg: 'bar' | 'baz') {",
+    "good": "function head<T>(items: T[]) {\n  // Necessary, since items.length might be 0\n  if (items.length) {\n    return items[0].toUpperCase();\n  }\n}\n\nfunction foo(arg: string) {"
+  },
+  "@typescript-eslint/no-unnecessary-type-assertion": {
+    "what": "Disallow type assertions that do not change the type of an expression.",
+    "bad": "const foo = 3;\nconst bar = foo!;",
+    "good": "const foo = <number>3;"
+  },
+  "@typescript-eslint/switch-exhaustiveness-check": {
+    "what": "Require switch-case statements to be exhaustive.",
+    "bad": "type Day =\n  | 'Monday'\n  | 'Tuesday'\n  | 'Wednesday'\n  | 'Thursday'\n  | 'Friday'\n  | 'Saturday'\n  | 'Sunday';",
+    "good": "type Day =\n  | 'Monday'\n  | 'Tuesday'\n  | 'Wednesday'\n  | 'Thursday'\n  | 'Friday'\n  | 'Saturday'\n  | 'Sunday';"
+  },
+  "@typescript-eslint/no-base-to-string": {
+    "what": "Require `.toString()` and `.toLocaleString()` to only be called on objects which provide useful information when stringified.",
+    "bad": "// Passing an object or class instance to string concatenation:\n'' + {};\n\nclass MyClass {}\nconst value = new MyClass();\nvalue + '';\n\n// Interpolation and manual .toString() and `toLocaleString()` calls too:",
+    "good": "// These types all have useful .toString() and `toLocaleString()` methods\n'Text' + true;\n`Value: ${123}`;\n`Arrays too: ${[1, 2, 3]}`;\n(() => {}).toString();\nString(42);\n(() => {}).toLocaleString();\n"
+  },
+  "@typescript-eslint/require-await": {
+    "what": "Disallow async functions which do not return promises and have no `await` expression.",
+    "bad": "async function returnNumber() {\n  return 1;\n}\n\nasync function* asyncGenerator() {\n  yield 1;\n}\n",
+    "good": "function returnNumber() {\n  return 1;\n}\n\nfunction* syncGenerator() {\n  yield 1;\n}\n"
+  },
+  "@typescript-eslint/no-confusing-void-expression": {
+    "what": "Require expressions of type void to appear in statement position.",
+    "bad": "// somebody forgot that `alert` doesn't return anything\nconst response = alert('Are you sure?');\nconsole.log(alert('Are you sure?'));\n\n// it's not obvious whether the chained promise will contain the response (fixable)\npromise.then(value => window.postMessage(value));\n\n// it looks like we are returning the result of `console.error` (fixable)",
+    "good": "// just a regular void function in a statement position\nalert('Hello, world!');\n\n// this function returns a boolean value so it's ok\nconst response = confirm('Are you sure?');\nconsole.log(confirm('Are you sure?'));\n\n// now it's obvious that `postMessage` doesn't return any response"
+  },
+  "@typescript-eslint/no-redundant-type-constituents": {
+    "what": "Disallow members of unions and intersections that do nothing or override type information.",
+    "bad": "type UnionAny = any | 'foo';\ntype UnionUnknown = unknown | 'foo';\ntype UnionNever = never | 'foo';\n\ntype UnionBooleanLiteral = boolean | false;\ntype UnionNumberLiteral = number | 1;\ntype UnionStringLiteral = string | 'foo';\n",
+    "good": "type UnionAny = any;\ntype UnionUnknown = unknown;\ntype UnionNever = never;\n\ntype UnionBooleanLiteral = boolean;\ntype UnionNumberLiteral = number;\ntype UnionStringLiteral = string;\n"
+  },
+  "@typescript-eslint/prefer-reduce-type-parameter": {
+    "what": "Enforce using type parameter when calling `Array#reduce` instead of using a type assertion.",
+    "bad": "[1, 2, 3].reduce((arr, num) => arr.concat(num * 2), [] as number[]);\n\n['a', 'b'].reduce(\n  (accumulator, name) => ({\n    ...accumulator,\n    [name]: true,\n  }),\n  {} as Record<string, boolean>,",
+    "good": "[1, 2, 3].reduce<number[]>((arr, num) => arr.concat(num * 2), []);\n\n['a', 'b'].reduce<Record<string, boolean>>(\n  (accumulator, name) => ({\n    ...accumulator,\n    [name]: true,\n  }),\n  {},"
+  }
+}
