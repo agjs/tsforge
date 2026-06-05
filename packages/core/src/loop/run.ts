@@ -2,11 +2,13 @@ import { join, basename, isAbsolute } from "node:path";
 import type { ITask } from "../spec/types";
 import type { IChatMessage, IProvider } from "../inference/types";
 import { validate, type ErrorParser } from "../validate/validate";
+import { parseEslintJson } from "../validate/parse";
 import { runAccept } from "../validate/accept";
 import { sameErrorSet, type ErrorSet } from "../validate/errors";
 import { isInScope } from "../lib/scope";
 import { ruleHelp, idiomHints } from "./rule-docs";
 import { executeTool } from "./execute-tool";
+import { astGrepFix } from "./astgrep-fix";
 import { EDIT_TOOL, CREATE_TOOL, RUN_TOOL, READ_TOOL } from "../agent/tools";
 import { TsService } from "../lsp/service";
 import type { Reporter } from "./events";
@@ -63,6 +65,14 @@ export async function runTask(
   opts: IRunOptions = {}
 ): Promise<IRunResult> {
   const { parse, enableThinking, thinkingTokenBudget } = opts;
+  // A/B control for the gate-feedback-fidelity win: TSFORGE_LEGACY_FEEDBACK=1
+  // forces the OLD mis-selected parser (eslint-json on chained tsc&&eslint), so
+  // a tsc failure dumps as one opaque blob (maxErr=1, no structure/source-lines)
+  // — the pre-fix behavior, to measure the lift with reps instead of n=1.
+  const legacyFeedback = process.env.TSFORGE_LEGACY_FEEDBACK === "1";
+  const effectiveParse: ErrorParser | undefined = legacyFeedback
+    ? parseEslintJson
+    : parse;
   const temperature = opts.temperature ?? 0;
   const maxTurns = opts.maxTurns ?? 40;
   const report: Reporter = opts.onEvent ?? (() => undefined);
@@ -74,7 +84,7 @@ export async function runTask(
   });
 
   // RED: the goalpost must fail before we build.
-  const red = await validate(task, cwd, parse);
+  const red = await validate(task, cwd, effectiveParse);
 
   if (red.passed) {
     report({
@@ -178,9 +188,21 @@ export async function runTask(
       if (tsService !== null) {
         let tsFixed = 0;
 
+        // Guard: only touch files that exist on disk, and never let a
+        // LanguageService throw crash the run (the `tsc -p` gate is the
+        // authority regardless). A not-yet-created editable file made
+        // getSemanticDiagnostics throw "Could not find source file".
         for (const f of task.files) {
-          tsService.refresh(f);
-          tsFixed += tsService.fixAll(f);
+          try {
+            if (!(await Bun.file(join(cwd, f)).exists())) {
+              continue;
+            }
+
+            tsService.refresh(f);
+            tsFixed += tsService.fixAll(f);
+          } catch {
+            // degrade silently — the gate still runs below
+          }
         }
 
         if (tsFixed > 0) {
@@ -192,11 +214,34 @@ export async function runTask(
         }
       }
 
+      // Deterministic SAFE idiom rewrites via ast-grep (structural codemod) —
+      // e.g. `new Array(n).fill(x)` → `Array.from(...)` (typed, not any[]). The
+      // gate re-validates, so a bad rewrite can't ship. Never throws into the loop.
+      let astFixed = 0;
+
+      for (const f of task.files) {
+        try {
+          if (await Bun.file(join(cwd, f)).exists()) {
+            astFixed += await astGrepFix(join(cwd, f));
+          }
+        } catch {
+          // degrade silently — gate is the authority
+        }
+      }
+
+      if (astFixed > 0) {
+        report({
+          kind: "tool",
+          task: task.id,
+          message: `astGrepFix: applied ${astFixed} idiom rewrite(s)`,
+        });
+      }
+
       if (task.fix !== undefined && task.fix.length > 0) {
         await runAccept({ ...task, accept: task.fix }, cwd);
       }
 
-      const gate = await validate(task, cwd, parse);
+      const gate = await validate(task, cwd, effectiveParse);
 
       if (lastGateCount >= 0 && gate.errors.length > lastGateCount) {
         regressions += 1;
@@ -443,7 +488,19 @@ export async function gateFeedback(
   const idiomBlock =
     idioms.length > 0 ? `\n\nWatch for these strict-TS idioms:\n${idioms}` : "";
 
-  return `The acceptance command still fails:\n${list}${capped}${note}${helpBlock}${idiomBlock}\n\nFix your editable files and run it again.`;
+  // Tool-use lapse guard: if an editable file doesn't exist, the model likely
+  // wrote the code as message TEXT instead of calling `create`. Code in your
+  // reply is NEVER applied — only tool calls touch disk. Say so explicitly.
+  const present = new Set(sources.map((s) => s.path));
+  const missing = task.files.filter((f) => !present.has(f));
+  const missingBlock =
+    missing.length > 0
+      ? `\n\n⚠ These editable files do NOT exist yet: ${missing.join(", ")}. ` +
+        "Code written in your message text is NOT applied — you MUST call the " +
+        "`create` tool with the file path and full content."
+      : "";
+
+  return `The acceptance command still fails:\n${list}${capped}${note}${helpBlock}${idiomBlock}${missingBlock}\n\nFix your editable files and run it again.`;
 }
 
 /**

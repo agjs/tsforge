@@ -30,6 +30,12 @@ interface IRunMetrics {
   /** Longest single turn (s) — usually one heavy reasoning turn; shows that
    *  wall-time variance is the model thinking, not harness churn. */
   slowestTurnSeconds: number;
+  /** Char volume of the heaviest turn (reasoning+content). Shows whether a
+   *  thinking_token_budget binds (drops it) and flags spirals (huge value). */
+  maxTurnChars: number;
+  /** Tool calls the harness rejected (bad input / scope / match failure) — the
+   *  open-model tool-calling friction; 0 = clean. Repaired calls excluded. */
+  toolRejects: number;
   regressions: number;
   quality: number | undefined;
 }
@@ -57,6 +63,9 @@ function parseLog(
   let totalEdits = 0;
   let maxEditsPerTurn = 0;
   let editsThisTurn = 0;
+  let charsThisTurn = 0;
+  let maxTurnChars = 0;
+  let toolRejects = 0;
   const passed = /spec ".*": done/.test(log) || /· turn \d+: GREEN/.test(log);
 
   for (const line of lines) {
@@ -65,7 +74,12 @@ function parseLog(
     if (asking !== null) {
       maxEditsPerTurn = Math.max(maxEditsPerTurn, editsThisTurn);
       editsThisTurn = 0;
+      charsThisTurn = 0;
     }
+
+    // Reasoning+content volume of the turn — how "does a thinking_token_budget
+    // bind?" shows up here (and a spiral is a huge maxTurnChars).
+    charsThisTurn += line.length;
 
     if (line.includes("✎ edit") || line.includes("✚ create")) {
       totalEdits += 1;
@@ -76,6 +90,7 @@ function parseLog(
 
     if (timing?.[1] !== undefined) {
       turns = Math.max(turns, Number(timing[1]));
+      maxTurnChars = Math.max(maxTurnChars, charsThisTurn);
 
       if (timing[2] !== undefined) {
         const took =
@@ -100,6 +115,10 @@ function parseLog(
     if (HAND_COUNT.test(line)) {
       handCountingLines += 1;
     }
+
+    if (/tool_input_rejected:|tool_rejected:/.test(line)) {
+      toolRejects += 1;
+    }
   }
 
   maxEditsPerTurn = Math.max(maxEditsPerTurn, editsThisTurn);
@@ -114,6 +133,8 @@ function parseLog(
     maxEditsPerTurn,
     totalEdits,
     slowestTurnSeconds,
+    maxTurnChars,
+    toolRejects,
   };
 }
 
@@ -197,7 +218,7 @@ for (const dir of dirs) {
 
 process.stdout.write(`\n=== run analysis (${metrics.length} runs) ===\n\n`);
 process.stdout.write(
-  "pass  turns  time(s)  slowTurn(s)  maxErr  handCount  maxEdits/turn  edits  regress  Q\n"
+  "pass  turns  time(s)  slowTurn(s)  maxTurnChars  maxErr  handCount  toolRej  maxEdits/turn  edits  regress  Q\n"
 );
 
 for (const m of metrics) {
@@ -207,8 +228,10 @@ for (const m of metrics) {
       String(m.turns).padStart(5),
       m.totalSeconds.toFixed(0).padStart(8),
       m.slowestTurnSeconds.toFixed(0).padStart(12),
+      String(m.maxTurnChars).padStart(13),
       String(m.maxErrorsSurfaced).padStart(7),
       String(m.handCountingLines).padStart(10),
+      String(m.toolRejects).padStart(8),
       String(m.maxEditsPerTurn).padStart(14),
       String(m.totalEdits).padStart(7),
       String(m.regressions).padStart(8),

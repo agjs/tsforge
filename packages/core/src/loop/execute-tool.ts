@@ -4,6 +4,7 @@ import { applyEdits } from "../files/edit";
 import { applyCreate } from "../files/create";
 import { isInScope } from "../lib/scope";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../agent/tools";
+import { repairArgs } from "../agent/tool-repair";
 import { ruleHelpFromOutput } from "./rule-docs";
 import type { Reporter } from "./events";
 
@@ -26,6 +27,59 @@ const MAX_EDIT_LINES = 25;
  *  instead of reasoning about it. */
 function writable(file: string, files: string[]): boolean {
   return isInScope(file, files) || file.startsWith("scratch/");
+}
+
+/**
+ * Parse a tool's args, with VALIDATE-THEN-REPAIR: try the tool's own parser; if
+ * it rejects, apply the generic input repairs and try ONCE more. Emits telemetry
+ * — `tool_input_repaired:<tool>` when a repair rescued the call,
+ * `tool_input_rejected:<tool>` when even repair couldn't — so we can watch
+ * per-tool failure rates as the toolset grows (right now rejections are
+ * invisible: they're returned to the model but never logged).
+ */
+function parseOrRepair<T>(
+  raw: Record<string, unknown>,
+  normalize: (a: Record<string, unknown>) => T | null,
+  ctx: IToolContext,
+  tool: string
+): T | null {
+  const direct = normalize(raw);
+
+  if (direct !== null) {
+    return direct;
+  }
+
+  const { args, applied } = repairArgs(raw);
+  const repaired = applied.length > 0 ? normalize(args) : null;
+
+  if (repaired !== null) {
+    ctx.report({
+      kind: "tool",
+      task: ctx.task,
+      message: `tool_input_repaired:${tool} (${applied.join(", ")})`,
+    });
+
+    return repaired;
+  }
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task,
+    message: `tool_input_rejected:${tool}`,
+  });
+
+  return null;
+}
+
+/** Log a tool rejection (scope / size / match failure) so it's measurable. */
+function reject(ctx: IToolContext, tool: string, reason: string): string {
+  ctx.report({
+    kind: "tool",
+    task: ctx.task,
+    message: `tool_rejected:${tool} (${reason})`,
+  });
+
+  return reason;
 }
 
 /**
@@ -60,7 +114,7 @@ async function readFile(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
-  const r = toRead(args);
+  const r = parseOrRepair(args, toRead, ctx, "read");
 
   if (r === null) {
     return "read: malformed args (need `file`)";
@@ -81,7 +135,7 @@ async function runShell(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
-  const r = toRun(args);
+  const r = parseOrRepair(args, toRun, ctx, "run");
 
   if (r === null) {
     return "run: malformed args (need `command`)";
@@ -114,14 +168,18 @@ async function doEdit(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
-  const edit = toEdits(args);
+  const edit = parseOrRepair(args, toEdits, ctx, "edit");
 
   if (edit === null) {
     return "edit: malformed args (need `file` plus either `oldString`/`newString` or an `edits` array of {oldString,newString})";
   }
 
   if (!writable(edit.file, ctx.files)) {
-    return `edit ${edit.file} REJECTED: out of scope. You may only edit/create: ${ctx.files.join(", ")} (or throwaway files under scratch/).`;
+    return reject(
+      ctx,
+      "edit",
+      `edit ${edit.file} REJECTED: out of scope. You may only edit/create: ${ctx.files.join(", ")} (or throwaway files under scratch/).`
+    );
   }
 
   // The size cap is PER replacement — each piece must be surgical (no lazy
@@ -131,7 +189,11 @@ async function doEdit(
     const span = (edit.edits[i]?.oldString ?? "").split("\n").length;
 
     if (span > MAX_EDIT_LINES) {
-      return `edit ${edit.file} REJECTED: replacement #${i + 1} is too large (${span} lines). Change ONLY the broken lines — make small, targeted replacements (the gate names the exact lines). To fix several spots, pass each as its own entry in \`edits\`; don't rewrite a whole function.`;
+      return reject(
+        ctx,
+        "edit",
+        `edit ${edit.file} REJECTED: replacement #${i + 1} is too large (${span} lines). Change ONLY the broken lines — make small, targeted replacements (the gate names the exact lines). To fix several spots, pass each as its own entry in \`edits\`; don't rewrite a whole function.`
+      );
     }
   }
 
@@ -159,21 +221,29 @@ async function doEdit(
       ? `oldString matched ${result.matches ?? 0} places — include more surrounding lines to make it unique`
       : result.reason;
 
-  return `edit ${edit.file} REJECTED${where}: ${detail}`;
+  return reject(
+    ctx,
+    `edit:${result.reason}`,
+    `edit ${edit.file} REJECTED${where}: ${detail}`
+  );
 }
 
 async function doCreate(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
-  const create = toCreate(args);
+  const create = parseOrRepair(args, toCreate, ctx, "create");
 
   if (create === null) {
     return "create: malformed args (need file, content)";
   }
 
   if (!writable(create.file, ctx.files)) {
-    return `create ${create.file} REJECTED: out of scope. You may only edit/create: ${ctx.files.join(", ")} (or throwaway files under scratch/).`;
+    return reject(
+      ctx,
+      "create",
+      `create ${create.file} REJECTED: out of scope. You may only edit/create: ${ctx.files.join(", ")} (or throwaway files under scratch/).`
+    );
   }
 
   const result = await applyCreate(ctx.cwd, create);
@@ -190,5 +260,9 @@ async function doCreate(
     return `created ${create.file}`;
   }
 
-  return `create ${create.file} REJECTED: already exists — use \`edit\``;
+  return reject(
+    ctx,
+    "create:exists",
+    `create ${create.file} REJECTED: already exists — use \`edit\``
+  );
 }
