@@ -1,0 +1,29 @@
+---
+title: File ops — edit + create
+description: Mutate the working tree safely. edit = exact/unique str_replace; create = no-clobber new file. The harness's sole mutator.
+---
+
+:::tip[Status: built + green + live-validated]
+`packages/core/src/files`. 36 tests; the real model both edited and created files to green.
+:::
+
+## edit — `applyEdit(cwd, { file, oldString, newString })`
+
+Replaces an **exact, unique** snippet:
+
+| Matches | Result | Why |
+| --- | --- | --- |
+| 1 | `{ ok: true }`, file written | the safe case |
+| 0 | `{ ok: false, reason: "not-found" }` | snippet doesn't exist |
+| >1 | `{ ok: false, reason: "ambiguous", matches }` | model must add surrounding context |
+| missing file | `{ ok: false, reason: "missing-file" }` | — |
+
+A strong model with the full file in context can produce an exact, unique `oldString`, so we don't need line numbers or hash anchors. On `ambiguous`/`not-found` the loop hands the reason back and the model retries.
+
+## create — `applyCreate(cwd, { file, content })`
+
+Makes a **new** file (parent dirs auto-created). Refuses to overwrite an existing file (`{ ok: false, reason: "exists" }`) — clobbering is `edit`'s job, not `create`'s. This is what lets the agent build a feature from nothing; proven live (model created `greet.ts` from a seeded test).
+
+## Deliberately absent (next)
+
+LSP-driven renames for cross-file symbol changes, multi-file atomic edits, and **scope enforcement** — rejecting edits/creates outside a task's `files:` globs (the drift tripwire).

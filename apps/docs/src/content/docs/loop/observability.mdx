@@ -1,0 +1,37 @@
+---
+title: Observability — watching the loop
+description: A progress event stream (onEvent) so a run isn't a black box. RED → cycle → edit/create → GREEN → verify → done, including the model's applied edits.
+---
+
+:::tip[Status: built + green]
+`packages/core/src/loop/events.ts`. 37 tests; live runs stream progress.
+:::
+
+## Why
+
+A run against a local model can take many seconds per cycle. Watching `RED → cycle → edit → GREEN` beats staring at a frozen terminal — and the same stream is what an eval UI or a dashboard consumes later.
+
+## How
+
+`runTask`/`runSpec` take an optional `onEvent: Reporter`. The reporter is threaded into the agent (`ctx.report`), so even the model's applied `edit`/`create` calls surface. No `console` in the library (the gate forbids it) — the harness *emits* events; scripts/UIs decide how to show them.
+
+```ts
+await runSpec(spec, cwd, agent, { onEvent: (e) => console.log(e.message) });
+```
+
+Event kinds: `start · red · cycle · edit · create · validated · done · stuck`. Each carries `{ task, message, cycle?, cycles?, errors?, passed?, file? }`.
+
+## Live example
+
+```
+task 1: RED (5 error(s))
+task 1 · cycle 1: asking model
+    create → todo.ts
+task 1 · cycle 1: GREEN
+whole-spec verify: GREEN
+spec "todo": done
+```
+
+## Deliberately absent (next)
+
+Token/latency per cycle, and streaming the model's tokens as it generates (the provider would expose a streaming `complete`).

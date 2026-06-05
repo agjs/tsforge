@@ -1,0 +1,28 @@
+---
+title: Spec runner — tasks in order, then verify
+description: Run a spec's tasks through the implement loop in order; block on the first that fails; gate the whole spec on its verify command. Validated live on a 2-chunk spec.
+---
+
+:::tip[Status: built + green + live-validated]
+`packages/core/src/loop/run-spec.ts`. 33 tests green; ran a real 2-chunk spec to `done` against Qwen3.6.
+:::
+
+## What it does
+
+`runSpec(spec, cwd, agent, parse?)`:
+
+1. Runs each task through the [implement loop](/loop/implement/) in listed order.
+2. The first task that doesn't reach `done` **blocks** the spec (returns `{ status: "blocked", results }`).
+3. When every task is green, the spec's own **`verify`** command must also pass — the whole-spec gate. Then `{ status: "done" }`.
+
+## Live eval
+
+`bun run packages/core/scripts/eval-spec.ts` — a `math` spec with two tasks (fix `add`, fix `mul`) + `verify: bun test`. The real model:
+
+- `add` → `done` in 1 cycle (`return a + b`)
+- `mul` → `done` in 1 cycle (`return a * b`)
+- whole-spec `verify` green → spec `done`
+
+## Deliberately absent (next)
+
+Dependency ordering via `needs:` and parallel-safe `[P]` (v1 is file order). And the big one for real features: a **`create` tool** — the agent can edit existing files but can't make new ones yet, so it can't yet build a feature from scratch.

@@ -1,0 +1,30 @@
+---
+title: Validation engine — structured errors + repair
+description: Turn a failing gate into a structured error set, then loop EDIT→VALIDATE descending that set until green, stuck, or capped.
+---
+
+:::tip[Status: built + green]
+In `packages/core/src/validate` + the repair loop in `src/loop/run.ts`. 17 tests pass.
+:::
+
+## What it adds over the skeleton
+
+The skeleton's gate was a boolean. Now a failing gate produces a **structured error set**, and `runTask` runs a real **REPAIR loop** that feeds the model the standing errors each cycle.
+
+- **Error set** — `ErrorItem { key, file?, line?, rule?, message }`. A failing gate **always** has ≥1 error (empty output still yields one).
+- **Diff** — `diffErrorSets` → `{ fixed, introduced, remaining }`; `shrank` = the set got smaller (progress).
+- **Loop** — `RED → (EDIT → VALIDATE)*`. Stops at: `done` (gate green), `stuck/stalled` (no shrink for **N=3** cycles), or `stuck/cap` (**12** cycles).
+- **Parsers** — `parseTsc`, `parseEslintJson` (carries custom plugin rule ids like `@boring-stack/structured-logging`), and `genericErrors` (fallback). `parserFor(command)` auto-picks by the `accept:` command; `validate` uses it unless a parser is passed.
+
+## Pieces
+
+| Module | Does |
+| --- | --- |
+| `validate/errors.ts` | `ErrorItem`/`ErrorSet`, `diffErrorSets`, `shrank` |
+| `validate/parse.ts` | `parseTsc`, `parseEslintJson`, `genericErrors`, `parserFor` |
+| `validate/validate.ts` | run gate → `{ passed, errors, output }` (≥1 error on failure) |
+| `loop/run.ts` | REPAIR loop + stall (N=3) + hard cap (12) |
+
+## Deliberately absent (next)
+
+`lint-meta` / vitest parsers (tsc + eslint done), tiered/scoped checks per edit, and wiring the loop's `stuck` into **escalate → notify** — plus the Judge, checkpoint, and a real model. The error-set *diff* isn't surfaced to the agent yet (it gets the full set); that's a small follow-up.

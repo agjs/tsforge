@@ -1,0 +1,45 @@
+---
+title: Walking skeleton — the loop, running
+description: The thinnest honest version of the implement loop, built test-first and green. RED → EDIT → VALIDATE over a one-chunk spec, with the model stubbed.
+---
+
+:::tip[Status: built + green]
+This exists in `packages/core` and passes its test. It's the first slice where the loop *runs* instead of being described.
+:::
+
+## What it is
+
+The smallest real version of the [implement loop](/loop/implement/): given a one-chunk spec in [our format](/spec/format/), it runs **RED → EDIT → VALIDATE** and reports `done`. The "model" is a **stub** that writes a canned edit — we're proving the *wiring*, not the intelligence, first.
+
+It was built **RED-first**, dogfooding our own discipline: the loop's test was written, `runTask` was stubbed to throw, the test was run and *confirmed failing*, then `runTask` was implemented to green.
+
+## The pieces (`packages/core`)
+
+| Module | Does | Maps to |
+| --- | --- | --- |
+| `src/spec/parse.ts` | Parse the one-file spec (frontmatter + `## Tasks`) into a typed `Spec`. | The spec format |
+| `src/validate/accept.ts` | Run a task's `accept:` command; pass = exit 0. | The deterministic oracle |
+| `src/agent/types.ts` | `Agent.implement(ctx)` — the seam the real model plugs into. | Inference adapter (later) |
+| `src/loop/run.ts` | `runTask`: RED → EDIT → VALIDATE → `{ redConfirmed, status }`. | The loop itself |
+
+## Run it
+
+```bash
+bun test --cwd . packages/core/tests/skeleton.e2e.test.ts
+```
+
+The test builds a tiny fixture in a temp dir (a failing `sum` + its test + a spec), runs `runTask` with a stub agent that writes the fix, and asserts the run went `redConfirmed → done`.
+
+## What it proves — and what it deliberately doesn't
+
+**Proves:** a spec in our format can be parsed, its `accept:` command is the pass/fail oracle, and the RED→EDIT→VALIDATE wiring holds end-to-end against real files.
+
+**Deliberately absent (each is a later slice):**
+
+- **STALL / escalate / notify** — stall detection landed in the [validation engine](/loop/validation/); escalate→notify wiring is still pending.
+- **JUDGE** — no fresh-context refutation.
+- **CHECKPOINT** — no commit/journal.
+- **Drift tripwire** — `files:` is parsed but not yet enforced.
+- **A real model** — the agent is a canned stub, not Qwen3.6.
+
+Built next: the [**Validation engine**](/loop/validation/) — structured error set + the REPAIR loop.

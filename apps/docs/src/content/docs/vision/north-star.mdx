@@ -1,0 +1,86 @@
+---
+title: North star — what we believe we'll achieve
+description: Give tsforge a well-defined spec; it decomposes the spec into chunks and builds the whole feature end-to-end, each chunk verified against a deterministic gate. Spec-driven, not prompt-driven.
+---
+
+This is the outcome. Every slice we build is derived by working backwards from this page. When something here is wrong, we change *this* first — then the tests, then the code.
+
+## The promise (one sentence)
+
+> Give tsforge a **well-defined spec**; it refines the spec with you, breaks it into ordered chunks, and **builds the whole feature end-to-end** — each chunk written test-first, validated against a deterministic gate, and checkpointed — so you review a *spec and a result*, not a stream of prompts.
+
+The work is **spec-driven, not prompt-driven**. The spec is the source of truth; the code is its expression in TypeScript. (See the [Spec Kit lineage](https://github.com/github/spec-kit/blob/main/spec-driven.md).)
+
+## The pipeline
+
+We follow the spec-driven pipeline, mapped onto assets we already have:
+
+| Phase | What it produces | Who drives | In tsforge |
+| --- | --- | --- | --- |
+| **Constitution** | Immutable principles: stack, conventions, boundaries. | Human (once). | *Already exists* — boringstack's `AGENT_CONTRACT.md` + lint plugins + `tsc` strict. The un-gameable rules. |
+| **Specify** | A spec: user stories, acceptance criteria, edge cases, `[NEEDS CLARIFICATION]` markers. Focus on *what/why*, not *how*. | **You write the spec**; tsforge interrogates it — clarifies ambiguities, surfaces edge cases and gaps — but never invents scope you didn't write. **You approve.** | The unit of work. |
+| **Plan** | Technical plan: data model, API contracts, UI surface, test scenarios. | tsforge drafts; human approves. | Derives the shape. |
+| **Tasks** | Ordered, dependency-aware chunks (some parallel-safe). | tsforge derives from the plan. **Human approves the breakdown.** | Each chunk = one run of the implement loop. |
+| **Implement** | Working, verified code for the whole spec. | tsforge builds chunk by chunk, end-to-end. | The per-chunk loop (below). |
+
+Intent is pinned in the **approved spec + task breakdown** *before* any code. That front-loaded human gate is what makes building end-to-end safe — the agent isn't guessing what you wanted; it's executing a plan you signed off on.
+
+## What a session looks like
+
+You hand tsforge a spec — *"Tickets can have tags."* It refines it with you (clarifies: max tags per ticket? who can tag? colors?), then proposes the breakdown:
+
+```
+Spec: Ticket tagging                          constitution: boringstack contract
+Plan: tags + ticket_tags tables · tag CRUD API · TagPicker UI · e2e
+
+Tasks (approve before build):
+  1. [db]   tags + ticket_tags schema + migration
+  2. [api]  tag service + routes + schemas + tests        (needs 1)
+  3. [ui]   TagPicker component + feature queries + tests (needs 2's contract)
+  4. [e2e]  Playwright: add & remove a tag on a ticket    (needs 2, 3)
+```
+
+Then it **builds all four, end-to-end**, each chunk through the same loop:
+
+| Step | Per chunk | You see |
+| --- | --- | --- |
+| **Test first** | Write the chunk's tests from its acceptance criteria. | A failing test — the goalpost, fixed up front. |
+| **Edit** | Implement against the plan; stay inside the chunk's declared files. | A scoped diff. |
+| **Validate** | Cheap checks per edit; full `bun run validate` to close the chunk. | The error set shrinking to zero. |
+| **Repair** | Feed itself the error-set diff; loop. | Either green, or a clear "stuck on X." |
+| **Judge** | Fresh-context pass: does this chunk satisfy *its part of the spec*? | A second opinion. |
+| **Checkpoint** | Commit the green chunk + a journal line; move to the next. | A reviewable commit per chunk. |
+
+It stops and asks only when it must: a new ambiguity surfaces, a chunk stalls, or it's about to do something irreversible. Otherwise it carries the spec to **done** — a fully integrated, gate-green feature, with a commit trail you can read chunk by chunk. How far it runs before pausing is **configurable per spec** — all chunks end-to-end by default, or capped/checkpointed wherever you want to inspect.
+
+## What we believe we'll achieve (observable)
+
+tsforge succeeds on a well-specified feature when it:
+
+1. **Builds the whole spec end-to-end** — every chunk implemented and integrated, not a half-finished vertical slice.
+2. **Passes the real gate** — `bun run validate` green across the repo in a clean checkout (local green == CI green).
+3. **Meets the spec's acceptance criteria** — each criterion traces to a passing test it wrote first.
+4. **Stays in scope** — touches only files its tasks declared; never edits a test's assertions to force a pass. (Either trips a stop.)
+5. **Knows when to stop** — asks on ambiguity/stall instead of thrashing or guessing.
+6. **Leaves a spec-to-code trail** — the spec, the task breakdown, and one reviewable checkpoint per chunk.
+
+## What it will *not* do (v1 scope boundaries)
+
+- **No vague-idea autonomy.** It will not run off a one-liner. A fuzzy idea is *refined into an approved spec first*; the spec is the contract.
+- **Not general-purpose.** TypeScript web dev only (React/Next/Vite/Node/Bun, APIs, tests, refactors). Narrow and excellent beats universal and mediocre.
+- **Not its own judge of intent.** Spec, task breakdown, and tests are human-approved *before* code. The model can't move the goalposts.
+- **No silent "learned lessons."** Memory is advisory, provenance-tagged, and measured on/off — never a hidden prior that poisons future runs.
+
+A **single small task is still supported** — it's just the degenerate case: a one-chunk spec. But the spec → decompose → build-end-to-end flow is the main event.
+
+## Why this is achievable now
+
+Generic agents are built to survive two scarcities: tiny context windows and no ground truth. We have neither. The model ([Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B)) is a strong agentic coder with a 262K context, and a boringstack-style repo already defines "correct" as a single deterministic command. Our job isn't to make the model smart — it's to **carry a strong model through an approved spec against a deterministic oracle**, and get out of the way.
+
+## Working backwards from here
+
+From this outcome the slices fall out top-down: first the **spec format + decomposition** (Specify/Plan/Tasks), then the **per-chunk implement loop** (the deterministic heart), then a **walking skeleton** that runs a trivial one-chunk spec end-to-end, then we deepen each subsystem (validation, repo map, memory, LSP, browser checks, judge).
+
+## ELI6
+
+You don't tell the clever kid "build something cool." You hand him a **picture of the finished Lego set and the step list**, you both agree it's the right set, and *then* he builds it step by step — checking after every step that the tower still stands. tsforge is the helper who turns your picture into the step list, builds every step, and gives each one the gentle push that proves it stands.
