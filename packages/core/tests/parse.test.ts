@@ -5,7 +5,7 @@ import {
   parseEslintJson,
   combinedParser,
   parserFor,
-} from "../src/validate/parse";
+} from "../src/validate";
 
 test("parseTsc extracts file/line/rule per diagnostic", () => {
   const out = [

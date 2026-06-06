@@ -1,10 +1,13 @@
 import { join } from "node:path";
 import type { ITask } from "../spec";
 import type { IChatMessage, IProvider } from "../inference";
-import { validate, type ErrorParser } from "../validate/validate";
-import { parseEslintJson } from "../validate/parse";
-import { runAccept } from "../validate/accept";
-import { sameErrorSet, type ErrorSet } from "../validate/errors";
+import {
+  validate,
+  type ErrorParser,
+  sameErrorSet,
+  type ErrorSet,
+} from "../validate";
+import { parseEslintJson, runAccept } from "../validate";
 import { isInScope } from "../lib/scope";
 import { readFiles, fileExists } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";

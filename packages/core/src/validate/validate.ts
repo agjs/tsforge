@@ -1,15 +1,7 @@
 import type { ITask } from "../spec";
-import type { IErrorItem, ErrorSet } from "./errors";
+import type { ErrorParser, ErrorSet, IValidateResult } from "./validate.types";
 import { runAccept } from "./accept";
 import { parserFor } from "./parse";
-
-export type ErrorParser = (output: string) => IErrorItem[];
-
-export interface IValidateResult {
-  passed: boolean;
-  errors: ErrorSet;
-  output: string;
-}
 
 /**
  * Run a task's gate and turn the result into a structured error set. When no

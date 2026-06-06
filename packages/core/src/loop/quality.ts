@@ -2,8 +2,8 @@ import { join } from "node:path";
 import type { ITask } from "../spec";
 import type { IAgent } from "../agent";
 import type { IProvider } from "../inference";
-import { validate, type ErrorParser } from "../validate/validate";
-import { runAccept } from "../validate/accept";
+import { validate, type ErrorParser } from "../validate";
+import { runAccept } from "../validate";
 import { judge } from "../eval/judge";
 import type { Reporter } from "./loop.types";
 

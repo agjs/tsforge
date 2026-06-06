@@ -1,6 +1,6 @@
 import type { ISpec } from "../spec";
 import type { IProvider } from "../inference";
-import { validate, type ErrorParser } from "../validate/validate";
+import { validate, type ErrorParser } from "../validate";
 import { runTask } from "./run";
 import { RUN_STATUS, SPEC_STATUS } from "./loop.constants";
 import type { IRunResult, ISpecResult, Reporter } from "./loop.types";

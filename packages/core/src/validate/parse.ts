@@ -1,4 +1,4 @@
-import type { IErrorItem } from "./errors";
+import type { IErrorItem, ErrorParserFn } from "./validate.types";
 import { isArray, isRecord } from "../lib/guards";
 
 const TSC = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$/;
@@ -98,8 +98,6 @@ export function parseEslintJson(output: string): IErrorItem[] {
 
   return items;
 }
-
-export type ErrorParserFn = (output: string) => IErrorItem[];
 
 /**
  * For chained gates like `tsc -p … && eslint --format json … && bun test`,

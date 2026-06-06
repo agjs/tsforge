@@ -3,7 +3,7 @@ import type { IProvider } from "../inference";
 import type { Reporter } from "../loop";
 import { isRecord, isArray } from "../lib/guards";
 import { extractJson } from "../lib/json";
-import { runTests, isRealRed } from "../validate/run-tests";
+import { runTests, isRealRed } from "../validate";
 import { FINDING_KIND } from "./spec.constants";
 import type {
   FindingKind,

@@ -1,12 +1,7 @@
 import type { ITask } from "../spec";
 import { readProcessOutput } from "../lib/fs";
 
-export interface IAcceptResult {
-  /** True when the command exits 0. */
-  passed: boolean;
-  /** Combined stdout + stderr, for feeding back into the loop. */
-  output: string;
-}
+import type { IAcceptResult } from "./validate.types";
 
 /**
  * Run a task's `accept:` command in `cwd`. This is the deterministic oracle in

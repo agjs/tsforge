@@ -1,5 +1,5 @@
 import type { ITask } from "../spec";
-import type { ErrorSet } from "../validate/errors";
+import type { ErrorSet } from "../validate";
 import type { Reporter } from "../loop";
 import { type TOOL_NAME } from "./agent.constants";
 

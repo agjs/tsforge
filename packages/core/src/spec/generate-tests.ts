@@ -5,11 +5,7 @@ import type { Reporter } from "../loop";
 import { CREATE_TOOL, TOOL_NAME, toCreate } from "../agent";
 import { applyCreate } from "../files/create";
 import { isInScope } from "../lib/scope";
-import {
-  runTests,
-  isRealRed,
-  type IRunTestsResult,
-} from "../validate/run-tests";
+import { runTests, isRealRed, type IRunTestsResult } from "../validate";
 
 export interface IGenerateTestsOptions {
   /** Where to write the suite. */

@@ -1,6 +1,6 @@
 import { join, basename, isAbsolute } from "node:path";
 import type { ITask } from "../spec";
-import type { ErrorSet } from "../validate/errors";
+import type { ErrorSet } from "../validate";
 import { isInScope } from "../lib/scope";
 import { readFiles } from "../lib/fs";
 import { ruleHelp, idiomHints } from "./rule-docs";

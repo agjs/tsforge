@@ -1,4 +1,4 @@
-import type { ErrorParser } from "../validate/validate";
+import type { ErrorParser } from "../validate";
 import {
   type RUN_STATUS,
   type STUCK_REASON,
