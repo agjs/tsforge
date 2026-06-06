@@ -196,3 +196,16 @@ Per-domain commits, gate green (157) after each:
   import paths stayed stable.
 - All exported types moved OUT of logic files into their `<domain>.types.ts`.
 - External code imports the domain BARREL (`../spec`, `../loop`, …), not deep paths.
+
+## Strictness completion + model switch (2026-06-06)
+- Scripts held to full src strictness (only console relaxed); the relaxed
+  no-duplicate-string had hidden an 11x model-name dup.
+- PROVIDER_DEFAULTS { baseUrl, model } — single source for endpoint + model.
+- loop/ sub-foldered: tools/ prompt/ feedback/ + coordinators at top.
+- cognitive-complexity ratcheted 31→20 (boringstack level): runTask/settleGate
+  decomposed into settleGate/applyDeterministicFixes/runToolCalls/emitTiming;
+  applyCall/parseEslintJson/parseLog also reduced. Every function ≤20.
+- DEFAULT MODEL → qwen3.6-35b-a3b (MoE, ~52.9 tok/s). Beats qwen3.6-27b on the
+  suite: money 3-4t/59-69s (vs 7t/140-217s), react-board 3-4t Q5 soup:0 (vs 6t
+  soup 11-13). The 27b's malformed-tool-call fragility is GONE on the MoE.
+- All on branch harness-cleanup, gate green (157) every commit; not merged to main.
