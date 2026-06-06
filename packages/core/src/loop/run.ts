@@ -143,6 +143,13 @@ export async function runTask(
   const hasExistingCode = editable.some((f) => f.content.trim().length > 0);
   const tools = toolsFor(hasExistingCode);
 
+  // Mode-aware reasoning cap: scratch tasks over-think unbounded, so default
+  // them to the measured knee; existing-code runs stay uncapped (the cap hurts
+  // navigation). An explicit opts.thinkingTokenBudget always wins.
+  const effectiveThinkingBudget =
+    thinkingTokenBudget ??
+    (hasExistingCode ? undefined : LOOP_LIMITS.scratchThinkingBudget);
+
   const ctx: ILoopCtx = {
     task,
     cwd,
@@ -175,7 +182,9 @@ export async function runTask(
       temperature,
       toolChoice: "auto",
       ...(enableThinking === undefined ? {} : { enableThinking }),
-      ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+      ...(effectiveThinkingBudget === undefined
+        ? {}
+        : { thinkingTokenBudget: effectiveThinkingBudget }),
       onToken: (text) => {
         report({ kind: "token", task: task.id, message: text });
       },

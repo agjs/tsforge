@@ -42,4 +42,15 @@ export const LOOP_LIMITS = {
   mapThresholdChars: 12000,
   /** Hard backstop on model turns per task. */
   maxTurns: 40,
+  /**
+   * Default reasoning-token cap for SCRATCH (create-from-spec) tasks, where the
+   * model over-thinks unbounded (~92s turn-1, occasional 198s spirals) without
+   * converging faster. Measured knee on money: 2048 ≈ 73s/4 turns vs 206s/5.7
+   * uncapped, Q-neutral; 4096 rambles back up to 133s. NOT applied to existing-
+   * code runs — there the cap HURT navigation (react-board hit 12 turns @2048),
+   * since understanding a codebase genuinely needs reasoning. Override per-run
+   * with TSFORGE_THINKING_BUDGET / opts.thinkingTokenBudget. Harder algorithmic
+   * scratch targets may want a higher override.
+   */
+  scratchThinkingBudget: 2048,
 } as const;
