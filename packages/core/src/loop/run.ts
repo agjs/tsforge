@@ -9,7 +9,13 @@ import { isInScope } from "../lib/scope";
 import { ruleHelp, idiomHints } from "./rule-docs";
 import { executeTool } from "./execute-tool";
 import { astGrepFix } from "./astgrep-fix";
-import { EDIT_TOOL, CREATE_TOOL, RUN_TOOL, READ_TOOL } from "../agent/tools";
+import {
+  EDIT_TOOL,
+  CREATE_TOOL,
+  RUN_TOOL,
+  READ_TOOL,
+  LSP_TOOLS,
+} from "../agent/tools";
 import { TsService } from "../lsp/service";
 import type { Reporter } from "./events";
 
@@ -41,7 +47,15 @@ export interface IRunOptions {
   maxTurns?: number;
 }
 
-const TOOLS = [READ_TOOL, RUN_TOOL, EDIT_TOOL, CREATE_TOOL];
+// The base tools the model always has, plus the semantic LSP/search tools
+// (rename/type_at/find_references/symbol_search/diagnostics/organize_imports/
+// search). The LSP set is A/B-gated by TSFORGE_NO_LSP_TOOLS=1 (default ON) — it
+// adds decision surface, so we verify it doesn't regress money before banking.
+const BASE_TOOLS = [READ_TOOL, RUN_TOOL, EDIT_TOOL, CREATE_TOOL];
+const TOOLS =
+  process.env.TSFORGE_NO_LSP_TOOLS === "1"
+    ? BASE_TOOLS
+    : [...BASE_TOOLS, ...LSP_TOOLS];
 /**
  * Give up only when the gate shows the EXACT same errors this many times in a
  * row — genuine spinning. Tuned for per-edit gating (the harness now validates
@@ -345,11 +359,17 @@ export async function runTask(
         edits += 1;
       }
 
+      // The semantic WRITE tools mutate editable files on disk too — re-gate.
+      if (call.name === "rename_symbol" || call.name === "organize_imports") {
+        touchedEditable = true;
+      }
+
       const result = await executeTool(call, {
         cwd,
         files: task.files,
         report,
         task: task.id,
+        tsService,
       });
 
       messages.push({

@@ -115,6 +115,117 @@ export const READ_TOOL = {
   },
 };
 
+/**
+ * Semantic + search tools backed by the in-process TypeScript LanguageService
+ * (+ ripgrep). They let the model NAVIGATE and REFACTOR a codebase by symbol
+ * name instead of reading whole files — essential at project scale. Read-only
+ * tools (find_references, type_at, symbol_search, diagnostics) are unrestricted;
+ * the writers (rename_symbol, organize_imports) are scope-enforced in dispatch.
+ */
+export const LSP_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "search",
+      description:
+        "ripgrep the working directory for a pattern — your primary way to FIND code without knowing file paths. Returns file:line matches.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string" },
+          glob: {
+            type: "string",
+            description: "optional path glob to scope the search",
+          },
+        },
+        required: ["pattern"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "symbol_search",
+      description:
+        "Find where a symbol (type/function/const) is declared across the project, by name. Returns kind, name, file:line.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "find_references",
+      description:
+        "List every reference to a symbol across the project (semantic, not text). Give the file it's declared/used in and the symbol name.",
+      parameters: {
+        type: "object",
+        properties: { file: { type: "string" }, symbol: { type: "string" } },
+        required: ["file", "symbol"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "type_at",
+      description:
+        "Get the inferred TypeScript type of a symbol (so you don't guess types). Give the file and symbol name.",
+      parameters: {
+        type: "object",
+        properties: { file: { type: "string" }, symbol: { type: "string" } },
+        required: ["file", "symbol"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "diagnostics",
+      description:
+        "Get the TypeScript semantic diagnostics (type errors) for one file on demand.",
+      parameters: {
+        type: "object",
+        properties: { file: { type: "string" } },
+        required: ["file"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "rename_symbol",
+      description:
+        "Semantically rename a symbol across ALL its references in one step (no manual multi-file edits). Rejected if any reference is in a read-only/out-of-scope file.",
+      parameters: {
+        type: "object",
+        properties: {
+          file: { type: "string" },
+          symbol: { type: "string" },
+          newName: { type: "string" },
+        },
+        required: ["file", "symbol", "newName"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "organize_imports",
+      description:
+        "Sort + dedupe + drop unused imports in an editable file (deterministic).",
+      parameters: {
+        type: "object",
+        properties: { file: { type: "string" } },
+        required: ["file"],
+      },
+    },
+  },
+];
+
 export function toRun(
   args: Record<string, unknown>
 ): { command: string } | null {

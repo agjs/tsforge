@@ -33,6 +33,21 @@ export interface ITsFix {
   changes: readonly ts.FileTextChanges[];
 }
 
+/** A reference / definition location, with a 1-based line for readable output. */
+export interface ITsLocation {
+  file: string;
+  line: number;
+  start: number;
+}
+
+/** A workspace symbol hit (from navigate-to). */
+export interface ITsSymbol {
+  name: string;
+  kind: string;
+  file: string;
+  line: number;
+}
+
 /**
  * Thin wrapper over the TypeScript LanguageService — the engine behind tsserver,
  * run in-process. Gives semantic diagnostics, TypeScript's own quick-fixes,
@@ -237,6 +252,138 @@ export class TsService {
     }
 
     return ts.displayPartsToString(info.displayParts);
+  }
+
+  /** All references to the symbol at `position` (across the project). */
+  references(file: string, position: number): ITsLocation[] {
+    const refs = this.service.getReferencesAtPosition(
+      this.toAbs(file),
+      position
+    );
+
+    return (refs ?? []).map((r) => ({
+      file: r.fileName,
+      line: this.lineOf(r.fileName, r.textSpan.start),
+      start: r.textSpan.start,
+    }));
+  }
+
+  /** Definition location(s) of the symbol at `position`. */
+  definition(file: string, position: number): ITsLocation[] {
+    const defs = this.service.getDefinitionAtPosition(
+      this.toAbs(file),
+      position
+    );
+
+    return (defs ?? []).map((d) => ({
+      file: d.fileName,
+      line: this.lineOf(d.fileName, d.textSpan.start),
+      start: d.textSpan.start,
+    }));
+  }
+
+  /** Workspace symbol search by name (navigate-to) — find a symbol/file without
+   *  knowing the path. */
+  symbols(query: string, max = 50): ITsSymbol[] {
+    return this.service.getNavigateToItems(query, max).map((i) => ({
+      name: i.name,
+      kind: i.kind,
+      file: i.fileName,
+      line: this.lineOf(i.fileName, i.textSpan.start),
+    }));
+  }
+
+  /**
+   * Semantic rename across ALL references, applied to disk. Returns the number
+   * of locations changed, or null if the symbol can't be renamed. Callers must
+   * enforce scope (a rename can touch read-only files — the loop checks).
+   */
+  rename(file: string, position: number, newName: string): number | null {
+    const locs = this.service.findRenameLocations(
+      this.toAbs(file),
+      position,
+      false,
+      false,
+      {}
+    );
+
+    if (locs === undefined || locs.length === 0) {
+      return null;
+    }
+
+    const byFile = new Map<string, ts.TextChange[]>();
+
+    for (const loc of locs) {
+      const arr = byFile.get(loc.fileName) ?? [];
+
+      arr.push({ span: loc.textSpan, newText: newName });
+      byFile.set(loc.fileName, arr);
+    }
+
+    const changes: ts.FileTextChanges[] = [...byFile].map(
+      ([fileName, textChanges]) => ({ fileName, textChanges, isNewFile: false })
+    );
+
+    this.applyChanges(changes);
+
+    return locs.length;
+  }
+
+  /** Which files a rename at `position` would touch (for scope-checking BEFORE
+   *  applying). Absolute paths. */
+  renameTargets(file: string, position: number): string[] {
+    const locs = this.service.findRenameLocations(
+      this.toAbs(file),
+      position,
+      false,
+      false,
+      {}
+    );
+
+    return [...new Set((locs ?? []).map((l) => l.fileName))];
+  }
+
+  /** Organize imports (dedupe/sort/drop unused) for one file. Returns edits made. */
+  organizeImports(file: string): number {
+    const changes = this.service.organizeImports(
+      { type: "file", fileName: this.toAbs(file) },
+      ts.getDefaultFormatCodeSettings("\n"),
+      {}
+    );
+
+    if (changes.length === 0) {
+      return 0;
+    }
+
+    this.applyChanges(changes);
+
+    return changes.reduce((n, c) => n + c.textChanges.length, 0);
+  }
+
+  /**
+   * Ergonomic position lookup: the model addresses symbols by NAME, not byte
+   * offset. Returns the offset of the first word-boundary occurrence of `symbol`
+   * in `file`, or undefined. Crude but practical (rename re-validates via the
+   * gate; references/typeAt are read-only).
+   */
+  positionOfSymbol(file: string, symbol: string): number | undefined {
+    const text = ts.sys.readFile(this.toAbs(file));
+
+    if (text === undefined) {
+      return undefined;
+    }
+
+    const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = new RegExp(`\\b${escaped}\\b`).exec(text);
+
+    return match === null ? undefined : match.index;
+  }
+
+  /** 1-based line number of a byte offset in a file (for readable tool output). */
+  private lineOf(file: string, position: number): number {
+    const text = ts.sys.readFile(file) ?? "";
+
+    return text.slice(0, position).split("\n").length;
   }
 
   private toAbs(file: string): string {
