@@ -9,7 +9,7 @@ import { isInScope } from "../lib/scope";
 import { readFiles, type IFileView } from "../lib/fs";
 import { EDIT_TOOL, CREATE_TOOL, TOOL_NAME } from "./agent.constants";
 import { toEdits, toCreate } from "./tools";
-import { ruleHelp } from "../loop/rule-docs";
+import { ruleHelp } from "../loop/feedback";
 
 /**
  * The errors the agent can actually act on: those in its editable files (plus

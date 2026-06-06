@@ -3,7 +3,7 @@ import {
   ruleHelp,
   ruleHelpFromOutput,
   parseRuleMdx,
-} from "../src/loop/rule-docs";
+} from "../src/loop/feedback/rule-docs";
 
 const SAMPLE_MDX = `---
 description: 'Disallow returning a value with type \`any\` from a function.'

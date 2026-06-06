@@ -15,7 +15,7 @@ import type { IRunResult, IRunOptions, Reporter } from "./loop.types";
 import { flags } from "../config";
 import { SYSTEM, seedPrompt } from "./prompt";
 import { gateFeedback } from "./feedback";
-import { executeTool } from "./execute-tool";
+import { executeTool } from "./tools";
 import { astGrepFix } from "./astgrep-fix";
 import {
   EDIT_TOOL,

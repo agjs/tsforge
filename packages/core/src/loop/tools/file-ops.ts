@@ -1,11 +1,11 @@
 import { join } from "node:path";
-import { applyEdits } from "../files/edit";
-import { applyCreate } from "../files/create";
-import { EDIT_FAIL_REASON } from "../files";
-import { writable } from "../lib/scope";
-import { LOOP_LIMITS } from "./loop.constants";
-import { toEdits, toCreate, toRun, toRead, runCommand } from "../agent";
-import { ruleHelpFromOutput } from "./rule-docs";
+import { applyEdits } from "../../files/edit";
+import { applyCreate } from "../../files/create";
+import { EDIT_FAIL_REASON } from "../../files";
+import { writable } from "../../lib/scope";
+import { LOOP_LIMITS } from "../loop.constants";
+import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
+import { ruleHelpFromOutput } from "../feedback/rule-docs";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
 
 export async function readFile(

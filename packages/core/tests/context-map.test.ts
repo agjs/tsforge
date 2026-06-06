@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
-import { renderFileSection, exportedSymbols } from "../src/loop/project-map";
+import {
+  renderFileSection,
+  exportedSymbols,
+} from "../src/loop/prompt/project-map";
 
 test("exportedSymbols extracts declared + named exports", () => {
   const c =

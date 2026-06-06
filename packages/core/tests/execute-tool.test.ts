@@ -2,8 +2,8 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeTool } from "../src/loop/execute-tool";
-import type { IToolContext } from "../src/loop/execute-tool";
+import { executeTool } from "../src/loop/tools/execute-tool";
+import type { IToolContext } from "../src/loop/tools/execute-tool";
 
 function ctx(cwd: string, files: string[]): IToolContext {
   return { cwd, files, task: "t", report: () => undefined };

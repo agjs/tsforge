@@ -1,5 +1,5 @@
-import type { ITask } from "../spec";
-import type { IFileView } from "../lib/fs";
+import type { ITask } from "../../spec";
+import type { IFileView } from "../../lib/fs";
 import { renderFileSection } from "./project-map";
 
 /** The implement-agent system prompt: who it is, the tools, and the strict-TS

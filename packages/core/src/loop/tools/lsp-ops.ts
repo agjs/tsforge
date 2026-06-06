@@ -1,7 +1,7 @@
 import { relative } from "node:path";
-import { runCommand, fileArg, TOOL_NAME, type ToolName } from "../agent";
-import { writable } from "../lib/scope";
-import { LOOP_LIMITS } from "./loop.constants";
+import { runCommand, fileArg, TOOL_NAME, type ToolName } from "../../agent";
+import { writable } from "../../lib/scope";
+import { LOOP_LIMITS } from "../loop.constants";
 import { str, reject, type IToolContext } from "./tool-context";
 
 /** ripgrep search over the working dir — the model's primary navigation at

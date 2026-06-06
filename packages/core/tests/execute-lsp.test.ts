@@ -2,8 +2,8 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeTool } from "../src/loop/execute-tool";
-import type { IToolContext } from "../src/loop/execute-tool";
+import { executeTool } from "../src/loop/tools/execute-tool";
+import type { IToolContext } from "../src/loop/tools/execute-tool";
 import { TsService } from "../src/lsp";
 
 const TSCONFIG = JSON.stringify({

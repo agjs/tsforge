@@ -1,4 +1,4 @@
-import type { ErrorSet } from "../validate";
+import type { ErrorSet } from "../../validate";
 import generatedJson from "./rule-docs.generated.json";
 
 export interface IRuleDoc {

@@ -179,3 +179,20 @@ A/B it; revert if it regresses evals. Lower priority than Phases 0-5.
 - No `any`/`as`/`!`. No inline `eslint-disable` (the new `eslint-comments/no-use` forbids it).
 - Don't touch the eval target fixtures under `evals/` or the memory files.
 - Commit per phase with a clear message so the refactor is bisectable.
+
+---
+
+## Reorg pass (done 2026-06-06, user-driven — boringstack domain layout)
+After the phased cleanup, the user flagged that types/constants/utils were still
+mixed and domain homes unclear. Reorganized EVERY domain to the boringstack shape
+(confirmed via AskUserQuestion): `<domain>.types.ts` (pure types) + `<domain>.constants.ts`
+(as-const registries / literals, imports nothing) + logic files + `index.ts` barrel.
+Per-domain commits, gate green (157) after each:
+- files, spec, agent, inference, loop, validate, lsp, eval, render — each split + barrel.
+- Root `constants.ts` DISSOLVED → `loop.constants.ts` (LOOP_LIMITS) + `inference.constants.ts` (PROVIDER_LIMITS).
+- Root `config.ts` → `config/` domain (config.constants.ts ENV_FLAG + flags.ts + index).
+- `lib/` flat grab-bag → per-concern folders: `lib/scope/`, `lib/guards/`, `lib/json/`,
+  `lib/fs/` (files+process merged). Folder names match old filenames so scope/guards/json
+  import paths stayed stable.
+- All exported types moved OUT of logic files into their `<domain>.types.ts`.
+- External code imports the domain BARREL (`../spec`, `../loop`, …), not deep paths.

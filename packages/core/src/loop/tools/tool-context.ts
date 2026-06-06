@@ -1,6 +1,6 @@
-import { repairArgs } from "../agent/tool-repair";
-import type { TsService } from "../lsp";
-import type { Reporter } from "./loop.types";
+import { repairArgs } from "../../agent/tool-repair";
+import type { TsService } from "../../lsp";
+import type { Reporter } from "../loop.types";
 
 export interface IToolContext {
   cwd: string;

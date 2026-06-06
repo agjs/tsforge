@@ -1,5 +1,5 @@
-import { LOOP_LIMITS } from "./loop.constants";
-import type { IFileView } from "../lib/fs";
+import { LOOP_LIMITS } from "../loop.constants";
+import type { IFileView } from "../../lib/fs";
 
 /** Exported symbol names in a file (lightweight regex — for the project map). */
 export function exportedSymbols(content: string): string[] {
