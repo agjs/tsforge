@@ -135,7 +135,12 @@ async function runOne(
     }
   };
 
-  const agent = modelAgent(provider, { temperature: temp });
+  const agent = modelAgent(provider, {
+    temperature: temp,
+    ...(process.env.TSFORGE_THINKING_BUDGET === undefined
+      ? {}
+      : { thinkingTokenBudget: Number(process.env.TSFORGE_THINKING_BUDGET) }),
+  });
   const started = performance.now();
   const result = await runSpec(spec, runDir, provider, {
     onEvent,

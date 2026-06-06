@@ -37,7 +37,7 @@ function editableErrors(errors: ErrorSet, files: string[]): ErrorSet {
  */
 export function modelAgent(
   provider: IProvider,
-  options: { temperature?: number } = {}
+  options: { temperature?: number; thinkingTokenBudget?: number } = {}
 ): IAgent {
   // Edit-application failures from the previous cycle, fed back so the model
   // learns when an edit was rejected (otherwise rejections are invisible to it).
@@ -55,6 +55,12 @@ export function modelAgent(
           // Temp 0 by default — the eval sweep showed it's decisively better for
           // convergence on coding tasks (temp 0: 100% pass vs temp 0.5: 0%).
           temperature: options.temperature ?? 0,
+          // Cap reasoning so the quality-repair pass can't ramble unbounded
+          // ("writing novels"): the budget that bounds the implement loop must
+          // bound this agent too, or the cap leaks.
+          ...(options.thinkingTokenBudget === undefined
+            ? {}
+            : { thinkingTokenBudget: options.thinkingTokenBudget }),
           // Stream: keeps the connection alive on long thinking calls (no
           // idle-drop) and emits a heartbeat. Reasoning is NOT logged — only a
           // dim dot per ~200 reasoning chars (proof of life, not the wall).
