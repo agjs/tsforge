@@ -100,6 +100,16 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "if (a == b) {}",
     good: "if (a === b) {}",
   },
+  "prefer-template": {
+    what: "Build strings with template literals, not `+` concatenation.",
+    bad: 'const s = "$" + dollars + "." + cents;',
+    good: "const s = `$${dollars}.${cents}`;",
+  },
+  "@typescript-eslint/no-inferrable-types": {
+    what: "Drop the type annotation when the initializer makes it obvious — let TS infer.",
+    bad: "const negative: boolean = cents < 0;",
+    good: "const negative = cents < 0;",
+  },
 
   // React / hooks idioms — same failure-keyed mechanism as the eslint/TS rules,
   // extended to framework rules the React gate enforces. Injected ONLY when the

@@ -78,6 +78,11 @@ export default tseslint.config(
     rules: {
       "prettier/prettier": "error",
 
+      // Idiomatic-output rules promoted to the GATE: over-annotation and
+      // string concatenation become deterministic errors, not reviewer notes.
+      "@typescript-eslint/no-inferrable-types": "error",
+      "prefer-template": "error",
+
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/consistent-type-assertions": [

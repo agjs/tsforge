@@ -27,6 +27,35 @@ const SAFE_REWRITES: readonly IRewrite[] = [
   },
 ];
 
+/**
+ * Drop a redundant type annotation on a `const` whose initializer already makes
+ * the type obvious to inference — the over-annotation a reviewer flags but no
+ * stock eslint rule catches (`no-inferrable-types` fires only on LITERAL
+ * initializers, never on calls/expressions). Structural, so it can't misfire on
+ * strings/comments. The `constraints` exclude the cases where dropping the
+ * annotation would CHANGE the inferred type: an empty/array/object literal
+ * (`number[] = []` infers `never[]`), `null`, or a function/arrow (loses its
+ * contextual parameter types under strict). Even so this is only HALF the
+ * safety — the caller re-runs the full gate and reverts the file if anything
+ * regressed, so an unsafe drop we didn't foresee can never ship.
+ */
+const DROP_ANNOTATION_RULE = `
+id: drop-redundant-annotation
+language: typescript
+rule:
+  pattern: 'const $A: $T = $B'
+constraints:
+  B:
+    not:
+      any:
+        - { kind: array }
+        - { kind: object }
+        - { kind: 'null' }
+        - { kind: arrow_function }
+        - { kind: function_expression }
+fix: 'const $A = $B'
+`;
+
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
 const AST_GREP = join(REPO_ROOT, "node_modules", ".bin", "ast-grep");
 
@@ -103,4 +132,54 @@ export async function astGrepFix(absFile: string): Promise<number> {
   }
 
   return applied;
+}
+
+/**
+ * Strip redundant `const` type annotations in `absFile` (see DROP_ANNOTATION_RULE).
+ * Counts matches first (constraint-filtered), then applies, returning the number
+ * rewritten. No-ops to 0 if ast-grep is absent. NOT verified here — the caller
+ * MUST re-gate and revert on regression; this only performs the rewrite.
+ */
+export async function dropRedundantAnnotations(
+  absFile: string
+): Promise<number> {
+  if (!(await Bun.file(AST_GREP).exists())) {
+    return 0;
+  }
+
+  const found = await astGrep([
+    "scan",
+    "--inline-rules",
+    DROP_ANNOTATION_RULE,
+    "--json=compact",
+    absFile,
+  ]);
+
+  if (!found.ok) {
+    return 0;
+  }
+
+  let matches: number;
+
+  try {
+    const parsed: unknown = JSON.parse(found.stdout);
+
+    matches = Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
+
+  if (matches === 0) {
+    return 0;
+  }
+
+  const done = await astGrep([
+    "scan",
+    "--inline-rules",
+    DROP_ANNOTATION_RULE,
+    "--update-all",
+    absFile,
+  ]);
+
+  return done.ok ? matches : 0;
 }

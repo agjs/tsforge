@@ -16,7 +16,7 @@ import { flags } from "../config";
 import { SYSTEM, seedPrompt } from "./prompt";
 import { gateFeedback } from "./feedback";
 import { executeTool } from "./tools";
-import { astGrepFix } from "./astgrep-fix";
+import { astGrepFix, dropRedundantAnnotations } from "./astgrep-fix";
 import {
   EDIT_TOOL,
   CREATE_TOOL,
@@ -372,6 +372,68 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
 }
 
 /**
+ * On a GREEN task, strip the redundant `const` annotations no stock lint rule
+ * catches (over-annotation of call/expression-initialized locals) — then re-gate
+ * and REVERT the whole file if anything regressed. Verified-safe: the structural
+ * rewrite only sticks when the full gate (incl. prettier --check) stays green,
+ * so a drop that changed an inferred type can never ship. Runs once, on the turn
+ * the task goes green; a no-op when ast-grep is off or nothing is redundant.
+ */
+async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
+  const { task, cwd, parse, report } = ctx;
+
+  if (flags.noAstgrep()) {
+    return;
+  }
+
+  const snapshot = new Map<string, string>();
+
+  for (const f of task.files) {
+    if (await fileExists(cwd, f)) {
+      snapshot.set(f, await Bun.file(join(cwd, f)).text());
+    }
+  }
+
+  let dropped = 0;
+
+  for (const f of task.files) {
+    if (await fileExists(cwd, f)) {
+      try {
+        dropped += await dropRedundantAnnotations(join(cwd, f));
+      } catch {
+        // degrade silently — we revalidate and revert below
+      }
+    }
+  }
+
+  if (dropped === 0) {
+    return;
+  }
+
+  // Re-format (the drop strips trailing semicolons) before re-gating.
+  if (task.fix !== undefined && task.fix.length > 0) {
+    await runAccept({ ...task, accept: task.fix }, cwd);
+  }
+
+  const recheck = await validate(task, cwd, parse);
+
+  if (recheck.passed) {
+    report({
+      kind: "tool",
+      task: task.id,
+      message: `polish: dropped ${dropped} redundant annotation(s)`,
+    });
+
+    return;
+  }
+
+  // A drop changed an inferred type — roll the whole file set back to green.
+  for (const [f, content] of snapshot) {
+    await Bun.write(join(cwd, f), content);
+  }
+}
+
+/**
  * The deterministic gate — the only authority on "done". Auto-fix, run the
  * optional fix command, validate, and return a terminal result (done/stuck) or
  * null to keep going (having fed the failures back into the conversation).
@@ -409,6 +471,8 @@ async function settleGate(
   });
 
   if (gate.passed) {
+    await polishOnGreen(ctx);
+
     report({
       kind: "done",
       task: task.id,
