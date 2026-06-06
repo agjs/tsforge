@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { ITask } from "../spec";
-import type { IChatMessage, IProvider } from "../inference";
+import type { IChatMessage, IProvider, IToolCall } from "../inference";
 import {
   validate,
   type ErrorParser,
@@ -47,6 +47,32 @@ export function toolsFor(hasExistingCode: boolean): typeof ALL_TOOLS {
   return ALL_TOOLS;
 }
 
+/** The model wrote prose but issued NO tool call while the gate is still red —
+ *  a narration-without-action turn (seen on money + react-board). Nudge it to ACT. */
+const NO_TOOL_CALL_NUDGE =
+  "You replied with text but called no tool. Writing code or a plan in your " +
+  "message does NOT change any file. Don't describe the next step — emit the " +
+  "actual tool call now (create/edit to change a file, read/search to inspect one).";
+
+/** The coordinator's per-task working context (immutable inputs). */
+interface ILoopCtx {
+  task: ITask;
+  cwd: string;
+  tsService: TsService | null;
+  parse: ErrorParser | undefined;
+  report: Reporter;
+  messages: IChatMessage[];
+}
+
+/** Mutable state threaded across turns (the gradient the loop descends). */
+interface ILoopState {
+  prevGateErrors: ErrorSet;
+  gateNoProgress: number;
+  lastGateCount: number;
+  edits: number;
+  regressions: number;
+}
+
 /**
  * The implement loop as a persistent, tool-using conversation. The model drives
  * — it can `read`, `run` (tests/tsc/eslint), `edit`, `create` — and the whole
@@ -63,11 +89,8 @@ export async function runTask(
 ): Promise<IRunResult> {
   const { parse, enableThinking, thinkingTokenBudget } = opts;
   // A/B control for the gate-feedback-fidelity win: TSFORGE_LEGACY_FEEDBACK=1
-  // forces the OLD mis-selected parser (eslint-json on chained tsc&&eslint), so
-  // a tsc failure dumps as one opaque blob (maxErr=1, no structure/source-lines)
-  // — the pre-fix behavior, to measure the lift with reps instead of n=1.
-  const legacyFeedback = flags.legacyFeedback();
-  const effectiveParse: ErrorParser | undefined = legacyFeedback
+  // forces the OLD mis-selected parser (eslint-json on chained tsc&&eslint).
+  const effectiveParse: ErrorParser | undefined = flags.legacyFeedback()
     ? parseEslintJson
     : parse;
   const temperature = opts.temperature ?? 0;
@@ -120,24 +143,21 @@ export async function runTask(
   const hasExistingCode = editable.some((f) => f.content.trim().length > 0);
   const tools = toolsFor(hasExistingCode);
 
-  // In-process TypeScript LanguageService for deterministic quick-fixes — built
-  // once if the project has a tsconfig. Guarded so a setup failure can't break
-  // the loop (the `tsc -p` gate stays the authority regardless).
-  let tsService: TsService | null = null;
-
-  try {
-    if (await fileExists(cwd, "tsconfig.json")) {
-      tsService = new TsService(cwd);
-    }
-  } catch {
-    tsService = null;
-  }
-
-  let prevGateErrors: ErrorSet = red.errors;
-  let gateNoProgress = 0;
-  let edits = 0;
-  let regressions = 0;
-  let lastGateCount = -1;
+  const ctx: ILoopCtx = {
+    task,
+    cwd,
+    tsService: await buildTsService(cwd),
+    parse: effectiveParse,
+    report,
+    messages,
+  };
+  const state: ILoopState = {
+    prevGateErrors: red.errors,
+    gateNoProgress: 0,
+    lastGateCount: -1,
+    edits: 0,
+    regressions: 0,
+  };
   const taskStart = performance.now();
 
   for (let turn = 1; turn <= maxTurns; turn += 1) {
@@ -149,19 +169,6 @@ export async function runTask(
       cycle: turn,
       message: `task ${task.id} · turn ${turn}: asking model`,
     });
-
-    const emitTiming = (): void => {
-      const turnMs = Math.round(performance.now() - turnStart);
-      const totalMs = Math.round(performance.now() - taskStart);
-
-      report({
-        kind: "timing",
-        task: task.id,
-        cycle: turn,
-        ms: turnMs,
-        message: `turn ${turn} took ${secs(turnMs)} (total ${secs(totalMs)})`,
-      });
-    };
 
     const res = await provider.complete(messages, {
       tools,
@@ -180,225 +187,35 @@ export async function runTask(
       toolCalls: res.toolCalls,
     });
 
-    // The deterministic gate — the only authority on "done". Auto-fix, validate,
-    // and return a terminal result (done/stuck) or null to keep going (having fed
-    // the failures back to the model).
-    const settleGate = async (): Promise<IRunResult | null> => {
-      // Deterministic TS auto-fix: apply TypeScript's own safe quick-fixes
-      // (missing imports, unused, etc.) to the editable files before the gate —
-      // mechanical fixes the model shouldn't burn turns on.
-      if (tsService !== null) {
-        let tsFixed = 0;
+    const touchedEditable =
+      res.toolCalls.length === 0
+        ? false
+        : await runToolCalls(res.toolCalls, ctx, state);
 
-        // Guard: only touch files that exist on disk, and never let a
-        // LanguageService throw crash the run (the `tsc -p` gate is the
-        // authority regardless). A not-yet-created editable file made
-        // getSemanticDiagnostics throw "Could not find source file".
-        for (const f of task.files) {
-          try {
-            if (!(await fileExists(cwd, f))) {
-              continue;
-            }
+    // Settle the gate whenever the model stopped OR changed an editable file.
+    // (A read-only turn neither finishes nor mutates — just loop again.)
+    if (res.toolCalls.length === 0 || touchedEditable) {
+      const settled = await settleGate(ctx, state, turn);
 
-            tsService.refresh(f);
-            tsFixed += tsService.fixAll(f);
-          } catch {
-            // degrade silently — the gate still runs below
-          }
-        }
+      emitTiming(report, task.id, turn, turnStart, taskStart);
 
-        if (tsFixed > 0) {
-          report({
-            kind: "tool",
-            task: task.id,
-            message: `tsFixAll: applied ${tsFixed} TypeScript quick-fix(es)`,
-          });
-        }
-      }
-
-      // Deterministic SAFE idiom rewrites via ast-grep (structural codemod) —
-      // e.g. `new Array(n).fill(x)` → `Array.from(...)` (typed, not any[]). The
-      // gate re-validates, so a bad rewrite can't ship. Never throws into the loop.
-      // TSFORGE_NO_ASTGREP=1 disables it (A/B control: it mutates model code
-      // mid-loop, which may or may not earn its keep — measure before trusting).
-      let astFixed = 0;
-
-      if (!flags.noAstgrep()) {
-        for (const f of task.files) {
-          try {
-            if (await fileExists(cwd, f)) {
-              astFixed += await astGrepFix(join(cwd, f));
-            }
-          } catch {
-            // degrade silently — gate is the authority
-          }
-        }
-      }
-
-      if (astFixed > 0) {
-        report({
-          kind: "tool",
-          task: task.id,
-          message: `astGrepFix: applied ${astFixed} idiom rewrite(s)`,
-        });
-      }
-
-      if (task.fix !== undefined && task.fix.length > 0) {
-        await runAccept({ ...task, accept: task.fix }, cwd);
-      }
-
-      const gate = await validate(task, cwd, effectiveParse);
-
-      if (lastGateCount >= 0 && gate.errors.length > lastGateCount) {
-        regressions += 1;
-      }
-
-      lastGateCount = gate.errors.length;
-
-      report({
-        kind: "validated",
-        task: task.id,
-        cycle: turn,
-        passed: gate.passed,
-        errors: gate.errors.length,
-        message: gate.passed
-          ? `task ${task.id} · turn ${turn}: GREEN`
-          : `task ${task.id} · turn ${turn}: red (${gate.errors.length} error(s))`,
-      });
-
-      if (gate.passed) {
-        report({
-          kind: "done",
-          task: task.id,
-          cycles: turn,
-          message: `task ${task.id}: done in ${turn} turn(s)`,
-        });
-
+      if (settled !== null) {
         return {
-          task: task.id,
-          redConfirmed: true,
-          status: RUN_STATUS.done,
-          cycles: turn,
+          ...settled,
+          edits: state.edits,
+          regressions: state.regressions,
         };
       }
 
-      gateNoProgress = sameErrorSet(prevGateErrors, gate.errors)
-        ? gateNoProgress + 1
-        : 0;
-      prevGateErrors = gate.errors;
-
-      if (gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
-        report({
-          kind: "stuck",
-          task: task.id,
-          cycles: turn,
-          message: `task ${task.id}: stuck (gate unchanged ${LOOP_LIMITS.gateStuckRepeats}x)`,
-        });
-
-        return {
-          task: task.id,
-          redConfirmed: true,
-          status: RUN_STATUS.stuck,
-          cycles: turn,
-          reason: STUCK_REASON.stalled,
-        };
-      }
-
-      messages.push({
-        role: "user",
-        content: await gateFeedback(gate.errors, task, cwd),
-      });
-
-      return null;
-    };
-
-    // No tool calls = the model stopped; settle the gate.
-    if (res.toolCalls.length === 0) {
-      const settled = await settleGate();
-
-      emitTiming();
-
-      if (settled !== null) {
-        return { ...settled, edits, regressions };
-      }
-
-      // The model replied with prose but issued NO tool call while the gate is
-      // still red — a narration-without-action turn that wastes wall-clock. Seen
-      // on BOTH money ("I wrote the code in my message but didn't call create")
-      // and react-board (a multi-turn "let me read the files…" loop). Nudge it to
-      // ACT, not describe. Only fires on zero-tool-calls-while-red (a turn that
-      // legitimately finishes ends green and returns above), so it can't push the
-      // model to over-edit a passing task.
-      messages.push({
-        role: "user",
-        content:
-          "You replied with text but called no tool. Writing code or a plan in your message does NOT change any file. Don't describe the next step — emit the actual tool call now (create/edit to change a file, read/search to inspect one).",
-      });
-
-      continue;
-    }
-
-    // The model asked for tools — run each, feed results back, note whether it
-    // changed an editable file.
-    let touchedEditable = false;
-
-    for (let i = 0; i < res.toolCalls.length; i += 1) {
-      const call = res.toolCalls[i];
-
-      if (call === undefined) {
-        continue;
-      }
-
-      const file = call.arguments.file;
-
-      if (
-        (call.name === TOOL_NAME.edit || call.name === TOOL_NAME.create) &&
-        typeof file === "string" &&
-        isInScope(file, task.files)
-      ) {
-        touchedEditable = true;
-        edits += 1;
-      }
-
-      // The semantic WRITE tools mutate editable files on disk too — re-gate.
-      if (
-        call.name === TOOL_NAME.renameSymbol ||
-        call.name === TOOL_NAME.organizeImports
-      ) {
-        touchedEditable = true;
-      }
-
-      const result = await executeTool(call, {
-        cwd,
-        files: task.files,
-        report,
-        task: task.id,
-        tsService,
-      });
-
-      messages.push({
-        role: "tool",
-        content: result,
-        toolCallId: call.id ?? `call_${i}`,
-      });
-    }
-
-    // Lever 1: after any edit to an editable file the HARNESS auto-runs the gate
-    // and feeds the result back — so the model never burns a turn on a premature
-    // "done" and need not run the acceptance command itself.
-    if (touchedEditable) {
-      const settled = await settleGate();
-
-      emitTiming();
-
-      if (settled !== null) {
-        return { ...settled, edits, regressions };
+      // Stopped with no tool call while still red → nudge it to act, not narrate.
+      if (res.toolCalls.length === 0) {
+        messages.push({ role: "user", content: NO_TOOL_CALL_NUDGE });
       }
 
       continue;
     }
 
-    emitTiming();
+    emitTiming(report, task.id, turn, turnStart, taskStart);
   }
 
   report({
@@ -414,9 +231,238 @@ export async function runTask(
     status: RUN_STATUS.stuck,
     cycles: maxTurns,
     reason: STUCK_REASON.cap,
-    edits,
-    regressions,
+    edits: state.edits,
+    regressions: state.regressions,
   };
+}
+
+/** Build the in-process TS LanguageService if the project has a tsconfig. Guarded
+ *  so a setup failure can't break the loop (the `tsc -p` gate stays authority). */
+async function buildTsService(cwd: string): Promise<TsService | null> {
+  try {
+    if (await fileExists(cwd, "tsconfig.json")) {
+      return new TsService(cwd);
+    }
+  } catch {
+    // degrade silently — the gate runs regardless
+  }
+
+  return null;
+}
+
+/**
+ * Run the model's tool calls: execute each, feed the result back, and report
+ * whether any touched an editable file (which means we should re-gate). Mutates
+ * `state.edits`. The semantic WRITE tools (rename/organize) also touch disk.
+ */
+async function runToolCalls(
+  toolCalls: readonly IToolCall[],
+  ctx: ILoopCtx,
+  state: ILoopState
+): Promise<boolean> {
+  let touchedEditable = false;
+
+  for (let i = 0; i < toolCalls.length; i += 1) {
+    const call = toolCalls[i];
+
+    if (call === undefined) {
+      continue;
+    }
+
+    const file = call.arguments.file;
+
+    if (
+      (call.name === TOOL_NAME.edit || call.name === TOOL_NAME.create) &&
+      typeof file === "string" &&
+      isInScope(file, ctx.task.files)
+    ) {
+      touchedEditable = true;
+      state.edits += 1;
+    }
+
+    if (
+      call.name === TOOL_NAME.renameSymbol ||
+      call.name === TOOL_NAME.organizeImports
+    ) {
+      touchedEditable = true;
+    }
+
+    const result = await executeTool(call, {
+      cwd: ctx.cwd,
+      files: ctx.task.files,
+      report: ctx.report,
+      task: ctx.task.id,
+      tsService: ctx.tsService,
+    });
+
+    ctx.messages.push({
+      role: "tool",
+      content: result,
+      toolCallId: call.id ?? `call_${i}`,
+    });
+  }
+
+  return touchedEditable;
+}
+
+/**
+ * Deterministic auto-fixes applied before the gate — mechanical fixes the model
+ * shouldn't burn turns on. TypeScript's own safe quick-fixes (missing imports,
+ * unused) + ast-grep SAFE idiom rewrites (`new Array(n).fill` → `Array.from`).
+ * The `tsc -p` gate re-validates, so a bad fix can't ship; never throws.
+ */
+async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
+  const { task, cwd, tsService, report } = ctx;
+
+  if (tsService !== null) {
+    let tsFixed = 0;
+
+    for (const f of task.files) {
+      try {
+        if (await fileExists(cwd, f)) {
+          tsService.refresh(f);
+          tsFixed += tsService.fixAll(f);
+        }
+      } catch {
+        // degrade silently — the gate still runs below
+      }
+    }
+
+    if (tsFixed > 0) {
+      report({
+        kind: "tool",
+        task: task.id,
+        message: `tsFixAll: applied ${tsFixed} TypeScript quick-fix(es)`,
+      });
+    }
+  }
+
+  if (flags.noAstgrep()) {
+    return;
+  }
+
+  let astFixed = 0;
+
+  for (const f of task.files) {
+    try {
+      if (await fileExists(cwd, f)) {
+        astFixed += await astGrepFix(join(cwd, f));
+      }
+    } catch {
+      // degrade silently — gate is the authority
+    }
+  }
+
+  if (astFixed > 0) {
+    report({
+      kind: "tool",
+      task: task.id,
+      message: `astGrepFix: applied ${astFixed} idiom rewrite(s)`,
+    });
+  }
+}
+
+/**
+ * The deterministic gate — the only authority on "done". Auto-fix, run the
+ * optional fix command, validate, and return a terminal result (done/stuck) or
+ * null to keep going (having fed the failures back into the conversation).
+ */
+async function settleGate(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  turn: number
+): Promise<IRunResult | null> {
+  const { task, cwd, parse, report, messages } = ctx;
+
+  await applyDeterministicFixes(ctx);
+
+  if (task.fix !== undefined && task.fix.length > 0) {
+    await runAccept({ ...task, accept: task.fix }, cwd);
+  }
+
+  const gate = await validate(task, cwd, parse);
+
+  if (state.lastGateCount >= 0 && gate.errors.length > state.lastGateCount) {
+    state.regressions += 1;
+  }
+
+  state.lastGateCount = gate.errors.length;
+
+  report({
+    kind: "validated",
+    task: task.id,
+    cycle: turn,
+    passed: gate.passed,
+    errors: gate.errors.length,
+    message: gate.passed
+      ? `task ${task.id} · turn ${turn}: GREEN`
+      : `task ${task.id} · turn ${turn}: red (${gate.errors.length} error(s))`,
+  });
+
+  if (gate.passed) {
+    report({
+      kind: "done",
+      task: task.id,
+      cycles: turn,
+      message: `task ${task.id}: done in ${turn} turn(s)`,
+    });
+
+    return {
+      task: task.id,
+      redConfirmed: true,
+      status: RUN_STATUS.done,
+      cycles: turn,
+    };
+  }
+
+  state.gateNoProgress = sameErrorSet(state.prevGateErrors, gate.errors)
+    ? state.gateNoProgress + 1
+    : 0;
+  state.prevGateErrors = gate.errors;
+
+  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
+    report({
+      kind: "stuck",
+      task: task.id,
+      cycles: turn,
+      message: `task ${task.id}: stuck (gate unchanged ${LOOP_LIMITS.gateStuckRepeats}x)`,
+    });
+
+    return {
+      task: task.id,
+      redConfirmed: true,
+      status: RUN_STATUS.stuck,
+      cycles: turn,
+      reason: STUCK_REASON.stalled,
+    };
+  }
+
+  messages.push({
+    role: "user",
+    content: await gateFeedback(gate.errors, task, cwd),
+  });
+
+  return null;
+}
+
+/** Report how long a turn took (and cumulative). */
+function emitTiming(
+  report: Reporter,
+  task: string,
+  turn: number,
+  turnStart: number,
+  taskStart: number
+): void {
+  const turnMs = Math.round(performance.now() - turnStart);
+  const totalMs = Math.round(performance.now() - taskStart);
+
+  report({
+    kind: "timing",
+    task,
+    cycle: turn,
+    ms: turnMs,
+    message: `turn ${turn} took ${secs(turnMs)} (total ${secs(totalMs)})`,
+  });
 }
 
 /** Human-readable duration: ms under a second, else seconds with one decimal. */
