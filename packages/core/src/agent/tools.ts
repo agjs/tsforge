@@ -1,5 +1,6 @@
 import type { ICreateFile, IReplacement } from "../files/types";
 import { isArray, isRecord } from "../lib/guards";
+import { readProcessOutput } from "../lib/process";
 
 /**
  * The canonical tool names. Schemas, dispatch, and any name comparison reference
@@ -303,8 +304,7 @@ export async function runCommand(
   });
 
   const exitCode = await proc.exited;
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
+  const { stdout, stderr } = await readProcessOutput(proc.stdout, proc.stderr);
 
   return { stdout, stderr, exitCode };
 }

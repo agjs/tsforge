@@ -1,4 +1,5 @@
 import type { ITask } from "../spec/types";
+import { readProcessOutput } from "../lib/process";
 
 export interface IAcceptResult {
   /** True when the command exits 0. */
@@ -22,8 +23,7 @@ export async function runAccept(
   });
 
   const exitCode = await proc.exited;
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
+  const { stdout, stderr } = await readProcessOutput(proc.stdout, proc.stderr);
 
   return { passed: exitCode === 0, output: stdout + stderr };
 }

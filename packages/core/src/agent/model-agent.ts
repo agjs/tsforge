@@ -1,4 +1,4 @@
-import { join, basename } from "node:path";
+import { basename } from "node:path";
 import type { IAgent, IAgentContext } from "./types";
 import type { IChatMessage, IProvider } from "../inference/types";
 import type { ErrorSet } from "../validate/errors";
@@ -6,6 +6,7 @@ import { applyEdits } from "../files/edit";
 import { applyCreate } from "../files/create";
 import { EDIT_FAIL_REASON } from "../files/types";
 import { isInScope } from "../lib/scope";
+import { readFiles, type IFileView } from "../lib/files";
 import { EDIT_TOOL, CREATE_TOOL, TOOL_NAME, toEdits, toCreate } from "./tools";
 import { ruleHelp } from "../loop/rule-docs";
 
@@ -24,11 +25,6 @@ function editableErrors(errors: ErrorSet, files: string[]): ErrorSet {
 
     return isInScope(e.file, files) || isInScope(basename(e.file), files);
   });
-}
-
-interface IFileView {
-  path: string;
-  content: string;
 }
 
 /**
@@ -192,20 +188,6 @@ function outOfScope(ctx: IAgentContext, file: string): string | null {
   return `${file} is OUT OF SCOPE — you may only edit/create: ${ctx.task.files.join(
     ", "
   )}. Read-only context (tests, etc.) must not be changed.`;
-}
-
-async function readFiles(cwd: string, paths: string[]): Promise<IFileView[]> {
-  const views: IFileView[] = [];
-
-  for (const path of paths) {
-    const file = Bun.file(join(cwd, path));
-
-    if (await file.exists()) {
-      views.push({ path, content: await file.text() });
-    }
-  }
-
-  return views;
 }
 
 function buildMessages(

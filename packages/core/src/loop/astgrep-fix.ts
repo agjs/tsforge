@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { readProcessOutput } from "../lib/process";
 
 /**
  * Deterministic, SAFE strict-TS idiom rewrites via ast-grep (structural, not
@@ -36,7 +37,7 @@ async function astGrep(
     stdout: "pipe",
     stderr: "pipe",
   });
-  const stdout = await new Response(proc.stdout).text();
+  const { stdout } = await readProcessOutput(proc.stdout, proc.stderr);
   const code = await proc.exited;
 
   return { stdout, ok: code === 0 };

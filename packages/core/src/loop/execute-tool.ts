@@ -1,23 +1,24 @@
 import { join, relative } from "node:path";
-import type { IToolCall } from "../inference/types";
-import { applyEdits } from "../files/edit";
-import { applyCreate } from "../files/create";
-import { EDIT_FAIL_REASON } from "../files/types";
-import { isInScope } from "../lib/scope";
+import { repairArgs } from "../agent/tool-repair";
 import {
-  toEdits,
-  toCreate,
-  toRun,
-  toRead,
-  runCommand,
   fileArg,
+  runCommand,
+  toCreate,
+  toEdits,
   TOOL_NAME,
+  toRead,
+  toRun,
   type ToolName,
 } from "../agent/tools";
-import { repairArgs } from "../agent/tool-repair";
-import { ruleHelpFromOutput } from "./rule-docs";
+import { LIMITS } from "../constants";
+import { applyCreate } from "../files/create";
+import { applyEdits } from "../files/edit";
+import { EDIT_FAIL_REASON } from "../files/types";
+import type { IToolCall } from "../inference/types";
+import { writable } from "../lib/scope";
 import type { TsService } from "../lsp/service";
 import type { Reporter } from "./events";
+import { ruleHelpFromOutput } from "./rule-docs";
 
 export interface IToolContext {
   cwd: string;
@@ -36,23 +37,6 @@ function str(args: Record<string, unknown>, key: string): string {
   const v = args[key];
 
   return typeof v === "string" ? v : "";
-}
-
-const MAX_OUTPUT = 4000;
-/** Reject an edit whose matched snippet spans more than this — a deterministic
- *  push toward surgical changes instead of lazily rewriting whole FILES (slow,
- *  reintroduces bugs; use `create` for brand-new files). Tuned UP from 25→50
- *  after the `lang` module showed legit function-sized edits (a 27-line block!)
- *  rejected by 2 lines — 25 was tuned on toy money's tiny functions. 50 admits
- *  real functions, still rejects ~80-line file rewrites. The gate re-validates,
- *  so a bad large edit can't ship. A/B'd on lang (friction↓) + money (canary). */
-const MAX_EDIT_LINES = 50;
-
-/** A file the model may write: its editable scope, OR a throwaway `scratch/`
- *  experiment (ignored by the gate) so it can test hypotheses by running code
- *  instead of reasoning about it. */
-function writable(file: string, files: string[]): boolean {
-  return isInScope(file, files) || file.startsWith("scratch/");
 }
 
 /**
@@ -166,7 +150,7 @@ async function doSearch(
   const globArg = glob.length > 0 ? ` -g ${JSON.stringify(glob)}` : "";
   const cmd = `rg --line-number --no-heading --color never -e ${JSON.stringify(pattern)}${globArg} || true`;
   const res = await runCommand(ctx.cwd, cmd);
-  const out = `${res.stdout}${res.stderr}`.slice(0, MAX_OUTPUT);
+  const out = `${res.stdout}${res.stderr}`.slice(0, LIMITS.maxToolOutputChars);
 
   ctx.report({
     kind: "tool",
@@ -358,7 +342,10 @@ async function runShell(
   }
 
   const res = await runCommand(ctx.cwd, r.command);
-  const output = `${res.stdout}${res.stderr}`.slice(0, MAX_OUTPUT);
+  const output = `${res.stdout}${res.stderr}`.slice(
+    0,
+    LIMITS.maxToolOutputChars
+  );
 
   // If the command surfaced lint/type errors, attach the failing rules' own
   // bad→good docs to what the model reads — so it fixes from examples, not blind.
@@ -404,7 +391,7 @@ async function doEdit(
   for (let i = 0; i < edit.edits.length; i += 1) {
     const span = (edit.edits[i]?.oldString ?? "").split("\n").length;
 
-    if (span > MAX_EDIT_LINES) {
+    if (span > LIMITS.maxEditLines) {
       return reject(
         ctx,
         "edit",

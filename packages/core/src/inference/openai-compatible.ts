@@ -7,6 +7,8 @@ import type {
 } from "./types";
 import type { IOpenAICompatibleConfig } from "./openai-compatible.types";
 import { isArray, isRecord } from "../lib/guards";
+import { LIMITS } from "../constants";
+import { TOOL_NAME } from "../agent/tools";
 
 /**
  * Talks to any OpenAI-compatible `/chat/completions` endpoint — which Ollama,
@@ -33,7 +35,7 @@ export class OpenAICompatibleProvider implements IProvider {
     const body = JSON.stringify({
       model: this.cfg.model,
       messages: messages.map(toWire),
-      max_tokens: this.cfg.maxTokens ?? 8192,
+      max_tokens: this.cfg.maxTokens ?? LIMITS.maxTokens,
       temperature: opts.temperature,
       ...(this.cfg.repetitionPenalty === undefined
         ? {}
@@ -59,7 +61,7 @@ export class OpenAICompatibleProvider implements IProvider {
       `${this.cfg.baseUrl}/chat/completions`,
       headers,
       body,
-      this.cfg.timeoutMs ?? 600000
+      this.cfg.timeoutMs ?? LIMITS.requestTimeoutMs
     );
 
     if (!res.ok) {
@@ -117,7 +119,7 @@ async function fetchWithRetry(
       }
 
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, 400 * attempt);
+        setTimeout(resolve, LIMITS.retryBackoffMs * attempt);
       });
     }
   }
@@ -181,20 +183,9 @@ function parseResponse(data: unknown): IModelResponse {
 }
 
 // Tool names the harness offers — the salvage parser only recognizes these, so
-// it can't mistake arbitrary prose/JSX for a tool call.
-const KNOWN_TOOLS = new Set([
-  "read",
-  "edit",
-  "create",
-  "run",
-  "search",
-  "symbol_search",
-  "find_references",
-  "type_at",
-  "diagnostics",
-  "rename_symbol",
-  "organize_imports",
-]);
+// it can't mistake arbitrary prose/JSX for a tool call. Derived from the single
+// TOOL_NAME registry (no second hardcoded list to drift).
+const KNOWN_TOOLS = new Set<string>(Object.values(TOOL_NAME));
 
 /**
  * Salvage tool calls the model emitted as MALFORMED text instead of structured

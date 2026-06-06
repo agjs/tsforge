@@ -6,6 +6,8 @@
  * load-bearing fact: an empty/vacuous file EXITS 0, so the exit code lies; only
  * the collected count (`total >= 1`) proves the suite actually asserts anything.
  */
+import { readProcessOutput } from "../lib/process";
+
 export interface IRunTestsResult {
   /** Tests that passed. */
   pass: number;
@@ -35,9 +37,8 @@ export async function runTests(
 
   await proc.exited;
 
-  const output =
-    (await new Response(proc.stdout).text()) +
-    (await new Response(proc.stderr).text());
+  const { stdout, stderr } = await readProcessOutput(proc.stdout, proc.stderr);
+  const output = stdout + stderr;
 
   return { ...countTests(output), output };
 }

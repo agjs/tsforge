@@ -6,6 +6,9 @@ import { parseEslintJson } from "../validate/parse";
 import { runAccept } from "../validate/accept";
 import { sameErrorSet, type ErrorSet } from "../validate/errors";
 import { isInScope } from "../lib/scope";
+import { readFiles, fileExists, type IFileView } from "../lib/files";
+import { LIMITS } from "../constants";
+import { flags } from "../config";
 import { ruleHelp, idiomHints } from "./rule-docs";
 import { executeTool } from "./execute-tool";
 import { astGrepFix } from "./astgrep-fix";
@@ -76,20 +79,12 @@ const BASE_TOOLS = [READ_TOOL, RUN_TOOL, EDIT_TOOL, CREATE_TOOL];
 const ALL_TOOLS = [...BASE_TOOLS, ...LSP_TOOLS];
 
 export function toolsFor(hasExistingCode: boolean): typeof ALL_TOOLS {
-  if (process.env.TSFORGE_NO_LSP_TOOLS === "1" || !hasExistingCode) {
+  if (flags.noLspTools() || !hasExistingCode) {
     return BASE_TOOLS;
   }
 
   return ALL_TOOLS;
 }
-
-/**
- * Give up only when the gate shows the EXACT same errors this many times in a
- * row — genuine spinning. Tuned for per-edit gating (the harness now validates
- * after every edit, so this counts edits, not stops): a hard error often needs
- * several attempts, so keep it generous. The 40-turn cap is the real backstop.
- */
-const GATE_STUCK_LIMIT = 10;
 
 /**
  * The implement loop as a persistent, tool-using conversation. The model drives
@@ -110,12 +105,12 @@ export async function runTask(
   // forces the OLD mis-selected parser (eslint-json on chained tsc&&eslint), so
   // a tsc failure dumps as one opaque blob (maxErr=1, no structure/source-lines)
   // — the pre-fix behavior, to measure the lift with reps instead of n=1.
-  const legacyFeedback = process.env.TSFORGE_LEGACY_FEEDBACK === "1";
+  const legacyFeedback = flags.legacyFeedback();
   const effectiveParse: ErrorParser | undefined = legacyFeedback
     ? parseEslintJson
     : parse;
   const temperature = opts.temperature ?? 0;
-  const maxTurns = opts.maxTurns ?? 40;
+  const maxTurns = opts.maxTurns ?? LIMITS.maxTurns;
   const report: Reporter = opts.onEvent ?? (() => undefined);
 
   report({
@@ -170,7 +165,7 @@ export async function runTask(
   let tsService: TsService | null = null;
 
   try {
-    if (await Bun.file(join(cwd, "tsconfig.json")).exists()) {
+    if (await fileExists(cwd, "tsconfig.json")) {
       tsService = new TsService(cwd);
     }
   } catch {
@@ -240,7 +235,7 @@ export async function runTask(
         // getSemanticDiagnostics throw "Could not find source file".
         for (const f of task.files) {
           try {
-            if (!(await Bun.file(join(cwd, f)).exists())) {
+            if (!(await fileExists(cwd, f))) {
               continue;
             }
 
@@ -267,10 +262,10 @@ export async function runTask(
       // mid-loop, which may or may not earn its keep — measure before trusting).
       let astFixed = 0;
 
-      if (process.env.TSFORGE_NO_ASTGREP !== "1") {
+      if (!flags.noAstgrep()) {
         for (const f of task.files) {
           try {
-            if (await Bun.file(join(cwd, f)).exists()) {
+            if (await fileExists(cwd, f)) {
               astFixed += await astGrepFix(join(cwd, f));
             }
           } catch {
@@ -331,12 +326,12 @@ export async function runTask(
         : 0;
       prevGateErrors = gate.errors;
 
-      if (gateNoProgress >= GATE_STUCK_LIMIT) {
+      if (gateNoProgress >= LIMITS.gateStuckRepeats) {
         report({
           kind: "stuck",
           task: task.id,
           cycles: turn,
-          message: `task ${task.id}: stuck (gate unchanged ${GATE_STUCK_LIMIT}x)`,
+          message: `task ${task.id}: stuck (gate unchanged ${LIMITS.gateStuckRepeats}x)`,
         });
 
         return {
@@ -477,18 +472,6 @@ const SYSTEM = [
   "The gate is `tsc` strict + eslint with every rule an error, so write TypeScript that satisfies it: interfaces are `I`-prefixed; `===`; no `var`; never the non-null `!` — guard index access (`const x = arr[i]; if (x === undefined) {...}`); no `any` and no `as` — type every parameter (e.g. `.reduce((acc: number, r: number) => …, 0)`); explicit boolean conditions. When the gate flags errors in read-only files (tests/types), they come from your editable file being missing or wrong-shaped and vanish once it's correct — don't edit them.",
 ].join("\n");
 
-interface IFileView {
-  path: string;
-  content: string;
-}
-
-/** Above this many chars of combined file content, switch from dumping full
- *  contents to a navigable MAP — so a large project doesn't blow the context
- *  window (the model pulls specifics on demand via read/search/LSP). Small
- *  targets stay full-dump (no behaviour change). This is the auto-compaction
- *  substrate the CLI needs at scale. */
-const MAP_THRESHOLD = 12000;
-
 /** Exported symbol names in a file (lightweight regex — for the project map). */
 export function exportedSymbols(content: string): string[] {
   const names = new Set<string>();
@@ -537,7 +520,7 @@ function projectMap(views: readonly IFileView[]): string {
 
 /**
  * Render a set of files for the prompt: full contents when small, a navigable
- * MAP when the combined size exceeds MAP_THRESHOLD (the model then uses
+ * MAP when the combined size exceeds LIMITS.mapThresholdChars (the model then uses
  * read/search/symbol_search to inspect specifics). Exported for testing.
  */
 export function renderFileSection(views: readonly IFileView[]): {
@@ -546,7 +529,7 @@ export function renderFileSection(views: readonly IFileView[]): {
 } {
   const total = views.reduce((n, v) => n + v.content.length, 0);
 
-  if (total > MAP_THRESHOLD) {
+  if (total > LIMITS.mapThresholdChars) {
     return { text: projectMap(views), mapped: true };
   }
 
@@ -705,21 +688,4 @@ async function renderErrors(errors: ErrorSet, cwd: string): Promise<string> {
   }
 
   return rendered.join("\n");
-}
-
-async function readFiles(
-  cwd: string,
-  paths: string[]
-): Promise<{ path: string; content: string }[]> {
-  const views: { path: string; content: string }[] = [];
-
-  for (const path of paths) {
-    const file = Bun.file(join(cwd, path));
-
-    if (await file.exists()) {
-      views.push({ path, content: await file.text() });
-    }
-  }
-
-  return views;
 }

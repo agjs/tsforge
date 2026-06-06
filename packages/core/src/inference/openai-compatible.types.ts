@@ -5,15 +5,15 @@ export interface IOpenAICompatibleConfig {
   model: string;
   apiKey?: string;
   /**
-   * Abort a single request after this many ms (default 600000 = 10 min).
+   * Abort a single request after this many ms (default LIMITS.requestTimeoutMs).
    * Generous because local generations are slow, but bounded so a hung server
    * can't wedge an unattended run forever.
    */
   timeoutMs?: number;
   /**
-   * Hard cap on tokens per response (default 8192). Bounds a degenerate
-   * repetition loop so one runaway generation can't spew until the context
-   * limit. Generous enough for whole-file tool-call output.
+   * Hard cap on tokens per response (default LIMITS.maxTokens). Bounds a
+   * degenerate repetition loop so one runaway generation can't spew until the
+   * context limit. Generous enough for whole-file tool-call output.
    */
   maxTokens?: number;
   /**
