@@ -168,8 +168,21 @@ export default tseslint.config(
     },
   },
   {
-    // Tests + scripts: relax the rules that fight legitimate test/CLI patterns.
-    files: ["packages/**/tests/**/*.ts", "packages/**/scripts/**/*.ts"],
+    // Scripts are operational ENTRY POINTS, not throwaway — held to `src`
+    // strictness (type-safety, no-duplicate-string, complexity). The ONLY
+    // allowance is console output: printing results to stdout is their job.
+    // (A relaxed no-duplicate-string here once hid an 11x-repeated model literal.)
+    files: ["packages/**/scripts/**/*.ts"],
+    rules: {
+      "no-console": "off",
+    },
+  },
+  {
+    // Tests: the minimal, universally-justified ergonomic exceptions only —
+    // mocks need `!`/`as`/unsafe access of untyped shapes, async wrappers don't
+    // always await, and suites legitimately repeat fixture strings. Everything
+    // else stays as strict as src.
+    files: ["packages/**/tests/**/*.ts"],
     rules: {
       "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/consistent-type-assertions": "off",
@@ -182,8 +195,8 @@ export default tseslint.config(
       "@typescript-eslint/no-confusing-void-expression": "off",
       "@typescript-eslint/no-empty-function": "off",
       "no-console": "off",
-      // Tests repeat fixture strings and scripts are operational glue — relax
-      // the duplication/complexity rules that fight those legitimate patterns.
+      // Suites repeat fixture/expected strings; complexity in a big table-driven
+      // test isn't the same smell as in product code.
       "sonarjs/no-duplicate-string": "off",
       "sonarjs/cognitive-complexity": "off",
     },

@@ -46,8 +46,9 @@ const out = (colored: string, plain: string): void => {
 out(`run ${runId}\n`, `run ${runId}\n`);
 
 const result = await runSpec(spec, runDir, provider, {
-  onEvent: (e) =>
-    out(renderEvent(e, { color: true }), renderEvent(e, { color: false })),
+  onEvent: (e) => {
+    out(renderEvent(e, { color: true }), renderEvent(e, { color: false }));
+  },
 });
 
 const summary = `\n\nspec "${spec.id}" -> ${result.status}\ntasks: ${JSON.stringify(result.results)}\n`;
