@@ -6,8 +6,8 @@ import { parseSpec } from "../src/spec";
 import { runSpec, qualityRepair } from "../src/loop";
 import { modelAgent } from "../src/agent";
 import { OpenAICompatibleProvider } from "../src/inference";
-import { summarize, type IRunRecord } from "../src/eval/score";
-import { renderEvent } from "../src/render/ansi";
+import { summarize, type IRunRecord } from "../src/eval";
+import { renderEvent } from "../src/render";
 import type { ILoopEvent } from "../src/loop";
 
 const seed = process.env.TSFORGE_SEED ?? "todo";

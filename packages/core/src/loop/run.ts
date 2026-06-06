@@ -25,7 +25,7 @@ import {
   LSP_TOOLS,
   TOOL_NAME,
 } from "../agent";
-import { TsService } from "../lsp/service";
+import { TsService } from "../lsp";
 
 // The base tools the model always has, plus the semantic LSP/search tools
 // (rename/type_at/find_references/symbol_search/diagnostics/organize_imports/

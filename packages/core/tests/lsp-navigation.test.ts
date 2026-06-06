@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TsService } from "../src/lsp/service";
+import { TsService } from "../src/lsp";
 
 const TSCONFIG = JSON.stringify({
   compilerOptions: {

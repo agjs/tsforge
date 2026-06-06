@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TsService } from "../src/lsp/service";
+import { TsService } from "../src/lsp";
 
 // The `orders` seed uses moduleResolution "bundler" + noUnusedLocals — the plan
 // flagged bundler resolution as the risk that could stop the LanguageService

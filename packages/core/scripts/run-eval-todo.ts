@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { parseSpec } from "../src/spec";
 import { runSpec } from "../src/loop";
 import { OpenAICompatibleProvider } from "../src/inference";
-import { renderEvent } from "../src/render/ansi";
+import { renderEvent } from "../src/render";
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
 const seedDir = join(evalsRoot, "todo");

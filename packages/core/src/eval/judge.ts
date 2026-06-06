@@ -1,21 +1,7 @@
+import type { IJudgeInput, IJudgeScore } from "./eval.types";
 import type { IProvider } from "../inference";
 import { isRecord } from "../lib/guards";
 import { extractJson } from "../lib/json";
-
-export interface IJudgeInput {
-  goal: string;
-  criteria: string;
-  code: string;
-}
-
-/** A quality score (1–5 per dimension) from an LLM reviewer — what the gate can't see. */
-export interface IJudgeScore {
-  overall: number;
-  correctness: number;
-  design: number;
-  readability: number;
-  notes: string;
-}
 
 /**
  * Score a green solution on quality dimensions the deterministic gate can't

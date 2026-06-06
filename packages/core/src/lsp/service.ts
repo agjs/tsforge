@@ -1,5 +1,11 @@
 import { join, isAbsolute } from "node:path";
 import ts from "typescript";
+import type {
+  ITsDiagnostic,
+  ITsFix,
+  ITsLocation,
+  ITsSymbol,
+} from "./lsp.types";
 
 /**
  * Quick-fixes safe to apply automatically — they align with our strict gate.
@@ -18,35 +24,6 @@ const SAFE_FIXES = new Set([
   "fixUnreachableCode",
   "fixAddMissingConstraint",
 ]);
-
-export interface ITsDiagnostic {
-  code: number;
-  message: string;
-  file: string;
-  start: number;
-  length: number;
-}
-
-export interface ITsFix {
-  description: string;
-  /** The text edits this fix applies (possibly across files). */
-  changes: readonly ts.FileTextChanges[];
-}
-
-/** A reference / definition location, with a 1-based line for readable output. */
-export interface ITsLocation {
-  file: string;
-  line: number;
-  start: number;
-}
-
-/** A workspace symbol hit (from navigate-to). */
-export interface ITsSymbol {
-  name: string;
-  kind: string;
-  file: string;
-  line: number;
-}
 
 /**
  * Thin wrapper over the TypeScript LanguageService — the engine behind tsserver,

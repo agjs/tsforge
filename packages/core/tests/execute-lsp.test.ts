@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeTool } from "../src/loop/execute-tool";
 import type { IToolContext } from "../src/loop/execute-tool";
-import { TsService } from "../src/lsp/service";
+import { TsService } from "../src/lsp";
 
 const TSCONFIG = JSON.stringify({
   compilerOptions: {

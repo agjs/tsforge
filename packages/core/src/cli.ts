@@ -2,7 +2,7 @@
 import { join, isAbsolute } from "node:path";
 import { runTask, RUN_STATUS } from "./loop";
 import { PROVIDER_LIMITS, OpenAICompatibleProvider } from "./inference";
-import { renderEvent } from "./render/ansi";
+import { renderEvent } from "./render";
 import type { ITask } from "./spec";
 
 /**

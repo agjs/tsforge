@@ -13,7 +13,7 @@ import { generateTests } from "../src/spec/generate-tests";
 import { reviewAndFixSuite } from "../src/spec/review-tests";
 import { runSpec } from "../src/loop";
 import { OpenAICompatibleProvider } from "../src/inference";
-import { renderEvent } from "../src/render/ansi";
+import { renderEvent } from "../src/render";
 import type { ILoopEvent } from "../src/loop";
 
 const seed = process.env.TSFORGE_SEED ?? "money";

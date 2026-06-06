@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { renderEvent } from "../src/render/ansi";
+import { renderEvent } from "../src/render";
 
 test("renders a create as a guttered block with the content", () => {
   const out = renderEvent(

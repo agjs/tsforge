@@ -4,7 +4,7 @@ import type { IAgent } from "../agent";
 import type { IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate";
 import { runAccept } from "../validate";
-import { judge } from "../eval/judge";
+import { judge } from "../eval";
 import type { Reporter } from "./loop.types";
 
 export interface IQualityResult {
