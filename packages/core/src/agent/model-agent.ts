@@ -4,7 +4,7 @@ import type { IChatMessage, IProvider } from "../inference/types";
 import type { ErrorSet } from "../validate/errors";
 import { applyEdits } from "../files/edit";
 import { applyCreate } from "../files/create";
-import { EDIT_FAIL_REASON } from "../files/types";
+import { EDIT_FAIL_REASON } from "../files";
 import { isInScope } from "../lib/scope";
 import { readFiles, type IFileView } from "../lib/files";
 import { EDIT_TOOL, CREATE_TOOL, TOOL_NAME, toEdits, toCreate } from "./tools";

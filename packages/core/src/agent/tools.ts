@@ -1,4 +1,4 @@
-import type { ICreateFile, IReplacement } from "../files/types";
+import type { ICreateFile, IReplacement } from "../files";
 import { isArray, isRecord } from "../lib/guards";
 import { readProcessOutput } from "../lib/process";
 

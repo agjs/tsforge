@@ -1,9 +1,6 @@
 import { join } from "node:path";
-import {
-  CREATE_FAIL_REASON,
-  type CreateResult,
-  type ICreateFile,
-} from "./types";
+import { CREATE_FAIL_REASON } from "./files.constants";
+import type { CreateResult, ICreateFile } from "./files.types";
 
 /**
  * Create a new file. Refuses to overwrite an existing one (that's `edit`'s job)

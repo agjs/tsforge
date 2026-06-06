@@ -1,11 +1,11 @@
 import { join } from "node:path";
-import {
-  EDIT_FAIL_REASON,
-  type IEdit,
-  type EditResult,
-  type IReplacement,
-  type EditsResult,
-} from "./types";
+import { EDIT_FAIL_REASON } from "./files.constants";
+import type {
+  IEdit,
+  EditResult,
+  IReplacement,
+  EditsResult,
+} from "./files.types";
 
 /**
  * Apply a str_replace edit. The match must be **exact and unique** — 0 matches
