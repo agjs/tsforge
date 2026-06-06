@@ -1,10 +1,5 @@
 import { join } from "node:path";
-
-/** A file's path (relative to the run dir) and its current contents. */
-export interface IFileView {
-  path: string;
-  content: string;
-}
+import type { IFileView } from "./fs.types";
 
 /** True when the file exists on disk (the one place this check lives). */
 export function fileExists(cwd: string, path: string): Promise<boolean> {

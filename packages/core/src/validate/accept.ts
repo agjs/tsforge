@@ -1,5 +1,5 @@
 import type { ITask } from "../spec";
-import { readProcessOutput } from "../lib/process";
+import { readProcessOutput } from "../lib/fs";
 
 export interface IAcceptResult {
   /** True when the command exits 0. */

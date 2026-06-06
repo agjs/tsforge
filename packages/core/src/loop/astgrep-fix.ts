@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { readProcessOutput } from "../lib/process";
+import { readProcessOutput } from "../lib/fs";
 
 /**
  * Deterministic, SAFE strict-TS idiom rewrites via ast-grep (structural, not

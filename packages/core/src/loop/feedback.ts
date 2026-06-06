@@ -2,7 +2,7 @@ import { join, basename, isAbsolute } from "node:path";
 import type { ITask } from "../spec";
 import type { ErrorSet } from "../validate/errors";
 import { isInScope } from "../lib/scope";
-import { readFiles } from "../lib/files";
+import { readFiles } from "../lib/fs";
 import { ruleHelp, idiomHints } from "./rule-docs";
 
 /** Cap rendered source lines so a large error set can't wall the model. */

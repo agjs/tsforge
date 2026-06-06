@@ -1,6 +1,6 @@
 import type { ICreateFile, IReplacement } from "../files";
 import { isArray, isRecord } from "../lib/guards";
-import { readProcessOutput } from "../lib/process";
+import { readProcessOutput } from "../lib/fs";
 import type { IShellResult } from "./agent.types";
 
 /**

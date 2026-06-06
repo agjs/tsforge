@@ -6,7 +6,7 @@ import { parseEslintJson } from "../validate/parse";
 import { runAccept } from "../validate/accept";
 import { sameErrorSet, type ErrorSet } from "../validate/errors";
 import { isInScope } from "../lib/scope";
-import { readFiles, fileExists } from "../lib/files";
+import { readFiles, fileExists } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
 import type { IRunResult, IRunOptions, Reporter } from "./loop.types";
 import { flags } from "../config";

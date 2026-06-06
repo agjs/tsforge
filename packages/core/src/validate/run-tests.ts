@@ -6,7 +6,7 @@
  * load-bearing fact: an empty/vacuous file EXITS 0, so the exit code lies; only
  * the collected count (`total >= 1`) proves the suite actually asserts anything.
  */
-import { readProcessOutput } from "../lib/process";
+import { readProcessOutput } from "../lib/fs";
 
 export interface IRunTestsResult {
   /** Tests that passed. */

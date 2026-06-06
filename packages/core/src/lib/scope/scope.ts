@@ -1,6 +1,4 @@
-/** A throwaway prefix the model may always write to — `scratch/` experiments are
- *  ignored by the gate, so it can test hypotheses by running code. */
-export const SCRATCH_PREFIX = "scratch/";
+import { SCRATCH_PREFIX } from "./scope.constants";
 
 /** True when `file` matches any of the glob `patterns` (the editable scope). */
 export function isInScope(file: string, patterns: string[]): boolean {
