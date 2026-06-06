@@ -131,6 +131,47 @@ test("applyEdits is atomic: one bad replacement writes NOTHING", async () => {
   }
 });
 
+test("applyEdits falls back to indentation-tolerant match when exact fails", async () => {
+  // File has 4-space indent; the model's oldString uses 2-space — exact match
+  // fails, but the line content is identical → fuzzy fallback applies it.
+  const dir = await tmp({
+    "a.ts": "function f() {\n    const x = arr[i];\n    return x;\n}\n",
+  });
+
+  try {
+    const r = await applyEdits(dir, "a.ts", [
+      {
+        oldString: "  const x = arr[i];\n  return x;",
+        newString: "  return arr[i] ?? 0;",
+      },
+    ]);
+
+    expect(r).toMatchObject({ ok: true, count: 1 });
+    const text = await Bun.file(join(dir, "a.ts")).text();
+
+    expect(text).toContain("return arr[i] ?? 0;");
+    expect(text).not.toContain("const x = arr[i]");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("fuzzy fallback does NOT guess when the line-match is ambiguous", async () => {
+  const dir = await tmp({ "a.ts": "  doThing();\n\n  doThing();\n" });
+
+  try {
+    const r = await applyEdits(dir, "a.ts", [
+      { oldString: "doThing();", newString: "doOther();" },
+    ]);
+
+    // Exact match is ambiguous (2 occurrences) → reported, not guessed.
+    expect(r).toMatchObject({ ok: false, reason: "ambiguous" });
+    expect(await Bun.file(join(dir, "a.ts")).text()).toContain("doThing();");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("applyEdits sees the result of earlier replacements (sequential)", async () => {
   const dir = await tmp({ "a.ts": "x" });
 

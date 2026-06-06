@@ -26,9 +26,9 @@ const GENERATED: Record<string, IRuleDoc> = generatedJson;
  */
 const RULE_DOCS: Record<string, IRuleDoc> = {
   TS2532: {
-    what: "Indexed access `arr[i]` is `T | undefined` (noUncheckedIndexedAccess). PREFER iterating so you never index by number — `for (const x of arr)`, `arr.reduce(...)`, `.map(...)`, or `for (const [i, x] of arr.entries())` which gives the index AND a defined `x` (no guard needed). Bind-and-guard only when you genuinely can't iterate. Never `!`.",
-    bad: "for (let i = 0; i < arr.length; i++) { const x = arr[i]; if (x === undefined) continue; total += x; }",
-    good: "for (const [i, x] of arr.entries()) { total += x; } // x is `T`, no undefined guard",
+    what: "Indexed access is `T | undefined` (noUncheckedIndexedAccess). Bind and guard before use; never `!`.",
+    bad: "total += arr[i];",
+    good: "const x = arr[i]; if (x === undefined) { continue; } total += x;",
   },
   TS18048: {
     what: "Value is possibly `undefined`. Guard it before use.",

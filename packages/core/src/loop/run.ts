@@ -217,15 +217,19 @@ export async function runTask(
       // Deterministic SAFE idiom rewrites via ast-grep (structural codemod) —
       // e.g. `new Array(n).fill(x)` → `Array.from(...)` (typed, not any[]). The
       // gate re-validates, so a bad rewrite can't ship. Never throws into the loop.
+      // TSFORGE_NO_ASTGREP=1 disables it (A/B control: it mutates model code
+      // mid-loop, which may or may not earn its keep — measure before trusting).
       let astFixed = 0;
 
-      for (const f of task.files) {
-        try {
-          if (await Bun.file(join(cwd, f)).exists()) {
-            astFixed += await astGrepFix(join(cwd, f));
+      if (process.env.TSFORGE_NO_ASTGREP !== "1") {
+        for (const f of task.files) {
+          try {
+            if (await Bun.file(join(cwd, f)).exists()) {
+              astFixed += await astGrepFix(join(cwd, f));
+            }
+          } catch {
+            // degrade silently — gate is the authority
           }
-        } catch {
-          // degrade silently — gate is the authority
         }
       }
 

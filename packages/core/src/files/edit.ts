@@ -71,6 +71,30 @@ export async function applyEdits(
     const matches = content.split(replacement.oldString).length - 1;
 
     if (matches === 0) {
+      // Exact match failed — try an indentation-tolerant LINE match (the common
+      // LLM miss: right code, slightly-off leading whitespace). Applies ONLY on a
+      // unique window; never guesses. The gate re-validates as a backstop.
+      const fuzzy = fuzzyLineReplace(
+        content,
+        replacement.oldString,
+        replacement.newString
+      );
+
+      if (fuzzy.matches === 1) {
+        content = fuzzy.text;
+        continue;
+      }
+
+      if (fuzzy.matches > 1) {
+        return {
+          ok: false,
+          file,
+          index: i,
+          reason: "ambiguous",
+          matches: fuzzy.matches,
+        };
+      }
+
       return { ok: false, file, index: i, reason: "not-found" };
     }
 
@@ -84,4 +108,69 @@ export async function applyEdits(
   await Bun.write(path, content);
 
   return { ok: true, file, count: edits.length };
+}
+
+/**
+ * Indentation-tolerant line match: compare `oldString` to `content` line-by-line
+ * ignoring each line's leading/trailing whitespace. Returns the new content with
+ * the matched window replaced by `newString` — but ONLY when exactly one window
+ * matches (`matches === 1`); 0 or >1 leaves content untouched so the caller can
+ * report not-found/ambiguous rather than guess. Line-granular (not char-offset),
+ * which keeps it simple and safe.
+ */
+function fuzzyLineReplace(
+  content: string,
+  oldString: string,
+  newString: string
+): { text: string; matches: number } {
+  const norm = (s: string): string => s.trim();
+  const contentLines = content.split("\n");
+  const oldLines = oldString.split("\n");
+
+  // Drop blank leading/trailing lines (the model often adds a stray newline).
+  while (oldLines.length > 0 && norm(oldLines[0] ?? "") === "") {
+    oldLines.shift();
+  }
+
+  while (
+    oldLines.length > 0 &&
+    norm(oldLines[oldLines.length - 1] ?? "") === ""
+  ) {
+    oldLines.pop();
+  }
+
+  if (oldLines.length === 0) {
+    return { text: content, matches: 0 };
+  }
+
+  const needle = oldLines.map(norm);
+  const starts: number[] = [];
+
+  for (let i = 0; i + needle.length <= contentLines.length; i += 1) {
+    let hit = true;
+
+    for (let j = 0; j < needle.length; j += 1) {
+      if (norm(contentLines[i + j] ?? "") !== needle[j]) {
+        hit = false;
+        break;
+      }
+    }
+
+    if (hit) {
+      starts.push(i);
+    }
+  }
+
+  if (starts.length !== 1) {
+    return { text: content, matches: starts.length };
+  }
+
+  const start = starts[0] ?? 0;
+  const rebuilt = [
+    ...contentLines.slice(0, start),
+    ...newString.split("\n"),
+    ...contentLines.slice(start + needle.length),
+  ];
+
+  return { text: rebuilt.join("\n"), matches: 1 };
 }
