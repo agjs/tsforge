@@ -271,3 +271,51 @@ function cap(code: string): string {
 
   return lines.length > 360 ? `${lines.slice(0, 360)}…` : lines;
 }
+
+/**
+ * Targeted fix guidance for a quality-REVIEWER's prose critique — the idiomatic
+ * issues the GATE can't flag (the model is already green). Keyed by what the
+ * judge actually complains about on Q4 runs: over-annotation, gratuitous
+ * undefined guards, locale-less toLocaleString, `+` concatenation, terse names.
+ * Turns a vague "make it more idiomatic" into a concrete bad→good, the same way
+ * ruleHelp does for lint failures — but on the quality channel, not the gate.
+ */
+interface IQualityHint {
+  /** Tested against the judge's notes prose. */
+  match: RegExp;
+  advice: string;
+}
+
+const QUALITY_HINTS: readonly IQualityHint[] = [
+  {
+    match: /verbose|explicit|redundant|annotation/i,
+    advice:
+      "Drop redundant type annotations — let TS infer obvious locals/returns (`const n = total;`, not `const n: number = total;`). Annotate parameters and unclear inference only.",
+  },
+  {
+    match: /unnecessary|undefined check|null check/i,
+    advice:
+      "Remove `=== undefined`/null guards the compiler doesn't require (a value already narrowed, or a non-indexed access). Guard ONLY where `noUncheckedIndexedAccess` actually flags it.",
+  },
+  {
+    match: /locale|toLocaleString/i,
+    advice:
+      'Pass an explicit locale: `n.toLocaleString("en-US")` — bare `toLocaleString()` is environment-dependent.',
+  },
+  {
+    match: /concatenat|string \+| \+ |\bconcat\b/i,
+    advice:
+      "Prefer template literals over `+` string concatenation: `` `${dollars}.${cents}` ``.",
+  },
+  {
+    match: /terse|short name|parameter name|\bnaming\b/i,
+    advice: "Name parameters descriptively (`acc`, `ratio` — not `a`, `r`).",
+  },
+];
+
+/** Concrete fix guidance for a quality reviewer's critique, or "" if none match. */
+export function qualityHints(notes: string): string {
+  return QUALITY_HINTS.filter((h) => h.match.test(notes))
+    .map((h) => `- ${h.advice}`)
+    .join("\n");
+}

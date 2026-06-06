@@ -5,6 +5,7 @@ import type { IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate";
 import { runAccept } from "../validate";
 import { judge } from "../eval";
+import { qualityHints } from "./feedback";
 import type { Reporter } from "./loop.types";
 
 export interface IQualityResult {
@@ -60,13 +61,22 @@ export async function qualityRepair(
 
     const snapshot = await snapshotFiles(task, cwd);
 
+    // Turn the reviewer's prose into concrete bad→good guidance where we have a
+    // card for the issue it named (the quality channel — these are idiomatic
+    // problems the gate can't flag).
+    const hints = qualityHints(best.notes);
+    const guidance =
+      hints.length > 0
+        ? `\n\nConcrete fixes for the idioms it named:\n${hints}`
+        : "";
+
     await agent.implement({
       cwd,
       task,
       errors: [
         {
           key: "quality",
-          message: `The code is green but a senior reviewer scored it ${best.quality}/5: "${best.notes}". Improve the code to address that critique. Do NOT break the tests or the gate.`,
+          message: `The code is green but a senior reviewer scored it ${best.quality}/5: "${best.notes}". Improve the code to address that critique.${guidance} Do NOT break the tests or the gate.`,
         },
       ],
       cycle: attempts,

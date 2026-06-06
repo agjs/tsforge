@@ -4,4 +4,5 @@ export {
   idiomHints,
   ruleHelpFromOutput,
   parseRuleMdx,
+  qualityHints,
 } from "./rule-docs";
