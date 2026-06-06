@@ -93,6 +93,22 @@ export function doLsp(
   }
 
   // The remaining tools address a symbol by name within a file.
+  return doSymbolLsp(name, svc, file, args, ctx, rel);
+}
+
+type LspService = NonNullable<IToolContext["tsService"]>;
+
+/** The LSP tools that resolve a symbol position first (type_at, find_references,
+ *  organize_imports, rename_symbol). Split out of doLsp to keep each function's
+ *  branching small. */
+function doSymbolLsp(
+  name: ToolName,
+  svc: LspService,
+  file: string,
+  args: Record<string, unknown>,
+  ctx: IToolContext,
+  rel: (abs: string) => string
+): string {
   const symbol = str(args, "symbol");
 
   if (file.length === 0 || symbol.length === 0) {

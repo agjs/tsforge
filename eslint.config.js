@@ -49,9 +49,13 @@ export default tseslint.config(
        * boringstack's 20/5) and ratchet down to 20/5 in the final phase once the
        * files are split. Ported from boringstack apps/api eslint.config.js.
        */
-      "sonarjs/cognitive-complexity": ["error", 35],
+      // Ceiling that prevents complexity creep. The loop's runTask (31) +
+      // settleGate (29) are the documented hotspots; decomposing them is a noted
+      // follow-up (the riskiest change in the codebase — deferred). Everything
+      // else is well under 20 after the Phase-3 splits + the doLsp dispatch split.
+      "sonarjs/cognitive-complexity": ["error", 31],
       "sonarjs/no-identical-functions": "error",
-      "sonarjs/no-duplicate-string": ["error", { threshold: 8 }],
+      "sonarjs/no-duplicate-string": ["error", { threshold: 5 }],
       "sonarjs/no-useless-catch": "error",
       "sonarjs/prefer-immediate-return": "error",
 
