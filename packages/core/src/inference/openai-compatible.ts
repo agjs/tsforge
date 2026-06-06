@@ -3,9 +3,9 @@ import type {
   ICompleteOptions,
   IModelResponse,
   IProvider,
-} from "./types";
-import type { IOpenAICompatibleConfig } from "./openai-compatible.types";
-import { LIMITS } from "../constants";
+  IOpenAICompatibleConfig,
+} from "./inference.types";
+import { PROVIDER_LIMITS } from "./inference.constants";
 import { fetchWithRetry } from "./transport";
 import { toWire, parseResponse } from "./wire";
 import { streamResponse } from "./stream";
@@ -39,7 +39,7 @@ export class OpenAICompatibleProvider implements IProvider {
     const body = JSON.stringify({
       model: this.cfg.model,
       messages: messages.map(toWire),
-      max_tokens: this.cfg.maxTokens ?? LIMITS.maxTokens,
+      max_tokens: this.cfg.maxTokens ?? PROVIDER_LIMITS.maxTokens,
       temperature: opts.temperature,
       ...(this.cfg.repetitionPenalty === undefined
         ? {}
@@ -65,7 +65,7 @@ export class OpenAICompatibleProvider implements IProvider {
       `${this.cfg.baseUrl}/chat/completions`,
       headers,
       body,
-      this.cfg.timeoutMs ?? LIMITS.requestTimeoutMs
+      this.cfg.timeoutMs ?? PROVIDER_LIMITS.requestTimeoutMs
     );
 
     if (!res.ok) {

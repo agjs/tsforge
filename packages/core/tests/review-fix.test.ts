@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { reviewAndFixSuite } from "../src/spec/review-tests";
-import type { IProvider } from "../src/inference/types";
+import type { IProvider } from "../src/inference";
 
 const STUB =
   'export function add(a: number, b: number): number {\n  throw new Error("nope");\n}\n';

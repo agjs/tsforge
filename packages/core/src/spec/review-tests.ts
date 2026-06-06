@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import type { IProvider } from "../inference/types";
-import type { Reporter } from "../loop/events";
+import type { IProvider } from "../inference";
+import type { Reporter } from "../loop";
 import { isRecord, isArray } from "../lib/guards";
 import { extractJson } from "../lib/json";
 import { runTests, isRealRed } from "../validate/run-tests";

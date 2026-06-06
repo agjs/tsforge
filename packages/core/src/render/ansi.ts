@@ -1,5 +1,5 @@
 import { highlight } from "cli-highlight";
-import type { ILoopEvent } from "../loop/events";
+import type { ILoopEvent } from "../loop";
 
 export interface IRenderOptions {
   /** Emit ANSI color codes (terminal) vs plain text (log files). Default true. */

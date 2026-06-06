@@ -11,10 +11,10 @@ import { join } from "node:path";
 import { parseSpec } from "../src/spec";
 import { generateTests } from "../src/spec/generate-tests";
 import { reviewAndFixSuite } from "../src/spec/review-tests";
-import { runSpec } from "../src/loop/run-spec";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
+import { runSpec } from "../src/loop";
+import { OpenAICompatibleProvider } from "../src/inference";
 import { renderEvent } from "../src/render/ansi";
-import type { ILoopEvent } from "../src/loop/events";
+import type { ILoopEvent } from "../src/loop";
 
 const seed = process.env.TSFORGE_SEED ?? "money";
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");

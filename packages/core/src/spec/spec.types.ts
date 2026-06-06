@@ -1,4 +1,4 @@
-import type { Reporter } from "../loop/events";
+import type { Reporter } from "../loop";
 import { type SPEC_MODE, type FINDING_KIND } from "./spec.constants";
 
 export type SpecMode = (typeof SPEC_MODE)[keyof typeof SPEC_MODE];

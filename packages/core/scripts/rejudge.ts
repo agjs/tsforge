@@ -12,7 +12,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
 import { judge } from "../src/eval/judge";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
+import { OpenAICompatibleProvider } from "../src/inference";
 import { isRecord } from "../src/lib/guards";
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");

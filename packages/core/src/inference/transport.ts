@@ -1,4 +1,4 @@
-import { LIMITS } from "../constants";
+import { PROVIDER_LIMITS } from "./inference.constants";
 
 // Transient CONNECTION failures (the box blipped / socket dropped) — retry these.
 // Deliberately does NOT match timeouts: a request that ran past timeoutMs is a
@@ -41,7 +41,7 @@ export async function fetchWithRetry(
       }
 
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, LIMITS.retryBackoffMs * attempt);
+        setTimeout(resolve, PROVIDER_LIMITS.retryBackoffMs * attempt);
       });
     }
   }

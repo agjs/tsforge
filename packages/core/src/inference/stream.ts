@@ -1,4 +1,4 @@
-import type { IModelResponse, IToolCall } from "./types";
+import type { IModelResponse, IToolCall } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import { parseArgs, salvageToolCalls } from "./wire";
 

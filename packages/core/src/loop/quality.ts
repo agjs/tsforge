@@ -1,11 +1,11 @@
 import { join } from "node:path";
 import type { ITask } from "../spec";
 import type { IAgent } from "../agent";
-import type { IProvider } from "../inference/types";
+import type { IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate/validate";
 import { runAccept } from "../validate/accept";
 import { judge } from "../eval/judge";
-import type { Reporter } from "./events";
+import type { Reporter } from "./loop.types";
 
 export interface IQualityResult {
   quality: number;

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { salvageToolCalls } from "../src/inference/openai-compatible";
+import { salvageToolCalls } from "../src/inference";
 
 // The exact malformed output captured from a react-board run (the local model
 // emitted tool calls as non-standard XML that vLLM left in content).

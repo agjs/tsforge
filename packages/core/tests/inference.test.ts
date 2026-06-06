@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
+import { OpenAICompatibleProvider } from "../src/inference";
 
 function okResponse(): Response {
   return new Response(

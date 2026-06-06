@@ -1,7 +1,7 @@
 import { relative } from "node:path";
 import { runCommand, fileArg, TOOL_NAME, type ToolName } from "../agent";
 import { writable } from "../lib/scope";
-import { LIMITS } from "../constants";
+import { LOOP_LIMITS } from "./loop.constants";
 import { str, reject, type IToolContext } from "./tool-context";
 
 /** ripgrep search over the working dir — the model's primary navigation at
@@ -21,7 +21,10 @@ export async function doSearch(
   const globArg = glob.length > 0 ? ` -g ${JSON.stringify(glob)}` : "";
   const cmd = `rg --line-number --no-heading --color never -e ${JSON.stringify(pattern)}${globArg} || true`;
   const res = await runCommand(ctx.cwd, cmd);
-  const out = `${res.stdout}${res.stderr}`.slice(0, LIMITS.maxToolOutputChars);
+  const out = `${res.stdout}${res.stderr}`.slice(
+    0,
+    LOOP_LIMITS.maxToolOutputChars
+  );
 
   ctx.report({
     kind: "tool",

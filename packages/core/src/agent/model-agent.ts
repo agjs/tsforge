@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import type { IAgent, IAgentContext } from "./agent.types";
-import type { IChatMessage, IProvider } from "../inference/types";
+import type { IChatMessage, IProvider } from "../inference";
 import type { ErrorSet } from "../validate/errors";
 import { applyEdits } from "../files/edit";
 import { applyCreate } from "../files/create";

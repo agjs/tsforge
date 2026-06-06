@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
+import { OpenAICompatibleProvider } from "../src/inference";
 
 function sseResponse(chunks: string[]): Response {
   const stream = new ReadableStream<Uint8Array>({

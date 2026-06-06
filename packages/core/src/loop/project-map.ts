@@ -1,4 +1,4 @@
-import { LIMITS } from "../constants";
+import { LOOP_LIMITS } from "./loop.constants";
 import type { IFileView } from "../lib/files";
 
 /** Exported symbol names in a file (lightweight regex — for the project map). */
@@ -49,7 +49,7 @@ function projectMap(views: readonly IFileView[]): string {
 
 /**
  * Render a set of files for the prompt: full contents when small, a navigable
- * MAP when the combined size exceeds LIMITS.mapThresholdChars (the model then
+ * MAP when the combined size exceeds LOOP_LIMITS.mapThresholdChars (the model then
  * uses read/search/symbol_search to inspect specifics). Exported for testing.
  */
 export function renderFileSection(views: readonly IFileView[]): {
@@ -58,7 +58,7 @@ export function renderFileSection(views: readonly IFileView[]): {
 } {
   const total = views.reduce((n, v) => n + v.content.length, 0);
 
-  if (total > LIMITS.mapThresholdChars) {
+  if (total > LOOP_LIMITS.mapThresholdChars) {
     return { text: projectMap(views), mapped: true };
   }
 

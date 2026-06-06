@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 import { join, isAbsolute } from "node:path";
-import { runTask, RUN_STATUS } from "./loop/run";
-import { LIMITS } from "./constants";
-import { OpenAICompatibleProvider } from "./inference/openai-compatible";
+import { runTask, RUN_STATUS } from "./loop";
+import { PROVIDER_LIMITS, OpenAICompatibleProvider } from "./inference";
 import { renderEvent } from "./render/ansi";
 import type { ITask } from "./spec";
 
@@ -99,7 +98,7 @@ async function main(): Promise<number> {
     model: process.env.TSFORGE_MODEL ?? "qwen3.6-27b",
     apiKey: process.env.TSFORGE_API_KEY,
     maxTokens: Number(
-      process.env.TSFORGE_MAX_TOKENS ?? String(LIMITS.maxTokens)
+      process.env.TSFORGE_MAX_TOKENS ?? String(PROVIDER_LIMITS.maxTokens)
     ),
   });
 

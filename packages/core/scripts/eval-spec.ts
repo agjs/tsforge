@@ -3,8 +3,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
-import { runSpec } from "../src/loop/run-spec";
+import { OpenAICompatibleProvider } from "../src/inference";
+import { runSpec } from "../src/loop";
 import type { ISpec } from "../src/spec";
 
 const FILES: Record<string, string> = {

@@ -1,13 +1,14 @@
 import { join } from "node:path";
 import type { ITask } from "../spec";
-import type { IChatMessage, IProvider } from "../inference/types";
+import type { IChatMessage, IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate/validate";
 import { parseEslintJson } from "../validate/parse";
 import { runAccept } from "../validate/accept";
 import { sameErrorSet, type ErrorSet } from "../validate/errors";
 import { isInScope } from "../lib/scope";
 import { readFiles, fileExists } from "../lib/files";
-import { LIMITS } from "../constants";
+import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
+import type { IRunResult, IRunOptions, Reporter } from "./loop.types";
 import { flags } from "../config";
 import { SYSTEM, seedPrompt } from "./prompt";
 import { gateFeedback } from "./feedback";
@@ -22,50 +23,6 @@ import {
   TOOL_NAME,
 } from "../agent";
 import { TsService } from "../lsp/service";
-import type { Reporter } from "./events";
-
-/** Terminal status of a single task run — compare against these, not bare strings. */
-export const RUN_STATUS = {
-  done: "done",
-  stuck: "stuck",
-  redNotConfirmed: "red-not-confirmed",
-} as const;
-
-export type RunStatus = (typeof RUN_STATUS)[keyof typeof RUN_STATUS];
-
-/** Why a run gave up (only set when status is `stuck`). */
-export const STUCK_REASON = {
-  stalled: "stalled",
-  cap: "cap",
-} as const;
-
-export type StuckReason = (typeof STUCK_REASON)[keyof typeof STUCK_REASON];
-
-export interface IRunResult {
-  task: string;
-  /** The gate failed before we started (a real goalpost). */
-  redConfirmed: boolean;
-  status: RunStatus;
-  /** Model turns used. */
-  cycles: number;
-  reason?: StuckReason;
-  /** Edits/creates applied to editable files (measure edit churn). */
-  edits?: number;
-  /** Times an edit RAISED the gate error count (regressions — measure churn quality). */
-  regressions?: number;
-}
-
-export interface IRunOptions {
-  parse?: ErrorParser;
-  onEvent?: Reporter;
-  temperature?: number;
-  /** Per-request thinking toggle passed to the provider. */
-  enableThinking?: boolean;
-  /** Cap reasoning tokens per model call (vLLM `thinking_token_budget`). */
-  thinkingTokenBudget?: number;
-  /** Hard backstop on model turns (default 40). */
-  maxTurns?: number;
-}
 
 // The base tools the model always has, plus the semantic LSP/search tools
 // (rename/type_at/find_references/symbol_search/diagnostics/organize_imports/
@@ -111,7 +68,7 @@ export async function runTask(
     ? parseEslintJson
     : parse;
   const temperature = opts.temperature ?? 0;
-  const maxTurns = opts.maxTurns ?? LIMITS.maxTurns;
+  const maxTurns = opts.maxTurns ?? LOOP_LIMITS.maxTurns;
   const report: Reporter = opts.onEvent ?? (() => undefined);
 
   report({
@@ -327,12 +284,12 @@ export async function runTask(
         : 0;
       prevGateErrors = gate.errors;
 
-      if (gateNoProgress >= LIMITS.gateStuckRepeats) {
+      if (gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
         report({
           kind: "stuck",
           task: task.id,
           cycles: turn,
-          message: `task ${task.id}: stuck (gate unchanged ${LIMITS.gateStuckRepeats}x)`,
+          message: `task ${task.id}: stuck (gate unchanged ${LOOP_LIMITS.gateStuckRepeats}x)`,
         });
 
         return {

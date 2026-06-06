@@ -3,8 +3,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
-import { runTask } from "../src/loop/run";
+import { OpenAICompatibleProvider } from "../src/inference";
+import { runTask } from "../src/loop";
 
 const BROKEN = `export function sum(a: number, b: number): number {
   return 0; // wrong on purpose

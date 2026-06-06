@@ -4,8 +4,8 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
-import { runSpec } from "../src/loop/run-spec";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
+import { runSpec } from "../src/loop";
+import { OpenAICompatibleProvider } from "../src/inference";
 import { renderEvent } from "../src/render/ansi";
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");

@@ -1,4 +1,4 @@
-import type { IProvider } from "../inference/types";
+import type { IProvider } from "../inference";
 import { isRecord } from "../lib/guards";
 import { extractJson } from "../lib/json";
 

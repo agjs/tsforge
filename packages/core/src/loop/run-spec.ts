@@ -1,21 +1,9 @@
 import type { ISpec } from "../spec";
-import type { IProvider } from "../inference/types";
+import type { IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate/validate";
-import { runTask, RUN_STATUS, type IRunResult } from "./run";
-import type { Reporter } from "./events";
-
-/** Whole-spec outcome — compare against these, never the bare string. */
-export const SPEC_STATUS = {
-  done: "done",
-  blocked: "blocked",
-} as const;
-
-export type SpecStatus = (typeof SPEC_STATUS)[keyof typeof SPEC_STATUS];
-
-export interface ISpecResult {
-  status: SpecStatus;
-  results: IRunResult[];
-}
+import { runTask } from "./run";
+import { RUN_STATUS, SPEC_STATUS } from "./loop.constants";
+import type { IRunResult, ISpecResult, Reporter } from "./loop.types";
 
 export interface IRunSpecOptions {
   parse?: ErrorParser;

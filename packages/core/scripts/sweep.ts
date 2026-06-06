@@ -3,13 +3,12 @@
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
-import { runSpec } from "../src/loop/run-spec";
+import { runSpec, qualityRepair } from "../src/loop";
 import { modelAgent } from "../src/agent";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
+import { OpenAICompatibleProvider } from "../src/inference";
 import { summarize, type IRunRecord } from "../src/eval/score";
-import { qualityRepair } from "../src/loop/quality";
 import { renderEvent } from "../src/render/ansi";
-import type { ILoopEvent } from "../src/loop/events";
+import type { ILoopEvent } from "../src/loop";
 
 const seed = process.env.TSFORGE_SEED ?? "todo";
 const temps = (process.env.TSFORGE_TEMPS ?? "0,0.5")

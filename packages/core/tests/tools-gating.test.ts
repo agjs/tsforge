@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from "bun:test";
-import { toolsFor } from "../src/loop/run";
+import { toolsFor } from "../src/loop";
 
 const names = (tools: { function: { name: string } }[]): string[] =>
   tools.map((t) => t.function.name);

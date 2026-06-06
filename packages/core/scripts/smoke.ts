@@ -1,6 +1,6 @@
 // Manual smoke check against a live local model. Not part of the test suite.
 // Run: bun run packages/core/scripts/smoke.ts
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
+import { OpenAICompatibleProvider } from "../src/inference";
 
 const p = new OpenAICompatibleProvider({
   baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",

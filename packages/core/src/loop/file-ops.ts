@@ -3,7 +3,7 @@ import { applyEdits } from "../files/edit";
 import { applyCreate } from "../files/create";
 import { EDIT_FAIL_REASON } from "../files";
 import { writable } from "../lib/scope";
-import { LIMITS } from "../constants";
+import { LOOP_LIMITS } from "./loop.constants";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../agent";
 import { ruleHelpFromOutput } from "./rule-docs";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
@@ -42,7 +42,7 @@ export async function runShell(
   const res = await runCommand(ctx.cwd, r.command);
   const output = `${res.stdout}${res.stderr}`.slice(
     0,
-    LIMITS.maxToolOutputChars
+    LOOP_LIMITS.maxToolOutputChars
   );
 
   // If the command surfaced lint/type errors, attach the failing rules' own
@@ -89,7 +89,7 @@ export async function doEdit(
   for (let i = 0; i < edit.edits.length; i += 1) {
     const span = (edit.edits[i]?.oldString ?? "").split("\n").length;
 
-    if (span > LIMITS.maxEditLines) {
+    if (span > LOOP_LIMITS.maxEditLines) {
       return reject(
         ctx,
         "edit",

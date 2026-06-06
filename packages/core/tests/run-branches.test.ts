@@ -2,8 +2,8 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTask } from "../src/loop/run";
-import type { IProvider } from "../src/inference/types";
+import { runTask } from "../src/loop";
+import type { IProvider } from "../src/inference";
 import { scripted, createStep, STOP } from "./stub-provider";
 
 test("red-not-confirmed when the goalpost already passes — model never runs", async () => {

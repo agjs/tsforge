@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
-import { runTask } from "../src/loop/run";
+import { runTask } from "../src/loop";
 import { scripted, editStep, STOP } from "./stub-provider";
 
 // A one-chunk spec in our format: make a failing test pass.

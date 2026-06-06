@@ -1,6 +1,6 @@
 import type { ITask } from "../spec";
 import type { ErrorSet } from "../validate/errors";
-import type { Reporter } from "../loop/events";
+import type { Reporter } from "../loop";
 import { type TOOL_NAME } from "./agent.constants";
 
 export type ToolName = (typeof TOOL_NAME)[keyof typeof TOOL_NAME];

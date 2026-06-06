@@ -1,4 +1,8 @@
-import type { IChatMessage, IModelResponse, IToolCall } from "./types";
+import type {
+  IChatMessage,
+  IModelResponse,
+  IToolCall,
+} from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import { TOOL_NAME } from "../agent";
 

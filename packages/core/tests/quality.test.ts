@@ -2,9 +2,9 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { qualityRepair } from "../src/loop/quality";
+import { qualityRepair } from "../src/loop";
 import type { IAgent } from "../src/agent";
-import type { IProvider } from "../src/inference/types";
+import type { IProvider } from "../src/inference";
 
 // Judge that returns a rising score on each successive call.
 function risingJudge(scores: number[]): IProvider {

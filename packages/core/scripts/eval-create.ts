@@ -3,8 +3,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
-import { runTask } from "../src/loop/run";
+import { OpenAICompatibleProvider } from "../src/inference";
+import { runTask } from "../src/loop";
 
 // Only the test exists. greet.ts must be CREATED by the model.
 const TESTFILE = `import { test, expect } from "bun:test";
