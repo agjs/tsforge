@@ -1,6 +1,58 @@
 import { expect, test } from "bun:test";
 import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
 
+function okResponse(): Response {
+  return new Response(
+    JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
+    { status: 200 }
+  );
+}
+
+test("retries a transient connection blip, then succeeds", async () => {
+  let calls = 0;
+  const flakyFetch = (async () => {
+    calls += 1;
+
+    if (calls === 1) {
+      throw new Error(
+        "Unable to connect. Is the computer able to access the url?"
+      );
+    }
+
+    return okResponse();
+  }) as unknown as typeof fetch;
+
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: flakyFetch,
+  });
+  const r = await p.complete([{ role: "user", content: "hi" }], {});
+
+  expect(calls).toBe(2); // first threw, retry succeeded
+  expect(r.content).toBe("ok");
+});
+
+test("does NOT retry a non-connection error (propagates)", async () => {
+  let calls = 0;
+  const badFetch = (async () => {
+    calls += 1;
+
+    throw new Error("something unrelated");
+  }) as unknown as typeof fetch;
+
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: badFetch,
+  });
+
+  await expect(
+    p.complete([{ role: "user", content: "hi" }], {})
+  ).rejects.toThrow("something unrelated");
+  expect(calls).toBe(1); // no retry on a non-transient error
+});
+
 test("posts to /chat/completions and parses content + tool calls", async () => {
   let captured: { url: string; body: Record<string, unknown> } | null = null;
   const fakeFetch = (async (url: string | URL, init: RequestInit) => {

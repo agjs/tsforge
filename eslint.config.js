@@ -2,6 +2,10 @@ import pluginJs from "@eslint/js";
 import tseslint from "typescript-eslint";
 import configPrettier from "eslint-config-prettier";
 import pluginPrettier from "eslint-plugin-prettier";
+import sonarjs from "eslint-plugin-sonarjs";
+import unicorn from "eslint-plugin-unicorn";
+import importX from "eslint-plugin-import-x";
+import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
 
 /*
  * Inherited from boringstack/apps/api: the general TypeScript quality rules
@@ -31,9 +35,46 @@ export default tseslint.config(
     plugins: {
       "@typescript-eslint": tseslint.plugin,
       prettier: pluginPrettier,
+      sonarjs,
+      unicorn,
+      "import-x": importX,
+      "eslint-comments": eslintComments,
     },
     rules: {
       "prettier/prettier": "error",
+
+      /*
+       * Complexity + duplication — the rules that catch concern-mixing and
+       * copy-paste. Thresholds are generous now (the god-files exceed the
+       * boringstack's 20/5) and ratchet down to 20/5 in the final phase once the
+       * files are split. Ported from boringstack apps/api eslint.config.js.
+       */
+      "sonarjs/cognitive-complexity": ["error", 35],
+      "sonarjs/no-identical-functions": "error",
+      "sonarjs/no-duplicate-string": ["error", { threshold: 8 }],
+      "sonarjs/no-useless-catch": "error",
+      "sonarjs/prefer-immediate-return": "error",
+
+      // Idiom hygiene (curated unicorn subset from boringstack).
+      "unicorn/prefer-string-starts-ends-with": "error",
+      "unicorn/prefer-includes": "error",
+      "unicorn/prefer-ternary": "error",
+      "unicorn/throw-new-error": "error",
+      "unicorn/no-lonely-if": "error",
+      "unicorn/error-message": "error",
+      "unicorn/prefer-array-some": "error",
+      "unicorn/prefer-array-find": "error",
+      "unicorn/no-useless-spread": "error",
+      "unicorn/no-instanceof-array": "error",
+
+      // Import hygiene.
+      "import-x/no-duplicates": "error",
+      "import-x/no-self-import": "error",
+      "import-x/no-useless-path-segments": "error",
+      "import-x/first": "error",
+
+      // Defense-in-depth: no inline rule suppressions — fix the code or the rule.
+      "eslint-comments/no-use": ["error", { allow: [] }],
 
       // Hard bans — things an AI agent must never write.
       "@typescript-eslint/no-explicit-any": "error",
@@ -137,6 +178,10 @@ export default tseslint.config(
       "@typescript-eslint/no-confusing-void-expression": "off",
       "@typescript-eslint/no-empty-function": "off",
       "no-console": "off",
+      // Tests repeat fixture strings and scripts are operational glue — relax
+      // the duplication/complexity rules that fight those legitimate patterns.
+      "sonarjs/no-duplicate-string": "off",
+      "sonarjs/cognitive-complexity": "off",
     },
   }
 );

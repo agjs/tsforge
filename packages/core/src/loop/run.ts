@@ -49,13 +49,24 @@ export interface IRunOptions {
 
 // The base tools the model always has, plus the semantic LSP/search tools
 // (rename/type_at/find_references/symbol_search/diagnostics/organize_imports/
-// search). The LSP set is A/B-gated by TSFORGE_NO_LSP_TOOLS=1 (default ON) — it
-// adds decision surface, so we verify it doesn't regress money before banking.
+// search). The LSP set is for NAVIGATING an existing codebase. Measured (money
+// vs react-board, 2026-06-06): handing the 7 nav tools to a SCRATCH create-from-
+// spec task DILUTES the create path — the small model narrates/explores
+// ("let me check existing files…") instead of emitting `create`, and stalls.
+// react-board (existing code) used them cleanly. So gate them on whether there
+// is existing code to navigate. TSFORGE_NO_LSP_TOOLS=1 forces them off entirely.
 const BASE_TOOLS = [READ_TOOL, RUN_TOOL, EDIT_TOOL, CREATE_TOOL];
-const TOOLS =
-  process.env.TSFORGE_NO_LSP_TOOLS === "1"
-    ? BASE_TOOLS
-    : [...BASE_TOOLS, ...LSP_TOOLS];
+
+const ALL_TOOLS = [...BASE_TOOLS, ...LSP_TOOLS];
+
+export function toolsFor(hasExistingCode: boolean): typeof ALL_TOOLS {
+  if (process.env.TSFORGE_NO_LSP_TOOLS === "1" || !hasExistingCode) {
+    return BASE_TOOLS;
+  }
+
+  return ALL_TOOLS;
+}
+
 /**
  * Give up only when the gate shows the EXACT same errors this many times in a
  * row — genuine spinning. Tuned for per-edit gating (the harness now validates
@@ -132,6 +143,11 @@ export async function runTask(
     { role: "user", content: seedPrompt(task, editable, context) },
   ];
 
+  // Existing code to navigate? (editable files already have content). Only then
+  // do the LSP nav tools earn their decision-surface cost — see toolsFor().
+  const hasExistingCode = editable.some((f) => f.content.trim().length > 0);
+  const tools = toolsFor(hasExistingCode);
+
   // In-process TypeScript LanguageService for deterministic quick-fixes — built
   // once if the project has a tsconfig. Guarded so a setup failure can't break
   // the loop (the `tsc -p` gate stays the authority regardless).
@@ -176,7 +192,7 @@ export async function runTask(
     };
 
     const res = await provider.complete(messages, {
-      tools: TOOLS,
+      tools,
       temperature,
       toolChoice: "auto",
       ...(enableThinking === undefined ? {} : { enableThinking }),
@@ -334,6 +350,19 @@ export async function runTask(
         return { ...settled, edits, regressions };
       }
 
+      // The model replied with prose but issued NO tool call while the gate is
+      // still red — a narration-without-action turn that wastes wall-clock. Seen
+      // on BOTH money ("I wrote the code in my message but didn't call create")
+      // and react-board (a multi-turn "let me read the files…" loop). Nudge it to
+      // ACT, not describe. Only fires on zero-tool-calls-while-red (a turn that
+      // legitimately finishes ends green and returns above), so it can't push the
+      // model to over-edit a passing task.
+      messages.push({
+        role: "user",
+        content:
+          "You replied with text but called no tool. Writing code or a plan in your message does NOT change any file. Don't describe the next step — emit the actual tool call now (create/edit to change a file, read/search to inspect one).",
+      });
+
       continue;
     }
 
@@ -429,27 +458,108 @@ const SYSTEM = [
   "The gate is `tsc` strict + eslint with every rule an error, so write TypeScript that satisfies it: interfaces are `I`-prefixed; `===`; no `var`; never the non-null `!` — guard index access (`const x = arr[i]; if (x === undefined) {...}`); no `any` and no `as` — type every parameter (e.g. `.reduce((acc: number, r: number) => …, 0)`); explicit boolean conditions. When the gate flags errors in read-only files (tests/types), they come from your editable file being missing or wrong-shaped and vanish once it's correct — don't edit them.",
 ].join("\n");
 
+interface IFileView {
+  path: string;
+  content: string;
+}
+
+/** Above this many chars of combined file content, switch from dumping full
+ *  contents to a navigable MAP — so a large project doesn't blow the context
+ *  window (the model pulls specifics on demand via read/search/LSP). Small
+ *  targets stay full-dump (no behaviour change). This is the auto-compaction
+ *  substrate the CLI needs at scale. */
+const MAP_THRESHOLD = 12000;
+
+/** Exported symbol names in a file (lightweight regex — for the project map). */
+export function exportedSymbols(content: string): string[] {
+  const names = new Set<string>();
+  const decl =
+    /export\s+(?:default\s+)?(?:async\s+)?(?:function|const|let|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g;
+
+  for (const m of content.matchAll(decl)) {
+    if (m[1] !== undefined) {
+      names.add(m[1]);
+    }
+  }
+
+  for (const m of content.matchAll(/export\s*\{([^}]*)\}/g)) {
+    const inner = m[1];
+
+    if (inner === undefined) {
+      continue;
+    }
+
+    for (const part of inner.split(",")) {
+      const name = part
+        .trim()
+        .split(/\s+as\s+/)[0]
+        ?.trim();
+
+      if (name !== undefined && name.length > 0) {
+        names.add(name);
+      }
+    }
+  }
+
+  return [...names];
+}
+
+/** A compact map: `path (N lines) — exports: A, B`, one per file. */
+function projectMap(views: readonly IFileView[]): string {
+  return views
+    .map((v) => {
+      const lines = v.content.split("\n").length;
+      const ex = exportedSymbols(v.content);
+
+      return `  ${v.path} (${String(lines)} lines)${ex.length > 0 ? ` — exports: ${ex.join(", ")}` : ""}`;
+    })
+    .join("\n");
+}
+
+/**
+ * Render a set of files for the prompt: full contents when small, a navigable
+ * MAP when the combined size exceeds MAP_THRESHOLD (the model then uses
+ * read/search/symbol_search to inspect specifics). Exported for testing.
+ */
+export function renderFileSection(views: readonly IFileView[]): {
+  text: string;
+  mapped: boolean;
+} {
+  const total = views.reduce((n, v) => n + v.content.length, 0);
+
+  if (total > MAP_THRESHOLD) {
+    return { text: projectMap(views), mapped: true };
+  }
+
+  return {
+    text: views.map((v) => `File ${v.path}:\n${v.content}`).join("\n\n"),
+    mapped: false,
+  };
+}
+
 function seedPrompt(
   task: ITask,
-  editable: { path: string; content: string }[],
-  context: { path: string; content: string }[]
+  editable: IFileView[],
+  context: IFileView[]
 ): string {
   const intent =
     task.intent !== undefined && task.intent.length > 0
       ? `Spec contract — implement EXACTLY this:\n${task.intent}`
       : "";
 
+  const ed = renderFileSection(editable);
   const editableText =
-    editable.length > 0
-      ? editable.map((f) => `File ${f.path}:\n${f.content}`).join("\n\n")
-      : "(none of the editable files exist yet — create them)";
+    editable.length === 0
+      ? "(none of the editable files exist yet — create them)"
+      : ed.mapped
+        ? `The editable files are large — here is a MAP (path · lines · exports). INSPECT specifics with read/search/symbol_search/find_references before editing; don't guess:\n${ed.text}`
+        : ed.text;
 
+  const ctx = context.length > 0 ? renderFileSection(context) : null;
   const contextText =
-    context.length > 0
-      ? `Read-only context (do NOT edit):\n${context
-          .map((f) => `File ${f.path}:\n${f.content}`)
-          .join("\n\n")}`
-      : "";
+    ctx === null
+      ? ""
+      : `Read-only context (do NOT edit)${ctx.mapped ? " — MAP; read specifics on demand" : ""}:\n${ctx.text}`;
 
   return [
     `Task ${task.id}.`,

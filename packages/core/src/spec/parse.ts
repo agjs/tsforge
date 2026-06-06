@@ -23,6 +23,7 @@ export function parseSpec(markdown: string): ISpec {
     title: fm.title ?? "",
     verify: fm.verify ?? "",
     tasks,
+    mode: fm.mode === "existing" ? "existing" : "scratch",
   };
 }
 

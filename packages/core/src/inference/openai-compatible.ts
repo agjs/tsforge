@@ -30,30 +30,37 @@ export class OpenAICompatibleProvider implements IProvider {
       headers.authorization = `Bearer ${this.cfg.apiKey}`;
     }
 
-    const res = await doFetch(`${this.cfg.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers,
-      signal: AbortSignal.timeout(this.cfg.timeoutMs ?? 600000),
-      body: JSON.stringify({
-        model: this.cfg.model,
-        messages: messages.map(toWire),
-        max_tokens: this.cfg.maxTokens ?? 8192,
-        temperature: opts.temperature,
-        ...(this.cfg.repetitionPenalty === undefined
-          ? {}
-          : { repetition_penalty: this.cfg.repetitionPenalty }),
-        ...(opts.tools === undefined
-          ? {}
-          : { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" }),
-        ...(opts.enableThinking === undefined
-          ? {}
-          : { chat_template_kwargs: { enable_thinking: opts.enableThinking } }),
-        ...(opts.thinkingTokenBudget === undefined
-          ? {}
-          : { thinking_token_budget: opts.thinkingTokenBudget }),
-        ...(streaming ? { stream: true } : {}),
-      }),
+    const body = JSON.stringify({
+      model: this.cfg.model,
+      messages: messages.map(toWire),
+      max_tokens: this.cfg.maxTokens ?? 8192,
+      temperature: opts.temperature,
+      ...(this.cfg.repetitionPenalty === undefined
+        ? {}
+        : { repetition_penalty: this.cfg.repetitionPenalty }),
+      ...(opts.tools === undefined
+        ? {}
+        : { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" }),
+      ...(opts.enableThinking === undefined
+        ? {}
+        : { chat_template_kwargs: { enable_thinking: opts.enableThinking } }),
+      ...(opts.thinkingTokenBudget === undefined
+        ? {}
+        : { thinking_token_budget: opts.thinkingTokenBudget }),
+      ...(streaming ? { stream: true } : {}),
     });
+
+    // Retry transient CONNECTION blips (socket close / unable-to-connect) — the
+    // connect happens before any stream starts, so retrying is safe for both
+    // streaming and non-streaming. Essential for a long-running CLI; also stops
+    // a network hiccup from wrecking an eval run.
+    const res = await fetchWithRetry(
+      doFetch,
+      `${this.cfg.baseUrl}/chat/completions`,
+      headers,
+      body,
+      this.cfg.timeoutMs ?? 600000
+    );
 
     if (!res.ok) {
       throw new Error(`model request failed: ${res.status}`);
@@ -67,6 +74,55 @@ export class OpenAICompatibleProvider implements IProvider {
 
     return parseResponse(data);
   }
+}
+
+// Transient CONNECTION failures (the box blipped / socket dropped) — retry these.
+// Deliberately does NOT match timeouts: a request that ran past timeoutMs is a
+// reasoning spiral, not a blip, and retrying would just waste another timeout.
+const TRANSIENT_NETWORK =
+  /unable to connect|socket connection|connection (was )?(closed|refused|reset)|econnrefused|econnreset/i;
+
+function isTransientNetworkError(err: unknown): boolean {
+  return err instanceof Error && TRANSIENT_NETWORK.test(err.message);
+}
+
+/**
+ * Retry a request on transient connection failures only (HTTP errors surface via
+ * `res.ok`, not a throw). Fresh AbortSignal per attempt; small linear backoff.
+ * The connect completes before any stream begins, so this is safe for streaming.
+ */
+async function fetchWithRetry(
+  doFetch: typeof fetch,
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  timeoutMs: number
+): Promise<Response> {
+  const maxAttempts = 4;
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await doFetch(url, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      lastErr = err;
+
+      if (!isTransientNetworkError(err) || attempt === maxAttempts) {
+        throw err;
+      }
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 400 * attempt);
+      });
+    }
+  }
+
+  throw lastErr instanceof Error ? lastErr : new Error("fetch failed");
 }
 
 /** Map our message shape to the OpenAI wire shape (tool_calls / tool results). */
@@ -118,7 +174,76 @@ function parseResponse(data: unknown): IModelResponse {
   const content = typeof message.content === "string" ? message.content : "";
   const toolCalls = collectToolCalls(message.tool_calls);
 
-  return { content, toolCalls };
+  return {
+    content,
+    toolCalls: toolCalls.length > 0 ? toolCalls : salvageToolCalls(content),
+  };
+}
+
+// Tool names the harness offers — the salvage parser only recognizes these, so
+// it can't mistake arbitrary prose/JSX for a tool call.
+const KNOWN_TOOLS = new Set([
+  "read",
+  "edit",
+  "create",
+  "run",
+  "search",
+  "symbol_search",
+  "find_references",
+  "type_at",
+  "diagnostics",
+  "rename_symbol",
+  "organize_imports",
+]);
+
+/**
+ * Salvage tool calls the model emitted as MALFORMED text instead of structured
+ * `tool_calls`. The local model intermittently (prompt-dependent, temp-0
+ * boundary) emits a non-standard XML form that vLLM's parser leaves in content,
+ * e.g.:
+ *   <read>
+ *   <parameter=file>
+ *   src/App.tsx
+ *   </parameter>
+ *   </function>
+ *   </tool_call>
+ * which would otherwise strand the loop (0 tool calls → stall). We extract
+ * `<toolname> … <parameter=key>value</parameter> …` blocks for KNOWN tools only.
+ * Used ONLY when the structured `tool_calls` came back empty, so it can never
+ * override a properly-parsed call. See memory: malformed-toolcall-format.
+ */
+export function salvageToolCalls(content: string): IToolCall[] {
+  const calls: IToolCall[] = [];
+  const blockRe =
+    /<([a-z_]+)>\s*((?:<parameter=[^>]+>[\s\S]*?<\/parameter>\s*)+)/gi;
+
+  for (const block of content.matchAll(blockRe)) {
+    const name = block[1];
+    const params = block[2];
+
+    if (name === undefined || params === undefined || !KNOWN_TOOLS.has(name)) {
+      continue;
+    }
+
+    const args: Record<string, unknown> = {};
+
+    for (const p of params.matchAll(
+      /<parameter=([^>]+)>\s*([\s\S]*?)\s*<\/parameter>/g
+    )) {
+      const key = p[1]?.trim();
+      const value = p[2];
+
+      if (key !== undefined && key.length > 0 && value !== undefined) {
+        args[key] = value.trim();
+      }
+    }
+
+    if (Object.keys(args).length > 0) {
+      calls.push({ id: undefined, name, arguments: args });
+    }
+  }
+
+  return calls;
 }
 
 function collectToolCalls(rawCalls: unknown): IToolCall[] {
@@ -203,7 +328,10 @@ async function streamResponse(
     arguments: parseArgs(c.args),
   }));
 
-  return { content, toolCalls };
+  return {
+    content,
+    toolCalls: toolCalls.length > 0 ? toolCalls : salvageToolCalls(content),
+  };
 }
 
 function parseSseLine(line: string): IStreamDelta | null {

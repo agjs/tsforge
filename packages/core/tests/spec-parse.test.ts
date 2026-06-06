@@ -12,6 +12,13 @@ describe("parseSpec", () => {
     expect(s.verify).toBe("bun run validate");
   });
 
+  test("mode defaults to scratch, and reads `existing` (work-on-existing)", () => {
+    expect(parseSpec(`---\nid: a\ntitle: t\n---\n`).mode).toBe("scratch");
+    expect(parseSpec(`---\nid: a\ntitle: t\nmode: existing\n---\n`).mode).toBe(
+      "existing"
+    );
+  });
+
   test("parses multiple tasks with accept + comma-split files", () => {
     const s = parseSpec(
       `---\nid: x\n---\n\n## Tasks\n1. [db] schema\n     accept: bun test db\n     files: a.ts, b.ts\n2. [api] routes\n     accept: bun test api\n     files: c.ts\n`

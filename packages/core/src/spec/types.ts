@@ -25,4 +25,12 @@ export interface ISpec {
   /** The whole-spec gate, run once all tasks are green. */
   verify: string;
   tasks: ITask[];
+  /**
+   * Run mode. `scratch` (default): the harness DELETES the editable files to
+   * start RED, and the model regenerates them from the spec. `existing`: the
+   * project already exists and is kept — RED comes from a new failing test /
+   * stated goal, and the model edits in place (a feature/bugfix/refactor). This
+   * is the CLI's real mode (work on a codebase, don't regenerate it).
+   */
+  mode?: "scratch" | "existing";
 }

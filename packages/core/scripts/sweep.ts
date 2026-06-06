@@ -1,6 +1,6 @@
 // Eval sweep: run a seed spec N times across temperature variants, score, tabulate.
 // Run:  TSFORGE_SEED=money TSFORGE_TEMPS=0,0.5 TSFORGE_REPEATS=3 bun run packages/core/scripts/sweep.ts
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec/parse";
 import { runSpec } from "../src/loop/run-spec";
@@ -23,7 +23,9 @@ const qualityAttempts = Number(process.env.TSFORGE_QUALITY_ATTEMPTS ?? "2");
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
 const seedDir = join(evalsRoot, seed);
-const seedFiles = await readdir(seedDir);
+// Recursive so nested-directory apps (e.g. a React app under `src/`) copy whole;
+// flat single-dir evals are unaffected (recursive readdir returns the same list).
+const seedFiles = await readdir(seedDir, { recursive: true });
 
 const provider = new OpenAICompatibleProvider({
   baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
@@ -93,17 +95,29 @@ async function runOne(
   await mkdir(runDir, { recursive: true });
 
   for (const file of seedFiles) {
-    await Bun.write(join(runDir, file), Bun.file(join(seedDir, file)));
+    const src = join(seedDir, file);
+
+    // recursive readdir yields directory entries too — skip them (Bun.write
+    // creates parent dirs for files automatically).
+    if ((await stat(src)).isDirectory()) {
+      continue;
+    }
+
+    await Bun.write(join(runDir, file), Bun.file(src));
   }
 
   const spec = parseSpec(
     await Bun.file(join(runDir, `${seed}.spec.md`)).text()
   );
 
-  // Start red: remove any editable implementation files copied from the seed.
-  for (const task of spec.tasks) {
-    for (const f of task.files) {
-      await rm(join(runDir, f), { force: true });
+  // Start red: in `scratch` mode, remove editable files so the model
+  // regenerates them. In `existing` mode the project is KEPT (work-on-existing:
+  // RED comes from a failing test / goal; the model edits in place).
+  if (spec.mode !== "existing") {
+    for (const task of spec.tasks) {
+      for (const f of task.files) {
+        await rm(join(runDir, f), { force: true });
+      }
     }
   }
 
@@ -144,17 +158,25 @@ async function runOne(
 
   if (passed && firstTask !== undefined) {
     const specText = await Bun.file(join(runDir, `${seed}.spec.md`)).text();
-    const qr = await qualityRepair(
-      firstTask,
-      runDir,
-      agent,
-      judgeProvider,
-      { goal: spec.title, criteria: specText },
-      { target: qualityTarget, maxAttempts: qualityAttempts, onEvent }
-    );
 
-    quality = qr.quality;
-    judgeNotes = qr.notes;
+    // The judge is a MEASUREMENT, not part of the build. If it fails (e.g. the
+    // server times out), the implement result still stands — degrade to
+    // "quality unknown" rather than erroring out a successful run.
+    try {
+      const qr = await qualityRepair(
+        firstTask,
+        runDir,
+        agent,
+        judgeProvider,
+        { goal: spec.title, criteria: specText },
+        { target: qualityTarget, maxAttempts: qualityAttempts, onEvent }
+      );
+
+      quality = qr.quality;
+      judgeNotes = qr.notes;
+    } catch (err) {
+      judgeNotes = `judge unavailable: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   await log.end();

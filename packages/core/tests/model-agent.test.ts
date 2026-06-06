@@ -3,8 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { modelAgent } from "../src/agent/model-agent";
-import type { IProvider } from "../src/inference/types";
-import type { IChatMessage } from "../src/inference/types";
+import type { IProvider, IChatMessage } from "../src/inference/types";
 
 function providerReturning(
   toolCalls: { name: string; arguments: Record<string, unknown> }[]

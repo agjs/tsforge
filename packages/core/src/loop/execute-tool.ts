@@ -3,7 +3,14 @@ import type { IToolCall } from "../inference/types";
 import { applyEdits } from "../files/edit";
 import { applyCreate } from "../files/create";
 import { isInScope } from "../lib/scope";
-import { toEdits, toCreate, toRun, toRead, runCommand } from "../agent/tools";
+import {
+  toEdits,
+  toCreate,
+  toRun,
+  toRead,
+  runCommand,
+  fileArg,
+} from "../agent/tools";
 import { repairArgs } from "../agent/tool-repair";
 import { ruleHelpFromOutput } from "./rule-docs";
 import type { TsService } from "../lsp/service";
@@ -30,9 +37,13 @@ function str(args: Record<string, unknown>, key: string): string {
 
 const MAX_OUTPUT = 4000;
 /** Reject an edit whose matched snippet spans more than this — a deterministic
- *  push toward surgical changes instead of rewriting whole functions/files
- *  (which is slow and reintroduces errors). The gate names the exact bad lines. */
-const MAX_EDIT_LINES = 25;
+ *  push toward surgical changes instead of lazily rewriting whole FILES (slow,
+ *  reintroduces bugs; use `create` for brand-new files). Tuned UP from 25→50
+ *  after the `lang` module showed legit function-sized edits (a 27-line block!)
+ *  rejected by 2 lines — 25 was tuned on toy money's tiny functions. 50 admits
+ *  real functions, still rejects ~80-line file rewrites. The gate re-validates,
+ *  so a bad large edit can't ship. A/B'd on lang (friction↓) + money (canary). */
+const MAX_EDIT_LINES = 50;
 
 /** A file the model may write: its editable scope, OR a throwaway `scratch/`
  *  experiment (ignored by the gate) so it can test hypotheses by running code
@@ -179,7 +190,7 @@ function doLsp(
     return `${name}: unavailable (this project has no TypeScript LanguageService)`;
   }
 
-  const file = str(args, "file");
+  const file = fileArg(args) ?? "";
   const rel = (abs: string): string => relative(ctx.cwd, abs);
 
   if (name === "symbol_search") {

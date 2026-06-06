@@ -50,7 +50,7 @@ test("rejects an oversized edit — forces surgical changes, not whole-function 
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
   try {
-    const big = Array.from({ length: 40 }, (_, i) => `line${i}`).join("\n");
+    const big = Array.from({ length: 60 }, (_, i) => `line${i}`).join("\n");
 
     await Bun.write(join(dir, "impl.ts"), big);
 
@@ -111,7 +111,7 @@ test("the size cap is per-replacement — a huge single replacement is still rej
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
   try {
-    const big = Array.from({ length: 40 }, (_, i) => `line${i}`).join("\n");
+    const big = Array.from({ length: 60 }, (_, i) => `line${i}`).join("\n");
 
     await Bun.write(join(dir, "impl.ts"), big);
 

@@ -2,6 +2,27 @@ import type { ICreateFile, IReplacement } from "../files/types";
 import { isArray, isRecord } from "../lib/guards";
 
 /**
+ * Resolve the target file path from a tool call. Our schema asks for `file`, but
+ * the model frequently reaches for `path` (the Claude-Code convention) and other
+ * synonyms. A schema mismatch on the very FIRST tool call poisons the whole
+ * trajectory — observed on react-board: 7 rejected reads in turn 1 sent the
+ * model into an inert "let me read…" narration loop that never recovered. So we
+ * accept the aliases instead of rejecting (input-repair, per the tooling
+ * principle: meet the model where it is). `file` wins if both are present.
+ */
+export function fileArg(args: Record<string, unknown>): string | null {
+  for (const key of ["file", "path", "filename", "filepath", "filePath"]) {
+    const value = args[key];
+
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+/**
  * The two file-mutation tools the model is offered. One definition, shared by
  * every caller (the implement agent and test generation) so the contract the
  * model sees can't drift between code paths.
@@ -47,9 +68,10 @@ export const CREATE_TOOL = {
 export function toEdits(
   args: Record<string, unknown>
 ): { file: string; edits: IReplacement[] } | null {
-  const { file, edits, oldString, newString } = args;
+  const { edits, oldString, newString } = args;
+  const file = fileArg(args);
 
-  if (typeof file !== "string") {
+  if (file === null) {
     return null;
   }
 
@@ -79,9 +101,10 @@ export function toEdits(
 }
 
 export function toCreate(args: Record<string, unknown>): ICreateFile | null {
-  const { file, content } = args;
+  const { content } = args;
+  const file = fileArg(args);
 
-  if (typeof file === "string" && typeof content === "string") {
+  if (file !== null && typeof content === "string") {
     return { file, content };
   }
 
@@ -235,9 +258,9 @@ export function toRun(
 }
 
 export function toRead(args: Record<string, unknown>): { file: string } | null {
-  const { file } = args;
+  const file = fileArg(args);
 
-  return typeof file === "string" ? { file } : null;
+  return file !== null ? { file } : null;
 }
 
 export interface IShellResult {
