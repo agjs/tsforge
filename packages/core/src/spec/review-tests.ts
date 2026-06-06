@@ -5,7 +5,17 @@ import { isRecord, isArray } from "../lib/guards";
 import { extractJson } from "../lib/json";
 import { runTests, isRealRed } from "../validate/run-tests";
 
-export type FindingKind = "unsatisfiable" | "over-strict" | "ambiguous" | "ok";
+/** Verdict on a generated test — compare against these, never the bare string. */
+export const FINDING_KIND = {
+  unsatisfiable: "unsatisfiable",
+  overStrict: "over-strict",
+  ambiguous: "ambiguous",
+  ok: "ok",
+} as const;
+
+export type FindingKind = (typeof FINDING_KIND)[keyof typeof FINDING_KIND];
+
+const FINDING_KINDS = new Set<string>(Object.values(FINDING_KIND));
 
 export interface ITestFinding {
   /** Name of the test the finding refers to. */
@@ -113,12 +123,7 @@ function parseFindings(raw: unknown): ITestFinding[] {
 }
 
 function isFindingKind(value: unknown): value is FindingKind {
-  return (
-    value === "unsatisfiable" ||
-    value === "over-strict" ||
-    value === "ambiguous" ||
-    value === "ok"
-  );
+  return typeof value === "string" && FINDING_KINDS.has(value);
 }
 
 export interface IReviewFixOptions {

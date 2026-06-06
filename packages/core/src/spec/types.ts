@@ -32,5 +32,13 @@ export interface ISpec {
    * stated goal, and the model edits in place (a feature/bugfix/refactor). This
    * is the CLI's real mode (work on a codebase, don't regenerate it).
    */
-  mode?: "scratch" | "existing";
+  mode?: SpecMode;
 }
+
+/** Spec run mode — compare against these, never the bare string. */
+export const SPEC_MODE = {
+  scratch: "scratch",
+  existing: "existing",
+} as const;
+
+export type SpecMode = (typeof SPEC_MODE)[keyof typeof SPEC_MODE];

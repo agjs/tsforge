@@ -2,6 +2,7 @@ import { join, relative } from "node:path";
 import type { IToolCall } from "../inference/types";
 import { applyEdits } from "../files/edit";
 import { applyCreate } from "../files/create";
+import { EDIT_FAIL_REASON } from "../files/types";
 import { isInScope } from "../lib/scope";
 import {
   toEdits,
@@ -10,6 +11,8 @@ import {
   toRead,
   runCommand,
   fileArg,
+  TOOL_NAME,
+  type ToolName,
 } from "../agent/tools";
 import { repairArgs } from "../agent/tool-repair";
 import { ruleHelpFromOutput } from "./rule-docs";
@@ -110,42 +113,40 @@ function reject(ctx: IToolContext, tool: string, reason: string): string {
  * tool message. `read`/`run` are unrestricted (read-only / sandboxed in the run
  * dir); `edit`/`create` are scope-enforced to the task's editable files.
  */
+type ToolHandler = (
+  args: Record<string, unknown>,
+  ctx: IToolContext
+) => Promise<string> | string;
+
+/** Name → handler. The LSP entries close over their tool name so `doLsp` keeps
+ *  one body. Keyed by ToolName, so a new tool must register here (exhaustive). */
+const HANDLERS: Record<ToolName, ToolHandler> = {
+  [TOOL_NAME.read]: readFile,
+  [TOOL_NAME.run]: runShell,
+  [TOOL_NAME.edit]: doEdit,
+  [TOOL_NAME.create]: doCreate,
+  [TOOL_NAME.search]: doSearch,
+  [TOOL_NAME.symbolSearch]: (a, c) => doLsp(TOOL_NAME.symbolSearch, a, c),
+  [TOOL_NAME.findReferences]: (a, c) => doLsp(TOOL_NAME.findReferences, a, c),
+  [TOOL_NAME.typeAt]: (a, c) => doLsp(TOOL_NAME.typeAt, a, c),
+  [TOOL_NAME.diagnostics]: (a, c) => doLsp(TOOL_NAME.diagnostics, a, c),
+  [TOOL_NAME.renameSymbol]: (a, c) => doLsp(TOOL_NAME.renameSymbol, a, c),
+  [TOOL_NAME.organizeImports]: (a, c) => doLsp(TOOL_NAME.organizeImports, a, c),
+};
+
+function isToolName(name: string): name is ToolName {
+  return Object.hasOwn(HANDLERS, name);
+}
+
 export async function executeTool(
   call: IToolCall,
   ctx: IToolContext
 ): Promise<string> {
-  if (call.name === "read") {
-    return readFile(call.arguments, ctx);
+  if (!isToolName(call.name)) {
+    return `unknown tool: ${call.name}`;
   }
 
-  if (call.name === "run") {
-    return runShell(call.arguments, ctx);
-  }
-
-  if (call.name === "edit") {
-    return doEdit(call.arguments, ctx);
-  }
-
-  if (call.name === "create") {
-    return doCreate(call.arguments, ctx);
-  }
-
-  if (call.name === "search") {
-    return doSearch(call.arguments, ctx);
-  }
-
-  if (
-    call.name === "find_references" ||
-    call.name === "type_at" ||
-    call.name === "symbol_search" ||
-    call.name === "diagnostics" ||
-    call.name === "rename_symbol" ||
-    call.name === "organize_imports"
-  ) {
-    return doLsp(call.name, call.arguments, ctx);
-  }
-
-  return `unknown tool: ${call.name}`;
+  return HANDLERS[call.name](call.arguments, ctx);
 }
 
 /** ripgrep search over the working dir — the model's primary navigation at
@@ -180,7 +181,7 @@ async function doSearch(
  *  symbols by NAME + file; read-only tools are unrestricted, the two that WRITE
  *  (rename_symbol, organize_imports) are scope-enforced. */
 function doLsp(
-  name: string,
+  name: ToolName,
   args: Record<string, unknown>,
   ctx: IToolContext
 ): string {
@@ -193,7 +194,7 @@ function doLsp(
   const file = fileArg(args) ?? "";
   const rel = (abs: string): string => relative(ctx.cwd, abs);
 
-  if (name === "symbol_search") {
+  if (name === TOOL_NAME.symbolSearch) {
     const q = str(args, "query");
     const query = q.length > 0 ? q : str(args, "symbol");
 
@@ -216,7 +217,7 @@ function doLsp(
           .join("\n");
   }
 
-  if (name === "diagnostics") {
+  if (name === TOOL_NAME.diagnostics) {
     if (file.length === 0) {
       return "diagnostics: need `file`";
     }
@@ -249,7 +250,7 @@ function doLsp(
     return `${name}: '${symbol}' not found in ${file}`;
   }
 
-  if (name === "type_at") {
+  if (name === TOOL_NAME.typeAt) {
     const type = svc.typeAt(file, pos);
 
     ctx.report({ kind: "tool", task: ctx.task, message: `type_at ${symbol}` });
@@ -259,7 +260,7 @@ function doLsp(
       : `no type info for ${symbol}`;
   }
 
-  if (name === "find_references") {
+  if (name === TOOL_NAME.findReferences) {
     const refs = svc.references(file, pos);
 
     ctx.report({
@@ -273,7 +274,7 @@ function doLsp(
       : refs.map((r) => `${rel(r.file)}:${r.line}`).join("\n");
   }
 
-  if (name === "organize_imports") {
+  if (name === TOOL_NAME.organizeImports) {
     if (!writable(file, ctx.files)) {
       return reject(
         ctx,
@@ -432,7 +433,7 @@ async function doEdit(
   const where =
     edit.edits.length > 1 ? ` (replacement #${result.index + 1})` : "";
   const detail =
-    result.reason === "ambiguous"
+    result.reason === EDIT_FAIL_REASON.ambiguous
       ? `oldString matched ${result.matches ?? 0} places — include more surrounding lines to make it unique`
       : result.reason;
 

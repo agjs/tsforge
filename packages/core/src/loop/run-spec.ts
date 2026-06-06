@@ -1,11 +1,19 @@
 import type { ISpec } from "../spec/types";
 import type { IProvider } from "../inference/types";
 import { validate, type ErrorParser } from "../validate/validate";
-import { runTask, type IRunResult } from "./run";
+import { runTask, RUN_STATUS, type IRunResult } from "./run";
 import type { Reporter } from "./events";
 
+/** Whole-spec outcome — compare against these, never the bare string. */
+export const SPEC_STATUS = {
+  done: "done",
+  blocked: "blocked",
+} as const;
+
+export type SpecStatus = (typeof SPEC_STATUS)[keyof typeof SPEC_STATUS];
+
 export interface ISpecResult {
-  status: "done" | "blocked";
+  status: SpecStatus;
   results: IRunResult[];
 }
 
@@ -46,14 +54,14 @@ export async function runSpec(
 
     results.push(result);
 
-    if (result.status !== "done") {
+    if (result.status !== RUN_STATUS.done) {
       report({
         kind: "stuck",
         task: task.id,
         message: `spec "${spec.id}" blocked at task ${task.id}`,
       });
 
-      return { status: "blocked", results };
+      return { status: SPEC_STATUS.blocked, results };
     }
   }
 
@@ -82,11 +90,11 @@ export async function runSpec(
     });
 
     if (!verified.passed) {
-      return { status: "blocked", results };
+      return { status: SPEC_STATUS.blocked, results };
     }
   }
 
   report({ kind: "done", task: spec.id, message: `spec "${spec.id}": done` });
 
-  return { status: "done", results };
+  return { status: SPEC_STATUS.done, results };
 }

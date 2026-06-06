@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { join, isAbsolute } from "node:path";
-import { runTask } from "./loop/run";
+import { runTask, RUN_STATUS } from "./loop/run";
 import { OpenAICompatibleProvider } from "./inference/openai-compatible";
 import { renderEvent } from "./render/ansi";
 import type { ITask } from "./spec/types";
@@ -114,11 +114,13 @@ async function main(): Promise<number> {
     },
   });
 
+  const ok = result.status === RUN_STATUS.done;
+
   process.stdout.write(
-    `\n${result.status === "done" ? "✓ done" : `✗ ${result.status}`} in ${String(result.cycles)} turn(s)\n`
+    `\n${ok ? "✓ done" : `✗ ${result.status}`} in ${String(result.cycles)} turn(s)\n`
   );
 
-  return result.status === "done" ? 0 : 1;
+  return ok ? 0 : 1;
 }
 
 if (import.meta.main) {

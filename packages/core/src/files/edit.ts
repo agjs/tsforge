@@ -1,5 +1,11 @@
 import { join } from "node:path";
-import type { IEdit, EditResult, IReplacement, EditsResult } from "./types";
+import {
+  EDIT_FAIL_REASON,
+  type IEdit,
+  type EditResult,
+  type IReplacement,
+  type EditsResult,
+} from "./types";
 
 /**
  * Apply a str_replace edit. The match must be **exact and unique** — 0 matches
@@ -11,22 +17,27 @@ export async function applyEdit(cwd: string, edit: IEdit): Promise<EditResult> {
   const f = Bun.file(path);
 
   if (!(await f.exists())) {
-    return { ok: false, file: edit.file, reason: "missing-file" };
+    return { ok: false, file: edit.file, reason: EDIT_FAIL_REASON.missingFile };
   }
 
   if (edit.oldString === "") {
-    return { ok: false, file: edit.file, reason: "not-found" };
+    return { ok: false, file: edit.file, reason: EDIT_FAIL_REASON.notFound };
   }
 
   const content = await f.text();
   const matches = content.split(edit.oldString).length - 1;
 
   if (matches === 0) {
-    return { ok: false, file: edit.file, reason: "not-found" };
+    return { ok: false, file: edit.file, reason: EDIT_FAIL_REASON.notFound };
   }
 
   if (matches > 1) {
-    return { ok: false, file: edit.file, reason: "ambiguous", matches };
+    return {
+      ok: false,
+      file: edit.file,
+      reason: EDIT_FAIL_REASON.ambiguous,
+      matches,
+    };
   }
 
   // Unique match: split/join avoids `$`-pattern interpretation in newString.
@@ -52,11 +63,11 @@ export async function applyEdits(
   const f = Bun.file(path);
 
   if (!(await f.exists())) {
-    return { ok: false, file, index: 0, reason: "missing-file" };
+    return { ok: false, file, index: 0, reason: EDIT_FAIL_REASON.missingFile };
   }
 
   if (edits.length === 0) {
-    return { ok: false, file, index: 0, reason: "not-found" };
+    return { ok: false, file, index: 0, reason: EDIT_FAIL_REASON.notFound };
   }
 
   let content = await f.text();
@@ -65,7 +76,7 @@ export async function applyEdits(
     const replacement = edits[i];
 
     if (replacement === undefined || replacement.oldString === "") {
-      return { ok: false, file, index: i, reason: "not-found" };
+      return { ok: false, file, index: i, reason: EDIT_FAIL_REASON.notFound };
     }
 
     const matches = content.split(replacement.oldString).length - 1;
@@ -90,16 +101,22 @@ export async function applyEdits(
           ok: false,
           file,
           index: i,
-          reason: "ambiguous",
+          reason: EDIT_FAIL_REASON.ambiguous,
           matches: fuzzy.matches,
         };
       }
 
-      return { ok: false, file, index: i, reason: "not-found" };
+      return { ok: false, file, index: i, reason: EDIT_FAIL_REASON.notFound };
     }
 
     if (matches > 1) {
-      return { ok: false, file, index: i, reason: "ambiguous", matches };
+      return {
+        ok: false,
+        file,
+        index: i,
+        reason: EDIT_FAIL_REASON.ambiguous,
+        matches,
+      };
     }
 
     content = content.split(replacement.oldString).join(replacement.newString);

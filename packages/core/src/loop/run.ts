@@ -15,11 +15,27 @@ import {
   RUN_TOOL,
   READ_TOOL,
   LSP_TOOLS,
+  TOOL_NAME,
 } from "../agent/tools";
 import { TsService } from "../lsp/service";
 import type { Reporter } from "./events";
 
-export type RunStatus = "done" | "stuck" | "red-not-confirmed";
+/** Terminal status of a single task run — compare against these, not bare strings. */
+export const RUN_STATUS = {
+  done: "done",
+  stuck: "stuck",
+  redNotConfirmed: "red-not-confirmed",
+} as const;
+
+export type RunStatus = (typeof RUN_STATUS)[keyof typeof RUN_STATUS];
+
+/** Why a run gave up (only set when status is `stuck`). */
+export const STUCK_REASON = {
+  stalled: "stalled",
+  cap: "cap",
+} as const;
+
+export type StuckReason = (typeof STUCK_REASON)[keyof typeof STUCK_REASON];
 
 export interface IRunResult {
   task: string;
@@ -28,7 +44,7 @@ export interface IRunResult {
   status: RunStatus;
   /** Model turns used. */
   cycles: number;
-  reason?: "stalled" | "cap";
+  reason?: StuckReason;
   /** Edits/creates applied to editable files (measure edit churn). */
   edits?: number;
   /** Times an edit RAISED the gate error count (regressions — measure churn quality). */
@@ -122,7 +138,7 @@ export async function runTask(
     return {
       task: task.id,
       redConfirmed: false,
-      status: "red-not-confirmed",
+      status: RUN_STATUS.redNotConfirmed,
       cycles: 0,
       edits: 0,
       regressions: 0,
@@ -305,7 +321,7 @@ export async function runTask(
         return {
           task: task.id,
           redConfirmed: true,
-          status: "done",
+          status: RUN_STATUS.done,
           cycles: turn,
         };
       }
@@ -326,9 +342,9 @@ export async function runTask(
         return {
           task: task.id,
           redConfirmed: true,
-          status: "stuck",
+          status: RUN_STATUS.stuck,
           cycles: turn,
-          reason: "stalled",
+          reason: STUCK_REASON.stalled,
         };
       }
 
@@ -380,7 +396,7 @@ export async function runTask(
       const file = call.arguments.file;
 
       if (
-        (call.name === "edit" || call.name === "create") &&
+        (call.name === TOOL_NAME.edit || call.name === TOOL_NAME.create) &&
         typeof file === "string" &&
         isInScope(file, task.files)
       ) {
@@ -389,7 +405,10 @@ export async function runTask(
       }
 
       // The semantic WRITE tools mutate editable files on disk too — re-gate.
-      if (call.name === "rename_symbol" || call.name === "organize_imports") {
+      if (
+        call.name === TOOL_NAME.renameSymbol ||
+        call.name === TOOL_NAME.organizeImports
+      ) {
         touchedEditable = true;
       }
 
@@ -436,9 +455,9 @@ export async function runTask(
   return {
     task: task.id,
     redConfirmed: true,
-    status: "stuck",
+    status: RUN_STATUS.stuck,
     cycles: maxTurns,
-    reason: "cap",
+    reason: STUCK_REASON.cap,
     edits,
     regressions,
   };

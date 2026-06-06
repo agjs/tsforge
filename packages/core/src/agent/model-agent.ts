@@ -4,8 +4,9 @@ import type { IChatMessage, IProvider } from "../inference/types";
 import type { ErrorSet } from "../validate/errors";
 import { applyEdits } from "../files/edit";
 import { applyCreate } from "../files/create";
+import { EDIT_FAIL_REASON } from "../files/types";
 import { isInScope } from "../lib/scope";
-import { EDIT_TOOL, CREATE_TOOL, toEdits, toCreate } from "./tools";
+import { EDIT_TOOL, CREATE_TOOL, TOOL_NAME, toEdits, toCreate } from "./tools";
 import { ruleHelp } from "../loop/rule-docs";
 
 /**
@@ -87,7 +88,7 @@ async function applyCall(
   name: string,
   args: Record<string, unknown>
 ): Promise<string | null> {
-  if (name === "edit") {
+  if (name === TOOL_NAME.edit) {
     const edit = toEdits(args);
 
     if (edit === null) {
@@ -120,7 +121,7 @@ async function applyCall(
     const where =
       edit.edits.length > 1 ? ` (replacement #${result.index + 1})` : "";
     const detail =
-      result.reason === "ambiguous"
+      result.reason === EDIT_FAIL_REASON.ambiguous
         ? `oldString matched ${result.matches ?? 0} places — include more surrounding lines to make it unique`
         : result.reason;
     const message = `edit to ${edit.file} REJECTED${where}: ${detail}`;
@@ -135,7 +136,7 @@ async function applyCall(
     return message;
   }
 
-  if (name === "create") {
+  if (name === TOOL_NAME.create) {
     const create = toCreate(args);
 
     if (create === null) {

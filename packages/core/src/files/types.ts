@@ -5,12 +5,22 @@ export interface IEdit {
   newString: string;
 }
 
+/** Why an edit failed to apply (compare against these, never the bare string). */
+export const EDIT_FAIL_REASON = {
+  missingFile: "missing-file",
+  notFound: "not-found",
+  ambiguous: "ambiguous",
+} as const;
+
+export type EditFailReason =
+  (typeof EDIT_FAIL_REASON)[keyof typeof EDIT_FAIL_REASON];
+
 export type EditResult =
   | { ok: true; file: string }
   | {
       ok: false;
       file: string;
-      reason: "missing-file" | "not-found" | "ambiguous";
+      reason: EditFailReason;
       /** Number of matches when ambiguous. */
       matches?: number;
     };
@@ -28,7 +38,7 @@ export type EditsResult =
       file: string;
       /** Which replacement in the batch failed (0-based). */
       index: number;
-      reason: "missing-file" | "not-found" | "ambiguous";
+      reason: EditFailReason;
       matches?: number;
     };
 
@@ -38,6 +48,14 @@ export interface ICreateFile {
   content: string;
 }
 
+/** Why a create failed (compare against this, never the bare string). */
+export const CREATE_FAIL_REASON = {
+  exists: "exists",
+} as const;
+
+export type CreateFailReason =
+  (typeof CREATE_FAIL_REASON)[keyof typeof CREATE_FAIL_REASON];
+
 export type CreateResult =
   | { ok: true; file: string }
-  | { ok: false; file: string; reason: "exists" };
+  | { ok: false; file: string; reason: CreateFailReason };
