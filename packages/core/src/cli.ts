@@ -1,7 +1,11 @@
 #!/usr/bin/env bun
 import { join, isAbsolute } from "node:path";
 import { runTask, RUN_STATUS } from "./loop";
-import { PROVIDER_LIMITS, OpenAICompatibleProvider } from "./inference";
+import {
+  PROVIDER_LIMITS,
+  OpenAICompatibleProvider,
+  PROVIDER_DEFAULTS,
+} from "./inference";
 import { renderEvent } from "./render";
 import type { ITask } from "./spec";
 
@@ -94,8 +98,8 @@ async function main(): Promise<number> {
   }
 
   const provider = new OpenAICompatibleProvider({
-    baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-    model: process.env.TSFORGE_MODEL ?? "qwen3.6-35b-a3b",
+    baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
+    model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
     apiKey: process.env.TSFORGE_API_KEY,
     maxTokens: Number(
       process.env.TSFORGE_MAX_TOKENS ?? String(PROVIDER_LIMITS.maxTokens)

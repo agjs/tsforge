@@ -12,7 +12,7 @@ import { parseSpec } from "../src/spec";
 import { generateTests } from "../src/spec/generate-tests";
 import { reviewAndFixSuite } from "../src/spec/review-tests";
 import { runSpec } from "../src/loop";
-import { OpenAICompatibleProvider } from "../src/inference";
+import { OpenAICompatibleProvider, PROVIDER_DEFAULTS } from "../src/inference";
 import { renderEvent } from "../src/render";
 import type { ILoopEvent } from "../src/loop";
 
@@ -21,8 +21,8 @@ const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
 const seedDir = join(evalsRoot, seed);
 
 const provider = new OpenAICompatibleProvider({
-  baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-  model: process.env.TSFORGE_MODEL ?? "qwen3.6-35b-a3b",
+  baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
+  model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
   apiKey: process.env.TSFORGE_API_KEY,
   repetitionPenalty:
     process.env.TSFORGE_REPETITION_PENALTY === undefined
@@ -38,11 +38,11 @@ const judge = new OpenAICompatibleProvider({
   baseUrl:
     process.env.TSFORGE_JUDGE_URL ??
     process.env.TSFORGE_BASE_URL ??
-    "http://192.168.20.107:8000/v1",
+    PROVIDER_DEFAULTS.baseUrl,
   model:
     process.env.TSFORGE_JUDGE_MODEL ??
     process.env.TSFORGE_MODEL ??
-    "qwen3.6-35b-a3b",
+    PROVIDER_DEFAULTS.model,
   apiKey: process.env.TSFORGE_JUDGE_KEY ?? process.env.TSFORGE_API_KEY,
 });
 

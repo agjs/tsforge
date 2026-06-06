@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parseSpec } from "../src/spec";
 import { runSpec, qualityRepair } from "../src/loop";
 import { modelAgent } from "../src/agent";
-import { OpenAICompatibleProvider } from "../src/inference";
+import { OpenAICompatibleProvider, PROVIDER_DEFAULTS } from "../src/inference";
 import { summarize, type IRunRecord } from "../src/eval";
 import { renderEvent } from "../src/render";
 import type { ILoopEvent } from "../src/loop";
@@ -27,8 +27,8 @@ const seedDir = join(evalsRoot, seed);
 const seedFiles = await readdir(seedDir, { recursive: true });
 
 const provider = new OpenAICompatibleProvider({
-  baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-  model: process.env.TSFORGE_MODEL ?? "qwen3.6-35b-a3b",
+  baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
+  model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
   apiKey: process.env.TSFORGE_API_KEY,
   // Thinking tokens count against the limit, so give reasoning + code room.
   maxTokens: Number(process.env.TSFORGE_MAX_TOKENS ?? "16384"),
@@ -47,11 +47,11 @@ const judgeProvider = new OpenAICompatibleProvider({
   baseUrl:
     process.env.TSFORGE_JUDGE_URL ??
     process.env.TSFORGE_BASE_URL ??
-    "http://192.168.20.107:8000/v1",
+    PROVIDER_DEFAULTS.baseUrl,
   model:
     process.env.TSFORGE_JUDGE_MODEL ??
     process.env.TSFORGE_MODEL ??
-    "qwen3.6-35b-a3b",
+    PROVIDER_DEFAULTS.model,
   apiKey: process.env.TSFORGE_JUDGE_KEY ?? process.env.TSFORGE_API_KEY,
 });
 

@@ -3,7 +3,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OpenAICompatibleProvider } from "../src/inference";
+import { OpenAICompatibleProvider, PROVIDER_DEFAULTS } from "../src/inference";
 import { runTask } from "../src/loop";
 
 // Only the test exists. greet.ts must be CREATED by the model.
@@ -15,8 +15,8 @@ test("greets by name", () => {
 `;
 
 const provider = new OpenAICompatibleProvider({
-  baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-  model: process.env.TSFORGE_MODEL ?? "qwen3.6-35b-a3b",
+  baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
+  model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
 });
 
 const dir = await mkdtemp(join(tmpdir(), "tsforge-eval-create-"));

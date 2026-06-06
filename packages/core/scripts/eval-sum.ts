@@ -3,7 +3,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OpenAICompatibleProvider } from "../src/inference";
+import { OpenAICompatibleProvider, PROVIDER_DEFAULTS } from "../src/inference";
 import { runTask } from "../src/loop";
 
 const BROKEN = `export function sum(a: number, b: number): number {
@@ -33,8 +33,8 @@ const EDIT_TOOL = {
 };
 
 const provider = new OpenAICompatibleProvider({
-  baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-  model: process.env.TSFORGE_MODEL ?? "qwen3.6-35b-a3b",
+  baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
+  model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
 });
 
 // (1) Diagnostic: WITH full context (file + test), does it emit a valid edit?

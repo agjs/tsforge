@@ -14,3 +14,12 @@ export const PROVIDER_LIMITS = {
   /** Linear backoff base per retry attempt (ms): attempt N waits N * this. */
   retryBackoffMs: 400,
 } as const;
+
+/**
+ * Default endpoint + model for the local provider — the single source of truth.
+ * Override per-run with TSFORGE_BASE_URL / TSFORGE_MODEL.
+ */
+export const PROVIDER_DEFAULTS = {
+  baseUrl: "http://192.168.20.107:8000/v1",
+  model: "qwen3.6-35b-a3b",
+} as const;

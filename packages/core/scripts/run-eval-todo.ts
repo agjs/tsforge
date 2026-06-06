@@ -5,7 +5,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
 import { runSpec } from "../src/loop";
-import { OpenAICompatibleProvider } from "../src/inference";
+import { OpenAICompatibleProvider, PROVIDER_DEFAULTS } from "../src/inference";
 import { renderEvent } from "../src/render";
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
@@ -31,8 +31,8 @@ for (const file of [
 const spec = parseSpec(await Bun.file(join(runDir, "todo.spec.md")).text());
 
 const provider = new OpenAICompatibleProvider({
-  baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-  model: process.env.TSFORGE_MODEL ?? "qwen3.6-35b-a3b",
+  baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
+  model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
 });
 
 // Tee to the terminal (colored) AND run.log (plain).
