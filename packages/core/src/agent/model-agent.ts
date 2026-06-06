@@ -86,91 +86,104 @@ async function applyCall(
   args: Record<string, unknown>
 ): Promise<string | null> {
   if (name === TOOL_NAME.edit) {
-    const edit = toEdits(args);
-
-    if (edit === null) {
-      return "an `edit` call had malformed arguments (need `file` plus `oldString`/`newString` or an `edits` array)";
-    }
-
-    const scopeError = outOfScope(ctx, edit.file);
-
-    if (scopeError !== null) {
-      return scopeError;
-    }
-
-    const result = await applyEdits(ctx.cwd, edit.file, edit.edits);
-
-    if (result.ok) {
-      for (const r of edit.edits) {
-        ctx.report?.({
-          kind: "edit",
-          task: ctx.task.id,
-          file: edit.file,
-          message: `edit ${edit.file}`,
-          oldString: r.oldString,
-          newString: r.newString,
-        });
-      }
-
-      return null;
-    }
-
-    const where =
-      edit.edits.length > 1 ? ` (replacement #${result.index + 1})` : "";
-    const detail =
-      result.reason === EDIT_FAIL_REASON.ambiguous
-        ? `oldString matched ${result.matches ?? 0} places — include more surrounding lines to make it unique`
-        : result.reason;
-    const message = `edit to ${edit.file} REJECTED${where}: ${detail}`;
-
-    ctx.report?.({
-      kind: "edit",
-      task: ctx.task.id,
-      file: edit.file,
-      message: `${edit.file} — rejected (${result.reason})`,
-    });
-
-    return message;
+    return applyAgentEdit(ctx, args);
   }
 
   if (name === TOOL_NAME.create) {
-    const create = toCreate(args);
+    return applyAgentCreate(ctx, args);
+  }
 
-    if (create === null) {
-      return "a `create` call had malformed arguments (need file, content)";
-    }
+  return null;
+}
 
-    const scopeError = outOfScope(ctx, create.file);
+async function applyAgentEdit(
+  ctx: IAgentContext,
+  args: Record<string, unknown>
+): Promise<string | null> {
+  const edit = toEdits(args);
 
-    if (scopeError !== null) {
-      return scopeError;
-    }
+  if (edit === null) {
+    return "an `edit` call had malformed arguments (need `file` plus `oldString`/`newString` or an `edits` array)";
+  }
 
-    const result = await applyCreate(ctx.cwd, create);
+  const scopeError = outOfScope(ctx, edit.file);
 
-    if (result.ok) {
+  if (scopeError !== null) {
+    return scopeError;
+  }
+
+  const result = await applyEdits(ctx.cwd, edit.file, edit.edits);
+
+  if (result.ok) {
+    for (const r of edit.edits) {
       ctx.report?.({
-        kind: "create",
+        kind: "edit",
         task: ctx.task.id,
-        file: create.file,
-        message: `create ${create.file}`,
-        content: create.content,
+        file: edit.file,
+        message: `edit ${edit.file}`,
+        oldString: r.oldString,
+        newString: r.newString,
       });
-
-      return null;
     }
 
+    return null;
+  }
+
+  const where =
+    edit.edits.length > 1 ? ` (replacement #${result.index + 1})` : "";
+  const detail =
+    result.reason === EDIT_FAIL_REASON.ambiguous
+      ? `oldString matched ${result.matches ?? 0} places — include more surrounding lines to make it unique`
+      : result.reason;
+
+  ctx.report?.({
+    kind: "edit",
+    task: ctx.task.id,
+    file: edit.file,
+    message: `${edit.file} — rejected (${result.reason})`,
+  });
+
+  return `edit to ${edit.file} REJECTED${where}: ${detail}`;
+}
+
+async function applyAgentCreate(
+  ctx: IAgentContext,
+  args: Record<string, unknown>
+): Promise<string | null> {
+  const create = toCreate(args);
+
+  if (create === null) {
+    return "a `create` call had malformed arguments (need file, content)";
+  }
+
+  const scopeError = outOfScope(ctx, create.file);
+
+  if (scopeError !== null) {
+    return scopeError;
+  }
+
+  const result = await applyCreate(ctx.cwd, create);
+
+  if (result.ok) {
     ctx.report?.({
       kind: "create",
       task: ctx.task.id,
       file: create.file,
-      message: `${create.file} — rejected (already exists)`,
+      message: `create ${create.file}`,
+      content: create.content,
     });
 
-    return `create ${create.file} REJECTED: file already exists — use \`edit\` instead`;
+    return null;
   }
 
-  return null;
+  ctx.report?.({
+    kind: "create",
+    task: ctx.task.id,
+    file: create.file,
+    message: `${create.file} — rejected (already exists)`,
+  });
+
+  return `create ${create.file} REJECTED: file already exists — use \`edit\` instead`;
 }
 
 /** Reject (and report) an edit/create whose path is outside the editable scope. */

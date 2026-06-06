@@ -49,6 +49,36 @@ const ASKING = /turn (\d+): asking model/;
 // of feedback-provided lines, which are the model USING the located errors.
 const HAND_COUNT = /^\s*\d+:\s+(?:export|const|function|return|if|for|\}|\/\/)/;
 
+interface ITurnTiming {
+  turn: number;
+  tookSeconds: number | null;
+  totalSeconds: number | null;
+}
+
+/** Parse a `turn N took Xs (total Ys)` line into its seconds (ms normalized). */
+function parseTiming(line: string): ITurnTiming | null {
+  const m = TIMING.exec(line);
+
+  if (m?.[1] === undefined) {
+    return null;
+  }
+
+  const took =
+    m[2] === undefined
+      ? null
+      : m[3] === "ms"
+        ? Number(m[2]) / 1000
+        : Number(m[2]);
+  const total =
+    m[4] === undefined
+      ? null
+      : m[5] === "ms"
+        ? Number(m[4]) / 1000
+        : Number(m[4]);
+
+  return { turn: Number(m[1]), tookSeconds: took, totalSeconds: total };
+}
+
 function parseLog(
   runId: string,
   log: string
@@ -86,23 +116,18 @@ function parseLog(
       editsThisTurn += 1;
     }
 
-    const timing = TIMING.exec(line);
+    const timing = parseTiming(line);
 
-    if (timing?.[1] !== undefined) {
-      turns = Math.max(turns, Number(timing[1]));
+    if (timing !== null) {
+      turns = Math.max(turns, timing.turn);
       maxTurnChars = Math.max(maxTurnChars, charsThisTurn);
 
-      if (timing[2] !== undefined) {
-        const took =
-          timing[3] === "ms" ? Number(timing[2]) / 1000 : Number(timing[2]);
-
-        slowestTurnSeconds = Math.max(slowestTurnSeconds, took);
+      if (timing.tookSeconds !== null) {
+        slowestTurnSeconds = Math.max(slowestTurnSeconds, timing.tookSeconds);
       }
 
-      if (timing[4] !== undefined) {
-        const total = Number(timing[4]);
-
-        totalSeconds = timing[5] === "ms" ? total / 1000 : total;
+      if (timing.totalSeconds !== null) {
+        totalSeconds = timing.totalSeconds;
       }
     }
 
