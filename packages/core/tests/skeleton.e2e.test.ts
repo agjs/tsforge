@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSpec } from "../src/spec/parse";
+import { parseSpec } from "../src/spec";
 import { runTask } from "../src/loop/run";
 import { scripted, editStep, STOP } from "./stub-provider";
 

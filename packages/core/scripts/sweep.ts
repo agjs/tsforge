@@ -2,7 +2,7 @@
 // Run:  TSFORGE_SEED=money TSFORGE_TEMPS=0,0.5 TSFORGE_REPEATS=3 bun run packages/core/scripts/sweep.ts
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { parseSpec } from "../src/spec/parse";
+import { parseSpec } from "../src/spec";
 import { runSpec } from "../src/loop/run-spec";
 import { modelAgent } from "../src/agent/model-agent";
 import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ITask } from "../spec/types";
+import type { ITask } from "../spec";
 import type { IChatMessage, IProvider } from "../inference/types";
 import { validate, type ErrorParser } from "../validate/validate";
 import { parseEslintJson } from "../validate/parse";

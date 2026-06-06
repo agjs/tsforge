@@ -1,5 +1,4 @@
-export * from "./spec/types";
-export * from "./spec/parse";
+export * from "./spec";
 export * from "./validate/accept";
 export * from "./validate/errors";
 export * from "./validate/parse";

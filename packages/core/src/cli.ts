@@ -4,7 +4,7 @@ import { runTask, RUN_STATUS } from "./loop/run";
 import { LIMITS } from "./constants";
 import { OpenAICompatibleProvider } from "./inference/openai-compatible";
 import { renderEvent } from "./render/ansi";
-import type { ITask } from "./spec/types";
+import type { ITask } from "./spec";
 
 /**
  * The tsforge CLI — point it at a project + a task + a gate command and it drives

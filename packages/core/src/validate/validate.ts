@@ -1,4 +1,4 @@
-import type { ITask } from "../spec/types";
+import type { ITask } from "../spec";
 import type { IErrorItem, ErrorSet } from "./errors";
 import { runAccept } from "./accept";
 import { parserFor } from "./parse";

@@ -1,4 +1,5 @@
-import { SPEC_MODE, type ISpec, type ITask } from "./types";
+import { SPEC_MODE } from "./spec.constants";
+import type { ISpec, ITask } from "./spec.types";
 
 /**
  * Parse our minimal one-file spec format (see docs: /spec/format/).

@@ -10,7 +10,7 @@
 // reproduces the existing scores — so it warns when no flagship judge is set.
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { parseSpec } from "../src/spec/parse";
+import { parseSpec } from "../src/spec";
 import { judge } from "../src/eval/judge";
 import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
 import { isRecord } from "../src/lib/guards";

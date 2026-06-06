@@ -4,40 +4,17 @@ import type { Reporter } from "../loop/events";
 import { isRecord, isArray } from "../lib/guards";
 import { extractJson } from "../lib/json";
 import { runTests, isRealRed } from "../validate/run-tests";
-
-/** Verdict on a generated test — compare against these, never the bare string. */
-export const FINDING_KIND = {
-  unsatisfiable: "unsatisfiable",
-  overStrict: "over-strict",
-  ambiguous: "ambiguous",
-  ok: "ok",
-} as const;
-
-export type FindingKind = (typeof FINDING_KIND)[keyof typeof FINDING_KIND];
+import { FINDING_KIND } from "./spec.constants";
+import type {
+  FindingKind,
+  ITestFinding,
+  IReviewResult,
+  IReviewInput,
+  IReviewFixOptions,
+  IReviewFixResult,
+} from "./spec.types";
 
 const FINDING_KINDS = new Set<string>(Object.values(FINDING_KIND));
-
-export interface ITestFinding {
-  /** Name of the test the finding refers to. */
-  test: string;
-  kind: FindingKind;
-  reason: string;
-}
-
-export interface IReviewResult {
-  findings: ITestFinding[];
-  /** Full corrected test file, or "" when no change is needed. */
-  correctedSuite: string;
-}
-
-export interface IReviewInput {
-  goal: string;
-  criteria: string;
-  /** The generated test file's contents. */
-  testCode: string;
-  /** Module specifier the suite imports the impl from (e.g. "./money"). */
-  moduleSpecifier: string;
-}
 
 /**
  * Offline teacher review of a generated suite: the `runTests` oracle proves a
@@ -124,20 +101,6 @@ function parseFindings(raw: unknown): ITestFinding[] {
 
 function isFindingKind(value: unknown): value is FindingKind {
   return typeof value === "string" && FINDING_KINDS.has(value);
-}
-
-export interface IReviewFixOptions {
-  testFile: string;
-  implFile: string;
-  goal: string;
-  criteria: string;
-  onEvent?: Reporter;
-}
-
-export interface IReviewFixResult {
-  findings: ITestFinding[];
-  /** True only when a correction was written AND it stayed real + RED. */
-  applied: boolean;
 }
 
 /**

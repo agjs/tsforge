@@ -1,4 +1,4 @@
-import type { ITask } from "../spec/types";
+import type { ITask } from "../spec";
 import { readProcessOutput } from "../lib/process";
 
 export interface IAcceptResult {

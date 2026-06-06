@@ -1,5 +1,5 @@
 import { join, basename, isAbsolute } from "node:path";
-import type { ITask } from "../spec/types";
+import type { ITask } from "../spec";
 import type { ErrorSet } from "../validate/errors";
 import { isInScope } from "../lib/scope";
 import { readFiles } from "../lib/files";

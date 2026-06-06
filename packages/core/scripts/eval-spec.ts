@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
 import { runSpec } from "../src/loop/run-spec";
-import type { ISpec } from "../src/spec/types";
+import type { ISpec } from "../src/spec";
 
 const FILES: Record<string, string> = {
   "add.ts": `export function add(a: number, b: number): number {\n  return 0;\n}\n`,

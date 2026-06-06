@@ -1,4 +1,4 @@
-import type { ITask } from "../spec/types";
+import type { ITask } from "../spec";
 import type { IFileView } from "../lib/files";
 import { renderFileSection } from "./project-map";
 

@@ -3,7 +3,7 @@
 // Run: bun run packages/core/scripts/run-eval-todo.ts
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { parseSpec } from "../src/spec/parse";
+import { parseSpec } from "../src/spec";
 import { runSpec } from "../src/loop/run-spec";
 import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
 import { renderEvent } from "../src/render/ansi";

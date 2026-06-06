@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseSpec } from "../src/spec/parse";
+import { parseSpec } from "../src/spec";
 
 describe("parseSpec", () => {
   test("reads frontmatter, stripping quotes", () => {

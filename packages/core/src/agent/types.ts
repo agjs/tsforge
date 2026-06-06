@@ -1,4 +1,4 @@
-import type { ITask } from "../spec/types";
+import type { ITask } from "../spec";
 import type { ErrorSet } from "../validate/errors";
 import type { Reporter } from "../loop/events";
 

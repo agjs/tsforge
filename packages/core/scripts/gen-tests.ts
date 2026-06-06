@@ -8,7 +8,7 @@
 // Run:  TSFORGE_SEED=money bun run packages/core/scripts/gen-tests.ts
 import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { parseSpec } from "../src/spec/parse";
+import { parseSpec } from "../src/spec";
 import { generateTests } from "../src/spec/generate-tests";
 import { reviewAndFixSuite } from "../src/spec/review-tests";
 import { runSpec } from "../src/loop/run-spec";

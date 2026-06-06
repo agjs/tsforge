@@ -1,4 +1,4 @@
-import type { ISpec } from "../spec/types";
+import type { ISpec } from "../spec";
 import type { IProvider } from "../inference/types";
 import { validate, type ErrorParser } from "../validate/validate";
 import { runTask, RUN_STATUS, type IRunResult } from "./run";
