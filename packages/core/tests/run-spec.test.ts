@@ -2,8 +2,8 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSpec } from "../src/loop/run-spec";
-import type { ISpec } from "../src/spec/types";
+import { runSpec } from "../src/loop";
+import type { ISpec } from "../src/spec";
 import { scripted, runStep, STOP } from "./stub-provider";
 
 function twoTaskSpec(verify: string): ISpec {

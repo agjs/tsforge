@@ -1,11 +1,7 @@
-import type { ITask } from "../spec/types";
+import type { ITask } from "../spec";
+import { readProcessOutput } from "../lib/fs";
 
-export interface IAcceptResult {
-  /** True when the command exits 0. */
-  passed: boolean;
-  /** Combined stdout + stderr, for feeding back into the loop. */
-  output: string;
-}
+import type { IAcceptResult } from "./validate.types";
 
 /**
  * Run a task's `accept:` command in `cwd`. This is the deterministic oracle in
@@ -22,8 +18,7 @@ export async function runAccept(
   });
 
   const exitCode = await proc.exited;
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
+  const { stdout, stderr } = await readProcessOutput(proc.stdout, proc.stderr);
 
   return { passed: exitCode === 0, output: stdout + stderr };
 }

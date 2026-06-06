@@ -3,7 +3,7 @@
 // committed cache the repair loop reads. Run when rules change:
 //   bun run packages/core/scripts/build-rule-docs.ts
 import { join } from "node:path";
-import { parseRuleMdx, type IRuleDoc } from "../src/loop/rule-docs";
+import { parseRuleMdx, type IRuleDoc } from "../src/loop/feedback/rule-docs";
 
 const BASE =
   "https://raw.githubusercontent.com/typescript-eslint/typescript-eslint/main/packages/eslint-plugin/docs/rules";

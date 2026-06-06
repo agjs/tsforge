@@ -1,13 +1,9 @@
-import type { ISpec } from "../spec/types";
-import type { IProvider } from "../inference/types";
-import { validate, type ErrorParser } from "../validate/validate";
-import { runTask, type IRunResult } from "./run";
-import type { Reporter } from "./events";
-
-export interface ISpecResult {
-  status: "done" | "blocked";
-  results: IRunResult[];
-}
+import type { ISpec } from "../spec";
+import type { IProvider } from "../inference";
+import { validate, type ErrorParser } from "../validate";
+import { runTask } from "./run";
+import { RUN_STATUS, SPEC_STATUS } from "./loop.constants";
+import type { IRunResult, ISpecResult, Reporter } from "./loop.types";
 
 export interface IRunSpecOptions {
   parse?: ErrorParser;
@@ -46,14 +42,14 @@ export async function runSpec(
 
     results.push(result);
 
-    if (result.status !== "done") {
+    if (result.status !== RUN_STATUS.done) {
       report({
         kind: "stuck",
         task: task.id,
         message: `spec "${spec.id}" blocked at task ${task.id}`,
       });
 
-      return { status: "blocked", results };
+      return { status: SPEC_STATUS.blocked, results };
     }
   }
 
@@ -82,11 +78,11 @@ export async function runSpec(
     });
 
     if (!verified.passed) {
-      return { status: "blocked", results };
+      return { status: SPEC_STATUS.blocked, results };
     }
   }
 
   report({ kind: "done", task: spec.id, message: `spec "${spec.id}": done` });
 
-  return { status: "done", results };
+  return { status: SPEC_STATUS.done, results };
 }

@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTests } from "../src/validate/run-tests";
+import { runTests } from "../src/validate";
 
 test("counts collected tests (pass + fail) from a real run", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-runtests-"));

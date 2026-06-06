@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
-import { judge } from "../src/eval/judge";
-import type { IProvider } from "../src/inference/types";
+import { judge } from "../src/eval";
+import type { IProvider } from "../src/inference";
 
 function providerSaying(content: string): IProvider {
   return {

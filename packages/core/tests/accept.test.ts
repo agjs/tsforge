@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { runAccept } from "../src/validate/accept";
+import { runAccept } from "../src/validate";
 
 test("passes when the command exits 0, capturing output", async () => {
   const r = await runAccept({ id: "1", accept: "echo ok", files: [] }, ".");

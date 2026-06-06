@@ -10,9 +10,9 @@
 // reproduces the existing scores — so it warns when no flagship judge is set.
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { parseSpec } from "../src/spec/parse";
-import { judge } from "../src/eval/judge";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
+import { parseSpec } from "../src/spec";
+import { judge } from "../src/eval";
+import { OpenAICompatibleProvider, PROVIDER_DEFAULTS } from "../src/inference";
 import { isRecord } from "../src/lib/guards";
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
@@ -25,11 +25,11 @@ const provider = new OpenAICompatibleProvider({
   baseUrl:
     process.env.TSFORGE_JUDGE_URL ??
     process.env.TSFORGE_BASE_URL ??
-    "http://192.168.20.107:8000/v1",
+    PROVIDER_DEFAULTS.baseUrl,
   model:
     process.env.TSFORGE_JUDGE_MODEL ??
     process.env.TSFORGE_MODEL ??
-    "qwen3.6-27b",
+    PROVIDER_DEFAULTS.model,
   apiKey: process.env.TSFORGE_JUDGE_KEY ?? process.env.TSFORGE_API_KEY,
 });
 

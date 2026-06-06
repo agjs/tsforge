@@ -1,6 +1,16 @@
-import type { ITask } from "../spec/types";
-import type { ErrorSet } from "../validate/errors";
-import type { Reporter } from "../loop/events";
+import type { ITask } from "../spec";
+import type { ErrorSet } from "../validate";
+import type { Reporter } from "../loop";
+import { type TOOL_NAME } from "./agent.constants";
+
+export type ToolName = (typeof TOOL_NAME)[keyof typeof TOOL_NAME];
+
+/** Captured output of a spawned shell command (the `run` tool). */
+export interface IShellResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
 
 export interface IAgentContext {
   /** Working directory the agent may edit within. */

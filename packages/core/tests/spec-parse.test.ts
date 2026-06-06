@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseSpec } from "../src/spec/parse";
+import { parseSpec } from "../src/spec";
 
 describe("parseSpec", () => {
   test("reads frontmatter, stripping quotes", () => {
@@ -10,6 +10,13 @@ describe("parseSpec", () => {
     expect(s.id).toBe("007");
     expect(s.title).toBe("Ticket tagging");
     expect(s.verify).toBe("bun run validate");
+  });
+
+  test("mode defaults to scratch, and reads `existing` (work-on-existing)", () => {
+    expect(parseSpec(`---\nid: a\ntitle: t\n---\n`).mode).toBe("scratch");
+    expect(parseSpec(`---\nid: a\ntitle: t\nmode: existing\n---\n`).mode).toBe(
+      "existing"
+    );
   });
 
   test("parses multiple tasks with accept + comma-split files", () => {

@@ -3,9 +3,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
-import { runSpec } from "../src/loop/run-spec";
-import type { ISpec } from "../src/spec/types";
+import { OpenAICompatibleProvider, PROVIDER_DEFAULTS } from "../src/inference";
+import { runSpec } from "../src/loop";
+import type { ISpec } from "../src/spec";
 
 const FILES: Record<string, string> = {
   "add.ts": `export function add(a: number, b: number): number {\n  return 0;\n}\n`,
@@ -25,8 +25,8 @@ const spec: ISpec = {
 };
 
 const provider = new OpenAICompatibleProvider({
-  baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-  model: process.env.TSFORGE_MODEL ?? "qwen3.6-27b",
+  baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
+  model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
 });
 
 const dir = await mkdtemp(join(tmpdir(), "tsforge-eval-spec-"));

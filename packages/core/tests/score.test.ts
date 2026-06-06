@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { summarize } from "../src/eval/score";
+import { summarize } from "../src/eval";
 
 test("aggregates run records per variant label", () => {
   const summaries = summarize([

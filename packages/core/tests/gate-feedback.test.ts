@@ -2,9 +2,9 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gateFeedback } from "../src/loop/run";
-import type { ITask } from "../src/spec/types";
-import type { ErrorSet } from "../src/validate/errors";
+import { gateFeedback } from "../src/loop/feedback";
+import type { ITask } from "../src/spec";
+import type { ErrorSet } from "../src/validate";
 
 const TASK: ITask = {
   id: "1",

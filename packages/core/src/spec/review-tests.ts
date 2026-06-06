@@ -1,33 +1,20 @@
 import { join } from "node:path";
-import type { IProvider } from "../inference/types";
-import type { Reporter } from "../loop/events";
+import type { IProvider } from "../inference";
+import type { Reporter } from "../loop";
 import { isRecord, isArray } from "../lib/guards";
 import { extractJson } from "../lib/json";
-import { runTests, isRealRed } from "../validate/run-tests";
+import { runTests, isRealRed } from "../validate";
+import { FINDING_KIND } from "./spec.constants";
+import type {
+  FindingKind,
+  ITestFinding,
+  IReviewResult,
+  IReviewInput,
+  IReviewFixOptions,
+  IReviewFixResult,
+} from "./spec.types";
 
-export type FindingKind = "unsatisfiable" | "over-strict" | "ambiguous" | "ok";
-
-export interface ITestFinding {
-  /** Name of the test the finding refers to. */
-  test: string;
-  kind: FindingKind;
-  reason: string;
-}
-
-export interface IReviewResult {
-  findings: ITestFinding[];
-  /** Full corrected test file, or "" when no change is needed. */
-  correctedSuite: string;
-}
-
-export interface IReviewInput {
-  goal: string;
-  criteria: string;
-  /** The generated test file's contents. */
-  testCode: string;
-  /** Module specifier the suite imports the impl from (e.g. "./money"). */
-  moduleSpecifier: string;
-}
+const FINDING_KINDS = new Set<string>(Object.values(FINDING_KIND));
 
 /**
  * Offline teacher review of a generated suite: the `runTests` oracle proves a
@@ -113,26 +100,7 @@ function parseFindings(raw: unknown): ITestFinding[] {
 }
 
 function isFindingKind(value: unknown): value is FindingKind {
-  return (
-    value === "unsatisfiable" ||
-    value === "over-strict" ||
-    value === "ambiguous" ||
-    value === "ok"
-  );
-}
-
-export interface IReviewFixOptions {
-  testFile: string;
-  implFile: string;
-  goal: string;
-  criteria: string;
-  onEvent?: Reporter;
-}
-
-export interface IReviewFixResult {
-  findings: ITestFinding[];
-  /** True only when a correction was written AND it stayed real + RED. */
-  applied: boolean;
+  return typeof value === "string" && FINDING_KINDS.has(value);
 }
 
 /**

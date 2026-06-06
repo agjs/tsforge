@@ -1,4 +1,5 @@
-import type { ISpec, ITask } from "./types";
+import { SPEC_MODE } from "./spec.constants";
+import type { ISpec, ITask } from "./spec.types";
 
 /**
  * Parse our minimal one-file spec format (see docs: /spec/format/).
@@ -23,6 +24,8 @@ export function parseSpec(markdown: string): ISpec {
     title: fm.title ?? "",
     verify: fm.verify ?? "",
     tasks,
+    mode:
+      fm.mode === SPEC_MODE.existing ? SPEC_MODE.existing : SPEC_MODE.scratch,
   };
 }
 

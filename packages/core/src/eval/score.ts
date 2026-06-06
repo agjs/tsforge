@@ -1,26 +1,6 @@
+import type { IRunRecord, IVariantSummary } from "./eval.types";
+
 /** One eval run's outcome. */
-export interface IRunRecord {
-  /** Variant label (e.g. "temp=0"). */
-  label: string;
-  passed: boolean;
-  cycles: number;
-  ms: number;
-  /** LLM-judge quality score (1–5), when available. */
-  quality?: number;
-}
-
-/** Aggregated metrics for a variant across its runs. */
-export interface IVariantSummary {
-  label: string;
-  runs: number;
-  passed: number;
-  passRate: number;
-  avgCycles: number;
-  avgMs: number;
-  /** Average quality across runs that were scored (0 if none). */
-  avgQuality: number;
-}
-
 /** Aggregate run records per variant label. */
 export function summarize(records: IRunRecord[]): IVariantSummary[] {
   const byLabel = new Map<string, IRunRecord[]>();

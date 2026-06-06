@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import type { CreateResult, ICreateFile } from "./types";
+import { CREATE_FAIL_REASON } from "./files.constants";
+import type { CreateResult, ICreateFile } from "./files.types";
 
 /**
  * Create a new file. Refuses to overwrite an existing one (that's `edit`'s job)
@@ -12,7 +13,7 @@ export async function applyCreate(
   const path = join(cwd, create.file);
 
   if (await Bun.file(path).exists()) {
-    return { ok: false, file: create.file, reason: "exists" };
+    return { ok: false, file: create.file, reason: CREATE_FAIL_REASON.exists };
   }
 
   await Bun.write(path, create.content);

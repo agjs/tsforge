@@ -1,4 +1,4 @@
-import type { IModelResponse, IProvider } from "../src/inference/types";
+import type { IModelResponse, IProvider } from "../src/inference";
 
 /** A provider that replays a scripted sequence of responses, one per turn
  *  (repeating the last once exhausted). For driving the agentic loop in tests. */

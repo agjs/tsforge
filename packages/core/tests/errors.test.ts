@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { diffErrorSets, shrank, sameErrorSet } from "../src/validate/errors";
+import { diffErrorSets, shrank, sameErrorSet } from "../src/validate";
 
 const e = (k: string) => ({ key: k, message: k });
 

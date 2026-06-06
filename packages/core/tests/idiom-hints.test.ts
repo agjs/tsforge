@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
-import { idiomHints } from "../src/loop/rule-docs";
-import type { ErrorSet } from "../src/validate/errors";
+import { idiomHints } from "../src/loop/feedback/rule-docs";
+import type { ErrorSet } from "../src/validate";
 
 const UNSAFE_ERR: ErrorSet = [
   {

@@ -2,6 +2,10 @@ import pluginJs from "@eslint/js";
 import tseslint from "typescript-eslint";
 import configPrettier from "eslint-config-prettier";
 import pluginPrettier from "eslint-plugin-prettier";
+import sonarjs from "eslint-plugin-sonarjs";
+import unicorn from "eslint-plugin-unicorn";
+import importX from "eslint-plugin-import-x";
+import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
 
 /*
  * Inherited from boringstack/apps/api: the general TypeScript quality rules
@@ -31,9 +35,48 @@ export default tseslint.config(
     plugins: {
       "@typescript-eslint": tseslint.plugin,
       prettier: pluginPrettier,
+      sonarjs,
+      unicorn,
+      "import-x": importX,
+      "eslint-comments": eslintComments,
     },
     rules: {
       "prettier/prettier": "error",
+
+      /*
+       * Complexity + duplication — the rules that catch concern-mixing and
+       * copy-paste. Thresholds are generous now (the god-files exceed the
+       * boringstack's 20/5) and ratchet down to 20/5 in the final phase once the
+       * files are split. Ported from boringstack apps/api eslint.config.js.
+       */
+      // Cognitive-complexity ceiling at boringstack's 20. The loop coordinator
+      // (runTask/settleGate) was decomposed into named helpers to hit it.
+      "sonarjs/cognitive-complexity": ["error", 20],
+      "sonarjs/no-identical-functions": "error",
+      "sonarjs/no-duplicate-string": ["error", { threshold: 5 }],
+      "sonarjs/no-useless-catch": "error",
+      "sonarjs/prefer-immediate-return": "error",
+
+      // Idiom hygiene (curated unicorn subset from boringstack).
+      "unicorn/prefer-string-starts-ends-with": "error",
+      "unicorn/prefer-includes": "error",
+      "unicorn/prefer-ternary": "error",
+      "unicorn/throw-new-error": "error",
+      "unicorn/no-lonely-if": "error",
+      "unicorn/error-message": "error",
+      "unicorn/prefer-array-some": "error",
+      "unicorn/prefer-array-find": "error",
+      "unicorn/no-useless-spread": "error",
+      "unicorn/no-instanceof-array": "error",
+
+      // Import hygiene.
+      "import-x/no-duplicates": "error",
+      "import-x/no-self-import": "error",
+      "import-x/no-useless-path-segments": "error",
+      "import-x/first": "error",
+
+      // Defense-in-depth: no inline rule suppressions — fix the code or the rule.
+      "eslint-comments/no-use": ["error", { allow: [] }],
 
       // Hard bans — things an AI agent must never write.
       "@typescript-eslint/no-explicit-any": "error",
@@ -123,8 +166,21 @@ export default tseslint.config(
     },
   },
   {
-    // Tests + scripts: relax the rules that fight legitimate test/CLI patterns.
-    files: ["packages/**/tests/**/*.ts", "packages/**/scripts/**/*.ts"],
+    // Scripts are operational ENTRY POINTS, not throwaway — held to `src`
+    // strictness (type-safety, no-duplicate-string, complexity). The ONLY
+    // allowance is console output: printing results to stdout is their job.
+    // (A relaxed no-duplicate-string here once hid an 11x-repeated model literal.)
+    files: ["packages/**/scripts/**/*.ts"],
+    rules: {
+      "no-console": "off",
+    },
+  },
+  {
+    // Tests: the minimal, universally-justified ergonomic exceptions only —
+    // mocks need `!`/`as`/unsafe access of untyped shapes, async wrappers don't
+    // always await, and suites legitimately repeat fixture strings. Everything
+    // else stays as strict as src.
+    files: ["packages/**/tests/**/*.ts"],
     rules: {
       "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/consistent-type-assertions": "off",
@@ -137,6 +193,10 @@ export default tseslint.config(
       "@typescript-eslint/no-confusing-void-expression": "off",
       "@typescript-eslint/no-empty-function": "off",
       "no-console": "off",
+      // Suites repeat fixture/expected strings; complexity in a big table-driven
+      // test isn't the same smell as in product code.
+      "sonarjs/no-duplicate-string": "off",
+      "sonarjs/cognitive-complexity": "off",
     },
   }
 );

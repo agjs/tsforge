@@ -1,10 +1,6 @@
+import type { IRenderOptions } from "./render.types";
 import { highlight } from "cli-highlight";
-import type { ILoopEvent } from "../loop/events";
-
-export interface IRenderOptions {
-  /** Emit ANSI color codes (terminal) vs plain text (log files). Default true. */
-  color?: boolean;
-}
+import type { ILoopEvent } from "../loop";
 
 const RESET = "[0m";
 const STYLE = {

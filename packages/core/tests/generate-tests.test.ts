@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateTests } from "../src/spec/generate-tests";
-import type { IProvider } from "../src/inference/types";
+import type { IProvider } from "../src/inference";
 
 // A throwing stub: every call fails, so a REAL test (one that invokes the impl)
 // must go RED against it. A vacuous test that never calls the impl stays green.

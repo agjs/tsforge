@@ -2,9 +2,8 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { modelAgent } from "../src/agent/model-agent";
-import type { IProvider } from "../src/inference/types";
-import type { IChatMessage } from "../src/inference/types";
+import { modelAgent } from "../src/agent";
+import type { IProvider, IChatMessage } from "../src/inference";
 
 function providerReturning(
   toolCalls: { name: string; arguments: Record<string, unknown> }[]

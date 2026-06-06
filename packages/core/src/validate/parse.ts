@@ -1,4 +1,4 @@
-import type { IErrorItem } from "./errors";
+import type { IErrorItem, ErrorParserFn } from "./validate.types";
 import { isArray, isRecord } from "../lib/guards";
 
 const TSC = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$/;
@@ -63,43 +63,44 @@ export function parseEslintJson(output: string): IErrorItem[] {
     return [];
   }
 
+  return data.flatMap(eslintFileItems);
+}
+
+/** Error items from one eslint JSON file entry (severity-2 messages only). */
+function eslintFileItems(file: unknown): IErrorItem[] {
+  if (!isRecord(file)) {
+    return [];
+  }
+
+  const filePath = typeof file.filePath === "string" ? file.filePath : "";
+  const messages = file.messages;
+
+  if (!isArray(messages)) {
+    return [];
+  }
+
   const items: IErrorItem[] = [];
 
-  for (const file of data) {
-    if (!isRecord(file)) {
+  for (const m of messages) {
+    if (!isRecord(m) || m.severity !== 2) {
       continue;
     }
 
-    const filePath = typeof file.filePath === "string" ? file.filePath : "";
-    const messages = file.messages;
+    const rule = typeof m.ruleId === "string" ? m.ruleId : "syntax";
+    const lineNo = typeof m.line === "number" ? m.line : undefined;
+    const message = typeof m.message === "string" ? m.message : "";
 
-    if (!isArray(messages)) {
-      continue;
-    }
-
-    for (const m of messages) {
-      if (!isRecord(m) || m.severity !== 2) {
-        continue;
-      }
-
-      const rule = typeof m.ruleId === "string" ? m.ruleId : "syntax";
-      const lineNo = typeof m.line === "number" ? m.line : undefined;
-      const message = typeof m.message === "string" ? m.message : "";
-
-      items.push({
-        key: `${filePath}:${lineNo ?? 0}:${rule}`,
-        file: filePath,
-        line: lineNo,
-        rule,
-        message: message.trim(),
-      });
-    }
+    items.push({
+      key: `${filePath}:${lineNo ?? 0}:${rule}`,
+      file: filePath,
+      line: lineNo,
+      rule,
+      message: message.trim(),
+    });
   }
 
   return items;
 }
-
-export type ErrorParserFn = (output: string) => IErrorItem[];
 
 /**
  * For chained gates like `tsc -p … && eslint --format json … && bun test`,

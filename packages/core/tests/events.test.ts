@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTask } from "../src/loop/run";
+import { runTask } from "../src/loop";
 import { scripted, runStep, STOP } from "./stub-provider";
 
 test("runTask emits progress events (red → cycle → run → done)", async () => {

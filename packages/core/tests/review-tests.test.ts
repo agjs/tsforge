@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { reviewTests } from "../src/spec/review-tests";
-import type { IProvider } from "../src/inference/types";
+import type { IProvider } from "../src/inference";
 
 // A judge that returns one canned response (JSON, optionally fenced).
 function cannedJudge(content: string): IProvider {

@@ -6,22 +6,9 @@
  * load-bearing fact: an empty/vacuous file EXITS 0, so the exit code lies; only
  * the collected count (`total >= 1`) proves the suite actually asserts anything.
  */
-export interface IRunTestsResult {
-  /** Tests that passed. */
-  pass: number;
-  /** Tests that failed. */
-  fail: number;
-  /** Total tests the runner collected. 0 means empty/unparseable/vacuous. */
-  total: number;
-  /**
-   * Load/parse errors (missing import, syntax error). bun reports these as a
-   * failing "test", so `errors > 0` is how a caller tells "the suite ran and
-   * some assertions failed" (fine — that's RED) from "the file never loaded".
-   */
-  errors: number;
-  /** Combined stdout + stderr, for feeding a failure back to the model. */
-  output: string;
-}
+import { readProcessOutput } from "../lib/fs";
+
+import type { IRunTestsResult } from "./validate.types";
 
 export async function runTests(
   testFile: string,
@@ -35,9 +22,8 @@ export async function runTests(
 
   await proc.exited;
 
-  const output =
-    (await new Response(proc.stdout).text()) +
-    (await new Response(proc.stderr).text());
+  const { stdout, stderr } = await readProcessOutput(proc.stdout, proc.stderr);
+  const output = stdout + stderr;
 
   return { ...countTests(output), output };
 }

@@ -2,7 +2,33 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCommand, toRun, toRead } from "../src/agent/tools";
+import { runCommand, toRun, toRead, toEdits, toCreate } from "../src/agent";
+
+test("toRead accepts the `file` arg", () => {
+  expect(toRead({ file: "src/a.ts" })).toEqual({ file: "src/a.ts" });
+});
+
+test("toRead repairs the `path` alias the model reaches for", () => {
+  // Regression: react-board run 1 spiraled because `read {path}` was rejected.
+  expect(toRead({ path: "src/a.ts" })).toEqual({ file: "src/a.ts" });
+  expect(toRead({ filename: "src/b.ts" })).toEqual({ file: "src/b.ts" });
+  expect(toRead({ filePath: "src/c.ts" })).toEqual({ file: "src/c.ts" });
+});
+
+test("toRead returns null when no file-like arg is present", () => {
+  expect(toRead({ nope: 1 })).toBeNull();
+});
+
+test("toEdits and toCreate also accept the `path` alias", () => {
+  expect(toEdits({ path: "a.ts", oldString: "x", newString: "y" })).toEqual({
+    file: "a.ts",
+    edits: [{ oldString: "x", newString: "y" }],
+  });
+  expect(toCreate({ path: "a.ts", content: "hi" })).toEqual({
+    file: "a.ts",
+    content: "hi",
+  });
+});
 
 test("runCommand returns stdout and exit code", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-run-"));

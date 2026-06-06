@@ -1,19 +1,4 @@
-/** One failure from the gate, with a stable key so we can diff across cycles. */
-export interface IErrorItem {
-  key: string;
-  file?: string;
-  line?: number;
-  rule?: string;
-  message: string;
-}
-
-export type ErrorSet = IErrorItem[];
-
-export interface IErrorDiff {
-  fixed: ErrorSet;
-  introduced: ErrorSet;
-  remaining: ErrorSet;
-}
+import type { ErrorSet, IErrorDiff } from "./validate.types";
 
 /** What changed between two cycles — the gradient the model descends. */
 export function diffErrorSets(prev: ErrorSet, next: ErrorSet): IErrorDiff {
