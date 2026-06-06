@@ -1,20 +1,7 @@
 import type { IRenderOptions } from "./render.types";
 import { highlight } from "cli-highlight";
 import type { ILoopEvent } from "../loop";
-
-const RESET = "[0m";
-const STYLE = {
-  dim: "[2m",
-  bold: "[1m",
-  red: "[31m",
-  green: "[32m",
-  cyan: "[36m",
-  yellow: "[33m",
-};
-
-function paint(text: string, code: string, color: boolean): string {
-  return color ? `${code}${text}${RESET}` : text;
-}
+import { STYLE, paint } from "./style";
 
 function highlightTs(code: string, color: boolean): string {
   if (!color) {

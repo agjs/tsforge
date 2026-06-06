@@ -48,3 +48,36 @@ test("returns nothing for plain prose", () => {
     salvageToolCalls("I will now create the file with the functions.")
   ).toEqual([]);
 });
+
+// The Qwen-channel pipe form captured live from qwen3.6-35b-a3b in the CLI:
+// `<|read|>{json}` markers vLLM left in content (toolCalls came back empty).
+test("salvages the <|toolname|>{json} pipe form", () => {
+  const soup =
+    'Let me inspect it.\n\n<|read|>{"file": "/agjs/code/ant"}\n\n' +
+    '<|run|>{"command": "ls -la"}';
+  const calls = salvageToolCalls(soup);
+
+  expect(calls.length).toBe(2);
+  expect(calls[0]).toEqual({
+    id: undefined,
+    name: "read",
+    arguments: { file: "/agjs/code/ant" },
+  });
+  expect(calls[1]?.name).toBe("run");
+  expect(calls[1]?.arguments).toEqual({ command: "ls -la" });
+});
+
+test("pipe form: string-aware brace scan keeps code containing braces intact", () => {
+  const soup =
+    '<|create|>{"file": "a.ts", "content": "export function f() { return {x: 1}; }"}';
+  const calls = salvageToolCalls(soup);
+
+  expect(calls.length).toBe(1);
+  expect(calls[0]?.arguments.content).toBe(
+    "export function f() { return {x: 1}; }"
+  );
+});
+
+test("pipe form: ignores unknown tool names", () => {
+  expect(salvageToolCalls('<|think|>{"foo": 1}')).toEqual([]);
+});

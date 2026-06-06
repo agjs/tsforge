@@ -1,0 +1,7 @@
+# Scope the default `bun test` to the harness's own suite. Without this, a bare
+# `bun test` from the repo root also sweeps the React eval TARGET fixtures under
+# evals/ (gitignored throwaway projects), which need a per-dir happy-dom preload
+# the root run doesn't apply → `document is not defined`. Those targets are run
+# by the harness inside their own dir (where their bunfig registers the DOM).
+[test]
+root = "packages"

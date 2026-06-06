@@ -83,6 +83,11 @@ const KNOWN_TOOLS = new Set<string>(Object.values(TOOL_NAME));
  * override a properly-parsed call. See memory: malformed-toolcall-format.
  */
 export function salvageToolCalls(content: string): IToolCall[] {
+  return [...salvageXmlCalls(content), ...salvagePipeCalls(content)];
+}
+
+/** The `<toolname> … <parameter=key>value</parameter> …` XML form. */
+function salvageXmlCalls(content: string): IToolCall[] {
   const calls: IToolCall[] = [];
   const blockRe =
     /<([a-z_]+)>\s*((?:<parameter=[^>]+>[\s\S]*?<\/parameter>\s*)+)/gi;
@@ -114,6 +119,77 @@ export function salvageToolCalls(content: string): IToolCall[] {
   }
 
   return calls;
+}
+
+/**
+ * The Qwen-channel pipe form: `<|read|>{"file": "a.ts"}` — a `<|toolname|>`
+ * marker followed by a JSON arguments object. Seen live from qwen3.6-35b-a3b in
+ * the interactive CLI when the server's tool-call parser leaves it in content.
+ * The object is extracted with a string-aware brace scan so code containing
+ * braces (in `edit`/`create` args) doesn't truncate it.
+ */
+function salvagePipeCalls(content: string): IToolCall[] {
+  const calls: IToolCall[] = [];
+
+  for (const m of content.matchAll(/<\|([a-z_]+)\|>[ \t]*/gi)) {
+    const name = m[1];
+    const open = m.index + m[0].length;
+
+    if (name === undefined || !KNOWN_TOOLS.has(name) || content[open] !== "{") {
+      continue;
+    }
+
+    const obj = jsonObjectAt(content, open);
+
+    if (obj === null) {
+      continue;
+    }
+
+    const args = parseArgs(obj);
+
+    if (Object.keys(args).length > 0) {
+      calls.push({ id: undefined, name, arguments: args });
+    }
+  }
+
+  return calls;
+}
+
+/** Extract the balanced `{…}` starting at `open`, respecting string literals. */
+function jsonObjectAt(s: string, open: number): string | null {
+  let depth = 0;
+  let inStr = false;
+  let escaped = false;
+
+  for (let i = open; i < s.length; i += 1) {
+    const c = s[i];
+
+    if (inStr) {
+      if (escaped) {
+        escaped = false;
+      } else if (c === "\\") {
+        escaped = true;
+      } else if (c === '"') {
+        inStr = false;
+      }
+
+      continue;
+    }
+
+    if (c === '"') {
+      inStr = true;
+    } else if (c === "{") {
+      depth += 1;
+    } else if (c === "}") {
+      depth -= 1;
+
+      if (depth === 0) {
+        return s.slice(open, i + 1);
+      }
+    }
+  }
+
+  return null;
 }
 
 function collectToolCalls(rawCalls: unknown): IToolCall[] {

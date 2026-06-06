@@ -1,0 +1,71 @@
+import { test, expect } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { IProvider } from "../src/inference";
+import { Session } from "../src/loop";
+
+/** A provider that yields immediately (no tool calls) — the "model is done" case. */
+function yields(content = "ok"): IProvider {
+  return {
+    async complete() {
+      return { content, toolCalls: [] };
+    },
+  };
+}
+
+test("no gate → one conversational turn, conversation retained", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const session = await Session.create({
+      provider: yields("hello"),
+      cwd: dir,
+    });
+    const result = await session.send("hi");
+
+    expect(result.status).toBe("responded");
+    expect(result.turns).toBe(1);
+    // system + user + assistant
+    expect(session.messages.length).toBe(3);
+    expect(session.messages.at(-1)?.content).toBe("hello");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("gate-confirms: model yields, green gate → done", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const session = await Session.create({
+      provider: yields(),
+      cwd: dir,
+      accept: "true", // a gate that always passes
+      files: [],
+    });
+    const result = await session.send("make the gate pass");
+
+    expect(result.status).toBe("done");
+    expect(result.turns).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("each send appends to the same persistent conversation", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const session = await Session.create({ provider: yields(), cwd: dir });
+
+    await session.send("first");
+    const afterFirst = session.messages.length;
+
+    await session.send("second");
+
+    expect(session.messages.length).toBe(afterFirst + 2); // user + assistant
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
