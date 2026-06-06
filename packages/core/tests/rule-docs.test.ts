@@ -61,6 +61,23 @@ test("ruleHelpFromOutput pulls guidance from raw tsc + eslint-json output", () =
   expect(ruleHelpFromOutput("all good, exit 0")).toBe("");
 });
 
+test("injects React framework idiom cards keyed by the gate's rule id", () => {
+  // The knowledge-card prototype: framework idioms ride the SAME failure-keyed
+  // mechanism as eslint/TS rules — the gate names the rule, we surface its card.
+  const hooks = ruleHelp([
+    { key: "k", rule: "react-hooks/rules-of-hooks", message: "" },
+  ]);
+
+  expect(hooks).toContain("react-hooks/rules-of-hooks");
+  expect(hooks).toContain("useState");
+
+  const key = ruleHelpFromOutput(
+    '[{"messages":[{"ruleId":"react/no-array-index-key"}]}]'
+  );
+
+  expect(key).toContain("stable id");
+});
+
 test("gives the guard idiom (bad/good) for a TS unchecked-index error", () => {
   const h = ruleHelp([
     { key: "k", rule: "TS2532", message: "Object is possibly 'undefined'." },

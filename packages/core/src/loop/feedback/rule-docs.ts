@@ -100,6 +100,30 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "if (a == b) {}",
     good: "if (a === b) {}",
   },
+
+  // React / hooks idioms — same failure-keyed mechanism as the eslint/TS rules,
+  // extended to framework rules the React gate enforces. Injected ONLY when the
+  // gate names the rule (never a standing wall of framework advice).
+  "react-hooks/rules-of-hooks": {
+    what: "Hooks run unconditionally at the top of the component — never inside a condition, loop, or after an early return.",
+    bad: "if (open) { const [x, setX] = useState(0); }",
+    good: "const [x, setX] = useState(0); if (open) { /* use x */ }",
+  },
+  "react-hooks/exhaustive-deps": {
+    what: "A hook's dependency array must list every reactive value it reads; add the missing dep (or memoize/move it).",
+    bad: "useEffect(() => { send(query); }, []);",
+    good: "useEffect(() => { send(query); }, [query]);",
+  },
+  "react/jsx-key": {
+    what: "Each element in a list needs a stable, unique `key` — an id, not the array index.",
+    bad: "items.map((it) => <li>{it.text}</li>)",
+    good: "items.map((it) => <li key={it.id}>{it.text}</li>)",
+  },
+  "react/no-array-index-key": {
+    what: "Don't use the array index as `key` — it breaks element identity when the list reorders or filters. Use a stable id.",
+    bad: "items.map((it, i) => <li key={i}>{it.text}</li>)",
+    good: "items.map((it) => <li key={it.id}>{it.text}</li>)",
+  },
 };
 
 /**
