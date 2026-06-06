@@ -1,6 +1,6 @@
 import type { IChatMessage, IModelResponse, IToolCall } from "./types";
 import { isArray, isRecord } from "../lib/guards";
-import { TOOL_NAME } from "../agent/tools";
+import { TOOL_NAME } from "../agent";
 
 /** Map our message shape to the OpenAI wire shape (tool_calls / tool results). */
 export function toWire(m: IChatMessage): Record<string, unknown> {

@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import type { IAgent, IAgentContext } from "./types";
+import type { IAgent, IAgentContext } from "./agent.types";
 import type { IChatMessage, IProvider } from "../inference/types";
 import type { ErrorSet } from "../validate/errors";
 import { applyEdits } from "../files/edit";
@@ -7,7 +7,8 @@ import { applyCreate } from "../files/create";
 import { EDIT_FAIL_REASON } from "../files";
 import { isInScope } from "../lib/scope";
 import { readFiles, type IFileView } from "../lib/files";
-import { EDIT_TOOL, CREATE_TOOL, TOOL_NAME, toEdits, toCreate } from "./tools";
+import { EDIT_TOOL, CREATE_TOOL, TOOL_NAME } from "./agent.constants";
+import { toEdits, toCreate } from "./tools";
 import { ruleHelp } from "../loop/rule-docs";
 
 /**

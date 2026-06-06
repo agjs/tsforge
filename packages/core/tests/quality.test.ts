@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { qualityRepair } from "../src/loop/quality";
-import type { IAgent } from "../src/agent/types";
+import type { IAgent } from "../src/agent";
 import type { IProvider } from "../src/inference/types";
 
 // Judge that returns a rising score on each successive call.

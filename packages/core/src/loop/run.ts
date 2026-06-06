@@ -20,7 +20,7 @@ import {
   READ_TOOL,
   LSP_TOOLS,
   TOOL_NAME,
-} from "../agent/tools";
+} from "../agent";
 import { TsService } from "../lsp/service";
 import type { Reporter } from "./events";
 

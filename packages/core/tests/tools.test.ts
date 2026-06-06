@@ -2,13 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  runCommand,
-  toRun,
-  toRead,
-  toEdits,
-  toCreate,
-} from "../src/agent/tools";
+import { runCommand, toRun, toRead, toEdits, toCreate } from "../src/agent";
 
 test("toRead accepts the `file` arg", () => {
   expect(toRead({ file: "src/a.ts" })).toEqual({ file: "src/a.ts" });

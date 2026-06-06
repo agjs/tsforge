@@ -4,7 +4,7 @@ import { applyCreate } from "../files/create";
 import { EDIT_FAIL_REASON } from "../files";
 import { writable } from "../lib/scope";
 import { LIMITS } from "../constants";
-import { toEdits, toCreate, toRun, toRead, runCommand } from "../agent/tools";
+import { toEdits, toCreate, toRun, toRead, runCommand } from "../agent";
 import { ruleHelpFromOutput } from "./rule-docs";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
 

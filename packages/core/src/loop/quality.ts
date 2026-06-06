@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { ITask } from "../spec";
-import type { IAgent } from "../agent/types";
+import type { IAgent } from "../agent";
 import type { IProvider } from "../inference/types";
 import { validate, type ErrorParser } from "../validate/validate";
 import { runAccept } from "../validate/accept";

@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { rm } from "node:fs/promises";
 import type { IChatMessage, IProvider } from "../inference/types";
 import type { Reporter } from "../loop/events";
-import { CREATE_TOOL, TOOL_NAME, toCreate } from "../agent/tools";
+import { CREATE_TOOL, TOOL_NAME, toCreate } from "../agent";
 import { applyCreate } from "../files/create";
 import { isInScope } from "../lib/scope";
 import {

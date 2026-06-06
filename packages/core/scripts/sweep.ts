@@ -4,7 +4,7 @@ import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
 import { runSpec } from "../src/loop/run-spec";
-import { modelAgent } from "../src/agent/model-agent";
+import { modelAgent } from "../src/agent";
 import { OpenAICompatibleProvider } from "../src/inference/openai-compatible";
 import { summarize, type IRunRecord } from "../src/eval/score";
 import { qualityRepair } from "../src/loop/quality";

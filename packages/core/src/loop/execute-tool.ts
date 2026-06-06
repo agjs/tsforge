@@ -1,5 +1,5 @@
 import type { IToolCall } from "../inference/types";
-import { TOOL_NAME, type ToolName } from "../agent/tools";
+import { TOOL_NAME, type ToolName } from "../agent";
 import { readFile, runShell, doEdit, doCreate } from "./file-ops";
 import { doSearch, doLsp } from "./lsp-ops";
 import { type IToolContext } from "./tool-context";

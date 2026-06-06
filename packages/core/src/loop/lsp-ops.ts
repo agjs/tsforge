@@ -1,5 +1,5 @@
 import { relative } from "node:path";
-import { runCommand, fileArg, TOOL_NAME, type ToolName } from "../agent/tools";
+import { runCommand, fileArg, TOOL_NAME, type ToolName } from "../agent";
 import { writable } from "../lib/scope";
 import { LIMITS } from "../constants";
 import { str, reject, type IToolContext } from "./tool-context";
