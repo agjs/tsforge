@@ -43,6 +43,9 @@ export interface ICompleteOptions {
    *  arrives, tagged by channel: `reasoning` (the model's thinking) vs `content`
    *  (its actual answer). Lets a UI dim the thinking and format the answer. */
   onToken?: (text: string, channel: TokenChannel) => void;
+  /** Caller cancellation — aborting it stops the request (and any stream)
+   *  mid-flight. Combined with the per-request timeout. */
+  signal?: AbortSignal;
 }
 
 /** Which stream a token belongs to: the model's thinking, or its answer. */

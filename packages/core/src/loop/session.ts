@@ -43,12 +43,15 @@ export interface ISessionConfig {
   thinkingTokenBudget?: number;
   /** Per-`send` turn cap (default LOOP_LIMITS.maxTurns). */
   maxTurns?: number;
+  /** Resume from a saved conversation (incl. its system message) instead of
+   *  starting fresh — used by `--continue`. */
+  history?: IChatMessage[];
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
- *  verdicts are `done`/`stuck` exactly as in `runTask`. */
+ *  verdicts are `done`/`stuck` as in `runTask`; `interrupted` = the user aborted. */
 export interface ISendResult {
-  status: "responded" | "done" | "stuck";
+  status: "responded" | "done" | "stuck" | "interrupted";
   turns: number;
 }
 
@@ -123,7 +126,10 @@ export class Session {
       tsService: await buildTsService(cfg.cwd),
       parse: cfg.parse,
       report: cfg.report ?? ((): void => undefined),
-      messages: [{ role: "system", content: systemPrompt(cfg) }],
+      messages:
+        cfg.history !== undefined && cfg.history.length > 0
+          ? [...cfg.history]
+          : [{ role: "system", content: systemPrompt(cfg) }],
     };
 
     return new Session(cfg, ctx);
@@ -138,13 +144,38 @@ export class Session {
    * Run one user message: drive the model until it stops calling tools, then
    * gate-confirm if a gate is set. Loops on red gate feedback up to the turn cap.
    */
-  async send(text: string): Promise<ISendResult> {
-    const { ctx, state, report } = this;
+  async send(text: string, signal?: AbortSignal): Promise<ISendResult> {
+    const { ctx, report } = this;
     const maxTurns = this.cfg.maxTurns ?? LOOP_LIMITS.maxTurns;
 
     ctx.messages.push({ role: "user", content: text });
 
     const sendStart = performance.now();
+
+    try {
+      return await this.drive(maxTurns, sendStart, signal);
+    } catch (err) {
+      if (signal?.aborted === true) {
+        report({
+          kind: "stuck",
+          task: SESSION_ID,
+          message: "interrupted",
+        });
+
+        return { status: "interrupted", turns: 0 };
+      }
+
+      throw err;
+    }
+  }
+
+  /** The turn loop — separated so `send` can wrap it in abort handling. */
+  private async drive(
+    maxTurns: number,
+    sendStart: number,
+    signal?: AbortSignal
+  ): Promise<ISendResult> {
+    const { ctx, state, report } = this;
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       const turnStart = performance.now();
@@ -166,6 +197,7 @@ export class Session {
         ...(this.cfg.thinkingTokenBudget === undefined
           ? {}
           : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
+        ...(signal === undefined ? {} : { signal }),
         onToken: (token, channel) => {
           // Stream the THINKING live (dim); the answer (content) is rendered
           // once below, syntax-highlighted, instead of as raw dim tokens.

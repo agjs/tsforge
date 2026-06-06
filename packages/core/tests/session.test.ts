@@ -53,6 +53,32 @@ test("gate-confirms: model yields, green gate → done", async () => {
   }
 });
 
+test("send returns 'interrupted' when its signal is aborted mid-turn", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    // A provider that never resolves on its own — only the abort ends it.
+    const provider: IProvider = {
+      async complete(_messages, opts) {
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener("abort", () => {
+            reject(new Error("aborted"));
+          });
+        });
+      },
+    };
+    const session = await Session.create({ provider, cwd: dir });
+    const controller = new AbortController();
+    const pending = session.send("do something slow", controller.signal);
+
+    controller.abort();
+
+    expect((await pending).status).toBe("interrupted");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("each send appends to the same persistent conversation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 

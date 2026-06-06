@@ -65,7 +65,8 @@ export class OpenAICompatibleProvider implements IProvider {
       `${this.cfg.baseUrl}/chat/completions`,
       headers,
       body,
-      this.cfg.timeoutMs ?? PROVIDER_LIMITS.requestTimeoutMs
+      this.cfg.timeoutMs ?? PROVIDER_LIMITS.requestTimeoutMs,
+      opts.signal
     );
 
     if (!res.ok) {

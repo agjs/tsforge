@@ -20,23 +20,40 @@ export async function fetchWithRetry(
   url: string,
   headers: Record<string, string>,
   body: string,
-  timeoutMs: number
+  timeoutMs: number,
+  signal?: AbortSignal
 ): Promise<Response> {
   const maxAttempts = 4;
   let lastErr: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    // A caller abort (Ctrl-C) is terminal — don't start another attempt.
+    if (isAborted(signal)) {
+      throw signalReason(signal);
+    }
+
+    // Per-attempt timeout, combined with the caller's cancellation — the latter
+    // also aborts the streaming body (the connect finishes before the stream).
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const attemptSignal =
+      signal === undefined ? timeout : AbortSignal.any([timeout, signal]);
+
     try {
       return await doFetch(url, {
         method: "POST",
         headers,
         body,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: attemptSignal,
       });
     } catch (err) {
       lastErr = err;
 
-      if (!isTransientNetworkError(err) || attempt === maxAttempts) {
+      // A caller abort never retries (it isn't a transient network blip).
+      if (
+        isAborted(signal) ||
+        !isTransientNetworkError(err) ||
+        attempt === maxAttempts
+      ) {
         throw err;
       }
 
@@ -47,4 +64,15 @@ export async function fetchWithRetry(
   }
 
   throw lastErr instanceof Error ? lastErr : new Error("fetch failed");
+}
+
+/** Read `aborted` through a function boundary so the loop-level narrowing (which
+ *  can't see the async abort mutate it mid-await) doesn't collapse the type. */
+function isAborted(signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
+}
+
+/** The Error an aborted signal carries (or a generic one). */
+function signalReason(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error ? signal.reason : new Error("aborted");
 }

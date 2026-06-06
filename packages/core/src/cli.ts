@@ -11,6 +11,7 @@ import {
 import { renderEvent, welcomeBanner } from "./render";
 import type { ITask } from "./spec";
 import type { Reporter } from "./loop";
+import { saveSession, latestSession } from "./session-store";
 
 /**
  * The tsforge CLI — the product surface over the same engine the eval harness
@@ -21,6 +22,7 @@ import type { Reporter } from "./loop";
  *   tsforge --dir ~/app           # ...in another repo
  *   tsforge "fix the build"       # interactive, with that as the first message
  *   tsforge "fix X" --accept "npm test"   # one-shot: drive to green, then exit
+ *   tsforge --continue            # resume the most recent session for this dir
  *
  * The eval-only knobs are now OPTIONAL refinements, never required:
  *   --files "<globs>"   narrow the editable scope (default: the whole workspace)
@@ -36,6 +38,8 @@ export interface ICliArgs {
   dir: string;
   files: string[];
   accept: string;
+  /** Resume the most recent saved session for this dir (`--continue` / `-c`). */
+  continue: boolean;
 }
 
 /** Parse argv (without `bun cli.ts`). Always succeeds — mode is decided in main. */
@@ -44,11 +48,17 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
   let dir = ".";
   let files: string[] = [];
   let accept = "";
+  let resume = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
 
     if (arg === undefined) {
+      continue;
+    }
+
+    if (arg === "--continue" || arg === "-c") {
+      resume = true;
       continue;
     }
 
@@ -87,6 +97,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     dir: isAbsolute(dir) ? dir : join(process.cwd(), dir),
     files,
     accept,
+    continue: resume,
   };
 }
 
@@ -103,6 +114,18 @@ function scopeOf(args: ICliArgs): string[] {
 /** One-shot mode = a task PLUS a gate to drive to green; else interactive. */
 export function isOneShot(args: ICliArgs): boolean {
   return args.task.length > 0 && args.accept.length > 0;
+}
+
+/** A unique-enough id for a new session (time + a little randomness). */
+function newSessionId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Human label for an editable scope (the whole-repo default reads nicer). */
+function scopeLabel(files: string[]): string {
+  return files.length === 1 && files[0] === "**/*"
+    ? "entire workspace"
+    : files.join(", ");
 }
 
 /** The host:port of an API base URL, for the banner (falls back to the raw url). */
@@ -164,15 +187,40 @@ const HELP = [
 /** Interactive REPL: a persistent gate-anchored conversation. */
 async function repl(args: ICliArgs): Promise<number> {
   const provider = makeProvider();
+
+  // --continue resumes the most recent saved session for this directory.
+  const resumed = args.continue ? await latestSession(args.dir) : null;
+
+  if (args.continue && resumed === null) {
+    process.stdout.write(
+      "(no saved session for this directory — starting fresh)\n"
+    );
+  }
+
+  const id = resumed?.id ?? newSessionId();
+  const accept = resumed?.accept ?? args.accept;
+  const files = resumed !== null ? resumed.files : scopeOf(args);
   const config = {
     provider,
     cwd: args.dir,
-    files: scopeOf(args),
-    accept: args.accept,
+    files,
+    accept,
     report: render,
+    ...(resumed === null ? {} : { history: resumed.messages }),
   };
 
   let session = await Session.create(config);
+
+  const persist = async (): Promise<void> => {
+    await saveSession({
+      id,
+      cwd: args.dir,
+      accept,
+      files,
+      updatedAt: Date.now(),
+      messages: [...session.messages],
+    });
+  };
 
   process.stdout.write(
     welcomeBanner({
@@ -185,8 +233,11 @@ async function repl(args: ICliArgs): Promise<number> {
   process.stdout.write(
     [
       `  cwd:   ${args.dir}`,
-      `  scope: ${args.files.length > 0 ? args.files.join(", ") : "entire workspace"}`,
-      `  gate:  ${args.accept.length > 0 ? args.accept : "none (stops when done; --accept to enforce a check)"}`,
+      `  scope: ${scopeLabel(files)}`,
+      `  gate:  ${accept.length > 0 ? accept : "none (stops when done; --accept to enforce a check)"}`,
+      resumed === null
+        ? `  session: new (${id})`
+        : `  session: resumed ${resumed.messages.length} message(s)`,
       "  /help for commands, /exit to quit",
       "",
     ].join("\n")
@@ -194,11 +245,36 @@ async function repl(args: ICliArgs): Promise<number> {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
+  // Ctrl-C: while a turn is running, abort it and return to the prompt; while
+  // idle at the prompt, quit. (readline emits SIGINT on the interface, so the
+  // process isn't killed — we decide what it means.)
+  let active: AbortController | null = null;
+
+  rl.on("SIGINT", () => {
+    if (active !== null) {
+      active.abort();
+    } else {
+      rl.close();
+    }
+  });
+
+  const dispatch = async (line: string): Promise<void> => {
+    active = new AbortController();
+
+    try {
+      const result = await session.send(line, active.signal);
+
+      process.stdout.write(`\n[${result.status} · ${result.turns} turn(s)]\n`);
+    } finally {
+      active = null;
+    }
+
+    await persist();
+  };
+
   // A positional task given on the command line is sent as the first message.
   if (args.task.length > 0) {
-    const first = await session.send(args.task);
-
-    process.stdout.write(`\n[${first.status} · ${first.turns} turn(s)]\n`);
+    await dispatch(args.task);
   }
 
   // Iterate the interface (not question()-in-a-loop) so buffered/piped input is
@@ -232,11 +308,8 @@ async function repl(args: ICliArgs): Promise<number> {
       continue;
     }
 
-    const result = await session.send(line);
-
-    process.stdout.write(
-      `\n[${result.status} · ${result.turns} turn(s)]\n\n› `
-    );
+    await dispatch(line);
+    process.stdout.write("\n› ");
   }
 
   rl.close();
