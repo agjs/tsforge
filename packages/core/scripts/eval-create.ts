@@ -16,7 +16,7 @@ test("greets by name", () => {
 
 const provider = new OpenAICompatibleProvider({
   baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-  model: process.env.TSFORGE_MODEL ?? "qwen3.6-27b",
+  model: process.env.TSFORGE_MODEL ?? "qwen3.6-35b-a3b",
 });
 
 const dir = await mkdtemp(join(tmpdir(), "tsforge-eval-create-"));

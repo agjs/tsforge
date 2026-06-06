@@ -54,7 +54,7 @@ export interface IProvider {
 export interface IOpenAICompatibleConfig {
   /** Root of the OpenAI-compatible API, e.g. http://localhost:11434/v1 */
   baseUrl: string;
-  /** Model id, e.g. qwen3.6-27b */
+  /** Model id, e.g. qwen3.6-35b-a3b */
   model: string;
   apiKey?: string;
   /**

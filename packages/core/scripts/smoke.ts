@@ -4,7 +4,7 @@ import { OpenAICompatibleProvider } from "../src/inference";
 
 const p = new OpenAICompatibleProvider({
   baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-  model: process.env.TSFORGE_MODEL ?? "qwen3.6-27b",
+  model: process.env.TSFORGE_MODEL ?? "qwen3.6-35b-a3b",
 });
 
 const r = await p.complete(

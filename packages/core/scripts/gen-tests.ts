@@ -22,7 +22,7 @@ const seedDir = join(evalsRoot, seed);
 
 const provider = new OpenAICompatibleProvider({
   baseUrl: process.env.TSFORGE_BASE_URL ?? "http://192.168.20.107:8000/v1",
-  model: process.env.TSFORGE_MODEL ?? "qwen3.6-27b",
+  model: process.env.TSFORGE_MODEL ?? "qwen3.6-35b-a3b",
   apiKey: process.env.TSFORGE_API_KEY,
   repetitionPenalty:
     process.env.TSFORGE_REPETITION_PENALTY === undefined
@@ -42,7 +42,7 @@ const judge = new OpenAICompatibleProvider({
   model:
     process.env.TSFORGE_JUDGE_MODEL ??
     process.env.TSFORGE_MODEL ??
-    "qwen3.6-27b",
+    "qwen3.6-35b-a3b",
   apiKey: process.env.TSFORGE_JUDGE_KEY ?? process.env.TSFORGE_API_KEY,
 });
 

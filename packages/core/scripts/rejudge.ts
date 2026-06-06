@@ -29,7 +29,7 @@ const provider = new OpenAICompatibleProvider({
   model:
     process.env.TSFORGE_JUDGE_MODEL ??
     process.env.TSFORGE_MODEL ??
-    "qwen3.6-27b",
+    "qwen3.6-35b-a3b",
   apiKey: process.env.TSFORGE_JUDGE_KEY ?? process.env.TSFORGE_API_KEY,
 });
 
