@@ -4,12 +4,42 @@ import type { ILoopEvent } from "../loop";
 import { STYLE, paint } from "./style";
 
 function highlightTs(code: string, color: boolean): string {
+  return highlightCode(code, "typescript", color);
+}
+
+/**
+ * Render an assistant message: prose untouched, fenced ```code``` blocks
+ * syntax-highlighted (so an inline answer reads as nicely as an `edit`/`create`).
+ */
+function renderMarkdown(text: string, color: boolean): string {
+  if (!color) {
+    return text;
+  }
+
+  return text
+    .split(/(```[\s\S]*?```)/g)
+    .map((part) => {
+      const fence = /^```([\w-]*)\n?([\s\S]*?)\n?```$/.exec(part);
+
+      if (fence === null) {
+        return part;
+      }
+
+      const lang =
+        fence[1] !== undefined && fence[1].length > 0 ? fence[1] : "typescript";
+
+      return highlightCode(fence[2] ?? "", lang, color);
+    })
+    .join("");
+}
+
+function highlightCode(code: string, lang: string, color: boolean): string {
   if (!color) {
     return code;
   }
 
   try {
-    return highlight(code, { language: "typescript", ignoreIllegals: true });
+    return highlight(code, { language: lang, ignoreIllegals: true });
   } catch {
     return code;
   }
@@ -53,6 +83,13 @@ export function renderEvent(
       // The model's streamed reasoning — dim, so it reads as secondary thinking
       // beneath the bright highlighted code/actions.
       return paint(event.message, STYLE.dim, color);
+
+    case "message":
+      // The model's actual answer (content channel) — prose plus syntax-
+      // highlighted code blocks, rendered once when the turn settles.
+      return event.message.length > 0
+        ? `\n${renderMarkdown(event.message, color)}\n`
+        : "";
 
     case "start":
     case "fix":

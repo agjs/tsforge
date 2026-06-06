@@ -39,9 +39,14 @@ export interface ICompleteOptions {
   /** Cap reasoning tokens before the model must answer (vLLM
    *  `thinking_token_budget`). Omitted = unbounded. The lever for turn *time*. */
   thinkingTokenBudget?: number;
-  /** When set, the request streams and each token (reasoning + content) is delivered here as it arrives. */
-  onToken?: (text: string) => void;
+  /** When set, the request streams and each token is delivered here as it
+   *  arrives, tagged by channel: `reasoning` (the model's thinking) vs `content`
+   *  (its actual answer). Lets a UI dim the thinking and format the answer. */
+  onToken?: (text: string, channel: TokenChannel) => void;
 }
+
+/** Which stream a token belongs to: the model's thinking, or its answer. */
+export type TokenChannel = "reasoning" | "content";
 
 /** The model seam. Implementations talk to a local server (vLLM/Ollama/...). */
 export interface IProvider {

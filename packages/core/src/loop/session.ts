@@ -166,8 +166,12 @@ export class Session {
         ...(this.cfg.thinkingTokenBudget === undefined
           ? {}
           : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
-        onToken: (token) => {
-          report({ kind: "token", task: SESSION_ID, message: token });
+        onToken: (token, channel) => {
+          // Stream the THINKING live (dim); the answer (content) is rendered
+          // once below, syntax-highlighted, instead of as raw dim tokens.
+          if (channel === "reasoning") {
+            report({ kind: "token", task: SESSION_ID, message: token });
+          }
         },
       });
 
@@ -176,6 +180,11 @@ export class Session {
         content: res.content,
         toolCalls: res.toolCalls,
       });
+
+      // Render the model's spoken answer (prose + highlighted code blocks).
+      if (res.content.length > 0) {
+        report({ kind: "message", task: SESSION_ID, message: res.content });
+      }
 
       // Still working — run the calls and keep going (we gate only when it stops).
       if (res.toolCalls.length > 0) {

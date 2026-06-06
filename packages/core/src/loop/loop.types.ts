@@ -12,6 +12,7 @@ export interface ILoopEvent {
     | "red"
     | "cycle"
     | "token"
+    | "message"
     | "fix"
     | "edit"
     | "create"

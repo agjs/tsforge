@@ -1,4 +1,8 @@
-import type { IModelResponse, IToolCall } from "./inference.types";
+import type {
+  IModelResponse,
+  IToolCall,
+  TokenChannel,
+} from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import { parseArgs, salvageToolCalls } from "./wire";
 
@@ -11,7 +15,7 @@ interface IStreamDelta {
 /** Streaming: parse SSE chunks, forward tokens to `onToken`, assemble the response. */
 export async function streamResponse(
   res: Response,
-  onToken: (text: string) => void
+  onToken: (text: string, channel: TokenChannel) => void
 ): Promise<IModelResponse> {
   const body = res.body;
 
@@ -44,12 +48,12 @@ export async function streamResponse(
       // (The "too much output" problem is solved by making the model think
       // less, not by hiding it from the log.)
       if (delta.reasoning !== undefined && delta.reasoning.length > 0) {
-        onToken(delta.reasoning);
+        onToken(delta.reasoning, "reasoning");
       }
 
       if (delta.content !== undefined && delta.content.length > 0) {
         content += delta.content;
-        onToken(delta.content);
+        onToken(delta.content, "content");
       }
 
       accumulateToolCalls(delta.toolCalls, calls);
