@@ -11,6 +11,7 @@ import {
 import { renderEvent, renderMessage, welcomeBanner } from "./render";
 import type { ITask } from "./spec";
 import type { Reporter } from "./loop";
+import { buildGate } from "./detect-gate";
 import {
   saveSession,
   latestSession,
@@ -47,6 +48,10 @@ export interface ICliArgs {
   accept: string;
   /** Resume the most recent saved session for this dir (`--continue` / `-c`). */
   continue: boolean;
+  /** Skip auto-detecting a gate from the project (`--no-gate`). */
+  noGate: boolean;
+  /** An HTML file to render-check in headless chromium as part of the gate (`--browser`). */
+  browser: string;
 }
 
 /** Parse argv (without `bun cli.ts`). Always succeeds — mode is decided in main. */
@@ -56,6 +61,8 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
   let files: string[] = [];
   let accept = "";
   let resume = false;
+  let noGate = false;
+  let browser = "";
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -69,12 +76,18 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
       continue;
     }
 
+    if (arg === "--no-gate") {
+      noGate = true;
+      continue;
+    }
+
     const next = argv[i + 1];
     const wantsValue =
       arg === "--dir" ||
       arg === "--files" ||
       arg === "--accept" ||
-      arg === "--gate";
+      arg === "--gate" ||
+      arg === "--browser";
 
     if (wantsValue) {
       if (next === undefined) {
@@ -88,6 +101,8 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
           .split(",")
           .map((s) => s.trim())
           .filter((s) => s.length > 0);
+      } else if (arg === "--browser") {
+        browser = next;
       } else {
         accept = next;
       }
@@ -105,6 +120,8 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     files,
     accept,
     continue: resume,
+    noGate,
+    browser,
   };
 }
 
@@ -239,18 +256,18 @@ function sessionLine(id: string, resumed: ISessionRecord | null): string {
 function printHeader(info: {
   dir: string;
   id: string;
-  accept: string;
+  gateLabel: string;
   files: string[];
   resumed: ISessionRecord | null;
 }): void {
-  const { dir, id, accept, files, resumed } = info;
+  const { dir, id, gateLabel, files, resumed } = info;
 
   process.stdout.write(welcomeBanner(modelInfo()));
   process.stdout.write(
     [
       `  cwd:   ${dir}`,
       `  scope: ${scopeLabel(files)}`,
-      `  gate:  ${accept.length > 0 ? accept : "none (stops when done; --accept to enforce a check)"}`,
+      `  gate:  ${gateLabel}`,
       sessionLine(id, resumed),
       "  /help for commands, /exit to quit",
       "",
@@ -271,6 +288,69 @@ function printHeader(info: {
   process.stdout.write("\n──────────────────────────\n");
 }
 
+// tsforge's bundled browser-check script (headless-chromium render oracle).
+const BROWSER_CHECK = join(
+  import.meta.dir,
+  "..",
+  "scripts",
+  "browser-check.ts"
+);
+
+function browserCheckCommand(htmlFile: string): string {
+  return `bun "${BROWSER_CHECK}" "${htmlFile}"`;
+}
+
+/**
+ * Resolve the session's gate + label. Starts from the base gate (resumed /
+ * explicit / auto strict-TS), then appends a `--browser` render check when asked
+ * — so a web build is verified to actually RUN, not just type-check.
+ */
+async function resolveGate(
+  args: ICliArgs,
+  resumed: ISessionRecord | null
+): Promise<{ accept: string; gateLabel: string }> {
+  const base = await baseGate(args, resumed);
+
+  if (args.browser.length === 0) {
+    return base;
+  }
+
+  const browser = browserCheckCommand(args.browser);
+
+  return {
+    accept: base.accept.length > 0 ? `${base.accept} && ${browser}` : browser,
+    gateLabel:
+      base.accept.length > 0
+        ? `${base.gateLabel} + browser render`
+        : "browser render",
+  };
+}
+
+/** The base gate: a resumed session's gate wins, then explicit `--accept`, then
+ *  `--no-gate` (off), else tsforge's auto gate (strict-TS / project lint). */
+async function baseGate(
+  args: ICliArgs,
+  resumed: ISessionRecord | null
+): Promise<{ accept: string; gateLabel: string }> {
+  if (resumed !== null) {
+    const label = resumed.accept.length > 0 ? resumed.accept : "none";
+
+    return { accept: resumed.accept, gateLabel: label };
+  }
+
+  if (args.accept.length > 0) {
+    return { accept: args.accept, gateLabel: args.accept };
+  }
+
+  if (args.noGate) {
+    return { accept: "", gateLabel: "none (--no-gate)" };
+  }
+
+  const auto = await buildGate(args.dir);
+
+  return { accept: auto.command, gateLabel: auto.label };
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 async function repl(args: ICliArgs): Promise<number> {
   const provider = makeProvider();
@@ -288,7 +368,7 @@ async function repl(args: ICliArgs): Promise<number> {
   }
 
   const id = resumed?.id ?? newSessionId();
-  const accept = resumed?.accept ?? args.accept;
+  const { accept, gateLabel } = await resolveGate(args, resumed);
   const files = resumed !== null ? resumed.files : scopeOf(args);
   const config = {
     provider,
@@ -312,7 +392,7 @@ async function repl(args: ICliArgs): Promise<number> {
     });
   };
 
-  printHeader({ dir: args.dir, id, accept, files, resumed });
+  printHeader({ dir: args.dir, id, gateLabel, files, resumed });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 

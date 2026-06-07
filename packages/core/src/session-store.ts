@@ -219,27 +219,66 @@ function toRole(value: unknown): IChatMessage["role"] | null {
   }
 }
 
-// Standalone secret SHAPES — the whole match is the secret, replaced wholesale.
-const SECRET_SHAPES: readonly RegExp[] = [
-  /\bsk-[A-Za-z0-9_-]{16,}\b/g, // OpenAI-style keys
-  /\bgh[posru]_[A-Za-z0-9]{20,}\b/g, // GitHub tokens
-  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
-  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack tokens
-  /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // JWTs
-  /Bearer\s+[A-Za-z0-9._-]{12,}/gi, // Authorization: Bearer …
-];
-
-// `key = value` / `key: value` — keep the key name, redact the value.
-const SECRET_ASSIGNMENT =
-  /\b(password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key)\b(\s*[:=]\s*)\S{4,}/gi;
-
 const REDACTED = "[redacted]";
 
-/** Scrub obvious secrets from text before it is persisted (data minimization). */
+// A PEM private-key block — redact the whole thing.
+const PRIVATE_KEY_BLOCK =
+  /-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----/g;
+
+// A password embedded in a connection-string's userinfo (`scheme://user:PASS@host`).
+const CONNECTION_PASSWORD = /(:\/\/[^\s:/@]*:)[^\s:/@]+(@)/g;
+
+// `<key>: <value>` / `<key> = <value>` where the key NAME contains a secret word.
+// The value is only redacted when it actually looks like a secret (see
+// valueLooksSecret) — so `password: string` (a type annotation) survives.
+const SECRET_KEYWORD =
+  /\b([\w.]*(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|client[_-]?secret|credentials?|auth[_-]?token|private[_-]?key)[\w.]*)(\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;{}()]+)/gi;
+
+// Standalone secret SHAPES — the whole match is the secret, replaced wholesale.
+const SECRET_SHAPES: readonly RegExp[] = [
+  /\bsk-[A-Za-z0-9_-]{16,}\b/g, // OpenAI-style keys (incl. sk-proj-)
+  /\b[sprk]k_(?:live|test)_[A-Za-z0-9]{8,}\b/g, // Stripe sk_live_/pk_test_/rk_…
+  /\bgh[posru]_[A-Za-z0-9]{20,}\b/g, // GitHub tokens (ghp_, gho_, …)
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, // GitHub fine-grained PAT
+  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
+  /\bAIza[0-9A-Za-z_-]{20,}\b/g, // Google API key
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack tokens
+  /\bnpm_[A-Za-z0-9]{36}\b/g, // npm token
+  /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // JWTs
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, // Authorization: Bearer …
+];
+
+/** Does a `key=` value look like a real secret (vs a type/identifier)? */
+function valueLooksSecret(value: string): boolean {
+  const quoted =
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"));
+
+  if (quoted) {
+    return value.length - 2 >= 3; // a non-trivial quoted literal
+  }
+
+  // A bare token: secret-looking if it has non-letters (digits/symbols) or is
+  // long. A short pure-letter word (`string`, `number`, `getInput`) is kept.
+  return /[^A-Za-z]/.test(value) || value.length >= 16;
+}
+
+/**
+ * Scrub secrets from text before it is persisted (data minimization). Covers
+ * private-key blocks, connection-string passwords, `<secret-key>: <value>`
+ * assignments (only when the value looks like a real secret), and a battery of
+ * known token shapes (OpenAI/Stripe/GitHub/AWS/Google/Slack/npm/JWT/Bearer).
+ */
 export function redactText(text: string): string {
-  let out = text.replace(SECRET_ASSIGNMENT, (_m, key: string, sep: string) => {
-    return `${key}${sep}${REDACTED}`;
-  });
+  let out = text.replace(PRIVATE_KEY_BLOCK, REDACTED);
+
+  out = out.replace(CONNECTION_PASSWORD, `$1${REDACTED}$2`);
+
+  out = out.replace(
+    SECRET_KEYWORD,
+    (match: string, key: string, sep: string, value: string) =>
+      valueLooksSecret(value) ? `${key}${sep}${REDACTED}` : match
+  );
 
   for (const shape of SECRET_SHAPES) {
     out = out.replace(shape, REDACTED);

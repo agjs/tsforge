@@ -34,20 +34,60 @@ test("no gate → one conversational turn, conversation retained", async () => {
   }
 });
 
-test("gate-confirms: model yields, green gate → done", async () => {
+test("a gate does NOT fire on a pure answer (no edits) — stays conversational", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 
   try {
+    // Gate set, but the model only answers (no edits) → no gate run.
     const session = await Session.create({
-      provider: yields(),
+      provider: yields("here is the answer"),
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+    const result = await session.send("what does this do?");
+
+    expect(result.status).toBe("responded");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("gate-confirms AFTER the model edits: green gate → done", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    // Turn 1: create a file (an edit). Turn 2: yield → gate runs (passes) → done.
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        if (calls === 1) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "1",
+                name: "create",
+                arguments: { file: "x.ts", content: "export const x = 1;\n" },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
       cwd: dir,
       accept: "true", // a gate that always passes
-      files: [],
+      files: ["**/*"],
     });
-    const result = await session.send("make the gate pass");
+    const result = await session.send("create x.ts");
 
     expect(result.status).toBe("done");
-    expect(result.turns).toBe(1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

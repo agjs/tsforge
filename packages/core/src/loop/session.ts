@@ -278,6 +278,10 @@ export class Session {
     signal?: AbortSignal
   ): Promise<ISendResult> {
     const { ctx, state, report } = this;
+    // The gate confirms CHANGES, not answers: it fires only once the model has
+    // actually edited a file this turn. So a pure question never triggers a gate
+    // run (even with one configured) — and an auto-detected gate stays unobtrusive.
+    let edited = false;
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       const turnStart = performance.now();
@@ -293,13 +297,13 @@ export class Session {
 
       // Still working — run the calls and keep going (we gate only when it stops).
       if (res.toolCalls.length > 0) {
-        await runToolCalls(res.toolCalls, ctx, state);
+        edited = (await runToolCalls(res.toolCalls, ctx, state)) || edited;
         emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
         continue;
       }
 
-      // The model yielded. No gate ⇒ a plain conversational answer.
-      if (!this.hasGate) {
+      // The model yielded. No gate, or it only answered (no edits) ⇒ conversational.
+      if (!this.hasGate || !edited) {
         emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
 
         return { status: "responded", turns: turn };

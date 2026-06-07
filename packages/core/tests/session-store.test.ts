@@ -64,24 +64,128 @@ test("saves and resumes the newest session for a directory", async () => {
   expect(resumed?.messages[2]?.toolCalls?.[0]?.name).toBe("read");
 });
 
-test("redactText scrubs secret shapes but keeps assignment key names", () => {
-  expect(redactText("here is sk-abcdefghijklmnopqrstuvwx")).not.toContain(
-    "sk-abcdefghij"
-  );
-  expect(redactText("export API_KEY=supersecretvalue123")).toBe(
-    "export API_KEY=[redacted]"
-  );
+// Each input contains a secret; after redaction the secret must be GONE and a
+// [redacted] marker present. `needle` is a recognizable slice of the secret.
+const SECRET_CASES: { name: string; input: string; needle: string }[] = [
+  {
+    name: "OpenAI key",
+    input: "key sk-abcdefghijklmnopqrstuvwx",
+    needle: "sk-abcdefghij",
+  },
+  {
+    name: "OpenAI project key",
+    input: "use sk-proj-abcdefghijklmnopqrst",
+    needle: "sk-proj-abcd",
+  },
+  {
+    name: "Stripe live key",
+    input: "stripe sk_live_abcdefghijklmnop",
+    needle: "sk_live_abcdef",
+  },
+  {
+    name: "GitHub token",
+    input: "token ghp_abcdefghijklmnopqrstuvwxyz0123",
+    needle: "ghp_abcdefghij",
+  },
+  {
+    name: "GitHub fine-grained PAT",
+    input: "github_pat_11ABCDEFG0abcdefghijklmnop",
+    needle: "github_pat_11ABC",
+  },
+  {
+    name: "AWS access key id",
+    input: "AKIAIOSFODNN7EXAMPLE here",
+    needle: "AKIAIOSFODNN7EXAMPLE",
+  },
+  {
+    name: "Google API key",
+    input: "AIzaSyA1234567890abcdefghijklmnopqrs",
+    needle: "AIzaSyA123456",
+  },
+  {
+    name: "Slack token",
+    input: "xoxb-1234567890-abcdefghij",
+    needle: "xoxb-1234567890",
+  },
+  {
+    name: "npm token",
+    input: "npm_abcdefghijklmnopqrstuvwxyz0123456789",
+    needle: "npm_abcdefghij",
+  },
+  {
+    name: "JWT",
+    input: "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q",
+    needle: "eyJhbGciOiJIUzI1",
+  },
+  {
+    name: "Bearer header",
+    input: "Authorization: Bearer abcdef123456ghijklmn",
+    needle: "abcdef123456ghij",
+  },
+  {
+    name: "env API_KEY",
+    input: "export API_KEY=supersecretvalue123",
+    needle: "supersecretvalue123",
+  },
+  {
+    name: "AWS secret env",
+    input: "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI1234567890abcdef",
+    needle: "wJalrXUtnFEMI",
+  },
+  {
+    name: "DB password env",
+    input: "DB_PASSWORD=hunter2hunter",
+    needle: "hunter2hunter",
+  },
+  {
+    name: "quoted json secret",
+    input: '"client_secret": "abc123def456ghi"',
+    needle: "abc123def456ghi",
+  },
+  {
+    name: "prose password",
+    input: "the password: hunter2hunter works",
+    needle: "hunter2hunter",
+  },
+  {
+    name: "connection string",
+    input: "postgres://user:hunter2pass@db:5432/app",
+    needle: "hunter2pass",
+  },
+  {
+    name: "private key block",
+    input:
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\nsecretmaterial\n-----END RSA PRIVATE KEY-----",
+    needle: "secretmaterial",
+  },
+];
 
-  const pw = redactText("password: hunter2hunter");
+for (const { name, input, needle } of SECRET_CASES) {
+  test(`redactText scrubs: ${name}`, () => {
+    const out = redactText(input);
 
-  expect(pw).toContain("password");
-  expect(pw).toContain("[redacted]");
+    expect(out).not.toContain(needle);
+    expect(out).toContain("[redacted]");
+  });
+}
 
-  expect(redactText("Authorization: Bearer abcdef123456ghijklmn")).toContain(
-    "[redacted]"
-  );
-  expect(redactText("just a normal sentence")).toBe("just a normal sentence");
-});
+// False-positive guards: ordinary code/prose must pass through UNCHANGED so the
+// saved transcript (and resumed context) isn't corrupted.
+const KEEP_CASES = [
+  "password: string", // a TS type annotation, not a secret
+  "const token: number = 5;",
+  "interface ICreds { secret: string; token: string }",
+  "function getPassword(): string { return read(); }",
+  "the meeting password will be shared verbally",
+  "fetch('http://localhost:8080/api/health')",
+  "const apiKey = getApiKey();",
+];
+
+for (const input of KEEP_CASES) {
+  test(`redactText leaves ordinary code/prose alone: ${input.slice(0, 32)}`, () => {
+    expect(redactText(input)).toBe(input);
+  });
+}
 
 test("secrets are redacted before they reach disk", async () => {
   await saveSession({
