@@ -33,6 +33,10 @@ export default tseslint.config(
           filter: { regex: "^(Register)$", match: false },
         },
       ],
+      // NOTE: one-component-per-file (boringstack) would be `react/no-multi-comp`,
+      // but eslint-plugin-react crashes under ESLint 10 (getFilename API removed),
+      // and @eslint-react (the compatible rewrite) isn't installed. Until it is,
+      // one-component-per-file is enforced by GUIDANCE only, not the gate.
       "prefer-const": "error",
       "prefer-template": "error",
       "no-var": "error",

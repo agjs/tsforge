@@ -346,6 +346,60 @@ test("forces tool_choice 'required' on the turn after a narration nudge", async 
   }
 });
 
+// Incremental check: while building, run a fast check every `checkEvery` edits
+// and feed errors back EARLY (so they don't pile up). Here the check is `false`
+// (always "fails") so we can see the interim feedback get injected.
+test("runs the incremental check every few edits and feeds errors back early", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        // Make 3 creates (the threshold), then yield.
+        if (calls <= 3) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: String(calls),
+                name: "create",
+                arguments: {
+                  file: `f${calls}.ts`,
+                  content: `export const v${calls} = ${calls};\n`,
+                },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+      incrementalCheck: "false", // a check that always reports failure
+      checkEvery: 3,
+    });
+
+    await session.send("build a few files");
+
+    // After 3 edits the interim check ran and injected its note as a user message.
+    const interim = session.messages.filter(
+      (m) => m.role === "user" && m.content.includes("Interim type-check")
+    );
+
+    expect(interim.length).toBeGreaterThanOrEqual(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("auto-compacts before a send once context exceeds the window threshold", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 

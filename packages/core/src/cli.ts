@@ -21,6 +21,8 @@ import {
   buildGate,
   buildWebGate,
   buildWebFix,
+  buildWebTypeGate,
+  buildWebTscCheck,
   scaffoldWeb,
   installWebDeps,
   webGuidance,
@@ -607,7 +609,11 @@ async function repl(args: ICliArgs): Promise<number> {
     report,
     ...(resumed === null ? {} : { history: resumed.messages }),
     ...(args.web
-      ? { guidance: webGuidance("react"), fix: buildWebFix("react") }
+      ? {
+          guidance: webGuidance("react"),
+          fix: buildWebFix("react"),
+          incrementalCheck: buildWebTscCheck(),
+        }
       : {}),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
@@ -680,6 +686,7 @@ async function repl(args: ICliArgs): Promise<number> {
     await setUpWebProject(args.dir, framework);
     session.setGate(buildWebGate(framework).command);
     session.setFix(buildWebFix(framework));
+    session.setIncrementalCheck(buildWebTscCheck());
     session.guide(webGuidance(framework));
   };
 
@@ -721,8 +728,15 @@ async function repl(args: ICliArgs): Promise<number> {
 
   // A from-scratch web build: stage it (plan + types, then implement) so the
   // model designs the type contract before writing UI — far less API invention.
-  const runStagedBuild = (line: string): Promise<void> =>
-    drive((opts) => session.buildStaged(line, opts));
+  // The design phase gates on TYPES only (tsc + lint) so contract errors surface
+  // early and small, not as a final avalanche.
+  const runStagedBuild = (
+    line: string,
+    framework: WebFramework
+  ): Promise<void> =>
+    drive((opts) =>
+      session.buildStaged(line, opts, buildWebTypeGate(framework).command)
+    );
 
   const dispatch = async (line: string): Promise<void> => {
     // A reply to the web spec Q&A: pick the stack, scaffold, then run the request.
@@ -742,7 +756,8 @@ async function repl(args: ICliArgs): Promise<number> {
       await configureWeb(framework);
       // Staged build: design the types first, then implement against them.
       await runStagedBuild(
-        extra.length > 0 ? `${request}\n\nDetails: ${extra}` : request
+        extra.length > 0 ? `${request}\n\nDetails: ${extra}` : request,
+        framework
       );
 
       return;
@@ -751,7 +766,7 @@ async function repl(args: ICliArgs): Promise<number> {
     // Explicit --web: the first message is a from-scratch build — stage it.
     if (stagedWebPending) {
       stagedWebPending = false;
-      await runStagedBuild(line);
+      await runStagedBuild(line, "react");
 
       return;
     }

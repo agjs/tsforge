@@ -5,7 +5,7 @@ import type {
   ITokenUsage,
 } from "../inference";
 import type { ITask } from "../spec";
-import type { ErrorParser } from "../validate";
+import { validate, type ErrorParser } from "../validate";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
 import type { Reporter } from "./loop.types";
 import { CHAT_SYSTEM, COMPACT_SYSTEM } from "./prompt";
@@ -61,6 +61,12 @@ export interface ISessionConfig {
   contextWindow?: number;
   /** Fraction of `contextWindow` that triggers auto-compaction (default 0.8). */
   autoCompactAt?: number;
+  /** A FAST check (e.g. `tsc --noEmit`) run every `checkEvery` edits WHILE the
+   *  model is still building — so errors surface a few edits after they're made,
+   *  not as a 100-error avalanche when it finally stops. Empty = off. */
+  incrementalCheck?: string;
+  /** Edits between incremental checks (default 3). */
+  checkEvery?: number;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -96,11 +102,22 @@ const PLAN_TYPES_STEP =
   "types shared across domains in `src/shared/shared.types.ts`. Do NOT create one " +
   "mega `src/types.ts`, and do NOT build components yet — types/constants only, then stop.";
 
+/** Default edits between incremental checks. */
+const CHECK_EVERY = 3;
+
+/** Prefaces interim-check feedback so the model fixes real errors and ignores the
+ *  expected "module not found" noise from files it hasn't created yet. */
+const INTERIM_CHECK_NOTE =
+  "Interim type-check (NOT the final gate) — fix these now, while they are few, " +
+  "before writing more. IGNORE any `Cannot find module './…'` for files you have " +
+  "not created yet; fix the real type errors:";
+
 /** Staged-build step 2: implement against the contract, gate on (drive to green). */
 const IMPLEMENT_STEP =
-  "STEP 2 of 2 — now build the app: import the types from `src/types.ts` and " +
-  "create the components/routes (one file per `create`), wiring them together. The " +
-  "gate builds and verifies it in a real browser; fix exactly what it reports until green.";
+  "STEP 2 of 2 — now build the app: import the types from the per-domain " +
+  "`.types.ts` files you created and build the components/routes (ONE component " +
+  "per `create`), wiring them together. The gate builds and verifies it in a real " +
+  "browser; fix exactly what it reports until green.";
 
 /**
  * Did the model write whole files INTO its chat message instead of calling
@@ -153,12 +170,15 @@ export class Session {
    *  size of the context the model last saw (drives the status gauge and, soon,
    *  auto-compaction). */
   private lastUsage?: ITokenUsage;
+  /** Fast check run every few edits while building (e.g. tsc); "" = off. */
+  private incrementalCheck: string;
 
   private constructor(cfg: ISessionConfig, ctx: ILoopCtx) {
     this.provider = cfg.provider;
     this.cfg = cfg;
     this.report = cfg.report ?? ((): void => undefined);
     this.hasGate = cfg.accept !== undefined && cfg.accept.length > 0;
+    this.incrementalCheck = cfg.incrementalCheck ?? "";
     // Start with the 4 BASE tools (read/run/edit/create). Measured: the bigger
     // 11-tool list pushes this model onto a malformed-tool-call boundary (it
     // emits unparseable formats the server leaves in content) — see
@@ -255,6 +275,12 @@ export class Session {
    *  deterministically instead of costing the model turns. */
   setFix(command: string): void {
     this.ctx.task.fix = command.length > 0 ? command : undefined;
+  }
+
+  /** Set (or clear, with "") the fast incremental check (e.g. `tsc --noEmit`) run
+   *  every few edits while building, so errors surface early instead of piling up. */
+  setIncrementalCheck(command: string): void {
+    this.incrementalCheck = command;
   }
 
   /** Replace the editable scope globs mid-session. */
@@ -383,11 +409,15 @@ export class Session {
    */
   async buildStaged(
     request: string,
-    opts: ISendOptions = {}
+    opts: ISendOptions = {},
+    designGate = ""
   ): Promise<ISendResult> {
     const gate = this.ctx.task.accept;
 
-    this.setGate("");
+    // Phase 1 gates on TYPES only (tsc + lint, no build) when a designGate is
+    // given — so the type contract is driven self-consistent BEFORE components,
+    // catching the as-const↔interface errors small instead of as a final pile.
+    this.setGate(designGate);
     const planned = await this.send(`${request}\n\n${PLAN_TYPES_STEP}`, opts);
 
     this.setGate(gate);
@@ -398,6 +428,59 @@ export class Session {
     }
 
     return this.send(IMPLEMENT_STEP, opts);
+  }
+
+  /** Once `editsSinceCheck` reaches the threshold, run the incremental check and
+   *  reset the counter; otherwise pass it through. Keeps `drive` branch-light. */
+  private async checkAfterEdits(
+    editsSinceCheck: number,
+    checkEvery: number
+  ): Promise<number> {
+    if (editsSinceCheck < checkEvery) {
+      return editsSinceCheck;
+    }
+
+    await this.runIncrementalCheck();
+
+    return 0;
+  }
+
+  /** Run the fast incremental check (e.g. tsc) and, if it surfaces errors, feed
+   *  them back NOW as a user message so the model fixes them before writing more
+   *  — instead of letting them pile up for the final gate. No-op when unset. */
+  private async runIncrementalCheck(): Promise<void> {
+    if (this.incrementalCheck.length === 0) {
+      return;
+    }
+
+    const { ctx } = this;
+    const task: ITask = { ...ctx.task, accept: this.incrementalCheck };
+    const result = await validate(
+      task,
+      ctx.cwd,
+      ctx.parse,
+      ctx.signal === undefined ? {} : { signal: ctx.signal }
+    );
+
+    if (result.passed) {
+      return;
+    }
+
+    ctx.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: `⊙ interim check: ${result.errors.length} error(s) — fixing now`,
+    });
+
+    const detail = result.errors
+      .slice(0, 20)
+      .map((e) => e.message)
+      .join("\n");
+
+    ctx.messages.push({
+      role: "user",
+      content: `${INTERIM_CHECK_NOTE}\n${detail}`,
+    });
   }
 
   /** The turn loop — separated so `send` can wrap it in abort handling. */
@@ -526,6 +609,9 @@ export class Session {
     // tool schema strictly — so the model can't narrate (or emit malformed tool
     // syntax) again on a turn where we already know a tool call is the move.
     let forceTool = false;
+    // Edits since the last incremental check — drives "check every few edits".
+    let editsSinceCheck = 0;
+    const checkEvery = this.cfg.checkEvery ?? CHECK_EVERY;
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       const turnStart = performance.now();
@@ -571,8 +657,19 @@ export class Session {
 
       // Still working — run the calls and keep going (we gate only when it stops).
       if (res.toolCalls.length > 0) {
+        const before = state.edits;
+
         edited = (await runToolCalls(res.toolCalls, ctx, state)) || edited;
+        editsSinceCheck += state.edits - before;
         emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
+
+        // Check every few edits WHILE building, so errors surface early instead
+        // of piling up into a final avalanche the model can't dig out of.
+        editsSinceCheck = await this.checkAfterEdits(
+          editsSinceCheck,
+          checkEvery
+        );
+
         continue;
       }
 

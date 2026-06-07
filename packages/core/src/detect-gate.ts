@@ -129,6 +129,16 @@ const BUILD_PREAMBLE = [
   "  • `as const` IS allowed and PREFERRED for literal data and registries (e.g.",
   "    `const STATUS = {...} as const`). Still forbidden: `any`, value-changing",
   "    `as` casts, non-null `!`. Use `===`, never `var`.",
+  "  • REGISTRIES (the #1 source of type errors): for an `as const` object, DERIVE",
+  "    its types — `type Status = keyof typeof STATUSES`, `type StatusInfo =",
+  "    (typeof STATUSES)[Status]`. Do NOT declare a separate interface the object",
+  "    must match (its `readonly`/literal types won't assign → a wall of TS2322).",
+  "    To VALIDATE a registry's shape, append `satisfies` — `const STATUSES = {...}",
+  "    as const satisfies Record<string, IStatusInfo>` — it checks the shape while",
+  "    keeping the literals, and is NOT an `as` cast (allowed). Need a typed key",
+  "    array? `Object.keys(x)` is `string[]`; do NOT cast it — make the array the",
+  "    source (`const STATUS_KEYS = [...] as const; type Status = (typeof",
+  "    STATUS_KEYS)[number]`) and build the registry from it.",
   "",
   "Write it RIGHT the first time — these are the gate's hard rules; code that",
   "breaks them is rejected and costs you extra turns. The fixes are not optional",
@@ -190,6 +200,35 @@ export function buildWebGate(framework: WebFramework): IGate {
     command: `${build} && ${tsc} && ${lint} && ${render}`,
     label: `${template.label} (build + browser)`,
   };
+}
+
+/**
+ * A TYPES-only gate for the staged DESIGN phase: `tsc --noEmit` + web eslint, but
+ * NO vite build / browser (the app has no UI yet). This surfaces the `as const`↔
+ * interface `TS2322` errors and the I-prefix/`as`-cast lint on the TYPE CONTRACT
+ * ALONE — caught small and isolated, before any component is built — instead of
+ * as a 20-error avalanche at the very end (the Linear-clone failure mode).
+ */
+export function buildWebTypeGate(framework: WebFramework): IGate {
+  const template = WEB_TEMPLATES[framework];
+  const ignores = template.eslintIgnore
+    .map((glob) => `--ignore-pattern "${glob}"`)
+    .join(" ");
+  const tsc = `"${TSC_BIN}" --noEmit -p tsconfig.json`;
+  const lint =
+    `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --format json .`.replace(
+      /\s+/g,
+      " "
+    );
+
+  return { command: `${tsc} && ${lint}`, label: `${template.label} (types)` };
+}
+
+/** Just `tsc --noEmit` — the FAST incremental check run every few edits while
+ *  building, so type errors (the avalanche source) surface early. Lint waits for
+ *  the full gate (running it every few edits is noisy on half-written files). */
+export function buildWebTscCheck(): string {
+  return `"${TSC_BIN}" --noEmit -p tsconfig.json`;
 }
 
 /**
