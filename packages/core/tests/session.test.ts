@@ -93,6 +93,129 @@ test("gate-confirms AFTER the model edits: green gate → done", async () => {
   }
 });
 
+// The narrate-instead-of-build failure: a gated build turn where the model writes
+// whole files into its message (fenced blocks) instead of calling `create`. The
+// content never reaches disk, so the session must NOT accept it as "responded".
+const CODE_DUMP =
+  "I'll build it. First the types:\n\n```ts\nexport interface Issue { id: string }\n```\n\n" +
+  "Now the component:\n\n```tsx\nexport function App() { return <div/>; }\n```\n";
+
+test("gated build: model dumps code as prose, never acts → nudged then stuck", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        return { content: CODE_DUMP, toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+    const result = await session.send("build a Linear clone");
+
+    // Not silently "responded": nudged maxBuildNudges times, then gave up.
+    expect(result.status).toBe("stuck");
+    // 2 nudges + the turn that hits the cap = 3 model calls.
+    expect(calls).toBe(3);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("gated build: a code-dump nudge recovers when the model then creates files", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        if (calls === 1) {
+          return { content: CODE_DUMP, toolCalls: [] }; // dumps → gets nudged
+        }
+
+        if (calls === 2) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "1",
+                name: "create",
+                arguments: { file: "x.ts", content: "export const x = 1;\n" },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] }; // yields → gate runs → done
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+    const result = await session.send("build a Linear clone");
+
+    expect(result.status).toBe("done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// P1: a create via the `path` alias (not `file`) still WRITES the file, so the
+// session must count it as an edit and run the gate — not return "responded".
+test("gated build: create({ path }) alias counts as an edit and reaches the gate", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        if (calls === 1) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "1",
+                name: "create",
+                // `path`, not `file` — the alias the model often reaches for.
+                arguments: { path: "x.ts", content: "export const x = 1;\n" },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+    const result = await session.send("create x.ts");
+
+    // The file was written AND the gate ran → done, not a silent "responded".
+    expect(result.status).toBe("done");
+    expect(await Bun.file(join(dir, "x.ts")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("send returns 'interrupted' when its signal is aborted mid-turn", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 
@@ -109,7 +232,9 @@ test("send returns 'interrupted' when its signal is aborted mid-turn", async () 
     };
     const session = await Session.create({ provider, cwd: dir });
     const controller = new AbortController();
-    const pending = session.send("do something slow", controller.signal);
+    const pending = session.send("do something slow", {
+      signal: controller.signal,
+    });
 
     controller.abort();
 
@@ -139,6 +264,47 @@ test("compact replaces the conversation with [system, summary]", async () => {
     expect(session.messages.length).toBe(2); // system + summary
     expect(session.messages[0]?.role).toBe("system");
     expect(session.messages[1]?.content).toContain("SUMMARY");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("steer injects a queued message before the next turn", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    // Turn 1 keeps working (a tool call); turn 2 yields. The steer callback
+    // queues a message that should land before turn 2's model call.
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        if (calls === 1) {
+          return {
+            content: "",
+            toolCalls: [{ id: "1", name: "read", arguments: { file: "x.ts" } }],
+          };
+        }
+
+        return { content: "ok", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({ provider, cwd: dir });
+
+    let steerCalls = 0;
+
+    await session.send("start", {
+      steer: () => {
+        steerCalls += 1;
+
+        return steerCalls === 2 ? ["actually use Tailwind"] : [];
+      },
+    });
+
+    expect(
+      session.messages.some((m) => m.content === "actually use Tailwind")
+    ).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -5,6 +5,7 @@ import type {
 } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import { parseArgs, salvageToolCalls } from "./wire";
+import { StreamGuard } from "./stream-guard";
 
 interface IStreamDelta {
   content?: string;
@@ -25,9 +26,13 @@ export async function streamResponse(
 
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  const calls = new Map<number, { id?: string; name: string; args: string }>();
+  const acc: IStreamAcc = {
+    calls: new Map(),
+    guard: new StreamGuard(),
+    content: "",
+  };
   let buffer = "";
-  let content = "";
+  let degenerated = false;
   let result = await reader.read();
 
   while (!result.done) {
@@ -37,44 +42,88 @@ export async function streamResponse(
 
     buffer = lines.pop() ?? "";
 
-    for (const line of lines) {
-      const delta = parseSseLine(line);
+    degenerated = consumeLines(lines, acc, onToken);
 
-      if (delta === null) {
-        continue;
-      }
+    if (degenerated) {
+      // Stop the runaway generation instead of letting it spew to max_tokens.
+      await reader.cancel();
 
-      // Forward reasoning too — the log is the full record of what happened.
-      // (The "too much output" problem is solved by making the model think
-      // less, not by hiding it from the log.)
-      if (delta.reasoning !== undefined && delta.reasoning.length > 0) {
-        onToken(delta.reasoning, "reasoning");
-      }
-
-      if (delta.content !== undefined && delta.content.length > 0) {
-        content += delta.content;
-        onToken(delta.content, "content");
-      }
-
-      accumulateToolCalls(delta.toolCalls, calls);
+      break;
     }
 
     result = await reader.read();
   }
 
-  const toolCalls: IToolCall[] = [...calls.values()].map((c) => ({
+  return assemble(acc, degenerated);
+}
+
+interface IStreamAcc {
+  calls: Map<number, { id?: string; name: string; args: string }>;
+  guard: StreamGuard;
+  content: string;
+}
+
+/** Parse a batch of SSE lines, forward tokens, accumulate state; returns true
+ *  the moment the model's output degenerates into a repetition loop. */
+function consumeLines(
+  lines: string[],
+  acc: IStreamAcc,
+  onToken: (text: string, channel: TokenChannel) => void
+): boolean {
+  for (const line of lines) {
+    const delta = parseSseLine(line);
+
+    if (delta === null) {
+      continue;
+    }
+
+    // Forward reasoning too — the log is the full record of what happened.
+    // (The "too much output" problem is solved by making the model think
+    // less, not by hiding it from the log.)
+    if (delta.reasoning !== undefined && delta.reasoning.length > 0) {
+      onToken(delta.reasoning, "reasoning");
+
+      if (acc.guard.observe(delta.reasoning, "reasoning")) {
+        return true;
+      }
+    }
+
+    if (delta.content !== undefined && delta.content.length > 0) {
+      acc.content += delta.content;
+      onToken(delta.content, "content");
+
+      if (acc.guard.observe(delta.content, "content")) {
+        return true;
+      }
+    }
+
+    accumulateToolCalls(delta.toolCalls, acc.calls, onToken);
+  }
+
+  return false;
+}
+
+function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
+  const toolCalls: IToolCall[] = [...acc.calls.values()].map((c) => ({
     id: c.id,
     name: c.name,
     arguments: parseArgs(c.args),
   }));
 
   if (toolCalls.length > 0) {
-    return { content, toolCalls };
+    return degenerated
+      ? { content: acc.content, toolCalls, degenerated }
+      : { content: acc.content, toolCalls };
   }
 
-  const salvaged = salvageToolCalls(content);
+  const salvaged = salvageToolCalls(acc.content);
 
-  return { content, toolCalls: salvaged, salvaged: salvaged.length };
+  return {
+    content: acc.content,
+    toolCalls: salvaged,
+    salvaged: salvaged.length,
+    ...(degenerated ? { degenerated } : {}),
+  };
 }
 
 function parseSseLine(line: string): IStreamDelta | null {
@@ -120,7 +169,8 @@ function parseSseLine(line: string): IStreamDelta | null {
 
 function accumulateToolCalls(
   raw: unknown,
-  calls: Map<number, { name: string; args: string }>
+  calls: Map<number, { name: string; args: string }>,
+  onToken: (text: string, channel: TokenChannel) => void
 ): void {
   if (!isArray(raw)) {
     return;
@@ -141,11 +191,19 @@ function accumulateToolCalls(
       existing.id = tc.id;
     }
 
+    // Surface the tool name the moment it first appears — so a long tool-call
+    // generation shows "it's writing X now" instead of a frozen cursor. The raw
+    // argument JSON is NOT streamed (it's noisy); the file lands as a clean
+    // create/edit event once the call runs.
     if (typeof fn.name === "string" && fn.name.length > 0) {
+      if (existing.name.length === 0) {
+        onToken(`\n  ✎ ${fn.name}…`, "tool");
+      }
+
       existing.name = fn.name;
     }
 
-    if (typeof fn.arguments === "string") {
+    if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
       existing.args += fn.arguments;
     }
 

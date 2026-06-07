@@ -40,6 +40,11 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "const n: number = readLine();",
     good: "const n: number = Number(readLine());",
   },
+  TS2307: {
+    what: "Module not found — the package isn't installed. Install it first (greenfield dirs have no node_modules); add its `@types/*` if it ships no types.",
+    bad: "import { render } from 'react-dom';",
+    good: "run: bun add react react-dom @types/react @types/react-dom",
+  },
   "@typescript-eslint/no-unsafe-return": {
     what: "Don't return a value typed `any` — narrow it to a real type before returning.",
     bad: "function f() { return JSON.parse(s); }",

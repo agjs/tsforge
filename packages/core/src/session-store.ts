@@ -40,6 +40,12 @@ function storeDir(): string {
   return join(process.env.TSFORGE_HOME ?? homedir(), ".tsforge", "sessions");
 }
 
+/** The run-logs directory (`--log`): `$TSFORGE_HOME`/.tsforge/logs, else under the
+ *  user's home. A fixed, predictable location so logs are always findable. */
+export function logsDir(): string {
+  return join(process.env.TSFORGE_HOME ?? homedir(), ".tsforge", "logs");
+}
+
 /**
  * Persist (create or overwrite) a session record — unless persistence is off.
  * Secrets in message text are redacted FIRST (so they never hit disk), the dir
@@ -131,6 +137,11 @@ export async function latestSession(
   cwd: string
 ): Promise<ISessionRecord | null> {
   return (await listSessions(cwd))[0] ?? null;
+}
+
+/** Load a specific session by id (for `--resume <id>`), or null if absent. */
+export async function loadSession(id: string): Promise<ISessionRecord | null> {
+  return readRecord(join(storeDir(), `${id}.json`));
 }
 
 async function readRecord(path: string): Promise<ISessionRecord | null> {

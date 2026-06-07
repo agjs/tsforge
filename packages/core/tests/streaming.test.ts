@@ -41,9 +41,12 @@ test("streams reasoning + content tokens and assembles tool calls", async () => 
 
   const streamed = tokens.join("");
 
-  // The log is the full record: reasoning + content (but NOT raw tool-call JSON,
-  // which is rendered cleanly as structured events elsewhere).
-  expect(streamed).toBe("thinking…hello");
+  // The log streams reasoning + content, plus a clean tool-name marker when a
+  // tool call starts (so a long tool generation isn't silent) — but NOT the raw
+  // tool-call JSON, which lands as a structured create/edit event elsewhere.
+  expect(streamed).toContain("thinking…hello");
+  expect(streamed).toContain("✎ edit");
+  expect(streamed).not.toContain('"file"');
   expect(r.content).toBe("hello");
   expect(r.toolCalls).toEqual([{ name: "edit", arguments: { file: "a.ts" } }]);
 });

@@ -1,7 +1,18 @@
 import type { ICreateFile, IReplacement } from "../files";
 import { isArray, isRecord } from "../lib/guards";
-import { readProcessOutput } from "../lib/fs";
+import { runShellCommand } from "../lib/fs";
 import type { IShellResult } from "./agent.types";
+
+/** Default kill-timeout for the `run` tool (ms) — generous enough for a slow
+ *  test/build, short enough that a hung `tail -f`/`vite dev` can't wedge the
+ *  harness forever. Override per-process with TSFORGE_RUN_TIMEOUT_MS (0 = off). */
+const DEFAULT_RUN_TIMEOUT_MS = 120_000;
+
+function runToolTimeoutMs(): number {
+  const env = Number(process.env.TSFORGE_RUN_TIMEOUT_MS);
+
+  return Number.isFinite(env) && env >= 0 ? env : DEFAULT_RUN_TIMEOUT_MS;
+}
 
 /**
  * Resolve the target file path from a tool call. Our schema asks for `file`, but
@@ -88,19 +99,27 @@ export function toRead(args: Record<string, unknown>): { file: string } | null {
   return file !== null ? { file } : null;
 }
 
-/** Run a shell command in `cwd` and capture stdout/stderr/exit — the `run` tool. */
+/** Run a shell command in `cwd` and capture stdout/stderr/exit — the `run` tool.
+ *  Cancellable via `signal`; killed after a timeout (default `runToolTimeoutMs`)
+ *  so a hung command can't wedge the harness. A timeout appends a clear note. */
 export async function runCommand(
   cwd: string,
-  command: string
+  command: string,
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {}
 ): Promise<IShellResult> {
-  const proc = Bun.spawn(["sh", "-c", command], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
+  const timeoutMs = opts.timeoutMs ?? runToolTimeoutMs();
+  const run = await runShellCommand(cwd, command, {
+    timeoutMs,
+    ...(opts.signal === undefined ? {} : { signal: opts.signal }),
   });
 
-  const exitCode = await proc.exited;
-  const { stdout, stderr } = await readProcessOutput(proc.stdout, proc.stderr);
+  const note = run.timedOut
+    ? `\n[command killed after ${timeoutMs}ms timeout — TSFORGE_RUN_TIMEOUT_MS to change]`
+    : "";
 
-  return { stdout, stderr, exitCode };
+  return {
+    stdout: run.stdout,
+    stderr: run.stderr + note,
+    exitCode: run.exitCode,
+  };
 }

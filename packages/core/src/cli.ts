@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { join, isAbsolute } from "node:path";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { runTask, RUN_STATUS, Session } from "./loop";
 import {
@@ -11,13 +12,23 @@ import {
 import { renderEvent, renderMessage, welcomeBanner } from "./render";
 import type { ITask } from "./spec";
 import type { Reporter } from "./loop";
-import { buildGate } from "./detect-gate";
+import {
+  buildGate,
+  buildWebGate,
+  scaffoldWeb,
+  installWebDeps,
+  webGuidance,
+} from "./detect-gate";
+import type { WebFramework } from "./web-templates";
+import { classifyIntent } from "./classify";
 import {
   saveSession,
   latestSession,
+  loadSession,
   listSessions,
   pruneSessions,
   persistenceEnabled,
+  logsDir,
   type ISessionRecord,
 } from "./session-store";
 
@@ -37,6 +48,10 @@ import {
  *   --accept "<cmd>"    a gate that confirms "done" (default: stop when the model
  *                       stops — like any chat agent). With a gate set, tsforge's
  *                       deterministic check enforces correctness; it can't be faked.
+ *   --log               record the full event stream (reasoning, every file the
+ *                       agent writes, gate verdicts, timing) as JSONL to an
+ *                       auto-named ~/.tsforge/logs/<timestamp>-<id>.jsonl — the
+ *                       record to evaluate runs and see where the model got stuck.
  * Slash commands (/help, /clear, /exit) follow the standard harness UX. Provider
  * via TSFORGE_* env.
  */
@@ -48,21 +63,51 @@ export interface ICliArgs {
   accept: string;
   /** Resume the most recent saved session for this dir (`--continue` / `-c`). */
   continue: boolean;
+  /** Resume a specific session by id (`--resume <id>`). */
+  resumeId: string;
   /** Skip auto-detecting a gate from the project (`--no-gate`). */
   noGate: boolean;
   /** An HTML file to render-check in headless chromium as part of the gate (`--browser`). */
   browser: string;
+  /** Scaffold + gate a web app: skeleton + tsc/eslint/build/browser ladder (`--web`). */
+  web: boolean;
+  /** Append the full event stream (reasoning, tool writes, gate verdicts) as JSONL
+   *  to an auto-named file under ~/.tsforge/logs/ for later evaluation (`--log`). */
+  log: boolean;
 }
+
+const BOOL_FLAGS: Record<string, "continue" | "noGate" | "web" | "log"> = {
+  "--continue": "continue",
+  "-c": "continue",
+  "--no-gate": "noGate",
+  "--web": "web",
+  "--log": "log",
+};
+
+const VALUE_FLAGS = new Set([
+  "--dir",
+  "--files",
+  "--accept",
+  "--gate",
+  "--browser",
+  "--resume",
+]);
 
 /** Parse argv (without `bun cli.ts`). Always succeeds — mode is decided in main. */
 export function parseArgs(argv: readonly string[]): ICliArgs {
   const positional: string[] = [];
-  let dir = ".";
-  let files: string[] = [];
-  let accept = "";
-  let resume = false;
-  let noGate = false;
-  let browser = "";
+  const out: ICliArgs = {
+    task: "",
+    dir: ".",
+    files: [],
+    accept: "",
+    continue: false,
+    resumeId: "",
+    noGate: false,
+    browser: "",
+    web: false,
+    log: false,
+  };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -71,58 +116,40 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
       continue;
     }
 
-    if (arg === "--continue" || arg === "-c") {
-      resume = true;
-      continue;
-    }
+    const boolKey = BOOL_FLAGS[arg];
 
-    if (arg === "--no-gate") {
-      noGate = true;
-      continue;
-    }
-
-    const next = argv[i + 1];
-    const wantsValue =
-      arg === "--dir" ||
-      arg === "--files" ||
-      arg === "--accept" ||
-      arg === "--gate" ||
-      arg === "--browser";
-
-    if (wantsValue) {
-      if (next === undefined) {
-        continue;
-      }
-
-      if (arg === "--dir") {
-        dir = next;
-      } else if (arg === "--files") {
-        files = next
-          .split(",")
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0);
-      } else if (arg === "--browser") {
-        browser = next;
-      } else {
-        accept = next;
-      }
-
+    if (boolKey !== undefined) {
+      out[boolKey] = true;
+    } else if (VALUE_FLAGS.has(arg) && argv[i + 1] !== undefined) {
+      applyValueFlag(arg, argv[i + 1] ?? "", out);
       i += 1;
-      continue;
+    } else if (!VALUE_FLAGS.has(arg)) {
+      positional.push(arg);
     }
-
-    positional.push(arg);
   }
 
-  return {
-    task: positional.join(" ").trim(),
-    dir: isAbsolute(dir) ? dir : join(process.cwd(), dir),
-    files,
-    accept,
-    continue: resume,
-    noGate,
-    browser,
-  };
+  out.task = positional.join(" ").trim();
+  out.dir = isAbsolute(out.dir) ? out.dir : join(process.cwd(), out.dir);
+
+  return out;
+}
+
+/** Assign one `--flag value` into the args (mutates `out`). */
+function applyValueFlag(flag: string, value: string, out: ICliArgs): void {
+  if (flag === "--dir") {
+    out.dir = value;
+  } else if (flag === "--files") {
+    out.files = value
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  } else if (flag === "--browser") {
+    out.browser = value;
+  } else if (flag === "--resume") {
+    out.resumeId = value;
+  } else {
+    out.accept = value; // --accept / --gate
+  }
 }
 
 // Default editable scope: the whole workspace — like any agentic CLI, the agent
@@ -169,6 +196,54 @@ function modelInfo(): { model: string; endpoint: string } {
   };
 }
 
+function frameworkLabel(framework: WebFramework): string {
+  return framework === "react"
+    ? "Vite + React + shadcn/ui + TanStack"
+    : "Vite + TypeScript + Tailwind";
+}
+
+/** The short spec Q&A shown when a web app is detected — confirm the stack + grab
+ *  any extra intent before scaffolding (we don't silently impose a framework). */
+const WEB_SPEC_PROMPT = `${[
+  "",
+  "  This looks like a web app. Two quick things before I scaffold:",
+  "    1. Framework — react (full kit: shadcn/ui + TanStack Router + Query) [default],",
+  "       or vanilla (Vite + TypeScript + Tailwind).   (vue/svelte coming soon)",
+  "    2. Anything specific? — key features, pages, data (optional).",
+  '  Reply on one line (e.g. "react — todo app with due dates"), or press Enter for the React kit.',
+].join("\n")}\n`;
+
+/** Parse a spec-Q&A reply: pick the framework (default react) and keep the rest as
+ *  extra task detail. */
+function parseSpec(line: string): { framework: WebFramework; extra: string } {
+  const framework: WebFramework = /\bvanilla\b/i.test(line)
+    ? "vanilla"
+    : "react";
+  const extra = line
+    .replace(/^\s*(react|vanilla|vue|svelte)\b[\s:.\-—]*/i, "")
+    .trim();
+
+  return { framework, extra };
+}
+
+/** Lay down a stack's skeleton and install its dependencies, reporting progress —
+ *  the model can't build until deps resolve. */
+async function setUpWebProject(
+  dir: string,
+  framework: WebFramework
+): Promise<void> {
+  await scaffoldWeb(dir, framework);
+  process.stdout.write(`  ↳ installing ${frameworkLabel(framework)}…\n`);
+
+  const ok = await installWebDeps(dir);
+
+  process.stdout.write(
+    ok
+      ? "  ↳ dependencies ready\n"
+      : "  ⚠ dependency install failed — run `bun install` yourself\n"
+  );
+}
+
 function makeProvider(): IProvider {
   return new OpenAICompatibleProvider({
     baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
@@ -177,6 +252,13 @@ function makeProvider(): IProvider {
     maxTokens: Number(
       process.env.TSFORGE_MAX_TOKENS ?? String(PROVIDER_LIMITS.maxTokens)
     ),
+    // OFF by default: a global repetition penalty also penalizes the rigid,
+    // repetitive tool-call JSON tokens, which pushes the model to NARRATE
+    // instead of emitting tool calls (→ no files written). The StreamGuard is
+    // the targeted loop protection. Opt in only to experiment.
+    ...(process.env.TSFORGE_REPETITION_PENALTY === undefined
+      ? {}
+      : { repetitionPenalty: Number(process.env.TSFORGE_REPETITION_PENALTY) }),
   });
 }
 
@@ -204,6 +286,51 @@ const render: Reporter = (event) => {
   process.stdout.write(renderEvent(event, { color: true }));
 };
 
+/** Reporter that renders to the terminal AND, when `--log <file>` is set, appends
+ *  the full event stream as JSONL (one event per line, timestamped) for later
+ *  evaluation — the durable record of what the agent did: its reasoning, every
+ *  file it wrote, the gate verdicts, and the loops it got stuck in. Append-only
+ *  (NOT overwritten like the session JSON), and unredacted — it's an opt-in local
+ *  debug artifact. Logging failures never break the session. */
+function makeReporter(logFile: string): Reporter {
+  if (logFile.length === 0) {
+    return render;
+  }
+
+  return (event) => {
+    render(event);
+
+    try {
+      appendFileSync(
+        logFile,
+        `${JSON.stringify({ t: Date.now(), ...event })}\n`
+      );
+    } catch {
+      // A logging failure must never interrupt the session.
+    }
+  };
+}
+
+/** Resolve the run-log file when `--log` is set: an auto-named, timestamped JSONL
+ *  under ~/.tsforge/logs/ (created if needed), so logs are always in one findable
+ *  place and you never specify a path. Empty string = logging off. */
+function resolveLogPath(id: string, enabled: boolean): string {
+  if (!enabled) {
+    return "";
+  }
+
+  const dir = logsDir();
+
+  mkdirSync(dir, { recursive: true });
+
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[:T]/g, "-")
+    .replace(/\..+$/, "");
+
+  return join(dir, `${stamp}-${id}.jsonl`);
+}
+
 /** One-shot: drive a single task to green, then exit. */
 async function runOnce(args: ICliArgs): Promise<number> {
   const task: ITask = {
@@ -214,8 +341,14 @@ async function runOnce(args: ICliArgs): Promise<number> {
     context: [],
   };
 
+  const logFile = resolveLogPath("cli", args.log);
+
+  if (logFile.length > 0) {
+    process.stdout.write(`  ↳ logging this run to ${logFile}\n`);
+  }
+
   const result = await runTask(task, args.dir, makeProvider(), {
-    onEvent: render,
+    onEvent: makeReporter(logFile),
   });
   const ok = result.status === RUN_STATUS.done;
 
@@ -234,11 +367,14 @@ const HELP = [
   "  /gate <cmd>      set the gate command (empty to clear)",
   "  /files <globs>   set the editable scope (comma-separated; empty = all)",
   "  /model           show the active model + endpoint",
-  "  /sessions        list saved sessions for this directory",
+  "  /sessions        list saved sessions (resume one with: tsforge --resume <id>)",
+  "  /cost            rough conversation size (messages + ~tokens)",
   "  /exit, /quit     leave the session",
   "",
   "Anything else is sent to the agent. It works with its tools; when it stops,",
   'the gate (if set) confirms "done".',
+  "While it's working: type a message to STEER the next turn (e.g. 'use Tailwind');",
+  "Ctrl-C interrupts the current run.",
 ].join("\n");
 
 /** The session status line — distinguishes off / new / resumed. */
@@ -342,6 +478,12 @@ async function baseGate(
     return { accept: args.accept, gateLabel: args.accept };
   }
 
+  if (args.web) {
+    const web = buildWebGate("react");
+
+    return { accept: web.command, gateLabel: web.label };
+  }
+
   if (args.noGate) {
     return { accept: "", gateLabel: "none (--no-gate)" };
   }
@@ -358,25 +500,40 @@ async function repl(args: ICliArgs): Promise<number> {
   // Best-effort cleanup of stale sessions on every launch.
   await pruneSessions();
 
-  // --continue resumes the most recent saved session for this directory.
-  const resumed = args.continue ? await latestSession(args.dir) : null;
+  // --resume <id> loads a specific session; --continue the newest for this dir.
+  const resumed =
+    args.resumeId.length > 0
+      ? await loadSession(args.resumeId)
+      : args.continue
+        ? await latestSession(args.dir)
+        : null;
 
-  if (args.continue && resumed === null) {
-    process.stdout.write(
-      "(no saved session for this directory — starting fresh)\n"
-    );
+  if ((args.continue || args.resumeId.length > 0) && resumed === null) {
+    process.stdout.write("(no matching saved session — starting fresh)\n");
+  }
+
+  // --web: lay down the opinionated skeleton before resolving the gate.
+  if (args.web && resumed === null) {
+    await setUpWebProject(args.dir, "react");
   }
 
   const id = resumed?.id ?? newSessionId();
   const { accept, gateLabel } = await resolveGate(args, resumed);
   const files = resumed !== null ? resumed.files : scopeOf(args);
+  const logFile = resolveLogPath(id, args.log);
+
+  if (logFile.length > 0) {
+    process.stdout.write(`  ↳ logging this run to ${logFile}\n`);
+  }
+
   const config = {
     provider,
     cwd: args.dir,
     files,
     accept,
-    report: render,
+    report: makeReporter(logFile),
     ...(resumed === null ? {} : { history: resumed.messages }),
+    ...(args.web ? { guidance: webGuidance("react") } : {}),
   };
 
   let session = await Session.create(config);
@@ -385,8 +542,11 @@ async function repl(args: ICliArgs): Promise<number> {
     await saveSession({
       id,
       cwd: args.dir,
-      accept,
-      files,
+      // The LIVE gate/scope — not the startup constants. /gate, /files, and a web
+      // scaffold all mutate these mid-session; persisting the originals would
+      // silently restore stale settings on --continue. See P2 review.
+      accept: session.gate,
+      files: session.scope,
       updatedAt: Date.now(),
       messages: [...session.messages],
     });
@@ -400,6 +560,9 @@ async function repl(args: ICliArgs): Promise<number> {
   // idle at the prompt, quit. (readline emits SIGINT on the interface, so the
   // process isn't killed — we decide what it means.)
   let active: AbortController | null = null;
+  // Lines typed WHILE a run is in flight — drained at each turn boundary to steer
+  // the model (see Session.send `steer`), instead of blocking until the run ends.
+  const pending: string[] = [];
 
   rl.on("SIGINT", () => {
     if (active !== null) {
@@ -409,11 +572,33 @@ async function repl(args: ICliArgs): Promise<number> {
     }
   });
 
-  const dispatch = async (line: string): Promise<void> => {
+  // On a PLAIN session (no explicit mode/gate), classify the first message and
+  // route to an opinionated approach — so "build me a todo app" gets a structured,
+  // tooled web scaffold instead of an improvised single-file blob.
+  let classified = false;
+  // While set, the next user line is the answer to the web spec Q&A (it holds the
+  // original build request, deferred until we know the stack).
+  let awaitingSpec: string | null = null;
+  const autoClassify =
+    resumed === null && !args.web && args.accept.length === 0 && !args.noGate;
+
+  const configureWeb = async (framework: WebFramework): Promise<void> => {
+    process.stdout.write(
+      `\n  ↳ scaffolding a ${frameworkLabel(framework)} project\n`
+    );
+    await setUpWebProject(args.dir, framework);
+    session.setGate(buildWebGate(framework).command);
+    session.guide(webGuidance(framework));
+  };
+
+  const runSend = async (line: string): Promise<void> => {
     active = new AbortController();
 
     try {
-      const result = await session.send(line, active.signal);
+      const result = await session.send(line, {
+        signal: active.signal,
+        steer: () => pending.splice(0, pending.length),
+      });
 
       process.stdout.write(`\n[${result.status} · ${result.turns} turn(s)]\n`);
     } finally {
@@ -421,6 +606,44 @@ async function repl(args: ICliArgs): Promise<number> {
     }
 
     await persist();
+  };
+
+  const dispatch = async (line: string): Promise<void> => {
+    // A reply to the web spec Q&A: pick the stack, scaffold, then run the request.
+    if (awaitingSpec !== null) {
+      const request = awaitingSpec;
+
+      awaitingSpec = null;
+
+      if (/\b(vue|svelte)\b/i.test(line)) {
+        process.stdout.write(
+          "  ↳ vue/svelte coming soon — using the React full kit\n"
+        );
+      }
+
+      const { framework, extra } = parseSpec(line);
+
+      await configureWeb(framework);
+      await runSend(
+        extra.length > 0 ? `${request}\n\nDetails: ${extra}` : request
+      );
+
+      return;
+    }
+
+    // First message: classify. A web app pauses for a short spec Q&A before scaffolding.
+    if (autoClassify && !classified) {
+      classified = true;
+
+      if ((await classifyIntent(provider, line)) === "web") {
+        awaitingSpec = line;
+        process.stdout.write(WEB_SPEC_PROMPT);
+
+        return;
+      }
+    }
+
+    await runSend(line);
   };
 
   // Slash-command dispatch. Returns true to EXIT the REPL. Kept as a closure so
@@ -478,6 +701,19 @@ async function repl(args: ICliArgs): Promise<number> {
       case "sessions":
         await printSessions(args.dir);
         break;
+
+      case "cost": {
+        const chars = session.messages.reduce(
+          (sum, m) => sum + m.content.length,
+          0
+        );
+
+        process.stdout.write(
+          `  ${String(session.messages.length)} messages · ~${String(Math.round(chars / 4))} tokens (rough)\n`
+        );
+        break;
+      }
+
       default:
         process.stdout.write(`unknown command: ${line} (try /help)\n`);
     }
@@ -485,38 +721,99 @@ async function repl(args: ICliArgs): Promise<number> {
     return false;
   };
 
-  // A positional task given on the command line is sent as the first message.
-  if (args.task.length > 0) {
-    await dispatch(args.task);
-  }
+  const prompt = (): void => {
+    process.stdout.write("\n› ");
+  };
 
-  // Iterate the interface (not question()-in-a-loop) so buffered/piped input is
-  // handled as well as interactive TTY input. The body backpressures reads — the
-  // next line isn't pulled until the current send/command finishes.
-  process.stdout.write("\n› ");
+  await new Promise<void>((resolveLoop) => {
+    let busy = false;
+    let closed = false;
 
-  for await (const raw of rl) {
-    const line = raw.trim();
+    // Finish the loop only when stdin has closed AND no run is in flight — so a
+    // stdin EOF (piped input / Ctrl-D) never kills a build mid-turn.
+    const maybeFinish = (): void => {
+      if (closed && !busy) {
+        resolveLoop();
+      }
+    };
 
-    if (line.length === 0) {
-      process.stdout.write("› ");
-      continue;
-    }
+    // Handle one idle line (slash command or a message), then any queued follow-up.
+    const runLine = async (line: string): Promise<void> => {
+      busy = true;
 
-    if (line.startsWith("/")) {
-      if (await command(line)) {
-        break;
+      try {
+        if (line.startsWith("/")) {
+          if (await command(line)) {
+            rl.close();
+
+            return;
+          }
+        } else {
+          await dispatch(line);
+        }
+      } finally {
+        busy = false;
       }
 
-      process.stdout.write("\n› ");
-      continue;
+      // A line typed in the gap after the last steer-drain becomes the next turn.
+      const next = pending.shift();
+
+      if (next !== undefined) {
+        void runLine(next);
+
+        return;
+      }
+
+      if (closed) {
+        maybeFinish();
+      } else {
+        prompt();
+      }
+    };
+
+    // Event-driven (not for-await) so stdin is read DURING a run: a line typed
+    // mid-run is queued to steer the next turn (or, if "/exit", aborts). This is
+    // what makes it feel like a real harness — you can redirect without waiting.
+    rl.on("line", (raw) => {
+      const line = raw.trim();
+
+      if (line.length === 0) {
+        // An empty line while awaiting the spec answer = accept the defaults.
+        if (awaitingSpec !== null && !busy) {
+          void runLine("");
+        } else if (!busy) {
+          prompt();
+        }
+
+        return;
+      }
+
+      if (busy) {
+        if (line === "/exit" || line === "/quit") {
+          active?.abort();
+          rl.close();
+        } else {
+          pending.push(line);
+          process.stdout.write("  ↳ queued (steers the next turn)\n");
+        }
+
+        return;
+      }
+
+      void runLine(line);
+    });
+
+    rl.on("close", () => {
+      closed = true;
+      maybeFinish();
+    });
+
+    if (args.task.length > 0) {
+      void runLine(args.task); // sent as the first message; prompts when done
+    } else {
+      prompt();
     }
-
-    await dispatch(line);
-    process.stdout.write("\n› ");
-  }
-
-  rl.close();
+  });
 
   return 0;
 }

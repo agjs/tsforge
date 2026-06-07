@@ -8,6 +8,15 @@ import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
 
+/**
+ * Read a file for the model. TRUSTED-MODE (by design): `read` and `run` are NOT
+ * sandboxed to the workspace — a `../config` read or any shell command the
+ * process can run is permitted, like a local human-run coding agent (Claude Code,
+ * etc.). Only WRITES (`edit`/`create`) are scope-enforced, since those are what
+ * mutate the user's project. tsforge runs locally on the user's own machine
+ * against their own code; the threat model is mistakes, not a hostile operator.
+ * (Sandboxing reads would be a separate, explicit execution profile.)
+ */
 export async function readFile(
   args: Record<string, unknown>,
   ctx: IToolContext
@@ -41,7 +50,11 @@ export async function runShell(
     return "run: malformed args (need `command`)";
   }
 
-  const res = await runCommand(ctx.cwd, r.command);
+  const res = await runCommand(
+    ctx.cwd,
+    r.command,
+    ctx.signal === undefined ? {} : { signal: ctx.signal }
+  );
   const output = `${res.stdout}${res.stderr}`.slice(
     0,
     LOOP_LIMITS.maxToolOutputChars

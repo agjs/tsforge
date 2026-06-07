@@ -12,6 +12,9 @@ export interface IToolContext {
    *  (rename/type_at/find_references/symbol_search/diagnostics/organize_imports).
    *  Null when the project has no tsconfig. */
   tsService?: TsService | null;
+  /** Cancellation for the in-flight turn — passed to the `run` tool (and search)
+   *  so a model-issued command is killed on Ctrl-C, not left running. */
+  signal?: AbortSignal;
 }
 
 /** A required string arg, or "" if missing/wrong-type. */

@@ -55,6 +55,40 @@ test("runCommand surfaces a non-zero exit", async () => {
   }
 });
 
+test("runCommand kills a hung command after its timeout", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-run-"));
+
+  try {
+    const start = Date.now();
+    const r = await runCommand(dir, "sleep 10", { timeoutMs: 150 });
+
+    // Killed well before the 10s sleep would finish, with a clear note.
+    expect(Date.now() - start).toBeLessThan(3000);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain("timeout");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runCommand is cancelled when its signal aborts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-run-"));
+
+  try {
+    const controller = new AbortController();
+    const start = Date.now();
+    const pending = runCommand(dir, "sleep 10", { signal: controller.signal });
+
+    controller.abort();
+    const r = await pending;
+
+    expect(Date.now() - start).toBeLessThan(3000);
+    expect(r.exitCode).not.toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("toRun / toRead parse args and reject malformed", () => {
   expect(toRun({ command: "ls" })).toEqual({ command: "ls" });
   expect(toRun({})).toBeNull();

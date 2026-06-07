@@ -23,6 +23,7 @@ import {
   READ_TOOL,
   LSP_TOOLS,
   TOOL_NAME,
+  fileArg,
 } from "../agent";
 import { TsService } from "../lsp";
 
@@ -61,6 +62,15 @@ export const NO_TOOL_CALL_NUDGE =
   "message does NOT change any file. Don't describe the next step — emit the " +
   "actual tool call now (create/edit to change a file, read/search to inspect one).";
 
+/** A build turn ended with the model writing whole files INTO its chat message
+ *  (fenced code blocks) instead of calling `create` — the narrate-instead-of-build
+ *  failure. A chat message is never written to disk, so this nudges it to act. */
+export const BUILD_NUDGE =
+  "STOP — you wrote file contents in your message, but that does NOT create any " +
+  "files on disk and cannot run. Write them for real now: call `create` once per " +
+  "file (relative path + full contents), ONE file per call, starting with the " +
+  "first. Do not paste code into your reply again — emit the create tool call.";
+
 /** The coordinator's per-task working context (immutable inputs). */
 export interface ILoopCtx {
   task: ITask;
@@ -69,6 +79,14 @@ export interface ILoopCtx {
   parse: ErrorParser | undefined;
   report: Reporter;
   messages: IChatMessage[];
+  /** When set, the gate's command output is streamed here live (the CLI wires
+   *  this so a slow gate like `vite build` + browser isn't silent dead air).
+   *  Omitted on the eval path, where output is just captured for scoring. */
+  onGateChunk?: (text: string) => void;
+  /** Cancellation for the in-flight turn — threaded into tool `run` commands and
+   *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
+   *  just the model call. Set per-send by the Session. */
+  signal?: AbortSignal;
 }
 
 /** Mutable state threaded across turns (the gradient the loop descends). */
@@ -113,11 +131,15 @@ export async function runToolCalls(
       continue;
     }
 
-    const file = call.arguments.file;
+    // Resolve the path the SAME way execution does (fileArg accepts the `path`/
+    // `filename`/… aliases the model reaches for). Reading `call.arguments.file`
+    // directly here would miss a `create({ path })` that DID write to disk — the
+    // session would then think nothing changed and skip the gate. See P1 review.
+    const file = fileArg(call.arguments);
 
     if (
       (call.name === TOOL_NAME.edit || call.name === TOOL_NAME.create) &&
-      typeof file === "string" &&
+      file !== null &&
       isInScope(file, ctx.task.files)
     ) {
       touchedEditable = true;
@@ -137,6 +159,7 @@ export async function runToolCalls(
       report: ctx.report,
       task: ctx.task.id,
       tsService: ctx.tsService,
+      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
     });
 
     ctx.messages.push({
@@ -247,10 +270,19 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
 
   // Re-format (the drop strips trailing semicolons) before re-gating.
   if (task.fix !== undefined && task.fix.length > 0) {
-    await runAccept({ ...task, accept: task.fix }, cwd);
+    await runAccept(
+      { ...task, accept: task.fix },
+      cwd,
+      ctx.signal === undefined ? {} : { signal: ctx.signal }
+    );
   }
 
-  const recheck = await validate(task, cwd, parse);
+  const recheck = await validate(
+    task,
+    cwd,
+    parse,
+    ctx.signal === undefined ? {} : { signal: ctx.signal }
+  );
 
   if (recheck.passed) {
     report({
@@ -283,10 +315,25 @@ export async function settleGate(
   await applyDeterministicFixes(ctx);
 
   if (task.fix !== undefined && task.fix.length > 0) {
-    await runAccept({ ...task, accept: task.fix }, cwd);
+    await runAccept(
+      { ...task, accept: task.fix },
+      cwd,
+      ctx.signal === undefined ? {} : { signal: ctx.signal }
+    );
   }
 
-  const gate = await validate(task, cwd, parse);
+  if (ctx.onGateChunk !== undefined) {
+    report({
+      kind: "tool",
+      task: task.id,
+      message: `⚙ running gate · turn ${turn}…`,
+    });
+  }
+
+  const gate = await validate(task, cwd, parse, {
+    ...(ctx.onGateChunk === undefined ? {} : { onChunk: ctx.onGateChunk }),
+    ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+  });
 
   if (state.lastGateCount >= 0 && gate.errors.length > state.lastGateCount) {
     state.regressions += 1;

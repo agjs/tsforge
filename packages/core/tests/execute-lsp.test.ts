@@ -116,6 +116,45 @@ test("rename_symbol is REJECTED when a reference is out of editable scope", asyn
   }
 });
 
+// P1: organize_imports' schema requires only `file`, so a `{file}`-only call must
+// REACH the operation — it must not be rejected with "need {file, symbol}".
+test("organize_imports runs with only `file` (no symbol required)", async () => {
+  const ctx = await setup(["types.ts", "use.ts"]);
+
+  try {
+    // An unused import → organize_imports should drop it.
+    await Bun.write(
+      join(ctx.cwd, "use.ts"),
+      'import type { IThing } from "./types";\nimport { f as unused } from "./types";\nexport const f = (t: IThing): number => t.value;\n'
+    );
+
+    const r = await executeTool(
+      { name: "organize_imports", arguments: { file: "use.ts" } },
+      ctx
+    );
+
+    expect(r).toContain("organize_imports:");
+    expect(r).not.toContain("need");
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
+test("organize_imports is REJECTED for an out-of-scope file", async () => {
+  const ctx = await setup(["types.ts"]); // use.ts read-only
+
+  try {
+    const r = await executeTool(
+      { name: "organize_imports", arguments: { file: "use.ts" } },
+      ctx
+    );
+
+    expect(r).toContain("REJECTED");
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
 test("semantic tools degrade gracefully without a TsService", async () => {
   const ctx = await setup(["types.ts"]);
   const noLsp: IToolContext = { ...ctx, tsService: null };

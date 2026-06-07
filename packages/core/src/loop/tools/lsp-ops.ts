@@ -20,7 +20,11 @@ export async function doSearch(
   const glob = str(args, "glob");
   const globArg = glob.length > 0 ? ` -g ${JSON.stringify(glob)}` : "";
   const cmd = `rg --line-number --no-heading --color never -e ${JSON.stringify(pattern)}${globArg} || true`;
-  const res = await runCommand(ctx.cwd, cmd);
+  const res = await runCommand(
+    ctx.cwd,
+    cmd,
+    ctx.signal === undefined ? {} : { signal: ctx.signal }
+  );
   const out = `${res.stdout}${res.stderr}`.slice(
     0,
     LOOP_LIMITS.maxToolOutputChars
@@ -95,6 +99,33 @@ export function doLsp(
           .join("\n");
   }
 
+  // organize_imports operates on a whole FILE (no symbol/position) — handle it
+  // here, before doSymbolLsp's `need {file, symbol}` guard would wrongly reject a
+  // valid `{file}`-only call (its schema requires only `file`). See P1 review.
+  if (name === TOOL_NAME.organizeImports) {
+    if (file.length === 0) {
+      return "organize_imports: need `file`";
+    }
+
+    if (!writable(file, ctx.files)) {
+      return reject(
+        ctx,
+        "organize_imports",
+        `organize_imports ${file} REJECTED: out of scope.`
+      );
+    }
+
+    const n = svc.organizeImports(file);
+
+    ctx.report({
+      kind: "tool",
+      task: ctx.task,
+      message: `organize_imports ${file} (${n})`,
+    });
+
+    return `organize_imports: ${n} change(s) in ${file}`;
+  }
+
   // The remaining tools address a symbol by name within a file.
   return doSymbolLsp(name, svc, file, args, ctx, rel);
 }
@@ -102,8 +133,7 @@ export function doLsp(
 type LspService = NonNullable<IToolContext["tsService"]>;
 
 /** The LSP tools that resolve a symbol position first (type_at, find_references,
- *  organize_imports, rename_symbol). Split out of doLsp to keep each function's
- *  branching small. */
+ *  rename_symbol). Split out of doLsp to keep each function's branching small. */
 function doSymbolLsp(
   name: ToolName,
   svc: LspService,
@@ -146,26 +176,6 @@ function doSymbolLsp(
     return refs.length === 0
       ? `no references to '${symbol}'`
       : refs.map((r) => `${rel(r.file)}:${r.line}`).join("\n");
-  }
-
-  if (name === TOOL_NAME.organizeImports) {
-    if (!writable(file, ctx.files)) {
-      return reject(
-        ctx,
-        "organize_imports",
-        `organize_imports ${file} REJECTED: out of scope.`
-      );
-    }
-
-    const n = svc.organizeImports(file);
-
-    ctx.report({
-      kind: "tool",
-      task: ctx.task,
-      message: `organize_imports ${file} (${n})`,
-    });
-
-    return `organize_imports: ${n} change(s) in ${file}`;
   }
 
   // rename_symbol — scope-enforced: a semantic rename can touch many files; it

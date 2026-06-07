@@ -43,6 +43,13 @@ export const LOOP_LIMITS = {
   /** Hard backstop on model turns per task. */
   maxTurns: 40,
   /**
+   * How many times a build turn may dump file contents as a chat message (instead
+   * of calling `create`) before the session gives up. Each time we nudge it to use
+   * tools; past this it's clearly not going to act, so stop with a clear message
+   * rather than loop forever narrating code.
+   */
+  maxBuildNudges: 2,
+  /**
    * Default reasoning-token cap for SCRATCH (create-from-spec) tasks, where the
    * model over-thinks unbounded (~92s turn-1, occasional 198s spirals) without
    * converging faster. Measured knee on money: 2048 ≈ 73s/4 turns vs 206s/5.7

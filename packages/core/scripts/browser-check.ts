@@ -23,7 +23,14 @@ async function checksFor(): Promise<Partial<IRenderOptions>> {
   }
 
   if (arg2.endsWith(".json")) {
-    return parseChecks(JSON.parse(await Bun.file(arg2).text()));
+    const file = Bun.file(arg2);
+
+    // Tolerate a missing checks file → render-only (the model may not write one).
+    if (!(await file.exists())) {
+      return {};
+    }
+
+    return parseChecks(JSON.parse(await file.text()));
   }
 
   return {

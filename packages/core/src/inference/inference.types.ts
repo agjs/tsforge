@@ -24,6 +24,10 @@ export interface IModelResponse {
   /** How many tool calls were SALVAGED from malformed content (server parser
    *  left them as text). >0 signals the model emitted unparseable tool syntax. */
   salvaged?: number;
+  /** Set when the stream was aborted because the model fell into a degenerate
+   *  repetition loop (same line/template until max_tokens). The loop driver
+   *  stops the turn instead of nudging into another loop. */
+  degenerated?: boolean;
 }
 
 export interface ICompleteOptions {
@@ -51,8 +55,10 @@ export interface ICompleteOptions {
   signal?: AbortSignal;
 }
 
-/** Which stream a token belongs to: the model's thinking, or its answer. */
-export type TokenChannel = "reasoning" | "content";
+/** Which stream a token belongs to: the model's thinking (`reasoning`), its answer
+ *  (`content`), or the tool calls it is emitting (`tool` — the file it's writing,
+ *  streamed so a long tool-call generation isn't silent dead air). */
+export type TokenChannel = "reasoning" | "content" | "tool";
 
 /** The model seam. Implementations talk to a local server (vLLM/Ollama/...). */
 export interface IProvider {
