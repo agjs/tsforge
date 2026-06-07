@@ -68,10 +68,13 @@ export async function streamResponse(
     arguments: parseArgs(c.args),
   }));
 
-  return {
-    content,
-    toolCalls: toolCalls.length > 0 ? toolCalls : salvageToolCalls(content),
-  };
+  if (toolCalls.length > 0) {
+    return { content, toolCalls };
+  }
+
+  const salvaged = salvageToolCalls(content);
+
+  return { content, toolCalls: salvaged, salvaged: salvaged.length };
 }
 
 function parseSseLine(line: string): IStreamDelta | null {

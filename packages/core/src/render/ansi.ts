@@ -1,7 +1,43 @@
 import type { IRenderOptions } from "./render.types";
 import { highlight } from "cli-highlight";
 import type { ILoopEvent } from "../loop";
+import type { IChatMessage } from "../inference";
 import { STYLE, paint } from "./style";
+
+/**
+ * Replay one stored conversation message — used to show the prior transcript on
+ * `--continue`. User turns are echoed at the prompt marker, assistant answers
+ * get markdown/code highlighting, tool calls collapse to a one-line summary, and
+ * the system prompt + raw tool output are omitted (context, not conversation).
+ */
+export function renderMessage(
+  message: IChatMessage,
+  opts: IRenderOptions = {}
+): string {
+  const color = opts.color ?? true;
+
+  if (message.role === "system" || message.role === "tool") {
+    return "";
+  }
+
+  if (message.role === "user") {
+    return `\n${paint("›", STYLE.cyan + STYLE.bold, color)} ${message.content}\n`;
+  }
+
+  const parts: string[] = [];
+
+  if (message.content.length > 0) {
+    parts.push(renderMarkdown(message.content, color));
+  }
+
+  if (message.toolCalls !== undefined && message.toolCalls.length > 0) {
+    const names = message.toolCalls.map((c) => c.name).join(", ");
+
+    parts.push(paint(`  · used ${names}`, STYLE.dim, color));
+  }
+
+  return parts.length > 0 ? `\n${parts.join("\n")}\n` : "";
+}
 
 function highlightTs(code: string, color: boolean): string {
   return highlightCode(code, "typescript", color);

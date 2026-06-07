@@ -1,3 +1,3 @@
 export * from "./render.types";
-export { renderEvent } from "./ansi";
+export { renderEvent, renderMessage } from "./ansi";
 export { welcomeBanner, type IBannerInfo } from "./banner";

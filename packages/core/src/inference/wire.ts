@@ -55,10 +55,13 @@ export function parseResponse(data: unknown): IModelResponse {
   const content = typeof message.content === "string" ? message.content : "";
   const toolCalls = collectToolCalls(message.tool_calls);
 
-  return {
-    content,
-    toolCalls: toolCalls.length > 0 ? toolCalls : salvageToolCalls(content),
-  };
+  if (toolCalls.length > 0) {
+    return { content, toolCalls };
+  }
+
+  const salvaged = salvageToolCalls(content);
+
+  return { content, toolCalls: salvaged, salvaged: salvaged.length };
 }
 
 // Tool names the harness offers — the salvage parser only recognizes these, so

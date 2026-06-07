@@ -79,6 +79,31 @@ test("send returns 'interrupted' when its signal is aborted mid-turn", async () 
   }
 });
 
+test("compact replaces the conversation with [system, summary]", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const provider: IProvider = {
+      async complete() {
+        return { content: "SUMMARY", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({ provider, cwd: dir });
+
+    await session.send("do a thing");
+    const before = session.messages.length; // system + user + assistant
+
+    const result = await session.compact();
+
+    expect(result.before).toBe(before);
+    expect(session.messages.length).toBe(2); // system + summary
+    expect(session.messages[0]?.role).toBe("system");
+    expect(session.messages[1]?.content).toContain("SUMMARY");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("each send appends to the same persistent conversation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 

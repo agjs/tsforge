@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { applyEdits } from "../../files/edit";
 import { applyCreate } from "../../files/create";
 import { EDIT_FAIL_REASON } from "../../files";
-import { writable } from "../../lib/scope";
+import { writable, normalizeWorkspacePath } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
@@ -17,6 +17,8 @@ export async function readFile(
   if (r === null) {
     return "read: malformed args (need `file`)";
   }
+
+  r.file = normalizeWorkspacePath(ctx.cwd, r.file);
 
   ctx.report({ kind: "tool", task: ctx.task, message: `read ${r.file}` });
 
@@ -74,6 +76,8 @@ export async function doEdit(
   if (edit === null) {
     return "edit: malformed args (need `file` plus either `oldString`/`newString` or an `edits` array of {oldString,newString})";
   }
+
+  edit.file = normalizeWorkspacePath(ctx.cwd, edit.file);
 
   if (!writable(edit.file, ctx.files)) {
     return reject(
@@ -138,6 +142,8 @@ export async function doCreate(
   if (create === null) {
     return "create: malformed args (need file, content)";
   }
+
+  create.file = normalizeWorkspacePath(ctx.cwd, create.file);
 
   if (!writable(create.file, ctx.files)) {
     return reject(

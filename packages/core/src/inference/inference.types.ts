@@ -21,6 +21,9 @@ export interface IToolCall {
 export interface IModelResponse {
   content: string;
   toolCalls: IToolCall[];
+  /** How many tool calls were SALVAGED from malformed content (server parser
+   *  left them as text). >0 signals the model emitted unparseable tool syntax. */
+  salvaged?: number;
 }
 
 export interface ICompleteOptions {

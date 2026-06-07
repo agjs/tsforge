@@ -1,9 +1,9 @@
-import type { IChatMessage, IProvider } from "../inference";
+import type { IChatMessage, IModelResponse, IProvider } from "../inference";
 import type { ITask } from "../spec";
 import type { ErrorParser } from "../validate";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
 import type { Reporter } from "./loop.types";
-import { CHAT_SYSTEM } from "./prompt";
+import { CHAT_SYSTEM, COMPACT_SYSTEM } from "./prompt";
 import {
   buildTsService,
   emitTiming,
@@ -85,7 +85,7 @@ export class Session {
   private readonly cfg: ISessionConfig;
   private readonly report: Reporter;
   private readonly tools: ReturnType<typeof toolsFor>;
-  private readonly hasGate: boolean;
+  private hasGate: boolean;
   private readonly ctx: ILoopCtx;
   private readonly state: ILoopState;
 
@@ -135,6 +135,65 @@ export class Session {
     return new Session(cfg, ctx);
   }
 
+  /** The current gate command (empty when none). */
+  get gate(): string {
+    return this.ctx.task.accept;
+  }
+
+  /** The editable scope globs. */
+  get scope(): string[] {
+    return this.ctx.task.files;
+  }
+
+  /** Set (or clear, with "") the gate command mid-session. */
+  setGate(command: string): void {
+    this.ctx.task.accept = command;
+    this.hasGate = command.length > 0;
+  }
+
+  /** Replace the editable scope globs mid-session. */
+  setScope(globs: string[]): void {
+    this.ctx.task.files = globs;
+  }
+
+  /**
+   * Compress the conversation: ask the model to summarize everything so far, then
+   * replace the history with [system, summary]. Frees context for long sessions
+   * while preserving goals/decisions/changes. Returns the message count before/after.
+   */
+  async compact(
+    signal?: AbortSignal
+  ): Promise<{ before: number; after: number }> {
+    const { ctx } = this;
+    const before = ctx.messages.length;
+    const conversation = ctx.messages.filter((m) => m.role !== "system");
+
+    if (conversation.length === 0) {
+      return { before, after: before };
+    }
+
+    const transcript = conversation
+      .map((m) => `[${m.role}] ${m.content}`)
+      .join("\n\n");
+    const res = await this.provider.complete(
+      [
+        { role: "system", content: COMPACT_SYSTEM },
+        { role: "user", content: transcript },
+      ],
+      { temperature: 0, ...(signal === undefined ? {} : { signal }) }
+    );
+
+    const system = ctx.messages[0];
+    const summary: IChatMessage = {
+      role: "user",
+      content: `[Summary of the earlier conversation]\n${res.content}`,
+    };
+
+    ctx.messages = system?.role === "system" ? [system, summary] : [summary];
+
+    return { before, after: ctx.messages.length };
+  }
+
   /** The live conversation (system + every exchange). Read-only view. */
   get messages(): readonly IChatMessage[] {
     return this.ctx.messages;
@@ -170,6 +229,49 @@ export class Session {
   }
 
   /** The turn loop — separated so `send` can wrap it in abort handling. */
+  /** One model call: stream thinking live, push the reply, and surface salvage +
+   *  the highlighted answer. Keeps `drive`'s per-turn control flow lean. */
+  private async askModel(signal?: AbortSignal): Promise<IModelResponse> {
+    const { ctx, report } = this;
+    const res = await this.provider.complete(ctx.messages, {
+      tools: this.tools,
+      temperature: this.cfg.temperature ?? 0,
+      toolChoice: "auto",
+      ...(this.cfg.enableThinking === undefined
+        ? {}
+        : { enableThinking: this.cfg.enableThinking }),
+      ...(this.cfg.thinkingTokenBudget === undefined
+        ? {}
+        : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
+      ...(signal === undefined ? {} : { signal }),
+      onToken: (token, channel) => {
+        if (channel === "reasoning") {
+          report({ kind: "token", task: SESSION_ID, message: token });
+        }
+      },
+    });
+
+    ctx.messages.push({
+      role: "assistant",
+      content: res.content,
+      toolCalls: res.toolCalls,
+    });
+
+    if (res.salvaged !== undefined && res.salvaged > 0) {
+      report({
+        kind: "tool",
+        task: SESSION_ID,
+        message: `⚠ recovered ${res.salvaged} malformed tool call(s) (server tool-call parser mismatch)`,
+      });
+    }
+
+    if (res.content.length > 0) {
+      report({ kind: "message", task: SESSION_ID, message: res.content });
+    }
+
+    return res;
+  }
+
   private async drive(
     maxTurns: number,
     sendStart: number,
@@ -187,36 +289,7 @@ export class Session {
         message: `turn ${turn}: asking model`,
       });
 
-      const res = await this.provider.complete(ctx.messages, {
-        tools: this.tools,
-        temperature: this.cfg.temperature ?? 0,
-        toolChoice: "auto",
-        ...(this.cfg.enableThinking === undefined
-          ? {}
-          : { enableThinking: this.cfg.enableThinking }),
-        ...(this.cfg.thinkingTokenBudget === undefined
-          ? {}
-          : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
-        ...(signal === undefined ? {} : { signal }),
-        onToken: (token, channel) => {
-          // Stream the THINKING live (dim); the answer (content) is rendered
-          // once below, syntax-highlighted, instead of as raw dim tokens.
-          if (channel === "reasoning") {
-            report({ kind: "token", task: SESSION_ID, message: token });
-          }
-        },
-      });
-
-      ctx.messages.push({
-        role: "assistant",
-        content: res.content,
-        toolCalls: res.toolCalls,
-      });
-
-      // Render the model's spoken answer (prose + highlighted code blocks).
-      if (res.content.length > 0) {
-        report({ kind: "message", task: SESSION_ID, message: res.content });
-      }
+      const res = await this.askModel(signal);
 
       // Still working — run the calls and keep going (we gate only when it stops).
       if (res.toolCalls.length > 0) {

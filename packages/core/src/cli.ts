@@ -8,10 +8,17 @@ import {
   PROVIDER_DEFAULTS,
   type IProvider,
 } from "./inference";
-import { renderEvent, welcomeBanner } from "./render";
+import { renderEvent, renderMessage, welcomeBanner } from "./render";
 import type { ITask } from "./spec";
 import type { Reporter } from "./loop";
-import { saveSession, latestSession } from "./session-store";
+import {
+  saveSession,
+  latestSession,
+  listSessions,
+  pruneSessions,
+  persistenceEnabled,
+  type ISessionRecord,
+} from "./session-store";
 
 /**
  * The tsforge CLI — the product surface over the same engine the eval harness
@@ -137,6 +144,14 @@ function hostOf(baseUrl: string): string {
   }
 }
 
+/** The active model id + endpoint host (env overrides, else defaults). */
+function modelInfo(): { model: string; endpoint: string } {
+  return {
+    model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
+    endpoint: hostOf(process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl),
+  };
+}
+
 function makeProvider(): IProvider {
   return new OpenAICompatibleProvider({
     baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
@@ -146,6 +161,26 @@ function makeProvider(): IProvider {
       process.env.TSFORGE_MAX_TOKENS ?? String(PROVIDER_LIMITS.maxTokens)
     ),
   });
+}
+
+/** List saved sessions for a directory (the `/sessions` command). */
+async function printSessions(dir: string): Promise<void> {
+  const sessions = await listSessions(dir);
+
+  if (sessions.length === 0) {
+    process.stdout.write("no saved sessions for this directory\n");
+
+    return;
+  }
+
+  for (const s of sessions) {
+    const firstUser = s.messages.find((m) => m.role === "user")?.content ?? "";
+    const snippet = firstUser.slice(0, 48).replace(/\s+/g, " ");
+
+    process.stdout.write(
+      `  ${s.id}  ${String(s.messages.length).padStart(3)} msgs  ${snippet}\n`
+    );
+  }
 }
 
 const render: Reporter = (event) => {
@@ -176,17 +211,72 @@ async function runOnce(args: ICliArgs): Promise<number> {
 
 const HELP = [
   "Commands:",
-  "  /help          show this help",
-  "  /clear         reset the conversation (keeps the workspace + gate)",
-  "  /exit, /quit   leave the session",
+  "  /help            show this help",
+  "  /compact         summarize the conversation to free up context",
+  "  /clear           reset the conversation (keeps the workspace + gate)",
+  "  /gate <cmd>      set the gate command (empty to clear)",
+  "  /files <globs>   set the editable scope (comma-separated; empty = all)",
+  "  /model           show the active model + endpoint",
+  "  /sessions        list saved sessions for this directory",
+  "  /exit, /quit     leave the session",
   "",
   "Anything else is sent to the agent. It works with its tools; when it stops,",
-  'the gate (if set with --accept) confirms "done".',
+  'the gate (if set) confirms "done".',
 ].join("\n");
+
+/** The session status line — distinguishes off / new / resumed. */
+function sessionLine(id: string, resumed: ISessionRecord | null): string {
+  if (!persistenceEnabled()) {
+    return "  session: not saved (TSFORGE_NO_PERSIST)";
+  }
+
+  return resumed === null
+    ? `  session: new (${id})`
+    : `  session: resumed ${resumed.messages.length} message(s)`;
+}
+
+/** Print the welcome banner, session info, and (when resuming) the prior transcript. */
+function printHeader(info: {
+  dir: string;
+  id: string;
+  accept: string;
+  files: string[];
+  resumed: ISessionRecord | null;
+}): void {
+  const { dir, id, accept, files, resumed } = info;
+
+  process.stdout.write(welcomeBanner(modelInfo()));
+  process.stdout.write(
+    [
+      `  cwd:   ${dir}`,
+      `  scope: ${scopeLabel(files)}`,
+      `  gate:  ${accept.length > 0 ? accept : "none (stops when done; --accept to enforce a check)"}`,
+      sessionLine(id, resumed),
+      "  /help for commands, /exit to quit",
+      "",
+    ].join("\n")
+  );
+
+  if (resumed === null) {
+    return;
+  }
+
+  // Replay the prior conversation so a resumed session has visible context.
+  process.stdout.write("\n── resuming conversation ──\n");
+
+  for (const message of resumed.messages) {
+    process.stdout.write(renderMessage(message, { color: true }));
+  }
+
+  process.stdout.write("\n──────────────────────────\n");
+}
 
 /** Interactive REPL: a persistent gate-anchored conversation. */
 async function repl(args: ICliArgs): Promise<number> {
   const provider = makeProvider();
+
+  // Best-effort cleanup of stale sessions on every launch.
+  await pruneSessions();
 
   // --continue resumes the most recent saved session for this directory.
   const resumed = args.continue ? await latestSession(args.dir) : null;
@@ -222,26 +312,7 @@ async function repl(args: ICliArgs): Promise<number> {
     });
   };
 
-  process.stdout.write(
-    welcomeBanner({
-      model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
-      endpoint: hostOf(
-        process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl
-      ),
-    })
-  );
-  process.stdout.write(
-    [
-      `  cwd:   ${args.dir}`,
-      `  scope: ${scopeLabel(files)}`,
-      `  gate:  ${accept.length > 0 ? accept : "none (stops when done; --accept to enforce a check)"}`,
-      resumed === null
-        ? `  session: new (${id})`
-        : `  session: resumed ${resumed.messages.length} message(s)`,
-      "  /help for commands, /exit to quit",
-      "",
-    ].join("\n")
-  );
+  printHeader({ dir: args.dir, id, accept, files, resumed });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
@@ -272,6 +343,68 @@ async function repl(args: ICliArgs): Promise<number> {
     await persist();
   };
 
+  // Slash-command dispatch. Returns true to EXIT the REPL. Kept as a closure so
+  // it can rebuild `session` (e.g. /clear) and reach config/persist.
+  const command = async (line: string): Promise<boolean> => {
+    const [verb, ...rest] = line.slice(1).split(" ");
+    const arg = rest.join(" ").trim();
+
+    switch ((verb ?? "").toLowerCase()) {
+      case "exit":
+      case "quit":
+        return true;
+      case "help":
+        process.stdout.write(`${HELP}\n`);
+        break;
+      case "clear":
+        session = await Session.create(config);
+        await persist();
+        process.stdout.write("conversation cleared\n");
+        break;
+
+      case "compact": {
+        const { before, after } = await session.compact();
+
+        await persist();
+        process.stdout.write(`compacted ${before} → ${after} messages\n`);
+        break;
+      }
+
+      case "gate":
+        session.setGate(arg);
+        process.stdout.write(
+          arg.length > 0 ? `gate: ${arg}\n` : "gate cleared\n"
+        );
+        break;
+
+      case "files": {
+        const globs = arg
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        session.setScope(globs.length > 0 ? globs : WHOLE_REPO);
+        process.stdout.write(`scope: ${scopeLabel(session.scope)}\n`);
+        break;
+      }
+
+      case "model": {
+        const { model, endpoint } = modelInfo();
+
+        process.stdout.write(`  model: ${model}\n  endpoint: ${endpoint}\n`);
+        break;
+      }
+
+      case "sessions":
+        await printSessions(args.dir);
+        break;
+      default:
+        process.stdout.write(`unknown command: ${line} (try /help)\n`);
+    }
+
+    return false;
+  };
+
   // A positional task given on the command line is sent as the first message.
   if (args.task.length > 0) {
     await dispatch(args.task);
@@ -291,17 +424,8 @@ async function repl(args: ICliArgs): Promise<number> {
     }
 
     if (line.startsWith("/")) {
-      const cmd = line.slice(1).toLowerCase();
-
-      if (cmd === "exit" || cmd === "quit") {
+      if (await command(line)) {
         break;
-      } else if (cmd === "help") {
-        process.stdout.write(`${HELP}\n`);
-      } else if (cmd === "clear") {
-        session = await Session.create(config);
-        process.stdout.write("conversation cleared\n");
-      } else {
-        process.stdout.write(`unknown command: ${line} (try /help)\n`);
       }
 
       process.stdout.write("\n› ");

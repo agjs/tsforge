@@ -1,8 +1,17 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readdir, mkdir } from "node:fs/promises";
+import { readdir, mkdir, chmod, stat, unlink } from "node:fs/promises";
 import type { IChatMessage, IToolCall } from "./inference";
 import { isRecord } from "./lib/guards";
+
+/** Days to keep a session before `pruneSessions` deletes it (env-overridable). */
+const DEFAULT_TTL_DAYS = 30;
+const MS_PER_DAY = 86_400_000;
+
+/** Persistence is off when TSFORGE_NO_PERSIST is set — sessions stay in memory only. */
+export function persistenceEnabled(): boolean {
+  return (process.env.TSFORGE_NO_PERSIST ?? "") === "";
+}
 
 /**
  * On-disk persistence for interactive CLI sessions, so `tsforge --continue` can
@@ -31,31 +40,76 @@ function storeDir(): string {
   return join(process.env.TSFORGE_HOME ?? homedir(), ".tsforge", "sessions");
 }
 
-/** Persist (create or overwrite) a session record. */
+/**
+ * Persist (create or overwrite) a session record — unless persistence is off.
+ * Secrets in message text are redacted FIRST (so they never hit disk), the dir
+ * is created 0700 and the file written 0600 (owner-only). We deliberately do NOT
+ * encrypt: a key stored beside the data only deters backup/sync exfil, not local
+ * compromise — data minimization (redaction) + perms is the higher-value floor.
+ */
 export async function saveSession(record: ISessionRecord): Promise<void> {
-  const dir = storeDir();
+  if (!persistenceEnabled()) {
+    return;
+  }
 
-  await mkdir(dir, { recursive: true });
-  await Bun.write(
-    join(dir, `${record.id}.json`),
-    JSON.stringify(record, null, 2)
-  );
+  const dir = storeDir();
+  const path = join(dir, `${record.id}.json`);
+  const safe: ISessionRecord = {
+    ...record,
+    messages: redactMessages(record.messages),
+  };
+
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await Bun.write(path, JSON.stringify(safe, null, 2));
+  await chmod(path, 0o600);
 }
 
-/** The most recently-updated session for `cwd`, or null if there is none. */
-export async function latestSession(
-  cwd: string
-): Promise<ISessionRecord | null> {
+/** Delete sessions older than `ttlDays` (by file mtime). Best-effort; never throws. */
+export async function pruneSessions(ttlDays?: number): Promise<void> {
+  const envTtl = Number(process.env.TSFORGE_SESSION_TTL_DAYS);
+  const ttl = ttlDays ?? (Number.isFinite(envTtl) ? envTtl : DEFAULT_TTL_DAYS);
   const dir = storeDir();
   let names: string[];
 
   try {
     names = await readdir(dir);
   } catch {
-    return null; // no store yet
+    return;
   }
 
-  let best: ISessionRecord | null = null;
+  const cutoff = Date.now() - ttl * MS_PER_DAY;
+
+  for (const name of names) {
+    if (!name.endsWith(".json")) {
+      continue;
+    }
+
+    const path = join(dir, name);
+
+    try {
+      const info = await stat(path);
+
+      if (info.mtimeMs < cutoff) {
+        await unlink(path);
+      }
+    } catch {
+      // racing deletion / unreadable — skip
+    }
+  }
+}
+
+/** All saved sessions for `cwd`, newest first. */
+export async function listSessions(cwd: string): Promise<ISessionRecord[]> {
+  const dir = storeDir();
+  let names: string[];
+
+  try {
+    names = await readdir(dir);
+  } catch {
+    return []; // no store yet
+  }
+
+  const records: ISessionRecord[] = [];
 
   for (const name of names) {
     if (!name.endsWith(".json")) {
@@ -64,16 +118,19 @@ export async function latestSession(
 
     const record = await readRecord(join(dir, name));
 
-    if (record?.cwd !== cwd) {
-      continue;
-    }
-
-    if (best === null || record.updatedAt > best.updatedAt) {
-      best = record;
+    if (record !== null && record.cwd === cwd) {
+      records.push(record);
     }
   }
 
-  return best;
+  return records.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** The most recently-updated session for `cwd`, or null if there is none. */
+export async function latestSession(
+  cwd: string
+): Promise<ISessionRecord | null> {
+  return (await listSessions(cwd))[0] ?? null;
 }
 
 async function readRecord(path: string): Promise<ISessionRecord | null> {
@@ -160,6 +217,68 @@ function toRole(value: unknown): IChatMessage["role"] | null {
     default:
       return null;
   }
+}
+
+// Standalone secret SHAPES — the whole match is the secret, replaced wholesale.
+const SECRET_SHAPES: readonly RegExp[] = [
+  /\bsk-[A-Za-z0-9_-]{16,}\b/g, // OpenAI-style keys
+  /\bgh[posru]_[A-Za-z0-9]{20,}\b/g, // GitHub tokens
+  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack tokens
+  /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, // JWTs
+  /Bearer\s+[A-Za-z0-9._-]{12,}/gi, // Authorization: Bearer …
+];
+
+// `key = value` / `key: value` — keep the key name, redact the value.
+const SECRET_ASSIGNMENT =
+  /\b(password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key)\b(\s*[:=]\s*)\S{4,}/gi;
+
+const REDACTED = "[redacted]";
+
+/** Scrub obvious secrets from text before it is persisted (data minimization). */
+export function redactText(text: string): string {
+  let out = text.replace(SECRET_ASSIGNMENT, (_m, key: string, sep: string) => {
+    return `${key}${sep}${REDACTED}`;
+  });
+
+  for (const shape of SECRET_SHAPES) {
+    out = out.replace(shape, REDACTED);
+  }
+
+  return out;
+}
+
+/**
+ * Redact every message before persisting: its text (user prompts, assistant
+ * answers, AND tool output — a `cat .env` dump is a real leak vector) AND the
+ * string values inside tool-call arguments (a token pasted into a `run` command
+ * or `create` content). Structure is preserved; only string values are scrubbed.
+ */
+function redactMessages(messages: readonly IChatMessage[]): IChatMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    content: redactText(message.content),
+    ...(message.toolCalls === undefined
+      ? {}
+      : { toolCalls: redactToolCalls(message.toolCalls) }),
+  }));
+}
+
+function redactToolCalls(calls: readonly IToolCall[]): IToolCall[] {
+  return calls.map((call) => ({
+    ...call,
+    arguments: redactArgs(call.arguments),
+  }));
+}
+
+function redactArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(args)) {
+    out[key] = typeof value === "string" ? redactText(value) : value;
+  }
+
+  return out;
 }
 
 function toToolCalls(raw: unknown): IToolCall[] {
