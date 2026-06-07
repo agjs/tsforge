@@ -30,7 +30,7 @@ test("greenfield TS project: brings a strict tsconfig + gates on tsc AND eslint"
   }
 });
 
-test("respects the project's own lint script (but still runs tsc)", async () => {
+test("always uses tsforge strict eslint, ignoring the project's lint script", async () => {
   const dir = await tempDir();
 
   try {
@@ -40,26 +40,35 @@ test("respects the project's own lint script (but still runs tsc)", async () => 
     );
     const gate = await buildGate(dir);
 
-    expect(gate.command).toContain("run lint");
-    expect(gate.label).toContain("project lint");
-    expect(gate.command).toContain("--noEmit");
+    // Policy: never defer to the project's lint script (that's how a weak repo
+    // would dodge the strict-TS floor). Always the bundled strict config.
+    expect(gate.command).not.toContain("run lint");
+    expect(gate.command).toContain("strict.eslint.config.mjs");
+    expect(gate.label).toContain("strict TypeScript");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("respects an existing tsconfig instead of overwriting it", async () => {
+test("existing tsconfig: not overwritten, but gated via a strict override that extends it", async () => {
   const dir = await tempDir();
 
   try {
     await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
     await writeFile(join(dir, "tsconfig.json"), '{ "mine": true }\n');
-    await buildGate(dir);
+    const gate = await buildGate(dir);
 
-    // untouched — we never clobber a project's own config
+    // The project's own tsconfig is never clobbered…
     expect(await readFile(join(dir, "tsconfig.json"), "utf8")).toContain(
       '"mine": true'
     );
+
+    // …but the gate runs a strict override that extends it and forces the floor.
+    expect(gate.command).toContain("-p tsforge.tsconfig.json");
+    const override = await readFile(join(dir, "tsforge.tsconfig.json"), "utf8");
+
+    expect(override).toContain('"extends": "./tsconfig.json"');
+    expect(override).toContain("noUncheckedIndexedAccess");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

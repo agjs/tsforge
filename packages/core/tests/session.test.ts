@@ -216,6 +216,216 @@ test("gated build: create({ path }) alias counts as an edit and reaches the gate
   }
 });
 
+test("buildStaged runs design (gate off) then implementation (gate restored)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const seen: string[] = [];
+    const provider: IProvider = {
+      async complete(messages) {
+        const lastUser =
+          [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+
+        // Phase 1 (design): create src/types.ts once, then yield to end the step.
+        if (lastUser.includes("STEP 1 of 2")) {
+          if (!seen.includes("design")) {
+            seen.push("design");
+
+            return {
+              content: "",
+              toolCalls: [
+                {
+                  id: "1",
+                  name: "create",
+                  arguments: {
+                    file: "src/types.ts",
+                    content: "export interface IThing { id: string; }\n",
+                  },
+                },
+              ],
+            };
+          }
+
+          return { content: "types ready", toolCalls: [] };
+        }
+
+        // Phase 2 (implement): create a component once, then yield → gate runs.
+        if (!seen.includes("implement")) {
+          seen.push("implement");
+
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "2",
+                name: "create",
+                arguments: {
+                  file: "src/App.tsx",
+                  content: "export const App = (): null => null;\n",
+                },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true", // gate passes when it runs
+      files: ["**/*"],
+    });
+
+    const result = await session.buildStaged("build a kanban board");
+
+    expect(seen).toEqual(["design", "implement"]); // design BEFORE implement
+    expect(result.status).toBe("done"); // phase 2 gate confirmed
+    expect(session.gate).toBe("true"); // gate restored after staging
+    expect(await Bun.file(join(dir, "src", "types.ts")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// After the model narrates code instead of acting, the next turn must FORCE a
+// tool call (tool_choice "required") — vLLM's required path follows the schema
+// strictly, so it can't narrate / emit malformed tool syntax again.
+test("forces tool_choice 'required' on the turn after a narration nudge", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const choices: (string | undefined)[] = [];
+    const thinking: (boolean | undefined)[] = [];
+    let calls = 0;
+    const provider: IProvider = {
+      async complete(_messages, opts) {
+        calls += 1;
+        choices.push(opts?.toolChoice);
+        thinking.push(opts?.enableThinking);
+
+        // Turn 1: narrate code (no tool call) → triggers the build nudge.
+        if (calls === 1) {
+          return { content: CODE_DUMP, toolCalls: [] };
+        }
+
+        // Turn 2 (forced): create the file, then later yield → gate → done.
+        if (calls === 2) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "1",
+                name: "create",
+                arguments: { file: "x.ts", content: "export const x = 1;\n" },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+
+    await session.send("build it");
+
+    // Turn 1 was "auto"; the recovery turn after the nudge was "required".
+    expect(choices[0]).toBe("auto");
+    expect(choices[1]).toBe("required");
+    // …and thinking is disabled on that forced turn (clean tool call).
+    expect(thinking[1]).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("auto-compacts before a send once context exceeds the window threshold", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let compactions = 0;
+    const provider: IProvider = {
+      async complete(messages) {
+        const system = messages[0]?.content ?? "";
+
+        // The compaction call is distinguished by its system prompt.
+        if (system.includes("compacting a coding session")) {
+          compactions += 1;
+
+          return { content: "summary", toolCalls: [] };
+        }
+
+        // A normal turn — report usage at 90% of the window so the NEXT send trips
+        // the 80% auto-compact threshold.
+        return {
+          content: "ok",
+          toolCalls: [],
+          usage: { promptTokens: 90, completionTokens: 5, totalTokens: 95 },
+        };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      contextWindow: 100,
+      autoCompactAt: 0.8,
+    });
+
+    await session.send("first"); // records usage 90/100; nothing to compact yet
+    expect(compactions).toBe(0);
+
+    await session.send("second"); // 90% ≥ 80% → compacts before the turn
+    expect(compactions).toBe(1);
+    // history collapsed to [system, summary, "second", assistant-reply]
+    expect(session.messages.length).toBeLessThanOrEqual(4);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("does NOT auto-compact when no context window is configured", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let compactions = 0;
+    const provider: IProvider = {
+      async complete(messages) {
+        if ((messages[0]?.content ?? "").includes("compacting a coding")) {
+          compactions += 1;
+
+          return { content: "summary", toolCalls: [] };
+        }
+
+        return {
+          content: "ok",
+          toolCalls: [],
+          usage: {
+            promptTokens: 9999,
+            completionTokens: 5,
+            totalTokens: 10004,
+          },
+        };
+      },
+    };
+    // No contextWindow → auto-compaction disabled regardless of usage.
+    const session = await Session.create({ provider, cwd: dir });
+
+    await session.send("first");
+    await session.send("second");
+
+    expect(compactions).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("send returns 'interrupted' when its signal is aborted mid-turn", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 

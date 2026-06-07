@@ -21,7 +21,8 @@ export interface ILoopEvent {
     | "stuck"
     | "run"
     | "tool"
-    | "timing";
+    | "timing"
+    | "usage";
   task: string;
   message: string;
   cycle?: number;
@@ -40,6 +41,18 @@ export interface ILoopEvent {
   command?: string;
   exitCode?: number;
   output?: string;
+  /** For `token` events: which stream it came from. The renderer collapses
+   *  `reasoning` to a compact "thinking…" indicator (the full text still goes to
+   *  the log); `tool` markers and gate output (no channel) print normally. */
+  channel?: "reasoning" | "content" | "tool";
+  /** For `usage` events: real per-call token accounting (for the --log metrics). */
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  /** For the `start` event: run metadata, so a log is self-describing for the
+   *  analyzer (which model / how big a context window the metrics are against). */
+  model?: string;
+  contextWindow?: number;
 }
 
 export type Reporter = (event: ILoopEvent) => void;

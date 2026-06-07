@@ -2,6 +2,7 @@ import type {
   IChatMessage,
   IModelResponse,
   IToolCall,
+  ITokenUsage,
 } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import { TOOL_NAME } from "../agent";
@@ -54,14 +55,39 @@ export function parseResponse(data: unknown): IModelResponse {
 
   const content = typeof message.content === "string" ? message.content : "";
   const toolCalls = collectToolCalls(message.tool_calls);
+  const usage = parseUsage(data.usage);
+  const withUsage = usage === undefined ? {} : { usage };
 
   if (toolCalls.length > 0) {
-    return { content, toolCalls };
+    return { content, toolCalls, ...withUsage };
   }
 
   const salvaged = salvageToolCalls(content);
 
-  return { content, toolCalls: salvaged, salvaged: salvaged.length };
+  return {
+    content,
+    toolCalls: salvaged,
+    salvaged: salvaged.length,
+    ...withUsage,
+  };
+}
+
+/** Narrow a server `usage` block to ITokenUsage (no type assertions). */
+export function parseUsage(raw: unknown): ITokenUsage | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+
+  const promptTokens =
+    typeof raw.prompt_tokens === "number" ? raw.prompt_tokens : 0;
+  const completionTokens =
+    typeof raw.completion_tokens === "number" ? raw.completion_tokens : 0;
+  const totalTokens =
+    typeof raw.total_tokens === "number"
+      ? raw.total_tokens
+      : promptTokens + completionTokens;
+
+  return { promptTokens, completionTokens, totalTokens };
 }
 
 // Tool names the harness offers — the salvage parser only recognizes these, so
@@ -207,7 +233,7 @@ function collectToolCalls(rawCalls: unknown): IToolCall[] {
     const fn = tc.function;
     const id = typeof tc.id === "string" ? tc.id : undefined;
     const name = typeof fn.name === "string" ? fn.name : "";
-    const args = typeof fn.arguments === "string" ? fn.arguments : undefined;
+    const args = fn.arguments;
 
     toolCalls.push({ id, name, arguments: parseArgs(args) });
   }
@@ -215,8 +241,16 @@ function collectToolCalls(rawCalls: unknown): IToolCall[] {
   return toolCalls;
 }
 
-export function parseArgs(raw?: string): Record<string, unknown> {
+export function parseArgs(raw?: unknown): Record<string, unknown> {
   if (raw === undefined) {
+    return {};
+  }
+
+  if (isRecord(raw)) {
+    return raw;
+  }
+
+  if (typeof raw !== "string") {
     return {};
   }
 

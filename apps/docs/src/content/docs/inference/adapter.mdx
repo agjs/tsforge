@@ -24,6 +24,6 @@ interface Provider {
 - **Agnostic:** swap `baseUrl`/`model` to point at any local server; no code change.
 - **Injectable `fetch`:** the whole adapter is unit-tested deterministically against canned responses — no GPU, no flakiness.
 
-## Deliberately absent (next)
+## Now built
 
-The `ModelAgent` that *uses* this provider — turning a task + error set into a prompt, reading the model's tool calls, and applying edits — needs the **edit engine** (str_replace + uniqueness). That's the slice that finally replaces the stub agent with a real one. Also pending: streaming, `tools` schema in the request, retries/timeouts.
+Streaming (SSE → `onToken`, with a `StreamGuard` that aborts repetition loops), the `tools` schema in the request (with salvage for malformed tool-call syntax), connection retries, and per-request timeout/cancellation are all implemented. The provider also accepts object-valued `tool_call.function.arguments` (some local servers emit an object, not a JSON string) and surfaces the response body in HTTP errors. The tool-using loop that drives this provider lives in `loop/turn.ts` (shared by `runTask` and the interactive `Session`).

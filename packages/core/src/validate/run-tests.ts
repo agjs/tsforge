@@ -6,7 +6,7 @@
  * load-bearing fact: an empty/vacuous file EXITS 0, so the exit code lies; only
  * the collected count (`total >= 1`) proves the suite actually asserts anything.
  */
-import { readProcessOutput } from "../lib/fs";
+import { runArgvCommand } from "../lib/fs";
 
 import type { IRunTestsResult } from "./validate.types";
 
@@ -14,16 +14,12 @@ export async function runTests(
   testFile: string,
   cwd: string
 ): Promise<IRunTestsResult> {
-  const proc = Bun.spawn(["bun", "test", testFile], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  await proc.exited;
-
-  const { stdout, stderr } = await readProcessOutput(proc.stdout, proc.stderr);
-  const output = stdout + stderr;
+  // Route through the shared runner, which drains stdout/stderr CONCURRENTLY
+  // with the process. Awaiting `proc.exited` before reading (the old code) can
+  // deadlock when a chatty test fills the pipe buffer — the child blocks on a
+  // full pipe while we wait for an exit that never arrives.
+  const run = await runArgvCommand(cwd, ["bun", "test", testFile]);
+  const output = run.stdout + run.stderr;
 
   return { ...countTests(output), output };
 }

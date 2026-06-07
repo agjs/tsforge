@@ -42,6 +42,35 @@ test("applies the model's edit tool calls via the edit engine", async () => {
   }
 });
 
+test("normalizes absolute in-workspace paths before scope checks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-model-"));
+
+  try {
+    const abs = join(dir, "a.ts");
+
+    await Bun.write(abs, "const x = 1;\n");
+    const agent = modelAgent(
+      providerReturning([
+        {
+          name: "edit",
+          arguments: { file: abs, oldString: "1", newString: "2" },
+        },
+      ])
+    );
+
+    await agent.implement({
+      cwd: dir,
+      task: { id: "1", accept: "true", files: ["a.ts"] },
+      errors: [],
+      cycle: 1,
+    });
+
+    expect(await Bun.file(abs).text()).toBe("const x = 2;\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("passes the task + current errors to the model", async () => {
   let seen: IChatMessage[] = [];
   const provider: IProvider = {

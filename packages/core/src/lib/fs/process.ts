@@ -46,12 +46,32 @@ export async function runShellCommand(
   command: string,
   opts: IShellRunOptions = {}
 ): Promise<IShellRun> {
+  return runArgvCommand(cwd, ["sh", "-c", command], opts);
+}
+
+/**
+ * Like `runShellCommand`, but spawns an explicit argv with NO shell — so
+ * arguments are passed literally and can't be expanded/injected (`$()`, backticks,
+ * globbing). Use this for any command built from model- or content-supplied
+ * values (e.g. ripgrep patterns). A missing binary resolves to exit 127, not a
+ * throw, so callers can degrade gracefully.
+ */
+export async function runArgvCommand(
+  cwd: string,
+  argv: string[],
+  opts: IShellRunOptions = {}
+): Promise<IShellRun> {
   const { signal, timeoutMs = 0, onChunk } = opts;
-  const proc = Bun.spawn(["sh", "-c", command], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+
+  let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
+
+  try {
+    proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    return { stdout: "", stderr: message, exitCode: 127, timedOut: false };
+  }
 
   let timedOut = false;
   const timer =

@@ -9,18 +9,25 @@ import {
   PROVIDER_DEFAULTS,
   type IProvider,
 } from "./inference";
-import { renderEvent, renderMessage, welcomeBanner } from "./render";
+import {
+  renderEvent,
+  renderMessage,
+  renderStatus,
+  welcomeBanner,
+} from "./render";
 import type { ITask } from "./spec";
 import type { Reporter } from "./loop";
 import {
   buildGate,
   buildWebGate,
+  buildWebFix,
   scaffoldWeb,
   installWebDeps,
   webGuidance,
 } from "./detect-gate";
 import type { WebFramework } from "./web-templates";
 import { classifyIntent } from "./classify";
+import { isRecord } from "./lib/guards";
 import {
   saveSession,
   latestSession,
@@ -196,6 +203,45 @@ function modelInfo(): { model: string; endpoint: string } {
   };
 }
 
+/** The model's real context window, read from the server's `/models`
+ *  (`max_model_len` — vLLM/OpenAI-compatible). Best-effort: undefined if the
+ *  endpoint is unreachable or doesn't report it (caller falls back). 3s cap so a
+ *  dead endpoint can't stall CLI startup. */
+async function detectContextWindow(): Promise<number | undefined> {
+  const base = process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl;
+  const model = process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model;
+  const headers: Record<string, string> = {};
+
+  if (process.env.TSFORGE_API_KEY !== undefined) {
+    headers.authorization = `Bearer ${process.env.TSFORGE_API_KEY}`;
+  }
+
+  try {
+    const res = await fetch(`${base}/models`, {
+      headers,
+      signal: AbortSignal.timeout(3000),
+    });
+
+    if (!res.ok) {
+      return undefined;
+    }
+
+    const data: unknown = await res.json();
+
+    if (!isRecord(data) || !Array.isArray(data.data)) {
+      return undefined;
+    }
+
+    const entries = data.data.filter(isRecord);
+    const match = entries.find((e) => e.id === model) ?? entries[0];
+    const len = match?.max_model_len;
+
+    return typeof len === "number" && Number.isFinite(len) ? len : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function frameworkLabel(framework: WebFramework): string {
   return framework === "react"
     ? "Vite + React + shadcn/ui + TanStack"
@@ -244,21 +290,34 @@ async function setUpWebProject(
   );
 }
 
+/** Parse a numeric env var, returning undefined for unset/blank/non-numeric
+ *  input (never NaN — a NaN reaching the provider serializes to `null` in the
+ *  request body and the model request fails confusingly). */
+function envNumber(name: string): number | undefined {
+  const raw = process.env[name];
+
+  if (raw === undefined || raw.trim().length === 0) {
+    return undefined;
+  }
+
+  const value = Number(raw);
+
+  return Number.isFinite(value) ? value : undefined;
+}
+
 function makeProvider(): IProvider {
+  const repetitionPenalty = envNumber("TSFORGE_REPETITION_PENALTY");
+
   return new OpenAICompatibleProvider({
     baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
     model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
     apiKey: process.env.TSFORGE_API_KEY,
-    maxTokens: Number(
-      process.env.TSFORGE_MAX_TOKENS ?? String(PROVIDER_LIMITS.maxTokens)
-    ),
+    maxTokens: envNumber("TSFORGE_MAX_TOKENS") ?? PROVIDER_LIMITS.maxTokens,
     // OFF by default: a global repetition penalty also penalizes the rigid,
     // repetitive tool-call JSON tokens, which pushes the model to NARRATE
     // instead of emitting tool calls (→ no files written). The StreamGuard is
     // the targeted loop protection. Opt in only to experiment.
-    ...(process.env.TSFORGE_REPETITION_PENALTY === undefined
-      ? {}
-      : { repetitionPenalty: Number(process.env.TSFORGE_REPETITION_PENALTY) }),
+    ...(repetitionPenalty === undefined ? {} : { repetitionPenalty }),
   });
 }
 
@@ -347,8 +406,10 @@ async function runOnce(args: ICliArgs): Promise<number> {
     process.stdout.write(`  ↳ logging this run to ${logFile}\n`);
   }
 
+  const thinkingTokenBudget = envNumber("TSFORGE_THINKING_BUDGET");
   const result = await runTask(task, args.dir, makeProvider(), {
     onEvent: makeReporter(logFile),
+    ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
   });
   const ok = result.status === RUN_STATUS.done;
 
@@ -526,17 +587,44 @@ async function repl(args: ICliArgs): Promise<number> {
     process.stdout.write(`  ↳ logging this run to ${logFile}\n`);
   }
 
+  const thinkingTokenBudget = envNumber("TSFORGE_THINKING_BUDGET");
+  // Auto-compaction threshold (fraction of the window); session default 0.8.
+  const autoCompactAt = envNumber("TSFORGE_COMPACT_AT");
+  // The model's real context window: explicit env wins, else ask the server
+  // (max_model_len), else a conservative fallback. Drives the status gauge AND
+  // auto-compaction (the session compacts before a send once it nears the window).
+  const contextWindow =
+    envNumber("TSFORGE_CONTEXT_WINDOW") ??
+    (await detectContextWindow()) ??
+    32_768;
+  const report = makeReporter(logFile);
   const config = {
     provider,
     cwd: args.dir,
     files,
     accept,
-    report: makeReporter(logFile),
+    contextWindow,
+    report,
     ...(resumed === null ? {} : { history: resumed.messages }),
-    ...(args.web ? { guidance: webGuidance("react") } : {}),
+    ...(args.web
+      ? { guidance: webGuidance("react"), fix: buildWebFix("react") }
+      : {}),
+    ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+    ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
   };
 
   let session = await Session.create(config);
+
+  // A self-describing run-meta line at the top of the --log so the analyzer knows
+  // which model / context window the metrics are against (the thread's advice:
+  // many "model failures" are really quant/config failures — record the config).
+  report({
+    kind: "start",
+    task: "session",
+    message: `model ${modelInfo().model} · context window ${contextWindow}`,
+    model: modelInfo().model,
+    contextWindow,
+  });
 
   const persist = async (): Promise<void> => {
     await saveSession({
@@ -579,6 +667,9 @@ async function repl(args: ICliArgs): Promise<number> {
   // While set, the next user line is the answer to the web spec Q&A (it holds the
   // original build request, deferred until we know the stack).
   let awaitingSpec: string | null = null;
+  // Explicit `--web` (no classify Q&A): the FIRST message is the build, so stage
+  // it (plan+types → implement). Cleared after, so follow-ups are plain sends.
+  let stagedWebPending = args.web && resumed === null;
   const autoClassify =
     resumed === null && !args.web && args.accept.length === 0 && !args.noGate;
 
@@ -588,25 +679,50 @@ async function repl(args: ICliArgs): Promise<number> {
     );
     await setUpWebProject(args.dir, framework);
     session.setGate(buildWebGate(framework).command);
+    session.setFix(buildWebFix(framework));
     session.guide(webGuidance(framework));
   };
 
-  const runSend = async (line: string): Promise<void> => {
+  // Last-turn summary, surfaced in the status line shown before each prompt.
+  let lastTurns = 0;
+  let lastElapsedMs = 0;
+  let lastStatus = "ready";
+
+  // Run one user-driven exchange: fresh abort controller, time it, record the
+  // outcome for the status line, persist. `run` gets the live signal + a steer
+  // drain so in-flight user messages reach the model.
+  const drive = async (
+    run: (opts: { signal: AbortSignal; steer: () => string[] }) => Promise<{
+      status: string;
+      turns: number;
+    }>
+  ): Promise<void> => {
     active = new AbortController();
+    const started = performance.now();
 
     try {
-      const result = await session.send(line, {
+      const result = await run({
         signal: active.signal,
         steer: () => pending.splice(0, pending.length),
       });
 
-      process.stdout.write(`\n[${result.status} · ${result.turns} turn(s)]\n`);
+      lastTurns = result.turns;
+      lastElapsedMs = performance.now() - started;
+      lastStatus = result.status;
     } finally {
       active = null;
     }
 
     await persist();
   };
+
+  const runSend = (line: string): Promise<void> =>
+    drive((opts) => session.send(line, opts));
+
+  // A from-scratch web build: stage it (plan + types, then implement) so the
+  // model designs the type contract before writing UI — far less API invention.
+  const runStagedBuild = (line: string): Promise<void> =>
+    drive((opts) => session.buildStaged(line, opts));
 
   const dispatch = async (line: string): Promise<void> => {
     // A reply to the web spec Q&A: pick the stack, scaffold, then run the request.
@@ -624,9 +740,18 @@ async function repl(args: ICliArgs): Promise<number> {
       const { framework, extra } = parseSpec(line);
 
       await configureWeb(framework);
-      await runSend(
+      // Staged build: design the types first, then implement against them.
+      await runStagedBuild(
         extra.length > 0 ? `${request}\n\nDetails: ${extra}` : request
       );
+
+      return;
+    }
+
+    // Explicit --web: the first message is a from-scratch build — stage it.
+    if (stagedWebPending) {
+      stagedWebPending = false;
+      await runStagedBuild(line);
 
       return;
     }
@@ -678,6 +803,9 @@ async function repl(args: ICliArgs): Promise<number> {
         process.stdout.write(
           arg.length > 0 ? `gate: ${arg}\n` : "gate cleared\n"
         );
+        // Persist immediately so a `/gate` change survives even if the user quits
+        // before the next send (persist otherwise only runs after a turn).
+        await persist();
         break;
 
       case "files": {
@@ -688,6 +816,7 @@ async function repl(args: ICliArgs): Promise<number> {
 
         session.setScope(globs.length > 0 ? globs : WHOLE_REPO);
         process.stdout.write(`scope: ${scopeLabel(session.scope)}\n`);
+        await persist();
         break;
       }
 
@@ -721,8 +850,22 @@ async function repl(args: ICliArgs): Promise<number> {
     return false;
   };
 
+  // The persistent status line, shown above every prompt so the model, real
+  // context-window usage, scope, and last-turn outcome are always in view.
   const prompt = (): void => {
-    process.stdout.write("\n› ");
+    process.stdout.write("\n");
+    process.stdout.write(
+      renderStatus({
+        model: modelInfo().model,
+        contextTokens: session.contextTokens,
+        contextWindow,
+        turns: lastTurns,
+        elapsedMs: lastElapsedMs,
+        status: lastStatus,
+        scope: scopeLabel(session.scope),
+      })
+    );
+    process.stdout.write("› ");
   };
 
   await new Promise<void>((resolveLoop) => {

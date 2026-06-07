@@ -1,5 +1,6 @@
 import { relative } from "node:path";
-import { runCommand, fileArg, TOOL_NAME, type ToolName } from "../../agent";
+import { fileArg, TOOL_NAME, type ToolName } from "../../agent";
+import { runArgvCommand } from "../../lib/fs";
 import { writable } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import { str, reject, type IToolContext } from "./tool-context";
@@ -18,17 +19,27 @@ export async function doSearch(
   }
 
   const glob = str(args, "glob");
-  const globArg = glob.length > 0 ? ` -g ${JSON.stringify(glob)}` : "";
-  const cmd = `rg --line-number --no-heading --color never -e ${JSON.stringify(pattern)}${globArg} || true`;
-  const res = await runCommand(
+  // Spawn rg with an explicit argv (NO shell) — the pattern/glob come from the
+  // model, so a `sh -c` string would let `$()`/backticks inside them execute.
+  const argv = [
+    "rg",
+    "--line-number",
+    "--no-heading",
+    "--color",
+    "never",
+    "-e",
+    pattern,
+    ...(glob.length > 0 ? ["-g", glob] : []),
+  ];
+  const res = await runArgvCommand(
     ctx.cwd,
-    cmd,
+    argv,
     ctx.signal === undefined ? {} : { signal: ctx.signal }
   );
-  const out = `${res.stdout}${res.stderr}`.slice(
-    0,
-    LOOP_LIMITS.maxToolOutputChars
-  );
+  // rg exits 1 when there are simply no matches (not an error); 2 = real error,
+  // 127 = rg absent. Surface stderr only on a real failure, not on "no matches".
+  const body = res.exitCode > 1 ? `${res.stdout}${res.stderr}` : res.stdout;
+  const out = body.slice(0, LOOP_LIMITS.maxToolOutputChars);
 
   ctx.report({
     kind: "tool",

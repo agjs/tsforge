@@ -5,7 +5,7 @@ import type { ErrorSet } from "../validate";
 import { applyEdits } from "../files/edit";
 import { applyCreate } from "../files/create";
 import { EDIT_FAIL_REASON } from "../files";
-import { isInScope } from "../lib/scope";
+import { isInScope, normalizeWorkspacePath } from "../lib/scope";
 import { readFiles, type IFileView } from "../lib/fs";
 import { EDIT_TOOL, CREATE_TOOL, TOOL_NAME } from "./agent.constants";
 import { toEdits, toCreate } from "./tools";
@@ -112,6 +112,8 @@ async function applyAgentEdit(
     return "an `edit` call had malformed arguments (need `file` plus `oldString`/`newString` or an `edits` array)";
   }
 
+  edit.file = normalizeWorkspacePath(ctx.cwd, edit.file);
+
   const scopeError = outOfScope(ctx, edit.file);
 
   if (scopeError !== null) {
@@ -161,6 +163,8 @@ async function applyAgentCreate(
   if (create === null) {
     return "a `create` call had malformed arguments (need file, content)";
   }
+
+  create.file = normalizeWorkspacePath(ctx.cwd, create.file);
 
   const scopeError = outOfScope(ctx, create.file);
 

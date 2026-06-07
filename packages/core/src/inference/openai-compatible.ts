@@ -53,7 +53,12 @@ export class OpenAICompatibleProvider implements IProvider {
       ...(opts.thinkingTokenBudget === undefined
         ? {}
         : { thinking_token_budget: opts.thinkingTokenBudget }),
-      ...(streaming ? { stream: true } : {}),
+      // include_usage → the stream emits a final chunk carrying token `usage`
+      // (otherwise a streamed response reports none). Non-stream replies carry it
+      // by default.
+      ...(streaming
+        ? { stream: true, stream_options: { include_usage: true } }
+        : {}),
     });
 
     // Retry transient CONNECTION blips (socket close / unable-to-connect) — the
@@ -70,7 +75,11 @@ export class OpenAICompatibleProvider implements IProvider {
     );
 
     if (!res.ok) {
-      throw new Error(`model request failed: ${res.status}`);
+      const detail = await responseDetail(res);
+
+      throw new Error(
+        `model request failed: ${res.status}${detail.length > 0 ? ` ${detail}` : ""}`
+      );
     }
 
     if (opts.onToken !== undefined) {
@@ -80,5 +89,13 @@ export class OpenAICompatibleProvider implements IProvider {
     const data: unknown = await res.json();
 
     return parseResponse(data);
+  }
+}
+
+async function responseDetail(res: Response): Promise<string> {
+  try {
+    return (await res.text()).trim().slice(0, 1000);
+  } catch {
+    return "";
   }
 }

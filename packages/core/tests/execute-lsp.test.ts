@@ -155,6 +155,43 @@ test("organize_imports is REJECTED for an out-of-scope file", async () => {
   }
 });
 
+// P2 (security): the search pattern comes from the model, so it must be passed
+// to rg as a literal argv element — a `$(…)` in it must NOT execute via a shell.
+test("search does not shell-expand the pattern", async () => {
+  const ctx = await setup(["types.ts", "use.ts"]);
+
+  try {
+    await Bun.write(join(ctx.cwd, "marker.txt"), "owned");
+
+    // If this ran through `sh -c`, the $(…) would create pwned.txt. With argv it
+    // is just a (non-matching) search string.
+    const r = await executeTool(
+      { name: "search", arguments: { pattern: "$(touch pwned.txt)" } },
+      ctx
+    );
+
+    expect(await Bun.file(join(ctx.cwd, "pwned.txt")).exists()).toBe(false);
+    expect(r).toContain("no matches");
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
+test("search finds a literal match across files", async () => {
+  const ctx = await setup(["types.ts", "use.ts"]);
+
+  try {
+    const r = await executeTool(
+      { name: "search", arguments: { pattern: "IThing" } },
+      ctx
+    );
+
+    expect(r).toContain("types.ts");
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
 test("semantic tools degrade gracefully without a TsService", async () => {
   const ctx = await setup(["types.ts"]);
   const noLsp: IToolContext = { ...ctx, tsService: null };

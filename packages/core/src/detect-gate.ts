@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { isRecord } from "./lib/guards";
 import { WEB_TEMPLATES, type WebFramework } from "./web-templates";
 
 /**
@@ -59,6 +58,24 @@ const STRICT_TSCONFIG = `{
 }
 `;
 
+/** Strict overlay for a project that ALREADY has a tsconfig: extend it (so the
+ *  project's paths/jsx/module/lib still resolve — a bare strict config would
+ *  mis-compile a real app) but FORCE every strictness flag on top, so a loosely-
+ *  configured repo still gets tsforge's strict-TS floor. Written as a sibling
+ *  `tsforge.tsconfig.json` and gated with `tsc -p`. */
+const STRICT_TSCONFIG_OVERRIDE = `{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  }
+}
+`;
+
 // The web-stack scaffolds (Vite + React full-kit, or Vite vanilla) live in the
 // registry; this module just lays them down and builds their gate. shadcn/TanStack
 // boilerplate is held to a web-tailored strict config (no `I`-prefix — React names
@@ -88,9 +105,12 @@ export async function scaffoldWeb(
 
 /**
  * How a build turn must behave — prepended to every stack's guidance. The base
- * CLI prompt is conversational ("reply with the code"); for a BUILD that framing
- * makes the model paste whole files into its message, which never reaches disk.
- * This overrides it: produce files by calling tools, one `create` per file.
+ * CLI prompt is conversational ("reply with the code") and carries the CORE
+ * harness's TS house-rules (I-prefixed interfaces, no `as`). Both are WRONG for a
+ * web build: it must write files via tools, and a Vite/React app's gate uses the
+ * web lint config (no I-prefix, `as const` allowed). This block overrides both,
+ * so the model writes conforming code up front instead of writing idiomatic code
+ * and then "correcting" it toward rules the web gate never enforces.
  */
 const BUILD_PREAMBLE = [
   "You are BUILDING this app. You produce files by CALLING TOOLS, not by writing",
@@ -99,6 +119,30 @@ const BUILD_PREAMBLE = [
   "starting with the first file NOW — do not pre-write everything in prose. After",
   "you stop, the gate builds the app and reports what to fix; then edit and",
   "continue until it passes. Never paste file contents into your message.",
+  "",
+  "TYPE STYLE — the gate checks these; write them this way the FIRST time (the",
+  "gate rejects code that breaks them, and fixing after costs extra turns):",
+  "  • Interfaces are `I`-prefixed PascalCase: `interface IIssue`, `interface",
+  "    IButtonProps` — NOT `Issue` / `ButtonProps`. Write the `I` from the start;",
+  "    do not emit a bare name and then rename it. (Type ALIASES — `type Status =`",
+  "    — are not prefixed.)",
+  "  • `as const` IS allowed and PREFERRED for literal data and registries (e.g.",
+  "    `const STATUS = {...} as const`). Still forbidden: `any`, value-changing",
+  "    `as` casts, non-null `!`. Use `===`, never `var`.",
+  "",
+  "Write it RIGHT the first time — these are the gate's hard rules; code that",
+  "breaks them is rejected and costs you extra turns. The fixes are not optional",
+  "polish, they are how you write the line:",
+  "  • No `x as Foo`. Narrow instead: `if (!(x instanceof Foo)) return;` or a type",
+  "    guard, or type the value at its source. For event targets, check the type.",
+  "  • No `arr[i]!` / `obj.maybe!`. Guard: `const v = arr[i]; if (v === undefined)",
+  "    return;` — array/Map index access is `T | undefined` here.",
+  "  • No `any`. Use `unknown` + a narrow, or write the real type.",
+  "  • Type every function parameter and every `useState`/`useRef` generic.",
+  "",
+  "Work directly — do NOT restate the task, announce a plan, or narrate progress",
+  "between steps ('The user wants me to…', 'I was in the middle of…', 'Now let me…').",
+  "That text is wasted. Emit the next tool call.",
 ].join("\n");
 
 /** The system-prompt guidance for a stack (build framing + structure/conventions). */
@@ -148,6 +192,24 @@ export function buildWebGate(framework: WebFramework): IGate {
   };
 }
 
+/**
+ * The web auto-fix command — `eslint --fix` with the web config, run BEFORE the
+ * gate each cycle. It deterministically squashes the mechanical violations the
+ * model otherwise burns turns hand-fixing (prefer-const, prefer-template, no-var,
+ * curly, inferrable types). The unfixable ones (`any`/`as`/`!`) still need the
+ * model, but those are the minority. Best-effort: a non-zero exit is ignored.
+ */
+export function buildWebFix(framework: WebFramework): string {
+  const ignores = WEB_TEMPLATES[framework].eslintIgnore
+    .map((glob) => `--ignore-pattern "${glob}"`)
+    .join(" ");
+
+  return `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --fix .`.replace(
+    /\s+/g,
+    " "
+  );
+}
+
 async function ensureFile(
   cwd: string,
   name: string,
@@ -171,7 +233,7 @@ export async function buildGate(cwd: string): Promise<IGate> {
     labels.push("tsc --strict");
   }
 
-  const lint = await lintPart(cwd);
+  const lint = lintPart();
 
   parts.push(lint.command);
   labels.push(lint.label);
@@ -179,13 +241,22 @@ export async function buildGate(cwd: string): Promise<IGate> {
   return { command: parts.join(" && "), label: labels.join(" + ") };
 }
 
-/** The type-aware floor: `tsc --noEmit` against the project's tsconfig (bringing a
- *  strict one if the project is TS but unconfigured). null when not a TS project. */
+/**
+ * The type-aware floor — ALWAYS tsforge-strict (user policy: a repo's own config
+ * is never trusted to be strict enough). With a project tsconfig, extend it but
+ * force the strict flags; greenfield, bring the full strict one. null when not a
+ * TS project. (The strict override / bundled config win over whatever the repo set.)
+ */
 async function tscPart(cwd: string): Promise<string | null> {
   const hasTsconfig = await Bun.file(join(cwd, "tsconfig.json")).exists();
 
   if (hasTsconfig) {
-    return `"${TSC_BIN}" --noEmit -p tsconfig.json`;
+    await Bun.write(
+      join(cwd, "tsforge.tsconfig.json"),
+      STRICT_TSCONFIG_OVERRIDE
+    );
+
+    return `"${TSC_BIN}" --noEmit -p tsforge.tsconfig.json`;
   }
 
   // Greenfield: bring a strict tsconfig so tsc can gate — but only when this is
@@ -199,56 +270,13 @@ async function tscPart(cwd: string): Promise<string | null> {
   return null;
 }
 
-/** The syntactic idiom layer: the project's own `lint` script, else tsforge's
- *  bundled strict eslint config (which needs no deps in the target). */
-async function lintPart(cwd: string): Promise<IGate> {
-  const pkg = await readPackageJson(cwd);
-  const scripts = pkg !== null && isRecord(pkg.scripts) ? pkg.scripts : {};
-
-  if (typeof scripts.lint === "string") {
-    const runner = await detectPackageManager(cwd);
-
-    return { command: `${runner} run lint`, label: "project lint" };
-  }
-
+/** The syntactic idiom layer — ALWAYS tsforge's bundled strict eslint config
+ *  (user policy). We deliberately do NOT defer to the project's own `lint`
+ *  script: that's exactly how a weak repo would dodge the strict-TS floor. The
+ *  bundled config needs no deps in the target. */
+function lintPart(): IGate {
   return {
     command: `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
     label: "strict TypeScript (tsforge)",
   };
-}
-
-async function readPackageJson(
-  cwd: string
-): Promise<Record<string, unknown> | null> {
-  const file = Bun.file(join(cwd, "package.json"));
-
-  if (!(await file.exists())) {
-    return null;
-  }
-
-  try {
-    const data: unknown = JSON.parse(await file.text());
-
-    return isRecord(data) ? data : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Pick the package manager by lockfile, defaulting to npm. */
-async function detectPackageManager(cwd: string): Promise<string> {
-  const byLockfile: [string, string][] = [
-    ["bun.lock", "bun"],
-    ["bun.lockb", "bun"],
-    ["pnpm-lock.yaml", "pnpm"],
-    ["yarn.lock", "yarn"],
-  ];
-
-  for (const [lockfile, manager] of byLockfile) {
-    if (await Bun.file(join(cwd, lockfile)).exists()) {
-      return manager;
-    }
-  }
-
-  return "npm";
 }

@@ -9,7 +9,7 @@ import {
   type ErrorSet,
 } from "../validate";
 import { isInScope } from "../lib/scope";
-import { fileExists } from "../lib/fs";
+import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
 import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
@@ -23,7 +23,6 @@ import {
   READ_TOOL,
   LSP_TOOLS,
   TOOL_NAME,
-  fileArg,
 } from "../agent";
 import { TsService } from "../lsp";
 
@@ -131,36 +130,49 @@ export async function runToolCalls(
       continue;
     }
 
-    // Resolve the path the SAME way execution does (fileArg accepts the `path`/
-    // `filename`/… aliases the model reaches for). Reading `call.arguments.file`
-    // directly here would miss a `create({ path })` that DID write to disk — the
-    // session would then think nothing changed and skip the gate. See P1 review.
-    const file = fileArg(call.arguments);
+    // Count an edit/create ONLY when it actually wrote an in-scope file. We read
+    // this from the handler's `edit`/`create` event — which carries the path it
+    // ACTUALLY wrote, already normalized (absolute / repeated-root / backslash
+    // paths resolved). Scope-checking the raw tool arg here instead would miss a
+    // write the handler normalized into scope, skipping the gate. The event fires
+    // only on a successful write, so failures/rejects never count. See P1/P2.
+    // (Object ref, not a captured `let`: CFA de-narrows a property after a call.)
+    const wrote = { value: false };
 
-    if (
-      (call.name === TOOL_NAME.edit || call.name === TOOL_NAME.create) &&
-      file !== null &&
-      isInScope(file, ctx.task.files)
-    ) {
+    const report: Reporter = (event) => {
+      if (
+        (event.kind === "edit" || event.kind === "create") &&
+        event.file !== undefined &&
+        isInScope(event.file, ctx.task.files)
+      ) {
+        wrote.value = true;
+      }
+
+      ctx.report(event);
+    };
+
+    const result = await executeTool(call, {
+      cwd: ctx.cwd,
+      files: ctx.task.files,
+      report,
+      task: ctx.task.id,
+      tsService: ctx.tsService,
+      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    });
+
+    if (wrote.value) {
       touchedEditable = true;
       state.edits += 1;
     }
 
+    // A semantic write (rename/organize_imports) is scope-enforced internally and
+    // mutates on success — re-gate to confirm. (These don't feed state.edits.)
     if (
       call.name === TOOL_NAME.renameSymbol ||
       call.name === TOOL_NAME.organizeImports
     ) {
       touchedEditable = true;
     }
-
-    const result = await executeTool(call, {
-      cwd: ctx.cwd,
-      files: ctx.task.files,
-      report: ctx.report,
-      task: ctx.task.id,
-      tsService: ctx.tsService,
-      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
-    });
 
     ctx.messages.push({
       role: "tool",
@@ -180,11 +192,15 @@ export async function runToolCalls(
  */
 async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
   const { task, cwd, tsService, report } = ctx;
+  // Resolve globs to concrete files — iterating task.files literally would skip a
+  // glob scope like `["**/*"]` (the common interactive default), so the fixes
+  // never ran there. See P1 review.
+  const files = await resolveScopeFiles(cwd, task.files);
 
   if (tsService !== null) {
     let tsFixed = 0;
 
-    for (const f of task.files) {
+    for (const f of files) {
       try {
         if (await fileExists(cwd, f)) {
           tsService.refresh(f);
@@ -210,7 +226,7 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
 
   let astFixed = 0;
 
-  for (const f of task.files) {
+  for (const f of files) {
     try {
       if (await fileExists(cwd, f)) {
         astFixed += await astGrepFix(join(cwd, f));
@@ -244,9 +260,11 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     return;
   }
 
+  // Resolve globs so a glob scope is polished too (not silently skipped).
+  const files = await resolveScopeFiles(cwd, task.files);
   const snapshot = new Map<string, string>();
 
-  for (const f of task.files) {
+  for (const f of files) {
     if (await fileExists(cwd, f)) {
       snapshot.set(f, await Bun.file(join(cwd, f)).text());
     }
@@ -254,7 +272,7 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
 
   let dropped = 0;
 
-  for (const f of task.files) {
+  for (const f of files) {
     if (await fileExists(cwd, f)) {
       try {
         dropped += await dropRedundantAnnotations(join(cwd, f));

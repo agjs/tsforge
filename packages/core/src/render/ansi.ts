@@ -1,8 +1,63 @@
-import type { IRenderOptions } from "./render.types";
+import type { IRenderOptions, IStatusInfo } from "./render.types";
 import { highlight } from "cli-highlight";
 import type { ILoopEvent } from "../loop";
 import type { IChatMessage } from "../inference";
 import { STYLE, paint } from "./style";
+
+/** Compact token count: 1234 → "1.2k", 14000 → "14k". */
+function humanCount(n: number): string {
+  if (n < 1000) {
+    return String(n);
+  }
+
+  const k = n / 1000;
+
+  return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
+}
+
+/** Compact duration: 9000 → "9s", 84000 → "1m24s". */
+function humanDuration(ms: number): string {
+  const total = Math.round(ms / 1000);
+
+  if (total < 60) {
+    return `${total}s`;
+  }
+
+  return `${Math.floor(total / 60)}m${String(total % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * The post-turn status line — model, context-window usage, turns, elapsed, last
+ * outcome, scope — the at-a-glance summary modern CLIs keep on screen. Dim, one
+ * line, printed after a turn settles.
+ */
+export function renderStatus(
+  info: IStatusInfo,
+  opts: IRenderOptions = {}
+): string {
+  const color = opts.color ?? true;
+  const pct =
+    info.contextWindow > 0
+      ? Math.round((info.contextTokens / info.contextWindow) * 100)
+      : 0;
+  const bits = [
+    info.model,
+    `ctx ~${humanCount(info.contextTokens)}/${humanCount(info.contextWindow)} ${pct}%`,
+  ];
+
+  // Only show turn/elapsed once a turn has actually run (skip the "0 turns · 0s"
+  // noise on the very first prompt).
+  if (info.turns > 0) {
+    bits.push(
+      `${info.turns} turn${info.turns === 1 ? "" : "s"}`,
+      humanDuration(info.elapsedMs)
+    );
+  }
+
+  bits.push(info.status, info.scope);
+
+  return `${paint(`  ⎯ ${bits.join(" · ")}`, STYLE.dim, color)}\n`;
+}
 
 /**
  * Replay one stored conversation message — used to show the prior transcript on
@@ -108,17 +163,43 @@ function diff(oldString: string, newString: string, color: boolean): string {
  * The library emits structured events; this renderer is the only place that
  * knows about colors/layout — a web UI could render the same events differently.
  */
+/** Latch so a run of `reasoning` tokens collapses to ONE "thinking…" line
+ *  instead of streaming the model's full chain-of-thought. Reset by any other
+ *  event (a tool marker, gate output, a message), so the next thinking burst
+ *  re-announces. The raw reasoning is still written verbatim to the --log. */
+let thinkingShown = false;
+
+/** Render a streamed token. Collapses the model's chain-of-thought (channel
+ *  `reasoning`) to a single compact "thinking…" line — the prose is noise on
+ *  screen (still logged); tool markers (✎) and gate output print normally. */
+function renderToken(event: ILoopEvent, color: boolean): string {
+  if (event.channel === "reasoning") {
+    if (thinkingShown) {
+      return "";
+    }
+
+    thinkingShown = true;
+
+    return `\n  ${paint("⠋ thinking…", STYLE.dim, color)}`;
+  }
+
+  return paint(event.message, STYLE.dim, color);
+}
+
 export function renderEvent(
   event: ILoopEvent,
   opts: IRenderOptions = {}
 ): string {
   const color = opts.color ?? true;
 
+  // Any event that is NOT a reasoning token ends the current thinking burst.
+  if (event.kind !== "token" || event.channel !== "reasoning") {
+    thinkingShown = false;
+  }
+
   switch (event.kind) {
     case "token":
-      // The model's streamed reasoning — dim, so it reads as secondary thinking
-      // beneath the bright highlighted code/actions.
-      return paint(event.message, STYLE.dim, color);
+      return renderToken(event, color);
 
     case "message":
       // The model's actual answer (content channel) — prose plus syntax-
@@ -183,6 +264,11 @@ export function renderEvent(
 
       return `${head}${out}`;
     }
+
+    case "usage":
+      // Logged for the metrics analyzer, but not shown — the status line already
+      // surfaces context usage on screen.
+      return "";
 
     case "tool":
       return `  ${paint(event.message, STYLE.dim, color)}\n`;

@@ -18,9 +18,20 @@ export interface IToolCall {
   arguments: Record<string, unknown>;
 }
 
+/** Real token accounting from the server's `usage` block — the basis for the
+ *  status line's context gauge and (soon) auto-compaction triggering. */
+export interface ITokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
 export interface IModelResponse {
   content: string;
   toolCalls: IToolCall[];
+  /** Server-reported token usage for this call, when available. `promptTokens`
+   *  is the full context the model just saw — what auto-compaction will watch. */
+  usage?: ITokenUsage;
   /** How many tool calls were SALVAGED from malformed content (server parser
    *  left them as text). >0 signals the model emitted unparseable tool syntax. */
   salvaged?: number;

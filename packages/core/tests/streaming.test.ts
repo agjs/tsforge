@@ -67,4 +67,51 @@ test("sets stream:true in the request body when onToken is given", async () => {
   await p.complete([{ role: "user", content: "hi" }], { onToken: () => {} });
 
   expect(body.stream).toBe(true);
+  // Ask the server to emit token usage in the stream (basis for the context
+  // gauge + auto-compaction).
+  expect(body.stream_options).toEqual({ include_usage: true });
+});
+
+test("captures token usage from the trailing stream chunk", async () => {
+  const chunks = [
+    `data: {"choices":[{"delta":{"content":"hi"}}]}\n`,
+    // vLLM/OpenAI emit a final chunk with empty choices carrying usage.
+    `data: {"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":34,"total_tokens":1234}}\n`,
+    `data: [DONE]\n`,
+  ];
+  const fakeFetch = (async () =>
+    sseResponse(chunks)) as unknown as typeof fetch;
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fakeFetch,
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }], {
+    onToken: () => {},
+  });
+
+  expect(r.usage).toEqual({
+    promptTokens: 1200,
+    completionTokens: 34,
+    totalTokens: 1234,
+  });
+});
+
+test("streams a final SSE line even when it has no trailing newline", async () => {
+  const fakeFetch = (async () =>
+    sseResponse([
+      `data: {"choices":[{"delta":{"content":"tail"}}]}`,
+    ])) as unknown as typeof fetch;
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fakeFetch,
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }], {
+    onToken: () => {},
+  });
+
+  expect(r.content).toBe("tail");
 });

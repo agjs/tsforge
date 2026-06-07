@@ -1,10 +1,10 @@
 // tsforge's bundled strict config for WEB stacks (React/Vue/Svelte via Vite).
-// Identical to strict.eslint.config.mjs EXCEPT it drops the `I`-prefix interface
-// naming rule: the React/TS ecosystem names interfaces `ButtonProps` (PascalCase,
-// often `Props`-suffixed), NOT `IButtonProps`, and library module augmentations
-// dictate the name outright (e.g. TanStack Router's `interface Register`) — so an
-// `I`-prefix mandate fights the whole ecosystem here. Every other strict rule
-// (no `as`/`any`/`!`, prefer-const/template, eqeqeq, curly, no-enum) is kept.
+// Like strict.eslint.config.mjs, it ENFORCES `I`-prefixed interfaces (project
+// house style — `IIssue`, `IButtonProps`), with ONE exemption: library module-
+// augmentation interfaces whose name the library dictates and you cannot rename
+// (e.g. TanStack Router's `interface Register`). Differs from the core config in
+// one other way: it allows `as const` (banning only value-changing `as`/`<Foo>`
+// via AST selectors), since `as const` is idiomatic for typed literal registries.
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
@@ -22,6 +22,17 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/no-inferrable-types": "error",
+      // I-prefixed interfaces (house style), EXCEPT library-mandated augmentation
+      // names you cannot rename (TanStack Router's `interface Register`).
+      "@typescript-eslint/naming-convention": [
+        "error",
+        {
+          selector: "interface",
+          format: ["PascalCase"],
+          prefix: ["I"],
+          filter: { regex: "^(Register)$", match: false },
+        },
+      ],
       "prefer-const": "error",
       "prefer-template": "error",
       "no-var": "error",

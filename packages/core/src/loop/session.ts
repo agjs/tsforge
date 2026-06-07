@@ -1,4 +1,9 @@
-import type { IChatMessage, IModelResponse, IProvider } from "../inference";
+import type {
+  IChatMessage,
+  IModelResponse,
+  IProvider,
+  ITokenUsage,
+} from "../inference";
 import type { ITask } from "../spec";
 import type { ErrorParser } from "../validate";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
@@ -50,6 +55,12 @@ export interface ISessionConfig {
   /** Extra opinionated guidance appended to the system prompt (e.g. a scaffold's
    *  conventions: "this is a web app, the entry is app.ts…"). */
   guidance?: string;
+  /** The model's context window (tokens). When set, the session auto-compacts
+   *  before a send once the held context exceeds `autoCompactAt` of it. 0/unset
+   *  disables auto-compaction. */
+  contextWindow?: number;
+  /** Fraction of `contextWindow` that triggers auto-compaction (default 0.8). */
+  autoCompactAt?: number;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -69,6 +80,27 @@ export interface ISendOptions {
 }
 
 const SESSION_ID = "session";
+
+/** Default share of the context window that triggers auto-compaction. */
+const AUTO_COMPACT_AT = 0.8;
+
+/** Staged-build step 1: design the type contract FIRST, gate off. Constraining
+ *  the model to types before UI is the community-validated cure for random API
+ *  invention on local models (plan → interfaces → implementation). */
+const PLAN_TYPES_STEP =
+  "STEP 1 of 2 — DESIGN FIRST, do not build the UI yet. In ONE short paragraph, " +
+  "name the DOMAINS the app needs and the data each holds. Then lay out the type " +
+  "contract the boringstack way: for each domain create its " +
+  "`src/<domain>/<domain>.types.ts` (its `I`-prefixed interfaces) and, where it has " +
+  "fixed registries/config, `src/<domain>/<domain>.constants.ts` (`as const`). Put " +
+  "types shared across domains in `src/shared/shared.types.ts`. Do NOT create one " +
+  "mega `src/types.ts`, and do NOT build components yet — types/constants only, then stop.";
+
+/** Staged-build step 2: implement against the contract, gate on (drive to green). */
+const IMPLEMENT_STEP =
+  "STEP 2 of 2 — now build the app: import the types from `src/types.ts` and " +
+  "create the components/routes (one file per `create`), wiring them together. The " +
+  "gate builds and verifies it in a real browser; fix exactly what it reports until green.";
 
 /**
  * Did the model write whole files INTO its chat message instead of calling
@@ -117,6 +149,10 @@ export class Session {
   private hasGate: boolean;
   private readonly ctx: ILoopCtx;
   private readonly state: ILoopState;
+  /** Token usage from the most recent model call — `promptTokens` is the real
+   *  size of the context the model last saw (drives the status gauge and, soon,
+   *  auto-compaction). */
+  private lastUsage?: ITokenUsage;
 
   private constructor(cfg: ISessionConfig, ctx: ILoopCtx) {
     this.provider = cfg.provider;
@@ -180,10 +216,45 @@ export class Session {
     return this.ctx.task.files;
   }
 
+  /** Real token usage of the most recent model call (undefined until the first
+   *  call, or if the server reports none). */
+  get usage(): ITokenUsage | undefined {
+    return this.lastUsage;
+  }
+
+  /** The real size of the context the model is currently holding — the prompt
+   *  tokens of the last call (what auto-compaction watches), 0 before any call. */
+  get contextTokens(): number {
+    return this.lastUsage?.promptTokens ?? 0;
+  }
+
+  /** If the held context is at/over the auto-compact threshold, the percent full
+   *  (for the notice); otherwise undefined. Needs a known window AND real usage
+   *  from a prior turn — both absent on the first send, so it never fires early. */
+  private autoCompactPct(): number | undefined {
+    const window = this.cfg.contextWindow ?? 0;
+
+    if (window <= 0 || this.lastUsage === undefined) {
+      return undefined;
+    }
+
+    const fraction = this.lastUsage.promptTokens / window;
+    const threshold = this.cfg.autoCompactAt ?? AUTO_COMPACT_AT;
+
+    return fraction >= threshold ? Math.round(fraction * 100) : undefined;
+  }
+
   /** Set (or clear, with "") the gate command mid-session. */
   setGate(command: string): void {
     this.ctx.task.accept = command;
     this.hasGate = command.length > 0;
+  }
+
+  /** Set (or clear, with "") the auto-fix command run before each gate — e.g. a
+   *  scaffold's `eslint --fix`, so mechanical lint violations are squashed
+   *  deterministically instead of costing the model turns. */
+  setFix(command: string): void {
+    this.ctx.task.fix = command.length > 0 ? command : undefined;
   }
 
   /** Replace the editable scope globs mid-session. */
@@ -254,9 +325,6 @@ export class Session {
   async send(text: string, opts: ISendOptions = {}): Promise<ISendResult> {
     const { ctx, report } = this;
     const maxTurns = this.cfg.maxTurns ?? LOOP_LIMITS.maxTurns;
-
-    ctx.messages.push({ role: "user", content: text });
-
     const sendStart = performance.now();
 
     // Thread cancellation to the tool `run` commands and the gate (not just the
@@ -264,6 +332,28 @@ export class Session {
     ctx.signal = opts.signal;
 
     try {
+      // Auto-compact BEFORE adding the new message (so it stays a fresh turn
+      // after the summary) when the held context is near the window.
+      const pct = this.autoCompactPct();
+
+      if (pct !== undefined) {
+        report({
+          kind: "tool",
+          task: SESSION_ID,
+          message: `⊙ context ~${pct}% full — auto-compacting to free room`,
+        });
+
+        const { before, after } = await this.compact(opts.signal);
+
+        report({
+          kind: "tool",
+          task: SESSION_ID,
+          message: `⊙ compacted ${before} → ${after} messages`,
+        });
+      }
+
+      ctx.messages.push({ role: "user", content: text });
+
       return await this.drive(maxTurns, sendStart, opts);
     } catch (err) {
       if (opts.signal?.aborted === true) {
@@ -282,18 +372,52 @@ export class Session {
     }
   }
 
+  /**
+   * Build a project from scratch in two STAGES, the way local models stay
+   * reliable: (1) plan + write the type contract (`src/types.ts`) with the gate
+   * OFF — a types-only app can't build yet, so gating here would spuriously fail;
+   * (2) implement against those types with the gate ON, driving to green. This is
+   * the community-validated plan→interfaces→implementation pattern; our gate is
+   * the verification stage. A soft constraint: if the model ignores step 1 and
+   * builds everything, step 2 simply continues — nothing breaks.
+   */
+  async buildStaged(
+    request: string,
+    opts: ISendOptions = {}
+  ): Promise<ISendResult> {
+    const gate = this.ctx.task.accept;
+
+    this.setGate("");
+    const planned = await this.send(`${request}\n\n${PLAN_TYPES_STEP}`, opts);
+
+    this.setGate(gate);
+
+    // Don't push on to implementation if the user aborted the design step.
+    if (planned.status === "interrupted") {
+      return planned;
+    }
+
+    return this.send(IMPLEMENT_STEP, opts);
+  }
+
   /** The turn loop — separated so `send` can wrap it in abort handling. */
   /** One model call: stream thinking live, push the reply, and surface salvage +
    *  the highlighted answer. Keeps `drive`'s per-turn control flow lean. */
-  private async askModel(signal?: AbortSignal): Promise<IModelResponse> {
+  private async askModel(
+    signal?: AbortSignal,
+    toolChoice: "auto" | "required" = "auto",
+    forceNoThinking = false
+  ): Promise<IModelResponse> {
     const { ctx, report } = this;
+    // On a FORCED tool turn, disable thinking: the model already decided what to
+    // do, and thinking-on is a known source of prose-before-the-call malformed
+    // output on this model. `required` + thinking-off = the cleanest tool call.
+    const enableThinking = forceNoThinking ? false : this.cfg.enableThinking;
     const res = await this.provider.complete(ctx.messages, {
       tools: this.tools,
       temperature: this.cfg.temperature ?? 0,
-      toolChoice: "auto",
-      ...(this.cfg.enableThinking === undefined
-        ? {}
-        : { enableThinking: this.cfg.enableThinking }),
+      toolChoice,
+      ...(enableThinking === undefined ? {} : { enableThinking }),
       ...(this.cfg.thinkingTokenBudget === undefined
         ? {}
         : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
@@ -301,12 +425,27 @@ export class Session {
       onToken: (token, channel) => {
         // Stream the model's thinking AND the tool calls it's writing (the files)
         // live — so a long generation shows progress instead of a frozen cursor.
-        // `content` is rendered once, formatted, when the turn settles.
+        // `content` is rendered once, formatted, when the turn settles. The
+        // `channel` lets the renderer collapse reasoning to a compact indicator
+        // (the raw text still reaches the --log).
         if (channel === "reasoning" || channel === "tool") {
-          report({ kind: "token", task: SESSION_ID, message: token });
+          report({ kind: "token", task: SESSION_ID, message: token, channel });
         }
       },
     });
+
+    if (res.usage !== undefined) {
+      this.lastUsage = res.usage;
+      // Logged (not shown) so the --log analyzer can compute tokens-to-solution.
+      report({
+        kind: "usage",
+        task: SESSION_ID,
+        message: `tokens ${res.usage.promptTokens} in / ${res.usage.completionTokens} out`,
+        promptTokens: res.usage.promptTokens,
+        completionTokens: res.usage.completionTokens,
+        totalTokens: res.usage.totalTokens,
+      });
+    }
 
     ctx.messages.push({
       role: "assistant",
@@ -382,6 +521,11 @@ export class Session {
     // How many times this send the model dumped file contents as a chat message
     // instead of calling `create` (the narrate-instead-of-build failure).
     let buildNudges = 0;
+    // Set after we nudge a narrating model: on the NEXT turn we FORCE a tool call
+    // (tool_choice "required") instead of "auto". vLLM's required path follows the
+    // tool schema strictly — so the model can't narrate (or emit malformed tool
+    // syntax) again on a turn where we already know a tool call is the move.
+    let forceTool = false;
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       const turnStart = performance.now();
@@ -404,7 +548,13 @@ export class Session {
         message: `turn ${turn}: asking model`,
       });
 
-      const res = await this.askModel(opts.signal);
+      const res = await this.askModel(
+        opts.signal,
+        forceTool ? "required" : "auto",
+        forceTool // forced tool turn → also disable thinking for a clean call
+      );
+
+      forceTool = false;
 
       // The stream caught a degenerate repetition loop and aborted it. Don't
       // nudge into another loop — stop the turn so the user can re-steer.
@@ -439,6 +589,7 @@ export class Session {
         }
 
         buildNudges += 1;
+        forceTool = true; // it just narrated code — force a tool call next turn
 
         continue;
       }
@@ -455,8 +606,10 @@ export class Session {
         };
       }
 
-      // Stopped while still red without acting → nudge it to act, not narrate.
+      // Stopped while still red without acting → nudge it to act, not narrate,
+      // and FORCE a tool call on the next turn so it can't narrate again.
       ctx.messages.push({ role: "user", content: NO_TOOL_CALL_NUDGE });
+      forceTool = true;
     }
 
     report({

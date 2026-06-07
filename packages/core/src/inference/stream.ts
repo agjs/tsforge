@@ -1,16 +1,18 @@
 import type {
   IModelResponse,
   IToolCall,
+  ITokenUsage,
   TokenChannel,
 } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
-import { parseArgs, salvageToolCalls } from "./wire";
+import { parseArgs, parseUsage, salvageToolCalls } from "./wire";
 import { StreamGuard } from "./stream-guard";
 
 interface IStreamDelta {
   content?: string;
   reasoning?: string;
   toolCalls?: unknown;
+  usage?: ITokenUsage;
 }
 
 /** Streaming: parse SSE chunks, forward tokens to `onToken`, assemble the response. */
@@ -31,6 +33,7 @@ export async function streamResponse(
     guard: new StreamGuard(),
     content: "",
   };
+  // `usage` arrives in a trailing chunk (choices: []), captured in consumeLines.
   let buffer = "";
   let degenerated = false;
   let result = await reader.read();
@@ -54,6 +57,12 @@ export async function streamResponse(
     result = await reader.read();
   }
 
+  buffer += decoder.decode();
+
+  if (!degenerated && buffer.trim().length > 0) {
+    degenerated = consumeLines([buffer], acc, onToken);
+  }
+
   return assemble(acc, degenerated);
 }
 
@@ -61,6 +70,7 @@ interface IStreamAcc {
   calls: Map<number, { id?: string; name: string; args: string }>;
   guard: StreamGuard;
   content: string;
+  usage?: ITokenUsage;
 }
 
 /** Parse a batch of SSE lines, forward tokens, accumulate state; returns true
@@ -97,6 +107,10 @@ function consumeLines(
       }
     }
 
+    if (delta.usage !== undefined) {
+      acc.usage = delta.usage;
+    }
+
     accumulateToolCalls(delta.toolCalls, acc.calls, onToken);
   }
 
@@ -104,6 +118,7 @@ function consumeLines(
 }
 
 function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
+  const usage = acc.usage === undefined ? {} : { usage: acc.usage };
   const toolCalls: IToolCall[] = [...acc.calls.values()].map((c) => ({
     id: c.id,
     name: c.name,
@@ -112,8 +127,8 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
 
   if (toolCalls.length > 0) {
     return degenerated
-      ? { content: acc.content, toolCalls, degenerated }
-      : { content: acc.content, toolCalls };
+      ? { content: acc.content, toolCalls, degenerated, ...usage }
+      : { content: acc.content, toolCalls, ...usage };
   }
 
   const salvaged = salvageToolCalls(acc.content);
@@ -123,6 +138,7 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
     toolCalls: salvaged,
     salvaged: salvaged.length,
     ...(degenerated ? { degenerated } : {}),
+    ...usage,
   };
 }
 
@@ -151,11 +167,14 @@ function parseSseLine(line: string): IStreamDelta | null {
     return null;
   }
 
+  // The trailing usage chunk has an empty `choices` array — capture its usage
+  // even though there's no delta to forward.
+  const usage = parseUsage(parsed.usage);
   const choices = parsed.choices;
   const first = isArray(choices) ? choices[0] : undefined;
 
   if (!isRecord(first) || !isRecord(first.delta)) {
-    return null;
+    return usage === undefined ? null : { usage };
   }
 
   const delta = first.delta;
@@ -164,12 +183,13 @@ function parseSseLine(line: string): IStreamDelta | null {
     content: typeof delta.content === "string" ? delta.content : undefined,
     reasoning: firstString(delta.reasoning, delta.reasoning_content),
     toolCalls: delta.tool_calls,
+    ...(usage === undefined ? {} : { usage }),
   };
 }
 
 function accumulateToolCalls(
   raw: unknown,
-  calls: Map<number, { name: string; args: string }>,
+  calls: Map<number, { id?: string; name: string; args: string }>,
   onToken: (text: string, channel: TokenChannel) => void
 ): void {
   if (!isArray(raw)) {

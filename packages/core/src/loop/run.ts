@@ -1,5 +1,5 @@
 import type { ITask } from "../spec";
-import type { IChatMessage, IProvider } from "../inference";
+import type { IChatMessage, IModelResponse, IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate";
 import { parseEslintJson } from "../validate";
 import { readFiles } from "../lib/fs";
@@ -17,6 +17,50 @@ import {
   emitTiming,
   NO_TOOL_CALL_NUDGE,
 } from "./turn";
+
+/** Report any salvaged malformed tool calls, then stop the task if the stream
+ *  degenerated into a repetition loop (returns a terminal stuck result; null to
+ *  keep going) — mirrors the interactive Session's degeneration handling. */
+function handleDegeneration(
+  res: IModelResponse,
+  ctx: ILoopCtx,
+  state: ILoopState,
+  at: { turn: number; turnStart: number; taskStart: number }
+): IRunResult | null {
+  const { report } = ctx;
+  const { id } = ctx.task;
+
+  if (res.salvaged !== undefined && res.salvaged > 0) {
+    report({
+      kind: "tool",
+      task: id,
+      message: `recovered ${res.salvaged} malformed tool call(s) (server tool-call parser mismatch)`,
+    });
+  }
+
+  if (res.degenerated !== true) {
+    return null;
+  }
+
+  report({
+    kind: "stuck",
+    task: id,
+    cycles: at.turn,
+    message:
+      "model fell into a repetition loop - stopped. Try a smaller task or steer it with a narrower instruction.",
+  });
+  emitTiming(report, id, at.turn, at.turnStart, at.taskStart);
+
+  return {
+    task: id,
+    redConfirmed: true,
+    status: RUN_STATUS.stuck,
+    cycles: at.turn,
+    reason: STUCK_REASON.stalled,
+    edits: state.edits,
+    regressions: state.regressions,
+  };
+}
 
 /**
  * The implement loop as a persistent, tool-using conversation. The model drives
@@ -143,6 +187,16 @@ export async function runTask(
       content: res.content,
       toolCalls: res.toolCalls,
     });
+
+    const looped = handleDegeneration(res, ctx, state, {
+      turn,
+      turnStart,
+      taskStart,
+    });
+
+    if (looped !== null) {
+      return looped;
+    }
 
     const touchedEditable =
       res.toolCalls.length === 0

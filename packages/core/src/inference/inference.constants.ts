@@ -30,5 +30,5 @@ export const PROVIDER_LIMITS = {
  */
 export const PROVIDER_DEFAULTS = {
   baseUrl: "http://192.168.20.107:8000/v1",
-  model: "qwen3.6-35b-a3b",
+  model: "qwen3.6-27b",
 } as const;

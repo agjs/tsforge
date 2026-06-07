@@ -88,3 +88,29 @@ test("stuck when it claims done but the gate stays red, unchanged", async () => 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("stuck immediately when the streamed model response degenerates", async () => {
+  const dir = await tmp();
+
+  try {
+    const r = await runTask(
+      { id: "1", accept: "test -f never.txt", files: [] },
+      dir,
+      {
+        async complete() {
+          return {
+            content: "I will fix it.\nI will fix it.\n",
+            toolCalls: [],
+            degenerated: true,
+          };
+        },
+      }
+    );
+
+    expect(r.status).toBe("stuck");
+    expect(r.reason).toBe("stalled");
+    expect(r.cycles).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

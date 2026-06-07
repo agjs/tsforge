@@ -2,3 +2,20 @@ export interface IRenderOptions {
   /** Emit ANSI color codes (terminal) vs plain text (log files). Default true. */
   color?: boolean;
 }
+
+/** A compact post-turn status line — the "where am I" summary modern CLIs show. */
+export interface IStatusInfo {
+  model: string;
+  /** Estimated tokens of conversation context currently held. */
+  contextTokens: number;
+  /** The model's context window (for the used/total ratio). */
+  contextWindow: number;
+  /** Turns the last send took. */
+  turns: number;
+  /** Wall-clock of the last send, in ms. */
+  elapsedMs: number;
+  /** Outcome of the last send (responded / done / stuck / interrupted). */
+  status: string;
+  /** Editable scope label. */
+  scope: string;
+}

@@ -33,6 +33,30 @@ test("retries a transient connection blip, then succeeds", async () => {
   expect(r.content).toBe("ok");
 });
 
+test("captures token usage from a non-streaming response", async () => {
+  const fetchWithUsage = (async () =>
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: "ok" } }],
+        usage: { prompt_tokens: 900, completion_tokens: 12, total_tokens: 912 },
+      }),
+      { status: 200 }
+    )) as unknown as typeof fetch;
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fetchWithUsage,
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }]);
+
+  expect(r.usage).toEqual({
+    promptTokens: 900,
+    completionTokens: 12,
+    totalTokens: 912,
+  });
+});
+
 test("does NOT retry a non-connection error (propagates)", async () => {
   let calls = 0;
   const badFetch = (async () => {
@@ -75,7 +99,7 @@ test("posts to /chat/completions and parses content + tool calls", async () => {
 
   const p = new OpenAICompatibleProvider({
     baseUrl: "http://x/v1",
-    model: "qwen3.6-27b",
+    model: "qwen3.6-35b-a3b",
     apiKey: "k",
     fetch: fakeFetch,
   });
@@ -85,7 +109,7 @@ test("posts to /chat/completions and parses content + tool calls", async () => {
   });
 
   expect(captured!.url).toBe("http://x/v1/chat/completions");
-  expect(captured!.body.model).toBe("qwen3.6-27b");
+  expect(captured!.body.model).toBe("qwen3.6-35b-a3b");
   expect(captured!.body.messages).toEqual([{ role: "user", content: "hi" }]);
   expect(r.content).toBe("ok");
   expect(r.toolCalls).toEqual([{ name: "edit", arguments: { file: "a.ts" } }]);
@@ -202,6 +226,39 @@ test("parses the tool-call id from the model response", async () => {
   expect(r.toolCalls[0]?.id).toBe("abc");
 });
 
+test("accepts object-valued tool-call arguments from local servers", async () => {
+  const fakeFetch = (async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: "",
+              tool_calls: [
+                {
+                  function: {
+                    name: "read",
+                    arguments: { file: "src/App.tsx" },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200 }
+    )) as unknown as typeof fetch;
+
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fakeFetch,
+  });
+  const r = await p.complete([{ role: "user", content: "x" }]);
+
+  expect(r.toolCalls[0]?.arguments).toEqual({ file: "src/App.tsx" });
+});
+
 test("sends repetition_penalty when configured, to break degenerate loops", async () => {
   let body: Record<string, unknown> = {};
   const fakeFetch = (async (_url: string | URL, init: RequestInit) => {
@@ -275,6 +332,22 @@ test("throws on a non-200 response", async () => {
 
   await expect(p.complete([{ role: "user", content: "hi" }])).rejects.toThrow(
     "500"
+  );
+});
+
+test("includes the response body in model HTTP errors", async () => {
+  const fakeFetch = (async () =>
+    new Response("bad chat template", {
+      status: 400,
+    })) as unknown as typeof fetch;
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fakeFetch,
+  });
+
+  await expect(p.complete([{ role: "user", content: "hi" }])).rejects.toThrow(
+    "bad chat template"
   );
 });
 
