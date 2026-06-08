@@ -141,8 +141,15 @@ export function makeFileLinter(
         return [];
       }
 
+      // ONLY surface errors the model must fix BY HAND. ESLint sets `fix` on a
+      // message when the rule is auto-fixable — those (padding-line, quotes, semis,
+      // curly, prefer-const…) are squashed by the gate's `eslint --fix`/`prettier`
+      // janitor for free, so nagging the model about them just burns turns and, for
+      // interdependent rules like padding-line, OSCILLATES (fix one blank line, the
+      // rule flags the next) — a real thrash we saw in a run log. Keep only the
+      // hand-fix-required rules: `as`-casts, `any`, I-prefix, one-component, etc.
       return first.messages
-        .filter((m) => m.severity === 2)
+        .filter((m) => m.severity === 2 && m.fix === undefined)
         .map((m) => ({
           line: m.line,
           message: m.message,
@@ -218,6 +225,13 @@ const BUILD_PREAMBLE = [
   "Work directly — do NOT restate the task, announce a plan, or narrate progress",
   "between steps ('The user wants me to…', 'I was in the middle of…', 'Now let me…').",
   "That text is wasted. Emit the next tool call.",
+  "",
+  "NO COMMENTS in the code you write. Every comment is generated text that costs",
+  "you time, and these add nothing: file-header banners ('// Company domain",
+  "constants'), section dividers ('// ─── Seed data ───'), and lines that restate",
+  "the code or where a symbol lives ('// re-exported via the barrel'). Write",
+  "self-explanatory names instead. The ONLY allowed comment explains a non-obvious",
+  "WHY that the code cannot — and most files need none. Do not write JSDoc.",
 ].join("\n");
 
 /** The system-prompt guidance for a stack (build framing + structure/conventions). */

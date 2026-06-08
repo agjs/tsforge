@@ -448,6 +448,63 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   }
 }
 
+/** Snapshot the editable files' mtimes (ms) — cheap stat, used to detect which
+ *  files the deterministic fixers + fix command rewrote. */
+async function snapshotMtimes(
+  cwd: string,
+  files: string[]
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+
+  for (const f of await resolveScopeFiles(cwd, files)) {
+    try {
+      out.set(f, Bun.file(join(cwd, f)).lastModified);
+    } catch {
+      // ignore — a file that can't be stat'd just isn't tracked
+    }
+  }
+
+  return out;
+}
+
+/** Files whose mtime advanced between two snapshots — i.e. a fixer rewrote them. */
+function changedSince(
+  before: Map<string, number>,
+  after: Map<string, number>
+): string[] {
+  const changed: string[] = [];
+
+  for (const [f, mtime] of after) {
+    const prev = before.get(f);
+
+    if (prev === undefined || mtime > prev) {
+      changed.push(f);
+    }
+  }
+
+  return changed;
+}
+
+/** Max auto-fixed files to name in the notice before eliding. */
+const MAX_AUTOFIX_NAMED = 20;
+
+/** Tell the model what the janitor just changed, so it re-reads before editing and
+ *  doesn't waste turns re-fixing formatting/imports (or edit stale text → reject). */
+function autoFixNotice(files: string[]): string {
+  const shown = files.slice(0, MAX_AUTOFIX_NAMED).join(", ");
+  const more =
+    files.length > MAX_AUTOFIX_NAMED
+      ? ` (+${String(files.length - MAX_AUTOFIX_NAMED)} more)`
+      : "";
+
+  return (
+    `NOTE: automatic fixers (prettier, eslint --fix, organize-imports, TS quick-fixes) ` +
+    `just reformatted/fixed and SAVED these files: ${shown}${more}. Those style/import/` +
+    `formatting fixes are DONE — do not redo them. Their on-disk text now DIFFERS from ` +
+    `what you wrote, so \`read\` a file before editing it. Fix ONLY the errors below.`
+  );
+}
+
 /**
  * The deterministic gate — the only authority on "done". Auto-fix, run the
  * optional fix command, validate, and return a terminal result (done/stuck) or
@@ -459,6 +516,9 @@ export async function settleGate(
   turn: number
 ): Promise<IRunResult | null> {
   const { task, cwd, parse, report, messages } = ctx;
+  // Snapshot before the fixers so we can tell the model exactly what they changed
+  // (else it re-fixes already-fixed style and edits now-stale text → rejects).
+  const beforeFix = await snapshotMtimes(cwd, task.files);
 
   await applyDeterministicFixes(ctx);
 
@@ -468,6 +528,19 @@ export async function settleGate(
       cwd,
       ctx.signal === undefined ? {} : { signal: ctx.signal }
     );
+  }
+
+  const autoFixed = changedSince(
+    beforeFix,
+    await snapshotMtimes(cwd, task.files)
+  );
+
+  if (autoFixed.length > 0) {
+    report({
+      kind: "tool",
+      task: task.id,
+      message: `auto-fixed ${String(autoFixed.length)} file(s) (prettier/eslint/imports) — noted to the model`,
+    });
   }
 
   if (ctx.onGateChunk !== undefined) {
@@ -540,10 +613,10 @@ export async function settleGate(
     };
   }
 
-  messages.push({
-    role: "user",
-    content: await gateFeedback(gate.errors, task, cwd),
-  });
+  const feedback = await gateFeedback(gate.errors, task, cwd);
+  const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
+
+  messages.push({ role: "user", content: `${notice}${feedback}` });
 
   return null;
 }

@@ -6,6 +6,7 @@ import sonarjs from "eslint-plugin-sonarjs";
 import unicorn from "eslint-plugin-unicorn";
 import importX from "eslint-plugin-import-x";
 import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
+import stylistic from "@stylistic/eslint-plugin";
 
 /*
  * Inherited from boringstack/apps/api: the general TypeScript quality rules
@@ -39,6 +40,7 @@ export default tseslint.config(
       unicorn,
       "import-x": importX,
       "eslint-comments": eslintComments,
+      "@stylistic": stylistic,
     },
     rules: {
       "prettier/prettier": "error",
@@ -112,7 +114,7 @@ export default tseslint.config(
         "error",
         { allowNumber: true, allowBoolean: false, allowNullish: false },
       ],
-      "padding-line-between-statements": [
+      "@stylistic/padding-line-between-statements": [
         "error",
         { blankLine: "always", prev: "import", next: "*" },
         { blankLine: "any", prev: "import", next: "import" },

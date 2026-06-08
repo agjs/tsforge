@@ -198,6 +198,43 @@ test("makeFileLinter flags the moat rules tsc is blind to (the `as` cast), clean
   }
 });
 
+test("makeFileLinter does NOT report AUTO-FIXABLE issues (the janitor handles those)", async () => {
+  const dir = await tempDir();
+
+  try {
+    const lint = makeFileLinter("react", dir);
+
+    await mkdir(join(dir, "src"), { recursive: true });
+
+    // Missing blank line before `return` → padding-line (AUTO-FIXABLE). The model
+    // must never be nagged about it (the gate's eslint --fix/prettier squash it);
+    // nagging caused an oscillation thrash in a run log. The non-fixable `as` cast
+    // in the SAME file must still surface.
+    const f = join(dir, "src/mix.ts");
+
+    await writeFile(
+      f,
+      "export function f(): string {\n" +
+        "  const v = (1 as unknown) as string;\n" +
+        "  return v;\n" +
+        "}\n"
+    );
+
+    const problems = await lint(f);
+
+    expect(problems.some((p) => p.ruleId === "no-restricted-syntax")).toBe(
+      true
+    );
+    expect(
+      problems.some(
+        (p) => p.ruleId === "@stylistic/padding-line-between-statements"
+      )
+    ).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("scaffoldWeb never overwrites an existing file", async () => {
   const dir = await tempDir();
 

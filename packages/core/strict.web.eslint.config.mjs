@@ -6,6 +6,7 @@
 // one other way: it allows `as const` (banning only value-changing `as`/`<Foo>`
 // via AST selectors), since `as const` is idiomatic for typed literal registries.
 import tseslint from "typescript-eslint";
+import stylistic from "@stylistic/eslint-plugin";
 
 // Custom rule: ONE React component per .tsx file (boringstack). The classic
 // eslint-plugin-react/no-multi-comp crashes on ESLint 10 and @eslint-react has no
@@ -80,6 +81,7 @@ export default tseslint.config(
     languageOptions: { parser: tseslint.parser },
     plugins: {
       "@typescript-eslint": tseslint.plugin,
+      "@stylistic": stylistic,
       boringstack: { rules: { "one-component-per-file": oneComponentPerFile } },
     },
     rules: {
@@ -110,8 +112,10 @@ export default tseslint.config(
       "prefer-template": "error",
       "no-var": "error",
       // Blank-line discipline (mirrors the core config) — the model rarely gets
-      // spacing right, so prettier --write + this rule's --fix make it free.
-      "padding-line-between-statements": [
+      // spacing right, so prettier --write + this rule's --fix make it free. Uses
+      // @stylistic (the rule's maintained home; the core rule is deprecated and
+      // spams `usedDeprecatedRules` into eslint's --format json gate output).
+      "@stylistic/padding-line-between-statements": [
         "error",
         { blankLine: "always", prev: "import", next: "*" },
         { blankLine: "any", prev: "import", next: "import" },

@@ -291,6 +291,65 @@ test("run does NOT condense a FAILED vite build — the model must see the error
   }
 });
 
+test("run factors the shared directory prefix out of a file listing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const base = "/agjs/code/ant/evals/runs/x/src";
+    const files = [
+      `${base}/routes/__root.tsx`,
+      `${base}/routes/index.tsx`,
+      `${base}/index.css`,
+      `${base}/main.tsx`,
+      `${base}/lib/result.ts`,
+      `${base}/lib/parse.ts`,
+      `${base}/lib/object.ts`,
+    ];
+
+    const r = await executeTool(
+      {
+        name: "run",
+        arguments: {
+          command: `printf "%s\\n" ${files.map((f) => `"${f}"`).join(" ")}`,
+        },
+      },
+      ctx(dir, [])
+    );
+
+    // The long shared prefix appears ONCE as a header, then relative entries…
+    expect(r).toContain("entries):");
+    expect(r).toContain("routes/__root.tsx");
+    // …and the full absolute prefix is NOT repeated on every line.
+    expect(r.match(new RegExp(base.replace(/\//g, "\\/"), "g"))?.length).toBe(
+      1
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("run leaves NON-path output untouched (no false-positive condensing)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const r = await executeTool(
+      {
+        name: "run",
+        arguments: {
+          command:
+            'printf "%s\\n" "Tests:" "1 passed" "2 passed" "3 passed" "all green" "done"',
+        },
+      },
+      ctx(dir, [])
+    );
+
+    expect(r).toContain("all green");
+    expect(r).not.toContain("entries):");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("run attaches rule-fix guidance when its output shows lint/type errors", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
