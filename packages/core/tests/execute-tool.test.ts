@@ -133,6 +133,56 @@ test("the size cap is per-replacement — a huge single replacement is still rej
   }
 });
 
+test("edit on an EXISTING file with an unmatched oldString says the file exists + don't create", async () => {
+  // Regression: the bare reason "not-found" read as "FILE not found", so the model
+  // switched to `create` (rejected: already exists) and thrashed edit↔create for
+  // ~4 turns. The message must disambiguate: file exists, read it, do NOT create.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    await Bun.write(join(dir, "impl.ts"), "const a = 1;\n");
+
+    const r = await executeTool(
+      {
+        name: "edit",
+        arguments: {
+          file: "impl.ts",
+          oldString: "const z = 99;",
+          newString: "const z = 100;",
+        },
+      },
+      ctx(dir, ["impl.ts"])
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(r).toContain("EXISTS");
+    expect(r).toContain("Do NOT use `create`");
+    expect(r).toContain("read");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("edit on a MISSING file tells the model to use create", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const r = await executeTool(
+      {
+        name: "edit",
+        arguments: { file: "impl.ts", oldString: "x", newString: "y" },
+      },
+      ctx(dir, ["impl.ts"])
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(r).toContain("does not exist");
+    expect(r).toContain("`create`");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("run executes a command and returns its output + exit code", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
@@ -144,6 +194,98 @@ test("run executes a command and returns its output + exit code", async () => {
 
     expect(r).toContain("scratch-works");
     expect(r).toContain("exit 0");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("run condenses eslint JSON, aggregating a repeated rule into one line", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const eslintJson = JSON.stringify([
+      {
+        filePath: "/x/CompaniesList.tsx",
+        messages: [
+          {
+            severity: 2,
+            line: 24,
+            ruleId: "padding-line-between-statements",
+            message: "Expected blank line",
+          },
+          {
+            severity: 2,
+            line: 26,
+            ruleId: "padding-line-between-statements",
+            message: "Expected blank line",
+          },
+          {
+            severity: 2,
+            line: 77,
+            ruleId: "no-restricted-syntax",
+            message: "No as casts",
+          },
+        ],
+      },
+    ]);
+
+    const r = await executeTool(
+      { name: "run", arguments: { command: `echo '${eslintJson}'` } },
+      ctx(dir, [])
+    );
+
+    // The repeated padding rule collapses to ONE aggregated line (×2, L24,26)…
+    expect(r).toContain("(×2)");
+    expect(r).toContain("L24,26");
+    // …while the lone no-as error keeps its single file:line form.
+    expect(r).toContain("CompaniesList.tsx:77");
+    expect(r).toContain("eslint: 3 error(s)");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("run condenses a successful vite build's chunk table to one line", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const r = await executeTool(
+      {
+        name: "run",
+        arguments: {
+          command:
+            'printf "%s\\n" "vite v6.4.3 building for production..." "✓ 212 modules transformed." "dist/assets/a.js 1kB" "dist/assets/b.js 2kB" "✓ built in 3.45s"',
+        },
+      },
+      ctx(dir, [])
+    );
+
+    expect(r).toContain("vite build ✓");
+    expect(r).toContain("212 modules");
+    expect(r).toContain("2 chunks");
+    expect(r).not.toContain("dist/assets/a.js"); // table elided
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("run does NOT condense a FAILED vite build — the model must see the error", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const r = await executeTool(
+      {
+        name: "run",
+        arguments: {
+          command:
+            'printf "%s\\n" "✓ 100 modules transformed." "error: Could not resolve ./missing" "built in 1.0s"',
+        },
+      },
+      ctx(dir, [])
+    );
+
+    expect(r).toContain("Could not resolve");
+    expect(r).not.toContain("vite build ✓");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

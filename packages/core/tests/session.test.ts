@@ -556,6 +556,59 @@ test("a provider error ends the send as 'stuck', never throws", async () => {
   }
 });
 
+// A SINGLE request timeout mid-build must not abandon prior turns: the loop
+// re-steers (forcing a small tool call) and continues, rather than going stuck.
+test("recovers from one request timeout, then proceeds to done", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let calls = 0;
+    const choices: (string | undefined)[] = [];
+    const provider: IProvider = {
+      async complete(_messages, opts) {
+        calls += 1;
+        choices.push(opts?.toolChoice);
+
+        if (calls === 1) {
+          throw Object.assign(new Error("The operation timed out."), {
+            name: "TimeoutError",
+          });
+        }
+
+        if (calls === 2) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "1",
+                name: "create",
+                arguments: { file: "x.ts", content: "export const x = 1;\n" },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+
+    const result = await session.send("build it");
+
+    // The turn after the timeout was FORCED (required) → a small clean call, and
+    // the build proceeded to green instead of abandoning on the single timeout.
+    expect(choices[1]).toBe("required");
+    expect(result.status).toBe("done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("send returns 'interrupted' when its signal is aborted mid-turn", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 

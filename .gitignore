@@ -8,3 +8,5 @@ evals/
 .env.*
 !.env.example
 .claude/
+evals/runs/
+evals/.web-cache-*/

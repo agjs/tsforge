@@ -109,6 +109,23 @@ export default tseslint.config(
       "prefer-const": "error",
       "prefer-template": "error",
       "no-var": "error",
+      // Blank-line discipline (mirrors the core config) — the model rarely gets
+      // spacing right, so prettier --write + this rule's --fix make it free.
+      "padding-line-between-statements": [
+        "error",
+        { blankLine: "always", prev: "import", next: "*" },
+        { blankLine: "any", prev: "import", next: "import" },
+        { blankLine: "always", prev: "*", next: "return" },
+        { blankLine: "always", prev: "*", next: "throw" },
+        { blankLine: "always", prev: ["const", "let", "var"], next: "*" },
+        {
+          blankLine: "any",
+          prev: ["const", "let", "var"],
+          next: ["const", "let", "var"],
+        },
+        { blankLine: "always", prev: "block-like", next: "*" },
+        { blankLine: "always", prev: "*", next: "block-like" },
+      ],
       eqeqeq: ["error", "always"],
       curly: ["error", "all"],
       "no-restricted-syntax": [

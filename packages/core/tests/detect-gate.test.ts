@@ -1,8 +1,13 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildGate, buildWebGate, scaffoldWeb } from "../src/detect-gate";
+import {
+  buildGate,
+  buildWebGate,
+  makeFileLinter,
+  scaffoldWeb,
+} from "../src/detect-gate";
 
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "tsforge-gate-"));
@@ -153,6 +158,41 @@ test("scaffoldWeb(vanilla) lays a Vite + TS skeleton; gate has no vendored exemp
     expect(gate.command).toContain("bun run build");
     expect(gate.command).toContain("dist/index.html");
     expect(gate.command).not.toContain("--ignore-pattern");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("makeFileLinter flags the moat rules tsc is blind to (the `as` cast), clean = []", async () => {
+  const dir = await tempDir();
+
+  try {
+    const lint = makeFileLinter("react", dir);
+
+    await mkdir(join(dir, "src"), { recursive: true });
+
+    // The exact pattern a run log showed piling up unseen: type-valid (tsc passes),
+    // but banned by the strict config's no-restricted-syntax `as` rule.
+    const bad = join(dir, "src/foo.constants.ts");
+
+    await writeFile(
+      bad,
+      "const x = Object.keys({ a: 1 }) as unknown as readonly string[];\n" +
+        "export const y = x;\n"
+    );
+
+    const problems = await lint(bad);
+
+    expect(problems.some((p) => p.ruleId === "no-restricted-syntax")).toBe(
+      true
+    );
+    expect(problems.every((p) => typeof p.line === "number")).toBe(true);
+
+    // A clean file yields no problems.
+    const good = join(dir, "src/clean.ts");
+
+    await writeFile(good, "export const n = 1;\n");
+    expect(await lint(good)).toEqual([]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

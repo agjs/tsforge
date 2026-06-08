@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { ITask } from "../spec";
 import type { IChatMessage, IToolCall } from "../inference";
 import {
@@ -24,7 +25,8 @@ import {
   LSP_TOOLS,
   TOOL_NAME,
 } from "../agent";
-import { TsService } from "../lsp";
+import { TsService, type ITsDiagnostic } from "../lsp";
+import type { FileLinter, IFileLintProblem } from "../detect-gate";
 
 /**
  * The shared turn primitives — one tool-using-conversation step and the
@@ -75,6 +77,9 @@ export interface ILoopCtx {
   task: ITask;
   cwd: string;
   tsService: TsService | null;
+  /** Write-time single-file linter (the gate's eslint rules, applied per write so
+   *  moat violations tsc can't see surface inline). Omitted ⇒ type-only guard. */
+  lintFile?: FileLinter;
   parse: ErrorParser | undefined;
   report: Reporter;
   messages: IChatMessage[];
@@ -111,6 +116,124 @@ export async function buildTsService(cwd: string): Promise<TsService | null> {
   return null;
 }
 
+/** Diagnostic codes that are EXPECTED noise mid-build, not real mistakes: 2307 =
+ *  "cannot find module" (a sibling the model hasn't created yet in this batch). */
+const TRANSIENT_DIAG_CODES = new Set<number>([2307]);
+
+/** Max diagnostics surfaced per write — keep the in-band feedback tight. */
+const MAX_WRITE_GUARD_DIAGS = 6;
+
+/** Render the per-issue lines (type errors + lint problems), capped + ordered. */
+function writeGuardLines(
+  absPath: string,
+  typeErrors: readonly ITsDiagnostic[],
+  lintProblems: readonly IFileLintProblem[]
+): string {
+  let text = "";
+
+  try {
+    text = readFileSync(absPath, "utf8");
+  } catch {
+    text = "";
+  }
+
+  const lineOf = (offset: number): number =>
+    text.slice(0, offset).split("\n").length;
+  const typeLines = typeErrors.map(
+    (d) => `  L${String(lineOf(d.start))}: ${d.message} (TS${String(d.code)})`
+  );
+  const lintLines = lintProblems.map(
+    (p) => `  L${String(p.line)}: ${p.message} (${p.ruleId})`
+  );
+  const all = [...typeLines, ...lintLines];
+  const shown = all.slice(0, MAX_WRITE_GUARD_DIAGS).join("\n");
+  const more =
+    all.length > MAX_WRITE_GUARD_DIAGS
+      ? `\n  …and ${String(all.length - MAX_WRITE_GUARD_DIAGS)} more`
+      : "";
+
+  return `${shown}${more}`;
+}
+
+/**
+ * WRITE-TIME GUARD: the moment the model writes a file, check JUST that file and
+ * hand any real problems back AS THE TOOL RESULT — so the model fixes them THIS
+ * turn, while the file is fresh, before building more on a broken foundation. Two
+ * layers: (1) tsc diagnostics via the in-process language service (real type
+ * errors); (2) the gate's eslint rules on this one file (when `lintFile` is wired)
+ * — the STRICTNESS MOAT (`no-as`, `I`-prefix, `prefer-template`) that tsc is blind
+ * to. A run log showed `Object.keys(x) as unknown as …` written in every domain
+ * file: type-valid, so the old type-only guard passed it, and the `as` violations
+ * piled up unseen until the gate. Together they convert the dominant failure mode
+ * (write 8 files → discover a 40-issue cascade at the gate → many repair turns)
+ * into (write 1 file → see its issue now → fix it). Transient "cannot find module"
+ * for not-yet-created siblings is filtered as expected noise.
+ */
+async function writeGuard(
+  ctx: { tsService: TsService; cwd: string; lintFile?: FileLinter },
+  file: string,
+  report: Reporter,
+  taskId: string
+): Promise<string> {
+  const { tsService, cwd, lintFile } = ctx;
+
+  tsService.refresh(file);
+
+  const typeErrors = tsService
+    .diagnostics(file)
+    .filter((d) => !TRANSIENT_DIAG_CODES.has(d.code));
+  // `file` is workspace-relative (the create/edit handler normalized it); the
+  // linter + readFileSync need the absolute path.
+  const absPath = join(cwd, file);
+  const lintProblems = lintFile === undefined ? [] : await lintFile(absPath);
+  const total = typeErrors.length + lintProblems.length;
+
+  if (total === 0) {
+    return "";
+  }
+
+  // Emit a visible event so the write-guard is observable in the log + countable
+  // by cli-metrics (the corrective feedback itself rides the tool result message).
+  report({
+    kind: "tool",
+    task: taskId,
+    message: `⚠ write-check: ${String(typeErrors.length)} type + ${String(lintProblems.length)} lint issue(s) in ${basename(absPath)} — fed back to fix inline`,
+  });
+
+  return (
+    `\n\n⚠ CHECK of this file found ${String(total)} issue(s) — fix them now ` +
+    "(edit this file) before writing others; ignore any 'cannot find module' for " +
+    `files you'll create next:\n${writeGuardLines(absPath, typeErrors, lintProblems)}`
+  );
+}
+
+/**
+ * Invoke the write-guard for a just-written file — best-effort: a guard failure
+ * must NEVER break the build (the gate stays the authority), so a null service or
+ * any thrown error degrades to no feedback. Extracted so `runToolCalls` stays
+ * under the cognitive-complexity bar.
+ */
+async function runWriteGuard(ctx: ILoopCtx, path: string): Promise<string> {
+  if (ctx.tsService === null || path.length === 0) {
+    return "";
+  }
+
+  try {
+    return await writeGuard(
+      {
+        tsService: ctx.tsService,
+        cwd: ctx.cwd,
+        ...(ctx.lintFile === undefined ? {} : { lintFile: ctx.lintFile }),
+      },
+      path,
+      ctx.report,
+      ctx.task.id
+    );
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Run the model's tool calls: execute each, feed the result back, and report
  * whether any touched an editable file (which means we should re-gate). Mutates
@@ -137,7 +260,7 @@ export async function runToolCalls(
     // write the handler normalized into scope, skipping the gate. The event fires
     // only on a successful write, so failures/rejects never count. See P1/P2.
     // (Object ref, not a captured `let`: CFA de-narrows a property after a call.)
-    const wrote = { value: false };
+    const wrote = { value: false, path: "" };
 
     const report: Reporter = (event) => {
       if (
@@ -146,6 +269,7 @@ export async function runToolCalls(
         isInScope(event.file, ctx.task.files)
       ) {
         wrote.value = true;
+        wrote.path = event.file;
       }
 
       ctx.report(event);
@@ -160,9 +284,12 @@ export async function runToolCalls(
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
     });
 
+    let feedback = "";
+
     if (wrote.value) {
       touchedEditable = true;
       state.edits += 1;
+      feedback = await runWriteGuard(ctx, wrote.path);
     }
 
     // A semantic write (rename/organize_imports) is scope-enforced internally and
@@ -176,7 +303,7 @@ export async function runToolCalls(
 
     ctx.messages.push({
       role: "tool",
-      content: result,
+      content: `${result}${feedback}`,
       toolCallId: call.id ?? `call_${i}`,
     });
   }
@@ -205,6 +332,9 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
         if (await fileExists(cwd, f)) {
           tsService.refresh(f);
           tsFixed += tsService.fixAll(f);
+          // Dedupe/sort imports + drop unused ones the model left behind — free
+          // mechanical cleanup so it never spends a repair turn on import hygiene.
+          tsFixed += tsService.organizeImports(f);
         }
       } catch {
         // degrade silently — the gate still runs below

@@ -5,6 +5,8 @@ import type {
   ITokenUsage,
 } from "../inference";
 import type { ITask } from "../spec";
+import type { FileLinter } from "../detect-gate";
+import { readFiles } from "../lib/fs";
 import { validate, type ErrorParser } from "../validate";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
 import type { Reporter } from "./loop.types";
@@ -67,6 +69,10 @@ export interface ISessionConfig {
   incrementalCheck?: string;
   /** Edits between incremental checks (default 3). */
   checkEvery?: number;
+  /** Write-time single-file linter (the gate's eslint rules per write). When set,
+   *  the write-guard reports lint violations — the moat rules tsc can't see (`as`,
+   *  `I`-prefix) — inline, so they're fixed in-context not piled up at the gate. */
+  lintFile?: FileLinter;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -83,6 +89,11 @@ export interface ISendOptions {
    *  messages before the next model call, so the user can STEER a run in flight
    *  ("actually use Tailwind") without aborting it. */
   steer?: () => string[];
+  /** Per-send thinking override (beats cfg.enableThinking for this send only).
+   *  Used to keep thinking ON for the design phase (where reasoning earns its
+   *  keep) but OFF for the mechanical implement phase, where ~25k tokens of
+   *  pre-write reasoning per build is pure latency. */
+  enableThinking?: boolean;
 }
 
 const SESSION_ID = "session";
@@ -100,13 +111,40 @@ const PLAN_TYPES_STEP =
   "`src/<domain>/<domain>.types.ts` (its `I`-prefixed interfaces) and, where it has " +
   "fixed registries/config, `src/<domain>/<domain>.constants.ts` (`as const`). Put " +
   "types shared across domains in `src/shared/shared.types.ts`. Do NOT create one " +
-  "mega `src/types.ts`, and do NOT build components yet — types/constants only, then stop.";
+  "mega `src/types.ts`, and do NOT build components yet — types/constants only, then stop.\n" +
+  "SPEED: after the one-paragraph plan, write MANY files per turn — emit SEVERAL " +
+  "`create` tool calls in a SINGLE response (batch all of a domain's type/constant " +
+  "files at once). Do NOT write one file then stop and wait.";
 
 /** Default edits between incremental checks. */
 const CHECK_EVERY = 3;
 
 /** How many times a send recovers from a repetition loop before giving up. */
 const MAX_DEGENERATION_RECOVERIES = 2;
+
+/** How many times a send recovers from a model-request TIMEOUT before giving up.
+ *  A single over-long turn (the model spiralled past the request timeout) must not
+ *  throw away many turns of real progress — re-steer toward a small, fast turn and
+ *  continue. Bounded so a server that's genuinely wedged still ends the run. */
+const MAX_TIMEOUT_RECOVERIES = 2;
+
+/** Pushed after a request timeout — the previous turn ran past the (generous)
+ *  request timeout, almost always from too-long reasoning or one huge file. Demand
+ *  a small, fast turn (paired with a forced, thinking-off tool call). */
+const TIMEOUT_RESTEER =
+  "Your previous response timed out — it ran too long (likely over-long reasoning " +
+  "or one huge file). Make the SINGLE next tool call now: create or edit just ONE " +
+  "file, kept small. Keep reasoning brief. No prose.";
+
+/** True when an error is a request TIMEOUT (AbortSignal.timeout fires a
+ *  `TimeoutError`), as opposed to a caller abort or a connection drop. */
+function isModelTimeout(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+
+  return err.name === "TimeoutError" || /timed out|timeout/i.test(err.message);
+}
 
 /** Pushed after a repetition loop — break the spiral by demanding ONE concrete
  *  action (paired with a forced tool call, which can't loop in prose). */
@@ -126,8 +164,13 @@ const INTERIM_CHECK_NOTE =
 const IMPLEMENT_STEP =
   "STEP 2 of 2 — now build the app: import the types from the per-domain " +
   "`.types.ts` files you created and build the components/routes (ONE component " +
-  "per `create`), wiring them together. The gate builds and verifies it in a real " +
-  "browser; fix exactly what it reports until green.";
+  "per FILE), wiring them together. The gate builds and verifies it in a real " +
+  "browser; fix exactly what it reports until green.\n" +
+  "SPEED: write MANY files per turn — emit SEVERAL `create` tool calls in a SINGLE " +
+  "response (e.g. a whole domain's files at once: its components, hooks, service). " +
+  "Do NOT write one file then stop and wait — batch aggressively, 5+ files a turn. " +
+  "When fixing gate errors, fix ALL reported files in one turn (one `edit` each). " +
+  "Don't explain or plan in prose — just emit the tool calls.";
 
 /**
  * Did the model write whole files INTO its chat message instead of calling
@@ -182,6 +225,16 @@ export class Session {
   private lastUsage?: ITokenUsage;
   /** Fast check run every few edits while building (e.g. tsc); "" = off. */
   private incrementalCheck: string;
+  /** Per-send thinking override, set from ISendOptions for the duration of a
+   *  `send` (cleared after). Lets the design phase think and the implement phase
+   *  not. Undefined = fall back to cfg.enableThinking (server default). */
+  private activeThinking?: boolean;
+  /** ADAPTIVE THINKING: true while the model has outstanding errors to fix (an
+   *  interim check or the gate came back RED). Measured: ~80% of build time is
+   *  REPAIR, and thinking-OFF repair oscillates and never converges (churns to the
+   *  turn cap), while thinking-ON repair converges. So we think ONLY while
+   *  repairing — fast thinking-off creation, convergent thinking-on repair. */
+  private repairing = false;
 
   private constructor(cfg: ISessionConfig, ctx: ILoopCtx) {
     this.provider = cfg.provider;
@@ -220,6 +273,7 @@ export class Session {
       task,
       cwd: cfg.cwd,
       tsService: await buildTsService(cfg.cwd),
+      ...(cfg.lintFile === undefined ? {} : { lintFile: cfg.lintFile }),
       parse: cfg.parse,
       report,
       messages:
@@ -366,6 +420,8 @@ export class Session {
     // Thread cancellation to the tool `run` commands and the gate (not just the
     // model call), so Ctrl-C kills in-flight child processes too.
     ctx.signal = opts.signal;
+    this.activeThinking = opts.enableThinking;
+    this.repairing = false; // fresh send starts in (fast, thinking-off) creation mode
 
     try {
       // Auto-compact BEFORE adding the new message (so it stays a fresh turn
@@ -417,6 +473,7 @@ export class Session {
       return { status: "stuck", turns: 0 };
     } finally {
       ctx.signal = undefined;
+      this.activeThinking = undefined;
     }
   }
 
@@ -449,7 +506,40 @@ export class Session {
       return planned;
     }
 
-    return this.send(IMPLEMENT_STEP, opts);
+    // Inject the EXACT type contract the design phase just wrote, fresh, right
+    // before implementation. The 27b's #1 first-pass error is misremembering its
+    // OWN types across many files/turns (a field shape it defined 30 turns ago) —
+    // re-showing the precise current signatures cuts those consistency errors (so
+    // less repair). Both phases run ADAPTIVE thinking (governed by `repairing`).
+    const contract = await this.typeContract();
+
+    return this.send(`${contract}${IMPLEMENT_STEP}`, opts);
+  }
+
+  /** Read the per-domain `.types.ts`/`.constants.ts` the design phase wrote and
+   *  format them as a precise reference block for the implement phase — so the
+   *  model builds against the EXACT current signatures instead of its (lossy)
+   *  recollection of them. Empty string if none exist yet (nothing to anchor). */
+  private async typeContract(): Promise<string> {
+    const files = await readFiles(this.ctx.cwd, [
+      "src/**/*.types.ts",
+      "src/**/*.constants.ts",
+    ]);
+
+    if (files.length === 0) {
+      return "";
+    }
+
+    const blocks = files
+      .map((f) => `// ${f.path}\n${f.content.trim()}`)
+      .join("\n\n");
+
+    return (
+      "THE TYPE CONTRACT you just designed (use these EXACT names/shapes — do " +
+      "NOT invent or misremember fields; import from these paths):\n\n```ts\n" +
+      `${blocks}\n` +
+      "```\n\n"
+    );
   }
 
   /** Once `editsSinceCheck` reaches the threshold, run the incremental check and
@@ -485,8 +575,12 @@ export class Session {
     );
 
     if (result.passed) {
+      this.repairing = false; // clean → back to fast thinking-off creation
+
       return;
     }
+
+    this.repairing = true; // errors outstanding → next turns think to converge
 
     ctx.report({
       kind: "tool",
@@ -517,7 +611,14 @@ export class Session {
     // On a FORCED tool turn, disable thinking: the model already decided what to
     // do, and thinking-on is a known source of prose-before-the-call malformed
     // output on this model. `required` + thinking-off = the cleanest tool call.
-    const enableThinking = forceNoThinking ? false : this.cfg.enableThinking;
+    // ADAPTIVE: think while REPAIRING (errors outstanding) so repair converges;
+    // otherwise honour the per-send/cfg setting (off = fast creation). A forced
+    // recovery turn always thinks-off (it just needs one clean tool call).
+    const enableThinking = forceNoThinking
+      ? false
+      : this.repairing
+        ? true
+        : (this.activeThinking ?? this.cfg.enableThinking);
     const res = await this.provider.complete(ctx.messages, {
       tools: this.tools,
       temperature: this.cfg.temperature ?? 0,
@@ -641,6 +742,51 @@ export class Session {
     return null;
   }
 
+  /** Handle a thrown model call: rethrow a caller abort or any non-timeout error
+   *  (terminal — send()'s handler turns it into interrupted/stuck). A request
+   *  TIMEOUT is recoverable: emit timing, then stop (return stuck) once the budget
+   *  is spent, else re-steer toward a small fast turn and return null so the caller
+   *  forces a (thinking-off) tool call and CONTINUES — preserving the turns already
+   *  done rather than abandoning the whole build on one over-long turn. */
+  private recoverFromTimeout(
+    err: unknown,
+    timeouts: number,
+    turn: number,
+    turnStart: number,
+    sendStart: number,
+    signal?: AbortSignal
+  ): ISendResult | null {
+    if (signal?.aborted === true || !isModelTimeout(err)) {
+      throw err;
+    }
+
+    emitTiming(this.report, SESSION_ID, turn, turnStart, sendStart);
+
+    // Log the RAW error so the timeout's true source (request-timeout ceiling vs a
+    // server-side stream close) is diagnosable from the --log, not swallowed.
+    const detail =
+      err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+
+    if (timeouts >= MAX_TIMEOUT_RECOVERIES) {
+      this.report({
+        kind: "stuck",
+        task: SESSION_ID,
+        message: `⚠ model request timed out repeatedly (${detail}) — stopped. The server may be wedged or the task too large for one turn.`,
+      });
+
+      return { status: "stuck", turns: turn };
+    }
+
+    this.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: `⚠ model request timed out (${detail}) — re-steering to a smaller turn and continuing (${String(timeouts + 1)}/${String(MAX_TIMEOUT_RECOVERIES)})`,
+    });
+    this.ctx.messages.push({ role: "user", content: TIMEOUT_RESTEER });
+
+    return null;
+  }
+
   /** Inject any messages the user typed mid-run (steering) before the next turn. */
   private injectSteer(steer?: () => string[]): void {
     for (const message of steer?.() ?? []) {
@@ -653,12 +799,101 @@ export class Session {
     }
   }
 
+  /** One model turn for `drive`, with timeout recovery folded in so the loop body
+   *  stays lean: `ok` → use the response; `stop` → terminal result; `retry` →
+   *  timed out, re-steer applied, force a small tool call next turn. A caller abort
+   *  or non-timeout error propagates (via recoverFromTimeout) to send()'s handler. */
+  private async acquireResponse(
+    forceTool: boolean,
+    timeouts: number,
+    turn: number,
+    turnStart: number,
+    sendStart: number,
+    opts: ISendOptions
+  ): Promise<
+    | { kind: "ok"; res: IModelResponse }
+    | { kind: "stop"; result: ISendResult }
+    | { kind: "retry" }
+  > {
+    try {
+      const res = await this.askModel(
+        opts.signal,
+        forceTool ? "required" : "auto",
+        forceTool // forced tool turn → also disable thinking for a clean call
+      );
+
+      return { kind: "ok", res };
+    } catch (err) {
+      const recovered = this.recoverFromTimeout(
+        err,
+        timeouts,
+        turn,
+        turnStart,
+        sendStart,
+        opts.signal
+      );
+
+      return recovered !== null
+        ? { kind: "stop", result: recovered }
+        : { kind: "retry" };
+    }
+  }
+
+  /** Run the tool calls of a turn, account the edits, emit timing, and run the
+   *  incremental check every few edits — returns the updated edit accounting so
+   *  `drive`'s loop body stays lean. */
+  private async runEditTurn(
+    res: IModelResponse,
+    acc: { edited: boolean; editsSinceCheck: number; checkEvery: number },
+    turn: number,
+    turnStart: number,
+    sendStart: number
+  ): Promise<{ edited: boolean; editsSinceCheck: number }> {
+    const { ctx, state, report } = this;
+    const before = state.edits;
+    const edited =
+      (await runToolCalls(res.toolCalls, ctx, state)) || acc.edited;
+
+    emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
+
+    // Check every few edits WHILE building, so errors surface early instead of
+    // piling up into a final avalanche the model can't dig out of.
+    const editsSinceCheck = await this.checkAfterEdits(
+      acc.editsSinceCheck + (state.edits - before),
+      acc.checkEvery
+    );
+
+    return { edited, editsSinceCheck };
+  }
+
+  /** Run the gate once the model has stopped after editing: a terminal result
+   *  (done/stuck) or null when still red (drive then pushes feedback + continues).
+   *  Keeps the done/stuck mapping out of `drive`'s loop body. */
+  private async settleTurn(
+    turn: number,
+    turnStart: number,
+    sendStart: number
+  ): Promise<ISendResult | null> {
+    const settled = await settleGate(this.ctx, this.state, turn);
+
+    emitTiming(this.report, SESSION_ID, turn, turnStart, sendStart);
+
+    if (settled === null) {
+      return null;
+    }
+
+    return {
+      status: settled.status === RUN_STATUS.done ? "done" : "stuck",
+      turns: turn,
+    };
+  }
+
   private async drive(
     maxTurns: number,
     sendStart: number,
     opts: ISendOptions
   ): Promise<ISendResult> {
-    const { ctx, state, report } = this;
+    const { ctx, report } = this;
     // The gate confirms CHANGES, not answers: it fires only once the model has
     // actually edited a file this turn. So a pure question never triggers a gate
     // run (even with one configured) — and an auto-detected gate stays unobtrusive.
@@ -674,6 +909,9 @@ export class Session {
     // Times the stream degenerated into a repetition loop this send — we try a
     // bounded recovery (force a concrete tool call) before giving up.
     let degenerations = 0;
+    // Times a model request timed out this send — a single over-long turn must not
+    // throw away prior progress; we re-steer to a small turn and continue.
+    let timeouts = 0;
     // Edits since the last incremental check — drives "check every few edits".
     let editsSinceCheck = 0;
     const checkEvery = this.cfg.checkEvery ?? CHECK_EVERY;
@@ -692,11 +930,30 @@ export class Session {
         message: `turn ${turn}: asking model`,
       });
 
-      const res = await this.askModel(
-        opts.signal,
-        forceTool ? "required" : "auto",
-        forceTool // forced tool turn → also disable thinking for a clean call
+      // Ask the model, recovering from a request timeout (re-steer + continue,
+      // keeping prior turns) instead of abandoning the whole build on one over-long
+      // turn. A caller abort or any other error propagates to send()'s handler.
+      const ask = await this.acquireResponse(
+        forceTool,
+        timeouts,
+        turn,
+        turnStart,
+        sendStart,
+        opts
       );
+
+      if (ask.kind === "stop") {
+        return ask.result;
+      }
+
+      if (ask.kind === "retry") {
+        timeouts += 1;
+        forceTool = true; // next turn: forced, thinking-off → a small clean call
+
+        continue;
+      }
+
+      const res = ask.res;
 
       forceTool = false;
 
@@ -720,18 +977,13 @@ export class Session {
 
       // Still working — run the calls and keep going (we gate only when it stops).
       if (res.toolCalls.length > 0) {
-        const before = state.edits;
-
-        edited = (await runToolCalls(res.toolCalls, ctx, state)) || edited;
-        editsSinceCheck += state.edits - before;
-        emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
-
-        // Check every few edits WHILE building, so errors surface early instead
-        // of piling up into a final avalanche the model can't dig out of.
-        editsSinceCheck = await this.checkAfterEdits(
-          editsSinceCheck,
-          checkEvery
-        );
+        ({ edited, editsSinceCheck } = await this.runEditTurn(
+          res,
+          { edited, editsSinceCheck, checkEvery },
+          turn,
+          turnStart,
+          sendStart
+        ));
 
         continue;
       }
@@ -755,16 +1007,14 @@ export class Session {
       }
 
       // Gate confirms. Green/stuck ⇒ terminal; null ⇒ red, feedback pushed.
-      const settled = await settleGate(ctx, state, turn);
-
-      emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
+      const settled = await this.settleTurn(turn, turnStart, sendStart);
 
       if (settled !== null) {
-        return {
-          status: settled.status === RUN_STATUS.done ? "done" : "stuck",
-          turns: turn,
-        };
+        return settled;
       }
+
+      // Gate came back RED → enter repair mode (think to converge on the fix).
+      this.repairing = true;
 
       // Stopped while still red without acting → nudge it to act, not narrate,
       // and FORCE a tool call on the next turn so it can't narrate again.

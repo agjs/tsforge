@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { ESLint } from "eslint";
 import { WEB_TEMPLATES, type WebFramework } from "./web-templates";
 
 /**
@@ -26,6 +27,7 @@ export interface IGate {
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const ESLINT_BIN = join(ROOT, "node_modules", ".bin", "eslint");
 const TSC_BIN = join(ROOT, "node_modules", ".bin", "tsc");
+const PRETTIER_BIN = join(ROOT, "node_modules", ".bin", "prettier");
 const STRICT_CONFIG = join(import.meta.dir, "..", "strict.eslint.config.mjs");
 const BROWSER_CHECK = join(
   import.meta.dir,
@@ -88,6 +90,69 @@ const STRICT_WEB_CONFIG = join(
 
 /** The frameworks the spec Q&A can scaffold. */
 export const WEB_FRAMEWORKS: readonly WebFramework[] = ["react", "vanilla"];
+
+/** One lint violation on a single file (errors only), for write-time feedback. */
+export interface IFileLintProblem {
+  line: number;
+  message: string;
+  ruleId: string;
+}
+
+/** Lint ONE just-written file, returning its errors. Reused per write. */
+export type FileLinter = (absPath: string) => Promise<IFileLintProblem[]>;
+
+/**
+ * Build a WRITE-TIME single-file linter using the SAME bundled strict config as
+ * the gate's eslint step. The write-guard type-checks each new file via tsc, but
+ * tsc is blind to our STRICTNESS MOAT — the `no-as` cast ban, `I`-prefix, and
+ * `prefer-template` are eslint rules. A run log showed the model writing
+ * `Object.keys(x) as unknown as ...` in every domain file: type-valid, so the
+ * type-guard waved it through, and 12 `as` violations piled up unseen until the
+ * gate. This surfaces them inline the instant the file is written, so the model
+ * fixes them in-context instead of in a late repair spiral.
+ *
+ * In-process via the ESLint API (config + parser loaded once and reused across
+ * calls — no per-write cold start). Best-effort: a linter failure returns [] and
+ * never breaks the build; the gate stays the authority. `cwd` is the app dir so
+ * the vendored-code ignore globs (ui/, lib/, *.gen.ts) resolve correctly.
+ */
+export function makeFileLinter(
+  framework: WebFramework | "core",
+  cwd: string
+): FileLinter {
+  const overrideConfigFile =
+    framework === "core" ? STRICT_CONFIG : STRICT_WEB_CONFIG;
+  const ignores =
+    framework === "core" ? [] : WEB_TEMPLATES[framework].eslintIgnore;
+  let engine: ESLint | null = null;
+
+  return async (absPath) => {
+    try {
+      engine ??= new ESLint({
+        cwd,
+        overrideConfigFile,
+        ...(ignores.length > 0 ? { overrideConfig: [{ ignores }] } : {}),
+      });
+
+      const results = await engine.lintFiles([absPath]);
+      const first = results[0];
+
+      if (first === undefined) {
+        return [];
+      }
+
+      return first.messages
+        .filter((m) => m.severity === 2)
+        .map((m) => ({
+          line: m.line,
+          message: m.message,
+          ruleId: m.ruleId ?? "?",
+        }));
+    } catch {
+      return [];
+    }
+  };
+}
 
 /** Lay down a stack's opinionated skeleton (non-destructive — only missing files).
  *  Dependency install is separate (`installWebDeps`) so this stays pure + fast +
@@ -202,9 +267,13 @@ export function buildWebGate(framework: WebFramework): IGate {
   // checks.json — the 27b writes over-strict interaction assertions (exact
   // placeholders/fill flows) it then can't satisfy and spirals on (iter3/4).
   const render = `bun "${BROWSER_CHECK}" dist/index.html --smoke`;
+  // Prettier enforces formatting (the fix step runs `prettier --write` first, so
+  // this passes without the model ever hand-formatting). Respects .prettierignore
+  // (vendored ui/ + lib/ skipped). Runs after lint so a parse error fails there.
+  const format = `"${PRETTIER_BIN}" --check .`;
 
   return {
-    command: `${build} && ${tsc} && ${lint} && ${render}`,
+    command: `${build} && ${tsc} && ${lint} && ${format} && ${render}`,
     label: `${template.label} (build + behaviour smoke)`,
   };
 }
@@ -239,21 +308,28 @@ export function buildWebTscCheck(): string {
 }
 
 /**
- * The web auto-fix command — `eslint --fix` with the web config, run BEFORE the
- * gate each cycle. It deterministically squashes the mechanical violations the
- * model otherwise burns turns hand-fixing (prefer-const, prefer-template, no-var,
- * curly, inferrable types). The unfixable ones (`any`/`as`/`!`) still need the
- * model, but those are the minority. Best-effort: a non-zero exit is ignored.
+ * The web auto-fix command — the deterministic JANITOR, run BEFORE the gate each
+ * cycle so the model NEVER spends (slow, costly) tokens on mechanical cleanup:
+ *   1. `eslint --fix` — prefer-const, no-var, curly, inferrable types, AND the
+ *      boringstack blank-lines (padding-line-between-statements is auto-fixable).
+ *   2. `prettier --write` — all whitespace/quotes/semis/width formatting.
+ * (Unused/missing imports are handled separately by the TS quick-fix pass.) The
+ * unfixable rules (`any`/`as`/`!`) still need the model. Best-effort: exits ignored,
+ * `;` so prettier runs even when eslint reports remaining (unfixable) errors.
  */
 export function buildWebFix(framework: WebFramework): string {
   const ignores = WEB_TEMPLATES[framework].eslintIgnore
     .map((glob) => `--ignore-pattern "${glob}"`)
     .join(" ");
 
-  return `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --fix .`.replace(
-    /\s+/g,
-    " "
-  );
+  const lintFix =
+    `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --fix .`.replace(
+      /\s+/g,
+      " "
+    );
+  const format = `"${PRETTIER_BIN}" --write .`;
+
+  return `${lintFix} ; ${format}`;
 }
 
 async function ensureFile(
