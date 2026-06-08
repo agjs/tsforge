@@ -66,8 +66,20 @@ export async function streamResponse(
   return assemble(acc, degenerated);
 }
 
+/** One in-flight tool call being assembled from streamed deltas. The `path`/
+ *  `lastProgress` fields drive the live progress heartbeat (responsiveness). */
+interface IStreamingCall {
+  id?: string;
+  name: string;
+  args: string;
+  /** True once we've surfaced the file path parsed from the partial args. */
+  pathShown?: boolean;
+  /** args length at the last progress heartbeat (throttle). */
+  lastProgress?: number;
+}
+
 interface IStreamAcc {
-  calls: Map<number, { id?: string; name: string; args: string }>;
+  calls: Map<number, IStreamingCall>;
   guard: StreamGuard;
   content: string;
   usage?: ITokenUsage;
@@ -187,9 +199,48 @@ function parseSseLine(line: string): IStreamDelta | null {
   };
 }
 
+/** Tools whose argument IS a large file body — worth a live progress heartbeat
+ *  (for a 20 tok/s model, minutes of silent arg streaming is the worst UX). */
+const BIG_CONTENT_TOOLS = new Set(["create", "edit", "scaffold_ui"]);
+/** Chars of args between progress heartbeats. */
+const PROGRESS_EVERY = 1500;
+
+/**
+ * Surface live progress as a big-content tool's arguments stream: the file path
+ * (parsed from the partial args JSON) the moment it's known, then a throttled size
+ * heartbeat. Turns minutes of silent generation into "writing X.tsx … 2.9KB …".
+ */
+function emitToolProgress(
+  call: IStreamingCall,
+  onToken: (text: string, channel: TokenChannel) => void
+): void {
+  if (!BIG_CONTENT_TOOLS.has(call.name)) {
+    return;
+  }
+
+  if (call.pathShown !== true) {
+    const path = /"(?:file|filename|path)"\s*:\s*"([^"]+)"/.exec(
+      call.args
+    )?.[1];
+
+    if (path !== undefined) {
+      call.pathShown = true;
+      onToken(`\n  ✎ → ${path}`, "tool");
+    }
+  }
+
+  if (call.args.length - (call.lastProgress ?? 0) >= PROGRESS_EVERY) {
+    call.lastProgress = call.args.length;
+    onToken(
+      `\n  ⋯ ${(call.args.length / 1024).toFixed(1)}KB streamed…`,
+      "tool"
+    );
+  }
+}
+
 function accumulateToolCalls(
   raw: unknown,
-  calls: Map<number, { id?: string; name: string; args: string }>,
+  calls: Map<number, IStreamingCall>,
   onToken: (text: string, channel: TokenChannel) => void
 ): void {
   if (!isArray(raw)) {
@@ -203,18 +254,16 @@ function accumulateToolCalls(
 
     const index = typeof tc.index === "number" ? tc.index : 0;
     const fn = tc.function;
-    const existing: { id?: string; name: string; args: string } = calls.get(
-      index
-    ) ?? { name: "", args: "" };
+    const existing: IStreamingCall = calls.get(index) ?? { name: "", args: "" };
 
     if (typeof tc.id === "string" && tc.id.length > 0) {
       existing.id = tc.id;
     }
 
     // Surface the tool name the moment it first appears — so a long tool-call
-    // generation shows "it's writing X now" instead of a frozen cursor. The raw
-    // argument JSON is NOT streamed (it's noisy); the file lands as a clean
-    // create/edit event once the call runs.
+    // generation shows "it's writing X now" instead of a frozen cursor. As the
+    // (often large) file body then streams, emitToolProgress adds the path + a
+    // throttled size heartbeat; the file lands as a clean create/edit event on run.
     if (typeof fn.name === "string" && fn.name.length > 0) {
       if (existing.name.length === 0) {
         onToken(`\n  ✎ ${fn.name}…`, "tool");
@@ -225,6 +274,7 @@ function accumulateToolCalls(
 
     if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
       existing.args += fn.arguments;
+      emitToolProgress(existing, onToken);
     }
 
     calls.set(index, existing);

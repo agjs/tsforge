@@ -51,6 +51,36 @@ test("streams reasoning + content tokens and assembles tool calls", async () => 
   expect(r.toolCalls).toEqual([{ name: "edit", arguments: { file: "a.ts" } }]);
 });
 
+test("surfaces live progress (path + size heartbeat) as a big create streams", async () => {
+  const big = "x".repeat(4000); // > PROGRESS_EVERY (1500) → multiple heartbeats
+  const chunks = [
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"create","arguments":"{\\"file\\":\\"src/C.tsx\\",\\"content\\":\\""}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"${big}"}}]}}]}\n`,
+    `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"}"}}]}}]}\n`,
+    `data: [DONE]\n`,
+  ];
+  const fakeFetch = (async () =>
+    sseResponse(chunks)) as unknown as typeof fetch;
+  const tokens: string[] = [];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fakeFetch,
+  });
+
+  await p.complete([{ role: "user", content: "hi" }], {
+    onToken: (t) => tokens.push(t),
+  });
+
+  const streamed = tokens.join("");
+
+  // The file path appears as soon as it's parseable, then a size heartbeat — so a
+  // minutes-long generation is never silent. The raw arg JSON is still NOT dumped.
+  expect(streamed).toContain("✎ → src/C.tsx");
+  expect(streamed).toContain("KB streamed");
+  expect(streamed).not.toContain('"content"');
+});
+
 test("sets stream:true in the request body when onToken is given", async () => {
   let body: Record<string, unknown> = {};
   const fakeFetch = (async (_url: string | URL, init: RequestInit) => {

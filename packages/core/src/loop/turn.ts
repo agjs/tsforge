@@ -258,23 +258,30 @@ async function writeGuard(
     return "";
   }
 
-  // Emit a visible event so the write-guard is observable in the log + countable
-  // by cli-metrics (the corrective feedback itself rides the tool result message).
+  const detail = writeGuardLines(absPath, typeErrors, lintProblems);
+  const blast = dependantBlastRadius(dependants);
+  const depNote =
+    dependants.length > 0
+      ? `, ${String(dependants.length)} dependant file(s) broken`
+      : "";
+
+  // Surface the ACTUAL errors (codes + messages) into the event — not just a count —
+  // so the log shows WHAT failed (the corrective feedback also rides the tool result).
+  // A log without the real errors can't tell us which mistakes are systematic.
   report({
     kind: "tool",
     task: taskId,
-    message: `⚠ write-check: ${String(typeErrors.length)} type + ${String(lintProblems.length)} lint issue(s)${dependants.length > 0 ? `, ${String(dependants.length)} dependant file(s) broken` : ""} in ${basename(absPath)} — fed back to fix inline`,
+    message: `⚠ write-check: ${String(typeErrors.length)} type + ${String(lintProblems.length)} lint issue(s)${depNote} in ${basename(absPath)}:\n${detail}${blast}`,
   });
 
   if (total === 0) {
-    return dependantBlastRadius(dependants);
+    return blast;
   }
 
   return (
     `\n\n⚠ CHECK of this file found ${String(total)} issue(s) — fix them now ` +
     "(edit this file) before writing others; ignore any 'cannot find module' for " +
-    `files you'll create next:\n${writeGuardLines(absPath, typeErrors, lintProblems)}` +
-    dependantBlastRadius(dependants)
+    `files you'll create next:\n${detail}${blast}`
   );
 }
 
@@ -636,6 +643,16 @@ export async function settleGate(
 
   state.lastGateCount = gate.errors.length;
 
+  // On red, surface the ACTUAL errors (codes + messages) into the event — so the
+  // log records WHAT failed at the gate, not just a count (the analysis substrate
+  // for finding systematic mistakes to fix in the harness).
+  const gateDetail = gate.passed
+    ? ""
+    : `:\n${gate.errors
+        .slice(0, 20)
+        .map((e) => `  ${e.message}`)
+        .join("\n")}`;
+
   report({
     kind: "validated",
     task: task.id,
@@ -644,7 +661,7 @@ export async function settleGate(
     errors: gate.errors.length,
     message: gate.passed
       ? `task ${task.id} · turn ${turn}: GREEN`
-      : `task ${task.id} · turn ${turn}: red (${gate.errors.length} error(s))`,
+      : `task ${task.id} · turn ${turn}: red (${String(gate.errors.length)} error(s))${gateDetail}`,
   });
 
   if (gate.passed) {

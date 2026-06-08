@@ -25,6 +25,7 @@ export type ThemeName = "minimal" | "warm" | "futuristic";
 
 /** The primitives `scaffold_ui` can materialize. */
 export type ComponentName =
+  // primitives (atoms)
   | "button"
   | "card"
   | "input"
@@ -33,7 +34,14 @@ export type ComponentName =
   | "select"
   | "badge"
   | "separator"
-  | "table";
+  | "table"
+  // composition blocks (molecules) — the view chrome the model otherwise re-rolls
+  | "app-shell"
+  | "page-header"
+  | "field"
+  | "form-actions"
+  | "toolbar"
+  | "empty-state";
 
 export const COMPONENT_NAMES: readonly ComponentName[] = [
   "button",
@@ -45,6 +53,12 @@ export const COMPONENT_NAMES: readonly ComponentName[] = [
   "badge",
   "separator",
   "table",
+  "app-shell",
+  "page-header",
+  "field",
+  "form-actions",
+  "toolbar",
+  "empty-state",
 ];
 
 export const THEME_NAMES: readonly ThemeName[] = [
@@ -408,6 +422,171 @@ export function TableCell({
   ...props
 }: React.TdHTMLAttributes<HTMLTableCellElement>): React.JSX.Element {
   return <td className={cn("p-2 align-middle", className)} {...props} />;
+}
+`,
+  // ─── composition blocks (molecules) ────────────────────────────────────────
+  "app-shell": `import { Link, Outlet, useLocation } from "@tanstack/react-router";
+import { cn } from "@/lib/utils";
+
+export interface INavItem {
+  to: string;
+  label: string;
+}
+
+export interface IAppShellProps {
+  title: string;
+  nav: readonly INavItem[];
+}
+
+export function AppShell({ title, nav }: IAppShellProps): React.JSX.Element {
+  const { pathname } = useLocation();
+
+  return (
+    <div className={cn("flex min-h-screen bg-background $DELTA")}>
+      <aside className="w-56 shrink-0 border-r border-border bg-card p-4">
+        <h1 className="mb-6 text-xl font-bold text-foreground">{title}</h1>
+        <nav className="flex flex-col gap-1">
+          {nav.map((item) => {
+            const active =
+              pathname === item.to ||
+              (item.to !== "/" && pathname.startsWith(\`\${item.to}/\`));
+
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                className={cn(
+                  "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  active
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                )}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </aside>
+      <main className="flex-1 p-6">
+        <Outlet />
+      </main>
+    </div>
+  );
+}
+`,
+  "page-header": `import { cn } from "@/lib/utils";
+
+export interface IPageHeaderProps {
+  title: string;
+  description?: string;
+  children?: React.ReactNode;
+}
+
+export function PageHeader({
+  title,
+  description,
+  children,
+}: IPageHeaderProps): React.JSX.Element {
+  return (
+    <div className={cn("mb-6 flex items-center justify-between gap-4 $DELTA")}>
+      <div>
+        <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
+        {description !== undefined && (
+          <p className="text-sm text-muted-foreground">{description}</p>
+        )}
+      </div>
+      {children !== undefined && (
+        <div className="flex items-center gap-2">{children}</div>
+      )}
+    </div>
+  );
+}
+`,
+  field: `import { cn } from "@/lib/utils";
+import { Label } from "@/components/ui/label";
+
+export interface IFieldProps {
+  label: string;
+  htmlFor?: string;
+  error?: string;
+  children: React.ReactNode;
+}
+
+export function Field({
+  label,
+  htmlFor,
+  error,
+  children,
+}: IFieldProps): React.JSX.Element {
+  return (
+    <div className={cn("flex flex-col gap-1.5 $DELTA")}>
+      <Label htmlFor={htmlFor}>{label}</Label>
+      {children}
+      {error !== undefined && (
+        <p className="text-sm text-destructive">{error}</p>
+      )}
+    </div>
+  );
+}
+`,
+  "form-actions": `import { cn } from "@/lib/utils";
+
+export function FormActions({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
+  return (
+    <div
+      className={cn("flex items-center justify-end gap-2 pt-2 $DELTA", className)}
+      {...props}
+    />
+  );
+}
+`,
+  toolbar: `import { cn } from "@/lib/utils";
+
+export function Toolbar({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
+  return (
+    <div
+      className={cn(
+        "mb-4 flex flex-wrap items-center gap-2 $DELTA",
+        className
+      )}
+      {...props}
+    />
+  );
+}
+`,
+  "empty-state": `import { cn } from "@/lib/utils";
+
+export interface IEmptyStateProps {
+  title: string;
+  description?: string;
+  children?: React.ReactNode;
+}
+
+export function EmptyState({
+  title,
+  description,
+  children,
+}: IEmptyStateProps): React.JSX.Element {
+  return (
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border p-12 text-center $DELTA"
+      )}
+    >
+      <p className="text-sm font-medium text-foreground">{title}</p>
+      {description !== undefined && (
+        <p className="text-sm text-muted-foreground">{description}</p>
+      )}
+      {children}
+    </div>
+  );
 }
 `,
 };

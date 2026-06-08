@@ -594,16 +594,18 @@ export class Session {
 
     this.repairing = true; // errors outstanding → next turns think to converge
 
-    ctx.report({
-      kind: "tool",
-      task: SESSION_ID,
-      message: `⊙ interim check: ${result.errors.length} error(s) — fixing now`,
-    });
-
     const detail = result.errors
       .slice(0, 20)
       .map((e) => e.message)
       .join("\n");
+
+    // Surface the ACTUAL errors into the log (not just the count) — so we can see
+    // WHAT the model fails at and target the systematic ones in the harness.
+    ctx.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: `⊙ interim check: ${String(result.errors.length)} error(s) — fixing now:\n${detail}`,
+    });
 
     ctx.messages.push({
       role: "user",

@@ -60,7 +60,7 @@ export const SCAFFOLD_UI_TOOL = {
   function: {
     name: TOOL_NAME.scaffoldUi,
     description:
-      "Generate tested, accessible UI primitives (button, card, input, label, textarea, select, badge, separator, table) into src/components/ui/, styled to a chosen vibe. Call this ONCE near the start with the primitives the app needs — then import and compose them. NEVER hand-write these base components yourself; that wastes time and they won't match the theme. It also writes the matching design tokens into src/index.css.",
+      "Generate tested, accessible UI building blocks into src/components/ui/, styled to a chosen vibe — so you NEVER hand-write base components or view chrome. Two tiers: PRIMITIVES (button, card, input, label, textarea, select, badge, separator, table) and COMPOSITION BLOCKS (app-shell = sidebar+nav layout, page-header, field = label+control+error, form-actions, toolbar, empty-state). Call this ONCE near the start with everything the app needs, then import and COMPOSE: e.g. build a list view from page-header + toolbar + table, a form from field + form-actions, the layout from app-shell. NEVER hand-roll these; it wastes time and breaks theme coherence. Also writes the matching design tokens into src/index.css.",
     parameters: {
       type: "object",
       properties: {
@@ -83,9 +83,15 @@ export const SCAFFOLD_UI_TOOL = {
               "badge",
               "separator",
               "table",
+              "app-shell",
+              "page-header",
+              "field",
+              "form-actions",
+              "toolbar",
+              "empty-state",
             ],
           },
-          description: "Which primitives to generate.",
+          description: "Which building blocks to generate.",
         },
       },
       required: ["theme", "components"],

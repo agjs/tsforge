@@ -44,6 +44,28 @@ test("an empty delta collapses cleanly — no leftover `$DELTA`, no double space
   }
 });
 
+test("composition blocks materialize and compose the primitives", () => {
+  const out = materializeComponents("minimal", [
+    "app-shell",
+    "field",
+    "page-header",
+  ]);
+
+  // app-shell is the sidebar+nav layout (renders <Outlet/>, router-backed)
+  const shell = out["src/components/ui/app-shell.tsx"];
+
+  expect(shell).toContain("export function AppShell");
+  expect(shell).toContain("@tanstack/react-router");
+  expect(shell).toContain("<Outlet");
+
+  // field composes the Label primitive + shows an error slot
+  const field = out["src/components/ui/field.tsx"];
+
+  expect(field).toContain("export function Field");
+  expect(field).toContain('from "@/components/ui/label"');
+  expect(field).toContain("text-destructive");
+});
+
 test("the token preset is the vibe lever — themes ship different palettes/radius", () => {
   expect(THEMES.minimal.tokens).toContain("--radius: 0.5rem");
   expect(THEMES.futuristic.tokens).toContain("--radius: 0rem");
