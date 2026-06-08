@@ -105,6 +105,16 @@ const PLAN_TYPES_STEP =
 /** Default edits between incremental checks. */
 const CHECK_EVERY = 3;
 
+/** How many times a send recovers from a repetition loop before giving up. */
+const MAX_DEGENERATION_RECOVERIES = 2;
+
+/** Pushed after a repetition loop — break the spiral by demanding ONE concrete
+ *  action (paired with a forced tool call, which can't loop in prose). */
+const REPETITION_RESTEER =
+  "You started repeating yourself. STOP — do not re-explain or re-decide. Emit " +
+  "the SINGLE next tool call that makes concrete progress (create or edit ONE " +
+  "file). No prose.";
+
 /** Prefaces interim-check feedback so the model fixes real errors and ignores the
  *  expected "module not found" noise from files it hasn't created yet. */
 const INTERIM_CHECK_NOTE =
@@ -392,7 +402,19 @@ export class Session {
         return { status: "interrupted", turns: 0 };
       }
 
-      throw err;
+      // A provider/network error (request timeout, connection drop after retries)
+      // ends the turn GRACEFULLY as stuck — never crash the process. The message
+      // is logged so it's visible/debuggable, not silently swallowed. This keeps a
+      // long autonomous run (and the interactive CLI) alive through a flaky model.
+      const detail = err instanceof Error ? err.message : String(err);
+
+      report({
+        kind: "stuck",
+        task: SESSION_ID,
+        message: `⚠ model request failed: ${detail}`,
+      });
+
+      return { status: "stuck", turns: 0 };
     } finally {
       ctx.signal = undefined;
     }
@@ -591,6 +613,46 @@ export class Session {
     return { result: null };
   }
 
+  /** Handle a repetition-loop detection: stop (return a stuck result) once the
+   *  recovery budget is spent, else re-steer toward one concrete action and
+   *  return null so the caller forces a tool call next turn. */
+  private degenerationRecovery(
+    degenerations: number,
+    turn: number
+  ): ISendResult | null {
+    if (degenerations >= MAX_DEGENERATION_RECOVERIES) {
+      this.report({
+        kind: "stuck",
+        task: SESSION_ID,
+        message:
+          "⚠ repetition loop persisted after recovery attempts — stopped. Try a smaller step.",
+      });
+
+      return { status: "stuck", turns: turn };
+    }
+
+    this.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: "⚠ repetition loop — forcing a concrete next action",
+    });
+    this.ctx.messages.push({ role: "user", content: REPETITION_RESTEER });
+
+    return null;
+  }
+
+  /** Inject any messages the user typed mid-run (steering) before the next turn. */
+  private injectSteer(steer?: () => string[]): void {
+    for (const message of steer?.() ?? []) {
+      this.ctx.messages.push({ role: "user", content: message });
+      this.report({
+        kind: "tool",
+        task: SESSION_ID,
+        message: `↳ steering: ${message.slice(0, 60)}`,
+      });
+    }
+  }
+
   private async drive(
     maxTurns: number,
     sendStart: number,
@@ -609,6 +671,9 @@ export class Session {
     // tool schema strictly — so the model can't narrate (or emit malformed tool
     // syntax) again on a turn where we already know a tool call is the move.
     let forceTool = false;
+    // Times the stream degenerated into a repetition loop this send — we try a
+    // bounded recovery (force a concrete tool call) before giving up.
+    let degenerations = 0;
     // Edits since the last incremental check — drives "check every few edits".
     let editsSinceCheck = 0;
     const checkEvery = this.cfg.checkEvery ?? CHECK_EVERY;
@@ -618,14 +683,7 @@ export class Session {
 
       // Inject any messages the user typed while the run was in flight, so they
       // steer the next model turn instead of waiting for the run to finish.
-      for (const message of opts.steer?.() ?? []) {
-        ctx.messages.push({ role: "user", content: message });
-        report({
-          kind: "tool",
-          task: SESSION_ID,
-          message: `↳ steering: ${message.slice(0, 60)}`,
-        });
-      }
+      this.injectSteer(opts.steer);
 
       report({
         kind: "cycle",
@@ -642,17 +700,22 @@ export class Session {
 
       forceTool = false;
 
-      // The stream caught a degenerate repetition loop and aborted it. Don't
-      // nudge into another loop — stop the turn so the user can re-steer.
+      // The stream caught a degenerate repetition loop. Try a BOUNDED recovery
+      // (force a concrete tool call next turn — can't loop in prose) before
+      // giving up; see degenerationRecovery.
       if (res.degenerated === true) {
-        report({
-          kind: "stuck",
-          task: SESSION_ID,
-          message:
-            "⚠ model fell into a repetition loop — stopped. Try rephrasing, or break the task into a smaller step.",
-        });
+        const stop = this.degenerationRecovery(degenerations, turn);
 
-        return { status: "stuck", turns: turn };
+        emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
+
+        if (stop !== null) {
+          return stop;
+        }
+
+        degenerations += 1;
+        forceTool = true;
+
+        continue;
       }
 
       // Still working — run the calls and keep going (we gate only when it stops).

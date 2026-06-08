@@ -7,12 +7,81 @@
 // via AST selectors), since `as const` is idiomatic for typed literal registries.
 import tseslint from "typescript-eslint";
 
+// Custom rule: ONE React component per .tsx file (boringstack). The classic
+// eslint-plugin-react/no-multi-comp crashes on ESLint 10 and @eslint-react has no
+// equivalent, so we enforce it directly. A "component" = a TOP-LEVEL PascalCase
+// `function`, or a `const PascalCase = (…) => …` whose init is a function. This
+// excludes TanStack's `const Route = createFileRoute(...)(...)` (init is a call,
+// not a function), so a route file's `Route` + its page component is fine.
+const oneComponentPerFile = {
+  meta: {
+    type: "suggestion",
+    messages: {
+      multi:
+        "One component per file (boringstack): '{{name}}' is a second component — move it to its own file.",
+    },
+  },
+  create(context) {
+    if (!context.filename.endsWith(".tsx")) {
+      return {};
+    }
+
+    const isComponentName = (name) => /^[A-Z]/.test(name);
+    const isFn = (node) =>
+      node?.type === "ArrowFunctionExpression" ||
+      node?.type === "FunctionExpression";
+
+    return {
+      Program(program) {
+        const components = [];
+
+        for (const statement of program.body) {
+          const decl =
+            statement.type === "ExportNamedDeclaration" &&
+            statement.declaration !== null
+              ? statement.declaration
+              : statement;
+
+          if (
+            decl.type === "FunctionDeclaration" &&
+            decl.id !== null &&
+            isComponentName(decl.id.name)
+          ) {
+            components.push(decl.id);
+          } else if (decl.type === "VariableDeclaration") {
+            for (const d of decl.declarations) {
+              if (
+                d.id.type === "Identifier" &&
+                isComponentName(d.id.name) &&
+                isFn(d.init)
+              ) {
+                components.push(d.id);
+              }
+            }
+          }
+        }
+
+        for (const id of components.slice(1)) {
+          context.report({
+            node: id,
+            messageId: "multi",
+            data: { name: id.name },
+          });
+        }
+      },
+    };
+  },
+};
+
 export default tseslint.config(
   { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**"] },
   {
     files: ["**/*.ts", "**/*.tsx"],
     languageOptions: { parser: tseslint.parser },
-    plugins: { "@typescript-eslint": tseslint.plugin },
+    plugins: {
+      "@typescript-eslint": tseslint.plugin,
+      boringstack: { rules: { "one-component-per-file": oneComponentPerFile } },
+    },
     rules: {
       // NOTE: we do NOT use `consistent-type-assertions: never` here — that also
       // bans `as const`, which is idiomatic and the cleanest escape for typed
@@ -33,10 +102,10 @@ export default tseslint.config(
           filter: { regex: "^(Register)$", match: false },
         },
       ],
-      // NOTE: one-component-per-file (boringstack) would be `react/no-multi-comp`,
-      // but eslint-plugin-react crashes under ESLint 10 (getFilename API removed),
-      // and @eslint-react (the compatible rewrite) isn't installed. Until it is,
-      // one-component-per-file is enforced by GUIDANCE only, not the gate.
+      // ONE React component per .tsx file (boringstack). Enforced by the custom
+      // rule defined above — eslint-plugin-react/no-multi-comp crashes on ESLint 10
+      // and @eslint-react has no equivalent, so we ship our own.
+      "boringstack/one-component-per-file": "error",
       "prefer-const": "error",
       "prefer-template": "error",
       "no-var": "error",

@@ -91,3 +91,37 @@ browserTest("interaction: a broken handler is caught", async () => {
 
   expect(result.ok).toBe(false);
 });
+
+browserTest(
+  "smoke: passes when the app mounts and buttons are safe",
+  async () => {
+    const result = await renderCheck({
+      html: `<div id="root"><h1>App</h1><button>noop</button></div>`,
+      smoke: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  }
+);
+
+browserTest("smoke: fails on a blank root (silent white screen)", async () => {
+  const result = await renderCheck({
+    html: `<div id="root"></div>`,
+    smoke: true,
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.errors.join(" ")).toContain("did not mount");
+});
+
+browserTest("smoke: fails when clicking a button throws", async () => {
+  const result = await renderCheck({
+    html: `<div id="root"><h1>App</h1>
+      <button onclick="throw new Error('boom on click')">Go</button></div>`,
+    smoke: true,
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.errors.join(" ")).toContain("boom on click");
+});

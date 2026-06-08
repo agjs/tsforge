@@ -7,8 +7,8 @@
 // Run:  bun run packages/core/scripts/headless-build.ts "build a kanban board" [react|vanilla] [dir]
 //   then: bun run packages/core/scripts/cli-metrics.ts
 import { appendFileSync, mkdirSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
+import { rm, cp } from "node:fs/promises";
+import { basename, join } from "node:path";
 import {
   buildWebFix,
   buildWebGate,
@@ -108,6 +108,9 @@ async function main(): Promise<void> {
     incrementalCheck: buildWebTscCheck(),
     guidance: webGuidance(framework),
     contextWindow,
+    // A from-scratch multi-domain app needs more than the 40 default — iter 1 was
+    // building cleanly (0 TS2322) but ran out of turns mid-build.
+    maxTurns: 80,
     report,
   });
 
@@ -117,8 +120,38 @@ async function main(): Promise<void> {
     buildWebTypeGate(framework).command
   );
 
+  // Snapshot the WHOLE project (package.json, vite.config, tsconfig, index.html,
+  // components.json, src/ — everything except the heavy/derived node_modules & dist)
+  // so each iteration is RUNNABLE: `cd <snapshot> && bun install && bun run dev`.
+  // The build dir itself is wiped by the next run. Named after the log + outcome so
+  // it lines up with the metrics. Best-effort — never fail the run over a snapshot.
+  const stem = basename(logFile, ".jsonl");
+  const snapshot = join(
+    import.meta.dir,
+    "..",
+    "..",
+    "..",
+    "evals",
+    "loop-snapshots",
+    `${stem}-${result.status}`
+  );
+
+  try {
+    await cp(dir, snapshot, {
+      recursive: true,
+      filter: (src) => {
+        const base = basename(src);
+
+        return base !== "node_modules" && base !== "dist";
+      },
+    });
+  } catch {
+    // best-effort — never fail the run over a snapshot
+  }
+
   process.stdout.write(
     `\n[${result.status} · ${result.turns} turn(s)] log: ${logFile}\n` +
+      `runnable snapshot: ${snapshot} (cd there, bun install && bun run dev)\n` +
       "score it: bun run packages/core/scripts/cli-metrics.ts\n"
   );
   process.exit(result.status === "done" ? 0 : 1);

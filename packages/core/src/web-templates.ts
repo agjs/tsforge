@@ -41,6 +41,9 @@ const REACT_PACKAGE_JSON = `{
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@radix-ui/react-slot": "^1.1.1",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-router": "^1.95.0",
@@ -49,6 +52,7 @@ const REACT_PACKAGE_JSON = `{
     "lucide-react": "^0.469.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "recharts": "^2.15.0",
     "tailwind-merge": "^3.0.0"
   },
   "devDependencies": {
@@ -377,11 +381,14 @@ const REACT_GUIDANCE = [
   "    a QueryClientProvider is already wired in src/main.tsx.",
   "  • Style with Tailwind classes via className using theme tokens",
   "    (bg-background, text-foreground, border-border), not raw colors.",
+  "  • Need charts? `recharts` is installed — import from 'recharts'. Need drag-and-",
+  "    drop? `@dnd-kit/core` + `@dnd-kit/sortable` are installed. Do NOT add other",
+  "    deps (only these + the scaffold's are installed; the build can't fetch more).",
   "Imports use the @/ alias (e.g. @/<domain>/<domain>.types, @/components/ui/button).",
-  "To verify behavior you MAY create a checks.json like",
-  '{"steps":[{"fill":{"selector":"#new-todo","value":"Buy milk"},"click":"#add",' +
-    '"expect":{"text":"Buy milk"}}]} — the gate builds with Vite and runs it in a',
-  "real browser. Use selectors you actually render.",
+  "Do NOT write a checks.json or any browser interaction test. The gate already",
+  "builds the app with Vite and renders it in a real browser, FAILING on any",
+  "runtime/console error — that IS the acceptance. Spend your effort on a working,",
+  "clean app that renders without errors, not on test assertions.",
 ].join("\n");
 
 // ─── vanilla: Vite + TS + Tailwind, no framework ─────────────────────────────
@@ -478,9 +485,9 @@ const VANILLA_GUIDANCE = [
   "  • src/view.ts — DOM rendering (build/update elements with createElement)",
   "  • src/main.ts — the entry that wires store + view + events into #app",
   "Style with Tailwind utility classes. Keep functions small and single-purpose.",
-  "To verify behavior you MAY create a checks.json like",
-  '{"steps":[{"click":"#add","expect":{"selector":"#count","text":"1"}}]} — the',
-  "gate builds with Vite and runs it in a real browser. Use ids you actually render.",
+  "Do NOT write a checks.json or browser interaction test. The gate builds with",
+  "Vite and renders the app in a real browser, failing on any runtime error — that",
+  "is the acceptance. Focus on a working app that renders cleanly.",
 ].join("\n");
 
 export const WEB_TEMPLATES: Record<WebFramework, IWebTemplate> = {

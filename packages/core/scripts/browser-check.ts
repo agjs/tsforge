@@ -4,11 +4,14 @@
 // AND behaves.
 //
 //   bun browser-check.ts <htmlFile>                 # render-only (no errors)
+//   bun browser-check.ts <htmlFile> --smoke         # render + generic behaviour smoke
 //   bun browser-check.ts <htmlFile> <checks.json>   # render + interaction checks
 //   bun browser-check.ts <htmlFile> <selector> [text]
 import { renderCheck, parseChecks, type IRenderOptions } from "../src/browser";
 
-const [file, arg2, arg3] = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+const smoke = rawArgs.includes("--smoke");
+const [file, arg2, arg3] = rawArgs.filter((a) => a !== "--smoke");
 
 if (file === undefined) {
   process.stderr.write(
@@ -38,7 +41,7 @@ async function checksFor(): Promise<Partial<IRenderOptions>> {
   };
 }
 
-const result = await renderCheck({ file, ...(await checksFor()) });
+const result = await renderCheck({ file, smoke, ...(await checksFor()) });
 
 if (result.ok) {
   process.stdout.write(`browser-check: ${file} renders + behaves correctly\n`);

@@ -31,6 +31,11 @@ export interface IRenderOptions {
   /** Interaction steps run after load — click/fill, then assert. Verifies the
    *  app actually WORKS (e.g. click increments), not just that it renders. */
   steps?: IStep[];
+  /** Generic, app-agnostic behaviour smoke (harness-authored, not model-authored):
+   *  assert the app actually mounted (root not blank) and that clicking the first
+   *  few buttons throws no uncaught/console error. Catches apps that crash on
+   *  interaction without needing per-app checks. */
+  smoke?: boolean;
   /** Navigation timeout (default 15s). */
   timeoutMs?: number;
 }
@@ -73,6 +78,10 @@ export async function renderCheck(
       await runStep(page, step, errors);
     }
 
+    if (opts.smoke === true) {
+      await runSmoke(page, errors);
+    }
+
     return { ok: errors.length === 0, errors };
   } finally {
     await browser.close();
@@ -111,6 +120,52 @@ async function loadOverHttp(
     );
   } finally {
     await server.stop(true);
+  }
+}
+
+/** Max interactive elements the generic smoke will click. */
+const SMOKE_CLICK_LIMIT = 5;
+
+/**
+ * Generic, app-agnostic behaviour smoke. First proves the app MOUNTED (the React
+ * root has rendered content — a blank white screen is a silent failure tsc/eslint
+ * never catch). Then clicks the first few enabled buttons; any uncaught exception
+ * or console error surfaces via the page handlers wired in renderCheck. No per-app
+ * knowledge, so it never needs the model to author (flaky) checks.
+ */
+async function runSmoke(page: Page, errors: string[]): Promise<void> {
+  const mounted = await page.evaluate(() => {
+    const root =
+      document.querySelector("#root") ??
+      document.querySelector("#app") ??
+      document.body;
+
+    return root.children.length > 0 && root.textContent.trim() !== "";
+  });
+
+  if (!mounted) {
+    errors.push("app did not mount: root is blank after load");
+
+    return;
+  }
+
+  // Click buttons only (not links — links navigate away from the SPA). The error
+  // handlers in renderCheck capture anything an onClick throws.
+  const buttons = await page.$$('button:not([disabled]), [role="button"]');
+  const limit = Math.min(buttons.length, SMOKE_CLICK_LIMIT);
+
+  for (let i = 0; i < limit; i++) {
+    try {
+      const button = buttons[i];
+
+      if (button !== undefined) {
+        await button.click({ timeout: 2000, trial: false });
+        await page.waitForTimeout(50);
+      }
+    } catch {
+      // A click that can't land (covered/detached) is not a behaviour failure;
+      // only uncaught JS errors (captured by the page handlers) count.
+    }
   }
 }
 

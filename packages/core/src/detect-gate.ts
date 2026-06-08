@@ -194,11 +194,18 @@ export function buildWebGate(framework: WebFramework): IGate {
       /\s+/g,
       " "
     );
-  const render = `bun "${BROWSER_CHECK}" dist/index.html checks.json`;
+  // GENERIC BEHAVIOUR SMOKE (--smoke): the gate proves the built app mounts in a
+  // real browser AND survives interaction — it asserts the React root rendered
+  // content (a blank white screen is a silent failure tsc/eslint never catch) and
+  // clicks the first few buttons with zero uncaught/console errors. This is
+  // HARNESS-authored and app-agnostic: we deliberately do NOT run a model-authored
+  // checks.json — the 27b writes over-strict interaction assertions (exact
+  // placeholders/fill flows) it then can't satisfy and spirals on (iter3/4).
+  const render = `bun "${BROWSER_CHECK}" dist/index.html --smoke`;
 
   return {
     command: `${build} && ${tsc} && ${lint} && ${render}`,
-    label: `${template.label} (build + browser)`,
+    label: `${template.label} (build + behaviour smoke)`,
   };
 }
 

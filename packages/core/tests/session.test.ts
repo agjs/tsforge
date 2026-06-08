@@ -480,6 +480,82 @@ test("does NOT auto-compact when no context window is configured", async () => {
   }
 });
 
+// A flaky model (request timeout / connection drop) must NOT crash the process —
+// send() ends the turn gracefully as `stuck` with the error logged.
+// A repetition loop should trigger a bounded RECOVERY (force a concrete action),
+// not immediately abandon the build.
+test("recovers from a repetition loop by forcing a tool call, then proceeds", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let calls = 0;
+    const choices: (string | undefined)[] = [];
+    const provider: IProvider = {
+      async complete(_messages, opts) {
+        calls += 1;
+        choices.push(opts?.toolChoice);
+
+        if (calls === 1) {
+          return {
+            content: "loop loop loop",
+            toolCalls: [],
+            degenerated: true,
+          };
+        }
+
+        if (calls === 2) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "1",
+                name: "create",
+                arguments: { file: "x.ts", content: "export const x = 1;\n" },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+
+    const result = await session.send("build it");
+
+    // Recovered (not immediately stuck): the post-loop turn was FORCED (required),
+    // it then created a file and the gate confirmed.
+    expect(choices[1]).toBe("required");
+    expect(result.status).toBe("done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a provider error ends the send as 'stuck', never throws", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const provider: IProvider = {
+      async complete() {
+        throw new Error("The operation timed out.");
+      },
+    };
+    const session = await Session.create({ provider, cwd: dir });
+
+    const result = await session.send("build something");
+
+    expect(result.status).toBe("stuck");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("send returns 'interrupted' when its signal is aborted mid-turn", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 
