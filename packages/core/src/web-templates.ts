@@ -370,7 +370,7 @@ createRoot(rootElement).render(
 // throw two unfixable errors ("Cannot find module './routeTree.gen'" + "createFileRoute
 // ('/') not assignable to 'undefined'") that pin every interim check at a 2-error
 // floor — the model never sees 0 errors, never settles, and burns its whole turn
-// budget chasing them (observed: saas-crm + pm-platform both stuck on exactly this).
+// budget chasing them (observed on large multi-route apps stuck on exactly this).
 // The Vite build overwrites this with the real tree (all routes) on every gate run.
 // @ts-nocheck + eslint-disabled (matches what the generator emits; *.gen.ts is ignored).
 const ROUTE_TREE_GEN = `/* eslint-disable */
@@ -461,11 +461,17 @@ const REACT_GUIDANCE = [
   "    createRootRoute/createFileRoute call, wrong path string, or a syntax/type",
   "    error). FIX THE ROUTE FILE — the generated tree then resolves on the next",
   "    build. Every route file must `export const Route = createFileRoute('/path')`.",
+  "  • UI PRIMITIVES — call `scaffold_ui` ONCE near the start to generate the base",
+  "    components you need (button, card, input, label, textarea, select, badge,",
+  "    separator, table), themed to the app's vibe (minimal | warm | futuristic).",
+  "    Pick the vibe from the user's request. Then import them from @/components/ui",
+  "    and COMPOSE. NEVER hand-write a button/card/input/etc. — it wastes time and",
+  "    won't match the theme. Build YOUR components (forms, lists, layouts) on top.",
   "  • HARNESS SDK — USE IT, do NOT hand-roll the data layer (this is the biggest",
   "    speed+quality lever). A tested generic toolkit is already in src/lib/:",
   "      – createCollection(key, SEED, parseFn) [from @/lib/collection] IS a domain's",
   "        whole service: typed async CRUD + Result + latency. <d>.service.ts is ONE",
-  "        line: `export const deals = createCollection('deals', SEED_DEALS, parseDeal)`.",
+  "        line: `export const items = createCollection('items', SEED_ITEMS, parseItem)`.",
   "      – useCollection(collection) [from @/lib/use-collection] IS the data hook:",
   "        cached list, isLoading/error, and create/update/remove mutations WITH",
   "        optimistic updates + rollback. Do NOT write a <d>.hooks.ts query wrapper.",
@@ -694,7 +700,7 @@ export function pObject<T extends Record<string, unknown>>(shape: {
 const SDK_COLLECTION_TS = `// createCollection — one tested generic that IS a domain's data layer: typed async
 // CRUD over an in-memory store, parsing seed data through a Parser, with simulated
 // latency + a Result return. A domain's service becomes one line:
-//   export const contacts = createCollection("contacts", SEED, parseContact)
+//   export const items = createCollection("items", SEED, parseItem)
 import type { Parser } from "@/lib/parse";
 import type { Result } from "@/lib/result";
 import { err, ok } from "@/lib/result";

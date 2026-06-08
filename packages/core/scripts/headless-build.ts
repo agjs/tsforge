@@ -182,6 +182,9 @@ async function main(): Promise<void> {
     // so without this they pile up unseen until the gate (a run log showed 12 `as`
     // casts accumulating that way). cwd = the run dir so vendored ignores resolve.
     lintFile: makeFileLinter(framework, dir),
+    // Offer the themed-UI-primitives tool so the model generates button/card/input/
+    // etc. (tested, theme-coherent) instead of re-authoring them every build.
+    scaffoldUi: framework === "react",
     guidance: webGuidance(framework),
     contextWindow,
     // ADAPTIVE THINKING (measured ~80% of build time is REPAIR): default thinking

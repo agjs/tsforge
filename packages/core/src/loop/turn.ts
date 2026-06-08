@@ -16,7 +16,11 @@ import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
 import { gateFeedback } from "./feedback";
 import { executeTool } from "./tools";
-import { astGrepFix, dropRedundantAnnotations } from "./astgrep-fix";
+import {
+  astGrepFix,
+  dropRedundantAnnotations,
+  stripLiteralCasts,
+} from "./astgrep-fix";
 import {
   EDIT_TOOL,
   CREATE_TOOL,
@@ -155,6 +159,54 @@ function writeGuardLines(
   return `${shown}${more}`;
 }
 
+/** Max dependant files (and errors each) to name in the blast-radius section. */
+const MAX_DEP_FILES = 4;
+const MAX_DEP_ERRORS = 2;
+
+/**
+ * Render the CROSS-FILE blast radius: the dependant files an edit broke, with the
+ * first error(s) in each. Empty string when nothing downstream broke. This is the
+ * write-guard reaching across the import graph (see TsService.dependantErrors).
+ */
+function dependantBlastRadius(
+  dependants: readonly { file: string; errors: readonly ITsDiagnostic[] }[]
+): string {
+  if (dependants.length === 0) {
+    return "";
+  }
+
+  const blocks = dependants.slice(0, MAX_DEP_FILES).map((d) => {
+    let text = "";
+
+    try {
+      text = readFileSync(d.file, "utf8");
+    } catch {
+      text = "";
+    }
+
+    const lineOf = (offset: number): number =>
+      text.slice(0, offset).split("\n").length;
+
+    return d.errors
+      .slice(0, MAX_DEP_ERRORS)
+      .map(
+        (e) =>
+          `  ${basename(d.file)}:${String(lineOf(e.start))} ${e.message} (TS${String(e.code)})`
+      )
+      .join("\n");
+  });
+  const more =
+    dependants.length > MAX_DEP_FILES
+      ? `\n  …and ${String(dependants.length - MAX_DEP_FILES)} more file(s)`
+      : "";
+
+  return (
+    `\n\n⚠ BLAST RADIUS — this change broke ${String(dependants.length)} file(s) that ` +
+    `depend on it. Fix them too, or revert the change (e.g. a signature you altered):\n` +
+    `${blocks.join("\n")}${more}`
+  );
+}
+
 /**
  * WRITE-TIME GUARD: the moment the model writes a file, check JUST that file and
  * hand any real problems back AS THE TOOL RESULT — so the model fixes them THIS
@@ -176,19 +228,33 @@ async function writeGuard(
   taskId: string
 ): Promise<string> {
   const { tsService, cwd, lintFile } = ctx;
+  // `file` is workspace-relative (the create/edit handler normalized it); the
+  // strip/linter/readFileSync need the absolute path.
+  const absPath = join(cwd, file);
+  // Strip the model's reflexive needless literal-to-union casts NOW (deterministic,
+  // safe) so it's never told about them and never spends a turn removing them.
+  const stripped = await stripLiteralCasts(absPath).catch(() => 0);
+
+  if (stripped > 0) {
+    report({
+      kind: "tool",
+      task: taskId,
+      message: `stripped ${String(stripped)} needless literal cast(s) in ${basename(absPath)}`,
+    });
+  }
 
   tsService.refresh(file);
 
   const typeErrors = tsService
     .diagnostics(file)
     .filter((d) => !TRANSIENT_DIAG_CODES.has(d.code));
-  // `file` is workspace-relative (the create/edit handler normalized it); the
-  // linter + readFileSync need the absolute path.
-  const absPath = join(cwd, file);
   const lintProblems = lintFile === undefined ? [] : await lintFile(absPath);
+  // BLAST RADIUS: files that depend on this one and now have errors. Computed even
+  // when THIS file is clean — a signature change can compile here but break callers.
+  const dependants = tsService.dependantErrors(file, TRANSIENT_DIAG_CODES);
   const total = typeErrors.length + lintProblems.length;
 
-  if (total === 0) {
+  if (total === 0 && dependants.length === 0) {
     return "";
   }
 
@@ -197,13 +263,18 @@ async function writeGuard(
   report({
     kind: "tool",
     task: taskId,
-    message: `⚠ write-check: ${String(typeErrors.length)} type + ${String(lintProblems.length)} lint issue(s) in ${basename(absPath)} — fed back to fix inline`,
+    message: `⚠ write-check: ${String(typeErrors.length)} type + ${String(lintProblems.length)} lint issue(s)${dependants.length > 0 ? `, ${String(dependants.length)} dependant file(s) broken` : ""} in ${basename(absPath)} — fed back to fix inline`,
   });
+
+  if (total === 0) {
+    return dependantBlastRadius(dependants);
+  }
 
   return (
     `\n\n⚠ CHECK of this file found ${String(total)} issue(s) — fix them now ` +
     "(edit this file) before writing others; ignore any 'cannot find module' for " +
-    `files you'll create next:\n${writeGuardLines(absPath, typeErrors, lintProblems)}`
+    `files you'll create next:\n${writeGuardLines(absPath, typeErrors, lintProblems)}` +
+    dependantBlastRadius(dependants)
   );
 }
 
@@ -360,6 +431,9 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
     try {
       if (await fileExists(cwd, f)) {
         astFixed += await astGrepFix(join(cwd, f));
+        // Backstop the write-time strip (covers files changed via rename/organize
+        // or any path that skipped the write-guard).
+        astFixed += await stripLiteralCasts(join(cwd, f));
       }
     } catch {
       // degrade silently — gate is the authority

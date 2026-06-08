@@ -2,6 +2,7 @@ import type { IToolCall } from "../../inference";
 import { TOOL_NAME, type ToolName } from "../../agent";
 import { readFile, runShell, doEdit, doCreate } from "./file-ops";
 import { doSearch, doLsp } from "./lsp-ops";
+import { doScaffoldUi } from "./scaffold-ui";
 import { type IToolContext } from "./tool-context";
 
 export type { IToolContext } from "./tool-context";
@@ -25,6 +26,7 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.diagnostics]: (a, c) => doLsp(TOOL_NAME.diagnostics, a, c),
   [TOOL_NAME.renameSymbol]: (a, c) => doLsp(TOOL_NAME.renameSymbol, a, c),
   [TOOL_NAME.organizeImports]: (a, c) => doLsp(TOOL_NAME.organizeImports, a, c),
+  [TOOL_NAME.scaffoldUi]: doScaffoldUi,
 };
 
 function isToolName(name: string): name is ToolName {

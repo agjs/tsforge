@@ -2,7 +2,11 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { astGrepFix, dropRedundantAnnotations } from "../src/loop/astgrep-fix";
+import {
+  astGrepFix,
+  dropRedundantAnnotations,
+  stripLiteralCasts,
+} from "../src/loop/astgrep-fix";
 
 test("rewrites new Array().fill() to Array.from() (structural, ignores strings)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-ag-"));
@@ -68,6 +72,38 @@ test("drops redundant const annotations on call/expression initializers", async 
     expect(out).toContain("const negative = cents < 0");
     expect(out).not.toContain(": number");
     expect(out).not.toContain(": boolean");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("strips needless literal-to-union casts but keeps `as const` and value casts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-ag-"));
+  const file = join(dir, "a.ts");
+
+  try {
+    const src = [
+      "const SIZES = ['s', 'm'] as const;",
+      "const rows = [",
+      "  { status: 'open' as Status, count: 200 as Code, flag: true as Bool },",
+      "];",
+      "const real = (x as Foo).bar;",
+      "const keep = 'x' as const;",
+    ].join("\n");
+
+    await Bun.write(file, `${src}\n`);
+
+    const stripped = await stripLiteralCasts(file);
+    const out = await Bun.file(file).text();
+
+    expect(stripped).toBe(3); // the three literal casts in the row
+    expect(out).toContain("status: 'open'");
+    expect(out).toContain("count: 200");
+    expect(out).toContain("flag: true");
+    // value cast (operand is an identifier) and both `as const` are untouched
+    expect(out).toContain("(x as Foo).bar");
+    expect(out).toContain("['s', 'm'] as const");
+    expect(out).toContain("'x' as const");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

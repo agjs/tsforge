@@ -131,6 +131,84 @@ test("definition jumps from a usage to the declaration", async () => {
   }
 });
 
+test("impact reports the blast radius (dependant files), excluding the declaration", async () => {
+  const dir = await project(graph());
+
+  try {
+    const svc = new TsService(dir);
+    const pos = svc.positionOfSymbol("types.ts", "IThing");
+    const impact = svc.impact("types.ts", pos ?? 0);
+    const files = new Set(
+      impact.files.map((f) => f.file.split("/").slice(-1)[0])
+    );
+
+    // IThing is used in a.ts and b.ts; its own declaration is excluded.
+    expect(impact.fileCount).toBe(2);
+    expect(files).toEqual(new Set(["a.ts", "b.ts"]));
+    expect(files.has("types.ts")).toBe(false);
+    expect(impact.total).toBeGreaterThanOrEqual(2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("context composes type + definition + references in one call", async () => {
+  const dir = await project(graph());
+
+  try {
+    const svc = new TsService(dir);
+    const pos = svc.positionOfSymbol("a.ts", "IThing");
+    const ctx = svc.context("a.ts", pos ?? 0);
+
+    expect(ctx.type.length).toBeGreaterThan(0);
+    expect(
+      ctx.definition.some((d) => d.file.split("/").slice(-1)[0] === "types.ts")
+    ).toBe(true);
+    expect(ctx.references.length).toBeGreaterThanOrEqual(2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("dependantErrors reports a caller broken by a dependency's signature", async () => {
+  const dir = await project({
+    "lib.ts":
+      "export function f(a: number, b: number): number {\n  return a + b;\n}\n",
+    "caller.ts": 'import { f } from "./lib";\nexport const x = f(1);\n', // missing arg
+    "ok.ts": 'import { f } from "./lib";\nexport const y = f(1, 2);\n', // correct
+  });
+
+  try {
+    const svc = new TsService(dir);
+    const broken = svc.dependantErrors("lib.ts");
+    const files = broken.map((b) => b.file.split("/").slice(-1)[0]);
+
+    // caller.ts (wrong arity) is in the blast radius; ok.ts is not.
+    expect(files).toContain("caller.ts");
+    expect(files).not.toContain("ok.ts");
+    expect(broken.some((b) => b.errors.some((e) => e.code === 2554))).toBe(
+      true
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("dependantErrors is empty when nothing downstream is broken", async () => {
+  const dir = await project({
+    "lib.ts": "export const k = 1;\n",
+    "use.ts": 'import { k } from "./lib";\nexport const z = k + 1;\n',
+  });
+
+  try {
+    const svc = new TsService(dir);
+
+    expect(svc.dependantErrors("lib.ts")).toEqual([]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("organizeImports removes an unused import", async () => {
   const dir = await project({
     "util.ts": "export const used = 1;\nexport const extra = 2;\n",

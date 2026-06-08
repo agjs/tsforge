@@ -16,6 +16,7 @@ export const TOOL_NAME = {
   diagnostics: "diagnostics",
   renameSymbol: "rename_symbol",
   organizeImports: "organize_imports",
+  scaffoldUi: "scaffold_ui",
 } as const;
 
 /** The two file-mutation tools the model is always offered. */
@@ -48,6 +49,46 @@ export const CREATE_TOOL = {
         content: { type: "string" },
       },
       required: ["file", "content"],
+    },
+  },
+};
+
+/** Materialize tested, THEMED UI primitives (button/card/input/…) into
+ *  src/components/ui/ so you never hand-write a base component. Web builds only. */
+export const SCAFFOLD_UI_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.scaffoldUi,
+    description:
+      "Generate tested, accessible UI primitives (button, card, input, label, textarea, select, badge, separator, table) into src/components/ui/, styled to a chosen vibe. Call this ONCE near the start with the primitives the app needs — then import and compose them. NEVER hand-write these base components yourself; that wastes time and they won't match the theme. It also writes the matching design tokens into src/index.css.",
+    parameters: {
+      type: "object",
+      properties: {
+        theme: {
+          type: "string",
+          enum: ["minimal", "warm", "futuristic"],
+          description: "The visual vibe, derived from the user's request.",
+        },
+        components: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: [
+              "button",
+              "card",
+              "input",
+              "label",
+              "textarea",
+              "select",
+              "badge",
+              "separator",
+              "table",
+            ],
+          },
+          description: "Which primitives to generate.",
+        },
+      },
+      required: ["theme", "components"],
     },
   },
 };

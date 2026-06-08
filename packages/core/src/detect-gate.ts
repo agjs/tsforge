@@ -217,6 +217,10 @@ const BUILD_PREAMBLE = [
   "polish, they are how you write the line:",
   "  • No `x as Foo`. Narrow instead: `if (!(x instanceof Foo)) return;` or a type",
   "    guard, or type the value at its source. For event targets, check the type.",
+  "  • SEED/DATA arrays: type the array ONCE (`const SEED: readonly IThing[] = [...]`)",
+  "    and write PLAIN literals in each row — `status: 'open'`, NEVER `status: 'open'",
+  "    as Status`. A literal that's a member of the union is ALREADY assignable;",
+  "    casting it is the most common needless `as` and the gate rejects every one.",
   "  • No `arr[i]!` / `obj.maybe!`. Guard: `const v = arr[i]; if (v === undefined)",
   "    return;` — array/Map index access is `T | undefined` here.",
   "  • No `any`. Use `unknown` + a narrow, or write the real type.",
@@ -226,12 +230,11 @@ const BUILD_PREAMBLE = [
   "between steps ('The user wants me to…', 'I was in the middle of…', 'Now let me…').",
   "That text is wasted. Emit the next tool call.",
   "",
-  "NO COMMENTS in the code you write. Every comment is generated text that costs",
-  "you time, and these add nothing: file-header banners ('// Company domain",
-  "constants'), section dividers ('// ─── Seed data ───'), and lines that restate",
-  "the code or where a symbol lives ('// re-exported via the barrel'). Write",
-  "self-explanatory names instead. The ONLY allowed comment explains a non-obvious",
-  "WHY that the code cannot — and most files need none. Do not write JSDoc.",
+  "NO COMMENTS in the code you write. A comment is generated text that costs you",
+  "time, and these add nothing: file-header banners that restate the filename,",
+  "decorative section dividers, and lines that restate the code or narrate where a",
+  "symbol is defined. Write self-explanatory names instead. The ONLY allowed comment",
+  "explains a non-obvious WHY the code cannot — most files need none. No JSDoc.",
 ].join("\n");
 
 /** The system-prompt guidance for a stack (build framing + structure/conventions). */

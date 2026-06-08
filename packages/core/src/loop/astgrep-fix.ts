@@ -56,6 +56,35 @@ constraints:
 fix: 'const $A = $B'
 `;
 
+/**
+ * Strip the model's #1 needless `as` cast: a LITERAL annotated with its own union
+ * type in data — e.g. `"open" as Status` or `200 as HttpCode`. A
+ * string/number/boolean literal that's a member of the target union is ALREADY
+ * assignable, so the cast is pure ceremony the gate rejects anyway. The model writes
+ * these reflexively (a deep TS prior) on the very first file and then burns turns
+ * removing them; stripping deterministically means it never has to. SAFE by
+ * construction: only string/number/true/false operands (not identifiers, so a real
+ * value-cast like `x as Foo` is left for the model to narrow), and `as const` is
+ * excluded. tsc re-validates — if a literal genuinely wasn't assignable, the real
+ * error surfaces (better than a cast hiding it).
+ */
+const STRIP_LITERAL_CAST_RULE = `
+id: strip-literal-cast
+language: typescript
+rule:
+  pattern: $LIT as $TYPE
+constraints:
+  LIT:
+    any:
+      - { kind: string }
+      - { kind: number }
+      - { kind: 'true' }
+      - { kind: 'false' }
+  TYPE:
+    not: { regex: '^const$' }
+fix: $LIT
+`;
+
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
 const AST_GREP = join(REPO_ROOT, "node_modules", ".bin", "ast-grep");
 
@@ -135,14 +164,12 @@ export async function astGrepFix(absFile: string): Promise<number> {
 }
 
 /**
- * Strip redundant `const` type annotations in `absFile` (see DROP_ANNOTATION_RULE).
- * Counts matches first (constraint-filtered), then applies, returning the number
- * rewritten. No-ops to 0 if ast-grep is absent. NOT verified here — the caller
- * MUST re-gate and revert on regression; this only performs the rewrite.
+ * Apply an inline ast-grep RULE (with constraints) to `absFile` in place: count the
+ * constraint-filtered matches, then rewrite them, returning the count. No-ops to 0
+ * if ast-grep is absent. NOT verified here — a caller that does an unsafe rewrite
+ * MUST re-gate (the full `tsc`/eslint gate is the authority and reverts can't ship).
  */
-export async function dropRedundantAnnotations(
-  absFile: string
-): Promise<number> {
+async function applyInlineRule(rule: string, absFile: string): Promise<number> {
   if (!(await Bun.file(AST_GREP).exists())) {
     return 0;
   }
@@ -150,7 +177,7 @@ export async function dropRedundantAnnotations(
   const found = await astGrep([
     "scan",
     "--inline-rules",
-    DROP_ANNOTATION_RULE,
+    rule,
     "--json=compact",
     absFile,
   ]);
@@ -176,10 +203,26 @@ export async function dropRedundantAnnotations(
   const done = await astGrep([
     "scan",
     "--inline-rules",
-    DROP_ANNOTATION_RULE,
+    rule,
     "--update-all",
     absFile,
   ]);
 
   return done.ok ? matches : 0;
+}
+
+/**
+ * Strip redundant `const` type annotations in `absFile` (see DROP_ANNOTATION_RULE).
+ * Caller MUST re-gate and revert on regression; this only performs the rewrite.
+ */
+export async function dropRedundantAnnotations(
+  absFile: string
+): Promise<number> {
+  return applyInlineRule(DROP_ANNOTATION_RULE, absFile);
+}
+
+/** Strip needless literal-to-union `as` casts in `absFile` (see the rule's note).
+ *  Safe by construction; the gate re-validates regardless. */
+export async function stripLiteralCasts(absFile: string): Promise<number> {
+  return applyInlineRule(STRIP_LITERAL_CAST_RULE, absFile);
 }

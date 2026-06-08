@@ -6,6 +6,7 @@ import type {
 } from "../inference";
 import type { ITask } from "../spec";
 import type { FileLinter } from "../detect-gate";
+import { SCAFFOLD_UI_TOOL } from "../agent";
 import { readFiles } from "../lib/fs";
 import { validate, type ErrorParser } from "../validate";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
@@ -73,6 +74,9 @@ export interface ISessionConfig {
    *  the write-guard reports lint violations — the moat rules tsc can't see (`as`,
    *  `I`-prefix) — inline, so they're fixed in-context not piled up at the gate. */
   lintFile?: FileLinter;
+  /** Offer the `scaffold_ui` tool (themed UI primitives). Web builds only — keeps
+   *  it off the pure-TS/scratch tool list where it's meaningless noise. */
+  scaffoldUi?: boolean;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -215,7 +219,10 @@ export class Session {
   private readonly provider: IProvider;
   private readonly cfg: ISessionConfig;
   private readonly report: Reporter;
-  private readonly tools: ReturnType<typeof toolsFor>;
+  private readonly tools: (
+    | ReturnType<typeof toolsFor>[number]
+    | typeof SCAFFOLD_UI_TOOL
+  )[];
   private hasGate: boolean;
   private readonly ctx: ILoopCtx;
   private readonly state: ILoopState;
@@ -247,7 +254,12 @@ export class Session {
     // emits unparseable formats the server leaves in content) — see
     // malformed-toolcall-format. The base tools are enough to work a repo; the
     // LSP nav set can become an opt-in once we confirm it parses cleanly here.
-    this.tools = toolsFor(false);
+    // WEB builds add ONE coarse tool — `scaffold_ui` — so the model generates
+    // tested themed primitives instead of re-authoring a button/card every build.
+    this.tools =
+      cfg.scaffoldUi === true
+        ? [...toolsFor(false), SCAFFOLD_UI_TOOL]
+        : toolsFor(false);
     this.ctx = ctx;
     this.state = {
       prevGateErrors: [],

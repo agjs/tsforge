@@ -5,6 +5,8 @@ import type {
   ITsFix,
   ITsLocation,
   ITsSymbol,
+  ITsImpact,
+  ITsContext,
 } from "./lsp.types";
 
 /**
@@ -257,6 +259,135 @@ export class TsService {
       line: this.lineOf(d.fileName, d.textSpan.start),
       start: d.textSpan.start,
     }));
+  }
+
+  /**
+   * BLAST RADIUS of the symbol at `position`: which files/lines reference it,
+   * EXCLUDING its own declaration site. Type-exact (the TS LanguageService resolves
+   * it), so it can drive a deliberate cross-file edit — "you changed X, it's used
+   * at A:12, B:40" — instead of discovering breakage at the gate. Files are ordered
+   * most-referenced first.
+   */
+  impact(file: string, position: number): ITsImpact {
+    const abs = this.toAbs(file);
+    const refs = this.service.getReferencesAtPosition(abs, position) ?? [];
+    const byFile = new Map<string, number[]>();
+
+    for (const r of refs) {
+      // Drop the declaration occurrence itself — blast radius is the DEPENDANTS.
+      if (r.fileName === abs && r.textSpan.start === position) {
+        continue;
+      }
+
+      const lines = byFile.get(r.fileName) ?? [];
+
+      lines.push(this.lineOf(r.fileName, r.textSpan.start));
+      byFile.set(r.fileName, lines);
+    }
+
+    const files = [...byFile.entries()]
+      .map(([f, lines]) => ({
+        file: f,
+        lines: [...lines].sort((a, b) => a - b),
+      }))
+      .sort((a, b) => b.lines.length - a.lines.length);
+    const total = files.reduce((n, f) => n + f.lines.length, 0);
+
+    return { total, fileCount: files.length, files };
+  }
+
+  /** A 360° view of the symbol at `position`: its type, definition site(s), and
+   *  every reference — the pieces a model needs to reason about it in one call. */
+  context(file: string, position: number): ITsContext {
+    return {
+      type: this.typeAt(file, position),
+      definition: this.definition(file, position),
+      references: this.references(file, position),
+    };
+  }
+
+  /** Start offsets of `file`'s top-level EXPORTED declarations (the symbols other
+   *  files can depend on) — the entry points for a file-level blast-radius check. */
+  private exportedPositions(abs: string): number[] {
+    const sf = this.service.getProgram()?.getSourceFile(abs);
+
+    if (sf === undefined) {
+      return [];
+    }
+
+    const out: number[] = [];
+
+    sf.forEachChild((node) => {
+      const mods = ts.canHaveModifiers(node)
+        ? ts.getModifiers(node)
+        : undefined;
+      const exported =
+        mods?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+
+      if (!exported) {
+        return;
+      }
+
+      if (ts.isVariableStatement(node)) {
+        for (const d of node.declarationList.declarations) {
+          if (ts.isIdentifier(d.name)) {
+            out.push(d.name.getStart(sf));
+          }
+        }
+      } else if (
+        (ts.isFunctionDeclaration(node) ||
+          ts.isClassDeclaration(node) ||
+          ts.isInterfaceDeclaration(node) ||
+          ts.isTypeAliasDeclaration(node) ||
+          ts.isEnumDeclaration(node)) &&
+        node.name !== undefined
+      ) {
+        out.push(node.name.getStart(sf));
+      }
+    });
+
+    return out;
+  }
+
+  /**
+   * CROSS-FILE BLAST RADIUS of an edit to `file`: the files that depend on its
+   * exports AND now have type errors — i.e. what this edit BROKE downstream. This
+   * is the write-guard extended across the import graph: change a signature and the
+   * harness can say "you also broke deals.service.ts:12" THIS turn, instead of the
+   * model discovering it at the gate. `ignoreCodes` drops expected mid-build noise
+   * (e.g. 2307 cannot-find-module). Naturally cheap for a fresh file (no dependants
+   * yet → no references → empty).
+   */
+  dependantErrors(
+    file: string,
+    ignoreCodes: ReadonlySet<number> = new Set()
+  ): { file: string; errors: ITsDiagnostic[] }[] {
+    const abs = this.toAbs(file);
+    const deps = new Set<string>();
+
+    for (const pos of this.exportedPositions(abs)) {
+      for (const f of this.impact(file, pos).files) {
+        if (f.file !== abs) {
+          deps.add(f.file);
+        }
+      }
+    }
+
+    const out: { file: string; errors: ITsDiagnostic[] }[] = [];
+
+    for (const dep of deps) {
+      this.refresh(dep);
+
+      const errors = this.diagnostics(dep).filter(
+        (d) => !ignoreCodes.has(d.code)
+      );
+
+      if (errors.length > 0) {
+        out.push({ file: dep, errors });
+      }
+    }
+
+    return out;
   }
 
   /** Workspace symbol search by name (navigate-to) — find a symbol/file without
