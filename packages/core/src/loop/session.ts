@@ -18,6 +18,7 @@ import {
   emitTiming,
   type ILoopCtx,
   type ILoopState,
+  isPhantomRouteError,
   NO_TOOL_CALL_NUDGE,
   runToolCalls,
   settleGate,
@@ -586,15 +587,19 @@ export class Session {
       ctx.signal === undefined ? {} : { signal: ctx.signal }
     );
 
-    if (result.passed) {
-      this.repairing = false; // clean → back to fast thinking-off creation
+    // Drop stub-route-tree phantoms (the build regenerates the tree at the gate) —
+    // the model can't fix them and shouldn't be told to try.
+    const errors = result.errors.filter((e) => !isPhantomRouteError(e.message));
+
+    if (result.passed || errors.length === 0) {
+      this.repairing = false; // clean (or only phantoms) → fast thinking-off creation
 
       return;
     }
 
     this.repairing = true; // errors outstanding → next turns think to converge
 
-    const detail = result.errors
+    const detail = errors
       .slice(0, 20)
       .map((e) => e.message)
       .join("\n");
@@ -604,7 +609,7 @@ export class Session {
     ctx.report({
       kind: "tool",
       task: SESSION_ID,
-      message: `⊙ interim check: ${String(result.errors.length)} error(s) — fixing now:\n${detail}`,
+      message: `⊙ interim check: ${String(errors.length)} error(s) — fixing now:\n${detail}`,
     });
 
     ctx.messages.push({

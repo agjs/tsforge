@@ -124,6 +124,47 @@ export async function buildTsService(cwd: string): Promise<TsService | null> {
  *  "cannot find module" (a sibling the model hasn't created yet in this batch). */
 const TRANSIENT_DIAG_CODES = new Set<number>([2307]);
 
+/**
+ * The write-guard and interim check run `tsc` WITHOUT a build, so they see the STUB
+ * `routeTree.gen.ts` (only `/` + `__root__` registered). TanStack Router's types are
+ * driven by that tree, so EVERY route-API type usage is a phantom error there — and
+ * route correctness can ONLY be validated against the real tree, which the gate's
+ * build-first step regenerates. So we ignore ALL route-API type errors at write/
+ * interim time; the GATE still validates routes for real.
+ *
+ * Measured across overnight CRM builds, these phantoms took MANY message shapes
+ * (≈51 of ~67 errors in build #2 alone): `to` unions in any order (`"/" | "." | ".."`,
+ * `"." | ".." | "/"`), bare `"/"` params, `createFileRoute` constraints, and
+ * `params={{…}}` excess-property errors. Path/shape matching was whack-a-mole, so we
+ * match the ROUTER'S INTERNAL TYPE SIGNATURES instead — robust to ordering and form.
+ * SAFE: a genuinely wrong route still fails the gate (real tree); we only suppress
+ * the un-fixable write/interim noise the model would otherwise chase.
+ */
+const ROUTE_API_SIGNATURES: readonly RegExp[] = [
+  /ConstrainLiteral</, //                       `<Link to>` / createFileRoute path constraint
+  /ParamsReducerFn</, //                         `params={{…}}` on a typed route
+  /"__root__"/, //                               stub route-id union (`"__root__" | "/"`)
+  // A target type union composed ONLY of the nav literals "/", ".", ".." (any order/subset).
+  /assignable to (?:parameter of )?type '(?:"\/"|"\."|"\.\.")(?:\s*\|\s*(?:"\/"|"\."|"\.\."))*'/,
+  // `Route.useParams()` against the stub gives EMPTY params (`{}` or `never`), so a
+  // `route.params.<name>` access fails. ≥2 builds (night2 `never` ×84, twitter `{}` ×6).
+  // Broadest signal here — a real `{}`/`never` property access would also match — but
+  // those are rare and the GATE (real tree) still catches any genuine one.
+  /Property '[^']+' does not exist on type '(?:\{\}|never)'/,
+];
+
+/** A TanStack route-API type error seen at write/interim time against the stub tree —
+ *  a phantom the build erases; never surface it (the gate validates routes for real). */
+export function isPhantomRouteError(message: string): boolean {
+  return ROUTE_API_SIGNATURES.some((re) => re.test(message));
+}
+
+/** A diagnostic that's expected mid-build noise (missing sibling module, or the
+ *  stub-route-tree phantom) — not a real mistake the model should chase. */
+function isTransientDiag(d: { code: number; message: string }): boolean {
+  return TRANSIENT_DIAG_CODES.has(d.code) || isPhantomRouteError(d.message);
+}
+
 /** Max diagnostics surfaced per write — keep the in-band feedback tight. */
 const MAX_WRITE_GUARD_DIAGS = 6;
 
@@ -247,11 +288,18 @@ async function writeGuard(
 
   const typeErrors = tsService
     .diagnostics(file)
-    .filter((d) => !TRANSIENT_DIAG_CODES.has(d.code));
+    .filter((d) => !isTransientDiag(d));
   const lintProblems = lintFile === undefined ? [] : await lintFile(absPath);
   // BLAST RADIUS: files that depend on this one and now have errors. Computed even
   // when THIS file is clean — a signature change can compile here but break callers.
-  const dependants = tsService.dependantErrors(file, TRANSIENT_DIAG_CODES);
+  // Drop the stub-route phantom here too (the build regenerates the tree).
+  const dependants = tsService
+    .dependantErrors(file, TRANSIENT_DIAG_CODES)
+    .map((d) => ({
+      file: d.file,
+      errors: d.errors.filter((e) => !isPhantomRouteError(e.message)),
+    }))
+    .filter((d) => d.errors.length > 0);
   const total = typeErrors.length + lintProblems.length;
 
   if (total === 0 && dependants.length === 0) {

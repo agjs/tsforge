@@ -436,9 +436,14 @@ export interface INavItem {
 export interface IAppShellProps {
   title: string;
   nav: readonly INavItem[];
+  children?: React.ReactNode;
 }
 
-export function AppShell({ title, nav }: IAppShellProps): React.JSX.Element {
+export function AppShell({
+  title,
+  nav,
+  children,
+}: IAppShellProps): React.JSX.Element {
   const { pathname } = useLocation();
 
   return (
@@ -468,9 +473,7 @@ export function AppShell({ title, nav }: IAppShellProps): React.JSX.Element {
           })}
         </nav>
       </aside>
-      <main className="flex-1 p-6">
-        <Outlet />
-      </main>
+      <main className="flex-1 p-6">{children ?? <Outlet />}</main>
     </div>
   );
 }

@@ -486,6 +486,10 @@ const REACT_GUIDANCE = [
   "      – objectKeys(x)/objectEntries(x) [from @/lib/object] for TYPED keys of an",
   "        `as const` object. NEVER write `Object.keys(x) as (keyof typeof x)[]` —",
   "        the gate REJECTS that `as` cast; call objectKeys(x) instead.",
+  "      – sortBy(rows, key, dir) [from @/lib/sort] for sortable tables/lists: pass",
+  "        the column key as a plain STRING, get a sorted copy. NEVER write",
+  "        `[...rows].sort((a, b) => a[sortKey] - b[sortKey])` — a string can't index",
+  "        an entity (TS7053) and the `as` to silence it is banned. sortBy does it safely.",
   "    So a domain is mostly: <d>.types.ts + a SEED const + a parse<X> + one-line",
   "    createCollection + components that call useCollection/useForm. Far fewer lines,",
   "    fewer bugs. Only write a custom service/hook if the SDK genuinely can't express",
@@ -633,6 +637,33 @@ export function objectKeys<T extends object>(obj: T): (keyof T)[] {
 
 export function objectEntries<T extends object>(obj: T): [keyof T, T[keyof T]][] {
   return Object.entries(obj) as [keyof T, T[keyof T]][];
+}
+`;
+
+const SDK_SORT_TS = `// Typed sorting for tables/lists. The strict gate rejects \`row[sortKey]\` when
+// sortKey is a string (TS7053: a string can't index an entity), and bans the \`as\`
+// cast that would silence it. This vendored, lint-exempt helper does the indexing
+// safely ONCE here: pass the column key as a plain string and get a sorted COPY
+// (handles readonly input → mutable output). In YOUR code:
+//   const rows = sortBy(transactions, sortKey, sortDir)  // sortKey: string is fine
+// — never write \`[...rows].sort((a, b) => a[sortKey] - b[sortKey])\`.
+export function sortBy<T extends object>(
+  rows: readonly T[],
+  key: string,
+  direction: "asc" | "desc" = "asc"
+): T[] {
+  const dir = direction === "asc" ? 1 : -1;
+
+  return [...rows].sort((a, b) => {
+    const av = (a as Record<string, unknown>)[key];
+    const bv = (b as Record<string, unknown>)[key];
+
+    if (typeof av === "number" && typeof bv === "number") {
+      return (av - bv) * dir;
+    }
+
+    return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
+  });
 }
 `;
 
@@ -941,6 +972,7 @@ export const WEB_TEMPLATES: Record<WebFramework, IWebTemplate> = {
       "src/lib/utils.ts": CN_UTILS,
       "src/lib/result.ts": SDK_RESULT_TS,
       "src/lib/object.ts": SDK_OBJECT_TS,
+      "src/lib/sort.ts": SDK_SORT_TS,
       "src/lib/parse.ts": SDK_PARSE_TS,
       "src/lib/collection.ts": SDK_COLLECTION_TS,
       "src/lib/use-collection.ts": SDK_USE_COLLECTION_TS,

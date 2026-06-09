@@ -51,12 +51,14 @@ test("composition blocks materialize and compose the primitives", () => {
     "page-header",
   ]);
 
-  // app-shell is the sidebar+nav layout (renders <Outlet/>, router-backed)
+  // app-shell is the sidebar+nav layout — accepts children (wrapper use) OR falls
+  // back to <Outlet/> (route-layout use); both, so the model can use it either way.
   const shell = out["src/components/ui/app-shell.tsx"];
 
   expect(shell).toContain("export function AppShell");
   expect(shell).toContain("@tanstack/react-router");
-  expect(shell).toContain("<Outlet");
+  expect(shell).toContain("children?: React.ReactNode");
+  expect(shell).toContain("{children ?? <Outlet />}");
 
   // field composes the Label primitive + shows an error slot
   const field = out["src/components/ui/field.tsx"];
