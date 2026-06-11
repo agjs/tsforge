@@ -34,6 +34,54 @@ test("salvages malformed <toolname><parameter=..> tool calls from content", () =
   });
 });
 
+// The atlas-spark (NVFP4) form captured live: Qwen3.5-native `<function=NAME>`
+// XML, which Atlas's qwen3_coder/hermes parsers don't match, so it leaks into
+// content. Same param structure, just a `function=` wrapper on the tool name.
+const FUNCTION_SOUP = `I'll create the barrels.
+
+<tool_call>
+<function=create>
+<parameter=content>
+export * from './account.types';
+</parameter>
+<parameter=file>
+src/account/index.ts
+</parameter>
+</function>
+</tool_call>`;
+
+test("salvages the <function=NAME><parameter=..> wrapper form (atlas-spark)", () => {
+  const calls = salvageToolCalls(FUNCTION_SOUP);
+
+  expect(calls.length).toBe(1);
+  expect(calls[0]?.name).toBe("create");
+  expect(calls[0]?.arguments).toEqual({
+    content: "export * from './account.types';",
+    file: "src/account/index.ts",
+  });
+});
+
+test("dedupes the SAME call repeated in one response (atlas-spark 4x repeat)", () => {
+  // The model emits the identical create several times in one generation.
+  const block = `<function=create>
+<parameter=file>
+src/a.ts
+</parameter>
+<parameter=content>
+export const a = 1;
+</parameter>
+</function>`;
+  const repeated = `${block}\n${block}\n${block}\n${block}`;
+  const calls = salvageToolCalls(repeated);
+
+  expect(calls.length).toBe(1);
+  expect(calls[0]?.name).toBe("create");
+  expect(calls[0]?.arguments).toEqual({
+    file: "src/a.ts",
+    content: "export const a = 1;",
+  });
+});
+
 test("ignores unknown tag names (no false positives from prose/JSX)", () => {
   // <div>/<section> are not tools; a stray <parameter=> with no known wrapper
   // must not produce a call.
@@ -80,4 +128,44 @@ test("pipe form: string-aware brace scan keeps code containing braces intact", (
 
 test("pipe form: ignores unknown tool names", () => {
   expect(salvageToolCalls('<|think|>{"foo": 1}')).toEqual([]);
+});
+
+// The exact malformed output captured live 2026-06-12 from qwen3.6-27b in the
+// interactive CLI: a `<parameters>` (plural) wrapper with bare `<key>` tags and
+// the value on the next line — the scaffold_web call that stranded a todo build.
+const PARAMS_BLOCK_SOUP = `I'll build a todo web app. Let me start by scaffolding a React project.
+
+<scaffold_web>
+<parameters>
+<framework>
+react
+</parameters>
+</function>`;
+
+test("salvages the <parameters>-block variant (live scaffold_web capture)", () => {
+  const calls = salvageToolCalls(PARAMS_BLOCK_SOUP);
+
+  expect(calls).toEqual([
+    {
+      id: undefined,
+      name: "scaffold_web",
+      arguments: { framework: "react" },
+    },
+  ]);
+});
+
+test("<parameters>-block variant with several keys and closing tags", () => {
+  const calls = salvageToolCalls(
+    "<read>\n<parameters>\n<file>src/a.ts</file>\n</parameters>\n</function>"
+  );
+
+  expect(calls).toEqual([
+    { id: undefined, name: "read", arguments: { file: "src/a.ts" } },
+  ]);
+});
+
+test("<parameters>-block variant ignores unknown tools", () => {
+  expect(
+    salvageToolCalls("<imaginary>\n<parameters>\n<x>\n1\n</parameters>")
+  ).toEqual([]);
 });

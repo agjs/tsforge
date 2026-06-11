@@ -2,18 +2,26 @@
 import { join, isAbsolute } from "node:path";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import { runTask, RUN_STATUS, Session } from "./loop";
+import { runTask, RUN_STATUS, Session, PLAN_APPROVED_NOTE } from "./loop";
 import {
   PROVIDER_LIMITS,
   OpenAICompatibleProvider,
-  PROVIDER_DEFAULTS,
-  type IProvider,
+  type IOpenAICompatibleConfig,
 } from "./inference";
+import {
+  resolveActiveModel,
+  setActiveModel,
+  loadModelsConfig,
+  resolveApiKey,
+  type IModelEntry,
+} from "./models-config";
 import {
   renderEvent,
   renderMessage,
   renderStatus,
   welcomeBanner,
+  STYLE,
+  RESET,
 } from "./render";
 import type { ITask } from "./spec";
 import type { Reporter } from "./loop";
@@ -28,7 +36,6 @@ import {
   webGuidance,
 } from "./detect-gate";
 import type { WebFramework } from "./web-templates";
-import { classifyIntent } from "./classify";
 import { isRecord } from "./lib/guards";
 import {
   saveSession,
@@ -83,14 +90,21 @@ export interface ICliArgs {
   /** Append the full event stream (reasoning, tool writes, gate verdicts) as JSONL
    *  to an auto-named file under ~/.tsforge/logs/ for later evaluation (`--log`). */
   log: boolean;
+  /** Plan mode: a from-scratch build pauses after the design phase to show its
+   *  plan for review/edit before implementing (`--plan`; also toggled by /plan). */
+  plan: boolean;
 }
 
-const BOOL_FLAGS: Record<string, "continue" | "noGate" | "web" | "log"> = {
+const BOOL_FLAGS: Record<
+  string,
+  "continue" | "noGate" | "web" | "log" | "plan"
+> = {
   "--continue": "continue",
   "-c": "continue",
   "--no-gate": "noGate",
   "--web": "web",
   "--log": "log",
+  "--plan": "plan",
 };
 
 const VALUE_FLAGS = new Set([
@@ -116,6 +130,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     browser: "",
     web: false,
     log: false,
+    plan: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -197,29 +212,31 @@ function hostOf(baseUrl: string): string {
   }
 }
 
-/** The active model id + endpoint host (env overrides, else defaults). */
-function modelInfo(): { model: string; endpoint: string } {
-  return {
-    model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
-    endpoint: hostOf(process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl),
-  };
+/** The active model id + endpoint host, from a wire-config (provider.config) or a
+ *  registry entry — both carry `model` + `baseUrl`. */
+function modelInfo(src: { model: string; baseUrl: string }): {
+  model: string;
+  endpoint: string;
+} {
+  return { model: src.model, endpoint: hostOf(src.baseUrl) };
 }
 
 /** The model's real context window, read from the server's `/models`
  *  (`max_model_len` — vLLM/OpenAI-compatible). Best-effort: undefined if the
  *  endpoint is unreachable or doesn't report it (caller falls back). 3s cap so a
  *  dead endpoint can't stall CLI startup. */
-async function detectContextWindow(): Promise<number | undefined> {
-  const base = process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl;
-  const model = process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model;
+async function detectContextWindow(
+  entry: IModelEntry
+): Promise<number | undefined> {
   const headers: Record<string, string> = {};
+  const key = resolveApiKey(entry);
 
-  if (process.env.TSFORGE_API_KEY !== undefined) {
-    headers.authorization = `Bearer ${process.env.TSFORGE_API_KEY}`;
+  if (key !== undefined) {
+    headers.authorization = `Bearer ${key}`;
   }
 
   try {
-    const res = await fetch(`${base}/models`, {
+    const res = await fetch(`${entry.baseUrl}/models`, {
       headers,
       signal: AbortSignal.timeout(3000),
     });
@@ -235,7 +252,7 @@ async function detectContextWindow(): Promise<number | undefined> {
     }
 
     const entries = data.data.filter(isRecord);
-    const match = entries.find((e) => e.id === model) ?? entries[0];
+    const match = entries.find((e) => e.id === entry.model) ?? entries[0];
     const len = match?.max_model_len;
 
     return typeof len === "number" && Number.isFinite(len) ? len : undefined;
@@ -248,30 +265,6 @@ function frameworkLabel(framework: WebFramework): string {
   return framework === "react"
     ? "Vite + React + shadcn/ui + TanStack"
     : "Vite + TypeScript + Tailwind";
-}
-
-/** The short spec Q&A shown when a web app is detected — confirm the stack + grab
- *  any extra intent before scaffolding (we don't silently impose a framework). */
-const WEB_SPEC_PROMPT = `${[
-  "",
-  "  This looks like a web app. Two quick things before I scaffold:",
-  "    1. Framework — react (full kit: shadcn/ui + TanStack Router + Query) [default],",
-  "       or vanilla (Vite + TypeScript + Tailwind).   (vue/svelte coming soon)",
-  "    2. Anything specific? — key features, pages, data (optional).",
-  '  Reply on one line (e.g. "react — todo app with due dates"), or press Enter for the React kit.',
-].join("\n")}\n`;
-
-/** Parse a spec-Q&A reply: pick the framework (default react) and keep the rest as
- *  extra task detail. */
-function parseSpec(line: string): { framework: WebFramework; extra: string } {
-  const framework: WebFramework = /\bvanilla\b/i.test(line)
-    ? "vanilla"
-    : "react";
-  const extra = line
-    .replace(/^\s*(react|vanilla|vue|svelte)\b[\s:.\-—]*/i, "")
-    .trim();
-
-  return { framework, extra };
 }
 
 /** Lay down a stack's skeleton and install its dependencies, reporting progress —
@@ -307,20 +300,104 @@ function envNumber(name: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-function makeProvider(): IProvider {
+/** Wire-config from a registry entry: API key resolved at use time (inline or
+ *  via apiKeyEnv); env still tunes maxTokens/penalty. Shared by initial
+ *  construction and `/model` hot-swap so a switched model behaves identically. */
+function providerConfig(entry: IModelEntry): IOpenAICompatibleConfig {
   const repetitionPenalty = envNumber("TSFORGE_REPETITION_PENALTY");
 
-  return new OpenAICompatibleProvider({
-    baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
-    model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
-    apiKey: process.env.TSFORGE_API_KEY,
-    maxTokens: envNumber("TSFORGE_MAX_TOKENS") ?? PROVIDER_LIMITS.maxTokens,
+  return {
+    baseUrl: entry.baseUrl,
+    model: entry.model,
+    apiKey: resolveApiKey(entry),
+    maxTokens:
+      entry.maxTokens ??
+      envNumber("TSFORGE_MAX_TOKENS") ??
+      PROVIDER_LIMITS.maxTokens,
     // OFF by default: a global repetition penalty also penalizes the rigid,
     // repetitive tool-call JSON tokens, which pushes the model to NARRATE
     // instead of emitting tool calls (→ no files written). The StreamGuard is
     // the targeted loop protection. Opt in only to experiment.
     ...(repetitionPenalty === undefined ? {} : { repetitionPenalty }),
-  });
+  };
+}
+
+function makeProvider(entry: IModelEntry): OpenAICompatibleProvider {
+  return new OpenAICompatibleProvider(providerConfig(entry));
+}
+
+/** Print the model registry with ★ on the active one (the `/model` listing). */
+async function listModels(
+  provider: OpenAICompatibleProvider,
+  activeName: string
+): Promise<void> {
+  const cfg = await loadModelsConfig();
+  const current = modelInfo(provider.config);
+
+  process.stdout.write(
+    `  active: ${activeName} — ${current.model} @ ${current.endpoint}\n`
+  );
+
+  for (const [name, e] of Object.entries(cfg.models)) {
+    const mark = name === activeName ? "★" : " ";
+
+    process.stdout.write(
+      `  ${mark} ${name}  ${e.model} @ ${hostOf(e.baseUrl)}\n`
+    );
+  }
+
+  if (activeName === "env") {
+    process.stdout.write(
+      "  (TSFORGE_* env is overriding the registry — unset it to use /model)\n"
+    );
+  }
+
+  process.stdout.write("  switch with: /model <name>\n");
+}
+
+/** Handle `/model [name]`: no arg lists the registry; a name persists it as active
+ *  and HOT-SWAPS the live provider. Returns the (possibly updated) active name +
+ *  context window for the caller to thread back into the REPL state. */
+async function runModelCommand(opts: {
+  arg: string;
+  provider: OpenAICompatibleProvider;
+  activeName: string;
+  fallbackEntry: IModelEntry;
+  contextWindow: number;
+}): Promise<{ activeName: string; contextWindow: number }> {
+  const { arg, provider, activeName, fallbackEntry, contextWindow } = opts;
+  const wanted = arg.trim();
+
+  if (wanted.length === 0) {
+    await listModels(provider, activeName);
+
+    return { activeName, contextWindow };
+  }
+
+  try {
+    const next = await setActiveModel(wanted);
+    const entry = next.models[wanted] ?? fallbackEntry;
+
+    provider.reconfigure(providerConfig(entry));
+
+    const window =
+      entry.contextWindow ??
+      (await detectContextWindow(entry)) ??
+      contextWindow;
+    const info = modelInfo(provider.config);
+
+    process.stdout.write(
+      `  ✓ switched to ${wanted} — ${info.model} @ ${info.endpoint} (context ${String(window)})\n`
+    );
+
+    return { activeName: wanted, contextWindow: window };
+  } catch (err) {
+    process.stdout.write(
+      `  ${err instanceof Error ? err.message : String(err)}\n`
+    );
+
+    return { activeName, contextWindow };
+  }
 }
 
 /** List saved sessions for a directory (the `/sessions` command). */
@@ -343,8 +420,71 @@ async function printSessions(dir: string): Promise<void> {
   }
 }
 
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_TICK_MS = 120;
+const ERASE_LINE = `\r${String.fromCharCode(27)}[2K`;
+
+/** Animated activity line (`⠋ thinking · 12s`) for the silent stretches of a
+ *  turn — hidden chain-of-thought, prompt processing, a slow first token. TTY
+ *  only. Any rendered event clears it before printing (the next tick redraws),
+ *  so it never interleaves with streamed text or boxes. */
+function makeSpinner(): {
+  start: () => void;
+  clear: () => void;
+  stop: () => void;
+} {
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let startedAt = 0;
+  let frame = 0;
+  let drawn = false;
+
+  const clear = (): void => {
+    if (drawn) {
+      process.stdout.write(ERASE_LINE);
+      drawn = false;
+    }
+  };
+
+  const tick = (): void => {
+    const secs = Math.round((performance.now() - startedAt) / 1000);
+
+    frame = (frame + 1) % SPINNER_FRAMES.length;
+    process.stdout.write(
+      `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} thinking · ${secs}s${RESET}`
+    );
+    drawn = true;
+  };
+
+  return {
+    start: (): void => {
+      if (!process.stdout.isTTY || timer !== null) {
+        return;
+      }
+
+      startedAt = performance.now();
+      timer = setInterval(tick, SPINNER_TICK_MS);
+    },
+    clear,
+    stop: (): void => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+
+      clear();
+    },
+  };
+}
+
+const spinner = makeSpinner();
+
 const render: Reporter = (event) => {
-  process.stdout.write(renderEvent(event, { color: true }));
+  const out = renderEvent(event, { color: true });
+
+  if (out.length > 0) {
+    spinner.clear();
+    process.stdout.write(out);
+  }
 };
 
 /** Reporter that renders to the terminal AND, when `--log <file>` is set, appends
@@ -409,7 +549,8 @@ async function runOnce(args: ICliArgs): Promise<number> {
   }
 
   const thinkingTokenBudget = envNumber("TSFORGE_THINKING_BUDGET");
-  const result = await runTask(task, args.dir, makeProvider(), {
+  const { entry } = await resolveActiveModel();
+  const result = await runTask(task, args.dir, makeProvider(entry), {
     onEvent: makeReporter(logFile),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
   });
@@ -422,14 +563,28 @@ async function runOnce(args: ICliArgs): Promise<number> {
   return ok ? 0 : 1;
 }
 
+/** Wide approval — the staged-web checkpoint explicitly prompted "type
+ *  'approve'", so casual yeses count there. */
+export function isApproval(line: string): boolean {
+  return /^(approve|approved|ok|okay|yes|y|go|lgtm)\.?$/i.test(line.trim());
+}
+
+/** Narrow approval — GENERAL plan mode, where the model asks clarifying
+ *  questions: a "yes" may ANSWER a question, so only unambiguous approval
+ *  words exit the mode and start implementing. */
+export function isPlanApproval(line: string): boolean {
+  return /^(approve|approved|go|lgtm|implement)[.!]?$/i.test(line.trim());
+}
+
 const HELP = [
   "Commands:",
   "  /help            show this help",
   "  /compact         summarize the conversation to free up context",
   "  /clear           reset the conversation (keeps the workspace + gate)",
+  "  /plan            toggle plan mode (read-only: explore → clarify → plan; 'approve' implements)",
   "  /gate <cmd>      set the gate command (empty to clear)",
   "  /files <globs>   set the editable scope (comma-separated; empty = all)",
-  "  /model           show the active model + endpoint",
+  "  /model [name]    list configured models (★ active), or switch to <name>",
   "  /sessions        list saved sessions (resume one with: tsforge --resume <id>)",
   "  /cost            rough conversation size (messages + ~tokens)",
   "  /exit, /quit     leave the session",
@@ -458,10 +613,11 @@ function printHeader(info: {
   gateLabel: string;
   files: string[];
   resumed: ISessionRecord | null;
+  model: { model: string; endpoint: string };
 }): void {
-  const { dir, id, gateLabel, files, resumed } = info;
+  const { dir, id, gateLabel, files, resumed, model } = info;
 
-  process.stdout.write(welcomeBanner(modelInfo()));
+  process.stdout.write(welcomeBanner(model));
   process.stdout.write(
     [
       `  cwd:   ${dir}`,
@@ -558,7 +714,11 @@ async function baseGate(
 
 /** Interactive REPL: a persistent gate-anchored conversation. */
 async function repl(args: ICliArgs): Promise<number> {
-  const provider = makeProvider();
+  // The active model comes from the registry (~/.tsforge/models.json) unless an
+  // explicit TSFORGE_* env overrides it; `/model <name>` switches it live.
+  const activeModel = await resolveActiveModel();
+  const provider = makeProvider(activeModel.entry);
+  let activeName = activeModel.name;
 
   // Best-effort cleanup of stale sessions on every launch.
   await pruneSessions();
@@ -595,9 +755,13 @@ async function repl(args: ICliArgs): Promise<number> {
   // The model's real context window: explicit env wins, else ask the server
   // (max_model_len), else a conservative fallback. Drives the status gauge AND
   // auto-compaction (the session compacts before a send once it nears the window).
-  const contextWindow =
+  // `let` so `/model` can refresh the gauge when switching to a model with a
+  // different window. Per-entry contextWindow wins, then explicit env, then the
+  // server's max_model_len, then a conservative fallback.
+  let contextWindow =
+    activeModel.entry.contextWindow ??
     envNumber("TSFORGE_CONTEXT_WINDOW") ??
-    (await detectContextWindow()) ??
+    (await detectContextWindow(provider.config)) ??
     32_768;
   const report = makeReporter(logFile);
   const config = {
@@ -608,15 +772,24 @@ async function repl(args: ICliArgs): Promise<number> {
     contextWindow,
     report,
     ...(resumed === null ? {} : { history: resumed.messages }),
+    // --web pre-scaffolds the project above, so it gets the web gate/guidance
+    // directly. EVERY OTHER interactive session offers `scaffold_web` (+ the
+    // ui/routes tools that ride along) so the AGENT can decide mid-conversation
+    // that a request is a from-scratch web app — this flag is what puts the tool
+    // in the model's list; setSetupWeb() below only wires its callback.
     ...(args.web
       ? {
           guidance: webGuidance("react"),
           fix: buildWebFix("react"),
           incrementalCheck: buildWebTscCheck(),
         }
-      : {}),
+      : { scaffoldWeb: true }),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
+    // Thinking OFF for interactive replies so they STREAM immediately instead of
+    // stalling on a long hidden chain-of-thought (qwen-local defaults thinking on).
+    // The session still flips thinking ON automatically while repairing gate errors.
+    enableThinking: false,
   };
 
   let session = await Session.create(config);
@@ -627,8 +800,8 @@ async function repl(args: ICliArgs): Promise<number> {
   report({
     kind: "start",
     task: "session",
-    message: `model ${modelInfo().model} · context window ${contextWindow}`,
-    model: modelInfo().model,
+    message: `model ${modelInfo(provider.config).model} · context window ${contextWindow}`,
+    model: modelInfo(provider.config).model,
     contextWindow,
   });
 
@@ -646,7 +819,14 @@ async function repl(args: ICliArgs): Promise<number> {
     });
   };
 
-  printHeader({ dir: args.dir, id, gateLabel, files, resumed });
+  printHeader({
+    dir: args.dir,
+    id,
+    gateLabel,
+    files,
+    resumed,
+    model: modelInfo(provider.config),
+  });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
@@ -666,18 +846,23 @@ async function repl(args: ICliArgs): Promise<number> {
     }
   });
 
-  // On a PLAIN session (no explicit mode/gate), classify the first message and
-  // route to an opinionated approach — so "build me a todo app" gets a structured,
-  // tooled web scaffold instead of an improvised single-file blob.
-  let classified = false;
-  // While set, the next user line is the answer to the web spec Q&A (it holds the
-  // original build request, deferred until we know the stack).
-  let awaitingSpec: string | null = null;
-  // Explicit `--web` (no classify Q&A): the FIRST message is the build, so stage
-  // it (plan+types → implement). Cleared after, so follow-ups are plain sends.
+  // Explicit `--web` (no Q&A): the FIRST message is the build, so stage it
+  // (plan+types → implement). Cleared after, so follow-ups are plain sends.
   let stagedWebPending = args.web && resumed === null;
-  const autoClassify =
-    resumed === null && !args.web && args.accept.length === 0 && !args.noGate;
+  // Plan mode (`--plan` or toggled by /plan). For a staged web build it pauses
+  // after the design phase to review the plan; for EVERYTHING else it is the
+  // general read-only mode: the agent explores, asks clarifying questions, and
+  // proposes a plan — only an explicit approval unlocks tools and implements.
+  let planMode = args.plan;
+  // True once a plan-mode exchange has happened, so a stray "approve" before any
+  // discussion is just a message, not an approval.
+  let planDiscussed = false;
+
+  session.setPlanMode(planMode);
+
+  // While set, the next user line is the plan-review reply ("approve", or edits to
+  // fold into phase 2) — the design phase has run and is waiting at the checkpoint.
+  let awaitingPlanApproval = false;
 
   const configureWeb = async (framework: WebFramework): Promise<void> => {
     process.stdout.write(
@@ -689,6 +874,14 @@ async function repl(args: ICliArgs): Promise<number> {
     session.setIncrementalCheck(buildWebTscCheck());
     session.guide(webGuidance(framework));
   };
+
+  // The `scaffold_web` tool invokes this when the AGENT decides to build a web app
+  // (the framework string is validated tool-side). `configureWeb` closes over the
+  // mutable `session`, so this stays correct across `/clear`; re-applied below.
+  const setupWeb = (framework: string): Promise<void> =>
+    configureWeb(framework === "vanilla" ? "vanilla" : "react");
+
+  session.setSetupWeb(setupWeb);
 
   // Last-turn summary, surfaced in the status line shown before each prompt.
   let lastTurns = 0;
@@ -707,6 +900,8 @@ async function repl(args: ICliArgs): Promise<number> {
     active = new AbortController();
     const started = performance.now();
 
+    spinner.start();
+
     try {
       const result = await run({
         signal: active.signal,
@@ -717,6 +912,7 @@ async function repl(args: ICliArgs): Promise<number> {
       lastElapsedMs = performance.now() - started;
       lastStatus = result.status;
     } finally {
+      spinner.stop();
       active = null;
     }
 
@@ -729,60 +925,120 @@ async function repl(args: ICliArgs): Promise<number> {
   // A from-scratch web build: stage it (plan + types, then implement) so the
   // model designs the type contract before writing UI — far less API invention.
   // The design phase gates on TYPES only (tsc + lint) so contract errors surface
-  // early and small, not as a final avalanche.
+  // early and small, not as a final avalanche. `withPlan` is the web flow's OWN
+  // checkpoint (design writes types, so general read-only plan mode must be off).
   const runStagedBuild = (
     line: string,
-    framework: WebFramework
+    framework: WebFramework,
+    withPlan: boolean
   ): Promise<void> =>
-    drive((opts) =>
-      session.buildStaged(line, opts, buildWebTypeGate(framework).command)
-    );
-
-  const dispatch = async (line: string): Promise<void> => {
-    // A reply to the web spec Q&A: pick the stack, scaffold, then run the request.
-    if (awaitingSpec !== null) {
-      const request = awaitingSpec;
-
-      awaitingSpec = null;
-
-      if (/\b(vue|svelte)\b/i.test(line)) {
-        process.stdout.write(
-          "  ↳ vue/svelte coming soon — using the React full kit\n"
+    withPlan
+      ? runPlanned(line, framework)
+      : drive((opts) =>
+          session.buildStaged(line, opts, buildWebTypeGate(framework).command)
         );
+
+  // Plan mode: run the design phase, then show the model's plan and PAUSE — the
+  // next user line approves it (or edits it, folded into phase 2). The design runs
+  // inside drive() (signal/steer/persist); the quick plan summary is captured for
+  // the prompt that follows.
+  const runPlanned = async (
+    line: string,
+    framework: WebFramework
+  ): Promise<void> => {
+    let plan = "";
+
+    await drive(async (opts) => {
+      const designed = await session.designBuild(
+        line,
+        opts,
+        buildWebTypeGate(framework).command
+      );
+
+      if (designed.status !== "interrupted") {
+        plan = await session.generatePlan();
       }
 
-      const { framework, extra } = parseSpec(line);
+      return designed;
+    });
 
-      await configureWeb(framework);
-      // Staged build: design the types first, then implement against them.
-      await runStagedBuild(
-        extra.length > 0 ? `${request}\n\nDetails: ${extra}` : request,
-        framework
+    if (plan.length > 0) {
+      process.stdout.write(
+        `\n📋 PLAN — review, then type 'approve' to build, or describe changes:\n\n${plan}\n\n`
+      );
+      awaitingPlanApproval = true;
+    }
+  };
+
+  const dispatch = async (line: string): Promise<void> => {
+    // A reply to the plan checkpoint: "approve" (build as-planned) or any other
+    // text = corrections folded into the implement phase. Either way phase 2 runs.
+    if (awaitingPlanApproval) {
+      awaitingPlanApproval = false;
+
+      const approved = isApproval(line);
+      const notes = approved ? "" : line;
+
+      if (!approved) {
+        process.stdout.write("  ↳ folding your changes into the build\n");
+      }
+
+      await drive((opts) => session.implementBuild(notes, opts));
+
+      return;
+    }
+
+    // Explicit --web: the first message is a from-scratch build — stage it. The
+    // staged flow has its OWN plan checkpoint (its design phase writes types),
+    // so general read-only plan mode hands over to it here.
+    if (stagedWebPending) {
+      stagedWebPending = false;
+
+      const withPlan = planMode;
+
+      planMode = false;
+      planDiscussed = false;
+      session.setPlanMode(false);
+      await runStagedBuild(line, "react", withPlan);
+
+      return;
+    }
+
+    // GENERAL plan mode, approval: unlock the tools and implement the plan that
+    // is already the latest assistant message. Only an explicit approval word
+    // counts ("yes" may be answering one of the model's clarifying questions).
+    if (planMode && planDiscussed && isPlanApproval(line)) {
+      planMode = false;
+      planDiscussed = false;
+      session.setPlanMode(false);
+      process.stdout.write("  ✓ plan approved — implementing\n");
+      await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
+
+      return;
+    }
+
+    // GENERAL plan mode, discussion: the agent explores read-only, asks its
+    // clarifying questions, and proposes/revises a plan. Stays in plan mode.
+    if (planMode) {
+      await runSend(line);
+      planDiscussed = true;
+
+      const last = session.messages.at(-1);
+      const planned =
+        last?.role === "assistant" && /^##\s*plan\b/im.test(last.content);
+
+      process.stdout.write(
+        planned
+          ? "\n  📋 plan ready — reply to refine, or type 'approve' to implement\n"
+          : "\n  (plan mode — reply to refine, or type 'approve' to implement)\n"
       );
 
       return;
     }
 
-    // Explicit --web: the first message is a from-scratch build — stage it.
-    if (stagedWebPending) {
-      stagedWebPending = false;
-      await runStagedBuild(line, "react");
-
-      return;
-    }
-
-    // First message: classify. A web app pauses for a short spec Q&A before scaffolding.
-    if (autoClassify && !classified) {
-      classified = true;
-
-      if ((await classifyIntent(provider, line)) === "web") {
-        awaitingSpec = line;
-        process.stdout.write(WEB_SPEC_PROMPT);
-
-        return;
-      }
-    }
-
+    // No up-front classifier: the AGENT decides. It calls `scaffold_web` itself
+    // when the request is a from-scratch web app, and just answers/edits otherwise
+    // (so "render a table in the CLI" is no longer mis-scaffolded as a Vite app).
     await runSend(line);
   };
 
@@ -801,6 +1057,9 @@ async function repl(args: ICliArgs): Promise<number> {
         break;
       case "clear":
         session = await Session.create(config);
+        session.setSetupWeb(setupWeb);
+        session.setPlanMode(planMode); // a /clear must not silently drop the mode
+        planDiscussed = false;
         await persist();
         process.stdout.write("conversation cleared\n");
         break;
@@ -812,6 +1071,18 @@ async function repl(args: ICliArgs): Promise<number> {
         process.stdout.write(`compacted ${before} → ${after} messages\n`);
         break;
       }
+
+      case "plan":
+        planMode = !planMode;
+        planDiscussed = false;
+        session.setPlanMode(planMode);
+        process.stdout.write(
+          planMode
+            ? "plan mode ON — read-only: the agent explores, asks, and proposes " +
+                "a plan; type 'approve' to implement\n"
+            : "plan mode OFF\n"
+        );
+        break;
 
       case "gate":
         session.setGate(arg);
@@ -836,9 +1107,16 @@ async function repl(args: ICliArgs): Promise<number> {
       }
 
       case "model": {
-        const { model, endpoint } = modelInfo();
+        const result = await runModelCommand({
+          arg,
+          provider,
+          activeName,
+          fallbackEntry: activeModel.entry,
+          contextWindow,
+        });
 
-        process.stdout.write(`  model: ${model}\n  endpoint: ${endpoint}\n`);
+        activeName = result.activeName;
+        contextWindow = result.contextWindow;
         break;
       }
 
@@ -871,13 +1149,13 @@ async function repl(args: ICliArgs): Promise<number> {
     process.stdout.write("\n");
     process.stdout.write(
       renderStatus({
-        model: modelInfo().model,
+        model: modelInfo(provider.config).model,
         contextTokens: session.contextTokens,
         contextWindow,
         turns: lastTurns,
         elapsedMs: lastElapsedMs,
         status: lastStatus,
-        scope: scopeLabel(session.scope),
+        scope: scopeLabel(session.scope) + (planMode ? " · PLAN" : ""),
       })
     );
     process.stdout.write("› ");
@@ -936,10 +1214,7 @@ async function repl(args: ICliArgs): Promise<number> {
       const line = raw.trim();
 
       if (line.length === 0) {
-        // An empty line while awaiting the spec answer = accept the defaults.
-        if (awaitingSpec !== null && !busy) {
-          void runLine("");
-        } else if (!busy) {
+        if (!busy) {
           prompt();
         }
 

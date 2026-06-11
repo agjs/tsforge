@@ -1,5 +1,33 @@
 import { test, expect } from "bun:test";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { renderCheck } from "../src/browser";
+
+/** Write a tiny SPA fixture: one index.html whose inline script renders per
+ *  location.pathname — throws on "/bad", leaves the root blank on "/blank". With
+ *  the oracle's SPA fallback, visiting any path serves this file + the client
+ *  "router" (the script) renders that route. */
+async function spaFixture(): Promise<{
+  file: string;
+  cleanup: () => Promise<void>;
+}> {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-crawl-"));
+  const file = join(dir, "index.html");
+
+  await writeFile(
+    file,
+    `<!doctype html><html><body><div id="root"></div><script>
+       const p = location.pathname;
+       if (p === "/bad") { throw new Error("boom on /bad route"); }
+       if (p !== "/blank") {
+         document.getElementById("root").innerHTML = "<h1>route " + p + "</h1>";
+       }
+     </script></body></html>`
+  );
+
+  return { file, cleanup: () => rm(dir, { recursive: true, force: true }) };
+}
 
 /** Skip these (don't fail) on machines/CI where chromium isn't installed. */
 async function chromiumAvailable(): Promise<boolean> {
@@ -113,6 +141,51 @@ browserTest("smoke: fails on a blank root (silent white screen)", async () => {
 
   expect(result.ok).toBe(false);
   expect(result.errors.join(" ")).toContain("did not mount");
+});
+
+browserTest(
+  "crawl: all routes render → ok (SPA fallback serves each path)",
+  async () => {
+    const { file, cleanup } = await spaFixture();
+
+    try {
+      const result = await renderCheck({
+        file,
+        routes: ["/", "/accounts", "/accounts/create"],
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  }
+);
+
+browserTest("crawl: a route that throws is caught", async () => {
+  const { file, cleanup } = await spaFixture();
+
+  try {
+    const result = await renderCheck({ file, routes: ["/accounts", "/bad"] });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("boom on /bad");
+  } finally {
+    await cleanup();
+  }
+});
+
+browserTest("crawl: a route that renders blank is caught", async () => {
+  const { file, cleanup } = await spaFixture();
+
+  try {
+    const result = await renderCheck({ file, routes: ["/blank"] });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("/blank rendered blank");
+  } finally {
+    await cleanup();
+  }
 });
 
 browserTest("smoke: fails when clicking a button throws", async () => {

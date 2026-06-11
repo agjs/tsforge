@@ -1,9 +1,10 @@
 import type { IRenderOptions, IStatusInfo } from "./render.types";
-import { highlight } from "cli-highlight";
 import type { ILoopEvent } from "../loop";
 import type { IChatMessage } from "../inference";
 import { STYLE, paint } from "./style";
-import { box, table, GLYPH } from "./box";
+import { box, GLYPH } from "./box";
+import { renderMarkdown, highlightCode } from "./markdown";
+import { StreamingMarkdown } from "./stream-markdown";
 
 /** Split highlighted/plain text into the body-line array a box expects. */
 function bodyLines(text: string): string[] {
@@ -114,94 +115,6 @@ function highlightTs(code: string, color: boolean): string {
   return highlightCode(code, "typescript", color);
 }
 
-/**
- * Render an assistant message: fenced ```code``` blocks syntax-highlighted, and
- * GitHub-flavored markdown TABLES drawn as real box tables (the model answers with
- * `| a | b |` tables constantly — raw they're unreadable pipe soup). Other prose
- * passes through.
- */
-function renderMarkdown(text: string, color: boolean): string {
-  return text
-    .split(/(```[\s\S]*?```)/g)
-    .map((part) => {
-      const fence = /^```([\w-]*)\n?([\s\S]*?)\n?```$/.exec(part);
-
-      if (fence === null) {
-        return formatTables(part, color);
-      }
-
-      const lang =
-        fence[1] !== undefined && fence[1].length > 0 ? fence[1] : "typescript";
-
-      return highlightCode(fence[2] ?? "", lang, color);
-    })
-    .join("");
-}
-
-/** A markdown table separator row, e.g. `|----|:--:|---|`. */
-function isTableSeparator(line: string | undefined): boolean {
-  return (
-    line !== undefined &&
-    line.includes("|") &&
-    line.includes("-") &&
-    /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(line)
-  );
-}
-
-/** Split a `| a | b |` row into trimmed cells (tolerates missing edge pipes). */
-function tableCells(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((c) => c.trim());
-}
-
-/** Replace each GFM table block in `text` with a box-drawn table; leave the rest. */
-function formatTables(text: string, color: boolean): string {
-  const lines = text.split("\n");
-  const out: string[] = [];
-
-  for (let i = 0; i < lines.length; ) {
-    const header = lines[i];
-
-    if (
-      header !== undefined &&
-      header.includes("|") &&
-      isTableSeparator(lines[i + 1])
-    ) {
-      const rows: string[][] = [tableCells(header)];
-      let j = i + 2;
-
-      while (j < lines.length && (lines[j]?.includes("|") ?? false)) {
-        rows.push(tableCells(lines[j] ?? ""));
-        j += 1;
-      }
-
-      out.push(table(rows, color));
-      i = j;
-    } else {
-      out.push(header ?? "");
-      i += 1;
-    }
-  }
-
-  return out.join("\n");
-}
-
-function highlightCode(code: string, lang: string, color: boolean): string {
-  if (!color) {
-    return code;
-  }
-
-  try {
-    return highlight(code, { language: lang, ignoreIllegals: true });
-  } catch {
-    return code;
-  }
-}
-
 function diff(oldString: string, newString: string, color: boolean): string {
   const minus = oldString
     .split("\n")
@@ -226,11 +139,22 @@ function diff(oldString: string, newString: string, color: boolean): string {
  *  re-announces. The raw reasoning is still written verbatim to the --log. */
 let thinkingShown = false;
 
-/** Render a streamed token. Collapses the model's chain-of-thought (channel
- *  `reasoning`) to a single compact "thinking…" line — the prose is noise on
- *  screen (still logged); tool markers (✎) and gate output print normally. */
+/** Live answer stream — content tokens render incrementally through this; the
+ *  settled `message` event then skips its duplicate full render (sawContent). */
+const stream = new StreamingMarkdown();
+
+/** Render a streamed token. The answer (channel `content`) streams live through
+ *  the incremental markdown renderer; the chain-of-thought (`reasoning`)
+ *  collapses to a compact indicator (on a TTY the CLI spinner owns it); tool
+ *  markers (✎) and gate output print normally. */
 function renderToken(event: ILoopEvent, color: boolean): string {
   if (event.channel === "reasoning") {
+    // On a live TTY the CLI's animated spinner is the thinking indicator; the
+    // static one-time line is for piped color output and plain logs.
+    if (color && process.stdout.isTTY) {
+      return "";
+    }
+
     if (thinkingShown) {
       return "";
     }
@@ -238,6 +162,12 @@ function renderToken(event: ILoopEvent, color: boolean): string {
     thinkingShown = true;
 
     return `\n  ${paint("⋯ thinking", STYLE.dim, color)}`;
+  }
+
+  if (event.channel === "content") {
+    // Plain/log mode stays quiet here — the consolidated `message` event is
+    // the log's record, so agent.log keeps its exact pre-streaming shape.
+    return color ? stream.push(event.message, true) : "";
   }
 
   return paint(event.message, STYLE.dim, color);
@@ -272,13 +202,30 @@ export function renderEvent(
     thinkingShown = false;
   }
 
+  // Any event that is NOT a content token first flushes the live answer stream
+  // (the closing table/fence, or a partial line on abort) so nothing is lost.
+  const isContentToken = event.kind === "token" && event.channel === "content";
+  const pending = color && !isContentToken ? stream.flush(true) : "";
+
+  return pending + renderEventBody(event, color);
+}
+
+function renderEventBody(event: ILoopEvent, color: boolean): string {
   switch (event.kind) {
     case "token":
       return renderToken(event, color);
 
     case "message":
-      // The model's actual answer (content channel) — prose plus syntax-
-      // highlighted code blocks, rendered once when the turn settles.
+      // The model's actual answer. When it already streamed live (content
+      // tokens), emit just a closing separator — the text is on screen; the
+      // full render here would print it twice. Without streamed content
+      // (non-streaming provider, replayed events, plain logs) render in full.
+      if (color && stream.sawContent) {
+        stream.reset();
+
+        return "\n";
+      }
+
       return event.message.length > 0
         ? `\n${renderMarkdown(event.message, color)}\n`
         : "";

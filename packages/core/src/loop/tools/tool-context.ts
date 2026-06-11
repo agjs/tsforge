@@ -15,6 +15,16 @@ export interface IToolContext {
   /** Cancellation for the in-flight turn — passed to the `run` tool (and search)
    *  so a model-issued command is killed on Ctrl-C, not left running. */
   signal?: AbortSignal;
+  /** Turn this workspace into a web project: scaffold the stack + deps and switch
+   *  the session to the web gate/guidance. Wired by the interactive CLI so the
+   *  AGENT decides whether to scaffold (via the `scaffold_web` tool) instead of a
+   *  brittle up-front classifier. Absent where unsupported (headless already
+   *  scaffolds up front), in which case the tool reports it's unavailable. */
+  setupWeb?: (framework: string) => Promise<void>;
+  /** PLAN MODE: mutating tools are rejected at dispatch and `run` only accepts
+   *  read-only commands — the hard guarantee behind the filtered tool list (a
+   *  salvaged/forced call could otherwise still write). */
+  readOnly?: boolean;
 }
 
 /** A required string arg, or "" if missing/wrong-type. */

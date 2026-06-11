@@ -274,7 +274,10 @@ test("buildStaged runs design (gate off) then implementation (gate restored)", a
     const session = await Session.create({
       provider,
       cwd: dir,
-      accept: "true", // gate passes when it runs
+      // Gate fails until phase 2 builds the component — so the mid-phase gate
+      // check sees phase 1 (types only) as RED and DOES run phase 2. (A green
+      // phase 1 is deliberately skipped past phase 2; that case is covered below.)
+      accept: "test -f src/App.tsx",
       files: ["**/*"],
     });
 
@@ -282,8 +285,109 @@ test("buildStaged runs design (gate off) then implementation (gate restored)", a
 
     expect(seen).toEqual(["design", "implement"]); // design BEFORE implement
     expect(result.status).toBe("done"); // phase 2 gate confirmed
-    expect(session.gate).toBe("true"); // gate restored after staging
+    expect(session.gate).toBe("test -f src/App.tsx"); // gate restored after staging
     expect(await Bun.file(join(dir, "src", "types.ts")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Regression: phase 1 sometimes OVERSHOOTS "types only" and builds the whole app
+// to a full green. If phase 2 then runs, the model concludes the prior phase did
+// "only data" and rm -rf's its own finished UI to rebuild — destroying a green
+// app (observed in run 23-00-52). buildStaged must gate-check the real build
+// between phases and, if already green, STOP — never run the destructive phase 2.
+test("buildStaged skips phase 2 when phase 1 already produced a green app", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const seen: string[] = [];
+    const provider: IProvider = {
+      async complete(messages) {
+        const lastUser =
+          [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+
+        // Phase 1 OVERSHOOTS: builds the full app (App.tsx) so the real gate
+        // would already pass — not just types.
+        if (lastUser.includes("STEP 1 of 2")) {
+          if (!seen.includes("design")) {
+            seen.push("design");
+
+            return {
+              content: "",
+              toolCalls: [
+                {
+                  id: "1",
+                  name: "create",
+                  arguments: {
+                    file: "src/App.tsx",
+                    content: "export const App = (): null => null;\n",
+                  },
+                },
+              ],
+            };
+          }
+
+          return { content: "app ready", toolCalls: [] };
+        }
+
+        // If phase 2 ever runs, record it — the assertion below proves it does NOT.
+        seen.push("implement");
+
+        return { content: "", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "test -f src/App.tsx", // green the moment phase 1 builds the app
+      files: ["**/*"],
+    });
+
+    const result = await session.buildStaged("build a kanban board");
+
+    expect(seen).toEqual(["design"]); // phase 2 was SKIPPED — never ran
+    expect(result.status).toBe("done"); // already-green app returned as done
+    // the app phase 1 built is INTACT (phase 2 never got to wipe it)
+    expect(await Bun.file(join(dir, "src", "App.tsx")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Plan mode: generatePlan() asks the model for its build plan as text (one
+// completion, no tools), so a human can review intent before phase 2 commits.
+test("generatePlan returns the model's plan markdown (no tools, no files)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const PLAN =
+      "## Entities\n- Course (own routes)\n- Lesson (nested in Course)";
+    let sawPlanPrompt = false;
+    const provider: IProvider = {
+      async complete(messages) {
+        const last = messages[messages.length - 1]?.content ?? "";
+
+        if (last.includes("BUILD PLAN")) {
+          sawPlanPrompt = true;
+
+          return { content: `  ${PLAN}  \n`, toolCalls: [] };
+        }
+
+        return { content: "", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+
+    const plan = await session.generatePlan();
+
+    expect(sawPlanPrompt).toBe(true); // it asked the model for the plan
+    expect(plan).toBe(PLAN); // returned trimmed, verbatim
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -715,6 +819,119 @@ test("each send appends to the same persistent conversation", async () => {
     await session.send("second");
 
     expect(session.messages.length).toBe(afterFirst + 2); // user + assistant
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("answer content streams as token events AND settles as one message event", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    // A streaming provider: emits the answer in two content deltas via onToken,
+    // then returns the consolidated content (what a real SSE stream does).
+    const provider: IProvider = {
+      async complete(_messages, opts) {
+        opts?.onToken?.("hello ", "content");
+        opts?.onToken?.("world", "content");
+
+        return { content: "hello world", toolCalls: [] };
+      },
+    };
+    const events: { kind: string; message: string; channel?: string }[] = [];
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      report: (e) => {
+        events.push({ kind: e.kind, message: e.message, channel: e.channel });
+      },
+    });
+
+    await session.send("hi");
+
+    const contentTokens = events.filter(
+      (e) => e.kind === "token" && e.channel === "content"
+    );
+
+    expect(contentTokens.map((e) => e.message)).toEqual(["hello ", "world"]);
+    // The consolidated message stays — it is the log's record of the answer.
+    expect(
+      events.some((e) => e.kind === "message" && e.message === "hello world")
+    ).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Captured live: the model emits a tool call as MALFORMED TEXT (the server's
+// parser can't match it, salvage can't rescue it) and yields — without a nudge
+// the turn ends as a fake "responded" and the build strands.
+test("leaked tool-call markup in a no-tool-call yield is nudged into a real call", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        if (calls === 1) {
+          // The exact degenerate shape captured live (invented tag pair).
+          return {
+            content: 'Scaffolding now.\n\n<files>\n["/tmp/x"]\n</files>',
+            toolCalls: [],
+          };
+        }
+
+        if (calls === 2) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "1",
+                name: "create",
+                arguments: { file: "x.ts", content: "export const x = 1;\n" },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+    const result = await session.send("build it");
+
+    expect(result.status).toBe("done");
+    // The nudge fired and the forced retry actually created the file.
+    expect(
+      session.messages.some(
+        (m) => m.role === "user" && m.content.includes("malformed")
+      )
+    ).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a plain prose answer (no markup, no dump) still ends as responded", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const session = await Session.create({
+      provider: yields("TypeScript adds static types to JavaScript."),
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+    const result = await session.send("what is TypeScript?");
+
+    expect(result.status).toBe("responded");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

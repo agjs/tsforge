@@ -39,3 +39,22 @@ test("bare invocation parses to an empty interactive session", () => {
   expect(a.accept).toBe("");
   expect(isOneShot(a)).toBe(false);
 });
+
+test("plan approval is narrow — a 'yes' answering a question must not implement", async () => {
+  const { isPlanApproval, isApproval } = await import("../src/cli");
+
+  expect(isPlanApproval("approve")).toBe(true);
+  expect(isPlanApproval("Approved.")).toBe(true);
+  expect(isPlanApproval("go")).toBe(true);
+  expect(isPlanApproval("lgtm")).toBe(true);
+  expect(isPlanApproval("implement")).toBe(true);
+
+  expect(isPlanApproval("yes")).toBe(false);
+  expect(isPlanApproval("y")).toBe(false);
+  expect(isPlanApproval("ok")).toBe(false);
+  expect(isPlanApproval("looks good, also add tests")).toBe(false);
+
+  // The staged-web checkpoint keeps the wide form (it prompted "type 'approve'").
+  expect(isApproval("yes")).toBe(true);
+  expect(isApproval("ok")).toBe(true);
+});

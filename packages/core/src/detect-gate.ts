@@ -36,6 +36,8 @@ const BROWSER_CHECK = join(
   "browser-check.ts"
 );
 
+const STUB_CHECK = join(import.meta.dir, "..", "scripts", "stub-check.ts");
+
 // The strict tsconfig tsforge brings to a greenfield project — strict + the
 // index-safety the local model is weakest at, with DOM + JSX libs so browser /
 // React code type-checks, and skipLibCheck so it never trips on dep .d.ts.
@@ -286,14 +288,19 @@ export function buildWebGate(framework: WebFramework): IGate {
   // HARNESS-authored and app-agnostic: we deliberately do NOT run a model-authored
   // checks.json — the 27b writes over-strict interaction assertions (exact
   // placeholders/fill flows) it then can't satisfy and spirals on (iter3/4).
-  const render = `bun "${BROWSER_CHECK}" dist/index.html --smoke`;
+  const render = `bun "${BROWSER_CHECK}" dist/index.html --smoke --crawl`;
   // Prettier enforces formatting (the fix step runs `prettier --write` first, so
   // this passes without the model ever hand-formatting). Respects .prettierignore
   // (vendored ui/ + lib/ skipped). Runs after lint so a parse error fails there.
   const format = `"${PRETTIER_BIN}" --check .`;
 
+  // Fail if any route is still an unfilled scaffold stub (empty page that coverage
+  // + the render smoke both miss). Runs before the browser so the cheap check
+  // fails fast.
+  const stubs = `bun "${STUB_CHECK}" .`;
+
   return {
-    command: `${build} && ${tsc} && ${lint} && ${format} && ${render}`,
+    command: `${build} && ${tsc} && ${lint} && ${stubs} && ${format} && ${render}`,
     label: `${template.label} (build + behaviour smoke)`,
   };
 }

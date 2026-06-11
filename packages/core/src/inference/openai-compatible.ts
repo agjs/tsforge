@@ -20,7 +20,19 @@ export { salvageToolCalls } from "./wire";
  * ./transport — this class just orchestrates one request.
  */
 export class OpenAICompatibleProvider implements IProvider {
-  constructor(private readonly cfg: IOpenAICompatibleConfig) {}
+  constructor(private cfg: IOpenAICompatibleConfig) {}
+
+  /** Hot-swap the endpoint/model/key (used by `/model` to switch live): the
+   *  running session keeps this provider reference and picks up the new config on
+   *  its next request — no restart. */
+  reconfigure(cfg: IOpenAICompatibleConfig): void {
+    this.cfg = cfg;
+  }
+
+  /** The current config — read by the CLI for the model/endpoint status line. */
+  get config(): IOpenAICompatibleConfig {
+    return this.cfg;
+  }
 
   async complete(
     messages: IChatMessage[],

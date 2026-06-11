@@ -7,17 +7,42 @@
 //   bun browser-check.ts <htmlFile> --smoke         # render + generic behaviour smoke
 //   bun browser-check.ts <htmlFile> <checks.json>   # render + interaction checks
 //   bun browser-check.ts <htmlFile> <selector> [text]
+import { readdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { renderCheck, parseChecks, type IRenderOptions } from "../src/browser";
+import { crawlableRoutePaths } from "../src/web-routes";
 
 const rawArgs = process.argv.slice(2);
 const smoke = rawArgs.includes("--smoke");
-const [file, arg2, arg3] = rawArgs.filter((a) => a !== "--smoke");
+const crawl = rawArgs.includes("--crawl");
+const [file, arg2, arg3] = rawArgs.filter(
+  (a) => a !== "--smoke" && a !== "--crawl"
+);
 
 if (file === undefined) {
   process.stderr.write(
-    "usage: browser-check.ts <htmlFile> [checks.json | selector [text]]\n"
+    "usage: browser-check.ts <htmlFile> [--smoke] [--crawl] [checks.json | selector [text]]\n"
   );
   process.exit(2);
+}
+
+/** With --crawl, enumerate the app's static routes from `<buildDir>/src/routes/`
+ *  (the build dir is the parent of dist/) so every page — not just the home —
+ *  is render-checked. Dynamic ($param) routes are skipped. */
+async function routesFor(): Promise<string[]> {
+  if (!crawl) {
+    return [];
+  }
+
+  const routesDir = join(dirname(dirname(file ?? ".")), "src", "routes");
+
+  try {
+    const files = await readdir(routesDir);
+
+    return crawlableRoutePaths(files.filter((f) => f.endsWith(".tsx")));
+  } catch {
+    return [];
+  }
 }
 
 async function checksFor(): Promise<Partial<IRenderOptions>> {
@@ -41,7 +66,12 @@ async function checksFor(): Promise<Partial<IRenderOptions>> {
   };
 }
 
-const result = await renderCheck({ file, smoke, ...(await checksFor()) });
+const result = await renderCheck({
+  file,
+  smoke,
+  routes: await routesFor(),
+  ...(await checksFor()),
+});
 
 if (result.ok) {
   process.stdout.write(`browser-check: ${file} renders + behaves correctly\n`);

@@ -65,6 +65,25 @@ test("flags the stub phantom regardless of message shape (the whack-a-mole forms
   ).toBe(true);
 });
 
+test("flags a forward-referenced route against a POPULATED union (the real-build storm)", () => {
+  // The exact shape seen mid-build: a `to="/x/create"` written before x.create.tsx
+  // lands + routeTree regenerates. The union now holds many REAL routes, but it
+  // STILL contains the ".." nav literal — the route-`to` fingerprint — so this is a
+  // phantom the build resolves, NOT something the model should chase. (Previously
+  // these stopped matching once real routes appeared → ~1/3-of-build churn.)
+  expect(
+    isPhantomRouteError(
+      `Type '"/activities/create"' is not assignable to type '"/" | "/deals" | "/contacts" | "/activities" | "/accounts" | "/deals/$dealId" | "/contacts/create" | "/contacts/$contactId" | "/accounts/$accountId" | "." | ".."'.`
+    )
+  ).toBe(true);
+  // navigate({ to }) variant against the populated path map.
+  expect(
+    isPhantomRouteError(
+      `Argument of type '"/deals/create"' is not assignable to parameter of type 'keyof FileRoutesByPath | undefined'.`
+    )
+  ).toBe(true);
+});
+
 test("does NOT flag a real route error (against the FULL route union)", () => {
   // A genuinely-wrong route errors against the populated tree — the gate must keep
   // catching this, so it must NOT be treated as a phantom.

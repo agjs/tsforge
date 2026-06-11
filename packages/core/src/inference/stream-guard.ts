@@ -34,6 +34,14 @@ const PREFIX_WORDS = 4;
 const LONG_LINE_LEN = 20;
 const GLOBAL_REPEAT_LIMIT = 5;
 
+/** Markers that the model has started emitting STRUCTURED tool calls into the
+ *  content channel — a server tool-call-parser mismatch (e.g. atlas-spark's
+ *  Qwen3.5-native `<function=…>` XML, which Atlas's parsers don't match) leaves
+ *  them in `content` instead of `tool_calls`. Once seen, content is no longer
+ *  prose, so the prose-loop guard must stand down for it (the leaked calls are
+ *  salvaged + deduped downstream). */
+const TOOL_MARKUP_RE = /<function=|<tool_call>/i;
+
 type ProseChannel = "reasoning" | "content";
 
 export class StreamGuard {
@@ -51,6 +59,9 @@ export class StreamGuard {
     reasoning: new Map(),
     content: new Map(),
   };
+  /** Set once tool-call markup leaks into the content channel — thereafter the
+   *  prose-loop guard stands down for content (see TOOL_MARKUP_RE). */
+  private contentIsToolMarkup = false;
 
   /** Feed a streamed token; returns true once the channel has degenerated. Only
    *  the prose channels are watched — tool-call output is structured, not a loop
@@ -62,9 +73,23 @@ export class StreamGuard {
 
     this.partial[channel] += text;
 
+    if (
+      channel === "content" &&
+      !this.contentIsToolMarkup &&
+      TOOL_MARKUP_RE.test(this.partial.content)
+    ) {
+      this.contentIsToolMarkup = true;
+    }
+
     const segments = this.partial[channel].split("\n");
 
     this.partial[channel] = segments.pop() ?? "";
+
+    // Content has become leaked tool-call markup, not prose — drain the buffer
+    // (so it stays bounded) but don't run the prose-loop checks on it.
+    if (channel === "content" && this.contentIsToolMarkup) {
+      return false;
+    }
 
     for (const segment of segments) {
       const trimmed = segment.trim();

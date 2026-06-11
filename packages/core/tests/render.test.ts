@@ -53,3 +53,59 @@ test("passes tokens through verbatim in plain mode (logs)", () => {
     )
   ).toBe("hello");
 });
+
+test("content tokens stream live in color mode, stay silent in plain mode", () => {
+  const tok = (message: string): Parameters<typeof renderEvent>[0] => ({
+    kind: "token",
+    task: "1",
+    message,
+    channel: "content",
+  });
+
+  expect(renderEvent(tok("answer "), { color: true })).toBe("\n");
+  expect(renderEvent(tok("text\n"), { color: true })).toContain("answer text");
+  expect(renderEvent(tok("ignored"), { color: false })).toBe("");
+
+  // Settle the module-level stream so later tests start clean.
+  renderEvent({ kind: "message", task: "1", message: "answer text" });
+});
+
+test("a message after streamed content does not re-print the body", () => {
+  renderEvent(
+    { kind: "token", task: "1", message: "the answer\n", channel: "content" },
+    { color: true }
+  );
+
+  const out = renderEvent(
+    { kind: "message", task: "1", message: "the answer" },
+    { color: true }
+  );
+
+  expect(out).not.toContain("the answer");
+});
+
+test("a message with no streamed content still renders in full", () => {
+  const out = renderEvent(
+    { kind: "message", task: "1", message: "plain answer" },
+    { color: true }
+  );
+
+  expect(out).toContain("plain answer");
+});
+
+test("a non-token event flushes a held partial content line first", () => {
+  renderEvent(
+    { kind: "token", task: "1", message: "partial tail", channel: "content" },
+    { color: true }
+  );
+
+  const out = renderEvent(
+    { kind: "done", task: "1", message: "all green" },
+    { color: true }
+  );
+
+  expect(out).toContain("partial tail");
+  expect(out).toContain("all green");
+
+  renderEvent({ kind: "message", task: "1", message: "x" }); // settle stream
+});

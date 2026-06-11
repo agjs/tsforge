@@ -36,6 +36,12 @@ export interface IRenderOptions {
    *  few buttons throws no uncaught/console error. Catches apps that crash on
    *  interaction without needing per-app checks. */
   smoke?: boolean;
+  /** Static URL paths to crawl after the initial load (e.g. "/accounts",
+   *  "/accounts/create"): each is visited and must render non-blank with no
+   *  console/page error. Catches routes that EXIST but are stub/broken — a
+   *  single-page smoke misses them. Served with SPA fallback so the client
+   *  router handles the path. Empty/undefined → no crawl (unchanged behavior). */
+  routes?: string[];
   /** Navigation timeout (default 15s). */
   timeoutMs?: number;
 }
@@ -67,19 +73,29 @@ export async function renderCheck(
 
     // A file is served over http (NOT file://) so `<script type="module">` and
     // relative fetches load — browsers block ES modules over file://. Inline
-    // `html` goes straight to setContent.
-    await (opts.file !== undefined
-      ? loadOverHttp(page, opts.file, timeout)
-      : page.setContent(opts.html ?? "", { waitUntil: "load", timeout }));
+    // `html` goes straight to setContent. For a file, the server stays up across
+    // ALL checks (incl the route crawl, which needs SPA fallback).
+    if (opts.file !== undefined) {
+      const abs = resolve(opts.file);
+      const server = startStaticServer(dirname(abs));
+      const base = `http://localhost:${String(server.port)}`;
 
-    await checkExpectations(page, opts.expect, errors);
+      try {
+        await page.goto(`${base}/${basename(abs)}`, {
+          waitUntil: "load",
+          timeout,
+        });
+        await runChecks(page, opts, errors);
 
-    for (const step of opts.steps ?? []) {
-      await runStep(page, step, errors);
-    }
-
-    if (opts.smoke === true) {
-      await runSmoke(page, errors);
+        if (opts.routes !== undefined && opts.routes.length > 0) {
+          await crawlRoutes(page, base, opts.routes, errors, timeout);
+        }
+      } finally {
+        await server.stop(true);
+      }
+    } else {
+      await page.setContent(opts.html ?? "", { waitUntil: "load", timeout });
+      await runChecks(page, opts, errors);
     }
 
     return { ok: errors.length === 0, errors };
@@ -88,15 +104,29 @@ export async function renderCheck(
   }
 }
 
-/** Serve `file`'s directory on an ephemeral localhost port and navigate to it. */
-async function loadOverHttp(
+/** The expectation + step + smoke checks that run against the loaded page. */
+async function runChecks(
   page: Page,
-  file: string,
-  timeout: number
+  opts: IRenderOptions,
+  errors: string[]
 ): Promise<void> {
-  const abs = resolve(file);
-  const root = dirname(abs);
-  const server = Bun.serve({
+  await checkExpectations(page, opts.expect, errors);
+
+  for (const step of opts.steps ?? []) {
+    await runStep(page, step, errors);
+  }
+
+  if (opts.smoke === true) {
+    await runSmoke(page, errors);
+  }
+}
+
+/** Serve a directory on an ephemeral localhost port. SPA FALLBACK: an
+ *  extension-less path that isn't a real file → index.html (so the client router
+ *  renders that route). Missing ASSETS (paths with a `.`) still 404, so a broken
+ *  bundle/import surfaces as a real error. */
+function startStaticServer(root: string): ReturnType<typeof Bun.serve> {
+  return Bun.serve({
     port: 0,
     fetch: async (req): Promise<Response> => {
       const path = new URL(req.url).pathname;
@@ -104,22 +134,57 @@ async function loadOverHttp(
         path === "/" ? "index.html" : decodeURIComponent(path.slice(1));
       const handle = Bun.file(join(root, rel));
 
-      return (await handle.exists())
-        ? new Response(handle)
-        : new Response("not found", { status: 404 });
+      if (await handle.exists()) {
+        return new Response(handle);
+      }
+
+      if (!rel.includes(".")) {
+        const index = Bun.file(join(root, "index.html"));
+
+        if (await index.exists()) {
+          return new Response(index);
+        }
+      }
+
+      return new Response("not found", { status: 404 });
     },
   });
+}
 
-  try {
-    await page.goto(
-      `http://localhost:${String(server.port)}/${basename(abs)}`,
-      {
-        waitUntil: "load",
-        timeout,
+/** Visit each route and assert it renders non-blank; console/page errors during
+ *  these navigations are captured by the handlers wired in renderCheck. A route
+ *  that errors or paints a blank root is a real defect a single-page smoke misses. */
+async function crawlRoutes(
+  page: Page,
+  base: string,
+  routes: readonly string[],
+  errors: string[],
+  timeout: number
+): Promise<void> {
+  for (const route of routes) {
+    try {
+      await page.goto(`${base}${route}`, { waitUntil: "load", timeout });
+      // Let the client router + first paint settle before the blank check (the
+      // shell/nav renders immediately, so this only flags genuinely dead routes).
+      await page.waitForTimeout(150);
+
+      const blank = await page.evaluate(() => {
+        const root =
+          document.querySelector("#root") ??
+          document.querySelector("#app") ??
+          document.body;
+
+        return root.children.length === 0 || root.textContent.trim() === "";
+      });
+
+      if (blank) {
+        errors.push(`route ${route} rendered blank`);
       }
-    );
-  } finally {
-    await server.stop(true);
+    } catch (error) {
+      errors.push(
+        `route ${route} failed to load: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 }
 

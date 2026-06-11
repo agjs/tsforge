@@ -11,4 +11,9 @@ export {
   type ILoopCtx,
   type ILoopState,
 } from "./turn";
-export { Session, type ISessionConfig, type ISendResult } from "./session";
+export {
+  Session,
+  PLAN_APPROVED_NOTE,
+  type ISessionConfig,
+  type ISendResult,
+} from "./session";

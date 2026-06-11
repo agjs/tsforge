@@ -95,6 +95,12 @@ export interface ILoopCtx {
    *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
    *  just the model call. Set per-send by the Session. */
   signal?: AbortSignal;
+  /** Wired by the interactive CLI: turn this workspace into a web project (the
+   *  `scaffold_web` tool calls it). Threaded into the tool context. */
+  setupWeb?: (framework: string) => Promise<void>;
+  /** PLAN MODE (set via Session.setPlanMode): threaded into the tool context so
+   *  mutating tools are rejected at dispatch — the model only plans. */
+  readOnly?: boolean;
 }
 
 /** Mutable state threaded across turns (the gradient the loop descends). */
@@ -144,8 +150,20 @@ const ROUTE_API_SIGNATURES: readonly RegExp[] = [
   /ConstrainLiteral</, //                       `<Link to>` / createFileRoute path constraint
   /ParamsReducerFn</, //                         `params={{…}}` on a typed route
   /"__root__"/, //                               stub route-id union (`"__root__" | "/"`)
-  // A target type union composed ONLY of the nav literals "/", ".", ".." (any order/subset).
+  /keyof FileRoutesByPath/, //                  navigate({ to }) target union
+  // A target type union composed ONLY of the nav literals "/", ".", ".." (any
+  // order/subset) — the EARLY stub tree, before any real route exists.
   /assignable to (?:parameter of )?type '(?:"\/"|"\."|"\.\.")(?:\s*\|\s*(?:"\/"|"\."|"\.\."))*'/,
+  // The same `<Link to>` / navigate target-union error AFTER real routes exist: the
+  // union ALWAYS still contains the ".." nav literal — which a normal string-literal
+  // union never does — so an "assignable to … type '…\"..\"…'" error is a route
+  // phantom REGARDLESS of which real routes are also in the union. (The nav-only
+  // pattern above STOPPED matching once the union grew, so the model got nagged to
+  // "fix" forward-referenced links (e.g. to="/x/create" written before x.create.tsx
+  // lands + routeTree regenerates) that the build resolves on its own — ~1/3 of a
+  // multi-route build burned chasing them. The real gate rebuilds the tree and still
+  // catches a genuinely missing route.)
+  /assignable to (?:parameter of )?type '[^']*"\.\."[^']*'/,
   // `Route.useParams()` against the stub gives EMPTY params (`{}` or `never`), so a
   // `route.params.<name>` access fails. ≥2 builds (night2 `never` ×84, twitter `{}` ×6).
   // Broadest signal here — a real `{}`/`never` property access would also match — but
@@ -408,6 +426,8 @@ export async function runToolCalls(
       task: ctx.task.id,
       tsService: ctx.tsService,
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+      ...(ctx.setupWeb === undefined ? {} : { setupWeb: ctx.setupWeb }),
+      ...(ctx.readOnly === undefined ? {} : { readOnly: ctx.readOnly }),
     });
 
     let feedback = "";

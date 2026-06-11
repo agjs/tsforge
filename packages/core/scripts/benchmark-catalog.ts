@@ -46,6 +46,29 @@ export const BENCHMARK_CATALOG: readonly IBenchmarkApp[] = [
     ],
   },
   {
+    slug: "udemy",
+    name: "Online Course Marketplace",
+    summary:
+      "A Udemy-like learning marketplace: instructors publish courses made of sections and lessons; students enrol, track progress, and leave reviews.",
+    entities: [
+      "User (with Role: student | instructor | admin)",
+      "Course",
+      "Section",
+      "Lesson (with Content: video | article | quiz — discriminated)",
+      "Enrollment (with progress)",
+      "Review (rating 1-5)",
+      "Category",
+      "Coupon (with Discount: percentage | fixed — discriminated)",
+    ],
+    flows: [
+      "Catalog: browse/search courses, filter by category + rating + price, paginate",
+      "Course detail: curriculum (sections → lessons), instructor bio, reviews, enrol button",
+      "Instructor studio: create/edit a course, add sections, add lessons (discriminated form — fields change by content type)",
+      "My learning: enrolled courses with progress bars, mark a lesson complete (optimistic) with rollback",
+      "Apply a coupon at enrol (discriminated discount math); leave a review after enrolling",
+    ],
+  },
+  {
     slug: "pm-platform",
     name: "Project Management Platform",
     summary:
@@ -267,8 +290,8 @@ FORBIDDEN: \`any\`, \`as\` casts (except \`as const\`), \`@ts-ignore\`/\`@ts-noc
 REQUIRED: strict typing everywhere; interfaces are \`I\`-prefixed (\`IInvoice\`); ONE React component per .tsx file; functional components only.
 
 # Type safety
-Every entity has explicit types. Use discriminated unions, branded IDs where useful, \`readonly\` where appropriate, EXHAUSTIVE switch statements, parser/validator functions, and a \`Result<T, E>\` style for fallible operations.
-Never use \`Record<string, any>\`, unvalidated casts, or unsafe JSON access. All external/seed data is PARSED through a validator before use — no direct trust of raw JSON.
+Every entity has explicit types. Use discriminated unions, branded IDs where useful, \`readonly\` where appropriate, and EXHAUSTIVE \`switch\` statements to narrow them. Use a \`Result<T, E>\` style ONLY for genuinely fallible RUNTIME ops (e.g. a mock-async service call that can fail) — never for data you already typed.
+There is NO backend, network, or uploaded data in this app: EVERY value originates from your own typed code + seed, so TypeScript has already proven its shape. The TYPE SYSTEM is the validation. NEVER write runtime parsers, entity validators, type-guard functions, or a \`*.validators.ts\` to "check" data the compiler already guarantees — type it correctly at the source and use it directly (\`x satisfies IType\` for a literal). Never use \`any\`, \`Record<string, any>\`, or \`as\` casts.
 
 # UI surface (all of these must exist and work)
 Dashboard · list view · detail view · creation workflow · editing workflow · search · filtering · sorting · pagination · modal workflow · form validation · toast notifications · loading states · error states · empty states.
@@ -288,13 +311,13 @@ Keyboard navigation, proper labels, aria attributes, focus management, accessibl
 # Project structure — BORINGSTACK, per-feature (NOT by-layer)
 Co-locate by domain under \`src/features/<domain>/\`:
   <domain>.types.ts        — entity types, discriminated unions, branded IDs
-  <domain>.validators.ts   — parser functions + type guards (parse all external data here)
+  <domain>.constants.ts    — \`as const\` registries / label maps (typed Record<Union, V>)
   <domain>.service.ts      — async data access (seeded/mock async with latency + failure paths)
-  <domain>.hooks.ts        — domain hooks (async/derived/optimistic state)
+  <domain>.hooks.ts        — ONLY genuine derived/computed state (the data hook is the SDK's useCollection; do NOT write a fetch/query wrapper)
   <PascalCase>.tsx         — ONE component per file
   index.ts                 — barrel re-exporting the public surface
 Shared shadcn primitives live in \`src/components/ui/\` (already scaffolded). Routes/pages are TanStack files under \`src/routes/\`.
-This satisfies the separation of UI / business logic / validation / data access / type definitions — colocated per domain, not in global folders.
+This separates UI / business logic / data access / type definitions — colocated per domain, not in global folders.
 
 # Domain complexity (minimum bar)
 ≥8 entity types · 20+ interfaces/types · multiple relationships · nested structures · enums-as-const · discriminated unions.
@@ -350,7 +373,7 @@ export function findBenchmarkApp(selector: string): IBenchmarkApp | undefined {
 export const JUDGE_RUBRIC = `You are grading a React + Vite + TypeScript application built by a coding system, against a production-grade bar. Be a harsh, specific senior reviewer. Score 1-5 overall and per-dimension, and list concrete defects (file + what's wrong).
 
 Dimensions:
-1. Type safety — discriminated unions, branded IDs, readonly, exhaustive switches, parsers/validators, Result<T,E>; NO any/as/!/Record<string,any>/unvalidated JSON.
+1. Type safety — discriminated unions, branded IDs, readonly, exhaustive switches, Result<T,E> for genuinely-fallible runtime ops; NO any/as/!/Record<string,any>. PENALIZE runtime parsers/entity-validators/type-guards/*.validators.ts that "check" already-typed seed data — there is no untrusted input, so that is dead ceremony, not type safety.
 2. State management — local/derived/async/optimistic(+rollback)/cached/filter/sort/selection actually present and correct.
 3. Component architecture — one component per file, clean props, no god-components, sensible composition.
 4. Forms — ≥3 with validation, nested + conditional fields, async submit, error AND success handling.

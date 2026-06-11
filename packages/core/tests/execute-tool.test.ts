@@ -358,7 +358,7 @@ test("run factors the shared directory prefix out of a file listing", async () =
       `${base}/index.css`,
       `${base}/main.tsx`,
       `${base}/lib/result.ts`,
-      `${base}/lib/parse.ts`,
+      `${base}/lib/collection.ts`,
       `${base}/lib/object.ts`,
     ];
 

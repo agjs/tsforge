@@ -1,9 +1,11 @@
 import type { IToolCall } from "../../inference";
-import { TOOL_NAME, type ToolName } from "../../agent";
+import { TOOL_NAME, READ_ONLY_TOOL_NAMES, type ToolName } from "../../agent";
 import { readFile, runShell, doEdit, doCreate } from "./file-ops";
 import { doSearch, doLsp } from "./lsp-ops";
 import { doScaffoldUi } from "./scaffold-ui";
-import { type IToolContext } from "./tool-context";
+import { doScaffoldRoutes } from "./scaffold-routes";
+import { doScaffoldWeb } from "./scaffold-web";
+import { reject, type IToolContext } from "./tool-context";
 
 export type { IToolContext } from "./tool-context";
 
@@ -27,6 +29,8 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.renameSymbol]: (a, c) => doLsp(TOOL_NAME.renameSymbol, a, c),
   [TOOL_NAME.organizeImports]: (a, c) => doLsp(TOOL_NAME.organizeImports, a, c),
   [TOOL_NAME.scaffoldUi]: doScaffoldUi,
+  [TOOL_NAME.scaffoldRoutes]: doScaffoldRoutes,
+  [TOOL_NAME.scaffoldWeb]: doScaffoldWeb,
 };
 
 function isToolName(name: string): name is ToolName {
@@ -45,6 +49,23 @@ export async function executeTool(
 ): Promise<string> {
   if (!isToolName(call.name)) {
     return `unknown tool: ${call.name}`;
+  }
+
+  // PLAN MODE hard guard: the advertised tool list already omits mutating tools,
+  // but a salvaged/forced call can name anything — reject it here so plan mode
+  // is a guarantee, not a convention. (`run` passes; its handler enforces a
+  // read-only command allowlist.)
+  if (
+    ctx.readOnly === true &&
+    !READ_ONLY_TOOL_NAMES.has(call.name) &&
+    call.name !== TOOL_NAME.run
+  ) {
+    return reject(
+      ctx,
+      call.name,
+      `plan mode: \`${call.name}\` is disabled — explore with read-only tools and ` +
+        "present your plan as text; the user must approve it before files can change."
+    );
   }
 
   return HANDLERS[call.name](call.arguments, ctx);

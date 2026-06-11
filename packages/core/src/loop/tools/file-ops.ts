@@ -41,6 +41,55 @@ export async function readFile(
   return handle.text();
 }
 
+/** Commands a plan-mode `run` may execute — pure inspection, never mutation. */
+const READ_ONLY_COMMANDS = new Set([
+  "ls",
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "rg",
+  "grep",
+  "find",
+  "tree",
+  "stat",
+  "file",
+  "which",
+  "du",
+  "tsc",
+  "git",
+]);
+
+/** Git subcommands that only inspect the repo. */
+const READ_ONLY_GIT = new Set(["status", "log", "diff", "show", "branch"]);
+
+/** Shell metacharacters that could turn a read into a write (`> out`, `&& rm`,
+ *  `| tee`, command substitution). Their PRESENCE disqualifies — conservative. */
+const SHELL_WRITE_RE = /[>;&|`]|\$\(/;
+
+/**
+ * Deterministically read-only: exactly one allowlisted command, no redirects/
+ * pipes/chaining. Used by plan mode so the model can explore (`ls`, `rg`,
+ * `git log`, `tsc --noEmit`) without any path to mutating the workspace.
+ */
+export function isReadOnlyCommand(command: string): boolean {
+  if (SHELL_WRITE_RE.test(command)) {
+    return false;
+  }
+
+  const [head, sub] = command.trim().split(/\s+/);
+
+  if (head === undefined || !READ_ONLY_COMMANDS.has(head)) {
+    return false;
+  }
+
+  if (head === "git") {
+    return sub !== undefined && READ_ONLY_GIT.has(sub);
+  }
+
+  return true;
+}
+
 export async function runShell(
   args: Record<string, unknown>,
   ctx: IToolContext
@@ -49,6 +98,15 @@ export async function runShell(
 
   if (r === null) {
     return "run: malformed args (need `command`)";
+  }
+
+  if (ctx.readOnly === true && !isReadOnlyCommand(r.command)) {
+    return reject(
+      ctx,
+      "run",
+      "plan mode: only read-only commands are allowed (ls, cat, rg, grep, find, " +
+        `git status/log/diff/show/branch, tsc — no pipes/redirects). Blocked: ${r.command}`
+    );
   }
 
   const res = await runCommand(

@@ -8,7 +8,13 @@
 //   or:  bun run packages/core/scripts/headless-build.ts --app <slug|index> [react|vanilla] [dir]
 //        (--app builds a FIXED benchmark-catalog domain with the full generation spec)
 //   then: bun run packages/core/scripts/cli-metrics.ts
-import { appendFileSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   buildWebFix,
@@ -20,11 +26,8 @@ import {
   scaffoldWeb,
   webGuidance,
 } from "../src/detect-gate";
-import {
-  OpenAICompatibleProvider,
-  PROVIDER_DEFAULTS,
-  PROVIDER_LIMITS,
-} from "../src/inference";
+import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
+import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { Session, type Reporter } from "../src/loop";
 import { renderEvent } from "../src/render";
 import { logsDir } from "../src/session-store";
@@ -42,6 +45,9 @@ interface IBuildRequest {
   readonly label: string;
   /** argv index where [framework] [dir] start (shifts when --app is used). */
   readonly tailStart: number;
+  /** Declared entities (catalog builds) — the coverage gate enforces each has UI;
+   *  empty for ad-hoc prompts (no enforced entity list). */
+  readonly entities: readonly string[];
 }
 
 /** Resolve the build request from argv: either a benchmark --app or a free prompt. */
@@ -62,7 +68,12 @@ function resolveRequest(): IBuildRequest | undefined {
       return undefined;
     }
 
-    return { prompt: buildBenchmarkPrompt(app), label: app.slug, tailStart: 4 };
+    return {
+      prompt: buildBenchmarkPrompt(app),
+      label: app.slug,
+      tailStart: 4,
+      entities: app.entities,
+    };
   }
 
   const prompt = process.argv[2];
@@ -71,7 +82,7 @@ function resolveRequest(): IBuildRequest | undefined {
     return undefined;
   }
 
-  return { prompt, label: "adhoc", tailStart: 3 };
+  return { prompt, label: "adhoc", tailStart: 3, entities: [] };
 }
 
 /** Tee progress to the terminal, a human-readable agent.log IN THE RUN DIR (so you
@@ -103,7 +114,47 @@ async function ensureDepsCache(
   return nodeModules;
 }
 
+/**
+ * Plan mode (headless): run the design phase, write the model's build plan to
+ * `plan.md` in the run dir, then proceed to implement — headless never blocks for
+ * approval (interactive plan mode does the human review). The plan.md is the
+ * reviewable artifact: entities, routes, what "done" means, modeling decisions.
+ */
+async function runPlanned(
+  session: Session,
+  prompt: string,
+  framework: WebFramework,
+  dir: string
+): Promise<Awaited<ReturnType<Session["buildStaged"]>>> {
+  const designed = await session.designBuild(
+    prompt,
+    {},
+    buildWebTypeGate(framework).command
+  );
+
+  if (designed.status === "interrupted") {
+    return designed;
+  }
+
+  const plan = await session.generatePlan();
+  const planPath = join(dir, "plan.md");
+
+  writeFileSync(planPath, `${plan}\n`);
+  process.stdout.write(`\n📋 plan → ${planPath}\n`);
+
+  return session.implementBuild("", {});
+}
+
 async function main(): Promise<void> {
+  // `--plan` (plan mode): after the design phase, write the model's build plan to
+  // plan.md and proceed (headless never blocks for approval). Strip it before any
+  // positional-arg logic so it can sit anywhere on the command line.
+  const planMode = process.argv.includes("--plan");
+
+  if (planMode) {
+    process.argv = process.argv.filter((a) => a !== "--plan");
+  }
+
   const request = resolveRequest();
 
   if (request === undefined) {
@@ -114,13 +165,18 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const { prompt, label, tailStart } = request;
+  const { prompt, label, tailStart, entities } = request;
   const framework: WebFramework =
     process.argv[tailStart] === "vanilla" ? "vanilla" : "react";
-  const model = process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model;
+  // The model comes from the registry (~/.tsforge/models.json) unless TSFORGE_*
+  // env overrides it — so a catalog run can target a cloud flagship by editing the
+  // registry's `active` (or setting env), no code change.
+  const { entry } = await resolveActiveModel();
+  const model = entry.model;
   const envWindow = Number(process.env.TSFORGE_CONTEXT_WINDOW);
   const contextWindow =
-    Number.isFinite(envWindow) && envWindow > 0 ? envWindow : 262_144;
+    entry.contextWindow ??
+    (Number.isFinite(envWindow) && envWindow > 0 ? envWindow : 262_144);
 
   // EACH RUN GETS ITS OWN DIRECTORY: evals/runs/<timestamp>-<label>/ — so you
   // always know exactly where this build's code is, and prior runs are never
@@ -149,10 +205,10 @@ async function main(): Promise<void> {
   mkdirSync(logsDir(), { recursive: true });
 
   const provider = new OpenAICompatibleProvider({
-    baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
-    model,
-    apiKey: process.env.TSFORGE_API_KEY,
-    maxTokens: PROVIDER_LIMITS.maxTokens,
+    baseUrl: entry.baseUrl,
+    model: entry.model,
+    apiKey: resolveApiKey(entry),
+    maxTokens: entry.maxTokens ?? PROVIDER_LIMITS.maxTokens,
   });
 
   const report = makeReporter(logFile, agentLog);
@@ -174,7 +230,15 @@ async function main(): Promise<void> {
     provider,
     cwd: dir,
     files: ["**/*"],
-    accept: buildWebGate(framework).command,
+    // For catalog builds, APPEND an entity-coverage check to the gate: the app
+    // cannot go green until every declared entity has real UI (not just types) —
+    // so the model can't satisfice on a subset (4-of-8 entities greened before).
+    accept:
+      entities.length > 0
+        ? `${buildWebGate(framework).command} && bun "${join(import.meta.dir, "coverage-check.ts")}" "${dir}" ${entities
+            .map((e) => JSON.stringify(e))
+            .join(" ")}`
+        : buildWebGate(framework).command,
     fix: buildWebFix(framework),
     incrementalCheck: buildWebTscCheck(),
     // WRITE-TIME LINT: surface the gate's eslint moat rules (no-as, I-prefix,
@@ -195,18 +259,23 @@ async function main(): Promise<void> {
     enableThinking: false,
     // A from-scratch multi-domain app needs more than the 40 default. The full
     // benchmark spec (8+ entities, 40-60 files) needs more still: pm-platform AND
-    // hospital-scheduling both hit an 80-turn cap while genuinely converging —
-    // hospital was build-passing + ONE lint error from green at turn 70/80. Bumped
-    // to 130 so these big apps have room to finish, not just to get close.
-    maxTurns: 130,
+    // hospital-scheduling hit an 80-turn cap (→ 130). Then the ENTITY-COVERAGE gate
+    // (cycle-31) raised the bar again: the model can no longer satisfice on 4 of 8
+    // entities — it must build ALL of them. A fast flagship (deepseek) hit the 130
+    // phase-2 cap while GENUINELY converging on the full 8 (it had built 7 of 8's
+    // routes, coverage shrinking 4→1). A complete 8-entity app is more than 130
+    // turns of work → 180 so the now-mandatory full build has room to finish.
+    maxTurns: 180,
     report,
   });
 
-  const result = await session.buildStaged(
-    prompt,
-    {},
-    buildWebTypeGate(framework).command
-  );
+  const result = planMode
+    ? await runPlanned(session, prompt, framework, dir)
+    : await session.buildStaged(
+        prompt,
+        {},
+        buildWebTypeGate(framework).command
+      );
 
   // The run dir IS the persistent, runnable artifact (per-run, never clobbered):
   // `cd <dir> && bun run dev` (node_modules is symlinked). No separate snapshot.

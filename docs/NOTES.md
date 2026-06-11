@@ -15,3 +15,7 @@ do deep research on most modern TS stack variations and the libraries that are u
 then apply that in our harness as capabilities, e.g. if a user wants vuejs, we can use the vuejs library to generate the code for them, etc.
 
 do teh same for nodejs, bun, etc
+
+---
+
+try it out, read, figure out how it works: https://github.com/MinishLab/semble#benchmarks

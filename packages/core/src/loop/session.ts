@@ -6,7 +6,13 @@ import type {
 } from "../inference";
 import type { ITask } from "../spec";
 import type { FileLinter } from "../detect-gate";
-import { SCAFFOLD_UI_TOOL } from "../agent";
+import {
+  SCAFFOLD_UI_TOOL,
+  SCAFFOLD_ROUTES_TOOL,
+  SCAFFOLD_WEB_TOOL,
+  READ_ONLY_TOOL_NAMES,
+  TOOL_NAME,
+} from "../agent";
 import { readFiles } from "../lib/fs";
 import { validate, type ErrorParser } from "../validate";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
@@ -78,6 +84,9 @@ export interface ISessionConfig {
   /** Offer the `scaffold_ui` tool (themed UI primitives). Web builds only — keeps
    *  it off the pure-TS/scratch tool list where it's meaningless noise. */
   scaffoldUi?: boolean;
+  /** Offer the `scaffold_web` tool — a fresh INTERACTIVE session where the agent
+   *  decides whether to start a web app. Pair with `setSetupWeb`. */
+  scaffoldWeb?: boolean;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -116,10 +125,49 @@ const PLAN_TYPES_STEP =
   "`src/<domain>/<domain>.types.ts` (its `I`-prefixed interfaces) and, where it has " +
   "fixed registries/config, `src/<domain>/<domain>.constants.ts` (`as const`). Put " +
   "types shared across domains in `src/shared/shared.types.ts`. Do NOT create one " +
-  "mega `src/types.ts`, and do NOT build components yet — types/constants only, then stop.\n" +
+  "mega `src/types.ts`. THIS STEP IS TYPES/CONSTANTS ONLY: do NOT create components, " +
+  "routes, services, seeds, or hooks, and do NOT call scaffold_routes or scaffold_ui " +
+  "yet — the NEXT step builds ALL of that. This phase's gate checks ONLY types (no " +
+  "build), so anything else you write now just risks errors and wastes turns. When " +
+  "your `.types.ts`/`.constants.ts` files type-check, STOP.\n" +
   "SPEED: after the one-paragraph plan, write MANY files per turn — emit SEVERAL " +
   "`create` tool calls in a SINGLE response (batch all of a domain's type/constant " +
   "files at once). Do NOT write one file then stop and wait.";
+
+/** Plan mode — emitted AFTER the design phase to surface the model's intent for a
+ *  human to review before phase 2 commits. Asks for a concise plan, NOT code. */
+const PLAN_SUMMARY_STEP =
+  "Before building the UI, output your BUILD PLAN as concise markdown so it can be " +
+  "reviewed. Cover, briefly:\n" +
+  "1. ENTITIES — list each, and for each say whether it gets its OWN routes " +
+  "(list/detail/create) or is NESTED/EMBEDDED in another (say where).\n" +
+  "2. ROUTES/PAGES — the routes you will create.\n" +
+  "3. DONE — what you consider a complete app for this spec.\n" +
+  "4. DECISIONS/ASSUMPTIONS — any modeling choices a reviewer might want to change.\n" +
+  "Output ONLY the markdown plan — no preamble, no tool calls, no code.";
+
+/** GENERAL plan mode (the `/plan` toggle, any task — distinct from the staged
+ *  web build's PLAN_SUMMARY_STEP): rides the first user message after the mode
+ *  flips on. Read-only tools enforce the contract at the execute layer; this
+ *  note tells the model the workflow — explore, clarify, propose, wait. */
+const PLAN_MODE_NOTE =
+  "[PLAN MODE — read-only. edit/create and write commands are disabled until " +
+  "the user approves a plan.]\n" +
+  "1. EXPLORE first: read/search the code this request touches.\n" +
+  "2. If the request is ambiguous, ask your clarifying question(s) and STOP — " +
+  "the user will answer.\n" +
+  "3. When you know enough, reply with a concise plan under a `## Plan` " +
+  "heading: each file to change and what to do in it, in order. No code dumps, " +
+  "no tool calls in that reply.\n" +
+  "The user will reply with feedback (revise the plan) or approve it; you " +
+  "implement ONLY after approval.";
+
+/** Sent when the user approves a plan-mode plan — the plan itself is already the
+ *  latest assistant message, so anchor it instead of re-pasting it. */
+export const PLAN_APPROVED_NOTE =
+  "Your plan is APPROVED — plan mode is off and all tools are available again. " +
+  "Implement the approved plan above now, in order, starting with the first " +
+  "step. Do not re-explore or restate the plan; emit the tool calls.";
 
 /** Default edits between incremental checks. */
 const CHECK_EVERY = 3;
@@ -167,15 +215,23 @@ const INTERIM_CHECK_NOTE =
 
 /** Staged-build step 2: implement against the contract, gate on (drive to green). */
 const IMPLEMENT_STEP =
-  "STEP 2 of 2 — now build the app: import the types from the per-domain " +
-  "`.types.ts` files you created and build the components/routes (ONE component " +
-  "per FILE), wiring them together. The gate builds and verifies it in a real " +
-  "browser; fix exactly what it reports until green.\n" +
-  "SPEED: write MANY files per turn — emit SEVERAL `create` tool calls in a SINGLE " +
-  "response (e.g. a whole domain's files at once: its components, hooks, service). " +
-  "Do NOT write one file then stop and wait — batch aggressively, 5+ files a turn. " +
-  "When fixing gate errors, fix ALL reported files in one turn (one `edit` each). " +
-  "Don't explain or plan in prose — just emit the tool calls.";
+  "STEP 2 of 2 — build the app in THIS ORDER, so every file compiles the moment " +
+  "you write it (each step depends only on earlier ones — no forward references):\n" +
+  "1) DATA LAYER — each domain's seed + service (`createCollection`). Small files; " +
+  "emit them together.\n" +
+  "2) ROUTES — call `scaffold_routes` ONCE with EVERY page the app needs (list, " +
+  "detail with $param like /accounts/$accountId, and create/edit like " +
+  "/deals/create). This writes all route files at once, so from here every " +
+  "<Link to>/navigate target type-checks — NEVER hand-write a route file.\n" +
+  "3) SHELL — the app-shell layout + nav linking those routes.\n" +
+  "4) FILL, FEATURE BY FEATURE — replace each route's placeholder with its real " +
+  "component (import your types + `useCollection(service)` + @/components/ui + " +
+  "<Link> to any route). FINISH one feature before starting the next.\n" +
+  "PACE: write ONE coherent slice per turn — a single feature's few files together " +
+  "(or one file if it's large) — then let the gate check it. Do NOT dump the whole " +
+  "app in one response (it gets cut off and the work is lost); do NOT trickle one " +
+  "trivial file at a time either. The gate builds + browser-verifies; fix exactly " +
+  "what it reports. Don't explain or plan in prose — just emit the tool calls.";
 
 /**
  * Did the model write whole files INTO its chat message instead of calling
@@ -188,6 +244,36 @@ function looksLikeCodeDump(content: string): boolean {
 
   return fences >= 4 || (fences >= 2 && content.length > 1500);
 }
+
+const TOOL_NAMES_ALT = Object.values(TOOL_NAME).join("|");
+
+/** Tool-call MARKUP leaked into the reply text: the known malformed variants
+ *  (`<function=`, `<tool_call`, `<parameter…`, `<|tool|>`, `<tool>` for a tool
+ *  we offer) — the server's parser left the call in content and salvage could
+ *  not rescue it (see malformed-toolcall-format + wire.ts salvage). */
+const LEAKED_CALL_RE = new RegExp(
+  `<function=|<tool_call|<parameters?[=>]|<\\|(?:${TOOL_NAMES_ALT})\\|>|^<(?:${TOOL_NAMES_ALT})>`,
+  "im"
+);
+
+/** The fully-degenerate invented-markup form: a short matched `<tag>…</tag>`
+ *  pair on its own lines (e.g. `<files>\n["…"]\n</files>`, captured live). A
+ *  legit prose answer with an HTML example could match — the cost is one
+ *  bounded nudge turn, while missing it strands the whole build. */
+const TAG_PAIR_RE = /^<([a-z_]+)>\s*$[\s\S]{0,400}?^<\/\1>\s*$/m;
+
+/** Did the model emit a tool call as TEXT instead of invoking one? */
+function leaksToolMarkup(content: string): boolean {
+  return LEAKED_CALL_RE.test(content) || TAG_PAIR_RE.test(content);
+}
+
+/** Pushed when a no-tool-call reply contained leaked tool markup — the model
+ *  believes it acted, but nothing ran. Paired with a FORCED tool call next turn
+ *  (constrained decoding ⇒ the retry always parses). */
+const MALFORMED_CALL_NUDGE =
+  "Your last reply contained tool-call markup as plain TEXT — the syntax was " +
+  "malformed, so NO tool ran and nothing happened. Do not write tool syntax " +
+  "in prose. Re-issue that action as a real tool call now.";
 
 /** CHAT_SYSTEM + a short orientation to the workspace and (optional) gate. */
 function systemPrompt(cfg: ISessionConfig): string {
@@ -220,9 +306,11 @@ export class Session {
   private readonly provider: IProvider;
   private readonly cfg: ISessionConfig;
   private readonly report: Reporter;
-  private readonly tools: (
+  private tools: (
     | ReturnType<typeof toolsFor>[number]
     | typeof SCAFFOLD_UI_TOOL
+    | typeof SCAFFOLD_ROUTES_TOOL
+    | typeof SCAFFOLD_WEB_TOOL
   )[];
   private hasGate: boolean;
   private readonly ctx: ILoopCtx;
@@ -243,6 +331,13 @@ export class Session {
    *  turn cap), while thinking-ON repair converges. So we think ONLY while
    *  repairing — fast thinking-off creation, convergent thinking-on repair. */
   private repairing = false;
+  /** GENERAL plan mode: read-only exploration until the user approves a plan.
+   *  Mirrors into ctx.readOnly (the execute-layer guarantee) and filters the
+   *  advertised tool list per call — `this.tools` itself is never mutated, so
+   *  toggling off restores everything with zero bookkeeping. */
+  private planMode = false;
+  /** Attach PLAN_MODE_NOTE to the NEXT send only (not every revision reply). */
+  private planIntroPending = false;
 
   private constructor(cfg: ISessionConfig, ctx: ILoopCtx) {
     this.provider = cfg.provider;
@@ -257,10 +352,21 @@ export class Session {
     // LSP nav set can become an opt-in once we confirm it parses cleanly here.
     // WEB builds add ONE coarse tool — `scaffold_ui` — so the model generates
     // tested themed primitives instead of re-authoring a button/card every build.
+    // Interactive sessions (scaffoldWeb) also offer `scaffold_web` so the AGENT
+    // can choose to start a web app — the UI/routes tools ride along so they're
+    // ready once it scaffolds. Headless web builds (scaffoldUi) scaffold up front,
+    // so they skip scaffold_web.
     this.tools =
-      cfg.scaffoldUi === true
-        ? [...toolsFor(false), SCAFFOLD_UI_TOOL]
-        : toolsFor(false);
+      cfg.scaffoldWeb === true
+        ? [
+            ...toolsFor(false),
+            SCAFFOLD_WEB_TOOL,
+            SCAFFOLD_UI_TOOL,
+            SCAFFOLD_ROUTES_TOOL,
+          ]
+        : cfg.scaffoldUi === true
+          ? [...toolsFor(false), SCAFFOLD_UI_TOOL, SCAFFOLD_ROUTES_TOOL]
+          : toolsFor(false);
     this.ctx = ctx;
     this.state = {
       prevGateErrors: [],
@@ -347,6 +453,15 @@ export class Session {
     this.hasGate = command.length > 0;
   }
 
+  /** Toggle GENERAL plan mode: read-only tools + the plan-then-approve workflow.
+   *  ON ⇒ the next send carries PLAN_MODE_NOTE, the advertised tools shrink to
+   *  the read-only set, and the execute layer rejects any mutating call. */
+  setPlanMode(on: boolean): void {
+    this.planMode = on;
+    this.ctx.readOnly = on; // the hard guarantee at the execute layer
+    this.planIntroPending = on;
+  }
+
   /** Set (or clear, with "") the auto-fix command run before each gate — e.g. a
    *  scaffold's `eslint --fix`, so mechanical lint violations are squashed
    *  deterministically instead of costing the model turns. */
@@ -363,6 +478,14 @@ export class Session {
   /** Replace the editable scope globs mid-session. */
   setScope(globs: string[]): void {
     this.ctx.task.files = globs;
+  }
+
+  /** Wire the web-setup callback the `scaffold_web` tool invokes when the AGENT
+   *  decides the task is a from-scratch web app — scaffolds the stack and flips
+   *  this session to the web gate/guidance. Late-bound (after create) because the
+   *  callback closes over this session to reconfigure it. */
+  setSetupWeb(fn: (framework: string) => Promise<void>): void {
+    this.ctx.setupWeb = fn;
   }
 
   /** Append opinionated guidance to the SYSTEM prompt (e.g. after classifying a
@@ -457,7 +580,17 @@ export class Session {
         });
       }
 
-      ctx.messages.push({ role: "user", content: text });
+      // The plan-mode workflow note rides the FIRST message after the mode flips
+      // on; revision replies go bare (the instruction persists in history).
+      if (this.planMode && this.planIntroPending) {
+        this.planIntroPending = false;
+        ctx.messages.push({
+          role: "user",
+          content: `${text}\n\n${PLAN_MODE_NOTE}`,
+        });
+      } else {
+        ctx.messages.push({ role: "user", content: text });
+      }
 
       return await this.drive(maxTurns, sendStart, opts);
     } catch (err) {
@@ -504,19 +637,75 @@ export class Session {
     opts: ISendOptions = {},
     designGate = ""
   ): Promise<ISendResult> {
-    const gate = this.ctx.task.accept;
-
-    // Phase 1 gates on TYPES only (tsc + lint, no build) when a designGate is
-    // given — so the type contract is driven self-consistent BEFORE components,
-    // catching the as-const↔interface errors small instead of as a final pile.
-    this.setGate(designGate);
-    const planned = await this.send(`${request}\n\n${PLAN_TYPES_STEP}`, opts);
-
-    this.setGate(gate);
+    const planned = await this.designBuild(request, opts, designGate);
 
     // Don't push on to implementation if the user aborted the design step.
     if (planned.status === "interrupted") {
       return planned;
+    }
+
+    return this.implementBuild("", opts);
+  }
+
+  /**
+   * PHASE 1 — design the type contract only. Gates on TYPES (tsc + lint, no build)
+   * when a `designGate` is given, so the contract is driven self-consistent BEFORE
+   * components (catching as-const↔interface errors small, not as a final pile).
+   * Withholds the app-building scaffold tools so the model CANNOT start the UI here
+   * — a prompt-only "types only" was repeatedly ignored. Returns the phase-1 result
+   * and leaves the session ready for `implementBuild`. Split out from `buildStaged`
+   * so plan mode can insert a human review between the phases.
+   */
+  async designBuild(
+    request: string,
+    opts: ISendOptions = {},
+    designGate = ""
+  ): Promise<ISendResult> {
+    const gate = this.ctx.task.accept;
+
+    this.setGate(designGate);
+
+    const phaseTwoTools = this.tools;
+
+    this.tools = toolsFor(false);
+    const planned = await this.send(`${request}\n\n${PLAN_TYPES_STEP}`, opts);
+
+    this.tools = phaseTwoTools;
+    this.setGate(gate);
+
+    return planned;
+  }
+
+  /**
+   * PHASE 2 — implement against the designed types, driving to green. If phase 1
+   * already produced a fully-green app (it ignored "types only" and built
+   * everything), this returns done WITHOUT rebuilding — else the model concludes
+   * the prior phase did "only the data layer" and `rm -rf`s its own finished UI to
+   * rebuild (observed: 23-00-52 went green at turn 146, then phase 2 wiped every
+   * file). `planNotes` (human plan-mode edits) are injected into the implement step.
+   */
+  async implementBuild(
+    planNotes = "",
+    opts: ISendOptions = {}
+  ): Promise<ISendResult> {
+    const gate = this.ctx.task.accept;
+    const fullGateTask: ITask = { ...this.ctx.task, accept: gate };
+    const full = await validate(
+      fullGateTask,
+      this.ctx.cwd,
+      this.ctx.parse,
+      this.ctx.signal === undefined ? {} : { signal: this.ctx.signal }
+    );
+
+    if (full.passed) {
+      this.report({
+        kind: "tool",
+        task: this.ctx.task.id,
+        message:
+          "phase 1 already produced a fully-green app — skipping phase 2 (no rebuild)",
+      });
+
+      return { status: "done", turns: 0 };
     }
 
     // Inject the EXACT type contract the design phase just wrote, fresh, right
@@ -525,8 +714,32 @@ export class Session {
     // re-showing the precise current signatures cuts those consistency errors (so
     // less repair). Both phases run ADAPTIVE thinking (governed by `repairing`).
     const contract = await this.typeContract();
+    const notes =
+      planNotes.length > 0
+        ? `\n\n## Approved plan — follow these decisions\n${planNotes}\n`
+        : "";
 
-    return this.send(`${contract}${IMPLEMENT_STEP}`, opts);
+    return this.send(`${contract}${IMPLEMENT_STEP}${notes}`, opts);
+  }
+
+  /**
+   * Plan mode — after `designBuild`, ask the model to state its build PLAN as
+   * markdown (entities + whether each is its own route or nested/embedded; the
+   * routes/pages it will create; what it considers DONE; key modeling decisions)
+   * so a human can review/correct it BEFORE phase 2 commits ~100 turns. A single
+   * completion over the live conversation; emits NO tool calls and touches no
+   * files. Returns the plan text (empty string if the model returned nothing).
+   */
+  async generatePlan(): Promise<string> {
+    const res = await this.provider.complete(
+      [...this.ctx.messages, { role: "user", content: PLAN_SUMMARY_STEP }],
+      {
+        temperature: 0,
+        ...(this.ctx.signal === undefined ? {} : { signal: this.ctx.signal }),
+      }
+    );
+
+    return res.content.trim();
   }
 
   /** Read the per-domain `.types.ts`/`.constants.ts` the design phase wrote and
@@ -638,8 +851,19 @@ export class Session {
       : this.repairing
         ? true
         : (this.activeThinking ?? this.cfg.enableThinking);
+    // PLAN MODE advertises only the read-only tools (+ `run`, whose handler
+    // enforces a read-only command allowlist) — the model never sees a write
+    // tool. Filtered per call, so `this.tools` is untouched and toggling the
+    // mode off restores the full set with zero bookkeeping.
+    const offeredTools = this.planMode
+      ? this.tools.filter(
+          (t) =>
+            READ_ONLY_TOOL_NAMES.has(t.function.name) ||
+            t.function.name === TOOL_NAME.run
+        )
+      : this.tools;
     const res = await this.provider.complete(ctx.messages, {
-      tools: this.tools,
+      tools: offeredTools,
       temperature: this.cfg.temperature ?? 0,
       toolChoice,
       ...(enableThinking === undefined ? {} : { enableThinking }),
@@ -648,14 +872,12 @@ export class Session {
         : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
       ...(signal === undefined ? {} : { signal }),
       onToken: (token, channel) => {
-        // Stream the model's thinking AND the tool calls it's writing (the files)
-        // live — so a long generation shows progress instead of a frozen cursor.
-        // `content` is rendered once, formatted, when the turn settles. The
-        // `channel` lets the renderer collapse reasoning to a compact indicator
-        // (the raw text still reaches the --log).
-        if (channel === "reasoning" || channel === "tool") {
-          report({ kind: "token", task: SESSION_ID, message: token, channel });
-        }
+        // Stream EVERYTHING live — thinking, the tool calls being written, and
+        // the answer itself (channel `content`), so the user watches the reply
+        // arrive instead of staring at a frozen indicator. The renderer formats
+        // content incrementally line-by-line; the consolidated `message` event
+        // below stays as the log's record (the interactive renderer dedupes it).
+        report({ kind: "token", task: SESSION_ID, message: token, channel });
       },
     });
 
@@ -707,7 +929,20 @@ export class Session {
     turn: number,
     buildNudges: number
   ): { result: ISendResult | null } {
-    if (!this.hasGate || !looksLikeCodeDump(content)) {
+    // Plan mode is read-only — a fenced-snippet-heavy PLAN is the desired
+    // output, not a narrate-instead-of-build failure; never nudge it to build.
+    if (this.planMode) {
+      return { result: { status: "responded", turns: turn } };
+    }
+
+    // Leaked tool markup = the model TRIED to act but the call never parsed
+    // (and salvage couldn't rescue it). Without this nudge the turn ends as a
+    // fake "responded" and the build silently strands (captured live: a
+    // scaffold_web emitted as text). The retry is a FORCED tool call, which is
+    // grammar-constrained — so it always parses.
+    const leaked = this.hasGate && leaksToolMarkup(content);
+
+    if (!leaked && (!this.hasGate || !looksLikeCodeDump(content))) {
       return { result: { status: "responded", turns: turn } };
     }
 
@@ -715,9 +950,11 @@ export class Session {
       this.report({
         kind: "stuck",
         task: SESSION_ID,
-        message:
-          "⚠ model kept writing files as chat messages instead of creating " +
-          "them — stopped. Try a smaller step (e.g. one file at a time).",
+        message: leaked
+          ? "⚠ model kept emitting malformed tool-call text instead of real " +
+            "calls — stopped. See malformed-toolcall-format (server parser)."
+          : "⚠ model kept writing files as chat messages instead of creating " +
+            "them — stopped. Try a smaller step (e.g. one file at a time).",
       });
 
       return { result: { status: "stuck", turns: turn } };
@@ -726,9 +963,14 @@ export class Session {
     this.report({
       kind: "tool",
       task: SESSION_ID,
-      message: "↳ no files written — nudging the model to build with tools",
+      message: leaked
+        ? "↳ malformed tool-call text (no tool ran) — forcing a real call"
+        : "↳ no files written — nudging the model to build with tools",
     });
-    this.ctx.messages.push({ role: "user", content: BUILD_NUDGE });
+    this.ctx.messages.push({
+      role: "user",
+      content: leaked ? MALFORMED_CALL_NUDGE : BUILD_NUDGE,
+    });
 
     return { result: null };
   }
