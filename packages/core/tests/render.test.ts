@@ -14,8 +14,8 @@ test("renders a create as a guttered block with the content", () => {
   );
 
   expect(out).toContain("create todo.ts");
-  expect(out).toContain("│ export const x = 1;");
-  expect(out).toContain("│ const y = 2;");
+  expect(out).toContain("export const x = 1;");
+  expect(out).toContain("const y = 2;");
   expect(out).not.toContain("["); // no ANSI when color:false
 });
 

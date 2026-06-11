@@ -10,6 +10,7 @@ export const STYLE = {
   red: `${ESC}[31m`,
   green: `${ESC}[32m`,
   cyan: `${ESC}[36m`,
+  blue: `${ESC}[34m`,
   yellow: `${ESC}[33m`,
   magenta: `${ESC}[35m`,
   orange: `${ESC}[38;5;208m`,

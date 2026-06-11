@@ -3,6 +3,22 @@ import { highlight } from "cli-highlight";
 import type { ILoopEvent } from "../loop";
 import type { IChatMessage } from "../inference";
 import { STYLE, paint } from "./style";
+import { box, table, GLYPH } from "./box";
+
+/** Split highlighted/plain text into the body-line array a box expects. */
+function bodyLines(text: string): string[] {
+  return text.replace(/\n$/, "").split("\n");
+}
+
+/** A single glyph-prefixed line — the compact form for events with no body. */
+function glyphLine(
+  glyph: string,
+  text: string,
+  accent: string,
+  color: boolean
+): string {
+  return `\n  ${paint(`${glyph} ${text}`, `${accent}${STYLE.bold}`, color)}\n`;
+}
 
 /** Compact token count: 1234 → "1.2k", 14000 → "14k". */
 function humanCount(n: number): string {
@@ -99,21 +115,19 @@ function highlightTs(code: string, color: boolean): string {
 }
 
 /**
- * Render an assistant message: prose untouched, fenced ```code``` blocks
- * syntax-highlighted (so an inline answer reads as nicely as an `edit`/`create`).
+ * Render an assistant message: fenced ```code``` blocks syntax-highlighted, and
+ * GitHub-flavored markdown TABLES drawn as real box tables (the model answers with
+ * `| a | b |` tables constantly — raw they're unreadable pipe soup). Other prose
+ * passes through.
  */
 function renderMarkdown(text: string, color: boolean): string {
-  if (!color) {
-    return text;
-  }
-
   return text
     .split(/(```[\s\S]*?```)/g)
     .map((part) => {
       const fence = /^```([\w-]*)\n?([\s\S]*?)\n?```$/.exec(part);
 
       if (fence === null) {
-        return part;
+        return formatTables(part, color);
       }
 
       const lang =
@@ -122,6 +136,58 @@ function renderMarkdown(text: string, color: boolean): string {
       return highlightCode(fence[2] ?? "", lang, color);
     })
     .join("");
+}
+
+/** A markdown table separator row, e.g. `|----|:--:|---|`. */
+function isTableSeparator(line: string | undefined): boolean {
+  return (
+    line !== undefined &&
+    line.includes("|") &&
+    line.includes("-") &&
+    /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(line)
+  );
+}
+
+/** Split a `| a | b |` row into trimmed cells (tolerates missing edge pipes). */
+function tableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((c) => c.trim());
+}
+
+/** Replace each GFM table block in `text` with a box-drawn table; leave the rest. */
+function formatTables(text: string, color: boolean): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; ) {
+    const header = lines[i];
+
+    if (
+      header !== undefined &&
+      header.includes("|") &&
+      isTableSeparator(lines[i + 1])
+    ) {
+      const rows: string[][] = [tableCells(header)];
+      let j = i + 2;
+
+      while (j < lines.length && (lines[j]?.includes("|") ?? false)) {
+        rows.push(tableCells(lines[j] ?? ""));
+        j += 1;
+      }
+
+      out.push(table(rows, color));
+      i = j;
+    } else {
+      out.push(header ?? "");
+      i += 1;
+    }
+  }
+
+  return out.join("\n");
 }
 
 function highlightCode(code: string, lang: string, color: boolean): string {
@@ -134,15 +200,6 @@ function highlightCode(code: string, lang: string, color: boolean): string {
   } catch {
     return code;
   }
-}
-
-function gutter(block: string, color: boolean): string {
-  const bar = paint("│", STYLE.dim, color);
-
-  return block
-    .split("\n")
-    .map((line) => `  ${bar} ${line}`)
-    .join("\n");
 }
 
 function diff(oldString: string, newString: string, color: boolean): string {
@@ -180,10 +237,28 @@ function renderToken(event: ILoopEvent, color: boolean): string {
 
     thinkingShown = true;
 
-    return `\n  ${paint("⠋ thinking…", STYLE.dim, color)}`;
+    return `\n  ${paint("⋯ thinking", STYLE.dim, color)}`;
   }
 
   return paint(event.message, STYLE.dim, color);
+}
+
+/** A shell-command event as a box — exit status drives the accent + glyph (a
+ *  non-zero exit goes red ✗); no output → a one-liner. */
+function renderRun(event: ILoopEvent, color: boolean): string {
+  const ok = event.exitCode === undefined || event.exitCode === 0;
+  const title =
+    event.exitCode === undefined
+      ? event.message
+      : `${event.message} (exit ${event.exitCode})`;
+  const accent = ok ? STYLE.yellow : STYLE.red;
+  const glyph = ok ? GLYPH.run : GLYPH.fail;
+
+  if (event.output === undefined || event.output.length === 0) {
+    return glyphLine(glyph, title, accent, color);
+  }
+
+  return `\n${box(title, bodyLines(event.output), { glyph, accent, color })}\n`;
 }
 
 export function renderEvent(
@@ -213,57 +288,41 @@ export function renderEvent(
       return `\n${paint(event.message, STYLE.dim, color)}\n`;
 
     case "cycle":
-      return `\n${paint(`── ${event.message} ──`, STYLE.cyan + STYLE.bold, color)}\n`;
+      // On screen the turn divider is just noise (the status line carries the
+      // count); keep a minimal boundary only in the plain log for `tail -f`.
+      return color
+        ? ""
+        : `\n── ${event.message.replace(/:?\s*asking model\s*$/i, "")} ──\n`;
 
-    case "create": {
-      const head = `\n  ${paint(`✚ ${event.message}`, STYLE.green + STYLE.bold, color)}\n`;
-
+    case "create":
       return event.content === undefined
-        ? head
-        : `${head}${gutter(highlightTs(event.content, color), color)}\n`;
-    }
+        ? glyphLine(GLYPH.create, event.message, STYLE.green, color)
+        : `\n${box(event.message, bodyLines(highlightTs(event.content, color)), { glyph: GLYPH.create, accent: STYLE.green, color })}\n`;
 
     case "edit": {
-      const head = `\n  ${paint(`✎ ${event.message}`, STYLE.cyan + STYLE.bold, color)}\n`;
-
       if (event.oldString === undefined || event.newString === undefined) {
-        return head;
+        return glyphLine(GLYPH.edit, event.message, STYLE.cyan, color);
       }
 
-      return `${head}${gutter(diff(event.oldString, event.newString, color), color)}\n`;
+      const body = bodyLines(diff(event.oldString, event.newString, color));
+
+      return `\n${box(event.message, body, { glyph: GLYPH.edit, accent: STYLE.cyan, color })}\n`;
     }
 
     case "red":
-      return `\n${paint(`✗ ${event.message}`, STYLE.red + STYLE.bold, color)}\n`;
-
     case "stuck":
-      return `\n${paint(`✗ ${event.message}`, STYLE.red + STYLE.bold, color)}\n`;
+      return `\n${paint(`${GLYPH.fail} ${event.message}`, STYLE.red + STYLE.bold, color)}\n`;
 
     case "validated":
       return event.passed === true
-        ? `${paint(`  ✓ ${event.message}`, STYLE.green, color)}\n`
-        : `${paint(`  • ${event.message}`, STYLE.yellow, color)}\n`;
+        ? `${paint(`  ${GLYPH.done} ${event.message}`, STYLE.green, color)}\n`
+        : `${paint(`  ${GLYPH.bullet} ${event.message}`, STYLE.yellow, color)}\n`;
 
     case "done":
-      return `\n${paint(`✓ ${event.message}`, STYLE.green + STYLE.bold, color)}\n`;
+      return `\n${paint(`${GLYPH.done} ${event.message}`, STYLE.green + STYLE.bold, color)}\n`;
 
-    case "run": {
-      const exit =
-        event.exitCode === undefined
-          ? ""
-          : paint(
-              ` → exit ${event.exitCode}`,
-              event.exitCode === 0 ? STYLE.green : STYLE.red,
-              color
-            );
-      const head = `\n  ${paint(event.message, STYLE.yellow + STYLE.bold, color)}${exit}\n`;
-      const out =
-        event.output !== undefined && event.output.length > 0
-          ? `${gutter(event.output, color)}\n`
-          : "";
-
-      return `${head}${out}`;
-    }
+    case "run":
+      return renderRun(event, color);
 
     case "usage":
       // Logged for the metrics analyzer, but not shown — the status line already
@@ -274,7 +333,8 @@ export function renderEvent(
       return `  ${paint(event.message, STYLE.dim, color)}\n`;
 
     case "timing":
-      return `${paint(`  ⏱ ${event.message}`, STYLE.dim, color)}\n`;
+      // Noise on screen (the status line shows turns + elapsed); log only.
+      return color ? "" : `  ${event.message}\n`;
 
     default:
       return `\n${event.message}\n`;
