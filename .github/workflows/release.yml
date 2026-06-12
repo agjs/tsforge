@@ -64,9 +64,11 @@ jobs:
         working-directory: packages/core
         env:
           NPM_CONFIG_PROVENANCE: "true"
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          registry="//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}"
+          printf '%s\n' "$registry" > "${HOME}/.npmrc"
+          printf '%s\n' "$registry" > .npmrc
           bun publish --access public
 
       - name: Create GitHub Release
