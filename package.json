@@ -46,6 +46,7 @@
     "react-dom": "^19.2.7",
     "typescript": "6.0.3",
     "typescript-eslint": "8.60.0",
+    "@typescript-eslint/parser": "8.60.0",
     "@typescript-eslint/utils": "8.60.0"
   },
   "overrides": {
