@@ -316,7 +316,13 @@ export async function runTask(
       toolCalls: res.toolCalls,
     });
 
-    // Check for TTSR firing: abort generation with corrective guidance + retry
+    // Every model call advances cooldown accounting — including interrupted
+    // ones, otherwise repeatGap rules mis-count after a TTSR retry.
+    ttsrManager?.incrementTurnCount();
+
+    // TTSR interrupts are checked BEFORE degeneration so corrective guidance
+    // lands at the earliest point. If the TTSR retry itself degenerates, the
+    // next iteration's degeneration check catches it.
     if (res.ttsrFired !== undefined) {
       handleTtsrInterrupt(
         res.ttsrFired,
@@ -343,8 +349,6 @@ export async function runTask(
     if (looped !== null) {
       return looped;
     }
-
-    ttsrManager?.incrementTurnCount();
 
     const touchedEditable =
       res.toolCalls.length === 0

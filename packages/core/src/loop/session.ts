@@ -20,6 +20,11 @@ import { flags } from "../config";
 import { readFiles } from "../lib/fs";
 import { validate, type ErrorParser } from "../validate";
 import { detectStack } from "../stack-detection";
+import {
+  loadTsforgeConfig,
+  normalizeRuleOverrides,
+  resolveActivePacks,
+} from "../config/tsforge-config";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
 import type { Reporter } from "./loop.types";
 import { CHAT_SYSTEM, COMPACT_SYSTEM } from "./prompt";
@@ -423,7 +428,16 @@ export class Session {
     };
 
     const report = cfg.report ?? ((): void => undefined);
-    const stackProfile = await detectStack(cfg.cwd);
+    // Same stack + tsforge.config.json resolution as the eval path
+    // (resolveStackForRun in run.ts) — interactive users get identical
+    // pack selection and rule-severity overrides.
+    const detected = await detectStack(cfg.cwd);
+    const projectConfig = await loadTsforgeConfig(cfg.cwd);
+    const stackProfile = {
+      ...detected,
+      packs: resolveActivePacks(detected.packs, projectConfig),
+    };
+    const ruleOverrides = normalizeRuleOverrides(projectConfig);
 
     const ctx: ILoopCtx = {
       task,
@@ -433,6 +447,7 @@ export class Session {
       parse: cfg.parse,
       report,
       stackProfile,
+      ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
       messages:
         cfg.history !== undefined && cfg.history.length > 0
           ? [...cfg.history]
