@@ -54,7 +54,7 @@ When the user asks to release, run the script. Do not ask them to commit first.
 3. Choose bump: first npm publish → `--tag-only`. Otherwise `patch` / `minor` / `major` unless they specify.
 4. Run `./scripts/release.sh <bump> --yes`
 5. On failure: `gh run view --log-failed` on the release workflow
-6. Report: `bun install -g tsforge@VERSION`
+6. Report: `bun install -g @agjs/tsforge@VERSION`
 
 Do not manually `npm publish` unless the user explicitly asks to bypass CI.
 
@@ -72,6 +72,7 @@ Do not manually `npm publish` unless the user explicitly asks to bypass CI.
 | `main diverged from origin/main` | resolve rebase conflict, re-run |
 | `tag vX.Y.Z already exists` | next semver or delete abandoned tag |
 | npm publish 401/403 | Regenerate `NPM_TOKEN`: granular token with **Read and write**, **All packages**, **Bypass 2FA for automation** (or classic Automation token). Verify npm email. `gh secret set NPM_TOKEN` |
+| npm publish 403 name conflict | Unscoped `tsforge` conflicts with `ts-forge` on npm — publish as `@agjs/tsforge` |
 | unsigned commit rejected | enable GPG/SSH signing |
 
 ## Related docs

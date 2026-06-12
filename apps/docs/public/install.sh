@@ -42,8 +42,8 @@ ensure_bun() {
 }
 
 install_from_npm() {
-  info "Trying npm registry (bun install -g tsforge)..."
-  if bun install -g tsforge@latest; then
+  info "Trying npm registry (bun install -g @agjs/tsforge)..."
+  if bun install -g @agjs/tsforge@latest; then
     info "Installed tsforge from npm."
     print_done
     return 0

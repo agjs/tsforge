@@ -61,7 +61,7 @@ jobs:
             exit 1
           fi
           echo "version=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Publishing tsforge@${PKG_VERSION}"
+          echo "Publishing @agjs/tsforge@${PKG_VERSION}"
 
       - name: Validate
         run: bun run validate
@@ -82,7 +82,7 @@ jobs:
             Install:
 
             ```bash
-            bun install -g tsforge@${{ steps.version.outputs.version }}
+            bun install -g @agjs/tsforge@${{ steps.version.outputs.version }}
             ```
 
             Or use the install script:

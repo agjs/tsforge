@@ -259,7 +259,7 @@ fi
 if gh run watch "$run_id" --exit-status; then
   info "Release workflow succeeded."
   gh release view "$TAG" --web 2>/dev/null || gh release view "$TAG"
-  printf '\nInstall: bun install -g tsforge@%s\n' "$NEW_VERSION"
+  printf '\nInstall: bun install -g @agjs/tsforge@%s\n' "$NEW_VERSION"
 else
   die "release workflow failed. See: gh run view $run_id --log-failed"
 fi
