@@ -1,0 +1,37 @@
+---
+title: Stack detection
+description: How tsforge picks ESLint rule packs from your package.json.
+---
+
+**Rule packs** are bundles of lint rules for specific stacks (React, Drizzle, Elysia, BullMQ, etc.). Before the gate runs, tsforge has to know which packs apply to **your** repo.
+
+**Stack detection** is that step. tsforge reads `package.json` (and sometimes config files like `drizzle.config.ts`), matches what it finds against a built-in list, and turns on the matching packs. You do not maintain a pack list by hand for every session.
+
+Example: if `elysia` and `drizzle-orm` are in your dependencies, tsforge enables the Elysia and Drizzle packs automatically.
+
+## Step by step
+
+1. Read `dependencies` and `devDependencies` from `package.json`
+2. Match package names (and optional file patterns) to known stacks
+3. Add always-on baseline packs for TypeScript projects
+4. Apply any overrides from [tsforge.config.json](/guardrails/config/)
+5. Run the enabled rules when the gate executes
+
+Detection runs when tsforge builds the gate and when it adds stack hints to the model prompt.
+
+## Tuning detection
+
+Optional file at your repo root: [tsforge.config.json](/guardrails/config/).
+
+| Field | What it does |
+| --- | --- |
+| `stack` | Force a stack label and its packs even if detection is unsure |
+| `packs.include` | Turn on extra pack IDs after detection |
+| `packs.exclude` | Turn off specific pack IDs |
+| `rules` | Set individual rules to `error`, `warn`, or `off` |
+
+## Full pack list
+
+See [Rule packs](/guardrails/rule-packs/) for every pack ID and [Rule catalog](/reference/rules-catalog/) for individual rule text and fix hints.
+
+→ [Big picture](/big-picture/) · [How tsforge builds the gate](/loop/gate-floor/)

@@ -1,44 +1,26 @@
 ---
-title: Write diagnostics — instant type feedback
-description: Append per-file TypeScript diagnostics to edit/create tool results. Cap of 5.
+title: Write diagnostics
+description: Type errors shown immediately after each edit, before the full gate runs.
 ---
 
-:::tip[Status: built + green]
-`packages/core/src/lsp/` write-feedback path. Default ON — set `TSFORGE_LSP_WRITE_FEEDBACK=0` to disable.
-:::
+The **session gate** runs when tsforge decides a task is finished. That can take a while on a big repo.
 
-## What it adds
+**Write diagnostics** are faster feedback: after every successful `edit` or `create`, tsforge typechecks **just that file** and appends any errors to the tool result. The model can fix mistakes before the next full gate run.
 
-After every successful `edit` or `create`, the harness runs the TypeScript language service on the touched file and **appends diagnostics** to the tool result.
+Default ON. Set `TSFORGE_LSP_WRITE_FEEDBACK=0` to disable.
 
-The model sees type errors immediately — before the full gate runs — and can fix them on the next turn.
-
-## Output shape
-
-Diagnostics appear as a trailing block on the tool result:
+## What it looks like
 
 ```
 ✓ edited src/foo.ts
 
 Type diagnostics (src/foo.ts):
   L12:5 TS2322: Type 'string' is not assignable to type 'number'.
-  L18:1 TS6133: 'unused' is declared but never used.
   …and 3 more
 ```
 
-## Cap
+At most **5** errors are shown; extra ones are summarized as `…and N more`.
 
-| Setting | Value |
-| --- | --- |
-| Max diagnostics shown | **5** |
-| Overflow | `…and N more` suffix |
+Write diagnostics do not replace the gate. They shorten the feedback loop.
 
-Keeps tool results bounded so context doesn't balloon on large files.
-
-## Disable
-
-```bash
-TSFORGE_LSP_WRITE_FEEDBACK=0 bun packages/core/src/cli.ts
-```
-
-Works alongside [hashline](/uplift/hashline/) and the [validation engine](/loop/validation/) — write diagnostics are per-edit; the gate is whole-project.
+→ [How the gate is built](/loop/gate-floor/) · [TypeScript language server](/lsp/typescript-server/) · [When the gate fails](/loop/validation/)

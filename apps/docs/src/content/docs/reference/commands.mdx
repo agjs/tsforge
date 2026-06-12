@@ -1,0 +1,58 @@
+---
+title: Commands
+description: Day-to-day CLI commands for tsforge development and validation.
+---
+
+## Run tsforge
+
+After [install](/quickstart/):
+
+```bash
+tsforge
+tsforge --dir ./my-app
+tsforge "add tests" --files "src/**" --accept "bun test"
+```
+
+From a monorepo checkout (contributors):
+
+```bash
+bun run tsforge
+```
+
+Environment variables: [Environment variables](/reference/flags/). Interactive usage: [Interactive CLI](/cli/interactive/).
+
+## Merge gate (repo root)
+
+Commands for people working on the tsforge repository itself:
+
+```bash
+bun run validate   # typecheck + lint + format:check + test — run before every push
+```
+
+| Command | Proves |
+| --- | --- |
+| `bun run typecheck` | strict TypeScript |
+| `bun run lint` | ESLint on packages |
+| `bun run format:check` | Prettier |
+| `bun test packages` | full test suite |
+
+## Doc generators
+
+```bash
+bun run rules:build    # regenerate packages/core/RULES.md
+bun run rules:docs     # regenerate rule-docs.generated.json
+```
+
+## Eval scripts
+
+Run from a cloned tsforge repo (not shipped with the `tsforge` npm package):
+
+```bash
+# A/B sweep — compare feature variants
+TSFORGE_FEATURE_VARIANTS=ttsr,hashline bun run eval:sweep
+
+# Compare edit mechanisms across run dirs
+bun run eval:benchmark evals/run-a-* evals/run-b-*
+```
+
+See [A/B testing](/eval/ab-testing/).

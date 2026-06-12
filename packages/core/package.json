@@ -1,12 +1,29 @@
 {
-  "name": "@tsforge/core",
+  "name": "tsforge",
   "type": "module",
-  "private": true,
   "version": "0.1.0",
   "license": "MIT",
-  "description": "tsforge core — the walking skeleton of the spec-driven implement loop.",
+  "description": "TypeScript coding harness with a deterministic gate, stack-aware guardrails, and stream-level correction.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agjs/tsforge.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://tsforge.dev",
+  "bugs": "https://github.com/agjs/tsforge/issues",
   "bin": {
     "tsforge": "./src/cli.ts"
+  },
+  "files": [
+    "src",
+    "strict.eslint.config.mjs",
+    "strict.web.eslint.config.mjs"
+  ],
+  "engines": {
+    "bun": ">=1.3.14"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "bun test"

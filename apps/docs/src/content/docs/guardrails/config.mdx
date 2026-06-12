@@ -1,28 +1,28 @@
 ---
-title: tsforge.config.json — project overrides
-description: Force stack, include/exclude packs, tune rule severities. Applied after stack detection.
+title: tsforge.config.json
+description: Optional project file to force stacks, include or exclude rule packs, and tune severities.
 ---
 
-:::tip[Status: built + green]
-`packages/core/src/config/tsforge-config.ts`. Loaded from project root on every gate run.
-:::
+You do not need this file to use tsforge. Stack detection works from `package.json` alone.
 
-## Schema
+Add **`tsforge.config.json`** at your repo root when you want to override what tsforge detected: force an Elysia stack, disable a pack you do not use, or downgrade a noisy rule to a warning.
+
+## Fields
 
 | Field | Type | Purpose |
 | --- | --- | --- |
-| `stack` | `string` | force-enable a stack (skip detection heuristics) |
-| `packs.include` | `string[]` | add packs after detection |
-| `packs.exclude` | `string[]` | remove packs after detection |
-| `rules` | `Record<string, "error" \| "warn" \| "off">` | override ESLint pack + meta-rule severities |
+| `stack` | string | Force-enable a stack and its packs |
+| `packs.include` | string[] | Add packs after detection |
+| `packs.exclude` | string[] | Remove packs after detection |
+| `rules` | object | Per-rule severity: `"error"`, `"warn"`, or `"off"` |
 
-**Resolution order:** detected packs → `stack` force-add → `include` → `exclude` → dedupe + sort.
+Resolution order: detect from the repo → apply `stack` → apply `include` → apply `exclude` → dedupe.
 
-**Missing/invalid file:** empty config `{}` with stderr warnings.
+If the file is missing, tsforge uses detection only. If JSON is invalid, tsforge warns on stderr and continues with an empty config.
 
-## Rule key format
+## Rule names
 
-Keys accept bare rule names or `tsforge/`-prefixed names:
+Bare names and `tsforge/`-prefixed names both work:
 
 ```json
 {
@@ -32,7 +32,7 @@ Keys accept bare rule names or `tsforge/`-prefixed names:
 }
 ```
 
-## Complete example
+## Example
 
 ```json
 {
@@ -49,8 +49,6 @@ Keys accept bare rule names or `tsforge/`-prefixed names:
 }
 ```
 
-This forces the Elysia stack, adds structured-logging, drops BullMQ, and tunes three rule severities.
+This project is treated as Elysia, keeps structured-logging rules, skips BullMQ rules, and softens one comment rule.
 
-## Env passthrough
-
-Gate subprocesses receive resolved packs via `TSFORGE_PACKS` and rule overrides via `TSFORGE_RULE_OVERRIDES` (JSON). See [flags](/reference/flags/).
+→ [Stack detection](/guardrails/stack-detection/) · [Rule packs](/guardrails/rule-packs/) · [Environment variables](/reference/flags/)

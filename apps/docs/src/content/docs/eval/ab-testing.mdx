@@ -1,66 +1,157 @@
 ---
-title: A/B testing — feature sweeps
-description: Compare TTSR, hashline, and write-feedback variants across benchmark runs.
+title: A/B testing
+description: Run feature sweeps, compare edit mechanisms, and land defaults from measured wins.
 ---
 
-:::tip[Status: built + green]
-`packages/core/scripts/sweep.ts` + `edit-benchmark.ts`. Full guide: [EVAL_GUIDE.md](https://github.com/agjs/tsforge/blob/main/EVAL_GUIDE.md).
-:::
+Compare [stream rules (TTSR)](/uplift/ttsr/), [hashline](/uplift/hashline/), and [write diagnostics](/uplift/write-diagnostics/) settings across benchmark runs before changing feature defaults. See [Big picture](/big-picture/) for what each feature does.
 
-## Feature flags under test
+## Feature flags
 
-| Variable | Default | Disables when |
+| Variable | Default | Disable |
 | --- | --- | --- |
 | `TSFORGE_TTSR` | ON | `=0` |
 | `TSFORGE_HASHLINE` | ON | `=0` |
 | `TSFORGE_LSP_WRITE_FEEDBACK` | ON | `=0` |
 
-## Sweep: hashline on/off
+Full flag reference: [Environment variables](/reference/flags/).
+
+## Running a sweep
+
+`bun run eval:sweep` accepts `TSFORGE_FEATURE_VARIANTS` — a comma-separated list of dimensions to sweep (cartesian product).
+
+### Hashline on/off
 
 ```bash
 TSFORGE_SEED=money \
 TSFORGE_TEMPS=0 \
 TSFORGE_REPEATS=2 \
 TSFORGE_FEATURE_VARIANTS=hashline \
-bun packages/core/scripts/sweep.ts
+bun run eval:sweep
 ```
 
-Creates 4 runs: `money-hashline=on-t0-...` and `money-hashline=off-t0-...` (2 repeats each).
+Creates four runs: `money-hashline=on-t0-...` and `money-hashline=off-t0-...` (two repeats each).
 
-## Sweep: TTSR × hashline
+### TTSR × hashline
 
 ```bash
 TSFORGE_SEED=saas-crm \
 TSFORGE_TEMPS=0.5 \
 TSFORGE_REPEATS=3 \
 TSFORGE_FEATURE_VARIANTS=ttsr,hashline \
-bun packages/core/scripts/sweep.ts
+bun run eval:sweep
 ```
 
-Runs `3 repeats × 2 temps × 4 variants = 24` runs. Each dir has `run.log` + `result.json`.
+Runs `3 repeats × 2 temps × 4 variants = 24` runs with IDs like `saas-crm-ttsr=on,hashline=off-t0.5-...`.
+
+Each run directory contains `run.log` (human transcript) and `result.json` (structured metrics + feature flags).
 
 ## Compare edit mechanisms
 
+After a sweep, use `bun run eval:benchmark` to compare edit tool performance:
+
 ```bash
-bun packages/core/scripts/edit-benchmark.ts \
+bun run eval:benchmark \
   evals/money-hashline=on-t0-* \
   evals/money-hashline=off-t0-*
 ```
 
-### Sample output
+Output table compares variants on:
 
-| Metric | hashline=on | hashline=off |
-| --- | --- | --- |
-| `edit` calls | 12 | 18 |
-| `edit_lines` calls | 24 | 0 |
-| stale-anchor retries | 3 | — |
-| gate green rate | 85% | 70% |
+| Metric | Meaning |
+| --- | --- |
+| `edit` / `edit_lines` calls | tool usage and success rate |
+| Stale-anchor recovery | hashline 3-way merge attempts |
+| Mean tool-args bytes | token-cost proxy |
+| Gate failures | red turns before green |
+| Turns to green | loop efficiency |
+| Pass rate + quality | overall outcome |
 
-## What to compare
+### JSON export
 
-- **Pass rate** — did the run reach gate green?
-- **Edit success** — `edit` vs `edit_lines` call counts and failure reasons
-- **Token cost** — total tokens per run (in `result.json`)
-- **Repair cycles** — how many EDIT→VALIDATE loops before done/stuck
+```bash
+bun run eval:benchmark \
+  --json evals/comparison.json \
+  evals/money-hashline=on-t0-* \
+  evals/money-hashline=off-t0-*
+```
 
-Full workflow, judge setup, and analysis scripts: [EVAL_GUIDE.md](https://github.com/agjs/tsforge/blob/main/EVAL_GUIDE.md).
+## Run artifacts
+
+Each run directory contains:
+
+- **`run.log`** — live event transcript (`renderEvent()` pipeline; source of truth for analysis)
+- **`result.json`** — structured metrics, for example:
+
+```json
+{
+  "seed": "money",
+  "runId": "money-hashline=on-t0-20260612-120000-1",
+  "temperature": 0,
+  "features": { "TSFORGE_HASHLINE": "1" },
+  "status": "done",
+  "cycles": 5,
+  "ms": 42000,
+  "quality": 4,
+  "tasks": [{ "cycles": 5, "edits": 3, "regressions": 0 }]
+}
+```
+
+## Events in run.log
+
+`bun run eval:benchmark` parses these patterns:
+
+| Pattern | Meaning |
+| --- | --- |
+| `✎ edit` | standard edit tool |
+| `edit_lines` | hashline edit tool |
+| `edit_lines ... REJECTED` | stale-anchor or parse failure |
+| `edit ... REJECTED` | out-of-scope or size rejection |
+| `snapshot merge` | stale-anchor recovery (3-way merge) |
+| `turn N: red (K errors)` | gate failure |
+| `· turn N: GREEN` | gate passed |
+| `turn N: asking model` | turn count |
+
+## How to read results
+
+**Edit success** — if `hashline=on` has higher `edit_lines` success than `hashline=off` `edit` success, hashline is reducing rejections.
+
+**Stale recovery** — non-zero recovery counts on hashline-on runs show 3-way merge is active; correlate with pass rate.
+
+**Turns to green** — lower on feature-on variants means less loop churn.
+
+**Token efficiency** — smaller `mean args (bytes)` at similar success rate is better.
+
+**Pass rate + quality** — confirm enabling a feature does not regress outcomes beyond noise.
+
+## Landing a new feature
+
+1. Ship the flag with a sensible default.
+2. Baseline sweep (small: 2 repeats, temp=0):
+
+```bash
+TSFORGE_SEED=money TSFORGE_TEMPS=0 TSFORGE_REPEATS=2 \
+bun run eval:sweep
+```
+
+3. Disable the feature, same seed/temp/repeats:
+
+```bash
+TSFORGE_SEED=money TSFORGE_TEMPS=0 TSFORGE_REPEATS=2 \
+TSFORGE_<FEATURE>=0 bun run eval:sweep
+```
+
+4. Compare with `bun run eval:benchmark` or `analyze-runs.ts`.
+5. Document findings in the PR (pass rate, edit success, token delta).
+6. Set the default from data and merge.
+
+## Debugging incomplete metrics
+
+```bash
+grep "edit" run.log              # edit tool calls
+grep "REJECTED" run.log          # rejections
+grep "tool_input_rejected" run.log
+grep "repair:" run.log           # L0–L3 repairs
+grep "ttsr" run.log              # TTSR interrupts
+```
+
+→ [Commands](/reference/commands/) · [Repair ladder](/uplift/repair-ladder/)

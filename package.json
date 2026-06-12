@@ -3,15 +3,21 @@
   "type": "module",
   "version": "0.1.0",
   "license": "MIT",
-  "description": "A specialized local AI coding harness for TypeScript web development, built around Qwen3.6-27B. Built greenfield to be understood inside out.",
+  "description": "TypeScript coding harness with a deterministic gate, stack-aware guardrails, and stream-level correction.",
   "scripts": {
+    "tsforge": "bun --cwd packages/core ./src/cli.ts",
     "typecheck": "tsc -p packages/core/tsconfig.json",
     "lint": "eslint packages",
     "lint:fix": "eslint packages --fix",
     "format": "prettier --write \"packages/**/*.ts\"",
     "format:check": "prettier --check \"packages/**/*.ts\"",
     "test": "bun test packages",
-    "validate": "bun run typecheck && bun run lint && bun run format:check && bun run test"
+    "validate": "bun run typecheck && bun run lint && bun run format:check && bun run test",
+    "rules:build": "bun packages/core/scripts/build-rules-md.ts",
+    "rules:docs": "bun packages/core/scripts/build-rule-docs.ts",
+    "eval:sweep": "bun packages/core/scripts/sweep.ts",
+    "eval:spec": "bun packages/core/scripts/eval-spec.ts",
+    "eval:benchmark": "bun packages/core/scripts/edit-benchmark.ts"
   },
   "workspaces": ["apps/*", "packages/*"],
   "packageManager": "bun@1.3.14",

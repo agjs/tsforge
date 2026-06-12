@@ -1,49 +1,30 @@
 ---
-title: File ops — edit, edit_lines, create
-description: Mutate the working tree safely. edit = exact str_replace; edit_lines = hashline; create = no-clobber new file.
+title: File ops
+description: The three ways the model writes files in your repo.
 ---
 
-:::tip[Status: built + green + live-validated]
-`packages/core/src/files`. Two edit tools + create; hashline default ON.
-:::
+The model changes your codebase through three tools. All of them can trigger immediate type feedback after a successful write ([Write diagnostics](/uplift/write-diagnostics/)).
 
-## edit — exact string replace
+## edit (find and replace)
 
-`applyEdit(cwd, { file, oldString, newString })`
+The model provides an exact `oldString` and `newString` inside a file.
 
-| Matches | Result |
+| Outcome | Meaning |
 | --- | --- |
-| 1 | `{ ok: true }`, file written |
-| 0 | `{ ok: false, reason: "not-found" }` |
-| >1 | `{ ok: false, reason: "ambiguous", matches }` |
-| missing file | `{ ok: false, reason: "missing-file" }` |
+| 1 match | file updated |
+| 0 matches | snippet not found |
+| 2+ matches | ambiguous; model must add more context |
 
-Best when the model has full file context and can produce a unique snippet.
+Best when the model has read the full file and can quote a unique snippet.
 
-## edit_lines — hashline line edits
+## edit_lines (line ranges)
 
-`applyHashlineEdit(cwd, { file, anchor, ops })`
+Line-number edits anchored to a content hash from the last read. Safer when the file might have changed between read and write.
 
-Content-hash-anchored line-range edits with snapshot recovery on stale anchors.
+→ [Hashline edits](/uplift/hashline/)
 
-| Reason | Meaning |
-| --- | --- |
-| `stale-anchor` | hash mismatch — re-read for current `#HASH` |
-| `stale-anchor-conflict` | 3-way merge failed — adjust ops |
-| `no-anchor` | must read file first |
+## create (new file)
 
-Full format: [hashline](/uplift/hashline/). Disable with `TSFORGE_HASHLINE=0`.
+Writes a new file only. Refuses to overwrite an existing path. Creates parent directories as needed.
 
-## create — new file only
-
-`applyCreate(cwd, { file, content })`
-
-Refuses to overwrite (`{ ok: false, reason: "exists" }`). Parent dirs auto-created.
-
-## Write diagnostics
-
-Both edit tools append [instant type diagnostics](/uplift/write-diagnostics/) on success (default ON).
-
-## Deliberately absent (next)
-
-LSP-driven renames, multi-file atomic edits, and **scope enforcement** — rejecting edits outside a task's `files:` globs.
+→ [Big picture](/big-picture/) · [Interactive CLI](/cli/interactive/)

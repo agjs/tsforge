@@ -1,18 +1,36 @@
 ---
 title: tsforge
-description: A specialized local AI coding harness for TypeScript web development — built greenfield to be understood inside out.
+description: "TypeScript coding harness with a deterministic gate, stack-aware guardrails, and stream-level correction."
+template: splash
+hero:
+  tagline: Run a model against your repo. tsforge edits files, runs tsc and ESLint, and loops until the gate passes.
+  actions:
+    - text: Quickstart
+      link: /quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: Big picture
+      link: /big-picture/
+      icon: right-arrow
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/agjs/tsforge
+      icon: external
+      variant: minimal
 ---
 
-This site is not marketing. It is **our living understanding of the harness** — written before the code, one slice at a time.
+tsforge drives a model against your TypeScript repo. You define a task; the harness edits files, validates, and repairs until the gate passes.
 
-We build greenfield for one reason: to understand the system *inside out*. Building is the vehicle; comprehension is the destination. So every part must justify its own existence — if we can't explain it to a six-year-old, we don't understand it yet, and we don't build it yet.
+Read [Big picture](/big-picture/) for how the loop fits together and why the project exists.
 
-## How to read this site
+| Subsystem | Docs |
+| --- | --- |
+| CLI & sessions | [Interactive CLI](/cli/interactive/) |
+| Gate & repair loop | [How the gate is built](/loop/gate-floor/) · [When the gate fails](/loop/validation/) |
+| Specs & benchmarks | [Spec format](/spec/format/) |
+| TypeScript LSP | [Language server](/lsp/typescript-server/) |
+| Web apps from scratch | [Web scaffolding](/scaffold/web/) |
+| ESLint packs & meta-rules | [Stack detection](/guardrails/stack-detection/) · [Rule packs](/guardrails/rule-packs/) |
+| Model helpers | [Fix bad tool calls](/uplift/repair-ladder/) · [Safer line edits](/uplift/hashline/) · [Stop bad output early](/uplift/ttsr/) |
 
-- **[North star](/vision/north-star/)** — what we believe we'll achieve. Everything else is derived by working backwards from it.
-- **[Guardrails](/guardrails/rule-packs/)** — stack-aware ESLint packs, meta-rules, and `tsforge.config.json` overrides.
-- **[Local-model uplift](/uplift/repair-ladder/)** — repair ladder, hashline edits, TTSR, write diagnostics.
-- **[Eval](/eval/ab-testing/)** — A/B sweeps and edit-benchmark comparison.
-- **[Reference / flags](/reference/flags/)** — canonical list of every `TSFORGE_*` env var.
-
-The site grows one section at a time. Each subsystem gets its own page when its slice begins, written in this order: **doc (the outcome) → test (the acceptance contract) → build (to green)**. Docs explain the *why*; the gate enforces the *what*.
+Start with the [Quickstart](/quickstart/).

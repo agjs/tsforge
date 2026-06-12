@@ -1,15 +1,17 @@
 ---
-title: Hashline — content-hash-anchored edits
-description: Read format ¶path#HASH, line-range edit grammar, stale-anchor recovery via snapshot merge.
+title: Safer line edits
+description: Line-number edits tied to a file hash so stale reads do not corrupt files.
 ---
 
-:::tip[Status: built + green]
-`packages/core/src/files/hashline.ts` + `hashline-format.ts`. Default ON — set `TSFORGE_HASHLINE=0` to disable.
-:::
+The `edit` tool needs an exact text match. The `edit_lines` tool (hashline) edits by **line numbers** from the model's last read, with a **hash** proving the file has not changed since.
+
+If the hash still matches, the edit applies. If the file drifted, tsforge tries recovery instead of silently writing to the wrong lines.
+
+Default ON. Set `TSFORGE_HASHLINE=0` to disable.
 
 ## Read format
 
-Every `read` on a tracked file emits hashline annotations:
+When the model reads a file with hashline enabled, it sees:
 
 ```
 ¶src/app.ts#3F2A
@@ -17,43 +19,24 @@ Every `read` on a tracked file emits hashline annotations:
 2:export function main() {}
 ```
 
-| Element | Syntax |
+`¶path#HASH` is the anchor. `HASH` is four hex characters from the file contents at read time.
+
+## Edit format
+
+| Operation | Syntax |
 | --- | --- |
-| Header | `¶path#HASH` — 4-char uppercase hex (xxHash32) |
-| Lines | `N:text` — 1-indexed |
+| Replace lines | `replace N..M:` then lines prefixed with `+` |
+| Delete lines | `delete N` or `delete N..M` |
+| Insert lines | `insert before N:` or `insert after N:` |
 
-## Edit grammar (`edit_lines` tool)
+Line numbers are 1-based. Multiple ops apply bottom-up so line numbers stay stable.
 
-| Op | Syntax | Payload |
-| --- | --- | --- |
-| Replace | `replace N..M:` | lines prefixed `+` |
-| Delete | `delete N` or `delete N..M` | none |
-| Insert | `insert before N:` or `insert after N:` | lines prefixed `+` |
+## If the hash is stale
 
-Ops apply **bottom-up** (descending line order). Ranges are 1-indexed, inclusive.
-
-### Worked example
-
-```
-¶src/app.ts#3F2A
-replace 2..2:
-+export function main(): void {}
-insert after 1:
-+import type { Bar } from "./bar";
-```
-
-## Stale anchor flow
-
-| Case | Outcome |
+| Result | Meaning |
 | --- | --- |
-| Hash matches live file | apply directly, write, record new snapshot |
-| Hash mismatch + snapshot in store | 3-way merge: snapshot=base, live=theirs, edited-snapshot=ours |
-| Re-anchor fails | `stale-anchor-conflict` — re-read and adjust |
-| Hash mismatch, no snapshot | `stale-anchor` — re-read for current hash |
-| Hash omitted | `no-anchor` — must read first |
+| Hash matches | edit applies |
+| Hash mismatch | tsforge tries a 3-way merge from a snapshot |
+| Merge fails | model must re-read and retry |
 
-## Snapshot store
-
-Session keeps up to **4** versions per file (LRU), **30** tracked paths max. Same content reuses hash.
-
-Contrast with [edit engine](/edit/engine/) — `edit` uses exact string match; hashline uses line ranges + content hash.
+→ [File ops](/edit/engine/) · [Big picture](/big-picture/)

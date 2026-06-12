@@ -63,8 +63,8 @@ expect(result[0].messageId).toBe("noDirectProcessEnv");
 5. Add behavioral tests under `packages/core/tests/` and regenerate docs:
 
 ```bash
-bun packages/core/scripts/build-rule-docs.ts
-bun packages/core/scripts/build-rules-md.ts
+bun run rules:docs
+bun run rules:build
 ```
 
 ## Add a meta-rule

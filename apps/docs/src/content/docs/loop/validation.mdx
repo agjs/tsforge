@@ -1,42 +1,49 @@
 ---
-title: Validation engine — structured errors + repair
-description: Turn a failing gate into a structured error set, then loop EDIT→VALIDATE descending that set until green, stuck, or capped.
+title: When the gate fails
+description: What happens when the gate fails, how errors get back to the model, and when the loop stops.
 ---
 
-:::tip[Status: built + green]
-`packages/core/src/validate` + repair loop in `src/loop/run.ts`. Gate includes ESLint pack rules + meta-rules.
-:::
+The **gate** is tsforge's pass/fail test. The model edits code; tsforge runs the gate; if anything fails, the model sees a list of real errors and gets another turn.
 
-## What it adds over the skeleton
+tsforge never trusts "I fixed it" from the model. It trusts exit code 0 from the acceptance command. See [How tsforge builds the gate](/loop/gate-floor/) for how that command is chosen.
 
-The skeleton's gate was a boolean. Now a failing gate produces a **structured error set**, and `runTask` runs a real **REPAIR loop** that feeds the model the standing errors each cycle.
+## What usually runs inside the gate
 
-- **Error set** — `ErrorItem { key, file?, line?, rule?, message }`. A failing gate **always** has ≥1 error (empty output still yields one).
-- **Diff** — `diffErrorSets` → `{ fixed, introduced, remaining }`; `shrank` = the set got smaller (progress).
-- **Loop** — `RED → (EDIT → VALIDATE)*`. Stops at: `done` (gate green), `stuck/stalled` (no shrink for **N=3** cycles), or `stuck/cap` (**12** cycles).
-- **Parsers** — `parseTsc`, `parseEslintJson` (carries custom plugin rule ids), and `genericErrors` (fallback).
+For a normal TypeScript repo, the gate combines:
 
-## Gate composition
+- **TypeScript** (`tsc --noEmit`) catches type errors
+- **ESLint packs** catch stack conventions (component layout, logging, Drizzle patterns, etc.)
+- **Meta-rules** catch repo files ESLint does not usually lint (`package.json`, CI workflows, missing test siblings)
+- **Format and tests** when the gate ladder includes them (common on web apps)
 
-| Layer | Source | Examples |
-| --- | --- | --- |
-| TypeScript | `tsc --noEmit` | TS2322, TS6133 |
-| ESLint packs | [rule packs](/guardrails/rule-packs/) | `@tsforge/no-direct-process-env` |
-| Meta-rules | [meta-rules](/guardrails/meta-rules/) | `test-sibling-required`, `package-exact-deps` |
-| Format + tests | `prettier --check`, `bun test` | format drift, test failures |
+[Stack detection](/guardrails/stack-detection/) picks ESLint packs from your dependencies. [tsforge.config.json](/guardrails/config/) can turn packs or rules up/down.
 
-Stack detection picks packs; [tsforge.config.json](/guardrails/config/) overrides them.
+## The repair loop
 
-## Pieces
+In short:
 
-| Module | Does |
+```
+gate fails → model edits → gate runs again → repeat until pass or stop
+```
+
+The loop stops when one of these happens:
+
+| Stop reason | Meaning |
 | --- | --- |
-| `validate/errors.ts` | `ErrorItem`/`ErrorSet`, `diffErrorSets`, `shrank` |
-| `validate/parse.ts` | `parseTsc`, `parseEslintJson`, `genericErrors`, `parserFor` |
-| `validate/validate.ts` | run gate → `{ passed, errors, output }` (≥1 error on failure) |
-| `loop/run.ts` | REPAIR loop + stall (N=3) + hard cap (12) |
-| `detect-gate.ts` | assemble strict ESLint config from enabled packs |
+| **Done** | Gate passed. Task complete. |
+| **Stalled** | Same errors for 3 cycles with no progress. tsforge gives up on this task. |
+| **Cap** | 12 repair cycles hit. tsforge gives up to avoid infinite churn. |
 
-## Deliberately absent (next)
+When the gate fails, tsforge sends structured errors (file, line, rule name, message) back to the model, not a generic failure blob. That is what makes repair workable.
 
-Tiered/scoped checks per edit, wiring the loop's `stuck` into **escalate → notify**, and surfacing the error-set *diff* (not just the full set) to the agent.
+## Internal tracking (for debugging)
+
+If you read logs or eval output, you may see:
+
+- **Error set**: the list of failures from the last gate run
+- **Diff**: which errors were fixed, newly introduced, or still open since the previous run
+- **Parsers**: tsforge reads `tsc` and ESLint JSON output when available
+
+Most users never touch this. It matters when tuning evals or reading `--log` JSONL output.
+
+→ [Big picture](/big-picture/) · [How tsforge builds the gate](/loop/gate-floor/) · [Model agent](/agent/model-agent/)

@@ -11,15 +11,21 @@
 </p>
 
 <p align="center">
-  <strong>Flagship-quality TypeScript from a local model.</strong><br />
-  An opinionated coding harness for Qwen-class local models — deterministic gate, stack-aware guardrails, stream-level correction.
+  <strong>TypeScript coding harness with a deterministic gate.</strong><br />
+  Stack-aware guardrails, stream-level correction, and a repair loop until your acceptance check passes.
 </p>
 
 <p align="center">
-  <a href="https://tsforge.dev"><img src="https://img.shields.io/badge/tsforge.dev-4ade80?style=for-the-badge&labelColor=090909" alt="tsforge.dev"></a>
-  <a href="https://github.com/agjs/tsforge/tree/main/packages/core"><img src="https://img.shields.io/badge/packages--core-4ade80?style=for-the-badge&labelColor=090909" alt="packages/core"></a>
-  <a href="https://github.com/agjs/tsforge/tree/main/apps/docs"><img src="https://img.shields.io/badge/apps--docs-4ade80?style=for-the-badge&labelColor=090909" alt="apps/docs"></a>
+  <a href="https://tsforge.dev"><img src="https://img.shields.io/badge/tsforge.dev-2563eb?style=for-the-badge&labelColor=090909" alt="tsforge.dev"></a>
+  <a href="https://github.com/agjs/tsforge/tree/main/packages/core"><img src="https://img.shields.io/badge/packages--core-2563eb?style=for-the-badge&labelColor=090909" alt="packages/core"></a>
+  <a href="https://github.com/agjs/tsforge/tree/main/apps/docs"><img src="https://img.shields.io/badge/apps--docs-2563eb?style=for-the-badge&labelColor=090909" alt="apps/docs"></a>
 </p>
+
+Documentation lives at [tsforge.dev](https://tsforge.dev) — start with the [Quickstart](https://tsforge.dev/quickstart/).
+
+## Why
+
+tsforge started as an experiment: could a 27B model produce merge-ready TypeScript if the harness enforced `tsc`, stack rules, and stream corrections? It could. The same guardrails work with any OpenAI-compatible model. [Read the origin story on tsforge.dev](https://tsforge.dev/big-picture/).
 
 ## What it does
 
@@ -35,10 +41,9 @@
 ## Quickstart
 
 ```bash
-git clone https://github.com/agjs/tsforge.git && cd tsforge
-bun install
+curl -fsSL https://tsforge.dev/install.sh | bash
+
 mkdir -p ~/.tsforge
-# point at your local OpenAI-compatible server
 cat > ~/.tsforge/models.json <<'EOF'
 {
   "active": "qwen-local",
@@ -51,17 +56,18 @@ cat > ~/.tsforge/models.json <<'EOF'
   }
 }
 EOF
-bun packages/core/src/cli.ts
+
+tsforge
 ```
+
+Alternative: `bun install -g tsforge` once the package is on npm. See [Quickstart](https://tsforge.dev/quickstart/) for model config and flags.
 
 Documentation lives at [tsforge.dev](https://tsforge.dev) — start with the [Welcome page](https://tsforge.dev/).
 
 | Doc | Purpose |
 | --- | --- |
-| [apps/docs](apps/docs/) | living harness docs (Astro Starlight) |
-| [packages/core/RULES.md](packages/core/RULES.md) | full rule catalog (generated) |
-| [EVAL_GUIDE.md](EVAL_GUIDE.md) | A/B sweep workflow |
-| [ROADMAP.md](ROADMAP.md) | what ships next |
+| [tsforge.dev](https://tsforge.dev) | product docs (Quickstart, gate, guardrails, eval, reference) |
+| [packages/core/RULES.md](packages/core/RULES.md) | generated rule catalog (also synced to [tsforge.dev/reference/rules-catalog/](https://tsforge.dev/reference/rules-catalog/)) |
 
 ## License
 

@@ -1,28 +1,45 @@
 ---
-title: Spec runner — tasks in order, then verify
-description: Run a spec's tasks through the implement loop in order; block on the first that fails; gate the whole spec on its verify command. Validated live on a 2-chunk spec.
+title: Spec runner
+description: Running multi-step benchmark tasks from a spec file (contributors and evals).
 ---
 
-:::tip[Status: built + green + live-validated]
-`packages/core/src/loop/run-spec.ts`. 33 tests green; ran a real 2-chunk spec to `done` against Qwen3.6.
-:::
+Most people use tsforge interactively (`tsforge` in a terminal). **Spec runner** is for a different workflow: automated multi-step benchmarks where each step must pass a check before the next one starts.
 
-## What it does
+You typically only need this page if you are running evals or regression tests against tsforge itself.
 
-`runSpec(spec, cwd, agent, parse?)`:
+## What a spec is
 
-1. Runs each task through the [implement loop](/loop/implement/) in listed order.
-2. The first task that doesn't reach `done` **blocks** the spec (returns `{ status: "blocked", results }`).
-3. When every task is green, the spec's own **`verify`** command must also pass — the whole-spec gate. Then `{ status: "done" }`.
+A spec is a markdown file with frontmatter and numbered tasks. Each task has an `accept:` shell command that must exit 0 before the runner moves on.
 
-## Live eval
+Full format: [Spec format](/spec/format/).
 
-`bun run packages/core/scripts/eval-spec.ts` — a `math` spec with two tasks (fix `add`, fix `mul`) + `verify: bun test`. The real model:
+## What the runner does
 
-- `add` → `done` in 1 cycle (`return a + b`)
-- `mul` → `done` in 1 cycle (`return a * b`)
-- whole-spec `verify` green → spec `done`
+For each task in order:
 
-## Deliberately absent (next)
+1. Run the implement loop (model edits → gate → repair)
+2. Stop when that task's `accept:` command passes
+3. Continue to the next task
+4. After all tasks, run the whole-spec `verify:` command
 
-Dependency ordering via `needs:` and parallel-safe `[P]` (v1 is file order). And the big one for real features: a **`create` tool** — the agent can edit existing files but can't make new ones yet, so it can't yet build a feature from scratch.
+Outputs include per-task status (`done`, `stuck`, interrupted) and a final pass/fail for the spec.
+
+## How to run (from a cloned tsforge repo)
+
+```bash
+bun run eval:spec
+
+TSFORGE_SEED=money TSFORGE_FEATURE_VARIANTS=hashline \
+  bun run eval:sweep
+```
+
+These scripts are for maintainers, not end users of the `tsforge` npm package. See [A/B testing](/eval/ab-testing/) and [Commands](/reference/commands/).
+
+## Spec modes
+
+| `mode:` | Use when |
+| --- | --- |
+| `scratch` | Greenfield: listed files are cleared so the model rebuilds them |
+| `existing` | Feature work in a repo that already exists |
+
+→ [Spec format](/spec/format/) · [When the gate fails](/loop/validation/)

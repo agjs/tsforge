@@ -1,0 +1,44 @@
+---
+title: TypeScript language server
+description: In-editor-style navigation and type feedback, embedded inside tsforge.
+---
+
+VS Code uses the TypeScript **language server** for go-to-definition, find-all-references, and red squiggles. tsforge embeds the same engine **in-process**. You do not run a separate `tsserver` process.
+
+It does two jobs:
+
+1. **Navigation tools** for the model on existing codebases (search symbols, rename, etc.)
+2. **Write diagnostics** after each edit ([Write diagnostics](/uplift/write-diagnostics/))
+
+The full-project gate still runs `tsc` separately when a task finishes. The language server is for faster, file-local feedback and smarter exploration.
+
+## Navigation tools (existing repos)
+
+Offered when tsforge detects real code to explore (existing repo, resumed session, non-empty tree). Omitted on greenfield scratch work so the model does not wander.
+
+| Tool | What it does |
+| --- | --- |
+| `search` | ripgrep by text pattern |
+| `symbol_search` | find declarations by name |
+| `find_references` | all usages of a symbol |
+| `type_at` | inferred type at a position |
+| `diagnostics` | errors for one file on demand |
+| `rename_symbol` | rename across the project |
+| `organize_imports` | sort and clean imports |
+
+Disable navigation tools: `TSFORGE_NO_LSP_TOOLS=1`. Disable write feedback: `TSFORGE_LSP_WRITE_FEEDBACK=0`.
+
+## Safe auto-fixes
+
+tsforge can apply TypeScript quick fixes that match its strict gate (imports, unused vars, missing `await`). It skips fixes that add `!` or unsafe `as` casts.
+
+## Per-edit ESLint
+
+On each write, tsforge can lint just the touched file for idioms `tsc` misses (same rules as the gate, scoped to one file).
+
+## Requirements
+
+- `tsconfig.json` in the project for full semantic features
+- tsforge refreshes its view after harness writes so diagnostics stay current
+
+→ [Big picture](/big-picture/) · [Write diagnostics](/uplift/write-diagnostics/) · [File ops](/edit/engine/)

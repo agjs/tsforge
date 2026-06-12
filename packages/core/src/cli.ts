@@ -122,7 +122,7 @@ const VALUE_FLAGS = new Set([
   "--resume",
 ]);
 
-/** Parse argv (without `bun cli.ts`). Always succeeds — mode is decided in main. */
+/** Parse argv (without the tsforge binary name). Always succeeds — mode is decided in main. */
 export function parseArgs(argv: readonly string[]): ICliArgs {
   const positional: string[] = [];
   const out: ICliArgs = {

@@ -1,26 +1,26 @@
 ---
-title: Rule packs — stack-aware ESLint guardrails
-description: Stack detection enables rule packs. The gate runs them on both greenfield and existing-code paths.
+title: Rule packs
+description: Stack-specific ESLint rules tsforge runs during the gate.
 ---
 
-:::tip[Status: built + green]
-`packages/core/src/stack-detection` + `packages/core/src/rule-packs`. 13 implemented packs, ~50 rules.
-:::
+When the gate runs ESLint, it does not use a generic preset. It uses **rule packs**: groups of rules keyed to the libraries in your project.
 
-## How packs activate
+If you use Drizzle, tsforge applies Drizzle-specific query rules. If you use React, it enforces component folder layout and JSX conventions. [Stack detection](/guardrails/stack-detection/) turns packs on from `package.json`. You can override in [tsforge.config.json](/guardrails/config/).
 
-1. **Detect** — read `package.json` deps and config files; match against `PACK_REGISTRY`
-2. **Configure** — apply `tsforge.config.json` overrides ([config](/guardrails/config/))
-3. **Gate** — run enabled pack rules via strict ESLint config on every validation
+Packs apply on every gate check, whether tsforge is editing an existing repo or scaffolding a new one.
 
-Both paths use the same packs: greenfield (constitution bring-up) and existing-code (detect-gate).
+## How a pack gets enabled
 
-## Pack registry (16)
+1. tsforge detects your stack from dependencies
+2. optional `tsforge.config.json` adds or removes packs
+3. the gate runs all enabled pack rules as errors by default
 
-| ID | Label | Rules implemented |
+## Pack list
+
+| ID | Label | Has rules |
 | --- | --- | --- |
-| `generic-ts` | TypeScript Fundamentals | registry only |
-| `react` | React | registry only |
+| `generic-ts` | TypeScript Fundamentals | detection only |
+| `react` | React | detection only |
 | `react-component-architecture` | React Component Architecture | yes |
 | `tanstack-query` | TanStack Query | yes |
 | `drizzle` | Drizzle ORM | yes |
@@ -28,7 +28,7 @@ Both paths use the same packs: greenfield (constitution bring-up) and existing-c
 | `bullmq` | BullMQ | yes |
 | `test-conventions` | Test Conventions | yes |
 | `env-access` | Environment Variables | yes |
-| `module-boundaries` | Module Boundaries | registry only |
+| `module-boundaries` | Module Boundaries | detection only |
 | `code-flow` | Code Flow | yes |
 | `comment-hygiene` | Comment Hygiene | yes |
 | `structured-logging` | Structured Logging | yes |
@@ -36,10 +36,12 @@ Both paths use the same packs: greenfield (constitution bring-up) and existing-c
 | `oauth-security` | OAuth Security | yes |
 | `i18n-keys` | i18n Keys | yes |
 
-**Always-on detection:** `generic-ts`, `env-access`, `module-boundaries`, `code-flow`, `comment-hygiene`.
+"Detection only" means tsforge knows the stack label but does not ship extra rules for it yet.
 
-Full rule catalog with fix guidance: [RULES.md](https://github.com/agjs/tsforge/blob/main/packages/core/RULES.md) (generated — run `bun packages/core/scripts/build-rules-md.ts` to refresh).
+Every implemented rule with fix text: [Rule catalog](/reference/rules-catalog/).
 
-## Severity
+## Changing severity
 
-Pack rules default to **error**. Override per-project in `tsforge.config.json` → see [config](/guardrails/config/).
+Pack rules default to **error** (gate fails). Set `"warn"` or `"off"` per rule in [tsforge.config.json](/guardrails/config/).
+
+→ [Big picture](/big-picture/) · [Meta-rules](/guardrails/meta-rules/) · [Stack detection](/guardrails/stack-detection/)

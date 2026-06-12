@@ -1,0 +1,73 @@
+---
+title: Interactive CLI
+description: REPL session, slash commands, flags, one-shot mode, and session persistence.
+---
+
+The **CLI** is the main way you use tsforge. **REPL** mode means an interactive session: you type tasks, steer with slash commands, and the harness keeps context between turns.
+
+Most users run `tsforge` and stay in the interactive session.
+
+## Modes
+
+| Mode | How | When |
+| --- | --- | --- |
+| **Interactive** | `tsforge` | default — open-ended tasks, steering, exploration |
+| **One-shot** | `tsforge "task" --accept "gate cmd"` | drive a single task to green and exit |
+| **Web build** | add `--web` | scaffold Vite app + web gate ladder on first message |
+| **Plan mode** | `--plan` or `/plan` | read-only exploration before implementing — see [Plan mode](/cli/plan-mode/) |
+
+## Flags
+
+| Flag | Effect |
+| --- | --- |
+| `--dir <path>` | target project (default: cwd) |
+| `--files <globs>` | narrow editable scope (comma-separated); default is whole repo |
+| `--accept` / `--gate <cmd>` | gate command for one-shot mode |
+| `--no-gate` | skip auto gate detection |
+| `--web` | pre-scaffold web stack + web gate on first build message |
+| `--browser <html>` | append headless render check to gate |
+| `--plan` | start in plan mode |
+| `--continue` / `-c` | resume latest saved session for this dir |
+| `--resume <id>` | resume a specific session |
+| `--log` | append JSONL event stream to `~/.tsforge/logs/` |
+
+Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environment variables](/reference/flags/).
+
+## Slash commands
+
+| Command | Action |
+| --- | --- |
+| `/help` | list commands |
+| `/plan` | toggle plan mode |
+| `/gate <cmd>` | set gate command (`/gate` alone clears) |
+| `/files <globs>` | set editable scope |
+| `/model [name]` | list models or switch active model |
+| `/sessions` | list saved sessions |
+| `/compact` | summarize conversation to free context |
+| `/clear` | reset conversation (keeps workspace + gate) |
+| `/cost` | rough token estimate |
+| `/exit` | quit |
+
+Anything else is sent to the agent. While it runs, type to **steer** the next turn. Ctrl-C interrupts the current run.
+
+## Session banner
+
+On start you see:
+
+- **cwd** — target project
+- **scope** — editable file globs
+- **gate** — acceptance command (auto-detected or set)
+- **model** — active entry from `~/.tsforge/models.json`
+- **session** — new or resumed id
+
+Gate auto-detection is described in [How the gate is built](/loop/gate-floor/).
+
+## Model registry
+
+Models live in `~/.tsforge/models.json`. Use `/model` to hot-swap without restarting. See [Quickstart](/quickstart/) for a starter config.
+
+## Run logs
+
+`--log` writes every loop event (tool calls, gate verdicts, repairs) as JSONL under `~/.tsforge/logs/`. Use this for eval analysis — see [A/B testing](/eval/ab-testing/).
+
+→ [Quickstart](/quickstart/) · [Plan mode](/cli/plan-mode/) · [Model adapter](/inference/adapter/)

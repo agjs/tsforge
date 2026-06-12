@@ -7,13 +7,12 @@ Single repository: `packages/core` (harness), `apps/docs` (Starlight site).
 ```bash
 bun run validate                              # merge gate — run before every push
 bun test packages                             # full test suite (680+ tests)
-bun run typecheck                             # tsc packages/core
-bun run lint                                  # eslint packages
-bun run format:check                          # prettier check
-bun packages/core/scripts/build-rules-md.ts   # regenerate RULES.md
-bun packages/core/scripts/build-rule-docs.ts  # regenerate rule-docs.generated.json
-bun packages/core/scripts/sweep.ts            # A/B feature sweep (see EVAL_GUIDE.md)
-bun packages/core/scripts/edit-benchmark.ts   # compare edit mechanisms across runs
+tsforge                                       # run harness (after install or bun link)
+bun run tsforge                               # run harness from monorepo checkout
+bun run rules:build                           # regenerate RULES.md
+bun run rules:docs                            # regenerate rule-docs.generated.json
+bun run eval:sweep                            # A/B feature sweep (see tsforge.dev/eval/ab-testing/)
+bun run eval:benchmark                        # compare edit mechanisms across runs
 ```
 
 ## Layout

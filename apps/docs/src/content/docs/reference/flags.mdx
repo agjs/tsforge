@@ -1,83 +1,77 @@
 ---
-title: TSFORGE_* flags — canonical reference
-description: Every TSFORGE_* environment variable. This page is the single source of truth for runtime flags.
+title: Environment variables
+description: Canonical list of every TSFORGE_* environment variable.
 ---
-
-:::tip[Canonical]
-Grep-verified against `packages/core/`. When code and this page disagree, the code wins — file a doc fix.
-:::
 
 ## Feature flags
 
-Read live from [`config/flags.ts`](https://github.com/agjs/tsforge/blob/main/packages/core/src/config/flags.ts).
-
 | Variable | Default | Toggles |
 | --- | --- | --- |
-| `TSFORGE_HASHLINE` | ON (`≠ "0"`) | hashline read annotations + `edit_lines` tool |
-| `TSFORGE_TTSR` | ON (`≠ "0"`) | stream-interrupting TTSR rules |
-| `TSFORGE_LSP_WRITE_FEEDBACK` | ON (`≠ "0"`) | type diagnostics on edit/create |
-| `TSFORGE_NO_LSP_TOOLS` | off | withhold LSP navigation tools (`=1`) |
-| `TSFORGE_LEGACY_FEEDBACK` | off | legacy gate-feedback parser (`=1`) |
-| `TSFORGE_NO_ASTGREP` | off | disable ast-grep rewrite in settleGate (`=1`) |
-| `TSFORGE_FORCE_TOOLS` | off | force `tool_choice: required` + stop tool (`=1`) |
+| `TSFORGE_HASHLINE` | ON (`≠ "0"`) | hashline + `edit_lines` |
+| `TSFORGE_TTSR` | ON (`≠ "0"`) | [stream rules (TTSR)](/uplift/ttsr/) |
+| `TSFORGE_LSP_WRITE_FEEDBACK` | ON (`≠ "0"`) | write diagnostics |
+| `TSFORGE_NO_LSP_TOOLS` | off | withhold LSP nav tools (`=1`) |
+| `TSFORGE_LEGACY_FEEDBACK` | off | legacy gate parser (`=1`) |
+| `TSFORGE_NO_ASTGREP` | off | disable ast-grep rewrite (`=1`) |
+| `TSFORGE_FORCE_TOOLS` | off | force tool_choice required (`=1`) |
 
 ## Model / inference
 
 | Variable | Default | Toggles |
 | --- | --- | --- |
-| `TSFORGE_BASE_URL` | `http://localhost:8000/v1` | OpenAI-compatible API endpoint |
+| `TSFORGE_BASE_URL` | `http://localhost:8000/v1` | API endpoint |
 | `TSFORGE_MODEL` | `qwen3.6-27b` | model name |
 | `TSFORGE_API_KEY` | unset | API key |
 | `TSFORGE_MAX_TOKENS` | `16384` | max output tokens |
-| `TSFORGE_REPETITION_PENALTY` | off | vLLM repetition penalty (opt-in) |
-| `TSFORGE_THINKING_BUDGET` | unset | reasoning-token cap |
-| `TSFORGE_CONTEXT_WINDOW` | `32768` | context window for gauge + compaction |
-| `TSFORGE_COMPACT_AT` | `0.8` | fraction triggering auto-compaction |
+| `TSFORGE_REPETITION_PENALTY` | off | vLLM repetition penalty |
+| `TSFORGE_THINKING_BUDGET` | unset | reasoning token cap |
+| `TSFORGE_CONTEXT_WINDOW` | `32768` | context window |
+| `TSFORGE_COMPACT_AT` | `0.8` | auto-compact threshold |
 
 ## Judge (eval scripts)
 
-| Variable | Default | Toggles |
-| --- | --- | --- |
-| `TSFORGE_JUDGE_URL` | `TSFORGE_BASE_URL` | separate judge endpoint |
-| `TSFORGE_JUDGE_MODEL` | `TSFORGE_MODEL` | judge model |
-| `TSFORGE_JUDGE_KEY` | `TSFORGE_API_KEY` | judge API key |
+| Variable | Default |
+| --- | --- |
+| `TSFORGE_JUDGE_URL` | `TSFORGE_BASE_URL` |
+| `TSFORGE_JUDGE_MODEL` | `TSFORGE_MODEL` |
+| `TSFORGE_JUDGE_KEY` | `TSFORGE_API_KEY` |
 
 ## Session / paths
 
 | Variable | Default | Toggles |
 | --- | --- | --- |
-| `TSFORGE_HOME` | `~` | root for `~/.tsforge/{sessions,logs,models.json}` |
-| `TSFORGE_NO_PERSIST` | off | any set value disables disk session persistence |
-| `TSFORGE_SESSION_TTL_DAYS` | `30` | days before prune deletes old sessions |
+| `TSFORGE_HOME` | `~` | root for `~/.tsforge/` |
+| `TSFORGE_NO_PERSIST` | off | disable disk sessions |
+| `TSFORGE_SESSION_TTL_DAYS` | `30` | session prune age |
 
 ## Timeouts
 
 | Variable | Default | Toggles |
 | --- | --- | --- |
-| `TSFORGE_RUN_TIMEOUT_MS` | `120000` | `run` tool shell timeout (`0` = none) |
-| `TSFORGE_GATE_TIMEOUT_MS` | `600000` | accept gate timeout (`0` = none) |
+| `TSFORGE_RUN_TIMEOUT_MS` | `120000` | shell timeout (`0` = none) |
+| `TSFORGE_GATE_TIMEOUT_MS` | `600000` | gate timeout (`0` = none) |
 
 ## Gate subprocess
 
-| Variable | Default | Toggles |
-| --- | --- | --- |
-| `TSFORGE_PACKS` | empty | comma-separated pack IDs for strict ESLint |
-| `TSFORGE_RULE_OVERRIDES` | unset | JSON rule severity map |
+| Variable | Default |
+| --- | --- |
+| `TSFORGE_PACKS` | comma-separated pack IDs |
+| `TSFORGE_RULE_OVERRIDES` | JSON severity map |
 
-## Eval / benchmark scripts
+## Eval scripts
 
-| Variable | Default | Toggles |
-| --- | --- | --- |
-| `TSFORGE_SEED` | script-specific | eval fixture seed name |
-| `TSFORGE_TEMPS` | `0,0.5` | temperature sweep list |
-| `TSFORGE_REPEATS` | `3` | sweep repeat count |
-| `TSFORGE_STREAM` | off | live-stream model output during sweep (`=1`) |
-| `TSFORGE_QUALITY_TARGET` | `5` | target quality score |
-| `TSFORGE_QUALITY_ATTEMPTS` | `2` | quality retry attempts |
-| `TSFORGE_FEATURE_VARIANTS` | empty | comma-separated dims (`ttsr`, `hashline`, …) |
+| Variable | Default |
+| --- | --- |
+| `TSFORGE_SEED` | fixture seed name |
+| `TSFORGE_TEMPS` | `0,0.5` |
+| `TSFORGE_REPEATS` | `3` |
+| `TSFORGE_STREAM` | off (`=1` to enable) |
+| `TSFORGE_FEATURE_VARIANTS` | comma-separated dims |
 
 ## Tests
 
-| Variable | Default | Toggles |
-| --- | --- | --- |
-| `TSFORGE_BROWSER_TESTS` | off | opt-in Playwright integration tests (`=1`) |
+| Variable | Default |
+| --- | --- |
+| `TSFORGE_BROWSER_TESTS` | off (`=1` for Playwright integration) |
+
+→ [Commands](/reference/commands/)

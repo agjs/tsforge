@@ -1,43 +1,45 @@
 ---
-title: Meta-rules — non-AST gate checks
-description: Config, CI, supply-chain, and test-sibling rules that run outside ESLint AST analysis.
+title: Meta-rules
+description: Gate checks on package.json, tsconfig, CI files, and test layout (not TypeScript source).
 ---
 
-:::tip[Status: built + green]
-`packages/core/src/meta-rules`. 10 rules; integrated into detect-gate alongside ESLint packs.
-:::
+Most tsforge rules lint **`.ts` files** through ESLint. **Meta-rules** are different: they inspect **project files** that normal lint does not cover.
 
-## What meta-rules cover
+Think of them as housekeeping checks. Is `package.json` pinned correctly? Is `tsconfig.json` strict? Does every logic module have a colocated test file? Are GitHub Actions pinned?
 
-ESLint packs analyze TypeScript source. Meta-rules analyze **project artifacts**:
+They run in the same gate pass as ESLint. A meta-rule failure blocks the task the same way a type error would.
 
-- `package.json` (exact deps, overlapping libs)
-- `tsconfig.json` (strict mode, path existence)
-- source text scans (`eslint-disable`, `@ts-ignore`)
-- CI workflow YAML (pinned actions, runners, timeouts)
-- test sibling presence for logic modules
+## What they look at
 
-## All 10 rules
+| Area | Example checks |
+| --- | --- |
+| `package.json` | exact version pins, no duplicate HTTP client libraries |
+| `tsconfig.json` | strict mode on, include paths exist |
+| Source text | no `@ts-ignore`, no `eslint-disable` comments |
+| CI workflows | pinned action SHAs, pinned runners, job timeouts |
+| Tests | service/util files have a matching `*.test.ts` sibling |
+
+## All 10 rules today
 
 | ID | Category | Checks |
 | --- | --- | --- |
-| `package-exact-deps` | supply-chain | no `^`/`~` ranges in dependencies |
-| `no-overlapping-libs` | supply-chain | forbid redundant HTTP clients, etc. |
-| `no-eslint-disable-comments` | source-text | no inline eslint-disable |
-| `no-ts-suppressions` | source-text | no `@ts-ignore` / `@ts-nocheck` |
-| `tsconfig-paths-exist` | config | literal include/files paths exist |
-| `tsconfig-strict` | config | strict mode enabled |
-| `test-sibling-required` | testing | logic modules have `*.test.ts` sibling |
-| `workflow-actions-pinned` | ci | GitHub Actions pinned to tag/SHA |
-| `workflow-runner-pinned` | ci | no `ubuntu-latest` floating runners |
-| `workflow-timeout-required` | ci | jobs declare `timeout-minutes` |
+| `package-exact-deps` | supply-chain | no `^`/`~` ranges |
+| `no-overlapping-libs` | supply-chain | forbid redundant libs |
+| `no-eslint-disable-comments` | source-text | no inline disables |
+| `no-ts-suppressions` | source-text | no `@ts-ignore` |
+| `tsconfig-paths-exist` | config | include paths exist |
+| `tsconfig-strict` | config | strict mode on |
+| `test-sibling-required` | testing | colocated tests |
+| `workflow-actions-pinned` | ci | pinned action refs |
+| `workflow-runner-pinned` | ci | no `ubuntu-latest` |
+| `workflow-timeout-required` | ci | job timeouts set |
 
-## Gate semantics
+## Severity
 
-| Severity | Effect on gate |
+| Level | Effect |
 | --- | --- |
-| **error** | gate fails; error appears in repair loop |
-| **warn** | reported but gate passes |
-| **off** | silenced via `tsforge.config.json` |
+| `error` | Gate fails. Model must fix it. |
+| `warn` | Reported but gate can still pass. |
+| `off` | Silenced via [tsforge.config.json](/guardrails/config/). |
 
-Override severities in [config](/guardrails/config/) — same `rules` map as ESLint pack rules.
+→ [Big picture](/big-picture/) · [Rule packs](/guardrails/rule-packs/) · [How tsforge builds the gate](/loop/gate-floor/)

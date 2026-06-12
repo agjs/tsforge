@@ -1,100 +1,90 @@
 ---
-title: The minimal spec format — draft
-description: One file per spec. Carries exactly three things — intent, decomposition, and per-chunk proof — and nothing more. A strawman to tear apart.
+title: Spec format
+description: Markdown task lists for automated benchmarks (contributors).
 ---
 
-:::note[Status: working format (v1)]
-The open design choices are resolved (see [Decisions](#decisions-resolved) at the end). Still revisable, but this is the shape we build against.
-:::
+**Specs** are markdown files that break work into ordered steps. Each step has an `accept:` command that must pass before the next step runs.
 
-## What problem this solves
+Normal users drive tsforge interactively with `tsforge`. Specs are for **benchmark and regression scripts** (`bun run eval:spec`, `bun run eval:sweep`). See [Spec runner](/loop/spec-runner/).
 
-The spec is the unit of work and the source of truth. It must carry enough for tsforge to (a) know *what done means* without guessing, (b) break the work into ordered chunks, and (c) prove each chunk and the whole. If we skip a real format and just pass prose, we lose the two things that make end-to-end building safe: a **fixed, human-approved definition of done**, and a **declared scope** per chunk that lets us detect drift.
+## File shape
 
-## The shape (one file)
-
-One Markdown file per spec, `.tsforge/specs/<id>-<slug>.md`. Frontmatter drives the machine; the body is for humans. Borrows boringstack's single-living-file `.specs/next.md` and Spec Kit's clarification markers + dependency-aware tasks — kept as small as we can.
-
-```md
+```markdown
 ---
-id: 007
-title: Ticket tagging
-status: draft            # draft → refined → approved → building → done
-constitution: boringstack         # which rule set is the gate (the un-gameable judge)
-autonomy: all-chunks     # all-chunks | one-chunk | "1,2"  (how far it runs)
-mode: interactive        # interactive (stall → ask you) | unattended (stall → self-escalate, then notify)
-notify: ""               # webhook (Slack/Discord) pinged when a task is blocked — used in unattended mode
-verify: bun run validate          # the whole-spec gate, run when all chunks are green
+id: hello
+title: Hello sum
+verify: bun test
+mode: scratch
 ---
-
-## Why
-Users need to group and filter tickets. Tags are the lightest grouping that
-doesn't require a new entity people have to manage. (What/why — never how.)
 
 ## Acceptance criteria
-A1. A ticket can have 0..N tags; a tag is a short label, unique per account.
-A2. Owners and members can add/remove tags; viewers cannot.
-A3. The tickets list can filter by one tag.
-A4. [NEEDS CLARIFICATION: max tags per ticket? tag colors in v1?]
+
+A1. sum adds two numbers correctly.
 
 ## Tasks
-1. [db]  tags + ticket_tags tables + migration
-     accept: cd apps/api && bun test src/db/tags
-     files:  apps/api/src/db/schema/tags.ts, apps/api/src/db/migrations/*
-2. [api] tag service + routes + schemas + tests        needs: 1   covers: A1,A2
-     accept: cd apps/api && bun test src/api/tags
-     files:  apps/api/src/api/tags/**
-3. [ui]  TagPicker + tickets-list filter + tests   [P]  needs: 2   covers: A3
-     accept: cd apps/ui && bun test src/features/tags
-     files:  apps/ui/src/features/tags/**, apps/ui/src/features/tickets/**
-4. [e2e] add, remove, filter by a tag              needs: 2,3 covers: A1,A2,A3
-     accept: cd apps/ui && bun playwright test tags.spec.ts
+
+1. [logic] implement sum
+     accept: bun test sum.test.ts
+     files: sum.ts
+     context: sum.test.ts
+     fix: bun eslint --fix sum.ts
 ```
 
-Two optional additions, learned from real long-running ("Ralph") loops:
+## Frontmatter
 
-- **`docs:` on a task** — links to pinned third-party docs (saved as markdown *in the repo*) for any external integration, so the agent reads the real API instead of guessing. The single biggest source of drift in unattended runs is the model inventing a vendor's API; this removes the guesswork.
-- **Preflight** — before building, every service a task's `accept:` (or the spec's `verify`) depends on — database, payment, LLM keys — must be reachable. If a key or service is missing, tsforge **refuses to start and says so**, rather than "verifying" against nothing and shipping silent garbage.
-
-## Who writes what
-
-You own **intent**: the `Why` and the numbered **acceptance criteria**. That's the spec you bring.
-
-During refinement, **tsforge proposes** the rest for your approval — the `[NEEDS CLARIFICATION]` markers, the **task breakdown**, each task's `files:` scope, and each task's `accept:` command (plus the whole-spec `verify`). Nothing it proposes binds until you approve. So you're *approving* a decomposition and its proofs, not writing them: the model works out **how to prove done**; you decide **what done is**.
-
-## Why each part is here (and what we'd lose without it)
-
-| Part | Earns its place because | Cut it and… |
+| Key | Required | Meaning |
 | --- | --- | --- |
-| `status` | The build gate keys off it; nothing builds before `approved` (boringstack's lesson). | Agent sprints ahead of your approval. |
-| `constitution` | Names the un-gameable rule set — the outer judge the model can't edit. | "Correct" becomes the model's opinion. |
-| `autonomy` | Encodes "configurable per run" — how far it goes before pausing. | One-size autonomy; either too timid or runs too far. |
-| `mode` | interactive vs unattended (Ralph). Decides whether a stall asks you or self-escalates then notifies. | Can't run unattended safely; or can't reach a human when one's nearby. |
-| `notify` | Webhook for unattended runs — async human-in-the-loop. | An overnight run that gets stuck has no way to reach you. |
-| **Acceptance criteria** | Human-approved definition of done, *before* code. Each `A#` is traceable. | Gate-green / intent-wrong drift returns. |
-| `[NEEDS CLARIFICATION]` | A hard blocker: spec can't reach `approved` while one remains. | Ambiguity gets silently guessed. |
-| **Tasks** | The decomposition — the thing that makes it end-to-end, chunk by chunk. | No chunks, no ordered build. |
-| `needs:` | Dependency order; `[P]` marks parallel-safe. | Builds things before their prerequisites. |
-| `files:` | Declared scope per chunk = the **drift tripwire**. Globs may span features (e.g. `tags/**` + `tickets/**`); the tripwire is anything *outside the declared globs*, not "one folder." | Can't tell a focused change from a sprawling one. |
-| `accept:` | Per-chunk proof — one runnable command that closes the chunk. | A chunk is "done" by vibes. |
-| `docs:` *(optional)* | Pinned third-party docs (markdown, in-repo) for external integrations — the agent reads the real API. | The model guesses a vendor's API and drifts. |
-| `covers:` | Traces tasks back to acceptance criteria. The spec is complete when every `A#` is covered and green. | No way to know the spec is *fully* built. |
-| `verify` | The whole-spec gate, run once all chunks pass. | "Done" without a final, repo-wide proof. |
+| `id` | yes | stable spec identifier |
+| `title` | yes | human title |
+| `verify` | yes | whole-spec gate after all tasks green |
+| `mode` | no | `scratch` (default) or `existing` |
 
-## The gates this enables
+### Modes
 
-- **Approve gate:** `status: approved` is impossible while any `[NEEDS CLARIFICATION]` remains, or while any `A#` is uncovered by a task.
-- **Preflight gate:** before any build, every service/key the spec's `accept:`/`verify` depends on must be reachable; otherwise refuse and report. Never verify against nothing.
-- **Build gate:** no source writes until `approved` (a chunk's `files:` + test paths are the only writable scope while building it).
-- **Chunk close:** a task closes only when its `accept:` command passes.
-- **Spec done:** `status: done` only when every task is closed **and** `verify` is green in a clean checkout.
+| Mode | Behavior |
+| --- | --- |
+| `scratch` | harness deletes editable `files` to start RED; model regenerates |
+| `existing` | project kept; RED from failing tests or stated goal; edits in place |
 
-## ELI6
+## Sections
 
-It's the **picture of the finished Lego set plus the step list**: the picture (Why + Acceptance criteria) is what we agree on first; the steps (Tasks) are built one at a time; and every step says exactly *which bricks it's allowed to touch* and *how we check it stands* before the next step starts.
+### Acceptance criteria
 
-## Decisions (resolved)
+Prose under `## Acceptance criteria` is attached to every task as **intent** — the model works from stated goals instead of reverse-engineering from test calls alone.
 
-1. **One file**, not a folder. Design notes live inline. If a spec outgrows roughly one screen, that's a signal to split the *spec into two specs* — not to split the format.
-2. **`files:` globs may span features.** The tripwire is "outside the declared globs," not "one folder." Honest cross-feature changes simply declare both.
-3. **tsforge proposes the `accept:` commands** (and the tasks, and the clarification markers) during refinement; you approve. You define *what done is*; it proposes *how to prove it*.
+### Tasks
+
+Numbered list under `## Tasks`. Each task supports indented fields:
+
+| Field | Meaning |
+| --- | --- |
+| `accept:` | shell command that must exit 0 to close the chunk |
+| `files:` | editable scope (comma-separated globs); edits outside are rejected |
+| `context:` | read-only files shown for context (e.g. tests) |
+| `fix:` | optional auto-fix before re-validation (e.g. `eslint --fix`) |
+
+Task numbers become stable ids (`1`, `2`, …).
+
+## Running specs
+
+Specs are consumed by the loop's `runSpec()` — used in eval scripts and benchmarks:
+
+```bash
+# Example: eval script against a seed spec
+bun run eval:spec
+
+# Multi-seed sweep (benchmark harness)
+TSFORGE_SEED=money bun run eval:sweep
+```
+
+Benchmark seeds ship as `<seed>.spec.md` under eval directories. See [Spec runner](/loop/spec-runner/) and [A/B testing](/eval/ab-testing/).
+
+## Related tools
+
+| Script | Role |
+| --- | --- |
+| `gen-tests.ts` | generate test suite from an untested spec |
+| `eval-spec.ts` | run one spec against the model |
+| `sweep.ts` | cartesian feature-variant sweeps |
+
+→ [Spec runner](/loop/spec-runner/) · [When the gate fails](/loop/validation/)

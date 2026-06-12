@@ -1,0 +1,68 @@
+---
+title: Web scaffolding
+description: Bootstrapping a new Vite app inside a tsforge session.
+---
+
+Use this when you want tsforge to **create a new browser app from scratch**, not when you are editing an existing codebase.
+
+Instead of letting the model invent folder structure and config, tsforge materializes a known-good Vite stack, installs dependencies, and switches to a stricter **web gate** so "done" means the app actually builds and renders.
+
+## Starting a web session
+
+```bash
+tsforge --web --dir ./my-app
+```
+
+Describe the app in your first message. Add `--plan` if you want a read-only design phase before files are edited ([Plan mode](/cli/plan-mode/)).
+
+## Agent tools (what the model calls)
+
+### scaffold_web
+
+Run **once** at the start of a greenfield UI build.
+
+| Framework | What you get |
+| --- | --- |
+| `react` | Vite + React + shadcn-style UI + TanStack Router + TanStack Query |
+| `vanilla` | Vite + TypeScript + Tailwind |
+
+After this runs: template files are written, `bun install` runs, the session gate switches to the web ladder, and stack-specific prompt guidance is injected.
+
+Do not use this on CLI-only projects or existing repos you are patching.
+
+### scaffold_ui
+
+Generates themed UI primitives under `src/components/ui/` and design tokens in `src/index.css`.
+
+Themes: `minimal`, `warm`, `futuristic`. Primitives include button, card, input, table, and layout blocks (app-shell, page-header, empty-state, etc.).
+
+Call once with everything the app needs. Do not hand-roll base components the scaffold already provides.
+
+### scaffold_routes
+
+Creates TanStack file routes as stubs in one shot, for example `["/", "/accounts", "/accounts/$accountId"]`. Each stub compiles; you fill in real UI later.
+
+### add_dependency
+
+Wrapper around `bun add` for missing npm packages (`date-fns`, `zod@3`, etc.).
+
+## What "done" means for web apps
+
+After scaffolding, the gate runs a longer pipeline roughly equivalent to:
+
+```
+vite build → tsc → eslint → stub-check → prettier → browser smoke
+```
+
+| Step | Catches |
+| --- | --- |
+| Vite build | broken imports, JSX, Tailwind |
+| tsc | type errors |
+| ESLint | web-specific idioms |
+| stub-check | route placeholders left unfilled |
+| prettier | formatting drift |
+| browser smoke | blank page, console errors |
+
+During plan mode's design phase, only the lighter subset runs (types + lint, no full build). See [Plan mode](/cli/plan-mode/).
+
+→ [How tsforge builds the gate](/loop/gate-floor/) · [Interactive CLI](/cli/interactive/)

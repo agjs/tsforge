@@ -1,29 +1,37 @@
 ---
-title: Inference adapter — the model seam
-description: A provider-agnostic client to a local Qwen3.6 over any OpenAI-compatible endpoint (Ollama / vLLM / llama.cpp). Parses content + tool calls.
+title: Model adapter
+description: How tsforge connects to your model API.
 ---
 
-:::tip[Status: built + green]
-`packages/core/src/inference`. 22 tests pass. Tested with an injected fake `fetch` — no live model needed.
-:::
+tsforge does not ship a model. It calls **your** model through any **OpenAI-compatible HTTP API** (local vLLM, Ollama-compatible proxy, OpenRouter, etc.).
 
-## What it is
+Configure models in `~/.tsforge/models.json`. Override per run with environment variables listed below.
 
-The seam the model plugs into, behind a small `Provider` interface:
+## Starter defaults
 
-```ts
-interface Provider {
-  complete(messages: ChatMessage[], opts?): Promise<ModelResponse>; // { content, toolCalls }
-}
-```
+| Setting | Default |
+| --- | --- |
+| Base URL | `http://localhost:8000/v1` |
+| Model | `qwen3.6-27b` |
+| Max tokens | 16384 |
 
-`OpenAICompatibleProvider` hits `POST {baseUrl}/chat/completions` — the API that **Ollama, vLLM, and llama.cpp all expose** for a local Qwen3.6. It parses the response into `content` plus decoded `toolCalls` (`{ name, arguments }`), so the rest of the harness never touches HTTP or vendor JSON.
+These defaults match tsforge's dev setup. Replace `baseUrl` and `model` with yours. The gate and guardrails stay the same regardless of provider.
 
-## Why provider-agnostic + injectable fetch
+## Common overrides
 
-- **Agnostic:** swap `baseUrl`/`model` to point at any local server; no code change.
-- **Injectable `fetch`:** the whole adapter is unit-tested deterministically against canned responses — no GPU, no flakiness.
+| Variable | Purpose |
+| --- | --- |
+| `TSFORGE_BASE_URL` | API endpoint |
+| `TSFORGE_MODEL` | model name |
+| `TSFORGE_API_KEY` | API key when required |
+| `TSFORGE_MAX_TOKENS` | output token cap |
+| `TSFORGE_CONTEXT_WINDOW` | context size for compaction |
+| `TSFORGE_COMPACT_AT` | auto-compact threshold (default 0.8) |
 
-## Now built
+Full list: [Environment variables](/reference/flags/).
 
-Streaming (SSE → `onToken`, with a `StreamGuard` that aborts repetition loops), the `tools` schema in the request (with salvage for malformed tool-call syntax), connection retries, and per-request timeout/cancellation are all implemented. The provider also accepts object-valued `tool_call.function.arguments` (some local servers emit an object, not a JSON string) and surfaces the response body in HTTP errors. The tool-using loop that drives this provider lives in `loop/turn.ts` (shared by `runTask` and the interactive `Session`).
+## Stream guard
+
+If model prose repeats degenerately (not tool JSON), tsforge aborts the run to avoid infinite token burn.
+
+→ [Quickstart](/quickstart/) · [Big picture](/big-picture/)
