@@ -200,7 +200,7 @@ function isTransientDiag(d: { code: number; message: string }): boolean {
 }
 
 /** Max diagnostics surfaced per write — keep the in-band feedback tight. */
-const MAX_WRITE_GUARD_DIAGS = 6;
+const MAX_WRITE_GUARD_DIAGS = 5;
 
 /** Render the per-issue lines (type errors + lint problems), capped + ordered. */
 function writeGuardLines(
@@ -374,7 +374,11 @@ async function writeGuard(
  * under the cognitive-complexity bar.
  */
 async function runWriteGuard(ctx: ILoopCtx, path: string): Promise<string> {
-  if (ctx.tsService === null || path.length === 0) {
+  if (
+    ctx.tsService === null ||
+    path.length === 0 ||
+    !flags.lspWriteFeedback()
+  ) {
     return "";
   }
 

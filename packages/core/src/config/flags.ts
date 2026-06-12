@@ -25,4 +25,8 @@ export const flags = {
   hashlineEditTool: (): boolean => process.env.TSFORGE_HASHLINE !== "0",
   /** TTSR stream-interrupting rules (A/B control, default ON — set to "0" to disable). */
   ttsr: (): boolean => process.env.TSFORGE_TTSR !== "0",
+  /** Instant per-file type diagnostics appended to edit/create tool results
+   *  (A/B control, default ON — set to "0" to disable). */
+  lspWriteFeedback: (): boolean =>
+    process.env.TSFORGE_LSP_WRITE_FEEDBACK !== "0",
 };
