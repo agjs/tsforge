@@ -1,16 +1,20 @@
 import type { TSESLint } from "@typescript-eslint/utils";
 
+import { bullmqPack } from "./bullmq";
 import { commentHygienePack } from "./comment-hygiene";
 import { codeFlowPack } from "./code-flow";
+import { drizzlePack } from "./drizzle";
 import { envAccessPack } from "./env-access";
 import { testConventionsPack } from "./test-conventions";
 import { PACK_REGISTRY } from "../stack-detection";
 
 /** Registry of all available rule packs, keyed by pack ID. */
 export const RULE_PACKS = {
-  "env-access": envAccessPack,
+  bullmq: bullmqPack,
   "code-flow": codeFlowPack,
   "comment-hygiene": commentHygienePack,
+  drizzle: drizzlePack,
+  "env-access": envAccessPack,
   "test-conventions": testConventionsPack,
 } as const;
 

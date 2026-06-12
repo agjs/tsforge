@@ -48,10 +48,12 @@ function lint(
 }
 
 describe("rule-packs: registry", () => {
-  test("should have all four packs registered", () => {
+  test("should have all six packs registered", () => {
     expect(Object.keys(RULE_PACKS).sort()).toEqual([
+      "bullmq",
       "code-flow",
       "comment-hygiene",
+      "drizzle",
       "env-access",
       "test-conventions",
     ]);
@@ -894,5 +896,279 @@ describe("test-conventions: test-file-mirrors-source", () => {
     // Reset to real fs.existsSync behavior
     setFileExistsForTesting(null);
     // This test verifies the helper can be reset; actual filesystem check would need real files
+  });
+});
+
+// ===== DRIZZLE PACK TESTS =====
+
+describe("drizzle pack", () => {
+  test("should export drizzlePack with correct structure", () => {
+    const pack = RULE_PACKS["drizzle"];
+
+    expect(pack.id).toBe("drizzle");
+    expect(pack.description).toContain("Drizzle ORM");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "account-scoped-tables-require-where",
+      "no-nested-db-transaction",
+      "no-raw-sql-outside-allowlist",
+      "relations-must-cover-fks",
+      "schema-files-must-not-import-driver",
+      "schema-files-must-only-export-schema",
+      "tables-must-have-timestamps",
+      "timestamp-must-specify-mode",
+    ]);
+  });
+
+  test("account-scoped-tables-require-where: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["drizzle"].rules["account-scoped-tables-require-where"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("account-scoped");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("account-scoped-tables-require-where: detects missing scope filter on select", () => {
+    const messages = lint(
+      "drizzle",
+      "account-scoped-tables-require-where",
+      "const users = db.select().from(usersTable);",
+      "src/db/queries.ts",
+      [{ tables: ["usersTable"], scopeColumn: "accountId" }]
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingScopeFilter");
+  });
+
+  test("account-scoped-tables-require-where: allows queries with scope filter", () => {
+    const messages = lint(
+      "drizzle",
+      "account-scoped-tables-require-where",
+      "const users = db.select().from(usersTable).where(eq(usersTable.accountId, id));",
+      "src/db/queries.ts",
+      [{ tables: ["usersTable"], scopeColumn: "accountId" }]
+    );
+
+    expect(
+      messages.some((m) => m.messageId === "missingScopeFilter")
+    ).toBeFalsy();
+  });
+
+  test("no-nested-db-transaction: reports nested db.transaction calls", () => {
+    const code = `
+      await db.transaction(async (tx) => {
+        await db.transaction(async (tx2) => {});
+      });
+    `;
+
+    const messages = lint(
+      "drizzle",
+      "no-nested-db-transaction",
+      code,
+      "src/db/migrations.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("nestedTransaction");
+  });
+
+  test("no-nested-db-transaction: allows nested with proper tx parameter", () => {
+    const code = `
+      await db.transaction(async (tx) => {
+        await tx.transaction(async (tx2) => {});
+      });
+    `;
+
+    const messages = lint(
+      "drizzle",
+      "no-nested-db-transaction",
+      code,
+      "src/db/migrations.ts"
+    );
+
+    expect(
+      messages.some((m) => m.messageId === "nestedTransaction")
+    ).toBeFalsy();
+  });
+
+  test("no-raw-sql-outside-allowlist: reports sql in non-allowed file", () => {
+    const messages = lint(
+      "drizzle",
+      "no-raw-sql-outside-allowlist",
+      "import { sql } from 'drizzle-orm';\nconst result = sql`SELECT 1`;",
+      "src/db/queries.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("noRawSql");
+  });
+
+  test("no-raw-sql-outside-allowlist: allows sql with custom allowFiles option", () => {
+    const messages = lint(
+      "drizzle",
+      "no-raw-sql-outside-allowlist",
+      "import { sql } from 'drizzle-orm';\nconst result = sql`SELECT 1`;",
+      "src/db/queries.ts",
+      [{ allowFiles: ["src/db/queries.ts"] }]
+    );
+
+    expect(messages.some((m) => m.messageId === "noRawSql")).toBeFalsy();
+  });
+
+  test("relations-must-cover-fks: rule exists and is callable", () => {
+    const rule = RULE_PACKS["drizzle"].rules["relations-must-cover-fks"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("relations");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("schema-files-must-not-import-driver: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["drizzle"].rules["schema-files-must-not-import-driver"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("schema files");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("schema-files-must-only-export-schema: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["drizzle"].rules["schema-files-must-only-export-schema"]!;
+
+    expect(rule.meta.type).toBe("suggestion");
+    expect(rule.meta.docs?.description).toContain("schema");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("tables-must-have-timestamps: reports missing createdAt column", () => {
+    const messages = lint(
+      "drizzle",
+      "tables-must-have-timestamps",
+      "const users = pgTable('users', { id: serial('id').primaryKey(), name: text('name') });",
+      "src/schema/users.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingTimestamp");
+  });
+
+  test("tables-must-have-timestamps: allows tables with createdAt", () => {
+    const messages = lint(
+      "drizzle",
+      "tables-must-have-timestamps",
+      "const users = pgTable('users', { id: serial('id').primaryKey(), createdAt: timestamp('createdAt') });",
+      "src/schema/users.ts"
+    );
+
+    expect(
+      messages.some((m) => m.messageId === "missingTimestamp")
+    ).toBeFalsy();
+  });
+
+  test("timestamp-must-specify-mode: reports missing mode option", () => {
+    const messages = lint(
+      "drizzle",
+      "timestamp-must-specify-mode",
+      "const col = timestamp('created');"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingMode");
+  });
+
+  test("timestamp-must-specify-mode: allows explicit mode", () => {
+    const messages = lint(
+      "drizzle",
+      "timestamp-must-specify-mode",
+      "const col = timestamp('created', { mode: 'date' });"
+    );
+
+    expect(messages.some((m) => m.messageId === "missingMode")).toBeFalsy();
+  });
+});
+
+// ===== BULLMQ PACK TESTS =====
+
+describe("bullmq pack", () => {
+  test("should export bullmqPack with correct structure", () => {
+    const pack = RULE_PACKS["bullmq"];
+
+    expect(pack.id).toBe("bullmq");
+    expect(pack.description).toContain("BullMQ");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "job-name-must-be-constant",
+      "job-options-must-set-attempts",
+      "no-blocking-concurrency-zero",
+      "queue-options-must-set-removeoncomplete",
+      "queue-options-must-set-removeonfail",
+      "worker-must-implement-close",
+      "worker-must-listen-failed",
+    ]);
+  });
+
+  test("job-name-must-be-constant: rule exists and is callable", () => {
+    const rule = RULE_PACKS["bullmq"].rules["job-name-must-be-constant"]!;
+
+    expect(rule.meta.type).toBe("suggestion");
+    expect(rule.meta.docs?.description).toContain("job name");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("job-options-must-set-attempts: rule exists and is callable", () => {
+    const rule = RULE_PACKS["bullmq"].rules["job-options-must-set-attempts"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("attempts");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("no-blocking-concurrency-zero: rule exists and is callable", () => {
+    const rule = RULE_PACKS["bullmq"].rules["no-blocking-concurrency-zero"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("concurrency");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("queue-options-must-set-removeoncomplete: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["bullmq"].rules["queue-options-must-set-removeoncomplete"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("removeOnComplete");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("queue-options-must-set-removeonfail: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["bullmq"].rules["queue-options-must-set-removeonfail"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("removeOnFail");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("worker-must-implement-close: rule exists and is callable", () => {
+    const rule = RULE_PACKS["bullmq"].rules["worker-must-implement-close"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("close");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("worker-must-listen-failed: rule exists and is callable", () => {
+    const rule = RULE_PACKS["bullmq"].rules["worker-must-listen-failed"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("failed");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
   });
 });
