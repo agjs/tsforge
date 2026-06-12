@@ -23,4 +23,6 @@ export const flags = {
   /** Hashline edit tool (content-hash-anchored line edits) with snapshot recovery
    *  (A/B control, default ON — set to "0" to disable). */
   hashlineEditTool: (): boolean => process.env.TSFORGE_HASHLINE !== "0",
+  /** TTSR stream-interrupting rules (A/B control, default ON — set to "0" to disable). */
+  ttsr: (): boolean => process.env.TSFORGE_TTSR !== "0",
 };

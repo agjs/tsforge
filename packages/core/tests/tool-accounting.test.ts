@@ -11,6 +11,7 @@ function freshState(): ILoopState {
     lastGateCount: -1,
     edits: 0,
     regressions: 0,
+    ttsrInterrupts: 0,
   };
 }
 

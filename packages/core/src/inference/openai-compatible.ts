@@ -5,6 +5,7 @@ import type {
   IProvider,
   IOpenAICompatibleConfig,
 } from "./inference.types";
+import type { TtsrManager } from "../loop/ttsr";
 import { PROVIDER_LIMITS } from "./inference.constants";
 import { fetchWithRetry } from "./transport";
 import { toWire, parseResponse } from "./wire";
@@ -95,7 +96,11 @@ export class OpenAICompatibleProvider implements IProvider {
     }
 
     if (opts.onToken !== undefined) {
-      return streamResponse(res, opts.onToken);
+      return streamResponse(
+        res,
+        opts.onToken,
+        opts.ttsrManager as TtsrManager | undefined
+      );
     }
 
     const data: unknown = await res.json();

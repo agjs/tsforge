@@ -39,6 +39,9 @@ export interface IModelResponse {
    *  repetition loop (same line/template until max_tokens). The loop driver
    *  stops the turn instead of nudging into another loop. */
   degenerated?: boolean;
+  /** Set when TTSR aborted the stream due to a rule match. Contains the rule name
+   *  and guidance to append to the corrective retry message. */
+  ttsrFired?: { ruleName: string; guidance: string };
 }
 
 export interface ICompleteOptions {
@@ -64,6 +67,8 @@ export interface ICompleteOptions {
   /** Caller cancellation — aborting it stops the request (and any stream)
    *  mid-flight. Combined with the per-request timeout. */
   signal?: AbortSignal;
+  /** TTSR manager for stream-interrupting rules (wired by the loop, not the provider). */
+  ttsrManager?: unknown; // Avoid circular dep: IProvider doesn't import TtsrManager
 }
 
 /** Which stream a token belongs to: the model's thinking (`reasoning`), its answer

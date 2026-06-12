@@ -7,6 +7,8 @@ import type {
 import { isArray, isRecord } from "../lib/guards";
 import { parseArgs, parseUsage, salvageToolCalls } from "./wire";
 import { StreamGuard } from "./stream-guard";
+import { TtsrManager } from "../loop/ttsr";
+import type { ITtsrRule } from "../loop/ttsr";
 
 interface IStreamDelta {
   content?: string;
@@ -15,10 +17,12 @@ interface IStreamDelta {
   usage?: ITokenUsage;
 }
 
-/** Streaming: parse SSE chunks, forward tokens to `onToken`, assemble the response. */
+/** Streaming: parse SSE chunks, forward tokens to `onToken`, assemble the response.
+ *  When ttsrManager is provided, feeds deltas to it and aborts on rule match. */
 export async function streamResponse(
   res: Response,
-  onToken: (text: string, channel: TokenChannel) => void
+  onToken: (text: string, channel: TokenChannel) => void,
+  ttsrManager?: TtsrManager
 ): Promise<IModelResponse> {
   const body = res.body;
 
@@ -32,6 +36,8 @@ export async function streamResponse(
     calls: new Map(),
     guard: new StreamGuard(),
     content: "",
+    ttsr: ttsrManager,
+    ttsrFired: null,
   };
   // `usage` arrives in a trailing chunk (choices: []), captured in consumeLines.
   let buffer = "";
@@ -47,8 +53,9 @@ export async function streamResponse(
 
     degenerated = consumeLines(lines, acc, onToken);
 
-    if (degenerated) {
-      // Stop the runaway generation instead of letting it spew to max_tokens.
+    if (degenerated || acc.ttsrFired !== null) {
+      // Stop the runaway generation instead of letting it spew to max_tokens,
+      // or abort when TTSR fires to inject corrective guidance.
       await reader.cancel();
 
       break;
@@ -83,6 +90,8 @@ interface IStreamAcc {
   guard: StreamGuard;
   content: string;
   usage?: ITokenUsage;
+  ttsr?: TtsrManager;
+  ttsrFired: { rule: ITtsrRule; fire: boolean } | null;
 }
 
 /** Parse a batch of SSE lines, forward tokens, accumulate state; returns true
@@ -117,13 +126,25 @@ function consumeLines(
       if (acc.guard.observe(delta.content, "content")) {
         return true;
       }
+
+      // Check TTSR rules on content channel.
+      if (acc.ttsr !== undefined && acc.ttsrFired === null) {
+        const matched = acc.ttsr.checkDelta(delta.content, {
+          source: "content",
+        });
+
+        if (matched !== null) {
+          acc.ttsrFired = { rule: matched, fire: true };
+          return true;
+        }
+      }
     }
 
     if (delta.usage !== undefined) {
       acc.usage = delta.usage;
     }
 
-    accumulateToolCalls(delta.toolCalls, acc.calls, onToken);
+    accumulateToolCalls(delta.toolCalls, acc.calls, onToken, acc);
   }
 
   return false;
@@ -137,10 +158,20 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
     arguments: parseArgs(c.args),
   }));
 
+  const ttsrFired =
+    acc.ttsrFired !== null
+      ? {
+          ttsrFired: {
+            ruleName: acc.ttsrFired.rule.name,
+            guidance: acc.ttsrFired.rule.guidance,
+          },
+        }
+      : {};
+
   if (toolCalls.length > 0) {
     return degenerated
-      ? { content: acc.content, toolCalls, degenerated, ...usage }
-      : { content: acc.content, toolCalls, ...usage };
+      ? { content: acc.content, toolCalls, degenerated, ...ttsrFired, ...usage }
+      : { content: acc.content, toolCalls, ...ttsrFired, ...usage };
   }
 
   const salvaged = salvageToolCalls(acc.content);
@@ -150,6 +181,7 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
     toolCalls: salvaged,
     salvaged: salvaged.length,
     ...(degenerated ? { degenerated } : {}),
+    ...ttsrFired,
     ...usage,
   };
 }
@@ -241,7 +273,8 @@ function emitToolProgress(
 function accumulateToolCalls(
   raw: unknown,
   calls: Map<number, IStreamingCall>,
-  onToken: (text: string, channel: TokenChannel) => void
+  onToken: (text: string, channel: TokenChannel) => void,
+  acc?: IStreamAcc
 ): void {
   if (!isArray(raw)) {
     return;
@@ -275,10 +308,37 @@ function accumulateToolCalls(
     if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
       existing.args += fn.arguments;
       emitToolProgress(existing, onToken);
+
+      // Check TTSR rules on tool-args channel (watch accumulated args for edit/create tools).
+      if (
+        acc !== undefined &&
+        acc.ttsr !== undefined &&
+        acc.ttsrFired === null &&
+        (fn.name === "edit" || fn.name === "create")
+      ) {
+        const matched = acc.ttsr.checkDelta(fn.arguments, {
+          source: "tool-args",
+          currentFile:
+            existing.args.includes('"file"') || existing.args.includes('"path"')
+              ? extractFilePath(existing.args)
+              : undefined,
+        });
+
+        if (matched !== null) {
+          acc.ttsrFired = { rule: matched, fire: true };
+        }
+      }
     }
 
     calls.set(index, existing);
   }
+}
+
+/** Extract file path from partial JSON args (e.g., "{"file":"src/app.ts",..."). */
+function extractFilePath(args: string): string | undefined {
+  const match = /"(?:file|path)"\s*:\s*"([^"]+)"/.exec(args);
+
+  return match?.[1];
 }
 
 /** First of the candidates that is a string (vLLM uses `reasoning`; others `reasoning_content`). */

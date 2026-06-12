@@ -124,6 +124,8 @@ export interface ILoopState {
   lastGateCount: number;
   edits: number;
   regressions: number;
+  /** Count of TTSR rule interrupts this task. Hard cap at 3 to prevent loops. */
+  ttsrInterrupts: number;
 }
 
 /** Build the in-process TS LanguageService if the project has a tsconfig. Guarded

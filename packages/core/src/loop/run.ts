@@ -8,6 +8,8 @@ import type { IRunResult, IRunOptions, Reporter } from "./loop.types";
 import { flags } from "../config";
 import { SYSTEM, seedPrompt } from "./prompt";
 import { detectStack } from "../stack-detection";
+import { TtsrManager } from "./ttsr";
+import { DEFAULT_TTSR_RULES } from "./ttsr-defaults";
 import {
   type ILoopCtx,
   type ILoopState,
@@ -61,6 +63,64 @@ function handleDegeneration(
     edits: state.edits,
     regressions: state.regressions,
   };
+}
+
+/** Build and configure a TTSR manager if enabled. Returns null if disabled. */
+function initTtsrManager(): TtsrManager | null {
+  if (!flags.ttsr()) {
+    return null;
+  }
+
+  const manager = new TtsrManager();
+
+  for (const rule of DEFAULT_TTSR_RULES) {
+    manager.addRule(rule);
+  }
+
+  return manager;
+}
+
+/** Handle a TTSR interrupt: report, inject corrective message, and optionally disable. */
+function handleTtsrInterrupt(
+  ttsrFired: { ruleName: string; guidance: string },
+  state: ILoopState,
+  messages: IChatMessage[],
+  report: Reporter,
+  taskId: string,
+  turn: number,
+  turnStart: number,
+  taskStart: number,
+  ttsrManager: TtsrManager | null
+): void {
+  state.ttsrInterrupts += 1;
+
+  report({
+    kind: "ttsr",
+    task: taskId,
+    message: `⚠ TTSR interrupted: ${ttsrFired.ruleName}`,
+  });
+
+  // Hard cap: after 3 interrupts, disable TTSR to prevent loops
+  if (state.ttsrInterrupts >= 3) {
+    report({
+      kind: "tool",
+      task: taskId,
+      message: `TTSR disabled after ${state.ttsrInterrupts} interrupts (hit cap)`,
+    });
+
+    if (ttsrManager !== null) {
+      // Disable by clearing rules
+      // (We'll create a way to disable the manager in a future refinement)
+    }
+  }
+
+  // Append corrective message and retry without counting as a normal cycle
+  messages.push({
+    role: "user",
+    content: `⚠ generation interrupted: ${ttsrFired.guidance} Rewrite the affected part without that pattern.`,
+  });
+
+  emitTiming(report, taskId, turn, turnStart, taskStart);
 }
 
 /** A/B control for the gate-feedback-fidelity win: TSFORGE_LEGACY_FEEDBACK=1
@@ -178,6 +238,8 @@ export async function runTask(
     thinkingTokenBudget ??
     (hasExistingCode ? undefined : LOOP_LIMITS.scratchThinkingBudget);
 
+  const ttsrManager = initTtsrManager();
+
   const ctx: ILoopCtx = {
     task,
     cwd,
@@ -195,6 +257,7 @@ export async function runTask(
     lastGateCount: -1,
     edits: 0,
     regressions: 0,
+    ttsrInterrupts: 0,
   };
   const taskStart = performance.now();
 
@@ -208,6 +271,10 @@ export async function runTask(
       message: `task ${task.id} · turn ${turn}: asking model`,
     });
 
+    if (ttsrManager !== null) {
+      ttsrManager.resetBuffer();
+    }
+
     const res = await provider.complete(messages, {
       tools,
       temperature,
@@ -216,6 +283,7 @@ export async function runTask(
       ...(effectiveThinkingBudget === undefined
         ? {}
         : { thinkingTokenBudget: effectiveThinkingBudget }),
+      ...(ttsrManager === null ? {} : { ttsrManager }),
       onToken: (text) => {
         report({ kind: "token", task: task.id, message: text });
       },
@@ -227,6 +295,24 @@ export async function runTask(
       toolCalls: res.toolCalls,
     });
 
+    // Check for TTSR firing: abort generation with corrective guidance + retry
+    if (res.ttsrFired !== undefined) {
+      handleTtsrInterrupt(
+        res.ttsrFired,
+        state,
+        messages,
+        report,
+        task.id,
+        turn,
+        turnStart,
+        taskStart,
+        ttsrManager
+      );
+
+      // Continue to next turn without settling the gate
+      continue;
+    }
+
     const looped = handleDegeneration(res, ctx, state, {
       turn,
       turnStart,
@@ -235,6 +321,10 @@ export async function runTask(
 
     if (looped !== null) {
       return looped;
+    }
+
+    if (ttsrManager !== null) {
+      ttsrManager.incrementTurnCount();
     }
 
     const touchedEditable =

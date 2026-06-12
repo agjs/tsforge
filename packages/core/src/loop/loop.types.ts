@@ -23,7 +23,8 @@ export interface ILoopEvent {
     | "tool"
     | "repair"
     | "timing"
-    | "usage";
+    | "usage"
+    | "ttsr";
   task: string;
   message: string;
   cycle?: number;
