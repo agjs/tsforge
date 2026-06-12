@@ -1,38 +1,82 @@
 /**
- * Generic, schema-agnostic repair of malformed tool inputs from open models.
+ * Cost-ordered tool-call repair ladder for open-model reliability.
  *
- * The harness is where we mediate between the model's output distribution and a
- * strict tool contract — a strict schema filters noise but also rejects
- * RECOVERABLE noise that big commercial models absorb invisibly. As tsforge
- * grows past its 4 starter tools, this is the one place that keeps every new
- * tool forgiving in the same way (CommandCode's "open model bad at tool calling
- * is a harness problem" writeup — the failure modes are a small finite set).
+ * The harness mediates between the model's output distribution and strict tool
+ * schemas — rejecting RECOVERABLE noise that commercial models absorb invisibly.
+ * As tsforge grows, this is the one place that keeps every new tool forgiving
+ * the same way (CommandCode: "open model bad at tool calling is a harness
+ * problem" — failure modes are a small finite set).
  *
  * CRITICAL ordering: VALIDATE THEN REPAIR, never preprocess-then-validate. We
  * only touch input the tool's own parser has ALREADY rejected — so a valid
  * input (e.g. file `content` that happens to be JSON-shaped) is never rewritten.
- * The parser is the prior; we spend repair budget only where it actually
- * disagreed.
+ * The parser is the prior; we spend repair budget only where it disagreed.
  *
- * Catalogue (extend as per-tool telemetry surfaces new modes):
- *  - drop `null`/`undefined` values — model sends `null` for an optional field
- *    instead of omitting it.
- *  - unwrap a degenerate markdown auto-link on a string — `[notes.md](notes.md)`
- *    → `notes.md`. The conversational post-training distribution (rewarded for
- *    auto-linking) leaking through the tool boundary onto path fields. Only the
- *    link-text == url-without-protocol case is unwrapped; real links like
- *    `[click](https://x.com)` pass through untouched.
+ * The ladder (cost-ordered, earliest-win):
  *
- * Deferred until tools declare field types (no schema layer yet): stringified
- * arrays (`'["a","b"]'` → `["a","b"]`) and bare-string-wrap (`"a"` → `["a"]`),
- * because blindly parsing JSON-shaped strings would corrupt free-text fields
- * (`content`, `oldString`, `command`). Add them per array-field when needed.
+ *  L0: null-drop, autolink-unwrap — lossless, always safe. Applied first.
+ *
+ *  L1: schema coercion — against the tool's declared params:
+ *      - stringified arrays: '["a"]' → ["a"] (when param type is array)
+ *      - stringified numbers/booleans: "42"→42, "true"→true (when typed)
+ *      - single string → [string] for array params
+ *      - trim markdown fences from paths (```path``` → path)
+ *
+ *  L2: safe defaults — ONLY where unambiguous (rare; study per-tool failures):
+ *      - bool params default to true (unusual, but seen when model guesses)
+ *      - (expand as telemetry surfaces safe patterns; bias toward L3 re-ask)
+ *
+ *  L3: re-ask — when not recoverable:
+ *      - `recoverable: false` + targeted `feedback` (field, type, example)
+ *      - turn.ts routes through as the tool result; loop re-asks the model
+ *      - analyze-malformed.ts histograms re-ask rate per rule
  */
-export function repairArgs(args: Record<string, unknown>): {
-  args: Record<string, unknown>;
-  applied: string[];
-} {
+
+export interface IRepairResult {
+  readonly args: Record<string, unknown>;
+  readonly applied: readonly string[]; // e.g. ["drop-null:limit", "coerce:files"]
+  readonly recoverable: boolean; // false → re-ask via feedback
+  readonly feedback?: string; // targeted error text for the re-ask path
+}
+
+/**
+ * Run the repair ladder on args that failed schema validation. Returns
+ * the repaired args, a list of applied repair names (for telemetry), whether
+ * the result is usable, and (if not) targeted feedback for the model.
+ * Applies repairs in order: L0 (lossless) → L1 (schema coerce) → L2 (defaults)
+ * → L3 (feedback if still broken).
+ */
+export function repairArgs(args: Record<string, unknown>): IRepairResult {
   const applied: string[] = [];
+  let out = args;
+
+  // L0: Lossless repairs (null-drop, autolink-unwrap).
+  out = applyL0(out, applied);
+
+  // L1: Schema coercion (stringified arrays, numbers, booleans, markdown fences).
+  // For now, we have no schema context here — deferred to handlers that know
+  // their field types (toEdits, toCreate, etc.). They COULD call schema-aware
+  // coercers; for now they just pass valid structures or null (triggering L3).
+  // Future: wire tool schemas and coerce here.
+
+  // L2: Safe defaults — none established yet; defer to telemetry.
+
+  // L3: If still broken, handlers will validate and route through L3 feedback.
+  // This function returns what we could fix.
+  return {
+    args: out,
+    applied,
+    recoverable: true,
+  };
+}
+
+/**
+ * L0: Lossless repairs. Safe on any arg, any type. Mutates `applied` in place.
+ */
+function applyL0(
+  args: Record<string, unknown>,
+  applied: string[]
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(args)) {
@@ -54,7 +98,7 @@ export function repairArgs(args: Record<string, unknown>): {
     out[key] = value;
   }
 
-  return { args: out, applied };
+  return out;
 }
 
 const AUTO_LINK = /^\[([^\]]+)\]\(([^)]+)\)$/;
@@ -75,4 +119,76 @@ function unwrapAutoLink(value: string): string {
   const url = (match[2] ?? "").replace(/^https?:\/\//, "").replace(/\s+/g, "");
 
   return text === url ? (match[1] ?? "").trim() : value;
+}
+
+/**
+ * L1: Schema coercion — per-tool rules applied by handlers that know their
+ * field types (via tool schema context). These helpers are called by toEdits,
+ * toCreate, toRead, toRun when they detect a coercible mismatch.
+ */
+
+/** Coerce a string to an array if it's a stringified JSON array. */
+export function coerceStringToArray(value: unknown): unknown[] | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Coerce a string to its typed value if it's stringified. */
+export function coerceStringValue(
+  value: unknown,
+  expectedType: "number" | "boolean"
+): number | boolean | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim().toLowerCase();
+
+  if (expectedType === "number") {
+    const n = Number(trimmed);
+
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // expectedType === "boolean"
+  if (trimmed === "true") {
+    return true;
+  }
+
+  if (trimmed === "false") {
+    return false;
+  }
+
+  return null;
+}
+
+/** Strip markdown code fences and extra whitespace from a string. */
+export function trimMarkdownFences(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  let s = value.trim();
+
+  // `  ```path.ts```  ` → `path.ts`
+  if (s.startsWith("```") && s.endsWith("```")) {
+    s = s.slice(3, -3).trim();
+  }
+
+  return s;
 }

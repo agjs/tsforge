@@ -21,6 +21,7 @@ export interface ILoopEvent {
     | "stuck"
     | "run"
     | "tool"
+    | "repair"
     | "timing"
     | "usage";
   task: string;

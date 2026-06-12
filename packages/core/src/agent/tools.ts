@@ -1,6 +1,7 @@
 import type { ICreateFile, IReplacement } from "../files";
 import { isArray, isRecord } from "../lib/guards";
 import { runShellCommand } from "../lib/fs";
+import { coerceStringToArray, trimMarkdownFences } from "./tool-repair";
 import type { IShellResult } from "./agent.types";
 
 /** Default kill-timeout for the `run` tool (ms) — generous enough for a slow
@@ -21,11 +22,24 @@ function runToolTimeoutMs(): number {
  * trajectory — observed on react-board: 7 rejected reads in turn 1 sent the
  * model into an inert "let me read…" loop. So we accept the aliases instead of
  * rejecting (input-repair: meet the model where it is). `file` wins if present.
+ * Also applies L1 coercions: trims markdown fences, coerces if stringified.
  */
 export function fileArg(args: Record<string, unknown>): string | null {
   for (const key of ["file", "path", "filename", "filepath", "filePath"]) {
     const value = args[key];
 
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    // L1: trim markdown fences (```path.ts``` → path.ts)
+    const trimmed = trimMarkdownFences(value);
+
+    if (trimmed !== null && trimmed.length > 0) {
+      return trimmed;
+    }
+
+    // Already a string but not markdown-wrapped.
     if (typeof value === "string" && value.length > 0) {
       return value;
     }
@@ -38,15 +52,26 @@ export function fileArg(args: Record<string, unknown>): string | null {
  * Normalize either edit form into a file + ordered replacement list. Accepts the
  * single `{file, oldString, newString}` shape AND the batched `{file, edits:[…]}`
  * shape, so old callers and the multi-site path share one contract.
+ * Applies L1 coercions: stringified arrays are parsed.
  */
 export function toEdits(
   args: Record<string, unknown>
 ): { file: string; edits: IReplacement[] } | null {
-  const { edits, oldString, newString } = args;
+  const { edits: editsDef, oldString: oldStr, newString: newStr } = args;
+  let edits = editsDef;
   const file = fileArg(args);
 
   if (file === null) {
     return null;
+  }
+
+  // L1: Coerce stringified arrays (e.g. from models that emit '[{...}]' as a string).
+  if (typeof edits === "string") {
+    const parsed = coerceStringToArray(edits);
+
+    if (parsed !== null) {
+      edits = parsed;
+    }
   }
 
   if (isArray(edits)) {
@@ -67,8 +92,8 @@ export function toEdits(
     return list.length > 0 ? { file, edits: list } : null;
   }
 
-  if (typeof oldString === "string" && typeof newString === "string") {
-    return { file, edits: [{ oldString, newString }] };
+  if (typeof oldStr === "string" && typeof newStr === "string") {
+    return { file, edits: [{ oldString: oldStr, newString: newStr }] };
   }
 
   return null;
@@ -83,6 +108,27 @@ export function toCreate(args: Record<string, unknown>): ICreateFile | null {
   }
 
   return null;
+}
+
+/**
+ * Build L3 re-ask feedback for a broken tool call. Targets the exact field,
+ * shows what was received, names the expected type, and provides a working example.
+ */
+export function buildRepairFeedback(
+  toolName: string,
+  field: string,
+  received: unknown,
+  expectedType: string,
+  example: string
+): string {
+  return (
+    `\n\n⚠ Tool argument repair failed — the \`${toolName}\` tool cannot proceed ` +
+    `without fixing \`${field}\`:\n` +
+    `  received: ${JSON.stringify(received)} (${typeof received})\n` +
+    `  expected: ${expectedType}\n` +
+    `  example: \`${example}\`\n\n` +
+    `Fix the argument and call the tool again.`
+  );
 }
 
 export function toRun(

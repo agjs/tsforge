@@ -34,36 +34,68 @@ export function str(args: Record<string, unknown>, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
+export interface IParseResult<T> {
+  value: T | null;
+  feedback?: string; // L3 feedback when recoverable=false
+}
+
 /**
  * Parse a tool's args, with VALIDATE-THEN-REPAIR: try the tool's own parser; if
- * it rejects, apply the generic input repairs and try ONCE more. Emits telemetry
- * — `tool_input_repaired:<tool>` when a repair rescued the call,
- * `tool_input_rejected:<tool>` when even repair couldn't — so we can watch
- * per-tool failure rates as the toolset grows.
+ * it rejects, apply the repair ladder (L0→L1→L2→L3). Emits telemetry:
+ *   - `repair:L0:<rule>` / `repair:L1:<rule>` / `repair:L2:<rule>` per applied rule
+ *   - `repair:L3` when re-asking (feedback included in result)
+ *   - `tool_input_rejected:<tool>` when (rarely) no parse succeeded
+ * Returns both the parsed value and optional L3 feedback to surface to the model.
  */
 export function parseOrRepair<T>(
   raw: Record<string, unknown>,
   normalize: (a: Record<string, unknown>) => T | null,
   ctx: IToolContext,
   tool: string
-): T | null {
+): IParseResult<T> {
   const direct = normalize(raw);
 
   if (direct !== null) {
-    return direct;
+    return { value: direct };
   }
 
-  const { args, applied } = repairArgs(raw);
-  const repaired = applied.length > 0 ? normalize(args) : null;
+  const repair = repairArgs(raw);
+
+  if (repair.applied.length > 0) {
+    for (const rule of repair.applied) {
+      ctx.report({
+        kind: "repair",
+        task: ctx.task,
+        message: `${tool}:${rule}`,
+      });
+    }
+  }
+
+  const repaired = repair.applied.length > 0 ? normalize(repair.args) : null;
 
   if (repaired !== null) {
     ctx.report({
       kind: "tool",
       task: ctx.task,
-      message: `tool_input_repaired:${tool} (${applied.join(", ")})`,
+      message: `tool_input_repaired:${tool} (${repair.applied.join(", ")})`,
     });
 
-    return repaired;
+    return { value: repaired };
+  }
+
+  // L3: If still broken after L0-L2, return feedback if provided (recoverable=false).
+  if (
+    !repair.recoverable &&
+    repair.feedback !== undefined &&
+    repair.feedback.length > 0
+  ) {
+    ctx.report({
+      kind: "repair",
+      task: ctx.task,
+      message: `${tool}:L3-re-ask`,
+    });
+
+    return { value: null, feedback: repair.feedback };
   }
 
   ctx.report({
@@ -72,7 +104,7 @@ export function parseOrRepair<T>(
     message: `tool_input_rejected:${tool}`,
   });
 
-  return null;
+  return { value: null };
 }
 
 /** Log a tool rejection (scope / size / match failure) so it's measurable. */

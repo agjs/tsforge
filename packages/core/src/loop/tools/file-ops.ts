@@ -22,9 +22,13 @@ export async function readFile(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
-  const r = parseOrRepair(args, toRead, ctx, "read");
+  const { value: r, feedback } = parseOrRepair(args, toRead, ctx, "read");
 
   if (r === null) {
+    if (feedback !== undefined && feedback.length > 0) {
+      return feedback;
+    }
+
     return "read: malformed args (need `file`)";
   }
 
@@ -94,9 +98,13 @@ export async function runShell(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
-  const r = parseOrRepair(args, toRun, ctx, "run");
+  const { value: r, feedback } = parseOrRepair(args, toRun, ctx, "run");
 
   if (r === null) {
+    if (feedback !== undefined && feedback.length > 0) {
+      return feedback;
+    }
+
     return "run: malformed args (need `command`)";
   }
 
@@ -156,9 +164,13 @@ export async function doEdit(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
-  const edit = parseOrRepair(args, toEdits, ctx, "edit");
+  const { value: edit, feedback } = parseOrRepair(args, toEdits, ctx, "edit");
 
   if (edit === null) {
+    if (feedback !== undefined && feedback.length > 0) {
+      return feedback;
+    }
+
     return "edit: malformed args (need `file` plus either `oldString`/`newString` or an `edits` array of {oldString,newString})";
   }
 
@@ -245,9 +257,18 @@ export async function doCreate(
   args: Record<string, unknown>,
   ctx: IToolContext
 ): Promise<string> {
-  const create = parseOrRepair(args, toCreate, ctx, "create");
+  const { value: create, feedback } = parseOrRepair(
+    args,
+    toCreate,
+    ctx,
+    "create"
+  );
 
   if (create === null) {
+    if (feedback !== undefined && feedback.length > 0) {
+      return feedback;
+    }
+
     return "create: malformed args (need file, content)";
   }
 
