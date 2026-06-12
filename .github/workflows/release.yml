@@ -45,6 +45,12 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+      - name: Set up Node for npm
+        uses: actions/setup-node@39370e3970a4d10e9485483007a1f8dd126a6a95 # v4.1.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
       - name: Verify tag matches package version
         id: version
         run: |
@@ -63,13 +69,10 @@ jobs:
       - name: Publish to npm
         working-directory: packages/core
         env:
-          NPM_CONFIG_PROVENANCE: "true"
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          registry="//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}"
-          printf '%s\n' "$registry" > "${HOME}/.npmrc"
-          printf '%s\n' "$registry" > .npmrc
-          bun publish --access public
+          npm whoami
+          npm publish --access public --provenance
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
