@@ -1312,13 +1312,16 @@ async function repl(args: ICliArgs): Promise<number> {
   return 0;
 }
 
-async function main(): Promise<number> {
+export async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
 
   // A positional task with a scope + gate ⇒ one-shot; otherwise interactive.
   return isOneShot(args) ? runOnce(args) : repl(args);
 }
 
+// Direct run (`bun src/cli.ts`, dev). The published binary instead imports
+// `main` from bin/tsforge.js, because `import.meta.main` is false when this
+// module is imported rather than executed as the entry point.
 if (import.meta.main) {
   main()
     .then((code) => {
