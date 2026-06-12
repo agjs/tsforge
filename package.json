@@ -1,8 +1,8 @@
 {
   "name": "tsforge",
-  "private": true,
   "type": "module",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "license": "MIT",
   "description": "A specialized local AI coding harness for TypeScript web development, built around Qwen3.6-27B. Built greenfield to be understood inside out.",
   "scripts": {
     "typecheck": "tsc -p packages/core/tsconfig.json",
