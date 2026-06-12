@@ -30,14 +30,16 @@ export function entityNoun(raw: string): string {
 async function uiBasenames(dir: string): Promise<string[]> {
   const out: string[] = [];
 
-  const walk = async (d: string): Promise<void> => {
-    let entries: Awaited<ReturnType<typeof readdir>>;
-
+  const readEntries = async (d: string) => {
     try {
-      entries = await readdir(d, { withFileTypes: true });
+      return await readdir(d, { withFileTypes: true });
     } catch {
-      return;
+      return [];
     }
+  };
+
+  const walk = async (d: string): Promise<void> => {
+    const entries = await readEntries(d);
 
     for (const entry of entries) {
       const p = join(d, entry.name);
