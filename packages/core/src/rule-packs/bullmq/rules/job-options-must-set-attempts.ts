@@ -114,7 +114,7 @@ function getEffectiveOptionValue(
   call: TSESTree.CallExpression,
   knownQueues: ReadonlyMap<string, QueueDefinition>,
   name: string
-): TSESTree.Expression | null {
+): TSESTree.Property["value"] | null {
   const opts = getOptionsObjectArg(call, 2);
 
   if (opts) {
@@ -146,7 +146,7 @@ function getEffectiveOptionValue(
   return defaultProperty.value;
 }
 
-function isAttemptsLiteralOne(value: TSESTree.Expression): boolean {
+function isAttemptsLiteralOne(value: TSESTree.Property["value"]): boolean {
   return (
     value.type === AST_NODE_TYPES.Literal &&
     typeof value.value === "number" &&

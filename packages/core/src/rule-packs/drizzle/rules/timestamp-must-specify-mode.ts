@@ -162,5 +162,5 @@ function allowedModesIncludes(
   allowedModes: readonly ("date" | "string")[],
   value: string
 ): boolean {
-  return allowedModes.includes(value);
+  return allowedModes.some((mode) => mode === value);
 }
