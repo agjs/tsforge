@@ -65,6 +65,10 @@ jobs:
         if: steps.filter.outputs.code == 'true'
         run: bun install --frozen-lockfile
 
+      - name: Install ripgrep
+        if: steps.filter.outputs.code == 'true'
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Verify install.sh copies match
         if: steps.filter.outputs.code == 'true'
         run: diff scripts/install.sh apps/docs/public/install.sh

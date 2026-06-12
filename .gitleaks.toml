@@ -1,12 +1,11 @@
 # Repo-wide gitleaks configuration. Every security-secrets workflow
 # points here so a single source of truth covers packages, apps, and scripts.
-#
-# Extend the allowlist only when CI hits known false positives in tests or
-# generated fixtures — production code with the same pattern still fails.
 
 [extend]
 useDefault = true
 
 [allowlist]
-description = "Known false positives in tests and placeholders."
-paths = []
+description = "Test fixtures that exercise secret redaction — not real credentials."
+paths = [
+  '''packages/core/tests/session-store\.test\.ts''',
+]
