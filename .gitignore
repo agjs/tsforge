@@ -10,3 +10,5 @@ evals/
 .claude/
 evals/runs/
 evals/.web-cache-*/
+.tsforge/
+models.json
