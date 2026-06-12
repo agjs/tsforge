@@ -6,7 +6,12 @@ import { codeFlowPack } from "./code-flow";
 import { drizzlePack } from "./drizzle";
 import { elysiaPack } from "./elysia";
 import { envAccessPack } from "./env-access";
+import { i18nKeysPack } from "./i18n-keys";
+import { jwtCookiesPack } from "./jwt-cookies";
+import { oauthSecurityPack } from "./oauth-security";
+import { reactComponentArchitecturePack } from "./react-component-architecture";
 import { structuredLoggingPack } from "./structured-logging";
+import { tanstackQueryPack } from "./tanstack-query";
 import { testConventionsPack } from "./test-conventions";
 import { PACK_REGISTRY } from "../stack-detection";
 
@@ -18,7 +23,12 @@ export const RULE_PACKS = {
   drizzle: drizzlePack,
   elysia: elysiaPack,
   "env-access": envAccessPack,
+  "i18n-keys": i18nKeysPack,
+  "jwt-cookies": jwtCookiesPack,
+  "oauth-security": oauthSecurityPack,
+  "react-component-architecture": reactComponentArchitecturePack,
   "structured-logging": structuredLoggingPack,
+  "tanstack-query": tanstackQueryPack,
   "test-conventions": testConventionsPack,
 } as const;
 

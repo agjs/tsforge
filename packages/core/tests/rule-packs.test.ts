@@ -48,7 +48,7 @@ function lint(
 }
 
 describe("rule-packs: registry", () => {
-  test("should have all eight packs registered", () => {
+  test("should have all thirteen packs registered", () => {
     expect(Object.keys(RULE_PACKS).sort()).toEqual([
       "bullmq",
       "code-flow",
@@ -56,7 +56,12 @@ describe("rule-packs: registry", () => {
       "drizzle",
       "elysia",
       "env-access",
+      "i18n-keys",
+      "jwt-cookies",
+      "oauth-security",
+      "react-component-architecture",
       "structured-logging",
+      "tanstack-query",
       "test-conventions",
     ]);
   });
@@ -1740,5 +1745,266 @@ describe("structured-logging pack", () => {
     const messages = lint("structured-logging", "require-event-field", code);
 
     expect(messages).toHaveLength(0);
+  });
+});
+
+describe("react-component-architecture pack", () => {
+  test("should export reactComponentArchitecturePack with correct structure", () => {
+    const pack = RULE_PACKS["react-component-architecture"];
+
+    expect(pack.id).toBe("react-component-architecture");
+    expect(pack.description).toContain("Component structure");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "component-folder-structure",
+      "forwardref-display-name",
+      "index-must-reexport-default",
+      "max-hooks-per-file",
+      "no-cross-feature-imports",
+      "no-inline-jsx-functions",
+    ]);
+  });
+
+  test("component-folder-structure: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["react-component-architecture"].rules[
+        "component-folder-structure"
+      ]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("component");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("forwardref-display-name: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["react-component-architecture"].rules[
+        "forwardref-display-name"
+      ]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("forwardRef");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("index-must-reexport-default: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["react-component-architecture"].rules[
+        "index-must-reexport-default"
+      ]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("index");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("max-hooks-per-file: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["react-component-architecture"].rules["max-hooks-per-file"]!;
+
+    expect(rule.meta.type).toBe("suggestion");
+    expect(rule.meta.docs?.description).toContain("hook");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("no-cross-feature-imports: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["react-component-architecture"].rules[
+        "no-cross-feature-imports"
+      ]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("feature");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("no-inline-jsx-functions: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["react-component-architecture"].rules[
+        "no-inline-jsx-functions"
+      ]!;
+
+    expect(rule.meta.type).toBe("suggestion");
+    expect(rule.meta.docs?.description).toContain("inline function");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+});
+
+describe("jwt-cookies pack", () => {
+  test("should export jwtCookiesPack with correct structure", () => {
+    const pack = RULE_PACKS["jwt-cookies"];
+
+    expect(pack.id).toBe("jwt-cookies");
+    expect(pack.description).toContain("JWT and cookie");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "auth-cookie-must-be-httponly",
+      "auth-cookie-must-be-secure-in-prod",
+      "bcrypt-rounds-min",
+    ]);
+  });
+
+  test("auth-cookie-must-be-httponly: reports missing httpOnly", () => {
+    const code = `
+      setCookie("session", token, { secure: true });
+    `;
+    const messages = lint("jwt-cookies", "auth-cookie-must-be-httponly", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("missingHttpOnly");
+  });
+
+  test("auth-cookie-must-be-httponly: allows httpOnly true", () => {
+    const code = `
+      setCookie("session", token, { httpOnly: true, secure: true });
+    `;
+    const messages = lint("jwt-cookies", "auth-cookie-must-be-httponly", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("auth-cookie-must-be-secure-in-prod: reports missing secure", () => {
+    const code = `
+      setCookie("session", token, { httpOnly: true });
+    `;
+    const messages = lint(
+      "jwt-cookies",
+      "auth-cookie-must-be-secure-in-prod",
+      code
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingSecure");
+  });
+
+  test("auth-cookie-must-be-secure-in-prod: allows secure true", () => {
+    const code = `
+      setCookie("session", token, { httpOnly: true, secure: true });
+    `;
+    const messages = lint(
+      "jwt-cookies",
+      "auth-cookie-must-be-secure-in-prod",
+      code
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("bcrypt-rounds-min: reports rounds below minimum", () => {
+    const code = `
+      import bcrypt from "bcrypt";
+      bcrypt.hash(password, 8);
+    `;
+    const messages = lint("jwt-cookies", "bcrypt-rounds-min", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("roundsTooLow");
+  });
+
+  test("bcrypt-rounds-min: allows rounds at minimum", () => {
+    const code = `
+      import bcrypt from "bcrypt";
+      bcrypt.hash(password, 10);
+    `;
+    const messages = lint("jwt-cookies", "bcrypt-rounds-min", code);
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("oauth-security pack", () => {
+  test("should export oauthSecurityPack with correct structure", () => {
+    const pack = RULE_PACKS["oauth-security"];
+
+    expect(pack.id).toBe("oauth-security");
+    expect(pack.description).toContain("OAuth");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "pkce-required-for-oidc",
+      "state-must-be-redis-backed",
+      "state-ttl-bounded",
+    ]);
+  });
+
+  test("pkce-required-for-oidc: rule exists and is callable", () => {
+    const rule = RULE_PACKS["oauth-security"].rules["pkce-required-for-oidc"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("PKCE");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("state-must-be-redis-backed: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["oauth-security"].rules["state-must-be-redis-backed"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("Redis");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("state-ttl-bounded: rule exists and is callable", () => {
+    const rule = RULE_PACKS["oauth-security"].rules["state-ttl-bounded"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("TTL");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+});
+
+describe("tanstack-query pack", () => {
+  test("should export tanstackQueryPack with correct structure", () => {
+    const pack = RULE_PACKS["tanstack-query"];
+
+    expect(pack.id).toBe("tanstack-query");
+    expect(pack.description).toContain("TanStack Query");
+    expect(Object.keys(pack.rules)).toEqual([
+      "prefix-query-key-must-use-set-queries-data",
+    ]);
+  });
+
+  test("prefix-query-key-must-use-set-queries-data: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["tanstack-query"].rules[
+        "prefix-query-key-must-use-set-queries-data"
+      ]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("queryKey");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+});
+
+describe("i18n-keys pack", () => {
+  test("should export i18nKeysPack with correct structure", () => {
+    const pack = RULE_PACKS["i18n-keys"];
+
+    expect(pack.id).toBe("i18n-keys");
+    expect(pack.description).toContain("Internationalization");
+    expect(Object.keys(pack.rules)).toEqual(["static-translation-key-exists"]);
+  });
+
+  test("static-translation-key-exists: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["i18n-keys"].rules["static-translation-key-exists"]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("Static string");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("static-translation-key-exists: reports missing key without dictionary", () => {
+    const code = `
+      t("missing.key");
+    `;
+    const messages = lint("i18n-keys", "static-translation-key-exists", code);
+
+    // Rule will report dictionaryReadFailed since no valid dict is provided
+    expect(messages.map((m) => m.messageId)).toContain("dictionaryReadFailed");
   });
 });
