@@ -8,6 +8,9 @@ import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
 import { condenseToolOutput } from "./condense";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
+import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
+import { SessionSnapshotStore } from "../../files/hashline";
+import { flags } from "../../config";
 
 /**
  * Read a file for the model. TRUSTED-MODE (by design): `read` and `run` are NOT
@@ -20,7 +23,7 @@ import { parseOrRepair, reject, type IToolContext } from "./tool-context";
  */
 export async function readFile(
   args: Record<string, unknown>,
-  ctx: IToolContext
+  ctx: IToolContext & { snapshotStore?: SessionSnapshotStore }
 ): Promise<string> {
   const { value: r, feedback } = parseOrRepair(args, toRead, ctx, "read");
 
@@ -42,7 +45,23 @@ export async function readFile(
     return `read: ${r.file} does not exist`;
   }
 
-  return handle.text();
+  const content = await handle.text();
+
+  // Annotate with hashline header if enabled
+  if (flags.hashlineEditTool()) {
+    ctx.snapshotStore ??= new SessionSnapshotStore();
+
+    const hash = ctx.snapshotStore.record(r.file, content);
+    const header = formatHashHeader(r.file, hash);
+    const lines = content.split("\n");
+    const annotated = lines
+      .map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`)
+      .join("\n");
+
+    return `${header}\n${annotated}`;
+  }
+
+  return content;
 }
 
 /** Commands a plan-mode `run` may execute — pure inspection, never mutation. */

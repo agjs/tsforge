@@ -1,6 +1,7 @@
 import { repairArgs } from "../../agent/tool-repair";
 import type { TsService } from "../../lsp";
 import type { Reporter } from "../loop.types";
+import type { SessionSnapshotStore } from "../../files/hashline";
 
 export interface IToolContext {
   cwd: string;
@@ -25,6 +26,8 @@ export interface IToolContext {
    *  read-only commands — the hard guarantee behind the filtered tool list (a
    *  salvaged/forced call could otherwise still write). */
   readOnly?: boolean;
+  /** Hashline snapshot store for stale-anchor recovery (per-session, lazily initialized). */
+  snapshotStore?: SessionSnapshotStore;
 }
 
 /** A required string arg, or "" if missing/wrong-type. */

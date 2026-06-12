@@ -13,7 +13,13 @@ test("scratch (no existing code) gets only the base tools — no LSP nav set", (
   // diluted the create path and stalled money. See lsp-tools-regress-scratch.
   const tools = toolsFor(false);
 
-  expect(names(tools).sort()).toEqual(["create", "edit", "read", "run"]);
+  expect(names(tools).sort()).toEqual([
+    "create",
+    "edit",
+    "edit_lines",
+    "read",
+    "run",
+  ]);
 });
 
 test("existing code gets the base tools PLUS the LSP nav set", () => {
@@ -33,6 +39,7 @@ test("TSFORGE_NO_LSP_TOOLS=1 forces base-only even with existing code", () => {
   expect(names(toolsFor(true)).sort()).toEqual([
     "create",
     "edit",
+    "edit_lines",
     "read",
     "run",
   ]);

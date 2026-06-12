@@ -145,6 +145,25 @@ export function toRead(args: Record<string, unknown>): { file: string } | null {
   return file !== null ? { file } : null;
 }
 
+/**
+ * Parse hashline edit args: file (required), hash (optional), input (required).
+ */
+export function toHashlineEdit(
+  args: Record<string, unknown>
+): { file: string; hash?: string; input: string } | null {
+  const file = fileArg(args);
+  const { hash, input } = args;
+
+  if (file === null || typeof input !== "string" || input.length === 0) {
+    return null;
+  }
+
+  const hashStr =
+    typeof hash === "string" && hash.length > 0 ? hash : undefined;
+
+  return { file, hash: hashStr, input };
+}
+
 /** Run a shell command in `cwd` and capture stdout/stderr/exit — the `run` tool.
  *  Cancellable via `signal`; killed after a timeout (default `runToolTimeoutMs`)
  *  so a hung command can't wedge the harness. A timeout appends a clear note. */

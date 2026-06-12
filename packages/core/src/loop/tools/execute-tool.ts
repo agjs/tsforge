@@ -1,6 +1,7 @@
 import type { IToolCall } from "../../inference";
 import { TOOL_NAME, READ_ONLY_TOOL_NAMES, type ToolName } from "../../agent";
 import { readFile, runShell, doEdit, doCreate } from "./file-ops";
+import { doHashlineEdit } from "./edit-hashline";
 import { doSearch, doLsp } from "./lsp-ops";
 import { doScaffoldUi } from "./scaffold-ui";
 import { doScaffoldRoutes } from "./scaffold-routes";
@@ -21,6 +22,7 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.read]: readFile,
   [TOOL_NAME.run]: runShell,
   [TOOL_NAME.edit]: doEdit,
+  [TOOL_NAME.editLines]: doHashlineEdit,
   [TOOL_NAME.create]: doCreate,
   [TOOL_NAME.search]: doSearch,
   [TOOL_NAME.symbolSearch]: (a, c) => doLsp(TOOL_NAME.symbolSearch, a, c),

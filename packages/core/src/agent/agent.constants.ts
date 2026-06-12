@@ -8,6 +8,7 @@ export const TOOL_NAME = {
   read: "read",
   run: "run",
   edit: "edit",
+  editLines: "edit_lines",
   create: "create",
   search: "search",
   symbolSearch: "symbol_search",
@@ -91,6 +92,27 @@ export const CREATE_TOOL = {
         content: { type: "string" },
       },
       required: ["file", "content"],
+    },
+  },
+};
+
+export const EDIT_LINES_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.editLines,
+    description:
+      "Edit file lines by content hash (stale-anchor recovery). Copy the hash from the read output (¶path#HASH), then use: ¶path#HASH / replace N..M: +line1 +line2 / delete N..M / insert before|after N: +line.",
+    parameters: {
+      type: "object",
+      properties: {
+        file: { type: "string" },
+        hash: {
+          type: "string",
+          description: "optional: file content hash (¶path#HASH)",
+        },
+        input: { type: "string", description: "hashline edit operations" },
+      },
+      required: ["file", "input"],
     },
   },
 };

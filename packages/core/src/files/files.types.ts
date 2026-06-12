@@ -52,3 +52,30 @@ export type CreateFailReason =
 export type CreateResult =
   | { ok: true; file: string }
   | { ok: false; file: string; reason: CreateFailReason };
+
+/** Hashline edit request: anchored by content hash for stale-anchor recovery. */
+export interface IHashlineEdit {
+  file: string;
+  /** Content hash from the read annotation (¶path#HASH). */
+  hash?: string;
+  /** Raw edit payload: header + ops. */
+  input: string;
+}
+
+export type HashlineFailReason =
+  | "missing-file"
+  | "no-anchor"
+  | "stale-anchor"
+  | "stale-anchor-conflict"
+  | "parse-error"
+  | "out-of-bounds"
+  | "invalid-op";
+
+export type HashlineResult =
+  | { ok: true; file: string; newHash: string }
+  | {
+      ok: false;
+      file: string;
+      reason: HashlineFailReason;
+      suggestions?: string[];
+    };

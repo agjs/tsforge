@@ -24,6 +24,7 @@ import {
 } from "./astgrep-fix";
 import {
   EDIT_TOOL,
+  EDIT_LINES_TOOL,
   CREATE_TOOL,
   RUN_TOOL,
   READ_TOOL,
@@ -57,11 +58,13 @@ import {
 // is existing code to navigate. TSFORGE_NO_LSP_TOOLS=1 forces them off entirely.
 const BASE_TOOLS = [READ_TOOL, RUN_TOOL, EDIT_TOOL, CREATE_TOOL];
 
-const ALL_TOOLS = [...BASE_TOOLS, ...LSP_TOOLS];
+const HASHLINE_TOOLS = flags.hashlineEditTool() ? [EDIT_LINES_TOOL] : [];
+
+const ALL_TOOLS = [...BASE_TOOLS, ...HASHLINE_TOOLS, ...LSP_TOOLS];
 
 export function toolsFor(hasExistingCode: boolean): typeof ALL_TOOLS {
   if (flags.noLspTools() || !hasExistingCode) {
-    return BASE_TOOLS;
+    return [...BASE_TOOLS, ...HASHLINE_TOOLS];
   }
 
   return ALL_TOOLS;

@@ -20,4 +20,7 @@ export const flags = {
    *  with tool_choice "required" + a `yield_status` stop tool, so output is
    *  always grammar-constrained — the malformed-tool-call class can't occur. */
   forceTools: (): boolean => isOn(ENV_FLAG.forceTools),
+  /** Hashline edit tool (content-hash-anchored line edits) with snapshot recovery
+   *  (A/B control, default ON — set to "0" to disable). */
+  hashlineEditTool: (): boolean => process.env.TSFORGE_HASHLINE !== "0",
 };
