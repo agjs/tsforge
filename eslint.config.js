@@ -210,10 +210,7 @@ export default tseslint.config(
     // untyped AST shapes (e.g., checking node.object.name, node.property.name
     // without full type guards). This minimal override relaxes only the rules
     // genuinely needed for AST manipulation.
-    files: [
-      "packages/core/src/rule-packs/**/*.ts",
-      "!packages/core/tests/**/*.ts",
-    ],
+    files: ["packages/core/src/rule-packs/**/*.ts"],
     rules: {
       "@typescript-eslint/no-unsafe-member-access": "off",
       "@typescript-eslint/no-unsafe-assignment": "off",

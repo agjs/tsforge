@@ -4,7 +4,7 @@ import path from "node:path";
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
-import { toPosixRelative } from "../utils/path";
+import { toPosixRelative } from "../../utils";
 
 export const RULE_NAME = "test-file-mirrors-source";
 

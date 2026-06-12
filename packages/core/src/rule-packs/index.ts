@@ -3,15 +3,14 @@ import type { TSESLint } from "@typescript-eslint/utils";
 import { commentHygienePack } from "./comment-hygiene";
 import { codeFlowPack } from "./code-flow";
 import { envAccessPack } from "./env-access";
-import { moduleBoundariesPack } from "./module-boundaries";
 import { testConventionsPack } from "./test-conventions";
+import { PACK_REGISTRY } from "../stack-detection";
 
 /** Registry of all available rule packs, keyed by pack ID. */
 export const RULE_PACKS = {
   "env-access": envAccessPack,
   "code-flow": codeFlowPack,
   "comment-hygiene": commentHygienePack,
-  "module-boundaries": moduleBoundariesPack,
   "test-conventions": testConventionsPack,
 } as const;
 
@@ -19,10 +18,12 @@ export type IRulePackId = keyof typeof RULE_PACKS;
 
 /**
  * Builds an ESLint plugin and merged config from a selection of rule packs.
- * Returns both the merged plugin (for registration under `tsforge` namespace)
- * and the rules config (mapping rule names to severities).
+ * Pack IDs present in stack-detection's PACK_REGISTRY but absent from RULE_PACKS
+ * are silently skipped (they may carry meta-rules later, not eslint rules).
+ * Throws only for IDs unknown to both registries.
  *
  * @throws if any two packs define the same rule name
+ * @throws if a pack ID is unknown to both RULE_PACKS and PACK_REGISTRY
  */
 export function buildPackEslintConfig(packIds: readonly IRulePackId[]): {
   plugin: TSESLint.FlatConfig.Plugin;
@@ -38,8 +39,16 @@ export function buildPackEslintConfig(packIds: readonly IRulePackId[]): {
   for (const packId of packIds) {
     const pack = RULE_PACKS[packId];
 
+    // Skip pack IDs known to stack-detection but absent from RULE_PACKS
     if (pack === undefined) {
-      throw new Error(`Unknown rule pack: ${packId}`);
+      const knownInRegistry = packId in PACK_REGISTRY;
+
+      if (!knownInRegistry) {
+        throw new Error(`Unknown rule pack: ${packId}`);
+      }
+
+      // Pack is in registry but not in RULE_PACKS — skip silently
+      continue;
     }
 
     for (const [ruleName, ruleModule] of Object.entries(pack.rules)) {

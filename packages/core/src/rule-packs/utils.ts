@@ -52,30 +52,3 @@ export function matchesAnyGlobPattern(
 
   return patterns.some((pattern) => matchesGlobPattern(filePath, pattern));
 }
-
-/**
- * Simple import-source matcher. Supports:
- * - glob patterns with `*` and `?`
- * - bare module specifiers (exact match or prefix match with `/`)
- */
-export function importMatchesAny(
-  importSource: string,
-  patterns: readonly string[]
-): boolean {
-  for (const pat of patterns) {
-    if (pat.includes("*") || pat.includes("?")) {
-      if (matchesGlobPattern(importSource, pat)) {
-        return true;
-      }
-
-      continue;
-    }
-
-    // Bare specifier: exact match or prefix match
-    if (importSource === pat || importSource.startsWith(`${pat}/`)) {
-      return true;
-    }
-  }
-
-  return false;
-}
