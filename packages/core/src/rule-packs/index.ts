@@ -4,7 +4,9 @@ import { bullmqPack } from "./bullmq";
 import { commentHygienePack } from "./comment-hygiene";
 import { codeFlowPack } from "./code-flow";
 import { drizzlePack } from "./drizzle";
+import { elysiaPack } from "./elysia";
 import { envAccessPack } from "./env-access";
+import { structuredLoggingPack } from "./structured-logging";
 import { testConventionsPack } from "./test-conventions";
 import { PACK_REGISTRY } from "../stack-detection";
 
@@ -14,7 +16,9 @@ export const RULE_PACKS = {
   "code-flow": codeFlowPack,
   "comment-hygiene": commentHygienePack,
   drizzle: drizzlePack,
+  elysia: elysiaPack,
   "env-access": envAccessPack,
+  "structured-logging": structuredLoggingPack,
   "test-conventions": testConventionsPack,
 } as const;
 

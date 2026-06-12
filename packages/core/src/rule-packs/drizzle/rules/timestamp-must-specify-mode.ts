@@ -159,8 +159,8 @@ function propertyKeyMatches(
 }
 
 function allowedModesIncludes(
-  allowedModes: readonly ("date" | "string")[],
+  allowedModes: readonly string[],
   value: string
 ): boolean {
-  return allowedModes.some((mode) => mode === value);
+  return allowedModes.includes(value);
 }

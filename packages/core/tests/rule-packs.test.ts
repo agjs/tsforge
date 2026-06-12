@@ -48,13 +48,15 @@ function lint(
 }
 
 describe("rule-packs: registry", () => {
-  test("should have all six packs registered", () => {
+  test("should have all eight packs registered", () => {
     expect(Object.keys(RULE_PACKS).sort()).toEqual([
       "bullmq",
       "code-flow",
       "comment-hygiene",
       "drizzle",
+      "elysia",
       "env-access",
+      "structured-logging",
       "test-conventions",
     ]);
   });
@@ -1450,5 +1452,293 @@ describe("bullmq pack", () => {
     const messages = lint("bullmq", "worker-must-listen-failed", code);
 
     expect(messages.map((m) => m.messageId)).toContain("missingListener");
+  });
+});
+
+describe("elysia pack", () => {
+  test("should export elysiaPack with correct structure", () => {
+    const pack = RULE_PACKS.elysia;
+
+    expect(pack.id).toBe("elysia");
+    expect(pack.description).toContain("Elysia");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "consistent-status-via-set",
+      "no-decorate-state-collision",
+      "no-separate-model-interfaces",
+      "prefer-destructured-context",
+      "prefer-direct-return",
+      "prefer-static-services",
+      "prefer-throw-status",
+      "require-hooks-before-routes",
+      "require-plugin-name",
+    ]);
+  });
+
+  test("consistent-status-via-set: reports Response wrapping in routes", () => {
+    const code = `
+      const app = new Elysia();
+      app.get("/", () => {
+        return new Response("Hello", { status: 200 });
+      });
+    `;
+    const messages = lint("elysia", "consistent-status-via-set", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("useSetStatus");
+  });
+
+  test("consistent-status-via-set: allows direct return without status", () => {
+    const code = `
+      const app = new Elysia();
+      app.get("/", () => {
+        return "Hello";
+      });
+    `;
+    const messages = lint("elysia", "consistent-status-via-set", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-decorate-state-collision: reports duplicate key in .decorate()", () => {
+    const code = `
+      const app = new Elysia()
+        .decorate("db", createDb())
+        .decorate("db", createCache());
+    `;
+    const messages = lint("elysia", "no-decorate-state-collision", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("decorateKeyCollision");
+  });
+
+  test("no-decorate-state-collision: allows distinct keys", () => {
+    const code = `
+      const app = new Elysia()
+        .decorate("db", createDb())
+        .decorate("cache", createCache());
+    `;
+    const messages = lint("elysia", "no-decorate-state-collision", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-separate-model-interfaces: reports duplicate Schema interface", () => {
+    const code = `
+      const UserSchema = t.Object({ name: t.String() });
+      interface User { name: string; }
+    `;
+    const messages = lint("elysia", "no-separate-model-interfaces", code);
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "noSeparateModelInterface"
+    );
+  });
+
+  test("no-separate-model-interfaces: allows distinct names", () => {
+    const code = `
+      const UserSchema = t.Object({ name: t.String() });
+      interface Profile { bio: string; }
+    `;
+    const messages = lint("elysia", "no-separate-model-interfaces", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("prefer-direct-return: reports Response.json() wrapper", () => {
+    const code = `
+      const app = new Elysia();
+      app.get("/users", () => {
+        return Response.json({ id: 1, name: "Alice" });
+      });
+    `;
+    const messages = lint("elysia", "prefer-direct-return", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("preferDirectReturn");
+  });
+
+  test("prefer-direct-return: allows direct object return", () => {
+    const code = `
+      const app = new Elysia();
+      app.get("/users", () => {
+        return { id: 1, name: "Alice" };
+      });
+    `;
+    const messages = lint("elysia", "prefer-direct-return", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("prefer-throw-status: reports try/catch with response in route", () => {
+    const code = `
+      const app = new Elysia();
+      app.post("/users", async () => {
+        try {
+          return await createUser();
+        } catch (e) {
+          return new Response("Error", { status: 500 });
+        }
+      });
+    `;
+    const messages = lint("elysia", "prefer-throw-status", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("preferThrowStatus");
+  });
+
+  test("prefer-throw-status: allows try/catch outside routes", () => {
+    const code = `
+      function safeCreate() {
+        try {
+          return createUser();
+        } catch (e) {
+          return null;
+        }
+      }
+    `;
+    const messages = lint("elysia", "prefer-throw-status", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("require-hooks-before-routes: reports hook after route", () => {
+    const code = `
+      const app = new Elysia()
+        .get("/", () => "hello")
+        .onError((ctx) => {});
+    `;
+    const messages = lint("elysia", "require-hooks-before-routes", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("hookAfterRoute");
+  });
+
+  test("require-hooks-before-routes: allows hooks before routes", () => {
+    const code = `
+      const app = new Elysia()
+        .onError((ctx) => {})
+        .get("/", () => "hello");
+    `;
+    const messages = lint("elysia", "require-hooks-before-routes", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("require-plugin-name: reports unnamed exported Elysia instance", () => {
+    const code = `
+      export const plugin = new Elysia();
+    `;
+    const messages = lint("elysia", "require-plugin-name", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("missingPluginName");
+  });
+
+  test("require-plugin-name: allows named plugin export", () => {
+    const code = `
+      export const plugin = new Elysia({ name: "auth-plugin" });
+    `;
+    const messages = lint("elysia", "require-plugin-name", code);
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("structured-logging pack", () => {
+  test("should export structuredLoggingPack with correct structure", () => {
+    const pack = RULE_PACKS["structured-logging"];
+
+    expect(pack.id).toBe("structured-logging");
+    expect(pack.description).toContain("Structured logging");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "mask-pii-fields",
+      "no-error-stringify",
+      "require-event-field",
+    ]);
+  });
+
+  test("mask-pii-fields: reports unmasked email in log payload", () => {
+    const code = `
+      logger.info({ event: "user_created", email: user.email });
+    `;
+    const messages = lint("structured-logging", "mask-pii-fields", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("unmaskedPii");
+  });
+
+  test("mask-pii-fields: allows masked PII field", () => {
+    const code = `
+      logger.info({ event: "user_created", email: maskEmailForLogging(user.email) });
+    `;
+    const messages = lint("structured-logging", "mask-pii-fields", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("mask-pii-fields: allows literal mask value", () => {
+    const code = `
+      logger.info({ event: "user_created", email: "[REDACTED]" });
+    `;
+    const messages = lint("structured-logging", "mask-pii-fields", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-error-stringify: reports String(error)", () => {
+    const code = `
+      logger.error({ event: "error", message: String(error) });
+    `;
+    const messages = lint("structured-logging", "no-error-stringify", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("noErrorStringify");
+  });
+
+  test("no-error-stringify: reports error.toString()", () => {
+    const code = `
+      logger.error({ event: "error", message: error.toString() });
+    `;
+    const messages = lint("structured-logging", "no-error-stringify", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("noErrorStringify");
+  });
+
+  test("no-error-stringify: reports template literal with error", () => {
+    const code = `
+      logger.error({ event: "error", message: \`Error: \${error}\` });
+    `;
+    const messages = lint("structured-logging", "no-error-stringify", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("noErrorStringify");
+  });
+
+  test("no-error-stringify: allows extractor function call", () => {
+    const code = `
+      import { getErrorMessage } from "@/lib/errors";
+      logger.error({ event: "error", message: getErrorMessage(error) });
+    `;
+    const messages = lint("structured-logging", "no-error-stringify", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("require-event-field: reports missing event field", () => {
+    const code = `
+      logger.info({ message: "Something happened" });
+    `;
+    const messages = lint("structured-logging", "require-event-field", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("missingEventField");
+  });
+
+  test("require-event-field: allows event field in payload", () => {
+    const code = `
+      logger.info({ event: "user_created", userId: 123 });
+    `;
+    const messages = lint("structured-logging", "require-event-field", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("require-event-field: allows spread with potential event field", () => {
+    const code = `
+      logger.info({ ...payload, extra: "data" });
+    `;
+    const messages = lint("structured-logging", "require-event-field", code);
+
+    expect(messages).toHaveLength(0);
   });
 });

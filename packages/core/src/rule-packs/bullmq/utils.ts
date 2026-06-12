@@ -1,5 +1,8 @@
 import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
-import { isRecord } from "../../lib/guards";
+
+import { walkAll } from "../utils";
+
+export { walkAll, walkSome } from "../utils";
 
 /**
  * Helper utilities for BullMQ rules.
@@ -328,95 +331,4 @@ export function findObjectProperty(
   }
 
   return null;
-}
-
-const NON_NODE_KEYS = new Set([
-  "parent",
-  "loc",
-  "range",
-  "tokens",
-  "comments",
-  "start",
-  "end",
-  "leadingComments",
-  "trailingComments",
-  "innerComments",
-]);
-
-/** AST nodes are plain objects with a string `type` discriminant. */
-function isNodeLike(value: unknown): value is TSESTree.Node {
-  return isRecord(value) && typeof value.type === "string";
-}
-
-export function walkAll(
-  node: TSESTree.Node,
-  callback: (node: TSESTree.Node) => void
-): void {
-  const visited = new WeakSet();
-
-  function walk(n: TSESTree.Node): void {
-    if (visited.has(n)) {
-      return;
-    }
-
-    visited.add(n);
-    callback(n);
-
-    for (const [key, value] of Object.entries(n)) {
-      if (NON_NODE_KEYS.has(key)) {
-        continue;
-      }
-
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          if (isNodeLike(item)) {
-            walk(item);
-          }
-        }
-      } else if (isNodeLike(value)) {
-        walk(value);
-      }
-    }
-  }
-
-  walk(node);
-}
-
-export function walkSome(
-  node: TSESTree.Node,
-  predicate: (node: TSESTree.Node) => boolean
-): boolean {
-  const visited = new WeakSet();
-
-  function walk(n: TSESTree.Node): boolean {
-    if (visited.has(n)) {
-      return false;
-    }
-
-    visited.add(n);
-
-    if (predicate(n)) {
-      return true;
-    }
-
-    for (const [key, value] of Object.entries(n)) {
-      if (NON_NODE_KEYS.has(key)) {
-        continue;
-      }
-
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          if (isNodeLike(item) && walk(item)) {
-            return true;
-          }
-        }
-      } else if (isNodeLike(value) && walk(value)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  return walk(node);
 }

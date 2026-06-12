@@ -2,8 +2,7 @@ import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
-import { matchesAnyGlobPattern } from "../../utils";
-import { isRecord } from "../../../lib/guards";
+import { matchesAnyGlobPattern, pushChildNodes } from "../../utils";
 
 export const RULE_NAME = "account-scoped-tables-require-where";
 
@@ -335,20 +334,6 @@ function objectExpressionMentionsKey(
   return false;
 }
 
-const NON_AST_KEYS = new Set([
-  "parent",
-  "loc",
-  "range",
-  "tokens",
-  "comments",
-  "start",
-  "end",
-]);
-
-function isAstNode(value: unknown): value is TSESTree.Node {
-  return isRecord(value) && typeof value.type === "string";
-}
-
 function nodeReferencesIdentifier(node: TSESTree.Node, name: string): boolean {
   if (node.type === AST_NODE_TYPES.Identifier && node.name === name) {
     return true;
@@ -359,24 +344,6 @@ function nodeReferencesIdentifier(node: TSESTree.Node, name: string): boolean {
     node.property.type === AST_NODE_TYPES.Identifier &&
     node.property.name === name
   );
-}
-
-function pushChildNodes(node: TSESTree.Node, stack: TSESTree.Node[]): void {
-  for (const [key, value] of Object.entries(node)) {
-    if (NON_AST_KEYS.has(key)) {
-      continue;
-    }
-
-    if (Array.isArray(value)) {
-      for (const child of value) {
-        if (isAstNode(child)) {
-          stack.push(child);
-        }
-      }
-    } else if (isAstNode(value)) {
-      stack.push(value);
-    }
-  }
 }
 
 function subtreeReferencesIdentifier(
