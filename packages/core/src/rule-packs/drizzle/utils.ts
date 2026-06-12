@@ -1,5 +1,7 @@
 import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
 
+import { walkAll } from "../utils";
+
 /**
  * Helper utilities for Drizzle rules.
  */
@@ -103,33 +105,11 @@ export function findCallExpressionsDeep(
 ): TSESTree.CallExpression[] {
   const results: TSESTree.CallExpression[] = [];
 
-  function walk(node: TSESTree.Node): void {
+  walkAll(root, (node) => {
     if (node.type === AST_NODE_TYPES.CallExpression && predicate(node)) {
       results.push(node);
     }
-
-    walkChildren(node);
-  }
-
-  function walkChildren(node: TSESTree.Node): void {
-    for (const [, value] of Object.entries(node)) {
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          if (isAstNode(item)) {
-            walk(item);
-          }
-        }
-      } else if (isAstNode(value)) {
-        walk(value);
-      }
-    }
-  }
-
-  function isAstNode(value: unknown): value is TSESTree.Node {
-    return typeof value === "object" && value !== null && "type" in value;
-  }
-
-  walk(root);
+  });
 
   return results;
 }
