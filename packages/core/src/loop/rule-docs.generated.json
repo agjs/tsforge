@@ -1,0 +1,367 @@
+{
+  "@typescript-eslint/no-explicit-any": {
+    "what": "Disallow the `any` type.",
+    "bad": "const age: any = 'seventeen';",
+    "good": "const age: number = 17;"
+  },
+  "@typescript-eslint/no-unsafe-argument": {
+    "what": "Disallow calling a function with a value with type `any`.",
+    "bad": "declare function foo(arg1: string, arg2: number, arg3: string): void;\n\nconst anyTyped = 1 as any;\n\nfoo(...anyTyped);\nfoo(anyTyped, 1, 'a');\n\nconst anyArray: any[] = [];",
+    "good": "declare function foo(arg1: string, arg2: number, arg3: string): void;\n\nfoo('a', 1, 'b');\n\nconst tuple1 = ['a', 1, 'b'] as const;\nfoo(...tuple1);\n\ndeclare function bar(arg1: string, arg2: number, ...rest: string[]): void;"
+  },
+  "@typescript-eslint/no-unsafe-assignment": {
+    "what": "Disallow assigning a value with type `any` to variables and properties.",
+    "bad": "const x = 1 as any,\n  y = 1 as any;\nconst [x] = 1 as any;\nconst [x] = [] as any[];\nconst [x] = [1 as any];\n[x] = [1] as [any];\n\nfunction foo(a = 1 as any) {}",
+    "good": "const x = 1,\n  y = 1;\nconst [x] = [1];\n[x] = [1] as [number];\n\nfunction foo(a = 1) {}\nclass Foo {\n  constructor(private a = 1) {}"
+  },
+  "@typescript-eslint/no-unsafe-call": {
+    "what": "Disallow calling a value with type `any`.",
+    "bad": "declare const anyVar: any;\ndeclare const nestedAny: { prop: any };\n\nanyVar();\nanyVar.a.b();\n\nnestedAny.prop();\nnestedAny.prop['a']();",
+    "good": "declare const typedVar: () => void;\ndeclare const typedNested: { prop: { a: () => void } };\n\ntypedVar();\ntypedNested.prop.a();\n\n(() => {})();\n"
+  },
+  "@typescript-eslint/no-unsafe-member-access": {
+    "what": "Disallow member access on a value with type `any`.",
+    "bad": "declare const anyVar: any;\ndeclare const nestedAny: { prop: any };\n\nanyVar.a;\nanyVar.a.b;\nanyVar['a'];\nanyVar['a']['b'];\n",
+    "good": "declare const properlyTyped: { prop: { a: string } };\n\nproperlyTyped.prop.a;\nproperlyTyped.prop['a'];\n\nconst key = 'a';\nproperlyTyped.prop[key];\n"
+  },
+  "@typescript-eslint/no-unsafe-return": {
+    "what": "Disallow returning a value with type `any` from a function.",
+    "bad": "function foo1() {\n  return 1 as any;\n}\nfunction foo2() {\n  return Object.create(null);\n}\nconst foo3 = () => {\n  return 1 as any;",
+    "good": "function foo1() {\n  return 1;\n}\nfunction foo2() {\n  return Object.create(null) as Record<string, unknown>;\n}\n\nconst foo3 = () => [];"
+  },
+  "@typescript-eslint/no-non-null-assertion": {
+    "what": "Disallow non-null assertions using the `!` postfix operator.",
+    "bad": "interface Example {\n  property?: string;\n}\n\ndeclare const example: Example;\nconst includesBaz = example.property!.includes('baz');",
+    "good": "interface Example {\n  property?: string;\n}\n\ndeclare const example: Example;\nconst includesBaz = example.property?.includes('baz') ?? false;"
+  },
+  "@typescript-eslint/restrict-plus-operands": {
+    "what": "Require both operands of addition to be the same type and be `bigint`, `number`, or `string`.",
+    "bad": "let foo = 1n + 1;\nlet fn = (a: string, b: never) => a + b;",
+    "good": "let foo = 1n + 1n;\nlet fn = (a: string, b: string) => a + b;"
+  },
+  "@typescript-eslint/restrict-template-expressions": {
+    "what": "Enforce template literal expressions to be of `string` type.",
+    "bad": "const arg1 = [1, 2];\nconst msg1 = `arg1 = ${arg1}`;\n\nconst arg2 = { name: 'Foo' };\nconst msg2 = `arg2 = ${arg2 || null}`;",
+    "good": "const arg = 'foo';\nconst msg1 = `arg = ${arg}`;\nconst msg2 = `arg = ${arg || 'default'}`;\n\nconst stringWithKindProp: string & { _kind?: 'MyString' } = 'foo';\nconst msg3 = `stringWithKindProp = ${stringWithKindProp}`;"
+  },
+  "@typescript-eslint/no-floating-promises": {
+    "what": "Require Promise-like statements to be handled appropriately.",
+    "bad": "const promise = new Promise((resolve, reject) => resolve('value'));\npromise;\n\nasync function returnsPromise() {\n  return 'value';\n}\nreturnsPromise().then(() => {});\n",
+    "good": "const promise = new Promise((resolve, reject) => resolve('value'));\nawait promise;\n\nasync function returnsPromise() {\n  return 'value';\n}\n\nvoid returnsPromise();"
+  },
+  "@typescript-eslint/await-thenable": {
+    "what": "Disallow awaiting a value that is not a Thenable.",
+    "bad": "await 'value';\n\nconst createValue = () => 'value';\nawait createValue();",
+    "good": "await Promise.resolve('value');\n\nconst createValue = async () => 'value';\nawait createValue();"
+  },
+  "@typescript-eslint/no-for-in-array": {
+    "what": "Disallow iterating over an array with a for-in loop.",
+    "bad": "declare const array: string[];\n\nfor (const i in array) {\n  console.log(array[i]);\n}\n\nfor (const i in array) {\n  console.log(i, array[i]);",
+    "good": "declare const array: string[];\n\nfor (const value of array) {\n  console.log(value);\n}\n\nfor (let i = 0; i < array.length; i += 1) {\n  console.log(i, array[i]);"
+  },
+  "@typescript-eslint/prefer-nullish-coalescing": {
+    "what": "Enforce using the nullish coalescing operator instead of logical assignments or chaining.",
+    "bad": "declare const a: string | null;\ndeclare const b: string | null;\n\nconst c = a || b;\n\ndeclare let foo: { a: string } | null;\ndeclare function makeFoo(): { a: string };\n",
+    "good": "declare const a: string | null;\ndeclare const b: string | null;\n\nconst c = a ?? b;\n\ndeclare let foo: { a: string } | null;\ndeclare function makeFoo(): { a: string };\n"
+  },
+  "@typescript-eslint/prefer-optional-chain": {
+    "what": "Enforce using concise optional chain expressions instead of chained logical ands, negated logical ors, or empty objects.",
+    "bad": "foo && foo.a && foo.a.b && foo.a.b.c;\nfoo && foo['a'] && foo['a'].b && foo['a'].b.c;\nfoo && foo.a && foo.a.b && foo.a.b.method && foo.a.b.method();\n\n// With empty objects\n(((foo || {}).a || {}).b || {}).c;\n(((foo || {})['a'] || {}).b || {}).c;\n",
+    "good": "foo?.a?.b?.c;\nfoo?.['a']?.b?.c;\nfoo?.a?.b?.method?.();\n\nfoo?.a?.b?.c?.d?.e;\n\n!foo?.bar;\n!foo?.[bar];"
+  },
+  "@typescript-eslint/no-unnecessary-condition": {
+    "what": "Disallow conditionals where the type is always truthy or always falsy.",
+    "bad": "function head<T>(items: T[]) {\n  // items can never be nullable, so this is unnecessary\n  if (items) {\n    return items[0].toUpperCase();\n  }\n}\n\nfunction foo(arg: 'bar' | 'baz') {",
+    "good": "function head<T>(items: T[]) {\n  // Necessary, since items.length might be 0\n  if (items.length) {\n    return items[0].toUpperCase();\n  }\n}\n\nfunction foo(arg: string) {"
+  },
+  "@typescript-eslint/no-unnecessary-type-assertion": {
+    "what": "Disallow type assertions that do not change the type of an expression.",
+    "bad": "const foo = 3;\nconst bar = foo!;",
+    "good": "const foo = <number>3;"
+  },
+  "@typescript-eslint/switch-exhaustiveness-check": {
+    "what": "Require switch-case statements to be exhaustive.",
+    "bad": "type Day =\n  | 'Monday'\n  | 'Tuesday'\n  | 'Wednesday'\n  | 'Thursday'\n  | 'Friday'\n  | 'Saturday'\n  | 'Sunday';",
+    "good": "type Day =\n  | 'Monday'\n  | 'Tuesday'\n  | 'Wednesday'\n  | 'Thursday'\n  | 'Friday'\n  | 'Saturday'\n  | 'Sunday';"
+  },
+  "@typescript-eslint/no-base-to-string": {
+    "what": "Require `.toString()` and `.toLocaleString()` to only be called on objects which provide useful information when stringified.",
+    "bad": "// Passing an object or class instance to string concatenation:\n'' + {};\n\nclass MyClass {}\nconst value = new MyClass();\nvalue + '';\n\n// Interpolation and manual .toString() and `toLocaleString()` calls too:",
+    "good": "// These types all have useful .toString() and `toLocaleString()` methods\n'Text' + true;\n`Value: ${123}`;\n`Arrays too: ${[1, 2, 3]}`;\n(() => {}).toString();\nString(42);\n(() => {}).toLocaleString();\n"
+  },
+  "@typescript-eslint/require-await": {
+    "what": "Disallow async functions which do not return promises and have no `await` expression.",
+    "bad": "async function returnNumber() {\n  return 1;\n}\n\nasync function* asyncGenerator() {\n  yield 1;\n}\n",
+    "good": "function returnNumber() {\n  return 1;\n}\n\nfunction* syncGenerator() {\n  yield 1;\n}\n"
+  },
+  "@typescript-eslint/no-confusing-void-expression": {
+    "what": "Require expressions of type void to appear in statement position.",
+    "bad": "// somebody forgot that `alert` doesn't return anything\nconst response = alert('Are you sure?');\nconsole.log(alert('Are you sure?'));\n\n// it's not obvious whether the chained promise will contain the response (fixable)\npromise.then(value => window.postMessage(value));\n\n// it looks like we are returning the result of `console.error` (fixable)",
+    "good": "// just a regular void function in a statement position\nalert('Hello, world!');\n\n// this function returns a boolean value so it's ok\nconst response = confirm('Are you sure?');\nconsole.log(confirm('Are you sure?'));\n\n// now it's obvious that `postMessage` doesn't return any response"
+  },
+  "@typescript-eslint/no-redundant-type-constituents": {
+    "what": "Disallow members of unions and intersections that do nothing or override type information.",
+    "bad": "type UnionAny = any | 'foo';\ntype UnionUnknown = unknown | 'foo';\ntype UnionNever = never | 'foo';\n\ntype UnionBooleanLiteral = boolean | false;\ntype UnionNumberLiteral = number | 1;\ntype UnionStringLiteral = string | 'foo';\n",
+    "good": "type UnionAny = any;\ntype UnionUnknown = unknown;\ntype UnionNever = never;\n\ntype UnionBooleanLiteral = boolean;\ntype UnionNumberLiteral = number;\ntype UnionStringLiteral = string;\n"
+  },
+  "@typescript-eslint/prefer-reduce-type-parameter": {
+    "what": "Enforce using type parameter when calling `Array#reduce` instead of using a type assertion.",
+    "bad": "[1, 2, 3].reduce((arr, num) => arr.concat(num * 2), [] as number[]);\n\n['a', 'b'].reduce(\n  (accumulator, name) => ({\n    ...accumulator,\n    [name]: true,\n  }),\n  {} as Record<string, boolean>,",
+    "good": "[1, 2, 3].reduce<number[]>((arr, num) => arr.concat(num * 2), []);\n\n['a', 'b'].reduce<Record<string, boolean>>(\n  (accumulator, name) => ({\n    ...accumulator,\n    [name]: true,\n  }),\n  {},"
+  },
+  "tsforge/job-name-must-be-constant": {
+    "what": "Disallow string-literal job names in `<queue>.add(name, ...)` calls — use a constant identifier so all consumers share one source of truth.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/job-options-must-set-attempts": {
+    "what": "Every `<queue>.add(...)` must configure `attempts` (per-call or via `defaultJobOptions`); when `attempts > 1`, also require `backoff`.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-blocking-concurrency-zero": {
+    "what": "Disallow `new Worker(name, processor, { concurrency: <numericLiteral ≤ 0> })` — non-positive concurrency blocks job processing.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/queue-options-must-set-removeoncomplete": {
+    "what": "Every `<queue>.add(...)` must configure `removeOnComplete` (per-call or via `defaultJobOptions`) so completed jobs don't accumulate in Redis.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/queue-options-must-set-removeonfail": {
+    "what": "Every `<queue>.add(...)` must configure `removeOnFail` (per-call or via `defaultJobOptions`) so failed jobs don't accumulate in Redis.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/worker-must-implement-close": {
+    "what": "Classes that own a `new Worker(...)` instance must declare a close-equivalent method for graceful shutdown.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/worker-must-listen-failed": {
+    "what": "Every `new Worker(...)` must register listeners for required events (default `failed`) — BullMQ failures are silent unless explicitly subscribed.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-bare-date-now": {
+    "what": "Disallow direct calls to non-deterministic time/random sources (`Date.now()`, `new Date()`, `Date()`, `Math.random()`) outside an allowlisted set of utility paths. Determinism is required for snapshot tests, workflow replays, and time-travel debugging — every consumer should route through a typed util that can be faked in tests.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-template-trim-empty-ternary": {
+    "what": "Disallow inline `<template>.trim() === '' ? fallback : <template>.trim()` patterns. Extract to a named utility.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/prefer-early-return": {
+    "what": "Prefer guard clauses (early return) over wrapping the function body in a multi-statement `if` without an `else`.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-historical-comments": {
+    "what": "Disallow comments that frame code relative to what it used to do or to a past incident ('Codex flagged X', 'before the fix', 'after the refactor', 'we used to', 'no longer'). Source comments must describe the current invariant; history belongs in the commit message or PR description, where it doesn't rot when the code changes again.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-narration-comments": {
+    "what": "Disallow narrative comments like 'Here we...', 'Now we...', 'First, we...'. These read as step-by-step prose and add no information a future reader can't get from the code itself. Often a tell that the comment was generated by an agent describing its own changes.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-pr-reference-comments": {
+    "what": "Disallow PR/issue references in comments. They belong in commit messages and PR descriptions — leaving them in source rots when the repo moves, the issue tracker migrates, or the numbering changes.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/account-scoped-tables-require-where": {
+    "what": "Require every Drizzle query against a configured account-scoped table to filter by a scope column (accountId by default).",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-nested-db-transaction": {
+    "what": "Forbid invoking the outer db's `.transaction(...)` method inside a transaction callback — use the callback's `tx` parameter instead to avoid deadlocks.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-raw-sql-outside-allowlist": {
+    "what": "Disallow drizzle-orm `sql` tagged template literals outside an allowlist of files (migrations, raw queries).",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/relations-must-cover-fks": {
+    "what": "Every Drizzle table that declares a foreignKey(...) must be covered by a relations(...) call. Searches sibling `relations.ts` files by default.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/schema-files-must-not-import-driver": {
+    "what": "Disallow imports from database driver packages inside schema files. Schema files must remain driver-agnostic.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/schema-files-must-only-export-schema": {
+    "what": "Restrict schema files to exporting only Drizzle schema artifacts (tables, schemas, relations, indices) and types.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/tables-must-have-timestamps": {
+    "what": "Require Drizzle tables to declare standard timestamp columns (createdAt by default).",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/timestamp-must-specify-mode": {
+    "what": "Require every Drizzle timestamp(...) call to explicitly set `mode: 'date'` or `mode: 'string'`.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/consistent-status-via-set": {
+    "what": "Inside Elysia route handlers, set HTTP status via `set.status = N`, not by returning a `new Response(body, { status: N })`.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-decorate-state-collision": {
+    "what": "Disallow duplicate keys across `.decorate()` / `.state()` / `.derive()` / `.resolve()` calls on a single Elysia instance — duplicates silently overwrite and break plugin composition.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-separate-model-interfaces": {
+    "what": "Disallow TypeScript interfaces that duplicate the shape of a runtime schema with a matching name. Use `typeof Schema.static` (or your project's equivalent) instead.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/prefer-destructured-context": {
+    "what": "Prefer destructured context (`{ body, set, ... }`) over passing the entire dynamic Elysia context object into controllers/services.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/prefer-direct-return": {
+    "what": "Inside Elysia route handlers, return values directly instead of wrapping them in `new Response(...)` or `Response.json(...)` — Elysia handles serialization and content-type automatically.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/prefer-static-services": {
+    "what": "Discourage `new Service()` inside Elysia route handlers when the class is stateless — prefer static methods or a singleton.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/prefer-throw-status": {
+    "what": "Inside Elysia route handlers, prefer `throw status(...)` over try/catch blocks that build their own Response — local catches bypass Elysia's typed onError pipeline.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/require-hooks-before-routes": {
+    "what": "Elysia hooks (onError, onBeforeHandle, etc.) must register before any route methods on the same instance — top-down waterfall semantics mean a hook registered after a route does not apply to it.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/require-plugin-name": {
+    "what": "Exported Elysia plugin instances must declare `new Elysia({ name: '...' })` so the runtime can deduplicate plugin re-imports.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-direct-process-env": {
+    "what": "Disallow direct `process.env` access — force every consumer through a typed, boot-validated singleton.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-process-exit": {
+    "what": "Disallow `process.exit()` outside the centralized shutdown and CLI entrypoints — forces graceful teardown through the error-handlers module.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/static-translation-key-exists": {
+    "what": "Static string passed to `t(\"...\")` or `i18n.t(\"...\")` must exist as a leaf path in the canonical locale JSON.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/auth-cookie-must-be-httponly": {
+    "what": "Auth-cookie writes must set `httpOnly: true` (or spread a trusted cookie-config helper). JS-readable session cookies leak via XSS.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/auth-cookie-must-be-secure-in-prod": {
+    "what": "Auth-cookie writes must set `secure:` to `true` or an env-derived expression (anything non-literal). Cookies leak over HTTP without it.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/bcrypt-rounds-min": {
+    "what": "Disallow `bcrypt.hash` / `bcrypt.hashSync` calls with a numeric-literal rounds value below the configured minimum (default 10).",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/pkce-required-for-oidc": {
+    "what": "OIDC providers must use PKCE: `buildAuthorizationURL` must call `generateCodeVerifier()` and pass it to `createAuthorizationURL`.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/state-must-be-redis-backed": {
+    "what": "OAuth state must be persisted to Redis and not stuffed into a cookie. Cookie-backed state lets attackers replay forged state across sessions.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/state-ttl-bounded": {
+    "what": "OAuth state writes to Redis must use a short TTL — long-lived state widens the replay window.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/component-folder-structure": {
+    "what": "Enforce required sibling files in component folders (hooks, types, stories, test, index)",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/forwardref-display-name": {
+    "what": "forwardRef components must have displayName set",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/index-must-reexport-default": {
+    "what": "index.ts in component folders must re-export the component default export and types",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/max-hooks-per-file": {
+    "what": "Flag query/hook modules that export more than N hooks. Same-kind modules pass the single-semantic-module rule but still grow into god files; this rule sets a hard ceiling so the split conversation happens early.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-cross-feature-imports": {
+    "what": "Prevent imports across different features",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-inline-jsx-functions": {
+    "what": "Disallow inline function expressions in JSX attributes",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/mask-pii-fields": {
+    "what": "Disallow unmasked PII (email, phone, password, token, ...) in structured-logger payloads — the #1 way data leaks quietly.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-error-stringify": {
+    "what": "Disallow stringifying errors with `String(error)` / `${error}` / `error.toString()` — strips the cause chain. Use a configured extractor instead.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/require-event-field": {
+    "what": "Require structured logger calls to include an `event` field in their payload, so log searches in ELK/Datadog/Loki don't fall back to substring match.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/prefix-query-key-must-use-set-queries-data": {
+    "what": "When a hook uses `queryKey: [...prefix, extra]`, do not call `setQueryData(prefix, …)`, `cancelQueries({ queryKey: prefix })`, etc. — those only touch one cache entry. Use `setQueriesData({ queryKey: prefix }, …)` and matcher-style `cancelQueries` / `invalidateQueries` so every variant is covered.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-focused-tests": {
+    "what": "Disallow focused tests (`test.only`, `it.only`, `fdescribe`, ...) — the canonical 'I forgot to remove this before committing' leak.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/test-file-mirrors-source": {
+    "what": "Every test file under `tests/` must mirror a source file under `src/`. Catches orphaned tests left behind after refactors and renames.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  }
+}

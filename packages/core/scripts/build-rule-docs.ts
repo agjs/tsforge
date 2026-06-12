@@ -1,9 +1,11 @@
 // Offline cache builder: fetch typescript-eslint rule docs from their own
-// source `.mdx`, parse the ❌/✅ examples deterministically, and write the
-// committed cache the repair loop reads. Run when rules change:
+// source `.mdx`, parse the ❌/✅ examples deterministically, and also scrape
+// tsforge pack rule descriptions, then write the committed cache the repair
+// loop reads. Run when rules change:
 //   bun run packages/core/scripts/build-rule-docs.ts
 import { join } from "node:path";
 import { parseRuleMdx, type IRuleDoc } from "../src/loop/feedback/rule-docs";
+import { RULE_PACKS } from "../src/rule-packs";
 
 const BASE =
   "https://raw.githubusercontent.com/typescript-eslint/typescript-eslint/main/packages/eslint-plugin/docs/rules";
@@ -38,6 +40,31 @@ const RULES = [
   "prefer-reduce-type-parameter",
 ];
 
+function getRuleDescription(obj: unknown): string | undefined {
+  const isObject = (val: unknown): val is Record<string, unknown> =>
+    val !== null && typeof val === "object";
+
+  if (!isObject(obj)) {
+    return undefined;
+  }
+
+  const meta = obj.meta;
+
+  if (!isObject(meta)) {
+    return undefined;
+  }
+
+  const docs = meta.docs;
+
+  if (!isObject(docs)) {
+    return undefined;
+  }
+
+  const description = docs.description;
+
+  return typeof description === "string" ? description : undefined;
+}
+
 const out: Record<string, IRuleDoc> = {};
 let ok = 0;
 let missed = 0;
@@ -63,6 +90,24 @@ for (const rule of RULES) {
   ok += 1;
 }
 
+// Add tsforge pack rules: extract description from rule meta.
+let packRulesAdded = 0;
+
+for (const pack of Object.values(RULE_PACKS)) {
+  for (const [ruleName, ruleModule] of Object.entries(pack.rules)) {
+    const ruleId = `tsforge/${ruleName}`;
+    const description = getRuleDescription(ruleModule) ?? ruleName;
+
+    out[ruleId] = {
+      what: description,
+      bad: `// Example that violates the rule`,
+      good: `// Corrected version`,
+    };
+
+    packRulesAdded += 1;
+  }
+}
+
 const path = join(
   import.meta.dir,
   "..",
@@ -72,4 +117,6 @@ const path = join(
 );
 
 await Bun.write(path, `${JSON.stringify(out, null, 2)}\n`);
-process.stdout.write(`\nwrote ${ok} rules (${missed} missed) → ${path}\n`);
+process.stdout.write(
+  `\nwrote ${ok} eslint rules (${missed} missed), ${packRulesAdded} pack rules → ${path}\n`
+);

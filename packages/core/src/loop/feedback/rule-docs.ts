@@ -233,7 +233,13 @@ export function ruleHelp(errors: ErrorSet): string {
       continue;
     }
 
-    const doc = RULE_DOCS[e.rule] ?? GENERATED[e.rule];
+    // Try curated docs first, then generated, then tsforge pack rules
+    let doc = RULE_DOCS[e.rule] ?? GENERATED[e.rule];
+
+    if (doc === undefined && e.rule.startsWith("tsforge/")) {
+      // For tsforge pack rules, look up in generated docs
+      doc = GENERATED[e.rule];
+    }
 
     if (doc === undefined) {
       continue;

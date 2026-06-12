@@ -1,9 +1,14 @@
 import { join, basename, isAbsolute } from "node:path";
 import type { ITask } from "../../spec";
 import type { ErrorSet } from "../../validate";
+import type { IMetaRuleViolation } from "../../meta-rules";
 import { isInScope } from "../../lib/scope";
 import { readFiles } from "../../lib/fs";
 import { ruleHelp, idiomHints } from "../feedback/rule-docs";
+import {
+  metaRuleHelp,
+  renderMetaViolations,
+} from "../feedback/meta-rule-feedback";
 
 /** Cap rendered source lines so a large error set can't wall the model. */
 const FEEDBACK_MAX_LINES = 20;
@@ -18,7 +23,8 @@ const FEEDBACK_MAX_LINES = 20;
 export async function gateFeedback(
   errors: ErrorSet,
   task: ITask,
-  cwd: string
+  cwd: string,
+  metaViolations: readonly IMetaRuleViolation[] = []
 ): Promise<string> {
   const own = errors.filter(
     (e) =>
@@ -54,6 +60,17 @@ export async function gateFeedback(
   const idiomBlock =
     idioms.length > 0 ? `\n\nWatch for these strict-TS idioms:\n${idioms}` : "";
 
+  // Render meta-rule violations (project structure violations)
+  const metaViolationsList =
+    metaViolations.length > 0 ? renderMetaViolations(metaViolations) : "";
+  const metaBlock =
+    metaViolationsList.length > 0
+      ? `\n\n## Project structure\n${metaViolationsList}`
+      : "";
+
+  const metaHelp = metaRuleHelp(metaViolations);
+  const metaHelpBlock = metaHelp.length > 0 ? `\n${metaHelp}` : "";
+
   // Tool-use lapse guard: if an editable file doesn't exist, the model likely
   // wrote the code as message TEXT instead of calling `create`. Code in your
   // reply is NEVER applied — only tool calls touch disk. Say so explicitly.
@@ -66,7 +83,7 @@ export async function gateFeedback(
         "`create` tool with the file path and full content."
       : "";
 
-  return `The acceptance command still fails:\n${list}${capped}${note}${helpBlock}${idiomBlock}${missingBlock}\n\nFix your editable files and run it again.`;
+  return `The acceptance command still fails:\n${list}${capped}${note}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
 }
 
 /**

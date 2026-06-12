@@ -32,6 +32,12 @@ import {
 } from "../agent";
 import { TsService, type ITsDiagnostic } from "../lsp";
 import type { FileLinter, IFileLintProblem } from "../detect-gate";
+import {
+  buildMetaRuleContext,
+  runMetaRules,
+  META_RULES,
+  type IMetaRuleViolation,
+} from "../meta-rules";
 
 /**
  * The shared turn primitives — one tool-using-conversation step and the
@@ -708,18 +714,47 @@ export async function settleGate(
     ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
   });
 
-  if (state.lastGateCount >= 0 && gate.errors.length > state.lastGateCount) {
+  // Run meta-rules against the project — project structure invariants the gate
+  // can't express. Convert error-severity violations to gate failures; warn
+  // violations are surfaced in feedback but don't block.
+  let metaViolations: IMetaRuleViolation[] = [];
+
+  try {
+    const metaContext = buildMetaRuleContext(
+      cwd,
+      ctx.stackProfile?.packs ?? []
+    );
+
+    metaViolations = runMetaRules(META_RULES, metaContext);
+  } catch {
+    // Degrade silently — meta-rules are supplementary to the gate
+  }
+
+  const metaErrors = metaViolations.filter((v) => v.severity === "error");
+  const gateErrors = gate.errors.concat(
+    metaErrors.map((v) => ({
+      key: `${v.file}:${v.ruleId}`,
+      file: v.file,
+      rule: v.ruleId,
+      message: v.message,
+    }))
+  );
+
+  if (state.lastGateCount >= 0 && gateErrors.length > state.lastGateCount) {
     state.regressions += 1;
   }
 
-  state.lastGateCount = gate.errors.length;
+  state.lastGateCount = gateErrors.length;
+
+  // Determine pass/fail: the gate passes only if BOTH gate command AND meta-rules are clean
+  const gatePassed = gate.passed && metaErrors.length === 0;
 
   // On red, surface the ACTUAL errors (codes + messages) into the event — so the
   // log records WHAT failed at the gate, not just a count (the analysis substrate
   // for finding systematic mistakes to fix in the harness).
-  const gateDetail = gate.passed
+  const gateDetail = gatePassed
     ? ""
-    : `:\n${gate.errors
+    : `:\n${gateErrors
         .slice(0, 20)
         .map((e) => `  ${e.message}`)
         .join("\n")}`;
@@ -728,14 +763,14 @@ export async function settleGate(
     kind: "validated",
     task: task.id,
     cycle: turn,
-    passed: gate.passed,
-    errors: gate.errors.length,
-    message: gate.passed
+    passed: gatePassed,
+    errors: gateErrors.length,
+    message: gatePassed
       ? `task ${task.id} · turn ${turn}: GREEN`
-      : `task ${task.id} · turn ${turn}: red (${String(gate.errors.length)} error(s))${gateDetail}`,
+      : `task ${task.id} · turn ${turn}: red (${String(gateErrors.length)} error(s))${gateDetail}`,
   });
 
-  if (gate.passed) {
+  if (gatePassed) {
     await polishOnGreen(ctx);
 
     report({
@@ -753,10 +788,10 @@ export async function settleGate(
     };
   }
 
-  state.gateNoProgress = sameErrorSet(state.prevGateErrors, gate.errors)
+  state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
     ? state.gateNoProgress + 1
     : 0;
-  state.prevGateErrors = gate.errors;
+  state.prevGateErrors = gateErrors;
 
   if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
     report({
@@ -775,7 +810,7 @@ export async function settleGate(
     };
   }
 
-  const feedback = await gateFeedback(gate.errors, task, cwd);
+  const feedback = await gateFeedback(gateErrors, task, cwd, metaViolations);
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
 
   messages.push({ role: "user", content: `${notice}${feedback}` });
