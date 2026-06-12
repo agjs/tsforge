@@ -6,9 +6,11 @@
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
+import { buildGate, prettierWriteCommand } from "../src/detect-gate";
 import { runSpec, qualityRepair } from "../src/loop";
 import { modelAgent } from "../src/agent";
-import { OpenAICompatibleProvider, PROVIDER_DEFAULTS } from "../src/inference";
+import { OpenAICompatibleProvider } from "../src/inference";
+import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { summarize, type IRunRecord } from "../src/eval";
 import { renderEvent } from "../src/render";
 import type { ILoopEvent } from "../src/loop";
@@ -90,31 +92,22 @@ function variantLabel(variant: IFeatureVariant): string {
 
 const featureVariants = parseFeatureVariants();
 
-const repoRoot = join(import.meta.dir, "..", "..", "..");
-const evalsRoot = join(repoRoot, "evals");
-// Seeds ship committed under `seeds/`; run outputs go to the gitignored `evals/`.
-// Prefer a committed seed (so `bun run eval:sweep` works on a fresh clone), and
-// fall back to a local `evals/<seed>/` working dir for ad-hoc experiments.
-const committedSeed = join(repoRoot, "seeds", seed);
-const seedDir = (await dirExists(committedSeed))
-  ? committedSeed
-  : join(evalsRoot, seed);
+const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
+const seedDir = join(evalsRoot, seed);
 // Recursive so nested-directory apps (e.g. a React app under `src/`) copy whole;
 // flat single-dir evals are unaffected (recursive readdir returns the same list).
 const seedFiles = await readdir(seedDir, { recursive: true });
 
-async function dirExists(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isDirectory();
-  } catch {
-    return false;
-  }
-}
+// Resolve the model the same way the CLI does: explicit TSFORGE_* env wins, else
+// the active entry from ~/.tsforge/models.json. (Previously this hardcoded the
+// localhost default and ignored the registry, so a sweep silently dialed an
+// unreachable endpoint and hung with an empty run.log.)
+const { entry: activeModel } = await resolveActiveModel();
 
 const provider = new OpenAICompatibleProvider({
-  baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,
-  model: process.env.TSFORGE_MODEL ?? PROVIDER_DEFAULTS.model,
-  apiKey: process.env.TSFORGE_API_KEY,
+  baseUrl: activeModel.baseUrl,
+  model: activeModel.model,
+  apiKey: resolveApiKey(activeModel),
   // Thinking tokens count against the limit, so give reasoning + code room.
   maxTokens: Number(process.env.TSFORGE_MAX_TOKENS ?? "16384"),
   // Opt-in only: a repetition penalty breaks rare temp-0 loops but DEGRADES
@@ -127,17 +120,11 @@ const provider = new OpenAICompatibleProvider({
 });
 
 // The judge scores quality. Point it at a flagship via TSFORGE_JUDGE_URL/MODEL
-// (+ TSFORGE_JUDGE_KEY) to measure the gap; defaults to the model judging itself.
+// (+ TSFORGE_JUDGE_KEY) to measure the gap; defaults to the active model judging itself.
 const judgeProvider = new OpenAICompatibleProvider({
-  baseUrl:
-    process.env.TSFORGE_JUDGE_URL ??
-    process.env.TSFORGE_BASE_URL ??
-    PROVIDER_DEFAULTS.baseUrl,
-  model:
-    process.env.TSFORGE_JUDGE_MODEL ??
-    process.env.TSFORGE_MODEL ??
-    PROVIDER_DEFAULTS.model,
-  apiKey: process.env.TSFORGE_JUDGE_KEY ?? process.env.TSFORGE_API_KEY,
+  baseUrl: process.env.TSFORGE_JUDGE_URL ?? activeModel.baseUrl,
+  model: process.env.TSFORGE_JUDGE_MODEL ?? activeModel.model,
+  apiKey: process.env.TSFORGE_JUDGE_KEY ?? resolveApiKey(activeModel),
 });
 
 /** Sortable timestamp `YYYYMMDD-HHMMSS` so run dirs sort newest-last by name. */
@@ -157,7 +144,7 @@ for (const variant of featureVariants) {
   for (const temp of temps) {
     for (let i = 0; i < repeats; i += 1) {
       const runId = `${seed}-${vLabel}-t${temp}-${stamp()}-${i + 1}`;
-      const runDir = join(evalsRoot, runId);
+      const runDir = join(evalsRoot, "runs", runId);
 
       // One run's failure (e.g. a request timing out) must not abort the sweep —
       // record it as a blocked run and carry on, so a long batch is resilient.
@@ -249,6 +236,25 @@ async function runOne(
 
     await startRed(runDir, spec);
 
+    // Apply tsforge's STRICT FLOOR (bundled tsc-strict + eslint) to the eval
+    // gate — the SAME gate the interactive CLI builds. Eval mode otherwise
+    // trusts the spec's `accept` verbatim, so an error the tests don't execute
+    // (an unguarded index access, an `as any`) slipped through as GREEN. Now
+    // every task and the whole-spec verify must clear the strict floor BEFORE
+    // its functional tests count.
+    // prettier --write FIRST (auto-format), then tsc-strict + eslint. The model
+    // never hand-formats, but the gate still enforces type-safety + idioms.
+    const strictGate = `${prettierWriteCommand()} && ${(await buildGate(runDir)).command}`;
+    const gatedSpec = {
+      ...spec,
+      tasks: spec.tasks.map((t) => ({
+        ...t,
+        accept: `${strictGate} && ${t.accept}`,
+      })),
+      verify:
+        spec.verify.length > 0 ? `${strictGate} && ${spec.verify}` : strictGate,
+    };
+
     // Every run gets a full transcript at <runDir>/run.log; stream to the
     // terminal too when TSFORGE_STREAM=1.
     const log = Bun.file(join(runDir, "run.log")).writer();
@@ -271,7 +277,7 @@ async function runOne(
         : { thinkingTokenBudget: Number(process.env.TSFORGE_THINKING_BUDGET) }),
     });
     const started = performance.now();
-    const result = await runSpec(spec, runDir, provider, {
+    const result = await runSpec(gatedSpec, runDir, provider, {
       onEvent,
       temperature: temp,
       // Cap reasoning per call to trim turn time — A/B the sweet spot via env.
@@ -369,7 +375,7 @@ for (const s of summaries) {
   );
 }
 
-const outPath = join(evalsRoot, `sweep-${seed}-${stamp()}.json`);
+const outPath = join(evalsRoot, "runs", `sweep-${seed}-${stamp()}.json`);
 
 await Bun.write(
   outPath,

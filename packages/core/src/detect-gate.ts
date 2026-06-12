@@ -447,6 +447,14 @@ async function ensureFile(
   }
 }
 
+/** The bundled `prettier --write` command. Prepended to the EVAL gate so the
+ *  model's output is auto-formatted before the strict checks run — the model
+ *  never burns turns hand-formatting, and the committed code is prettier-clean.
+ *  Uses tsforge's own prettier so it works in a target with no prettier installed. */
+export function prettierWriteCommand(): string {
+  return `"${PRETTIER_BIN}" --write .`;
+}
+
 export async function buildGate(
   cwd: string,
   packs?: readonly string[],

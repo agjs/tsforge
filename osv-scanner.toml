@@ -3,3 +3,18 @@
 # Each entry must include reasoning + a re-evaluation date. Re-run
 # `osv-scanner --lockfile=bun.lock` periodically to confirm each remains
 # accepted-risk. bun.lock is canonical.
+
+# esbuild advisories reach us only transitively through Vite / Astro / Wrangler,
+# which are BUILD-TIME dev dependencies for the docs site and the web-scaffold
+# build. esbuild is not in the published @agjs/tsforge npm package (files: bin,
+# src, *.eslint.config.mjs) — there is no runtime or published-artifact exposure.
+# Re-evaluate once Vite/Astro ship a patched esbuild range.
+[[IgnoredVulns]]
+id = "GHSA-gv7w-rqvm-qjhr"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "esbuild (transitive via Vite/Astro/Wrangler) is a build-time dev dependency only; not shipped in the published package."
+
+[[IgnoredVulns]]
+id = "GHSA-g7r4-m6w7-qqqr"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "esbuild (transitive via Vite/Astro/Wrangler) is a build-time dev dependency only; not shipped in the published package."
