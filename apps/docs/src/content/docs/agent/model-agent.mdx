@@ -1,32 +1,43 @@
 ---
 title: ModelAgent — the real agent
-description: Wires the model (Provider) to the edit engine. Reads the declared files, advertises the `edit` tool, applies the model's edits. Validated live against Qwen3.6.
+description: Wires the model to file ops. Reads declared files, advertises edit tools, applies repairs on malformed calls.
 ---
 
 :::tip[Status: built + green + live-validated]
-`packages/core/src/agent/model-agent.ts`. 30 tests green; drove a real task to `done` against the local Qwen3.6.
+`packages/core/src/agent/model-agent.ts`. Drove real tasks to `done` against local Qwen3.6.
 :::
 
 ## What it does
 
 `modelAgent(provider)` returns an `IAgent`. Each cycle it:
 
-1. **Reads the declared files** (`task.files`) into context — the model can't write a matching `oldString` for a file it can't see.
-2. Sends the model the files + acceptance command + current failures, advertising the **`edit` tool** (`{ file, oldString, newString }`).
-3. Applies each `edit` tool call through the [edit engine](/edit/engine/) (which enforces the exact/unique match). Non-edit or malformed calls are ignored.
+1. **Reads the declared files** (`task.files`) into context
+2. Sends files + acceptance command + current failures, advertising **`edit`**, **`edit_lines`**, and **`create`** tools
+3. Applies each tool call through the [edit engine](/edit/engine/)
+4. Runs the [repair ladder](/uplift/repair-ladder/) on rejected tool args before returning feedback
+
+## Tool-call repair
+
+Malformed tool calls don't waste a full model turn:
+
+| Level | Fix |
+| --- | --- |
+| L0 | unwrap autolinks, drop null fields |
+| L1 | coerce JSON strings to arrays, trim fences |
+| L3 | targeted re-ask with field name + example |
+
+See [repair ladder](/uplift/repair-ladder/) for details.
 
 ## The live eval that shaped it
 
-Run `bun run packages/core/scripts/eval-sum.ts` against the local model. It found a real weakness, then confirmed the fix:
+Run `bun packages/core/scripts/eval-sum.ts` against the local model:
 
 | Setup | Result |
 | --- | --- |
-| Model given the file + test directly | Emitted a **perfect** `edit` (exact, unique `oldString`) |
-| ModelAgent **blind** (errors only, no file) | `stuck/stalled` — couldn't match `oldString` |
-| ModelAgent **with file context** (the fix) | `done` in **1 cycle**, file correctly rewritten |
-
-This is the method: the real model is the weakness-finder. Blind-vs-context wasn't a guess — the model showed us.
+| Model given file + test directly | perfect `edit` (exact, unique `oldString`) |
+| ModelAgent **blind** (errors only) | `stuck/stalled` |
+| ModelAgent **with file context** | `done` in **1 cycle** |
 
 ## Deliberately absent (next)
 
-Glob expansion for `task.files` (currently literal paths), scope/drift enforcement on edits, feeding the error-set **diff** (not the full set), multi-file edits, and **MCP tools** (e.g. context7) alongside `edit`.
+Glob expansion for `task.files`, scope/drift enforcement, feeding the error-set **diff**, and MCP tools alongside native edit tools.

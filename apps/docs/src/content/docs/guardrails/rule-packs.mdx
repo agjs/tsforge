@@ -1,0 +1,45 @@
+---
+title: Rule packs — stack-aware ESLint guardrails
+description: Stack detection enables rule packs. The gate runs them on both greenfield and existing-code paths.
+---
+
+:::tip[Status: built + green]
+`packages/core/src/stack-detection` + `packages/core/src/rule-packs`. 13 implemented packs, ~50 rules.
+:::
+
+## How packs activate
+
+1. **Detect** — read `package.json` deps and config files; match against `PACK_REGISTRY`
+2. **Configure** — apply `tsforge.config.json` overrides ([config](/guardrails/config/))
+3. **Gate** — run enabled pack rules via strict ESLint config on every validation
+
+Both paths use the same packs: greenfield (constitution bring-up) and existing-code (detect-gate).
+
+## Pack registry (16)
+
+| ID | Label | Rules implemented |
+| --- | --- | --- |
+| `generic-ts` | TypeScript Fundamentals | registry only |
+| `react` | React | registry only |
+| `react-component-architecture` | React Component Architecture | yes |
+| `tanstack-query` | TanStack Query | yes |
+| `drizzle` | Drizzle ORM | yes |
+| `elysia` | Elysia | yes |
+| `bullmq` | BullMQ | yes |
+| `test-conventions` | Test Conventions | yes |
+| `env-access` | Environment Variables | yes |
+| `module-boundaries` | Module Boundaries | registry only |
+| `code-flow` | Code Flow | yes |
+| `comment-hygiene` | Comment Hygiene | yes |
+| `structured-logging` | Structured Logging | yes |
+| `jwt-cookies` | JWT & Cookies | yes |
+| `oauth-security` | OAuth Security | yes |
+| `i18n-keys` | i18n Keys | yes |
+
+**Always-on detection:** `generic-ts`, `env-access`, `module-boundaries`, `code-flow`, `comment-hygiene`.
+
+Full rule catalog with fix guidance: [RULES.md](https://github.com/agjs/tsforge/blob/main/packages/core/RULES.md) (generated — run `bun packages/core/scripts/build-rules-md.ts` to refresh).
+
+## Severity
+
+Pack rules default to **error**. Override per-project in `tsforge.config.json` → see [config](/guardrails/config/).

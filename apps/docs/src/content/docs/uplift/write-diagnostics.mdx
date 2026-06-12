@@ -1,0 +1,44 @@
+---
+title: Write diagnostics — instant type feedback
+description: Append per-file TypeScript diagnostics to edit/create tool results. Cap of 5.
+---
+
+:::tip[Status: built + green]
+`packages/core/src/lsp/` write-feedback path. Default ON — set `TSFORGE_LSP_WRITE_FEEDBACK=0` to disable.
+:::
+
+## What it adds
+
+After every successful `edit` or `create`, the harness runs the TypeScript language service on the touched file and **appends diagnostics** to the tool result.
+
+The model sees type errors immediately — before the full gate runs — and can fix them on the next turn.
+
+## Output shape
+
+Diagnostics appear as a trailing block on the tool result:
+
+```
+✓ edited src/foo.ts
+
+Type diagnostics (src/foo.ts):
+  L12:5 TS2322: Type 'string' is not assignable to type 'number'.
+  L18:1 TS6133: 'unused' is declared but never used.
+  …and 3 more
+```
+
+## Cap
+
+| Setting | Value |
+| --- | --- |
+| Max diagnostics shown | **5** |
+| Overflow | `…and N more` suffix |
+
+Keeps tool results bounded so context doesn't balloon on large files.
+
+## Disable
+
+```bash
+TSFORGE_LSP_WRITE_FEEDBACK=0 bun packages/core/src/cli.ts
+```
+
+Works alongside [hashline](/uplift/hashline/) and the [validation engine](/loop/validation/) — write diagnostics are per-edit; the gate is whole-project.

@@ -1,0 +1,66 @@
+---
+title: A/B testing — feature sweeps
+description: Compare TTSR, hashline, and write-feedback variants across benchmark runs.
+---
+
+:::tip[Status: built + green]
+`packages/core/scripts/sweep.ts` + `edit-benchmark.ts`. Full guide: [EVAL_GUIDE.md](https://github.com/agjs/tsforge/blob/main/EVAL_GUIDE.md).
+:::
+
+## Feature flags under test
+
+| Variable | Default | Disables when |
+| --- | --- | --- |
+| `TSFORGE_TTSR` | ON | `=0` |
+| `TSFORGE_HASHLINE` | ON | `=0` |
+| `TSFORGE_LSP_WRITE_FEEDBACK` | ON | `=0` |
+
+## Sweep: hashline on/off
+
+```bash
+TSFORGE_SEED=money \
+TSFORGE_TEMPS=0 \
+TSFORGE_REPEATS=2 \
+TSFORGE_FEATURE_VARIANTS=hashline \
+bun packages/core/scripts/sweep.ts
+```
+
+Creates 4 runs: `money-hashline=on-t0-...` and `money-hashline=off-t0-...` (2 repeats each).
+
+## Sweep: TTSR × hashline
+
+```bash
+TSFORGE_SEED=saas-crm \
+TSFORGE_TEMPS=0.5 \
+TSFORGE_REPEATS=3 \
+TSFORGE_FEATURE_VARIANTS=ttsr,hashline \
+bun packages/core/scripts/sweep.ts
+```
+
+Runs `3 repeats × 2 temps × 4 variants = 24` runs. Each dir has `run.log` + `result.json`.
+
+## Compare edit mechanisms
+
+```bash
+bun packages/core/scripts/edit-benchmark.ts \
+  evals/money-hashline=on-t0-* \
+  evals/money-hashline=off-t0-*
+```
+
+### Sample output
+
+| Metric | hashline=on | hashline=off |
+| --- | --- | --- |
+| `edit` calls | 12 | 18 |
+| `edit_lines` calls | 24 | 0 |
+| stale-anchor retries | 3 | — |
+| gate green rate | 85% | 70% |
+
+## What to compare
+
+- **Pass rate** — did the run reach gate green?
+- **Edit success** — `edit` vs `edit_lines` call counts and failure reasons
+- **Token cost** — total tokens per run (in `result.json`)
+- **Repair cycles** — how many EDIT→VALIDATE loops before done/stuck
+
+Full workflow, judge setup, and analysis scripts: [EVAL_GUIDE.md](https://github.com/agjs/tsforge/blob/main/EVAL_GUIDE.md).

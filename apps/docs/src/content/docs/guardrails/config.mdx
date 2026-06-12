@@ -1,0 +1,56 @@
+---
+title: tsforge.config.json — project overrides
+description: Force stack, include/exclude packs, tune rule severities. Applied after stack detection.
+---
+
+:::tip[Status: built + green]
+`packages/core/src/config/tsforge-config.ts`. Loaded from project root on every gate run.
+:::
+
+## Schema
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `stack` | `string` | force-enable a stack (skip detection heuristics) |
+| `packs.include` | `string[]` | add packs after detection |
+| `packs.exclude` | `string[]` | remove packs after detection |
+| `rules` | `Record<string, "error" \| "warn" \| "off">` | override ESLint pack + meta-rule severities |
+
+**Resolution order:** detected packs → `stack` force-add → `include` → `exclude` → dedupe + sort.
+
+**Missing/invalid file:** empty config `{}` with stderr warnings.
+
+## Rule key format
+
+Keys accept bare rule names or `tsforge/`-prefixed names:
+
+```json
+{
+  "no-direct-process-env": "error",
+  "tsforge/prefer-early-return": "warn",
+  "no-historical-comments": "off"
+}
+```
+
+## Complete example
+
+```json
+{
+  "stack": "elysia",
+  "packs": {
+    "include": ["structured-logging"],
+    "exclude": ["bullmq"]
+  },
+  "rules": {
+    "no-direct-process-env": "error",
+    "tsforge/prefer-early-return": "warn",
+    "no-historical-comments": "off"
+  }
+}
+```
+
+This forces the Elysia stack, adds structured-logging, drops BullMQ, and tunes three rule severities.
+
+## Env passthrough
+
+Gate subprocesses receive resolved packs via `TSFORGE_PACKS` and rule overrides via `TSFORGE_RULE_OVERRIDES` (JSON). See [flags](/reference/flags/).

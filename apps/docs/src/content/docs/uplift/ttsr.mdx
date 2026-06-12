@@ -1,0 +1,47 @@
+---
+title: TTSR — stream-interrupting rules
+description: Stop bad tool args mid-generation. Default rules, 3-interrupt cap, custom rules path.
+---
+
+:::tip[Status: built + green]
+`packages/core/src/loop/ttsr.ts` + `ttsr-defaults.ts`. Default ON — set `TSFORGE_TTSR=0` to disable.
+:::
+
+## What interrupts
+
+TTSR watches the model's **streaming tool-call arguments**. When a pattern matches, the harness **cuts the stream**, injects corrective guidance, and asks the model to rewrite.
+
+This catches bad patterns *before* the tool executes — cheaper than gate failure + repair loop.
+
+## Default rules
+
+| Rule ID | Pattern | Guidance (summary) |
+| --- | --- | --- |
+| `no-as-any` | `\bas\s+any\b` | use `unknown` or proper types |
+| `no-ts-suppression` | `@ts-(ignore\|nocheck)` | fix real TS errors |
+| `no-empty-catch` | empty `catch { }` | log or handle errors |
+| `no-console-log` | `console.log/debug(` | remove console output |
+
+All defaults: `scope: "tool-args"`, `fileGlobs: src/**/*.ts(x)`, `repeatMode: cooldown`, `repeatGap: 5`.
+
+## Interrupt cap
+
+| Setting | Value |
+| --- | --- |
+| Per-task cap | **3** interrupts |
+| On cap | TTSR disables for remainder of task |
+| On fire | injects `⚠ generation interrupted: {guidance} Rewrite…` |
+
+## Custom rules
+
+Project file: `.tsforge/rules.json` — array of `{ name, condition, scope, guidance, repeatMode?, repeatGap?, fileGlobs? }`.
+
+Parser exists (`parseProjectRules`); **not wired into the loop yet** — runtime loads `DEFAULT_TTSR_RULES` only.
+
+## Disable
+
+```bash
+TSFORGE_TTSR=0 bun packages/core/src/cli.ts
+```
+
+See [flags](/reference/flags/) for all feature toggles.

@@ -1,0 +1,43 @@
+---
+title: Meta-rules — non-AST gate checks
+description: Config, CI, supply-chain, and test-sibling rules that run outside ESLint AST analysis.
+---
+
+:::tip[Status: built + green]
+`packages/core/src/meta-rules`. 10 rules; integrated into detect-gate alongside ESLint packs.
+:::
+
+## What meta-rules cover
+
+ESLint packs analyze TypeScript source. Meta-rules analyze **project artifacts**:
+
+- `package.json` (exact deps, overlapping libs)
+- `tsconfig.json` (strict mode, path existence)
+- source text scans (`eslint-disable`, `@ts-ignore`)
+- CI workflow YAML (pinned actions, runners, timeouts)
+- test sibling presence for logic modules
+
+## All 10 rules
+
+| ID | Category | Checks |
+| --- | --- | --- |
+| `package-exact-deps` | supply-chain | no `^`/`~` ranges in dependencies |
+| `no-overlapping-libs` | supply-chain | forbid redundant HTTP clients, etc. |
+| `no-eslint-disable-comments` | source-text | no inline eslint-disable |
+| `no-ts-suppressions` | source-text | no `@ts-ignore` / `@ts-nocheck` |
+| `tsconfig-paths-exist` | config | literal include/files paths exist |
+| `tsconfig-strict` | config | strict mode enabled |
+| `test-sibling-required` | testing | logic modules have `*.test.ts` sibling |
+| `workflow-actions-pinned` | ci | GitHub Actions pinned to tag/SHA |
+| `workflow-runner-pinned` | ci | no `ubuntu-latest` floating runners |
+| `workflow-timeout-required` | ci | jobs declare `timeout-minutes` |
+
+## Gate semantics
+
+| Severity | Effect on gate |
+| --- | --- |
+| **error** | gate fails; error appears in repair loop |
+| **warn** | reported but gate passes |
+| **off** | silenced via `tsforge.config.json` |
+
+Override severities in [config](/guardrails/config/) — same `rules` map as ESLint pack rules.

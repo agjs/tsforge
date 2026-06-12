@@ -1,29 +1,49 @@
 ---
-title: File ops — edit + create
-description: Mutate the working tree safely. edit = exact/unique str_replace; create = no-clobber new file. The harness's sole mutator.
+title: File ops — edit, edit_lines, create
+description: Mutate the working tree safely. edit = exact str_replace; edit_lines = hashline; create = no-clobber new file.
 ---
 
 :::tip[Status: built + green + live-validated]
-`packages/core/src/files`. 36 tests; the real model both edited and created files to green.
+`packages/core/src/files`. Two edit tools + create; hashline default ON.
 :::
 
-## edit — `applyEdit(cwd, { file, oldString, newString })`
+## edit — exact string replace
 
-Replaces an **exact, unique** snippet:
+`applyEdit(cwd, { file, oldString, newString })`
 
-| Matches | Result | Why |
-| --- | --- | --- |
-| 1 | `{ ok: true }`, file written | the safe case |
-| 0 | `{ ok: false, reason: "not-found" }` | snippet doesn't exist |
-| >1 | `{ ok: false, reason: "ambiguous", matches }` | model must add surrounding context |
-| missing file | `{ ok: false, reason: "missing-file" }` | — |
+| Matches | Result |
+| --- | --- |
+| 1 | `{ ok: true }`, file written |
+| 0 | `{ ok: false, reason: "not-found" }` |
+| >1 | `{ ok: false, reason: "ambiguous", matches }` |
+| missing file | `{ ok: false, reason: "missing-file" }` |
 
-A strong model with the full file in context can produce an exact, unique `oldString`, so we don't need line numbers or hash anchors. On `ambiguous`/`not-found` the loop hands the reason back and the model retries.
+Best when the model has full file context and can produce a unique snippet.
 
-## create — `applyCreate(cwd, { file, content })`
+## edit_lines — hashline line edits
 
-Makes a **new** file (parent dirs auto-created). Refuses to overwrite an existing file (`{ ok: false, reason: "exists" }`) — clobbering is `edit`'s job, not `create`'s. This is what lets the agent build a feature from nothing; proven live (model created `greet.ts` from a seeded test).
+`applyHashlineEdit(cwd, { file, anchor, ops })`
+
+Content-hash-anchored line-range edits with snapshot recovery on stale anchors.
+
+| Reason | Meaning |
+| --- | --- |
+| `stale-anchor` | hash mismatch — re-read for current `#HASH` |
+| `stale-anchor-conflict` | 3-way merge failed — adjust ops |
+| `no-anchor` | must read file first |
+
+Full format: [hashline](/uplift/hashline/). Disable with `TSFORGE_HASHLINE=0`.
+
+## create — new file only
+
+`applyCreate(cwd, { file, content })`
+
+Refuses to overwrite (`{ ok: false, reason: "exists" }`). Parent dirs auto-created.
+
+## Write diagnostics
+
+Both edit tools append [instant type diagnostics](/uplift/write-diagnostics/) on success (default ON).
 
 ## Deliberately absent (next)
 
-LSP-driven renames for cross-file symbol changes, multi-file atomic edits, and **scope enforcement** — rejecting edits/creates outside a task's `files:` globs (the drift tripwire).
+LSP-driven renames, multi-file atomic edits, and **scope enforcement** — rejecting edits outside a task's `files:` globs.

@@ -1,0 +1,39 @@
+---
+title: Tool-call repair ladder
+description: Cost-ordered repair before re-asking the model. L0 cleanup, L1 coercion, L3 targeted feedback.
+---
+
+:::tip[Status: built + green]
+`packages/core/src/agent/tool-repair.ts`. Runs on every rejected tool call.
+:::
+
+## Principle
+
+Validate first. Repair only on rejection. Try the cheapest fix first; re-ask the model last.
+
+## Levels
+
+| Level | Name | When | Example |
+| --- | --- | --- | --- |
+| **L0** | Lossless cleanup | Always first on rejected args | `limit: null` → dropped; `"[notes.md](notes.md)"` → `"notes.md"` |
+| **L1** | Schema coercion | Per-field in tool handlers | `edits: '[{"oldString":"a","newString":"b"}]'` → parsed array |
+| **L2** | Safe defaults | Reserved (not implemented) | expand from telemetry |
+| **L3** | Re-ask | Args still invalid after L0–L2 | targeted field/type/example message returned as tool result |
+
+## L0 example
+
+Model sends `file: "[src/foo.ts](src/foo.ts)"`. L0 unwraps the autolink → `src/foo.ts`. Re-validate passes without a model round-trip.
+
+## L1 example
+
+Model sends `edits` as a JSON string instead of an array. `coerceStringToArray` parses it. Fenced code blocks in string fields get trimmed.
+
+## L3 example
+
+Model omits required `file` on `edit`. L3 returns: *"`file` is required (string). Example: `"src/index.ts"`* — the model retries on the next turn.
+
+## Entry point
+
+`repairArgs()` runs L0 centrally. `parseOrRepair()` in `tool-context.ts` orchestrates: validate → L0 → re-validate → L3 feedback.
+
+See also [ModelAgent](/agent/model-agent/) for where repairs surface to the model.

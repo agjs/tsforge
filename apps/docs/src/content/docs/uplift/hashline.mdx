@@ -1,0 +1,59 @@
+---
+title: Hashline — content-hash-anchored edits
+description: Read format ¶path#HASH, line-range edit grammar, stale-anchor recovery via snapshot merge.
+---
+
+:::tip[Status: built + green]
+`packages/core/src/files/hashline.ts` + `hashline-format.ts`. Default ON — set `TSFORGE_HASHLINE=0` to disable.
+:::
+
+## Read format
+
+Every `read` on a tracked file emits hashline annotations:
+
+```
+¶src/app.ts#3F2A
+1:import { foo } from "./foo";
+2:export function main() {}
+```
+
+| Element | Syntax |
+| --- | --- |
+| Header | `¶path#HASH` — 4-char uppercase hex (xxHash32) |
+| Lines | `N:text` — 1-indexed |
+
+## Edit grammar (`edit_lines` tool)
+
+| Op | Syntax | Payload |
+| --- | --- | --- |
+| Replace | `replace N..M:` | lines prefixed `+` |
+| Delete | `delete N` or `delete N..M` | none |
+| Insert | `insert before N:` or `insert after N:` | lines prefixed `+` |
+
+Ops apply **bottom-up** (descending line order). Ranges are 1-indexed, inclusive.
+
+### Worked example
+
+```
+¶src/app.ts#3F2A
+replace 2..2:
++export function main(): void {}
+insert after 1:
++import type { Bar } from "./bar";
+```
+
+## Stale anchor flow
+
+| Case | Outcome |
+| --- | --- |
+| Hash matches live file | apply directly, write, record new snapshot |
+| Hash mismatch + snapshot in store | 3-way merge: snapshot=base, live=theirs, edited-snapshot=ours |
+| Re-anchor fails | `stale-anchor-conflict` — re-read and adjust |
+| Hash mismatch, no snapshot | `stale-anchor` — re-read for current hash |
+| Hash omitted | `no-anchor` — must read first |
+
+## Snapshot store
+
+Session keeps up to **4** versions per file (LRU), **30** tracked paths max. Same content reuses hash.
+
+Contrast with [edit engine](/edit/engine/) — `edit` uses exact string match; hashline uses line ranges + content hash.

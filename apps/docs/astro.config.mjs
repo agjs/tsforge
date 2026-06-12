@@ -41,6 +41,23 @@ export default defineConfig({
           ],
         },
         {
+          label: "Guardrails",
+          items: [
+            { label: "Rule packs (built)", link: "/guardrails/rule-packs/" },
+            { label: "Meta-rules (built)", link: "/guardrails/meta-rules/" },
+            { label: "tsforge.config.json (built)", link: "/guardrails/config/" },
+          ],
+        },
+        {
+          label: "Local-model uplift",
+          items: [
+            { label: "Repair ladder (built)", link: "/uplift/repair-ladder/" },
+            { label: "Hashline edits (built)", link: "/uplift/hashline/" },
+            { label: "TTSR (built)", link: "/uplift/ttsr/" },
+            { label: "Write diagnostics (built)", link: "/uplift/write-diagnostics/" },
+          ],
+        },
+        {
           label: "Inference",
           items: [{ label: "Model adapter (built)", link: "/inference/adapter/" }],
         },
@@ -52,9 +69,14 @@ export default defineConfig({
           label: "Agent",
           items: [{ label: "ModelAgent (built)", link: "/agent/model-agent/" }],
         },
-        // Sections grow one-per-slice as we work backwards from the north star:
-        // then Subsystems (edit engine, orchestrator, repo, memory, ...),
-        // each added only when its doc → test → build slice begins.
+        {
+          label: "Eval",
+          items: [{ label: "A/B testing (built)", link: "/eval/ab-testing/" }],
+        },
+        {
+          label: "Reference",
+          items: [{ label: "TSFORGE_* flags (built)", link: "/reference/flags/" }],
+        },
       ],
     }),
   ],
