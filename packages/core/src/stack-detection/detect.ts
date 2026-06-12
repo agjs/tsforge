@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/restrict-template-expressions, @typescript-eslint/no-base-to-string */
-
 import { join } from "node:path";
+import { isRecord } from "../lib/guards";
 import { resolveScopeFiles } from "../lib/fs";
 import type { IStackProfile } from "./stack-detection.types";
 import {
@@ -41,17 +40,17 @@ async function loadPackageDeps(cwd: string): Promise<{
 
 /** Extract dependency keys from a parsed package.json object. */
 function extractDeps(obj: unknown, field: string): Set<string> {
-  if (typeof obj !== "object" || obj === null) {
+  if (!isRecord(obj)) {
     return new Set();
   }
 
-  const depsObj: unknown = (obj as Record<string, unknown>)[field];
+  const depsObj = obj[field];
 
-  if (typeof depsObj !== "object" || depsObj === null) {
+  if (!isRecord(depsObj)) {
     return new Set();
   }
 
-  return new Set(Object.keys(depsObj as Record<string, unknown>));
+  return new Set(Object.keys(depsObj));
 }
 
 /** Check which packs have file-based matches, returning both match set and whether any were found. */
@@ -61,9 +60,7 @@ async function checkFileMatches(
 ): Promise<{ matches: Set<string>; anyFound: boolean }> {
   const matches = new Set<string>();
 
-  for (const packId in registry) {
-    const descriptor = registry[packId as IPackId];
-    // files may not exist on all variants of appliesWhen, so use optional chaining
+  for (const descriptor of Object.values(registry)) {
     const filesOption =
       "files" in descriptor.appliesWhen
         ? descriptor.appliesWhen.files
@@ -83,7 +80,7 @@ async function checkFileMatches(
       const resolved = await resolveScopeFiles(cwd, filesList);
 
       if (resolved.length > 0) {
-        matches.add(packId);
+        matches.add(descriptor.id);
       }
     } catch {
       // If file resolution fails, skip this pack's file checks
@@ -91,6 +88,30 @@ async function checkFileMatches(
   }
 
   return { matches, anyFound: matches.size > 0 };
+}
+
+/** Check if any required dependencies are present. */
+function matchAnyDeps(
+  required: readonly string[] | undefined,
+  allDeps: Set<string>
+): string | undefined {
+  if (!required || required.length === 0) {
+    return undefined;
+  }
+
+  return Array.from(required).find((dep) => allDeps.has(dep));
+}
+
+/** Check if all required dependencies are present. */
+function matchAllDeps(
+  required: readonly string[] | undefined,
+  allDeps: Set<string>
+): boolean {
+  if (!required || required.length === 0) {
+    return false;
+  }
+
+  return Array.from(required).every((dep) => allDeps.has(dep));
 }
 
 /** Evaluate a single pack descriptor against available deps and file matches. */
@@ -101,52 +122,31 @@ function evaluatePack(
   fileMatches: Set<string>
 ): { enabled: boolean; signal?: string } {
   // Always-on packs are handled separately
-  if ("always" in descriptor.appliesWhen && descriptor.appliesWhen.always) {
+  if ("always" in descriptor.appliesWhen) {
     return { enabled: false };
   }
 
   if ("anyDeps" in descriptor.appliesWhen) {
-    const anyDepsOption = descriptor.appliesWhen.anyDeps;
-    if (anyDepsOption) {
-      const anyDepsList = Array.from(anyDepsOption);
+    const matched = matchAnyDeps(descriptor.appliesWhen.anyDeps, allDeps);
 
-      if (anyDepsList.length > 0) {
-        const matched = anyDepsList.find((dep) => allDeps.has(dep));
-
-        if (matched !== undefined) {
-          return {
-            enabled: true,
-            signal: `${descriptor.label} (${matched})`,
-          };
-        }
-      }
+    if (matched !== undefined) {
+      return { enabled: true, signal: `${descriptor.label} (${matched})` };
     }
   }
 
   if ("allDeps" in descriptor.appliesWhen) {
-    const allDepsRequiredOption = descriptor.appliesWhen.allDeps;
-    if (allDepsRequiredOption) {
-      const allDepsList = Array.from(allDepsRequiredOption);
+    const hasAll = matchAllDeps(descriptor.appliesWhen.allDeps, allDeps);
 
-      if (allDepsList.length > 0) {
-        const hasAll = allDepsList.every((dep) => allDeps.has(dep));
-
-        if (hasAll) {
-          return { enabled: true, signal: descriptor.label };
-        }
-      }
+    if (hasAll) {
+      return { enabled: true, signal: descriptor.label };
     }
   }
 
-  // Check files only if not already enabled by deps
   if ("files" in descriptor.appliesWhen) {
-    const filesOption = descriptor.appliesWhen.files;
-    if (filesOption) {
-      const filesList = Array.from(filesOption);
+    const filesList = Array.from(descriptor.appliesWhen.files);
 
-      if (filesList.length > 0 && fileMatches.has(packId)) {
-        return { enabled: true, signal: `${descriptor.label} (file detected)` };
-      }
+    if (filesList.length > 0 && fileMatches.has(packId)) {
+      return { enabled: true, signal: `${descriptor.label} (file detected)` };
     }
   }
 
@@ -196,23 +196,20 @@ export async function detectStack(cwd: string): Promise<IStackProfile> {
   // Evaluate and add framework/library packs
   const alwaysOnSet = new Set<string>(Array.from(ALWAYS_ON_PACKS));
 
-  for (const packId in PACK_REGISTRY) {
-    const packIdTyped = packId as IPackId;
-
-    if (alwaysOnSet.has(packId)) {
+  for (const descriptor of Object.values(PACK_REGISTRY)) {
+    if (alwaysOnSet.has(descriptor.id)) {
       continue;
     }
 
-    const descriptor = PACK_REGISTRY[packIdTyped];
     const { enabled, signal } = evaluatePack(
-      packIdTyped,
+      descriptor.id,
       descriptor,
       allDeps,
       fileMatches
     );
 
     if (enabled) {
-      enabledPacks.push(packId);
+      enabledPacks.push(descriptor.id);
 
       if (signal !== undefined) {
         matchedSignals.push(signal);
