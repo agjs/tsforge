@@ -42,6 +42,11 @@ export const LOOP_LIMITS = {
   mapThresholdChars: 12000,
   /** Hard backstop on model turns per task. */
   maxTurns: 40,
+  /** Turn budget for a from-scratch WEB build (heavy gate, many files): used by
+   *  headless web builds AND applied when an interactive session scaffolds via
+   *  `scaffold_web` — measured: a todo app was still WRITING components when it
+   *  hit the default 40 cap, before the gate ever ran. */
+  webMaxTurns: 180,
   /**
    * How many times a build turn may dump file contents as a chat message (instead
    * of calling `create`) before the session gives up. Each time we nudge it to use

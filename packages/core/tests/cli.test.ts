@@ -58,3 +58,28 @@ test("plan approval is narrow — a 'yes' answering a question must not implemen
   expect(isApproval("yes")).toBe(true);
   expect(isApproval("ok")).toBe(true);
 });
+
+test("spinnerPhase tracks the turn's activity", async () => {
+  const { spinnerPhase } = await import("../src/cli");
+
+  expect(
+    spinnerPhase({ kind: "token", task: "s", message: "x", channel: "tool" })
+  ).toBe("writing");
+  expect(
+    spinnerPhase({
+      kind: "token",
+      task: "s",
+      message: "x",
+      channel: "reasoning",
+    })
+  ).toBe("thinking");
+  expect(spinnerPhase({ kind: "run", task: "s", message: "$ tsc" })).toBe(
+    "checking"
+  );
+  expect(
+    spinnerPhase({ kind: "tool", task: "s", message: "↳ installing deps" })
+  ).toBe("installing deps");
+  expect(
+    spinnerPhase({ kind: "done", task: "s", message: "green" })
+  ).toBeNull();
+});

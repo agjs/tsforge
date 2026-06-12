@@ -233,11 +233,12 @@ test("scaffoldWeb sessions offer scaffold_web — except while plan mode is on",
     expect(offered.at(-1)).toContain("scaffold_ui");
     expect(offered.at(-1)).toContain("scaffold_routes");
 
-    // Plan mode hides the scaffold tools (they mutate the workspace)…
+    // Plan mode hides the scaffold tools (they mutate the workspace) but keeps
+    // the read-only explorer set, including search.
     session.setPlanMode(true);
     await session.send("plan something");
 
-    expect(offered.at(-1)).toEqual(["read", "run"]);
+    expect(offered.at(-1)).toEqual(["read", "run", "search"]);
 
     // …and approval restores them.
     session.setPlanMode(false);

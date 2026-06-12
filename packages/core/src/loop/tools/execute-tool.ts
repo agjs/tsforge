@@ -5,6 +5,7 @@ import { doSearch, doLsp } from "./lsp-ops";
 import { doScaffoldUi } from "./scaffold-ui";
 import { doScaffoldRoutes } from "./scaffold-routes";
 import { doScaffoldWeb } from "./scaffold-web";
+import { doAddDependency } from "./add-dependency";
 import { reject, type IToolContext } from "./tool-context";
 
 export type { IToolContext } from "./tool-context";
@@ -31,6 +32,11 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.scaffoldUi]: doScaffoldUi,
   [TOOL_NAME.scaffoldRoutes]: doScaffoldRoutes,
   [TOOL_NAME.scaffoldWeb]: doScaffoldWeb,
+  [TOOL_NAME.addDependency]: doAddDependency,
+  // yield_status is intercepted by the Session BEFORE tool dispatch (it ends the
+  // turn); this handler only fires if one slips through with other calls.
+  [TOOL_NAME.yieldStatus]: () =>
+    "(turn continues — finish the work, then yield alone)",
 };
 
 function isToolName(name: string): name is ToolName {

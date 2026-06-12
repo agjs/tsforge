@@ -19,6 +19,8 @@ export const TOOL_NAME = {
   scaffoldUi: "scaffold_ui",
   scaffoldRoutes: "scaffold_routes",
   scaffoldWeb: "scaffold_web",
+  addDependency: "add_dependency",
+  yieldStatus: "yield_status",
 } as const;
 
 /** Tools that cannot mutate the workspace — the PLAN-MODE set. `run` is absent
@@ -196,26 +198,83 @@ export const READ_TOOL = {
  * diagnostics) are unrestricted; the writers (rename_symbol, organize_imports)
  * are scope-enforced in dispatch.
  */
-export const LSP_TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: TOOL_NAME.search,
-      description:
-        "ripgrep the working directory for a pattern — your primary way to FIND code without knowing file paths. Returns file:line matches.",
-      parameters: {
-        type: "object",
-        properties: {
-          pattern: { type: "string" },
-          glob: {
-            type: "string",
-            description: "optional path glob to scope the search",
-          },
+/** The STOP tool for forced-tools mode (TSFORGE_FORCE_TOOLS): with tool_choice
+ *  "required" the model can never end a turn in prose, so this is how it stops —
+ *  every turn is grammar-constrained and the malformed-call class is impossible.
+ *  The session converts a yield_status call back into a normal "model stopped"
+ *  turn (summary becomes the reply; the gate confirms as usual). */
+export const YIELD_STATUS_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.yieldStatus,
+    description:
+      "Call this when you are DONE working on the request (or have a final answer/question for the user) — it ends your turn. Put your reply in `summary`. Do not call it together with other tools; finish the work first.",
+    parameters: {
+      type: "object",
+      properties: {
+        summary: {
+          type: "string",
+          description:
+            "your reply to the user: what you did, or your answer/question",
         },
-        required: ["pattern"],
       },
+      required: ["summary"],
     },
   },
+};
+
+/** Install npm packages with bun — the measured next frontier blocker (builds
+ *  dead-ended whenever a feature needed a dep the scaffold didn't ship). Names
+ *  are validated handler-side (no flags/shell metacharacters reach the shell). */
+export const ADD_DEPENDENCY_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.addDependency,
+    description:
+      "Install one or more npm packages into this project (bun add). Use it when a feature genuinely needs a library the project doesn't have — check package.json first. Plain package names only (e.g. 'date-fns' or 'zod@3'), no flags.",
+    parameters: {
+      type: "object",
+      properties: {
+        packages: {
+          type: "string",
+          description:
+            "space-separated package names, each optionally @versioned, e.g. 'date-fns zod@3'",
+        },
+        dev: {
+          type: "boolean",
+          description: "install as devDependency (default false)",
+        },
+      },
+      required: ["packages"],
+    },
+  },
+};
+
+/** Ripgrep over the workspace — read-only, deps-free, and useful WITHOUT a
+ *  tsconfig, so it is also offered standalone in interactive sessions (the
+ *  plan-mode explorer's main tool besides `read`). */
+export const SEARCH_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.search,
+    description:
+      "ripgrep the working directory for a pattern — your primary way to FIND code without knowing file paths. Returns file:line matches.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string" },
+        glob: {
+          type: "string",
+          description: "optional path glob to scope the search",
+        },
+      },
+      required: ["pattern"],
+    },
+  },
+};
+
+export const LSP_TOOLS = [
+  SEARCH_TOOL,
   {
     type: "function",
     function: {

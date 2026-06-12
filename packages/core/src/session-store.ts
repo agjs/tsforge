@@ -30,6 +30,9 @@ export interface ISessionRecord {
   files: string[];
   /** Last-write time (ms) — newest wins for `--continue`. */
   updatedAt: number;
+  /** Plan mode was on when last saved — restored on `--continue` so a resumed
+   *  session doesn't silently drop its read-only guarantee. */
+  planMode?: boolean;
   /** The full conversation, including the system message. */
   messages: IChatMessage[];
 }

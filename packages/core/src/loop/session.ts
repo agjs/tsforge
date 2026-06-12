@@ -10,9 +10,13 @@ import {
   SCAFFOLD_UI_TOOL,
   SCAFFOLD_ROUTES_TOOL,
   SCAFFOLD_WEB_TOOL,
+  SEARCH_TOOL,
+  ADD_DEPENDENCY_TOOL,
+  YIELD_STATUS_TOOL,
   READ_ONLY_TOOL_NAMES,
   TOOL_NAME,
 } from "../agent";
+import { flags } from "../config";
 import { readFiles } from "../lib/fs";
 import { validate, type ErrorParser } from "../validate";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
@@ -87,6 +91,12 @@ export interface ISessionConfig {
   /** Offer the `scaffold_web` tool — a fresh INTERACTIVE session where the agent
    *  decides whether to start a web app. Pair with `setSetupWeb`. */
   scaffoldWeb?: boolean;
+  /** FORCED-TOOLS experiment (default: the TSFORGE_FORCE_TOOLS env flag): gated
+   *  build turns always run with tool_choice "required" + the `yield_status`
+   *  stop tool, so every turn is grammar-constrained and the malformed-call
+   *  class is impossible. Conversational (no-gate) and plan-mode turns are
+   *  unaffected (they should stream prose). */
+  forceTools?: boolean;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -311,6 +321,8 @@ export class Session {
     | typeof SCAFFOLD_UI_TOOL
     | typeof SCAFFOLD_ROUTES_TOOL
     | typeof SCAFFOLD_WEB_TOOL
+    | typeof ADD_DEPENDENCY_TOOL
+    | typeof YIELD_STATUS_TOOL
   )[];
   private hasGate: boolean;
   private readonly ctx: ILoopCtx;
@@ -338,6 +350,10 @@ export class Session {
   private planMode = false;
   /** Attach PLAN_MODE_NOTE to the NEXT send only (not every revision reply). */
   private planIntroPending = false;
+  /** FORCED-TOOLS experiment — see ISessionConfig.forceTools. */
+  private readonly forceTools: boolean;
+  /** Mid-session turn-cap override (setMaxTurns) — a web scaffold raises it. */
+  private maxTurnsOverride?: number;
 
   private constructor(cfg: ISessionConfig, ctx: ILoopCtx) {
     this.provider = cfg.provider;
@@ -356,17 +372,34 @@ export class Session {
     // can choose to start a web app — the UI/routes tools ride along so they're
     // ready once it scaffolds. Headless web builds (scaffoldUi) scaffold up front,
     // so they skip scaffold_web.
+    // Interactive sessions also get `search` (ripgrep): it's read-only, needs
+    // no tsconfig, and is the plan-mode explorer's main tool besides `read`.
+    // Headless/eval sessions keep the measured base set (see
+    // lsp-tools-regress-scratch: nav tools hurt from-scratch builds).
     this.tools =
       cfg.scaffoldWeb === true
         ? [
             ...toolsFor(false),
+            SEARCH_TOOL,
             SCAFFOLD_WEB_TOOL,
             SCAFFOLD_UI_TOOL,
             SCAFFOLD_ROUTES_TOOL,
+            ADD_DEPENDENCY_TOOL,
           ]
         : cfg.scaffoldUi === true
-          ? [...toolsFor(false), SCAFFOLD_UI_TOOL, SCAFFOLD_ROUTES_TOOL]
+          ? [
+              ...toolsFor(false),
+              SCAFFOLD_UI_TOOL,
+              SCAFFOLD_ROUTES_TOOL,
+              ADD_DEPENDENCY_TOOL,
+            ]
           : toolsFor(false);
+    this.forceTools = cfg.forceTools ?? flags.forceTools();
+
+    if (this.forceTools) {
+      this.tools = [...this.tools, YIELD_STATUS_TOOL];
+    }
+
     this.ctx = ctx;
     this.state = {
       prevGateErrors: [],
@@ -451,6 +484,13 @@ export class Session {
   setGate(command: string): void {
     this.ctx.task.accept = command;
     this.hasGate = command.length > 0;
+  }
+
+  /** Raise/lower the per-send turn cap mid-session — `scaffold_web` flips a chat
+   *  session into a from-scratch web build, whose heavy gate needs the bigger
+   *  webMaxTurns budget (0/undefined restores the config default). */
+  setMaxTurns(n?: number): void {
+    this.maxTurnsOverride = n !== undefined && n > 0 ? n : undefined;
   }
 
   /** Toggle GENERAL plan mode: read-only tools + the plan-then-approve workflow.
@@ -550,7 +590,8 @@ export class Session {
    */
   async send(text: string, opts: ISendOptions = {}): Promise<ISendResult> {
     const { ctx, report } = this;
-    const maxTurns = this.cfg.maxTurns ?? LOOP_LIMITS.maxTurns;
+    const maxTurns =
+      this.maxTurnsOverride ?? this.cfg.maxTurns ?? LOOP_LIMITS.maxTurns;
     const sendStart = performance.now();
 
     // Thread cancellation to the tool `run` commands and the gate (not just the
@@ -884,6 +925,8 @@ export class Session {
     if (res.usage !== undefined) {
       this.lastUsage = res.usage;
       // Logged (not shown) so the --log analyzer can compute tokens-to-solution.
+      // `thinking` records THIS call's mode, so malformed-call rates can be
+      // correlated with it (analyze-malformed).
       report({
         kind: "usage",
         task: SESSION_ID,
@@ -891,6 +934,7 @@ export class Session {
         promptTokens: res.usage.promptTokens,
         completionTokens: res.usage.completionTokens,
         totalTokens: res.usage.totalTokens,
+        ...(enableThinking === undefined ? {} : { thinking: enableThinking }),
       });
     }
 
@@ -905,6 +949,7 @@ export class Session {
         kind: "tool",
         task: SESSION_ID,
         message: `⚠ recovered ${res.salvaged} malformed tool call(s) (server tool-call parser mismatch)`,
+        ...(enableThinking === undefined ? {} : { thinking: enableThinking }),
       });
     }
 
@@ -1077,9 +1122,14 @@ export class Session {
     | { kind: "retry" }
   > {
     try {
+      // FORCED-TOOLS experiment: gated, non-plan turns are ALWAYS grammar-
+      // constrained (the model stops via yield_status), so malformed tool text
+      // can't occur. A recovery force additionally disables thinking.
+      const required =
+        forceTool || (this.forceTools && this.hasGate && !this.planMode);
       const res = await this.askModel(
         opts.signal,
-        forceTool ? "required" : "auto",
+        required ? "required" : "auto",
         forceTool // forced tool turn → also disable thinking for a clean call
       );
 
@@ -1147,6 +1197,48 @@ export class Session {
       status: settled.status === RUN_STATUS.done ? "done" : "stuck",
       turns: turn,
     };
+  }
+
+  /** FORCED-TOOLS mode: convert `yield_status` calls back into a normal "model
+   *  stopped" turn — ack each call (so no tool_call dangles on the wire), strip
+   *  them from the response, and promote the summary to the reply content. The
+   *  existing no-tool-call paths (gate confirm / responded) then apply unchanged.
+   *  A yield alongside REAL calls is dropped here and answered by its dispatch
+   *  stub ("finish the work, then yield alone") — the work runs, the model
+   *  yields properly next turn. */
+  private resolveYieldCalls(res: IModelResponse): void {
+    const yields = res.toolCalls.filter(
+      (c) => c.name === TOOL_NAME.yieldStatus
+    );
+
+    if (yields.length === 0) {
+      return;
+    }
+
+    const others = res.toolCalls.filter(
+      (c) => c.name !== TOOL_NAME.yieldStatus
+    );
+
+    if (others.length > 0) {
+      return; // mixed turn: let dispatch run everything (stub answers the yield)
+    }
+
+    for (const y of yields) {
+      this.ctx.messages.push({
+        role: "tool",
+        toolCallId: y.id ?? "",
+        content: "(turn ended)",
+      });
+    }
+
+    res.toolCalls = [];
+
+    const summary = yields[0]?.arguments.summary;
+
+    if (res.content.length === 0 && typeof summary === "string") {
+      res.content = summary;
+      this.report({ kind: "message", task: SESSION_ID, message: summary });
+    }
   }
 
   private async drive(
@@ -1235,6 +1327,9 @@ export class Session {
 
         continue;
       }
+
+      // FORCED-TOOLS: a lone yield_status call becomes a normal stop.
+      this.resolveYieldCalls(res);
 
       // Still working — run the calls and keep going (we gate only when it stops).
       if (res.toolCalls.length > 0) {

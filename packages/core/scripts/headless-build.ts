@@ -28,7 +28,7 @@ import {
 } from "../src/detect-gate";
 import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
-import { Session, type Reporter } from "../src/loop";
+import { Session, LOOP_LIMITS, type Reporter } from "../src/loop";
 import { renderEvent } from "../src/render";
 import { logsDir } from "../src/session-store";
 import type { WebFramework } from "../src/web-templates";
@@ -265,7 +265,7 @@ async function main(): Promise<void> {
     // phase-2 cap while GENUINELY converging on the full 8 (it had built 7 of 8's
     // routes, coverage shrinking 4→1). A complete 8-entity app is more than 130
     // turns of work → 180 so the now-mandatory full build has room to finish.
-    maxTurns: 180,
+    maxTurns: LOOP_LIMITS.webMaxTurns,
     report,
   });
 

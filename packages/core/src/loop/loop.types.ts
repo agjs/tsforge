@@ -49,6 +49,10 @@ export interface ILoopEvent {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** For `usage` (and salvage-warning `tool`) events: whether THIS model call
+   *  ran with thinking enabled — lets the analyzer correlate malformed-tool-call
+   *  rate with the thinking mode (see analyze-malformed). */
+  thinking?: boolean;
   /** For the `start` event: run metadata, so a log is self-describing for the
    *  analyzer (which model / how big a context window the metrics are against). */
   model?: string;

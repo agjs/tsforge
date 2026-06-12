@@ -2,7 +2,13 @@
 import { join, isAbsolute } from "node:path";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import { runTask, RUN_STATUS, Session, PLAN_APPROVED_NOTE } from "./loop";
+import {
+  runTask,
+  RUN_STATUS,
+  Session,
+  PLAN_APPROVED_NOTE,
+  LOOP_LIMITS,
+} from "./loop";
 import {
   PROVIDER_LIMITS,
   OpenAICompatibleProvider,
@@ -24,7 +30,7 @@ import {
   RESET,
 } from "./render";
 import type { ITask } from "./spec";
-import type { Reporter } from "./loop";
+import type { Reporter, ILoopEvent } from "./loop";
 import {
   buildGate,
   buildWebGate,
@@ -302,8 +308,9 @@ function envNumber(name: string): number | undefined {
 
 /** Wire-config from a registry entry: API key resolved at use time (inline or
  *  via apiKeyEnv); env still tunes maxTokens/penalty. Shared by initial
- *  construction and `/model` hot-swap so a switched model behaves identically. */
-function providerConfig(entry: IModelEntry): IOpenAICompatibleConfig {
+ *  construction, `/model` hot-swap, and the interactive eval script — so they
+ *  all behave identically. */
+export function providerConfig(entry: IModelEntry): IOpenAICompatibleConfig {
   const repetitionPenalty = envNumber("TSFORGE_REPETITION_PENALTY");
 
   return {
@@ -432,11 +439,13 @@ function makeSpinner(): {
   start: () => void;
   clear: () => void;
   stop: () => void;
+  setLabel: (label: string) => void;
 } {
   let timer: ReturnType<typeof setInterval> | null = null;
   let startedAt = 0;
   let frame = 0;
   let drawn = false;
+  let label = "thinking";
 
   const clear = (): void => {
     if (drawn) {
@@ -450,7 +459,7 @@ function makeSpinner(): {
 
     frame = (frame + 1) % SPINNER_FRAMES.length;
     process.stdout.write(
-      `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} thinking · ${secs}s${RESET}`
+      `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secs}s${RESET}`
     );
     drawn = true;
   };
@@ -461,6 +470,7 @@ function makeSpinner(): {
         return;
       }
 
+      label = "thinking";
       startedAt = performance.now();
       timer = setInterval(tick, SPINNER_TICK_MS);
     },
@@ -473,12 +483,44 @@ function makeSpinner(): {
 
       clear();
     },
+    setLabel: (l: string): void => {
+      label = l;
+    },
   };
 }
 
 const spinner = makeSpinner();
 
+/** What the spinner should say given the latest event — the activity line
+ *  follows the turn's phase instead of claiming "thinking" during a gate run
+ *  or a dependency install. Null = keep the current label. */
+export function spinnerPhase(event: ILoopEvent): string | null {
+  if (event.kind === "token") {
+    if (event.channel === "tool") {
+      return "writing";
+    }
+
+    return event.channel === "reasoning" ? "thinking" : null;
+  }
+
+  if (event.kind === "run" || event.kind === "validated") {
+    return "checking";
+  }
+
+  if (event.kind === "tool" && /install/i.test(event.message)) {
+    return "installing deps";
+  }
+
+  return event.kind === "cycle" ? "thinking" : null;
+}
+
 const render: Reporter = (event) => {
+  const phase = spinnerPhase(event);
+
+  if (phase !== null) {
+    spinner.setLabel(phase);
+  }
+
   const out = renderEvent(event, { color: true });
 
   if (out.length > 0) {
@@ -815,6 +857,7 @@ async function repl(args: ICliArgs): Promise<number> {
       accept: session.gate,
       files: session.scope,
       updatedAt: Date.now(),
+      planMode,
       messages: [...session.messages],
     });
   };
@@ -853,7 +896,9 @@ async function repl(args: ICliArgs): Promise<number> {
   // after the design phase to review the plan; for EVERYTHING else it is the
   // general read-only mode: the agent explores, asks clarifying questions, and
   // proposes a plan — only an explicit approval unlocks tools and implements.
-  let planMode = args.plan;
+  // A resumed session restores its saved mode (the read-only guarantee must
+  // survive `--continue`).
+  let planMode = args.plan || (resumed?.planMode ?? false);
   // True once a plan-mode exchange has happened, so a stray "approve" before any
   // discussion is just a message, not an approval.
   let planDiscussed = false;
@@ -873,6 +918,9 @@ async function repl(args: ICliArgs): Promise<number> {
     session.setFix(buildWebFix(framework));
     session.setIncrementalCheck(buildWebTscCheck());
     session.guide(webGuidance(framework));
+    // A from-scratch web build needs the big turn budget — the default cap was
+    // measured to cut a todo app off mid-write, before its gate ever ran.
+    session.setMaxTurns(LOOP_LIMITS.webMaxTurns);
   };
 
   // The `scaffold_web` tool invokes this when the AGENT decides to build a web app

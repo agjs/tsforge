@@ -16,4 +16,8 @@ export const flags = {
   legacyFeedback: (): boolean => isOn(ENV_FLAG.legacyFeedback),
   /** Disable the ast-grep safe-idiom rewrite pass in settleGate (A/B control). */
   noAstgrep: (): boolean => isOn(ENV_FLAG.noAstgrep),
+  /** FORCED-TOOLS experiment (A/B, default off): every gated-build turn runs
+   *  with tool_choice "required" + a `yield_status` stop tool, so output is
+   *  always grammar-constrained — the malformed-tool-call class can't occur. */
+  forceTools: (): boolean => isOn(ENV_FLAG.forceTools),
 };
