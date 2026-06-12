@@ -71,7 +71,7 @@ Do not manually `npm publish` unless the user explicitly asks to bypass CI.
 | `must be on main` | `git checkout main` |
 | `main diverged from origin/main` | resolve rebase conflict, re-run |
 | `tag vX.Y.Z already exists` | next semver or delete abandoned tag |
-| npm publish 401/403 | fix `NPM_TOKEN` on GitHub |
+| npm publish 401/403 | Regenerate `NPM_TOKEN`: granular token with **Read and write**, **All packages**, **Bypass 2FA for automation** (or classic Automation token). Verify npm email. `gh secret set NPM_TOKEN` |
 | unsigned commit rejected | enable GPG/SSH signing |
 
 ## Related docs

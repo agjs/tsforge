@@ -12,9 +12,10 @@
   "homepage": "https://tsforge.dev",
   "bugs": "https://github.com/agjs/tsforge/issues",
   "bin": {
-    "tsforge": "./src/cli.ts"
+    "tsforge": "./bin/tsforge.js"
   },
   "files": [
+    "bin",
     "src",
     "strict.eslint.config.mjs",
     "strict.web.eslint.config.mjs"
