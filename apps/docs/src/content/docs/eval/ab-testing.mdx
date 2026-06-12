@@ -15,6 +15,15 @@ Compare [stream rules (TTSR)](/uplift/ttsr/), [hashline](/uplift/hashline/), and
 
 Full flag reference: [Environment variables](/reference/flags/).
 
+## Seeds
+
+A **seed** is the task you run the model against. They live in [`seeds/`](https://github.com/agjs/tsforge/tree/main/seeds) and ship with the repo, so the examples below work on a fresh clone. Two come built in:
+
+- `money` — single-file pure logic (currency-safe arithmetic, no-lost-cents allocation).
+- `orders` — a three-module pricing engine (discounts, region tax, order summary).
+
+Pick one with `TSFORGE_SEED=<name>`. To add your own, drop a folder in `seeds/` — see [Spec format](/spec/format/).
+
 ## Running a sweep
 
 `bun run eval:sweep` accepts `TSFORGE_FEATURE_VARIANTS` — a comma-separated list of dimensions to sweep (cartesian product).
@@ -34,14 +43,14 @@ Creates four runs: `money-hashline=on-t0-...` and `money-hashline=off-t0-...` (t
 ### TTSR × hashline
 
 ```bash
-TSFORGE_SEED=saas-crm \
+TSFORGE_SEED=orders \
 TSFORGE_TEMPS=0.5 \
 TSFORGE_REPEATS=3 \
 TSFORGE_FEATURE_VARIANTS=ttsr,hashline \
 bun run eval:sweep
 ```
 
-Runs `3 repeats × 2 temps × 4 variants = 24` runs with IDs like `saas-crm-ttsr=on,hashline=off-t0.5-...`.
+Runs `3 repeats × 2 temps × 4 variants = 24` runs with IDs like `orders-ttsr=on,hashline=off-t0.5-...`.
 
 Each run directory contains `run.log` (human transcript) and `result.json` (structured metrics + feature flags).
 

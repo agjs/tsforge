@@ -7,35 +7,33 @@
 
 .tf-landing-hero {
   width: var(--tf-landing-max);
+  max-width: 62rem;
   margin-inline: auto;
-  padding-block: clamp(2rem, 4vw, 4.5rem) clamp(1.5rem, 3vw, 2rem);
-}
-
-.tf-landing-hero__grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: clamp(2rem, 4vw, 3rem);
-  align-items: start;
-}
-
-@media (min-width: 50rem) {
-  .tf-landing-hero__grid {
-    grid-template-columns: 1fr min(380px, 44%);
-    gap: clamp(2rem, 5vw, 3.5rem);
-  }
+  padding-block: clamp(3rem, 8vw, 6.5rem);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: clamp(1.85rem, 4vw, 2.75rem);
 }
 
 .tf-landing-hero__copy {
   display: flex;
   flex-direction: column;
-  gap: 1.15rem;
-  text-align: center;
+  align-items: center;
+  gap: 1.1rem;
+  width: 100%;
+  max-width: 44rem;
 }
 
-@media (min-width: 50rem) {
-  .tf-landing-hero__copy {
-    text-align: start;
-  }
+.tf-landing-eyebrow {
+  margin: 0;
+  font-family: var(--tf-landing-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--tf-brand-400);
 }
 
 .tf-landing-headline {
@@ -52,17 +50,11 @@
 }
 
 .tf-landing-lede {
-  margin: 0;
-  max-width: 44ch;
-  font-size: clamp(1rem, 1.6vw, 1.1rem);
-  line-height: 1.65;
+  margin: 0 auto;
+  max-width: 42ch;
+  font-size: clamp(1.02rem, 1.6vw, 1.15rem);
+  line-height: 1.6;
   color: var(--sl-color-gray-2);
-}
-
-@media (max-width: 49.99rem) {
-  .tf-landing-lede {
-    margin-inline: auto;
-  }
 }
 
 .tf-landing-actions {
@@ -70,12 +62,6 @@
   flex-wrap: wrap;
   gap: 0.65rem;
   justify-content: center;
-}
-
-@media (min-width: 50rem) {
-  .tf-landing-actions {
-    justify-content: flex-start;
-  }
 }
 
 .tf-landing-actions__primary,
@@ -122,7 +108,9 @@
 
 /* Install snippet */
 .tf-install-snippet {
-  margin-top: 0.25rem;
+  width: 100%;
+  max-width: 33rem;
+  margin-inline: auto;
   text-align: start;
 }
 
@@ -191,77 +179,140 @@
   text-decoration: underline;
 }
 
-/* Loop diagram (right column) */
-.tf-loop-diagram {
-  padding: 1.15rem 1.2rem;
+/* Terminal window (hero, right column) */
+.tf-term {
+  width: 100%;
+  max-width: 44rem;
+  margin-inline: auto;
+  text-align: left;
   border: 1px solid var(--tf-doc-line);
-  border-radius: 12px;
-  background: var(--tf-doc-panel);
+  border-radius: 14px;
+  background: var(--tf-doc-panel-strong);
+  box-shadow: 0 40px 90px -48px rgba(0, 0, 0, 0.95);
+  overflow: hidden;
 }
 
-.tf-loop-diagram__steps {
+.tf-term__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--tf-doc-line);
+  background: color-mix(in srgb, var(--tf-doc-panel) 60%, transparent);
+}
+
+.tf-term__dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+  background: var(--tf-doc-line);
+}
+
+.tf-term__dot:nth-child(1) {
+  background: #ff5f57;
+}
+
+.tf-term__dot:nth-child(2) {
+  background: #febc2e;
+}
+
+.tf-term__dot:nth-child(3) {
+  background: #28c840;
+}
+
+.tf-term__title {
+  margin-left: 0.45rem;
+  font-family: var(--tf-landing-mono);
+  font-size: 0.76rem;
+  color: var(--sl-color-gray-3);
+}
+
+.tf-term__body {
+  margin: 0;
+  padding: 1.15rem 1.3rem;
+  font-family: var(--tf-landing-mono);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--tf-doc-code-text);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* The loop strip (full-width, below the hero) */
+.tf-loop {
+  width: var(--tf-landing-max);
+  margin-inline: auto;
+  padding-block: clamp(1.75rem, 3.5vw, 3rem);
+  border-top: 1px solid var(--tf-doc-line);
+}
+
+.tf-loop__title {
+  margin: 0 0 1.5rem;
+  font-size: clamp(1.2rem, 2.2vw, 1.5rem);
+  font-weight: 600;
+  color: var(--sl-color-white);
+}
+
+.tf-loop__steps {
   margin: 0;
   padding: 0;
   list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.tf-loop-diagram__step {
   display: grid;
-  grid-template-columns: 2rem 1fr;
-  gap: 0.85rem;
-  padding-block: 0.85rem;
-  border-bottom: 1px solid var(--tf-doc-line);
+  gap: 1.5rem 1.5rem;
+  grid-template-columns: 1fr;
 }
 
-.tf-loop-diagram__step:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
+@media (min-width: 34rem) {
+  .tf-loop__steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
-.tf-loop-diagram__step:first-child {
-  padding-top: 0;
+@media (min-width: 60rem) {
+  .tf-loop__steps {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 
-.tf-loop-diagram__num {
-  display: flex;
+.tf-loop__num {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  height: 2rem;
+  width: 2.1rem;
+  height: 2.1rem;
+  margin-bottom: 0.8rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--sl-color-accent) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--sl-color-accent) 35%, transparent);
-  font-size: 0.82rem;
+  border: 1px solid color-mix(in srgb, var(--sl-color-accent) 38%, transparent);
+  font-size: 0.85rem;
   font-weight: 700;
   color: var(--tf-brand-400);
 }
 
-.tf-loop-diagram__step--pass .tf-loop-diagram__num {
-  background: color-mix(in srgb, #4ade80 14%, transparent);
-  border-color: color-mix(in srgb, #4ade80 35%, transparent);
+.tf-loop__step--pass .tf-loop__num {
+  background: color-mix(in srgb, #4ade80 16%, transparent);
+  border-color: color-mix(in srgb, #4ade80 40%, transparent);
   color: #4ade80;
 }
 
-.tf-loop-diagram__step strong {
+.tf-loop__step-title {
   display: block;
-  margin-bottom: 0.2rem;
-  font-size: 0.92rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.98rem;
+  font-weight: 700;
   color: var(--sl-color-white);
 }
 
-.tf-loop-diagram__step p {
+.tf-loop__step-body {
   margin: 0;
-  font-size: 0.84rem;
-  line-height: 1.5;
+  font-size: 0.85rem;
+  line-height: 1.55;
   color: var(--sl-color-gray-3);
 }
 
-.tf-loop-diagram__step code {
+.tf-loop__step-body code {
   font-family: var(--tf-landing-mono);
-  font-size: 0.78em;
+  font-size: 0.82em;
 }
 
 /* Three pillars */
@@ -440,9 +491,9 @@
 }
 
 [data-theme="light"] .tf-landing-headline,
-[data-theme="light"] .tf-loop-diagram__step strong,
+[data-theme="light"] .tf-loop__title,
+[data-theme="light"] .tf-loop__step-title,
 [data-theme="light"] .tf-pillar__title,
-[data-theme="light"] .tf-cli-preview__heading,
 [data-theme="light"] .tf-doc-map__title,
 [data-theme="light"] .tf-doc-map__card-title {
   color: var(--sl-color-text);

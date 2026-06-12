@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { existsSync } from "node:fs";
 import { ESLint } from "eslint";
 import { WEB_TEMPLATES, type WebFramework } from "./web-templates";
 
@@ -23,11 +24,44 @@ export interface IGate {
 }
 
 // tsforge's own toolchain, resolved from this module's location so it's found
-// wherever the harness lives.
-const ROOT = join(import.meta.dir, "..", "..", "..");
-const ESLINT_BIN = join(ROOT, "node_modules", ".bin", "eslint");
-const TSC_BIN = join(ROOT, "node_modules", ".bin", "tsc");
-const PRETTIER_BIN = join(ROOT, "node_modules", ".bin", "prettier");
+// wherever the harness lives. We walk UP from this file to the nearest
+// `node_modules/.bin` that actually has the tool, which is correct in BOTH
+// layouts tsforge ships in: the monorepo (deps hoisted to <repo>/node_modules)
+// AND a published install, where the deps are hoisted into the install's
+// node_modules and an ANCESTOR dir is itself `node_modules`. The old
+// `../../../node_modules/.bin` hard-coding only matched the monorepo; once
+// published it pointed at `.../node_modules/node_modules/.bin` and the CLI
+// crashed on startup the moment it touched the toolchain.
+function resolveToolBin(name: string): string {
+  let dir = import.meta.dir;
+  let parent = dirname(dir);
+
+  while (parent !== dir) {
+    const hoisted = join(dir, "node_modules", ".bin", name);
+
+    if (existsSync(hoisted)) {
+      return hoisted;
+    }
+
+    // When `dir` is itself a `node_modules` (the published/global-install case),
+    // the .bin sits directly inside it.
+    const direct = join(dir, ".bin", name);
+
+    if (existsSync(direct)) {
+      return direct;
+    }
+
+    dir = parent;
+    parent = dirname(dir);
+  }
+
+  // Last resort: let the shell resolve it from PATH rather than a wrong abspath.
+  return name;
+}
+
+const ESLINT_BIN = resolveToolBin("eslint");
+const TSC_BIN = resolveToolBin("tsc");
+const PRETTIER_BIN = resolveToolBin("prettier");
 const STRICT_CONFIG = join(import.meta.dir, "..", "strict.eslint.config.mjs");
 const BROWSER_CHECK = join(
   import.meta.dir,

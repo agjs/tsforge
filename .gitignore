@@ -12,3 +12,12 @@ evals/runs/
 evals/.web-cache-*/
 .tsforge/
 models.json
+
+# Generated gate artifact + stray scaffold left at the repo root from running
+# tsforge against its own directory during development (the real source lives in
+# packages/core/ and apps/docs/). Anchored to root so packages/core/src etc. are unaffected.
+/tsforge.tsconfig.json
+/index.html
+/vite.config.ts
+/components.json
+/src/

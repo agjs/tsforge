@@ -90,11 +90,26 @@ function variantLabel(variant: IFeatureVariant): string {
 
 const featureVariants = parseFeatureVariants();
 
-const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
-const seedDir = join(evalsRoot, seed);
+const repoRoot = join(import.meta.dir, "..", "..", "..");
+const evalsRoot = join(repoRoot, "evals");
+// Seeds ship committed under `seeds/`; run outputs go to the gitignored `evals/`.
+// Prefer a committed seed (so `bun run eval:sweep` works on a fresh clone), and
+// fall back to a local `evals/<seed>/` working dir for ad-hoc experiments.
+const committedSeed = join(repoRoot, "seeds", seed);
+const seedDir = (await dirExists(committedSeed))
+  ? committedSeed
+  : join(evalsRoot, seed);
 // Recursive so nested-directory apps (e.g. a React app under `src/`) copy whole;
 // flat single-dir evals are unaffected (recursive readdir returns the same list).
 const seedFiles = await readdir(seedDir, { recursive: true });
+
+async function dirExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 const provider = new OpenAICompatibleProvider({
   baseUrl: process.env.TSFORGE_BASE_URL ?? PROVIDER_DEFAULTS.baseUrl,

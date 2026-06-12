@@ -1,36 +1,49 @@
 ---
-/** Harness loop — tsforge's edit → gate → repair cycle, not a blueprint poster. */
+/** The tsforge loop — a horizontal edit → gate → repair strip below the hero. */
+interface ILoopStep {
+  num: string;
+  title: string;
+  body: string;
+  pass?: boolean;
+}
+
+const steps: readonly ILoopStep[] = [
+  {
+    num: "1",
+    title: "You set a task",
+    body: "Point tsforge at a repo and describe what to change.",
+  },
+  {
+    num: "2",
+    title: "Model edits files",
+    body: "It reads, edits, creates, and runs — with language-server navigation when the repo supports it.",
+  },
+  {
+    num: "3",
+    title: "The gate runs for real",
+    body: "<code>tsc --noEmit</code>, tsforge's strict ESLint, and your tests when configured.",
+  },
+  {
+    num: "✓",
+    title: "Pass or repair",
+    body: "A clean run saves a checkpoint. A failure goes back to the model with the exact errors.",
+    pass: true,
+  },
+];
 ---
 
-<div class="tf-loop-diagram" aria-label="How tsforge works">
-  <ol class="tf-loop-diagram__steps">
-    <li class="tf-loop-diagram__step">
-      <span class="tf-loop-diagram__num">1</span>
-      <div>
-        <strong>You set a task</strong>
-        <p>Point tsforge at a repo and describe what to change.</p>
-      </div>
-    </li>
-    <li class="tf-loop-diagram__step">
-      <span class="tf-loop-diagram__num">2</span>
-      <div>
-        <strong>Model edits files</strong>
-        <p>Tools for read, edit, create, and run. LSP navigation when the repo supports it.</p>
-      </div>
-    </li>
-    <li class="tf-loop-diagram__step">
-      <span class="tf-loop-diagram__num">3</span>
-      <div>
-        <strong>Gate runs for real</strong>
-        <p><code>tsc --noEmit</code>, tsforge ESLint, tests when configured.</p>
-      </div>
-    </li>
-    <li class="tf-loop-diagram__step tf-loop-diagram__step--pass">
-      <span class="tf-loop-diagram__num">✓</span>
-      <div>
-        <strong>Pass or repair</strong>
-        <p>Exit 0 saves a checkpoint. Failures go back to the model with exact errors.</p>
-      </div>
-    </li>
+<section class="tf-loop" aria-label="How tsforge works">
+  <h2 class="tf-loop__title">One task, one loop</h2>
+
+  <ol class="tf-loop__steps">
+    {
+      steps.map((step) => (
+        <li class={`tf-loop__step${step.pass ? " tf-loop__step--pass" : ""}`}>
+          <span class="tf-loop__num">{step.num}</span>
+          <strong class="tf-loop__step-title">{step.title}</strong>
+          <p class="tf-loop__step-body" set:html={step.body} />
+        </li>
+      ))
+    }
   </ol>
-</div>
+</section>

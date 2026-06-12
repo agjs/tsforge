@@ -1,44 +1,61 @@
 ---
 import DraftContentNotice from "virtual:starlight/components/DraftContentNotice";
-import HarnessLoopDiagram from "./HarnessLoopDiagram.astro";
 import InstallSnippet from "./InstallSnippet.tsx";
-import HarnessPillars from "./HarnessPillars.astro";
 
 const { data } = Astro.locals.starlightRoute.entry;
 ---
 
 <section class="tf-landing-hero hero">
-  <div class="tf-landing-hero__grid">
-    <div class="tf-landing-hero__copy stack sl-flex">
-      <h1 id="_top" class="tf-landing-headline" data-page-title>
-        The harness for <span class="tf-accent">TypeScript</span> apps
-      </h1>
+  <div class="tf-landing-hero__copy stack sl-flex">
+    <p class="tf-landing-eyebrow">TypeScript coding harness</p>
 
-      {data.draft && <DraftContentNotice />}
+    <h1 id="_top" class="tf-landing-headline" data-page-title>
+      The harness for <span class="tf-accent">TypeScript</span> apps
+    </h1>
 
-      <p class="tf-landing-lede">
-        {data.hero?.tagline ??
-          "Run a model against your repo. tsforge edits files, runs tsc and ESLint, and loops until the gate passes."}
-      </p>
+    {data.draft && <DraftContentNotice />}
 
-      <div class="tf-landing-actions">
-        <a class="tf-landing-actions__primary" href="/quickstart/">Try it</a>
-        <a class="tf-landing-actions__secondary" href="/big-picture/">How it works</a>
-        <a
-          class="tf-landing-actions__secondary"
-          href="https://github.com/agjs/tsforge"
-          rel="noopener noreferrer"
-          target="_blank"
-        >
-          GitHub
-        </a>
-      </div>
+    <p class="tf-landing-lede">
+      {data.hero?.tagline ??
+        "Point an AI model at your repo. tsforge keeps it fixing until your code actually compiles and passes lint."}
+    </p>
 
-      <InstallSnippet client:load />
+    <div class="tf-landing-actions">
+      <a class="tf-landing-actions__primary" href="/quickstart/">Get started</a>
+      <a
+        class="tf-landing-actions__secondary"
+        href="https://github.com/agjs/tsforge"
+        rel="noopener noreferrer"
+        target="_blank"
+      >
+        GitHub
+      </a>
     </div>
 
-    <HarnessLoopDiagram />
+    <InstallSnippet client:load />
+  </div>
+
+  <div class="tf-term" aria-label="Example tsforge session">
+    <div class="tf-term__bar">
+      <span class="tf-term__dot"></span>
+      <span class="tf-term__dot"></span>
+      <span class="tf-term__dot"></span>
+      <span class="tf-term__title">tsforge — auth-service</span>
+    </div>
+    <pre class="tf-term__body" aria-hidden="true"><span class="tf-cli-accent">›</span> fix the token-refresh type error
+
+<span class="tf-cli-dim">┌─ </span><span class="tf-cli-accent">✎ edit auth.service.ts</span><span class="tf-cli-dim"> ────────────────────────────</span>
+<span class="tf-cli-dim">│</span> <span class="tf-cli-red">- return user as any;</span>
+<span class="tf-cli-dim">│</span> <span class="tf-cli-green">+ return user satisfies IUser;</span>
+<span class="tf-cli-dim">└─────────────────────────────────────────────────────</span>
+
+<span class="tf-cli-dim">┌─ </span><span class="tf-cli-accent">→ gate (exit 0)</span><span class="tf-cli-dim"> ───────────────────────────────────</span>
+<span class="tf-cli-dim">│</span> <span class="tf-cli-green">✓ tsc --noEmit</span>
+<span class="tf-cli-dim">│</span> <span class="tf-cli-green">✓ strict ESLint (tsforge)</span>
+<span class="tf-cli-dim">│</span> <span class="tf-cli-green">✓ bun test · 8 passed</span>
+<span class="tf-cli-dim">└─────────────────────────────────────────────────────</span>
+
+<span class="tf-cli-green">✓ Gate passed. Checkpoint saved.</span>
+<span class="tf-cli-dim">⎯ qwen3.6-27b · ctx ~12k/33k 36% · 2 turns · 8s · done</span></pre>
   </div>
 </section>
-
-<HarnessPillars />

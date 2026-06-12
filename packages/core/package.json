@@ -1,7 +1,7 @@
 {
   "name": "@agjs/tsforge",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "TypeScript coding harness with a deterministic gate, stack-aware guardrails, and stream-level correction.",
   "repository": {
@@ -30,6 +30,12 @@
     "test": "bun test"
   },
   "dependencies": {
-    "cli-highlight": "2.1.11"
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "@typescript-eslint/utils": "8.60.0",
+    "cli-highlight": "2.1.11",
+    "eslint": "10.4.0",
+    "prettier": "3.8.3",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.60.0"
   }
 }
