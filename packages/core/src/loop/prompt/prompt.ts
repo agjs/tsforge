@@ -1,5 +1,7 @@
 import type { ITask } from "../../spec";
 import type { IFileView } from "../../lib/fs";
+import { PACK_REGISTRY } from "../../stack-detection";
+import type { IStackProfile } from "../../stack-detection";
 import { renderFileSection } from "./project-map";
 
 /** The implement-agent system prompt: who it is, the tools, and the strict-TS
@@ -39,12 +41,36 @@ export const COMPACT_SYSTEM = [
   "Drop: small talk, redundant tool output, and anything already superseded. Use terse bullet points. Do not invent anything not in the transcript.",
 ].join("\n");
 
+/** Build stack-aware guidance from an IStackProfile. Includes the stack name
+ *  and guidance strings from active packs (skipping empty/always-on packs). */
+export function buildStackGuidance(profile: IStackProfile): string {
+  const lines: string[] = [];
+
+  lines.push(`## Project stack & conventions`);
+  lines.push(`Stack: **${profile.name}** (${profile.reason})`);
+
+  for (const packId of profile.packs) {
+    // Find the descriptor by ID from the registry
+    const descriptor = Object.values(PACK_REGISTRY).find(
+      (d) => d.id === packId
+    );
+
+    // Add guidance if present and non-empty
+    if (descriptor?.guidance !== undefined) {
+      lines.push(`- ${descriptor.guidance}`);
+    }
+  }
+
+  return lines.length > 1 ? lines.join("\n") : "";
+}
+
 /** Build the first user message: the task contract + editable/context files
  *  (full dumps when small, a navigable MAP when large — see renderFileSection). */
 export function seedPrompt(
   task: ITask,
   editable: IFileView[],
-  context: IFileView[]
+  context: IFileView[],
+  stack?: IStackProfile
 ): string {
   const intent =
     task.intent !== undefined && task.intent.length > 0
@@ -65,9 +91,12 @@ export function seedPrompt(
       ? ""
       : `Read-only context (do NOT edit)${ctx.mapped ? " — MAP; read specifics on demand" : ""}:\n${ctx.text}`;
 
+  const stackText = stack !== undefined ? buildStackGuidance(stack) : "";
+
   return [
     `Task ${task.id}.`,
     intent,
+    stackText,
     `Acceptance command (run this to verify — it must exit 0): ${task.accept}`,
     `Editable files: ${task.files.join(", ")}`,
     `Current editable contents:\n${editableText}`,

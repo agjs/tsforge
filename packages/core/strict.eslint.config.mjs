@@ -6,7 +6,31 @@
 // strict + noUncheckedIndexedAccess, no-unsafe-*) is layered separately when a
 // tsconfig is available. This is what lifts the local model: the casts / `any` /
 // `!` / over-annotation it habitually emits become errors it must fix.
+//
+// Stack-aware rule packs are loaded via TSFORGE_PACKS env var (comma-separated
+// pack IDs), allowing the gate to inject stack-specific rules dynamically.
 import tseslint from "typescript-eslint";
+
+// Load stack-aware packs if TSFORGE_PACKS env var is set
+let packConfig = [];
+const packIds = (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
+if (packIds.length > 0) {
+  try {
+    const { buildPackEslintConfig } = await import(
+      "./src/rule-packs/index.ts"
+    );
+    const { plugin, rules } = buildPackEslintConfig(packIds);
+    packConfig = [
+      {
+        files: ["**/*.ts", "**/*.tsx"],
+        plugins: { tsforge: plugin },
+        rules,
+      },
+    ];
+  } catch {
+    // If pack loading fails, silently continue without them
+  }
+}
 
 export default tseslint.config(
   { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**"] },
@@ -40,5 +64,6 @@ export default tseslint.config(
         },
       ],
     },
-  }
+  },
+  ...packConfig
 );

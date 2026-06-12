@@ -5,8 +5,32 @@
 // (e.g. TanStack Router's `interface Register`). Differs from the core config in
 // one other way: it allows `as const` (banning only value-changing `as`/`<Foo>`
 // via AST selectors), since `as const` is idiomatic for typed literal registries.
+//
+// Stack-aware rule packs are loaded via TSFORGE_PACKS env var (comma-separated
+// pack IDs), allowing the gate to inject stack-specific rules dynamically.
 import tseslint from "typescript-eslint";
 import stylistic from "@stylistic/eslint-plugin";
+
+// Load stack-aware packs if TSFORGE_PACKS env var is set
+let packConfig = [];
+const packIds = (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
+if (packIds.length > 0) {
+  try {
+    const { buildPackEslintConfig } = await import(
+      "./src/rule-packs/index.ts"
+    );
+    const { plugin, rules } = buildPackEslintConfig(packIds);
+    packConfig = [
+      {
+        files: ["**/*.ts", "**/*.tsx"],
+        plugins: { tsforge: plugin },
+        rules,
+      },
+    ];
+  } catch {
+    // If pack loading fails, silently continue without them
+  }
+}
 
 // Custom rule: ONE React component per .tsx file (boringstack). The classic
 // eslint-plugin-react/no-multi-comp crashes on ESLint 10 and @eslint-react has no
@@ -83,6 +107,11 @@ export default tseslint.config(
       "@typescript-eslint": tseslint.plugin,
       "@stylistic": stylistic,
       boringstack: { rules: { "one-component-per-file": oneComponentPerFile } },
+      ...packConfig
+        .filter(
+          (cfg) => cfg.plugins !== undefined && cfg.plugins.tsforge !== undefined
+        )
+        .reduce((acc, cfg) => ({ ...acc, ...cfg.plugins }), {}),
     },
     rules: {
       // NOTE: we do NOT use `consistent-type-assertions: never` here — that also
@@ -149,6 +178,8 @@ export default tseslint.config(
             "No angle-bracket type assertions — type it properly. `as const` is allowed.",
         },
       ],
+      ...packConfig.reduce((acc, cfg) => ({ ...acc, ...(cfg.rules ?? {}) }), {}),
     },
-  }
+  },
+  ...packConfig
 );

@@ -117,10 +117,15 @@ export type FileLinter = (absPath: string) => Promise<IFileLintProblem[]>;
  * calls — no per-write cold start). Best-effort: a linter failure returns [] and
  * never breaks the build; the gate stays the authority. `cwd` is the app dir so
  * the vendored-code ignore globs (ui/, lib/, *.gen.ts) resolve correctly.
+ *
+ * When `packIds` is provided, those rule packs are added to the config via
+ * `overrideConfig` (applies after the bundled config). This allows write-time
+ * feedback on stack-aware rules.
  */
 export function makeFileLinter(
   framework: WebFramework | "core",
-  cwd: string
+  cwd: string,
+  packIds?: readonly string[]
 ): FileLinter {
   const overrideConfigFile =
     framework === "core" ? STRICT_CONFIG : STRICT_WEB_CONFIG;
@@ -130,11 +135,43 @@ export function makeFileLinter(
 
   return async (absPath) => {
     try {
-      engine ??= new ESLint({
-        cwd,
-        overrideConfigFile,
-        ...(ignores.length > 0 ? { overrideConfig: [{ ignores }] } : {}),
-      });
+      if (engine === null) {
+        interface IEslintOptions {
+          cwd: string;
+          overrideConfigFile: string;
+          overrideConfig?: Record<string, unknown>[];
+        }
+
+        const eOpts: IEslintOptions = {
+          cwd,
+          overrideConfigFile,
+        };
+
+        // Add ignores config if needed
+        if (ignores.length > 0) {
+          eOpts.overrideConfig = [{ ignores }];
+        }
+
+        // Add pack rules if provided
+        if (packIds !== undefined && packIds.length > 0) {
+          const { buildPackEslintConfig } = await import("./rule-packs/index");
+
+          const { plugin, rules } = buildPackEslintConfig(packIds);
+
+          const packConfig: Record<string, unknown> = {
+            files: ["**/*.ts", "**/*.tsx"],
+            plugins: { tsforge: plugin },
+            rules,
+          };
+
+          eOpts.overrideConfig =
+            eOpts.overrideConfig !== undefined
+              ? [...eOpts.overrideConfig, packConfig]
+              : [packConfig];
+        }
+
+        engine = new ESLint(eOpts);
+      }
 
       const results = await engine.lintFiles([absPath]);
       const first = results[0];
@@ -371,7 +408,10 @@ async function ensureFile(
   }
 }
 
-export async function buildGate(cwd: string): Promise<IGate> {
+export async function buildGate(
+  cwd: string,
+  packs?: readonly string[]
+): Promise<IGate> {
   const parts: string[] = [];
   const labels: string[] = [];
 
@@ -382,7 +422,7 @@ export async function buildGate(cwd: string): Promise<IGate> {
     labels.push("tsc --strict");
   }
 
-  const lint = lintPart();
+  const lint = lintPart(packs);
 
   parts.push(lint.command);
   labels.push(lint.label);
@@ -422,10 +462,16 @@ async function tscPart(cwd: string): Promise<string | null> {
 /** The syntactic idiom layer — ALWAYS tsforge's bundled strict eslint config
  *  (user policy). We deliberately do NOT defer to the project's own `lint`
  *  script: that's exactly how a weak repo would dodge the strict-TS floor. The
- *  bundled config needs no deps in the target. */
-function lintPart(): IGate {
+ *  bundled config needs no deps in the target. When packs are provided, they
+ *  are passed via TSFORGE_PACKS env var so the config can load TS imports. */
+function lintPart(packs?: readonly string[]): IGate {
+  const envPrefix =
+    packs !== undefined && packs.length > 0
+      ? `TSFORGE_PACKS=${packs.join(",")} `
+      : "";
+
   return {
-    command: `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
+    command: `${envPrefix}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
     label: "strict TypeScript (tsforge)",
   };
 }

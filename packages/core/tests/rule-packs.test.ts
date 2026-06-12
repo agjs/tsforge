@@ -259,7 +259,7 @@ describe("buildPackEslintConfig", () => {
 
   test("should throw on unknown pack ID not in registry", () => {
     expect(() => {
-      buildPackEslintConfig(["unknown-pack" as any]);
+      buildPackEslintConfig(["unknown-pack"]);
     }).toThrow("Unknown rule pack");
   });
 
@@ -267,7 +267,7 @@ describe("buildPackEslintConfig", () => {
     // module-boundaries is in PACK_REGISTRY but not in RULE_PACKS, so it should be skipped
     const { plugin, rules } = buildPackEslintConfig([
       "env-access",
-      "module-boundaries" as any,
+      "module-boundaries",
     ]);
 
     expect(plugin.meta?.name).toBe("tsforge");

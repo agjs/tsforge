@@ -749,7 +749,9 @@ async function baseGate(
     return { accept: "", gateLabel: "none (--no-gate)" };
   }
 
-  const auto = await buildGate(args.dir);
+  const { detectStack } = await import("./stack-detection");
+  const stackProfile = await detectStack(args.dir);
+  const auto = await buildGate(args.dir, stackProfile.packs);
 
   return { accept: auto.command, gateLabel: auto.label };
 }

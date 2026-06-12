@@ -19,6 +19,7 @@ import {
 import { flags } from "../config";
 import { readFiles } from "../lib/fs";
 import { validate, type ErrorParser } from "../validate";
+import { detectStack } from "../stack-detection";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
 import type { Reporter } from "./loop.types";
 import { CHAT_SYSTEM, COMPACT_SYSTEM } from "./prompt";
@@ -421,6 +422,8 @@ export class Session {
     };
 
     const report = cfg.report ?? ((): void => undefined);
+    const stackProfile = await detectStack(cfg.cwd);
+
     const ctx: ILoopCtx = {
       task,
       cwd: cfg.cwd,
@@ -428,6 +431,7 @@ export class Session {
       ...(cfg.lintFile === undefined ? {} : { lintFile: cfg.lintFile }),
       parse: cfg.parse,
       report,
+      stackProfile,
       messages:
         cfg.history !== undefined && cfg.history.length > 0
           ? [...cfg.history]

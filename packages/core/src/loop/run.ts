@@ -7,6 +7,7 @@ import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
 import type { IRunResult, IRunOptions, Reporter } from "./loop.types";
 import { flags } from "../config";
 import { SYSTEM, seedPrompt } from "./prompt";
+import { detectStack } from "../stack-detection";
 import {
   type ILoopCtx,
   type ILoopState,
@@ -123,11 +124,23 @@ export async function runTask(
     message: `task ${task.id}: RED (${red.errors.length} error(s))`,
   });
 
+  // Detect stack once per run, early
+  const stackProfile = await detectStack(cwd);
+
+  report({
+    kind: "tool",
+    task: task.id,
+    message: `detected stack: ${stackProfile.name} (${stackProfile.reason})`,
+  });
+
   const editable = await readFiles(cwd, task.files);
   const context = await readFiles(cwd, task.context ?? []);
   const messages: IChatMessage[] = [
     { role: "system", content: SYSTEM },
-    { role: "user", content: seedPrompt(task, editable, context) },
+    {
+      role: "user",
+      content: seedPrompt(task, editable, context, stackProfile),
+    },
   ];
 
   // Existing code to navigate? (editable files already have content). Only then
@@ -149,6 +162,7 @@ export async function runTask(
     parse: effectiveParse,
     report,
     messages,
+    stackProfile,
   };
   const state: ILoopState = {
     prevGateErrors: red.errors,

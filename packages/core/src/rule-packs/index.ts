@@ -34,6 +34,11 @@ export const RULE_PACKS = {
 
 export type IRulePackId = keyof typeof RULE_PACKS;
 
+/** Type guard: check if a string is a valid RULE_PACKS key. */
+function isRulePackId(id: unknown): id is IRulePackId {
+  return typeof id === "string" && id in RULE_PACKS;
+}
+
 /**
  * Builds an ESLint plugin and merged config from a selection of rule packs.
  * Pack IDs present in stack-detection's PACK_REGISTRY but absent from RULE_PACKS
@@ -43,7 +48,7 @@ export type IRulePackId = keyof typeof RULE_PACKS;
  * @throws if any two packs define the same rule name
  * @throws if a pack ID is unknown to both RULE_PACKS and PACK_REGISTRY
  */
-export function buildPackEslintConfig(packIds: readonly IRulePackId[]): {
+export function buildPackEslintConfig(packIds: readonly string[]): {
   plugin: TSESLint.FlatConfig.Plugin;
   rules: Record<string, "error" | "warn">;
 } {
@@ -55,7 +60,7 @@ export function buildPackEslintConfig(packIds: readonly IRulePackId[]): {
   const seenRuleNames = new Set<string>();
 
   for (const packId of packIds) {
-    const pack = RULE_PACKS[packId];
+    const pack = isRulePackId(packId) ? RULE_PACKS[packId] : undefined;
 
     // Skip pack IDs known to stack-detection but absent from RULE_PACKS
     if (pack === undefined) {

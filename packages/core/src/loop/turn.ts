@@ -14,6 +14,7 @@ import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
 import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
+import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
 import { executeTool } from "./tools";
 import {
@@ -87,6 +88,8 @@ export interface ILoopCtx {
   parse: ErrorParser | undefined;
   report: Reporter;
   messages: IChatMessage[];
+  /** Detected stack profile — determines which rule packs are enabled. */
+  stackProfile?: IStackProfile;
   /** When set, the gate's command output is streamed here live (the CLI wires
    *  this so a slow gate like `vite build` + browser isn't silent dead air).
    *  Omitted on the eval path, where output is just captured for scoring. */
