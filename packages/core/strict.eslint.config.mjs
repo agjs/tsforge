@@ -9,17 +9,32 @@
 //
 // Stack-aware rule packs are loaded via TSFORGE_PACKS env var (comma-separated
 // pack IDs), allowing the gate to inject stack-specific rules dynamically.
+// Rule overrides are loaded via TSFORGE_RULE_OVERRIDES env var (JSON-encoded
+// map of bare rule names to "error" | "warn" | "off").
 import tseslint from "typescript-eslint";
 
 // Load stack-aware packs if TSFORGE_PACKS env var is set
 let packConfig = [];
 const packIds = (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
+let ruleOverrides = {};
+
+if (process.env.TSFORGE_RULE_OVERRIDES !== undefined) {
+  try {
+    ruleOverrides = JSON.parse(process.env.TSFORGE_RULE_OVERRIDES);
+    if (typeof ruleOverrides !== "object" || ruleOverrides === null) {
+      ruleOverrides = {};
+    }
+  } catch {
+    // If parsing fails, silently ignore overrides
+  }
+}
+
 if (packIds.length > 0) {
   try {
     const { buildPackEslintConfig } = await import(
       "./src/rule-packs/index.ts"
     );
-    const { plugin, rules } = buildPackEslintConfig(packIds);
+    const { plugin, rules } = buildPackEslintConfig(packIds, ruleOverrides);
     packConfig = [
       {
         files: ["**/*.ts", "**/*.tsx"],

@@ -120,12 +120,14 @@ export type FileLinter = (absPath: string) => Promise<IFileLintProblem[]>;
  *
  * When `packIds` is provided, those rule packs are added to the config via
  * `overrideConfig` (applies after the bundled config). This allows write-time
- * feedback on stack-aware rules.
+ * feedback on stack-aware rules. `ruleOverrides` (keyed by bare rule name) can
+ * tune severities or silence rules ("off").
  */
 export function makeFileLinter(
   framework: WebFramework | "core",
   cwd: string,
-  packIds?: readonly string[]
+  packIds?: readonly string[],
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
 ): FileLinter {
   const overrideConfigFile =
     framework === "core" ? STRICT_CONFIG : STRICT_WEB_CONFIG;
@@ -156,7 +158,10 @@ export function makeFileLinter(
         if (packIds !== undefined && packIds.length > 0) {
           const { buildPackEslintConfig } = await import("./rule-packs/index");
 
-          const { plugin, rules } = buildPackEslintConfig(packIds);
+          const { plugin, rules } = buildPackEslintConfig(
+            packIds,
+            ruleOverrides
+          );
 
           const packConfig: Record<string, unknown> = {
             files: ["**/*.ts", "**/*.tsx"],
@@ -410,7 +415,8 @@ async function ensureFile(
 
 export async function buildGate(
   cwd: string,
-  packs?: readonly string[]
+  packs?: readonly string[],
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
 ): Promise<IGate> {
   const parts: string[] = [];
   const labels: string[] = [];
@@ -422,7 +428,7 @@ export async function buildGate(
     labels.push("tsc --strict");
   }
 
-  const lint = lintPart(packs);
+  const lint = lintPart(packs, ruleOverrides);
 
   parts.push(lint.command);
   labels.push(lint.label);
@@ -463,12 +469,27 @@ async function tscPart(cwd: string): Promise<string | null> {
  *  (user policy). We deliberately do NOT defer to the project's own `lint`
  *  script: that's exactly how a weak repo would dodge the strict-TS floor. The
  *  bundled config needs no deps in the target. When packs are provided, they
- *  are passed via TSFORGE_PACKS env var so the config can load TS imports. */
-function lintPart(packs?: readonly string[]): IGate {
-  const envPrefix =
-    packs !== undefined && packs.length > 0
-      ? `TSFORGE_PACKS=${packs.join(",")} `
-      : "";
+ *  are passed via TSFORGE_PACKS env var so the config can load TS imports. Rule
+ *  overrides are passed via TSFORGE_RULE_OVERRIDES (JSON-encoded map). */
+function lintPart(
+  packs?: readonly string[],
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
+): IGate {
+  const envParts: string[] = [];
+
+  if (packs !== undefined && packs.length > 0) {
+    envParts.push(`TSFORGE_PACKS=${packs.join(",")}`);
+  }
+
+  if (
+    ruleOverrides !== undefined &&
+    typeof ruleOverrides === "object" &&
+    Object.keys(ruleOverrides).length > 0
+  ) {
+    envParts.push(`TSFORGE_RULE_OVERRIDES=${JSON.stringify(ruleOverrides)}`);
+  }
+
+  const envPrefix = envParts.length > 0 ? `${envParts.join(" ")} ` : "";
 
   return {
     command: `${envPrefix}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,

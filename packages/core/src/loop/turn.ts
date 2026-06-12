@@ -96,6 +96,8 @@ export interface ILoopCtx {
   messages: IChatMessage[];
   /** Detected stack profile — determines which rule packs are enabled. */
   stackProfile?: IStackProfile;
+  /** Rule severity overrides from tsforge.config.json (maps rule ID to "error" | "warn" | "off"). */
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>;
   /** When set, the gate's command output is streamed here live (the CLI wires
    *  this so a slow gate like `vite build` + browser isn't silent dead air).
    *  Omitted on the eval path, where output is just captured for scoring. */
@@ -716,7 +718,8 @@ export async function settleGate(
 
   // Run meta-rules against the project — project structure invariants the gate
   // can't express. Convert error-severity violations to gate failures; warn
-  // violations are surfaced in feedback but don't block.
+  // violations are surfaced in feedback but don't block. Apply config overrides
+  // from ctx.ruleOverrides (already loaded and normalized in run.ts).
   let metaViolations: IMetaRuleViolation[] = [];
 
   try {
@@ -725,7 +728,7 @@ export async function settleGate(
       ctx.stackProfile?.packs ?? []
     );
 
-    metaViolations = runMetaRules(META_RULES, metaContext);
+    metaViolations = runMetaRules(META_RULES, metaContext, ctx.ruleOverrides);
   } catch {
     // Degrade silently — meta-rules are supplementary to the gate
   }

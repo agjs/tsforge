@@ -63,6 +63,33 @@ function handleDegeneration(
   };
 }
 
+/** A/B control for the gate-feedback-fidelity win: TSFORGE_LEGACY_FEEDBACK=1
+ *  forces the OLD mis-selected parser (eslint-json on chained tsc&&eslint). */
+function effectiveParserFor(
+  parse: ErrorParser | undefined
+): ErrorParser | undefined {
+  return flags.legacyFeedback() ? parseEslintJson : parse;
+}
+
+/** Detect the stack and fold in tsforge.config.json pack/rule overrides. */
+async function resolveStackForRun(cwd: string): Promise<{
+  stackProfile: Awaited<ReturnType<typeof detectStack>>;
+  ruleOverrides: Readonly<Record<string, "error" | "warn" | "off">>;
+}> {
+  const detectedProfile = await detectStack(cwd);
+  const { loadTsforgeConfig, resolveActivePacks, normalizeRuleOverrides } =
+    await import("../config/tsforge-config");
+  const cfg = await loadTsforgeConfig(cwd);
+
+  return {
+    stackProfile: {
+      ...detectedProfile,
+      packs: resolveActivePacks(detectedProfile.packs, cfg),
+    },
+    ruleOverrides: normalizeRuleOverrides(cfg),
+  };
+}
+
 /**
  * The implement loop as a persistent, tool-using conversation. The model drives
  * — it can `read`, `run` (tests/tsc/eslint), `edit`, `create` — and the whole
@@ -81,11 +108,7 @@ export async function runTask(
   opts: IRunOptions = {}
 ): Promise<IRunResult> {
   const { parse, enableThinking, thinkingTokenBudget } = opts;
-  // A/B control for the gate-feedback-fidelity win: TSFORGE_LEGACY_FEEDBACK=1
-  // forces the OLD mis-selected parser (eslint-json on chained tsc&&eslint).
-  const effectiveParse: ErrorParser | undefined = flags.legacyFeedback()
-    ? parseEslintJson
-    : parse;
+  const effectiveParse = effectiveParserFor(parse);
   const temperature = opts.temperature ?? 0;
   const maxTurns = opts.maxTurns ?? LOOP_LIMITS.maxTurns;
   const report: Reporter = opts.onEvent ?? (() => undefined);
@@ -124,8 +147,8 @@ export async function runTask(
     message: `task ${task.id}: RED (${red.errors.length} error(s))`,
   });
 
-  // Detect stack once per run, early
-  const stackProfile = await detectStack(cwd);
+  // Detect stack once per run, early; tsforge.config.json may adjust it
+  const { stackProfile, ruleOverrides } = await resolveStackForRun(cwd);
 
   report({
     kind: "tool",
@@ -163,6 +186,8 @@ export async function runTask(
     report,
     messages,
     stackProfile,
+    ruleOverrides:
+      Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
   };
   const state: ILoopState = {
     prevGateErrors: red.errors,

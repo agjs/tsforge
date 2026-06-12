@@ -103,6 +103,22 @@ describe("gate command construction", () => {
     expect(gate.command).not.toContain("TSFORGE_PACKS");
     expect(gate.command).toContain("bun");
   });
+
+  test("includes TSFORGE_RULE_OVERRIDES when rule overrides provided", async () => {
+    const gate = await buildGate(fixtureDir, ["drizzle"], {
+      "timestamp-must-specify-mode": "off",
+    });
+
+    expect(gate.command).toContain("TSFORGE_PACKS=drizzle");
+    expect(gate.command).toContain("TSFORGE_RULE_OVERRIDES=");
+    expect(gate.command).toContain("timestamp-must-specify-mode");
+  });
+
+  test("omits TSFORGE_RULE_OVERRIDES when no overrides provided", async () => {
+    const gate = await buildGate(fixtureDir, ["drizzle"]);
+
+    expect(gate.command).not.toContain("TSFORGE_RULE_OVERRIDES");
+  });
 });
 
 describe("makeFileLinter with packs (API path)", () => {

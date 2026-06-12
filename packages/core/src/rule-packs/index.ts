@@ -39,16 +39,45 @@ function isRulePackId(id: unknown): id is IRulePackId {
   return typeof id === "string" && id in RULE_PACKS;
 }
 
+/** Apply rule overrides: "off" drops a rule, error/warn replaces its severity. */
+function applyOverrides(
+  mergedRulesConfig: Readonly<Record<string, "error" | "warn">>,
+  overrides?: Readonly<Record<string, "error" | "warn" | "off">>
+): Record<string, "error" | "warn"> {
+  const result: Record<string, "error" | "warn"> = {};
+
+  for (const [key, severity] of Object.entries(mergedRulesConfig)) {
+    const bareName = key.startsWith("tsforge/") ? key.slice(8) : key;
+    const override = overrides?.[bareName];
+
+    if (override === "off") {
+      continue;
+    }
+
+    result[key] = override ?? severity;
+  }
+
+  return result;
+}
+
 /**
  * Builds an ESLint plugin and merged config from a selection of rule packs.
  * Pack IDs present in stack-detection's PACK_REGISTRY but absent from RULE_PACKS
  * are silently skipped (they may carry meta-rules later, not eslint rules).
  * Throws only for IDs unknown to both registries.
  *
+ * @param packIds Pack IDs to build config from
+ * @param overrides Optional rule severity overrides (keyed by bare rule name, not tsforge-prefixed)
+ *   - "off" removes the rule from the config
+ *   - "error"/"warn" replaces the severity
+ *
  * @throws if any two packs define the same rule name
  * @throws if a pack ID is unknown to both RULE_PACKS and PACK_REGISTRY
  */
-export function buildPackEslintConfig(packIds: readonly string[]): {
+export function buildPackEslintConfig(
+  packIds: readonly string[],
+  overrides?: Readonly<Record<string, "error" | "warn" | "off">>
+): {
   plugin: TSESLint.FlatConfig.Plugin;
   rules: Record<string, "error" | "warn">;
 } {
@@ -91,6 +120,8 @@ export function buildPackEslintConfig(packIds: readonly string[]): {
     }
   }
 
+  const finalRulesConfig = applyOverrides(mergedRulesConfig, overrides);
+
   const plugin: TSESLint.FlatConfig.Plugin = {
     meta: {
       name: "tsforge",
@@ -101,7 +132,7 @@ export function buildPackEslintConfig(packIds: readonly string[]): {
 
   return {
     plugin,
-    rules: mergedRulesConfig,
+    rules: finalRulesConfig,
   };
 }
 
