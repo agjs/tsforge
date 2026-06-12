@@ -48,6 +48,7 @@ async function chromiumAvailable(): Promise<boolean> {
 // default deterministic suite. The oracle's logic is exercised live regardless.
 const enabled = process.env.TSFORGE_BROWSER_TESTS === "1";
 const hasChromium = enabled && (await chromiumAvailable());
+// skipped unless TSFORGE_BROWSER_TESTS=1 and Playwright chromium is installed
 const browserTest = hasChromium ? test : test.skip;
 
 browserTest("renders clean HTML and confirms expected content", async () => {
