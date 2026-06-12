@@ -57,7 +57,7 @@ export const jobNameMustBeConstantRule = createRule<RuleOptions, MessageIds>({
       queueLocalNames: new Set(),
       queueEventsLocalNames: new Set(),
     };
-    let knownQueues: Map<string, QueueDefinition> = new Map();
+    let knownQueues = new Map<string, QueueDefinition>();
 
     return {
       Program(program) {

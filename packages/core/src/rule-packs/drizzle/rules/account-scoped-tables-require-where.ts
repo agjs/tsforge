@@ -3,6 +3,7 @@ import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
 import { matchesAnyGlobPattern } from "../../utils";
+import { isRecord } from "../../../lib/guards";
 
 export const RULE_NAME = "account-scoped-tables-require-where";
 
@@ -96,10 +97,11 @@ export const accountScopedTablesRequireWhereRule = createRule<
           if (chainContainsValuesWithScope(node, scopeColumn)) {
             return;
           }
-        } else if (queryShape.kind === "queryBuilder") {
-          if (objectArgumentContainsAnyScope(node, scopeColumns)) {
-            return;
-          }
+        } else if (
+          queryShape.kind === "queryBuilder" &&
+          objectArgumentContainsAnyScope(node, scopeColumns)
+        ) {
+          return;
         }
 
         context.report({
@@ -147,36 +149,17 @@ function identifyQuery(
     return null;
   }
 
-  if (property.name === "from") {
+  const directKinds = ["from", "insert", "update", "delete"] as const;
+  const direct = directKinds.find((kind) => kind === property.name);
+
+  if (direct !== undefined) {
     const arg = node.arguments[0];
 
-    if (arg && arg.type === AST_NODE_TYPES.Identifier && tables.has(arg.name)) {
-      return { kind: "from", table: arg.name };
+    if (arg?.type === AST_NODE_TYPES.Identifier && tables.has(arg.name)) {
+      return { kind: direct, table: arg.name };
     }
-  }
 
-  if (property.name === "insert") {
-    const arg = node.arguments[0];
-
-    if (arg && arg.type === AST_NODE_TYPES.Identifier && tables.has(arg.name)) {
-      return { kind: "insert", table: arg.name };
-    }
-  }
-
-  if (property.name === "update") {
-    const arg = node.arguments[0];
-
-    if (arg && arg.type === AST_NODE_TYPES.Identifier && tables.has(arg.name)) {
-      return { kind: "update", table: arg.name };
-    }
-  }
-
-  if (property.name === "delete") {
-    const arg = node.arguments[0];
-
-    if (arg && arg.type === AST_NODE_TYPES.Identifier && tables.has(arg.name)) {
-      return { kind: "delete", table: arg.name };
-    }
+    return null;
   }
 
   if (property.name === "findFirst" || property.name === "findMany") {
@@ -211,12 +194,17 @@ function extractQueryBuilderTable(
 }
 
 function getParent(node: TSESTree.Node): TSESTree.Node | undefined {
-  return (node as { parent?: TSESTree.Node }).parent;
+  return node.parent;
 }
 
-function chainContainsWhereWithScope(
+/**
+ * Walk up a fluent call chain (`db.update(t).set(x).where(...)`) looking for a
+ * `.<methodName>(...)` link whose call satisfies `callMatches`.
+ */
+function chainCallProvides(
   startCall: TSESTree.CallExpression,
-  scopeColumn: string
+  methodName: string,
+  callMatches: (call: TSESTree.CallExpression) => boolean
 ): boolean {
   let current: TSESTree.Node = startCall;
   let parent = getParent(current);
@@ -226,16 +214,12 @@ function chainContainsWhereWithScope(
       parent.type === AST_NODE_TYPES.MemberExpression &&
       parent.object === current &&
       parent.property.type === AST_NODE_TYPES.Identifier &&
-      parent.property.name === "where"
+      parent.property.name === methodName
     ) {
-      const whereCall = getParent(parent);
+      const call = getParent(parent);
 
-      if (whereCall && whereCall.type === AST_NODE_TYPES.CallExpression) {
-        const firstArg = whereCall.arguments[0];
-
-        if (firstArg && subtreeReferencesIdentifier(firstArg, scopeColumn)) {
-          return true;
-        }
+      if (call?.type === AST_NODE_TYPES.CallExpression && callMatches(call)) {
+        return true;
       }
     }
 
@@ -255,50 +239,48 @@ function chainContainsWhereWithScope(
   return false;
 }
 
+function chainContainsWhereWithScope(
+  startCall: TSESTree.CallExpression,
+  scopeColumn: string
+): boolean {
+  return chainCallProvides(startCall, "where", (call) => {
+    const firstArg = call.arguments[0];
+
+    return (
+      firstArg !== undefined &&
+      subtreeReferencesIdentifier(firstArg, scopeColumn)
+    );
+  });
+}
+
 function chainContainsValuesWithScope(
   startCall: TSESTree.CallExpression,
   scopeColumn: string
 ): boolean {
-  let current: TSESTree.Node = startCall;
-  let parent = getParent(current);
+  return chainCallProvides(startCall, "values", (call) =>
+    valuesCallProvidesScope(call, scopeColumn)
+  );
+}
 
-  while (parent !== undefined) {
-    if (
-      parent.type === AST_NODE_TYPES.MemberExpression &&
-      parent.object === current &&
-      parent.property.type === AST_NODE_TYPES.Identifier &&
-      parent.property.name === "values"
-    ) {
-      const valuesCall = getParent(parent);
+function valuesCallProvidesScope(
+  valuesCall: TSESTree.CallExpression,
+  scopeColumn: string
+): boolean {
+  const firstArg = valuesCall.arguments[0];
 
-      if (valuesCall && valuesCall.type === AST_NODE_TYPES.CallExpression) {
-        const firstArg = valuesCall.arguments[0];
+  if (firstArg === undefined) {
+    return false;
+  }
 
-        if (firstArg && objectExpressionMentionsKey(firstArg, scopeColumn)) {
-          return true;
-        }
+  if (objectExpressionMentionsKey(firstArg, scopeColumn)) {
+    return true;
+  }
 
-        if (firstArg && firstArg.type === AST_NODE_TYPES.ArrayExpression) {
-          for (const element of firstArg.elements) {
-            if (element && objectExpressionMentionsKey(element, scopeColumn)) {
-              return true;
-            }
-          }
-        }
-      }
-    }
-
-    if (
-      parent.type === AST_NODE_TYPES.MemberExpression ||
-      parent.type === AST_NODE_TYPES.CallExpression
-    ) {
-      current = parent;
-      parent = getParent(current);
-
-      continue;
-    }
-
-    break;
+  if (firstArg.type === AST_NODE_TYPES.ArrayExpression) {
+    return firstArg.elements.some(
+      (element) =>
+        element !== null && objectExpressionMentionsKey(element, scopeColumn)
+    );
   }
 
   return false;
@@ -310,7 +292,7 @@ function objectArgumentContainsScope(
 ): boolean {
   const arg = node.arguments[0];
 
-  if (!arg || arg.type !== AST_NODE_TYPES.ObjectExpression) {
+  if (arg?.type !== AST_NODE_TYPES.ObjectExpression) {
     return false;
   }
 
@@ -318,11 +300,10 @@ function objectArgumentContainsScope(
     if (
       property.type === AST_NODE_TYPES.Property &&
       property.key.type === AST_NODE_TYPES.Identifier &&
-      property.key.name === "where"
+      property.key.name === "where" &&
+      subtreeReferencesIdentifier(property.value, scopeColumn)
     ) {
-      if (subtreeReferencesIdentifier(property.value, scopeColumn)) {
-        return true;
-      }
+      return true;
     }
   }
 
@@ -365,74 +346,59 @@ const NON_AST_KEYS = new Set([
 ]);
 
 function isAstNode(value: unknown): value is TSESTree.Node {
+  return isRecord(value) && typeof value.type === "string";
+}
+
+function nodeReferencesIdentifier(node: TSESTree.Node, name: string): boolean {
+  if (node.type === AST_NODE_TYPES.Identifier && node.name === name) {
+    return true;
+  }
+
   return (
-    typeof value === "object" &&
-    value !== null &&
-    "type" in (value as { type?: unknown }) &&
-    typeof (value as { type?: unknown }).type === "string"
+    node.type === AST_NODE_TYPES.MemberExpression &&
+    node.property.type === AST_NODE_TYPES.Identifier &&
+    node.property.name === name
   );
+}
+
+function pushChildNodes(node: TSESTree.Node, stack: TSESTree.Node[]): void {
+  for (const [key, value] of Object.entries(node)) {
+    if (NON_AST_KEYS.has(key)) {
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (isAstNode(child)) {
+          stack.push(child);
+        }
+      }
+    } else if (isAstNode(value)) {
+      stack.push(value);
+    }
+  }
 }
 
 function subtreeReferencesIdentifier(
   root: TSESTree.Node,
   name: string
 ): boolean {
-  let found = false;
-  const visited = new WeakSet<object>();
+  const stack: TSESTree.Node[] = [root];
+  const visited = new WeakSet();
 
-  const visit = (node: TSESTree.Node): void => {
-    if (found || visited.has(node)) {
-      return;
+  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
+    if (visited.has(node)) {
+      continue;
     }
 
     visited.add(node);
 
-    if (node.type === AST_NODE_TYPES.Identifier && node.name === name) {
-      found = true;
-
-      return;
+    if (nodeReferencesIdentifier(node, name)) {
+      return true;
     }
 
-    if (
-      node.type === AST_NODE_TYPES.MemberExpression &&
-      node.property.type === AST_NODE_TYPES.Identifier &&
-      node.property.name === name
-    ) {
-      found = true;
+    pushChildNodes(node, stack);
+  }
 
-      return;
-    }
-
-    for (const [key, value] of Object.entries(node)) {
-      if (found) {
-        return;
-      }
-
-      if (NON_AST_KEYS.has(key)) {
-        continue;
-      }
-
-      if (Array.isArray(value)) {
-        for (const child of value) {
-          if (isAstNode(child)) {
-            visit(child);
-
-            if (found) {
-              return;
-            }
-          }
-        }
-      } else if (isAstNode(value)) {
-        visit(value);
-
-        if (found) {
-          return;
-        }
-      }
-    }
-  };
-
-  visit(root);
-
-  return found;
+  return false;
 }

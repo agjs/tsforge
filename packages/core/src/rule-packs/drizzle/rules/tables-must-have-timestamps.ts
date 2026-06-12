@@ -74,7 +74,7 @@ export const tablesMustHaveTimestampsRule = createRule<RuleOptions, MessageIds>(
 
       return {
         VariableDeclarator(node) {
-          if (!node.init || node.init.type !== AST_NODE_TYPES.CallExpression) {
+          if (node.init?.type !== AST_NODE_TYPES.CallExpression) {
             return;
           }
 
@@ -88,14 +88,14 @@ export const tablesMustHaveTimestampsRule = createRule<RuleOptions, MessageIds>(
             return;
           }
 
-          if (ignorePattern && ignorePattern.test(tableName)) {
+          if (ignorePattern?.test(tableName)) {
             return;
           }
 
           const columnsArg = node.init.arguments[1];
 
           const definedColumns =
-            columnsArg && columnsArg.type === AST_NODE_TYPES.ObjectExpression
+            columnsArg?.type === AST_NODE_TYPES.ObjectExpression
               ? columnsArg
               : null;
 
@@ -119,27 +119,19 @@ export const tablesMustHaveTimestampsRule = createRule<RuleOptions, MessageIds>(
             }
           }
 
-          if (requireOnUpdate.length > 0 && definedColumns) {
-            for (const column of requireOnUpdate) {
-              const property = findTimestampProperty(definedColumns, column);
-
-              if (!property) {
-                continue;
-              }
-
-              if (
-                property.value.type === AST_NODE_TYPES.CallExpression &&
-                !chainHasOnUpdate(property.value)
-              ) {
-                context.report({
-                  node: property,
-                  messageId: "missingOnUpdate",
-                  data: {
-                    name: tableName,
-                    column,
-                  },
-                });
-              }
+          if (definedColumns) {
+            for (const violation of findOnUpdateViolations(
+              definedColumns,
+              requireOnUpdate
+            )) {
+              context.report({
+                node: violation.property,
+                messageId: "missingOnUpdate",
+                data: {
+                  name: tableName,
+                  column: violation.column,
+                },
+              });
             }
           }
         },
@@ -169,8 +161,7 @@ function getTableName(node: TSESTree.VariableDeclarator): string | null {
     const firstArg = node.init.arguments[0];
 
     if (
-      firstArg &&
-      firstArg.type === AST_NODE_TYPES.Literal &&
+      firstArg?.type === AST_NODE_TYPES.Literal &&
       typeof firstArg.value === "string"
     ) {
       return firstArg.value;
@@ -259,7 +250,7 @@ function chainHasOnUpdate(startCall: TSESTree.CallExpression): boolean {
     ) {
       const methodCall = getParent(parent);
 
-      if (methodCall && methodCall.type === AST_NODE_TYPES.CallExpression) {
+      if (methodCall?.type === AST_NODE_TYPES.CallExpression) {
         return true;
       }
     }
@@ -281,7 +272,32 @@ function chainHasOnUpdate(startCall: TSESTree.CallExpression): boolean {
 }
 
 function getParent(node: TSESTree.Node): TSESTree.Node | undefined {
-  return (node as { parent?: TSESTree.Node }).parent;
+  return node.parent;
+}
+
+/** Columns from `requireOnUpdate` whose timestamp chain lacks `.$onUpdate(...)`. */
+function findOnUpdateViolations(
+  definedColumns: TSESTree.ObjectExpression,
+  requireOnUpdate: readonly string[]
+): { property: TSESTree.Property; column: string }[] {
+  const violations: { property: TSESTree.Property; column: string }[] = [];
+
+  for (const column of requireOnUpdate) {
+    const property = findTimestampProperty(definedColumns, column);
+
+    if (!property) {
+      continue;
+    }
+
+    if (
+      property.value.type === AST_NODE_TYPES.CallExpression &&
+      !chainHasOnUpdate(property.value)
+    ) {
+      violations.push({ property, column });
+    }
+  }
+
+  return violations;
 }
 
 function hasTimestampColumn(

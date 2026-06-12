@@ -59,10 +59,7 @@ export const timestampMustSpecifyModeRule = createRule<RuleOptions, MessageIds>(
 
           const optionsArg = node.arguments[1];
 
-          if (
-            !optionsArg ||
-            optionsArg.type !== AST_NODE_TYPES.ObjectExpression
-          ) {
+          if (optionsArg?.type !== AST_NODE_TYPES.ObjectExpression) {
             context.report({ node, messageId: "missingMode" });
 
             return;
@@ -94,7 +91,7 @@ export const timestampMustSpecifyModeRule = createRule<RuleOptions, MessageIds>(
 
           const modeValue = modeProperty.value.value;
 
-          if (!(allowedModes as readonly string[]).includes(modeValue)) {
+          if (!allowedModesIncludes(allowedModes, modeValue)) {
             context.report({
               node: modeProperty,
               messageId: "invalidMode",
@@ -137,20 +134,33 @@ function findModeProperty(
       continue;
     }
 
-    if (
-      property.key.type === AST_NODE_TYPES.Identifier &&
-      property.key.name === "mode"
-    ) {
-      return property;
-    }
-
-    if (
-      property.key.type === AST_NODE_TYPES.Literal &&
-      property.key.value === "mode"
-    ) {
+    if (propertyKeyMatches(property, "mode")) {
       return property;
     }
   }
 
   return null;
+}
+
+function propertyKeyMatches(
+  property: TSESTree.Property,
+  name: string
+): boolean {
+  if (
+    property.key.type === AST_NODE_TYPES.Identifier &&
+    property.key.name === name
+  ) {
+    return true;
+  }
+
+  return (
+    property.key.type === AST_NODE_TYPES.Literal && property.key.value === name
+  );
+}
+
+function allowedModesIncludes(
+  allowedModes: readonly ("date" | "string")[],
+  value: string
+): boolean {
+  return allowedModes.includes(value);
 }

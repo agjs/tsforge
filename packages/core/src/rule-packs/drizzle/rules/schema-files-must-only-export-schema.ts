@@ -121,8 +121,7 @@ function getNamedDeclarationName(
 ): string | null {
   if (
     "id" in declaration &&
-    declaration.id &&
-    declaration.id.type === AST_NODE_TYPES.Identifier
+    declaration.id?.type === AST_NODE_TYPES.Identifier
   ) {
     return declaration.id.name;
   }
@@ -137,8 +136,7 @@ function getDefaultExportName(
 
   if (
     "id" in declaration &&
-    declaration.id &&
-    declaration.id.type === AST_NODE_TYPES.Identifier
+    declaration.id?.type === AST_NODE_TYPES.Identifier
   ) {
     return declaration.id.name;
   }

@@ -60,7 +60,7 @@ export const workerMustListenFailedRule = createRule<RuleOptions, MessageIds>({
       queueEventsLocalNames: new Set(),
     };
     let workers: WorkerDefinition[] = [];
-    let listenerKeyEventPairs: Set<string> = new Set();
+    let listenerKeyEventPairs = new Set<string>();
 
     return {
       Program(program) {
@@ -127,8 +127,7 @@ function collectOnListeners(program: TSESTree.Program): Set<string> {
     const eventArg = node.arguments[0];
 
     if (
-      !eventArg ||
-      eventArg.type !== AST_NODE_TYPES.Literal ||
+      eventArg?.type !== AST_NODE_TYPES.Literal ||
       typeof eventArg.value !== "string"
     ) {
       return;

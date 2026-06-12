@@ -62,7 +62,7 @@ function readTablesFromRelationsFile(filePath: string): ReadonlySet<string> {
 
   const cached = relationsFileCache.get(filePath);
 
-  if (cached && cached.mtimeMs === stat.mtimeMs) {
+  if (cached?.mtimeMs === stat.mtimeMs) {
     return cached.tables;
   }
 
@@ -144,7 +144,7 @@ export const relationsMustCoverFksRule = createRule<RuleOptions, MessageIds>({
 
     return {
       VariableDeclarator(node) {
-        if (!node.init || node.init.type !== AST_NODE_TYPES.CallExpression) {
+        if (node.init?.type !== AST_NODE_TYPES.CallExpression) {
           return;
         }
 
@@ -171,7 +171,7 @@ export const relationsMustCoverFksRule = createRule<RuleOptions, MessageIds>({
 
         const firstArg = node.arguments[0];
 
-        if (firstArg && firstArg.type === AST_NODE_TYPES.Identifier) {
+        if (firstArg?.type === AST_NODE_TYPES.Identifier) {
           tablesWithRelations.add(firstArg.name);
         }
       },

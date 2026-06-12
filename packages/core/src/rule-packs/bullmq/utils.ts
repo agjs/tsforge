@@ -1,4 +1,5 @@
 import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
+import { isRecord } from "../../lib/guards";
 
 /**
  * Helper utilities for BullMQ rules.
@@ -41,25 +42,32 @@ export function analyzeBullmqImports(program: TSESTree.Program): BullmqImports {
     result.hasBullmqImport = true;
 
     for (const specifier of stmt.specifiers) {
-      if (specifier.type === AST_NODE_TYPES.ImportSpecifier) {
-        const importedName =
-          specifier.imported.type === AST_NODE_TYPES.Identifier
-            ? specifier.imported.name
-            : null;
-        const localName = specifier.local.name;
-
-        if (importedName && importedName === "Worker") {
-          result.workerLocalNames.add(localName);
-        } else if (importedName && importedName === "Queue") {
-          result.queueLocalNames.add(localName);
-        } else if (importedName && importedName === "QueueEvents") {
-          result.queueEventsLocalNames.add(localName);
-        }
-      }
+      recordImportSpecifier(specifier, result);
     }
   }
 
   return result;
+}
+
+function recordImportSpecifier(
+  specifier: TSESTree.ImportClause,
+  result: BullmqImports
+): void {
+  if (specifier.type !== AST_NODE_TYPES.ImportSpecifier) {
+    return;
+  }
+
+  if (specifier.imported.type !== AST_NODE_TYPES.Identifier) {
+    return;
+  }
+
+  const target = {
+    Worker: result.workerLocalNames,
+    Queue: result.queueLocalNames,
+    QueueEvents: result.queueEventsLocalNames,
+  }[specifier.imported.name];
+
+  target?.add(specifier.local.name);
 }
 
 function extractDefaultJobOptions(
@@ -106,26 +114,25 @@ export function collectQueueDefinitions(
   const queues = new Map<string, QueueDefinition>();
 
   walkAll(program, (node) => {
-    if (node.type === AST_NODE_TYPES.VariableDeclarator) {
-      if (
-        node.id.type === AST_NODE_TYPES.Identifier &&
-        node.init &&
-        isNewQueue(node.init, imports)
-      ) {
-        const varName = node.id.name;
-        const firstArg = node.init.arguments[0];
+    if (
+      node.type === AST_NODE_TYPES.VariableDeclarator &&
+      node.id.type === AST_NODE_TYPES.Identifier &&
+      node.init &&
+      isNewQueue(node.init, imports)
+    ) {
+      const varName = node.id.name;
+      const firstArg = node.init.arguments[0];
 
-        if (firstArg && firstArg.type === AST_NODE_TYPES.Literal) {
-          const queueName = firstArg.value;
+      if (firstArg?.type === AST_NODE_TYPES.Literal) {
+        const queueName = firstArg.value;
 
-          if (typeof queueName === "string") {
-            const defaultJobOptions = extractDefaultJobOptions(node.init);
+        if (typeof queueName === "string") {
+          const defaultJobOptions = extractDefaultJobOptions(node.init);
 
-            queues.set(varName, {
-              bindingKey: varName,
-              defaultJobOptions,
-            });
-          }
+          queues.set(varName, {
+            bindingKey: varName,
+            defaultJobOptions,
+          });
         }
       }
     }
@@ -138,7 +145,7 @@ export function collectQueueDefinitions(
 
     const firstArg = node.arguments[0];
 
-    if (!firstArg || firstArg.type !== AST_NODE_TYPES.Literal) {
+    if (firstArg?.type !== AST_NODE_TYPES.Literal) {
       return;
     }
 
@@ -149,10 +156,9 @@ export function collectQueueDefinitions(
     }
 
     const defaultJobOptions = extractDefaultJobOptions(node);
-    const parent = (node as any).parent;
+    const { parent } = node;
 
     if (
-      !parent ||
       parent.type !== AST_NODE_TYPES.VariableDeclarator ||
       parent.id.type !== AST_NODE_TYPES.Identifier
     ) {
@@ -174,14 +180,13 @@ export function collectWorkerDefinitions(
   const varToWorkerMap = new Map<string, TSESTree.NewExpression>();
 
   walkAll(program, (node) => {
-    if (node.type === AST_NODE_TYPES.VariableDeclarator) {
-      if (
-        node.id.type === AST_NODE_TYPES.Identifier &&
-        node.init &&
-        isNewWorker(node.init, imports)
-      ) {
-        varToWorkerMap.set(node.id.name, node.init);
-      }
+    if (
+      node.type === AST_NODE_TYPES.VariableDeclarator &&
+      node.id.type === AST_NODE_TYPES.Identifier &&
+      node.init &&
+      isNewWorker(node.init, imports)
+    ) {
+      varToWorkerMap.set(node.id.name, node.init);
     }
   });
 
@@ -190,33 +195,7 @@ export function collectWorkerDefinitions(
       return;
     }
 
-    const parent = (node as any).parent;
-    let bindingKey: string | null = null;
-
-    if (parent) {
-      if (
-        parent.type === AST_NODE_TYPES.VariableDeclarator &&
-        parent.id.type === AST_NODE_TYPES.Identifier
-      ) {
-        bindingKey = parent.id.name;
-      } else if (parent.type === AST_NODE_TYPES.PropertyDefinition) {
-        if (parent.key.type === AST_NODE_TYPES.Identifier && !parent.computed) {
-          bindingKey = `this.${parent.key.name}`;
-        } else if (
-          parent.key.type === AST_NODE_TYPES.Literal &&
-          typeof parent.key.value === "string"
-        ) {
-          bindingKey = `this.${parent.key.value}`;
-        }
-      } else if (parent.type === AST_NODE_TYPES.AssignmentExpression) {
-        const left = parent.left;
-        if (left.type === AST_NODE_TYPES.Identifier) {
-          bindingKey = left.name;
-        } else if (left.type === AST_NODE_TYPES.MemberExpression) {
-          bindingKey = getReceiverKey(left);
-        }
-      }
-    }
+    const bindingKey = workerBindingKey(node.parent);
 
     workers.push({
       bindingKey,
@@ -225,6 +204,42 @@ export function collectWorkerDefinitions(
   });
 
   return workers;
+}
+
+function workerBindingKey(parent: TSESTree.Node): string | null {
+  if (
+    parent.type === AST_NODE_TYPES.VariableDeclarator &&
+    parent.id.type === AST_NODE_TYPES.Identifier
+  ) {
+    return parent.id.name;
+  }
+
+  if (parent.type === AST_NODE_TYPES.PropertyDefinition) {
+    if (parent.key.type === AST_NODE_TYPES.Identifier && !parent.computed) {
+      return `this.${parent.key.name}`;
+    }
+
+    if (
+      parent.key.type === AST_NODE_TYPES.Literal &&
+      typeof parent.key.value === "string"
+    ) {
+      return `this.${parent.key.value}`;
+    }
+
+    return null;
+  }
+
+  if (parent.type === AST_NODE_TYPES.AssignmentExpression) {
+    if (parent.left.type === AST_NODE_TYPES.Identifier) {
+      return parent.left.name;
+    }
+
+    if (parent.left.type === AST_NODE_TYPES.MemberExpression) {
+      return getReceiverKey(parent.left);
+    }
+  }
+
+  return null;
 }
 
 export function isNewWorker(
@@ -287,7 +302,7 @@ export function getOptionsObjectArg(
 ): TSESTree.ObjectExpression | null {
   const arg = node.arguments[argIndex];
 
-  if (arg && arg.type === AST_NODE_TYPES.ObjectExpression) {
+  if (arg?.type === AST_NODE_TYPES.ObjectExpression) {
     return arg;
   }
 
@@ -328,11 +343,16 @@ const NON_NODE_KEYS = new Set([
   "innerComments",
 ]);
 
+/** AST nodes are plain objects with a string `type` discriminant. */
+function isNodeLike(value: unknown): value is TSESTree.Node {
+  return isRecord(value) && typeof value.type === "string";
+}
+
 export function walkAll(
   node: TSESTree.Node,
   callback: (node: TSESTree.Node) => void
 ): void {
-  const visited = new WeakSet<object>();
+  const visited = new WeakSet();
 
   function walk(n: TSESTree.Node): void {
     if (visited.has(n)) {
@@ -349,16 +369,12 @@ export function walkAll(
 
       if (Array.isArray(value)) {
         for (const item of value) {
-          if (typeof item === "object" && item !== null && "type" in item) {
-            walk(item as TSESTree.Node);
+          if (isNodeLike(item)) {
+            walk(item);
           }
         }
-      } else if (
-        typeof value === "object" &&
-        value !== null &&
-        "type" in value
-      ) {
-        walk(value as TSESTree.Node);
+      } else if (isNodeLike(value)) {
+        walk(value);
       }
     }
   }
@@ -370,7 +386,7 @@ export function walkSome(
   node: TSESTree.Node,
   predicate: (node: TSESTree.Node) => boolean
 ): boolean {
-  const visited = new WeakSet<object>();
+  const visited = new WeakSet();
 
   function walk(n: TSESTree.Node): boolean {
     if (visited.has(n)) {
@@ -390,20 +406,12 @@ export function walkSome(
 
       if (Array.isArray(value)) {
         for (const item of value) {
-          if (typeof item === "object" && item !== null && "type" in item) {
-            if (walk(item as TSESTree.Node)) {
-              return true;
-            }
+          if (isNodeLike(item) && walk(item)) {
+            return true;
           }
         }
-      } else if (
-        typeof value === "object" &&
-        value !== null &&
-        "type" in value
-      ) {
-        if (walk(value as TSESTree.Node)) {
-          return true;
-        }
+      } else if (isNodeLike(value) && walk(value)) {
+        return true;
       }
     }
 

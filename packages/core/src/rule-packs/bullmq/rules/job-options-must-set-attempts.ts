@@ -60,7 +60,7 @@ export const jobOptionsMustSetAttemptsRule = createRule<
       queueLocalNames: new Set(),
       queueEventsLocalNames: new Set(),
     };
-    let knownQueues: Map<string, QueueDefinition> = new Map();
+    let knownQueues = new Map<string, QueueDefinition>();
 
     return {
       Program(program) {
@@ -121,7 +121,7 @@ function getEffectiveOptionValue(
     const property = findObjectProperty(opts, name);
 
     if (property) {
-      return property.value as TSESTree.Expression;
+      return property.value;
     }
   }
 
@@ -143,7 +143,7 @@ function getEffectiveOptionValue(
     return null;
   }
 
-  return defaultProperty.value as TSESTree.Expression;
+  return defaultProperty.value;
 }
 
 function isAttemptsLiteralOne(value: TSESTree.Expression): boolean {

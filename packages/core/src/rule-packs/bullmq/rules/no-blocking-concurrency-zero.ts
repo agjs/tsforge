@@ -1,4 +1,4 @@
-import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
+import { AST_NODE_TYPES } from "@typescript-eslint/utils";
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
@@ -12,9 +12,7 @@ import {
 
 export const RULE_NAME = "no-blocking-concurrency-zero";
 
-export interface NoBlockingConcurrencyZeroOptions {}
-
-type RuleOptions = [NoBlockingConcurrencyZeroOptions];
+type RuleOptions = [];
 type MessageIds = "invalidConcurrency";
 
 const optionSchema: JSONSchema4 = {
@@ -40,7 +38,7 @@ export const noBlockingConcurrencyZeroRule = createRule<
         "Worker concurrency must be ≥ 1 — `{{value}}` would block job processing entirely. Use a positive integer or read from configuration.",
     },
   },
-  defaultOptions: [{}],
+  defaultOptions: [],
   create(context) {
     let imports: BullmqImports = {
       hasBullmqImport: false,
@@ -70,7 +68,7 @@ export const noBlockingConcurrencyZeroRule = createRule<
           return;
         }
 
-        const value = concurrency.value as TSESTree.Expression;
+        const value = concurrency.value;
 
         if (
           value.type === AST_NODE_TYPES.Literal &&

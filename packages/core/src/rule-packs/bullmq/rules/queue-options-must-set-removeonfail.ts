@@ -16,9 +16,7 @@ import {
 
 export const RULE_NAME = "queue-options-must-set-removeonfail";
 
-export interface QueueOptionsMustSetRemoveOnFailOptions {}
-
-type RuleOptions = [QueueOptionsMustSetRemoveOnFailOptions];
+type RuleOptions = [];
 type MessageIds = "missingRemoveOnFail";
 
 const optionSchema: JSONSchema4 = {
@@ -44,7 +42,7 @@ export const queueOptionsMustSetRemoveOnFailRule = createRule<
         "Job has no `removeOnFail` configuration — failed jobs accumulate in Redis indefinitely. Set it per-call or via `defaultJobOptions` on the Queue.",
     },
   },
-  defaultOptions: [{}],
+  defaultOptions: [],
   create(context) {
     let imports: BullmqImports = {
       hasBullmqImport: false,
@@ -52,7 +50,7 @@ export const queueOptionsMustSetRemoveOnFailRule = createRule<
       queueLocalNames: new Set(),
       queueEventsLocalNames: new Set(),
     };
-    let knownQueues: Map<string, QueueDefinition> = new Map();
+    let knownQueues = new Map<string, QueueDefinition>();
 
     return {
       Program(program) {

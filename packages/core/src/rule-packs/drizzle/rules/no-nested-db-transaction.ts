@@ -80,7 +80,7 @@ export const noNestedDbTransactionRule = createRule<RuleOptions, MessageIds>({
 
       const firstParam = arg.params[0];
 
-      if (firstParam && firstParam.type === AST_NODE_TYPES.Identifier) {
+      if (firstParam?.type === AST_NODE_TYPES.Identifier) {
         return firstParam.name;
       }
 

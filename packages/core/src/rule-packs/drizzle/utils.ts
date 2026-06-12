@@ -108,21 +108,25 @@ export function findCallExpressionsDeep(
       results.push(node);
     }
 
+    walkChildren(node);
+  }
+
+  function walkChildren(node: TSESTree.Node): void {
     for (const [, value] of Object.entries(node)) {
       if (Array.isArray(value)) {
         for (const item of value) {
-          if (typeof item === "object" && item !== null && "type" in item) {
-            walk(item as TSESTree.Node);
+          if (isAstNode(item)) {
+            walk(item);
           }
         }
-      } else if (
-        typeof value === "object" &&
-        value !== null &&
-        "type" in value
-      ) {
-        walk(value as TSESTree.Node);
+      } else if (isAstNode(value)) {
+        walk(value);
       }
     }
+  }
+
+  function isAstNode(value: unknown): value is TSESTree.Node {
+    return typeof value === "object" && value !== null && "type" in value;
   }
 
   walk(root);
