@@ -1,0 +1,62 @@
+---
+interface IDocCard {
+  title: string;
+  description: string;
+  href: string;
+  linkLabel: string;
+}
+
+const cards: readonly IDocCard[] = [
+  {
+    title: "CLI & sessions",
+    description: "Interactive REPL, slash commands, flags, and session persistence.",
+    href: "/cli/interactive/",
+    linkLabel: "Interactive CLI →",
+  },
+  {
+    title: "Gate & repair loop",
+    description: "How tsforge builds the acceptance check and feeds errors back to the model.",
+    href: "/loop/gate-floor/",
+    linkLabel: "How the gate is built →",
+  },
+  {
+    title: "TypeScript LSP",
+    description: "In-process language server for navigation and write-time diagnostics.",
+    href: "/lsp/typescript-server/",
+    linkLabel: "Language server →",
+  },
+  {
+    title: "Web scaffolding",
+    description: "Bootstrap a Vite app inside a session with a stricter web gate.",
+    href: "/scaffold/web/",
+    linkLabel: "Web scaffolding →",
+  },
+  {
+    title: "Guardrails",
+    description: "Stack detection, ESLint rule packs, and tsforge.config.json overrides.",
+    href: "/guardrails/stack-detection/",
+    linkLabel: "Stack detection →",
+  },
+  {
+    title: "Model helpers",
+    description: "Repair ladder for malformed tool JSON, hashline edits, and TTSR stream rules.",
+    href: "/uplift/repair-ladder/",
+    linkLabel: "Fix bad tool calls →",
+  },
+];
+---
+
+<section class="tf-doc-map">
+  <h2 class="tf-doc-map__title">Documentation</h2>
+  <div class="tf-doc-map__grid">
+    {
+      cards.map((card) => (
+        <a class="tf-doc-map__card" href={card.href}>
+          <h3 class="tf-doc-map__card-title">{card.title}</h3>
+          <p class="tf-doc-map__card-desc">{card.description}</p>
+          <span class="tf-doc-map__card-link">{card.linkLabel}</span>
+        </a>
+      ))
+    }
+  </div>
+</section>

@@ -53,7 +53,7 @@ export function box(
 ): string {
   const {
     glyph = "",
-    accent = STYLE.cyan,
+    accent = STYLE.brand,
     color = true,
     width = termWidth(),
   } = opts;
@@ -115,7 +115,7 @@ export function table(
       .map((w, c) => {
         const cell = (cells[c] ?? "").padEnd(w);
 
-        return ` ${header ? paint(cell, `${STYLE.cyan}${STYLE.bold}`, color) : cell} `;
+        return ` ${header ? paint(cell, `${STYLE.brand}${STYLE.bold}`, color) : cell} `;
       })
       .join(bar);
 

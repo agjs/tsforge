@@ -1,0 +1,36 @@
+---
+/** Harness loop — tsforge's edit → gate → repair cycle, not a blueprint poster. */
+---
+
+<div class="tf-loop-diagram" aria-label="How tsforge works">
+  <ol class="tf-loop-diagram__steps">
+    <li class="tf-loop-diagram__step">
+      <span class="tf-loop-diagram__num">1</span>
+      <div>
+        <strong>You set a task</strong>
+        <p>Point tsforge at a repo and describe what to change.</p>
+      </div>
+    </li>
+    <li class="tf-loop-diagram__step">
+      <span class="tf-loop-diagram__num">2</span>
+      <div>
+        <strong>Model edits files</strong>
+        <p>Tools for read, edit, create, and run. LSP navigation when the repo supports it.</p>
+      </div>
+    </li>
+    <li class="tf-loop-diagram__step">
+      <span class="tf-loop-diagram__num">3</span>
+      <div>
+        <strong>Gate runs for real</strong>
+        <p><code>tsc --noEmit</code>, tsforge ESLint, tests when configured.</p>
+      </div>
+    </li>
+    <li class="tf-loop-diagram__step tf-loop-diagram__step--pass">
+      <span class="tf-loop-diagram__num">✓</span>
+      <div>
+        <strong>Pass or repair</strong>
+        <p>Exit 0 saves a checkpoint. Failures go back to the model with exact errors.</p>
+      </div>
+    </li>
+  </ol>
+</div>

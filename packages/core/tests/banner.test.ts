@@ -29,6 +29,7 @@ test("welcomeBanner: shows the brand, model, and endpoint", () => {
   });
 
   expect(banner).toContain("tsforge");
+  expect(banner).toContain("strict TypeScript, gate-driven");
   expect(banner).toContain("qwen3.6-35b-a3b");
   expect(banner).toContain("localhost:8000");
   // color:false ⇒ plain text, no ANSI escape codes

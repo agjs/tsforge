@@ -93,7 +93,7 @@ export function renderMessage(
   }
 
   if (message.role === "user") {
-    return `\n${paint("›", STYLE.cyan + STYLE.bold, color)} ${message.content}\n`;
+    return `\n${paint("›", STYLE.brand + STYLE.bold, color)} ${message.content}\n`;
   }
 
   const parts: string[] = [];
@@ -248,12 +248,12 @@ function renderEventBody(event: ILoopEvent, color: boolean): string {
 
     case "edit": {
       if (event.oldString === undefined || event.newString === undefined) {
-        return glyphLine(GLYPH.edit, event.message, STYLE.cyan, color);
+        return glyphLine(GLYPH.edit, event.message, STYLE.brand, color);
       }
 
       const body = bodyLines(diff(event.oldString, event.newString, color));
 
-      return `\n${box(event.message, body, { glyph: GLYPH.edit, accent: STYLE.cyan, color })}\n`;
+      return `\n${box(event.message, body, { glyph: GLYPH.edit, accent: STYLE.brand, color })}\n`;
     }
 
     case "red":

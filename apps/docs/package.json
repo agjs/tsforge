@@ -6,10 +6,13 @@
   "description": "tsforge docs — Astro Starlight product site.",
   "scripts": {
     "sync:rules": "bun scripts/sync-rules-catalog.ts",
+    "check:rules": "cd ../.. && bun run rules:build && git diff --exit-code packages/core/RULES.md",
     "dev": "bun run sync:rules && astro dev",
     "start": "bun run sync:rules && astro dev",
     "build": "bun run sync:rules && astro build",
+    "build:ci": "bun run check:rules && bun run sync:rules && astro build",
     "preview": "astro preview",
+    "deploy": "bun run build:ci && wrangler deploy",
     "astro": "astro"
   },
   "dependencies": {
@@ -26,5 +29,8 @@
     "remark-gfm": "4.0.1",
     "sharp": "0.34.5",
     "tailwindcss": "4.3.0"
+  },
+  "devDependencies": {
+    "wrangler": "4.95.0"
   }
 }

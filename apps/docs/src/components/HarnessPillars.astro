@@ -1,0 +1,34 @@
+---
+interface IPillar {
+  title: string;
+  body: string;
+}
+
+const pillars: readonly IPillar[] = [
+  {
+    title: "Deterministic gate",
+    body: "The model can stop talking whenever it wants. tsforge only checkpoints when your acceptance command exits 0.",
+  },
+  {
+    title: "Stack-aware guardrails",
+    body: "Reads package.json and turns on ESLint packs for React, Drizzle, Elysia, and whatever else you depend on.",
+  },
+  {
+    title: "Correction while it types",
+    body: "TTSR, hashline edits, and LSP write diagnostics can cut off a bad tool call before the next turn burns context.",
+  },
+];
+---
+
+<section class="tf-pillars" aria-label="Three things tsforge enforces">
+  <div class="tf-pillars__grid">
+    {
+      pillars.map((pillar) => (
+        <article class="tf-pillar">
+          <h2 class="tf-pillar__title">{pillar.title}</h2>
+          <p class="tf-pillar__body">{pillar.body}</p>
+        </article>
+      ))
+    }
+  </div>
+</section>

@@ -86,3 +86,31 @@ Run them locally with:
 ```bash
 TSFORGE_BROWSER_TESTS=1 bun test packages/core/tests/browser-oracle.test.ts
 ```
+
+## CI checks
+
+GitHub Actions runs on every PR and on pushes to `main`. Workflows live under [`.github/workflows/`](.github/workflows/).
+
+| Workflow | Job name | What it runs |
+| -------- | -------- | ------------ |
+| `core-ci.yml` | typecheck + lint + test | `bun run validate`, rules catalog drift, install.sh sync |
+| `docs-linkcheck.yml` | linkcheck | `apps/docs` `build:ci` + lychee internal links |
+| `security-deps.yml` | dep vuln scan (osv + audit) | osv-scanner + `bun audit --audit-level=high` |
+| `security-secrets.yml` | gitleaks secret scan | Full-history secret scan |
+| `security-sast.yml` | semgrep SAST | OWASP + JS/TS rules on core + docs source |
+| `release.yml` | npm publish + GitHub Release | On tag `v*.*.*` only — not on every merge to `main` |
+
+### Releases
+
+npm publishes happen when you push a semver tag that matches `packages/core/package.json`:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Requires `NPM_TOKEN` in GitHub repo secrets (npm automation token with publish access).
+
+### Docs deploy
+
+Production docs at [tsforge.dev](https://tsforge.dev) deploy via Cloudflare Pages Git integration — see [apps/docs/DEPLOY.md](apps/docs/DEPLOY.md). CI linkcheck is the PR gate; Cloudflare rebuilds on push to `main`.

@@ -79,11 +79,16 @@ export default defineConfig({
       description:
         "TypeScript coding harness with a deterministic gate, stack-aware guardrails, and stream-level correction.",
       favicon: "/favicon.svg",
-      customCss: ["./src/styles/tailwind.css", "./src/styles/custom.css"],
+      customCss: [
+        "./src/styles/tailwind.css",
+        "./src/styles/custom.css",
+        "./src/styles/landing.css",
+      ],
       tableOfContents: false,
       components: {
         Footer: "./src/components/Footer.astro",
         Header: "./src/components/Header.astro",
+        Hero: "./src/components/LandingHero.astro",
         PageTitle: "./src/components/PageTitle.astro",
         Pagination: "./src/components/Pagination.astro",
         ThemeProvider: "./src/components/ThemeProvider.astro",

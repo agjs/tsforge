@@ -1,10 +1,8 @@
 import { STYLE, paint } from "./style";
 
 /**
- * The nerdy welcome banner shown when the interactive CLI starts — a boxed
- * tsforge forge emblem with the active model + endpoint, in the spirit of other
- * agentic CLIs. Pure string-building; centering is computed from the VISIBLE
- * (un-painted) length so ANSI codes never throw off the box alignment.
+ * Welcome banner for the interactive CLI — solid forge emblem, wordmark,
+ * model/endpoint. Centering uses visible (un-painted) length.
  */
 export interface IBannerInfo {
   model: string;
@@ -15,63 +13,101 @@ export interface IBannerInfo {
 /** Chars between the two vertical borders. */
 const INNER = 58;
 
-interface ILine {
-  /** The visible text (used for centering). */
+interface ISegment {
   text: string;
-  /** Optional ANSI code to paint it with. */
   code?: string;
 }
 
-/** A stylized anvil under a shower of sparks — strict TypeScript, forged. */
-const EMBLEM: ILine[] = [
-  { text: "·   ✦    ✦   ·", code: STYLE.yellow },
-  { text: "▗▄▄██████████▄▄▖", code: STYLE.orange + STYLE.bold },
-  { text: "▝▀▀▀▀██████▀▀▀▀▘", code: STYLE.orange },
-  { text: "▗▟████████████▙▖", code: STYLE.cyan + STYLE.bold },
-  { text: "▝▀▀▀▀▀▀▀▀▀▀▀▀▀▀▘", code: STYLE.cyan },
-];
+interface ILine {
+  text?: string;
+  code?: string;
+  segments?: readonly ISegment[];
+}
 
 const BLANK: ILine = { text: "" };
+
+/** Compact solid anvil — filled blocks, horn + face + base (~9 cols). */
+const EMBLEM: readonly ILine[] = [
+  { text: "· ✦ ✦ ·", code: STYLE.brandLight },
+  { text: "▄▀▀▀▄", code: STYLE.brandLight + STYLE.bold },
+  { text: "███████", code: STYLE.brand + STYLE.bold },
+  { text: "▀▀▀▀▀▀▀▀▀", code: STYLE.brandDark + STYLE.bold },
+];
+
+/** Split wordmark under the emblem. */
+const WORDMARK: ILine = {
+  segments: [
+    { text: "ts", code: STYLE.brandLight + STYLE.bold },
+    { text: "forge", code: STYLE.brand + STYLE.bold },
+  ],
+};
 
 export function welcomeBanner(info: IBannerInfo): string {
   const color = info.color ?? true;
 
   const lines: ILine[] = [
     BLANK,
-    { text: "Welcome to the forge", code: STYLE.bold },
-    BLANK,
     ...EMBLEM,
     BLANK,
-    { text: "strict TypeScript, forged green", code: STYLE.dim },
+    WORDMARK,
     BLANK,
-    { text: info.model, code: STYLE.cyan + STYLE.bold },
+    { text: "strict TypeScript, gate-driven", code: STYLE.dim },
+    BLANK,
+    { text: info.model, code: STYLE.brand + STYLE.bold },
     { text: info.endpoint, code: STYLE.dim },
     BLANK,
   ];
 
   const body = lines.map((line) => boxLine(line, color)).join("\n");
 
-  return `${topBorder()}\n${body}\n${bottomBorder()}\n`;
+  return `${topBorder(color)}\n${body}\n${bottomBorder()}\n`;
 }
 
-function topBorder(): string {
+function topBorder(color: boolean): string {
   const label = "─── tsforge ";
   const fill = "─".repeat(Math.max(0, INNER - label.length));
+  const frame = `╭${label}${fill}╮`;
 
-  return `╭${label}${fill}╮`;
+  return color
+    ? paint("╭", STYLE.dim, color) +
+        paint(label, STYLE.brandDark, color) +
+        paint(fill + "╮", STYLE.dim, color)
+    : frame;
 }
 
 function bottomBorder(): string {
   return `╰${"─".repeat(INNER)}╯`;
 }
 
+function visibleText(line: ILine): string {
+  if (line.segments !== undefined) {
+    return line.segments.map((s) => s.text).join("");
+  }
+
+  return line.text ?? "";
+}
+
+function renderContent(line: ILine, color: boolean): string {
+  if (line.segments !== undefined) {
+    return line.segments
+      .map((s) =>
+        s.code === undefined ? s.text : paint(s.text, s.code, color)
+      )
+      .join("");
+  }
+
+  const text = line.text ?? "";
+
+  return line.code === undefined ? text : paint(text, line.code, color);
+}
+
 /** Center `line` within INNER and frame it with the vertical borders. */
 function boxLine(line: ILine, color: boolean): string {
-  const pad = Math.max(0, INNER - line.text.length);
+  const visible = visibleText(line);
+  const pad = Math.max(0, INNER - visible.length);
   const left = Math.floor(pad / 2);
   const right = pad - left;
-  const content =
-    line.code === undefined ? line.text : paint(line.text, line.code, color);
+  const content = renderContent(line, color);
 
   return `│${" ".repeat(left)}${content}${" ".repeat(right)}│`;
 }

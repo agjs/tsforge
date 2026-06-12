@@ -1,0 +1,5 @@
+# osv-scanner accepted-risk allowlist.
+#
+# Each entry must include reasoning + a re-evaluation date. Re-run
+# `osv-scanner --lockfile=bun.lock` periodically to confirm each remains
+# accepted-risk. bun.lock is canonical.

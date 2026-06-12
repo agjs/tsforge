@@ -4,33 +4,11 @@ description: "TypeScript coding harness with a deterministic gate, stack-aware g
 template: splash
 hero:
   tagline: Run a model against your repo. tsforge edits files, runs tsc and ESLint, and loops until the gate passes.
-  actions:
-    - text: Quickstart
-      link: /quickstart/
-      icon: right-arrow
-      variant: primary
-    - text: Big picture
-      link: /big-picture/
-      icon: right-arrow
-      variant: minimal
-    - text: View on GitHub
-      link: https://github.com/agjs/tsforge
-      icon: external
-      variant: minimal
 ---
 
-tsforge drives a model against your TypeScript repo. You define a task; the harness edits files, validates, and repairs until the gate passes.
+import CliPreview from "../../components/CliPreview.astro";
+import DocMap from "../../components/DocMap.astro";
 
-Read [Big picture](/big-picture/) for how the loop fits together and why the project exists.
+<CliPreview />
 
-| Subsystem | Docs |
-| --- | --- |
-| CLI & sessions | [Interactive CLI](/cli/interactive/) |
-| Gate & repair loop | [How the gate is built](/loop/gate-floor/) · [When the gate fails](/loop/validation/) |
-| Specs & benchmarks | [Spec format](/spec/format/) |
-| TypeScript LSP | [Language server](/lsp/typescript-server/) |
-| Web apps from scratch | [Web scaffolding](/scaffold/web/) |
-| ESLint packs & meta-rules | [Stack detection](/guardrails/stack-detection/) · [Rule packs](/guardrails/rule-packs/) |
-| Model helpers | [Fix bad tool calls](/uplift/repair-ladder/) · [Safer line edits](/uplift/hashline/) · [Stop bad output early](/uplift/ttsr/) |
-
-Start with the [Quickstart](/quickstart/).
+<DocMap />
