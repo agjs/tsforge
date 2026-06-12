@@ -108,10 +108,7 @@ function handleTtsrInterrupt(
       message: `TTSR disabled after ${state.ttsrInterrupts} interrupts (hit cap)`,
     });
 
-    if (ttsrManager !== null) {
-      // Disable by clearing rules
-      // (We'll create a way to disable the manager in a future refinement)
-    }
+    ttsrManager?.disable();
   }
 
   // Append corrective message and retry without counting as a normal cycle
@@ -121,6 +118,33 @@ function handleTtsrInterrupt(
   });
 
   emitTiming(report, taskId, turn, turnStart, taskStart);
+}
+
+/** Assemble per-call completion options, leaving optional knobs unset when absent. */
+function completionOptionsFor(args: {
+  tools: unknown[];
+  temperature: number;
+  enableThinking: boolean | undefined;
+  thinkingTokenBudget: number | undefined;
+  ttsrManager: TtsrManager | null;
+  report: Reporter;
+  taskId: string;
+}): Parameters<IProvider["complete"]>[1] {
+  return {
+    tools: args.tools,
+    temperature: args.temperature,
+    toolChoice: "auto",
+    ...(args.enableThinking === undefined
+      ? {}
+      : { enableThinking: args.enableThinking }),
+    ...(args.thinkingTokenBudget === undefined
+      ? {}
+      : { thinkingTokenBudget: args.thinkingTokenBudget }),
+    ...(args.ttsrManager === null ? {} : { ttsrManager: args.ttsrManager }),
+    onToken: (text) => {
+      args.report({ kind: "token", task: args.taskId, message: text });
+    },
+  };
 }
 
 /** A/B control for the gate-feedback-fidelity win: TSFORGE_LEGACY_FEEDBACK=1
@@ -271,23 +295,20 @@ export async function runTask(
       message: `task ${task.id} · turn ${turn}: asking model`,
     });
 
-    if (ttsrManager !== null) {
-      ttsrManager.resetBuffer();
-    }
+    ttsrManager?.resetBuffer();
 
-    const res = await provider.complete(messages, {
-      tools,
-      temperature,
-      toolChoice: "auto",
-      ...(enableThinking === undefined ? {} : { enableThinking }),
-      ...(effectiveThinkingBudget === undefined
-        ? {}
-        : { thinkingTokenBudget: effectiveThinkingBudget }),
-      ...(ttsrManager === null ? {} : { ttsrManager }),
-      onToken: (text) => {
-        report({ kind: "token", task: task.id, message: text });
-      },
-    });
+    const res = await provider.complete(
+      messages,
+      completionOptionsFor({
+        tools,
+        temperature,
+        enableThinking,
+        thinkingTokenBudget: effectiveThinkingBudget,
+        ttsrManager,
+        report,
+        taskId: task.id,
+      })
+    );
 
     messages.push({
       role: "assistant",
@@ -323,9 +344,7 @@ export async function runTask(
       return looped;
     }
 
-    if (ttsrManager !== null) {
-      ttsrManager.incrementTurnCount();
-    }
+    ttsrManager?.incrementTurnCount();
 
     const touchedEditable =
       res.toolCalls.length === 0

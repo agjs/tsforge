@@ -1,4 +1,5 @@
 import { isArray, isRecord } from "../lib/guards";
+import { matchesAnyGlobPattern } from "../rule-packs/utils";
 
 /**
  * A TTSR rule — triggers on matching stream text, aborts generation, and injects
@@ -37,6 +38,8 @@ export interface IMatchContext {
  * to catch patterns spanning chunk boundaries; respects repeat policy + scope gates.
  */
 export class TtsrManager {
+  private disabled = false;
+
   private readonly rules: Map<string, ITtsrRule> = new Map<string, ITtsrRule>();
   private readonly compiledConditions: Map<string, RegExp[]> = new Map<
     string,
@@ -88,7 +91,16 @@ export class TtsrManager {
 
   /** Feed a delta into the rolling buffer and check all rules. Returns the first
    *  matching rule or null. Accumulates text into buffers per source channel. */
+  /** Permanently stop matching (used when the per-task interrupt cap is hit). */
+  disable(): void {
+    this.disabled = true;
+  }
+
   checkDelta(text: string, context: IMatchContext): ITtsrRule | null {
+    if (this.disabled) {
+      return null;
+    }
+
     const bufferKey = context.source;
 
     this.buffers[bufferKey] += text;
@@ -105,6 +117,10 @@ export class TtsrManager {
     // Check all rules; return first match that passes repeat policy and scope gates.
     for (const [ruleName, rule] of this.rules) {
       if (!this.isScopeActive(rule, context)) {
+        continue;
+      }
+
+      if (!this.isFileScopeSatisfied(rule, context)) {
         continue;
       }
 
@@ -134,6 +150,27 @@ export class TtsrManager {
   resetBuffer(): void {
     this.buffers.content = "";
     this.buffers["tool-args"] = "";
+  }
+
+  /** fileGlobs constrain tool-args matches to edits of matching files. An
+   *  unknown target (path not yet streamed) holds fire — conservative. */
+  private isFileScopeSatisfied(
+    rule: ITtsrRule,
+    context: IMatchContext
+  ): boolean {
+    if (rule.fileGlobs === undefined || rule.fileGlobs.length === 0) {
+      return true;
+    }
+
+    if (context.source !== "tool-args") {
+      return true;
+    }
+
+    if (context.currentFile === undefined) {
+      return false;
+    }
+
+    return matchesAnyGlobPattern(context.currentFile, rule.fileGlobs);
   }
 
   /** Check if a rule's scope includes the current source. */
@@ -281,5 +318,5 @@ function createRule(
     repeatMode,
     ...(fileGlobs && fileGlobs.length > 0 ? { fileGlobs } : {}),
     ...(repeatGap !== undefined && repeatGap > 0 ? { repeatGap } : {}),
-  } as ITtsrRule;
+  };
 }

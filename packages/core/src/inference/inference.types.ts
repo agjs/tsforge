@@ -67,8 +67,17 @@ export interface ICompleteOptions {
   /** Caller cancellation — aborting it stops the request (and any stream)
    *  mid-flight. Combined with the per-request timeout. */
   signal?: AbortSignal;
-  /** TTSR manager for stream-interrupting rules (wired by the loop, not the provider). */
-  ttsrManager?: unknown; // Avoid circular dep: IProvider doesn't import TtsrManager
+  /** TTSR watcher for stream-interrupting rules (wired by the loop, not the provider). */
+  ttsrManager?: ITtsrWatcher;
+}
+
+/** Structural view of the loop's TtsrManager — keeps the inference layer free of
+ *  a hard dependency on loop internals while staying fully typed. */
+export interface ITtsrWatcher {
+  checkDelta(
+    text: string,
+    context: { source: "content" | "tool-args"; currentFile?: string }
+  ): { readonly name: string; readonly guidance: string } | null;
 }
 
 /** Which stream a token belongs to: the model's thinking (`reasoning`), its answer

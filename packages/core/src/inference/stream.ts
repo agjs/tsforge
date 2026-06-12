@@ -2,13 +2,12 @@ import type {
   IModelResponse,
   IToolCall,
   ITokenUsage,
+  ITtsrWatcher,
   TokenChannel,
 } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import { parseArgs, parseUsage, salvageToolCalls } from "./wire";
 import { StreamGuard } from "./stream-guard";
-import { TtsrManager } from "../loop/ttsr";
-import type { ITtsrRule } from "../loop/ttsr";
 
 interface IStreamDelta {
   content?: string;
@@ -22,7 +21,7 @@ interface IStreamDelta {
 export async function streamResponse(
   res: Response,
   onToken: (text: string, channel: TokenChannel) => void,
-  ttsrManager?: TtsrManager
+  ttsrManager?: ITtsrWatcher
 ): Promise<IModelResponse> {
   const body = res.body;
 
@@ -90,8 +89,33 @@ interface IStreamAcc {
   guard: StreamGuard;
   content: string;
   usage?: ITokenUsage;
-  ttsr?: TtsrManager;
-  ttsrFired: { rule: ITtsrRule; fire: boolean } | null;
+  ttsr?: ITtsrWatcher;
+  ttsrFired: { readonly name: string; readonly guidance: string } | null;
+}
+
+/** Forward a content delta, watching for degeneration and TTSR matches.
+ *  Returns true when the stream should stop. */
+function consumeContentDelta(
+  text: string,
+  acc: IStreamAcc,
+  onToken: (text: string, channel: TokenChannel) => void
+): boolean {
+  acc.content += text;
+  onToken(text, "content");
+
+  if (acc.guard.observe(text, "content")) {
+    return true;
+  }
+
+  if (acc.ttsr !== undefined && acc.ttsrFired === null) {
+    acc.ttsrFired = acc.ttsr.checkDelta(text, { source: "content" });
+
+    if (acc.ttsrFired !== null) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /** Parse a batch of SSE lines, forward tokens, accumulate state; returns true
@@ -119,25 +143,12 @@ function consumeLines(
       }
     }
 
-    if (delta.content !== undefined && delta.content.length > 0) {
-      acc.content += delta.content;
-      onToken(delta.content, "content");
-
-      if (acc.guard.observe(delta.content, "content")) {
-        return true;
-      }
-
-      // Check TTSR rules on content channel.
-      if (acc.ttsr !== undefined && acc.ttsrFired === null) {
-        const matched = acc.ttsr.checkDelta(delta.content, {
-          source: "content",
-        });
-
-        if (matched !== null) {
-          acc.ttsrFired = { rule: matched, fire: true };
-          return true;
-        }
-      }
+    if (
+      delta.content !== undefined &&
+      delta.content.length > 0 &&
+      consumeContentDelta(delta.content, acc, onToken)
+    ) {
+      return true;
     }
 
     if (delta.usage !== undefined) {
@@ -162,8 +173,8 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
     acc.ttsrFired !== null
       ? {
           ttsrFired: {
-            ruleName: acc.ttsrFired.rule.name,
-            guidance: acc.ttsrFired.rule.guidance,
+            ruleName: acc.ttsrFired.name,
+            guidance: acc.ttsrFired.guidance,
           },
         }
       : {};
@@ -270,6 +281,8 @@ function emitToolProgress(
   }
 }
 
+const TTSR_WATCHED_TOOLS = new Set(["edit", "edit_lines", "create"]);
+
 function accumulateToolCalls(
   raw: unknown,
   calls: Map<number, IStreamingCall>,
@@ -286,51 +299,55 @@ function accumulateToolCalls(
     }
 
     const index = typeof tc.index === "number" ? tc.index : 0;
-    const fn = tc.function;
     const existing: IStreamingCall = calls.get(index) ?? { name: "", args: "" };
 
     if (typeof tc.id === "string" && tc.id.length > 0) {
       existing.id = tc.id;
     }
 
-    // Surface the tool name the moment it first appears — so a long tool-call
-    // generation shows "it's writing X now" instead of a frozen cursor. As the
-    // (often large) file body then streams, emitToolProgress adds the path + a
-    // throttled size heartbeat; the file lands as a clean create/edit event on run.
-    if (typeof fn.name === "string" && fn.name.length > 0) {
-      if (existing.name.length === 0) {
-        onToken(`\n  ✎ ${fn.name}…`, "tool");
-      }
-
-      existing.name = fn.name;
-    }
-
-    if (typeof fn.arguments === "string" && fn.arguments.length > 0) {
-      existing.args += fn.arguments;
-      emitToolProgress(existing, onToken);
-
-      // Check TTSR rules on tool-args channel (watch accumulated args for edit/create tools).
-      if (
-        acc !== undefined &&
-        acc.ttsr !== undefined &&
-        acc.ttsrFired === null &&
-        (fn.name === "edit" || fn.name === "create")
-      ) {
-        const matched = acc.ttsr.checkDelta(fn.arguments, {
-          source: "tool-args",
-          currentFile:
-            existing.args.includes('"file"') || existing.args.includes('"path"')
-              ? extractFilePath(existing.args)
-              : undefined,
-        });
-
-        if (matched !== null) {
-          acc.ttsrFired = { rule: matched, fire: true };
-        }
-      }
-    }
-
+    processToolCallDelta(tc.function, existing, onToken, acc);
     calls.set(index, existing);
+  }
+}
+
+function processToolCallDelta(
+  fn: Record<string, unknown>,
+  existing: IStreamingCall,
+  onToken: (text: string, channel: TokenChannel) => void,
+  acc?: IStreamAcc
+): void {
+  // Surface the tool name the moment it first appears — so a long tool-call
+  // generation shows "it's writing X now" instead of a frozen cursor. As the
+  // (often large) file body then streams, emitToolProgress adds the path + a
+  // throttled size heartbeat; the file lands as a clean create/edit event on run.
+  if (typeof fn.name === "string" && fn.name.length > 0) {
+    if (existing.name.length === 0) {
+      onToken(`\n  ✎ ${fn.name}…`, "tool");
+    }
+
+    existing.name = fn.name;
+  }
+
+  if (typeof fn.arguments !== "string" || fn.arguments.length === 0) {
+    return;
+  }
+
+  existing.args += fn.arguments;
+  emitToolProgress(existing, onToken);
+
+  // TTSR on the tool-args channel. Gate by the ACCUMULATED tool name — the
+  // name only arrives on a call's first delta, but every fragment must be fed.
+  if (
+    acc?.ttsr !== undefined &&
+    acc.ttsrFired === null &&
+    TTSR_WATCHED_TOOLS.has(existing.name)
+  ) {
+    const currentFile = extractFilePath(existing.args);
+
+    acc.ttsrFired = acc.ttsr.checkDelta(fn.arguments, {
+      source: "tool-args",
+      ...(currentFile !== undefined ? { currentFile } : {}),
+    });
   }
 }
 
