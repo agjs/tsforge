@@ -6,7 +6,7 @@ const ESC = String.fromCharCode(27);
 test("welcomeBanner: every framed line is the same visible width", () => {
   const banner = welcomeBanner({
     model: "qwen3.6-35b-a3b",
-    endpoint: "192.168.20.107:8000",
+    endpoint: "localhost:8000",
     color: false,
   });
 
@@ -24,13 +24,13 @@ test("welcomeBanner: every framed line is the same visible width", () => {
 test("welcomeBanner: shows the brand, model, and endpoint", () => {
   const banner = welcomeBanner({
     model: "qwen3.6-35b-a3b",
-    endpoint: "192.168.20.107:8000",
+    endpoint: "localhost:8000",
     color: false,
   });
 
   expect(banner).toContain("tsforge");
   expect(banner).toContain("qwen3.6-35b-a3b");
-  expect(banner).toContain("192.168.20.107:8000");
+  expect(banner).toContain("localhost:8000");
   // color:false ⇒ plain text, no ANSI escape codes
   expect(banner.includes(ESC)).toBe(false);
 });

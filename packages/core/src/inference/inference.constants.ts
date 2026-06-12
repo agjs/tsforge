@@ -29,6 +29,6 @@ export const PROVIDER_LIMITS = {
  * Override per-run with TSFORGE_BASE_URL / TSFORGE_MODEL.
  */
 export const PROVIDER_DEFAULTS = {
-  baseUrl: "http://192.168.20.107:8000/v1",
+  baseUrl: "http://localhost:8000/v1",
   model: "qwen3.6-27b",
 } as const;
