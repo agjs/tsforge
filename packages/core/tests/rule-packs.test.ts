@@ -903,7 +903,7 @@ describe("test-conventions: test-file-mirrors-source", () => {
 
 describe("drizzle pack", () => {
   test("should export drizzlePack with correct structure", () => {
-    const pack = RULE_PACKS["drizzle"];
+    const pack = RULE_PACKS.drizzle;
 
     expect(pack.id).toBe("drizzle");
     expect(pack.description).toContain("Drizzle ORM");
@@ -921,7 +921,7 @@ describe("drizzle pack", () => {
 
   test("account-scoped-tables-require-where: rule exists and is callable", () => {
     const rule =
-      RULE_PACKS["drizzle"].rules["account-scoped-tables-require-where"]!;
+      RULE_PACKS.drizzle.rules["account-scoped-tables-require-where"]!;
 
     expect(rule.meta.type).toBe("problem");
     expect(rule.meta.docs?.description).toContain("account-scoped");
@@ -1015,7 +1015,7 @@ describe("drizzle pack", () => {
   });
 
   test("relations-must-cover-fks: rule exists and is callable", () => {
-    const rule = RULE_PACKS["drizzle"].rules["relations-must-cover-fks"]!;
+    const rule = RULE_PACKS.drizzle.rules["relations-must-cover-fks"]!;
 
     expect(rule.meta.type).toBe("problem");
     expect(rule.meta.docs?.description).toContain("relations");
@@ -1025,7 +1025,7 @@ describe("drizzle pack", () => {
 
   test("schema-files-must-not-import-driver: rule exists and is callable", () => {
     const rule =
-      RULE_PACKS["drizzle"].rules["schema-files-must-not-import-driver"]!;
+      RULE_PACKS.drizzle.rules["schema-files-must-not-import-driver"]!;
 
     expect(rule.meta.type).toBe("problem");
     expect(rule.meta.docs?.description).toContain("schema files");
@@ -1035,7 +1035,7 @@ describe("drizzle pack", () => {
 
   test("schema-files-must-only-export-schema: rule exists and is callable", () => {
     const rule =
-      RULE_PACKS["drizzle"].rules["schema-files-must-only-export-schema"]!;
+      RULE_PACKS.drizzle.rules["schema-files-must-only-export-schema"]!;
 
     expect(rule.meta.type).toBe("suggestion");
     expect(rule.meta.docs?.description).toContain("schema");
@@ -1092,7 +1092,7 @@ describe("drizzle pack", () => {
 
 describe("bullmq pack", () => {
   test("should export bullmqPack with correct structure", () => {
-    const pack = RULE_PACKS["bullmq"];
+    const pack = RULE_PACKS.bullmq;
 
     expect(pack.id).toBe("bullmq");
     expect(pack.description).toContain("BullMQ");
@@ -1108,7 +1108,7 @@ describe("bullmq pack", () => {
   });
 
   test("job-name-must-be-constant: rule exists and is callable", () => {
-    const rule = RULE_PACKS["bullmq"].rules["job-name-must-be-constant"]!;
+    const rule = RULE_PACKS.bullmq.rules["job-name-must-be-constant"]!;
 
     expect(rule.meta.type).toBe("suggestion");
     expect(rule.meta.docs?.description).toContain("job name");
@@ -1117,7 +1117,7 @@ describe("bullmq pack", () => {
   });
 
   test("job-options-must-set-attempts: rule exists and is callable", () => {
-    const rule = RULE_PACKS["bullmq"].rules["job-options-must-set-attempts"]!;
+    const rule = RULE_PACKS.bullmq.rules["job-options-must-set-attempts"]!;
 
     expect(rule.meta.type).toBe("problem");
     expect(rule.meta.docs?.description).toContain("attempts");
@@ -1126,7 +1126,7 @@ describe("bullmq pack", () => {
   });
 
   test("no-blocking-concurrency-zero: rule exists and is callable", () => {
-    const rule = RULE_PACKS["bullmq"].rules["no-blocking-concurrency-zero"]!;
+    const rule = RULE_PACKS.bullmq.rules["no-blocking-concurrency-zero"]!;
 
     expect(rule.meta.type).toBe("problem");
     expect(rule.meta.docs?.description).toContain("concurrency");
@@ -1136,7 +1136,7 @@ describe("bullmq pack", () => {
 
   test("queue-options-must-set-removeoncomplete: rule exists and is callable", () => {
     const rule =
-      RULE_PACKS["bullmq"].rules["queue-options-must-set-removeoncomplete"]!;
+      RULE_PACKS.bullmq.rules["queue-options-must-set-removeoncomplete"]!;
 
     expect(rule.meta.type).toBe("problem");
     expect(rule.meta.docs?.description).toContain("removeOnComplete");
@@ -1146,7 +1146,7 @@ describe("bullmq pack", () => {
 
   test("queue-options-must-set-removeonfail: rule exists and is callable", () => {
     const rule =
-      RULE_PACKS["bullmq"].rules["queue-options-must-set-removeonfail"]!;
+      RULE_PACKS.bullmq.rules["queue-options-must-set-removeonfail"]!;
 
     expect(rule.meta.type).toBe("problem");
     expect(rule.meta.docs?.description).toContain("removeOnFail");
@@ -1155,7 +1155,7 @@ describe("bullmq pack", () => {
   });
 
   test("worker-must-implement-close: rule exists and is callable", () => {
-    const rule = RULE_PACKS["bullmq"].rules["worker-must-implement-close"]!;
+    const rule = RULE_PACKS.bullmq.rules["worker-must-implement-close"]!;
 
     expect(rule.meta.type).toBe("problem");
     expect(rule.meta.docs?.description).toContain("close");
@@ -1164,11 +1164,291 @@ describe("bullmq pack", () => {
   });
 
   test("worker-must-listen-failed: rule exists and is callable", () => {
-    const rule = RULE_PACKS["bullmq"].rules["worker-must-listen-failed"]!;
+    const rule = RULE_PACKS.bullmq.rules["worker-must-listen-failed"]!;
 
     expect(rule.meta.type).toBe("problem");
     expect(rule.meta.docs?.description).toContain("failed");
     expect(rule.meta.messages).toBeDefined();
     expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("job-name-must-be-constant: detects inline string literal job name", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email");
+      emailQueue.add("send-email", { to: "user@example.com" });
+    `;
+    const messages = lint("bullmq", "job-name-must-be-constant", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("literalJobName");
+  });
+
+  test("job-name-must-be-constant: allows constant identifier job name", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const JOB_NAMES = { SendEmail: "send-email" } as const;
+      const emailQueue = new Queue("email");
+      emailQueue.add(JOB_NAMES.SendEmail, { to: "user@example.com" });
+    `;
+    const messages = lint("bullmq", "job-name-must-be-constant", code);
+
+    expect(messages.some((m) => m.messageId === "literalJobName")).toBeFalsy();
+  });
+
+  test("job-options-must-set-attempts: detects missing attempts option", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email");
+      emailQueue.add("send", {}, {});
+    `;
+    const messages = lint("bullmq", "job-options-must-set-attempts", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("missingAttempts");
+  });
+
+  test("job-options-must-set-attempts: allows attempts in per-call options", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email");
+      emailQueue.add("send", {}, { attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+    `;
+    const messages = lint("bullmq", "job-options-must-set-attempts", code);
+
+    expect(messages.some((m) => m.messageId === "missingAttempts")).toBeFalsy();
+  });
+
+  test("job-options-must-set-attempts: detects missing backoff when attempts > 1", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email");
+      emailQueue.add("send", {}, { attempts: 5 });
+    `;
+    const messages = lint("bullmq", "job-options-must-set-attempts", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("missingBackoff");
+  });
+
+  test("job-options-must-set-attempts: allows attempts=1 without backoff", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email");
+      emailQueue.add("send", {}, { attempts: 1 });
+    `;
+    const messages = lint("bullmq", "job-options-must-set-attempts", code);
+
+    expect(messages.some((m) => m.messageId === "missingBackoff")).toBeFalsy();
+  });
+
+  test("no-blocking-concurrency-zero: detects concurrency set to 0", () => {
+    const code = `
+      import { Worker } from "bullmq";
+      new Worker("queue", async () => {}, { concurrency: 0 });
+    `;
+    const messages = lint("bullmq", "no-blocking-concurrency-zero", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("invalidConcurrency");
+  });
+
+  test("no-blocking-concurrency-zero: detects negative concurrency", () => {
+    const code = `
+      import { Worker } from "bullmq";
+      new Worker("queue", async () => {}, { concurrency: -1 });
+    `;
+    const messages = lint("bullmq", "no-blocking-concurrency-zero", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("invalidConcurrency");
+  });
+
+  test("no-blocking-concurrency-zero: allows positive concurrency", () => {
+    const code = `
+      import { Worker } from "bullmq";
+      new Worker("queue", async () => {}, { concurrency: 5 });
+    `;
+    const messages = lint("bullmq", "no-blocking-concurrency-zero", code);
+
+    expect(
+      messages.some((m) => m.messageId === "invalidConcurrency")
+    ).toBeFalsy();
+  });
+
+  test("queue-options-must-set-removeoncomplete: detects missing removeOnComplete", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email");
+      emailQueue.add("send", {});
+    `;
+    const messages = lint(
+      "bullmq",
+      "queue-options-must-set-removeoncomplete",
+      code
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "missingRemoveOnComplete"
+    );
+  });
+
+  test("queue-options-must-set-removeoncomplete: allows removeOnComplete in per-call options", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email");
+      emailQueue.add("send", {}, { removeOnComplete: true });
+    `;
+    const messages = lint(
+      "bullmq",
+      "queue-options-must-set-removeoncomplete",
+      code
+    );
+
+    expect(
+      messages.some((m) => m.messageId === "missingRemoveOnComplete")
+    ).toBeFalsy();
+  });
+
+  test("queue-options-must-set-removeoncomplete: allows removeOnComplete via defaultJobOptions", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email", {
+        defaultJobOptions: { removeOnComplete: true }
+      });
+      emailQueue.add("send", {});
+    `;
+    const messages = lint(
+      "bullmq",
+      "queue-options-must-set-removeoncomplete",
+      code
+    );
+
+    expect(
+      messages.some((m) => m.messageId === "missingRemoveOnComplete")
+    ).toBeFalsy();
+  });
+
+  test("queue-options-must-set-removeonfail: detects missing removeOnFail", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email");
+      emailQueue.add("send", {});
+    `;
+    const messages = lint(
+      "bullmq",
+      "queue-options-must-set-removeonfail",
+      code
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingRemoveOnFail");
+  });
+
+  test("queue-options-must-set-removeonfail: allows removeOnFail in per-call options", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email");
+      emailQueue.add("send", {}, { removeOnFail: 5000 });
+    `;
+    const messages = lint(
+      "bullmq",
+      "queue-options-must-set-removeonfail",
+      code
+    );
+
+    expect(
+      messages.some((m) => m.messageId === "missingRemoveOnFail")
+    ).toBeFalsy();
+  });
+
+  test("queue-options-must-set-removeonfail: allows removeOnFail via defaultJobOptions", () => {
+    const code = `
+      import { Queue } from "bullmq";
+      const emailQueue = new Queue("email", {
+        defaultJobOptions: { removeOnFail: 5000 }
+      });
+      emailQueue.add("send", {});
+    `;
+    const messages = lint(
+      "bullmq",
+      "queue-options-must-set-removeonfail",
+      code
+    );
+
+    expect(
+      messages.some((m) => m.messageId === "missingRemoveOnFail")
+    ).toBeFalsy();
+  });
+
+  test("worker-must-implement-close: detects missing close method in worker-owning class", () => {
+    const code = `
+      import { Worker } from "bullmq";
+      export class EmailService {
+        private worker = new Worker("email", async () => {});
+      }
+    `;
+    const messages = lint("bullmq", "worker-must-implement-close", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("missingClose");
+  });
+
+  test("worker-must-implement-close: allows class with close method", () => {
+    const code = `
+      import { Worker } from "bullmq";
+      export class EmailService {
+        private worker = new Worker("email", async () => {});
+        async close() {
+          await this.worker.close();
+        }
+      }
+    `;
+    const messages = lint("bullmq", "worker-must-implement-close", code);
+
+    expect(messages.some((m) => m.messageId === "missingClose")).toBeFalsy();
+  });
+
+  test("worker-must-implement-close: allows alternative shutdown methods", () => {
+    const code = `
+      import { Worker } from "bullmq";
+      export class EmailService {
+        private worker = new Worker("email", async () => {});
+        async onModuleDestroy() {
+          await this.worker.close();
+        }
+      }
+    `;
+    const messages = lint("bullmq", "worker-must-implement-close", code);
+
+    expect(messages.some((m) => m.messageId === "missingClose")).toBeFalsy();
+  });
+
+  test("worker-must-listen-failed: detects missing failed event listener on worker", () => {
+    const code = `
+      import { Worker } from "bullmq";
+      const worker = new Worker("queue", async () => {});
+      worker.on("completed", () => {});
+    `;
+    const messages = lint("bullmq", "worker-must-listen-failed", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("missingListener");
+  });
+
+  test("worker-must-listen-failed: detects missing listener in inline worker", () => {
+    const code = `
+      import { Worker } from "bullmq";
+      const worker = new Worker("queue", async () => {});
+      worker.on("completed", () => {});
+    `;
+    const messages = lint("bullmq", "worker-must-listen-failed", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("missingListener");
+  });
+
+  test("worker-must-listen-failed: detects missing listener in class worker", () => {
+    const code = `
+      import { Worker } from "bullmq";
+      export class EmailService {
+        private worker = new Worker("queue", async () => {});
+        async close() { await this.worker.close(); }
+      }
+    `;
+    const messages = lint("bullmq", "worker-must-listen-failed", code);
+
+    expect(messages.map((m) => m.messageId)).toContain("missingListener");
   });
 });

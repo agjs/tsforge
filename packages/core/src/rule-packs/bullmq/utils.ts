@@ -62,74 +62,106 @@ export function analyzeBullmqImports(program: TSESTree.Program): BullmqImports {
   return result;
 }
 
+function extractDefaultJobOptions(
+  newExpr: TSESTree.NewExpression
+): TSESTree.ObjectExpression | null {
+  const opts = getOptionsObjectArg(newExpr, 1);
+
+  if (!opts) {
+    return null;
+  }
+
+  const property = findObjectProperty(opts, "defaultJobOptions");
+
+  if (!property) {
+    return null;
+  }
+
+  if (property.value.type === AST_NODE_TYPES.ObjectExpression) {
+    return property.value;
+  }
+
+  return null;
+}
+
+function isNewQueue(
+  node: TSESTree.Node,
+  imports: BullmqImports
+): node is TSESTree.NewExpression {
+  if (node.type !== AST_NODE_TYPES.NewExpression) {
+    return false;
+  }
+
+  if (node.callee.type !== AST_NODE_TYPES.Identifier) {
+    return false;
+  }
+
+  return imports.queueLocalNames.has(node.callee.name);
+}
+
 export function collectQueueDefinitions(
   program: TSESTree.Program,
   imports: BullmqImports
 ): Map<string, QueueDefinition> {
   const queues = new Map<string, QueueDefinition>();
 
-  function walk(node: TSESTree.Node): void {
-    if (node.type === AST_NODE_TYPES.NewExpression) {
+  walkAll(program, (node) => {
+    if (node.type === AST_NODE_TYPES.VariableDeclarator) {
       if (
-        node.callee.type === AST_NODE_TYPES.Identifier &&
-        imports.queueLocalNames.has(node.callee.name)
+        node.id.type === AST_NODE_TYPES.Identifier &&
+        node.init &&
+        isNewQueue(node.init, imports)
       ) {
-        const firstArg = node.arguments[0];
+        const varName = node.id.name;
+        const firstArg = node.init.arguments[0];
 
         if (firstArg && firstArg.type === AST_NODE_TYPES.Literal) {
           const queueName = firstArg.value;
 
           if (typeof queueName === "string") {
-            const defaultJobOptions = getOptionsObjectArg(node, 1);
+            const defaultJobOptions = extractDefaultJobOptions(node.init);
 
-            queues.set(queueName, {
-              bindingKey: queueName,
+            queues.set(varName, {
+              bindingKey: varName,
               defaultJobOptions,
             });
           }
         }
       }
     }
+  });
 
-    if (node.type === AST_NODE_TYPES.VariableDeclarator) {
-      if (
-        node.init &&
-        node.init.type === AST_NODE_TYPES.NewExpression &&
-        node.init.callee.type === AST_NODE_TYPES.Identifier &&
-        imports.queueLocalNames.has(node.init.callee.name)
-      ) {
-        const varName =
-          node.id.type === AST_NODE_TYPES.Identifier ? node.id.name : null;
-
-        if (varName) {
-          const defaultJobOptions = getOptionsObjectArg(node.init, 1);
-
-          queues.set(varName, {
-            bindingKey: varName,
-            defaultJobOptions,
-          });
-        }
-      }
+  walkAll(program, (node) => {
+    if (!isNewQueue(node, imports)) {
+      return;
     }
 
-    for (const [, value] of Object.entries(node)) {
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          if (typeof item === "object" && item !== null && "type" in item) {
-            walk(item as TSESTree.Node);
-          }
-        }
-      } else if (
-        typeof value === "object" &&
-        value !== null &&
-        "type" in value
-      ) {
-        walk(value as TSESTree.Node);
-      }
-    }
-  }
+    const firstArg = node.arguments[0];
 
-  walk(program);
+    if (!firstArg || firstArg.type !== AST_NODE_TYPES.Literal) {
+      return;
+    }
+
+    const queueName = firstArg.value;
+
+    if (typeof queueName !== "string") {
+      return;
+    }
+
+    const defaultJobOptions = extractDefaultJobOptions(node);
+    const parent = (node as any).parent;
+
+    if (
+      !parent ||
+      parent.type !== AST_NODE_TYPES.VariableDeclarator ||
+      parent.id.type !== AST_NODE_TYPES.Identifier
+    ) {
+      queues.set(queueName, {
+        bindingKey: queueName,
+        defaultJobOptions,
+      });
+    }
+  });
 
   return queues;
 }
@@ -139,54 +171,58 @@ export function collectWorkerDefinitions(
   imports: BullmqImports
 ): WorkerDefinition[] {
   const workers: WorkerDefinition[] = [];
+  const varToWorkerMap = new Map<string, TSESTree.NewExpression>();
 
-  function walk(node: TSESTree.Node): void {
-    if (
-      node.type === AST_NODE_TYPES.NewExpression &&
-      isNewWorker(node, imports)
-    ) {
-      const bindingKey = getReceiverKey(node);
-
-      workers.push({
-        bindingKey,
-        node,
-      });
-    }
-
+  walkAll(program, (node) => {
     if (node.type === AST_NODE_TYPES.VariableDeclarator) {
       if (
+        node.id.type === AST_NODE_TYPES.Identifier &&
         node.init &&
-        node.init.type === AST_NODE_TYPES.NewExpression &&
         isNewWorker(node.init, imports)
       ) {
-        const varName =
-          node.id.type === AST_NODE_TYPES.Identifier ? node.id.name : null;
-
-        workers.push({
-          bindingKey: varName,
-          node: node.init,
-        });
+        varToWorkerMap.set(node.id.name, node.init);
       }
     }
+  });
 
-    for (const [, value] of Object.entries(node)) {
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          if (typeof item === "object" && item !== null && "type" in item) {
-            walk(item as TSESTree.Node);
-          }
-        }
-      } else if (
-        typeof value === "object" &&
-        value !== null &&
-        "type" in value
+  walkAll(program, (node) => {
+    if (!isNewWorker(node, imports)) {
+      return;
+    }
+
+    const parent = (node as any).parent;
+    let bindingKey: string | null = null;
+
+    if (parent) {
+      if (
+        parent.type === AST_NODE_TYPES.VariableDeclarator &&
+        parent.id.type === AST_NODE_TYPES.Identifier
       ) {
-        walk(value as TSESTree.Node);
+        bindingKey = parent.id.name;
+      } else if (parent.type === AST_NODE_TYPES.PropertyDefinition) {
+        if (parent.key.type === AST_NODE_TYPES.Identifier && !parent.computed) {
+          bindingKey = `this.${parent.key.name}`;
+        } else if (
+          parent.key.type === AST_NODE_TYPES.Literal &&
+          typeof parent.key.value === "string"
+        ) {
+          bindingKey = `this.${parent.key.value}`;
+        }
+      } else if (parent.type === AST_NODE_TYPES.AssignmentExpression) {
+        const left = parent.left;
+        if (left.type === AST_NODE_TYPES.Identifier) {
+          bindingKey = left.name;
+        } else if (left.type === AST_NODE_TYPES.MemberExpression) {
+          bindingKey = getReceiverKey(left);
+        }
       }
     }
-  }
 
-  walk(program);
+    workers.push({
+      bindingKey,
+      node,
+    });
+  });
 
   return workers;
 }
