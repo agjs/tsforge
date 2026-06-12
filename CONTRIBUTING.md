@@ -102,15 +102,25 @@ GitHub Actions runs on every PR and on pushes to `main`. Workflows live under [`
 
 ### Releases
 
-npm publishes happen when you push a semver tag that matches `packages/core/package.json`:
+Use the release script. It validates, commits all pending work, bumps version, tags, pushes, and watches CI publish to npm:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+./scripts/release.sh --tag-only --yes   # first publish at current version
+./scripts/release.sh patch --yes        # later releases
 ```
 
-Requires `NPM_TOKEN` in GitHub repo secrets (npm automation token with publish access).
+See [`.cursor/skills/tsforge-release/SKILL.md`](.cursor/skills/tsforge-release/SKILL.md). Requires `NPM_TOKEN` in GitHub repo secrets.
 
 ### Docs deploy
 
 Production docs at [tsforge.dev](https://tsforge.dev) deploy via Cloudflare Pages Git integration — see [apps/docs/DEPLOY.md](apps/docs/DEPLOY.md). CI linkcheck is the PR gate; Cloudflare rebuilds on push to `main`.
+
+### GitHub repo settings
+
+Desired settings live in [`.github/desired-repo-settings.json`](.github/desired-repo-settings.json) (same pattern as [boringstack](https://github.com/boringstack-xyz/boringstack)). Audit drift and print copy-pasteable `gh api` fixes:
+
+```bash
+./scripts/audit-repo-settings.sh
+```
+
+Nothing auto-applies — run the printed commands yourself. **Private repos** on the free plan can apply merge settings (squash-only, delete branch on merge) but not branch protection or GitHub secret scanning; make the repo public or upgrade to Pro for full parity with boringstack.
