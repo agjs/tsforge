@@ -31,7 +31,7 @@ The entry **key** (`"deepseek"`) is just a local label. The field that's sent to
 | `baseUrl` | yes | OpenAI-compatible API root, e.g. `https://api.deepseek.com/v1`. `/chat/completions` is appended (and not double-appended). |
 | `model` | yes | The model id sent to the API. |
 | `apiKey` / `apiKeyEnv` | no | Inline key, or the name of an env var holding it (preferred — keeps secrets out of the file). |
-| `reasoning` | no | Provider thinking dialect: `qwen` (default), `deepseek`, `openai`, `none` — see below. |
+| `reasoning` | no | Provider thinking dialect: `qwen` (default), `deepseek`, `openai`, `none` — see below. **Auto-detected as `deepseek`** when `baseUrl` or `model` contains "deepseek", so a DeepSeek model usually needs no explicit value. |
 | `reasoningEffort` | no | `low` / `medium` / `high` for `deepseek`/`openai`. |
 | `contextWindow` | no | Tokens, for the status gauge + auto-compaction. Auto-detected from `/models` when omitted. |
 | `maxTokens` | no | Output-token cap (default 16384). |
@@ -48,6 +48,8 @@ Providers express "thinking" differently. `reasoning` picks the wire shape:
 | `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, `reasoning_effort` | Omits `tool_choice` entirely (DeepSeek's thinking mode rejects an explicit one) — the model still gets the tools and decides. |
 | `openai` | `reasoning_effort` | Uses `max_completion_tokens` and omits `temperature` (o-series rejects both). |
 | `none` | — | No reasoning params. |
+
+tsforge **auto-detects** the `deepseek` dialect when `baseUrl`/`model` contains "deepseek", so DeepSeek thinking models work out of the box — the `reasoning_content` from each turn is replayed on the next request (DeepSeek 400s otherwise). Set `reasoning` explicitly only when a DeepSeek-compatible gateway hides that string in its URL/model name.
 
 ## Examples
 

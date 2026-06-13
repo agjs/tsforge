@@ -47,6 +47,7 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environme
 | `/clear` | reset conversation (keeps workspace + gate) |
 | `/cost` | rough token estimate |
 | `/metrics` | token totals + generation rate (tok/s) this session |
+| `/memory` | show learned failure→fix lessons (`/memory forget` clears them) |
 | `/exit` | quit |
 
 Anything else is sent to the agent. While it runs, type to **steer** the next turn. Ctrl-C interrupts the current run.

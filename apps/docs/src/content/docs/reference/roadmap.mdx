@@ -18,6 +18,17 @@ TypeScript coding harness for web projects — `packages/core` for the loop and 
 - Next.js rule pack (App Router server/client boundaries, dead pages-router APIs)
 - `.tsforge/rules.json` custom TTSR rules wired into the loop
 
+## Shipped since v0.1 (0.1.x → 0.2.x)
+
+- **Provider-agnostic models** — `~/.tsforge/models.json` for any OpenAI-compatible API; reasoning dialects (`qwen`/`deepseek`/`openai`), with the DeepSeek dialect **auto-detected** so DeepSeek thinking models work out of the box. See [models.json](/inference/models-json/).
+- **MCP servers** — connect stdio MCP servers as read-only context/tools. See [MCP servers](/integrations/mcp/).
+- **Web scaffolding** — greenfield Vite + React + shadcn + TanStack stacks; `scaffold_web`/`scaffold_ui`/`scaffold_routes`; a web gate ladder that ends in a real browser smoke test. See [Web scaffolding](/scaffold/web/).
+- **Views layout enforced** — scaffolded apps use `src/views/<Feature>/`; the new `component-file-purity` rule and a rewritten `component-folder-structure` keep types/constants/helpers out of component files, and the core `Table` is column-driven (no per-feature wrappers).
+- **Progress-based loop termination** — the blunt 40-turn cap is gone; tsforge stops on **lack of progress** (a single error surviving 5 fix cycles) with a blocker diagnosis, and interactive sessions ride a high runaway backstop. See [When the gate fails](/loop/validation/).
+- **Cross-session memory** — tsforge mines its own runs for failure→fix lessons and recalls the recurring ones as dormant triggers. See [Learning from past runs](/uplift/memory/).
+- **Observability** — live tok/s in the status bar, `/metrics`, and a `--log` JSONL analyzer with a failure-class taxonomy. See [Token metrics](/observability/metrics/).
+- **Also**: plan mode, external plugin packs, a type-aware ESLint overlay, and an auto-gate that runs the project's own tests.
+
 **Sequencing rule:** Measured wins first. No feature defaults change and no 1.0 tag until A/B numbers against the reference model exist.
 
 ## Road to 1.0

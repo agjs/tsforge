@@ -1,0 +1,56 @@
+---
+title: Learning from past runs
+description: tsforge mines its own runs for mistakes it fixed and recalls them as dormant triggers, so it stops repeating the same failures.
+---
+
+tsforge **learns from its own runs**. After each run it mines the event stream for gate failures it then **fixed**, accumulates those failure→fix lessons in a per-repo ledger, and recalls the recurring ones as [TTSR](/uplift/ttsr/) rules that fire only when the **same mistake** recurs.
+
+The design principle: **aggregate aggressively and automatically; inject conservatively.** The ledger fills on its own with no curation from you, but almost nothing reaches a new session's prompt — a learned rule is a dormant trigger that costs zero context until the exact pattern shows up again.
+
+Default ON (shares the `TSFORGE_TTSR` switch). Set `TSFORGE_TTSR=0` to disable both stream rules and learning.
+
+## How it works
+
+```
+run ends → mine events for (rule that failed, the edit that fixed it)
+        → ledger .tsforge/memory.json  (every candidate, with a hit count)
+        → activate the recurring ones → .tsforge/learned-rules.json
+next run → loaded as TTSR rules → fire only if the model re-commits the pattern
+```
+
+- **Mine** — when a gate rule (e.g. `no-explicit-any`, `TS18048`) is failing and then **disappears after an edit**, that edit's before→after is a candidate lesson. Deterministic; no model call.
+- **Consolidate** — candidates accumulate in `.tsforge/memory.json` with a `hits` count per distinct run and a last-seen timestamp.
+- **Activate** — a lesson is promoted to an active rule (written to `.tsforge/learned-rules.json`) only once it has recurred in **≥ 2 runs**. A single fluke fix never starts steering future runs.
+- **Decay** — a learned rule unseen for ~45 days drops out of the active set (it stays in the ledger).
+
+Both the [headless loop](/loop/validation/) and the [interactive session](/cli/interactive/) write lessons at the end of a run and load them at the start of the next one.
+
+## Why this beats plain recall
+
+A learned lesson becomes a **deterministic trigger**, not text the model might or might not read. When the pattern recurs mid-stream, tsforge interrupts and injects the known fix — the same mechanism as a built-in [TTSR](/uplift/ttsr/) rule. So memory rides the gate's enforcement rather than hoping for recall.
+
+## Safety
+
+- **Non-blocking only.** Auto-writes only ever produce TTSR guidance rules (they nudge and self-disable after 3 fires per run). They never change gate severity or block a build, so a wrong lesson can nudge but can never wedge.
+- **Local + inspectable.** Everything lives under `.tsforge/` in the repo. Nothing is sent anywhere.
+- **Accumulation ≠ injection.** A large ledger costs a new session nothing — learned rules fire only on the actual mistake.
+
+## Inspecting and clearing
+
+In an interactive session:
+
+```
+/memory          list learned lessons (● active · ○ still accruing)
+/memory forget   clear this repo's learned memory
+```
+
+The files are plain JSON you can read, edit, commit, or delete:
+
+| File | What it holds |
+| --- | --- |
+| `.tsforge/memory.json` | the full ledger — every candidate lesson with `hits`, `source`, `lastSeen` |
+| `.tsforge/learned-rules.json` | the active subset, loaded as TTSR rules each run |
+
+`.tsforge/` is git-ignored by default; commit `learned-rules.json` if you want the team to share a repo's lessons.
+
+→ [Stop bad output early (TTSR)](/uplift/ttsr/) · [When the gate fails](/loop/validation/) · [Interactive CLI](/cli/interactive/)

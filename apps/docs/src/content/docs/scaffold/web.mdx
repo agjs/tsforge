@@ -38,6 +38,37 @@ Themes: `minimal`, `warm`, `futuristic`. Primitives include button, card, input,
 
 Call once with everything the app needs. Do not hand-roll base components the scaffold already provides.
 
+The `table` primitive is **column-driven** — it _is_ the table, not a base for per-feature wrappers. Pass typed rows and a column spec; there is no `DealsTable`/`UsersTable`:
+
+```tsx
+const dealColumns: readonly IColumn<IDeal>[] = [
+  { header: "Name", cell: (d) => d.name },
+  { header: "Value", cell: (d) => formatCurrency(d.value) },
+];
+
+<Table columns={dealColumns} data={deals} rowKey={(d) => d.id} />;
+```
+
+## Project layout (views)
+
+Scaffolded apps follow a **views** layout, and the [`react-component-architecture`](/guardrails/rule-packs/#react-component-architecture) rules enforce it at the gate. Each screen/feature is a folder under `src/views/`:
+
+```
+src/views/<Feature>/
+  index.tsx              the view — the composition root
+  components/<X>.tsx      feature components (one per file)
+  <feature>.types.ts     the feature's interfaces (I-prefixed)
+  <feature>.constants.ts  its label maps, column specs, seed data
+src/components/ui/         shared, feature-agnostic primitives (scaffold_ui)
+src/lib/<name>.ts          pure helpers (formatCurrency, timeAgo)
+src/routes/<feature>.tsx   thin TanStack route shell → renders the view
+```
+
+Two hard rules the gate enforces (`component-file-purity`, `component-folder-structure`):
+
+- A component `.tsx` contains **only imports and the component**. Types go to `<feature>.types.ts`, constants to `<feature>.constants.ts`, pure helpers to `src/lib` — never inline above a component.
+- **No gratuitous wrappers.** Compose the shared primitives directly in the view; only create a `components/<X>.tsx` when a piece has real local state, is reused, or is large enough to stand alone.
+
 ### scaffold_routes
 
 Creates TanStack file routes as stubs in one shot, for example `["/", "/accounts", "/accounts/$accountId"]`. Each stub compiles; you fill in real UI later.

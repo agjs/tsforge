@@ -184,6 +184,7 @@ export default defineConfig({
             { label: "Fix bad tool calls", link: "/uplift/repair-ladder/" },
             { label: "Safer line edits", link: "/uplift/hashline/" },
             { label: "Stop bad output early", link: "/uplift/ttsr/" },
+            { label: "Learning from past runs", link: "/uplift/memory/" },
           ],
         },
         {
