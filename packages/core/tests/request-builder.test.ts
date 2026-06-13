@@ -47,13 +47,20 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.chat_template_kwargs).toBeUndefined();
   });
 
-  test("deepseek clamps tool_choice 'required' to 'auto' (thinking mode rejects it)", () => {
+  test("deepseek sends tools but omits tool_choice (thinking mode rejects it)", () => {
     const b = body(
       { reasoning: "deepseek" },
       { tools: [{}], toolChoice: "required" }
     );
 
-    expect(b.tool_choice).toBe("auto");
+    expect(b.tools).toBeDefined();
+    expect(b.tool_choice).toBeUndefined();
+  });
+
+  test("non-deepseek still sends tool_choice", () => {
+    const b = body({}, { tools: [{}], toolChoice: "required" });
+
+    expect(b.tool_choice).toBe("required");
   });
 
   test("openai uses max_completion_tokens, reasoning_effort, and omits temperature", () => {

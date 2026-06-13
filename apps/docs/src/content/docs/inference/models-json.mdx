@@ -45,7 +45,7 @@ Providers express "thinking" differently. `reasoning` picks the wire shape:
 | `reasoning` | Sends | Notes |
 | --- | --- | --- |
 | `qwen` (default) | `chat_template_kwargs.enable_thinking`, `thinking_token_budget` | vLLM/Qwen. |
-| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, `reasoning_effort` | Also never sends `tool_choice: "required"` (DeepSeek's thinking mode rejects it). |
+| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, `reasoning_effort` | Omits `tool_choice` entirely (DeepSeek's thinking mode rejects an explicit one) — the model still gets the tools and decides. |
 | `openai` | `reasoning_effort` | Uses `max_completion_tokens` and omits `temperature` (o-series rejects both). |
 | `none` | — | No reasoning params. |
 

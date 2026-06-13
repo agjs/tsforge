@@ -68,17 +68,22 @@ function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, number> {
     : { max_tokens: max };
 }
 
-/** Tool-choice clamped for provider constraints: DeepSeek's thinking mode rejects
- *  `tool_choice: "required"`, so downgrade it to `"auto"` there. */
-function toolChoiceFor(
+/** The `tools` (+ `tool_choice`) request fields, with provider constraints
+ *  applied: DeepSeek's thinking mode rejects an explicit `tool_choice`, so omit
+ *  it entirely there (the model still gets the tools and decides). */
+function toolsBlock(
   cfg: IOpenAICompatibleConfig,
-  requested: "auto" | "required" | "none"
-): "auto" | "required" | "none" {
-  if (style(cfg) === "deepseek" && requested === "required") {
-    return "auto";
+  opts: ICompleteOptions
+): Record<string, unknown> {
+  if (opts.tools === undefined) {
+    return {};
   }
 
-  return requested;
+  if (style(cfg) === "deepseek") {
+    return { tools: opts.tools };
+  }
+
+  return { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" };
 }
 
 /** Build the request body object (pure). Field order keeps the qwen default
@@ -102,12 +107,7 @@ export function buildRequestBody(
     ...(cfg.repetitionPenalty === undefined
       ? {}
       : { repetition_penalty: cfg.repetitionPenalty }),
-    ...(opts.tools === undefined
-      ? {}
-      : {
-          tools: opts.tools,
-          tool_choice: toolChoiceFor(cfg, opts.toolChoice ?? "auto"),
-        }),
+    ...toolsBlock(cfg, opts),
     ...reasoningFields(cfg, opts),
     ...(streaming
       ? { stream: true, stream_options: { include_usage: true } }
