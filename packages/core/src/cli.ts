@@ -629,6 +629,7 @@ const HELP = [
   "  /model [name]    list configured models (★ active), or switch to <name>",
   "  /sessions        list saved sessions (resume one with: tsforge --resume <id>)",
   "  /cost            rough conversation size (messages + ~tokens)",
+  "  /metrics         token totals + generation rate (tok/s) this session",
   "  /exit, /quit     leave the session",
   "",
   "Anything else is sent to the agent. It works with its tools; when it stops,",
@@ -1197,6 +1198,21 @@ async function repl(args: ICliArgs): Promise<number> {
         break;
       }
 
+      case "metrics": {
+        const m = session.metrics;
+
+        if (m.calls === 0) {
+          process.stdout.write("  no model calls yet\n");
+        } else {
+          process.stdout.write(
+            `  ${String(m.calls)} call(s) · ${String(m.promptTokens)} in / ${String(m.completionTokens)} out · ` +
+              `${String(m.lastTokensPerSecond)} tok/s last · ${String(m.avgTokensPerSecond)} tok/s avg\n`
+          );
+        }
+
+        break;
+      }
+
       default:
         process.stdout.write(`unknown command: ${line} (try /help)\n`);
     }
@@ -1217,6 +1233,7 @@ async function repl(args: ICliArgs): Promise<number> {
         elapsedMs: lastElapsedMs,
         status: lastStatus,
         scope: scopeLabel(session.scope) + (planMode ? " · PLAN" : ""),
+        tokensPerSecond: session.metrics.lastTokensPerSecond,
       })
     );
     process.stdout.write("› ");

@@ -46,9 +46,20 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environme
 | `/compact` | summarize conversation to free context |
 | `/clear` | reset conversation (keeps workspace + gate) |
 | `/cost` | rough token estimate |
+| `/metrics` | token totals + generation rate (tok/s) this session |
 | `/exit` | quit |
 
 Anything else is sent to the agent. While it runs, type to **steer** the next turn. Ctrl-C interrupts the current run.
+
+## Live metrics
+
+The status line above each prompt shows the last call's generation rate (`tok/s`) next to the context gauge. `/metrics` prints the running totals for the session — model calls, input/output tokens, and both the last and average output rate:
+
+```
+  4 call(s) · 8120 in / 1540 out · 47 tok/s last · 44 tok/s avg
+```
+
+tokens/sec measures output generation (from the first streamed token to the call's end), so it reflects decode speed rather than prompt-processing latency. Per-call usage is also written to the `--log` JSONL for post-hoc analysis.
 
 ## Session banner
 

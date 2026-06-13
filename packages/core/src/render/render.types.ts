@@ -18,4 +18,7 @@ export interface IStatusInfo {
   status: string;
   /** Editable scope label. */
   scope: string;
+  /** Output generation rate of the last model call (tokens/second); omitted or
+   *  0 before the first call. */
+  tokensPerSecond?: number;
 }

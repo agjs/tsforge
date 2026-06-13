@@ -51,6 +51,9 @@ export interface ILoopEvent {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** For `usage` events: output generation rate (completion tokens / second),
+   *  measured from the first streamed token to the call's end. */
+  tokensPerSecond?: number;
   /** For `usage` (and salvage-warning `tool`) events: whether THIS model call
    *  ran with thinking enabled — lets the analyzer correlate malformed-tool-call
    *  rate with the thinking mode (see analyze-malformed). */

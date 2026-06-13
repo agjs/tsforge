@@ -114,6 +114,20 @@ export interface ISendResult {
   turns: number;
 }
 
+/** Cumulative model-call metrics for a session — the basis for `/metrics`. */
+export interface ISessionMetrics {
+  /** Number of model calls made. */
+  readonly calls: number;
+  /** Total prompt (input) tokens billed across all calls. */
+  readonly promptTokens: number;
+  /** Total completion (output) tokens generated across all calls. */
+  readonly completionTokens: number;
+  /** Output generation rate averaged over all calls (tokens/second). */
+  readonly avgTokensPerSecond: number;
+  /** Output generation rate of the most recent call (tokens/second). */
+  readonly lastTokensPerSecond: number;
+}
+
 export interface ISendOptions {
   /** Caller cancellation (Ctrl-C). */
   signal?: AbortSignal;
@@ -339,6 +353,15 @@ export class Session {
    *  size of the context the model last saw (drives the status gauge and, soon,
    *  auto-compaction). */
   private lastUsage?: ITokenUsage;
+  /** Running totals behind the `metrics` getter. genMs is the summed generation
+   *  time (first-token→end) so the average rate is tokens/total-gen-seconds. */
+  private readonly metricsTotals = {
+    calls: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    genMs: 0,
+    lastTokensPerSecond: 0,
+  };
   /** Fast check run every few edits while building (e.g. tsc); "" = off. */
   private incrementalCheck: string;
   /** Per-send thinking override, set from ISendOptions for the duration of a
@@ -505,6 +528,31 @@ export class Session {
    *  call, or if the server reports none). */
   get usage(): ITokenUsage | undefined {
     return this.lastUsage;
+  }
+
+  /** Cumulative model-call metrics (tokens + generation rate) for this session. */
+  get metrics(): ISessionMetrics {
+    const t = this.metricsTotals;
+
+    return {
+      calls: t.calls,
+      promptTokens: t.promptTokens,
+      completionTokens: t.completionTokens,
+      avgTokensPerSecond:
+        t.genMs > 0 ? Math.round((t.completionTokens / t.genMs) * 1000) : 0,
+      lastTokensPerSecond: Math.round(t.lastTokensPerSecond),
+    };
+  }
+
+  /** Fold one call's usage + generation time into the running metrics totals. */
+  private recordUsage(usage: ITokenUsage, genMs: number): void {
+    this.lastUsage = usage;
+    this.metricsTotals.calls += 1;
+    this.metricsTotals.promptTokens += usage.promptTokens;
+    this.metricsTotals.completionTokens += usage.completionTokens;
+    this.metricsTotals.genMs += genMs;
+    this.metricsTotals.lastTokensPerSecond =
+      genMs > 0 ? (usage.completionTokens / genMs) * 1000 : 0;
   }
 
   /** The real size of the context the model is currently holding — the prompt
@@ -957,6 +1005,8 @@ export class Session {
     const mcpSchemas = this.ctx.mcpRegistry?.toolSchemas() ?? [];
     const offeredTools =
       mcpSchemas.length > 0 ? [...baseTools, ...mcpSchemas] : baseTools;
+    const callStart = performance.now();
+    let firstTokenAt = 0;
     const res = await this.provider.complete(ctx.messages, {
       tools: offeredTools,
       temperature: this.cfg.temperature ?? 0,
@@ -967,6 +1017,12 @@ export class Session {
         : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
       ...(signal === undefined ? {} : { signal }),
       onToken: (token, channel) => {
+        // Stamp the first token so tokens/sec measures generation rate (excluding
+        // prompt-processing / time-to-first-token), not total wall time.
+        if (firstTokenAt === 0) {
+          firstTokenAt = performance.now();
+        }
+
         // Stream EVERYTHING live — thinking, the tool calls being written, and
         // the answer itself (channel `content`), so the user watches the reply
         // arrive instead of staring at a frozen indicator. The renderer formats
@@ -977,17 +1033,23 @@ export class Session {
     });
 
     if (res.usage !== undefined) {
-      this.lastUsage = res.usage;
+      const ended = performance.now();
+      const genMs = firstTokenAt > 0 ? ended - firstTokenAt : ended - callStart;
+      const tps = genMs > 0 ? (res.usage.completionTokens / genMs) * 1000 : 0;
+
+      this.recordUsage(res.usage, genMs);
       // Logged (not shown) so the --log analyzer can compute tokens-to-solution.
       // `thinking` records THIS call's mode, so malformed-call rates can be
       // correlated with it (analyze-malformed).
       report({
         kind: "usage",
         task: SESSION_ID,
-        message: `tokens ${res.usage.promptTokens} in / ${res.usage.completionTokens} out`,
+        message: `tokens ${res.usage.promptTokens} in / ${res.usage.completionTokens} out · ${Math.round(tps)} tok/s`,
         promptTokens: res.usage.promptTokens,
         completionTokens: res.usage.completionTokens,
         totalTokens: res.usage.totalTokens,
+        tokensPerSecond: Math.round(tps),
+        ms: Math.round(genMs),
         ...(enableThinking === undefined ? {} : { thinking: enableThinking }),
       });
     }

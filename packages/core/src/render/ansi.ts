@@ -71,6 +71,10 @@ export function renderStatus(
     );
   }
 
+  if (info.tokensPerSecond !== undefined && info.tokensPerSecond > 0) {
+    bits.push(`${info.tokensPerSecond} tok/s`);
+  }
+
   bits.push(info.status, info.scope);
 
   return `${paint(`  ⎯ ${bits.join(" · ")}`, STYLE.dim, color)}\n`;
