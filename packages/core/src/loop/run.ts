@@ -366,6 +366,9 @@ export async function runTask(
       role: "assistant",
       content: res.content,
       toolCalls: res.toolCalls,
+      ...(res.reasoning === undefined
+        ? {}
+        : { reasoningContent: res.reasoning }),
     });
 
     // Every model call advances cooldown accounting — including interrupted

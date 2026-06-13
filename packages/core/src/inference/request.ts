@@ -99,9 +99,13 @@ export function buildRequestBody(
   const omitTemperature =
     style(cfg) === "openai" || opts.temperature === undefined;
 
+  // DeepSeek's thinking mode requires each prior assistant turn's
+  // `reasoning_content` replayed; other providers don't want it.
+  const includeReasoning = style(cfg) === "deepseek";
+
   return {
     model: cfg.model,
-    messages: messages.map(toWire),
+    messages: messages.map((m) => toWire(m, includeReasoning)),
     ...tokenCapField(cfg),
     ...(omitTemperature ? {} : { temperature: opts.temperature }),
     ...(cfg.repetitionPenalty === undefined

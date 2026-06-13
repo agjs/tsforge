@@ -35,6 +35,7 @@ export async function streamResponse(
     calls: new Map(),
     guard: new StreamGuard(),
     content: "",
+    reasoning: "",
     ttsr: ttsrManager,
     ttsrFired: null,
   };
@@ -88,6 +89,7 @@ interface IStreamAcc {
   calls: Map<number, IStreamingCall>;
   guard: StreamGuard;
   content: string;
+  reasoning: string;
   usage?: ITokenUsage;
   ttsr?: ITtsrWatcher;
   ttsrFired: { readonly name: string; readonly guidance: string } | null;
@@ -137,6 +139,7 @@ function consumeLines(
     // less, not by hiding it from the log.)
     if (delta.reasoning !== undefined && delta.reasoning.length > 0) {
       onToken(delta.reasoning, "reasoning");
+      acc.reasoning += delta.reasoning;
 
       if (acc.guard.observe(delta.reasoning, "reasoning")) {
         return true;
@@ -163,6 +166,8 @@ function consumeLines(
 
 function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
   const usage = acc.usage === undefined ? {} : { usage: acc.usage };
+  const reasoning =
+    acc.reasoning.length > 0 ? { reasoning: acc.reasoning } : {};
   const toolCalls: IToolCall[] = [...acc.calls.values()].map((c) => ({
     id: c.id,
     name: c.name,
@@ -181,8 +186,21 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
 
   if (toolCalls.length > 0) {
     return degenerated
-      ? { content: acc.content, toolCalls, degenerated, ...ttsrFired, ...usage }
-      : { content: acc.content, toolCalls, ...ttsrFired, ...usage };
+      ? {
+          content: acc.content,
+          toolCalls,
+          degenerated,
+          ...reasoning,
+          ...ttsrFired,
+          ...usage,
+        }
+      : {
+          content: acc.content,
+          toolCalls,
+          ...reasoning,
+          ...ttsrFired,
+          ...usage,
+        };
   }
 
   const salvaged = salvageToolCalls(acc.content);
@@ -192,6 +210,7 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
     toolCalls: salvaged,
     salvaged: salvaged.length,
     ...(degenerated ? { degenerated } : {}),
+    ...reasoning,
     ...ttsrFired,
     ...usage,
   };

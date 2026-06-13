@@ -1,5 +1,18 @@
 import { resolve, dirname, basename, join } from "node:path";
-import { chromium, type Page } from "playwright";
+// `playwright` is an OPTIONAL peer: bundling it (+ a browser binary) into every
+// install is too heavy, so the import is dynamic and the render-check skips when
+// it's absent. The type-only import is erased at runtime, so it can't crash a
+// playwright-less install.
+import type { Page, chromium as Chromium } from "playwright";
+
+/** Load playwright's chromium lazily; null when it isn't installed. */
+async function loadChromium(): Promise<typeof Chromium | null> {
+  try {
+    return (await import("playwright")).chromium;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The browser oracle — renders a built web page in headless chromium and reports
@@ -50,12 +63,27 @@ export interface IRenderResult {
   ok: boolean;
   /** Human-readable failures (console errors, page errors, missing content). */
   errors: string[];
+  /** True when the check was skipped because playwright isn't installed. */
+  skipped?: boolean;
 }
 
 export async function renderCheck(
   opts: IRenderOptions
 ): Promise<IRenderResult> {
   const errors: string[] = [];
+  const chromium = await loadChromium();
+
+  // No playwright → skip the render check rather than fail the gate. The build
+  // still ran tsc/eslint/build/stub-check; the browser smoke is an enhancement.
+  if (chromium === null) {
+    process.stderr.write(
+      "browser render-check skipped: playwright not installed " +
+        "(run `bunx playwright install chromium` to enable it)\n"
+    );
+
+    return { ok: true, errors: [], skipped: true };
+  }
+
   const browser = await chromium.launch({ args: ["--no-sandbox"] });
 
   try {

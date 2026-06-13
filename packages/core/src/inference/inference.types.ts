@@ -8,6 +8,10 @@ export interface IChatMessage {
   toolCalls?: IToolCall[];
   /** Tool messages only: the id of the call this message is the result of. */
   toolCallId?: string;
+  /** Assistant only: the model's chain-of-thought. DeepSeek's thinking mode
+   *  REQUIRES the prior turn's `reasoning_content` to be replayed, so it's kept
+   *  on the message and re-sent (for the deepseek reasoning style). */
+  reasoningContent?: string;
 }
 
 /** A parsed tool call from the model (name + decoded JSON arguments). */
@@ -29,6 +33,10 @@ export interface ITokenUsage {
 export interface IModelResponse {
   content: string;
   toolCalls: IToolCall[];
+  /** The model's chain-of-thought (`reasoning`/`reasoning_content`), when it
+   *  produced any. Stored on the assistant message for providers (DeepSeek) that
+   *  require it replayed on the next turn. */
+  reasoning?: string;
   /** Server-reported token usage for this call, when available. `promptTokens`
    *  is the full context the model just saw — what auto-compaction will watch. */
   usage?: ITokenUsage;

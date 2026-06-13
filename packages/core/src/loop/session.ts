@@ -144,6 +144,17 @@ export interface ISendOptions {
 
 const SESSION_ID = "session";
 
+/** Build the assistant history message, carrying `reasoningContent` when the
+ *  model produced it (DeepSeek's thinking mode requires it replayed). */
+function assistantMessage(res: IModelResponse): IChatMessage {
+  return {
+    role: "assistant",
+    content: res.content,
+    toolCalls: res.toolCalls,
+    ...(res.reasoning === undefined ? {} : { reasoningContent: res.reasoning }),
+  };
+}
+
 /** Default share of the context window that triggers auto-compaction. */
 const AUTO_COMPACT_AT = 0.8;
 
@@ -1054,11 +1065,7 @@ export class Session {
       });
     }
 
-    ctx.messages.push({
-      role: "assistant",
-      content: res.content,
-      toolCalls: res.toolCalls,
-    });
+    ctx.messages.push(assistantMessage(res));
 
     if (res.salvaged !== undefined && res.salvaged > 0) {
       report({

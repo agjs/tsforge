@@ -138,6 +138,32 @@ describe("buildRequestHeaders", () => {
   });
 });
 
+describe("reasoning_content round-trip", () => {
+  const history: IChatMessage[] = [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "ans", reasoningContent: "my thought" },
+  ];
+
+  test("deepseek replays assistant reasoning_content", () => {
+    const b = buildRequestBody(
+      cfg({ reasoning: "deepseek" }),
+      history,
+      {},
+      false
+    );
+
+    expect(JSON.stringify(b.messages)).toContain(
+      '"reasoning_content":"my thought"'
+    );
+  });
+
+  test("non-deepseek (qwen) does NOT replay reasoning_content", () => {
+    const b = buildRequestBody(cfg({}), history, {}, false);
+
+    expect(JSON.stringify(b.messages)).not.toContain("reasoning_content");
+  });
+});
+
 describe("chatCompletionsUrl", () => {
   test("appends the path", () => {
     expect(chatCompletionsUrl("https://api.deepseek.com/v1")).toBe(
