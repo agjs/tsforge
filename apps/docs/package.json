@@ -2,7 +2,7 @@
   "name": "@tsforge/docs",
   "type": "module",
   "private": true,
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "tsforge docs — Astro Starlight product site.",
   "scripts": {
     "sync:rules": "bun scripts/sync-rules-catalog.ts",
@@ -11,7 +11,7 @@
     "start": "bun run sync:rules && astro dev",
     "build": "bun run sync:rules && astro build",
     "build:ci": "bun run check:rules && bun run sync:rules && astro build",
-    "export:harness-board": "bun run build && bun scripts/export-harness-board.mjs",
+    "export:harness-board": "bun scripts/export-harness-board.mjs",
     "preview": "astro preview",
     "deploy": "bun run build:ci && wrangler deploy",
     "astro": "astro"

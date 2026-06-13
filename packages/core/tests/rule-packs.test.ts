@@ -28,9 +28,10 @@ function lint(
   // (The eslint.config.js override at lines 185 relaxes type assertions for test files,
   // and this single bridge point is within that scope.)
   const ruleModule = rule as unknown as Rule.RuleModule;
+  const isTsx = filename.endsWith(".tsx");
 
   const config = {
-    files: ["**/*.ts"],
+    files: [isTsx ? "**/*.tsx" : "**/*.ts"],
     plugins: { tsforge: { rules: { [ruleName]: ruleModule } } },
     rules: {
       [`tsforge/${ruleName}`]: options ? ["error", ...options] : "error",
@@ -40,6 +41,7 @@ function lint(
       parserOptions: {
         ecmaVersion: 2022,
         sourceType: "module",
+        ecmaFeatures: isTsx ? { jsx: true } : undefined,
       },
     },
   } as unknown as Linter.Config;
@@ -1763,6 +1765,8 @@ describe("react-component-architecture pack", () => {
       "max-hooks-per-file",
       "no-cross-feature-imports",
       "no-inline-jsx-functions",
+      "no-jsx-computation",
+      "no-state-in-component-body",
     ]);
   });
 
@@ -1834,6 +1838,158 @@ describe("react-component-architecture pack", () => {
     expect(rule.meta.docs?.description).toContain("inline function");
     expect(rule.meta.messages).toBeDefined();
     expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("no-jsx-computation: reports .map() inside JSX", () => {
+    const code = `
+      export function List({ items }: { items: string[] }) {
+        return <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-jsx-computation",
+      code,
+      "src/List.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("noComputation");
+  });
+
+  test("no-jsx-computation: reports arithmetic in JSX", () => {
+    const code = `
+      export function Counter({ count }: { count: number }) {
+        return <span>{count + 1}</span>;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-jsx-computation",
+      code,
+      "src/Counter.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("noComputation");
+  });
+
+  test("no-jsx-computation: allows identifier in JSX", () => {
+    const code = `
+      export function Greeting({ userName }: { userName: string }) {
+        return <span>{userName}</span>;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-jsx-computation",
+      code,
+      "src/Greeting.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-jsx-computation: allows simple ternary by default", () => {
+    const code = `
+      export function Status({ active }: { active: boolean }) {
+        return <span>{active ? "On" : "Off"}</span>;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-jsx-computation",
+      code,
+      "src/Status.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-jsx-computation: skips story files", () => {
+    const code = `
+      export function List({ items }: { items: string[] }) {
+        return <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-jsx-computation",
+      code,
+      "src/List.stories.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-state-in-component-body: reports useState in component", () => {
+    const code = `
+      import { useState } from "react";
+      export function Button() {
+        const [open, setOpen] = useState(false);
+        return <button>{open ? "Open" : "Closed"}</button>;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-state-in-component-body",
+      code,
+      "src/Button.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("noStateInComponent");
+  });
+
+  test("no-state-in-component-body: allows useId in component body", () => {
+    const code = `
+      import { useId } from "react";
+      export function Field() {
+        const id = useId();
+        return <input id={id} />;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-state-in-component-body",
+      code,
+      "src/Field.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-state-in-component-body: skips hooks files", () => {
+    const code = `
+      import { useState } from "react";
+      export function useButton() {
+        const [open, setOpen] = useState(false);
+        return { open, setOpen };
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-state-in-component-body",
+      code,
+      "src/Button.hooks.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-state-in-component-body: skips test files", () => {
+    const code = `
+      import { useState } from "react";
+      export function Button() {
+        const [open, setOpen] = useState(false);
+        return <button>{open ? "Open" : "Closed"}</button>;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "no-state-in-component-body",
+      code,
+      "src/Button.test.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
   });
 });
 

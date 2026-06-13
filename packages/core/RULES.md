@@ -113,6 +113,8 @@ Component structure, composition, and file organization for React
 - **max-hooks-per-file** [WARN]: Flag query/hook modules that export more than N hooks. Same-kind modules pass the single-semantic-module rule but still grow into god files; this rule sets a hard ceiling so the split conversation happens early.
 - **no-cross-feature-imports** [ERROR]: Prevent imports across different features
 - **no-inline-jsx-functions** [WARN]: Disallow inline function expressions in JSX attributes
+- **no-jsx-computation** [ERROR]: Move complex computations out of JSX into hooks or helper functions
+- **no-state-in-component-body** [ERROR]: State hooks must be in .hooks.ts files, not directly in components
 
 ### structured-logging
 

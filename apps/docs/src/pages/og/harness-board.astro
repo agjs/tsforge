@@ -19,45 +19,20 @@ import HarnessBoardDiagram from "../../components/HarnessBoardDiagram.astro";
         height: 630px;
         overflow: hidden;
         background: #0f1218;
-        color: #e8ecf5;
-        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
       }
 
       .og-harness-board {
-        box-sizing: border-box;
         width: 1200px;
         height: 630px;
-        padding: 2.5rem 3rem 2rem;
         display: flex;
-        flex-direction: column;
+        align-items: center;
         justify-content: center;
-      }
-
-      .og-harness-board .tf-harness-board {
-        margin: 0;
-      }
-
-      .og-harness-board .tf-harness-board__frame {
-        padding: 1.25rem 1rem 0.85rem;
-      }
-
-      .og-harness-board .tf-harness-board__svg {
-        max-width: 100%;
-      }
-
-      .og-harness-board .tf-diagram-caption {
-        margin-top: 0.65rem;
-        font-size: 0.95rem;
-      }
-
-      .og-harness-board .tf-harness-board__stack {
-        display: none !important;
       }
     </style>
   </head>
   <body>
     <div class="og-harness-board">
-      <HarnessBoardDiagram ogMode linked={false} showCaption={true} />
+      <HarnessBoardDiagram ogMode linked={false} showCaption={false} />
     </div>
   </body>
 </html>

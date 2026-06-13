@@ -359,6 +359,16 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/no-jsx-computation": {
+    "what": "Move complex computations out of JSX into hooks or helper functions",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-state-in-component-body": {
+    "what": "State hooks must be in .hooks.ts files, not directly in components",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/mask-pii-fields": {
     "what": "Disallow unmasked PII (email, phone, password, token, ...) in structured-logger payloads — the #1 way data leaks quietly.",
     "bad": "// Example that violates the rule",

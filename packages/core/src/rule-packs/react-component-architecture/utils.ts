@@ -1,3 +1,5 @@
+import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
+
 /**
  * Detect if a file is a component file (.tsx with uppercase name, not test/story)
  */
@@ -20,6 +22,57 @@ export function isComponentFile(filename: string): boolean {
  */
 export function isStoryFile(filename: string): boolean {
   return filename.includes(".stories.tsx");
+}
+
+/**
+ * Detect if a file is a test file
+ */
+export function isTestFile(filename: string): boolean {
+  return filename.includes(".test.ts") || filename.includes(".test.tsx");
+}
+
+/**
+ * True when a function returns JSX directly or via a block `return`.
+ */
+export function isJsxReturningFunction(
+  node: TSESTree.FunctionDeclaration | TSESTree.ArrowFunctionExpression
+): boolean {
+  const fnBody = node.body;
+
+  if (!fnBody) {
+    return false;
+  }
+
+  if (
+    fnBody.type === AST_NODE_TYPES.JSXElement ||
+    fnBody.type === AST_NODE_TYPES.JSXFragment
+  ) {
+    return true;
+  }
+
+  if (fnBody.type === AST_NODE_TYPES.BlockStatement) {
+    return containsReturnOfJsx(fnBody);
+  }
+
+  return false;
+}
+
+function containsReturnOfJsx(block: TSESTree.BlockStatement): boolean {
+  for (const stmt of block.body) {
+    if (stmt.type === AST_NODE_TYPES.ReturnStatement) {
+      const arg = stmt.argument;
+
+      if (
+        arg &&
+        (arg.type === AST_NODE_TYPES.JSXElement ||
+          arg.type === AST_NODE_TYPES.JSXFragment)
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
