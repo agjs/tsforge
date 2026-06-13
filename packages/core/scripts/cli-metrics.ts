@@ -10,6 +10,7 @@ import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isRecord } from "../src/lib/guards";
+import { classifyRun, parseEventLog } from "../src/eval";
 
 function num(value: unknown): number {
   return typeof value === "number" ? value : 0;
@@ -168,6 +169,9 @@ async function main(): Promise<void> {
   const text = await Bun.file(path).text();
   const lines = text.split("\n").filter((l) => l.trim().length > 0);
   const m = analyze(lines);
+  // Single source of truth for WHY a run failed — the same classifier the eval
+  // sweep and the reusable analyzeEvents() use, fed the typed event stream.
+  const failure = classifyRun(parseEventLog(text));
   const pct =
     m.contextWindow > 0
       ? Math.round((m.peakContext / m.contextWindow) * 100)
@@ -182,6 +186,12 @@ async function main(): Promise<void> {
     ["model", m.model],
     ["context window", String(m.contextWindow)],
     ["final status", m.finalStatus],
+    [
+      "failure class",
+      failure.detail === undefined
+        ? failure.failureClass
+        : `${failure.failureClass} (${failure.detail})`,
+    ],
     ["turns (repair iterations)", String(m.turns)],
     ["model calls", String(m.modelCalls)],
     ["tokens out (→ solution)", String(m.tokensOut)],

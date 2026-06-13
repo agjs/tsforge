@@ -32,6 +32,10 @@ export interface ILoopEvent {
   /** For `timing` events: how long the turn took, in milliseconds. */
   ms?: number;
   errors?: number;
+  /** For `validated` events: the failing gate rules/codes (e.g. "TS18048",
+   *  "no-restricted-syntax") — the structured substrate the failure classifier
+   *  reads to tell a type error from a lint rule, not just a count. */
+  rules?: readonly string[];
   passed?: boolean;
   file?: string;
   /** For `create` events: the new file's content (rendered as a code block). */

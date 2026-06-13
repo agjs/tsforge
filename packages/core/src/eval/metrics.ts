@@ -1,4 +1,5 @@
 import type { ILoopEvent } from "../loop/loop.types";
+import { classifyRun, type FailureClass } from "./failure-class";
 
 /** Behavioral metrics distilled from a run's event stream — the signals the
  *  local-model literature says predict outcomes (tokens-to-solution, repair
@@ -6,6 +7,10 @@ import type { ILoopEvent } from "../loop/loop.types";
  *  the cli-metrics script. */
 export interface IRunMetrics {
   finalStatus: "done" | "stuck" | "none";
+  /** Structured reason the run failed (`none` when it reached green). The single
+   *  source of truth for failure classification — the cli-metrics analyzer and
+   *  the eval sweep both read this rather than re-deriving it. */
+  failureClass: FailureClass;
   /** Model turns (one per `cycle` event). */
   turns: number;
   /** Model calls (one per `usage` event). */
@@ -29,6 +34,7 @@ export interface IRunMetrics {
 function emptyMetrics(): IRunMetrics {
   return {
     finalStatus: "none",
+    failureClass: "none",
     turns: 0,
     modelCalls: 0,
     tokensOut: 0,
@@ -82,6 +88,7 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
 
   m.filesCreated = created.size;
   m.avgTokensPerSecond = tpsCount > 0 ? Math.round(tpsSum / tpsCount) : 0;
+  m.failureClass = classifyRun(events).failureClass;
 
   return m;
 }

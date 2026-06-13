@@ -1,3 +1,5 @@
+import type { FailureClass } from "./failure-class";
+
 export interface IJudgeInput {
   goal: string;
   criteria: string;
@@ -21,6 +23,9 @@ export interface IRunRecord {
   ms: number;
   /** LLM-judge quality score (1–5), when available. */
   quality?: number;
+  /** Structured reason a failed run failed (from classifyRun); omitted/`none`
+   *  for a passing run. The substrate for turning failures into interventions. */
+  failureClass?: FailureClass;
 }
 
 /** Aggregated metrics for a variant across its runs. */
@@ -33,4 +38,8 @@ export interface IVariantSummary {
   avgMs: number;
   /** Average quality across runs that were scored (0 if none). */
   avgQuality: number;
+  /** Count of failed runs by failure class (e.g. {"type-error": 2}); empty when
+   *  no run carried a class. Lets a sweep show WHY a variant failed, not just how
+   *  often. */
+  failureClasses: Record<string, number>;
 }

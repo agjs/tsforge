@@ -784,6 +784,9 @@ export async function settleGate(
     cycle: turn,
     passed: gatePassed,
     errors: gateErrors.length,
+    // Structured rule/code list (not just a count) so the failure classifier can
+    // tell a type error from a lint rule without re-parsing the gate output.
+    rules: gateErrors.flatMap((e) => (e.rule === undefined ? [] : [e.rule])),
     message: gatePassed
       ? `task ${task.id} · turn ${turn}: GREEN`
       : `task ${task.id} · turn ${turn}: red (${String(gateErrors.length)} error(s))${gateDetail}`,

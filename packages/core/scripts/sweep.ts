@@ -12,7 +12,13 @@ import { modelAgent } from "../src/agent";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { providerConfig } from "../src/cli";
-import { summarize, type IRunRecord } from "../src/eval";
+import {
+  summarize,
+  classifyRun,
+  renderSweepReportMarkdown,
+  buildSweepReport,
+  type IRunRecord,
+} from "../src/eval";
 import { renderEvent } from "../src/render";
 import type { ILoopEvent } from "../src/loop";
 
@@ -268,8 +274,12 @@ async function runOne(
     // Every run gets a full transcript at <runDir>/run.log; stream to the
     // terminal too when TSFORGE_STREAM=1.
     const log = Bun.file(join(runDir, "run.log")).writer();
+    // Keep the structured events so a failed run can be classified (WHY it
+    // failed), not just counted — fed to classifyRun below.
+    const runEvents: ILoopEvent[] = [];
 
     const onEvent = (e: ILoopEvent): void => {
+      runEvents.push(e);
       void log.write(renderEvent(e, { color: false }));
       // Flush per event — otherwise Bun's FileSink buffers and `tail -f` shows
       // nothing until the run ends. The log must be live.
@@ -359,6 +369,9 @@ async function runOne(
     );
 
     const vLabel = variantLabel(variantEnv);
+    const failureClass = passed
+      ? undefined
+      : classifyRun(runEvents).failureClass;
 
     records.push({
       label: `${vLabel} temp=${temp}`,
@@ -366,9 +379,10 @@ async function runOne(
       cycles,
       ms,
       quality,
+      ...(failureClass === undefined ? {} : { failureClass }),
     });
     process.stdout.write(
-      `  ${seed} ${vLabel} temp=${temp} #${i + 1}: ${passed ? "done" : "blocked"} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${ms}ms${quality === undefined ? "" : `, Q${quality}/5`}) → ${runId}\n`
+      `  ${seed} ${vLabel} temp=${temp} #${i + 1}: ${passed ? "done" : `blocked[${failureClass ?? "unknown"}]`} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${ms}ms${quality === undefined ? "" : `, Q${quality}/5`}) → ${runId}\n`
     );
   } finally {
     restore();
@@ -380,10 +394,21 @@ const summaries = summarize(records);
 process.stdout.write(`\n=== sweep: ${seed} (${repeats} runs/variant) ===\n`);
 
 for (const s of summaries) {
+  const failures = Object.entries(s.failureClasses)
+    .sort(([, a], [, b]) => b - a)
+    .map(([cls, n]) => `${cls}×${String(n)}`)
+    .join(", ");
+
   process.stdout.write(
-    `${s.label.padEnd(10)}  pass ${Math.round(s.passRate * 100)}% (${s.passed}/${s.runs})  Q ${s.avgQuality.toFixed(1)}/5  avg ${s.avgCycles.toFixed(1)} cyc  ${Math.round(s.avgMs)}ms\n`
+    `${s.label.padEnd(10)}  pass ${Math.round(s.passRate * 100)}% (${s.passed}/${s.runs})  Q ${s.avgQuality.toFixed(1)}/5  avg ${s.avgCycles.toFixed(1)} cyc  ${Math.round(s.avgMs)}ms${failures.length > 0 ? `  [${failures}]` : ""}\n`
   );
 }
+
+// The statistical report (Wilson CI + z-test vs baseline) now also tabulates a
+// per-variant failure-class breakdown — WHY runs failed, not just how often.
+process.stdout.write(
+  `\n${renderSweepReportMarkdown(buildSweepReport(records))}\n`
+);
 
 const outPath = join(evalsRoot, "runs", `sweep-${seed}-${stamp()}.json`);
 

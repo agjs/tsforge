@@ -164,5 +164,24 @@ export function renderSweepReportMarkdown(report: ISweepReport): string {
     ...rows,
     "",
     "`*` = significant at p < 0.05 (two-proportion z-test vs baseline).",
+    ...failureSection(report),
   ].join("\n");
+}
+
+/** Format a variant's failure-class tally, e.g. "type-error×2, no-progress×1". */
+function formatFailureClasses(classes: Record<string, number>): string {
+  return Object.entries(classes)
+    .sort(([, a], [, b]) => b - a)
+    .map(([cls, n]) => `${cls}×${String(n)}`)
+    .join(", ");
+}
+
+/** A "why failures happened" section — per-variant failure-class breakdown.
+ *  Empty (no lines) when every run passed, so a clean sweep stays terse. */
+function failureSection(report: ISweepReport): string[] {
+  const lines = report.variants
+    .filter((v) => Object.keys(v.failureClasses).length > 0)
+    .map((v) => `- **${v.label}**: ${formatFailureClasses(v.failureClasses)}`);
+
+  return lines.length === 0 ? [] : ["", "### Failure breakdown", ...lines];
 }
