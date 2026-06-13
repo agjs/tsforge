@@ -181,6 +181,12 @@ export default defineConfig({
           items: [{ label: "MCP servers", link: "/integrations/mcp/" }],
         },
         {
+          label: "Observability",
+          items: [
+            { label: "Token metrics (tok/s)", link: "/observability/metrics/" },
+          ],
+        },
+        {
           label: "Eval",
           items: [{ label: "A/B testing", link: "/eval/ab-testing/" }],
         },

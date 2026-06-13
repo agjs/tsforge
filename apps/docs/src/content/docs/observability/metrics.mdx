@@ -1,0 +1,58 @@
+---
+title: Token metrics & tokens/sec
+description: See how fast the model is generating — live in the status line, on demand with /metrics, or in the logs for deeper analysis.
+---
+
+Want to know how fast your model is actually going? tsforge surfaces real token throughput in three places, from "glance at it" to "analyse a whole run."
+
+## 1. The status line — always on
+
+After every turn, the line above the prompt shows the **last call's generation rate** right next to the context gauge:
+
+```
+  ⎯ qwen3.6-27b · ctx ~8k/32k 25% · 2 turns · 12s · 47 tok/s · done · src/**
+```
+
+`47 tok/s` is how many output tokens per second the model produced on that call. Nothing to enable — it appears as soon as the first model call returns.
+
+## 2. `/metrics` — the running total
+
+Type `/metrics` at the prompt for the whole session so far:
+
+```
+› /metrics
+  4 call(s) · 8120 in / 1540 out · 47 tok/s last · 44 tok/s avg
+```
+
+| Field | Meaning |
+| --- | --- |
+| `calls` | model calls made this session |
+| `in` / `out` | total prompt (input) and completion (output) tokens |
+| `tok/s last` | output rate of the most recent call |
+| `tok/s avg` | output rate averaged across all calls |
+
+## What "tokens/sec" measures
+
+It's **output decode speed** — measured from the *first* streamed token to the end of the call. That deliberately excludes prompt-processing / time-to-first-token, so a big prompt doesn't make the model look slow. It reflects how fast tokens come out once they start.
+
+A low number usually points at the *serving* setup (quantization, batch size, GPU), not the model — "measure, don't assume."
+
+## 3. `--log` — analyse a whole run
+
+Start the CLI (or an eval) with `--log` and every model call is written to `~/.tsforge/logs/<timestamp>.jsonl` as a `usage` event:
+
+```json
+{ "kind": "usage", "task": "session", "promptTokens": 2031,
+  "completionTokens": 240, "tokensPerSecond": 46, "ms": 5200 }
+```
+
+Turn a log into a summary with the built-in analyzer:
+
+```bash
+bun run packages/core/scripts/cli-metrics.ts            # newest log
+bun run packages/core/scripts/cli-metrics.ts run.jsonl  # a specific one
+```
+
+It reports tokens-to-solution, peak context, edits, gate runs, and more. The same distillation is available programmatically as `analyzeEvents(events)` from `@agjs/tsforge`'s eval module, and feeds the [A/B sweep report](/eval/ab-testing/).
+
+→ [Interactive CLI](/cli/interactive/) · [A/B testing](/eval/ab-testing/) · [Model adapter](/inference/adapter/)
