@@ -1,30 +1,37 @@
 import type { TSESLint } from "@typescript-eslint/utils";
 
 import type { IRulePack } from "./rule-packs.types";
+import { authorizationPack } from "./authorization";
 import { bullmqPack } from "./bullmq";
 import { commentHygienePack } from "./comment-hygiene";
 import { codeFlowPack } from "./code-flow";
 import { drizzlePack } from "./drizzle";
 import { elysiaPack } from "./elysia";
 import { envAccessPack } from "./env-access";
+import { fastifyPack } from "./fastify";
 import { i18nKeysPack } from "./i18n-keys";
 import { jwtCookiesPack } from "./jwt-cookies";
 import { moduleBoundariesPack } from "./module-boundaries";
 import { nextjsPack } from "./nextjs";
 import { oauthSecurityPack } from "./oauth-security";
 import { reactComponentArchitecturePack } from "./react-component-architecture";
+import { runtimeBoundariesPack } from "./runtime-boundaries";
+import { securityPack } from "./security";
 import { structuredLoggingPack } from "./structured-logging";
 import { tanstackQueryPack } from "./tanstack-query";
 import { testConventionsPack } from "./test-conventions";
+import { typescriptCorePack } from "./typescript-core";
 import { PACK_REGISTRY } from "../stack-detection";
 
 /** Registry of all available rule packs, keyed by pack ID. */
 export const RULE_PACKS = {
+  authorization: authorizationPack,
   bullmq: bullmqPack,
   "code-flow": codeFlowPack,
   "comment-hygiene": commentHygienePack,
   drizzle: drizzlePack,
   elysia: elysiaPack,
+  fastify: fastifyPack,
   "env-access": envAccessPack,
   "i18n-keys": i18nKeysPack,
   "jwt-cookies": jwtCookiesPack,
@@ -32,9 +39,12 @@ export const RULE_PACKS = {
   nextjs: nextjsPack,
   "oauth-security": oauthSecurityPack,
   "react-component-architecture": reactComponentArchitecturePack,
+  "runtime-boundaries": runtimeBoundariesPack,
+  security: securityPack,
   "structured-logging": structuredLoggingPack,
   "tanstack-query": tanstackQueryPack,
   "test-conventions": testConventionsPack,
+  "typescript-core": typescriptCorePack,
 } as const;
 
 export type IRulePackId = keyof typeof RULE_PACKS;

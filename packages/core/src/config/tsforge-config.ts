@@ -3,6 +3,14 @@ import { isRecord } from "../lib/guards";
 import { PACK_REGISTRY } from "../stack-detection";
 import { parseMcpServers, type IMcpServerConfig } from "../mcp";
 import { parsePlugins, type IExternalPlugin } from "./external-plugins";
+import {
+  DEFAULT_PROFILE,
+  isProfileId,
+  mergeRuleOverrides,
+  resolveProfileExtraPacks,
+  resolveProfileMetaRuleOverrides,
+  type ProfileId,
+} from "./profiles";
 
 /**
  * User-defined configuration from tsforge.config.json
@@ -10,6 +18,9 @@ import { parsePlugins, type IExternalPlugin } from "./external-plugins";
  * include/exclude packs, and tune rule severities (eslint packs + meta-rules).
  */
 export interface ITsforgeProjectConfig {
+  /** Rule profile: recommended (default), strict, security, frontend, backend, opinionated. */
+  readonly profile?: ProfileId;
+
   /** Force-enable a stack by name (skip detection heuristics, force-add its packs). */
   readonly stack?: string;
 
@@ -100,6 +111,31 @@ function warnUnknownPackInInclude(packId: string): void {
   warnConfig(msg);
 }
 
+function warnInvalidProfile(profileValue: unknown): void {
+  warnConfig(
+    `tsforge.config.json: "profile" must be one of recommended, strict, security, frontend, backend, opinionated — got "${String(profileValue)}"`
+  );
+}
+
+/** Validate and extract profile field. */
+function validateProfile(parsed: unknown): ProfileId | undefined {
+  if (typeof parsed !== "string") {
+    if (parsed !== undefined) {
+      warnInvalidProfile(parsed);
+    }
+
+    return undefined;
+  }
+
+  if (isProfileId(parsed)) {
+    return parsed;
+  }
+
+  warnInvalidProfile(parsed);
+
+  return undefined;
+}
+
 /** Validate and extract stack field. */
 function validateStack(parsed: unknown): string | undefined {
   if (typeof parsed === "string") {
@@ -181,12 +217,21 @@ function buildConfigFields(
   parsed: Record<string, unknown>
 ): ITsforgeProjectConfig {
   const configFields: {
+    profile?: ProfileId;
     stack?: string;
     packs?: { include?: readonly string[]; exclude?: readonly string[] };
     rules?: Record<string, "error" | "warn" | "off">;
     mcpServers?: Record<string, IMcpServerConfig>;
     plugins?: readonly IExternalPlugin[];
   } = {};
+
+  if (parsed.profile !== undefined) {
+    const profile = validateProfile(parsed.profile);
+
+    if (profile !== undefined) {
+      configFields.profile = profile;
+    }
+  }
 
   if (parsed.stack !== undefined) {
     const stack = validateStack(parsed.stack);
@@ -290,6 +335,13 @@ export function resolveActivePacks(
     packs.add(config.stack);
   }
 
+  // Profile extra packs (runtime-boundaries, authorization, typescript-core, …)
+  for (const packId of resolveProfileExtraPacks(config.profile)) {
+    if (packId in PACK_REGISTRY) {
+      packs.add(packId);
+    }
+  }
+
   // Include: add packs (unknown ids are kept out of the registry lookup warning only)
   for (const packId of config.packs?.include ?? []) {
     if (packId.length === 0) {
@@ -324,11 +376,9 @@ function isSeverityOverride(value: unknown): value is "error" | "warn" | "off" {
 export function normalizeRuleOverrides(
   config: ITsforgeProjectConfig
 ): Record<string, "error" | "warn" | "off"> {
-  const normalized: Record<string, "error" | "warn" | "off"> = {};
+  const userOverrides: Record<string, "error" | "warn" | "off"> = {};
 
   for (const [key, severity] of Object.entries(config.rules ?? {})) {
-    // Runtime data can violate the declared union (hand-built configs in tests,
-    // partially validated JSON) — re-check before trusting it.
     if (!isSeverityOverride(severity)) {
       continue;
     }
@@ -336,9 +386,18 @@ export function normalizeRuleOverrides(
     const bareKey = key.startsWith("tsforge/") ? key.slice(8) : key;
 
     if (bareKey.length > 0) {
-      normalized[bareKey] = severity;
+      userOverrides[bareKey] = severity;
     }
   }
 
-  return normalized;
+  return {
+    ...resolveProfileMetaRuleOverrides(config.profile),
+    ...mergeRuleOverrides(config.profile, userOverrides),
+  };
+}
+
+export function resolveProjectProfile(
+  config: ITsforgeProjectConfig
+): ProfileId {
+  return config.profile ?? DEFAULT_PROFILE;
 }

@@ -154,6 +154,156 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "<button onClick={() => doThing(id)} />",
     good: "const onClickRow = useCallback(() => doThing(id), [id]); <button onClick={onClickRow} />",
   },
+  "tsforge/no-throw-literal": {
+    what: "Throw `Error` instances, not string or number literals.",
+    bad: "throw 'Unauthorized';",
+    good: "throw new Error('Unauthorized');",
+  },
+  "tsforge/no-react-fc": {
+    what: "Do not use React.FC — type props on the function parameter.",
+    bad: "const Button: React.FC<IButtonProps> = ({ onClick }) => <button onClick={onClick} />;",
+    good: "function Button({ onClick }: IButtonProps) { return <button onClick={onClick} />; }",
+  },
+  "tsforge/no-component-invocation": {
+    what: "Render components as JSX, not function calls.",
+    bad: "<div>{Header()}</div>",
+    good: "<div><Header /></div>",
+  },
+  "tsforge/no-nested-component": {
+    what: "Declare components at module scope, not inside another component.",
+    bad: "function App() { function Inner() { return <span />; } return <Inner />; }",
+    good: "function Inner() { return <span />; } function App() { return <Inner />; }",
+  },
+  "tsforge/dangerous-html-requires-sanitize": {
+    what: "Sanitize HTML before dangerouslySetInnerHTML — import DOMPurify.",
+    bad: "<div dangerouslySetInnerHTML={{ __html: rawHtml }} />",
+    good: "import DOMPurify from 'isomorphic-dompurify'; <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(rawHtml) }} />",
+  },
+  "tsforge/no-child-process-exec": {
+    what: "Do not use child_process.exec/execSync — shell execution enables command injection.",
+    bad: "import { exec } from 'child_process'; exec(`rm -rf ${dir}`);",
+    good: "import { execFile } from 'child_process'; execFile('rm', ['-rf', dir], callback);",
+  },
+  "tsforge/no-spawn-with-shell": {
+    what: "Do not pass `{ shell: true }` to spawn/spawnSync.",
+    bad: "spawn('sh', ['-c', cmd], { shell: true });",
+    good: "spawn('node', ['script.js', arg]);",
+  },
+  "tsforge/no-dynamic-regexp": {
+    what: "Do not build RegExp from runtime input — ReDoS risk.",
+    bad: "const re = new RegExp(userPattern);",
+    good: "const re = /^fixed-pattern$/;",
+  },
+  "tsforge/no-inner-html-assignment": {
+    what: "Do not assign to innerHTML — XSS risk in vanilla DOM code.",
+    bad: "el.innerHTML = userHtml;",
+    good: "el.textContent = userText;",
+  },
+  "tsforge/catch-must-handle": {
+    what: "Catch blocks must log, rethrow, or return a typed error — not silently mask failure.",
+    bad: "catch (e) { return null; }",
+    good: "catch (e) { logger.error(e); throw e; }",
+  },
+  "tsforge/no-react-in-services": {
+    what: "Service/data modules must not import React — keep business logic decoupled from UI.",
+    bad: "import { useMemo } from 'react'; // in src/services/users.ts",
+    good: "Move React hooks to components; keep services as plain TypeScript.",
+  },
+  "tsforge/no-anonymous-useEffect": {
+    what: "Pass a named function to useEffect for debuggable stack traces.",
+    bad: "useEffect(() => { sync(); }, [id]);",
+    good: "useEffect(function syncOnIdChange() { sync(); }, [id]);",
+  },
+  "tsforge/no-derived-state-in-effect": {
+    what: "Do not set local state inside useEffect when the value can be derived during render.",
+    bad: "useEffect(() => { setFullName(first + ' ' + last); }, [first, last]);",
+    good: "const fullName = `${first} ${last}`;",
+  },
+  "tsforge/no-internal-api-fetch": {
+    what: "Server Components must not fetch the app's own /api routes.",
+    bad: "await fetch('/api/users');",
+    good: "import { listUsers } from '@/services/users'; const users = await listUsers();",
+  },
+  "tsforge/await-dynamic-request-apis": {
+    what: "Await Next.js dynamic request APIs in Server Components.",
+    bad: "const jar = cookies();",
+    good: "const jar = await cookies();",
+  },
+  "tsforge/error-boundary-require-use-client": {
+    what: "error.tsx and global-error.tsx must be Client Components.",
+    bad: "export default function Error() { return <div />; }",
+    good: "'use client'; export default function Error() { return <div />; }",
+  },
+  "tsforge/no-html-img-element": {
+    what: "Prefer next/image over raw img elements.",
+    bad: "<img src='/hero.jpg' alt='hero' />",
+    good: "import Image from 'next/image'; <Image src='/hero.jpg' alt='hero' width={800} height={400} />",
+  },
+  "tsforge/no-sensitive-next-public-env": {
+    what: "NEXT_PUBLIC_* vars are exposed in the client bundle — never use for secrets.",
+    bad: "process.env.NEXT_PUBLIC_STRIPE_SECRET",
+    good: "process.env.STRIPE_SECRET_KEY // server-only, no NEXT_PUBLIC prefix",
+  },
+  "tsforge/prefer-lazy-use-state-init": {
+    what: "Use lazy useState when parsing localStorage on mount.",
+    bad: "useState(JSON.parse(localStorage.getItem('cfg') ?? '{}'))",
+    good: "useState(() => JSON.parse(localStorage.getItem('cfg') ?? '{}'))",
+  },
+  "tsforge/no-auth-token-in-storage": {
+    what: "Never store auth tokens in localStorage/sessionStorage.",
+    bad: "localStorage.setItem('auth_token', token);",
+    good: "Set an httpOnly session cookie on the server instead.",
+  },
+  "tsforge/fetch-must-check-ok": {
+    what: "Check response.ok before calling .json() on fetch results.",
+    bad: "const data = await fetch(url).then(r => r.json());",
+    good: "const res = await fetch(url); if (!res.ok) { throw new Error('fetch failed'); } const data = await res.json();",
+  },
+  "tsforge/json-parse-must-validate": {
+    what: "Parse external JSON through a schema library, not bare JSON.parse.",
+    bad: "const body = JSON.parse(raw);",
+    good: "const body = UserSchema.parse(JSON.parse(raw));",
+  },
+  "tsforge/no-unsafe-boundary-cast": {
+    what: "Do not cast untrusted parsed input with `as` — validate at the boundary.",
+    bad: "const user = (await req.json()) as IUser;",
+    good: "const user = UserSchema.parse(await req.json());",
+  },
+  "tsforge/no-user-controlled-redirect": {
+    what: "Redirect URLs must be string literals or allowlisted helpers — not user input.",
+    bad: "redirect(searchParams.get('next')!);",
+    good: "redirect('/dashboard');",
+  },
+  "tsforge/no-user-controlled-fetch-url": {
+    what: "fetch/axios URLs must be literals or pass through an allowlisted URL builder.",
+    bad: "await fetch(userSuppliedUrl);",
+    good: "await fetch('https://api.example.com/v1/status');",
+  },
+  "tsforge/no-prototype-polluting-merge": {
+    what: "Do not merge request body/query/params into objects wholesale.",
+    bad: "Object.assign(config, req.body);",
+    good: "const name = UserSchema.parse(req.body).name; config.name = name;",
+  },
+  "tsforge/server-only-modules-import-server-only": {
+    what: "Server-only modules importing DB/env must include `import 'server-only'`.",
+    bad: "import { db } from '@/lib/db'; // in lib/admin.ts",
+    good: "import 'server-only'; import { db } from '@/lib/db';",
+  },
+  "tsforge/server-action-requires-authz-and-validation": {
+    what: "Server actions must validate input and call authz before mutations.",
+    bad: "'use server'; export async function deleteUser(id: string) { await db.delete(users).where(eq(users.id, id)); }",
+    good: "'use server'; export async function deleteUser(raw: unknown) { const user = await requireUser(); const { id } = IdSchema.parse(raw); await authorize(user, id); ... }",
+  },
+  "tsforge/require-route-schema": {
+    what: "Fastify routes need a schema object with input validation.",
+    bad: "fastify.post('/users', async () => ({ ok: true }));",
+    good: "fastify.post('/users', { schema: { body: UserSchema } }, async () => ({ ok: true }));",
+  },
+  "tsforge/require-plugin-name": {
+    what: "fastify-plugin wrappers need a name option.",
+    bad: "export default fp(dbPlugin);",
+    good: "export default fp(dbPlugin, { name: 'db-connector', fastify: '5.x' });",
+  },
 };
 
 /**

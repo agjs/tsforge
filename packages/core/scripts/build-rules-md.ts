@@ -1,9 +1,10 @@
-// Generate RULES.md: a catalog of all rule packs and meta-rules.
-// This produces a deterministic, human-readable reference of what gets enforced.
-//   bun run packages/core/scripts/build-rules-md.ts
+// Generate RULES.md grouped by adoption tier, then pack.
 import { join } from "node:path";
 import { RULE_PACKS } from "../src/rule-packs";
 import { META_RULES } from "../src/meta-rules";
+import { getRuleCatalogEntry } from "../src/rule-packs/rule-metadata";
+import type { RuleTier } from "../src/rule-packs/rule-catalog.types";
+import { PROFILE_DEFINITIONS } from "../src/config/profiles";
 
 function getRuleDescription(obj: unknown): string | undefined {
   const isObject = (val: unknown): val is Record<string, unknown> =>
@@ -30,15 +31,28 @@ function getRuleDescription(obj: unknown): string | undefined {
   return typeof description === "string" ? description : undefined;
 }
 
+const TIER_ORDER: readonly RuleTier[] = [
+  "safety",
+  "framework",
+  "architecture",
+  "experimental",
+];
+
 const out: string[] = [
   "# Rules and Meta-Rules Catalog",
   "",
-  "This document lists all rules enforced by tsforge across rule packs and meta-rules.",
+  "Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` to control which tiers are active by default.",
+  "",
+  "## Profiles",
   "",
 ];
 
-// Section: Rule Packs
-out.push("## Rule Packs");
+for (const profile of Object.values(PROFILE_DEFINITIONS)) {
+  out.push(`- **${profile.id}**: ${profile.description}`);
+}
+
+out.push("");
+out.push("## Rule Packs by Tier");
 out.push("");
 
 type PackId = keyof typeof RULE_PACKS;
@@ -47,36 +61,62 @@ function isPackId(id: string): id is PackId {
   return id in RULE_PACKS;
 }
 
-const packIds = Object.keys(RULE_PACKS).sort();
+const entriesByTier = new Map<
+  RuleTier,
+  { packId: string; ruleName: string; severity: string; description: string }[]
+>();
 
-for (const packId of packIds) {
+for (const packId of Object.keys(RULE_PACKS).sort()) {
   if (!isPackId(packId)) {
     continue;
   }
 
   const pack = RULE_PACKS[packId];
 
-  out.push(`### ${packId}`);
-  out.push("");
-  out.push(pack.description);
-  out.push("");
-
-  const ruleNames = Object.keys(pack.rules).sort();
-
-  for (const ruleName of ruleNames) {
+  for (const ruleName of Object.keys(pack.rules).sort()) {
     const rule = pack.rules[ruleName];
     const severity = pack.rulesConfig[ruleName] ?? "warn";
     const description = getRuleDescription(rule) ?? ruleName;
-    const severityUpper = severity.toUpperCase();
-    const line = `- **${ruleName}** [${severityUpper}]: ${description}`;
+    const tier = getRuleCatalogEntry(ruleName, packId).tier;
+    const list = entriesByTier.get(tier) ?? [];
 
-    out.push(line);
+    list.push({
+      packId,
+      ruleName,
+      severity: severity.toUpperCase(),
+      description,
+    });
+    entriesByTier.set(tier, list);
+  }
+}
+
+for (const tier of TIER_ORDER) {
+  const entries = entriesByTier.get(tier) ?? [];
+
+  if (entries.length === 0) {
+    continue;
+  }
+
+  out.push(`### Tier: ${tier}`);
+  out.push("");
+
+  for (const entry of entries.sort((a, b) => {
+    const byPack = a.packId.localeCompare(b.packId);
+
+    if (byPack !== 0) {
+      return byPack;
+    }
+
+    return a.ruleName.localeCompare(b.ruleName);
+  })) {
+    out.push(
+      `- **${entry.packId}/${entry.ruleName}** [${entry.severity}]: ${entry.description}`
+    );
   }
 
   out.push("");
 }
 
-// Section: Meta-Rules
 out.push("## Meta-Rules");
 out.push("");
 out.push(
@@ -103,7 +143,6 @@ for (const rule of META_RULES) {
   rulesByCategory.set(cat, rules);
 }
 
-// Render meta-rules by category.
 for (const category of categoryOrder) {
   const rules = rulesByCategory.get(category) ?? [];
 
@@ -122,6 +161,24 @@ for (const category of categoryOrder) {
 
   out.push("");
 }
+
+out.push("## Out of scope");
+out.push("");
+out.push(
+  "The following are intentionally deferred — wrong tool for the syntactic ESLint gate, or require cross-file analysis:"
+);
+out.push("");
+out.push(
+  "- GraphQL/WebSocket/OpenAPI contract rules (until OpenAPI dep + parser)"
+);
+out.push(
+  "- Container/Kubernetes YAML hardening (future meta-rules when Dockerfile/k8s detected)"
+);
+out.push("- LLM/MCP security packs (opt-in when AI SDK deps detected)");
+out.push("- FSD layer DAG / full authorization taint tracking");
+out.push("- Lighthouse / bundle-analyzer CI gates");
+out.push("- Violation ratcheting / baseline snapshots (Phase 5)");
+out.push("");
 
 const path = join(import.meta.dir, "..", "RULES.md");
 

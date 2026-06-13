@@ -36,6 +36,24 @@ export function hasDirective(
   return false;
 }
 
+/** True if the file is a Next.js error boundary route file. */
+export function isErrorBoundaryFile(filename: string): boolean {
+  const base = filename.split(/[\\/]/).pop() ?? "";
+
+  return (
+    isAppRouterFile(filename) &&
+    /^(?:error|global-error)\.(?:tsx|ts|jsx|js)$/.test(base)
+  );
+}
+
+/** True if the file is an app-router file defaulting to a Server Component. */
+export function isServerAppFile(
+  filename: string,
+  program: TSESTree.Program
+): boolean {
+  return isAppRouterFile(filename) && !hasDirective(program, "use client");
+}
+
 /** Resolve a call's callee to a simple name: `useState` or `React.useState`
  *  → "useState". Returns null for computed or complex callees. */
 export function calleeName(callee: TSESTree.Node): string | null {

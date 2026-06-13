@@ -311,6 +311,153 @@ test("tsconfig-strict: passes with strict: true", () => {
   expect(relevant.length).toBe(0);
 });
 
+test("tsconfig-recommended-flags: detects missing flags", () => {
+  const tsconfig = {
+    compilerOptions: {
+      strict: true,
+    },
+  };
+
+  writeFileSync(
+    join(tempDir, "tsconfig.json"),
+    JSON.stringify(tsconfig, null, 2)
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "tsconfig-recommended-flags"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("fastify-security-plugins: warns when plugins missing", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify(
+      {
+        dependencies: { fastify: "5.0.0" },
+      },
+      null,
+      2
+    )
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, ["fastify"]);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "fastify-security-plugins"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("fastify-security-plugins: skipped without fastify pack context", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify(
+      {
+        dependencies: { fastify: "5.0.0" },
+      },
+      null,
+      2
+    )
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "fastify-security-plugins"
+  );
+
+  expect(relevant.length).toBe(0);
+});
+
+test("next-proxy-over-middleware: warns when middleware exists without proxy", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify({ dependencies: { next: "16.0.0" } }, null, 2)
+  );
+  writeFileSync(
+    join(tempDir, "middleware.ts"),
+    "export function middleware() {}"
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, ["nextjs"]);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "next-proxy-over-middleware"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("next-instrumentation-present: warns when app router lacks instrumentation.ts", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify({ dependencies: { next: "16.0.0" } }, null, 2)
+  );
+  mkdirSync(join(tempDir, "src", "app"), { recursive: true });
+  writeFileSync(
+    join(tempDir, "src", "app", "page.tsx"),
+    "export default function Page() { return null; }"
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, ["nextjs"]);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "next-instrumentation-present"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("next-image-remote-patterns-no-wildcards: reports wildcard hostname", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify({ dependencies: { next: "16.0.0" } }, null, 2)
+  );
+  writeFileSync(
+    join(tempDir, "next.config.ts"),
+    `export default { images: { remotePatterns: [{ protocol: "https", hostname: "**" }] } };`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, ["nextjs"]);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "next-image-remote-patterns-no-wildcards"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("next-image-remote-patterns-no-wildcards: passes with explicit hostname", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify({ dependencies: { next: "16.0.0" } }, null, 2)
+  );
+  writeFileSync(
+    join(tempDir, "next.config.ts"),
+    `export default { images: { remotePatterns: [{ protocol: "https", hostname: "cdn.example.com" }] } };`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, ["nextjs"]);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "next-image-remote-patterns-no-wildcards"
+  );
+
+  expect(relevant.length).toBe(0);
+});
+
 // === Testing Rules ===
 
 test("test-sibling-required: detects missing test for .utils.ts", () => {
@@ -537,6 +684,259 @@ jobs:
   );
 
   expect(relevant.length).toBe(0);
+});
+
+test("workflow-permissions-explicit: detects missing permissions", () => {
+  mkdirSync(join(tempDir, ".github", "workflows"), { recursive: true });
+  writeFileSync(
+    join(tempDir, ".github", "workflows", "test.yml"),
+    `
+name: test
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "test"
+`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "workflow-permissions-explicit"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("workflow-permissions-explicit: passes with workflow permissions", () => {
+  mkdirSync(join(tempDir, ".github", "workflows"), { recursive: true });
+  writeFileSync(
+    join(tempDir, ".github", "workflows", "test.yml"),
+    `
+name: test
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "test"
+`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "workflow-permissions-explicit"
+  );
+
+  expect(relevant.length).toBe(0);
+});
+
+test("workflow-permissions-least-privilege: warns on workflow contents write", () => {
+  mkdirSync(join(tempDir, ".github", "workflows"), { recursive: true });
+  writeFileSync(
+    join(tempDir, ".github", "workflows", "test.yml"),
+    `
+name: test
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "workflow-permissions-least-privilege"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("no-pull-request-target-untrusted-checkout: detects unsafe checkout", () => {
+  mkdirSync(join(tempDir, ".github", "workflows"), { recursive: true });
+  writeFileSync(
+    join(tempDir, ".github", "workflows", "test.yml"),
+    `
+name: test
+on:
+  pull_request_target:
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: \${{ github.event.pull_request.head.sha }}
+`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "no-pull-request-target-untrusted-checkout"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("no-github-context-in-shell: detects github.event in run", () => {
+  mkdirSync(join(tempDir, ".github", "workflows"), { recursive: true });
+  writeFileSync(
+    join(tempDir, ".github", "workflows", "test.yml"),
+    `
+name: test
+jobs:
+  build:
+    steps:
+      - run: echo "\${{ github.event.issue.title }}"
+`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "no-github-context-in-shell"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("lockfile-required: detects missing lockfile", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify({ packageManager: "bun@1.3.14" }, null, 2)
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter((v) => v.ruleId === "lockfile-required");
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("single-package-manager: detects mixed lockfiles", () => {
+  writeFileSync(join(tempDir, "package-lock.json"), "{}");
+  writeFileSync(join(tempDir, "yarn.lock"), "# yarn");
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "single-package-manager"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("package-manager-field-required: detects missing field", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify({ name: "demo" }, null, 2)
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "package-manager-field-required"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("no-git-or-tarball-dependencies: detects git dependency", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify(
+      {
+        dependencies: {
+          demo: "git+https://github.com/example/demo.git",
+        },
+      },
+      null,
+      2
+    )
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "no-git-or-tarball-dependencies"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("dependency-overrides-require-comment: detects uncommented overrides", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    `{
+  "name": "demo",
+  "overrides": {
+    "lodash": "4.17.21"
+  }
+}`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "dependency-overrides-require-comment"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("production-must-not-use-drizzle-push: detects push script", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify(
+      {
+        scripts: {
+          "db:push": "drizzle-kit push",
+        },
+      },
+      null,
+      2
+    )
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, ["drizzle"]);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "production-must-not-use-drizzle-push"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("migrations-must-be-checked-in: detects missing migration dir", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify({ dependencies: { "drizzle-orm": "0.36.0" } }, null, 2)
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, ["drizzle"]);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) => v.ruleId === "migrations-must-be-checked-in"
+  );
+
+  expect(relevant.length).toBeGreaterThan(0);
 });
 
 // === Runner Tests ===

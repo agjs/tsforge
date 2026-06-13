@@ -3,41 +3,59 @@ title: Rule packs
 description: Stack-specific ESLint rules tsforge runs during the gate.
 ---
 
-When the gate runs ESLint, it does not use a generic preset. It uses **rule packs**: groups of rules keyed to the libraries in your project. [Stack detection](/guardrails/stack-detection/) turns packs on from `package.json`. You can override in [tsforge.config.json](/guardrails/config/).
+When the gate runs ESLint, it does not use a generic preset. It uses **rule packs**: groups of rules keyed to the libraries in your project. [Stack detection](/guardrails/stack-detection/) turns packs on from `package.json`. A [profile](/guardrails/config/#profiles) in [tsforge.config.json](/guardrails/config/) adjusts default severities and opt-in packs.
 
 Packs apply on every gate check, whether tsforge is editing an existing repo or scaffolding a new one.
 
 ## How a pack gets enabled
 
-1. tsforge detects your stack from dependencies
-2. optional `tsforge.config.json` adds or removes packs
-3. the gate runs all enabled pack rules as errors by default
+1. **Always-on** safety packs load on every TypeScript project
+2. tsforge detects your stack from dependencies and enables matching framework packs
+3. optional **`profile`** in `tsforge.config.json` adds packs (e.g. `typescript-core`, `authorization`) and sets default severities
+4. optional `packs.include` / `packs.exclude` fine-tune the list
+5. the gate runs all enabled pack rules
+
+## Always-on packs
+
+These load without waiting for a dependency match:
+
+| ID | What it covers |
+| --- | --- |
+| `env-access` | Validated env access, no `process.exit` in libraries |
+| `module-boundaries` | Layering, no React in services |
+| `code-flow` | Deterministic time/random, early returns |
+| `comment-hygiene` | No narration, PR refs, or historical comments |
+| `security` | Command injection, ReDoS, DOM XSS, silent catch blocks, no tokens in storage |
+| `runtime-boundaries` | Open redirects, SSRF fetches, prototype pollution, webhook verify, upload limits |
+
+`generic-ts` is a detection label only — strict TypeScript comes from `tsc` and the bundled ESLint config.
 
 ## Pack list
 
-| ID | Label | Has rules |
+| ID | Label | Enabled when |
 | --- | --- | --- |
-| `generic-ts` | TypeScript Fundamentals | detection only |
-| `react` | React | detection only |
-| `react-component-architecture` | React Component Architecture | yes |
-| `tanstack-query` | TanStack Query | yes |
-| `drizzle` | Drizzle ORM | yes |
-| `elysia` | Elysia | yes |
-| `nextjs` | Next.js | yes |
-| `bullmq` | BullMQ | yes |
-| `test-conventions` | Test Conventions | yes |
-| `env-access` | Environment Variables | yes |
-| `module-boundaries` | Module Boundaries | yes |
-| `code-flow` | Code Flow | yes |
-| `comment-hygiene` | Comment Hygiene | yes |
-| `structured-logging` | Structured Logging | yes |
-| `jwt-cookies` | JWT & Cookies | yes |
-| `oauth-security` | OAuth Security | yes |
-| `i18n-keys` | i18n Keys | yes |
+| `fastify` | Fastify | `fastify` in deps |
+| `elysia` | Elysia | `elysia` in deps |
+| `nextjs` | Next.js | `next` in deps |
+| `react-component-architecture` | React Component Architecture | `react` in deps |
+| `tanstack-query` | TanStack Query | `@tanstack/react-query` in deps |
+| `drizzle` | Drizzle ORM | `drizzle-orm` in deps |
+| `bullmq` | BullMQ | `bullmq` in deps |
+| `structured-logging` | Structured Logging | `pino` or `winston` in deps |
+| `jwt-cookies` | JWT & Cookies | `jsonwebtoken` or `jose` in deps |
+| `oauth-security` | OAuth Security | OAuth/OIDC libs in deps |
+| `i18n-keys` | i18n Keys | `i18next` in deps |
+| `test-conventions` | Test Conventions | vitest/jest/bun test setup |
+| `typescript-core` | TypeScript Core | **`strict`** profile (fetch `.ok`, JSON validation, boundary casts) |
+| `authorization` | Authorization | **`security`** profile (experimental route/action authz heuristics) |
+| `react` | React | detection label only |
+| `generic-ts` | TypeScript Fundamentals | detection label only |
 
-"Detection only" means tsforge knows the stack label but does not ship extra rules for it yet.
+Every implemented rule with severity and fix text: [Rule catalog](/reference/rules-catalog/) (grouped by adoption tier).
 
-Every implemented rule with fix text: [Rule catalog](/reference/rules-catalog/).
+## Web stacks and accessibility
+
+When stack packs load on a web project, the bundled web ESLint config also enables **jsx-a11y** rules on `.tsx` files (alt text, button types, label associations, and similar). This applies to all web stacks, not just Next.js.
 
 ## React component architecture
 
@@ -50,6 +68,8 @@ When the `react-component-architecture` pack is enabled (React in `package.json`
 | `no-inline-jsx-functions` | Inline arrow/function handlers in JSX attributes |
 | `component-folder-structure` | Required sibling files (`*.hooks.ts`, `*.types.ts`, stories, test, `index.ts`) |
 | `no-cross-feature-imports` | Cross-feature runtime imports |
+
+These architecture rules are **off** in the default `recommended` profile. Enable them with **`opinionated`**, or turn individual rules on in `rules`.
 
 ### No computation inside JSX
 
@@ -96,6 +116,10 @@ export function useButton() {
 
 ## Changing severity
 
-Pack rules default to **error** (gate fails). Set `"warn"` or `"off"` per rule in [tsforge.config.json](/guardrails/config/).
+Pack rules default to **error** (gate fails). Profiles pre-set some rules to **warn** or **off**. Override any rule in [tsforge.config.json](/guardrails/config/):
+
+```json
+{ "rules": { "prefer-early-return": "off" } }
+```
 
 → [Big picture](/big-picture/) · [Meta-rules](/guardrails/meta-rules/) · [Stack detection](/guardrails/stack-detection/)

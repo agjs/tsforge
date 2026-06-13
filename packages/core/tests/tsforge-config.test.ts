@@ -6,6 +6,7 @@ import {
   loadTsforgeConfig,
   resolveActivePacks,
   normalizeRuleOverrides,
+  resolveProjectProfile,
   type ITsforgeProjectConfig,
 } from "../src/config/tsforge-config";
 import { makeFileLinter } from "../src/detect-gate";
@@ -197,10 +198,11 @@ describe("resolveActivePacks", () => {
 });
 
 describe("normalizeRuleOverrides", () => {
-  test("empty config returns empty map", () => {
+  test("empty config applies recommended profile defaults", () => {
     const result = normalizeRuleOverrides({});
 
-    expect(result).toEqual({});
+    expect(result["component-folder-structure"]).toBe("off");
+    expect(result["prefer-early-return"]).toBe("warn");
   });
 
   test("bare rule names preserved", () => {
@@ -360,5 +362,49 @@ describe("tsforge.config.json integration", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("profiles", () => {
+  test("recommended profile disables architecture rules by default", () => {
+    const overrides = normalizeRuleOverrides({ profile: "recommended" });
+
+    expect(overrides["component-folder-structure"]).toBe("off");
+    expect(overrides["prefer-early-return"]).toBe("warn");
+  });
+
+  test("strict profile adds meta-rules at error and typescript-core pack", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tsforge-profile-"));
+
+    try {
+      writeFileSync(
+        join(dir, "tsforge.config.json"),
+        JSON.stringify({ profile: "strict" })
+      );
+
+      const config = await loadTsforgeConfig(dir);
+      const packs = resolveActivePacks(["generic-ts"], config);
+      const overrides = normalizeRuleOverrides(config);
+
+      expect(resolveProjectProfile(config)).toBe("strict");
+      expect(packs).toContain("typescript-core");
+      expect(overrides["workflow-permissions-explicit"]).toBe("error");
+      expect(overrides["lockfile-required"]).toBe("error");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("security profile adds authorization pack", () => {
+    const packs = resolveActivePacks(["generic-ts"], { profile: "security" });
+
+    expect(packs).toContain("authorization");
+  });
+
+  test("opinionated profile enables architecture rules", () => {
+    const overrides = normalizeRuleOverrides({ profile: "opinionated" });
+
+    expect(overrides["component-folder-structure"]).toBe("error");
+    expect(overrides["prefer-early-return"]).toBe("error");
   });
 });

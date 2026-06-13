@@ -10,10 +10,14 @@
 // pack IDs), allowing the gate to inject stack-specific rules dynamically.
 import tseslint from "typescript-eslint";
 import stylistic from "@stylistic/eslint-plugin";
+import pluginReact from "eslint-plugin-react";
+import pluginReactHooks from "eslint-plugin-react-hooks";
+import pluginJsxA11y from "eslint-plugin-jsx-a11y";
 
 // Load stack-aware packs if TSFORGE_PACKS env var is set
 let packConfig = [];
 const packIds = (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
+const isWebStack = packIds.length > 0;
 if (packIds.length > 0) {
   try {
     const { buildPackEslintConfig } = await import(
@@ -106,6 +110,8 @@ export default tseslint.config(
     plugins: {
       "@typescript-eslint": tseslint.plugin,
       "@stylistic": stylistic,
+      react: pluginReact,
+      "react-hooks": pluginReactHooks,
       boringstack: { rules: { "one-component-per-file": oneComponentPerFile } },
       ...packConfig
         .filter(
@@ -137,6 +143,10 @@ export default tseslint.config(
       // rule defined above — eslint-plugin-react/no-multi-comp crashes on ESLint 10
       // and @eslint-react has no equivalent, so we ship our own.
       "boringstack/one-component-per-file": "error",
+      "react/jsx-key": "error",
+      "react/no-array-index-key": "error",
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
       "prefer-const": "error",
       "prefer-template": "error",
       "no-var": "error",
@@ -180,6 +190,27 @@ export default tseslint.config(
       ],
       ...packConfig.reduce((acc, cfg) => ({ ...acc, ...(cfg.rules ?? {}) }), {}),
     },
+    settings: {
+      react: { version: "detect" },
+    },
   },
-  ...packConfig
+  ...packConfig,
+  ...(isWebStack
+    ? [
+        {
+          files: ["**/*.tsx"],
+          plugins: { "jsx-a11y": pluginJsxA11y },
+          rules: {
+            "jsx-a11y/alt-text": "error",
+            "jsx-a11y/anchor-is-valid": "warn",
+            "jsx-a11y/aria-props": "error",
+            "jsx-a11y/click-events-have-key-events": "warn",
+            "jsx-a11y/no-static-element-interactions": "warn",
+            "jsx-a11y/label-has-associated-control": "error",
+            "jsx-a11y/button-has-type": "error",
+            "jsx-a11y/no-noninteractive-tabindex": "error",
+          },
+        },
+      ]
+    : [])
 );

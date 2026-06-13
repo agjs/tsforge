@@ -50,23 +50,28 @@ function lint(
 }
 
 describe("rule-packs: registry", () => {
-  test("should have all fifteen packs registered", () => {
+  test("should have all twenty packs registered", () => {
     expect(Object.keys(RULE_PACKS).sort()).toEqual([
+      "authorization",
       "bullmq",
       "code-flow",
       "comment-hygiene",
       "drizzle",
       "elysia",
       "env-access",
+      "fastify",
       "i18n-keys",
       "jwt-cookies",
       "module-boundaries",
       "nextjs",
       "oauth-security",
       "react-component-architecture",
+      "runtime-boundaries",
+      "security",
       "structured-logging",
       "tanstack-query",
       "test-conventions",
+      "typescript-core",
     ]);
   });
 
@@ -127,6 +132,7 @@ describe("code-flow pack", () => {
     expect(Object.keys(pack.rules).sort()).toEqual([
       "no-bare-date-now",
       "no-template-trim-empty-ternary",
+      "no-throw-literal",
       "prefer-early-return",
     ]);
   });
@@ -209,7 +215,10 @@ describe("test-conventions pack", () => {
     expect(pack.id).toBe("test-conventions");
     expect(pack.description).toContain("test");
     expect(Object.keys(pack.rules).sort()).toEqual([
+      "fake-timers-must-be-restored",
+      "no-conditional-expect",
       "no-focused-tests",
+      "no-real-network-in-unit-tests",
       "test-file-mirrors-source",
     ]);
   });
@@ -249,6 +258,7 @@ describe("buildPackEslintConfig", () => {
       "no-direct-process-env",
       "no-process-exit",
       "no-template-trim-empty-ternary",
+      "no-throw-literal",
       "prefer-early-return",
     ]);
 
@@ -257,6 +267,7 @@ describe("buildPackEslintConfig", () => {
       "tsforge/no-direct-process-env",
       "tsforge/no-process-exit",
       "tsforge/no-template-trim-empty-ternary",
+      "tsforge/no-throw-literal",
       "tsforge/prefer-early-return",
     ]);
   });
@@ -312,22 +323,26 @@ describe("buildPackEslintConfig", () => {
     expect(rules["tsforge/no-direct-process-env"]).toBe("error");
     expect(rules["tsforge/no-process-exit"]).toBe("error");
 
-    // code-flow: 3 rules
+    // code-flow: 4 rules
     expect(rules["tsforge/no-bare-date-now"]).toBe("error");
     expect(rules["tsforge/no-template-trim-empty-ternary"]).toBe("error");
-    expect(rules["tsforge/prefer-early-return"]).toBe("error");
+    expect(rules["tsforge/no-throw-literal"]).toBe("error");
+    expect(rules["tsforge/prefer-early-return"]).toBe("warn");
 
     // comment-hygiene: 3 rules
     expect(rules["tsforge/no-historical-comments"]).toBe("error");
     expect(rules["tsforge/no-narration-comments"]).toBe("error");
     expect(rules["tsforge/no-pr-reference-comments"]).toBe("error");
 
-    // test-conventions: 2 rules
+    // test-conventions: 5 rules
+    expect(rules["tsforge/fake-timers-must-be-restored"]).toBe("error");
+    expect(rules["tsforge/no-conditional-expect"]).toBe("error");
     expect(rules["tsforge/no-focused-tests"]).toBe("error");
+    expect(rules["tsforge/no-real-network-in-unit-tests"]).toBe("warn");
     expect(rules["tsforge/test-file-mirrors-source"]).toBe("error");
 
-    // Total: 10 rules
-    expect(Object.keys(rules).length).toBe(10);
+    // Total: 14 rules
+    expect(Object.keys(rules).length).toBe(14);
   });
 });
 
@@ -843,6 +858,78 @@ describe("test-conventions: no-focused-tests", () => {
   });
 });
 
+describe("test-conventions: no-conditional-expect", () => {
+  test("reports expect inside if", () => {
+    const messages = lint(
+      "test-conventions",
+      "no-conditional-expect",
+      "if (ready) { expect(value).toBe(1); }",
+      "src/example.test.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("conditionalExpect");
+  });
+
+  test("allows top-level expect", () => {
+    const messages = lint(
+      "test-conventions",
+      "no-conditional-expect",
+      "expect(value).toBe(1);",
+      "src/example.test.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("test-conventions: fake-timers-must-be-restored", () => {
+  test("reports useFakeTimers without restore", () => {
+    const messages = lint(
+      "test-conventions",
+      "fake-timers-must-be-restored",
+      "vi.useFakeTimers();",
+      "src/example.test.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("timersNotRestored");
+  });
+
+  test("allows useFakeTimers with useRealTimers", () => {
+    const messages = lint(
+      "test-conventions",
+      "fake-timers-must-be-restored",
+      "vi.useFakeTimers();\nvi.useRealTimers();",
+      "src/example.test.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("test-conventions: no-real-network-in-unit-tests", () => {
+  test("reports fetch in unit test", () => {
+    const messages = lint(
+      "test-conventions",
+      "no-real-network-in-unit-tests",
+      'await fetch("https://example.com");',
+      "src/users/users.service.test.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("realNetworkInUnitTest");
+  });
+
+  test("allows fetch in integration test file", () => {
+    const messages = lint(
+      "test-conventions",
+      "no-real-network-in-unit-tests",
+      'await fetch("https://example.com");',
+      "src/users/users.integration.test.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
 describe("test-conventions: test-file-mirrors-source", () => {
   test("reports orphaned test file (no matching source)", () => {
     // Stub filesystem to indicate only expected source exists
@@ -927,6 +1014,8 @@ describe("drizzle pack", () => {
       "schema-files-must-only-export-schema",
       "tables-must-have-timestamps",
       "timestamp-must-specify-mode",
+      "update-delete-account-scoped-must-filter-scope",
+      "update-delete-must-have-where",
     ]);
   });
 
@@ -964,6 +1053,52 @@ describe("drizzle pack", () => {
     expect(
       messages.some((m) => m.messageId === "missingScopeFilter")
     ).toBeFalsy();
+  });
+
+  test("update-delete-must-have-where: reports delete without where", () => {
+    const messages = lint(
+      "drizzle",
+      "update-delete-must-have-where",
+      "await db.delete(usersTable);",
+      "src/db/queries.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingWhere");
+  });
+
+  test("update-delete-must-have-where: allows delete with where", () => {
+    const messages = lint(
+      "drizzle",
+      "update-delete-must-have-where",
+      "await db.delete(usersTable).where(eq(usersTable.id, id));",
+      "src/db/queries.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("update-delete-account-scoped-must-filter-scope: reports missing scope on update", () => {
+    const messages = lint(
+      "drizzle",
+      "update-delete-account-scoped-must-filter-scope",
+      "await db.update(usersTable).set({ name: 'x' }).where(eq(usersTable.id, id));",
+      "src/db/queries.ts",
+      [{ tables: ["usersTable"], scopeColumn: "accountId" }]
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingScopeFilter");
+  });
+
+  test("update-delete-account-scoped-must-filter-scope: allows scoped update", () => {
+    const messages = lint(
+      "drizzle",
+      "update-delete-account-scoped-must-filter-scope",
+      "await db.update(usersTable).set({ name: 'x' }).where(eq(usersTable.accountId, accountId));",
+      "src/db/queries.ts",
+      [{ tables: ["usersTable"], scopeColumn: "accountId" }]
+    );
+
+    expect(messages).toHaveLength(0);
   });
 
   test("no-nested-db-transaction: reports nested db.transaction calls", () => {
@@ -1654,6 +1789,8 @@ describe("structured-logging pack", () => {
     expect(pack.id).toBe("structured-logging");
     expect(pack.description).toContain("Structured logging");
     expect(Object.keys(pack.rules).sort()).toEqual([
+      "caught-error-log-requires-cause",
+      "logger-not-console",
       "mask-pii-fields",
       "no-error-stringify",
       "require-event-field",
@@ -1750,6 +1887,48 @@ describe("structured-logging pack", () => {
 
     expect(messages).toHaveLength(0);
   });
+
+  test("logger-not-console: reports console.log in service file", () => {
+    const messages = lint(
+      "structured-logging",
+      "logger-not-console",
+      'console.log("debug");',
+      "src/users/users.service.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("consoleInService");
+  });
+
+  test("logger-not-console: ignores console in non-service file", () => {
+    const messages = lint(
+      "structured-logging",
+      "logger-not-console",
+      'console.log("debug");',
+      "src/components/Button.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("caught-error-log-requires-cause: reports missing cause field", () => {
+    const messages = lint(
+      "structured-logging",
+      "caught-error-log-requires-cause",
+      `try { work(); } catch (error) { logger.error({ event: "failed", err: error }); }`
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingCause");
+  });
+
+  test("caught-error-log-requires-cause: allows cause field", () => {
+    const messages = lint(
+      "structured-logging",
+      "caught-error-log-requires-cause",
+      `try { work(); } catch (error) { logger.error({ event: "failed", cause: error }); }`
+    );
+
+    expect(messages).toHaveLength(0);
+  });
 });
 
 describe("react-component-architecture pack", () => {
@@ -1760,12 +1939,18 @@ describe("react-component-architecture pack", () => {
     expect(pack.description).toContain("Component structure");
     expect(Object.keys(pack.rules).sort()).toEqual([
       "component-folder-structure",
+      "dangerous-html-requires-sanitize",
       "forwardref-display-name",
       "index-must-reexport-default",
       "max-hooks-per-file",
+      "no-anonymous-useEffect",
+      "no-component-invocation",
       "no-cross-feature-imports",
+      "no-derived-state-in-effect",
       "no-inline-jsx-functions",
       "no-jsx-computation",
+      "no-nested-component",
+      "no-react-fc",
       "no-state-in-component-body",
     ]);
   });
@@ -2002,7 +2187,10 @@ describe("jwt-cookies pack", () => {
     expect(Object.keys(pack.rules).sort()).toEqual([
       "auth-cookie-must-be-httponly",
       "auth-cookie-must-be-secure-in-prod",
+      "auth-cookie-must-set-maxage-or-expires",
+      "auth-cookie-must-set-samesite",
       "bcrypt-rounds-min",
+      "jwt-must-verify-not-decode",
     ]);
   });
 
@@ -2066,6 +2254,66 @@ describe("jwt-cookies pack", () => {
       bcrypt.hash(password, 10);
     `;
     const messages = lint("jwt-cookies", "bcrypt-rounds-min", code);
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("auth-cookie-must-set-samesite: reports missing sameSite", () => {
+    const messages = lint(
+      "jwt-cookies",
+      "auth-cookie-must-set-samesite",
+      'setCookie("session", token, { httpOnly: true, secure: true });'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingSameSite");
+  });
+
+  test("auth-cookie-must-set-samesite: allows sameSite strict", () => {
+    const messages = lint(
+      "jwt-cookies",
+      "auth-cookie-must-set-samesite",
+      'setCookie("session", token, { httpOnly: true, secure: true, sameSite: "strict" });'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("auth-cookie-must-set-maxage-or-expires: reports missing lifetime", () => {
+    const messages = lint(
+      "jwt-cookies",
+      "auth-cookie-must-set-maxage-or-expires",
+      'setCookie("session", token, { httpOnly: true, secure: true, sameSite: "strict" });'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingLifetime");
+  });
+
+  test("auth-cookie-must-set-maxage-or-expires: allows maxAge", () => {
+    const messages = lint(
+      "jwt-cookies",
+      "auth-cookie-must-set-maxage-or-expires",
+      'setCookie("session", token, { httpOnly: true, secure: true, sameSite: "strict", maxAge: 3600 });'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("jwt-must-verify-not-decode: reports jwt.decode", () => {
+    const messages = lint(
+      "jwt-cookies",
+      "jwt-must-verify-not-decode",
+      "const payload = jwt.decode(token);"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("useVerifyNotDecode");
+  });
+
+  test("jwt-must-verify-not-decode: allows jwt.verify", () => {
+    const messages = lint(
+      "jwt-cookies",
+      "jwt-must-verify-not-decode",
+      "const payload = jwt.verify(token, secret);"
+    );
 
     expect(messages).toHaveLength(0);
   });
@@ -2267,6 +2515,42 @@ describe("rule-packs: module-boundaries", () => {
 
     expect(messages).toHaveLength(0);
   });
+
+  test("no-react-in-services: reports react import in services/", () => {
+    const code = `import { useMemo } from "react";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-react-in-services",
+      code,
+      "src/services/users.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("reactInService");
+  });
+
+  test("no-react-in-services: allows react import in components", () => {
+    const code = `import { useState } from "react";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-react-in-services",
+      code,
+      "src/components/Button.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-react-in-services: reports react-dom in *.queries.ts", () => {
+    const code = `import { createPortal } from "react-dom";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-react-in-services",
+      code,
+      "src/data/users.queries.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("reactInService");
+  });
 });
 
 describe("rule-packs: nextjs", () => {
@@ -2361,6 +2645,809 @@ export { getStaticProps };`;
       "no-next-head-in-app",
       code,
       "pages/index.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-internal-api-fetch: reports fetch to /api in server page", () => {
+    const code = `export default async function Page() {
+  const res = await fetch("/api/users");
+  return null;
+}`;
+    const messages = lint(
+      "nextjs",
+      "no-internal-api-fetch",
+      code,
+      "app/dashboard/page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("internalApiFetch");
+  });
+
+  test("no-internal-api-fetch: allows fetch in use client file", () => {
+    const code = `"use client";
+export default function Page() {
+  fetch("/api/users");
+  return null;
+}`;
+    const messages = lint(
+      "nextjs",
+      "no-internal-api-fetch",
+      code,
+      "app/dashboard/page.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("await-dynamic-request-apis: reports bare cookies()", () => {
+    const code = `import { cookies } from "next/headers";
+export default async function Page() {
+  const jar = cookies();
+  return null;
+}`;
+    const messages = lint(
+      "nextjs",
+      "await-dynamic-request-apis",
+      code,
+      "app/page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("mustAwait");
+  });
+
+  test("await-dynamic-request-apis: allows await cookies()", () => {
+    const code = `import { cookies } from "next/headers";
+export default async function Page() {
+  const jar = await cookies();
+  return null;
+}`;
+    const messages = lint(
+      "nextjs",
+      "await-dynamic-request-apis",
+      code,
+      "app/page.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("error-boundary-require-use-client: reports missing directive", () => {
+    const code = `export default function Error({ error }: { error: Error }) {
+  return <div>{error.message}</div>;
+}`;
+    const messages = lint(
+      "nextjs",
+      "error-boundary-require-use-client",
+      code,
+      "app/dashboard/error.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingUseClient");
+  });
+
+  test("error-boundary-require-use-client: allows use client", () => {
+    const code = `"use client";
+export default function Error({ error }: { error: Error }) {
+  return <div>{error.message}</div>;
+}`;
+    const messages = lint(
+      "nextjs",
+      "error-boundary-require-use-client",
+      code,
+      "app/dashboard/error.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-html-img-element: reports img tag", () => {
+    const code = `export function Hero() { return <img src="/hero.jpg" alt="hero" />; }`;
+    const messages = lint(
+      "nextjs",
+      "no-html-img-element",
+      code,
+      "src/components/Hero.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("useNextImage");
+  });
+
+  test("no-sensitive-next-public-env: reports NEXT_PUBLIC with SECRET", () => {
+    const code = `const key = process.env.NEXT_PUBLIC_STRIPE_SECRET;`;
+    const messages = lint(
+      "nextjs",
+      "no-sensitive-next-public-env",
+      code,
+      "src/config.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("sensitiveNextPublic");
+  });
+
+  test("prefer-lazy-use-state-init: reports eager localStorage parse", () => {
+    const code = `"use client";
+import { useState } from "react";
+export function Panel() {
+  const [config] = useState(JSON.parse(localStorage.getItem("cfg") ?? "{}"));
+  return null;
+}`;
+    const messages = lint(
+      "nextjs",
+      "prefer-lazy-use-state-init",
+      code,
+      "src/Panel.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("preferLazyInit");
+  });
+
+  test("prefer-lazy-use-state-init: allows lazy initializer", () => {
+    const code = `"use client";
+import { useState } from "react";
+export function Panel() {
+  const [config] = useState(() => JSON.parse(localStorage.getItem("cfg") ?? "{}"));
+  return null;
+}`;
+    const messages = lint(
+      "nextjs",
+      "prefer-lazy-use-state-init",
+      code,
+      "src/Panel.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("server-only-modules-import-server-only: reports missing import", () => {
+    const messages = lint(
+      "nextjs",
+      "server-only-modules-import-server-only",
+      "export default async function Page() { return null; }",
+      "app/dashboard/page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "missingServerOnlyImport"
+    );
+  });
+
+  test("server-only-modules-import-server-only: allows server-only import", () => {
+    const messages = lint(
+      "nextjs",
+      "server-only-modules-import-server-only",
+      'import "server-only";\nexport default async function Page() { return null; }',
+      "app/dashboard/page.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-secret-props-to-client: reports secret prop", () => {
+    const messages = lint(
+      "nextjs",
+      "no-secret-props-to-client",
+      "export default function Page() { return <Panel apiKey={key} />; }",
+      "app/dashboard/page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("secretPropToClient");
+  });
+
+  test("server-action-requires-authz-and-validation: reports missing authz and parse", () => {
+    const messages = lint(
+      "nextjs",
+      "server-action-requires-authz-and-validation",
+      `"use server";\nexport async function save(data) { await db.insert(users).values(data); }`
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingAuthz");
+    expect(messages.map((m) => m.messageId)).toContain("missingValidation");
+  });
+
+  test("server-action-requires-authz-and-validation: allows authz and parse", () => {
+    const messages = lint(
+      "nextjs",
+      "server-action-requires-authz-and-validation",
+      `"use server";\nexport async function save(data) { requireUser(); const parsed = schema.parse(data); await db.insert(users).values(parsed); }`
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("mutation-should-revalidate-cache: reports missing revalidation", () => {
+    const messages = lint(
+      "nextjs",
+      "mutation-should-revalidate-cache",
+      `"use server";\nexport async function save(data) { await db.insert(users).values(data); }`
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingRevalidation");
+  });
+
+  test("mutation-should-revalidate-cache: allows revalidatePath", () => {
+    const messages = lint(
+      "nextjs",
+      "mutation-should-revalidate-cache",
+      `"use server";\nimport { revalidatePath } from "next/cache";\nexport async function save(data) { await db.insert(users).values(data); revalidatePath("/users"); }`
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("code-flow: no-throw-literal", () => {
+  test("reports throw string literal", () => {
+    const messages = lint(
+      "code-flow",
+      "no-throw-literal",
+      "throw 'Unauthorized';",
+      "src/auth.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("throwLiteral");
+  });
+
+  test("allows throw new Error", () => {
+    const messages = lint(
+      "code-flow",
+      "no-throw-literal",
+      "throw new Error('Unauthorized');",
+      "src/auth.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("fastify pack", () => {
+  test("require-route-schema: reports POST without schema.body", () => {
+    const code = `
+import Fastify from "fastify";
+const fastify = Fastify();
+fastify.post("/users", { schema: {} }, async () => ({ ok: true }));
+`;
+    const messages = lint(
+      "fastify",
+      "require-route-schema",
+      code,
+      "src/routes/users.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingBodySchema");
+  });
+
+  test("require-route-schema: allows POST with schema.body", () => {
+    const code = `
+import Fastify from "fastify";
+const UserSchema = {};
+const fastify = Fastify();
+fastify.post("/users", { schema: { body: UserSchema } }, async () => ({ ok: true }));
+`;
+    const messages = lint(
+      "fastify",
+      "require-route-schema",
+      code,
+      "src/routes/users.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("require-plugin-name: reports fp without name", () => {
+    const code = `
+import fp from "fastify-plugin";
+export default fp(async function dbPlugin(fastify) {
+  fastify.decorate("db", {});
+});
+`;
+    const messages = lint(
+      "fastify",
+      "require-plugin-name",
+      code,
+      "src/plugins/db.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingPluginName");
+  });
+
+  test("require-plugin-name: allows fp with name", () => {
+    const code = `
+import fp from "fastify-plugin";
+export default fp(async function dbPlugin(fastify) {
+  fastify.decorate("db", {});
+}, { name: "db-connector" });
+`;
+    const messages = lint(
+      "fastify",
+      "require-plugin-name",
+      code,
+      "src/plugins/db.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("test-inject-must-close-app: reports inject without close", () => {
+    const code = `
+import { test } from "node:test";
+import { buildApp } from "./app";
+test("login", async () => {
+  const app = buildApp();
+  await app.inject({ method: "GET", url: "/health" });
+});
+`;
+    const messages = lint(
+      "fastify",
+      "test-inject-must-close-app",
+      code,
+      "src/routes/users.test.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingAppClose");
+  });
+
+  test("test-inject-must-close-app: allows inject with close", () => {
+    const code = `
+import { test } from "node:test";
+import { buildApp } from "./app";
+test("login", async (t) => {
+  const app = buildApp();
+  t.after(() => app.close());
+  await app.inject({ method: "GET", url: "/health" });
+});
+`;
+    const messages = lint(
+      "fastify",
+      "test-inject-must-close-app",
+      code,
+      "src/routes/users.test.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("security pack", () => {
+  test("should export securityPack with correct structure", () => {
+    const pack = RULE_PACKS.security;
+
+    expect(pack.id).toBe("security");
+    expect(pack.description).toContain("security");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "catch-must-handle",
+      "no-auth-token-in-storage",
+      "no-child-process-exec",
+      "no-dynamic-regexp",
+      "no-inner-html-assignment",
+      "no-spawn-with-shell",
+    ]);
+    expect(pack.rulesConfig["no-child-process-exec"]).toBe("error");
+  });
+
+  test("no-child-process-exec: reports child_process.exec", () => {
+    const code = `import * as child_process from "child_process";
+child_process.exec("rm -rf /");`;
+    const messages = lint(
+      "security",
+      "no-child-process-exec",
+      code,
+      "src/runner.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("noExec");
+  });
+
+  test("no-child-process-exec: allows execFile", () => {
+    const code = `import { execFile } from "child_process";
+execFile("ls", ["-la"], () => {});`;
+    const messages = lint(
+      "security",
+      "no-child-process-exec",
+      code,
+      "src/runner.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-spawn-with-shell: reports spawn with shell true", () => {
+    const code = `import { spawn } from "child_process";
+spawn("sh", ["-c", cmd], { shell: true });`;
+    const messages = lint(
+      "security",
+      "no-spawn-with-shell",
+      code,
+      "src/runner.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("spawnWithShell");
+  });
+
+  test("no-spawn-with-shell: allows spawn without shell", () => {
+    const code = `import { spawn } from "child_process";
+spawn("node", ["script.js"]);`;
+    const messages = lint(
+      "security",
+      "no-spawn-with-shell",
+      code,
+      "src/runner.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-dynamic-regexp: reports RegExp from variable", () => {
+    const code = `const pattern = userInput;
+const re = new RegExp(pattern);`;
+    const messages = lint(
+      "security",
+      "no-dynamic-regexp",
+      code,
+      "src/validate.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("dynamicRegexp");
+  });
+
+  test("no-dynamic-regexp: allows string literal pattern", () => {
+    const code = `const re = new RegExp("^foo$");`;
+    const messages = lint(
+      "security",
+      "no-dynamic-regexp",
+      code,
+      "src/validate.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-inner-html-assignment: reports innerHTML assignment", () => {
+    const code = `const el = document.getElementById("x");
+el.innerHTML = userHtml;`;
+    const messages = lint(
+      "security",
+      "no-inner-html-assignment",
+      code,
+      "src/dom.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("innerHtmlAssignment");
+  });
+
+  test("catch-must-handle: reports silent return null", () => {
+    const code = `try { doWork(); } catch (e) { return null; }`;
+    const messages = lint(
+      "security",
+      "catch-must-handle",
+      code,
+      "src/worker.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("silentCatch");
+  });
+
+  test("catch-must-handle: allows console.error in catch", () => {
+    const code = `try { doWork(); } catch (e) { console.error(e); return null; }`;
+    const messages = lint(
+      "security",
+      "catch-must-handle",
+      code,
+      "src/worker.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-auth-token-in-storage: reports localStorage.setItem session key", () => {
+    const code = `localStorage.setItem("auth_token", token);`;
+    const messages = lint(
+      "security",
+      "no-auth-token-in-storage",
+      code,
+      "src/auth.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("authTokenInStorage");
+  });
+
+  test("no-auth-token-in-storage: allows unrelated storage keys", () => {
+    const code = `localStorage.setItem("theme", "dark");`;
+    const messages = lint(
+      "security",
+      "no-auth-token-in-storage",
+      code,
+      "src/ui.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("react-component-architecture: new rules", () => {
+  test("no-react-fc: reports React.FC", () => {
+    const code = `type IProps = { label: string };
+const Badge: React.FC<IProps> = ({ label }) => <span>{label}</span>;`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-react-fc",
+      code,
+      "src/components/Badge.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("noReactFc");
+  });
+
+  test("no-component-invocation: reports Header()", () => {
+    const code = `function Header() { return <header />; }
+export function App() { return <div>{Header()}</div>; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-component-invocation",
+      code,
+      "src/App.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("componentInvocation");
+  });
+
+  test("dangerous-html-requires-sanitize: reports without import", () => {
+    const code = `export function Page({ html }: { html: string }) {
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}`;
+    const messages = lint(
+      "react-component-architecture",
+      "dangerous-html-requires-sanitize",
+      code,
+      "src/Page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingSanitize");
+  });
+
+  test("dangerous-html-requires-sanitize: allows with dompurify import", () => {
+    const code = `import DOMPurify from "isomorphic-dompurify";
+export function Page({ html }: { html: string }) {
+  return <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(html) }} />;
+}`;
+    const messages = lint(
+      "react-component-architecture",
+      "dangerous-html-requires-sanitize",
+      code,
+      "src/Page.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-anonymous-useEffect: reports arrow callback", () => {
+    const code = `import { useEffect } from "react";
+export function Page() {
+  useEffect(() => { document.title = "x"; }, []);
+  return null;
+}`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-anonymous-useEffect",
+      code,
+      "src/Page.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("anonymousEffect");
+  });
+
+  test("no-anonymous-useEffect: allows named function callback", () => {
+    const code = `import { useEffect } from "react";
+export function Page() {
+  useEffect(function syncTitle() { document.title = "x"; }, []);
+  return null;
+}`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-anonymous-useEffect",
+      code,
+      "src/Page.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-derived-state-in-effect: reports setter only in useEffect", () => {
+    const code = `import { useEffect, useState } from "react";
+export function Counter({ seed }: { seed: number }) {
+  const [count, setCount] = useState(0);
+  useEffect(() => { setCount(seed); }, [seed]);
+  return <span>{count}</span>;
+}`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-derived-state-in-effect",
+      code,
+      "src/Counter.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("derivedStateInEffect");
+  });
+
+  test("no-derived-state-in-effect: allows setter outside useEffect", () => {
+    const code = `import { useState } from "react";
+export function Counter() {
+  const [count, setCount] = useState(0);
+  function increment() { setCount((c) => c + 1); }
+  return <button onClick={increment}>{count}</button>;
+}`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-derived-state-in-effect",
+      code,
+      "src/Counter.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("runtime-boundaries pack", () => {
+  test("should export runtimeBoundariesPack with correct structure", () => {
+    const pack = RULE_PACKS["runtime-boundaries"];
+
+    expect(pack.id).toBe("runtime-boundaries");
+    expect(pack.description).toContain("boundary");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "no-prototype-polluting-merge",
+      "no-user-controlled-fetch-url",
+      "no-user-controlled-redirect",
+      "upload-must-set-limits",
+      "webhook-must-verify-signature-before-parse",
+    ]);
+    expect(pack.rulesConfig["no-user-controlled-redirect"]).toBe("error");
+    expect(pack.rulesConfig["webhook-must-verify-signature-before-parse"]).toBe(
+      "warn"
+    );
+  });
+
+  test("no-user-controlled-redirect: reports dynamic redirect URL", () => {
+    const code = `import { redirect } from "next/navigation";
+export function go(target: string) { redirect(target); }`;
+    const messages = lint(
+      "runtime-boundaries",
+      "no-user-controlled-redirect",
+      code,
+      "src/actions.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "userControlledRedirect"
+    );
+  });
+
+  test("no-user-controlled-redirect: allows literal redirect URL", () => {
+    const code = `import { redirect } from "next/navigation";
+export function go() { redirect("/dashboard"); }`;
+    const messages = lint(
+      "runtime-boundaries",
+      "no-user-controlled-redirect",
+      code,
+      "src/actions.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-user-controlled-fetch-url: reports dynamic fetch URL", () => {
+    const code = `export async function load(url: string) { return fetch(url); }`;
+    const messages = lint(
+      "runtime-boundaries",
+      "no-user-controlled-fetch-url",
+      code,
+      "src/client.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "userControlledFetchUrl"
+    );
+  });
+
+  test("no-user-controlled-fetch-url: allows literal fetch URL", () => {
+    const code = `export async function load() { return fetch("https://api.example.com"); }`;
+    const messages = lint(
+      "runtime-boundaries",
+      "no-user-controlled-fetch-url",
+      code,
+      "src/client.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-prototype-polluting-merge: reports Object.assign with req.body", () => {
+    const code = `export function merge(req: { body: object }, target: object) {
+  return Object.assign(target, req.body);
+}`;
+    const messages = lint(
+      "runtime-boundaries",
+      "no-prototype-polluting-merge",
+      code,
+      "src/handler.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "prototypePollutingMerge"
+    );
+  });
+
+  test("no-prototype-polluting-merge: reports spread of query", () => {
+    const code = `export function copy(query: object) { return { ...query }; }`;
+    const messages = lint(
+      "runtime-boundaries",
+      "no-prototype-polluting-merge",
+      code,
+      "src/handler.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "prototypePollutingMerge"
+    );
+  });
+
+  test("webhook-must-verify-signature-before-parse: reports json before verify", () => {
+    const code = `export async function handleWebhook(request: Request) {
+  const payload = await request.json();
+  verifySignature(payload);
+}`;
+    const messages = lint(
+      "runtime-boundaries",
+      "webhook-must-verify-signature-before-parse",
+      code,
+      "src/routes/stripe-webhook.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("jsonBeforeVerify");
+  });
+
+  test("webhook-must-verify-signature-before-parse: allows verify before json", () => {
+    const code = `export async function handleWebhook(request: Request) {
+  verifySignature(request);
+  const payload = await request.json();
+  return payload;
+}`;
+    const messages = lint(
+      "runtime-boundaries",
+      "webhook-must-verify-signature-before-parse",
+      code,
+      "src/routes/stripe-webhook.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("upload-must-set-limits: reports multipart handler without limits", () => {
+    const code = `import multipart from "@fastify/multipart";
+export async function handleUpload(request: { file: () => Promise<unknown> }) {
+  return request.file();
+}`;
+    const messages = lint(
+      "runtime-boundaries",
+      "upload-must-set-limits",
+      code,
+      "src/routes/upload.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingUploadLimits");
+  });
+
+  test("upload-must-set-limits: allows multipart handler with limits", () => {
+    const code = `import multipart from "@fastify/multipart";
+const limits = { fileSize: 1024 };
+export async function handleUpload(request: { file: () => Promise<unknown> }) {
+  return request.file();
+}`;
+    const messages = lint(
+      "runtime-boundaries",
+      "upload-must-set-limits",
+      code,
+      "src/routes/upload.ts"
     );
 
     expect(messages).toHaveLength(0);

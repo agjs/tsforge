@@ -187,7 +187,7 @@ test("file-existence check: vitest.config.ts enables test-conventions pack", asy
   }
 });
 
-test("always-on packs: generic-ts, env-access, module-boundaries, code-flow, comment-hygiene always present", async () => {
+test("always-on packs: generic-ts, env-access, module-boundaries, code-flow, comment-hygiene, security always present", async () => {
   const dir = await tempDir();
 
   try {
@@ -202,6 +202,7 @@ test("always-on packs: generic-ts, env-access, module-boundaries, code-flow, com
     expect(profile.packs).toContain("module-boundaries");
     expect(profile.packs).toContain("code-flow");
     expect(profile.packs).toContain("comment-hygiene");
+    expect(profile.packs).toContain("security");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -230,6 +231,7 @@ test("pack order: always-on packs first (deterministic), then framework/library 
       "module-boundaries",
       "code-flow",
       "comment-hygiene",
+      "security",
     ];
     const lastAlwaysOnIndex = Math.max(
       ...alwaysOnPacks

@@ -8,6 +8,8 @@ import { schemaFilesMustNotImportDriverRule } from "./rules/schema-files-must-no
 import { schemaFilesMustOnlyExportSchemaRule } from "./rules/schema-files-must-only-export-schema";
 import { tablesMustHaveTimestampsRule } from "./rules/tables-must-have-timestamps";
 import { timestampMustSpecifyModeRule } from "./rules/timestamp-must-specify-mode";
+import { updateDeleteAccountScopedMustFilterScopeRule } from "./rules/update-delete-account-scoped-must-filter-scope";
+import { updateDeleteMustHaveWhereRule } from "./rules/update-delete-must-have-where";
 import type { IRulePack } from "../rule-packs.types";
 
 const rules: Record<string, TSESLint.RuleModule<string, readonly unknown[]>> = {
@@ -19,6 +21,9 @@ const rules: Record<string, TSESLint.RuleModule<string, readonly unknown[]>> = {
   "schema-files-must-only-export-schema": schemaFilesMustOnlyExportSchemaRule,
   "tables-must-have-timestamps": tablesMustHaveTimestampsRule,
   "timestamp-must-specify-mode": timestampMustSpecifyModeRule,
+  "update-delete-account-scoped-must-filter-scope":
+    updateDeleteAccountScopedMustFilterScopeRule,
+  "update-delete-must-have-where": updateDeleteMustHaveWhereRule,
 };
 
 export const drizzlePack: IRulePack = {
@@ -35,6 +40,8 @@ export const drizzlePack: IRulePack = {
     "schema-files-must-only-export-schema": "warn",
     "tables-must-have-timestamps": "warn",
     "timestamp-must-specify-mode": "error",
+    "update-delete-account-scoped-must-filter-scope": "error",
+    "update-delete-must-have-where": "error",
   },
 };
 

@@ -795,18 +795,24 @@ async function baseGate(
   }
 
   const { detectStack } = await import("./stack-detection");
-  const { loadTsforgeConfig, resolveActivePacks, normalizeRuleOverrides } =
-    await import("./config/tsforge-config");
+  const {
+    loadTsforgeConfig,
+    resolveActivePacks,
+    normalizeRuleOverrides,
+    resolveProjectProfile,
+  } = await import("./config/tsforge-config");
 
   const stackProfile = await detectStack(args.dir);
   const config = await loadTsforgeConfig(args.dir);
   const activePacks = resolveActivePacks(stackProfile.packs, config);
   const ruleOverrides = normalizeRuleOverrides(config);
+  const profile = resolveProjectProfile(config);
 
   const auto = await buildGate(
     args.dir,
     activePacks,
-    Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined
+    Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
+    { enableTypeAware: profile === "strict" }
   );
 
   return { accept: auto.command, gateLabel: auto.label };

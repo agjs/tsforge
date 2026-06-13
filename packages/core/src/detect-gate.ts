@@ -63,6 +63,11 @@ const ESLINT_BIN = resolveToolBin("eslint");
 const TSC_BIN = resolveToolBin("tsc");
 const PRETTIER_BIN = resolveToolBin("prettier");
 const STRICT_CONFIG = join(import.meta.dir, "..", "strict.eslint.config.mjs");
+const TYPE_AWARE_CONFIG = join(
+  import.meta.dir,
+  "..",
+  "strict.type-aware.eslint.config.mjs"
+);
 const BROWSER_CHECK = join(
   import.meta.dir,
   "..",
@@ -86,6 +91,8 @@ const STRICT_TSCONFIG = `{
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
+    "useUnknownInCatchVariables": true,
+    "erasableSyntaxOnly": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
@@ -108,6 +115,8 @@ const STRICT_TSCONFIG_OVERRIDE = `{
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
+    "useUnknownInCatchVariables": true,
+    "erasableSyntaxOnly": true,
     "skipLibCheck": true,
     "noEmit": true
   }
@@ -458,7 +467,8 @@ export function prettierWriteCommand(): string {
 export async function buildGate(
   cwd: string,
   packs?: readonly string[],
-  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
+  options?: { enableTypeAware?: boolean }
 ): Promise<IGate> {
   const parts: string[] = [];
   const labels: string[] = [];
@@ -474,6 +484,15 @@ export async function buildGate(
 
   parts.push(lint.command);
   labels.push(lint.label);
+
+  if (options?.enableTypeAware === true) {
+    const typeAware = await typeAwareLintPart(cwd);
+
+    if (typeAware !== null) {
+      parts.push(typeAware.command);
+      labels.push(typeAware.label);
+    }
+  }
 
   return { command: parts.join(" && "), label: labels.join(" + ") };
 }
@@ -536,5 +555,19 @@ function lintPart(
   return {
     command: `${envPrefix}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
     label: "strict TypeScript (tsforge)",
+  };
+}
+
+/** Optional type-aware async rules — only when target has tsconfig.json. */
+async function typeAwareLintPart(cwd: string): Promise<IGate | null> {
+  const hasTsconfig = await Bun.file(join(cwd, "tsconfig.json")).exists();
+
+  if (!hasTsconfig) {
+    return null;
+  }
+
+  return {
+    command: `bun "${ESLINT_BIN}" --no-config-lookup -c "${TYPE_AWARE_CONFIG}" --format json .`,
+    label: "type-aware async (tsforge)",
   };
 }

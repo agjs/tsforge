@@ -61,7 +61,9 @@ tsforge does **not** trust a loose upstream tsconfig. Even if your repo allows s
 
 After typecheck, tsforge runs **its own** ESLint setup. It does **not** run your project's `npm run lint` script.
 
-Why separate? tsforge ships rules tuned for AI-written code and your stack (React, Drizzle, Elysia, etc.). Those rules come from [Rule packs](/guardrails/rule-packs/) enabled by [Stack detection](/guardrails/stack-detection/). You can tune them in [tsforge.config.json](/guardrails/config/).
+Why separate? tsforge ships rules tuned for AI-written code and your stack (React, Drizzle, Elysia, etc.). Those rules come from [Rule packs](/guardrails/rule-packs/) enabled by [Stack detection](/guardrails/stack-detection/). Tune them with a [profile](/guardrails/config/#profiles) or per-rule overrides in [tsforge.config.json](/guardrails/config/).
+
+The core ESLint config is **syntactic-only** (no type-aware rules) so it runs on any `.ts` file without the target's full type graph. With **`profile: "strict"`** and an existing `tsconfig.json`, tsforge adds a second pass for async correctness (`no-floating-promises`, `no-misused-promises`).
 
 Baseline stylistic rules (all stacks) include blank lines before `return` and around block-like statements via `@stylistic/padding-line-between-statements`. These are auto-fixable — the gate's `eslint --fix` applies them without model intervention.
 

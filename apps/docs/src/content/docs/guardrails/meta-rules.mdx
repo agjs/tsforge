@@ -5,34 +5,76 @@ description: Gate checks on package.json, tsconfig, CI files, and test layout (n
 
 Most tsforge rules lint **`.ts` files** through ESLint. **Meta-rules** are different: they inspect **project files** that normal lint does not cover.
 
-Think of them as housekeeping checks. Is `package.json` pinned correctly? Is `tsconfig.json` strict? Does every logic module have a colocated test file? Are GitHub Actions pinned?
+Think of them as housekeeping checks. Is `package.json` pinned correctly? Is `tsconfig.json` strict? Does every logic module have a colocated test file? Are GitHub Actions pinned with explicit permissions?
 
 They run in the same gate pass as ESLint. A meta-rule failure blocks the task the same way a type error would.
+
+Tune meta-rule severity in [tsforge.config.json](/guardrails/config/) the same way as ESLint rules. The **`strict`** profile elevates key supply-chain and CI checks to **error** by default.
 
 ## What they look at
 
 | Area | Example checks |
 | --- | --- |
-| `package.json` | exact version pins, no duplicate HTTP client libraries |
-| `tsconfig.json` | strict mode on, include paths exist |
+| `package.json` | exact version pins, lockfile present, `packageManager` field, no git/tarball deps |
+| `tsconfig.json` | strict mode on, recommended flags, include paths exist |
 | Source text | no `@ts-ignore`, no `eslint-disable` comments |
-| CI workflows | pinned action SHAs, pinned runners, job timeouts |
+| CI workflows | pinned actions/runners, timeouts, explicit permissions, no unsafe `pull_request_target` |
+| Next.js config | no wildcard image hostnames, instrumentation present |
 | Tests | service/util files have a matching `*.test.ts` sibling |
+| Drizzle (when pack active) | migrations checked in, no `drizzle-kit push` in CI |
 
-## All 10 rules today
+## All 26 rules
 
-| ID | Category | Checks |
-| --- | --- | --- |
-| `package-exact-deps` | supply-chain | no `^`/`~` ranges |
-| `no-overlapping-libs` | supply-chain | forbid redundant libs |
-| `no-eslint-disable-comments` | source-text | no inline disables |
-| `no-ts-suppressions` | source-text | no `@ts-ignore` |
-| `tsconfig-paths-exist` | config | include paths exist |
-| `tsconfig-strict` | config | strict mode on |
-| `test-sibling-required` | testing | colocated tests |
-| `workflow-actions-pinned` | ci | pinned action refs |
-| `workflow-runner-pinned` | ci | no `ubuntu-latest` |
-| `workflow-timeout-required` | ci | job timeouts set |
+### Supply chain
+
+| ID | Checks |
+| --- | --- |
+| `package-exact-deps` | no `^`/`~` ranges in dependencies |
+| `no-overlapping-libs` | forbid redundant HTTP client libraries |
+| `fastify-security-plugins` | helmet/cors/rate-limit when using Fastify |
+| `lockfile-required` | exactly one lockfile for the detected package manager |
+| `single-package-manager` | no mixed lockfiles |
+| `package-manager-field-required` | `packageManager` in package.json |
+| `no-git-or-tarball-dependencies` | warn on `git+` / HTTP tarball URLs |
+| `dependency-overrides-require-comment` | overrides/resolutions need an adjacent comment |
+| `production-must-not-use-drizzle-push` | no `drizzle-kit push` in scripts/CI (Drizzle projects) |
+| `migrations-must-be-checked-in` | `drizzle/` or `migrations/` folder exists (Drizzle projects) |
+
+### Source text
+
+| ID | Checks |
+| --- | --- |
+| `no-eslint-disable-comments` | no inline disables |
+| `no-ts-suppressions` | no `@ts-ignore` / `@ts-expect-error` |
+
+### Config
+
+| ID | Checks |
+| --- | --- |
+| `tsconfig-paths-exist` | include paths exist on disk |
+| `tsconfig-strict` | strict mode on |
+| `tsconfig-recommended-flags` | `useUnknownInCatchVariables`, `erasableSyntaxOnly`, `exactOptionalPropertyTypes`, and related flags |
+| `next-proxy-over-middleware` | migrate `middleware.ts` → `proxy.ts` (Next.js 16) |
+| `next-instrumentation-present` | `instrumentation.ts` with OpenTelemetry (Next.js apps) |
+| `next-image-remote-patterns-no-wildcards` | no `**` hostnames in `remotePatterns` |
+
+### Testing
+
+| ID | Checks |
+| --- | --- |
+| `test-sibling-required` | colocated `*.test.ts` for service modules |
+
+### CI
+
+| ID | Checks |
+| --- | --- |
+| `workflow-actions-pinned` | pinned action refs (tag or SHA) |
+| `workflow-runner-pinned` | no `ubuntu-latest` |
+| `workflow-timeout-required` | job timeouts set |
+| `workflow-permissions-explicit` | every workflow declares `permissions:` |
+| `workflow-permissions-least-privilege` | warn on broad `contents: write` / `id-token: write` |
+| `no-pull-request-target-untrusted-checkout` | unsafe `pull_request_target` + PR head checkout |
+| `no-github-context-in-shell` | `${{ github.event` in `run:` without env indirection |
 
 ## Severity
 
@@ -41,5 +83,7 @@ They run in the same gate pass as ESLint. A meta-rule failure blocks the task th
 | `error` | Gate fails. Model must fix it. |
 | `warn` | Reported but gate can still pass. |
 | `off` | Silenced via [tsforge.config.json](/guardrails/config/). |
+
+Full list with descriptions: [Rule catalog](/reference/rules-catalog/) (meta-rules section at the bottom).
 
 → [Big picture](/big-picture/) · [Rule packs](/guardrails/rule-packs/) · [How tsforge builds the gate](/loop/gate-floor/)

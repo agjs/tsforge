@@ -154,6 +154,11 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/no-throw-literal": {
+    "what": "Disallow throwing primitive literals (strings, numbers) — throw Error instances so error handlers can propagate status and stack traces correctly.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/prefer-early-return": {
     "what": "Prefer guard clauses (early return) over wrapping the function body in a multi-statement `if` without an `else`.",
     "bad": "// Example that violates the rule",
@@ -255,7 +260,37 @@
     "good": "// Corrected version"
   },
   "tsforge/require-plugin-name": {
-    "what": "Exported Elysia plugin instances must declare `new Elysia({ name: '...' })` so the runtime can deduplicate plugin re-imports.",
+    "what": "fastify-plugin (fp) wrappers must include a `name` option so Fastify can deduplicate plugin registration.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/error-handler-must-set-status": {
+    "what": "Custom Fastify setErrorHandler callbacks must call reply.code() or reply.status() — automatic status mapping is disabled when a custom handler is registered.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/prefer-return-over-reply-send": {
+    "what": "Inside Fastify route handlers, prefer `return data` over `return reply.send(data)` so fast-json-stringify can serialize responses.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/require-fp-for-shared-plugins": {
+    "what": "Fastify plugins that call fastify.decorate, fastify.addHook, or fastify.register must be wrapped in fastify-plugin (fp) to break encapsulation and share state.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/require-response-schema": {
+    "what": "Fastify routes should declare schema.response for compiled fast-json-stringify serialization.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/require-route-schema": {
+    "what": "Fastify POST/PUT/PATCH routes must declare schema.body; GET/DELETE routes must declare schema.querystring or schema.params.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/test-inject-must-close-app": {
+    "what": "Test files using fastify.inject must register teardown that calls app.close() to drain connections.",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
@@ -299,8 +334,33 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/no-react-in-services": {
+    "what": "Service and data-fetch modules must not import React — keep business logic decoupled from the view layer.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/await-dynamic-request-apis": {
+    "what": "Require awaiting Next.js dynamic request APIs (cookies, headers, draftMode) in app-router Server Components.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/client-hooks-require-use-client": {
     "what": "Require the 'use client' directive in app-router page/layout/template files that call client-only hooks. Server Components cannot use state/effect/navigation hooks — doing so crashes at runtime.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/error-boundary-require-use-client": {
+    "what": "Require 'use client' in app-router error.tsx and global-error.tsx — Next.js error boundaries must be Client Components.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-html-img-element": {
+    "what": "Prefer next/image over raw <img> elements for optimized responsive images and Core Web Vitals.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-internal-api-fetch": {
+    "what": "Disallow Server Components from fetching the app's own /api routes — import services or ORM modules directly to avoid loopback HTTP overhead.",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
@@ -311,6 +371,16 @@
   },
   "tsforge/no-pages-router-data-fetching-in-app": {
     "what": "Disallow pages-router data-fetching exports (getServerSideProps, getStaticProps, getStaticPaths, getInitialProps) in app-router files. Next.js ignores them under app/, so they are silent dead code — use async Server Components or route handlers instead.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-sensitive-next-public-env": {
+    "what": "Disallow NEXT_PUBLIC_* env vars whose names suggest secrets — public build-time vars are visible in the client bundle.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/prefer-lazy-use-state-init": {
+    "what": "Prefer lazy useState initializers when parsing localStorage/sessionStorage — avoids re-parsing on every render.",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
@@ -334,6 +404,11 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/dangerous-html-requires-sanitize": {
+    "what": "dangerouslySetInnerHTML requires a sanitization library (DOMPurify or equivalent) imported in the same file.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/forwardref-display-name": {
     "what": "forwardRef components must have displayName set",
     "bad": "// Example that violates the rule",
@@ -349,8 +424,23 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/no-anonymous-useEffect": {
+    "what": "Disallow anonymous arrow functions passed to useEffect — use a named function for debuggable stack traces.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-component-invocation": {
+    "what": "Disallow invoking React components as plain functions — use JSX (`<Header />`) instead of `{Header()}`.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/no-cross-feature-imports": {
     "what": "Prevent imports across different features",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-derived-state-in-effect": {
+    "what": "Disallow setting local state inside useEffect when the value can be derived during render (or memoized with useMemo).",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
@@ -364,8 +454,48 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/no-nested-component": {
+    "what": "Disallow declaring React components inside another component body — nested components reset state on every parent render.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-react-fc": {
+    "what": "Disallow React.FC / FunctionComponent — type props explicitly on the function parameter instead.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/no-state-in-component-body": {
     "what": "State hooks must be in .hooks.ts files, not directly in components",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/catch-must-handle": {
+    "what": "Catch blocks must log, rethrow, or propagate errors — not silently return empty defaults on failure.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-auth-token-in-storage": {
+    "what": "Disallow storing or reading auth tokens from localStorage/sessionStorage — use httpOnly cookies instead.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-child-process-exec": {
+    "what": "Disallow child_process.exec/execSync — they run commands in a shell. Use execFile or spawn without shell instead.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-dynamic-regexp": {
+    "what": "Disallow new RegExp(non-literal) — dynamic patterns enable ReDoS. Use string-literal regexes or a safe engine like re2.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-inner-html-assignment": {
+    "what": "Disallow assigning to innerHTML — use textContent/innerText or sanitize with DOMPurify before injecting HTML.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-spawn-with-shell": {
+    "what": "Disallow child_process.spawn/spawnSync with shell: true — shell execution enables command injection.",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },

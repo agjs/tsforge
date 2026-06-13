@@ -61,6 +61,17 @@ export const PACK_REGISTRY = {
     guidance: "Follow Elysia patterns for HTTP routing and middleware.",
   } as const satisfies IRulePackDescriptor,
 
+  fastify: {
+    id: "fastify",
+    label: "Fastify",
+    description:
+      "Schema-first Fastify routing, plugin encapsulation, and test hygiene",
+    category: "framework",
+    appliesWhen: { anyDeps: ["fastify"] },
+    guidance:
+      "Use schema-driven routes, fastify-plugin for shared decorators, and fastify.inject with app.close() in tests.",
+  } as const satisfies IRulePackDescriptor,
+
   nextjs: {
     id: "nextjs",
     label: "Next.js",
@@ -132,6 +143,50 @@ export const PACK_REGISTRY = {
     guidance: "Write comments that explain intent, not what the code does.",
   } as const satisfies IRulePackDescriptor,
 
+  security: {
+    id: "security",
+    label: "Security",
+    description:
+      "Application security guardrails: command injection, ReDoS, DOM XSS, and silent error masking",
+    category: "infra",
+    appliesWhen: { always: true },
+    guidance:
+      "Avoid shell execution, dynamic regex, innerHTML assignment, and catch blocks that silently mask failures.",
+  } as const satisfies IRulePackDescriptor,
+
+  "runtime-boundaries": {
+    id: "runtime-boundaries",
+    label: "Runtime Boundaries",
+    description:
+      "Runtime boundary safety: open redirects, SSRF, prototype pollution, webhook verification, and upload limits",
+    category: "infra",
+    appliesWhen: { always: true },
+    guidance:
+      "Use literal redirect/fetch URLs, avoid merging request fields into objects, verify webhooks before parsing, and cap multipart uploads.",
+  } as const satisfies IRulePackDescriptor,
+
+  "typescript-core": {
+    id: "typescript-core",
+    label: "TypeScript Core",
+    description:
+      "Cross-cutting TypeScript boundary safety: fetch status checks, JSON validation, and export typing",
+    category: "language",
+    appliesWhen: { always: false },
+    guidance:
+      "Validate HTTP responses, parse JSON through schemas, and annotate exported function return types.",
+  } as const satisfies IRulePackDescriptor,
+
+  authorization: {
+    id: "authorization",
+    label: "Authorization",
+    description:
+      "Experimental authorization heuristics for routes, server actions, and object-level access",
+    category: "infra",
+    appliesWhen: { always: false },
+    guidance:
+      "Mutating handlers should call authorization helpers before writes; opt in via the security profile.",
+  } as const satisfies IRulePackDescriptor,
+
   "structured-logging": {
     id: "structured-logging",
     label: "Structured Logging",
@@ -176,6 +231,8 @@ export const ALWAYS_ON_PACKS = [
   "module-boundaries",
   "code-flow",
   "comment-hygiene",
+  "security",
+  "runtime-boundaries",
 ] as const;
 
 /** Type-safe record of all pack descriptors. */

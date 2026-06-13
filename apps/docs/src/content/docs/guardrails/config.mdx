@@ -1,26 +1,48 @@
 ---
 title: tsforge.config.json
-description: Optional project file to force stacks, include or exclude rule packs, and tune severities.
+description: Optional project file to pick a rule profile, force stacks, include or exclude rule packs, and tune severities.
 ---
 
-You do not need this file to use tsforge. Stack detection works from `package.json` alone.
+You do not need this file to use tsforge. Stack detection works from `package.json` alone, and the default **`recommended`** profile keeps safety rules on while turning off noisy architecture opinions.
 
-Add **`tsforge.config.json`** at your repo root when you want to override what tsforge detected: force an Elysia stack, disable a pack you do not use, or downgrade a noisy rule to a warning.
+Add **`tsforge.config.json`** at your repo root when you want to override what tsforge detected: pick a stricter profile, force an Elysia stack, disable a pack you do not use, or downgrade a noisy rule to a warning.
 
 ## Fields
 
 | Field | Type | Purpose |
 | --- | --- | --- |
+| `profile` | string | Rule preset: `recommended` (default), `strict`, `security`, `frontend`, `backend`, `opinionated` |
 | `stack` | string | Force-enable a stack and its packs |
 | `packs.include` | string[] | Add packs after detection |
 | `packs.exclude` | string[] | Remove packs after detection |
-| `rules` | object | Per-rule severity: `"error"`, `"warn"`, or `"off"` |
+| `rules` | object | Per-rule severity: `"error"`, `"warn"`, or `"off"` (overrides profile defaults) |
 | `plugins` | object[] | External modules providing extra rule packs (see below) |
 | `mcpServers` | object | External [MCP servers](/integrations/mcp/) whose tools the agent can call |
 
-Resolution order: detect from the repo → apply `stack` → apply `include` → apply `exclude` → add external plugin packs → dedupe.
+Resolution order: detect from the repo → apply **`profile`** (packs + default severities) → apply `stack` → apply `include` → apply `exclude` → add external plugin packs → dedupe → merge `rules` overrides (user wins).
 
-If the file is missing, tsforge uses detection only. If JSON is invalid, tsforge warns on stderr and continues with an empty config.
+If the file is missing, tsforge uses detection with the **`recommended`** profile. If JSON is invalid, tsforge warns on stderr and continues with an empty config.
+
+## Profiles
+
+Profiles control which **extra packs** load and which **default severities** apply. They do not replace stack detection — they layer on top.
+
+| Profile | What it adds |
+| --- | --- |
+| `recommended` | Safety + always-on packs + stack-detected framework packs. Architecture opinions **off**. |
+| `strict` | `recommended` + `typescript-core` pack, CI/supply-chain meta-rules at **error**, optional type-aware async ESLint when `tsconfig.json` exists |
+| `security` | `recommended` + experimental **`authorization`** heuristics (mutating routes/actions without authz calls) |
+| `frontend` | `recommended` with React/Next effect and image rules at **warn** |
+| `backend` | `recommended` — stack detection adds Fastify/Elysia/Drizzle/BullMQ as usual |
+| `opinionated` | Full house-style architecture rules (component folder structure, hooks layout, early returns at **error**) |
+
+Every rule in the [Rule catalog](/reference/rules-catalog/) is tagged by **tier** (safety, framework, architecture, experimental). Profiles are the ergonomic switch — you rarely need to tune individual rules.
+
+```json
+{
+  "profile": "strict"
+}
+```
 
 ## Rule names
 
@@ -34,10 +56,13 @@ Bare names and `tsforge/`-prefixed names both work:
 }
 ```
 
+Meta-rules use the same `rules` map. Example: `"workflow-permissions-explicit": "off"`.
+
 ## Example
 
 ```json
 {
+  "profile": "backend",
   "stack": "elysia",
   "packs": {
     "include": ["structured-logging"],
@@ -51,7 +76,7 @@ Bare names and `tsforge/`-prefixed names both work:
 }
 ```
 
-This project is treated as Elysia, keeps structured-logging rules, skips BullMQ rules, and softens one comment rule.
+This project uses the backend profile, is treated as Elysia, keeps structured-logging rules, skips BullMQ rules, and softens one comment rule.
 
 ## External plugins
 
