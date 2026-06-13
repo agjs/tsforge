@@ -34,6 +34,7 @@ import {
 import { TsService, type ITsDiagnostic } from "../lsp";
 import type { McpRegistry } from "../mcp";
 import type { FileLinter, IFileLintProblem } from "../detect-gate";
+import { formatFile } from "../detect-gate";
 import {
   buildMetaRuleContext,
   runMetaRules,
@@ -321,6 +322,12 @@ async function writeGuard(
       message: `stripped ${String(stripped)} needless literal cast(s) in ${basename(absPath)}`,
     });
   }
+
+  // Auto-format this file NOW (eslint --fix + prettier) — not at the settle
+  // gate. Otherwise the mechanical lint (blank lines, braces, quotes) sits
+  // unfixed between writes, and when the model self-runs the gate it sees the
+  // noise and hand-chases it to the turn cap. Best-effort; gate stays authority.
+  await formatFile(cwd, file);
 
   tsService.refresh(file);
 

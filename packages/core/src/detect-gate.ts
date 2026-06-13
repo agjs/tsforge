@@ -478,6 +478,47 @@ export function buildCoreFix(): string {
   return `${lintFix} ; ${format}`;
 }
 
+/**
+ * Auto-format ONE just-written file in place: `eslint --fix` (squashes the
+ * auto-fixable mechanical rules — padding-line, curly, prefer-template, quotes)
+ * then `prettier --write` (whitespace/quotes/width). Run at WRITE time (in the
+ * write guard) so the model never sees — nor hand-chases — formatting noise.
+ * Deferring all of this to the settle-time gate let the model self-run eslint
+ * mid-build, see the un-squashed mechanical lint, and spiral fixing blank lines
+ * and braces by hand to the turn cap. Best-effort + per-file (cheap): any failure
+ * is swallowed and the settle gate stays the authority.
+ */
+export async function formatFile(cwd: string, file: string): Promise<void> {
+  const abs = join(cwd, file);
+
+  try {
+    await Bun.spawn(
+      [
+        "bun",
+        ESLINT_BIN,
+        "--no-config-lookup",
+        "-c",
+        STRICT_CONFIG,
+        "--fix",
+        abs,
+      ],
+      { cwd, stdout: "ignore", stderr: "ignore" }
+    ).exited;
+  } catch {
+    // best-effort — the settle gate still fixes + validates
+  }
+
+  try {
+    await Bun.spawn(["bun", PRETTIER_BIN, "--write", abs], {
+      cwd,
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exited;
+  } catch {
+    // best-effort
+  }
+}
+
 async function ensureFile(
   cwd: string,
   name: string,
