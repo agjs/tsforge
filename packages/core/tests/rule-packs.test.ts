@@ -48,7 +48,7 @@ function lint(
 }
 
 describe("rule-packs: registry", () => {
-  test("should have all fourteen packs registered", () => {
+  test("should have all fifteen packs registered", () => {
     expect(Object.keys(RULE_PACKS).sort()).toEqual([
       "bullmq",
       "code-flow",
@@ -59,6 +59,7 @@ describe("rule-packs: registry", () => {
       "i18n-keys",
       "jwt-cookies",
       "module-boundaries",
+      "nextjs",
       "oauth-security",
       "react-component-architecture",
       "structured-logging",
@@ -2106,6 +2107,104 @@ describe("rule-packs: module-boundaries", () => {
       "no-import-build-output",
       code,
       "src/a.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("rule-packs: nextjs", () => {
+  test("client-hooks-require-use-client: flags useState in a server page", () => {
+    const code = `import { useState } from "react";
+export default function Page() { const [n] = useState(0); return null; }`;
+    const messages = lint(
+      "nextjs",
+      "client-hooks-require-use-client",
+      code,
+      "app/dashboard/page.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingUseClient");
+  });
+
+  test("client-hooks-require-use-client: allows hooks with 'use client'", () => {
+    const code = `"use client";
+import { useState } from "react";
+export default function Page() { const [n] = useState(0); return null; }`;
+    const messages = lint(
+      "nextjs",
+      "client-hooks-require-use-client",
+      code,
+      "app/dashboard/page.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("client-hooks-require-use-client: ignores non-route files", () => {
+    const code = `import { useState } from "react";
+export function useThing() { return useState(0); }`;
+    const messages = lint(
+      "nextjs",
+      "client-hooks-require-use-client",
+      code,
+      "app/hooks/use-thing.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-pages-router-data-fetching-in-app: flags getServerSideProps under app/", () => {
+    const code = `export async function getServerSideProps() { return { props: {} }; }`;
+    const messages = lint(
+      "nextjs",
+      "no-pages-router-data-fetching-in-app",
+      code,
+      "app/page.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("pagesDataFnInApp");
+  });
+
+  test("no-pages-router-data-fetching-in-app: flags re-exported getStaticProps", () => {
+    const code = `const getStaticProps = () => ({ props: {} });
+export { getStaticProps };`;
+    const messages = lint(
+      "nextjs",
+      "no-pages-router-data-fetching-in-app",
+      code,
+      "app/page.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("pagesDataFnInApp");
+  });
+
+  test("no-pages-router-data-fetching-in-app: ignores files outside app/", () => {
+    const code = `export async function getServerSideProps() { return { props: {} }; }`;
+    const messages = lint(
+      "nextjs",
+      "no-pages-router-data-fetching-in-app",
+      code,
+      "pages/index.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-next-head-in-app: flags next/head import under app/", () => {
+    const code = `import Head from "next/head";`;
+    const messages = lint("nextjs", "no-next-head-in-app", code, "app/page.ts");
+
+    expect(messages.map((m) => m.messageId)).toContain("nextHeadInApp");
+  });
+
+  test("no-next-head-in-app: ignores next/head outside app/", () => {
+    const code = `import Head from "next/head";`;
+    const messages = lint(
+      "nextjs",
+      "no-next-head-in-app",
+      code,
+      "pages/index.ts"
     );
 
     expect(messages).toHaveLength(0);

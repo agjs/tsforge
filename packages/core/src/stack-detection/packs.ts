@@ -61,6 +61,17 @@ export const PACK_REGISTRY = {
     guidance: "Follow Elysia patterns for HTTP routing and middleware.",
   } as const satisfies IRulePackDescriptor,
 
+  nextjs: {
+    id: "nextjs",
+    label: "Next.js",
+    description:
+      "App-router correctness: server/client boundaries and dead pages-router APIs",
+    category: "framework",
+    appliesWhen: { anyDeps: ["next"] },
+    guidance:
+      "Follow Next.js app-router conventions: mark interactive files 'use client' and use the Metadata API and Server Components instead of pages-router APIs.",
+  } as const satisfies IRulePackDescriptor,
+
   bullmq: {
     id: "bullmq",
     label: "BullMQ",

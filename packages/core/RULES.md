@@ -87,6 +87,14 @@ Module boundary hygiene: keep the test/production and source/build-output bounda
 - **no-import-build-output** [ERROR]: Disallow importing from build/output directories within the project. Source must import source, not compiled artifacts, to avoid stale-code drift and broken module boundaries.
 - **no-import-test-from-source** [ERROR]: Disallow production/source files from importing test files. Tests may depend on source, never the reverse — test code must not ship in the production graph.
 
+### nextjs
+
+Next.js app-router correctness: server/client component boundaries and dead pages-router APIs.
+
+- **client-hooks-require-use-client** [ERROR]: Require the 'use client' directive in app-router page/layout/template files that call client-only hooks. Server Components cannot use state/effect/navigation hooks — doing so crashes at runtime.
+- **no-next-head-in-app** [ERROR]: Disallow importing 'next/head' in app-router files. The <Head> component is a no-op under app/ — use the Metadata API (export const metadata / generateMetadata) instead.
+- **no-pages-router-data-fetching-in-app** [ERROR]: Disallow pages-router data-fetching exports (getServerSideProps, getStaticProps, getStaticPaths, getInitialProps) in app-router files. Next.js ignores them under app/, so they are silent dead code — use async Server Components or route handlers instead.
+
 ### oauth-security
 
 OAuth and OpenID patterns and security considerations

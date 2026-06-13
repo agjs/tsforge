@@ -299,6 +299,21 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/client-hooks-require-use-client": {
+    "what": "Require the 'use client' directive in app-router page/layout/template files that call client-only hooks. Server Components cannot use state/effect/navigation hooks — doing so crashes at runtime.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-next-head-in-app": {
+    "what": "Disallow importing 'next/head' in app-router files. The <Head> component is a no-op under app/ — use the Metadata API (export const metadata / generateMetadata) instead.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-pages-router-data-fetching-in-app": {
+    "what": "Disallow pages-router data-fetching exports (getServerSideProps, getStaticProps, getStaticPaths, getInitialProps) in app-router files. Next.js ignores them under app/, so they are silent dead code — use async Server Components or route handlers instead.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/pkce-required-for-oidc": {
     "what": "OIDC providers must use PKCE: `buildAuthorizationURL` must call `generateCodeVerifier()` and pass it to `createAuthorizationURL`.",
     "bad": "// Example that violates the rule",

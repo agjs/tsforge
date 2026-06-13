@@ -9,6 +9,7 @@ import { envAccessPack } from "./env-access";
 import { i18nKeysPack } from "./i18n-keys";
 import { jwtCookiesPack } from "./jwt-cookies";
 import { moduleBoundariesPack } from "./module-boundaries";
+import { nextjsPack } from "./nextjs";
 import { oauthSecurityPack } from "./oauth-security";
 import { reactComponentArchitecturePack } from "./react-component-architecture";
 import { structuredLoggingPack } from "./structured-logging";
@@ -27,6 +28,7 @@ export const RULE_PACKS = {
   "i18n-keys": i18nKeysPack,
   "jwt-cookies": jwtCookiesPack,
   "module-boundaries": moduleBoundariesPack,
+  nextjs: nextjsPack,
   "oauth-security": oauthSecurityPack,
   "react-component-architecture": reactComponentArchitecturePack,
   "structured-logging": structuredLoggingPack,
