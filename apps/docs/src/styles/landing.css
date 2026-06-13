@@ -23,7 +23,7 @@
   align-items: center;
   gap: 1.1rem;
   width: 100%;
-  max-width: 44rem;
+  max-width: min(56rem, 100%);
 }
 
 .tf-landing-eyebrow {
@@ -43,6 +43,14 @@
   line-height: 1.15;
   letter-spacing: -0.025em;
   color: var(--sl-color-white);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .tf-landing-headline {
+    font-size: clamp(1.65rem, 7vw, 2rem);
+    white-space: normal;
+  }
 }
 
 .tf-landing-headline .tf-accent {
@@ -50,10 +58,11 @@
 }
 
 .tf-landing-lede {
-  margin: 0 auto;
-  max-width: 42ch;
+  margin: 0;
+  max-width: none;
+  width: 100%;
   font-size: clamp(1.02rem, 1.6vw, 1.15rem);
-  line-height: 1.6;
+  line-height: 1.55;
   color: var(--sl-color-gray-2);
 }
 

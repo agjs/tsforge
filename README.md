@@ -17,8 +17,8 @@
 </p>
 
 <p align="center">
-  <strong>TypeScript coding harness with a deterministic gate.</strong><br />
-  Stack-aware guardrails, stream-level correction, and a repair loop until your acceptance check passes.
+  <strong>Ship full-stack TypeScript.</strong><br />
+  Point it at your repo. Keeps building until the gate passes.
 </p>
 
 <p align="center">

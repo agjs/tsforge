@@ -7,17 +7,17 @@ const { data } = Astro.locals.starlightRoute.entry;
 
 <section class="tf-landing-hero hero">
   <div class="tf-landing-hero__copy stack sl-flex">
-    <p class="tf-landing-eyebrow">TypeScript coding harness</p>
+    <p class="tf-landing-eyebrow">Full-stack TypeScript harness</p>
 
     <h1 id="_top" class="tf-landing-headline" data-page-title>
-      The harness for <span class="tf-accent">TypeScript</span> apps
+      Ship <span class="tf-accent">full-stack TypeScript</span>
     </h1>
 
     {data.draft && <DraftContentNotice />}
 
     <p class="tf-landing-lede">
       {data.hero?.tagline ??
-        "Point an AI model at your repo. tsforge keeps it fixing until your code actually compiles and passes lint."}
+        "Point it at your repo. Keeps building until the gate passes."}
     </p>
 
     <div class="tf-landing-actions">

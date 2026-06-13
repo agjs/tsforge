@@ -77,7 +77,7 @@ export default defineConfig({
     starlight({
       title: "tsforge",
       description:
-        "TypeScript coding harness with a deterministic gate, stack-aware guardrails, and stream-level correction.",
+        "Ship full-stack TypeScript — loops until your acceptance check passes.",
       favicon: "/favicon.svg",
       customCss: [
         "./src/styles/tailwind.css",

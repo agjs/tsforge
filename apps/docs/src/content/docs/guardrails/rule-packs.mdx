@@ -3,9 +3,7 @@ title: Rule packs
 description: Stack-specific ESLint rules tsforge runs during the gate.
 ---
 
-When the gate runs ESLint, it does not use a generic preset. It uses **rule packs**: groups of rules keyed to the libraries in your project.
-
-If you use Drizzle, tsforge applies Drizzle-specific query rules. If you use React, it enforces component folder layout, JSX computation limits, hooks-in-files, and handler conventions. [Stack detection](/guardrails/stack-detection/) turns packs on from `package.json`. You can override in [tsforge.config.json](/guardrails/config/).
+When the gate runs ESLint, it does not use a generic preset. It uses **rule packs**: groups of rules keyed to the libraries in your project. [Stack detection](/guardrails/stack-detection/) turns packs on from `package.json`. You can override in [tsforge.config.json](/guardrails/config/).
 
 Packs apply on every gate check, whether tsforge is editing an existing repo or scaffolding a new one.
 
