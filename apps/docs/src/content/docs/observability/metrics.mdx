@@ -53,6 +53,6 @@ bun run packages/core/scripts/cli-metrics.ts            # newest log
 bun run packages/core/scripts/cli-metrics.ts run.jsonl  # a specific one
 ```
 
-It reports tokens-to-solution, peak context, edits, gate runs, and more. The same distillation is available programmatically as `analyzeEvents(events)` from `@agjs/tsforge`'s eval module, and feeds the [A/B sweep report](/eval/ab-testing/).
+It reports tokens-to-solution, peak context, edits, gate runs, and — for a run that didn't reach green — a **`failure class`** (e.g. `type-error (TS18048)`, `tool-malformed`, `hallucinated-import`): one structured reason for *why* it failed, so a failure points at the rule, prompt, or fixer to build next. The same distillation is available programmatically as `analyzeEvents(events)` from `@agjs/tsforge`'s eval module, and feeds the [A/B sweep report](/eval/ab-testing/#why-runs-failed).
 
 → [Interactive CLI](/cli/interactive/) · [A/B testing](/eval/ab-testing/) · [Model adapter](/inference/adapter/)

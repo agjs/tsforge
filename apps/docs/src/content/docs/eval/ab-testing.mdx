@@ -24,6 +24,12 @@ Running a sweep drives a real model, so you need an OpenAI-compatible endpoint (
 A **seed** is the task you run the model against. Committed seeds live in [`evals/corpus/`](https://github.com/agjs/tsforge/tree/main/evals/corpus) and ship with the repo, so the examples work on a fresh clone:
 
 - `math` — single-file pure logic (currency-safe cent arithmetic with half-up rounding).
+- `slugify` — single-file string normalization with Unicode edge cases.
+- `checkout` — multi-file pricing engine (cart + coupons + tax, integer cents).
+- `auth` — multi-file session service (password policy + lockout + token expiry).
+- `query` — multi-file mini-SQL engine (lexer → recursive-descent parser → executor).
+
+The first two are warm-ups a strong model one-shots; the last three are multi-file and deliberately harder, so a feature has room to move the pass rate (and the [failure breakdown](#why-runs-failed)) off the ceiling.
 
 Pick one with `TSFORGE_SEED=<name>`. A sweep first looks for a local working copy at `evals/<name>/`, then falls back to the committed `evals/corpus/<name>/`. To add your own, drop a folder under `evals/corpus/` with a `<name>.spec.md` plus its fixture files — see [Spec format](/spec/format/).
 
@@ -79,6 +85,18 @@ It prints the table and writes it next to the sweep JSON as `…​.report.md`:
 ```
 
 Wilson intervals (not naive ±) keep the bounds sane at small N, and the z-test tells you whether a pass-rate gap is signal or noise — the bar for "measured wins" before flipping a default.
+
+### Why runs failed
+
+Pass rate tells you *how often* a variant failed; the **failure breakdown** tells you *why*. Below the table, the report tallies each failed run by a structured failure class:
+
+```
+### Failure breakdown
+- ttsr=off,hashline=off temp=0: type-error×3, no-progress×1
+- ttsr=on,hashline=on temp=0: type-error×1
+```
+
+Each failed run is classified from its event stream into one of: `type-error`, `lint-rule`, `hallucinated-import`, `tool-malformed`, `edit-reject`, `degeneration`, `no-progress`, `build-fail`, `browser-fail`, `route-phantom`, or `timeout`. This turns a sweep from "feature X passes more" into "feature X eliminates the `type-error` failures" — pointing at the next rule, prompt, or fixer to build. The same classifier powers the `failure class` line in [`cli-metrics`](/observability/metrics/) for a single `--log` run.
 
 ## Compare edit mechanisms
 

@@ -11,10 +11,10 @@ This page explains how tsforge **chooses** that command when you do not set one 
 
 ## The gate in practice
 
-Example gate for a typical TypeScript repo:
+Example gate for a typical TypeScript repo with tests:
 
 ```bash
-tsc --noEmit -p tsforge.tsconfig.json && eslint --max-warnings 0 …
+tsc --noEmit -p .tsforge/tsconfig.gate.json && eslint --max-warnings 0 … && bun test
 ```
 
 You do not have to memorize this. tsforge builds something like it automatically.
@@ -25,6 +25,7 @@ You can override anytime:
 | --- | --- |
 | `/gate bun test` | use your command for the rest of the session |
 | `tsforge "task" --accept "bun test"` | one-shot run with a custom gate |
+| `--strict-floor-only` | strict tsc + ESLint only — do **not** append the project's tests |
 | `--no-gate` | skip auto-detection (advanced) |
 
 See [When the gate fails](/loop/validation/) for what happens when the gate fails and how the repair loop stops.
@@ -34,7 +35,7 @@ See [When the gate fails](/loop/validation/) for what happens when the gate fail
 ```mermaid
 flowchart TD
   start[Your project folder] --> tsconfig{Has tsconfig.json?}
-  tsconfig -->|yes| overlay[Add strict tsforge.tsconfig.json overlay]
+  tsconfig -->|yes| overlay[Add strict .tsforge/tsconfig.gate.json overlay]
   tsconfig -->|no but has package.json| greenfield[Write a strict tsconfig.json]
   tsconfig -->|neither| eslintOnly[ESLint-only gate]
   overlay --> tsc[tsc --noEmit]
@@ -45,11 +46,15 @@ flowchart TD
 
 Three common cases:
 
-**Existing TypeScript repo** (you already have `tsconfig.json`). tsforge writes `tsforge.tsconfig.json` that extends yours and turns on strict flags tsforge cares about (`strict`, `noUncheckedIndexedAccess`, and similar). Your original file stays untouched.
+**Existing TypeScript repo** (you already have `tsconfig.json`). tsforge writes an ephemeral overlay at `.tsforge/tsconfig.gate.json` that extends yours and turns on strict flags tsforge cares about (`strict`, `noUncheckedIndexedAccess`, and similar). Your original file stays untouched.
 
-**New project with `package.json` but no tsconfig yet**. tsforge writes a full strict `tsconfig.json` so the model cannot slip through on loose settings.
+**New project with `package.json` but no tsconfig yet**. tsforge writes a full strict `tsconfig.json` so the model cannot slip through on loose settings. Unlike the overlay, this is a real, durable project file.
 
 **Not really a TypeScript project**. No `tsc` step. The gate is ESLint-only.
+
+### Where the overlay lives
+
+The strict overlay is a **cache artifact, not a project file**: it lives under `.tsforge/` (tsforge's own folder, alongside `.tsforge/rules.json`), never as a `tsforge.tsconfig.json` in your repo root. tsforge also drops a scoped `.tsforge/.gitignore` so the overlay stays out of git — created only if you do not already have one, so a `.tsforge/.gitignore` you wrote (e.g. to track `rules.json`) is never overwritten.
 
 ## TypeScript check (`tsc`)
 
@@ -67,6 +72,20 @@ The core ESLint config is **syntactic-only** (no type-aware rules) so it runs on
 
 Baseline stylistic rules (all stacks) include blank lines before `return` and around block-like statements via `@stylistic/padding-line-between-statements`. These are auto-fixable — the gate's `eslint --fix` applies them without model intervention.
 
+## Your tests run too
+
+Type-check and lint prove the code is well-formed; your **tests** prove it's correct. So the auto-gate runs them as well — "green" means the strict floor **and** your tests pass.
+
+tsforge finds the test command automatically:
+
+- a real `test` script in `package.json` → `bun run test`
+- otherwise, if the project has `*.test.ts` / `*.spec.ts` files → `bun test`
+- neither (a greenfield app with no tests yet) → nothing is appended; the gate stays at the strict floor
+
+The npm-init placeholder (`"echo \"Error: no test specified\" && exit 1"`) is ignored — it never counts as "has tests." Tests run **last**, after the cheap static checks, so a type or lint error fails fast without waiting on a test run.
+
+Opt out with **`--strict-floor-only`** when you want the type/lint floor without running tests every cycle (e.g. a slow suite). An explicit `--accept` gate always wins.
+
 ## Web apps get a longer gate
 
 If the session scaffolds a new browser app (`scaffold_web` or `tsforge --web`), the gate grows. "Done" then roughly means: Vite build passes, types pass, lint passes, route stubs are filled in, formatting is clean, and a headless browser smoke test passes.
@@ -74,6 +93,23 @@ If the session scaffolds a new browser app (`scaffold_web` or `tsforge --web`), 
 Details: [Web scaffolding](/scaffold/web/).
 
 Add a one-off page render check with `--browser path/to/index.html`.
+
+### Accessibility, screenshots, and a perf budget
+
+The browser smoke can do more than check that a page renders. These extra oracles are **opt-in** (the default smoke is unchanged):
+
+| Env var | Adds |
+| --- | --- |
+| `TSFORGE_A11Y=1` | [axe](https://github.com/dequelabs/axe-core) accessibility checks on every route — **serious/critical** violations (including colour contrast) fail the gate |
+| `TSFORGE_SCREENSHOTS=1` | a desktop + mobile screenshot per route, written for review (never a pass/fail signal) |
+
+Running the check directly (outside a build) exposes the same flags, plus a basic perf budget:
+
+```bash
+bun browser-check.ts dist/index.html --smoke --a11y --screenshots --perf
+```
+
+`--perf` is a tripwire (DOM node count + mount time), not a full Lighthouse audit. All of these skip cleanly when Chromium / `@axe-core/playwright` aren't installed.
 
 ## Two kinds of checking
 
