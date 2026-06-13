@@ -87,10 +87,12 @@ jobs:
             if [ -n "$PREV_TAG" ]; then
               echo "Since ${PREV_TAG}:"
               echo
-              git log --no-merges --pretty='- %s' "${PREV_TAG}..${GITHUB_REF_NAME}"
+              RANGE="${PREV_TAG}..${GITHUB_REF_NAME}"
             else
-              git log --no-merges --pretty='- %s' "${GITHUB_REF_NAME}"
+              RANGE="${GITHUB_REF_NAME}"
             fi
+            # Drop the version-bump commit — it's noise in the changelog.
+            git log --no-merges --pretty='- %s' "$RANGE" | { grep -vE '^- chore: release ' || true; }
             echo
             echo "## Install"
             echo
