@@ -2,6 +2,23 @@
 title: tsforge
 description: "Point an AI model at your TypeScript project. tsforge lets it edit your code, checks every change with the TypeScript compiler and ESLint, and keeps it fixing until the project actually passes."
 template: splash
+head:
+  - tag: meta
+    attrs:
+      property: og:image
+      content: https://tsforge.dev/og-harness-board.png
+  - tag: meta
+    attrs:
+      name: twitter:image
+      content: https://tsforge.dev/og-harness-board.png
 hero:
   tagline: Point an AI model at your repo. tsforge keeps it fixing until your code actually compiles and passes lint.
 ---
+
+import HarnessBoardDiagram from "../../components/HarnessBoardDiagram.astro";
+import HarnessLoopDiagram from "../../components/HarnessLoopDiagram.astro";
+import HarnessPillars from "../../components/HarnessPillars.astro";
+
+<HarnessBoardDiagram variant="full" />
+<HarnessLoopDiagram />
+<HarnessPillars />

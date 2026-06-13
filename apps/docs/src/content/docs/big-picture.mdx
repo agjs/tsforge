@@ -3,11 +3,19 @@ title: Big picture
 description: What tsforge is, how the loop works, and where each doc section fits.
 ---
 
+import HarnessBoardDiagram from "../../components/HarnessBoardDiagram.astro";
+
 tsforge is a **TypeScript coding harness**. It sits between you and a model, runs edits in your repo, and keeps asking the model to fix things until your project passes a real check. It is not an editor plugin. You point it at a folder, give it a task, and it drives file changes plus validation until the gate is green or the loop stops.
 
 If you already ran the [Quickstart](/quickstart/), this page explains what you just turned on.
 
 **How to read the docs:** start here, then [How the gate is built](/loop/gate-floor/) when "what counts as done?" is unclear. Use the glossary below when a term looks unfamiliar. Eval and spec pages are for benchmark contributors, not required for day-to-day use.
+
+## What the harness is made of
+
+<HarnessBoardDiagram variant="full" />
+
+The diagram shows **composition** — what subsystems exist. The loop diagram below shows **flow** — what happens on each turn.
 
 ## Why tsforge exists
 

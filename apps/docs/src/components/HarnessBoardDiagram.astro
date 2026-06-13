@@ -1,0 +1,403 @@
+---
+/** Motherboard-style harness composition diagram — five subsystems around MODEL. */
+interface ISubsystem {
+  id: string;
+  title: string;
+  subtext: string;
+  href: string;
+}
+
+interface Props {
+  variant?: "full" | "compact";
+  showCaption?: boolean;
+  linked?: boolean;
+  /** Fixed dark styling for OG export page — no doc links. */
+  ogMode?: boolean;
+}
+
+const {
+  variant = "full",
+  showCaption = true,
+  linked = true,
+  ogMode = false,
+} = Astro.props;
+
+const isCompact = variant === "compact";
+const showSubtext = !isCompact && !ogMode;
+
+const subsystems: readonly ISubsystem[] = [
+  {
+    id: "stack",
+    title: "STACK",
+    subtext: "detection, rule packs, constitution",
+    href: "/guardrails/stack-detection/",
+  },
+  {
+    id: "loop",
+    title: "LOOP",
+    subtext: "orchestration, plan mode, repair cycles",
+    href: "/loop/validation/",
+  },
+  {
+    id: "gate",
+    title: "GATE",
+    subtext: "tsc, ESLint, tests, browser smoke",
+    href: "/loop/gate-floor/",
+  },
+  {
+    id: "tools",
+    title: "TOOLS",
+    subtext: "read, edit, shell, MCP, scaffold",
+    href: "/edit/engine/",
+  },
+  {
+    id: "session",
+    title: "SESSION",
+    subtext: "CLI, config, checkpoints, render",
+    href: "/cli/interactive/",
+  },
+];
+
+const ariaLabel =
+  "tsforge harness board: MODEL at center with STACK, LOOP, GATE, TOOLS, and SESSION subsystems connected by circuit traces.";
+---
+
+<section
+  class:list={[
+    "tf-harness-board",
+    isCompact && "tf-harness-board--compact",
+    ogMode && "tf-harness-board--og",
+  ]}
+  aria-label="tsforge harness composition"
+>
+  <div class="tf-harness-board__frame">
+    <svg
+      class="tf-harness-board__svg tf-harness-board__svg--desktop"
+      viewBox="0 0 820 680"
+      role="img"
+      aria-label={ariaLabel}
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <linearGradient id="tf-board-trace" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" class="tf-board-trace-stop-a" />
+          <stop offset="100%" class="tf-board-trace-stop-b" />
+        </linearGradient>
+        <filter id="tf-board-glow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="0" stdDeviation="3" class="tf-board-glow-shadow" />
+        </filter>
+      </defs>
+
+      <!-- Outer HARNESS boundary -->
+      <rect
+        x="36"
+        y="44"
+        width="748"
+        height="592"
+        rx="18"
+        class="tf-board-harness-bg"
+        fill="none"
+        stroke-width="1.5"
+        stroke-dasharray="7 5"
+      />
+      <text x="410" y="72" text-anchor="middle" class="tf-board-boundary-label">HARNESS</text>
+
+      <!-- Circuit traces -->
+      <g class="tf-board-traces" stroke="url(#tf-board-trace)" stroke-width="1.6" fill="none">
+        <path d="M410 168 L410 300" />
+        <path d="M215 268 L330 330" />
+        <path d="M215 488 L330 400" />
+        <path d="M605 268 L490 330" />
+        <path d="M605 488 L490 400" />
+      </g>
+
+      <!-- STACK (top) -->
+      <g class="tf-board-node" transform="translate(410, 130)">
+        {
+          linked && !ogMode ? (
+            <a href="/guardrails/stack-detection/" class="tf-board-link">
+              <g transform="translate(-52, -44)">
+                <rect width="104" height="88" rx="10" class="tf-board-node-bg" />
+                <g transform="translate(22, 12)" stroke-width="1.4" fill="none" class="tf-board-icon-stroke">
+                  <rect x="0" y="0" width="14" height="36" rx="2" />
+                  <rect x="20" y="4" width="14" height="32" rx="2" />
+                  <rect x="40" y="8" width="14" height="28" rx="2" />
+                  <line x1="2" y1="8" x2="12" y2="8" />
+                  <line x1="22" y1="12" x2="32" y2="12" />
+                  <line x1="42" y1="16" x2="52" y2="16" />
+                </g>
+                <text x="52" y="62" text-anchor="middle" class="tf-board-node-title">STACK</text>
+                {showSubtext && (
+                  <text x="52" y="78" text-anchor="middle" class="tf-board-node-sub">detection, rule packs, constitution</text>
+                )}
+              </g>
+            </a>
+          ) : (
+            <g transform="translate(-52, -44)">
+              <rect width="104" height="88" rx="10" class="tf-board-node-bg" />
+              <g transform="translate(22, 12)" stroke-width="1.4" fill="none" class="tf-board-icon-stroke">
+                <rect x="0" y="0" width="14" height="36" rx="2" />
+                <rect x="20" y="4" width="14" height="32" rx="2" />
+                <rect x="40" y="8" width="14" height="28" rx="2" />
+                <line x1="2" y1="8" x2="12" y2="8" />
+                <line x1="22" y1="12" x2="32" y2="12" />
+                <line x1="42" y1="16" x2="52" y2="16" />
+              </g>
+              <text x="52" y="62" text-anchor="middle" class="tf-board-node-title">STACK</text>
+              {showSubtext && (
+                <text x="52" y="78" text-anchor="middle" class="tf-board-node-sub">detection, rule packs, constitution</text>
+              )}
+            </g>
+          )
+        }
+      </g>
+
+      <!-- LOOP (left-top) -->
+      <g class="tf-board-node" transform="translate(160, 268)">
+        {
+          linked && !ogMode ? (
+            <a href="/loop/validation/" class="tf-board-link">
+              <g transform="translate(-58, -48)">
+                <rect width="116" height="96" rx="10" class="tf-board-node-bg" />
+                <g transform="translate(28, 10)" stroke-width="1.4" fill="none" class="tf-board-icon-stroke">
+                  <rect x="0" y="14" width="28" height="16" rx="3" />
+                  <circle cx="14" cy="22" r="5" />
+                  <path d="M44 8 A18 18 0 1 1 44 36" />
+                  <polyline points="44,36 52,36 52,28" stroke-linejoin="round" />
+                </g>
+                <text x="58" y="64" text-anchor="middle" class="tf-board-node-title">LOOP</text>
+                {showSubtext && (
+                  <text x="58" y="80" text-anchor="middle" class="tf-board-node-sub">orchestration, plan mode, repair cycles</text>
+                )}
+              </g>
+            </a>
+          ) : (
+            <g transform="translate(-58, -48)">
+              <rect width="116" height="96" rx="10" class="tf-board-node-bg" />
+              <g transform="translate(28, 10)" stroke-width="1.4" fill="none" class="tf-board-icon-stroke">
+                <rect x="0" y="14" width="28" height="16" rx="3" />
+                <circle cx="14" cy="22" r="5" />
+                <path d="M44 8 A18 18 0 1 1 44 36" />
+                <polyline points="44,36 52,36 52,28" stroke-linejoin="round" />
+              </g>
+              <text x="58" y="64" text-anchor="middle" class="tf-board-node-title">LOOP</text>
+              {showSubtext && (
+                <text x="58" y="80" text-anchor="middle" class="tf-board-node-sub">orchestration, plan mode, repair cycles</text>
+              )}
+            </g>
+          )
+        }
+      </g>
+
+      <!-- GATE (left-bottom) -->
+      <g class="tf-board-node" transform="translate(160, 488)">
+        {
+          linked && !ogMode ? (
+            <a href="/loop/gate-floor/" class="tf-board-link">
+              <g transform="translate(-58, -48)">
+                <rect width="116" height="96" rx="10" class="tf-board-node-bg" />
+                <g transform="translate(24, 8)" stroke-width="1.4" fill="none">
+                  <circle cx="30" cy="24" r="22" class="tf-board-icon-stroke" />
+                  <path d="M30 24 L30 12" class="tf-board-icon-stroke" />
+                  <path d="M30 24 L42 30" class="tf-board-icon-stroke" />
+                  <polyline points="18,38 26,46 44,28" class="tf-board-gate-check" stroke-width="2" fill="none" stroke-linejoin="round" />
+                </g>
+                <text x="58" y="64" text-anchor="middle" class="tf-board-node-title">GATE</text>
+                {showSubtext && (
+                  <text x="58" y="80" text-anchor="middle" class="tf-board-node-sub">tsc, ESLint, tests, browser smoke</text>
+                )}
+              </g>
+            </a>
+          ) : (
+            <g transform="translate(-58, -48)">
+              <rect width="116" height="96" rx="10" class="tf-board-node-bg" />
+              <g transform="translate(24, 8)" stroke-width="1.4" fill="none">
+                <circle cx="30" cy="24" r="22" class="tf-board-icon-stroke" />
+                <path d="M30 24 L30 12" class="tf-board-icon-stroke" />
+                <path d="M30 24 L42 30" class="tf-board-icon-stroke" />
+                <polyline points="18,38 26,46 44,28" class="tf-board-gate-check" stroke-width="2" fill="none" stroke-linejoin="round" />
+              </g>
+              <text x="58" y="64" text-anchor="middle" class="tf-board-node-title">GATE</text>
+              {showSubtext && (
+                <text x="58" y="80" text-anchor="middle" class="tf-board-node-sub">tsc, ESLint, tests, browser smoke</text>
+              )}
+            </g>
+          )
+        }
+      </g>
+
+      <!-- TOOLS (right-top) -->
+      <g class="tf-board-node" transform="translate(660, 268)">
+        {
+          linked && !ogMode ? (
+            <a href="/edit/engine/" class="tf-board-link">
+              <g transform="translate(-58, -48)">
+                <rect width="116" height="96" rx="10" class="tf-board-node-bg" />
+                <g transform="translate(22, 10)" stroke-width="1.4" fill="none" class="tf-board-icon-stroke">
+                  <rect x="0" y="0" width="52" height="34" rx="4" />
+                  <polyline points="6,28 14,20 22,24 30,14 38,18 46,10" />
+                  <rect x="58" y="8" width="8" height="18" rx="1" />
+                  <rect x="58" y="8" width="8" height="6" rx="1" class="tf-board-icon-fill" />
+                </g>
+                <text x="58" y="64" text-anchor="middle" class="tf-board-node-title">TOOLS</text>
+                {showSubtext && (
+                  <text x="58" y="80" text-anchor="middle" class="tf-board-node-sub">read, edit, shell, MCP, scaffold</text>
+                )}
+              </g>
+            </a>
+          ) : (
+            <g transform="translate(-58, -48)">
+              <rect width="116" height="96" rx="10" class="tf-board-node-bg" />
+              <g transform="translate(22, 10)" stroke-width="1.4" fill="none" class="tf-board-icon-stroke">
+                <rect x="0" y="0" width="52" height="34" rx="4" />
+                <polyline points="6,28 14,20 22,24 30,14 38,18 46,10" />
+                <rect x="58" y="8" width="8" height="18" rx="1" />
+                <rect x="58" y="8" width="8" height="6" rx="1" class="tf-board-icon-fill" />
+              </g>
+              <text x="58" y="64" text-anchor="middle" class="tf-board-node-title">TOOLS</text>
+              {showSubtext && (
+                <text x="58" y="80" text-anchor="middle" class="tf-board-node-sub">read, edit, shell, MCP, scaffold</text>
+              )}
+            </g>
+          )
+        }
+      </g>
+
+      <!-- SESSION (right-bottom) -->
+      <g class="tf-board-node" transform="translate(660, 488)">
+        {
+          linked && !ogMode ? (
+            <a href="/cli/interactive/" class="tf-board-link">
+              <g transform="translate(-58, -48)">
+                <rect width="116" height="96" rx="10" class="tf-board-node-bg" />
+                <g transform="translate(20, 14)" stroke-width="1.4" fill="none" class="tf-board-icon-stroke">
+                  <rect x="0" y="0" width="56" height="28" rx="4" />
+                  <rect x="8" y="6" width="40" height="4" rx="1" class="tf-board-icon-fill" />
+                  <rect x="8" y="14" width="28" height="4" rx="1" class="tf-board-icon-fill" />
+                  <rect x="8" y="22" width="20" height="4" rx="1" class="tf-board-icon-fill" />
+                  <circle cx="52" cy="22" r="3" />
+                </g>
+                <text x="58" y="64" text-anchor="middle" class="tf-board-node-title">SESSION</text>
+                {showSubtext && (
+                  <text x="58" y="80" text-anchor="middle" class="tf-board-node-sub">CLI, config, checkpoints, render</text>
+                )}
+              </g>
+            </a>
+          ) : (
+            <g transform="translate(-58, -48)">
+              <rect width="116" height="96" rx="10" class="tf-board-node-bg" />
+              <g transform="translate(20, 14)" stroke-width="1.4" fill="none" class="tf-board-icon-stroke">
+                <rect x="0" y="0" width="56" height="28" rx="4" />
+                <rect x="8" y="6" width="40" height="4" rx="1" class="tf-board-icon-fill" />
+                <rect x="8" y="14" width="28" height="4" rx="1" class="tf-board-icon-fill" />
+                <rect x="8" y="22" width="20" height="4" rx="1" class="tf-board-icon-fill" />
+                <circle cx="52" cy="22" r="3" />
+              </g>
+              <text x="58" y="64" text-anchor="middle" class="tf-board-node-title">SESSION</text>
+              {showSubtext && (
+                <text x="58" y="80" text-anchor="middle" class="tf-board-node-sub">CLI, config, checkpoints, render</text>
+              )}
+            </g>
+          )
+        }
+      </g>
+
+      <!-- MODEL (center) -->
+      <g class="tf-board-node tf-board-node--model" transform="translate(410, 360)" filter="url(#tf-board-glow)">
+        {
+          linked && !ogMode ? (
+            <a href="/agent/model-agent/" class="tf-board-link">
+              <g transform="translate(-70, -62)">
+                <rect width="140" height="124" rx="12" class="tf-board-model-panel" />
+                <g transform="translate(30, 8)">
+                  <rect x="16" y="0" width="48" height="14" rx="3" class="tf-board-heatsink" />
+                  <line x1="22" y1="0" x2="22" y2="14" class="tf-board-heatsink-fin" />
+                  <line x1="32" y1="0" x2="32" y2="14" class="tf-board-heatsink-fin" />
+                  <line x1="42" y1="0" x2="42" y2="14" class="tf-board-heatsink-fin" />
+                  <line x1="52" y1="0" x2="52" y2="14" class="tf-board-heatsink-fin" />
+                  <rect x="8" y="18" width="64" height="44" rx="4" class="tf-board-model-chip" />
+                  <line x1="0" y1="28" x2="8" y2="28" class="tf-board-pin" />
+                  <line x1="0" y1="38" x2="8" y2="38" class="tf-board-pin" />
+                  <line x1="0" y1="48" x2="8" y2="48" class="tf-board-pin" />
+                  <line x1="72" y1="28" x2="80" y2="28" class="tf-board-pin" />
+                  <line x1="72" y1="38" x2="80" y2="38" class="tf-board-pin" />
+                  <line x1="72" y1="48" x2="80" y2="48" class="tf-board-pin" />
+                </g>
+                <text x="70" y="88" text-anchor="middle" class="tf-board-model-title">MODEL</text>
+                {showSubtext && (
+                  <text x="70" y="106" text-anchor="middle" class="tf-board-model-sub">reasons → tool calls</text>
+                )}
+              </g>
+            </a>
+          ) : (
+            <g transform="translate(-70, -62)">
+              <rect width="140" height="124" rx="12" class="tf-board-model-panel" />
+              <g transform="translate(30, 8)">
+                <rect x="16" y="0" width="48" height="14" rx="3" class="tf-board-heatsink" />
+                <line x1="22" y1="0" x2="22" y2="14" class="tf-board-heatsink-fin" />
+                <line x1="32" y1="0" x2="32" y2="14" class="tf-board-heatsink-fin" />
+                <line x1="42" y1="0" x2="42" y2="14" class="tf-board-heatsink-fin" />
+                <line x1="52" y1="0" x2="52" y2="14" class="tf-board-heatsink-fin" />
+                <rect x="8" y="18" width="64" height="44" rx="4" class="tf-board-model-chip" />
+                <line x1="0" y1="28" x2="8" y2="28" class="tf-board-pin" />
+                <line x1="0" y1="38" x2="8" y2="38" class="tf-board-pin" />
+                <line x1="0" y1="48" x2="8" y2="48" class="tf-board-pin" />
+                <line x1="72" y1="28" x2="80" y2="28" class="tf-board-pin" />
+                <line x1="72" y1="38" x2="80" y2="38" class="tf-board-pin" />
+                <line x1="72" y1="48" x2="80" y2="48" class="tf-board-pin" />
+              </g>
+              <text x="70" y="88" text-anchor="middle" class="tf-board-model-title">MODEL</text>
+              {showSubtext && (
+                <text x="70" y="106" text-anchor="middle" class="tf-board-model-sub">reasons → tool calls</text>
+              )}
+            </g>
+          )
+        }
+      </g>
+    </svg>
+
+    <!-- Mobile: stacked cards -->
+    <ol class="tf-harness-board__stack" aria-label={ariaLabel}>
+      <li class="tf-harness-board__card tf-harness-board__card--model">
+        {
+          linked && !ogMode ? (
+            <a href="/agent/model-agent/" class="tf-harness-board__card-link">
+              <strong>MODEL</strong>
+              {showSubtext && <span>reasons → tool calls</span>}
+            </a>
+          ) : (
+            <div class="tf-harness-board__card-body">
+              <strong>MODEL</strong>
+              {showSubtext && <span>reasons → tool calls</span>}
+            </div>
+          )
+        }
+      </li>
+      {
+        subsystems.map((node) => (
+          <li class="tf-harness-board__card">
+            {linked && !ogMode ? (
+              <a href={node.href} class="tf-harness-board__card-link">
+                <strong>{node.title}</strong>
+                {showSubtext && <span>{node.subtext}</span>}
+              </a>
+            ) : (
+              <div class="tf-harness-board__card-body">
+                <strong>{node.title}</strong>
+                {showSubtext && <span>{node.subtext}</span>}
+              </div>
+            )}
+          </li>
+        ))
+      }
+    </ol>
+  </div>
+
+  {
+    showCaption && (
+      <p class="tf-diagram-caption">
+        <em>The model is one chip on the board. The harness is everything else that makes TypeScript merge-ready.</em>
+      </p>
+    )
+  }
+</section>
