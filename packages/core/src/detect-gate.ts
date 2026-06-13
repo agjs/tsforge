@@ -386,7 +386,12 @@ export function buildWebGate(framework: WebFramework): IGate {
   // HARNESS-authored and app-agnostic: we deliberately do NOT run a model-authored
   // checks.json — the 27b writes over-strict interaction assertions (exact
   // placeholders/fill flows) it then can't satisfy and spirals on (iter3/4).
-  const render = `bun "${BROWSER_CHECK}" dist/index.html --smoke --crawl`;
+  // OPT-IN quality oracles (default OFF so existing web runs are unchanged):
+  // TSFORGE_A11Y=1 adds axe (serious/critical fail), TSFORGE_SCREENSHOTS=1 writes
+  // per-route PNGs. A "frontend"/"strict" profile can set these.
+  const a11y = process.env.TSFORGE_A11Y === "1" ? " --a11y" : "";
+  const shots = process.env.TSFORGE_SCREENSHOTS === "1" ? " --screenshots" : "";
+  const render = `bun "${BROWSER_CHECK}" dist/index.html --smoke --crawl${a11y}${shots}`;
   // Prettier enforces formatting (the fix step runs `prettier --write` first, so
   // this passes without the model ever hand-formatting). Respects .prettierignore
   // (vendored ui/ + lib/ skipped). Runs after lint so a parse error fails there.

@@ -1,4 +1,5 @@
 import { resolve, dirname, basename, join } from "node:path";
+import { isRecord } from "../lib/guards";
 // `playwright` is an OPTIONAL peer: bundling it (+ a browser binary) into every
 // install is too heavy, so the import is dynamic and the render-check skips when
 // it's absent. The type-only import is erased at runtime, so it can't crash a
@@ -9,6 +10,20 @@ import type { Page, chromium as Chromium } from "playwright";
 async function loadChromium(): Promise<typeof Chromium | null> {
   try {
     return (await import("playwright")).chromium;
+  } catch {
+    return null;
+  }
+}
+
+/** Run axe against a page and return its raw result; null when @axe-core/
+ *  playwright isn't installed (a11y is an optional enhancement, like the browser
+ *  itself). Kept untyped at the boundary — extractAxeViolations narrows it. */
+async function runAxe(page: Page): Promise<unknown> {
+  try {
+    const mod = await import("@axe-core/playwright");
+    const builder = new mod.AxeBuilder({ page });
+
+    return await builder.analyze();
   } catch {
     return null;
   }
@@ -55,9 +70,24 @@ export interface IRenderOptions {
    *  single-page smoke misses them. Served with SPA fallback so the client
    *  router handles the path. Empty/undefined → no crawl (unchanged behavior). */
   routes?: string[];
+  /** Run axe accessibility checks on the page (and each crawled route). Serious
+   *  and critical violations become gate errors; minor/moderate are skipped.
+   *  Skipped gracefully when @axe-core/playwright isn't installed. */
+  a11y?: boolean;
+  /** Directory to write a screenshot per page/route into (desktop + mobile
+   *  viewports). An artifact for human/visual review — never a pass/fail signal. */
+  screenshotDir?: string;
+  /** A perf budget (DOM node count + mount time) checked on the initial page. */
+  perfBudget?: IPerfBudget;
   /** Navigation timeout (default 15s). */
   timeoutMs?: number;
 }
+
+/** Screenshot viewports — a desktop and a mobile pass per page. */
+const VIEWPORTS = [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 390, height: 844 },
+] as const;
 
 export interface IRenderResult {
   ok: boolean;
@@ -65,12 +95,96 @@ export interface IRenderResult {
   errors: string[];
   /** True when the check was skipped because playwright isn't installed. */
   skipped?: boolean;
+  /** Paths of screenshots captured (when `screenshotDir` was set). */
+  screenshots?: string[];
+}
+
+/** A simple performance budget: fail the render when the built app blows past
+ *  these. Intentionally minimal (no full Lighthouse) — a tripwire, not a profiler. */
+export interface IPerfBudget {
+  /** Max total DOM nodes after load (a proxy for over-heavy render trees). */
+  maxDomNodes?: number;
+  /** Max time from navigation start to DOMContentLoaded, in ms. */
+  maxMountMs?: number;
+}
+
+/** axe impact levels that FAIL the a11y check — minor/moderate are reported by
+ *  axe but don't gate (too noisy to block a build on). */
+const AXE_FAIL_IMPACTS = new Set(["serious", "critical"]);
+
+/** The subset of an axe violation the oracle reports on. */
+interface IAxeViolation {
+  id: string;
+  impact: string | undefined;
+  nodeCount: number;
+}
+
+/** Extract the reportable violations from axe's (untyped, dynamically-imported)
+ *  result — narrowed with guards, no casts. */
+function extractAxeViolations(result: unknown): IAxeViolation[] {
+  if (!isRecord(result) || !Array.isArray(result.violations)) {
+    return [];
+  }
+
+  const out: IAxeViolation[] = [];
+
+  for (const v of result.violations) {
+    if (!isRecord(v) || typeof v.id !== "string") {
+      continue;
+    }
+
+    out.push({
+      id: v.id,
+      impact: typeof v.impact === "string" ? v.impact : undefined,
+      nodeCount: Array.isArray(v.nodes) ? v.nodes.length : 0,
+    });
+  }
+
+  return out;
+}
+
+/** Turn axe violations into gate errors — only serious/critical fail. Pure. */
+export function summarizeAxeViolations(
+  violations: readonly IAxeViolation[],
+  where: string
+): string[] {
+  return violations
+    .filter((v) => v.impact !== undefined && AXE_FAIL_IMPACTS.has(v.impact))
+    .map(
+      (v) =>
+        `a11y ${v.impact ?? "?"} at ${where}: ${v.id} (${String(v.nodeCount)} node(s))`
+    );
+}
+
+/** Evaluate a perf budget against measured values → gate errors. Pure. */
+export function checkPerfBudget(
+  domNodes: number,
+  mountMs: number,
+  budget: IPerfBudget,
+  where: string
+): string[] {
+  const errors: string[] = [];
+
+  if (budget.maxDomNodes !== undefined && domNodes > budget.maxDomNodes) {
+    errors.push(
+      `perf at ${where}: ${String(domNodes)} DOM nodes > budget ${String(budget.maxDomNodes)}`
+    );
+  }
+
+  if (budget.maxMountMs !== undefined && mountMs > budget.maxMountMs) {
+    errors.push(
+      `perf at ${where}: mount ${String(Math.round(mountMs))}ms > budget ${String(budget.maxMountMs)}ms`
+    );
+  }
+
+  return errors;
 }
 
 export async function renderCheck(
   opts: IRenderOptions
 ): Promise<IRenderResult> {
   const errors: string[] = [];
+  const screenshots: string[] = [];
   const chromium = await loadChromium();
 
   // No playwright → skip the render check rather than fail the gate. The build
@@ -87,7 +201,10 @@ export async function renderCheck(
   const browser = await chromium.launch({ args: ["--no-sandbox"] });
 
   try {
-    const page = await browser.newPage();
+    // Page via an explicit context (not browser.newPage()) — axe-core/playwright
+    // requires a context-owned page; browser.close() tears the context down too.
+    const context = await browser.newContext();
+    const page = await context.newPage();
     const timeout = opts.timeoutMs ?? 15_000;
 
     page.on("console", (message) => {
@@ -113,30 +230,39 @@ export async function renderCheck(
           waitUntil: "load",
           timeout,
         });
-        await runChecks(page, opts, errors);
+        await runChecks(page, opts, errors, screenshots);
 
         if (opts.routes !== undefined && opts.routes.length > 0) {
-          await crawlRoutes(page, base, opts.routes, errors, timeout);
+          await crawlRoutes(page, base, opts.routes, errors, timeout, {
+            opts,
+            screenshots,
+          });
         }
       } finally {
         await server.stop(true);
       }
     } else {
       await page.setContent(opts.html ?? "", { waitUntil: "load", timeout });
-      await runChecks(page, opts, errors);
+      await runChecks(page, opts, errors, screenshots);
     }
 
-    return { ok: errors.length === 0, errors };
+    return {
+      ok: errors.length === 0,
+      errors,
+      ...(screenshots.length > 0 ? { screenshots } : {}),
+    };
   } finally {
     await browser.close();
   }
 }
 
-/** The expectation + step + smoke checks that run against the loaded page. */
+/** The expectation + step + smoke checks that run against the loaded page, then
+ *  the optional quality oracles (a11y, perf budget, screenshots). */
 async function runChecks(
   page: Page,
   opts: IRenderOptions,
-  errors: string[]
+  errors: string[],
+  screenshots: string[]
 ): Promise<void> {
   await checkExpectations(page, opts.expect, errors);
 
@@ -146,6 +272,76 @@ async function runChecks(
 
   if (opts.smoke === true) {
     await runSmoke(page, errors);
+  }
+
+  await runQualityOracles(page, opts, "index", errors, screenshots);
+}
+
+/** The opt-in quality layer: accessibility (axe), a perf budget, and screenshots.
+ *  Each is independent and skips cleanly when not requested / dep absent. */
+async function runQualityOracles(
+  page: Page,
+  opts: IRenderOptions,
+  where: string,
+  errors: string[],
+  screenshots: string[]
+): Promise<void> {
+  if (opts.a11y === true) {
+    const violations = extractAxeViolations(await runAxe(page));
+
+    errors.push(...summarizeAxeViolations(violations, where));
+  }
+
+  if (opts.perfBudget !== undefined) {
+    const { domNodes, mountMs } = await measurePage(page);
+
+    errors.push(...checkPerfBudget(domNodes, mountMs, opts.perfBudget, where));
+  }
+
+  if (opts.screenshotDir !== undefined) {
+    await capturePage(page, opts.screenshotDir, where, screenshots);
+  }
+}
+
+/** Measure DOM size + mount time for the perf budget. */
+async function measurePage(
+  page: Page
+): Promise<{ domNodes: number; mountMs: number }> {
+  return page.evaluate(() => {
+    const nav = performance.getEntriesByType("navigation")[0];
+    const mountMs =
+      nav instanceof PerformanceNavigationTiming
+        ? nav.domContentLoadedEventEnd - nav.startTime
+        : 0;
+
+    return { domNodes: document.querySelectorAll("*").length, mountMs };
+  });
+}
+
+/** Filesystem-safe label for a route (e.g. "/a/b" → "a-b", "/" → "index"). */
+function routeLabel(route: string): string {
+  const cleaned = route.replace(/^\/+|\/+$/g, "").replace(/\//g, "-");
+
+  return cleaned.length === 0 ? "index" : cleaned;
+}
+
+/** Capture a desktop + mobile screenshot of the current page into `dir`. */
+async function capturePage(
+  page: Page,
+  dir: string,
+  label: string,
+  screenshots: string[]
+): Promise<void> {
+  for (const vp of VIEWPORTS) {
+    const path = join(dir, `${label}-${vp.name}.png`);
+
+    try {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.screenshot({ path, fullPage: true });
+      screenshots.push(path);
+    } catch {
+      // A screenshot is a best-effort artifact, never a gate failure.
+    }
   }
 }
 
@@ -187,7 +383,8 @@ async function crawlRoutes(
   base: string,
   routes: readonly string[],
   errors: string[],
-  timeout: number
+  timeout: number,
+  quality: { opts: IRenderOptions; screenshots: string[] }
 ): Promise<void> {
   for (const route of routes) {
     try {
@@ -207,7 +404,17 @@ async function crawlRoutes(
 
       if (blank) {
         errors.push(`route ${route} rendered blank`);
+        continue;
       }
+
+      // a11y + screenshots per route (perf budget stays an initial-page check).
+      await runQualityOracles(
+        page,
+        { ...quality.opts, perfBudget: undefined },
+        routeLabel(route),
+        errors,
+        quality.screenshots
+      );
     } catch (error) {
       errors.push(
         `route ${route} failed to load: ${error instanceof Error ? error.message : String(error)}`
