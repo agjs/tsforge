@@ -69,7 +69,7 @@ describe("classifyRun", () => {
     expect(out.failureClass).toBe(FAILURE_CLASS.toolMalformed);
   });
 
-  test("rejected edits with no gate errors → edit-reject", () => {
+  test("rejected edits with no gate errors → edit-reject (edit channel)", () => {
     const out = classifyRun([
       ev("edit", { message: "src/x.ts — rejected (not-found)" }),
       STUCK,
@@ -78,13 +78,86 @@ describe("classifyRun", () => {
     expect(out.failureClass).toBe(FAILURE_CLASS.editReject);
   });
 
-  test("degeneration message → degeneration", () => {
+  test("dispatcher tool-channel rejections also classify as edit-reject", () => {
+    // tool-context.ts emits these on kind:"tool", not kind:"edit".
+    expect(
+      classifyRun([ev("tool", { message: "tool_input_rejected:edit" }), STUCK])
+        .failureClass
+    ).toBe(FAILURE_CLASS.editReject);
+
+    expect(
+      classifyRun([
+        ev("tool", { message: "tool_rejected:edit (out of scope)" }),
+        STUCK,
+      ]).failureClass
+    ).toBe(FAILURE_CLASS.editReject);
+  });
+
+  test("repeated request timeout → timeout (outranks a stale gate error)", () => {
     const out = classifyRun([
-      ev("tool", { message: "output degenerated into a loop" }),
-      STUCK,
+      ev("validated", { passed: false, rules: ["TS18048"] }),
+      ev("stuck", {
+        message:
+          "⚠ model request timed out repeatedly (TimeoutError) — stopped.",
+      }),
     ]);
 
-    expect(out.failureClass).toBe(FAILURE_CLASS.degeneration);
+    expect(out.failureClass).toBe(FAILURE_CLASS.timeout);
+  });
+
+  test("a transient timeout re-steer does NOT classify as timeout", () => {
+    // The per-turn "re-steering (1/3)" message must not trip the terminal signal.
+    const out = classifyRun([
+      ev("tool", {
+        message: "⚠ model request timed out (TimeoutError) — re-steering (1/3)",
+      }),
+      ev("done", { message: "done" }),
+    ]);
+
+    expect(out.failureClass).toBe(FAILURE_CLASS.none);
+  });
+
+  test("repetition-loop stop → degeneration (real terminal messages)", () => {
+    // run.ts / session.ts say "repetition loop", never "degenerate".
+    expect(
+      classifyRun([
+        ev("stuck", {
+          message:
+            "model fell into a repetition loop - stopped. Try a smaller task.",
+        }),
+      ]).failureClass
+    ).toBe(FAILURE_CLASS.degeneration);
+
+    // Outranks a stale gate error from an earlier turn.
+    expect(
+      classifyRun([
+        ev("validated", { passed: false, rules: ["TS18048"] }),
+        ev("stuck", {
+          message:
+            "⚠ repetition loop persisted after recovery attempts — stopped.",
+        }),
+      ]).failureClass
+    ).toBe(FAILURE_CLASS.degeneration);
+  });
+
+  test("malformed-tool-call / narrate-instead-of-build stops → tool-malformed", () => {
+    expect(
+      classifyRun([
+        ev("stuck", {
+          message:
+            "⚠ model kept emitting malformed tool-call text instead of real calls — stopped.",
+        }),
+      ]).failureClass
+    ).toBe(FAILURE_CLASS.toolMalformed);
+
+    expect(
+      classifyRun([
+        ev("stuck", {
+          message:
+            "⚠ model kept writing files as chat messages instead of creating them — stopped.",
+        }),
+      ]).failureClass
+    ).toBe(FAILURE_CLASS.toolMalformed);
   });
 
   test("stuck with no decisive signal → no-progress", () => {
@@ -93,19 +166,34 @@ describe("classifyRun", () => {
     expect(out.failureClass).toBe(FAILURE_CLASS.noProgress);
   });
 
-  test("blank-render browser failure → browser-fail; with a route → route-phantom", () => {
+  test("browser-oracle failures (real strings) → browser-fail / route-phantom", () => {
+    // "app did not mount: root is blank after load" (oracle.ts)
     expect(
       classifyRun([
-        ev("validated", { passed: false, message: "app did not render" }),
+        ev("validated", {
+          passed: false,
+          message: "app did not mount: root is blank after load",
+        }),
         STUCK,
       ]).failureClass
     ).toBe(FAILURE_CLASS.browserFail);
+
+    // "route X failed to load" / "route X rendered blank" → route-phantom
+    expect(
+      classifyRun([
+        ev("validated", {
+          passed: false,
+          message: "route /reports rendered blank",
+        }),
+        STUCK,
+      ]).failureClass
+    ).toBe(FAILURE_CLASS.routePhantom);
 
     expect(
       classifyRun([
         ev("validated", {
           passed: false,
-          message: "route /reports did not render (blank)",
+          message: "route /reports failed to load: TypeError",
         }),
         STUCK,
       ]).failureClass

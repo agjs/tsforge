@@ -12,7 +12,8 @@ export const FAILURE_CLASS = {
   none: "none",
   /** Model emitted tool calls the parser couldn't read (repair L3 / salvage). */
   toolMalformed: "tool-malformed",
-  /** Edits kept missing their target (missing-file / not-found / ambiguous). */
+  /** Edits/tool calls were rejected — missing target (missing-file / not-found /
+   *  ambiguous) or out-of-scope (the dispatcher's tool_rejected). */
   editReject: "edit-reject",
   /** Hit the turn cap or the gate stalled with no decisive error class. */
   noProgress: "no-progress",
@@ -44,6 +45,8 @@ export interface IFailureSignals {
   salvages: number;
   editRejects: number;
   degenerated: boolean;
+  timedOut: boolean;
+  toolUseFailed: boolean;
   tsErrors: number;
   lintErrors: number;
   missingModule: number;
@@ -60,10 +63,25 @@ export interface IFailureSummary {
 
 const TS_CODE = /^TS\d+$/;
 const MISSING_MODULE = /cannot find module/i;
-const DEGENERATE = /degenerat/i;
+// The terminal degeneration stops say "repetition loop" (run.ts, session.ts) —
+// NOT "degenerate". Match both the user-facing phrase and the internal term.
+const DEGENERATE = /repetition loop|degenerat/i;
+// Salvage telemetry on the tool channel ("recovered N malformed tool call(s)").
 const TOOL_MALFORMED = /salvage|recovered|malformed|re-ask/i;
+// Terminal stops where the model never produced usable tool calls: the leaked
+// malformed-tool-call stop and the narrate-instead-of-build stop (session.ts).
+const TOOL_USE_FAILED =
+  /malformed tool-call|writing files as chat|instead of creating them/i;
+// Edit/scope rejections surface on TWO channels: model-agent emits a `kind:"edit"`
+// "<file> — rejected (<reason>)"; the tool dispatcher emits `kind:"tool"`
+// "tool_rejected:" / "tool_input_rejected:". Both contain "reject".
 const REJECTED = /reject/i;
-const BROWSER = /blank|did not render|did not mount|page error|uncaught/i;
+// The TERMINAL timeout stop ("timed out repeatedly … stopped"), NOT the transient
+// per-turn re-steer ("timed out … re-steering (1/3)") — only the former ends a run.
+const TIMED_OUT = /timed out repeatedly/i;
+// The actual browser-oracle failure strings (oracle.ts): "rendered blank",
+// "app did not mount", "console error:", "uncaught:", "route X failed to load".
+const BROWSER = /blank|did not mount|console error|uncaught|failed to load/i;
 const ROUTE = /route|phantom|stub/i;
 const BUILD = /vite|esbuild|build failed|bundl/i;
 
@@ -146,10 +164,15 @@ function gatherSignals(
     salvages: events.filter(
       (e) => e.kind === "tool" && TOOL_MALFORMED.test(e.message)
     ).length,
+    // Rejections come on both the "edit" channel (model-agent) and the "tool"
+    // channel (dispatcher: tool_rejected / tool_input_rejected).
     editRejects: events.filter(
-      (e) => e.kind === "edit" && REJECTED.test(e.message)
+      (e) =>
+        (e.kind === "edit" || e.kind === "tool") && REJECTED.test(e.message)
     ).length,
     degenerated: events.some((e) => DEGENERATE.test(e.message)),
+    timedOut: events.some((e) => TIMED_OUT.test(e.message)),
+    toolUseFailed: events.some((e) => TOOL_USE_FAILED.test(e.message)),
     tsErrors: rules.filter((r) => TS_CODE.test(r) && r !== "TS2307").length,
     lintErrors: rules.filter((r) => !TS_CODE.test(r)).length,
     missingModule,
@@ -203,11 +226,7 @@ function classifyGateErrors(
 
 /** Behavioral fallback when no gate-error class dominates. */
 function classifyBehavior(signals: IFailureSignals): FailureClass {
-  if (signals.degenerated) {
-    return FAILURE_CLASS.degeneration;
-  }
-
-  if (signals.salvages > 0 || signals.repairs > 0) {
+  if (signals.toolUseFailed || signals.salvages > 0 || signals.repairs > 0) {
     return FAILURE_CLASS.toolMalformed;
   }
 
@@ -232,6 +251,18 @@ export function classifyRun(
 
   if (finalStatusOf(events) === "done") {
     return { failureClass: FAILURE_CLASS.none, signals };
+  }
+
+  // A repeated request timeout is the terminal cause — the model couldn't even
+  // respond — so it outranks any stale gate error from an earlier turn.
+  if (signals.timedOut) {
+    return { failureClass: FAILURE_CLASS.timeout, signals };
+  }
+
+  // Likewise a repetition-loop stop: the run died because generation degenerated,
+  // not because of whatever the gate last reported.
+  if (signals.degenerated) {
+    return { failureClass: FAILURE_CLASS.degeneration, signals };
   }
 
   if (signals.missingModule > 0) {
