@@ -38,6 +38,7 @@ import {
   buildGate,
   buildWebGate,
   buildWebFix,
+  buildCoreFix,
   buildWebTypeGate,
   buildWebTscCheck,
   scaffoldWeb,
@@ -903,7 +904,7 @@ async function repl(args: ICliArgs): Promise<number> {
           fix: buildWebFix("react"),
           incrementalCheck: buildWebTscCheck(),
         }
-      : { scaffoldWeb: true }),
+      : { scaffoldWeb: true, fix: buildCoreFix() }),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
     // Thinking OFF for interactive replies so they STREAM immediately instead of

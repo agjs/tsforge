@@ -9,7 +9,12 @@ import {
   makeFileLinter,
   scaffoldWeb,
   discoverTestCommand,
+  buildCoreFix,
 } from "../src/detect-gate";
+
+const ROOT = join(import.meta.dir, "..", "..", "..");
+const ESLINT_BIN = join(ROOT, "node_modules", ".bin", "eslint");
+const STRICT_CONFIG = join(import.meta.dir, "..", "strict.eslint.config.mjs");
 
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "tsforge-gate-"));
@@ -342,4 +347,149 @@ test("scaffoldWeb never overwrites an existing file", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+interface ILintMessage {
+  ruleId: string | null;
+  fix?: unknown;
+}
+
+interface ILintedFile {
+  messages: ILintMessage[];
+}
+
+function isLintedFileArray(value: unknown): value is ILintedFile[] {
+  return Array.isArray(value);
+}
+
+async function runStrictEslint(
+  cwd: string,
+  file: string,
+  fix = false
+): Promise<ILintMessage[]> {
+  const args = [
+    "bun",
+    ESLINT_BIN,
+    "--no-config-lookup",
+    "-c",
+    STRICT_CONFIG,
+    "--format",
+    "json",
+    ...(fix ? ["--fix"] : []),
+    file,
+  ];
+
+  const proc = Bun.spawn(args, {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const stdout = await new Response(proc.stdout).text();
+
+  await proc.exited;
+
+  const parsed: unknown = JSON.parse(stdout);
+
+  if (!isLintedFileArray(parsed)) {
+    throw new Error(`unexpected eslint output: ${stdout.slice(0, 200)}`);
+  }
+
+  return parsed.flatMap((f) => f.messages);
+}
+
+test("core strict config flags missing blank line before return", async () => {
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "src"), { recursive: true });
+    const f = join(dir, "src", "fn.ts");
+
+    await writeFile(
+      f,
+      "export function f(): number {\n  const n = 1;\n  return n;\n}\n"
+    );
+
+    const messages = await runStrictEslint(dir, "src/fn.ts");
+    const padding = messages.filter(
+      (m) => m.ruleId === "@stylistic/padding-line-between-statements"
+    );
+
+    expect(padding.length).toBeGreaterThan(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("core strict config eslint --fix inserts blank line before return", async () => {
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "src"), { recursive: true });
+    const f = join(dir, "src", "fn.ts");
+
+    await writeFile(
+      f,
+      "export function f(): number {\n  const n = 1;\n  return n;\n}\n"
+    );
+
+    await runStrictEslint(dir, "src/fn.ts", true);
+
+    const text = await readFile(f, "utf8");
+
+    expect(text).toContain("const n = 1;\n\n  return n;");
+
+    const messages = await runStrictEslint(dir, "src/fn.ts");
+    const padding = messages.filter(
+      (m) => m.ruleId === "@stylistic/padding-line-between-statements"
+    );
+
+    expect(padding).toEqual([]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("makeFileLinter core does NOT report auto-fixable padding-line issues", async () => {
+  const dir = await tempDir();
+
+  try {
+    const lint = makeFileLinter("core", dir);
+
+    await mkdir(join(dir, "src"), { recursive: true });
+
+    const f = join(dir, "src", "mix.ts");
+
+    await writeFile(
+      f,
+      "export function f(): string {\n" +
+        "  const v = (1 as unknown) as string;\n" +
+        "  return v;\n" +
+        "}\n"
+    );
+
+    const problems = await lint(f);
+
+    expect(
+      problems.some(
+        (p) => p.ruleId === "@typescript-eslint/consistent-type-assertions"
+      )
+    ).toBe(true);
+    expect(
+      problems.some(
+        (p) => p.ruleId === "@stylistic/padding-line-between-statements"
+      )
+    ).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildCoreFix returns eslint --fix and prettier commands", () => {
+  const fix = buildCoreFix();
+
+  expect(fix).toContain("eslint");
+  expect(fix).toContain("--fix");
+  expect(fix).toContain("strict.eslint.config.mjs");
+  expect(fix).toContain("prettier");
 });

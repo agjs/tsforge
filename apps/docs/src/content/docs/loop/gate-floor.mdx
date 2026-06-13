@@ -70,7 +70,7 @@ Why separate? tsforge ships rules tuned for AI-written code and your stack (Reac
 
 The core ESLint config is **syntactic-only** (no type-aware rules) so it runs on any `.ts` file without the target's full type graph. With **`profile: "strict"`** and an existing `tsconfig.json`, tsforge adds a second pass for async correctness (`no-floating-promises`, `no-misused-promises`).
 
-Baseline stylistic rules (all stacks) include blank lines before `return` and around block-like statements via `@stylistic/padding-line-between-statements`. These are auto-fixable — the gate's `eslint --fix` applies them without model intervention.
+Baseline stylistic rules (all stacks) include blank lines before `return` and around block-like statements via `@stylistic/padding-line-between-statements`. That rule is **auto-fixed by `eslint --fix`**, not Prettier — Prettier does not enforce semantic blank lines. Non-web sessions run the same eslint + prettier janitor (`buildCoreFix`) before the gate, so the blank line is inserted without model turns.
 
 ## Your tests run too
 

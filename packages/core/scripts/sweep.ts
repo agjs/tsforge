@@ -6,7 +6,7 @@
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
-import { buildGate, prettierWriteCommand } from "../src/detect-gate";
+import { buildGate, buildCoreFix } from "../src/detect-gate";
 import { runSpec, qualityRepair } from "../src/loop";
 import { modelAgent } from "../src/agent";
 import { OpenAICompatibleProvider } from "../src/inference";
@@ -258,17 +258,22 @@ async function runOne(
     // (an unguarded index access, an `as any`) slipped through as GREEN. Now
     // every task and the whole-spec verify must clear the strict floor BEFORE
     // its functional tests count.
-    // prettier --write FIRST (auto-format), then tsc-strict + eslint. The model
-    // never hand-formats, but the gate still enforces type-safety + idioms.
-    const strictGate = `${prettierWriteCommand()} && ${(await buildGate(runDir)).command}`;
+    // buildCoreFix (eslint --fix + prettier) runs as task.fix before each gate
+    // check — same janitor as the interactive CLI — so padding-line, prefer-const,
+    // etc. are squashed without model turns.
+    const gateCommand = (await buildGate(runDir)).command;
+    const fixCommand = buildCoreFix();
     const gatedSpec = {
       ...spec,
       tasks: spec.tasks.map((t) => ({
         ...t,
-        accept: `${strictGate} && ${t.accept}`,
+        fix: fixCommand,
+        accept: `${gateCommand} && ${t.accept}`,
       })),
       verify:
-        spec.verify.length > 0 ? `${strictGate} && ${spec.verify}` : strictGate,
+        spec.verify.length > 0
+          ? `${gateCommand} && ${spec.verify}`
+          : gateCommand,
     };
 
     // Every run gets a full transcript at <runDir>/run.log; stream to the

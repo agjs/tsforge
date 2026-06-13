@@ -462,6 +462,22 @@ export function buildWebFix(framework: WebFramework): string {
   return `${lintFix} ; ${format}`;
 }
 
+/**
+ * The core (non-web) auto-fix command — same janitor as buildWebFix but uses the
+ * bundled strict.eslint.config.mjs. Run BEFORE the gate each cycle so padding-line,
+ * prefer-const, curly, etc. are squashed without model turns.
+ */
+export function buildCoreFix(): string {
+  const lintFix =
+    `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --fix .`.replace(
+      /\s+/g,
+      " "
+    );
+  const format = `"${PRETTIER_BIN}" --write .`;
+
+  return `${lintFix} ; ${format}`;
+}
+
 async function ensureFile(
   cwd: string,
   name: string,

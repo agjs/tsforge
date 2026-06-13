@@ -12,6 +12,7 @@
 // Rule overrides are loaded via TSFORGE_RULE_OVERRIDES env var (JSON-encoded
 // map of bare rule names to "error" | "warn" | "off").
 import tseslint from "typescript-eslint";
+import stylistic from "@stylistic/eslint-plugin";
 
 // Load stack-aware packs if TSFORGE_PACKS env var is set
 let packConfig = [];
@@ -52,7 +53,10 @@ export default tseslint.config(
   {
     files: ["**/*.ts", "**/*.tsx"],
     languageOptions: { parser: tseslint.parser },
-    plugins: { "@typescript-eslint": tseslint.plugin },
+    plugins: {
+      "@typescript-eslint": tseslint.plugin,
+      "@stylistic": stylistic,
+    },
     rules: {
       // The idioms the model habitually violates — all caught WITHOUT type info.
       "@typescript-eslint/consistent-type-assertions": [
@@ -69,6 +73,25 @@ export default tseslint.config(
       "prefer-const": "error",
       "prefer-template": "error",
       "no-var": "error",
+      // Blank-line discipline — the model rarely gets spacing right, so
+      // eslint --fix + prettier make it free. Uses @stylistic (the rule's
+      // maintained home; the core rule is deprecated and spams usedDeprecatedRules
+      // into eslint's --format json gate output).
+      "@stylistic/padding-line-between-statements": [
+        "error",
+        { blankLine: "always", prev: "import", next: "*" },
+        { blankLine: "any", prev: "import", next: "import" },
+        { blankLine: "always", prev: "*", next: "return" },
+        { blankLine: "always", prev: "*", next: "throw" },
+        { blankLine: "always", prev: ["const", "let", "var"], next: "*" },
+        {
+          blankLine: "any",
+          prev: ["const", "let", "var"],
+          next: ["const", "let", "var"],
+        },
+        { blankLine: "always", prev: "block-like", next: "*" },
+        { blankLine: "always", prev: "*", next: "block-like" },
+      ],
       eqeqeq: ["error", "always"],
       curly: ["error", "all"],
       "no-restricted-syntax": [
