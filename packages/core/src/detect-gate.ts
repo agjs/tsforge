@@ -367,7 +367,43 @@ export async function installWebDeps(cwd: string): Promise<boolean> {
  *  TanStack Router's routeTree.gen.ts) exists before tsc; `vite build` is itself
  *  the bundler oracle — it resolves imports, compiles JSX/Tailwind, fails on
  *  anything broken. */
-export function buildWebGate(framework: WebFramework): IGate {
+/** The packs the WEB eslint config must load by default so the React component
+ *  architecture rules (component-folder-structure, component-file-purity,
+ *  no-jsx-computation, …) actually run on a generated app. The web scaffold's
+ *  stack is fixed (React + TanStack), so this set is deterministic; callers may
+ *  pass a detected/overridden set instead. Without this the web gate ran the
+ *  bundled config with ZERO packs and the whole architecture layer was inert. */
+export const WEB_PACKS: readonly string[] = [
+  "typescript-core",
+  "react",
+  "react-component-architecture",
+  "tanstack-query",
+];
+
+/** Build the `KEY=val ` shell prefix that hands packs (+ rule overrides) to a
+ *  bundled eslint config, which reads them from the environment at load time.
+ *  JSON.stringify emits no spaces, so this survives a later whitespace-collapse. */
+function packEnvPrefix(
+  packs?: readonly string[],
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
+): string {
+  const envParts: string[] = [];
+
+  if (packs !== undefined && packs.length > 0) {
+    envParts.push(`TSFORGE_PACKS=${packs.join(",")}`);
+  }
+
+  if (ruleOverrides !== undefined && Object.keys(ruleOverrides).length > 0) {
+    envParts.push(`TSFORGE_RULE_OVERRIDES=${JSON.stringify(ruleOverrides)}`);
+  }
+
+  return envParts.length > 0 ? `${envParts.join(" ")} ` : "";
+}
+
+export function buildWebGate(
+  framework: WebFramework,
+  packs: readonly string[] = WEB_PACKS
+): IGate {
   const template = WEB_TEMPLATES[framework];
   const ignores = template.eslintIgnore
     .map((glob) => `--ignore-pattern "${glob}"`)
@@ -375,7 +411,7 @@ export function buildWebGate(framework: WebFramework): IGate {
   const build = `bun run build`;
   const tsc = `"${TSC_BIN}" --noEmit -p tsconfig.json`;
   const lint =
-    `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --format json .`.replace(
+    `${packEnvPrefix(packs)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --format json .`.replace(
       /\s+/g,
       " "
     );
@@ -415,14 +451,17 @@ export function buildWebGate(framework: WebFramework): IGate {
  * ALONE — caught small and isolated, before any component is built — instead of
  * as a 20-error avalanche at the very end (the Linear-clone failure mode).
  */
-export function buildWebTypeGate(framework: WebFramework): IGate {
+export function buildWebTypeGate(
+  framework: WebFramework,
+  packs: readonly string[] = WEB_PACKS
+): IGate {
   const template = WEB_TEMPLATES[framework];
   const ignores = template.eslintIgnore
     .map((glob) => `--ignore-pattern "${glob}"`)
     .join(" ");
   const tsc = `"${TSC_BIN}" --noEmit -p tsconfig.json`;
   const lint =
-    `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --format json .`.replace(
+    `${packEnvPrefix(packs)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --format json .`.replace(
       /\s+/g,
       " "
     );
@@ -447,13 +486,16 @@ export function buildWebTscCheck(): string {
  * unfixable rules (`any`/`as`/`!`) still need the model. Best-effort: exits ignored,
  * `;` so prettier runs even when eslint reports remaining (unfixable) errors.
  */
-export function buildWebFix(framework: WebFramework): string {
+export function buildWebFix(
+  framework: WebFramework,
+  packs: readonly string[] = WEB_PACKS
+): string {
   const ignores = WEB_TEMPLATES[framework].eslintIgnore
     .map((glob) => `--ignore-pattern "${glob}"`)
     .join(" ");
 
   const lintFix =
-    `"${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --fix .`.replace(
+    `${packEnvPrefix(packs)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --fix .`.replace(
       /\s+/g,
       " "
     );
@@ -691,24 +733,8 @@ function lintPart(
   packs?: readonly string[],
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
 ): IGate {
-  const envParts: string[] = [];
-
-  if (packs !== undefined && packs.length > 0) {
-    envParts.push(`TSFORGE_PACKS=${packs.join(",")}`);
-  }
-
-  if (
-    ruleOverrides !== undefined &&
-    typeof ruleOverrides === "object" &&
-    Object.keys(ruleOverrides).length > 0
-  ) {
-    envParts.push(`TSFORGE_RULE_OVERRIDES=${JSON.stringify(ruleOverrides)}`);
-  }
-
-  const envPrefix = envParts.length > 0 ? `${envParts.join(" ")} ` : "";
-
   return {
-    command: `${envPrefix}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
+    command: `${packEnvPrefix(packs, ruleOverrides)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
     label: "strict TypeScript (tsforge)",
   };
 }

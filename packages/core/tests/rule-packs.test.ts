@@ -1938,6 +1938,7 @@ describe("react-component-architecture pack", () => {
     expect(pack.id).toBe("react-component-architecture");
     expect(pack.description).toContain("Component structure");
     expect(Object.keys(pack.rules).sort()).toEqual([
+      "component-file-purity",
       "component-folder-structure",
       "dangerous-html-requires-sanitize",
       "forwardref-display-name",
@@ -1965,6 +1966,163 @@ describe("react-component-architecture pack", () => {
     expect(rule.meta.docs?.description).toContain("component");
     expect(rule.meta.messages).toBeDefined();
     expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("component-folder-structure: allows a feature component under views/<F>/components/", () => {
+    const code = `export function DealsTable() { return <div />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/views/Dashboard/components/DealsTable.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("component-folder-structure: allows a shared primitive under components/ui/", () => {
+    const code = `export function Table() { return <table />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/components/ui/table.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("component-folder-structure: rejects a component scattered outside views/", () => {
+    const code = `export function DealsTable() { return <div />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/dashboard/DealsTable.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("wrongLocation");
+  });
+
+  test("component-folder-structure: rejects a component at the view root (not in components/)", () => {
+    const code = `export function DealsTable() { return <div />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "component-folder-structure",
+      code,
+      "src/views/Dashboard/DealsTable.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("wrongLocation");
+  });
+
+  test("component-file-purity: rule exists and is callable", () => {
+    const rule =
+      RULE_PACKS["react-component-architecture"].rules[
+        "component-file-purity"
+      ]!;
+
+    expect(rule.meta.type).toBe("problem");
+    expect(rule.meta.docs?.description).toContain("component");
+    expect(rule.meta.messages).toBeDefined();
+    expect(rule.meta.schema).toBeDefined();
+  });
+
+  test("component-file-purity: rejects an inline constant beside a component", () => {
+    const code = `
+      const STAGE_LABEL = { lead: "Lead" };
+      export function DealsTable() { return <div>{STAGE_LABEL.lead}</div>; }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "component-file-purity",
+      code,
+      "src/views/Dashboard/components/DealsTable.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("inlineConstant");
+  });
+
+  test("component-file-purity: rejects an inline helper function beside a component", () => {
+    const code = `
+      function formatCurrency(n: number): string { return String(n); }
+      export function DealsTable() { return <div>{formatCurrency(1)}</div>; }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "component-file-purity",
+      code,
+      "src/views/Dashboard/components/DealsTable.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("inlineHelper");
+  });
+
+  test("component-file-purity: rejects an inline type beside a component", () => {
+    const code = `
+      interface IProps { deals: readonly string[]; }
+      export function DealsTable({ deals }: IProps) { return <div>{deals.length}</div>; }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "component-file-purity",
+      code,
+      "src/views/Dashboard/components/DealsTable.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("inlineType");
+  });
+
+  test("component-file-purity: allows a pure component file (imports + component only)", () => {
+    const code = `
+      import { Table } from "@/components/ui/table";
+      import { dealColumns } from "../dashboard.constants";
+      import type { IDeal } from "../dashboard.types";
+
+      export function DealsTable({ deals }: { deals: readonly IDeal[] }) {
+        return <Table columns={dealColumns} data={deals} rowKey={(d) => d.id} />;
+      }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "component-file-purity",
+      code,
+      "src/views/Dashboard/components/DealsTable.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("component-file-purity: exempts shadcn ui primitives (cva variant consts)", () => {
+    const code = `
+      import { cva } from "class-variance-authority";
+      const buttonVariants = cva("base");
+      export function Button() { return <button type="button" />; }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "component-file-purity",
+      code,
+      "src/components/ui/button.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("component-file-purity: exempts route shells (const Route = createFileRoute)", () => {
+    const code = `
+      import { createFileRoute } from "@tanstack/react-router";
+      export const Route = createFileRoute("/dashboard")({ component: Page });
+      function Page() { return <div />; }
+    `;
+    const messages = lint(
+      "react-component-architecture",
+      "component-file-purity",
+      code,
+      "src/routes/dashboard.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
   });
 
   test("forwardref-display-name: rule exists and is callable", () => {

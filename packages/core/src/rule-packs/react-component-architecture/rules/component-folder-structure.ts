@@ -1,44 +1,34 @@
-import { existsSync } from "fs";
-import { dirname, join } from "path";
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 
 import { createRule } from "../../create-rule";
-import { getComponentName, isComponentFile, isInShadcnUi } from "../utils";
+import {
+  getComponentName,
+  isComponentFile,
+  isInShadcnUi,
+  isRouteFile,
+} from "../utils";
 
 export const RULE_NAME = "component-folder-structure";
 
 export interface ComponentFolderStructureOptions {
-  readonly requiredSiblings?: readonly string[];
+  /** Substrings; a component file whose path matches any is left alone. */
   readonly ignorePaths?: readonly string[];
 }
 
 type RuleOptions = [ComponentFolderStructureOptions];
-type MessageIds = "missingSiblings";
+type MessageIds = "wrongLocation";
 
-const DEFAULT_SIBLINGS = [
-  "<Name>.hooks.ts",
-  "<Name>.types.ts",
-  "<Name>.stories.tsx",
-  "<Name>.test.ts",
-  "index.ts",
-];
+const DEFAULT_IGNORE_PATHS = ["tests/", "e2e/", ".storybook/", "node_modules"];
 
-const DEFAULT_IGNORE_PATHS = [
-  "src/components/ui/",
-  "tests/",
-  "e2e/",
-  ".storybook/",
-  "node_modules",
-];
+/** A feature component lives at src/views/<Feature>/components/<X>.tsx (nesting
+ *  under components/ is allowed). The view root is src/views/<Feature>/index.tsx
+ *  (lowercase ⇒ not a PascalCase component file, so it never reaches here). */
+const FEATURE_COMPONENT = /(^|\/)src\/views\/[^/]+\/components\//;
 
 const optionSchema: JSONSchema4 = {
   type: "object",
   additionalProperties: false,
   properties: {
-    requiredSiblings: {
-      type: "array",
-      items: { type: "string" },
-    },
     ignorePaths: {
       type: "array",
       items: { type: "string" },
@@ -53,20 +43,15 @@ export const componentFolderStructureRule = createRule<RuleOptions, MessageIds>(
       type: "problem",
       docs: {
         description:
-          "Enforce required sibling files in component folders (hooks, types, stories, test, index)",
+          "A component .tsx must live in src/views/<Feature>/components/ (feature component), src/components/ui/ (shared primitive), or be the view root src/views/<Feature>/index.tsx",
       },
       schema: [optionSchema],
       messages: {
-        missingSiblings:
-          "Component '{{name}}' is missing required siblings: {{missing}}",
+        wrongLocation:
+          "Component '{{name}}' is in the wrong place. Put it in src/views/<Feature>/components/{{name}}.tsx (a feature component), src/components/ui/ (a shared primitive), or make it the view root src/views/<Feature>/index.tsx — do NOT scatter components under {{dir}}.",
       },
     },
-    defaultOptions: [
-      {
-        requiredSiblings: DEFAULT_SIBLINGS,
-        ignorePaths: DEFAULT_IGNORE_PATHS,
-      },
-    ],
+    defaultOptions: [{ ignorePaths: DEFAULT_IGNORE_PATHS }],
     create(context, [options]) {
       const filename = context.filename;
 
@@ -80,42 +65,32 @@ export const componentFolderStructureRule = createRule<RuleOptions, MessageIds>(
         return {};
       }
 
-      if (isInShadcnUi(filename)) {
+      // Allowed homes: shared primitives, generated route shells, feature
+      // components. Anything else is a scattered/mis-placed component.
+      if (
+        isInShadcnUi(filename) ||
+        isRouteFile(filename) ||
+        FEATURE_COMPONENT.test(filename)
+      ) {
         return {};
       }
 
       const componentName = getComponentName(filename);
 
-      if (!componentName) {
+      if (componentName === null) {
         return {};
       }
 
+      const slash = filename.lastIndexOf("/");
+      const dir = slash === -1 ? "." : filename.slice(0, slash);
+
       return {
         "Program:exit"(node) {
-          const dir = dirname(filename);
-          const requiredSiblings = options.requiredSiblings ?? DEFAULT_SIBLINGS;
-
-          const missing: string[] = [];
-
-          for (const sibling of requiredSiblings) {
-            const siblingPath = sibling.replace("<Name>", componentName);
-            const fullPath = join(dir, siblingPath);
-
-            if (!existsSync(fullPath)) {
-              missing.push(siblingPath);
-            }
-          }
-
-          if (missing.length > 0) {
-            context.report({
-              node,
-              messageId: "missingSiblings",
-              data: {
-                name: componentName,
-                missing: missing.join(", "),
-              },
-            });
-          }
+          context.report({
+            node,
+            messageId: "wrongLocation",
+            data: { name: componentName, dir },
+          });
         },
       };
     },

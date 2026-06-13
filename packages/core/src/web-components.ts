@@ -365,63 +365,65 @@ export function Separator({
 `,
   table: `import { cn } from "@/lib/utils";
 
-export function Table({
+// A column-driven table: pass your typed rows + a column spec and it renders.
+// This is the table — there is NO per-feature wrapper (no DealsTable/UsersTable).
+// Define columns as a feature constant (e.g. dashboard.constants.ts) and render
+// <Table columns={dealColumns} data={deals} rowKey={(d) => d.id} />.
+export interface IColumn<T> {
+  readonly header: string;
+  readonly cell: (row: T) => React.ReactNode;
+  readonly className?: string;
+}
+
+export function Table<T>({
+  columns,
+  data,
+  rowKey,
   className,
-  ...props
-}: React.TableHTMLAttributes<HTMLTableElement>): React.JSX.Element {
+}: {
+  readonly columns: readonly IColumn<T>[];
+  readonly data: readonly T[];
+  readonly rowKey: (row: T) => string;
+  readonly className?: string;
+}): React.JSX.Element {
   return (
     <div className="relative w-full overflow-auto $DELTA">
-      <table className={cn("w-full caption-bottom text-sm", className)} {...props} />
+      <table className={cn("w-full caption-bottom text-sm", className)}>
+        <thead className="[&_tr]:border-b">
+          <tr className="border-b transition-colors hover:bg-muted/50">
+            {columns.map((col) => (
+              <th
+                key={col.header}
+                className={cn(
+                  "h-10 px-2 text-left align-middle font-medium text-muted-foreground",
+                  col.className
+                )}
+              >
+                {col.header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="[&_tr:last-child]:border-0">
+          {data.map((row) => (
+            <tr
+              key={rowKey(row)}
+              className="border-b transition-colors hover:bg-muted/50"
+            >
+              {columns.map((col) => (
+                <td
+                  key={col.header}
+                  className={cn("p-2 align-middle", col.className)}
+                >
+                  {col.cell(row)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
-}
-
-export function TableHeader({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLTableSectionElement>): React.JSX.Element {
-  return <thead className={cn("[&_tr]:border-b", className)} {...props} />;
-}
-
-export function TableBody({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLTableSectionElement>): React.JSX.Element {
-  return <tbody className={cn("[&_tr:last-child]:border-0", className)} {...props} />;
-}
-
-export function TableRow({
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLTableRowElement>): React.JSX.Element {
-  return (
-    <tr
-      className={cn("border-b transition-colors hover:bg-muted/50", className)}
-      {...props}
-    />
-  );
-}
-
-export function TableHead({
-  className,
-  ...props
-}: React.ThHTMLAttributes<HTMLTableCellElement>): React.JSX.Element {
-  return (
-    <th
-      className={cn(
-        "h-10 px-2 text-left align-middle font-medium text-muted-foreground",
-        className
-      )}
-      {...props}
-    />
-  );
-}
-
-export function TableCell({
-  className,
-  ...props
-}: React.TdHTMLAttributes<HTMLTableCellElement>): React.JSX.Element {
-  return <td className={cn("p-2 align-middle", className)} {...props} />;
 }
 `,
   // ─── composition blocks (molecules) ────────────────────────────────────────

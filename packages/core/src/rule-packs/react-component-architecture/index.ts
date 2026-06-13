@@ -1,6 +1,7 @@
 import type { TSESLint } from "@typescript-eslint/utils";
 
 import { dangerousHtmlRequiresSanitizeRule } from "./rules/dangerous-html-requires-sanitize";
+import { componentFilePurityRule } from "./rules/component-file-purity";
 import { componentFolderStructureRule } from "./rules/component-folder-structure";
 import { forwardrefDisplayNameRule } from "./rules/forwardref-display-name";
 import { indexMustReexportDefaultRule } from "./rules/index-must-reexport-default";
@@ -17,6 +18,7 @@ import { noStateInComponentBodyRule } from "./rules/no-state-in-component-body";
 import type { IRulePack } from "../rule-packs.types";
 
 const rules: Record<string, TSESLint.RuleModule<string, readonly unknown[]>> = {
+  "component-file-purity": componentFilePurityRule,
   "component-folder-structure": componentFolderStructureRule,
   "dangerous-html-requires-sanitize": dangerousHtmlRequiresSanitizeRule,
   "forwardref-display-name": forwardrefDisplayNameRule,
@@ -39,6 +41,7 @@ export const reactComponentArchitecturePack: IRulePack = {
     "Component structure, composition, and file organization for React",
   rules,
   rulesConfig: {
+    "component-file-purity": "error",
     "component-folder-structure": "error",
     "dangerous-html-requires-sanitize": "error",
     "forwardref-display-name": "error",

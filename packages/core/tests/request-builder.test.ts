@@ -162,6 +162,44 @@ describe("reasoning_content round-trip", () => {
 
     expect(JSON.stringify(b.messages)).not.toContain("reasoning_content");
   });
+
+  test("auto-detects deepseek from baseUrl (no explicit reasoning) and replays", () => {
+    const b = buildRequestBody(
+      cfg({ baseUrl: "https://api.deepseek.com/v1" }),
+      history,
+      {},
+      false
+    );
+
+    expect(JSON.stringify(b.messages)).toContain(
+      '"reasoning_content":"my thought"'
+    );
+  });
+
+  test("auto-detects deepseek from model id (no explicit reasoning) and replays", () => {
+    const b = buildRequestBody(
+      cfg({ baseUrl: "https://proxy/v1", model: "deepseek-pro-4" }),
+      history,
+      {},
+      false
+    );
+
+    expect(JSON.stringify(b.messages)).toContain(
+      '"reasoning_content":"my thought"'
+    );
+  });
+
+  test("auto-detected deepseek also omits tool_choice (thinking mode rejects it)", () => {
+    const b = buildRequestBody(
+      cfg({ model: "deepseek-pro-4" }),
+      MSGS,
+      { tools: [{ type: "function" }] },
+      false
+    );
+
+    expect(b.tools).toBeDefined();
+    expect(b.tool_choice).toBeUndefined();
+  });
 });
 
 describe("chatCompletionsUrl", () => {

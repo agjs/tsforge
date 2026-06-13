@@ -83,6 +83,68 @@ export function isInShadcnUi(filename: string): boolean {
 }
 
 /**
+ * Detect if a path is a TanStack route file (generated/hand-wired shells under
+ * src/routes/). These legitimately hold a non-component `const Route =
+ * createFileRoute(...)` and are exempt from the component-purity/location rules.
+ */
+export function isRouteFile(filename: string): boolean {
+  return /(^|\/)src\/routes\//.test(filename);
+}
+
+/** A name is a component name when it is PascalCase (starts with an uppercase). */
+export function isComponentName(name: string): boolean {
+  return /^[A-Z]/.test(name);
+}
+
+/** True when a node is a function expression/arrow (a component's init shape). */
+function isFunctionInit(node: TSESTree.Expression | null | undefined): boolean {
+  return (
+    node?.type === AST_NODE_TYPES.ArrowFunctionExpression ||
+    node?.type === AST_NODE_TYPES.FunctionExpression
+  );
+}
+
+/**
+ * Given a top-level statement (already unwrapped from any `export`), report
+ * whether it DECLARES a React component — a PascalCase `function`, or a
+ * `const PascalCase = (…) => …` whose init is a function. A `const Route =
+ * createFileRoute(...)(...)` is NOT a component (its init is a call), so route
+ * files don't trip this.
+ */
+export function isComponentDeclaration(node: TSESTree.Node): boolean {
+  if (node.type === AST_NODE_TYPES.FunctionDeclaration && node.id !== null) {
+    return isComponentName(node.id.name);
+  }
+
+  if (node.type === AST_NODE_TYPES.VariableDeclaration) {
+    return node.declarations.some(
+      (d) =>
+        d.id.type === AST_NODE_TYPES.Identifier &&
+        isComponentName(d.id.name) &&
+        isFunctionInit(d.init)
+    );
+  }
+
+  return false;
+}
+
+/** Unwrap a top-level statement from its `export`/`export default` wrapper, so
+ *  callers classify the underlying declaration uniformly. */
+export function unwrapExport(
+  statement: TSESTree.ProgramStatement
+): TSESTree.Node {
+  if (
+    (statement.type === AST_NODE_TYPES.ExportNamedDeclaration ||
+      statement.type === AST_NODE_TYPES.ExportDefaultDeclaration) &&
+    statement.declaration !== null
+  ) {
+    return statement.declaration;
+  }
+
+  return statement;
+}
+
+/**
  * Extract component name from filename (e.g., Button.tsx → Button)
  */
 export function getComponentName(filename: string): string | null {

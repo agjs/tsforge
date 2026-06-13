@@ -19,7 +19,21 @@ function interpolateEnv(
 }
 
 function style(cfg: IOpenAICompatibleConfig): ReasoningStyle {
-  return cfg.reasoning ?? "qwen";
+  if (cfg.reasoning !== undefined) {
+    return cfg.reasoning;
+  }
+
+  // Auto-detect DeepSeek when not explicitly configured, so its thinking-mode
+  // round-trip works out of the box: DeepSeek requires each prior assistant
+  // turn's `reasoning_content` replayed, and 400s otherwise ("The
+  // reasoning_content in the thinking mode must be passed back to the API").
+  // Without this, a DeepSeek model added with just { baseUrl, model } gets the
+  // `qwen` default, which strips reasoning_content on replay → that 400.
+  if (`${cfg.baseUrl} ${cfg.model}`.toLowerCase().includes("deepseek")) {
+    return "deepseek";
+  }
+
+  return "qwen";
 }
 
 /** Provider-specific reasoning/thinking fields for the request body. */
