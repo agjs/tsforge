@@ -59,7 +59,7 @@ On a real terminal, a status bar stays **pinned to the bottom** while output scr
   ⎯ qwen3.6-27b · ctx ~8k/32k 25% · 2 turns · 12s · 48 tok/s · done · src/**
 ```
 
-It shows the active model, real context-window usage, the last turn's count + elapsed, the current generation rate, the last outcome, and the editable scope. It repaints as state changes and survives terminal resizes. When stdout isn't a TTY (piped output, `--log`, a tiny window) the bar is skipped and the same line prints inline above each prompt instead, so logs and pipes stay clean.
+It shows the active model, real context-window usage, the last turn's count + elapsed, the current generation rate, the last outcome, and the editable scope. It **ticks live while the model works** — tokens/sec and the context meter update mid-turn (the status reads `● working`), settling to `✓ done` / `✗ stuck` when the turn ends — and it survives terminal resizes. When stdout isn't a TTY (piped output, `--log`, a tiny window) the bar is skipped and the same line prints inline above each prompt instead, so logs and pipes stay clean.
 
 ## Live metrics
 

@@ -442,12 +442,14 @@ function makeSpinner(): {
   clear: () => void;
   stop: () => void;
   setLabel: (label: string) => void;
+  onTick: (cb: () => void) => void;
 } {
   let timer: ReturnType<typeof setInterval> | null = null;
   let startedAt = 0;
   let frame = 0;
   let drawn = false;
   let label = "thinking";
+  let onTickCb: (() => void) | null = null;
 
   const clear = (): void => {
     if (drawn) {
@@ -464,6 +466,7 @@ function makeSpinner(): {
       `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secs}s${RESET}`
     );
     drawn = true;
+    onTickCb?.(); // repaint the pinned status bar with live tok/s / context
   };
 
   return {
@@ -487,6 +490,9 @@ function makeSpinner(): {
     },
     setLabel: (l: string): void => {
       label = l;
+    },
+    onTick: (cb: () => void): void => {
+      onTickCb = cb;
     },
   };
 }
@@ -964,6 +970,7 @@ async function repl(args: ICliArgs): Promise<number> {
     active = new AbortController();
     const started = performance.now();
 
+    lastStatus = "working"; // reflected live on the bar (● working) during the turn
     spinner.start();
 
     try {
@@ -1238,6 +1245,14 @@ async function repl(args: ICliArgs): Promise<number> {
   // Pinned bottom status bar when we're on a real terminal; otherwise the bar is
   // inactive and `prompt()` falls back to the inline status line (pipes, --log).
   const statusBar = new StatusBar(process.stdout, true, true);
+
+  // Repaint the bar on every spinner tick so tok/s and the context meter update
+  // live mid-turn (both read live session state), not just at turn boundaries.
+  spinner.onTick(() => {
+    if (statusBar.active) {
+      statusBar.update(statusInfo());
+    }
+  });
 
   process.stdout.on("resize", () => {
     statusBar.resize(statusInfo());
