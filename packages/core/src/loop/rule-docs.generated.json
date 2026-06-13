@@ -109,6 +109,21 @@
     "bad": "[1, 2, 3].reduce((arr, num) => arr.concat(num * 2), [] as number[]);\n\n['a', 'b'].reduce(\n  (accumulator, name) => ({\n    ...accumulator,\n    [name]: true,\n  }),\n  {} as Record<string, boolean>,",
     "good": "[1, 2, 3].reduce<number[]>((arr, num) => arr.concat(num * 2), []);\n\n['a', 'b'].reduce<Record<string, boolean>>(\n  (accumulator, name) => ({\n    ...accumulator,\n    [name]: true,\n  }),\n  {},"
   },
+  "tsforge/id-param-requires-object-authz": {
+    "what": "Warn when a handler reads `params.id` and queries the database without an authorization check in the same function.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/mutating-route-requires-authz": {
+    "what": "POST/PUT/PATCH/DELETE route handlers must call an authorization helper before mutating state.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/server-action-requires-authz": {
+    "what": "Files with `\"use server\"` that perform database mutations must call an authorization helper in the same function.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/job-name-must-be-constant": {
     "what": "Disallow string-literal job names in `<queue>.add(name, ...)` calls — use a constant identifier so all consumers share one source of truth.",
     "bad": "// Example that violates the rule",
@@ -219,6 +234,16 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/update-delete-account-scoped-must-filter-scope": {
+    "what": "Require Drizzle `.update()` / `.delete()` against account-scoped tables to filter by a scope column in `.where()`.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/update-delete-must-have-where": {
+    "what": "Require every Drizzle `.update()` and `.delete()` call to include a `.where()` clause — unscoped writes affect every row.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/consistent-status-via-set": {
     "what": "Inside Elysia route handlers, set HTTP status via `set.status = N`, not by returning a `new Response(body, { status: N })`.",
     "bad": "// Example that violates the rule",
@@ -319,8 +344,23 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/auth-cookie-must-set-maxage-or-expires": {
+    "what": "Auth-cookie writes should set `maxAge` or `expires` so session cookies do not live forever by default.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/auth-cookie-must-set-samesite": {
+    "what": "Auth-cookie writes must set `sameSite` (`strict` or `lax`) — missing SameSite allows cross-site cookie delivery.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/bcrypt-rounds-min": {
     "what": "Disallow `bcrypt.hash` / `bcrypt.hashSync` calls with a numeric-literal rounds value below the configured minimum (default 10).",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/jwt-must-verify-not-decode": {
+    "what": "Disallow `jwt.decode` / `decodeJwt` — decoding without verification accepts forged tokens. Use `jwt.verify` or `jwtVerify` instead.",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
@@ -354,6 +394,11 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/mutation-should-revalidate-cache": {
+    "what": "After database mutations in server actions or route handlers, call `revalidatePath` or `revalidateTag` so cached pages reflect the change.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/no-html-img-element": {
     "what": "Prefer next/image over raw <img> elements for optimized responsive images and Core Web Vitals.",
     "bad": "// Example that violates the rule",
@@ -374,6 +419,11 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/no-secret-props-to-client": {
+    "what": "Warn when Server Components pass secret-looking props to JSX — values may cross the client boundary.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/no-sensitive-next-public-env": {
     "what": "Disallow NEXT_PUBLIC_* env vars whose names suggest secrets — public build-time vars are visible in the client bundle.",
     "bad": "// Example that violates the rule",
@@ -381,6 +431,16 @@
   },
   "tsforge/prefer-lazy-use-state-init": {
     "what": "Prefer lazy useState initializers when parsing localStorage/sessionStorage — avoids re-parsing on every render.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/server-action-requires-authz-and-validation": {
+    "what": "Server actions (`\"use server\"`) that mutate the database must call authorization helpers and validate input with `.parse()` / `.safeParse()`.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/server-only-modules-import-server-only": {
+    "what": "App-router server modules must import `\"server-only\"` so accidental client bundling fails at build time.",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
@@ -399,8 +459,13 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/component-file-purity": {
+    "what": "A component .tsx contains only imports and the component itself — types go to <feature>.types.ts, constants to <feature>.constants.ts, helpers to src/lib",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/component-folder-structure": {
-    "what": "Enforce required sibling files in component folders (hooks, types, stories, test, index)",
+    "what": "A component .tsx must live in src/views/<Feature>/components/ (feature component), src/components/ui/ (shared primitive), or be the view root src/views/<Feature>/index.tsx",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
@@ -469,6 +534,31 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/no-prototype-polluting-merge": {
+    "what": "Disallow merging request body/query/params into objects — enables prototype pollution.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-user-controlled-fetch-url": {
+    "what": "Disallow fetch/axios requests to non-literal URLs — dynamic URLs enable SSRF.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-user-controlled-redirect": {
+    "what": "Disallow redirects to non-literal URLs — user-controlled redirects enable open redirects.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/upload-must-set-limits": {
+    "what": "Multipart upload handlers should declare `limits` or `maxFileSize` to bound request size.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/webhook-must-verify-signature-before-parse": {
+    "what": "Webhook handlers must verify signatures before calling `.json()` on the request body.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/catch-must-handle": {
     "what": "Catch blocks must log, rethrow, or propagate errors — not silently return empty defaults on failure.",
     "bad": "// Example that violates the rule",
@@ -499,6 +589,16 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/caught-error-log-requires-cause": {
+    "what": "When logging a caught error, include a `cause` field in the structured payload so downstream tools preserve the error chain.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/logger-not-console": {
+    "what": "Service modules should use the structured logger instead of `console.*` — console output is unstructured and hard to search.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/mask-pii-fields": {
     "what": "Disallow unmasked PII (email, phone, password, token, ...) in structured-logger payloads — the #1 way data leaks quietly.",
     "bad": "// Example that violates the rule",
@@ -519,13 +619,48 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/fake-timers-must-be-restored": {
+    "what": "When a test file calls `useFakeTimers()`, it must also call `useRealTimers()` so later tests are not affected.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-conditional-expect": {
+    "what": "Disallow `expect()` inside conditionals — tests must fail when assertions are skipped.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/no-focused-tests": {
     "what": "Disallow focused tests (`test.only`, `it.only`, `fdescribe`, ...) — the canonical 'I forgot to remove this before committing' leak.",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/no-real-network-in-unit-tests": {
+    "what": "Unit tests should not perform real network I/O — mock HTTP clients or move the test to an integration suite.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/test-file-mirrors-source": {
     "what": "Every test file under `tests/` must mirror a source file under `src/`. Catches orphaned tests left behind after refactors and renames.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/exported-functions-require-return-type": {
+    "what": "Exported functions should declare an explicit return type at module boundaries.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/fetch-must-check-ok": {
+    "what": "HTTP fetch responses must check `.ok` or status before calling `.json()`.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/json-parse-must-validate": {
+    "what": "Disallow bare JSON.parse on untrusted input — validate through a schema library.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-unsafe-boundary-cast": {
+    "what": "Disallow type assertions immediately after parsing untrusted boundary input.",
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   }
