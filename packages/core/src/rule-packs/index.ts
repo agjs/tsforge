@@ -1,5 +1,6 @@
 import type { TSESLint } from "@typescript-eslint/utils";
 
+import type { IRulePack } from "./rule-packs.types";
 import { bullmqPack } from "./bullmq";
 import { commentHygienePack } from "./comment-hygiene";
 import { codeFlowPack } from "./code-flow";
@@ -41,6 +42,31 @@ export type IRulePackId = keyof typeof RULE_PACKS;
 /** Type guard: check if a string is a valid RULE_PACKS key. */
 function isRulePackId(id: unknown): id is IRulePackId {
   return typeof id === "string" && id in RULE_PACKS;
+}
+
+/** Externally-registered rule packs (from tsforge.config.json `plugins`). Kept
+ *  separate from the built-in RULE_PACKS so a user pack can never shadow a
+ *  built-in by id; rule-name collisions still fail the build in
+ *  buildPackEslintConfig. */
+const EXTERNAL_PACKS = new Map<string, IRulePack>();
+
+/** Register an external rule pack so its id resolves in buildPackEslintConfig. */
+export function registerExternalPack(pack: IRulePack): void {
+  EXTERNAL_PACKS.set(pack.id, pack);
+}
+
+/** Drop all registered external packs (used by tests for isolation). */
+export function clearExternalPacks(): void {
+  EXTERNAL_PACKS.clear();
+}
+
+/** Resolve a pack id to its definition, built-ins first, then external packs. */
+function lookupPack(packId: string): IRulePack | undefined {
+  if (isRulePackId(packId)) {
+    return RULE_PACKS[packId];
+  }
+
+  return EXTERNAL_PACKS.get(packId);
 }
 
 /** Apply rule overrides: "off" drops a rule, error/warn replaces its severity. */
@@ -93,7 +119,7 @@ export function buildPackEslintConfig(
   const seenRuleNames = new Set<string>();
 
   for (const packId of packIds) {
-    const pack = isRulePackId(packId) ? RULE_PACKS[packId] : undefined;
+    const pack = lookupPack(packId);
 
     // Skip pack IDs known to stack-detection but absent from RULE_PACKS
     if (pack === undefined) {

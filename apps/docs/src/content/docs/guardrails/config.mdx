@@ -15,8 +15,10 @@ Add **`tsforge.config.json`** at your repo root when you want to override what t
 | `packs.include` | string[] | Add packs after detection |
 | `packs.exclude` | string[] | Remove packs after detection |
 | `rules` | object | Per-rule severity: `"error"`, `"warn"`, or `"off"` |
+| `plugins` | object[] | External modules providing extra rule packs (see below) |
+| `mcpServers` | object | External [MCP servers](/integrations/mcp/) whose tools the agent can call |
 
-Resolution order: detect from the repo → apply `stack` → apply `include` → apply `exclude` → dedupe.
+Resolution order: detect from the repo → apply `stack` → apply `include` → apply `exclude` → add external plugin packs → dedupe.
 
 If the file is missing, tsforge uses detection only. If JSON is invalid, tsforge warns on stderr and continues with an empty config.
 
@@ -51,4 +53,19 @@ Bare names and `tsforge/`-prefixed names both work:
 
 This project is treated as Elysia, keeps structured-logging rules, skips BullMQ rules, and softens one comment rule.
 
-→ [Stack detection](/guardrails/stack-detection/) · [Rule packs](/guardrails/rule-packs/) · [Environment variables](/reference/flags/)
+## External plugins
+
+Ship your own rule packs without recompiling tsforge. Each `plugins` entry names a module (or a path relative to the repo root) and, optionally, which exported packs to use; omit `packs` to load every exported pack. An export must be a valid rule pack (`id`, `description`, `rules`, `rulesConfig`) or it is skipped with a warning. A pack id can never shadow a built-in, and a rule name that collides with a built-in fails the build.
+
+```json
+{
+  "plugins": [
+    { "path": "@acme/tsforge-pack" },
+    { "path": "./tools/house-rules.ts", "packs": ["housePack"] }
+  ]
+}
+```
+
+A module that fails to import is reported on stderr and skipped — a broken plugin never blocks a run.
+
+→ [Stack detection](/guardrails/stack-detection/) · [Rule packs](/guardrails/rule-packs/) · [MCP servers](/integrations/mcp/) · [Environment variables](/reference/flags/)

@@ -191,20 +191,31 @@ function effectiveParserFor(
   return flags.legacyFeedback() ? parseEslintJson : parse;
 }
 
-/** Detect the stack and fold in tsforge.config.json pack/rule overrides. */
-async function resolveStackForRun(cwd: string): Promise<{
+/** Detect the stack and fold in tsforge.config.json pack/rule overrides, plus any
+ *  rule packs from configured external plugins. */
+async function resolveStackForRun(
+  cwd: string,
+  report: (message: string) => void
+): Promise<{
   stackProfile: Awaited<ReturnType<typeof detectStack>>;
   ruleOverrides: Readonly<Record<string, "error" | "warn" | "off">>;
 }> {
   const detectedProfile = await detectStack(cwd);
   const { loadTsforgeConfig, resolveActivePacks, normalizeRuleOverrides } =
     await import("../config/tsforge-config");
+  const { loadAndRegisterPlugins } = await import("../config/external-plugins");
   const cfg = await loadTsforgeConfig(cwd);
+  const activePacks = resolveActivePacks(detectedProfile.packs, cfg);
+  const externalIds =
+    cfg.plugins === undefined
+      ? []
+      : await loadAndRegisterPlugins(cfg.plugins, cwd, report);
 
   return {
     stackProfile: {
       ...detectedProfile,
-      packs: resolveActivePacks(detectedProfile.packs, cfg),
+      packs:
+        externalIds.length > 0 ? [...activePacks, ...externalIds] : activePacks,
     },
     ruleOverrides: normalizeRuleOverrides(cfg),
   };
@@ -268,7 +279,12 @@ export async function runTask(
   });
 
   // Detect stack once per run, early; tsforge.config.json may adjust it
-  const { stackProfile, ruleOverrides } = await resolveStackForRun(cwd);
+  const { stackProfile, ruleOverrides } = await resolveStackForRun(
+    cwd,
+    (message) => {
+      report({ kind: "tool", task: task.id, message });
+    }
+  );
 
   report({
     kind: "tool",

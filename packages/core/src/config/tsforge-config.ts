@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { isRecord } from "../lib/guards";
 import { PACK_REGISTRY } from "../stack-detection";
 import { parseMcpServers, type IMcpServerConfig } from "../mcp";
+import { parsePlugins, type IExternalPlugin } from "./external-plugins";
 
 /**
  * User-defined configuration from tsforge.config.json
@@ -31,6 +32,13 @@ export interface ITsforgeProjectConfig {
    * interpolated from the environment at load time. Opt-in: absent ⇒ no MCP.
    */
   readonly mcpServers?: Readonly<Record<string, IMcpServerConfig>>;
+
+  /**
+   * External plugins providing extra rule packs, loaded without recompiling
+   * tsforge. Each entry names a module (or relative path) and, optionally, which
+   * exported packs to use. Opt-in: absent ⇒ only built-in packs.
+   */
+  readonly plugins?: readonly IExternalPlugin[];
 }
 
 function warnConfig(msg: string): void {
@@ -177,6 +185,7 @@ function buildConfigFields(
     packs?: { include?: readonly string[]; exclude?: readonly string[] };
     rules?: Record<string, "error" | "warn" | "off">;
     mcpServers?: Record<string, IMcpServerConfig>;
+    plugins?: readonly IExternalPlugin[];
   } = {};
 
   if (parsed.stack !== undefined) {
@@ -208,6 +217,14 @@ function buildConfigFields(
 
     if (Object.keys(servers).length > 0) {
       configFields.mcpServers = servers;
+    }
+  }
+
+  if (parsed.plugins !== undefined) {
+    const plugins = parsePlugins(parsed.plugins);
+
+    if (plugins.length > 0) {
+      configFields.plugins = plugins;
     }
   }
 
