@@ -102,11 +102,15 @@ export interface ICliArgs {
   /** Plan mode: a from-scratch build pauses after the design phase to show its
    *  plan for review/edit before implementing (`--plan`; also toggled by /plan). */
   plan: boolean;
+  /** Keep the auto-gate at the strict TS floor only — do NOT append the
+   *  project's discovered tests (`--strict-floor-only`). By default the auto-gate
+   *  also runs the project's tests, so "green" means floor + tests pass. */
+  strictFloorOnly: boolean;
 }
 
 const BOOL_FLAGS: Record<
   string,
-  "continue" | "noGate" | "web" | "log" | "plan"
+  "continue" | "noGate" | "web" | "log" | "plan" | "strictFloorOnly"
 > = {
   "--continue": "continue",
   "-c": "continue",
@@ -114,6 +118,7 @@ const BOOL_FLAGS: Record<
   "--web": "web",
   "--log": "log",
   "--plan": "plan",
+  "--strict-floor-only": "strictFloorOnly",
 };
 
 const VALUE_FLAGS = new Set([
@@ -140,6 +145,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     web: false,
     log: false,
     plan: false,
+    strictFloorOnly: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -812,7 +818,13 @@ async function baseGate(
     args.dir,
     activePacks,
     Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
-    { enableTypeAware: profile === "strict" }
+    {
+      enableTypeAware: profile === "strict",
+      // "Green" should mean the strict floor AND the project's own tests pass —
+      // not just that it type-checks and lints. discoverTestCommand appends them
+      // only when the project actually has tests; --strict-floor-only opts out.
+      includeTests: !args.strictFloorOnly,
+    }
   );
 
   return { accept: auto.command, gateLabel: auto.label };

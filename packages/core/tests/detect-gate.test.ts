@@ -8,6 +8,7 @@ import {
   buildWebGate,
   makeFileLinter,
   scaffoldWeb,
+  discoverTestCommand,
 } from "../src/detect-gate";
 
 async function tempDir(): Promise<string> {
@@ -242,6 +243,89 @@ test("makeFileLinter does NOT report AUTO-FIXABLE issues (the janitor handles th
         (p) => p.ruleId === "@stylistic/padding-line-between-statements"
       )
     ).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: real test script → bun run test", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" } })
+    );
+
+    expect(await discoverTestCommand(dir)).toBe("bun run test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: npm-init placeholder is ignored, falls to file detection", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        scripts: { test: 'echo "Error: no test specified" && exit 1' },
+      })
+    );
+
+    // No test files → the placeholder must NOT count → null (floor only).
+    expect(await discoverTestCommand(dir)).toBe(null);
+
+    // A test file present → bun test, even though the script is the placeholder.
+    await writeFile(join(dir, "sum.test.ts"), "export const x = 1;\n");
+    expect(await discoverTestCommand(dir)).toBe("bun test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverTestCommand: test files but no script → bun test; nothing → null", async () => {
+  const dir = await tempDir();
+
+  try {
+    expect(await discoverTestCommand(dir)).toBe(null);
+
+    await writeFile(join(dir, "a.spec.ts"), "export const x = 1;\n");
+    expect(await discoverTestCommand(dir)).toBe("bun test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildGate includeTests: appends tests only when the project has them", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+
+    // No tests yet → floor only, even with includeTests on.
+    const floor = await buildGate(dir, undefined, undefined, {
+      includeTests: true,
+    });
+
+    expect(floor.command).not.toContain("bun test");
+    expect(floor.label).not.toContain("tests");
+
+    // Add a test file → it's appended LAST (after the static floor).
+    await writeFile(join(dir, "a.test.ts"), "export const x = 1;\n");
+    const withTests = await buildGate(dir, undefined, undefined, {
+      includeTests: true,
+    });
+
+    expect(withTests.command).toContain("bun test");
+    expect(withTests.command.trim().endsWith("bun test")).toBe(true);
+    expect(withTests.label).toContain("tests");
+
+    // Default (no includeTests) stays floor-only.
+    const noOpt = await buildGate(dir);
+
+    expect(noOpt.command).not.toContain("bun test");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

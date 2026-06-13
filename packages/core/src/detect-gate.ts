@@ -2,6 +2,7 @@ import { join, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { ESLint } from "eslint";
 import { WEB_TEMPLATES, type WebFramework } from "./web-templates";
+import { isRecord } from "./lib/guards";
 
 /**
  * Build the gate that confirms "done" — and makes tsforge a TypeScript-SPECIALIZED
@@ -480,7 +481,7 @@ export async function buildGate(
   cwd: string,
   packs?: readonly string[],
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
-  options?: { enableTypeAware?: boolean }
+  options?: { enableTypeAware?: boolean; includeTests?: boolean }
 ): Promise<IGate> {
   const parts: string[] = [];
   const labels: string[] = [];
@@ -506,7 +507,68 @@ export async function buildGate(
     }
   }
 
+  // Tests run LAST (after the cheap static floor) so a type/lint error fails
+  // fast without paying for a test run. Only appended when the project actually
+  // has tests to run — a strict-floor-only run, or a project with none, skips it.
+  if (options?.includeTests === true) {
+    const test = await discoverTestCommand(cwd);
+
+    if (test !== null) {
+      parts.push(test);
+      labels.push("tests");
+    }
+  }
+
   return { command: parts.join(" && "), label: labels.join(" + ") };
+}
+
+/** The npm-init placeholder test script — running it always fails, so it must
+ *  NOT count as "the project has tests". */
+const PLACEHOLDER_TEST = /no test specified/i;
+
+/**
+ * The project's test command for the gate, or null when there's nothing to run.
+ * Prefers an explicit, real package.json `test` script (run via `bun run test`);
+ * else falls back to `bun test` when the project has test files; else null — so
+ * a greenfield app with no tests yet stays at the strict floor instead of
+ * failing a gate that runs a placeholder/absent test command.
+ */
+export async function discoverTestCommand(cwd: string): Promise<string | null> {
+  const pkgFile = Bun.file(join(cwd, "package.json"));
+
+  if (await pkgFile.exists()) {
+    try {
+      const pkg: unknown = await pkgFile.json();
+      const scripts = isRecord(pkg) ? pkg.scripts : undefined;
+      const script = isRecord(scripts) ? scripts.test : undefined;
+
+      if (
+        typeof script === "string" &&
+        script.trim().length > 0 &&
+        !PLACEHOLDER_TEST.test(script)
+      ) {
+        return "bun run test";
+      }
+    } catch {
+      // Malformed package.json — fall through to file detection.
+    }
+  }
+
+  return (await hasTestFiles(cwd)) ? "bun test" : null;
+}
+
+/** True when the project has at least one *.test.* / *.spec.* file (outside
+ *  node_modules) — the signal that a bare `bun test` has something to run. */
+async function hasTestFiles(cwd: string): Promise<boolean> {
+  const glob = new Bun.Glob("**/*.{test,spec}.{ts,tsx,js,jsx}");
+
+  for await (const path of glob.scan({ cwd, onlyFiles: true })) {
+    if (!path.includes("node_modules")) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
