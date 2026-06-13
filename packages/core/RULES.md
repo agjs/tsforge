@@ -80,6 +80,13 @@ Secure JWT and cookie handling patterns
 - **auth-cookie-must-be-secure-in-prod** [ERROR]: Auth-cookie writes must set `secure:` to `true` or an env-derived expression (anything non-literal). Cookies leak over HTTP without it.
 - **bcrypt-rounds-min** [ERROR]: Disallow `bcrypt.hash` / `bcrypt.hashSync` calls with a numeric-literal rounds value below the configured minimum (default 10).
 
+### module-boundaries
+
+Module boundary hygiene: keep the test/production and source/build-output boundaries clean so the dependency graph stays sound.
+
+- **no-import-build-output** [ERROR]: Disallow importing from build/output directories within the project. Source must import source, not compiled artifacts, to avoid stale-code drift and broken module boundaries.
+- **no-import-test-from-source** [ERROR]: Disallow production/source files from importing test files. Tests may depend on source, never the reverse — test code must not ship in the production graph.
+
 ### oauth-security
 
 OAuth and OpenID patterns and security considerations

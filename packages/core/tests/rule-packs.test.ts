@@ -48,7 +48,7 @@ function lint(
 }
 
 describe("rule-packs: registry", () => {
-  test("should have all thirteen packs registered", () => {
+  test("should have all fourteen packs registered", () => {
     expect(Object.keys(RULE_PACKS).sort()).toEqual([
       "bullmq",
       "code-flow",
@@ -58,6 +58,7 @@ describe("rule-packs: registry", () => {
       "env-access",
       "i18n-keys",
       "jwt-cookies",
+      "module-boundaries",
       "oauth-security",
       "react-component-architecture",
       "structured-logging",
@@ -264,10 +265,10 @@ describe("buildPackEslintConfig", () => {
   });
 
   test("should skip pack IDs known to stack-detection but absent from RULE_PACKS", () => {
-    // module-boundaries is in PACK_REGISTRY but not in RULE_PACKS, so it should be skipped
+    // generic-ts is in PACK_REGISTRY but carries no eslint rules, so it should be skipped
     const { plugin, rules } = buildPackEslintConfig([
       "env-access",
-      "module-boundaries",
+      "generic-ts",
     ]);
 
     expect(plugin.meta?.name).toBe("tsforge");
@@ -2006,5 +2007,107 @@ describe("i18n-keys pack", () => {
 
     // Rule will report dictionaryReadFailed since no valid dict is provided
     expect(messages.map((m) => m.messageId)).toContain("dictionaryReadFailed");
+  });
+});
+
+describe("rule-packs: module-boundaries", () => {
+  test("no-import-test-from-source: flags source importing a .test file", () => {
+    const code = `import { helper } from "../foo.test";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-import-test-from-source",
+      code,
+      "src/a.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "testImportedFromSource"
+    );
+  });
+
+  test("no-import-test-from-source: flags source importing from __tests__", () => {
+    const code = `import { helper } from "../__tests__/helpers";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-import-test-from-source",
+      code,
+      "src/a.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "testImportedFromSource"
+    );
+  });
+
+  test("no-import-test-from-source: a test file may import another test file", () => {
+    const code = `import { helper } from "../b.test";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-import-test-from-source",
+      code,
+      "src/a.test.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-import-test-from-source: allows a normal relative source import", () => {
+    const code = `import { thing } from "../thing";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-import-test-from-source",
+      code,
+      "src/a.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-import-build-output: flags importing from dist/", () => {
+    const code = `import { x } from "../dist/index";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-import-build-output",
+      code,
+      "src/a.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("buildOutputImported");
+  });
+
+  test("no-import-build-output: flags importing from build/", () => {
+    const code = `import { x } from "./build/thing";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-import-build-output",
+      code,
+      "src/a.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("buildOutputImported");
+  });
+
+  test("no-import-build-output: ignores bare package specifiers", () => {
+    const code = `import { x } from "some-pkg/dist/lib";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-import-build-output",
+      code,
+      "src/a.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-import-build-output: allows a normal relative source import", () => {
+    const code = `import { thing } from "../lib/thing";`;
+    const messages = lint(
+      "module-boundaries",
+      "no-import-build-output",
+      code,
+      "src/a.ts"
+    );
+
+    expect(messages).toHaveLength(0);
   });
 });

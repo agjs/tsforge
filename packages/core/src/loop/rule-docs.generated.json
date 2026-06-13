@@ -289,6 +289,16 @@
     "bad": "// Example that violates the rule",
     "good": "// Corrected version"
   },
+  "tsforge/no-import-build-output": {
+    "what": "Disallow importing from build/output directories within the project. Source must import source, not compiled artifacts, to avoid stale-code drift and broken module boundaries.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
+  "tsforge/no-import-test-from-source": {
+    "what": "Disallow production/source files from importing test files. Tests may depend on source, never the reverse — test code must not ship in the production graph.",
+    "bad": "// Example that violates the rule",
+    "good": "// Corrected version"
+  },
   "tsforge/pkce-required-for-oidc": {
     "what": "OIDC providers must use PKCE: `buildAuthorizationURL` must call `generateCodeVerifier()` and pass it to `createAuthorizationURL`.",
     "bad": "// Example that violates the rule",
