@@ -11,6 +11,7 @@ import {
 } from "./loop";
 import {
   PROVIDER_LIMITS,
+  PROVIDER_DEFAULTS,
   OpenAICompatibleProvider,
   type IOpenAICompatibleConfig,
 } from "./inference";
@@ -261,7 +262,12 @@ async function detectContextWindow(
 
     const entries = data.data.filter(isRecord);
     const match = entries.find((e) => e.id === entry.model) ?? entries[0];
-    const len = match?.max_model_len;
+    // vLLM uses `max_model_len`; other servers expose `context_window` or
+    // `max_position_embeddings` — accept whichever is present.
+    const len =
+      match?.max_model_len ??
+      match?.context_window ??
+      match?.max_position_embeddings;
 
     return typeof len === "number" && Number.isFinite(len) ? len : undefined;
   } catch {
@@ -328,11 +334,41 @@ export function providerConfig(entry: IModelEntry): IOpenAICompatibleConfig {
     // instead of emitting tool calls (→ no files written). The StreamGuard is
     // the targeted loop protection. Opt in only to experiment.
     ...(repetitionPenalty === undefined ? {} : { repetitionPenalty }),
+    // Provider dialect + escape hatches — passed straight through so any
+    // OpenAI-ish endpoint (DeepSeek, OpenAI o-series, custom gateways) works.
+    ...(entry.reasoning === undefined ? {} : { reasoning: entry.reasoning }),
+    ...(entry.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: entry.reasoningEffort }),
+    ...(entry.extraBody === undefined ? {} : { extraBody: entry.extraBody }),
+    ...(entry.extraHeaders === undefined
+      ? {}
+      : { extraHeaders: entry.extraHeaders }),
   };
 }
 
 function makeProvider(entry: IModelEntry): OpenAICompatibleProvider {
   return new OpenAICompatibleProvider(providerConfig(entry));
+}
+
+/** Catch the common footgun: a cloud baseUrl paired with the leftover qwen
+ *  default `model`, which then 400s ("model not supported") on that host. */
+function warnDefaultModelOnRemote(entry: IModelEntry): void {
+  let host: string;
+
+  try {
+    host = new URL(entry.baseUrl).hostname;
+  } catch {
+    return;
+  }
+
+  const remote = host !== "localhost" && host !== "127.0.0.1" && host !== "::1";
+
+  if (remote && entry.model === PROVIDER_DEFAULTS.model) {
+    process.stdout.write(
+      `  ⚠ models.json: model is still "${PROVIDER_DEFAULTS.model}" (the default) but baseUrl is ${host} — set the entry's "model" to a name that host supports.\n`
+    );
+  }
 }
 
 /** Print the model registry with ★ on the active one (the `/model` listing). */
@@ -783,6 +819,8 @@ async function repl(args: ICliArgs): Promise<number> {
   const activeModel = await resolveActiveModel();
   const provider = makeProvider(activeModel.entry);
   let activeName = activeModel.name;
+
+  warnDefaultModelOnRemote(activeModel.entry);
 
   // Best-effort cleanup of stale sessions on every launch.
   await pruneSessions();

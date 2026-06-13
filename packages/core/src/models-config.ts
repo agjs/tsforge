@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import { isRecord } from "./lib/guards";
 import { PROVIDER_DEFAULTS } from "./inference/inference.constants";
+import type { ReasoningStyle } from "./inference/inference.types";
 
 /**
  * The model registry — `~/.tsforge/models.json`, the central place a user
@@ -28,6 +29,18 @@ export interface IModelEntry {
   thinking?: boolean;
   /** Per-response token cap override. */
   maxTokens?: number;
+  /** Provider reasoning dialect: how thinking/reasoning is expressed on the wire.
+   *  `qwen` (default) | `deepseek` | `openai` | `none`. Set `deepseek` for the
+   *  DeepSeek API, `openai` for OpenAI o-series. */
+  reasoning?: ReasoningStyle;
+  /** Reasoning effort for `deepseek`/`openai` styles. */
+  reasoningEffort?: "low" | "medium" | "high";
+  /** Arbitrary fields merged into the request body (override built-ins) — the
+   *  escape hatch for any provider-specific param. */
+  extraBody?: Record<string, unknown>;
+  /** Arbitrary request headers (e.g. a non-Bearer auth scheme); `${VAR}` values
+   *  are interpolated from the environment. */
+  extraHeaders?: Record<string, string>;
 }
 
 export interface IModelsConfig {

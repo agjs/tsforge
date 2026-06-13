@@ -110,6 +110,20 @@ export default defineConfig({
           tag: "meta",
           attrs: { name: "twitter:card", content: "summary_large_image" },
         },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image",
+            content: "https://tsforge.dev/og-harness-board.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image",
+            content: "https://tsforge.dev/og-harness-board.png",
+          },
+        },
       ],
       social: [
         {
@@ -174,7 +188,10 @@ export default defineConfig({
         },
         {
           label: "Inference",
-          items: [{ label: "Model adapter", link: "/inference/adapter/" }],
+          items: [
+            { label: "models.json (any provider)", link: "/inference/models-json/" },
+            { label: "Model adapter", link: "/inference/adapter/" },
+          ],
         },
         {
           label: "Integrations",

@@ -118,6 +118,26 @@ export interface IOpenAICompatibleConfig {
    * correctness. Omitted (1.0 = off) by default; set it on code-gen providers.
    */
   repetitionPenalty?: number;
+  /**
+   * How this provider wants reasoning/thinking expressed on the wire:
+   *  - `qwen` (default): `chat_template_kwargs.enable_thinking` + `thinking_token_budget` (vLLM).
+   *  - `deepseek`: top-level `thinking: { type }` + `reasoning_effort`; never sends
+   *    `tool_choice: "required"` (DeepSeek's thinking mode rejects it).
+   *  - `openai`: `reasoning_effort`; uses `max_completion_tokens` and omits `temperature` (o-series).
+   *  - `none`: no reasoning fields.
+   */
+  reasoning?: ReasoningStyle;
+  /** Reasoning effort for `deepseek`/`openai` styles (maps to `reasoning_effort`). */
+  reasoningEffort?: "low" | "medium" | "high";
+  /** Arbitrary fields merged into the request body LAST (override anything above) —
+   *  the escape hatch for any provider-specific param. */
+  extraBody?: Record<string, unknown>;
+  /** Arbitrary request headers (e.g. Azure `api-key`, Anthropic `x-api-key`).
+   *  `${VAR}` in values is interpolated from the environment. */
+  extraHeaders?: Record<string, string>;
   /** Injectable for tests; defaults to global fetch. */
   fetch?: typeof fetch;
 }
+
+/** Provider reasoning-param dialect. */
+export type ReasoningStyle = "qwen" | "deepseek" | "openai" | "none";

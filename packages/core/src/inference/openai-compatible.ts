@@ -7,8 +7,13 @@ import type {
 } from "./inference.types";
 import { PROVIDER_LIMITS } from "./inference.constants";
 import { fetchWithRetry } from "./transport";
-import { toWire, parseResponse } from "./wire";
+import { parseResponse } from "./wire";
 import { streamResponse } from "./stream";
+import {
+  buildRequestBody,
+  buildRequestHeaders,
+  chatCompletionsUrl,
+} from "./request";
 
 export { salvageToolCalls } from "./wire";
 
@@ -40,38 +45,10 @@ export class OpenAICompatibleProvider implements IProvider {
   ): Promise<IModelResponse> {
     const doFetch = this.cfg.fetch ?? fetch;
     const streaming = opts.onToken !== undefined;
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-    };
-
-    if (this.cfg.apiKey !== undefined) {
-      headers.authorization = `Bearer ${this.cfg.apiKey}`;
-    }
-
-    const body = JSON.stringify({
-      model: this.cfg.model,
-      messages: messages.map(toWire),
-      max_tokens: this.cfg.maxTokens ?? PROVIDER_LIMITS.maxTokens,
-      temperature: opts.temperature,
-      ...(this.cfg.repetitionPenalty === undefined
-        ? {}
-        : { repetition_penalty: this.cfg.repetitionPenalty }),
-      ...(opts.tools === undefined
-        ? {}
-        : { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" }),
-      ...(opts.enableThinking === undefined
-        ? {}
-        : { chat_template_kwargs: { enable_thinking: opts.enableThinking } }),
-      ...(opts.thinkingTokenBudget === undefined
-        ? {}
-        : { thinking_token_budget: opts.thinkingTokenBudget }),
-      // include_usage → the stream emits a final chunk carrying token `usage`
-      // (otherwise a streamed response reports none). Non-stream replies carry it
-      // by default.
-      ...(streaming
-        ? { stream: true, stream_options: { include_usage: true } }
-        : {}),
-    });
+    const headers = buildRequestHeaders(this.cfg);
+    const body = JSON.stringify(
+      buildRequestBody(this.cfg, messages, opts, streaming)
+    );
 
     // Retry transient CONNECTION blips (socket close / unable-to-connect) — the
     // connect happens before any stream starts, so retrying is safe for both
@@ -79,7 +56,7 @@ export class OpenAICompatibleProvider implements IProvider {
     // a network hiccup from wrecking an eval run.
     const res = await fetchWithRetry(
       doFetch,
-      `${this.cfg.baseUrl}/chat/completions`,
+      chatCompletionsUrl(this.cfg.baseUrl),
       headers,
       body,
       this.cfg.timeoutMs ?? PROVIDER_LIMITS.requestTimeoutMs,

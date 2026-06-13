@@ -1,0 +1,98 @@
+---
+title: models.json (any provider)
+description: Configure any OpenAI-compatible model — local qwen, DeepSeek, OpenAI o-series, or a custom gateway — from one registry file. No env vars needed.
+---
+
+tsforge reads its model registry from **`~/.tsforge/models.json`** (or `$TSFORGE_HOME/.tsforge/models.json`). It's the one place you configure providers; you never need environment variables. `active` names the entry to use; `/model <name>` switches live.
+
+```jsonc
+{
+  "active": "deepseek",
+  "models": {
+    "deepseek": {
+      "baseUrl": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4-pro",      // ← the name SENT to the API (not the entry key)
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "reasoning": "deepseek",
+      "reasoningEffort": "high"
+    }
+  }
+}
+```
+
+:::caution
+The entry **key** (`"deepseek"`) is just a local label. The field that's sent to the API is **`model`**. Pointing `baseUrl` at a cloud provider while leaving `model` as the qwen default is the #1 mistake — tsforge warns at startup when it detects this.
+:::
+
+## Fields
+
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `baseUrl` | yes | OpenAI-compatible API root, e.g. `https://api.deepseek.com/v1`. `/chat/completions` is appended (and not double-appended). |
+| `model` | yes | The model id sent to the API. |
+| `apiKey` / `apiKeyEnv` | no | Inline key, or the name of an env var holding it (preferred — keeps secrets out of the file). |
+| `reasoning` | no | Provider thinking dialect: `qwen` (default), `deepseek`, `openai`, `none` — see below. |
+| `reasoningEffort` | no | `low` / `medium` / `high` for `deepseek`/`openai`. |
+| `contextWindow` | no | Tokens, for the status gauge + auto-compaction. Auto-detected from `/models` when omitted. |
+| `maxTokens` | no | Output-token cap (default 16384). |
+| `extraBody` | no | Arbitrary JSON merged into the request body (overrides built-ins) — the escape hatch for any provider param. |
+| `extraHeaders` | no | Arbitrary request headers; `${VAR}` values are interpolated from the environment. |
+
+## Reasoning dialects
+
+Providers express "thinking" differently. `reasoning` picks the wire shape:
+
+| `reasoning` | Sends | Notes |
+| --- | --- | --- |
+| `qwen` (default) | `chat_template_kwargs.enable_thinking`, `thinking_token_budget` | vLLM/Qwen. |
+| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, `reasoning_effort` | Also never sends `tool_choice: "required"` (DeepSeek's thinking mode rejects it). |
+| `openai` | `reasoning_effort` | Uses `max_completion_tokens` and omits `temperature` (o-series rejects both). |
+| `none` | — | No reasoning params. |
+
+## Examples
+
+### Local qwen (vLLM) — the default
+
+```jsonc
+{ "baseUrl": "http://localhost:8000/v1", "model": "qwen3.6-27b", "thinking": true }
+```
+
+### DeepSeek
+
+```jsonc
+{
+  "baseUrl": "https://api.deepseek.com/v1",
+  "model": "deepseek-v4-pro",
+  "apiKeyEnv": "DEEPSEEK_API_KEY",
+  "reasoning": "deepseek",
+  "reasoningEffort": "high"
+}
+```
+
+### OpenAI o-series
+
+```jsonc
+{
+  "baseUrl": "https://api.openai.com/v1",
+  "model": "o4-mini",
+  "apiKeyEnv": "OPENAI_API_KEY",
+  "reasoning": "openai",
+  "reasoningEffort": "medium"
+}
+```
+
+### Any other provider — `extraBody` / `extraHeaders`
+
+When a provider needs a param or auth scheme tsforge doesn't model, express it directly. `extraBody` is merged **last** (so it overrides anything), and `extraHeaders` can set a non-Bearer scheme:
+
+```jsonc
+{
+  "baseUrl": "https://my-gateway.example/v1",
+  "model": "some-model",
+  "reasoning": "none",
+  "extraHeaders": { "api-key": "${MY_GATEWAY_KEY}" },
+  "extraBody": { "thinking": { "type": "enabled" }, "provider_specific_flag": true }
+}
+```
+
+→ [Model adapter](/inference/adapter/) · [Quickstart](/quickstart/)
