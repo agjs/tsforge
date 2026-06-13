@@ -25,9 +25,11 @@ import {
   renderEvent,
   renderMessage,
   renderStatus,
+  StatusBar,
   welcomeBanner,
   STYLE,
   RESET,
+  type IStatusInfo,
 } from "./render";
 import type { ITask } from "./spec";
 import type { Reporter, ILoopEvent } from "./loop";
@@ -1220,22 +1222,44 @@ async function repl(args: ICliArgs): Promise<number> {
     return false;
   };
 
-  // The persistent status line, shown above every prompt so the model, real
-  // context-window usage, scope, and last-turn outcome are always in view.
+  // Current state as the status surface sees it — shared by the pinned bar and
+  // the inline fallback so both show identical content.
+  const statusInfo = (): IStatusInfo => ({
+    model: modelInfo(provider.config).model,
+    contextTokens: session.contextTokens,
+    contextWindow,
+    turns: lastTurns,
+    elapsedMs: lastElapsedMs,
+    status: lastStatus,
+    scope: scopeLabel(session.scope) + (planMode ? " · PLAN" : ""),
+    tokensPerSecond: session.metrics.lastTokensPerSecond,
+  });
+
+  // Pinned bottom status bar when we're on a real terminal; otherwise the bar is
+  // inactive and `prompt()` falls back to the inline status line (pipes, --log).
+  const statusBar = new StatusBar(process.stdout, true, true);
+
+  process.stdout.on("resize", () => {
+    statusBar.resize(statusInfo());
+  });
+
+  // Restore the terminal even on an unexpected exit (teardown is idempotent).
+  process.on("exit", () => {
+    statusBar.teardown();
+  });
+
+  // The prompt. With the bar pinned it repaints the bar and shows only the
+  // input marker; otherwise it prints the inline status line above the marker.
   const prompt = (): void => {
+    if (statusBar.active) {
+      statusBar.update(statusInfo());
+      process.stdout.write("\n› ");
+
+      return;
+    }
+
     process.stdout.write("\n");
-    process.stdout.write(
-      renderStatus({
-        model: modelInfo(provider.config).model,
-        contextTokens: session.contextTokens,
-        contextWindow,
-        turns: lastTurns,
-        elapsedMs: lastElapsedMs,
-        status: lastStatus,
-        scope: scopeLabel(session.scope) + (planMode ? " · PLAN" : ""),
-        tokensPerSecond: session.metrics.lastTokensPerSecond,
-      })
-    );
+    process.stdout.write(renderStatus(statusInfo()));
     process.stdout.write("› ");
   };
 
@@ -1316,8 +1340,12 @@ async function repl(args: ICliArgs): Promise<number> {
 
     rl.on("close", () => {
       closed = true;
+      statusBar.teardown();
       maybeFinish();
     });
+
+    // Pin the bar before the first turn so it's visible while that turn streams.
+    statusBar.install(statusInfo());
 
     if (args.task.length > 0) {
       void runLine(args.task); // sent as the first message; prompts when done
@@ -1325,6 +1353,8 @@ async function repl(args: ICliArgs): Promise<number> {
       prompt();
     }
   });
+
+  statusBar.teardown(); // belt-and-suspenders: restore the terminal on loop exit
 
   return 0;
 }

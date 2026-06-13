@@ -44,15 +44,11 @@ function humanDuration(ms: number): string {
 }
 
 /**
- * The post-turn status line — model, context-window usage, turns, elapsed, last
- * outcome, scope — the at-a-glance summary modern CLIs keep on screen. Dim, one
- * line, printed after a turn settles.
+ * The status segments — model, context-window usage, turns, elapsed, tok/s, last
+ * outcome, scope — as a plain-text list. Shared by the inline `renderStatus`
+ * fallback and the pinned `StatusBar`, so both show identical content.
  */
-export function renderStatus(
-  info: IStatusInfo,
-  opts: IRenderOptions = {}
-): string {
-  const color = opts.color ?? true;
+export function statusSegments(info: IStatusInfo): string[] {
   const pct =
     info.contextWindow > 0
       ? Math.round((info.contextTokens / info.contextWindow) * 100)
@@ -76,6 +72,20 @@ export function renderStatus(
   }
 
   bits.push(info.status, info.scope);
+
+  return bits;
+}
+
+/**
+ * The post-turn status line — the inline fallback used when a pinned status bar
+ * can't be installed (non-TTY, piped, `--log`, tiny terminal). Dim, one line.
+ */
+export function renderStatus(
+  info: IStatusInfo,
+  opts: IRenderOptions = {}
+): string {
+  const color = opts.color ?? true;
+  const bits = statusSegments(info);
 
   return `${paint(`  ⎯ ${bits.join(" · ")}`, STYLE.dim, color)}\n`;
 }

@@ -51,9 +51,19 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environme
 
 Anything else is sent to the agent. While it runs, type to **steer** the next turn. Ctrl-C interrupts the current run.
 
+## Status bar
+
+On a real terminal, a status bar stays **pinned to the bottom** while output scrolls above it — always in view, never scrolled away:
+
+```
+  ⎯ qwen3.6-27b · ctx ~8k/32k 25% · 2 turns · 12s · 48 tok/s · done · src/**
+```
+
+It shows the active model, real context-window usage, the last turn's count + elapsed, the current generation rate, the last outcome, and the editable scope. It repaints as state changes and survives terminal resizes. When stdout isn't a TTY (piped output, `--log`, a tiny window) the bar is skipped and the same line prints inline above each prompt instead, so logs and pipes stay clean.
+
 ## Live metrics
 
-The status line above each prompt shows the last call's generation rate (`tok/s`) next to the context gauge. `/metrics` prints the running totals for the session — model calls, input/output tokens, and both the last and average output rate:
+The status bar shows the last call's generation rate (`tok/s`) next to the context gauge. `/metrics` prints the running totals for the session — model calls, input/output tokens, and both the last and average output rate:
 
 ```
   4 call(s) · 8120 in / 1540 out · 47 tok/s last · 44 tok/s avg

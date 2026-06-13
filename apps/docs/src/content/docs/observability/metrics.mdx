@@ -5,15 +5,15 @@ description: See how fast the model is generating — live in the status line, o
 
 Want to know how fast your model is actually going? tsforge surfaces real token throughput in three places, from "glance at it" to "analyse a whole run."
 
-## 1. The status line — always on
+## 1. The status bar — always on
 
-After every turn, the line above the prompt shows the **last call's generation rate** right next to the context gauge:
+On a real terminal a status bar stays pinned to the bottom (see [Interactive CLI](/cli/interactive/#status-bar)), showing the **last call's generation rate** next to the context gauge:
 
 ```
   ⎯ qwen3.6-27b · ctx ~8k/32k 25% · 2 turns · 12s · 47 tok/s · done · src/**
 ```
 
-`47 tok/s` is how many output tokens per second the model produced on that call. Nothing to enable — it appears as soon as the first model call returns.
+`47 tok/s` is how many output tokens per second the model produced on that call. Nothing to enable — it appears as soon as the first model call returns. (Piped/`--log` runs show the same line inline instead.)
 
 ## 2. `/metrics` — the running total
 
