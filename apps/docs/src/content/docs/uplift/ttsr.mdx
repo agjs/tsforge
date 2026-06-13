@@ -20,9 +20,38 @@ Default ON. Set `TSFORGE_TTSR=0` to disable.
 
 These apply to tool argument text under `src/**/*.ts(x)`. Each rule has a cooldown so one mistake does not loop forever.
 
+## Custom rules
+
+Add your own stream rules in `.tsforge/rules.json` at the project root. They load on top of the built-ins; a custom rule whose `name` matches a built-in is ignored, so the built-in safety rules always win.
+
+```json
+[
+  {
+    "name": "no-todo-comment",
+    "condition": ["//\\s*TODO", "//\\s*FIXME"],
+    "guidance": "Do not leave TODO/FIXME markers; finish the work or open an issue.",
+    "scope": "tool-args",
+    "repeatMode": "cooldown",
+    "repeatGap": 5,
+    "fileGlobs": ["src/**/*.ts", "src/**/*.tsx"]
+  }
+]
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `name` | yes | Unique; duplicates of a built-in are skipped |
+| `condition` | yes | Array of regex sources; matches if **any** one matches |
+| `guidance` | yes | Correction text sent to the model on a hit |
+| `scope` | no | `tool-args`, `content`, or `both` (default `content`) |
+| `repeatMode` | no | `once` (default) or `cooldown` |
+| `repeatGap` | no | Turns between refires when `cooldown` |
+| `fileGlobs` | no | Restrict to matching files; omit to apply everywhere |
+
+Invalid JSON or invalid regex is skipped silently. On load, tsforge reports how many custom rules were registered.
+
 ## Limits
 
 - **3 interrupts per task**, then TTSR turns off for the rest of that task
-- Custom rules via `.tsforge/rules.json` are parsed but not loaded in v0.1 (defaults only)
 
 → [Big picture](/big-picture/) · [Environment variables](/reference/flags/)

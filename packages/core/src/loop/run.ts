@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { ITask } from "../spec";
 import type { IChatMessage, IModelResponse, IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate";
@@ -8,7 +9,7 @@ import type { IRunResult, IRunOptions, Reporter } from "./loop.types";
 import { flags } from "../config";
 import { SYSTEM, seedPrompt } from "./prompt";
 import { detectStack } from "../stack-detection";
-import { TtsrManager } from "./ttsr";
+import { TtsrManager, parseProjectRules, type ITtsrRule } from "./ttsr";
 import { DEFAULT_TTSR_RULES } from "./ttsr-defaults";
 import {
   type ILoopCtx,
@@ -65,8 +66,27 @@ function handleDegeneration(
   };
 }
 
-/** Build and configure a TTSR manager if enabled. Returns null if disabled. */
-function initTtsrManager(): TtsrManager | null {
+/** Read and parse `<cwd>/.tsforge/rules.json` if present. Missing or invalid
+ *  files yield no rules (parseProjectRules tolerates malformed JSON). */
+export async function loadProjectTtsrRules(cwd: string): Promise<ITtsrRule[]> {
+  const file = Bun.file(join(cwd, ".tsforge", "rules.json"));
+
+  if (!(await file.exists())) {
+    return [];
+  }
+
+  return parseProjectRules(await file.text());
+}
+
+/** Build and configure a TTSR manager if enabled. Returns null if disabled.
+ *  Built-in defaults register first, then optional project rules from
+ *  `<cwd>/.tsforge/rules.json`; `addRule` ignores duplicate names, so a
+ *  built-in safety rule always wins over a same-named project rule. */
+export async function initTtsrManager(
+  cwd: string,
+  report: Reporter,
+  taskId: string
+): Promise<TtsrManager | null> {
   if (!flags.ttsr()) {
     return null;
   }
@@ -75,6 +95,22 @@ function initTtsrManager(): TtsrManager | null {
 
   for (const rule of DEFAULT_TTSR_RULES) {
     manager.addRule(rule);
+  }
+
+  let added = 0;
+
+  for (const rule of await loadProjectTtsrRules(cwd)) {
+    if (manager.addRule(rule)) {
+      added += 1;
+    }
+  }
+
+  if (added > 0) {
+    report({
+      kind: "ttsr",
+      task: taskId,
+      message: `loaded ${added} custom TTSR rule(s) from .tsforge/rules.json`,
+    });
   }
 
   return manager;
@@ -262,7 +298,7 @@ export async function runTask(
     thinkingTokenBudget ??
     (hasExistingCode ? undefined : LOOP_LIMITS.scratchThinkingBudget);
 
-  const ttsrManager = initTtsrManager();
+  const ttsrManager = await initTtsrManager(cwd, report, task.id);
 
   const ctx: ILoopCtx = {
     task,
