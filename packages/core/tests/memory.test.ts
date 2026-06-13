@@ -15,7 +15,7 @@ import {
   DECAY_MS,
   type ICandidateLesson,
 } from "../src/loop/memory";
-import { parseProjectRules } from "../src/loop/ttsr";
+import { parseProjectRules, TtsrManager } from "../src/loop/ttsr";
 
 async function tmp(): Promise<string> {
   return mkdtemp(join(tmpdir(), "tsforge-mem-"));
@@ -35,6 +35,10 @@ function edit(file: string, oldString: string, newString: string): ILoopEvent {
   return { kind: "edit", task: "t", message: "", file, oldString, newString };
 }
 
+function red(rules: string[]): ILoopEvent {
+  return { kind: "red", task: "t", message: "", rules };
+}
+
 describe("mineLessons", () => {
   test("pairs a disappeared rule code with the edit that cleared it", () => {
     const events: ILoopEvent[] = [
@@ -49,6 +53,26 @@ describe("mineLessons", () => {
     expect(candidates[0]?.rule).toBe("no-explicit-any");
     expect(candidates[0]?.file).toBe("src/a.ts");
     expect(candidates[0]?.before).toContain("any");
+  });
+
+  test("mines a one-turn red→green fix seeded from the pre-run RED event", () => {
+    // The headless loop's initial failure is a `red` event, not `validated`; a
+    // single-turn fix has only a GREEN `validated` afterward. The miner must seed
+    // the baseline from `red` or it learns nothing (regression: live e2e run 1).
+    const events: ILoopEvent[] = [
+      red(["TS2322"]),
+      edit(
+        "src/x.ts",
+        'const greeting: number = "hello"',
+        "const greeting = 42"
+      ),
+      validated([]),
+    ];
+
+    const candidates = mineLessons(events);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.rule).toBe("TS2322");
   });
 
   test("ignores rules that persist (no fix happened)", () => {
@@ -131,6 +155,38 @@ describe("mergeCandidates + activeRules", () => {
     expect(activeRules(after2, 2000 + DECAY_MS + 1)).toHaveLength(0);
     // ...but it remains in the ledger (accumulation is preserved).
     expect(after2.entries).toHaveLength(1);
+  });
+
+  test("an activated rule FIRES through the real TtsrManager (recall→fire)", () => {
+    const led = mergeCandidates(
+      mergeCandidates(EMPTY_LEDGER, [cand], "s1", 1000),
+      [cand],
+      "s2",
+      2000
+    );
+    const [rule] = activeRules(led, 2000);
+    const mgr = new TtsrManager();
+
+    mgr.addRule(rule!);
+
+    // The model re-emits the previously-failing snippet inside a tool call.
+    const fired = mgr.checkDelta(cand.before, {
+      source: "tool-args",
+      currentFile: "src/a.ts",
+    });
+
+    expect(fired?.name).toBe(rule?.name);
+  });
+
+  test("activated rules carry no fileGlobs (so the glob matcher can't suppress them)", () => {
+    const led = mergeCandidates(
+      mergeCandidates(EMPTY_LEDGER, [cand], "s1", 1000),
+      [cand],
+      "s2",
+      2000
+    );
+
+    expect(activeRules(led, 2000)[0]?.fileGlobs).toBeUndefined();
   });
 
   test("active rules round-trip through parseProjectRules (valid TTSR shape)", () => {

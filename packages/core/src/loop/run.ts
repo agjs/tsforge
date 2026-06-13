@@ -268,6 +268,9 @@ export async function runTask(
     kind: "red",
     task: task.id,
     errors: red.errors.length,
+    // Carry the failing rule codes so the memory miner can seed the baseline
+    // failure set — a one-turn red→green fix has no prior `validated` event.
+    rules: red.errors.flatMap((e) => (e.rule === undefined ? [] : [e.rule])),
     message: `task ${task.id}: RED (${red.errors.length} error(s))`,
   });
 

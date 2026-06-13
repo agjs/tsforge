@@ -161,7 +161,9 @@ export function activeRules(ledger: IMemoryLedger, now: number): ITtsrRule[] {
       name: e.name,
       condition: [e.condition],
       scope: "tool-args" as const,
-      fileGlobs: e.fileGlobs,
+      // No fileGlobs: the condition is already a specific code snippet, and the
+      // TTSR file-glob matcher does not match `**/*.ts`-style patterns — setting
+      // one would silently prevent the rule from ever firing.
       guidance: e.guidance,
       repeatMode: "cooldown" as const,
       repeatGap: 3,

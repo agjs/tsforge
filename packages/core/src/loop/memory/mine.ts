@@ -31,6 +31,15 @@ export function mineLessons(events: readonly ILoopEvent[]): ICandidateLesson[] {
   let edits: IEditWindow[] = [];
 
   for (const event of events) {
+    // The pre-run RED gate is a `red` event (not `validated`), so seed the
+    // baseline failing set from it — otherwise a one-turn red→green fix, whose
+    // only `validated` event is the GREEN one, would mine nothing.
+    if (event.kind === "red") {
+      prevFailing = new Set(event.rules ?? []);
+
+      continue;
+    }
+
     if (
       event.kind === "edit" &&
       event.file !== undefined &&
