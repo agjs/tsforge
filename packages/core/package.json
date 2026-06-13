@@ -17,6 +17,7 @@
   "files": [
     "bin",
     "src",
+    "scripts",
     "strict.eslint.config.mjs",
     "strict.web.eslint.config.mjs"
   ],
