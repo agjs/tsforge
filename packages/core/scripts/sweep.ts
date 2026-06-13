@@ -11,6 +11,7 @@ import { runSpec, qualityRepair } from "../src/loop";
 import { modelAgent } from "../src/agent";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
+import { providerConfig } from "../src/cli";
 import { summarize, type IRunRecord } from "../src/eval";
 import { renderEvent } from "../src/render";
 import type { ILoopEvent } from "../src/loop";
@@ -109,28 +110,32 @@ const seedFiles = await readdir(seedDir, { recursive: true });
 // unreachable endpoint and hung with an empty run.log.)
 const { entry: activeModel } = await resolveActiveModel();
 
-const provider = new OpenAICompatibleProvider({
-  baseUrl: activeModel.baseUrl,
-  model: activeModel.model,
-  apiKey: resolveApiKey(activeModel),
-  // Thinking tokens count against the limit, so give reasoning + code room.
-  maxTokens: Number(process.env.TSFORGE_MAX_TOKENS ?? "16384"),
-  // Opt-in only: a repetition penalty breaks rare temp-0 loops but DEGRADES
-  // algorithmic code (it made `money` write unsafe/any code that failed the
-  // strict gate). Default off; enable via env if a target genuinely loops.
-  repetitionPenalty:
-    process.env.TSFORGE_REPETITION_PENALTY === undefined
-      ? undefined
-      : Number(process.env.TSFORGE_REPETITION_PENALTY),
-});
+// Build the wire config the SAME way the CLI does (`providerConfig`), so the
+// sweep inherits the active entry's provider dialect — `reasoning`,
+// `reasoningEffort`, `extraBody`, `extraHeaders`. Hand-rolling the config here
+// dropped those fields, so a DeepSeek sweep sent qwen-only params and hit the
+// 400s the interactive path already handles. maxTokens still defaults to
+// PROVIDER_LIMITS (16384) — thinking tokens count against it, so reasoning +
+// code get room. Repetition penalty stays opt-in via TSFORGE_REPETITION_PENALTY.
+const provider = new OpenAICompatibleProvider(providerConfig(activeModel));
 
 // The judge scores quality. Point it at a flagship via TSFORGE_JUDGE_URL/MODEL
-// (+ TSFORGE_JUDGE_KEY) to measure the gap; defaults to the active model judging itself.
-const judgeProvider = new OpenAICompatibleProvider({
-  baseUrl: process.env.TSFORGE_JUDGE_URL ?? activeModel.baseUrl,
-  model: process.env.TSFORGE_JUDGE_MODEL ?? activeModel.model,
-  apiKey: process.env.TSFORGE_JUDGE_KEY ?? resolveApiKey(activeModel),
-});
+// (+ TSFORGE_JUDGE_KEY) to measure the gap. When NOT overridden, the active
+// model judges itself — reuse its full dialect via providerConfig so a
+// self-judge against DeepSeek speaks DeepSeek too. An explicit external judge
+// is a plain generic call (its own endpoint, no inherited reasoning dialect).
+const judgeOverridden =
+  process.env.TSFORGE_JUDGE_URL !== undefined ||
+  process.env.TSFORGE_JUDGE_MODEL !== undefined;
+const judgeProvider = new OpenAICompatibleProvider(
+  judgeOverridden
+    ? {
+        baseUrl: process.env.TSFORGE_JUDGE_URL ?? activeModel.baseUrl,
+        model: process.env.TSFORGE_JUDGE_MODEL ?? activeModel.model,
+        apiKey: process.env.TSFORGE_JUDGE_KEY ?? resolveApiKey(activeModel),
+      }
+    : providerConfig(activeModel)
+);
 
 /** Sortable timestamp `YYYYMMDD-HHMMSS` so run dirs sort newest-last by name. */
 function stamp(): string {
