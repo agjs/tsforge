@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -68,12 +69,22 @@ test("existing tsconfig: not overwritten, but gated via a strict override that e
       '"mine": true'
     );
 
-    // …but the gate runs a strict override that extends it and forces the floor.
-    expect(gate.command).toContain("-p tsforge.tsconfig.json");
-    const override = await readFile(join(dir, "tsforge.tsconfig.json"), "utf8");
+    // …but the gate runs a strict overlay that extends it and forces the floor.
+    // The overlay lives under .tsforge/ (not a sibling in the project root).
+    expect(gate.command).toContain("-p .tsforge/tsconfig.gate.json");
+    expect(existsSync(join(dir, "tsforge.tsconfig.json"))).toBe(false);
+    const override = await readFile(
+      join(dir, ".tsforge", "tsconfig.gate.json"),
+      "utf8"
+    );
 
-    expect(override).toContain('"extends": "./tsconfig.json"');
+    expect(override).toContain('"extends": "../tsconfig.json"');
     expect(override).toContain("noUncheckedIndexedAccess");
+
+    // The ephemeral overlay is self-ignored so it never lands in the user's git.
+    expect(
+      await readFile(join(dir, ".tsforge", ".gitignore"), "utf8")
+    ).toContain("tsconfig.gate.json");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

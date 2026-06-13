@@ -19,7 +19,8 @@
     "src",
     "scripts",
     "strict.eslint.config.mjs",
-    "strict.web.eslint.config.mjs"
+    "strict.web.eslint.config.mjs",
+    "strict.type-aware.eslint.config.mjs"
   ],
   "engines": {
     "bun": ">=1.3.14"

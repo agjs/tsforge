@@ -106,10 +106,16 @@ const STRICT_TSCONFIG = `{
 /** Strict overlay for a project that ALREADY has a tsconfig: extend it (so the
  *  project's paths/jsx/module/lib still resolve — a bare strict config would
  *  mis-compile a real app) but FORCE every strictness flag on top, so a loosely-
- *  configured repo still gets tsforge's strict-TS floor. Written as a sibling
- *  `tsforge.tsconfig.json` and gated with `tsc -p`. */
-const STRICT_TSCONFIG_OVERRIDE = `{
-  "extends": "./tsconfig.json",
+ *  configured repo still gets tsforge's strict-TS floor.
+ *
+ *  PERSISTENCE POLICY: written under `.tsforge/` (tsforge's cache namespace), NOT
+ *  as a sibling in the project root — so the gate never litters the user's repo
+ *  with a `tsforge.tsconfig.json`. `extends` points one level up to the project's
+ *  own config, and `include`/`exclude` are re-stated relative to the subdir
+ *  because `extends` does not inherit them (they default to the config's own
+ *  directory otherwise — which under `.tsforge/` would compile nothing). */
+const STRICT_TSCONFIG_OVERLAY = `{
+  "extends": "../tsconfig.json",
   "compilerOptions": {
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -119,9 +125,15 @@ const STRICT_TSCONFIG_OVERRIDE = `{
     "erasableSyntaxOnly": true,
     "skipLibCheck": true,
     "noEmit": true
-  }
+  },
+  "include": ["../**/*.ts", "../**/*.tsx"],
+  "exclude": ["../node_modules", "../dist", "../build", "../scratch", "../.tsforge"]
 }
 `;
+
+/** The gate overlay's home: tsforge's cache dir + the overlay filename. */
+const GATE_TSCONFIG_DIR = ".tsforge";
+const GATE_TSCONFIG_FILE = "tsconfig.gate.json";
 
 // The web-stack scaffolds (Vite + React full-kit, or Vite vanilla) live in the
 // registry; this module just lays them down and builds their gate. shadcn/TanStack
@@ -499,24 +511,29 @@ export async function buildGate(
 
 /**
  * The type-aware floor — ALWAYS tsforge-strict (user policy: a repo's own config
- * is never trusted to be strict enough). With a project tsconfig, extend it but
- * force the strict flags; greenfield, bring the full strict one. null when not a
- * TS project. (The strict override / bundled config win over whatever the repo set.)
+ * is never trusted to be strict enough). With a project tsconfig, extend it under
+ * `.tsforge/` but force the strict flags; greenfield, bring the full strict one.
+ * null when not a TS project. (The strict overlay / bundled config win over
+ * whatever the repo set.)
  */
 async function tscPart(cwd: string): Promise<string | null> {
   const hasTsconfig = await Bun.file(join(cwd, "tsconfig.json")).exists();
 
   if (hasTsconfig) {
+    // EPHEMERAL gate artifact: lives in .tsforge/ (Bun.write makes the dir), so
+    // we never drop a tsforge.tsconfig.json in the user's project root.
     await Bun.write(
-      join(cwd, "tsforge.tsconfig.json"),
-      STRICT_TSCONFIG_OVERRIDE
+      join(cwd, GATE_TSCONFIG_DIR, GATE_TSCONFIG_FILE),
+      STRICT_TSCONFIG_OVERLAY
     );
+    await ignoreGateArtifact(cwd);
 
-    return `"${TSC_BIN}" --noEmit -p tsforge.tsconfig.json`;
+    return `"${TSC_BIN}" --noEmit -p ${GATE_TSCONFIG_DIR}/${GATE_TSCONFIG_FILE}`;
   }
 
   // Greenfield: bring a strict tsconfig so tsc can gate — but only when this is
   // actually a TS project (has a package.json), so we never litter a random dir.
+  // Unlike the overlay, a greenfield tsconfig.json is a DURABLE project file.
   if (await Bun.file(join(cwd, "package.json")).exists()) {
     await Bun.write(join(cwd, "tsconfig.json"), STRICT_TSCONFIG);
 
@@ -524,6 +541,20 @@ async function tscPart(cwd: string): Promise<string | null> {
   }
 
   return null;
+}
+
+/** Keep the ephemeral gate overlay out of git WITHOUT touching the user's root
+ *  .gitignore: drop a scoped `.tsforge/.gitignore` ignoring just the overlay.
+ *  Created only when absent, so a user-authored `.tsforge/.gitignore` (e.g. one
+ *  that intentionally tracks rules.json) is never clobbered. */
+async function ignoreGateArtifact(cwd: string): Promise<void> {
+  const ignore = join(cwd, GATE_TSCONFIG_DIR, ".gitignore");
+
+  if (await Bun.file(ignore).exists()) {
+    return;
+  }
+
+  await Bun.write(ignore, `${GATE_TSCONFIG_FILE}\n`);
 }
 
 /** The syntactic idiom layer — ALWAYS tsforge's bundled strict eslint config
