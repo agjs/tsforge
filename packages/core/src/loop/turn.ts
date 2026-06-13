@@ -8,6 +8,7 @@ import {
   sameErrorSet,
   type ErrorParser,
   type ErrorSet,
+  type IErrorItem,
 } from "../validate";
 import { isInScope } from "../lib/scope";
 import { fileExists, resolveScopeFiles } from "../lib/fs";
@@ -126,6 +127,9 @@ export interface ILoopCtx {
 export interface ILoopState {
   prevGateErrors: ErrorSet;
   gateNoProgress: number;
+  /** Per-error-key (file:rule) survival count: how many consecutive gate cycles
+   *  each error has persisted. Drives the primary `samePersist` no-progress stop. */
+  errorAge: Map<string, number>;
   lastGateCount: number;
   edits: number;
   regressions: number;
@@ -689,6 +693,46 @@ function autoFixNotice(files: string[]): string {
 }
 
 /**
+ * Advance each error's per-(file:rule) survival count and return the first error
+ * that has now persisted for `samePersist` consecutive gate cycles — the model
+ * keeps failing at the SAME thing — or null. Rebuilds the map from the CURRENT
+ * keys, so a fixed error's age drops out (no stale growth) and an error that
+ * comes back later starts fresh. Catches "stuck on X" even while OTHER errors
+ * churn around it (which the whole-set `gateNoProgress` guard misses).
+ */
+export function trackErrorAges(
+  state: ILoopState,
+  gateErrors: ErrorSet
+): IErrorItem | null {
+  const next = new Map<string, number>();
+  let stuck: IErrorItem | null = null;
+
+  for (const e of gateErrors) {
+    const age = (state.errorAge.get(e.key) ?? 0) + 1;
+
+    next.set(e.key, age);
+
+    if (age >= LOOP_LIMITS.samePersist && stuck === null) {
+      stuck = e;
+    }
+  }
+
+  state.errorAge = next;
+
+  return stuck;
+}
+
+/** The blocker diagnosis surfaced when a single error persists too long — names
+ *  the rule + file + attempt count + the last message, so an interactive session
+ *  hands back something the user can act on. */
+export function persistDetail(e: IErrorItem): string {
+  const where = e.file !== undefined ? ` in ${e.file}` : "";
+  const rule = e.rule ?? "the same error";
+
+  return `stuck on ${rule}${where} after ${String(LOOP_LIMITS.samePersist)} attempts (last: ${e.message.slice(0, 140)})`;
+}
+
+/**
  * The deterministic gate — the only authority on "done". Auto-fix, run the
  * optional fix command, validate, and return a terminal result (done/stuck) or
  * null to keep going (having fed the failures back into the conversation).
@@ -817,17 +861,20 @@ export async function settleGate(
     };
   }
 
-  state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
-    ? state.gateNoProgress + 1
-    : 0;
-  state.prevGateErrors = gateErrors;
+  // PRIMARY no-progress stop: the model keeps failing at the SAME (file,rule)
+  // for `samePersist` cycles running — even if other errors churn. Hand back a
+  // concrete blocker rather than spinning to a raw turn cap.
+  const persisted = trackErrorAges(state, gateErrors);
 
-  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
+  if (persisted !== null) {
+    const detail = persistDetail(persisted);
+
     report({
       kind: "stuck",
       task: task.id,
       cycles: turn,
-      message: `task ${task.id}: stuck (gate unchanged ${LOOP_LIMITS.gateStuckRepeats}x)`,
+      detail,
+      message: `task ${task.id}: ${detail}`,
     });
 
     return {
@@ -836,6 +883,34 @@ export async function settleGate(
       status: RUN_STATUS.stuck,
       cycles: turn,
       reason: STUCK_REASON.stalled,
+      detail,
+    };
+  }
+
+  // Coarser secondary net: the WHOLE error set unchanged this many cycles.
+  state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
+    ? state.gateNoProgress + 1
+    : 0;
+  state.prevGateErrors = gateErrors;
+
+  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
+    const detail = `gate unchanged ${String(LOOP_LIMITS.gateStuckRepeats)} cycles (${String(gateErrors.length)} error(s) not converging)`;
+
+    report({
+      kind: "stuck",
+      task: task.id,
+      cycles: turn,
+      detail,
+      message: `task ${task.id}: stuck — ${detail}`,
+    });
+
+    return {
+      task: task.id,
+      redConfirmed: true,
+      status: RUN_STATUS.stuck,
+      cycles: turn,
+      reason: STUCK_REASON.stalled,
+      detail,
     };
   }
 

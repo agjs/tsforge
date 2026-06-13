@@ -31,17 +31,31 @@ export const LOOP_LIMITS = {
    */
   maxEditLines: 50,
   /**
-   * Give up after the gate shows the EXACT same error set this many edits in a
-   * row (genuine spinning). Generous; the turn cap is the real backstop.
+   * Give up after the gate shows the EXACT same error SET this many edits in a
+   * row (genuine spinning) — the coarse net. The finer `samePersist` guard
+   * (below) usually trips first; this catches a stable-but-shuffling set.
    */
-  gateStuckRepeats: 10,
+  gateStuckRepeats: 6,
+  /**
+   * The PRIMARY no-progress guard: give up when a SINGLE error — same (file,rule)
+   * key — survives this many consecutive gate cycles, i.e. the model keeps failing
+   * at the same thing N attempts running, even while OTHER errors churn around it.
+   * This (not a raw turn count) is how the loop decides it's genuinely stuck.
+   */
+  samePersist: 5,
   /**
    * Above this many chars of combined file content, the seed prompt sends a
    * navigable project MAP instead of full dumps. Below it, full dumps.
    */
   mapThresholdChars: 12000,
-  /** Hard backstop on model turns per task. */
+  /** Hard backstop on model turns per HEADLESS task (eval/cron — no human to
+   *  intervene). Interactive sessions use `interactiveBackstopTurns` instead. */
   maxTurns: 40,
+  /** Interactive runaway safety only — NOT the primary stop. A human is present
+   *  and can interrupt, and the progress guards (`samePersist` / `gateStuckRepeats`)
+   *  pull the agent out the moment it stops converging, so this is set high enough
+   *  that normal long, productive back-and-forth never trips it. */
+  interactiveBackstopTurns: 250,
   /** Turn budget for a from-scratch WEB build (heavy gate, many files): used by
    *  headless web builds AND applied when an interactive session scaffolds via
    *  `scaffold_web` — measured: a todo app was still WRITING components when it

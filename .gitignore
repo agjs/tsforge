@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .astro/
+.cursor/
 # Ignore everything under evals/ (run output, scratch) EXCEPT the committed
 # corpus seeds, so `eval:sweep` has a versioned set of tasks to run against.
 evals/*

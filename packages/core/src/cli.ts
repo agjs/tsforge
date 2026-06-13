@@ -2,13 +2,7 @@
 import { join, isAbsolute } from "node:path";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import {
-  runTask,
-  RUN_STATUS,
-  Session,
-  PLAN_APPROVED_NOTE,
-  LOOP_LIMITS,
-} from "./loop";
+import { runTask, RUN_STATUS, Session, PLAN_APPROVED_NOTE } from "./loop";
 import {
   PROVIDER_LIMITS,
   PROVIDER_DEFAULTS,
@@ -997,9 +991,10 @@ async function repl(args: ICliArgs): Promise<number> {
     session.setFix(buildWebFix(framework));
     session.setIncrementalCheck(buildWebTscCheck());
     session.guide(webGuidance(framework));
-    // A from-scratch web build needs the big turn budget — the default cap was
-    // measured to cut a todo app off mid-write, before its gate ever ran.
-    session.setMaxTurns(LOOP_LIMITS.webMaxTurns);
+    // A from-scratch web build legitimately needs many turns. Don't pin a low
+    // ceiling here — the interactive session already rides the high runaway
+    // backstop (interactiveBackstopTurns) and stops on the progress guards, so a
+    // long, converging build is never cut off mid-write.
   };
 
   // The `scaffold_web` tool invokes this when the AGENT decides to build a web app

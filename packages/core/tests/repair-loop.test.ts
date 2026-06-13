@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTask } from "../src/loop";
+import { runTask, LOOP_LIMITS } from "../src/loop";
 import { scripted, runStep, STOP } from "./stub-provider";
 
 async function tmp(): Promise<string> {
@@ -74,7 +74,9 @@ test("stuck when it claims done but the gate stays red, unchanged", async () => 
   const dir = await tmp();
 
   try {
-    // Always stops without fixing → gate red with the same error every time.
+    // Always stops without fixing → gate red with the SAME error every time, so
+    // the per-(file,rule) persistence guard trips at `samePersist` cycles (the
+    // primary no-progress stop), well before any raw turn cap.
     const r = await runTask(
       { id: "1", accept: "test -f never.txt", files: [] },
       dir,
@@ -83,7 +85,7 @@ test("stuck when it claims done but the gate stays red, unchanged", async () => 
 
     expect(r.status).toBe("stuck");
     expect(r.reason).toBe("stalled");
-    expect(r.cycles).toBe(10); // GATE_STUCK_LIMIT
+    expect(r.cycles).toBe(LOOP_LIMITS.samePersist);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

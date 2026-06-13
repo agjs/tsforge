@@ -446,6 +446,7 @@ export class Session {
     this.state = {
       prevGateErrors: [],
       gateNoProgress: 0,
+      errorAge: new Map(),
       lastGateCount: -1,
       edits: 0,
       regressions: 0,
@@ -698,8 +699,13 @@ export class Session {
    */
   async send(text: string, opts: ISendOptions = {}): Promise<ISendResult> {
     const { ctx, report } = this;
+    // Interactive ceiling is a RUNAWAY backstop, not the primary stop — the
+    // progress guards (samePersist / gateNoProgress) pull the agent out the moment
+    // it stops converging. Set high so normal long back-and-forth never trips it.
     const maxTurns =
-      this.maxTurnsOverride ?? this.cfg.maxTurns ?? LOOP_LIMITS.maxTurns;
+      this.maxTurnsOverride ??
+      this.cfg.maxTurns ??
+      LOOP_LIMITS.interactiveBackstopTurns;
     const sendStart = performance.now();
 
     // Thread cancellation to the tool `run` commands and the gate (not just the
@@ -1505,7 +1511,7 @@ export class Session {
       kind: "stuck",
       task: SESSION_ID,
       cycles: maxTurns,
-      message: `stuck (hit ${maxTurns}-turn cap)`,
+      message: `stuck (hit the ${maxTurns}-turn runaway backstop — progress guards never tripped, which is unusual; re-steer or narrow the task)`,
     });
 
     return { status: "stuck", turns: maxTurns };

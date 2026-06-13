@@ -37,6 +37,8 @@ export interface ILoopEvent {
    *  reads to tell a type error from a lint rule, not just a count. */
   rules?: readonly string[];
   passed?: boolean;
+  /** For `stuck` events: a human-readable blocker diagnosis. */
+  detail?: string;
   file?: string;
   /** For `create` events: the new file's content (rendered as a code block). */
   content?: string;
@@ -82,6 +84,9 @@ export interface IRunResult {
   /** Model turns used. */
   cycles: number;
   reason?: StuckReason;
+  /** When stuck: a human-readable blocker diagnosis (the persistent rule/file +
+   *  last error) so an interactive session can hand back something actionable. */
+  detail?: string;
   /** Edits/creates applied to editable files (measure edit churn). */
   edits?: number;
   /** Times an edit RAISED the gate error count (regressions). */
