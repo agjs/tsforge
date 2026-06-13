@@ -28,6 +28,7 @@ import {
 } from "./render";
 import type { ITask } from "./spec";
 import type { Reporter, ILoopEvent } from "./loop";
+import { loadLedger, activeRules, forgetMemory } from "./loop/memory";
 import {
   buildGate,
   buildWebGate,
@@ -675,6 +676,7 @@ const HELP = [
   "  /sessions        list saved sessions (resume one with: tsforge --resume <id>)",
   "  /cost            rough conversation size (messages + ~tokens)",
   "  /metrics         token totals + generation rate (tok/s) this session",
+  "  /memory          show learned failure→fix lessons (/memory forget to clear)",
   "  /exit, /quit     leave the session",
   "",
   "Anything else is sent to the agent. It works with its tools; when it stops,",
@@ -1246,6 +1248,40 @@ async function repl(args: ICliArgs): Promise<number> {
       case "sessions":
         await printSessions(args.dir);
         break;
+
+      case "memory": {
+        if (arg.trim() === "forget") {
+          await forgetMemory(args.dir);
+          process.stdout.write("  memory cleared for this repo\n");
+          break;
+        }
+
+        const ledger = await loadLedger(args.dir);
+
+        if (ledger.entries.length === 0) {
+          process.stdout.write("  no learned lessons yet\n");
+          break;
+        }
+
+        const activeNames = new Set(
+          activeRules(ledger, Date.now()).map((r) => r.name)
+        );
+
+        process.stdout.write(
+          `  ${String(ledger.entries.length)} lesson(s), ${String(activeNames.size)} active (● fires · ○ still accruing):\n`
+        );
+
+        for (const entry of ledger.entries.slice(0, 20)) {
+          const mark = activeNames.has(entry.name) ? "●" : "○";
+
+          process.stdout.write(
+            `    ${mark} ${entry.rule} · ${String(entry.hits)} hit(s)\n`
+          );
+        }
+
+        process.stdout.write("  /memory forget to clear\n");
+        break;
+      }
 
       case "cost": {
         const chars = session.messages.reduce(

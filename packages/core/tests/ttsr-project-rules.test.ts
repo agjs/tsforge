@@ -34,6 +34,38 @@ test("loadProjectTtsrRules reads .tsforge/rules.json from cwd", async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+test("loadProjectTtsrRules also reads memory-learned .tsforge/learned-rules.json", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-ttsr-"));
+
+  await mkdir(join(dir, ".tsforge"), { recursive: true });
+  await writeFile(
+    join(dir, ".tsforge", "learned-rules.json"),
+    JSON.stringify([{ ...CUSTOM_RULE, name: "learned-no-any-abc" }])
+  );
+
+  const rules = await loadProjectTtsrRules(dir);
+
+  expect(rules.map((r) => r.name)).toContain("learned-no-any-abc");
+
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("loadProjectTtsrRules merges hand-authored + learned rules", async () => {
+  const dir = await withProjectRules(JSON.stringify([CUSTOM_RULE]));
+
+  await writeFile(
+    join(dir, ".tsforge", "learned-rules.json"),
+    JSON.stringify([{ ...CUSTOM_RULE, name: "learned-x" }])
+  );
+
+  const names = (await loadProjectTtsrRules(dir)).map((r) => r.name);
+
+  expect(names).toContain("custom-foo");
+  expect(names).toContain("learned-x");
+
+  await rm(dir, { recursive: true, force: true });
+});
+
 test("loadProjectTtsrRules returns [] when the file is absent", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-ttsr-"));
 
@@ -68,7 +100,9 @@ test("initTtsrManager merges project rules so a custom rule fires", async () => 
 
   expect(matched?.name).toBe("custom-foo");
   expect(
-    events.some((e) => e.kind === "ttsr" && e.message.includes("1 custom"))
+    events.some(
+      (e) => e.kind === "ttsr" && e.message.includes("1 project/learned")
+    )
   ).toBe(true);
 
   await rm(dir, { recursive: true, force: true });

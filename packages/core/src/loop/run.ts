@@ -1,16 +1,25 @@
-import { join } from "node:path";
 import type { ITask } from "../spec";
 import type { IChatMessage, IModelResponse, IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate";
 import { parseEslintJson } from "../validate";
 import { readFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
-import type { IRunResult, IRunOptions, Reporter } from "./loop.types";
+import type {
+  IRunResult,
+  IRunOptions,
+  Reporter,
+  ILoopEvent,
+} from "./loop.types";
+import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import { flags } from "../config";
 import { SYSTEM, seedPrompt } from "./prompt";
 import { detectStack } from "../stack-detection";
-import { TtsrManager, parseProjectRules, type ITtsrRule } from "./ttsr";
-import { DEFAULT_TTSR_RULES } from "./ttsr-defaults";
+import type { TtsrManager } from "./ttsr";
+import {
+  initTtsrManager,
+  loadProjectTtsrRules,
+  applyTtsrInterrupt,
+} from "./ttsr-init";
 import {
   type ILoopCtx,
   type ILoopState,
@@ -66,57 +75,14 @@ function handleDegeneration(
   };
 }
 
-/** Read and parse `<cwd>/.tsforge/rules.json` if present. Missing or invalid
- *  files yield no rules (parseProjectRules tolerates malformed JSON). */
-export async function loadProjectTtsrRules(cwd: string): Promise<ITtsrRule[]> {
-  const file = Bun.file(join(cwd, ".tsforge", "rules.json"));
+// TTSR init + project/learned-rule loading live in the shared ttsr-init module
+// (the interactive session uses the same loaders). Re-exported here so existing
+// importers (and tests) keep their path.
+export { initTtsrManager, loadProjectTtsrRules };
 
-  if (!(await file.exists())) {
-    return [];
-  }
-
-  return parseProjectRules(await file.text());
-}
-
-/** Build and configure a TTSR manager if enabled. Returns null if disabled.
- *  Built-in defaults register first, then optional project rules from
- *  `<cwd>/.tsforge/rules.json`; `addRule` ignores duplicate names, so a
- *  built-in safety rule always wins over a same-named project rule. */
-export async function initTtsrManager(
-  cwd: string,
-  report: Reporter,
-  taskId: string
-): Promise<TtsrManager | null> {
-  if (!flags.ttsr()) {
-    return null;
-  }
-
-  const manager = new TtsrManager();
-
-  for (const rule of DEFAULT_TTSR_RULES) {
-    manager.addRule(rule);
-  }
-
-  let added = 0;
-
-  for (const rule of await loadProjectTtsrRules(cwd)) {
-    if (manager.addRule(rule)) {
-      added += 1;
-    }
-  }
-
-  if (added > 0) {
-    report({
-      kind: "ttsr",
-      task: taskId,
-      message: `loaded ${added} custom TTSR rule(s) from .tsforge/rules.json`,
-    });
-  }
-
-  return manager;
-}
-
-/** Handle a TTSR interrupt: report, inject corrective message, and optionally disable. */
+/** Handle a TTSR interrupt in the headless loop: apply the shared interrupt
+ *  (count, report, inject corrective guidance, disable at the cap) then emit
+ *  timing for the interrupted turn. */
 function handleTtsrInterrupt(
   ttsrFired: { ruleName: string; guidance: string },
   state: ILoopState,
@@ -128,32 +94,41 @@ function handleTtsrInterrupt(
   taskStart: number,
   ttsrManager: TtsrManager | null
 ): void {
-  state.ttsrInterrupts += 1;
+  applyTtsrInterrupt(ttsrFired, state, messages, report, taskId, ttsrManager);
+  emitTiming(report, taskId, turn, turnStart, taskStart);
+}
 
-  report({
-    kind: "ttsr",
-    task: taskId,
-    message: `⚠ TTSR interrupted: ${ttsrFired.ruleName}`,
-  });
-
-  // Hard cap: after 3 interrupts, disable TTSR to prevent loops
-  if (state.ttsrInterrupts >= 3) {
-    report({
-      kind: "tool",
-      task: taskId,
-      message: `TTSR disabled after ${state.ttsrInterrupts} interrupts (hit cap)`,
-    });
-
-    ttsrManager?.disable();
+/**
+ * MEMORY post-run hook: mine this run's events for failure→fix lessons and
+ * consolidate them into `.tsforge/`. Gated on the TTSR flag (learned rules are
+ * recalled via TTSR, so there's nothing to learn for if it's off). Best-effort:
+ * a memory failure never affects the run's result. `runId` is unique per run so
+ * the same task re-run counts as a distinct session for the recurrence gate.
+ */
+async function consolidateLessons(
+  cwd: string,
+  events: readonly ILoopEvent[],
+  runId: string,
+  report: Reporter
+): Promise<void> {
+  if (!flags.ttsr()) {
+    return;
   }
 
-  // Append corrective message and retry without counting as a normal cycle
-  messages.push({
-    role: "user",
-    content: `⚠ generation interrupted: ${ttsrFired.guidance} Rewrite the affected part without that pattern.`,
-  });
+  try {
+    const candidates = mineLessons(events);
+    const active = await consolidateMemory(cwd, candidates, runId);
 
-  emitTiming(report, taskId, turn, turnStart, taskStart);
+    if (active > 0) {
+      report({
+        kind: "ttsr",
+        task: runId,
+        message: `memory: ${String(active)} learned rule(s) active in .tsforge/learned-rules.json`,
+      });
+    }
+  } catch {
+    // Memory is supplementary — never let it break a run.
+  }
 }
 
 /** Assemble per-call completion options, leaving optional knobs unset when absent. */
@@ -242,7 +217,25 @@ export async function runTask(
   const effectiveParse = effectiveParserFor(parse);
   const temperature = opts.temperature ?? 0;
   const maxTurns = opts.maxTurns ?? LOOP_LIMITS.maxTurns;
-  const report: Reporter = opts.onEvent ?? (() => undefined);
+  // Buffer every event so the post-run memory hook can mine the run for
+  // failure→fix lessons, while still forwarding live to the real reporter.
+  const base: Reporter = opts.onEvent ?? (() => undefined);
+  const events: ILoopEvent[] = [];
+
+  const report: Reporter = (event) => {
+    events.push(event);
+    base(event);
+  };
+
+  // Unique per run, so re-running the same task counts as a distinct session for
+  // the lesson-recurrence gate.
+  const runId = `${task.id}-${Date.now().toString(36)}`;
+
+  const finish = async (result: IRunResult): Promise<IRunResult> => {
+    await consolidateLessons(cwd, events, runId, report);
+
+    return result;
+  };
 
   report({
     kind: "start",
@@ -403,7 +396,7 @@ export async function runTask(
     });
 
     if (looped !== null) {
-      return looped;
+      return finish(looped);
     }
 
     const touchedEditable =
@@ -419,11 +412,11 @@ export async function runTask(
       emitTiming(report, task.id, turn, turnStart, taskStart);
 
       if (settled !== null) {
-        return {
+        return finish({
           ...settled,
           edits: state.edits,
           regressions: state.regressions,
-        };
+        });
       }
 
       // Stopped with no tool call while still red → nudge it to act, not narrate.
@@ -444,7 +437,7 @@ export async function runTask(
     message: `task ${task.id}: stuck (hit ${maxTurns}-turn cap)`,
   });
 
-  return {
+  return finish({
     task: task.id,
     redConfirmed: true,
     status: RUN_STATUS.stuck,
@@ -452,5 +445,5 @@ export async function runTask(
     reason: STUCK_REASON.cap,
     edits: state.edits,
     regressions: state.regressions,
-  };
+  });
 }

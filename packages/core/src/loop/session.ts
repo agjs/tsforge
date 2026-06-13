@@ -28,7 +28,10 @@ import {
 import { connectMcpServers } from "../mcp";
 import { loadAndRegisterPlugins } from "../config/external-plugins";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
-import type { Reporter } from "./loop.types";
+import type { Reporter, ILoopEvent } from "./loop.types";
+import type { TtsrManager } from "./ttsr";
+import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
+import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import { CHAT_SYSTEM, COMPACT_SYSTEM } from "./prompt";
 import {
   buildTsService,
@@ -396,6 +399,12 @@ export class Session {
   private readonly forceTools: boolean;
   /** Mid-session turn-cap override (setMaxTurns) — a web scaffold raises it. */
   private maxTurnsOverride?: number;
+  /** TTSR manager (built-in + project + memory-learned rules). Null when TTSR is
+   *  disabled. Built in `create` (needs async rule loading). */
+  private ttsrManager: TtsrManager | null = null;
+  /** Events of the CURRENT send (reset each drive), buffered off ctx.report so the
+   *  post-send memory hook can mine the run for failure→fix lessons. */
+  private readonly sendEvents: ILoopEvent[] = [];
 
   private constructor(cfg: ISessionConfig, ctx: ILoopCtx) {
     this.provider = cfg.provider;
@@ -443,6 +452,15 @@ export class Session {
     }
 
     this.ctx = ctx;
+    // Buffer events off ctx.report (where edit/create/validated flow) so the
+    // post-send memory hook can mine them; still forward to the original reporter.
+    const rawCtxReport = ctx.report;
+
+    this.ctx.report = (event) => {
+      this.sendEvents.push(event);
+      rawCtxReport(event);
+    };
+
     this.state = {
       prevGateErrors: [],
       gateNoProgress: 0,
@@ -523,7 +541,14 @@ export class Session {
       },
     };
 
-    return new Session(cfg, ctx);
+    const session = new Session(cfg, ctx);
+
+    // Build the TTSR manager (built-in + project + memory-learned rules) so the
+    // interactive loop gets the SAME mid-stream guidance the headless loop does —
+    // including the failure→fix lessons learned in this repo.
+    session.ttsrManager = await initTtsrManager(cfg.cwd, report, SESSION_ID);
+
+    return session;
   }
 
   /** The current gate command (empty when none). */
@@ -1024,6 +1049,9 @@ export class Session {
       mcpSchemas.length > 0 ? [...baseTools, ...mcpSchemas] : baseTools;
     const callStart = performance.now();
     let firstTokenAt = 0;
+
+    this.ttsrManager?.resetBuffer();
+
     const res = await this.provider.complete(ctx.messages, {
       tools: offeredTools,
       temperature: this.cfg.temperature ?? 0,
@@ -1032,6 +1060,7 @@ export class Session {
       ...(this.cfg.thinkingTokenBudget === undefined
         ? {}
         : { thinkingTokenBudget: this.cfg.thinkingTokenBudget }),
+      ...this.ttsrCallOption(),
       ...(signal === undefined ? {} : { signal }),
       onToken: (token, channel) => {
         // Stamp the first token so tokens/sec measures generation rate (excluding
@@ -1072,6 +1101,10 @@ export class Session {
     }
 
     ctx.messages.push(assistantMessage(res));
+
+    // Every model call advances TTSR cooldown accounting (including interrupted
+    // ones, so repeatGap rules count correctly after a retry).
+    this.ttsrManager?.incrementTurnCount();
 
     if (res.salvaged !== undefined && res.salvaged > 0) {
       report({
@@ -1370,7 +1403,100 @@ export class Session {
     }
   }
 
+  /** Drive one send to a terminal result, then mine the send's events for
+   *  failure→fix lessons (best-effort, never affects the result). The buffer is
+   *  reset per send so each maps to one "run". */
   private async drive(
+    maxTurns: number,
+    sendStart: number,
+    opts: ISendOptions
+  ): Promise<ISendResult> {
+    this.sendEvents.length = 0;
+
+    try {
+      return await this.driveInner(maxTurns, sendStart, opts);
+    } finally {
+      await this.consolidateLessons();
+    }
+  }
+
+  /** Mine the current send's events into the project's learned-rules memory.
+   *  Gated on the TTSR flag (learned rules are recalled via TTSR). */
+  private async consolidateLessons(): Promise<void> {
+    if (!flags.ttsr()) {
+      return;
+    }
+
+    try {
+      const candidates = mineLessons(this.sendEvents);
+      const runId = `${SESSION_ID}-${Date.now().toString(36)}`;
+      const active = await consolidateMemory(this.ctx.cwd, candidates, runId);
+
+      if (active > 0) {
+        this.report({
+          kind: "ttsr",
+          task: SESSION_ID,
+          message: `memory: ${String(active)} learned rule(s) active in .tsforge/learned-rules.json`,
+        });
+      }
+    } catch {
+      // Memory is supplementary — never let it break a send.
+    }
+  }
+
+  /** The `ttsrManager` completion option, or nothing when TTSR is off. */
+  private ttsrCallOption():
+    | { ttsrManager: TtsrManager }
+    | Record<string, never> {
+    return this.ttsrManager === null ? {} : { ttsrManager: this.ttsrManager };
+  }
+
+  /** Apply a mid-stream TTSR fire (inject guidance, retry). Returns true when it
+   *  fired (the caller should `continue`). */
+  private handleTtsrFired(
+    res: IModelResponse,
+    turn: number,
+    turnStart: number,
+    sendStart: number
+  ): boolean {
+    if (res.ttsrFired === undefined) {
+      return false;
+    }
+
+    applyTtsrInterrupt(
+      res.ttsrFired,
+      this.state,
+      this.ctx.messages,
+      this.report,
+      SESSION_ID,
+      this.ttsrManager
+    );
+    emitTiming(this.report, SESSION_ID, turn, turnStart, sendStart);
+
+    return true;
+  }
+
+  /** Handle a degenerate stream: a bounded recovery or a terminal stop. Returns a
+   *  stop result, "retry" to continue with a forced tool, or null if not degenerate. */
+  private degenerationStop(
+    res: IModelResponse,
+    degenerations: number,
+    turn: number,
+    turnStart: number,
+    sendStart: number
+  ): ISendResult | "retry" | null {
+    if (res.degenerated !== true) {
+      return null;
+    }
+
+    const stop = this.degenerationRecovery(degenerations, turn);
+
+    emitTiming(this.report, SESSION_ID, turn, turnStart, sendStart);
+
+    return stop ?? "retry";
+  }
+
+  private async driveInner(
     maxTurns: number,
     sendStart: number,
     opts: ISendOptions
@@ -1439,22 +1565,32 @@ export class Session {
 
       forceTool = false;
 
-      // The stream caught a degenerate repetition loop. Try a BOUNDED recovery
-      // (force a concrete tool call next turn — can't loop in prose) before
-      // giving up; see degenerationRecovery.
-      if (res.degenerated === true) {
-        const stop = this.degenerationRecovery(degenerations, turn);
+      // A learned/built-in TTSR rule fired mid-stream — inject its corrective
+      // guidance and retry (checked before degeneration so the fix lands first).
+      // This is how memory's failure→fix lessons reach an interactive session.
+      if (this.handleTtsrFired(res, turn, turnStart, sendStart)) {
+        continue;
+      }
 
-        emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
+      // The stream caught a degenerate repetition loop. Bounded recovery (force a
+      // concrete tool call next turn) before giving up; see degenerationRecovery.
+      const deg = this.degenerationStop(
+        res,
+        degenerations,
+        turn,
+        turnStart,
+        sendStart
+      );
 
-        if (stop !== null) {
-          return stop;
-        }
-
+      if (deg === "retry") {
         degenerations += 1;
         forceTool = true;
 
         continue;
+      }
+
+      if (deg !== null) {
+        return deg;
       }
 
       // FORCED-TOOLS: a lone yield_status call becomes a normal stop.
