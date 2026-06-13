@@ -93,7 +93,12 @@ function variantLabel(variant: IFeatureVariant): string {
 const featureVariants = parseFeatureVariants();
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
-const seedDir = join(evalsRoot, seed);
+// Prefer a local working seed (evals/<seed>); fall back to the committed corpus
+// (evals/corpus/<seed>) so checked-in seeds run with no manual copy step.
+const localSeedDir = join(evalsRoot, seed);
+const seedDir = (await Bun.file(join(localSeedDir, `${seed}.spec.md`)).exists())
+  ? localSeedDir
+  : join(evalsRoot, "corpus", seed);
 // Recursive so nested-directory apps (e.g. a React app under `src/`) copy whole;
 // flat single-dir evals are unaffected (recursive readdir returns the same list).
 const seedFiles = await readdir(seedDir, { recursive: true });

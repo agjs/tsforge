@@ -15,14 +15,17 @@ Compare [stream rules (TTSR)](/uplift/ttsr/), [hashline](/uplift/hashline/), and
 
 Full flag reference: [Environment variables](/reference/flags/).
 
+:::note
+Running a sweep drives a real model, so you need an OpenAI-compatible endpoint (the default is local qwen at `http://localhost:8000/v1`; override with `TSFORGE_BASE_URL`/`TSFORGE_MODEL`/`TSFORGE_API_KEY`). The corpus, analysis, and report tooling below ship with the repo and are exercised by the test suite, but the runs themselves need a model.
+:::
+
 ## Seeds
 
-A **seed** is the task you run the model against. They live in [`seeds/`](https://github.com/agjs/tsforge/tree/main/seeds) and ship with the repo, so the examples below work on a fresh clone. Two come built in:
+A **seed** is the task you run the model against. Committed seeds live in [`evals/corpus/`](https://github.com/agjs/tsforge/tree/main/evals/corpus) and ship with the repo, so the examples work on a fresh clone:
 
-- `money` — single-file pure logic (currency-safe arithmetic, no-lost-cents allocation).
-- `orders` — a three-module pricing engine (discounts, region tax, order summary).
+- `math` — single-file pure logic (currency-safe cent arithmetic with half-up rounding).
 
-Pick one with `TSFORGE_SEED=<name>`. To add your own, drop a folder in `seeds/` — see [Spec format](/spec/format/).
+Pick one with `TSFORGE_SEED=<name>`. A sweep first looks for a local working copy at `evals/<name>/`, then falls back to the committed `evals/corpus/<name>/`. To add your own, drop a folder under `evals/corpus/` with a `<name>.spec.md` plus its fixture files — see [Spec format](/spec/format/).
 
 ## Running a sweep
 
@@ -31,14 +34,14 @@ Pick one with `TSFORGE_SEED=<name>`. To add your own, drop a folder in `seeds/` 
 ### Hashline on/off
 
 ```bash
-TSFORGE_SEED=money \
+TSFORGE_SEED=math \
 TSFORGE_TEMPS=0 \
 TSFORGE_REPEATS=2 \
 TSFORGE_FEATURE_VARIANTS=hashline \
 bun run eval:sweep
 ```
 
-Creates four runs: `money-hashline=on-t0-...` and `money-hashline=off-t0-...` (two repeats each).
+Creates four runs: `math-hashline=on-t0-...` and `math-hashline=off-t0-...` (two repeats each).
 
 ### TTSR × hashline
 
@@ -52,7 +55,30 @@ bun run eval:sweep
 
 Runs `3 repeats × 2 temps × 4 variants = 24` runs with IDs like `orders-ttsr=on,hashline=off-t0.5-...`.
 
-Each run directory contains `run.log` (human transcript) and `result.json` (structured metrics + feature flags).
+Each run directory contains `run.log` (human transcript) and `result.json` (structured metrics + feature flags). A sweep also writes `evals/runs/sweep-<seed>-<ts>.json` with every run record.
+
+## Statistical report
+
+`bun run eval:report` turns a sweep's JSON into a Markdown table: per-variant pass rate with a **95% Wilson confidence interval**, average cycles/ms/quality, and — when you name a baseline — a **two-proportion z-test** of each variant's pass-rate difference (a `*` marks p < 0.05).
+
+```bash
+# newest sweep under evals/runs, comparing every variant to the all-off baseline
+TSFORGE_BASELINE="ttsr=off,hashline=off temp=0" bun run eval:report
+
+# or point at a specific sweep file
+bun run eval:report evals/runs/sweep-math-20260613-120000.json
+```
+
+It prints the table and writes it next to the sweep JSON as `…​.report.md`:
+
+```
+| Variant | Runs | Pass | 95% CI | Cycles | Ms | Quality | vs baseline |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ttsr=off,hashline=off temp=0 | 10 | 60% | 31%–83% | 6.1 | 41000 | 3.8 | baseline |
+| ttsr=on,hashline=on temp=0   | 10 | 90% | 60%–98% | 4.7 | 33000 | 4.2 | +30% (z=2.13) * |
+```
+
+Wilson intervals (not naive ±) keep the bounds sane at small N, and the z-test tells you whether a pass-rate gap is signal or noise — the bar for "measured wins" before flipping a default.
 
 ## Compare edit mechanisms
 
