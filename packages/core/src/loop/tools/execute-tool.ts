@@ -55,6 +55,13 @@ export async function executeTool(
   call: IToolCall,
   ctx: IToolContext
 ): Promise<string> {
+  // MCP tools (mcp__<server>__<tool>) are dispatched to their server. They are
+  // external context sources — never workspace mutations — so they bypass the
+  // built-in name table and the plan-mode write guard below.
+  if (ctx.mcpRegistry?.has(call.name) === true) {
+    return ctx.mcpRegistry.callTool(call.name, call.arguments);
+  }
+
   if (!isToolName(call.name)) {
     return `unknown tool: ${call.name}`;
   }

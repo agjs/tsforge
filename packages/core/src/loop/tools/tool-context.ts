@@ -2,6 +2,7 @@ import { repairArgs } from "../../agent/tool-repair";
 import type { TsService } from "../../lsp";
 import type { Reporter } from "../loop.types";
 import type { SessionSnapshotStore } from "../../files/hashline";
+import type { McpRegistry } from "../../mcp";
 
 export interface IToolContext {
   cwd: string;
@@ -28,6 +29,10 @@ export interface IToolContext {
   readOnly?: boolean;
   /** Hashline snapshot store for stale-anchor recovery (per-session, lazily initialized). */
   snapshotStore?: SessionSnapshotStore;
+  /** Connected MCP servers. When present, `mcp__<server>__<tool>` calls are routed
+   *  here. These are external context/tool sources — they never touch the editable
+   *  scope or the deterministic gate. Absent ⇒ no MCP configured. */
+  mcpRegistry?: McpRegistry;
 }
 
 /** A required string arg, or "" if missing/wrong-type. */

@@ -1,0 +1,219 @@
+import { test, expect, describe } from "bun:test";
+import {
+  LineDecoder,
+  encodeMessage,
+  McpRegistry,
+  parseMcpServers,
+  interpolateEnv,
+  mcpToolName,
+  mapMcpTool,
+  type IMcpToolInfo,
+  type IMcpTransport,
+} from "../src/mcp";
+
+class FakeTransport implements IMcpTransport {
+  connected = false;
+  closed = false;
+
+  constructor(
+    private readonly tools: IMcpToolInfo[],
+    private readonly behavior?: (
+      name: string,
+      args: Record<string, unknown>
+    ) => Promise<string>
+  ) {}
+
+  connect(): Promise<void> {
+    this.connected = true;
+
+    return Promise.resolve();
+  }
+
+  listTools(): Promise<IMcpToolInfo[]> {
+    return Promise.resolve(this.tools);
+  }
+
+  callTool(name: string, args: Record<string, unknown>): Promise<string> {
+    if (this.behavior !== undefined) {
+      return this.behavior(name, args);
+    }
+
+    return Promise.resolve(`called ${name} with ${JSON.stringify(args)}`);
+  }
+
+  close(): Promise<void> {
+    this.closed = true;
+
+    return Promise.resolve();
+  }
+}
+
+const ECHO_TOOL: IMcpToolInfo = {
+  name: "echo",
+  description: "echoes input",
+  inputSchema: { type: "object", properties: { msg: { type: "string" } } },
+};
+
+describe("mcp: jsonrpc framing", () => {
+  test("encodeMessage appends a newline", () => {
+    expect(encodeMessage({ a: 1 })).toBe('{"a":1}\n');
+  });
+
+  test("LineDecoder reassembles a split message", () => {
+    const d = new LineDecoder();
+
+    expect(d.push('{"x":')).toEqual([]);
+    expect(d.push("1}\n")).toEqual([{ x: 1 }]);
+  });
+
+  test("LineDecoder yields multiple messages in one chunk", () => {
+    const d = new LineDecoder();
+
+    expect(d.push('{"a":1}\n{"b":2}\n')).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  test("LineDecoder skips malformed and blank lines", () => {
+    const d = new LineDecoder();
+
+    expect(d.push('not json\n\n{"ok":true}\n')).toEqual([{ ok: true }]);
+  });
+});
+
+describe("mcp: schema mapping", () => {
+  test("mcpToolName namespaces and sanitizes", () => {
+    expect(mcpToolName("my server", "do.thing")).toBe(
+      "mcp__my_server__do_thing"
+    );
+  });
+
+  test("mapMcpTool produces an OpenAI function schema", () => {
+    const schema = mapMcpTool("ctx7", ECHO_TOOL);
+
+    expect(schema.type).toBe("function");
+    expect(schema.function.name).toBe("mcp__ctx7__echo");
+    expect(schema.function.description).toBe("echoes input");
+    expect(schema.function.parameters).toEqual(ECHO_TOOL.inputSchema);
+  });
+
+  test("mapMcpTool fills an empty schema and default description", () => {
+    const schema = mapMcpTool("s", { name: "ping", inputSchema: {} });
+
+    expect(schema.function.description).toBe("s: ping");
+    expect(schema.function.parameters).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
+});
+
+describe("mcp: config parsing", () => {
+  test("interpolateEnv substitutes and blanks missing vars", () => {
+    expect(interpolateEnv("a-${TOK}-b", { TOK: "X" })).toBe("a-X-b");
+    expect(interpolateEnv("a-${MISSING}-b", {})).toBe("a--b");
+  });
+
+  test("parseMcpServers accepts a valid stdio entry with interpolation", () => {
+    const servers = parseMcpServers(
+      {
+        context7: {
+          command: "npx",
+          args: ["-y", "@upstash/context7-mcp"],
+          env: { CONTEXT7_API_KEY: "${KEY}" },
+        },
+      },
+      { KEY: "secret" }
+    );
+
+    expect(servers.context7?.type).toBe("stdio");
+    expect(servers.context7?.command).toBe("npx");
+    expect(servers.context7?.env?.CONTEXT7_API_KEY).toBe("secret");
+  });
+
+  test("parseMcpServers drops a stdio entry with no command", () => {
+    const servers = parseMcpServers({ bad: { args: ["x"] } }, {});
+
+    expect(servers.bad).toBeUndefined();
+  });
+
+  test("parseMcpServers requires url for http", () => {
+    const ok = parseMcpServers({ s: { type: "http", url: "http://x" } }, {});
+    const bad = parseMcpServers({ s: { type: "http" } }, {});
+
+    expect(ok.s?.type).toBe("http");
+    expect(bad.s).toBeUndefined();
+  });
+});
+
+describe("mcp: registry", () => {
+  test("addServer registers namespaced tools and schemas", async () => {
+    const registry = new McpRegistry();
+    const count = await registry.addServer(
+      "ctx7",
+      new FakeTransport([ECHO_TOOL])
+    );
+
+    expect(count).toBe(1);
+    expect(registry.size).toBe(1);
+    expect(registry.has("mcp__ctx7__echo")).toBe(true);
+    expect(registry.toolSchemas()[0]?.function.name).toBe("mcp__ctx7__echo");
+  });
+
+  test("callTool routes to the owning transport", async () => {
+    const registry = new McpRegistry();
+
+    await registry.addServer(
+      "ctx7",
+      new FakeTransport([ECHO_TOOL], (_n, a) =>
+        Promise.resolve(`echo:${JSON.stringify(a)}`)
+      )
+    );
+
+    const out = await registry.callTool("mcp__ctx7__echo", { msg: "hi" });
+
+    expect(out).toBe('echo:{"msg":"hi"}');
+  });
+
+  test("callTool on an unknown tool returns text, not a throw", async () => {
+    const registry = new McpRegistry();
+
+    expect(await registry.callTool("mcp__x__nope", {})).toContain(
+      "unknown MCP tool"
+    );
+  });
+
+  test("callTool returns failure text when the transport throws", async () => {
+    const registry = new McpRegistry();
+
+    await registry.addServer(
+      "ctx7",
+      new FakeTransport([ECHO_TOOL], () =>
+        Promise.reject(new Error("server died"))
+      )
+    );
+
+    const out = await registry.callTool("mcp__ctx7__echo", {});
+
+    expect(out).toContain("failed");
+    expect(out).toContain("server died");
+  });
+
+  test("dedupes identical tool names within one server", async () => {
+    const registry = new McpRegistry();
+    const count = await registry.addServer(
+      "s",
+      new FakeTransport([ECHO_TOOL, ECHO_TOOL])
+    );
+
+    expect(count).toBe(1);
+  });
+
+  test("closeAll closes every transport", async () => {
+    const registry = new McpRegistry();
+    const transport = new FakeTransport([ECHO_TOOL]);
+
+    await registry.addServer("s", transport);
+    await registry.closeAll();
+
+    expect(transport.closed).toBe(true);
+  });
+});

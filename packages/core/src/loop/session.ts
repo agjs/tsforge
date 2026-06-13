@@ -25,6 +25,7 @@ import {
   normalizeRuleOverrides,
   resolveActivePacks,
 } from "../config/tsforge-config";
+import { connectMcpServers } from "../mcp";
 import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
 import type { Reporter } from "./loop.types";
 import { CHAT_SYSTEM, COMPACT_SYSTEM } from "./prompt";
@@ -439,6 +440,16 @@ export class Session {
     };
     const ruleOverrides = normalizeRuleOverrides(projectConfig);
 
+    // Opt-in: connect any configured MCP servers so their tools are offered to
+    // the agent. A bad server is reported and skipped (connectMcpServers never
+    // throws), so MCP can never block an interactive session from starting.
+    const mcpRegistry =
+      projectConfig.mcpServers === undefined
+        ? null
+        : await connectMcpServers(projectConfig.mcpServers, (message) => {
+            report({ kind: "tool", task: SESSION_ID, message });
+          });
+
     const ctx: ILoopCtx = {
       task,
       cwd: cfg.cwd,
@@ -447,6 +458,7 @@ export class Session {
       parse: cfg.parse,
       report,
       stackProfile,
+      ...(mcpRegistry === null ? {} : { mcpRegistry }),
       ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
       messages:
         cfg.history !== undefined && cfg.history.length > 0
@@ -916,13 +928,18 @@ export class Session {
     // enforces a read-only command allowlist) — the model never sees a write
     // tool. Filtered per call, so `this.tools` is untouched and toggling the
     // mode off restores the full set with zero bookkeeping.
-    const offeredTools = this.planMode
+    const baseTools = this.planMode
       ? this.tools.filter(
           (t) =>
             READ_ONLY_TOOL_NAMES.has(t.function.name) ||
             t.function.name === TOOL_NAME.run
         )
       : this.tools;
+    // MCP tools are external context sources (not workspace writes), so they ride
+    // alongside the built-ins even in plan mode — appended after the filter.
+    const mcpSchemas = this.ctx.mcpRegistry?.toolSchemas() ?? [];
+    const offeredTools =
+      mcpSchemas.length > 0 ? [...baseTools, ...mcpSchemas] : baseTools;
     const res = await this.provider.complete(ctx.messages, {
       tools: offeredTools,
       temperature: this.cfg.temperature ?? 0,

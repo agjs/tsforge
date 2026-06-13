@@ -177,6 +177,10 @@ export default defineConfig({
           items: [{ label: "Model adapter", link: "/inference/adapter/" }],
         },
         {
+          label: "Integrations",
+          items: [{ label: "MCP servers", link: "/integrations/mcp/" }],
+        },
+        {
           label: "Eval",
           items: [{ label: "A/B testing", link: "/eval/ab-testing/" }],
         },

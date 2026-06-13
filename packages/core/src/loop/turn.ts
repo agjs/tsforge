@@ -32,6 +32,7 @@ import {
   TOOL_NAME,
 } from "../agent";
 import { TsService, type ITsDiagnostic } from "../lsp";
+import type { McpRegistry } from "../mcp";
 import type { FileLinter, IFileLintProblem } from "../detect-gate";
 import {
   buildMetaRuleContext,
@@ -115,6 +116,9 @@ export interface ILoopCtx {
   /** PLAN MODE (set via Session.setPlanMode): threaded into the tool context so
    *  mutating tools are rejected at dispatch — the model only plans. */
   readOnly?: boolean;
+  /** Connected MCP servers (opt-in via tsforge.config.json `mcpServers`). Threaded
+   *  into the tool context so `mcp__<server>__<tool>` calls dispatch to them. */
+  mcpRegistry?: McpRegistry;
 }
 
 /** Mutable state threaded across turns (the gradient the loop descends). */
@@ -448,6 +452,9 @@ export async function runToolCalls(
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
       ...(ctx.setupWeb === undefined ? {} : { setupWeb: ctx.setupWeb }),
       ...(ctx.readOnly === undefined ? {} : { readOnly: ctx.readOnly }),
+      ...(ctx.mcpRegistry === undefined
+        ? {}
+        : { mcpRegistry: ctx.mcpRegistry }),
     });
 
     let feedback = "";

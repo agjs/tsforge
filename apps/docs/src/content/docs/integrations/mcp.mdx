@@ -1,0 +1,52 @@
+---
+title: MCP servers
+description: Give the agent extra tools from external Model Context Protocol servers — live library docs, search, and more.
+---
+
+tsforge can connect to external **MCP (Model Context Protocol) servers** and offer their tools to the agent during an interactive session. The classic use is **[Context7](https://github.com/upstash/context7)** for up-to-date library documentation, but any stdio MCP server works.
+
+MCP is **opt-in**: with no `mcpServers` block in your config, nothing connects and nothing changes.
+
+## Configure
+
+Add an `mcpServers` block to `tsforge.config.json` at your repo root. Each entry is a stdio server tsforge spawns. `${VAR}` references are read from the environment at startup.
+
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": { "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}" }
+    }
+  }
+}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `command` | yes (stdio) | Executable to spawn |
+| `args` | no | Arguments for `command` |
+| `env` | no | Extra env vars (merged over the parent env); `${VAR}` interpolated |
+| `type` | no | `stdio` (default) or `http` (http not yet wired) |
+| `timeoutMs` | no | Per-call timeout (default 30000) |
+
+## How tools are exposed
+
+On startup tsforge connects each server, lists its tools, and advertises them to the model under a namespaced name: `mcp__<server>__<tool>` (for example `mcp__context7__get-library-docs`). When the model calls one, tsforge routes it to that server and feeds the text result back into the conversation.
+
+## Safety model
+
+MCP fits tsforge's deterministic, local-first design as an **opt-in context source**:
+
+- MCP tools **never touch your editable scope** and **cannot satisfy or bypass the acceptance gate** — they add context, they don't certify "done".
+- Because they don't write the workspace, they remain available in **plan mode** (e.g. look up docs while planning).
+- A server that fails to connect, crashes, or times out is **reported and skipped** — it can never block a session from starting or wedge the loop. A failed tool call comes back as an error string the model can react to.
+
+## Limits today
+
+- **stdio transport only** — `http` entries are reported and skipped (HTTP/SSE is planned).
+- MCP tools are offered in the **interactive CLI**; the headless eval path does not load them.
+- Connected servers are child processes; they exit with the tsforge process.
+
+→ [Interactive CLI](/cli/interactive/) · [tsforge.config.json](/guardrails/config/)

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { isRecord } from "../lib/guards";
 import { PACK_REGISTRY } from "../stack-detection";
+import { parseMcpServers, type IMcpServerConfig } from "../mcp";
 
 /**
  * User-defined configuration from tsforge.config.json
@@ -23,6 +24,13 @@ export interface ITsforgeProjectConfig {
    * Values: "error" | "warn" | "off" (off silences the rule).
    */
   readonly rules?: Readonly<Record<string, "error" | "warn" | "off">>;
+
+  /**
+   * External MCP (Model Context Protocol) servers whose tools are offered to the
+   * agent. Keyed by a short server name. `${VAR}` references in string values are
+   * interpolated from the environment at load time. Opt-in: absent ⇒ no MCP.
+   */
+  readonly mcpServers?: Readonly<Record<string, IMcpServerConfig>>;
 }
 
 function warnConfig(msg: string): void {
@@ -158,6 +166,54 @@ function validateRules(
   return Object.keys(rulesFields).length > 0 ? rulesFields : undefined;
 }
 
+/** Validate each known field of an already-parsed config object, dropping any
+ *  that fail their per-field validator. Kept separate from the file IO so the
+ *  loader stays simple. */
+function buildConfigFields(
+  parsed: Record<string, unknown>
+): ITsforgeProjectConfig {
+  const configFields: {
+    stack?: string;
+    packs?: { include?: readonly string[]; exclude?: readonly string[] };
+    rules?: Record<string, "error" | "warn" | "off">;
+    mcpServers?: Record<string, IMcpServerConfig>;
+  } = {};
+
+  if (parsed.stack !== undefined) {
+    const stack = validateStack(parsed.stack);
+
+    if (stack !== undefined) {
+      configFields.stack = stack;
+    }
+  }
+
+  if (parsed.packs !== undefined) {
+    const packs = validatePacks(parsed.packs);
+
+    if (packs !== undefined) {
+      configFields.packs = packs;
+    }
+  }
+
+  if (parsed.rules !== undefined) {
+    const rules = validateRules(parsed.rules);
+
+    if (rules !== undefined) {
+      configFields.rules = rules;
+    }
+  }
+
+  if (parsed.mcpServers !== undefined) {
+    const servers = parseMcpServers(parsed.mcpServers, process.env);
+
+    if (Object.keys(servers).length > 0) {
+      configFields.mcpServers = servers;
+    }
+  }
+
+  return configFields;
+}
+
 /** Load tsforge.config.json from cwd, defaulting to empty config on missing/invalid files. */
 export async function loadTsforgeConfig(
   cwd: string
@@ -181,37 +237,7 @@ export async function loadTsforgeConfig(
       return {};
     }
 
-    const configFields: {
-      stack?: string;
-      packs?: { include?: readonly string[]; exclude?: readonly string[] };
-      rules?: Record<string, "error" | "warn" | "off">;
-    } = {};
-
-    if (parsed.stack !== undefined) {
-      const stack = validateStack(parsed.stack);
-
-      if (stack !== undefined) {
-        configFields.stack = stack;
-      }
-    }
-
-    if (parsed.packs !== undefined) {
-      const packs = validatePacks(parsed.packs);
-
-      if (packs !== undefined) {
-        configFields.packs = packs;
-      }
-    }
-
-    if (parsed.rules !== undefined) {
-      const rules = validateRules(parsed.rules);
-
-      if (rules !== undefined) {
-        configFields.rules = rules;
-      }
-    }
-
-    return configFields;
+    return buildConfigFields(parsed);
   } catch (err) {
     if (err instanceof SyntaxError) {
       const firstLine = err.message.split("\n")[0];
