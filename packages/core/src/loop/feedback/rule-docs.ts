@@ -139,6 +139,21 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "items.map((it, i) => <li key={i}>{it.text}</li>)",
     good: "items.map((it) => <li key={it.id}>{it.text}</li>)",
   },
+  "tsforge/no-jsx-computation": {
+    what: "No `.map()`/`.filter()`/arithmetic/chained logic inside JSX `{…}` — extract to a hook or pre-prep variable first.",
+    bad: "<ul>{items.filter((i) => i.visible).map((i) => <li key={i.id}>{i.label}</li>)}</ul>",
+    good: "const rows = useMemo(() => items.filter(...).map(...), [items]); return <ul>{rows}</ul>;",
+  },
+  "tsforge/no-state-in-component-body": {
+    what: "State hooks (`useState`, `useEffect`, `useMemo`, …) belong in `Component.hooks.ts`, not in the `.tsx` component body.",
+    bad: "export function Button() { const [open, setOpen] = useState(false); return <button />; }",
+    good: "export function useButton() { const [open, setOpen] = useState(false); return { open }; }",
+  },
+  "tsforge/no-inline-jsx-functions": {
+    what: "No inline arrow/function expressions in JSX attributes — bind handlers in the hook and pass a reference.",
+    bad: "<button onClick={() => doThing(id)} />",
+    good: "const onClickRow = useCallback(() => doThing(id), [id]); <button onClick={onClickRow} />",
+  },
 };
 
 /**

@@ -5,7 +5,7 @@ description: Stack-specific ESLint rules tsforge runs during the gate.
 
 When the gate runs ESLint, it does not use a generic preset. It uses **rule packs**: groups of rules keyed to the libraries in your project.
 
-If you use Drizzle, tsforge applies Drizzle-specific query rules. If you use React, it enforces component folder layout and JSX conventions. [Stack detection](/guardrails/stack-detection/) turns packs on from `package.json`. You can override in [tsforge.config.json](/guardrails/config/).
+If you use Drizzle, tsforge applies Drizzle-specific query rules. If you use React, it enforces component folder layout, JSX computation limits, hooks-in-files, and handler conventions. [Stack detection](/guardrails/stack-detection/) turns packs on from `package.json`. You can override in [tsforge.config.json](/guardrails/config/).
 
 Packs apply on every gate check, whether tsforge is editing an existing repo or scaffolding a new one.
 
@@ -40,6 +40,61 @@ Packs apply on every gate check, whether tsforge is editing an existing repo or 
 "Detection only" means tsforge knows the stack label but does not ship extra rules for it yet.
 
 Every implemented rule with fix text: [Rule catalog](/reference/rules-catalog/).
+
+## React component architecture
+
+When the `react-component-architecture` pack is enabled (React in `package.json`):
+
+| Rule | What it catches |
+| --- | --- |
+| `no-jsx-computation` | `.map()` / `.filter()` / arithmetic / chained logic inside JSX `{…}` |
+| `no-state-in-component-body` | `useState`, `useEffect`, etc. directly in component `.tsx` files |
+| `no-inline-jsx-functions` | Inline arrow/function handlers in JSX attributes |
+| `component-folder-structure` | Required sibling files (`*.hooks.ts`, `*.types.ts`, stories, test, `index.ts`) |
+| `no-cross-feature-imports` | Cross-feature runtime imports |
+
+### No computation inside JSX
+
+Lift `.map()`, `.filter()`, arithmetic, and chained logical expressions into a hook or pre-prep variable. JSX is a template.
+
+Disallowed in `{…}`: array methods (`.map`, `.filter`, `.reduce`, `.sort`, `.find`), arithmetic (`+`, `-`, `*`, `/`), chained logical expressions. Simple ternaries and `{show && <Node />}` are allowed by default. Story files are exempt.
+
+```tsx
+// ❌
+<ul>{items.filter((i) => i.visible).map((i) => <li key={i.id}>{i.label}</li>)}</ul>
+
+// ✅ prepare in *.hooks.ts, render a variable
+const listItems = useMemo(
+  () => items.filter((i) => i.visible).map((i) => <li key={i.id}>{i.label}</li>),
+  [items]
+);
+<ul>{listItems}</ul>
+```
+
+### State hooks in `*.hooks.ts`
+
+In PascalCase component `.tsx` files, move `useState`, `useEffect`, `useMemo`, `useCallback`, `useLayoutEffect`, and `useRef` to a colocated custom hook. Passthrough hooks (`useId`, `useTransition`, `useDeferredValue`) may stay in the component.
+
+```tsx
+// ❌ useState in Button.tsx
+export function Button() {
+  const [open, setOpen] = useState(false);
+  return <button>{open ? "Open" : "Closed"}</button>;
+}
+
+// ✅ Button.hooks.ts + thin component
+export function useButton() {
+  const [open, setOpen] = useState(false);
+  return { open, setOpen };
+}
+```
+
+### Named handler references
+
+```tsx
+// ❌ <button onClick={() => doThing(id)} />
+// ✅ const onClickRow = useCallback(() => doThing(id), [id]); … onClick={onClickRow}
+```
 
 ## Changing severity
 

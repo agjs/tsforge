@@ -2,7 +2,7 @@
   "name": "@tsforge/docs",
   "type": "module",
   "private": true,
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "tsforge docs — Astro Starlight product site.",
   "scripts": {
     "sync:rules": "bun scripts/sync-rules-catalog.ts",

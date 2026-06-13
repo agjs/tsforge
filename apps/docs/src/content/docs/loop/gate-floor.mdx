@@ -63,6 +63,8 @@ After typecheck, tsforge runs **its own** ESLint setup. It does **not** run your
 
 Why separate? tsforge ships rules tuned for AI-written code and your stack (React, Drizzle, Elysia, etc.). Those rules come from [Rule packs](/guardrails/rule-packs/) enabled by [Stack detection](/guardrails/stack-detection/). You can tune them in [tsforge.config.json](/guardrails/config/).
 
+Baseline stylistic rules (all stacks) include blank lines before `return` and around block-like statements via `@stylistic/padding-line-between-statements`. These are auto-fixable — the gate's `eslint --fix` applies them without model intervention.
+
 ## Web apps get a longer gate
 
 If the session scaffolds a new browser app (`scaffold_web` or `tsforge --web`), the gate grows. "Done" then roughly means: Vite build passes, types pass, lint passes, route stubs are filled in, formatting is clean, and a headless browser smoke test passes.

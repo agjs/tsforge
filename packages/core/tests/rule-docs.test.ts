@@ -61,6 +61,15 @@ test("ruleHelpFromOutput pulls guidance from raw tsc + eslint-json output", () =
   expect(ruleHelpFromOutput("all good, exit 0")).toBe("");
 });
 
+test("injects tsforge React pack idiom cards keyed by the gate's rule id", () => {
+  const jsx = ruleHelp([
+    { key: "k", rule: "tsforge/no-jsx-computation", message: "" },
+  ]);
+
+  expect(jsx).toContain("tsforge/no-jsx-computation");
+  expect(jsx).toContain("useMemo");
+});
+
 test("injects React framework idiom cards keyed by the gate's rule id", () => {
   // The knowledge-card prototype: framework idioms ride the SAME failure-keyed
   // mechanism as eslint/TS rules — the gate names the rule, we surface its card.
