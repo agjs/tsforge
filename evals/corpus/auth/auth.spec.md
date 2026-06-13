@@ -17,17 +17,7 @@ A4. `login(email, password, now)` checks password, locks after 5 consecutive fai
 
 ## Tasks
 
-1. [passwords] Implement password validation
+1. [auth] Implement the passwords, sessions, and accounts modules
    accept: bun test auth.test.ts
-   files: passwords.ts
-   context: auth.test.ts
-
-2. [sessions] Implement session tokens with injected clock
-   accept: bun test auth.test.ts
-   files: sessions.ts
-   context: auth.test.ts
-
-3. [accounts] Implement signup and login with lockout
-   accept: bun test auth.test.ts
-   files: accounts.ts
+   files: passwords.ts, sessions.ts, accounts.ts
    context: auth.test.ts

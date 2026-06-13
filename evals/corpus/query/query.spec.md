@@ -17,22 +17,7 @@ A4. Query pipeline: lexer → parser → executor → projected rows. Integrates
 
 ## Tasks
 
-1. [lexer] Implement tokenizer
+1. [query] Implement the lexer, parser, executor, and pipeline facade
    accept: bun test query.test.ts
-   files: lexer.ts
-   context: query.test.ts
-
-2. [parser] Implement recursive descent parser with AND/OR precedence
-   accept: bun test query.test.ts
-   files: parser.ts
-   context: query.test.ts
-
-3. [executor] Implement executor with null semantics and stable sort
-   accept: bun test query.test.ts
-   files: executor.ts
-   context: query.test.ts
-
-4. [query] Wire lexer, parser, executor into query pipeline
-   accept: bun test query.test.ts
-   files: query.ts
+   files: lexer.ts, parser.ts, executor.ts, query.ts
    context: query.test.ts

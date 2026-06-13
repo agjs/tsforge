@@ -26,17 +26,7 @@ A6. Multiple coupons stack in a defined order (e.g., percent → fixed → bogo)
 
 ## Tasks
 
-1. [coupons] Implement coupon types and application logic
+1. [checkout] Implement the coupons, pricing, and cart modules
    accept: bun test checkout.test.ts
-   files: coupons.ts
-   context: checkout.test.ts
-
-2. [pricing] Implement money math and tax calculation
-   accept: bun test checkout.test.ts
-   files: pricing.ts
-   context: checkout.test.ts
-
-3. [cart] Implement cart aggregate with inventory and checkout composition
-   accept: bun test checkout.test.ts
-   files: cart.ts
+   files: coupons.ts, pricing.ts, cart.ts
    context: checkout.test.ts
