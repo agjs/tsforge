@@ -3,6 +3,7 @@ import {
   parseHashlineEdit,
   SessionSnapshotStore,
 } from "../../files/hashline";
+import { extractHash } from "../../files/hashline-format";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
 import { toHashlineEdit } from "../../agent";
 
@@ -50,11 +51,17 @@ export async function doHashlineEdit(
   // Ensure the store exists on the context
   ctx.snapshotStore ??= new SessionSnapshotStore();
 
+  // Hash source priority: the `¶path#HASH` header the model wrote in `input`
+  // (the format it saw on read), else the `hash` arg — tolerantly extracted so
+  // a pasted full tag (`¶path#HASH`) still yields the bare hash. Using the raw
+  // arg directly caused false stale-anchor rejections on unchanged files.
+  const fileHash = parsed.fileHash ?? extractHash(edit.hash);
+
   const result = await applyHashlineEdit(
     ctx.snapshotStore,
     ctx.cwd,
     edit.file,
-    edit.hash,
+    fileHash,
     parsed.ops
   );
 

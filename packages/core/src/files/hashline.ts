@@ -10,6 +10,7 @@ import {
   computeFileHash,
   parseHashHeader,
   normalizeHash,
+  HL_HEADER_SIGIL,
 } from "./hashline-format";
 
 /**
@@ -318,25 +319,34 @@ export function parseHashlineEdit(input: string): {
 
   let i = 0;
 
-  // Parse file header
-  if (i < lines.length) {
-    const headerLine = lines[i] ?? "";
+  // The `¶path#HASH` header is OPTIONAL. The model frequently sends bare ops
+  // (`delete 79..164`) — the path is already in the tool args and the hash
+  // comes from the `hash` arg — so only treat the first line as a header when
+  // it actually looks like one (a malformed sigil header is still an error).
+  const headerLine = lines[0] ?? "";
+
+  if (headerLine.startsWith(HL_HEADER_SIGIL)) {
     const parsed = parseHeaderLine(headerLine, errors);
+
+    if (errors.length > 0) {
+      return { filePath: "", fileHash: undefined, ops: [], errors };
+    }
 
     filePath = parsed.filePath;
     fileHash = parsed.fileHash;
-
-    if (filePath.length > 0) {
-      i++;
-    } else if (errors.length > 0) {
-      return { filePath: "", fileHash: undefined, ops: [], errors };
-    } else if (headerLine.trim() === "") {
-      i++;
-    }
+    i = 1;
+  } else if (headerLine.trim() === "") {
+    i = 1;
   }
 
   // Parse operations
   const ops = parseOperations(lines, i, errors);
+
+  if (ops.length === 0 && errors.length === 0) {
+    errors.push(
+      "No edit operations found. Provide replace/delete/insert ops (optionally after a ¶path#HASH header)."
+    );
+  }
 
   return { filePath, fileHash, ops, errors };
 }

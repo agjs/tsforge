@@ -108,3 +108,22 @@ export function isValidHash(hash: string): boolean {
 export function normalizeHash(hash: string): string {
   return hash.toUpperCase();
 }
+
+/**
+ * Extract the 4-hex hash from a raw value that may be a full `¶path#HASH` tag,
+ * a `path#HASH`, a `#HASH`, or a bare `HASH`. The model frequently pastes the
+ * whole header tag (what it saw on read) into the `hash` arg, which then fails
+ * the staleness compare against a real 4-hex hash. Returns undefined when no
+ * valid hash is present.
+ */
+export function extractHash(raw: string | undefined): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const candidate = raw.includes(HL_HASH_SEP)
+    ? raw.slice(raw.lastIndexOf(HL_HASH_SEP) + 1).trim()
+    : raw.trim();
+
+  return isValidHash(candidate) ? candidate : undefined;
+}
