@@ -28,6 +28,8 @@ import { noGithubContextInShellRule } from "./rules/ci/no-github-context-in-shel
 import { dockerfileBaseImagePinnedRule } from "./rules/docker/dockerfile-base-image-pinned";
 import { dockerfileNonRootUserRule } from "./rules/docker/dockerfile-non-root-user";
 import { dockerfileNoSecretsInEnvArgRule } from "./rules/docker/dockerfile-no-secrets-in-env-arg";
+import { noUndeclaredDependenciesRule } from "./rules/supply-chain/no-undeclared-dependencies";
+import { noCircularImportsRule } from "./rules/structure/no-circular-imports";
 
 /**
  * All available meta-rules, ordered by category for readability.
@@ -45,6 +47,7 @@ export const META_RULES: readonly IMetaRule[] = [
   dependencyOverridesRequireCommentRule,
   productionMustNotUseDrizzlePushRule,
   migrationsMustBeCheckedInRule,
+  noUndeclaredDependenciesRule,
 
   // Source text
   noEslintDisableCommentsRule,
@@ -74,4 +77,7 @@ export const META_RULES: readonly IMetaRule[] = [
   dockerfileBaseImagePinnedRule,
   dockerfileNonRootUserRule,
   dockerfileNoSecretsInEnvArgRule,
+
+  // Structure (cross-file)
+  noCircularImportsRule,
 ];

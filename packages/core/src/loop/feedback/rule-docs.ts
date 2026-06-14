@@ -25,6 +25,39 @@ const GENERATED: Record<string, IRuleDoc> = generatedJson;
  * failure beats making the model re-derive the fix from scratch.
  */
 const RULE_DOCS: Record<string, IRuleDoc> = {
+  // --- Type-aware: implicit-`any` containment (no `any` token to see) ---
+  // (no-unsafe-assignment / -member-access / -return are curated further below)
+  "@typescript-eslint/no-unsafe-call": {
+    what: "Calling an `any`-typed value. Type the callee so the call is checked.",
+    bad: "const fn = lib.run; fn(); // lib is any",
+    good: "const fn: () => void = lib.run; fn();",
+  },
+  "@typescript-eslint/no-unsafe-argument": {
+    what: "Passing an `any` into a typed parameter. Validate/narrow before the call.",
+    bad: "save(JSON.parse(body));",
+    good: "save(UserSchema.parse(JSON.parse(body)));",
+  },
+  "sonarjs/cognitive-complexity": {
+    what: "Function is too tangled (cognitive complexity > 20). Extract named helper functions for the inner branches/loops — don't suppress.",
+    bad: "function handle(x) { /* many nested if/for/switch in one body */ }",
+    good: "function handle(x) { return isA(x) ? doA(x) : doB(x); } // branches extracted",
+  },
+  // --- AI-SDK pack ---
+  "tsforge/no-api-key-in-client": {
+    what: "An AI provider client constructed in a `'use client'` file ships the API key to the browser. Call the model from a server route/action.",
+    bad: "'use client';\nconst client = new OpenAI({ apiKey: process.env.KEY });",
+    good: "// server action / route handler:\nconst client = new OpenAI({ apiKey: process.env.KEY });",
+  },
+  "tsforge/require-completion-token-limit": {
+    what: "AI completion calls must bound output tokens to cap cost/latency.",
+    bad: "await generateText({ model, prompt });",
+    good: "await generateText({ model, prompt, maxTokens: 512 });",
+  },
+  "tsforge/no-user-input-in-system-prompt": {
+    what: "Don't splice request/user data into the system prompt (injection). Keep the system prompt constant; pass user input as a user message.",
+    bad: "generateText({ system: `You are ${role}`, prompt });",
+    good: "generateText({ system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userInput }] });",
+  },
   TS2532: {
     what: "Indexed access is `T | undefined` (noUncheckedIndexedAccess). Bind and guard before use; never `!`.",
     bad: "total += arr[i];",
@@ -416,7 +449,17 @@ export function ruleHelp(errors: ErrorSet): string {
     }
 
     seen.add(e.rule);
-    blocks.push(`${e.rule}: ${doc.what}\n  ✗ ${doc.bad}\n  ✓ ${doc.good}`);
+
+    // Only show the ✗/✓ pair when there is a REAL worked example. Generated-only
+    // entries (pack rules without a curated example) carry just `what` — a fake
+    // "// Example that violates the rule" placeholder is worse than nothing.
+    const hasExample = doc.bad.length > 0 && doc.good.length > 0;
+
+    blocks.push(
+      hasExample
+        ? `${e.rule}: ${doc.what}\n  ✗ ${doc.bad}\n  ✓ ${doc.good}`
+        : `${e.rule}: ${doc.what}`
+    );
   }
 
   return blocks.join("\n");

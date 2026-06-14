@@ -1136,3 +1136,91 @@ test("dockerfiles: context collects root Dockerfile and one level down", () => {
   expect(ctx.dockerfiles).toContain("Dockerfile");
   expect(ctx.dockerfiles).toContain(join("docker", "api.Dockerfile"));
 });
+
+// === Supply-chain: no-undeclared-dependencies ===
+
+test("no-undeclared-dependencies: flags an import with no matching dep", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify({ name: "x", dependencies: { zod: "3.0.0" } })
+  );
+  mkdirSync(join(tempDir, "src"), { recursive: true });
+  writeFileSync(
+    join(tempDir, "src", "a.ts"),
+    `import _ from "lodash";\nexport const x = _;\n`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "no-undeclared-dependencies"
+  );
+
+  expect(violations.length).toBeGreaterThan(0);
+  expect(violations[0]?.message).toContain("lodash");
+});
+
+test("no-undeclared-dependencies: allows declared deps, builtins, subpaths, and @types", () => {
+  writeFileSync(
+    join(tempDir, "package.json"),
+    JSON.stringify({
+      name: "x",
+      dependencies: { "react-dom": "19.0.0" },
+      devDependencies: { "@types/node": "24.0.0" },
+    })
+  );
+  mkdirSync(join(tempDir, "src"), { recursive: true });
+  writeFileSync(
+    join(tempDir, "src", "a.ts"),
+    `import { createRoot } from "react-dom/client";\nimport { join } from "node:path";\nimport process from "node:process";\nexport const x = [createRoot, join, process];\n`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "no-undeclared-dependencies"
+  );
+
+  expect(violations).toHaveLength(0);
+});
+
+// === Structure: no-circular-imports ===
+
+test("no-circular-imports: flags a two-module cycle", () => {
+  mkdirSync(join(tempDir, "src"), { recursive: true });
+  writeFileSync(
+    join(tempDir, "src", "a.ts"),
+    `import { b } from "./b";\nexport const a = b;\n`
+  );
+  writeFileSync(
+    join(tempDir, "src", "b.ts"),
+    `import { a } from "./a";\nexport const b = a;\n`
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "no-circular-imports"
+  );
+
+  expect(violations.length).toBeGreaterThan(0);
+  expect(violations[0]?.message).toContain("src/a.ts");
+  expect(violations[0]?.message).toContain("src/b.ts");
+});
+
+test("no-circular-imports: passes an acyclic graph", () => {
+  mkdirSync(join(tempDir, "src"), { recursive: true });
+  writeFileSync(
+    join(tempDir, "src", "a.ts"),
+    `import { b } from "./b";\nexport const a = b;\n`
+  );
+  writeFileSync(
+    join(tempDir, "src", "b.ts"),
+    `import { c } from "./c";\nexport const b = c;\n`
+  );
+  writeFileSync(join(tempDir, "src", "c.ts"), `export const c = 1;\n`);
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "no-circular-imports"
+  );
+
+  expect(violations).toHaveLength(0);
+});

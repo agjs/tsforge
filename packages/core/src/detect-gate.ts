@@ -77,6 +77,13 @@ const BROWSER_CHECK = join(
 );
 
 const STUB_CHECK = join(import.meta.dir, "..", "scripts", "stub-check.ts");
+const TEST_COVERAGE_CHECK = join(
+  import.meta.dir,
+  "..",
+  "scripts",
+  "test-coverage-check.ts"
+);
+const BOOT_CHECK = join(import.meta.dir, "..", "scripts", "boot-check.ts");
 
 // The strict tsconfig tsforge brings to a greenfield project — strict + the
 // index-safety the local model is weakest at, with DOM + JSX libs so browser /
@@ -677,7 +684,32 @@ export async function buildGate(
     }
   }
 
+  appendOptInOracles(parts, labels, process.env);
+
   return { command: parts.join(" && "), label: labels.join(" + ") };
+}
+
+/**
+ * Opt-in quality oracles (default OFF, mirroring the web a11y/screenshot flags).
+ * They run AFTER tests and read their own config from env, so the gate command
+ * stays free of shell-quoting:
+ *   - TSFORGE_COVERAGE=<pct> — fail if line coverage is below the floor.
+ *   - TSFORGE_BOOT="<start cmd>" — boot the server and require a non-5xx response.
+ */
+function appendOptInOracles(
+  parts: string[],
+  labels: string[],
+  env: Record<string, string | undefined>
+): void {
+  if (env.TSFORGE_COVERAGE !== undefined && env.TSFORGE_COVERAGE.length > 0) {
+    parts.push(`bun "${TEST_COVERAGE_CHECK}"`);
+    labels.push("test coverage");
+  }
+
+  if (env.TSFORGE_BOOT !== undefined && env.TSFORGE_BOOT.trim().length > 0) {
+    parts.push(`bun "${BOOT_CHECK}"`);
+    labels.push("boot smoke");
+  }
 }
 
 /** The npm-init placeholder test script — running it always fails, so it must

@@ -1,0 +1,106 @@
+// Gate-runnable BOOT oracle: actually start the built server and confirm it comes
+// up and answers a request without a 5xx. This is "does it RUN", a class of
+// failure tsc/eslint/unit-tests never catch — a server that throws on boot
+// (bad env wiring, a port clash, a top-level await that rejects) still type-checks
+// and lints clean. Mirrors the web browser smoke, for backends.
+//
+// OPT-IN: wired into the gate only when TSFORGE_BOOT is set to the start command
+// (e.g. `TSFORGE_BOOT="bun run start"`). TSFORGE_BOOT_URL (default
+// http://localhost:3000/) and TSFORGE_BOOT_TIMEOUT (ms, default 15000) tune it.
+//
+//   TSFORGE_BOOT="bun run start" TSFORGE_BOOT_URL=http://localhost:3000/health bun boot-check.ts
+
+export interface IBootConfig {
+  readonly command: string;
+  readonly url: string;
+  readonly timeoutMs: number;
+}
+
+/** Read the boot config from env; null when TSFORGE_BOOT is not set. */
+export function bootConfig(
+  env: Record<string, string | undefined>
+): IBootConfig | null {
+  const command = env.TSFORGE_BOOT;
+
+  if (command === undefined || command.trim().length === 0) {
+    return null;
+  }
+
+  const timeoutRaw = Number(env.TSFORGE_BOOT_TIMEOUT);
+
+  return {
+    command,
+    url: env.TSFORGE_BOOT_URL ?? "http://localhost:3000/",
+    timeoutMs:
+      Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 15000,
+  };
+}
+
+/** Poll `url` until it answers with status < 500, or the deadline passes.
+ *  Returns the status code on success, or null on timeout. */
+export async function pollUntilReady(
+  url: string,
+  timeoutMs: number,
+  now: () => number = () => performance.now(),
+  sleep: (ms: number) => Promise<void> = (ms) =>
+    new Promise((r) => setTimeout(r, ms))
+): Promise<number | null> {
+  const deadline = now() + timeoutMs;
+
+  while (now() < deadline) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+
+      if (res.status < 500) {
+        return res.status;
+      }
+    } catch {
+      // not up yet
+    }
+
+    await sleep(250);
+  }
+
+  return null;
+}
+
+async function main(): Promise<number> {
+  const cfg = bootConfig(process.env);
+
+  if (cfg === null) {
+    return 0; // not configured — nothing to do
+  }
+
+  const child = Bun.spawn(["sh", "-c", cfg.command], {
+    cwd: process.cwd(),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env,
+  });
+
+  try {
+    const status = await pollUntilReady(cfg.url, cfg.timeoutMs);
+
+    if (status === null) {
+      const err = await new Response(child.stderr).text();
+
+      process.stderr.write(
+        `boot-check: server did not answer ${cfg.url} within ${cfg.timeoutMs}ms (or only returned 5xx). It must boot and serve a non-5xx response.\n${err.slice(0, 800)}\n`
+      );
+
+      return 1;
+    }
+
+    process.stdout.write(
+      `boot-check: server answered ${cfg.url} with ${status}. OK\n`
+    );
+
+    return 0;
+  } finally {
+    child.kill();
+  }
+}
+
+if (import.meta.main) {
+  process.exit(await main());
+}

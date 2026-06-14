@@ -68,7 +68,12 @@ After typecheck, tsforge runs **its own** ESLint setup. It does **not** run your
 
 Why separate? tsforge ships rules tuned for AI-written code and your stack (React, Drizzle, Elysia, etc.). Those rules come from [Rule packs](/guardrails/rule-packs/) enabled by [Stack detection](/guardrails/stack-detection/). Tune them with a [profile](/guardrails/config/#profiles) or per-rule overrides in [tsforge.config.json](/guardrails/config/).
 
-The core ESLint config is **syntactic-only** (no type-aware rules) so it runs on any `.ts` file without the target's full type graph. It also caps **cognitive complexity at 20** and **nesting depth at 4** — a sprawling, deeply-nested function fails the gate until it is split into named helpers. Whenever the project has a `tsconfig.json`, tsforge adds a second pass for async correctness (`no-floating-promises`, `no-misused-promises`), so a dropped `await` is a gate error; web-app gates run this pass too.
+The core ESLint config is **syntactic-only** (no type-aware rules) so it runs on any `.ts` file without the target's full type graph. It also caps **cognitive complexity at 20** and **nesting depth at 4** — a sprawling, deeply-nested function fails the gate until it is split into named helpers.
+
+Whenever the project has a `tsconfig.json`, tsforge adds a **type-aware pass** that catches what `tsc --strict` and the syntactic rules can't:
+
+- **Async correctness** — `no-floating-promises`, `no-misused-promises`: a dropped `await` is a gate error.
+- **Implicit-`any` containment** — the `no-unsafe-*` family. `no-explicit-any` bans the literal `any` token, but it cannot see `any` that leaks in from an untyped boundary (`JSON.parse`, `await res.json()`, an untyped dependency), which `tsc` propagates silently. These rules force you to validate the boundary, then the data is typed. Web-app gates run this pass too.
 
 Baseline stylistic rules (all stacks) include blank lines before `return` and around block-like statements via `@stylistic/padding-line-between-statements`. That rule is **auto-fixed by `eslint --fix`**, not Prettier — Prettier does not enforce semantic blank lines. Non-web sessions run the same eslint + prettier janitor (`buildCoreFix`) before the gate, so the blank line is inserted without model turns.
 
@@ -85,6 +90,17 @@ tsforge finds the test command automatically:
 The npm-init placeholder (`"echo \"Error: no test specified\" && exit 1"`) is ignored — it never counts as "has tests." Tests run **last**, after the cheap static checks, so a type or lint error fails fast without waiting on a test run.
 
 Opt out with **`--strict-floor-only`** when you want the type/lint floor without running tests every cycle (e.g. a slow suite). An explicit `--accept` gate always wins.
+
+### Opt-in oracles: coverage and boot
+
+Two extra gate steps prove the work is real, not just well-formed. Both default **off** and skip cleanly when there's nothing to check:
+
+| Env var | Adds |
+| --- | --- |
+| `TSFORGE_COVERAGE=<pct>` | runs the suite with coverage and fails if the **weaker of line/function coverage** is below `<pct>` — a green suite that never calls the new code no longer passes |
+| `TSFORGE_BOOT="<start cmd>"` | actually **boots the server** (`TSFORGE_BOOT_URL`, default `http://localhost:3000/`) and fails unless it answers without a 5xx — catches boot-time crashes that type-check and lint clean |
+
+Coverage checks **function** coverage as well as lines, so a one-line export that's never exercised can't hide behind a "line executed at declaration" count.
 
 ## Web apps get a longer gate
 

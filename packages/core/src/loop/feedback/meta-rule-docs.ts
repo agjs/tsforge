@@ -32,6 +32,12 @@ export const META_RULE_DOCS: Record<string, string> = {
   "production-must-not-use-drizzle-push":
     "Replace `drizzle-kit push` in scripts and CI with checked-in SQL migrations and `drizzle-kit migrate`.",
 
+  "no-undeclared-dependencies":
+    "Add the imported package to package.json (dependencies or devDependencies) — relying on a hoisted/transitive copy breaks on a clean install.",
+
+  "no-circular-imports":
+    "Break the import cycle by extracting the shared code both modules need into a third module they each import (one-way edges only).",
+
   "migrations-must-be-checked-in":
     "Add a drizzle/ or migrations/ folder with generated SQL migration files when using Drizzle ORM.",
 

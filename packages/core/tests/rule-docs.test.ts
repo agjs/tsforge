@@ -124,3 +124,39 @@ test("is empty for unknown rules / no errors", () => {
   expect(ruleHelp([{ key: "a", message: "no rule field" }])).toBe("");
   expect(ruleHelp([])).toBe("");
 });
+
+test("ruleHelp: curated AI-SDK rules surface a worked ✗/✓ example", () => {
+  const h = ruleHelp([
+    { key: "k", rule: "tsforge/require-completion-token-limit", message: "" },
+  ]);
+
+  expect(h).toContain("tsforge/require-completion-token-limit");
+  expect(h).toContain("✗");
+  expect(h).toContain("✓");
+  expect(h).toContain("maxTokens");
+});
+
+test("ruleHelp: implicit-any no-unsafe rule shows the validate-the-boundary fix", () => {
+  const h = ruleHelp([
+    {
+      key: "k",
+      rule: "@typescript-eslint/no-unsafe-member-access",
+      message: "",
+    },
+  ]);
+
+  expect(h).toContain("✗");
+  expect(h).toContain("✓");
+});
+
+test("ruleHelp: a pack rule with no worked example shows only its description (no fake ✗/✓)", () => {
+  // component-folder-structure has a generated (empty bad/good) entry, no curated one.
+  const h = ruleHelp([
+    { key: "k", rule: "tsforge/component-folder-structure", message: "" },
+  ]);
+
+  if (h.length > 0) {
+    expect(h).not.toContain("// Example that violates the rule");
+    expect(h).not.toContain("✗ \n");
+  }
+});

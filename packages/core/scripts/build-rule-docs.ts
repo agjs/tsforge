@@ -98,10 +98,13 @@ for (const pack of Object.values(RULE_PACKS)) {
     const ruleId = `tsforge/${ruleName}`;
     const description = getRuleDescription(ruleModule) ?? ruleName;
 
+    // No fake placeholders: leave bad/good empty so the feedback renderer shows
+    // just the description. Real worked examples come from curated RULE_DOCS,
+    // which take precedence over this generated cache.
     out[ruleId] = {
       what: description,
-      bad: `// Example that violates the rule`,
-      good: `// Corrected version`,
+      bad: "",
+      good: "",
     };
 
     packRulesAdded += 1;

@@ -153,6 +153,7 @@ Meta-rules enforce project structure and configuration invariants that ESLint ca
 - **migrations-must-be-checked-in** [WARN]: When using Drizzle, commit SQL migrations under drizzle/ or migrations/.
 - **no-git-or-tarball-dependencies** [WARN]: Warn on git+, git:, or http(s) tarball dependency URLs in package.json.
 - **no-overlapping-libs** [WARN]: package.json must not list forbidden overlapping library pairs (e.g. axios + node-fetch).
+- **no-undeclared-dependencies** [ERROR]: Every imported package must be declared in package.json — an undeclared import works via hoisting locally but breaks on a clean install.
 - **package-exact-deps** [WARN]: dependencies and devDependencies must use exact versions (no ^ or ~ ranges).
 - **package-manager-field-required** [WARN]: package.json must declare a packageManager field.
 - **production-must-not-use-drizzle-push** [WARN]: Do not run drizzle-kit push in package.json scripts or CI workflows.
@@ -175,6 +176,10 @@ Meta-rules enforce project structure and configuration invariants that ESLint ca
 ### testing
 
 - **test-sibling-required** [WARN]: Logic modules (*.service.ts, *.utils.ts, etc.) should have a co-located *.test.ts sibling.
+
+### stack-layout
+
+- **no-circular-imports** [ERROR]: Project modules must not form import cycles (A → B → A) — they cause partial-initialization bugs and defeat tree-shaking.
 
 ### ci
 

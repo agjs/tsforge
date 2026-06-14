@@ -24,7 +24,7 @@ Tune meta-rule severity in [tsforge.config.json](/guardrails/config/) the same w
 | Tests | service/util files have a matching `*.test.ts` sibling |
 | Drizzle (when pack active) | migrations checked in, no `drizzle-kit push` in CI |
 
-## All 29 rules
+## All 31 rules
 
 ### Supply chain
 
@@ -37,6 +37,7 @@ Tune meta-rule severity in [tsforge.config.json](/guardrails/config/) the same w
 | `single-package-manager` | no mixed lockfiles |
 | `package-manager-field-required` | `packageManager` in package.json |
 | `no-git-or-tarball-dependencies` | warn on `git+` / HTTP tarball URLs |
+| `no-undeclared-dependencies` | every imported package is declared in package.json (no relying on hoisting) |
 | `dependency-overrides-require-comment` | overrides/resolutions need an adjacent comment |
 | `production-must-not-use-drizzle-push` | no `drizzle-kit push` in scripts/CI (Drizzle projects) |
 | `migrations-must-be-checked-in` | `drizzle/` or `migrations/` folder exists (Drizzle projects) |
@@ -78,6 +79,14 @@ Both scan every hand-written `.ts`/`.tsx` under `src/`, `tests/`, and `scripts/`
 | `workflow-permissions-least-privilege` | warn on broad `contents: write` / `id-token: write` |
 | `no-pull-request-target-untrusted-checkout` | unsafe `pull_request_target` + PR head checkout |
 | `no-github-context-in-shell` | `${{ github.event` in `run:` without env indirection |
+
+### Structure (cross-file)
+
+Per-file ESLint can't see the module graph; this builds it from the project's own relative imports.
+
+| ID | Checks |
+| --- | --- |
+| `no-circular-imports` | no import cycle (A → B → A) — they cause partial-initialization bugs and defeat tree-shaking |
 
 ### Container
 
