@@ -17,7 +17,7 @@ import type {
 } from "./loop.types";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import { flags } from "../config";
-import { SYSTEM, seedPrompt } from "./prompt";
+import { buildSystemPrompt, seedPrompt } from "./prompt";
 import { detectStack } from "../stack-detection";
 import type { TtsrManager } from "./ttsr";
 import {
@@ -295,17 +295,23 @@ export async function runTask(
 
   const editable = await readFiles(cwd, task.files);
   const context = await readFiles(cwd, task.context ?? []);
+
+  // Existing code to navigate? (editable files already have content). Only then
+  // do the LSP nav tools earn their decision-surface cost — see toolsFor(). Also
+  // gates the scratch-simplicity guidance (from-scratch builds only).
+  const hasExistingCode = editable.some((f) => f.content.trim().length > 0);
+
   const messages: IChatMessage[] = [
-    { role: "system", content: SYSTEM },
+    {
+      role: "system",
+      content: buildSystemPrompt(hasExistingCode, stackProfile),
+    },
     {
       role: "user",
       content: seedPrompt(task, editable, context, stackProfile),
     },
   ];
 
-  // Existing code to navigate? (editable files already have content). Only then
-  // do the LSP nav tools earn their decision-surface cost — see toolsFor().
-  const hasExistingCode = editable.some((f) => f.content.trim().length > 0);
   const tools = toolsFor(hasExistingCode);
 
   // Mode-aware reasoning cap: scratch tasks over-think unbounded, so default

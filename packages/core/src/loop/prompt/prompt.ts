@@ -1,7 +1,8 @@
 import type { ITask } from "../../spec";
 import type { IFileView } from "../../lib/fs";
-import { PACK_REGISTRY } from "../../stack-detection";
+import { PACK_REGISTRY, isWebStack } from "../../stack-detection";
 import type { IStackProfile } from "../../stack-detection";
+import { flags } from "../../config";
 import { renderFileSection } from "./project-map";
 
 /** The implement-agent system prompt: who it is, the tools, and the strict-TS
@@ -15,6 +16,40 @@ export const SYSTEM = [
   "Test hypotheses by RUNNING them, never by reasoning them out. Unsure about an edge case, rounding, or ordering (`Math.floor(100/3)`, largest-remainder ties)? `run` a quick `bun -e '…console.log(…)'`, or write a throwaway `scratch/check.ts` importing your impl and `run` it. `scratch/` is yours — the gate ignores it.",
   "The gate is `tsc` strict + eslint with every rule an error, so write TypeScript that satisfies it: interfaces are `I`-prefixed; `===`; no `var`; never the non-null `!` — guard index access (`const x = arr[i]; if (x === undefined) {...}`); no `any` and no `as` — type every parameter (e.g. `.reduce((acc: number, r: number) => …, 0)`); explicit boolean conditions. When the gate flags errors in read-only files (tests/types), they come from your editable file being missing or wrong-shaped and vanish once it's correct — don't edit them.",
 ].join("\n");
+
+/** Appended to SYSTEM for from-scratch, NON-web utility builds when the simplicity
+ *  flag is on. Pushes the model toward the shortest correct solution — the axis the
+ *  gate is blind to (it checks correctness, never concision). Carve-outs keep it
+ *  from fighting the gate's hard rules. NOT for web builds (the views/components
+ *  architecture legitimately needs many small files). */
+export const SCRATCH_SIMPLICITY_GUIDANCE = [
+  "SIMPLICITY — write the SHORTEST correct solution that passes the gate:",
+  "  • The task's `files:` are the ceiling — do NOT add modules, classes, or",
+  "    abstractions the task didn't ask for. One focused implementation.",
+  "  • Prefer built-ins and a direct expression over step-by-step temporaries:",
+  "    chain the transforms (`xs.filter(...).map(...)`) instead of naming each",
+  "    intermediate, when it stays readable.",
+  "  • NO narration/step comments ('// Step 1', '// first we…') — the code is the",
+  "    explanation. A comment earns its place only for a non-obvious WHY.",
+  "  • This NEVER overrides the gate: keep `I`-prefixed interfaces, no `as`/`any`/`!`,",
+  "    real validation at trust boundaries, and any test siblings the gate requires.",
+].join("\n");
+
+/** SYSTEM + the simplicity block when it applies, else SYSTEM unchanged. Gated on
+ *  the `simplicity` flag AND a from-scratch (`!hasExistingCode`) NON-web build —
+ *  so it never touches existing-repo edits or web/UI apps. */
+export function buildSystemPrompt(
+  hasExistingCode: boolean,
+  stack: IStackProfile | undefined
+): string {
+  const webish = stack !== undefined && isWebStack(stack);
+
+  if (!flags.simplicity() || hasExistingCode || webish) {
+    return SYSTEM;
+  }
+
+  return `${SYSTEM}\n\n${SCRATCH_SIMPLICITY_GUIDANCE}`;
+}
 
 /**
  * The INTERACTIVE assistant prompt (the CLI's `Session`). Unlike `SYSTEM` — which

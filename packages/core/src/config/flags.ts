@@ -29,4 +29,8 @@ export const flags = {
    *  (A/B control, default ON — set to "0" to disable). */
   lspWriteFeedback: (): boolean =>
     process.env.TSFORGE_LSP_WRITE_FEEDBACK !== "0",
+  /** Scratch-utility simplicity guidance — appends a "shortest correct solution"
+   *  block to the build prompt for from-scratch, non-web tasks (A/B control,
+   *  default OFF until a sweep validates it). */
+  simplicity: (): boolean => isOn(ENV_FLAG.simplicity),
 };

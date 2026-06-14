@@ -87,6 +87,8 @@ function variantToEnvVars(variant: IFeatureVariant): Record<string, string> {
       envVars.TSFORGE_HASHLINE = state === "1" ? "1" : "0";
     } else if (dim === "lsp_write_feedback") {
       envVars.TSFORGE_LSP_WRITE_FEEDBACK = state === "1" ? "1" : "0";
+    } else if (dim === "simplicity") {
+      envVars.TSFORGE_SIMPLICITY = state === "1" ? "1" : "0";
     }
     // else: unknown dimension, skip
   }

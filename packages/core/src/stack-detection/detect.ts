@@ -9,6 +9,21 @@ import {
   type IPackId,
 } from "./packs";
 
+/** The pack ids that identify a WEB (browser UI) build. Used to scope behaviours
+ *  that must NOT apply to web apps (e.g. the scratch-simplicity prompt, whose
+ *  "shortest solution / no extra files" advice fights the views/components
+ *  architecture the web scaffold requires). */
+const WEB_PACK_IDS: readonly string[] = [
+  "react",
+  "react-component-architecture",
+  "tanstack-query",
+];
+
+/** True when the detected stack is a web/browser UI build. */
+export function isWebStack(profile: IStackProfile): boolean {
+  return profile.packs.some((p) => WEB_PACK_IDS.includes(p));
+}
+
 /** Parse package.json and extract deps/devDeps, tolerating missing/invalid JSON. */
 async function loadPackageDeps(cwd: string): Promise<{
   deps: Set<string>;

@@ -1,2 +1,9 @@
-export { SYSTEM, CHAT_SYSTEM, COMPACT_SYSTEM, seedPrompt } from "./prompt";
+export {
+  SYSTEM,
+  CHAT_SYSTEM,
+  COMPACT_SYSTEM,
+  SCRATCH_SIMPLICITY_GUIDANCE,
+  buildSystemPrompt,
+  seedPrompt,
+} from "./prompt";
 export { renderFileSection, exportedSymbols } from "./project-map";
