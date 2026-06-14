@@ -206,7 +206,7 @@ export async function doEdit(
 
   edit.file = normalizeWorkspacePath(ctx.cwd, edit.file);
 
-  if (isVendored(edit.file)) {
+  if (isVendored(edit.file, ctx.vendored ?? [])) {
     return reject(
       ctx,
       "edit:vendored",
@@ -312,7 +312,7 @@ export async function doCreate(
 
   create.file = normalizeWorkspacePath(ctx.cwd, create.file);
 
-  if (isVendored(create.file)) {
+  if (isVendored(create.file, ctx.vendored ?? [])) {
     return reject(
       ctx,
       "create:vendored",

@@ -4,18 +4,31 @@ import {
   isVendored,
   writable,
   normalizeWorkspacePath,
+  WEB_VENDORED_PATTERNS,
 } from "../src/lib/scope";
 
-test("isVendored blocks SDK/UI/mock/generated files, allows model files", () => {
-  expect(isVendored("src/lib/use-resource.ts")).toBe(true);
-  expect(isVendored("src/components/ui/button.tsx")).toBe(true);
-  expect(isVendored("src/mocks/db.ts")).toBe(true);
-  expect(isVendored("src/mocks/browser.ts")).toBe(true);
-  expect(isVendored("src/routeTree.gen.ts")).toBe(true);
-  // Model-owned files are NOT vendored.
-  expect(isVendored("src/mocks/handlers.ts")).toBe(false);
-  expect(isVendored("src/views/Deals/index.tsx")).toBe(false);
-  expect(isVendored("src/views/Deals/deals.constants.ts")).toBe(false);
+test("isVendored protects shipped SDK/generated files, frees model files", () => {
+  const p = WEB_VENDORED_PATTERNS;
+
+  // The untouchable shipped SDK + generated files.
+  expect(isVendored("src/lib/use-resource.ts", p)).toBe(true);
+  expect(isVendored("src/lib/api.ts", p)).toBe(true);
+  expect(isVendored("src/mocks/db.ts", p)).toBe(true);
+  expect(isVendored("src/mocks/browser.ts", p)).toBe(true);
+  expect(isVendored("src/routeTree.gen.ts", p)).toBe(true);
+
+  // Files the GUIDANCE tells the model to write must be ALLOWED.
+  expect(isVendored("src/components/ui/card.tsx", p)).toBe(false); // new primitive
+  expect(isVendored("src/components/ui/button.tsx", p)).toBe(false); // editable primitive
+  expect(isVendored("src/lib/format.ts", p)).toBe(false); // new helper
+  expect(isVendored("src/mocks/handlers.ts", p)).toBe(false); // model's mock registry
+  expect(isVendored("src/views/Deals/index.tsx", p)).toBe(false);
+});
+
+test("isVendored is inert with no patterns (non-web / normal repos unaffected)", () => {
+  expect(isVendored("src/lib/use-resource.ts", [])).toBe(false);
+  expect(isVendored("src/lib/sort.ts", [])).toBe(false);
+  expect(isVendored("anything.gen.ts", [])).toBe(false);
 });
 
 test("matches exact paths and globs; empty patterns match nothing", () => {

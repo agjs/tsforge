@@ -896,6 +896,11 @@ async function repl(args: ICliArgs): Promise<number> {
     // in the model's list; setSetupWeb() below only wires its callback.
     ...(args.web
       ? {
+          // --web pre-scaffolds the app, so scaffold_web isn't needed — but the
+          // build still needs scaffold_ui + scaffold_routes (+ add_dependency),
+          // which `scaffoldUi: true` registers. Without this the web guidance
+          // tells the model to call tools that aren't in its list and it deadlocks.
+          scaffoldUi: true,
           guidance: webGuidance("react"),
           fix: buildWebFix("react"),
           incrementalCheck: buildWebTscCheck(),

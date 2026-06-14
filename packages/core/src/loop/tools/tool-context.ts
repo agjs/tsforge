@@ -8,6 +8,10 @@ export interface IToolContext {
   cwd: string;
   /** Editable scope — `edit`/`create` outside it are rejected. */
   files: string[];
+  /** VENDORED file globs the model must not rewrite (the web scaffold's shipped
+   *  SDK/generated files). Set only for web-scaffold sessions; absent/empty ⇒ the
+   *  vendored guard is inert (non-web builds and normal repos are unaffected). */
+  vendored?: readonly string[];
   report: Reporter;
   task: string;
   /** In-process TypeScript LanguageService — backs the semantic tools

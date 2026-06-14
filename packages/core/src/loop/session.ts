@@ -18,6 +18,7 @@ import {
 } from "../agent";
 import { flags } from "../config";
 import { readFiles } from "../lib/fs";
+import { WEB_VENDORED_PATTERNS } from "../lib/scope";
 import { validate, type ErrorParser } from "../validate";
 import { detectStack } from "../stack-detection";
 import {
@@ -521,9 +522,11 @@ export class Session {
             report({ kind: "tool", task: SESSION_ID, message });
           });
 
+    const isWebScaffold = cfg.scaffoldWeb === true || cfg.scaffoldUi === true;
     const ctx: ILoopCtx = {
       task,
       cwd: cfg.cwd,
+      ...(isWebScaffold ? { vendored: WEB_VENDORED_PATTERNS } : {}),
       tsService: await buildTsService(cfg.cwd),
       ...(cfg.lintFile === undefined ? {} : { lintFile: cfg.lintFile }),
       parse: cfg.parse,

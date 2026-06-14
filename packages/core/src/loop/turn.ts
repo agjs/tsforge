@@ -115,6 +115,9 @@ export interface ILoopCtx {
   /** Wired by the interactive CLI: turn this workspace into a web project (the
    *  `scaffold_web` tool calls it). Threaded into the tool context. */
   setupWeb?: (framework: string) => Promise<void>;
+  /** VENDORED file globs the model must not rewrite (web-scaffold sessions only).
+   *  Threaded into the tool context; absent ⇒ the vendored guard is inert. */
+  vendored?: readonly string[];
   /** PLAN MODE (set via Session.setPlanMode): threaded into the tool context so
    *  mutating tools are rejected at dispatch — the model only plans. */
   readOnly?: boolean;
@@ -462,6 +465,7 @@ export async function runToolCalls(
       tsService: ctx.tsService,
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
       ...(ctx.setupWeb === undefined ? {} : { setupWeb: ctx.setupWeb }),
+      ...(ctx.vendored === undefined ? {} : { vendored: ctx.vendored }),
       ...(ctx.readOnly === undefined ? {} : { readOnly: ctx.readOnly }),
       ...(ctx.mcpRegistry === undefined
         ? {}
