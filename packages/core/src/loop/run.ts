@@ -3,7 +3,12 @@ import type { IChatMessage, IModelResponse, IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate";
 import { parseEslintJson } from "../validate";
 import { readFiles } from "../lib/fs";
-import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
+import {
+  DEFAULT_TEMPERATURE,
+  RUN_STATUS,
+  STUCK_REASON,
+  LOOP_LIMITS,
+} from "./loop.constants";
 import type {
   IRunResult,
   IRunOptions,
@@ -215,7 +220,7 @@ export async function runTask(
 ): Promise<IRunResult> {
   const { parse, enableThinking, thinkingTokenBudget } = opts;
   const effectiveParse = effectiveParserFor(parse);
-  const temperature = opts.temperature ?? 0;
+  const temperature = opts.temperature ?? DEFAULT_TEMPERATURE;
   const maxTurns = opts.maxTurns ?? LOOP_LIMITS.maxTurns;
   // Buffer every event so the post-run memory hook can mine the run for
   // failure→fix lessons, while still forwarding live to the real reporter.

@@ -10,6 +10,7 @@ import { readFiles, type IFileView } from "../lib/fs";
 import { EDIT_TOOL, CREATE_TOOL, TOOL_NAME } from "./agent.constants";
 import { toEdits, toCreate } from "./tools";
 import { ruleHelp } from "../loop/feedback";
+import { DEFAULT_TEMPERATURE } from "../loop/loop.constants";
 
 /**
  * The errors the agent can actually act on: those in its editable files (plus
@@ -54,7 +55,7 @@ export function modelAgent(
           toolChoice: "auto",
           // Temp 0 by default — the eval sweep showed it's decisively better for
           // convergence on coding tasks (temp 0: 100% pass vs temp 0.5: 0%).
-          temperature: options.temperature ?? 0,
+          temperature: options.temperature ?? DEFAULT_TEMPERATURE,
           // Cap reasoning so the quality-repair pass can't ramble unbounded
           // ("writing novels"): the budget that bounds the implement loop must
           // bound this agent too, or the cap leaks.

@@ -17,6 +17,10 @@ export const SPEC_STATUS = {
   blocked: "blocked",
 } as const;
 
+/** Default sampling temperature for main agent turns (Session, runTask, modelAgent).
+ *  Auxiliary one-shot calls (compaction, plan summary, judge) stay at 0. */
+export const DEFAULT_TEMPERATURE = 0.2;
+
 /**
  * Loop tuning — kept with the loop domain (not a global bucket). Each value's
  * rationale lives here so a tuning pass sees the whole budget at a glance.
