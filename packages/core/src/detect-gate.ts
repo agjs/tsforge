@@ -385,10 +385,14 @@ async function initMswWorker(cwd: string): Promise<void> {
   }
 
   try {
-    // No `--save`: that rewrites package.json (non-prettier, fails the gate's
-    // format check) just to record the worker dir. The worker lands at the default
-    // `/mockServiceWorker.js`, which `worker.start()` finds without any config.
-    await Bun.spawn(["bunx", "msw", "init", "public"], {
+    // `--no-save`, NOT a bare `init`: bare `init` (save flag absent) drops into an
+    // interactive @inquirer "save the worker dir to package.json?" prompt, which has
+    // no TTY in this headless pipeline and crashes the msw child with ExitPromptError.
+    // `--save` would answer it but rewrites package.json un-prettified (fails the
+    // gate's format check). `--no-save` copies the worker, skips package.json, and
+    // never prompts. The worker lands at the default `/mockServiceWorker.js`, which
+    // `worker.start()` finds without any config.
+    await Bun.spawn(["bunx", "msw", "init", "public", "--no-save"], {
       cwd,
       stdout: "inherit",
       stderr: "inherit",
