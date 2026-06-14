@@ -1,5 +1,7 @@
-// Eval sweep: run a seed spec N times across temperature + feature flag variants, score, tabulate.
+// Eval sweep: run seed spec(s) N times across temperature + feature flag variants, score, tabulate.
 // Run:  TSFORGE_SEED=money TSFORGE_TEMPS=0,0.5 TSFORGE_REPEATS=3 bun run packages/core/scripts/sweep.ts
+// TSFORGE_SEED accepts a comma-separated list (e.g. slugify,debounce,rate-limit) — each seed
+// runs the full variant matrix and gets its own report + saved JSON.
 // A/B feature variants:
 //   TSFORGE_FEATURE_VARIANTS=ttsr,hashline (sweep across feature toggles)
 //   Each variant is dim=on|off (e.g. ttsr=on×hashline=off) creating a cartesian product.
@@ -15,6 +17,7 @@ import { providerConfig } from "../src/cli";
 import {
   summarize,
   classifyRun,
+  countTaskLoc,
   renderSweepReportMarkdown,
   buildSweepReport,
   type IRunRecord,
@@ -22,7 +25,10 @@ import {
 import { renderEvent } from "../src/render";
 import type { ILoopEvent } from "../src/loop";
 
-const seed = process.env.TSFORGE_SEED ?? "todo";
+const seeds = (process.env.TSFORGE_SEED ?? "todo")
+  .split(",")
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
 const temps = (process.env.TSFORGE_TEMPS ?? "0,0.5")
   .split(",")
   .map((t) => Number(t.trim()));
@@ -100,15 +106,17 @@ function variantLabel(variant: IFeatureVariant): string {
 const featureVariants = parseFeatureVariants();
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
-// Prefer a local working seed (evals/<seed>); fall back to the committed corpus
-// (evals/corpus/<seed>) so checked-in seeds run with no manual copy step.
-const localSeedDir = join(evalsRoot, seed);
-const seedDir = (await Bun.file(join(localSeedDir, `${seed}.spec.md`)).exists())
-  ? localSeedDir
-  : join(evalsRoot, "corpus", seed);
-// Recursive so nested-directory apps (e.g. a React app under `src/`) copy whole;
-// flat single-dir evals are unaffected (recursive readdir returns the same list).
-const seedFiles = await readdir(seedDir, { recursive: true });
+
+/** Resolve a seed's directory: prefer a local working seed (evals/<seed>); fall
+ *  back to the committed corpus (evals/corpus/<seed>) so checked-in seeds run with
+ *  no manual copy step. */
+async function resolveSeedDir(seed: string): Promise<string> {
+  const local = join(evalsRoot, seed);
+
+  return (await Bun.file(join(local, `${seed}.spec.md`)).exists())
+    ? local
+    : join(evalsRoot, "corpus", seed);
+}
 
 // Resolve the model the same way the CLI does: explicit TSFORGE_* env wins, else
 // the active entry from ~/.tsforge/models.json. (Previously this hardcoded the
@@ -151,36 +159,55 @@ function stamp(): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-const records: IRunRecord[] = [];
+for (const seed of seeds) {
+  const seedDir = await resolveSeedDir(seed);
+  // Recursive so nested-directory apps (e.g. a React app under `src/`) copy whole;
+  // flat single-dir evals are unaffected (recursive readdir returns the same list).
+  const seedFiles = await readdir(seedDir, { recursive: true });
+  const records: IRunRecord[] = [];
 
-for (const variant of featureVariants) {
-  const variantEnv = variantToEnvVars(variant);
-  const vLabel = variantLabel(variant);
+  for (const variant of featureVariants) {
+    const variantEnv = variantToEnvVars(variant);
+    const vLabel = variantLabel(variant);
 
-  for (const temp of temps) {
-    for (let i = 0; i < repeats; i += 1) {
-      const runId = `${seed}-${vLabel}-t${temp}-${stamp()}-${i + 1}`;
-      const runDir = join(evalsRoot, "runs", runId);
+    for (const temp of temps) {
+      for (let i = 0; i < repeats; i += 1) {
+        const runId = `${seed}-${vLabel}-t${temp}-${stamp()}-${i + 1}`;
+        const runDir = join(evalsRoot, "runs", runId);
 
-      // One run's failure (e.g. a request timing out) must not abort the sweep —
-      // record it as a blocked run and carry on, so a long batch is resilient.
-      try {
-        await runOne(runId, runDir, temp, i, variantEnv);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        // One run's failure (e.g. a request timing out) must not abort the sweep —
+        // record it as a blocked run and carry on, so a long batch is resilient.
+        try {
+          records.push(
+            await runOne(
+              seed,
+              seedDir,
+              seedFiles,
+              runId,
+              runDir,
+              temp,
+              i,
+              variantEnv
+            )
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
 
-        records.push({
-          label: `${vLabel} temp=${temp}`,
-          passed: false,
-          cycles: 0,
-          ms: 0,
-        });
-        process.stdout.write(
-          `  ${seed} ${vLabel} temp=${temp} #${i + 1}: ERRORED (${message}) → ${runId}\n`
-        );
+          records.push({
+            label: `${vLabel} temp=${temp}`,
+            passed: false,
+            cycles: 0,
+            ms: 0,
+          });
+          process.stdout.write(
+            `  ${seed} ${vLabel} temp=${temp} #${i + 1}: ERRORED (${message}) → ${runId}\n`
+          );
+        }
       }
     }
   }
+
+  await reportSeed(seed, records);
 }
 
 /** Set env vars for a variant, returning a restore function. */
@@ -206,7 +233,11 @@ function setVariantEnv(variant: Record<string, string>): () => void {
 }
 
 /** Copy seed files and prepare the run directory. */
-async function setupRunDir(dir: string): Promise<void> {
+async function setupRunDir(
+  dir: string,
+  seedDir: string,
+  seedFiles: string[]
+): Promise<void> {
   await mkdir(dir, { recursive: true });
 
   for (const file of seedFiles) {
@@ -235,16 +266,19 @@ async function startRed(
 }
 
 async function runOne(
+  seed: string,
+  seedDir: string,
+  seedFiles: string[],
   runId: string,
   runDir: string,
   temp: number,
   i: number,
   variantEnv: Record<string, string> = {}
-): Promise<void> {
+): Promise<IRunRecord> {
   const restore = setVariantEnv(variantEnv);
 
   try {
-    await setupRunDir(runDir);
+    await setupRunDir(runDir, seedDir, seedFiles);
 
     const spec = parseSpec(
       await Bun.file(join(runDir, `${seed}.spec.md`)).text()
@@ -315,6 +349,16 @@ async function runOne(
     const cycles = result.results.reduce((acc, r) => acc + r.cycles, 0);
     const passed = result.status === "done";
 
+    // LOC is the concision signal the gate can't see — measured post-hoc on the
+    // GREEN solution's task files (a failed run has no shipped solution to size).
+    let loc: number | undefined;
+
+    if (passed) {
+      const taskFiles = spec.tasks.flatMap((t) => t.files);
+
+      loc = (await countTaskLoc(runDir, taskFiles)).totalLoc;
+    }
+
     // Once green, drive QUALITY up: judge → improve-per-critique → re-judge.
     let quality: number | undefined;
     let judgeNotes = "";
@@ -359,6 +403,7 @@ async function runOne(
           cycles,
           ms,
           quality,
+          loc,
           judgeNotes,
           tasks: result.results,
         },
@@ -378,47 +423,52 @@ async function runOne(
       ? undefined
       : classifyRun(runEvents).failureClass;
 
-    records.push({
+    process.stdout.write(
+      `  ${seed} ${vLabel} temp=${temp} #${i + 1}: ${passed ? "done" : `blocked[${failureClass ?? "unknown"}]`} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${ms}ms${quality === undefined ? "" : `, Q${quality}/5`}${loc === undefined ? "" : `, ${String(loc)} loc`}) → ${runId}\n`
+    );
+
+    return {
       label: `${vLabel} temp=${temp}`,
       passed,
       cycles,
       ms,
       quality,
+      ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
-    });
-    process.stdout.write(
-      `  ${seed} ${vLabel} temp=${temp} #${i + 1}: ${passed ? "done" : `blocked[${failureClass ?? "unknown"}]`} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${ms}ms${quality === undefined ? "" : `, Q${quality}/5`}) → ${runId}\n`
-    );
+    };
   } finally {
     restore();
   }
 }
 
-const summaries = summarize(records);
+/** Print one seed's per-variant summary + statistical report, and save its JSON. */
+async function reportSeed(seed: string, records: IRunRecord[]): Promise<void> {
+  const summaries = summarize(records);
 
-process.stdout.write(`\n=== sweep: ${seed} (${repeats} runs/variant) ===\n`);
+  process.stdout.write(`\n=== sweep: ${seed} (${repeats} runs/variant) ===\n`);
 
-for (const s of summaries) {
-  const failures = Object.entries(s.failureClasses)
-    .sort(([, a], [, b]) => b - a)
-    .map(([cls, n]) => `${cls}×${String(n)}`)
-    .join(", ");
+  for (const s of summaries) {
+    const failures = Object.entries(s.failureClasses)
+      .sort(([, a], [, b]) => b - a)
+      .map(([cls, n]) => `${cls}×${String(n)}`)
+      .join(", ");
 
+    process.stdout.write(
+      `${s.label.padEnd(10)}  pass ${Math.round(s.passRate * 100)}% (${s.passed}/${s.runs})  Q ${s.avgQuality.toFixed(1)}/5  ${s.avgLoc.toFixed(1)} loc  avg ${s.avgCycles.toFixed(1)} cyc  ${Math.round(s.avgMs)}ms${failures.length > 0 ? `  [${failures}]` : ""}\n`
+    );
+  }
+
+  // The statistical report (Wilson CI + z-test vs baseline) now also tabulates a
+  // per-variant failure-class breakdown — WHY runs failed, not just how often.
   process.stdout.write(
-    `${s.label.padEnd(10)}  pass ${Math.round(s.passRate * 100)}% (${s.passed}/${s.runs})  Q ${s.avgQuality.toFixed(1)}/5  avg ${s.avgCycles.toFixed(1)} cyc  ${Math.round(s.avgMs)}ms${failures.length > 0 ? `  [${failures}]` : ""}\n`
+    `\n${renderSweepReportMarkdown(buildSweepReport(records))}\n`
   );
+
+  const outPath = join(evalsRoot, "runs", `sweep-${seed}-${stamp()}.json`);
+
+  await Bun.write(
+    outPath,
+    JSON.stringify({ seed, temps, repeats, records, summaries }, null, 2)
+  );
+  process.stdout.write(`\nsaved ${outPath}\n`);
 }
-
-// The statistical report (Wilson CI + z-test vs baseline) now also tabulates a
-// per-variant failure-class breakdown — WHY runs failed, not just how often.
-process.stdout.write(
-  `\n${renderSweepReportMarkdown(buildSweepReport(records))}\n`
-);
-
-const outPath = join(evalsRoot, "runs", `sweep-${seed}-${stamp()}.json`);
-
-await Bun.write(
-  outPath,
-  JSON.stringify({ seed, temps, repeats, records, summaries }, null, 2)
-);
-process.stdout.write(`\nsaved ${outPath}\n`);

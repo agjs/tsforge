@@ -20,6 +20,7 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
     const sum = (select: (r: IRunRecord) => number): number =>
       list.reduce((acc, r) => acc + select(r), 0);
     const scored = list.filter((r) => r.quality !== undefined);
+    const sized = list.filter((r) => r.loc !== undefined);
     const failureClasses: Record<string, number> = {};
 
     for (const r of list) {
@@ -40,6 +41,10 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
       avgQuality:
         scored.length > 0
           ? scored.reduce((acc, r) => acc + (r.quality ?? 0), 0) / scored.length
+          : 0,
+      avgLoc:
+        sized.length > 0
+          ? sized.reduce((acc, r) => acc + (r.loc ?? 0), 0) / sized.length
           : 0,
       failureClasses,
     });

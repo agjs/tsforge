@@ -1,6 +1,7 @@
 export * from "./eval.types";
 export { judge } from "./judge";
 export { summarize } from "./score";
+export { countLoc, countTaskLoc, type ITaskLoc } from "./loc";
 export { analyzeEvents, type IRunMetrics } from "./metrics";
 export {
   classifyRun,

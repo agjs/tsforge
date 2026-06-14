@@ -23,6 +23,10 @@ export interface IRunRecord {
   ms: number;
   /** LLM-judge quality score (1–5), when available. */
   quality?: number;
+  /** Lines of code in the solution's task files (non-blank, non-comment), measured
+   *  post-hoc on a green run. The concision signal the gate is blind to; omitted
+   *  for a failed run (there's no shipped solution to measure). */
+  loc?: number;
   /** Structured reason a failed run failed (from classifyRun); omitted/`none`
    *  for a passing run. The substrate for turning failures into interventions. */
   failureClass?: FailureClass;
@@ -38,6 +42,9 @@ export interface IVariantSummary {
   avgMs: number;
   /** Average quality across runs that were scored (0 if none). */
   avgQuality: number;
+  /** Average LOC across runs that recorded it — i.e. green runs (0 if none). The
+   *  lower-is-better concision metric, compared per task across variants. */
+  avgLoc: number;
   /** Count of failed runs by failure class (e.g. {"type-error": 2}); empty when
    *  no run carried a class. Lets a sweep show WHY a variant failed, not just how
    *  often. */

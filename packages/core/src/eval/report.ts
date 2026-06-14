@@ -144,8 +144,8 @@ function baselineCell(report: IVariantReport, baseline: string | null): string {
  *  (p < 0.05) from the baseline. */
 export function renderSweepReportMarkdown(report: ISweepReport): string {
   const header =
-    "| Variant | Runs | Pass | 95% CI | Cycles | Ms | Quality | vs baseline |\n" +
-    "| --- | --- | --- | --- | --- | --- | --- | --- |";
+    "| Variant | Runs | Pass | 95% CI | Cycles | Ms | Quality | LOC | vs baseline |\n" +
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |";
 
   const rows = report.variants.map((v) => {
     const ci = `${pct(v.passRateCI[0])}–${pct(v.passRateCI[1])}`;
@@ -153,7 +153,7 @@ export function renderSweepReportMarkdown(report: ISweepReport): string {
     return (
       `| ${v.label} | ${String(v.runs)} | ${pct(v.passRate)} | ${ci} | ` +
       `${v.avgCycles.toFixed(1)} | ${String(Math.round(v.avgMs))} | ` +
-      `${v.avgQuality.toFixed(1)} | ${baselineCell(v, report.baseline)} |`
+      `${v.avgQuality.toFixed(1)} | ${v.avgLoc.toFixed(1)} | ${baselineCell(v, report.baseline)} |`
     );
   });
 
