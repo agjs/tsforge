@@ -10,7 +10,8 @@ export type MetaRuleCategory =
   | "source-text"
   | "testing"
   | "stack-layout"
-  | "ci";
+  | "ci"
+  | "container";
 
 /** A single rule violation (file, rule, message). */
 export interface IMetaRuleViolation {
@@ -30,6 +31,7 @@ export interface IMetaRuleContext {
   readonly sourceFiles: readonly string[]; // repo-relative .ts/.tsx
   readonly configFiles: readonly string[]; // tsconfig*, eslint*, package.json, *.config.*
   readonly workflowFiles: readonly string[]; // .github/workflows/*.yml|yaml
+  readonly dockerfiles: readonly string[]; // Dockerfile, Dockerfile.*, *.Dockerfile (root + 1 level)
   readonly activePacks: readonly string[]; // pack ids from stack detection
   readonly readFile: (relPath: string) => string | null; // cached, safe
 }

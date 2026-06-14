@@ -131,6 +131,7 @@ const categoryOrder = [
   "testing",
   "stack-layout",
   "ci",
+  "container",
 ] as const;
 
 const rulesByCategory = new Map<string, (typeof META_RULES)[number][]>();
@@ -172,9 +173,11 @@ out.push(
   "- GraphQL/WebSocket/OpenAPI contract rules (until OpenAPI dep + parser)"
 );
 out.push(
-  "- Container/Kubernetes YAML hardening (future meta-rules when Dockerfile/k8s detected)"
+  "- Kubernetes / Compose YAML hardening (Dockerfile hardening now ships as container meta-rules)"
 );
-out.push("- LLM/MCP security packs (opt-in when AI SDK deps detected)");
+out.push(
+  "- MCP-server security pack (the AI-SDK pack now covers `ai`/`openai`/Anthropic clients)"
+);
 out.push("- FSD layer DAG / full authorization taint tracking");
 out.push("- Lighthouse / bundle-analyzer CI gates");
 out.push("- Violation ratcheting / baseline snapshots (Phase 5)");

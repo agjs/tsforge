@@ -13,6 +13,7 @@
 // map of bare rule names to "error" | "warn" | "off").
 import tseslint from "typescript-eslint";
 import stylistic from "@stylistic/eslint-plugin";
+import sonarjs from "eslint-plugin-sonarjs";
 
 // Load stack-aware packs if TSFORGE_PACKS env var is set
 let packConfig = [];
@@ -56,8 +57,19 @@ export default tseslint.config(
     plugins: {
       "@typescript-eslint": tseslint.plugin,
       "@stylistic": stylistic,
+      sonarjs,
     },
     rules: {
+      // Concern-mixing / copy-paste ceiling (syntactic — no type info needed).
+      // cc <= 20 is the house rule tsforge holds ITSELF to (eslint.config.js); it
+      // forces the model to decompose a sprawling function into named helpers
+      // instead of one un-reviewable block. Not auto-fixable, so it surfaces as a
+      // hand-fix error — the intended "split this up" signal. max-depth/max-params
+      // are zero-dep ESLint-core complements.
+      "sonarjs/cognitive-complexity": ["error", 20],
+      "sonarjs/no-identical-functions": "error",
+      "max-depth": ["error", 4],
+      "max-params": ["error", 4],
       // The idioms the model habitually violates — all caught WITHOUT type info.
       "@typescript-eslint/consistent-type-assertions": [
         "error",

@@ -141,15 +141,28 @@ test("scaffoldWeb(react) lays the full kit; gate builds with Vite + browser", as
     expect(html).toContain('id="root"');
     expect(html).toContain("/src/main.tsx");
 
-    const gate = buildWebGate("react");
+    const gate = buildWebGate("react", undefined, dir);
 
     expect(gate.command).toContain("bun run build"); // vite build FIRST (codegen)
     expect(gate.command).toContain("--noEmit"); // tsc
     expect(gate.command).toContain("strict.web.eslint.config.mjs"); // web eslint
+    expect(gate.command).toContain("strict.type-aware.eslint.config.mjs"); // async correctness (scaffold ships a tsconfig)
     expect(gate.command).toContain("src/components/ui/**"); // vendored exempt
     expect(gate.command).toContain("*.gen.ts"); // generated exempt
     expect(gate.command).toContain("dist/index.html"); // render the BUILT app
     expect(gate.label).toContain("Vite");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildWebGate omits the type-aware async pass when the dir has no tsconfig", async () => {
+  const dir = await tempDir();
+
+  try {
+    const gate = buildWebGate("react", undefined, dir);
+
+    expect(gate.command).not.toContain("strict.type-aware.eslint.config.mjs");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

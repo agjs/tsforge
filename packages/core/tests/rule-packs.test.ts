@@ -50,8 +50,9 @@ function lint(
 }
 
 describe("rule-packs: registry", () => {
-  test("should have all twenty packs registered", () => {
+  test("should have all twenty-one packs registered", () => {
     expect(Object.keys(RULE_PACKS).sort()).toEqual([
+      "ai-sdk",
       "authorization",
       "bullmq",
       "code-flow",
@@ -3657,6 +3658,160 @@ export async function handleUpload(request: { file: () => Promise<unknown> }) {
       "upload-must-set-limits",
       code,
       "src/routes/upload.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});
+
+describe("ai-sdk pack", () => {
+  test("should export aiSdkPack with correct structure", () => {
+    const pack = RULE_PACKS["ai-sdk"];
+
+    expect(pack.id).toBe("ai-sdk");
+    expect(Object.keys(pack.rules).sort()).toEqual([
+      "no-api-key-in-client",
+      "no-user-input-in-system-prompt",
+      "require-completion-token-limit",
+    ]);
+    expect(pack.rulesConfig["no-api-key-in-client"]).toBe("error");
+    expect(pack.rulesConfig["require-completion-token-limit"]).toBe("error");
+    expect(pack.rulesConfig["no-user-input-in-system-prompt"]).toBe("warn");
+  });
+
+  test("no-api-key-in-client: flags `new OpenAI()` in a client component", () => {
+    const code = `"use client";
+import OpenAI from "openai";
+const client = new OpenAI({ apiKey: "sk-x" });
+export function Chat() {
+  return client;
+}`;
+    const messages = lint(
+      "ai-sdk",
+      "no-api-key-in-client",
+      code,
+      "src/chat.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("clientProvider");
+  });
+
+  test("no-api-key-in-client: flags a provider factory in a client component", () => {
+    const code = `"use client";
+import { createOpenAI } from "@ai-sdk/openai";
+const openai = createOpenAI({ apiKey: "sk-x" });
+export function Chat() {
+  return openai;
+}`;
+    const messages = lint(
+      "ai-sdk",
+      "no-api-key-in-client",
+      code,
+      "src/chat.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("clientProvider");
+  });
+
+  test("no-api-key-in-client: allows provider construction on the server", () => {
+    const code = `import OpenAI from "openai";
+const client = new OpenAI({ apiKey: process.env.KEY });
+export function getClient() {
+  return client;
+}`;
+    const messages = lint(
+      "ai-sdk",
+      "no-api-key-in-client",
+      code,
+      "src/server/ai.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("require-completion-token-limit: flags generateText without maxTokens", () => {
+    const code = `import { generateText } from "ai";
+export async function run(model: unknown) {
+  return generateText({ model, prompt: "hi" });
+}`;
+    const messages = lint(
+      "ai-sdk",
+      "require-completion-token-limit",
+      code,
+      "src/server/run.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingLimit");
+  });
+
+  test("require-completion-token-limit: flags openai create() without max_tokens", () => {
+    const code = `export async function run(openai: { chat: { completions: { create: (o: unknown) => Promise<unknown> } } }) {
+  return openai.chat.completions.create({ model: "gpt-4o", messages: [] });
+}`;
+    const messages = lint(
+      "ai-sdk",
+      "require-completion-token-limit",
+      code,
+      "src/server/run.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingLimit");
+  });
+
+  test("require-completion-token-limit: allows a bounded call", () => {
+    const code = `import { generateText } from "ai";
+export async function run(model: unknown) {
+  return generateText({ model, prompt: "hi", maxTokens: 256 });
+}`;
+    const messages = lint(
+      "ai-sdk",
+      "require-completion-token-limit",
+      code,
+      "src/server/run.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-user-input-in-system-prompt: warns on an interpolated system field", () => {
+    const code = `import { generateText } from "ai";
+export async function run(model: unknown, role: string) {
+  return generateText({ model, system: \`You are a \${role}.\`, prompt: "hi" });
+}`;
+    const messages = lint(
+      "ai-sdk",
+      "no-user-input-in-system-prompt",
+      code,
+      "src/server/run.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("dynamicSystemPrompt");
+  });
+
+  test("no-user-input-in-system-prompt: warns on concatenated system message content", () => {
+    const code = `export function build(userInput: string) {
+  return [{ role: "system", content: "Base. " + userInput }];
+}`;
+    const messages = lint(
+      "ai-sdk",
+      "no-user-input-in-system-prompt",
+      code,
+      "src/server/run.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("dynamicSystemPrompt");
+  });
+
+  test("no-user-input-in-system-prompt: allows a constant system prompt", () => {
+    const code = `import { generateText } from "ai";
+export async function run(model: unknown) {
+  return generateText({ model, system: "You are a helpful assistant.", prompt: "hi" });
+}`;
+    const messages = lint(
+      "ai-sdk",
+      "no-user-input-in-system-prompt",
+      code,
+      "src/server/run.ts"
     );
 
     expect(messages).toHaveLength(0);

@@ -222,6 +222,25 @@ export const PACK_REGISTRY = {
     appliesWhen: { anyDeps: ["i18next", "react-i18next"] },
     guidance: "Keep i18n keys organized and validated.",
   } as const satisfies IRulePackDescriptor,
+
+  "ai-sdk": {
+    id: "ai-sdk",
+    label: "AI SDK Security",
+    description:
+      "LLM/AI-SDK security and cost guardrails: no provider key in client bundles, bounded completion tokens, no request data in the system prompt",
+    category: "library",
+    appliesWhen: {
+      anyDeps: [
+        "ai",
+        "openai",
+        "@anthropic-ai/sdk",
+        "@ai-sdk/openai",
+        "@ai-sdk/anthropic",
+      ],
+    },
+    guidance:
+      "Call models server-side, bound output tokens, and keep the system prompt constant.",
+  } as const satisfies IRulePackDescriptor,
 } as const;
 
 /** Ordered list of always-on pack IDs (for deterministic ordering). */

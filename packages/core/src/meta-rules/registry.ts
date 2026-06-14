@@ -25,6 +25,9 @@ import { workflowPermissionsExplicitRule } from "./rules/ci/workflow-permissions
 import { workflowPermissionsLeastPrivilegeRule } from "./rules/ci/workflow-permissions-least-privilege";
 import { noPullRequestTargetUntrustedCheckoutRule } from "./rules/ci/no-pull-request-target-untrusted-checkout";
 import { noGithubContextInShellRule } from "./rules/ci/no-github-context-in-shell";
+import { dockerfileBaseImagePinnedRule } from "./rules/docker/dockerfile-base-image-pinned";
+import { dockerfileNonRootUserRule } from "./rules/docker/dockerfile-non-root-user";
+import { dockerfileNoSecretsInEnvArgRule } from "./rules/docker/dockerfile-no-secrets-in-env-arg";
 
 /**
  * All available meta-rules, ordered by category for readability.
@@ -66,4 +69,9 @@ export const META_RULES: readonly IMetaRule[] = [
   workflowPermissionsLeastPrivilegeRule,
   noPullRequestTargetUntrustedCheckoutRule,
   noGithubContextInShellRule,
+
+  // Container
+  dockerfileBaseImagePinnedRule,
+  dockerfileNonRootUserRule,
+  dockerfileNoSecretsInEnvArgRule,
 ];

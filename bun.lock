@@ -38,7 +38,7 @@
     },
     "apps/docs": {
       "name": "@tsforge/docs",
-      "version": "0.2.0",
+      "version": "0.3.4",
       "dependencies": {
         "@astrojs/react": "5.0.6",
         "@astrojs/sitemap": "3.7.2",
@@ -60,7 +60,7 @@
     },
     "packages/core": {
       "name": "@agjs/tsforge",
-      "version": "0.2.0",
+      "version": "0.3.4",
       "bin": {
         "tsforge": "./bin/tsforge.js",
       },
@@ -72,6 +72,7 @@
         "eslint-plugin-jsx-a11y": "^6.10.2",
         "eslint-plugin-react": "^7.37.5",
         "eslint-plugin-react-hooks": "^7.1.1",
+        "eslint-plugin-sonarjs": "4.0.3",
         "prettier": "3.8.3",
         "typescript": "6.0.3",
         "typescript-eslint": "8.60.0",

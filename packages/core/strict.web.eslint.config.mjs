@@ -13,6 +13,7 @@ import stylistic from "@stylistic/eslint-plugin";
 import pluginReact from "eslint-plugin-react";
 import pluginReactHooks from "eslint-plugin-react-hooks";
 import pluginJsxA11y from "eslint-plugin-jsx-a11y";
+import sonarjs from "eslint-plugin-sonarjs";
 
 // Load stack-aware packs if TSFORGE_PACKS env var is set
 let packConfig = [];
@@ -112,6 +113,7 @@ export default tseslint.config(
       "@stylistic": stylistic,
       react: pluginReact,
       "react-hooks": pluginReactHooks,
+      sonarjs,
       boringstack: { rules: { "one-component-per-file": oneComponentPerFile } },
       ...packConfig
         .filter(
@@ -125,6 +127,13 @@ export default tseslint.config(
       // literal/tuple data (and it makes a fixed array a tuple, so literal-index
       // access is defined, not `T | undefined`). Instead we ban only the
       // value-changing forms (`x as Foo`, `<Foo>x`) via AST selectors below.
+      // Concern-mixing / copy-paste ceiling (syntactic — mirrors the core config).
+      // cc <= 20 forces decomposition into named helpers; max-depth/max-params are
+      // zero-dep ESLint-core complements.
+      "sonarjs/cognitive-complexity": ["error", 20],
+      "sonarjs/no-identical-functions": "error",
+      "max-depth": ["error", 4],
+      "max-params": ["error", 4],
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/no-inferrable-types": "error",

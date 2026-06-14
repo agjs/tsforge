@@ -133,6 +133,55 @@ function collectWorkflowFiles(root: string): string[] {
   return out.sort();
 }
 
+/** True for a Dockerfile-shaped name: `Dockerfile`, `Dockerfile.<x>`, `<x>.Dockerfile`. */
+function isDockerfileName(entry: string): boolean {
+  return (
+    entry === "Dockerfile" ||
+    entry.startsWith("Dockerfile.") ||
+    entry.endsWith(".Dockerfile")
+  );
+}
+
+/** Dockerfiles at the root and one directory level down (e.g. docker/, apps/*). */
+function collectDockerfiles(root: string): string[] {
+  const out: string[] = [];
+
+  const scanDir = (dir: string, relBase: string): void => {
+    let entries: string[];
+
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (IGNORE_SEGMENTS.has(entry)) {
+        continue;
+      }
+
+      const full = join(dir, entry);
+      const rel = relBase === "" ? entry : join(relBase, entry);
+
+      try {
+        const stat = statSync(full);
+
+        if (stat.isFile() && isDockerfileName(entry)) {
+          out.push(rel);
+        } else if (stat.isDirectory() && relBase === "") {
+          scanDir(full, entry); // one level only
+        }
+      } catch {
+        // Skip unreadable entries
+      }
+    }
+  };
+
+  scanDir(root, "");
+
+  return out.sort();
+}
+
 /** Parse package.json, returning null on error. */
 function parsePackageJson(root: string): Record<string, unknown> | null {
   const pkgPath = join(root, "package.json");
@@ -196,6 +245,7 @@ export function buildMetaRuleContext(
     sourceFiles: collectSourceFiles(root),
     configFiles: collectConfigFiles(root),
     workflowFiles: collectWorkflowFiles(root),
+    dockerfiles: collectDockerfiles(root),
     activePacks,
     readFile,
   };

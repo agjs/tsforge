@@ -1038,3 +1038,101 @@ test("buildMetaRuleContext: returns null for nonexistent files", () => {
 
   expect(content).toBeNull();
 });
+
+// === Dockerfile (container) Rules ===
+
+test("dockerfile-base-image-pinned: flags :latest and untagged FROM", () => {
+  writeFileSync(join(tempDir, "Dockerfile"), "FROM node:latest\nRUN echo hi\n");
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "dockerfile-base-image-pinned"
+  );
+
+  expect(violations.length).toBeGreaterThan(0);
+  expect(violations[0]?.severity).toBe("error");
+});
+
+test("dockerfile-base-image-pinned: passes a pinned tag and skips build stages", () => {
+  writeFileSync(
+    join(tempDir, "Dockerfile"),
+    "FROM node:24.3.0-bookworm AS build\nFROM build\nUSER node\n"
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "dockerfile-base-image-pinned"
+  );
+
+  expect(violations).toHaveLength(0);
+});
+
+test("dockerfile-non-root-user: flags a Dockerfile with no USER", () => {
+  writeFileSync(
+    join(tempDir, "Dockerfile"),
+    'FROM node:24.3.0-bookworm\nRUN echo hi\nCMD ["node", "x.js"]\n'
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "dockerfile-non-root-user"
+  );
+
+  expect(violations.length).toBeGreaterThan(0);
+});
+
+test("dockerfile-non-root-user: passes when a non-root USER is set", () => {
+  writeFileSync(
+    join(tempDir, "Dockerfile"),
+    'FROM node:24.3.0-bookworm\nUSER node\nCMD ["node", "x.js"]\n'
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "dockerfile-non-root-user"
+  );
+
+  expect(violations).toHaveLength(0);
+});
+
+test("dockerfile-no-secrets-in-env-arg: flags a secret literal in ENV", () => {
+  writeFileSync(
+    join(tempDir, "Dockerfile"),
+    "FROM node:24.3.0-bookworm\nENV OPENAI_API_KEY=sk-secret\nUSER node\n"
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "dockerfile-no-secrets-in-env-arg"
+  );
+
+  expect(violations.length).toBeGreaterThan(0);
+});
+
+test("dockerfile-no-secrets-in-env-arg: allows a non-secret ENV and a bare ARG", () => {
+  writeFileSync(
+    join(tempDir, "Dockerfile"),
+    "FROM node:24.3.0-bookworm\nENV NODE_ENV=production\nARG API_KEY\nUSER node\n"
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "dockerfile-no-secrets-in-env-arg"
+  );
+
+  expect(violations).toHaveLength(0);
+});
+
+test("dockerfiles: context collects root Dockerfile and one level down", () => {
+  mkdirSync(join(tempDir, "docker"), { recursive: true });
+  writeFileSync(join(tempDir, "Dockerfile"), "FROM node:24.3.0\nUSER node\n");
+  writeFileSync(
+    join(tempDir, "docker", "api.Dockerfile"),
+    "FROM node:24.3.0\nUSER node\n"
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+
+  expect(ctx.dockerfiles).toContain("Dockerfile");
+  expect(ctx.dockerfiles).toContain(join("docker", "api.Dockerfile"));
+});

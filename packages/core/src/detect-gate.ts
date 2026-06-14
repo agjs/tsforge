@@ -442,7 +442,8 @@ function packEnvPrefix(
 
 export function buildWebGate(
   framework: WebFramework,
-  packs: readonly string[] = WEB_PACKS
+  packs: readonly string[] = WEB_PACKS,
+  cwd: string = process.cwd()
 ): IGate {
   const template = WEB_TEMPLATES[framework];
   const ignores = template.eslintIgnore
@@ -478,8 +479,21 @@ export function buildWebGate(
   // fails fast.
   const stubs = `bun "${STUB_CHECK}" .`;
 
+  // Type-aware async correctness (no-floating-promises / no-misused-promises) —
+  // the CORE gate already runs this via typeAwareLintPart(), but the web gate
+  // historically did not, so a dropped `await` in a handler/effect/mutation passed.
+  // Splice it in after the syntactic lint when the scaffold has a tsconfig (it
+  // always does), reusing the SHIPPED strict.type-aware config verbatim.
+  const typeAware = existsSync(join(cwd, "tsconfig.json"))
+    ? `bun "${ESLINT_BIN}" --no-config-lookup -c "${TYPE_AWARE_CONFIG}" ${ignores} --format json .`.replace(
+        /\s+/g,
+        " "
+      )
+    : null;
+  const lintChain = typeAware === null ? lint : `${lint} && ${typeAware}`;
+
   return {
-    command: `${build} && ${tsc} && ${lint} && ${stubs} && ${format} && ${render}`,
+    command: `${build} && ${tsc} && ${lintChain} && ${stubs} && ${format} && ${render}`,
     label: `${template.label} (build + behaviour smoke)`,
   };
 }

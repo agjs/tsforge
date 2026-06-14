@@ -774,7 +774,7 @@ async function baseGate(
   }
 
   if (args.web) {
-    const web = buildWebGate("react");
+    const web = buildWebGate("react", undefined, args.dir);
 
     return { accept: web.command, gateLabel: web.label };
   }
@@ -980,7 +980,7 @@ async function repl(args: ICliArgs): Promise<number> {
       `\n  ↳ scaffolding a ${frameworkLabel(framework)} project\n`
     );
     await setUpWebProject(args.dir, framework);
-    session.setGate(buildWebGate(framework).command);
+    session.setGate(buildWebGate(framework, undefined, args.dir).command);
     session.setFix(buildWebFix(framework));
     session.setIncrementalCheck(buildWebTscCheck());
     session.guide(webGuidance(framework));

@@ -19,11 +19,12 @@ Tune meta-rule severity in [tsforge.config.json](/guardrails/config/) the same w
 | `tsconfig.json` | strict mode on, recommended flags, include paths exist |
 | Source text | no `@ts-ignore`, no `eslint-disable` comments |
 | CI workflows | pinned actions/runners, timeouts, explicit permissions, no unsafe `pull_request_target` |
+| Dockerfiles | pinned base image, non-root `USER`, no secret literals in `ENV`/`ARG` |
 | Next.js config | no wildcard image hostnames, instrumentation present |
 | Tests | service/util files have a matching `*.test.ts` sibling |
 | Drizzle (when pack active) | migrations checked in, no `drizzle-kit push` in CI |
 
-## All 26 rules
+## All 29 rules
 
 ### Supply chain
 
@@ -77,6 +78,16 @@ Both scan every hand-written `.ts`/`.tsx` under `src/`, `tests/`, and `scripts/`
 | `workflow-permissions-least-privilege` | warn on broad `contents: write` / `id-token: write` |
 | `no-pull-request-target-untrusted-checkout` | unsafe `pull_request_target` + PR head checkout |
 | `no-github-context-in-shell` | `${{ github.event` in `run:` without env indirection |
+
+### Container
+
+Active whenever a `Dockerfile` (`Dockerfile`, `Dockerfile.*`, or `*.Dockerfile`) exists at the project root or one level down — no-op otherwise.
+
+| ID | Checks |
+| --- | --- |
+| `dockerfile-base-image-pinned` | every `FROM` pins an explicit non-`latest` tag (or `@sha256:` digest); build-stage refs and `scratch` are exempt |
+| `dockerfile-non-root-user` | a non-root `USER` is declared so the container does not run as root |
+| `dockerfile-no-secrets-in-env-arg` | no secret-looking `ENV`/`ARG` literal (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`) — inject at runtime |
 
 ## Severity
 

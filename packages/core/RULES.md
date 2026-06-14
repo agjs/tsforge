@@ -38,6 +38,9 @@ Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` t
 
 ### Tier: framework
 
+- **ai-sdk/no-api-key-in-client** [ERROR]: Disallow constructing an AI provider client in a client component — it leaks the API key into the browser bundle. Call the model from a server route/action.
+- **ai-sdk/no-user-input-in-system-prompt** [WARN]: Warn when a system prompt is built by string interpolation/concatenation — splicing request data into the system role enables prompt injection. Keep the system prompt constant; pass user input as a user message.
+- **ai-sdk/require-completion-token-limit** [ERROR]: Require a token limit (maxTokens / max_tokens) on AI completion calls to bound runaway cost and latency.
 - **bullmq/job-name-must-be-constant** [WARN]: Disallow string-literal job names in `<queue>.add(name, ...)` calls — use a constant identifier so all consumers share one source of truth.
 - **bullmq/job-options-must-set-attempts** [ERROR]: Every `<queue>.add(...)` must configure `attempts` (per-call or via `defaultJobOptions`); when `attempts > 1`, also require `backoff`.
 - **bullmq/no-blocking-concurrency-zero** [ERROR]: Disallow `new Worker(name, processor, { concurrency: <numericLiteral ≤ 0> })` — non-positive concurrency blocks job processing.
@@ -183,13 +186,19 @@ Meta-rules enforce project structure and configuration invariants that ESLint ca
 - **workflow-runner-pinned** [WARN]: Workflows must pin runner images to an explicit OS version (e.g. ubuntu-24.04) instead of floating *-latest labels.
 - **workflow-timeout-required** [WARN]: GitHub Actions jobs require an explicit timeout-minutes (reusable-workflow calls exempt).
 
+### container
+
+- **dockerfile-base-image-pinned** [ERROR]: Dockerfile FROM instructions must pin an explicit non-latest tag (or a digest) so image builds are reproducible.
+- **dockerfile-no-secrets-in-env-arg** [ERROR]: Dockerfiles must not assign secret-looking ENV/ARG values (KEY/TOKEN/SECRET/PASSWORD) — they bake into image layers. Inject secrets at runtime.
+- **dockerfile-non-root-user** [ERROR]: Dockerfiles must declare a non-root USER so the container process does not run as root.
+
 ## Out of scope
 
 The following are intentionally deferred — wrong tool for the syntactic ESLint gate, or require cross-file analysis:
 
 - GraphQL/WebSocket/OpenAPI contract rules (until OpenAPI dep + parser)
-- Container/Kubernetes YAML hardening (future meta-rules when Dockerfile/k8s detected)
-- LLM/MCP security packs (opt-in when AI SDK deps detected)
+- Kubernetes / Compose YAML hardening (Dockerfile hardening now ships as container meta-rules)
+- MCP-server security pack (the AI-SDK pack now covers `ai`/`openai`/Anthropic clients)
 - FSD layer DAG / full authorization taint tracking
 - Lighthouse / bundle-analyzer CI gates
 - Violation ratcheting / baseline snapshots (Phase 5)

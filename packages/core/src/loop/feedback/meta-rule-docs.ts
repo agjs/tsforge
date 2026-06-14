@@ -86,4 +86,14 @@ export const META_RULE_DOCS: Record<string, string> = {
 
   "no-github-context-in-shell":
     "Pass github.event values through env: instead of interpolating them directly in run: shell scripts.",
+
+  // Container
+  "dockerfile-base-image-pinned":
+    "Pin every Dockerfile FROM to an explicit non-latest tag (e.g. node:24.3.0-bookworm) or a @sha256: digest; build-stage references and scratch are exempt.",
+
+  "dockerfile-non-root-user":
+    "Add a non-root USER instruction (after the install steps) so the container process does not run as root.",
+
+  "dockerfile-no-secrets-in-env-arg":
+    "Do not assign secret-looking ENV/ARG literals (names ending in _KEY/_TOKEN/_SECRET/_PASSWORD) — they bake into image layers; inject them at runtime via --env-file, a secret manager, or a BuildKit --secret mount.",
 };

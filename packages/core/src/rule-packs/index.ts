@@ -1,6 +1,7 @@
 import type { TSESLint } from "@typescript-eslint/utils";
 
 import type { IRulePack } from "./rule-packs.types";
+import { aiSdkPack } from "./ai-sdk";
 import { authorizationPack } from "./authorization";
 import { bullmqPack } from "./bullmq";
 import { commentHygienePack } from "./comment-hygiene";
@@ -25,6 +26,7 @@ import { PACK_REGISTRY } from "../stack-detection";
 
 /** Registry of all available rule packs, keyed by pack ID. */
 export const RULE_PACKS = {
+  "ai-sdk": aiSdkPack,
   authorization: authorizationPack,
   bullmq: bullmqPack,
   "code-flow": codeFlowPack,
