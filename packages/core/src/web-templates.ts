@@ -317,6 +317,12 @@ export const Route = createRootRoute({
 });
 `;
 
+// The placeholder home carries `data-tsforge-stub` (the SAME sentinel scaffold_routes
+// stubs use) so the gate's stub-check FAILS until the model replaces it with the real
+// home. Without this, an unbuilt app — just the scaffold + maybe some types — passes
+// the gate (vite builds, this page renders non-blank, no scaffold_routes stubs to
+// catch) and is falsely declared "done". The model removes the marker when it builds
+// the real home.
 const INDEX_ROUTE_TSX = `import { createFileRoute } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
@@ -327,7 +333,7 @@ export const Route = createFileRoute("/")({
 
 function Home() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background text-foreground">
+    <main data-tsforge-stub className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background text-foreground">
       <h1 className="text-3xl font-bold">app</h1>
       <Button>Get started</Button>
     </main>

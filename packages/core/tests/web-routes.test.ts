@@ -9,6 +9,17 @@ import {
   routePathFromFile,
   crawlableRoutePaths,
 } from "../src/web-routes";
+import { WEB_TEMPLATES } from "../src/web-templates";
+
+test("scaffolded react home is a stub (data-tsforge-stub) so an unbuilt app fails the gate", () => {
+  // Regression: without the marker, the stock scaffold home passes the gate (vite
+  // builds, the page renders, no scaffold_routes stubs to catch) and an unbuilt app
+  // is falsely declared "done". stub-check greps src/routes/*.tsx for this sentinel.
+  const home = WEB_TEMPLATES.react.files["src/routes/index.tsx"];
+
+  expect(home).toBeDefined();
+  expect(home).toContain("data-tsforge-stub");
+});
 
 test("path → TanStack file-based filename (index, nested dot, $param, create)", () => {
   expect(routeFileName("/")).toBe("src/routes/index.tsx");
