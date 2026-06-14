@@ -1,5 +1,22 @@
 import { test, expect } from "bun:test";
-import { isInScope, writable, normalizeWorkspacePath } from "../src/lib/scope";
+import {
+  isInScope,
+  isVendored,
+  writable,
+  normalizeWorkspacePath,
+} from "../src/lib/scope";
+
+test("isVendored blocks SDK/UI/mock/generated files, allows model files", () => {
+  expect(isVendored("src/lib/use-resource.ts")).toBe(true);
+  expect(isVendored("src/components/ui/button.tsx")).toBe(true);
+  expect(isVendored("src/mocks/db.ts")).toBe(true);
+  expect(isVendored("src/mocks/browser.ts")).toBe(true);
+  expect(isVendored("src/routeTree.gen.ts")).toBe(true);
+  // Model-owned files are NOT vendored.
+  expect(isVendored("src/mocks/handlers.ts")).toBe(false);
+  expect(isVendored("src/views/Deals/index.tsx")).toBe(false);
+  expect(isVendored("src/views/Deals/deals.constants.ts")).toBe(false);
+});
 
 test("matches exact paths and globs; empty patterns match nothing", () => {
   expect(isInScope("todo.ts", ["todo.ts"])).toBe(true);

@@ -389,20 +389,11 @@ async function crawlRoutes(
   for (const route of routes) {
     try {
       await page.goto(`${base}${route}`, { waitUntil: "load", timeout });
-      // Let the client router + first paint settle before the blank check (the
-      // shell/nav renders immediately, so this only flags genuinely dead routes).
-      await page.waitForTimeout(150);
 
-      const blank = await page.evaluate(() => {
-        const root =
-          document.querySelector("#root") ??
-          document.querySelector("#app") ??
-          document.body;
-
-        return root.children.length === 0 || root.textContent.trim() === "";
-      });
-
-      if (blank) {
+      // Poll for first paint before the blank check, so a route that mounts
+      // ASYNCHRONOUSLY (after MSW's worker.start() resolves, or any await-before-
+      // render bootstrap) isn't misjudged dead. Only a genuinely empty root fails.
+      if (!(await waitForMount(page))) {
         errors.push(`route ${route} rendered blank`);
         continue;
       }
@@ -433,15 +424,30 @@ const SMOKE_CLICK_LIMIT = 5;
  * or console error surfaces via the page handlers wired in renderCheck. No per-app
  * knowledge, so it never needs the model to author (flaky) checks.
  */
-async function runSmoke(page: Page, errors: string[]): Promise<void> {
-  const mounted = await page.evaluate(() => {
-    const root =
-      document.querySelector("#root") ??
-      document.querySelector("#app") ??
-      document.body;
+/** Wait for the app to paint content into its root — polls up to `timeoutMs`, so an
+ *  app that renders ASYNCHRONOUSLY (after MSW's worker.start() resolves, or any
+ *  await-before-mount bootstrap) is not misjudged "blank" by a check that fires the
+ *  instant `load` does. Returns true once mounted, false on timeout. */
+async function waitForMount(page: Page, timeoutMs = 5000): Promise<boolean> {
+  return page
+    .waitForFunction(
+      () => {
+        const root =
+          document.querySelector("#root") ??
+          document.querySelector("#app") ??
+          document.body;
 
-    return root.children.length > 0 && root.textContent.trim() !== "";
-  });
+        return root.children.length > 0 && root.textContent.trim() !== "";
+      },
+      undefined,
+      { timeout: timeoutMs, polling: 100 }
+    )
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function runSmoke(page: Page, errors: string[]): Promise<void> {
+  const mounted = await waitForMount(page);
 
   if (!mounted) {
     errors.push("app did not mount: root is blank after load");

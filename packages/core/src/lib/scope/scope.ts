@@ -1,5 +1,5 @@
 import { resolve, relative } from "node:path";
-import { SCRATCH_PREFIX } from "./scope.constants";
+import { SCRATCH_PREFIX, VENDORED_PATTERNS } from "./scope.constants";
 
 /**
  * Normalize a model-supplied path against the workspace root, fixing the common
@@ -25,6 +25,13 @@ export function normalizeWorkspacePath(cwd: string, file: string): string {
 /** True when `file` matches any of the glob `patterns` (the editable scope). */
 export function isInScope(file: string, patterns: string[]): boolean {
   return patterns.some((pattern) => new Bun.Glob(pattern).match(file));
+}
+
+/** True when `file` is a VENDORED, harness-authored file the model must not
+ *  touch (`src/lib/**`, `src/components/ui/**`, the MSW machinery, `*.gen.ts`).
+ *  Expects the workspace-relative form (`normalizeWorkspacePath` first). */
+export function isVendored(file: string): boolean {
+  return VENDORED_PATTERNS.some((pattern) => new Bun.Glob(pattern).match(file));
 }
 
 /** A file the model may write: its editable scope, OR a throwaway scratch file.

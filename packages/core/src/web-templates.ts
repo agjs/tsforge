@@ -35,6 +35,9 @@ const PRETTIER_IGNORE = `node_modules
 dist
 src/components/ui
 src/lib
+src/mocks/db.ts
+src/mocks/browser.ts
+public/mockServiceWorker.js
 *.gen.ts
 `;
 
@@ -71,6 +74,7 @@ const REACT_PACKAGE_JSON = `{
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "msw": "^2.7.0",
     "tailwindcss": "^4.0.0",
     "tw-animate-css": "^1.0.0",
     "typescript": "^5.7.0",
@@ -336,6 +340,7 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+import { worker } from "./mocks/browser";
 import { routeTree } from "./routeTree.gen";
 import "./index.css";
 
@@ -355,13 +360,23 @@ if (rootElement === null) {
   throw new Error("missing #root element");
 }
 
-createRoot(rootElement).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
-  </StrictMode>
-);
+const root = createRoot(rootElement);
+
+// Start the MSW mock API BEFORE mounting — there is no real backend, so the app's
+// fetches must be intercepted from the very first render (in dev AND in the build).
+async function start(): Promise<void> {
+  await worker.start({ onUnhandledRequest: "bypass", quiet: true });
+
+  root.render(
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </StrictMode>,
+  );
+}
+
+void start();
 `;
 
 // A STUB of TanStack Router's generated route tree, registering only the stock "/"
@@ -451,7 +466,7 @@ const REACT_GUIDANCE = [
   "        (NO `DealsTable` around <Table> — render <Table> with deal columns instead).",
   "      – <feature>.types.ts — the feature's interfaces/types (I-prefixed).",
   "      – <feature>.constants.ts — its `as const` registries/label maps/column specs.",
-  "      – (NO <feature>.hooks.ts query wrapper — the SDK's useCollection IS the data",
+  "      – (NO <feature>.hooks.ts query wrapper — the SDK's useResource IS the data",
   "        hook; add a hook file ONLY for genuine derived/computed state, never to fetch.)",
   "  • A component .tsx (index.tsx or components/<X>.tsx) = imports + the component,",
   "    nothing else. A constant (label map, column spec) → <feature>.constants.ts. A type",
@@ -515,9 +530,9 @@ const REACT_GUIDANCE = [
   "  • UI BUILDING BLOCKS — call `scaffold_ui` ONCE near the start to generate what",
   "    the app needs, themed to its vibe (minimal | warm | futuristic, from the",
   "    user's request). Two tiers, BOTH from @/components/ui: PRIMITIVES (button,",
-  "    card, input, label, textarea, select, badge, separator, table) AND COMPOSITION",
-  "    BLOCKS — app-shell (sidebar+nav layout, renders <Outlet/>), page-header, field",
-  "    (label+control+error), form-actions, toolbar, empty-state. COMPOSE these:",
+  "    card, input, label, textarea, select, badge, separator, skeleton, table) AND",
+  "    COMPOSITION BLOCKS — app-shell (sidebar+nav layout, renders <Outlet/>), page-",
+  "    header, field (label+control+error), form-actions, toolbar, empty-state. COMPOSE:",
   "    layout = app-shell; a list view = page-header + toolbar + table + empty-state;",
   "    a form = field × N + form-actions. NEVER hand-roll a component OR this view",
   "    chrome — it wastes time and breaks theme coherence. Write only feature wiring.",
@@ -525,14 +540,28 @@ const REACT_GUIDANCE = [
   "    => d.id} />`, where `dealColumns: readonly IColumn<IDeal>[]` is a feature CONSTANT",
   "    (in <feature>.constants.ts). Each column is `{ header, cell: (row) => …, className? }`.",
   "    Do NOT build a per-feature table component — pass columns to the one <Table>.",
-  "  • HARNESS SDK — USE IT, do NOT hand-roll the data layer (this is the biggest",
-  "    speed+quality lever). A tested generic toolkit is already in src/lib/:",
-  "      – createCollection(key, SEED) [from @/lib/collection] IS a feature's whole",
-  "        service: typed async CRUD + Result + latency. <feature>.service.ts (in the",
-  "        view folder) is ONE line: `export const items = createCollection('items', SEED_ITEMS)`.",
-  "      – useCollection(collection) [from @/lib/use-collection] IS the data hook:",
-  "        cached list, isLoading/error, and create/update/remove mutations WITH",
-  "        optimistic updates + rollback. Do NOT write a <feature>.hooks.ts query wrapper.",
+  "  • LOADING STATES ARE SKELETONS — every `isLoading`/`isPending` branch renders",
+  "    `<Skeleton/>` (from @/components/ui/skeleton) SHAPED like the content it stands",
+  "    in for: skeleton rows for a table, skeleton cards for a grid, a short skeleton",
+  '    line for a heading. NEVER render `"Loading…"`/`"Loading"` text and NEVER a',
+  "    spinner — the gate REJECTS loading text (no-loading-text-use-skeleton). Request",
+  "    `skeleton` from scaffold_ui. Pattern: `if (isLoading) return <Skeleton className=",
+  '    "h-9 w-full" />;` (size with Tailwind h-/w- classes; render several for a list).',
+  "  • DATA LAYER — a REAL mock API (MSW), do NOT hand-roll it (biggest speed+quality",
+  "    lever). The app does REAL `fetch()` to REST endpoints intercepted in-browser by",
+  "    Mock Service Worker — already wired and started in src/main.tsx. Two vendored",
+  "    generics (in src/lib + src/mocks; NEVER edit them — a type error involving them",
+  "    is a wrong CALL SITE) give you the whole loop in two lines per feature:",
+  "      – REGISTER the endpoint: in src/mocks/handlers.ts add ONE line —",
+  "        `...mockResource('/api/deals', SEED_DEALS)` [mockResource from @/mocks/db].",
+  "        It serves GET (list), GET /:id, POST, PATCH /:id, DELETE /:id over an in-",
+  "        memory faker-seeded store. handlers.ts is the ONLY mock file you edit.",
+  "      – CONSUME it: `const { items, isLoading, error, mutations } =",
+  "        useResource<IDeal>('/api/deals')` [useResource from @/lib/use-resource] IS",
+  "        the data hook — cached list, isLoading/error, and create/update/remove",
+  "        mutations WITH optimistic updates + rollback. Pass the SAME path string you",
+  "        registered. Do NOT write a <feature>.hooks.ts query wrapper or call fetch",
+  "        yourself — useResource is the only data access.",
   "      – useForm({ initial, validate, submit }) [from @/lib/use-form] IS form state:",
   "        values, per-field errors, async submit status. Do NOT hand-roll form state.",
   "      – SEED DATA — GENERATE with faker. NEVER hand-write literal arrays, and NEVER",
@@ -551,9 +580,11 @@ const REACT_GUIDANCE = [
   "          `    ['like','reply','follow']), from: faker.helpers.arrayElement(SEED_USERS),`",
   "          `    text: faker.lorem.sentence() }), { count: 15 });`",
   "        No `i`, no `arr[i % len]`, no undefined-guards, no parser — the type system +",
-  "        the factory return type ARE the validation. There is NO backend/localStorage,",
-  "        so NEVER write a runtime parser/validator (no parse<X>, no pObject, no `typeof`",
-  "        guards, no `as` casts).",
+  "        the factory return type ARE the validation. Define each SEED in the view's",
+  "        <feature>.constants.ts and pass it to mockResource. The mock API echoes your",
+  "        typed SEED and useResource<T> types the response, so the contract is proven",
+  "        end-to-end — NEVER write a runtime parser/validator (no parse<X>, no pObject,",
+  "        no `typeof` guards, no `as` casts) even though it now crosses a fetch.",
   "      – Result/ok/err [from @/lib/result] for any fallible op.",
   "      – objectKeys(x)/objectEntries(x) [from @/lib/object] for TYPED keys of an",
   "        `as const` object. NEVER write `Object.keys(x) as (keyof typeof x)[]` —",
@@ -569,10 +600,11 @@ const REACT_GUIDANCE = [
   "        `as const` and then index it `MAP[key as keyof typeof MAP]` — that `as` is",
   "        REJECTED. The map's KEY type, not a cast, is what makes the lookup type-check.",
   "    So a feature is mostly: src/views/<Feature>/{<feature>.types.ts + a `satisfies`-typed",
-  "    SEED const + one-line createCollection + index.tsx + components/} calling",
-  "    useCollection/useForm. Far fewer lines,",
-  "    fewer bugs. Only write a custom service/hook if the SDK genuinely can't express",
-  "    it. A QueryClientProvider is already wired in src/main.tsx.",
+  "    SEED const in <feature>.constants.ts + index.tsx + components/}, plus ONE",
+  "    `mockResource('/api/x', SEED)` line in src/mocks/handlers.ts, calling",
+  "    useResource/useForm. Far fewer lines, fewer bugs. Only write a custom hook if the",
+  "    SDK genuinely can't express it. QueryClientProvider + the MSW worker are already",
+  "    wired in src/main.tsx.",
   "  • Style with Tailwind classes via className using theme tokens",
   "    (bg-background, text-foreground, border-border), not raw colors.",
   "  • Need charts? `recharts` is installed — import from 'recharts'. Need drag-and-",
@@ -758,87 +790,67 @@ export function sortBy<T extends object>(
 }
 `;
 
-const SDK_COLLECTION_TS = `// createCollection — one tested generic that IS a domain's data layer: typed async
-// CRUD over an in-memory store, seeded from a typed const, with simulated latency +
-// a Result return. A domain's service becomes one line:
-//   export const items = createCollection("items", SEED_ITEMS)
+const SDK_API_TS = `// The typed fetch client — every data op goes over a REAL network call to a REST
+// endpoint, intercepted in-browser by MSW (see src/mocks/). Returns Result instead
+// of throwing, so callers handle failure explicitly. This is vendored + lint-exempt
+// (the boundary cast on the JSON body lives here, ONCE — your code never casts).
 import type { Result } from "@/lib/result";
 import { err, ok } from "@/lib/result";
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown
+): Promise<Result<T, string>> {
+  try {
+    const res = await fetch(path, {
+      method,
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      return err(method + " " + path + " failed: " + String(res.status));
+    }
+
+    if (res.status === 204) {
+      return ok(undefined as T);
+    }
+
+    return ok((await res.json()) as T);
+  } catch (error) {
+    return err(error instanceof Error ? error.message : "network error");
+  }
+}
+
+export function apiGet<T>(path: string): Promise<Result<T, string>> {
+  return request<T>("GET", path);
+}
+
+export function apiPost<T>(path: string, body: unknown): Promise<Result<T, string>> {
+  return request<T>("POST", path, body);
+}
+
+export function apiPatch<T>(path: string, body: unknown): Promise<Result<T, string>> {
+  return request<T>("PATCH", path, body);
+}
+
+export function apiDelete(path: string): Promise<Result<true, string>> {
+  return request<true>("DELETE", path);
+}
+`;
+
+const SDK_USE_RESOURCE_TS = `// useResource — the TanStack Query layer for a REST resource, once: cached list,
+// loading/error state, and create/update/remove mutations with OPTIMISTIC updates
+// + rollback + invalidation built in. Pass the resource's base path (the same one
+// you registered with mockResource in src/mocks/handlers.ts):
+//   const { items, isLoading, mutations } = useResource<IDeal>("/api/deals")
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 
 export interface IEntity {
   readonly id: string;
 }
-
-export interface ICollection<T extends IEntity> {
-  readonly key: string;
-  list: () => Promise<Result<readonly T[], string>>;
-  get: (id: string) => Promise<Result<T, string>>;
-  create: (draft: Omit<T, "id">) => Promise<Result<T, string>>;
-  update: (id: string, patch: Partial<Omit<T, "id">>) => Promise<Result<T, string>>;
-  remove: (id: string) => Promise<Result<true, string>>;
-}
-
-const LATENCY_MS = 120;
-
-function delay(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, LATENCY_MS));
-}
-
-export function createCollection<T extends IEntity>(
-  key: string,
-  seed: readonly T[]
-): ICollection<T> {
-  const store = new Map<string, T>();
-  for (const entity of seed) {
-    store.set(entity.id, entity);
-  }
-
-  let counter = store.size;
-  const nextId = (): string => {
-    counter += 1;
-    return key + "-" + String(counter);
-  };
-
-  return {
-    key,
-    async list() {
-      await delay();
-      return ok([...store.values()]);
-    },
-    async get(id) {
-      await delay();
-      const found = store.get(id);
-      return found === undefined ? err(key + " " + id + " not found") : ok(found);
-    },
-    async create(draft) {
-      await delay();
-      const entity = { ...draft, id: nextId() } as T;
-      store.set(entity.id, entity);
-      return ok(entity);
-    },
-    async update(id, patch) {
-      await delay();
-      const current = store.get(id);
-      if (current === undefined) {
-        return err(key + " " + id + " not found");
-      }
-      const updated = { ...current, ...patch };
-      store.set(id, updated);
-      return ok(updated);
-    },
-    async remove(id) {
-      await delay();
-      return store.delete(id) ? ok(true) : err(key + " " + id + " not found");
-    },
-  };
-}
-`;
-
-const SDK_USE_COLLECTION_TS = `// useCollection — the TanStack Query layer for a collection, once: cached list,
-// loading/error state, and create/update/remove mutations with OPTIMISTIC updates
-// + rollback + invalidation built in. A domain's hooks file becomes one line.
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ICollection, IEntity } from "@/lib/collection";
 
 export interface IMutationApi<T extends IEntity> {
   create: (draft: Omit<T, "id">) => void;
@@ -847,7 +859,7 @@ export interface IMutationApi<T extends IEntity> {
   isPending: boolean;
 }
 
-export interface ICollectionApi<T extends IEntity> {
+export interface IResourceApi<T extends IEntity> {
   items: readonly T[];
   isLoading: boolean;
   error: string | undefined;
@@ -863,13 +875,13 @@ async function unwrap<T>(promise: Promise<{ ok: true; value: T } | { ok: false; 
   return result.value;
 }
 
-export function useCollection<T extends IEntity>(collection: ICollection<T>): ICollectionApi<T> {
+export function useResource<T extends IEntity>(path: string): IResourceApi<T> {
   const client = useQueryClient();
-  const queryKey = [collection.key];
+  const queryKey = [path];
 
   const query = useQuery({
     queryKey,
-    queryFn: () => unwrap(collection.list()),
+    queryFn: () => unwrap(apiGet<readonly T[]>(path)),
   });
 
   const invalidate = (): void => {
@@ -877,13 +889,13 @@ export function useCollection<T extends IEntity>(collection: ICollection<T>): IC
   };
 
   const create = useMutation({
-    mutationFn: (draft: Omit<T, "id">) => unwrap(collection.create(draft)),
+    mutationFn: (draft: Omit<T, "id">) => unwrap(apiPost<T>(path, draft)),
     onSettled: invalidate,
   });
 
   const update = useMutation({
     mutationFn: (input: { readonly id: string; readonly patch: Partial<Omit<T, "id">> }) =>
-      unwrap(collection.update(input.id, input.patch)),
+      unwrap(apiPatch<T>(path + "/" + input.id, input.patch)),
     onMutate: async (input) => {
       await client.cancelQueries({ queryKey });
       const previous = client.getQueryData<readonly T[]>(queryKey);
@@ -904,7 +916,7 @@ export function useCollection<T extends IEntity>(collection: ICollection<T>): IC
   });
 
   const remove = useMutation({
-    mutationFn: (id: string) => unwrap(collection.remove(id)),
+    mutationFn: (id: string) => unwrap(apiDelete(path + "/" + id)),
     onSettled: invalidate,
   });
 
@@ -923,6 +935,79 @@ export function useCollection<T extends IEntity>(collection: ICollection<T>): IC
     },
   };
 }
+`;
+
+const SDK_MOCKS_DB_TS = `// mockResource — one tested generic that IS a REST endpoint set: in-memory CRUD
+// over a faker-seeded store, exposed as MSW handlers. Registering a resource is one
+// line in src/mocks/handlers.ts:
+//   ...mockResource("/api/deals", SEED_DEALS)
+// It serves GET (list), GET /:id, POST, PATCH /:id, DELETE /:id. Vendored + lint-
+// exempt (the boundary casts on request bodies live here, ONCE). NEVER edit this.
+import { http, HttpResponse, type RequestHandler } from "msw";
+import { faker } from "@faker-js/faker";
+
+export interface IEntity {
+  readonly id: string;
+}
+
+export function mockResource<T extends IEntity>(
+  path: string,
+  seed: readonly T[]
+): RequestHandler[] {
+  const store = new Map<string, T>();
+  for (const entity of seed) {
+    store.set(entity.id, entity);
+  }
+
+  return [
+    http.get(path, () => HttpResponse.json([...store.values()])),
+    http.get(path + "/:id", ({ params }) => {
+      const found = store.get(String(params.id));
+      return found === undefined
+        ? new HttpResponse(null, { status: 404 })
+        : HttpResponse.json(found);
+    }),
+    http.post(path, async ({ request }) => {
+      const draft = (await request.json()) as Omit<T, "id">;
+      const entity = { ...draft, id: faker.string.uuid() } as T;
+      store.set(entity.id, entity);
+      return HttpResponse.json(entity, { status: 201 });
+    }),
+    http.patch(path + "/:id", async ({ params, request }) => {
+      const current = store.get(String(params.id));
+      if (current === undefined) {
+        return new HttpResponse(null, { status: 404 });
+      }
+      const patch = (await request.json()) as Partial<Omit<T, "id">>;
+      const updated = { ...current, ...patch };
+      store.set(updated.id, updated);
+      return HttpResponse.json(updated);
+    }),
+    http.delete(path + "/:id", ({ params }) => {
+      const existed = store.delete(String(params.id));
+      return new HttpResponse(null, { status: existed ? 204 : 404 });
+    }),
+  ];
+}
+`;
+
+const SDK_MOCKS_BROWSER_TS = `// The MSW worker, wired from your handlers. Vendored — NEVER edit. Register your
+// resources in src/mocks/handlers.ts; main.tsx starts this before the app mounts.
+import { setupWorker } from "msw/browser";
+import { handlers } from "@/mocks/handlers";
+
+export const worker = setupWorker(...handlers);
+`;
+
+const MOCKS_HANDLERS_TS = `// YOUR mock API. Register each resource here with mockResource (one line per
+// resource), passing your faker-generated SEED. This is the ONLY mock file you
+// edit — src/mocks/db.ts and src/mocks/browser.ts are vendored.
+//   import { mockResource } from "@/mocks/db";
+//   import { SEED_DEALS } from "@/views/Deals/deals.constants";
+//   export const handlers: RequestHandler[] = [...mockResource("/api/deals", SEED_DEALS)];
+import { type RequestHandler } from "msw";
+
+export const handlers: RequestHandler[] = [];
 `;
 
 const SDK_USE_FORM_TS = `// useForm — declarative form state: values, per-field errors, async submit with
@@ -995,9 +1080,12 @@ export const WEB_TEMPLATES: Record<WebFramework, IWebTemplate> = {
       "src/lib/result.ts": SDK_RESULT_TS,
       "src/lib/object.ts": SDK_OBJECT_TS,
       "src/lib/sort.ts": SDK_SORT_TS,
-      "src/lib/collection.ts": SDK_COLLECTION_TS,
-      "src/lib/use-collection.ts": SDK_USE_COLLECTION_TS,
+      "src/lib/api.ts": SDK_API_TS,
+      "src/lib/use-resource.ts": SDK_USE_RESOURCE_TS,
       "src/lib/use-form.ts": SDK_USE_FORM_TS,
+      "src/mocks/db.ts": SDK_MOCKS_DB_TS,
+      "src/mocks/browser.ts": SDK_MOCKS_BROWSER_TS,
+      "src/mocks/handlers.ts": MOCKS_HANDLERS_TS,
       "src/index.css": REACT_INDEX_CSS,
       "src/components/ui/button.tsx": BUTTON_TSX,
       "src/routes/__root.tsx": ROOT_ROUTE_TSX,
@@ -1005,7 +1093,14 @@ export const WEB_TEMPLATES: Record<WebFramework, IWebTemplate> = {
       "src/routeTree.gen.ts": ROUTE_TREE_GEN,
       "src/main.tsx": REACT_MAIN_TSX,
     },
-    eslintIgnore: ["src/components/ui/**", "src/lib/**", "**/*.gen.ts"],
+    eslintIgnore: [
+      "src/components/ui/**",
+      "src/lib/**",
+      "src/mocks/db.ts",
+      "src/mocks/browser.ts",
+      "public/mockServiceWorker.js",
+      "**/*.gen.ts",
+    ],
     guidance: REACT_GUIDANCE,
   },
   vanilla: {

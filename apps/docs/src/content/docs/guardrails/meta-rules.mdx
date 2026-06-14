@@ -45,7 +45,9 @@ Tune meta-rule severity in [tsforge.config.json](/guardrails/config/) the same w
 | ID | Checks |
 | --- | --- |
 | `no-eslint-disable-comments` | no inline disables |
-| `no-ts-suppressions` | no `@ts-ignore` / `@ts-expect-error` |
+| `no-ts-suppressions` | no `@ts-ignore` / `@ts-expect-error` / `@ts-nocheck` |
+
+Both scan every hand-written `.ts`/`.tsx` under `src/`, `tests/`, and `scripts/`. Generated `*.gen.ts` files are **skipped** — codegen output (e.g. TanStack's route tree) legitimately ships with `/* eslint-disable */` + `@ts-nocheck`, and the model can't write `*.gen.ts` anyway (it's [vendored/read-only](/edit/engine/#vendored--read-only-scope)), so the ban stays airtight everywhere the model actually writes.
 
 ### Config
 

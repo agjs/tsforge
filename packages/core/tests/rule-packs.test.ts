@@ -1950,10 +1950,61 @@ describe("react-component-architecture pack", () => {
       "no-derived-state-in-effect",
       "no-inline-jsx-functions",
       "no-jsx-computation",
+      "no-loading-text-use-skeleton",
       "no-nested-component",
       "no-react-fc",
       "no-state-in-component-body",
     ]);
+  });
+
+  test("no-loading-text-use-skeleton: flags a 'Loading…' text node", () => {
+    const code = `export function View() { return <div>Loading...</div>; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-loading-text-use-skeleton",
+      code,
+      "src/views/Deals/index.tsx"
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.messageId).toBe("useSkeleton");
+  });
+
+  test("no-loading-text-use-skeleton: flags bare 'Loading' and the ellipsis form", () => {
+    for (const text of ["Loading", "Loading…", "loading...", "LOADING"]) {
+      const messages = lint(
+        "react-component-architecture",
+        "no-loading-text-use-skeleton",
+        `export function View() { return <span>${text}</span>; }`,
+        "src/views/Deals/index.tsx"
+      );
+
+      expect(messages).toHaveLength(1);
+    }
+  });
+
+  test("no-loading-text-use-skeleton: passes when rendering a Skeleton", () => {
+    const code = `export function View() { return <Skeleton className="h-8 w-full" />; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-loading-text-use-skeleton",
+      code,
+      "src/views/Deals/index.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("no-loading-text-use-skeleton: a sentence merely containing 'loading' is fine", () => {
+    const code = `export function View() { return <p>Avoid loading the page twice.</p>; }`;
+    const messages = lint(
+      "react-component-architecture",
+      "no-loading-text-use-skeleton",
+      code,
+      "src/views/Deals/index.tsx"
+    );
+
+    expect(messages).toHaveLength(0);
   });
 
   test("component-folder-structure: rule exists and is callable", () => {

@@ -50,7 +50,14 @@ function collectSourceFiles(root: string): string[] {
         } else if (stat.isFile()) {
           const ext = extname(entry);
 
-          if (ext === ".ts" || ext === ".tsx") {
+          // Skip generated output (*.gen.ts — e.g. TanStack's route tree). It
+          // ships with `/* eslint-disable */` + `@ts-nocheck`, which the
+          // source-text meta-rules (no-eslint-disable-comments,
+          // no-ts-suppressions) would otherwise flag. The model cannot write
+          // *.gen.ts (vendored scope), so the only such file is harness/codegen
+          // output — hand-written files stay fully covered, keeping the bypass
+          // ban airtight where it matters.
+          if ((ext === ".ts" || ext === ".tsx") && !entry.endsWith(".gen.ts")) {
             out.push(rel);
           }
         }

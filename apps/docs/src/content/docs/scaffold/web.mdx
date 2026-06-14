@@ -34,9 +34,17 @@ Do not use this on CLI-only projects or existing repos you are patching.
 
 Generates themed UI primitives under `src/components/ui/` and design tokens in `src/index.css`.
 
-Themes: `minimal`, `warm`, `futuristic`. Primitives include button, card, input, table, and layout blocks (app-shell, page-header, empty-state, etc.).
+Themes: `minimal`, `warm`, `futuristic`. Primitives include button, card, input, table, `skeleton`, and layout blocks (app-shell, page-header, empty-state, etc.).
 
 Call once with everything the app needs. Do not hand-roll base components the scaffold already provides.
+
+**Loading states are skeletons.** Every `isLoading`/`isPending` branch renders a `<Skeleton/>` shaped like the content it stands in for (rows, cards, a heading line) — never a spinner and never `"Loading…"` text. The gate enforces this: the [`no-loading-text-use-skeleton`](/guardrails/rule-packs/#react-component-architecture) rule rejects loading-text nodes.
+
+```tsx
+if (isLoading) {
+  return <Skeleton className="h-9 w-full" />;
+}
+```
 
 The `table` primitive is **column-driven** — it _is_ the table, not a base for per-feature wrappers. Pass typed rows and a column spec; there is no `DealsTable`/`UsersTable`:
 
@@ -58,9 +66,11 @@ src/views/<Feature>/
   index.tsx              the view — the composition root
   components/<X>.tsx      feature components (one per file)
   <feature>.types.ts     the feature's interfaces (I-prefixed)
-  <feature>.constants.ts  its label maps, column specs, seed data
-src/components/ui/         shared, feature-agnostic primitives (scaffold_ui)
-src/lib/<name>.ts          pure helpers (formatCurrency, timeAgo)
+  <feature>.constants.ts  its label maps, column specs, faker seed data
+src/components/ui/         shared, feature-agnostic primitives (scaffold_ui) — vendored, read-only
+src/lib/                   vendored SDK (api, use-resource, result, sort, …) — read-only
+src/mocks/handlers.ts      YOUR mock API — register resources here
+src/mocks/db.ts            vendored mockResource factory — read-only
 src/routes/<feature>.tsx   thin TanStack route shell → renders the view
 ```
 
@@ -68,6 +78,26 @@ Two hard rules the gate enforces (`component-file-purity`, `component-folder-str
 
 - A component `.tsx` contains **only imports and the component**. Types go to `<feature>.types.ts`, constants to `<feature>.constants.ts`, pure helpers to `src/lib` — never inline above a component.
 - **No gratuitous wrappers.** Compose the shared primitives directly in the view; only create a `components/<X>.tsx` when a piece has real local state, is reused, or is large enough to stand alone.
+
+**Vendored files are read-only.** `src/lib/**`, `src/components/ui/**`, `src/mocks/db.ts`, `src/mocks/browser.ts`, and any `*.gen.ts` are tested, already-type-correct harness files — the model cannot edit or create them (the edit/create tools reject the write). A type error involving one is a wrong _call site_, not a library bug. The only mock file you edit is `src/mocks/handlers.ts`. See [Vendored & read-only scope](/edit/engine/#vendored--read-only-scope).
+
+## Data layer (mock API)
+
+React apps do **real `fetch()`** to REST endpoints mocked in the browser by [MSW](https://mswjs.io) (Mock Service Worker), seeded with faker — no separate backend, but a real network boundary so the app is backend-ready. The worker is generated at install (`msw init`) and started in `src/main.tsx` before the app mounts.
+
+A feature's data layer is two lines:
+
+```ts
+// src/mocks/handlers.ts — register the endpoint (GET list/:id, POST, PATCH, DELETE)
+export const handlers: RequestHandler[] = [...mockResource("/api/deals", SEED_DEALS)];
+```
+
+```tsx
+// in the view — consume it (cached list, isLoading/error, optimistic mutations)
+const { items, isLoading, error, mutations } = useResource<IDeal>("/api/deals");
+```
+
+`useResource<T>(path)` (from `@/lib/use-resource`) and `mockResource(path, seed)` (from `@/mocks/db`) are the vendored generics — do **not** hand-roll fetch wrappers or a query layer, and do **not** write runtime validators (the typed seed + `useResource<T>` prove the shape end-to-end).
 
 ### scaffold_routes
 

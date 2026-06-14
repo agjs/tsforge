@@ -104,6 +104,7 @@ Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` t
 - **react-component-architecture/no-cross-feature-imports** [ERROR]: Prevent imports across different features
 - **react-component-architecture/no-derived-state-in-effect** [WARN]: Disallow setting local state inside useEffect when the value can be derived during render (or memoized with useMemo).
 - **react-component-architecture/no-jsx-computation** [ERROR]: Move complex computations out of JSX into hooks or helper functions
+- **react-component-architecture/no-loading-text-use-skeleton** [ERROR]: Loading states must render a <Skeleton/>, not loading text or a spinner
 - **react-component-architecture/no-nested-component** [ERROR]: Disallow declaring React components inside another component body — nested components reset state on every parent render.
 - **react-component-architecture/no-react-fc** [ERROR]: Disallow React.FC / FunctionComponent — type props explicitly on the function parameter instead.
 - **structured-logging/caught-error-log-requires-cause** [ERROR]: When logging a caught error, include a `cause` field in the structured payload so downstream tools preserve the error chain.

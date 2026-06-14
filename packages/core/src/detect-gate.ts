@@ -349,17 +349,53 @@ export function webGuidance(framework: WebFramework): string {
  *  progress to the terminal. Required before the gate's tsc + vite build can run.
  *  Skipped when deps are already present. Returns false on a failed install. */
 export async function installWebDeps(cwd: string): Promise<boolean> {
-  if (await Bun.file(join(cwd, "node_modules", ".bin", "vite")).exists()) {
-    return true;
+  if (!(await Bun.file(join(cwd, "node_modules", ".bin", "vite")).exists())) {
+    const proc = Bun.spawn(["bun", "install"], {
+      cwd,
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+
+    if ((await proc.exited) !== 0) {
+      return false;
+    }
   }
 
-  const proc = Bun.spawn(["bun", "install"], {
-    cwd,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
+  await initMswWorker(cwd);
 
-  return (await proc.exited) === 0;
+  return true;
+}
+
+/** Lay down `public/mockServiceWorker.js` via the MSW CLI — the in-browser mock
+ *  API the React scaffold relies on. The worker script is version-matched to the
+ *  installed msw (so we never ship a stale, version-pinned blob) and Vite copies
+ *  `public/` into `dist/`, so the gate's built-app smoke serves it at
+ *  `/mockServiceWorker.js`. No-op when msw isn't installed (e.g. the vanilla
+ *  scaffold) or the worker already exists; best-effort so it never breaks install. */
+async function initMswWorker(cwd: string): Promise<void> {
+  const hasMsw = await Bun.file(
+    join(cwd, "node_modules", "msw", "package.json")
+  ).exists();
+  const alreadyInit = await Bun.file(
+    join(cwd, "public", "mockServiceWorker.js")
+  ).exists();
+
+  if (!hasMsw || alreadyInit) {
+    return;
+  }
+
+  try {
+    // No `--save`: that rewrites package.json (non-prettier, fails the gate's
+    // format check) just to record the worker dir. The worker lands at the default
+    // `/mockServiceWorker.js`, which `worker.start()` finds without any config.
+    await Bun.spawn(["bunx", "msw", "init", "public"], {
+      cwd,
+      stdout: "inherit",
+      stderr: "inherit",
+    }).exited;
+  } catch {
+    // best-effort — a missing worker surfaces as a clear runtime error in the gate
+  }
 }
 
 /** The full web ladder: `vite build` + tsc strict + web eslint (vendored-exempt) +

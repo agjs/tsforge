@@ -34,6 +34,7 @@ export type ComponentName =
   | "select"
   | "badge"
   | "separator"
+  | "skeleton"
   | "table"
   // composition blocks (molecules) — the view chrome the model otherwise re-rolls
   | "app-shell"
@@ -52,6 +53,7 @@ export const COMPONENT_NAMES: readonly ComponentName[] = [
   "select",
   "badge",
   "separator",
+  "skeleton",
   "table",
   "app-shell",
   "page-header",
@@ -358,6 +360,23 @@ export function Separator({
     <div
       role="separator"
       className={cn("shrink-0 bg-border h-px w-full $DELTA", className)}
+      {...props}
+    />
+  );
+}
+`,
+  skeleton: `import { cn } from "@/lib/utils";
+
+// THE loading-state primitive. Render a Skeleton SHAPED like the content it
+// stands in for (a row, a card, a line of text) for every isLoading/isPending
+// branch — never a spinner, never "Loading…" text. Size it with className.
+export function Skeleton({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
+  return (
+    <div
+      className={cn("animate-pulse rounded-md bg-muted $DELTA", className)}
       {...props}
     />
   );

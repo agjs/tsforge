@@ -12,6 +12,7 @@ import { noCrossFeatureImportsRule } from "./rules/no-cross-feature-imports";
 import { noDerivedStateInEffectRule } from "./rules/no-derived-state-in-effect";
 import { noInlineJsxFunctionsRule } from "./rules/no-inline-jsx-functions";
 import { noJsxComputationRule } from "./rules/no-jsx-computation";
+import { noLoadingTextUseSkeletonRule } from "./rules/no-loading-text-use-skeleton";
 import { noNestedComponentRule } from "./rules/no-nested-component";
 import { noReactFcRule } from "./rules/no-react-fc";
 import { noStateInComponentBodyRule } from "./rules/no-state-in-component-body";
@@ -30,6 +31,7 @@ const rules: Record<string, TSESLint.RuleModule<string, readonly unknown[]>> = {
   "no-derived-state-in-effect": noDerivedStateInEffectRule,
   "no-inline-jsx-functions": noInlineJsxFunctionsRule,
   "no-jsx-computation": noJsxComputationRule,
+  "no-loading-text-use-skeleton": noLoadingTextUseSkeletonRule,
   "no-nested-component": noNestedComponentRule,
   "no-react-fc": noReactFcRule,
   "no-state-in-component-body": noStateInComponentBodyRule,
@@ -53,6 +55,7 @@ export const reactComponentArchitecturePack: IRulePack = {
     "no-derived-state-in-effect": "warn",
     "no-inline-jsx-functions": "warn",
     "no-jsx-computation": "error",
+    "no-loading-text-use-skeleton": "error",
     "no-nested-component": "error",
     "no-react-fc": "error",
     "no-state-in-component-body": "error",

@@ -144,6 +144,11 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "<ul>{items.filter((i) => i.visible).map((i) => <li key={i.id}>{i.label}</li>)}</ul>",
     good: "const rows = useMemo(() => items.filter(...).map(...), [items]); return <ul>{rows}</ul>;",
   },
+  "tsforge/no-loading-text-use-skeleton": {
+    what: "Loading states render a <Skeleton/> shaped like the content — never 'Loading…' text or a spinner. Add `skeleton` via scaffold_ui.",
+    bad: "if (isLoading) { return <p>Loading…</p>; }",
+    good: 'if (isLoading) { return <Skeleton className="h-8 w-full" />; }',
+  },
   "tsforge/no-state-in-component-body": {
     what: "State hooks (`useState`, `useEffect`, `useMemo`, …) belong in `Component.hooks.ts`, not in the `.tsx` component body.",
     bad: "export function Button() { const [open, setOpen] = useState(false); return <button />; }",

@@ -181,6 +181,28 @@ test("no-eslint-disable-comments: passes without violations", () => {
   expect(relevant.length).toBe(0);
 });
 
+test("source-text rules: skip *.gen.ts (codegen ships eslint-disable + @ts-nocheck)", () => {
+  mkdirSync(join(tempDir, "src"), { recursive: true });
+  writeFileSync(
+    join(tempDir, "src", "routeTree.gen.ts"),
+    `/* eslint-disable */
+    // @ts-nocheck
+    export const routeTree = {};
+  `
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) =>
+      v.ruleId === "no-eslint-disable-comments" ||
+      v.ruleId === "no-ts-suppressions"
+  );
+
+  expect(relevant.length).toBe(0);
+});
+
 test("no-ts-suppressions: detects @ts-ignore", () => {
   mkdirSync(join(tempDir, "src"), { recursive: true });
   writeFileSync(

@@ -313,7 +313,7 @@ Co-locate by domain under \`src/features/<domain>/\`:
   <domain>.types.ts        — entity types, discriminated unions, branded IDs
   <domain>.constants.ts    — \`as const\` registries / label maps (typed Record<Union, V>)
   <domain>.service.ts      — async data access (seeded/mock async with latency + failure paths)
-  <domain>.hooks.ts        — ONLY genuine derived/computed state (the data hook is the SDK's useCollection; do NOT write a fetch/query wrapper)
+  <domain>.hooks.ts        — ONLY genuine derived/computed state (the data hook is the SDK's useResource; do NOT write a fetch/query wrapper)
   <PascalCase>.tsx         — ONE component per file
   index.ts                 — barrel re-exporting the public surface
 Shared shadcn primitives live in \`src/components/ui/\` (already scaffolded). Routes/pages are TanStack files under \`src/routes/\`.

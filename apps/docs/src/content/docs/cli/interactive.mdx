@@ -21,7 +21,7 @@ Most users run `tsforge` and stay in the interactive session.
 | Flag | Effect |
 | --- | --- |
 | `--dir <path>` | target project (default: cwd) |
-| `--files <globs>` | narrow editable scope (comma-separated); default is whole repo |
+| `--files <globs>` | narrow editable scope (comma-separated); default is whole repo (vendored/generated files are [always excluded](/edit/engine/#vendored--read-only-scope)) |
 | `--accept` / `--gate <cmd>` | gate command for one-shot mode |
 | `--no-gate` | skip auto gate detection |
 | `--web` | pre-scaffold web stack + web gate on first build message |

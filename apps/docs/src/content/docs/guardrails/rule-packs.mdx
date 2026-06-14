@@ -66,6 +66,7 @@ When the `react-component-architecture` pack is enabled (React in `package.json`
 | `no-jsx-computation` | `.map()` / `.filter()` / arithmetic / chained logic inside JSX `{…}` |
 | `no-state-in-component-body` | `useState`, `useEffect`, etc. directly in component `.tsx` files |
 | `no-inline-jsx-functions` | Inline arrow/function handlers in JSX attributes |
+| `no-loading-text-use-skeleton` | `"Loading…"` text / spinners in loading branches — render a `<Skeleton/>` instead |
 | `component-file-purity` | A component `.tsx` holds **only** imports + the component — no inline types, constants, or helper functions |
 | `component-folder-structure` | A component `.tsx` must live in `src/views/<Feature>/components/`, be the view root `src/views/<Feature>/index.tsx`, or a shared primitive in `src/components/ui/` |
 | `no-cross-feature-imports` | Cross-feature runtime imports |

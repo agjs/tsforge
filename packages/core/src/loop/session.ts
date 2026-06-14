@@ -27,7 +27,7 @@ import {
 } from "../config/tsforge-config";
 import { connectMcpServers } from "../mcp";
 import { loadAndRegisterPlugins } from "../config/external-plugins";
-import { LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
+import { DEFAULT_TEMPERATURE, LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
 import type { Reporter, ILoopEvent } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
@@ -263,15 +263,16 @@ const INTERIM_CHECK_NOTE =
 const IMPLEMENT_STEP =
   "STEP 2 of 2 — build the app in THIS ORDER, so every file compiles the moment " +
   "you write it (each step depends only on earlier ones — no forward references):\n" +
-  "1) DATA LAYER — each domain's seed + service (`createCollection`). Small files; " +
-  "emit them together.\n" +
+  "1) DATA LAYER — each domain's faker seed (in <feature>.constants.ts) + ONE " +
+  "`mockResource('/api/x', SEED)` line registered in src/mocks/handlers.ts. Small " +
+  "files; emit them together.\n" +
   "2) ROUTES — call `scaffold_routes` ONCE with EVERY page the app needs (list, " +
   "detail with $param like /accounts/$accountId, and create/edit like " +
   "/deals/create). This writes all route files at once, so from here every " +
   "<Link to>/navigate target type-checks — NEVER hand-write a route file.\n" +
   "3) SHELL — the app-shell layout + nav linking those routes.\n" +
   "4) FILL, FEATURE BY FEATURE — replace each route's placeholder with its real " +
-  "component (import your types + `useCollection(service)` + @/components/ui + " +
+  "component (import your types + `useResource('/api/x')` + @/components/ui + " +
   "<Link> to any route). FINISH one feature before starting the next.\n" +
   "PACE: write ONE coherent slice per turn — a single feature's few files together " +
   "(or one file if it's large) — then let the gate check it. Do NOT dump the whole " +
@@ -1054,7 +1055,7 @@ export class Session {
 
     const res = await this.provider.complete(ctx.messages, {
       tools: offeredTools,
-      temperature: this.cfg.temperature ?? 0,
+      temperature: this.cfg.temperature ?? DEFAULT_TEMPERATURE,
       toolChoice,
       ...(enableThinking === undefined ? {} : { enableThinking }),
       ...(this.cfg.thinkingTokenBudget === undefined
