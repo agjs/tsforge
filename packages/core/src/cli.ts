@@ -2,6 +2,9 @@
 import { join, isAbsolute } from "node:path";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
+import { emitKeypressEvents } from "node:readline";
+import { formatHelp, takesArg } from "./cli/commands";
+import { pickCommand } from "./render/command-menu";
 import { runTask, RUN_STATUS, Session, PLAN_APPROVED_NOTE } from "./loop";
 import {
   PROVIDER_LIMITS,
@@ -664,26 +667,9 @@ export function isPlanApproval(line: string): boolean {
   return /^(approve|approved|go|lgtm|implement)[.!]?$/i.test(line.trim());
 }
 
-const HELP = [
-  "Commands:",
-  "  /help            show this help",
-  "  /compact         summarize the conversation to free up context",
-  "  /clear           reset the conversation (keeps the workspace + gate)",
-  "  /plan            toggle plan mode (read-only: explore → clarify → plan; 'approve' implements)",
-  "  /gate <cmd>      set the gate command (empty to clear)",
-  "  /files <globs>   set the editable scope (comma-separated; empty = all)",
-  "  /model [name]    list configured models (★ active), or switch to <name>",
-  "  /sessions        list saved sessions (resume one with: tsforge --resume <id>)",
-  "  /cost            rough conversation size (messages + ~tokens)",
-  "  /metrics         token totals + generation rate (tok/s) this session",
-  "  /memory          show learned failure→fix lessons (/memory forget to clear)",
-  "  /exit, /quit     leave the session",
-  "",
-  "Anything else is sent to the agent. It works with its tools; when it stops,",
-  'the gate (if set) confirms "done".',
-  "While it's working: type a message to STEER the next turn (e.g. 'use Tailwind');",
-  "Ctrl-C interrupts the current run.",
-].join("\n");
+// The /help body is generated from the command registry (src/cli/commands.ts) so
+// the help text and the interactive `/` palette can never drift.
+const HELP = formatHelp();
 
 /** The session status line — distinguishes off / new / resumed. */
 function sessionLine(id: string, resumed: ISessionRecord | null): string {
@@ -1191,6 +1177,7 @@ async function repl(args: ICliArgs): Promise<number> {
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
         planDiscussed = false;
         await persist();
+        clearScreen(); // wipe the visible terminal + scrollback, not just the state
         process.stdout.write("conversation cleared\n");
         break;
 
@@ -1356,6 +1343,23 @@ async function repl(args: ICliArgs): Promise<number> {
     statusBar.teardown();
   });
 
+  // Wipe the visible terminal + scrollback (2J + 3J + home), re-pinning the status
+  // bar around it so its scroll region stays correct. Used by /clear so the screen
+  // is a clean slate, not just the conversation state.
+  const clearScreen = (): void => {
+    const wasActive = statusBar.active;
+
+    if (wasActive) {
+      statusBar.teardown();
+    }
+
+    process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+
+    if (wasActive) {
+      statusBar.install(statusInfo());
+    }
+  };
+
   // The prompt. With the bar pinned it repaints the bar and shows only the
   // input marker; otherwise it prints the inline status line above the marker.
   const prompt = (): void => {
@@ -1374,6 +1378,7 @@ async function repl(args: ICliArgs): Promise<number> {
   await new Promise<void>((resolveLoop) => {
     let busy = false;
     let closed = false;
+    let paletteOpen = false;
 
     // Finish the loop only when stdin has closed AND no run is in flight — so a
     // stdin EOF (piped input / Ctrl-D) never kills a build mid-turn.
@@ -1416,6 +1421,50 @@ async function repl(args: ICliArgs): Promise<number> {
         prompt();
       }
     };
+
+    // Open the interactive `/` command palette: pick a command from a navigable
+    // list, then either run it (no-arg) or prefill the line so the user types the
+    // argument. Cancel ⇒ back to a clean prompt. Only meaningful on a TTY.
+    const openPalette = async (): Promise<void> => {
+      paletteOpen = true;
+
+      try {
+        rl.write(null, { ctrl: true, name: "u" }); // clear the typed "/"
+
+        const picked = await pickCommand(process.stdout.isTTY);
+
+        // The palette ran on the alternate screen; exiting it restored the prompt
+        // verbatim, so don't re-draw it (that left stray `›` lines). On cancel,
+        // nothing to do; for an arg command, prefill so the user types the value.
+        if (picked !== null) {
+          if (takesArg(picked)) {
+            rl.write(`${picked.name} `);
+          } else {
+            void runLine(picked.name);
+          }
+        }
+      } finally {
+        paletteOpen = false;
+      }
+    };
+
+    // Press `/` on an empty line ⇒ open the palette. setImmediate lets readline
+    // finish inserting the slash first, so `rl.line === "/"` confirms it's a fresh
+    // command start (not a slash mid-text). No-op while busy or already open.
+    if (process.stdin.isTTY) {
+      emitKeypressEvents(process.stdin);
+      process.stdin.on("keypress", (str: string | undefined) => {
+        if (busy || paletteOpen || str !== "/") {
+          return;
+        }
+
+        setImmediate(() => {
+          if (!busy && !paletteOpen && rl.line === "/") {
+            void openPalette();
+          }
+        });
+      });
+    }
 
     // Event-driven (not for-await) so stdin is read DURING a run: a line typed
     // mid-run is queued to steer the next turn (or, if "/exit", aborts). This is
