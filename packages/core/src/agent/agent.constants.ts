@@ -16,6 +16,7 @@ export const TOOL_NAME = {
   typeAt: "type_at",
   diagnostics: "diagnostics",
   renameSymbol: "rename_symbol",
+  moveFile: "move_file",
   organizeImports: "organize_imports",
   scaffoldUi: "scaffold_ui",
   scaffoldRoutes: "scaffold_routes",
@@ -376,6 +377,19 @@ export const LSP_TOOLS = [
         type: "object",
         properties: { file: { type: "string" } },
         required: ["file"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: TOOL_NAME.moveFile,
+      description:
+        "Move/rename a FILE and rewrite every import that points at it (and its own relative imports) in one step — compiler-accurate, no manual edits. Rejected if the source, destination, or any importer is read-only/out-of-scope.",
+      parameters: {
+        type: "object",
+        properties: { from: { type: "string" }, to: { type: "string" } },
+        required: ["from", "to"],
       },
     },
   },

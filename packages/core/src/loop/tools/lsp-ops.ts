@@ -1,7 +1,7 @@
 import { relative } from "node:path";
 import { fileArg, TOOL_NAME, type ToolName } from "../../agent";
 import { runArgvCommand } from "../../lib/fs";
-import { writable } from "../../lib/scope";
+import { writable, isVendored } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import { str, reject, type IToolContext } from "./tool-context";
 
@@ -137,8 +137,55 @@ export function doLsp(
     return `organize_imports: ${n} change(s) in ${file}`;
   }
 
+  // move_file takes {from, to} (not {file, symbol}) — handle before doSymbolLsp's
+  // symbol guard. Scope-enforced: a move rewrites importers across the project; it
+  // must NOT touch read-only/out-of-scope/vendored files.
+  if (name === TOOL_NAME.moveFile) {
+    return doMoveFile(svc, args, ctx, rel);
+  }
+
   // The remaining tools address a symbol by name within a file.
   return doSymbolLsp(name, svc, file, args, ctx, rel);
+}
+
+/** move_file: relocate a file and rewrite every importer's specifier. */
+function doMoveFile(
+  svc: LspService,
+  args: Record<string, unknown>,
+  ctx: IToolContext,
+  rel: (abs: string) => string
+): string {
+  const from = str(args, "from");
+  const to = str(args, "to");
+
+  if (from.length === 0 || to.length === 0) {
+    return "move_file: need {from, to}";
+  }
+
+  const targets = svc.moveTargets(from, to).map(rel);
+  const blocked = targets.filter(
+    (t) => !writable(t, ctx.files) || isVendored(t, ctx.vendored ?? [])
+  );
+
+  if (blocked.length > 0) {
+    return reject(
+      ctx,
+      "move_file",
+      `move '${from}' → '${to}' REJECTED: would touch out-of-scope/read-only file(s): ${blocked.join(", ")}. Move files only when the source, destination, and every importer are in your editable scope.`
+    );
+  }
+
+  const changed = svc.moveFile(from, to);
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task,
+    message: `move_file ${from}→${to} (${changed ?? 0})`,
+  });
+
+  return changed === null
+    ? `move_file: source '${from}' not found`
+    : `moved '${from}' → '${to}', updated imports across ${changed} file(s)`;
 }
 
 type LspService = NonNullable<IToolContext["tsService"]>;

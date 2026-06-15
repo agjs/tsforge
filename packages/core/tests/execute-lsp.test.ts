@@ -192,6 +192,76 @@ test("search finds a literal match across files", async () => {
   }
 });
 
+test("move_file relocates a file and rewrites every importer's specifier", async () => {
+  const ctx = await setup(["types.ts", "use.ts", "lib/types.ts"]);
+
+  try {
+    const r = await executeTool(
+      {
+        name: "move_file",
+        arguments: { from: "types.ts", to: "lib/types.ts" },
+      },
+      ctx
+    );
+
+    expect(r).toContain("moved");
+    // File physically moved.
+    expect(await Bun.file(join(ctx.cwd, "lib/types.ts")).exists()).toBe(true);
+    expect(await Bun.file(join(ctx.cwd, "types.ts")).exists()).toBe(false);
+    // Importer's specifier rewritten to the new location.
+    expect(await Bun.file(join(ctx.cwd, "use.ts")).text()).toContain(
+      "lib/types"
+    );
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
+test("move_file is REJECTED when an importer is out of editable scope", async () => {
+  // Only the source + destination are editable; use.ts (an importer) is read-only.
+  const ctx = await setup(["types.ts", "lib/types.ts"]);
+
+  try {
+    const r = await executeTool(
+      {
+        name: "move_file",
+        arguments: { from: "types.ts", to: "lib/types.ts" },
+      },
+      ctx
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(r).toContain("use.ts");
+    // Nothing moved.
+    expect(await Bun.file(join(ctx.cwd, "types.ts")).exists()).toBe(true);
+    expect(await Bun.file(join(ctx.cwd, "lib/types.ts")).exists()).toBe(false);
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
+test("move_file is REJECTED when the destination is vendored (read-only)", async () => {
+  const ctx: IToolContext = {
+    ...(await setup(["types.ts", "use.ts", "lib/types.ts"])),
+    vendored: ["lib/**"],
+  };
+
+  try {
+    const r = await executeTool(
+      {
+        name: "move_file",
+        arguments: { from: "types.ts", to: "lib/types.ts" },
+      },
+      ctx
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(await Bun.file(join(ctx.cwd, "types.ts")).exists()).toBe(true);
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
 test("semantic tools degrade gracefully without a TsService", async () => {
   const ctx = await setup(["types.ts"]);
   const noLsp: IToolContext = { ...ctx, tsService: null };

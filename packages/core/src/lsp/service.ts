@@ -1,4 +1,5 @@
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, dirname } from "node:path";
+import { mkdirSync, rmSync } from "node:fs";
 import ts from "typescript";
 import type {
   ITsDiagnostic,
@@ -449,6 +450,73 @@ export class TsService {
     );
 
     return [...new Set((locs ?? []).map((l) => l.fileName))];
+  }
+
+  /** Edits a file move would produce (rewriting importers + the file's own
+   *  relative imports). Absolute paths. */
+  private moveEdits(
+    fromAbs: string,
+    toAbs: string
+  ): readonly ts.FileTextChanges[] {
+    return this.service.getEditsForFileRename(
+      fromAbs,
+      toAbs,
+      ts.getDefaultFormatCodeSettings("\n"),
+      {}
+    );
+  }
+
+  /** Which files a move would touch — every importer plus the source and
+   *  destination — for scope-checking BEFORE applying. Absolute paths. */
+  moveTargets(fromRel: string, toRel: string): string[] {
+    const fromAbs = this.toAbs(fromRel);
+    const toAbs = this.toAbs(toRel);
+    const touched = new Set(
+      this.moveEdits(fromAbs, toAbs).map((e) => e.fileName)
+    );
+
+    touched.add(fromAbs);
+    touched.add(toAbs);
+
+    return [...touched];
+  }
+
+  /**
+   * Move a file and rewrite every import that points at it (and its own relative
+   * imports), compiler-accurately via getEditsForFileRename. Returns the number
+   * of files changed (incl. the moved file), or null if the source can't be read.
+   * Callers MUST enforce scope first (a move can touch read-only files).
+   */
+  moveFile(fromRel: string, toRel: string): number | null {
+    const fromAbs = this.toAbs(fromRel);
+    const toAbs = this.toAbs(toRel);
+    const original = ts.sys.readFile(fromAbs);
+
+    if (original === undefined) {
+      return null;
+    }
+
+    const edits = this.moveEdits(fromAbs, toAbs);
+
+    // Apply the import rewrites (importers + the moved file's own imports) while
+    // the file still lives at its old path, THEN relocate the edited content.
+    this.applyChanges(edits);
+
+    const moved = ts.sys.readFile(fromAbs) ?? original;
+
+    mkdirSync(dirname(toAbs), { recursive: true });
+    ts.sys.writeFile(toAbs, moved);
+    rmSync(fromAbs, { force: true });
+
+    const stale = this.files.indexOf(fromAbs);
+
+    if (stale >= 0) {
+      this.files.splice(stale, 1);
+    }
+
+    this.refresh(toRel);
+
+    return new Set([...edits.map((e) => e.fileName), fromAbs]).size;
   }
 
   /** Organize imports (dedupe/sort/drop unused) for one file. Returns edits made. */

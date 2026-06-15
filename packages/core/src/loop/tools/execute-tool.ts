@@ -30,6 +30,7 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.typeAt]: (a, c) => doLsp(TOOL_NAME.typeAt, a, c),
   [TOOL_NAME.diagnostics]: (a, c) => doLsp(TOOL_NAME.diagnostics, a, c),
   [TOOL_NAME.renameSymbol]: (a, c) => doLsp(TOOL_NAME.renameSymbol, a, c),
+  [TOOL_NAME.moveFile]: (a, c) => doLsp(TOOL_NAME.moveFile, a, c),
   [TOOL_NAME.organizeImports]: (a, c) => doLsp(TOOL_NAME.organizeImports, a, c),
   [TOOL_NAME.scaffoldUi]: doScaffoldUi,
   [TOOL_NAME.scaffoldRoutes]: doScaffoldRoutes,
