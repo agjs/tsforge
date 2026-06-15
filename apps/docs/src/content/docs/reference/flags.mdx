@@ -14,6 +14,18 @@ description: Canonical list of every TSFORGE_* environment variable.
 | `TSFORGE_LEGACY_FEEDBACK` | off | legacy gate parser (`=1`) |
 | `TSFORGE_NO_ASTGREP` | off | disable ast-grep rewrite (`=1`) |
 | `TSFORGE_FORCE_TOOLS` | off | force tool_choice required (`=1`) |
+| `TSFORGE_SIMPLICITY` | off | shortest-solution guidance, scratch non-web (`=1`) |
+| `TSFORGE_TDD` | off | test-first guidance + `test-sibling-required` becomes an error (`=1`) |
+
+## Opt-in gate oracles
+
+Extra gate steps (default off; each skips cleanly when nothing applies). See [How tsforge builds the gate](/loop/gate-floor/).
+
+| Variable | Adds |
+| --- | --- |
+| `TSFORGE_COVERAGE=<pct>` | fail if line/function coverage is below the floor |
+| `TSFORGE_BOOT="<start cmd>"` | boot the server (`TSFORGE_BOOT_URL`, `TSFORGE_BOOT_TIMEOUT`) and require a non-5xx |
+| `TSFORGE_PROPTEST=1` | fuzz exported functions from their types; fail if any throws on valid input |
 
 ## Model / inference
 

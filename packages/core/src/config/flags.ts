@@ -33,4 +33,9 @@ export const flags = {
    *  block to the build prompt for from-scratch, non-web tasks (A/B control,
    *  default OFF until a sweep validates it). */
   simplicity: (): boolean => isOn(ENV_FLAG.simplicity),
+  /** TDD-first mode: appends test-first guidance to the build prompt AND elevates
+   *  the `test-sibling-required` meta-rule to an ERROR — so a logic module without
+   *  a co-located test fails the gate (the harness obsesses over tests, not just
+   *  suggests them). Default OFF. */
+  tdd: (): boolean => isOn(ENV_FLAG.tdd),
 };

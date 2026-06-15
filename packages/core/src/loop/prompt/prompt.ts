@@ -36,6 +36,24 @@ export const SCRATCH_SIMPLICITY_GUIDANCE = [
   "    real validation at trust boundaries, and any test siblings the gate requires.",
 ].join("\n");
 
+/** Appended to SYSTEM when TDD mode is on. Drives test-FIRST development: the
+ *  model writes a failing test that pins the behavior, runs it to see it fail for
+ *  the right reason, THEN implements to green — and adds a test for every logic
+ *  module (the gate elevates `test-sibling-required` to an error in this mode, so
+ *  a missing test fails the build, not just warns). */
+export const TDD_GUIDANCE = [
+  "TEST-FIRST (TDD) — write the test BEFORE the implementation:",
+  "  • For each unit of behavior, first `create` a `*.test.ts` that asserts the",
+  "    expected result, then `run` it and SEE IT FAIL for the right reason (the",
+  "    function is missing/wrong) — not a typo or import error.",
+  "  • Only then write the implementation, and keep editing until that test (and",
+  "    the gate) is green. Do NOT write implementation code with no test covering it.",
+  "  • Every logic module (`*.service.ts`, `*.utils.ts`, `lib/…`) MUST have a",
+  "    co-located test — the gate enforces it as an ERROR in this mode.",
+  "  • Cover the real edge cases you'd expect to break it (empty, zero, boundary,",
+  "    error paths), not just the happy path. Tests are part of the deliverable.",
+].join("\n");
+
 /** SYSTEM + the simplicity block when it applies, else SYSTEM unchanged. Gated on
  *  the `simplicity` flag AND a from-scratch (`!hasExistingCode`) NON-web build —
  *  so it never touches existing-repo edits or web/UI apps. */
@@ -44,12 +62,20 @@ export function buildSystemPrompt(
   stack: IStackProfile | undefined
 ): string {
   const webish = stack !== undefined && isWebStack(stack);
+  const blocks: string[] = [SYSTEM];
 
-  if (!flags.simplicity() || hasExistingCode || webish) {
-    return SYSTEM;
+  // Simplicity: from-scratch, non-web only (an A/B-gated concision push).
+  if (flags.simplicity() && !hasExistingCode && !webish) {
+    blocks.push(SCRATCH_SIMPLICITY_GUIDANCE);
   }
 
-  return `${SYSTEM}\n\n${SCRATCH_SIMPLICITY_GUIDANCE}`;
+  // TDD-first: applies on any stack/mode (write the failing test first), paired
+  // with the gate elevating test-sibling-required to an error.
+  if (flags.tdd()) {
+    blocks.push(TDD_GUIDANCE);
+  }
+
+  return blocks.join("\n\n");
 }
 
 /**

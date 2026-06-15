@@ -7,4 +7,5 @@ export const ENV_FLAG = {
   noAstgrep: "TSFORGE_NO_ASTGREP",
   forceTools: "TSFORGE_FORCE_TOOLS",
   simplicity: "TSFORGE_SIMPLICITY",
+  tdd: "TSFORGE_TDD",
 } as const;

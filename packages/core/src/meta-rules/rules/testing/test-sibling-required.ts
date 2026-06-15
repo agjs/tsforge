@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { statSync } from "node:fs";
 import type { IMetaRule, IMetaRuleViolation } from "../../meta-rules.types";
+import { flags } from "../../../config";
 
 /**
  * File suffixes that indicate logic files requiring tests.
@@ -53,6 +54,9 @@ export const testSiblingRequiredRule: IMetaRule = {
   severity: "warn",
   run({ root, sourceFiles }) {
     const violations: IMetaRuleViolation[] = [];
+    // TDD mode makes a missing test a hard failure ("obsess over tests"); the
+    // default keeps it a nudge so it never blocks a non-TDD build.
+    const severity = flags.tdd() ? "error" : "warn";
 
     for (const file of sourceFiles) {
       if (!isLogicFile(file)) {
@@ -100,7 +104,7 @@ export const testSiblingRequiredRule: IMetaRule = {
       violations.push({
         file,
         ruleId: "test-sibling-required",
-        severity: "warn",
+        severity,
         message: `Missing unit-test sibling. Expected \`${relativeExpectedTest}\` to exist alongside this logic module.`,
       });
     }
