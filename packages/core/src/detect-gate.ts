@@ -84,6 +84,12 @@ const TEST_COVERAGE_CHECK = join(
   "test-coverage-check.ts"
 );
 const BOOT_CHECK = join(import.meta.dir, "..", "scripts", "boot-check.ts");
+const PROPTEST_CHECK = join(
+  import.meta.dir,
+  "..",
+  "scripts",
+  "proptest-check.ts"
+);
 
 // The strict tsconfig tsforge brings to a greenfield project — strict + the
 // index-safety the local model is weakest at, with DOM + JSX libs so browser /
@@ -700,6 +706,8 @@ export async function buildGate(
  * stays free of shell-quoting:
  *   - TSFORGE_COVERAGE=<pct> — fail if line coverage is below the floor.
  *   - TSFORGE_BOOT="<start cmd>" — boot the server and require a non-5xx response.
+ *   - TSFORGE_PROPTEST=1 — fuzz exported functions from their types; fail if any
+ *     throws on valid typed input.
  */
 function appendOptInOracles(
   parts: string[],
@@ -714,6 +722,11 @@ function appendOptInOracles(
   if (env.TSFORGE_BOOT !== undefined && env.TSFORGE_BOOT.trim().length > 0) {
     parts.push(`bun "${BOOT_CHECK}"`);
     labels.push("boot smoke");
+  }
+
+  if (env.TSFORGE_PROPTEST === "1") {
+    parts.push(`bun "${PROPTEST_CHECK}"`);
+    labels.push("property tests");
   }
 }
 

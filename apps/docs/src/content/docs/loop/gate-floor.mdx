@@ -99,6 +99,7 @@ Two extra gate steps prove the work is real, not just well-formed. Both default 
 | --- | --- |
 | `TSFORGE_COVERAGE=<pct>` | runs the suite with coverage and fails if the **weaker of line/function coverage** is below `<pct>` — a green suite that never calls the new code no longer passes |
 | `TSFORGE_BOOT="<start cmd>"` | actually **boots the server** (`TSFORGE_BOOT_URL`, default `http://localhost:3000/`) and fails unless it answers without a 5xx — catches boot-time crashes that type-check and lint clean |
+| `TSFORGE_PROPTEST=1` | **property-fuzzes** every exported function: derives `fast-check` inputs from its TypeScript parameter types and fails if it throws on any valid input — catches edge-case crashes (empty array, NaN, out-of-range) that example tests miss. Best for pure functions. |
 
 Coverage checks **function** coverage as well as lines, so a one-line export that's never exercised can't hide behind a "line executed at declaration" count.
 
