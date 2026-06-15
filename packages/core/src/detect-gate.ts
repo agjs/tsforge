@@ -142,6 +142,11 @@ const STRICT_TSCONFIG_OVERLAY = `{
 /** The gate overlay's home: tsforge's cache dir + the overlay filename. */
 const GATE_TSCONFIG_DIR = ".tsforge";
 const GATE_TSCONFIG_FILE = "tsconfig.gate.json";
+/** Persistent incremental-typecheck cache (in .tsforge/, git-ignored). Reused
+ *  across settles so a warm `tsc` only re-checks what changed — tsc stays the
+ *  authority, just amortized. */
+const GATE_TSBUILDINFO_FILE = "gate.tsbuildinfo";
+const INCREMENTAL_FLAGS = `--incremental --tsBuildInfoFile ${GATE_TSCONFIG_DIR}/${GATE_TSBUILDINFO_FILE}`;
 
 // The web-stack scaffolds (Vite + React full-kit, or Vite vanilla) live in the
 // registry; this module just lays them down and builds their gate. shadcn/TanStack
@@ -780,7 +785,7 @@ async function tscPart(cwd: string): Promise<string | null> {
     );
     await ignoreGateArtifact(cwd);
 
-    return `"${TSC_BIN}" --noEmit -p ${GATE_TSCONFIG_DIR}/${GATE_TSCONFIG_FILE}`;
+    return `"${TSC_BIN}" --noEmit ${INCREMENTAL_FLAGS} -p ${GATE_TSCONFIG_DIR}/${GATE_TSCONFIG_FILE}`;
   }
 
   // Greenfield: bring a strict tsconfig so tsc can gate — but only when this is
@@ -788,8 +793,11 @@ async function tscPart(cwd: string): Promise<string | null> {
   // Unlike the overlay, a greenfield tsconfig.json is a DURABLE project file.
   if (await Bun.file(join(cwd, "package.json")).exists()) {
     await Bun.write(join(cwd, "tsconfig.json"), STRICT_TSCONFIG);
+    // The buildinfo lives in .tsforge/ (git-ignored), NOT next to the durable
+    // tsconfig — so incremental never leaks a cache file into the user's tree.
+    await ignoreGateArtifact(cwd);
 
-    return `"${TSC_BIN}" --noEmit -p tsconfig.json`;
+    return `"${TSC_BIN}" --noEmit ${INCREMENTAL_FLAGS} -p tsconfig.json`;
   }
 
   return null;
@@ -801,12 +809,26 @@ async function tscPart(cwd: string): Promise<string | null> {
  *  that intentionally tracks rules.json) is never clobbered. */
 async function ignoreGateArtifact(cwd: string): Promise<void> {
   const ignore = join(cwd, GATE_TSCONFIG_DIR, ".gitignore");
+  const entries = [GATE_TSCONFIG_FILE, GATE_TSBUILDINFO_FILE];
+  const file = Bun.file(ignore);
 
-  if (await Bun.file(ignore).exists()) {
+  if (!(await file.exists())) {
+    await Bun.write(ignore, `${entries.join("\n")}\n`);
+
     return;
   }
 
-  await Bun.write(ignore, `${GATE_TSCONFIG_FILE}\n`);
+  // Exists (maybe a user's, or an older tsforge one without the buildinfo line):
+  // append only the missing entries so we never clobber what's there.
+  const current = await file.text();
+  const missing = entries.filter((e) => !current.split("\n").includes(e));
+
+  if (missing.length > 0) {
+    await Bun.write(
+      ignore,
+      `${current.replace(/\n*$/u, "\n")}${missing.join("\n")}\n`
+    );
+  }
 }
 
 /** The syntactic idiom layer — ALWAYS tsforge's bundled strict eslint config

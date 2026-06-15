@@ -27,8 +27,10 @@ test("greenfield TS project: brings a strict tsconfig + gates on tsc AND eslint"
     await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
     const gate = await buildGate(dir);
 
-    // type-aware floor + syntactic idioms
-    expect(gate.command).toContain("--noEmit -p tsconfig.json");
+    // type-aware floor + syntactic idioms (tsc runs incremental for warm speed)
+    expect(gate.command).toContain("--noEmit");
+    expect(gate.command).toContain("-p tsconfig.json");
+    expect(gate.command).toContain("--incremental");
     expect(gate.command).toContain("strict.eslint.config.mjs");
     expect(gate.label).toContain("tsc --strict");
     expect(gate.label).toContain("strict TypeScript");
