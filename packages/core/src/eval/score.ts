@@ -21,6 +21,9 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
       list.reduce((acc, r) => acc + select(r), 0);
     const scored = list.filter((r) => r.quality !== undefined);
     const sized = list.filter((r) => r.loc !== undefined);
+    // Turns-to-green only counts runs that actually reached green — averaging in
+    // failed runs' (capped) turn counts would muddy the loop-efficiency signal.
+    const green = list.filter((r) => r.passed);
     const failureClasses: Record<string, number> = {};
 
     for (const r of list) {
@@ -37,6 +40,10 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
       passed,
       passRate: passed / total,
       avgCycles: sum((r) => r.cycles) / total,
+      avgTurnsToGreen:
+        green.length > 0
+          ? green.reduce((acc, r) => acc + r.cycles, 0) / green.length
+          : null,
       avgMs: sum((r) => r.ms) / total,
       avgQuality:
         scored.length > 0

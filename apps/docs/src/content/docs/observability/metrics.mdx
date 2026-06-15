@@ -22,6 +22,7 @@ Type `/metrics` at the prompt for the whole session so far:
 ```
 › /metrics
   4 call(s) · 8120 in / 1540 out · 47 tok/s last · 44 tok/s avg
+  turns to green (last): 2
 ```
 
 | Field | Meaning |
@@ -30,6 +31,7 @@ Type `/metrics` at the prompt for the whole session so far:
 | `in` / `out` | total prompt (input) and completion (output) tokens |
 | `tok/s last` | output rate of the most recent call |
 | `tok/s avg` | output rate averaged across all calls |
+| `turns to green` | how many turns the last successful run took to pass the gate — the loop-efficiency signal (lower is better) |
 
 ## What "tokens/sec" measures
 

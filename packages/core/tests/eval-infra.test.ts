@@ -111,6 +111,7 @@ describe("eval metrics: analyzeEvents", () => {
     expect(m.edits).toBe(2);
     expect(m.filesCreated).toBe(1);
     expect(m.gateRuns).toBe(1);
+    expect(m.turnsToGreen).toBe(2); // reached green at the `done` event, turn 2
     expect(m.wallClockSeconds).toBe(2);
     expect(m.finalStatus).toBe("done");
     expect(m.avgTokensPerSecond).toBe(40);

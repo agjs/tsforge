@@ -25,6 +25,9 @@ export interface IRunMetrics {
   filesCreated: number;
   /** Gate runs (`validated` events). */
   gateRuns: number;
+  /** Turns taken to reach the FIRST green (at the `done` event), or null if the
+   *  run never went green. The headline loop-efficiency signal — lower is better. */
+  turnsToGreen: number | null;
   /** Summed turn wall-clock from `timing` events, in seconds. */
   wallClockSeconds: number;
   /** Mean output rate across calls that reported one (tokens/second). */
@@ -42,6 +45,7 @@ function emptyMetrics(): IRunMetrics {
     edits: 0,
     filesCreated: 0,
     gateRuns: 0,
+    turnsToGreen: null,
     wallClockSeconds: 0,
     avgTokensPerSecond: 0,
   };
@@ -81,6 +85,7 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
       m.gateRuns += 1;
     } else if (event.kind === "done") {
       m.finalStatus = "done";
+      m.turnsToGreen ??= m.turns;
     } else if (event.kind === "stuck") {
       m.finalStatus = "stuck";
     }

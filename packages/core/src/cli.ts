@@ -286,6 +286,14 @@ function frameworkLabel(framework: WebFramework): string {
     : "Vite + TypeScript + Tailwind";
 }
 
+/** The `/metrics` turns-to-green line (loop-efficiency: turns the last green run
+ *  took). Extracted so the command switch stays a flat dispatch. */
+function turnsToGreenLine(turns: number | null): string {
+  return turns === null
+    ? "  turns to green: — (no green run yet)\n"
+    : `  turns to green (last): ${String(turns)}\n`;
+}
+
 /** Lay down a stack's skeleton and install its dependencies, reporting progress —
  *  the model can't build until deps resolve. */
 async function setUpWebProject(
@@ -1000,6 +1008,8 @@ async function repl(args: ICliArgs): Promise<number> {
 
   // Last-turn summary, surfaced in the status line shown before each prompt.
   let lastTurns = 0;
+  // Turns the last GREEN run took (the loop-efficiency signal shown in /metrics).
+  let lastTurnsToGreen: number | null = null;
   let lastElapsedMs = 0;
   let lastStatus = "ready";
 
@@ -1025,6 +1035,11 @@ async function repl(args: ICliArgs): Promise<number> {
       });
 
       lastTurns = result.turns;
+
+      if (result.status === "done") {
+        lastTurnsToGreen = result.turns;
+      }
+
       lastElapsedMs = performance.now() - started;
       lastStatus = result.status;
     } finally {
@@ -1298,6 +1313,8 @@ async function repl(args: ICliArgs): Promise<number> {
               `${String(m.lastTokensPerSecond)} tok/s last · ${String(m.avgTokensPerSecond)} tok/s avg\n`
           );
         }
+
+        process.stdout.write(turnsToGreenLine(lastTurnsToGreen));
 
         break;
       }

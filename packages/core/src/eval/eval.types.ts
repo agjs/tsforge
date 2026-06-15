@@ -39,6 +39,10 @@ export interface IVariantSummary {
   passed: number;
   passRate: number;
   avgCycles: number;
+  /** Average turns to reach green, over PASSED runs only (null if none passed).
+   *  The headline loop-efficiency signal — lower means the harness fixes things
+   *  in fewer rounds. Distinct from avgCycles, which dilutes with failed runs. */
+  avgTurnsToGreen: number | null;
   avgMs: number;
   /** Average quality across runs that were scored (0 if none). */
   avgQuality: number;

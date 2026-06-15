@@ -17,10 +17,13 @@ test("aggregates run records per variant label", () => {
     avgCycles: 3,
     avgMs: 200,
     avgQuality: 4,
+    // passed run took 2 cycles; the failed run's 4 are excluded from T2G.
+    avgTurnsToGreen: 2,
   });
 
   const b = summaries.find((s) => s.label === "b");
 
   expect(b?.passRate).toBe(1);
   expect(b?.runs).toBe(1);
+  expect(b?.avgTurnsToGreen).toBe(1);
 });
