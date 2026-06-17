@@ -31,7 +31,9 @@ tsforge review --base develop  # diff against an explicit base ref
 
 `tsforge review` reviews the change you're working on — the working tree (committed **and** uncommitted edits) vs the auto-detected base (merge-base with `main`/`master`). No commit or push required.
 
-It is **functional** review — logic, regressions, edge cases, and business rules — guided by a built-in senior-review rubric (lenses), with each finding adversarially re-checked against the real code so false positives are dropped. Types, structure, and style are out of scope (the gate covers those). Exits non-zero if any **error**-severity finding survives, so it's CI-usable. Disable the tool entirely with `TSFORGE_NO_GIT_TOOL=1` (it relies on git).
+It is **functional** review — logic, regressions, edge cases, and business rules — guided by a built-in senior-review rubric (lenses), with each finding adversarially re-checked against the real code so false positives are dropped. Types, structure, and style are out of scope (the gate covers those). When a `tsconfig.json` is present it also feeds the reviewer a **caller blast-radius** signal (who calls each changed export, computed type-exactly) so the regression lens has concrete call sites to check. Exits non-zero if any **error**-severity finding survives, so it's CI-usable.
+
+The same review is available inside an interactive session as **`/review`** (optionally `/review <base>` to diff against a specific ref).
 
 ## Merge gate (repo root)
 
