@@ -66,7 +66,7 @@ Both scan every hand-written `.ts`/`.tsx` under `src/`, `tests/`, and `scripts/`
 
 | ID | Checks |
 | --- | --- |
-| `test-sibling-required` | colocated `*.test.ts` for service modules |
+| `test-sibling-required` | a logic file (one exporting a function/class) the agent changes has a test — co-located `*.test.ts` or mirrored under `tests/`. **Error** when [TDD mode](/reference/flags/) is on (the default), warn when off. Scoped to changed files, so it never blocks on pre-existing untested code. |
 
 ### CI
 
