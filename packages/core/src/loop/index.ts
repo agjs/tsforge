@@ -17,3 +17,11 @@ export {
   type ISessionConfig,
   type ISendResult,
 } from "./session";
+export {
+  reviewChange,
+  formatReport,
+  LENSES,
+  type IReviewOptions,
+  type IReviewReport,
+  type IVerifiedFinding,
+} from "./review";

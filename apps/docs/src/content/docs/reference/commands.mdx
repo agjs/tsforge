@@ -21,6 +21,18 @@ bun run tsforge
 
 Environment variables: [Environment variables](/reference/flags/). Interactive usage: [Interactive CLI](/cli/interactive/).
 
+## Review the change you're on
+
+```bash
+tsforge review                 # functional review of the current diff
+tsforge review --staged        # only staged changes (pre-commit)
+tsforge review --base develop  # diff against an explicit base ref
+```
+
+`tsforge review` reviews the change you're working on — the working tree (committed **and** uncommitted edits) vs the auto-detected base (merge-base with `main`/`master`). No commit or push required.
+
+It is **functional** review — logic, regressions, edge cases, and business rules — guided by a built-in senior-review rubric (lenses), with each finding adversarially re-checked against the real code so false positives are dropped. Types, structure, and style are out of scope (the gate covers those). Exits non-zero if any **error**-severity finding survives, so it's CI-usable. Disable the tool entirely with `TSFORGE_NO_GIT_TOOL=1` (it relies on git).
+
 ## Merge gate (repo root)
 
 Commands for people working on the tsforge repository itself:
