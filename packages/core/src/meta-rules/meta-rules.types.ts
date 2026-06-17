@@ -29,6 +29,7 @@ export interface IMetaRuleContext {
   readonly root: string;
   readonly packageJson: Record<string, unknown> | null;
   readonly sourceFiles: readonly string[]; // repo-relative .ts/.tsx
+  readonly changedFiles: readonly string[]; // repo-relative files changed vs git HEAD (empty when not a git repo)
   readonly configFiles: readonly string[]; // tsconfig*, eslint*, package.json, *.config.*
   readonly workflowFiles: readonly string[]; // .github/workflows/*.yml|yaml
   readonly dockerfiles: readonly string[]; // Dockerfile, Dockerfile.*, *.Dockerfile (root + 1 level)

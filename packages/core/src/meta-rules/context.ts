@@ -208,7 +208,8 @@ function parsePackageJson(root: string): Record<string, unknown> | null {
  */
 export function buildMetaRuleContext(
   root: string,
-  activePacks: readonly string[]
+  activePacks: readonly string[],
+  changedFiles: readonly string[] = []
 ): IMetaRuleContext {
   const fileCache = new Map<string, string | null>();
 
@@ -243,6 +244,7 @@ export function buildMetaRuleContext(
     root,
     packageJson: parsePackageJson(root),
     sourceFiles: collectSourceFiles(root),
+    changedFiles,
     configFiles: collectConfigFiles(root),
     workflowFiles: collectWorkflowFiles(root),
     dockerfiles: collectDockerfiles(root),
