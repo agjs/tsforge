@@ -99,6 +99,23 @@ test("formatReport surfaces a verified finding with file:line and lens", async (
   expect(text).toContain("subtraction is reversed");
 });
 
+test("a string line number from the model is parsed, not defaulted to 1", async () => {
+  const stringLine = JSON.stringify({
+    findings: [
+      {
+        line: "2",
+        severity: "error",
+        lens: "correctness",
+        claim: "subtraction is reversed",
+        reason: "x",
+      },
+    ],
+  });
+  const report = await reviewChange(stub(stringLine, true), repo);
+
+  expect(report.findings[0]?.line).toBe(2);
+});
+
 test("the senior-review rubric ships with the expected lenses", () => {
   const ids = LENSES.map((l) => l.id);
 

@@ -72,9 +72,10 @@ async function changedFiles(
   base: string,
   staged: boolean
 ): Promise<string[]> {
+  // --diff-filter=d drops deleted files — no point reviewing a file that's gone.
   const argv = staged
-    ? ["diff", "--name-only", "--staged"]
-    : ["diff", "--name-only", base];
+    ? ["diff", "--name-only", "--diff-filter=d", "--staged"]
+    : ["diff", "--name-only", "--diff-filter=d", base];
   const out = await gitText(cwd, argv);
 
   return out
@@ -140,6 +141,23 @@ function toSeverity(value: unknown): Severity {
   return "info";
 }
 
+/** A 1-based line, accepting a number OR a numeric string (models emit both). */
+function toLine(value: unknown): number {
+  if (typeof value === "number" && value > 0) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const n = Number.parseInt(value, 10);
+
+    if (Number.isFinite(n) && n > 0) {
+      return n;
+    }
+  }
+
+  return 1;
+}
+
 function parseFindings(content: string, file: string): IRepoFinding[] {
   let data: unknown;
 
@@ -170,7 +188,7 @@ function parseFindings(content: string, file: string): IRepoFinding[] {
 
     out.push({
       file,
-      line: typeof line === "number" && line > 0 ? line : 1,
+      line: toLine(line),
       severity: toSeverity(entry.severity),
       lens:
         typeof lens === "string" && LENS_IDS.has(lens) ? lens : "correctness",
@@ -257,6 +275,43 @@ async function verifyFinding(
   return { ...finding, verified: real, verdict };
 }
 
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** findInFile, but a thrown error degrades to no findings (one bad file can't
+ *  abort the whole review). */
+async function safeFind(
+  provider: IProvider,
+  file: string,
+  diff: string,
+  log: (m: string) => void
+): Promise<IRepoFinding[]> {
+  try {
+    return await findInFile(provider, file, diff);
+  } catch (err) {
+    log(`  ${file}: review failed — ${errText(err)}`);
+
+    return [];
+  }
+}
+
+/** verifyFinding, but a thrown error drops the finding (fail closed on error). */
+async function safeVerify(
+  provider: IProvider,
+  cwd: string,
+  finding: IRepoFinding,
+  log: (m: string) => void
+): Promise<IVerifiedFinding> {
+  try {
+    return await verifyFinding(provider, cwd, finding);
+  } catch (err) {
+    log(`  verify failed at ${finding.file}:${finding.line} — ${errText(err)}`);
+
+    return { ...finding, verified: false, verdict: "verification error" };
+  }
+}
+
 /**
  * Review the change you're on (working tree vs the auto-detected base, including
  * uncommitted edits). Per-file find pass guided by the senior-review lenses, then
@@ -276,9 +331,12 @@ export async function reviewChange(
 
   const raw: IRepoFinding[] = [];
 
+  // Sequential on purpose: this harness targets a single local-model server, so
+  // we don't fan out concurrent requests that would swamp it. Each file is
+  // isolated in try/catch so one bad file can't abort the whole review.
   for (const file of files) {
     const diff = await fileDiff(cwd, base, file, staged);
-    const found = await findInFile(provider, file, diff);
+    const found = await safeFind(provider, file, diff, log);
 
     log(`  ${file}: ${found.length} candidate finding(s)`);
     raw.push(...found);
@@ -290,7 +348,7 @@ export async function reviewChange(
 
   for (const finding of raw) {
     const result = doVerify
-      ? await verifyFinding(provider, cwd, finding)
+      ? await safeVerify(provider, cwd, finding, log)
       : { ...finding, verified: true, verdict: "(unverified)" };
 
     if (result.verified) {
