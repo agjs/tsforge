@@ -55,6 +55,11 @@ import {
   logsDir,
   type ISessionRecord,
 } from "./session-store";
+import {
+  currentVersion,
+  getUpdateNotice,
+  refreshUpdateCacheInBackground,
+} from "./update-check";
 
 /**
  * The tsforge CLI — the product surface over the same engine the eval harness
@@ -698,10 +703,16 @@ function printHeader(info: {
   files: string[];
   resumed: ISessionRecord | null;
   model: { model: string; endpoint: string };
+  updateNotice?: string | null;
 }): void {
-  const { dir, id, gateLabel, files, resumed, model } = info;
+  const { dir, id, gateLabel, files, resumed, model, updateNotice } = info;
 
   process.stdout.write(welcomeBanner(model));
+
+  if (updateNotice !== undefined && updateNotice !== null) {
+    process.stdout.write(`${updateNotice}\n`);
+  }
+
   process.stdout.write(
     [
       `  cwd:   ${dir}`,
@@ -936,6 +947,13 @@ async function repl(args: ICliArgs): Promise<number> {
     });
   };
 
+  // "update available" notice: read from the local cache (no network on the hot
+  // path) and refresh it in the background for next time. Gated to interactive,
+  // non-CI sessions inside update-check, so eval/headless runs are unaffected.
+  const updateNotice = await getUpdateNotice(currentVersion());
+
+  refreshUpdateCacheInBackground();
+
   printHeader({
     dir: args.dir,
     id,
@@ -943,6 +961,7 @@ async function repl(args: ICliArgs): Promise<number> {
     files,
     resumed,
     model: modelInfo(provider.config),
+    updateNotice,
   });
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });

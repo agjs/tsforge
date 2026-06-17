@@ -9,4 +9,5 @@ export const ENV_FLAG = {
   simplicity: "TSFORGE_SIMPLICITY",
   tdd: "TSFORGE_TDD",
   webTools: "TSFORGE_WEB",
+  noUpdateCheck: "TSFORGE_NO_UPDATE_CHECK",
 } as const;
