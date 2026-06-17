@@ -1,30 +1,30 @@
 ---
 title: Drive a change to green
-description: "Give tsforge a task and a check, and it works until the check passes — then exits. The one-shot, CI-friendly way to use the harness."
+description: "Give tsforge a task and a check, and it works until the check passes, then exits. The one-shot, CI-friendly way to use the harness."
 ---
 
-The interactive REPL is great for exploring. When you know exactly what "done" looks like, hand tsforge a task **and a check**, and it drives the change until the check passes — then exits.
+The interactive REPL is great for exploring. When you already know what "done" looks like, hand tsforge a task and a check, and it drives the change until the check passes, then exits.
 
 ```bash
 tsforge "add input validation to the signup route" --accept "bun test"
 ```
 
-`--accept` is any shell command. tsforge runs the model, applies edits, runs the check, feeds the failures back, and repeats — until the command exits 0 or it stops making progress. The exit code is the check's, so it drops straight into scripts and CI.
+`--accept` is any shell command. tsforge runs the model, applies edits, runs the check, feeds the failures back, and repeats until the command exits 0 or it stops making progress. The exit code is the check's, so it drops straight into scripts and CI.
 
 ## Why this is the safe way to delegate
 
-The check is the contract. The model doesn't decide it's finished — **your command does**. With `--accept "bun test"`, "done" means your tests actually pass. With `--accept "tsc --noEmit && bun test"`, it means types *and* tests pass. tsforge layers its own [strict gate](/loop/gate-floor/) (strict `tsc` + ESLint + [tests-by-default](/quality/tests/)) underneath, so green can't be faked — it's not "the model says so," it's "the compiler, the linter, and your tests all agree."
+The check is the contract. The model doesn't decide it's finished; your command does. With `--accept "bun test"`, "done" means your tests pass. With `--accept "tsc --noEmit && bun test"`, it means types and tests pass. Underneath, tsforge layers its own [strict gate](/loop/gate-floor/) (strict `tsc`, ESLint, and [tests by default](/quality/tests/)), so green reflects the compiler, the linter, and your tests all agreeing, not the model's say-so.
 
 ## Choosing a good check
 
 | Goal | `--accept` |
 | --- | --- |
 | Make the suite pass | `bun test` |
-| Types + tests | `tsc --noEmit && bun test` |
+| Types and tests | `tsc --noEmit && bun test` |
 | One file's tests (fast loop) | `bun test src/auth.test.ts` |
 | Lint clean too | `bun test && bun run lint` |
 
-If it can't get there, it stops with a clear status instead of churning forever — see [When the gate fails](/loop/validation/).
+If it can't get there, it stops with a clear status instead of churning forever. See [When the gate fails](/loop/validation/).
 
 ## Scoping the edits
 
@@ -34,6 +34,6 @@ By default the whole repo is editable. To fence the agent in, narrow it:
 tsforge "refactor the parser" --files "src/parser/**" --accept "bun test"
 ```
 
-Anything outside `--files` is read-only — a tripwire, not a requirement.
+Anything outside `--files` is read-only, a tripwire rather than a requirement.
 
 → [Chat with your repo](/cli/interactive/) · [The gate](/loop/gate-floor/) · [Review your changes](/cli/review/)
