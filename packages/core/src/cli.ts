@@ -5,7 +5,14 @@ import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
 import { formatHelp, takesArg } from "./cli/commands";
 import { pickCommand } from "./render/command-menu";
-import { runTask, RUN_STATUS, Session, PLAN_APPROVED_NOTE } from "./loop";
+import {
+  runTask,
+  RUN_STATUS,
+  Session,
+  PLAN_APPROVED_NOTE,
+  reviewChange,
+  formatReport,
+} from "./loop";
 import {
   PROVIDER_LIMITS,
   PROVIDER_DEFAULTS,
@@ -110,11 +117,17 @@ export interface ICliArgs {
    *  project's discovered tests (`--strict-floor-only`). By default the auto-gate
    *  also runs the project's tests, so "green" means floor + tests pass. */
   strictFloorOnly: boolean;
+  /** Review the change you're on (functional review of the diff) (`tsforge review`). */
+  review: boolean;
+  /** Review only staged changes (`--staged`). */
+  staged: boolean;
+  /** Explicit base ref to diff against for review (`--base <ref>`). */
+  base: string;
 }
 
 const BOOL_FLAGS: Record<
   string,
-  "continue" | "noGate" | "web" | "log" | "plan" | "strictFloorOnly"
+  "continue" | "noGate" | "web" | "log" | "plan" | "strictFloorOnly" | "staged"
 > = {
   "--continue": "continue",
   "-c": "continue",
@@ -123,6 +136,7 @@ const BOOL_FLAGS: Record<
   "--log": "log",
   "--plan": "plan",
   "--strict-floor-only": "strictFloorOnly",
+  "--staged": "staged",
 };
 
 const VALUE_FLAGS = new Set([
@@ -132,6 +146,7 @@ const VALUE_FLAGS = new Set([
   "--gate",
   "--browser",
   "--resume",
+  "--base",
 ]);
 
 /** Parse argv (without the tsforge binary name). Always succeeds — mode is decided in main. */
@@ -150,6 +165,9 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     log: false,
     plan: false,
     strictFloorOnly: false,
+    review: false,
+    staged: false,
+    base: "",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -172,6 +190,13 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
   }
 
   out.task = positional.join(" ").trim();
+
+  // `tsforge review` is a subcommand, not a task: the first positional selects it.
+  if (positional[0] === "review") {
+    out.review = true;
+    out.task = positional.slice(1).join(" ").trim();
+  }
+
   out.dir = isAbsolute(out.dir) ? out.dir : join(process.cwd(), out.dir);
 
   return out;
@@ -190,6 +215,8 @@ function applyValueFlag(flag: string, value: string, out: ICliArgs): void {
     out.browser = value;
   } else if (flag === "--resume") {
     out.resumeId = value;
+  } else if (flag === "--base") {
+    out.base = value;
   } else {
     out.accept = value; // --accept / --gate
   }
@@ -1552,8 +1579,26 @@ async function repl(args: ICliArgs): Promise<number> {
   return 0;
 }
 
+async function reviewMode(args: ICliArgs): Promise<number> {
+  const { entry } = await resolveActiveModel();
+  const report = await reviewChange(makeProvider(entry), args.dir, {
+    ...(args.base.length > 0 ? { base: args.base } : {}),
+    staged: args.staged,
+    log: (m) => process.stdout.write(`  ↳ ${m}\n`),
+  });
+
+  process.stdout.write(`\n${formatReport(report)}\n`);
+
+  // Exit non-zero when there are error-severity findings, so it's CI-usable.
+  return report.findings.some((f) => f.severity === "error") ? 1 : 0;
+}
+
 export async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.review) {
+    return reviewMode(args);
+  }
 
   // A positional task with a scope + gate ⇒ one-shot; otherwise interactive.
   return isOneShot(args) ? runOnce(args) : repl(args);
