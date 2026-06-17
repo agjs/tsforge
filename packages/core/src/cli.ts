@@ -1614,6 +1614,14 @@ async function runMapCommand(dir: string, sub: string): Promise<void> {
     return;
   }
 
+  if (sub.length > 0) {
+    process.stdout.write(
+      `unknown map subcommand: ${sub} (use 'status', 'forget', or nothing to build)\n`
+    );
+
+    return;
+  }
+
   process.stdout.write("building workspace map…\n");
 
   try {

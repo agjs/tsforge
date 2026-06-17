@@ -348,7 +348,7 @@ export class TsService {
   projectFiles(): string[] {
     return this.files
       .filter((f) => !f.endsWith(".d.ts") && !f.includes("node_modules"))
-      .map((f) => relative(this.dir, f));
+      .map((f) => relative(this.dir, f).replaceAll("\\", "/"));
   }
 
   /** Start offsets of `file`'s exported declarations — file-level blast-radius. */

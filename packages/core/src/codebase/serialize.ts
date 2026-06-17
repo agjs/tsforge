@@ -61,9 +61,13 @@ function renderModules(map: IWorkspaceMap): string {
   let dropped = 0;
 
   for (const m of ordered) {
+    // Cap exports per module so a barrel/types file can't blow the budget on one line.
+    const shown = m.exports.slice(0, MAX_HUB_EXPORTS).join(", ");
+    const exportsText =
+      m.exports.length > MAX_HUB_EXPORTS ? `${shown}, …` : shown;
     const line =
       m.exports.length > 0
-        ? `  ${m.path} (${m.lineCount}) — exports: ${m.exports.join(", ")}`
+        ? `  ${m.path} (${m.lineCount}) — exports: ${exportsText}`
         : `  ${m.path} (${m.lineCount})`;
 
     if (used + line.length > MODULE_BUDGET_CHARS) {

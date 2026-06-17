@@ -114,7 +114,13 @@ async function ensureIgnored(cwd: string): Promise<void> {
   const file = Bun.file(join(cwd, MAP_DIR, ".gitignore"));
   const current = (await file.exists()) ? await file.text() : "";
 
-  if (current.split("\n").includes(MAP_FILE)) {
+  // Split on \r?\n so a CRLF .gitignore doesn't leave "\r" and re-append forever.
+  if (
+    current
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .includes(MAP_FILE)
+  ) {
     return;
   }
 

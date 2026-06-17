@@ -65,7 +65,9 @@ function buildModule(
   return {
     path: file,
     exports: svc.exportedSymbols(file).map((s) => s.name),
-    imports: svc.importsOf(file).map((abs) => relative(cwd, abs)),
+    imports: svc
+      .importsOf(file)
+      .map((abs) => relative(cwd, abs).replaceAll("\\", "/")),
     lineCount: text.length === 0 ? 0 : text.split("\n").length,
     hasTests: hasSiblingTest(file, fileSet),
   };
