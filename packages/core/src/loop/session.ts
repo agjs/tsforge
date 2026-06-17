@@ -21,6 +21,7 @@ import { readFiles } from "../lib/fs";
 import { WEB_VENDORED_PATTERNS } from "../lib/scope";
 import { validate, type ErrorParser } from "../validate";
 import { detectStack } from "../stack-detection";
+import { recallMapBlock } from "../codebase";
 import {
   loadTsforgeConfig,
   normalizeRuleOverrides,
@@ -323,8 +324,10 @@ const MALFORMED_CALL_NUDGE =
   "malformed, so NO tool ran and nothing happened. Do not write tool syntax " +
   "in prose. Re-issue that action as a real tool call now.";
 
-/** CHAT_SYSTEM + a short orientation to the workspace and (optional) gate. */
-function systemPrompt(cfg: ISessionConfig): string {
+/** CHAT_SYSTEM + the (optional) workspace map + a short orientation to the
+ *  workspace and gate. The map block, when present, is injected right after
+ *  CHAT_SYSTEM so the agent is oriented before the task-specific lines. */
+function systemPrompt(cfg: ISessionConfig, workspaceMap: string): string {
   const lines = [`Workspace: ${cfg.cwd}`];
   const files = cfg.files ?? [];
   const wholeRepo = files.length === 0 || files.includes("**/*");
@@ -347,7 +350,9 @@ function systemPrompt(cfg: ISessionConfig): string {
     lines.push(cfg.guidance);
   }
 
-  return `${CHAT_SYSTEM}\n\n${lines.join("\n")}`;
+  const prefix = workspaceMap.length > 0 ? `${workspaceMap}\n\n` : "";
+
+  return `${CHAT_SYSTEM}\n\n${prefix}${lines.join("\n")}`;
 }
 
 export class Session {
@@ -522,6 +527,10 @@ export class Session {
             report({ kind: "tool", task: SESSION_ID, message });
           });
 
+    // Persisted workspace map (from `/map`), if any — primes the agent with the
+    // repo's structure. Cheap: loads + marks drift, never rebuilds here.
+    const workspaceMap = await recallMapBlock(cfg.cwd);
+
     const isWebScaffold = cfg.scaffoldWeb === true || cfg.scaffoldUi === true;
     const ctx: ILoopCtx = {
       task,
@@ -537,7 +546,7 @@ export class Session {
       messages:
         cfg.history !== undefined && cfg.history.length > 0
           ? [...cfg.history]
-          : [{ role: "system", content: systemPrompt(cfg) }],
+          : [{ role: "system", content: systemPrompt(cfg, workspaceMap) }],
       // Stream the gate's output live (the interactive CLI), so a slow gate
       // (vite build + chromium) shows progress instead of running silently.
       onGateChunk: (text) => {

@@ -13,6 +13,7 @@ import {
   reviewChange,
   formatReport,
 } from "./loop";
+import { buildAndPersistMap, mapStatus, forgetMap } from "./codebase";
 import {
   PROVIDER_LIMITS,
   PROVIDER_DEFAULTS,
@@ -123,6 +124,8 @@ export interface ICliArgs {
   staged: boolean;
   /** Explicit base ref to diff against for review (`--base <ref>`). */
   base: string;
+  /** Build a structural workspace map (`tsforge map`). */
+  map: boolean;
 }
 
 const BOOL_FLAGS: Record<
@@ -168,6 +171,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     review: false,
     staged: false,
     base: "",
+    map: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -191,9 +195,13 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
 
   out.task = positional.join(" ").trim();
 
-  // `tsforge review` is a subcommand, not a task: the first positional selects it.
+  // `tsforge review` / `tsforge map` are subcommands, not tasks: the first
+  // positional selects them.
   if (positional[0] === "review") {
     out.review = true;
+    out.task = positional.slice(1).join(" ").trim();
+  } else if (positional[0] === "map") {
+    out.map = true;
     out.task = positional.slice(1).join(" ").trim();
   }
 
@@ -1276,6 +1284,10 @@ async function repl(args: ICliArgs): Promise<number> {
         await runReviewCommand(provider, args.dir, arg);
         break;
 
+      case "map":
+        await runMapCommand(args.dir, arg);
+        break;
+
       case "files": {
         const globs = arg
           .split(",")
@@ -1583,6 +1595,42 @@ async function repl(args: ICliArgs): Promise<number> {
   return 0;
 }
 
+/** `/map [status|forget]` (REPL) and `tsforge map` — build/inspect the workspace
+ *  map. The built map primes future sessions (and a `/clear`). */
+async function runMapCommand(dir: string, sub: string): Promise<void> {
+  if (sub === "status") {
+    process.stdout.write(`${await mapStatus(dir)}\n`);
+
+    return;
+  }
+
+  if (sub === "forget") {
+    const had = await forgetMap(dir);
+
+    process.stdout.write(
+      had ? "workspace map deleted\n" : "no map to delete\n"
+    );
+
+    return;
+  }
+
+  process.stdout.write("building workspace map…\n");
+
+  try {
+    const map = await buildAndPersistMap(dir);
+
+    process.stdout.write(
+      map === null
+        ? "no tsconfig.json — nothing to map (the map is for TypeScript projects)\n"
+        : `mapped ${map.meta.totalFiles} files, ${map.hubs.length} hubs. Primes new sessions (/clear to apply now).\n`
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    process.stdout.write(`map failed: ${message}\n`);
+  }
+}
+
 /** `/review` in the REPL — review the current change and print findings. */
 async function runReviewCommand(
   provider: OpenAICompatibleProvider,
@@ -1620,11 +1668,21 @@ async function reviewMode(args: ICliArgs): Promise<number> {
   return report.findings.some((f) => f.severity === "error") ? 1 : 0;
 }
 
+async function mapMode(args: ICliArgs): Promise<number> {
+  await runMapCommand(args.dir, args.task);
+
+  return 0;
+}
+
 export async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.review) {
     return reviewMode(args);
+  }
+
+  if (args.map) {
+    return mapMode(args);
   }
 
   // A positional task with a scope + gate ⇒ one-shot; otherwise interactive.
