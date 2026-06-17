@@ -1,4 +1,4 @@
-import { join, isAbsolute, dirname } from "node:path";
+import { join, isAbsolute, dirname, relative } from "node:path";
 import { mkdirSync, rmSync } from "node:fs";
 import ts from "typescript";
 import type {
@@ -38,6 +38,7 @@ export class TsService {
   private readonly service: ts.LanguageService;
   private readonly versions = new Map<string, number>();
   private readonly files: string[];
+  private readonly options: ts.CompilerOptions;
 
   constructor(private readonly dir: string) {
     const configPath = join(dir, "tsconfig.json");
@@ -49,6 +50,7 @@ export class TsService {
     );
 
     this.files = [...parsed.fileNames];
+    this.options = parsed.options;
 
     const host: ts.LanguageServiceHost = {
       getScriptFileNames: () => this.files,
@@ -316,6 +318,39 @@ export class TsService {
     return sf === undefined ? [] : collectExports(sf);
   }
 
+  /** Internal project files that `file` imports (resolved via TS module
+   *  resolution) — the edges of the workspace import graph. Excludes
+   *  node_modules and unresolved/external specifiers. Absolute paths. */
+  importsOf(file: string): string[] {
+    const abs = this.toAbs(file);
+    const sf = this.service.getProgram()?.getSourceFile(abs);
+
+    if (sf === undefined) {
+      return [];
+    }
+
+    const out = new Set<string>();
+
+    for (const spec of importSpecifiers(sf)) {
+      const resolved = ts.resolveModuleName(spec, abs, this.options, ts.sys)
+        .resolvedModule?.resolvedFileName;
+
+      if (resolved !== undefined && !resolved.includes("node_modules")) {
+        out.add(resolved);
+      }
+    }
+
+    return [...out];
+  }
+
+  /** Non-declaration source files in the project, relative to the root —
+   *  the set a workspace map iterates over. */
+  projectFiles(): string[] {
+    return this.files
+      .filter((f) => !f.endsWith(".d.ts") && !f.includes("node_modules"))
+      .map((f) => relative(this.dir, f).replaceAll("\\", "/"));
+  }
+
   /** Start offsets of `file`'s exported declarations — file-level blast-radius. */
   private exportedPositions(abs: string): number[] {
     const sf = this.service.getProgram()?.getSourceFile(abs);
@@ -538,6 +573,23 @@ export class TsService {
   private toAbs(file: string): string {
     return isAbsolute(file) ? file : join(this.dir, file);
   }
+}
+
+/** Module specifiers of a file's top-level `import`/`export … from` statements. */
+function importSpecifiers(sf: ts.SourceFile): string[] {
+  const specs: string[] = [];
+
+  sf.forEachChild((node) => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier !== undefined &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      specs.push(node.moduleSpecifier.text);
+    }
+  });
+
+  return specs;
 }
 
 /** Top-level exported declarations of a source file as {name, start offset}. */
