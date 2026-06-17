@@ -121,7 +121,7 @@ export const testSiblingRequiredRule: IMetaRule = {
         file: norm,
         ruleId: "test-sibling-required",
         severity,
-        message: `Missing test for a logic file you changed. Add \`${join(dirname(norm), `${stem}.test.ts`)}\` (co-located) or the mirrored \`tests/\` equivalent — the harness tests what it writes.`,
+        message: `Missing test for a logic file you changed. Add \`${join(dirname(norm), `${stem}.test.ts`).replace(/\\/gu, "/")}\` (co-located) or the mirrored \`tests/\` equivalent — the harness tests what it writes.`,
       });
     }
 

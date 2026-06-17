@@ -520,7 +520,11 @@ export async function runToolCalls(
         ? relative(ctx.cwd, wrote.path)
         : wrote.path;
 
-      ctx.touched?.add(rel.replaceAll("\\", "/"));
+      // Lazy-init rather than `?.add` so a custom loop runner that forgot to seed
+      // `touched` self-heals instead of silently skipping TDD enforcement — the
+      // exact silent-no-op class this fix exists to kill.
+      ctx.touched ??= new Set<string>();
+      ctx.touched.add(rel.replaceAll("\\", "/"));
       feedback = await runWriteGuard(ctx, wrote.path);
     }
 
