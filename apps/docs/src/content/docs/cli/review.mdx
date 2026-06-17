@@ -1,0 +1,39 @@
+---
+title: Review your changes
+description: "tsforge review — a functional code review of the change you're on (logic, regressions, edge cases), with every finding re-checked against the code so it doesn't invent problems."
+---
+
+`tsforge review` reviews the change you're working on and prints a focused list of **functional** problems, the things a linter can't catch.
+
+```bash
+tsforge review                 # review the current diff
+tsforge review --staged        # only staged changes (pre-commit)
+tsforge review --base develop   # diff against a specific ref
+```
+
+Inside a session, the same review is available as `/review`.
+
+## What it reviews
+
+It looks at what you changed (working tree plus uncommitted edits, against the auto-detected base branch, no commit or push required) through a built-in senior-reviewer rubric:
+
+- **Correctness**: inverted conditions, wrong operators, off-by-one.
+- **Regressions**: a signature, return, or contract change that breaks existing callers.
+- **Edge cases**: null/empty/boundary inputs, unhandled errors, a missing `await`.
+- **Business logic**: money rounding, auth gating, invalid state transitions.
+- **Data and concurrency**: races, partial writes.
+- **API and contracts**: breaking a response shape or a serialized format.
+
+Types, structure, and style are out of scope. [The gate](/loop/gate-floor/) already enforces those. Review is for judgment, not lint.
+
+## Why the findings are trustworthy
+
+The usual failure of AI review is confident nonsense. tsforge runs an adversarial verification pass: every candidate finding is re-checked against the actual code, and anything the code doesn't confirm, or that can't cite a real line, gets dropped. You get a short list of real issues instead of a wall of maybes.
+
+When a `tsconfig.json` is present, it also feeds the reviewer the callers of each changed export, computed from the type graph, so the regression check looks at concrete call sites instead of guessing.
+
+## In CI
+
+`tsforge review` exits non-zero if any error-severity finding survives, so you can gate a PR on it. It uses `git` to find what changed, so run it inside a git repository.
+
+→ [Commands](/reference/commands/) · [Map the repo](/cli/map/)

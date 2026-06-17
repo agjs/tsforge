@@ -1,0 +1,34 @@
+---
+title: Tests by default
+description: "tsforge enforces tests out of the box — a logic file the agent writes without a test fails the gate, scoped to what it changes so it never blocks on your repo's legacy code."
+---
+
+Most AI tools will happily write a function and move on. tsforge won't. Out of the box, a logic file the agent changes without a test **fails the gate**. Quality and strictness are the default, not a flag you have to remember.
+
+## What triggers it
+
+When the agent creates or edits a file that exports a function or class and there's no test for it, the gate fails with a clear message, the same way a type error fails it. The agent then writes the test and continues until it's green.
+
+A test counts if it's either co-located (`total.test.ts` next to `total.ts`) or mirrored (`tests/total.test.ts` alongside `src/total.ts`). The co-located form works in any layout; the mirrored form assumes a top-level `src/` ↔ `tests/` convention. Type-only modules (`*.types.ts`), barrels (`index.ts`), and declaration files are exempt, since they have no logic to test.
+
+## It won't block on your legacy code
+
+This is the important part. Enforcement is scoped to the files the agent touches this session, computed from `git`. It holds the agent to testing the code it writes. It does not fail because some pre-existing file in your repo lacks a test. Open a repo with thousands of untested files and nothing happens until the agent changes one.
+
+In a non-git directory there's no change signal, so enforcement is a no-op.
+
+## Test-first guidance
+
+Alongside the gate rule, the agent is told to work test-first: write the failing test, watch it fail for the right reason, then implement until it passes. The gate makes that the floor; the guidance makes it the habit.
+
+## Opting out
+
+It's on by default. To turn it off for a run, set:
+
+```bash
+TSFORGE_TDD=0
+```
+
+The test requirement drops back to a non-blocking nudge. Most projects should leave it on. It's the cheapest way to keep an agent honest.
+
+→ [The gate](/loop/gate-floor/) · [When the gate fails](/loop/validation/) · [Environment variables](/reference/flags/)

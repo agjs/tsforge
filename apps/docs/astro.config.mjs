@@ -138,83 +138,75 @@ export default defineConfig({
       lastUpdated: true,
       sidebar: [
         {
-          label: "Getting started",
+          label: "Get started",
           items: [
             { label: "Welcome", link: "/" },
             { label: "Quickstart", link: "/quickstart/" },
-            { label: "Big picture", link: "/big-picture/" },
-            { label: "Interactive CLI", link: "/cli/interactive/" },
+            { label: "How it works", link: "/big-picture/" },
           ],
         },
         {
-          label: "Loop",
+          label: "Everyday use",
           items: [
-            { label: "How the gate is built", link: "/loop/gate-floor/" },
-            { label: "When the gate fails", link: "/loop/validation/" },
-            { label: "Spec format", link: "/spec/format/" },
-            { label: "Spec runner", link: "/loop/spec-runner/" },
-            { label: "Model agent", link: "/agent/model-agent/" },
-            { label: "File ops", link: "/edit/engine/" },
+            { label: "Chat with your repo", link: "/cli/interactive/" },
+            { label: "Drive a change to green", link: "/workflows/fix-to-green/" },
+            { label: "Review your changes", link: "/cli/review/" },
+            { label: "Map the repo", link: "/cli/map/" },
             { label: "Plan mode", link: "/cli/plan-mode/" },
           ],
         },
         {
-          label: "TypeScript LSP",
+          label: "Quality & strictness",
           items: [
-            { label: "Language server", link: "/lsp/typescript-server/" },
-            { label: "Write diagnostics", link: "/uplift/write-diagnostics/" },
-          ],
-        },
-        {
-          label: "Web scaffolding",
-          items: [{ label: "Vite stacks", link: "/scaffold/web/" }],
-        },
-        {
-          label: "Guardrails",
-          items: [
+            { label: "The gate", link: "/loop/gate-floor/" },
+            { label: "When the gate fails", link: "/loop/validation/" },
+            { label: "Tests by default", link: "/quality/tests/" },
             { label: "Stack detection", link: "/guardrails/stack-detection/" },
             { label: "Rule packs", link: "/guardrails/rule-packs/" },
             { label: "Meta-rules", link: "/guardrails/meta-rules/" },
+          ],
+        },
+        {
+          label: "Configure",
+          items: [
+            { label: "Models (any provider)", link: "/inference/models-json/" },
             { label: "tsforge.config.json", link: "/guardrails/config/" },
+            { label: "Environment variables", link: "/reference/flags/" },
+            { label: "MCP servers", link: "/integrations/mcp/" },
           ],
-        },
-        {
-          label: "Helping the model",
-          items: [
-            { label: "Fix bad tool calls", link: "/uplift/repair-ladder/" },
-            { label: "Safer line edits", link: "/uplift/hashline/" },
-            { label: "Stop bad output early", link: "/uplift/ttsr/" },
-            { label: "Learning from past runs", link: "/uplift/memory/" },
-          ],
-        },
-        {
-          label: "Inference",
-          items: [
-            { label: "models.json (any provider)", link: "/inference/models-json/" },
-            { label: "Model adapter", link: "/inference/adapter/" },
-          ],
-        },
-        {
-          label: "Integrations",
-          items: [{ label: "MCP servers", link: "/integrations/mcp/" }],
-        },
-        {
-          label: "Observability",
-          items: [
-            { label: "Token metrics (tok/s)", link: "/observability/metrics/" },
-          ],
-        },
-        {
-          label: "Eval",
-          items: [{ label: "A/B testing", link: "/eval/ab-testing/" }],
         },
         {
           label: "Reference",
           items: [
             { label: "Commands", link: "/reference/commands/" },
-            { label: "Environment variables", link: "/reference/flags/" },
             { label: "Rule catalog", link: "/reference/rules-catalog/" },
             { label: "Roadmap", link: "/reference/roadmap/" },
+          ],
+        },
+        {
+          label: "Under the hood",
+          collapsed: true,
+          items: [
+            { label: "Model agent", link: "/agent/model-agent/" },
+            { label: "File ops", link: "/edit/engine/" },
+            { label: "TypeScript language server", link: "/lsp/typescript-server/" },
+            { label: "Write diagnostics", link: "/uplift/write-diagnostics/" },
+            { label: "Fixing bad tool calls", link: "/uplift/repair-ladder/" },
+            { label: "Safer line edits", link: "/uplift/hashline/" },
+            { label: "Stopping bad output early", link: "/uplift/ttsr/" },
+            { label: "Learning from past runs", link: "/uplift/memory/" },
+            { label: "Web scaffolding", link: "/scaffold/web/" },
+            { label: "Model adapter", link: "/inference/adapter/" },
+            { label: "Token metrics", link: "/observability/metrics/" },
+          ],
+        },
+        {
+          label: "For contributors",
+          collapsed: true,
+          items: [
+            { label: "Spec format", link: "/spec/format/" },
+            { label: "Spec runner", link: "/loop/spec-runner/" },
+            { label: "A/B testing (eval)", link: "/eval/ab-testing/" },
           ],
         },
       ],
