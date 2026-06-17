@@ -7,6 +7,7 @@ const names = (tools: { function: { name: string } }[]): string[] =>
 afterEach(() => {
   delete process.env.TSFORGE_NO_LSP_TOOLS;
   delete process.env.TSFORGE_WEB;
+  delete process.env.TSFORGE_NO_GIT_TOOL;
 });
 
 test("scratch (no existing code) gets only the base tools — no LSP nav set", () => {
@@ -35,15 +36,29 @@ test("existing code gets the base tools PLUS the LSP nav set", () => {
   expect(tools.length).toBeGreaterThan(4);
 });
 
-test("TSFORGE_NO_LSP_TOOLS=1 forces base-only even with existing code", () => {
+test("existing code exposes git_context", () => {
+  expect(names(toolsFor(true))).toContain("git_context");
+});
+
+test("TSFORGE_NO_LSP_TOOLS=1 forces base-only — but git_context survives", () => {
+  // git_context is NOT an LSP tool (no tsconfig needed); it's gated on history,
+  // so it stays on existing-code runs even when the LSP nav set is withheld.
   process.env.TSFORGE_NO_LSP_TOOLS = "1";
   expect(names(toolsFor(true)).sort()).toEqual([
     "create",
     "edit",
     "edit_lines",
+    "git_context",
     "read",
     "run",
   ]);
+});
+
+test("git_context is absent on scratch (no history) and removable by flag", () => {
+  expect(names(toolsFor(false))).not.toContain("git_context");
+
+  process.env.TSFORGE_NO_GIT_TOOL = "1";
+  expect(names(toolsFor(true))).not.toContain("git_context");
 });
 
 test("web tools are absent unless TSFORGE_WEB=1", () => {

@@ -3,6 +3,7 @@ import { TOOL_NAME, READ_ONLY_TOOL_NAMES, type ToolName } from "../../agent";
 import { readFile, runShell, doEdit, doCreate } from "./file-ops";
 import { doHashlineEdit } from "./edit-hashline";
 import { doSearch, doLsp } from "./lsp-ops";
+import { doGit } from "./git-ops";
 import { doScaffoldUi } from "./scaffold-ui";
 import { doScaffoldRoutes } from "./scaffold-routes";
 import { doScaffoldWeb } from "./scaffold-web";
@@ -34,6 +35,7 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.renameSymbol]: (a, c) => doLsp(TOOL_NAME.renameSymbol, a, c),
   [TOOL_NAME.moveFile]: (a, c) => doLsp(TOOL_NAME.moveFile, a, c),
   [TOOL_NAME.organizeImports]: (a, c) => doLsp(TOOL_NAME.organizeImports, a, c),
+  [TOOL_NAME.gitContext]: doGit,
   [TOOL_NAME.scaffoldUi]: doScaffoldUi,
   [TOOL_NAME.scaffoldRoutes]: doScaffoldRoutes,
   [TOOL_NAME.scaffoldWeb]: doScaffoldWeb,

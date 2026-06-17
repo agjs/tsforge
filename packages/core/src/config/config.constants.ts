@@ -10,4 +10,5 @@ export const ENV_FLAG = {
   tdd: "TSFORGE_TDD",
   webTools: "TSFORGE_WEB",
   noUpdateCheck: "TSFORGE_NO_UPDATE_CHECK",
+  noGitTool: "TSFORGE_NO_GIT_TOOL",
 } as const;
