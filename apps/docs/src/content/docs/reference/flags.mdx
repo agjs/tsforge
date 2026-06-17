@@ -16,6 +16,16 @@ description: Canonical list of every TSFORGE_* environment variable.
 | `TSFORGE_FORCE_TOOLS` | off | force tool_choice required (`=1`) |
 | `TSFORGE_SIMPLICITY` | off | shortest-solution guidance, scratch non-web (`=1`) |
 | `TSFORGE_TDD` | off | test-first guidance + `test-sibling-required` becomes an error (`=1`) |
+| `TSFORGE_WEB` | off | free, local web access — the `web_fetch` + `web_search` tools (`=1`) |
+
+## Web access
+
+Opt-in, free, and fully local — no API key, no paid service. `TSFORGE_WEB=1` adds two read-only tools: `web_fetch` (retrieve a URL → readable markdown, extracted on-machine) and `web_search` (discover sources). Search defaults to DuckDuckGo's keyless HTML endpoint; point at a self-hosted [SearXNG](https://docs.searxng.org/) instance for full privacy/control.
+
+| Variable | Default | Toggles |
+| --- | --- | --- |
+| `TSFORGE_WEB` | off | enable `web_fetch` + `web_search` (`=1`) |
+| `TSFORGE_SEARXNG_URL` | unset | route `web_search` to a self-hosted SearXNG instance (e.g. `http://localhost:8888`) |
 
 ## Opt-in gate oracles
 
@@ -85,5 +95,6 @@ Extra gate steps (default off; each skips cleanly when nothing applies). See [Ho
 | Variable | Default |
 | --- | --- |
 | `TSFORGE_BROWSER_TESTS` | off (`=1` for Playwright integration) |
+| `TSFORGE_WEB_LIVE_TESTS` | off (`=1` for live `web_fetch`/`web_search` network tests) |
 
 → [Commands](/reference/commands/)

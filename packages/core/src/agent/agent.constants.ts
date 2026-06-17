@@ -22,6 +22,8 @@ export const TOOL_NAME = {
   scaffoldRoutes: "scaffold_routes",
   scaffoldWeb: "scaffold_web",
   addDependency: "add_dependency",
+  webFetch: "web_fetch",
+  webSearch: "web_search",
   yieldStatus: "yield_status",
 } as const;
 
@@ -35,6 +37,11 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   TOOL_NAME.findReferences,
   TOOL_NAME.typeAt,
   TOOL_NAME.diagnostics,
+  // Web tools are read-only (no workspace mutation), so they're usable in plan
+  // mode too — research while planning. Network egress here is structured and
+  // opt-in (TSFORGE_WEB), unlike the raw `run` curl path plan mode blocks.
+  TOOL_NAME.webFetch,
+  TOOL_NAME.webSearch,
 ]);
 
 /** The model's own decision to start a from-scratch WEB app: scaffolds the stack
@@ -211,6 +218,45 @@ export const READ_TOOL = {
       type: "object",
       properties: { file: { type: "string" } },
       required: ["file"],
+    },
+  },
+};
+
+/** Free, LOCAL web access (gated behind TSFORGE_WEB). web_fetch reads a known
+ *  URL; web_search discovers URLs. No API key, no paid service — fetch extracts
+ *  on-machine, search uses DuckDuckGo (or a self-hosted SearXNG). */
+export const WEB_FETCH_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.webFetch,
+    description:
+      "Fetch a public web page and get its main content back as readable markdown. Use it to READ a known URL — docs, a GitHub issue, an RFC, an API reference — instead of guessing. Give the absolute http(s) URL; returns the extracted article text (truncated — pass `maxChars` for more). Runs locally on the user's machine; no external API or key.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "absolute http(s) URL to fetch" },
+        maxChars: {
+          type: "number",
+          description: "optional cap on returned characters (default 8000)",
+        },
+      },
+      required: ["url"],
+    },
+  },
+};
+
+export const WEB_SEARCH_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.webSearch,
+    description:
+      "Search the web and get back ranked result titles, URLs, and snippets. Use it to DISCOVER sources when you don't already have a URL, then `web_fetch` the most relevant one. Free and keyless — DuckDuckGo by default, or a self-hosted SearXNG instance via the TSFORGE_SEARXNG_URL env var.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "the search query" },
+      },
+      required: ["query"],
     },
   },
 };

@@ -30,6 +30,8 @@ import {
   RUN_TOOL,
   READ_TOOL,
   LSP_TOOLS,
+  WEB_FETCH_TOOL,
+  WEB_SEARCH_TOOL,
   TOOL_NAME,
 } from "../agent";
 import { TsService, type ITsDiagnostic } from "../lsp";
@@ -63,14 +65,37 @@ const BASE_TOOLS = [READ_TOOL, RUN_TOOL, EDIT_TOOL, CREATE_TOOL];
 
 const HASHLINE_TOOLS = flags.hashlineEditTool() ? [EDIT_LINES_TOOL] : [];
 
-const ALL_TOOLS = [...BASE_TOOLS, ...HASHLINE_TOOLS, ...LSP_TOOLS];
+// The full advertisable set: base + hashline + LSP nav + the (gated) web tools.
+// Its element union is also the return TYPE of toolsFor — every narrower runtime
+// list below is assignable to it, so each tool stays independently gated.
+const ALL_TOOLS = [
+  ...BASE_TOOLS,
+  ...HASHLINE_TOOLS,
+  ...LSP_TOOLS,
+  WEB_FETCH_TOOL,
+  WEB_SEARCH_TOOL,
+];
+
+/** Free, local web tools (fetch + search) — advertised only under TSFORGE_WEB so
+ *  eval sweeps stay deterministic and offline by default. Available on both
+ *  scratch and existing-code runs when enabled (unlike the LSP nav set). */
+function webTools(): typeof ALL_TOOLS {
+  return flags.webTools() ? [WEB_FETCH_TOOL, WEB_SEARCH_TOOL] : [];
+}
 
 export function toolsFor(hasExistingCode: boolean): typeof ALL_TOOLS {
+  const web = webTools();
+
   if (flags.noLspTools() || !hasExistingCode) {
-    return [...BASE_TOOLS, ...HASHLINE_TOOLS];
+    return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...web];
   }
 
-  return ALL_TOOLS;
+  // existing-code + LSP + web enabled is exactly the full set.
+  if (flags.webTools()) {
+    return ALL_TOOLS;
+  }
+
+  return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...LSP_TOOLS];
 }
 
 /** The model wrote prose but issued NO tool call while the gate is still red —

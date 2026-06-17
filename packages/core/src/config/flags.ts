@@ -38,4 +38,9 @@ export const flags = {
    *  a co-located test fails the gate (the harness obsesses over tests, not just
    *  suggests them). Default OFF. */
   tdd: (): boolean => isOn(ENV_FLAG.tdd),
+  /** Free, local web access (web_fetch + web_search) — opt-in (default OFF) so
+   *  eval sweeps stay deterministic and offline. No key, no paid service:
+   *  web_fetch extracts locally; web_search uses DuckDuckGo (or a self-hosted
+   *  SearXNG via TSFORGE_SEARXNG_URL). */
+  webTools: (): boolean => isOn(ENV_FLAG.webTools),
 };

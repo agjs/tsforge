@@ -32,17 +32,24 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@typescript-eslint/utils": "8.60.0",
     "cli-highlight": "2.1.11",
+    "eslint": "10.4.0",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-sonarjs": "4.0.3",
-    "eslint": "10.4.0",
     "fast-check": "3.23.2",
+    "jsdom": "^29.1.1",
     "prettier": "3.8.3",
+    "turndown": "^7.2.4",
     "typescript": "6.0.3",
     "typescript-eslint": "8.60.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.3",
+    "@types/turndown": "^5.0.6"
   }
 }

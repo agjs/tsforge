@@ -23,6 +23,7 @@ One approved task can involve many agent cycles until the gate passes or tsforge
 | Line edits | `edit_lines` | when hashline is enabled |
 | Navigation | `search`, `symbol_search`, `find_references`, `type_at`, `diagnostics`, `rename_symbol`, `move_file`, `organize_imports` | existing-code repos |
 | Web | `scaffold_web`, `scaffold_ui`, `scaffold_routes`, `add_dependency` | web builds |
+| Web access | `web_fetch`, `web_search` | when `TSFORGE_WEB=1` (free, local — no API key) |
 | Control | `yield_status` | end turn with a summary |
 
 On greenfield specs, navigation tools are often withheld so the model focuses on creating files instead of exploring an empty tree. See [TypeScript language server](/lsp/typescript-server/).

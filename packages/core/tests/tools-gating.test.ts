@@ -6,6 +6,7 @@ const names = (tools: { function: { name: string } }[]): string[] =>
 
 afterEach(() => {
   delete process.env.TSFORGE_NO_LSP_TOOLS;
+  delete process.env.TSFORGE_WEB;
 });
 
 test("scratch (no existing code) gets only the base tools — no LSP nav set", () => {
@@ -43,4 +44,27 @@ test("TSFORGE_NO_LSP_TOOLS=1 forces base-only even with existing code", () => {
     "read",
     "run",
   ]);
+});
+
+test("web tools are absent unless TSFORGE_WEB=1", () => {
+  const n = names(toolsFor(true));
+
+  expect(n).not.toContain("web_fetch");
+  expect(n).not.toContain("web_search");
+});
+
+test("TSFORGE_WEB=1 exposes both free web tools (no key required)", () => {
+  process.env.TSFORGE_WEB = "1";
+  const n = names(toolsFor(true));
+
+  expect(n).toContain("web_fetch");
+  expect(n).toContain("web_search");
+});
+
+test("web tools are available on scratch tasks too when enabled", () => {
+  process.env.TSFORGE_WEB = "1";
+  const n = names(toolsFor(false));
+
+  expect(n).toContain("web_fetch");
+  expect(n).toContain("web_search");
 });

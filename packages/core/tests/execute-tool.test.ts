@@ -428,3 +428,26 @@ test("run attaches rule-fix guidance when its output shows lint/type errors", as
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("web_fetch dispatches to its handler and is permitted in plan mode", async () => {
+  // readOnly (plan mode) + a bad URL: the result is web_fetch's own validation
+  // message — proving the call reached the handler, NOT the plan-mode guard
+  // (web tools are read-only, so plan mode allows them). No network is touched.
+  const r = await executeTool(
+    { name: "web_fetch", arguments: { url: "file:///etc/passwd" } },
+    { cwd: ".", files: [], task: "t", report: () => undefined, readOnly: true }
+  );
+
+  expect(r).toContain("web_fetch");
+  expect(r).not.toContain("plan mode");
+});
+
+test("web_search dispatches to its handler (empty query rejected, no network)", async () => {
+  const r = await executeTool(
+    { name: "web_search", arguments: { query: "" } },
+    { cwd: ".", files: [], task: "t", report: () => undefined, readOnly: true }
+  );
+
+  expect(r).toContain("web_search");
+  expect(r).not.toContain("plan mode");
+});
