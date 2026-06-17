@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative, isAbsolute } from "node:path";
 import type { ITask } from "../spec";
 import type { IChatMessage, IToolCall } from "../inference";
 import {
@@ -11,7 +11,7 @@ import {
   type IErrorItem,
 } from "../validate";
 import { isInScope } from "../lib/scope";
-import { fileExists, resolveScopeFiles, runArgvCommand } from "../lib/fs";
+import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
 import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
@@ -135,6 +135,10 @@ export interface ILoopCtx {
   messages: IChatMessage[];
   /** Detected stack profile — determines which rule packs are enabled. */
   stackProfile?: IStackProfile;
+  /** Files the agent created/edited this session (cwd-relative, forward slashes).
+   *  Accumulated by `runToolCalls`; change-scoped meta-rules (test-sibling-required)
+   *  enforce on this set, so they cover what the agent wrote regardless of git. */
+  touched?: Set<string>;
   /** Rule severity overrides from tsforge.config.json (maps rule ID to "error" | "warn" | "off"). */
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>;
   /** When set, the gate's command output is streamed here live (the CLI wires
@@ -510,6 +514,13 @@ export async function runToolCalls(
     if (wrote.value) {
       touchedEditable = true;
       state.edits += 1;
+      // Record what the agent wrote (cwd-relative) so change-scoped gate rules
+      // (test-sibling-required) know which files to enforce on.
+      const rel = isAbsolute(wrote.path)
+        ? relative(ctx.cwd, wrote.path)
+        : wrote.path;
+
+      ctx.touched?.add(rel.replaceAll("\\", "/"));
       feedback = await runWriteGuard(ctx, wrote.path);
     }
 
@@ -774,33 +785,6 @@ export function persistDetail(e: IErrorItem): string {
  * optional fix command, validate, and return a terminal result (done/stuck) or
  * null to keep going (having fed the failures back into the conversation).
  */
-/** Repo-relative files changed vs git HEAD (working tree + staged). Empty when
- *  not a git repo or git is absent — callers then fall back to non-scoped behavior. */
-async function gitChangedFiles(cwd: string): Promise<string[]> {
-  const out = new Set<string>();
-
-  // --relative → paths relative to cwd (matches sourceFiles even in a monorepo
-  // subdir). ls-files --others picks up UNTRACKED new files — the common TDD case
-  // where the agent CREATES a logic file (and should be made to test it).
-  for (const args of [
-    ["diff", "--name-only", "--relative", "HEAD"],
-    ["diff", "--name-only", "--relative", "--staged"],
-    ["ls-files", "--others", "--exclude-standard"],
-  ]) {
-    const res = await runArgvCommand(cwd, ["git", ...args]);
-
-    if (res.exitCode === 0) {
-      for (const f of res.stdout.split("\n").map((s) => s.trim())) {
-        if (f.length > 0) {
-          out.add(f);
-        }
-      }
-    }
-  }
-
-  return [...out];
-}
-
 export async function settleGate(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -854,9 +838,11 @@ export async function settleGate(
   let metaViolations: IMetaRuleViolation[] = [];
 
   try {
-    // Files changed vs git HEAD — lets change-scoped rules (test-sibling-required)
-    // enforce only on what's being worked on, not a repo's pre-existing debt.
-    const changed = await gitChangedFiles(cwd);
+    // The files the AGENT created/edited this session — what change-scoped rules
+    // (test-sibling-required) enforce on. This is the real signal, not git: it
+    // works in any directory (including a freshly generated, non-git project) and
+    // never blocks on the repo's pre-existing untested code.
+    const changed = [...(ctx.touched ?? [])];
     const metaContext = buildMetaRuleContext(
       cwd,
       ctx.stackProfile?.packs ?? [],

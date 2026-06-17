@@ -331,6 +331,7 @@ export async function runTask(
     report,
     messages,
     stackProfile,
+    touched: new Set<string>(),
     ruleOverrides:
       Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
   };
