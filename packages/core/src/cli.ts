@@ -1272,6 +1272,10 @@ async function repl(args: ICliArgs): Promise<number> {
         await persist();
         break;
 
+      case "review":
+        await runReviewCommand(provider, args.dir, arg);
+        break;
+
       case "files": {
         const globs = arg
           .split(",")
@@ -1577,6 +1581,29 @@ async function repl(args: ICliArgs): Promise<number> {
   statusBar.teardown(); // belt-and-suspenders: restore the terminal on loop exit
 
   return 0;
+}
+
+/** `/review` in the REPL — review the current change and print findings. */
+async function runReviewCommand(
+  provider: OpenAICompatibleProvider,
+  dir: string,
+  base: string
+): Promise<void> {
+  process.stdout.write("reviewing the current change…\n");
+
+  // Guard the REPL: a review error (git/fs/model) must not crash the session.
+  try {
+    const report = await reviewChange(provider, dir, {
+      ...(base.length > 0 ? { base } : {}),
+      log: (m) => process.stdout.write(`  ↳ ${m}\n`),
+    });
+
+    process.stdout.write(`\n${formatReport(report)}\n`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    process.stdout.write(`\nreview failed: ${message}\n`);
+  }
 }
 
 async function reviewMode(args: ICliArgs): Promise<number> {

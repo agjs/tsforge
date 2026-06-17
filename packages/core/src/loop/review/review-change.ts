@@ -3,7 +3,10 @@ import { runArgvCommand } from "../../lib/fs";
 import { isRecord, isArray } from "../../lib/guards";
 import { extractJson } from "../../lib/json";
 import type { IProvider } from "../../inference";
+import type { TsService } from "../../lsp";
+import { buildTsService } from "../turn";
 import { LENSES, lensRubric } from "./lenses";
+import { callerSignal } from "./signals";
 import type {
   IRepoFinding,
   IVerifiedFinding,
@@ -113,18 +116,24 @@ const FIND_SYSTEM = [
 async function findInFile(
   provider: IProvider,
   file: string,
-  diff: string
+  diff: string,
+  signal: string
 ): Promise<IRepoFinding[]> {
   if (diff.length === 0) {
     return [];
   }
+
+  const callers =
+    signal.length > 0
+      ? `\n\nCallers of this file's exports (type-exact — review these for regressions):\n${signal}`
+      : "";
 
   const res = await provider.complete(
     [
       { role: "system", content: FIND_SYSTEM },
       {
         role: "user",
-        content: `File: ${file}\n\nDiff (base → working tree):\n${diff}`,
+        content: `File: ${file}\n\nDiff (base → working tree):\n${diff}${callers}`,
       },
     ],
     { temperature: 0 }
@@ -283,12 +292,18 @@ function errText(err: unknown): string {
  *  abort the whole review). */
 async function safeFind(
   provider: IProvider,
+  svc: TsService | null,
+  cwd: string,
   file: string,
   diff: string,
   log: (m: string) => void
 ): Promise<IRepoFinding[]> {
   try {
-    return await findInFile(provider, file, diff);
+    // callerSignal lives INSIDE the try so a LanguageService hiccup on one file
+    // degrades that file's review, never aborting the whole run.
+    const signal = callerSignal(svc, cwd, file);
+
+    return await findInFile(provider, file, diff, signal);
   } catch (err) {
     log(`  ${file}: review failed — ${errText(err)}`);
 
@@ -329,6 +344,9 @@ export async function reviewChange(
 
   log(`reviewing ${files.length} changed file(s) vs ${base}`);
 
+  // In-process TS LanguageService (null without a tsconfig) — powers the
+  // caller blast-radius signal. Built once; falls back gracefully when absent.
+  const svc: TsService | null = await buildTsService(cwd);
   const raw: IRepoFinding[] = [];
 
   // Sequential on purpose: this harness targets a single local-model server, so
@@ -336,7 +354,7 @@ export async function reviewChange(
   // isolated in try/catch so one bad file can't abort the whole review.
   for (const file of files) {
     const diff = await fileDiff(cwd, base, file, staged);
-    const found = await safeFind(provider, file, diff, log);
+    const found = await safeFind(provider, svc, cwd, file, diff, log);
 
     log(`  ${file}: ${found.length} candidate finding(s)`);
     raw.push(...found);

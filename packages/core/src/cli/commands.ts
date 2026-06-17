@@ -39,6 +39,11 @@ export const COMMANDS: readonly ICommandSpec[] = [
     summary: "set the editable scope (comma-separated; empty = all)",
   },
   {
+    name: "/review",
+    arg: "[base]",
+    summary: "review the current change (logic, regressions, edge cases)",
+  },
+  {
     name: "/model",
     arg: "[name]",
     summary: "list configured models (★ active), or switch to <name>",

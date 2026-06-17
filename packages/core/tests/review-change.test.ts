@@ -116,6 +116,59 @@ test("a string line number from the model is parsed, not defaulted to 1", async 
   expect(report.findings[0]?.line).toBe(2);
 });
 
+test("injects the caller blast-radius signal into the find prompt", async () => {
+  // A two-file TS project (with tsconfig so the LanguageService loads): caller.ts
+  // calls util.ts's export. Reviewing a change to util.ts should surface caller.ts
+  // as a regression site in the find prompt.
+  const proj = mkdtempSync(join(tmpdir(), "tsforge-signal-"));
+  const pgit = (...a: string[]): void =>
+    void execFileSync("git", a, { cwd: proj, stdio: "ignore" });
+
+  writeFileSync(
+    join(proj, "tsconfig.json"),
+    '{"compilerOptions":{"strict":true,"skipLibCheck":true},"include":["*.ts"]}'
+  );
+  writeFileSync(
+    join(proj, "util.ts"),
+    "export function area(w: number, h: number): number {\n  return w * h;\n}\n"
+  );
+  writeFileSync(
+    join(proj, "caller.ts"),
+    'import { area } from "./util";\nexport const room = area(3, 4);\n'
+  );
+  pgit("init", "-q");
+  pgit("config", "user.email", "t@t.t");
+  pgit("config", "user.name", "t");
+  pgit("add", "-A");
+  pgit("commit", "-q", "-m", "init");
+  writeFileSync(
+    join(proj, "util.ts"),
+    "export function area(w: number, h: number): number {\n  return w + h;\n}\n"
+  );
+
+  let findPrompt = "";
+  const capturing: IProvider = {
+    async complete(messages) {
+      const sys = messages.find((m) => m.role === "system")?.content ?? "";
+
+      if (!sys.includes("verifying a code-review finding")) {
+        findPrompt = messages.find((m) => m.role === "user")?.content ?? "";
+      }
+
+      return { content: JSON.stringify({ findings: [] }), toolCalls: [] };
+    },
+  };
+
+  try {
+    await reviewChange(capturing, proj);
+    expect(findPrompt).toContain("Callers of this file's exports");
+    expect(findPrompt).toContain("area");
+    expect(findPrompt).toContain("caller.ts");
+  } finally {
+    rmSync(proj, { recursive: true, force: true });
+  }
+});
+
 test("the senior-review rubric ships with the expected lenses", () => {
   const ids = LENSES.map((l) => l.id);
 
