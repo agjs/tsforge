@@ -1,16 +1,73 @@
 ---
 title: tsforge
-description: "Ship full-stack TypeScript. tsforge loops until your acceptance check passes."
+description: "The TypeScript-native AI coding harness. A gate you can't fake, tests by default, and guardrails that know your stack — so the code it ships actually compiles, passes, and fits your repo."
 template: splash
 hero:
-  tagline: Point it at your repo. Keeps building until the gate passes.
+  tagline: "The AI coding harness built for TypeScript. It doesn't stop at \"looks done\" — it stops when a real check passes."
+  actions:
+    - text: Get started
+      link: /quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: How it works
+      link: /big-picture/
+      icon: open-book
+    - text: GitHub
+      link: https://github.com/agjs/tsforge
+      icon: external
 head:
   - tag: meta
     attrs:
       property: og:title
-      content: "tsforge — TypeScript-specialized AI harness"
+      content: "tsforge — the TypeScript-native AI coding harness"
   - tag: meta
     attrs:
       name: twitter:title
-      content: "tsforge — TypeScript-specialized AI harness"
+      content: "tsforge — the TypeScript-native AI coding harness"
 ---
+
+Point it at a TypeScript repo and talk to it. It reads, edits, and runs your code — and keeps working until a **real check passes**, not until the model says it's finished.
+
+```bash
+curl -fsSL https://tsforge.dev/install.sh | bash
+tsforge            # start in the current repo
+```
+
+## Why tsforge
+
+Most AI coding tools write plausible TypeScript and stop. They skip types, paste `as any`, ignore your stack's conventions, and declare victory before anything is verified. tsforge is built the opposite way — around **machine-checkable truth**.
+
+#### A gate you can't fake
+
+"Done" means a shell command exited 0 — `tsc --strict`, ESLint on tsforge's own strict config, your tests. The model sees the exact errors and fixes them, turn after turn, until it's genuinely green. It can't talk its way past a type error.
+
+#### Tests by default
+
+Out of the box, a logic file the agent writes without a test **fails the gate** — scoped to what it touches, so it never blocks on your repo's legacy code. Quality and strictness are the default, not a flag you have to remember.
+
+#### It knows your stack
+
+tsforge reads your `package.json`, detects React / Next / Drizzle / Fastify / Elysia and more, and enforces the right rules automatically — server/client boundaries, query shapes, auth patterns. No lint config to wire up.
+
+#### Built for your real repo, not just demos
+
+`tsforge review` gives a functional code review of your current change — logic, regressions, edge cases — with every finding re-checked against the code so it doesn't invent problems. `tsforge map` primes the agent with your repo's structure so it stops exploring blind. It works *with* existing code.
+
+#### Runs the model you want
+
+Any OpenAI-compatible endpoint — a hosted API or a local server. It's tuned so even small local models produce TypeScript you'd actually merge; bigger models just need fewer retries.
+
+## Try it in two minutes
+
+```bash
+# chat with your repo
+tsforge
+
+# drive a change until your check passes, then exit
+tsforge "add input validation to the signup route" --accept "bun test"
+
+# review what you've changed
+tsforge review
+```
+
+→ **[Quickstart](/quickstart/)** to install and point it at a model · **[How it works](/big-picture/)** for the loop and the gate · **[Everyday use](/cli/interactive/)** for the day-to-day workflow.

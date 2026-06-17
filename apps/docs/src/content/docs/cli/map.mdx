@@ -1,0 +1,34 @@
+---
+title: Map the repo
+description: "tsforge map — build a structural map of your TypeScript repo so the agent starts oriented instead of exploring blind."
+---
+
+When the agent opens an unfamiliar repo, its first instinct is to read files until it finds the relevant code — burning turns. `tsforge map` gives it a head start: a **structural map** of the codebase, injected into its context so it knows where things live before it starts.
+
+```bash
+tsforge map            # build the map
+tsforge map status     # when it was built, files/hubs, how much has drifted
+tsforge map forget     # delete it
+```
+
+Inside a session, the same build is available as **`/map`**.
+
+## What it builds
+
+All from the TypeScript compiler — no AI guessing, no extra dependencies:
+
+- the **directory shape** and entry points,
+- each module's **exports**,
+- the **hub modules** — the ones most other files import (your repo's load-bearing code), ranked by how many modules depend on them.
+
+It's saved under `.tsforge/workspace-map.json` (git-ignored — it's machine-specific).
+
+## How the agent uses it
+
+The map is a **snapshot**, serialized into a compact block and added to the agent's prompt at the **start of a session**. So the flow is: run `tsforge map` once, then start working — the agent is already oriented. (`/clear` re-applies it mid-session.)
+
+It's a starting orientation, not live truth: as you edit, the agent uses live navigation (`search`, the language server) for current detail, and the map block carries a freshness note telling it how many files have changed since it was built.
+
+No map, no change — it's purely additive, and only useful on existing repos (greenfield builds have nothing to map yet).
+
+→ [Commands](/reference/commands/) · [Review your changes](/cli/review/)
