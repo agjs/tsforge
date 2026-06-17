@@ -541,6 +541,7 @@ export class Session {
       parse: cfg.parse,
       report,
       stackProfile,
+      touched: new Set<string>(),
       ...(mcpRegistry === null ? {} : { mcpRegistry }),
       ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
       messages:

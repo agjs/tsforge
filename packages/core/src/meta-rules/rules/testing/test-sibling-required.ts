@@ -20,10 +20,12 @@ function isTestPath(file: string): boolean {
   return /\.(test|spec)\.[tj]sx?$/u.test(file);
 }
 
-/** A source file that EXPORTS logic and should therefore have a test. Excludes
- *  tests, declaration files, barrels (index), and type-only modules. */
+/** A source file that EXPORTS logic and should therefore have a test. Only `.ts`:
+ *  presentational `.tsx`/`.jsx` components are exempt (in-loop unit tests for them
+ *  are low-value and would make from-scratch web builds impractical — put testable
+ *  logic in `.ts`). Also excludes tests, declarations, barrels, and type-only modules. */
 function isLogicFile(file: string, content: string): boolean {
-  if (!/\.(ts|tsx)$/u.test(file) || file.endsWith(".d.ts")) {
+  if (!file.endsWith(".ts") || file.endsWith(".d.ts")) {
     return false;
   }
 
@@ -85,27 +87,25 @@ export const testSiblingRequiredRule: IMetaRule = {
   description:
     "A logic file (one that exports a function or class) the agent changes must have a test — co-located (*.test.ts) or mirrored under tests/.",
   severity: "warn",
-  run({ root, sourceFiles, changedFiles, readFile }) {
+  run({ root, changedFiles, readFile }) {
     // TDD mode (default ON) makes a missing test a hard gate failure; off → a
-    // nudge. Either way, SCOPED to files changed vs HEAD — never a repo's
-    // pre-existing untested code. No git signal (empty) → nothing to enforce.
+    // nudge. SCOPED to the files the agent changed this session (not the whole
+    // tree), so it never blocks on a repo's pre-existing untested code. Iterating
+    // changedFiles directly (rather than sourceFiles ∩ changed) means it works
+    // regardless of where files live, including a root-level file.
     const severity = flags.tdd() ? "error" : "warn";
-    const changed = new Set(changedFiles.map((f) => f.replace(/\\/gu, "/")));
-
-    if (changed.size === 0) {
-      return [];
-    }
-
     const violations: IMetaRuleViolation[] = [];
+    const seen = new Set<string>();
 
-    for (const file of sourceFiles) {
-      const norm = file.replace(/\\/gu, "/");
+    for (const raw of changedFiles) {
+      const norm = raw.replace(/\\/gu, "/");
 
-      if (!changed.has(norm)) {
+      if (seen.has(norm)) {
         continue;
       }
 
-      const content = readFile(file);
+      seen.add(norm);
+      const content = readFile(norm);
 
       if (
         content === null ||
@@ -118,10 +118,10 @@ export const testSiblingRequiredRule: IMetaRule = {
       const stem = basename(norm).replace(/\.tsx?$/u, "");
 
       violations.push({
-        file,
+        file: norm,
         ruleId: "test-sibling-required",
         severity,
-        message: `Missing test for a logic file you changed. Add \`${join(dirname(norm), `${stem}.test.ts`)}\` (co-located) or the mirrored \`tests/\` equivalent — the harness tests what it writes.`,
+        message: `Missing test for a logic file you changed. Add \`${join(dirname(norm), `${stem}.test.ts`).replace(/\\/gu, "/")}\` (co-located) or the mirrored \`tests/\` equivalent — the harness tests what it writes.`,
       });
     }
 
