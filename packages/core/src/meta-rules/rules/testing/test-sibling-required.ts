@@ -12,7 +12,8 @@ const LOGIC_EXPORTS = [
   /\bexport\s+(default\s+)?(async\s+)?function\b/u,
   /\bexport\s+(abstract\s+)?class\b/u,
   /\bexport\s+default\s+class\b/u,
-  /\bexport\s+const\s+[A-Za-z_$][\w$]*\s*(?::[^=\n]+)?=\s*(async\s+)?(function\b|\([^)]*\)\s*(?::[^=\n]+)?=>|[A-Za-z_$][\w$]*\s*=>)/u,
+  // `[^=]` (not `[^=\n]`) so a multiline type annotation before `=` still matches.
+  /\bexport\s+const\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*(async\s+)?(function\b|\([^)]*\)\s*(?::[^=]+)?=>|[A-Za-z_$][\w$]*\s*=>)/u,
 ];
 
 function isTestPath(file: string): boolean {
@@ -45,31 +46,35 @@ function fileExistsAt(root: string, rel: string): boolean {
   }
 }
 
-/** The mirrored test path under `tests/` (src/foo.ts → tests/foo.test.ts), or "". */
-function mirroredTest(file: string, ext: string): string {
-  const stem = file.slice(0, -ext.length);
-
+/** The mirrored test path under `tests/` for a given stem + test extension, or "". */
+function mirroredTest(file: string, stem: string, testExt: string): string {
   if (file.startsWith("src/")) {
-    return `tests/${stem.slice(4)}.test${ext}`;
+    return `tests/${stem.slice(4)}.test${testExt}`;
   }
 
   if (file.startsWith("scripts/")) {
-    return `tests/scripts/${stem.slice(8)}.test${ext}`;
+    return `tests/scripts/${stem.slice(8)}.test${testExt}`;
   }
 
   return "";
 }
 
 /** A test exists if there's a co-located `*.test|spec` sibling OR a mirrored
- *  `tests/` file. Supports both layouts — co-located and a parallel tests tree. */
+ *  `tests/` file. Supports both layouts, and a `.tsx` source whose test is a
+ *  plain `.test.ts` (common for components without JSX in the test). */
 function hasTest(root: string, file: string): boolean {
-  const ext = /\.tsx?$/u.exec(file)?.[0] ?? ".ts";
-  const stem = file.slice(0, -ext.length);
-  const candidates = [
-    `${stem}.test${ext}`,
-    `${stem}.spec${ext}`,
-    mirroredTest(file, ext),
-  ];
+  const srcExt = /\.tsx?$/u.exec(file)?.[0] ?? ".ts";
+  const stem = file.slice(0, -srcExt.length);
+  const testExts = srcExt === ".tsx" ? [".tsx", ".ts"] : [".ts"];
+  const candidates: string[] = [];
+
+  for (const e of testExts) {
+    candidates.push(
+      `${stem}.test${e}`,
+      `${stem}.spec${e}`,
+      mirroredTest(file, stem, e)
+    );
+  }
 
   return candidates.some((c) => c.length > 0 && fileExistsAt(root, c));
 }

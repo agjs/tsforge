@@ -175,7 +175,7 @@ Meta-rules enforce project structure and configuration invariants that ESLint ca
 
 ### testing
 
-- **test-sibling-required** [WARN]: Logic modules (*.service.ts, *.utils.ts, etc.) should have a co-located *.test.ts sibling.
+- **test-sibling-required** [WARN]: A logic file (one that exports a function or class) the agent changes must have a test — co-located (*.test.ts) or mirrored under tests/.
 
 ### stack-layout
 

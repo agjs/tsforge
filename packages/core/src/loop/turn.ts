@@ -780,10 +780,12 @@ async function gitChangedFiles(cwd: string): Promise<string[]> {
   const out = new Set<string>();
 
   // --relative → paths relative to cwd (matches sourceFiles even in a monorepo
-  // subdir, where the git root differs from the project root).
+  // subdir). ls-files --others picks up UNTRACKED new files — the common TDD case
+  // where the agent CREATES a logic file (and should be made to test it).
   for (const args of [
     ["diff", "--name-only", "--relative", "HEAD"],
     ["diff", "--name-only", "--relative", "--staged"],
+    ["ls-files", "--others", "--exclude-standard"],
   ]) {
     const res = await runArgvCommand(cwd, ["git", ...args]);
 
