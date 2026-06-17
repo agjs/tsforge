@@ -307,47 +307,20 @@ export class TsService {
     };
   }
 
-  /** Start offsets of `file`'s top-level EXPORTED declarations (the symbols other
-   *  files can depend on) — the entry points for a file-level blast-radius check. */
+  /** `file`'s top-level EXPORTED declarations as {name, start offset} — the
+   *  symbols other files can depend on. AST-derived (not regex), so commented-out
+   *  or string-literal "exports" don't count. */
+  exportedSymbols(file: string): { name: string; pos: number }[] {
+    const sf = this.service.getProgram()?.getSourceFile(this.toAbs(file));
+
+    return sf === undefined ? [] : collectExports(sf);
+  }
+
+  /** Start offsets of `file`'s exported declarations — file-level blast-radius. */
   private exportedPositions(abs: string): number[] {
     const sf = this.service.getProgram()?.getSourceFile(abs);
 
-    if (sf === undefined) {
-      return [];
-    }
-
-    const out: number[] = [];
-
-    sf.forEachChild((node) => {
-      const mods = ts.canHaveModifiers(node)
-        ? ts.getModifiers(node)
-        : undefined;
-      const exported =
-        mods?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
-
-      if (!exported) {
-        return;
-      }
-
-      if (ts.isVariableStatement(node)) {
-        for (const d of node.declarationList.declarations) {
-          if (ts.isIdentifier(d.name)) {
-            out.push(d.name.getStart(sf));
-          }
-        }
-      } else if (
-        (ts.isFunctionDeclaration(node) ||
-          ts.isClassDeclaration(node) ||
-          ts.isInterfaceDeclaration(node) ||
-          ts.isTypeAliasDeclaration(node) ||
-          ts.isEnumDeclaration(node)) &&
-        node.name !== undefined
-      ) {
-        out.push(node.name.getStart(sf));
-      }
-    });
-
-    return out;
+    return sf === undefined ? [] : collectExports(sf).map((s) => s.pos);
   }
 
   /**
@@ -565,4 +538,38 @@ export class TsService {
   private toAbs(file: string): string {
     return isAbsolute(file) ? file : join(this.dir, file);
   }
+}
+
+/** Top-level exported declarations of a source file as {name, start offset}. */
+function collectExports(sf: ts.SourceFile): { name: string; pos: number }[] {
+  const out: { name: string; pos: number }[] = [];
+
+  sf.forEachChild((node) => {
+    const mods = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined;
+    const exported =
+      mods?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+
+    if (!exported) {
+      return;
+    }
+
+    if (ts.isVariableStatement(node)) {
+      for (const d of node.declarationList.declarations) {
+        if (ts.isIdentifier(d.name)) {
+          out.push({ name: d.name.text, pos: d.name.getStart(sf) });
+        }
+      }
+    } else if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isClassDeclaration(node) ||
+        ts.isInterfaceDeclaration(node) ||
+        ts.isTypeAliasDeclaration(node) ||
+        ts.isEnumDeclaration(node)) &&
+      node.name !== undefined
+    ) {
+      out.push({ name: node.name.getText(sf), pos: node.name.getStart(sf) });
+    }
+  });
+
+  return out;
 }

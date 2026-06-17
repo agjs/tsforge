@@ -1,23 +1,6 @@
 import { isAbsolute, join, relative } from "node:path";
 import type { TsService } from "../../lsp";
 
-/** Top-level exported declaration names in a file (best-effort, text-based) —
- *  the symbols other code can depend on, hence the regression surface. */
-const EXPORT_RE =
-  /^export\s+(?:async\s+)?(?:function|const|let|var|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gm;
-
-function exportedNames(text: string): string[] {
-  const names = new Set<string>();
-
-  for (const m of text.matchAll(EXPORT_RE)) {
-    if (m[1] !== undefined) {
-      names.add(m[1]);
-    }
-  }
-
-  return [...names];
-}
-
 const MAX_CALLER_FILES = 5;
 const MAX_CALLER_LINES = 3;
 
@@ -28,31 +11,23 @@ const MAX_CALLER_LINES = 3;
  * having to guess them. Returns "" when there's no LanguageService (no tsconfig)
  * or the exports have no external callers.
  */
-export async function callerSignal(
+export function callerSignal(
   svc: TsService | null,
   cwd: string,
   file: string
-): Promise<string> {
+): string {
   if (svc === null) {
     return "";
   }
 
   const abs = isAbsolute(file) ? file : join(cwd, file);
-  const text = await Bun.file(abs)
-    .text()
-    .catch(() => "");
-
-  if (text.length === 0) {
-    return "";
-  }
-
   const lines: string[] = [];
 
-  for (const name of exportedNames(text)) {
-    const sites = callersOf(svc, cwd, file, abs, name);
+  for (const sym of svc.exportedSymbols(file)) {
+    const sites = callersOf(svc, cwd, file, abs, sym.pos);
 
     if (sites.length > 0) {
-      lines.push(`- ${name} → ${sites.join("; ")}`);
+      lines.push(`- ${sym.name} → ${sites.join("; ")}`);
     }
   }
 
@@ -65,20 +40,8 @@ function callersOf(
   cwd: string,
   file: string,
   abs: string,
-  name: string
+  pos: number
 ): string[] {
-  let pos: number | undefined;
-
-  try {
-    pos = svc.positionOfSymbol(file, name);
-  } catch {
-    return [];
-  }
-
-  if (pos === undefined) {
-    return [];
-  }
-
   let external: { file: string; lines: number[] }[];
 
   try {

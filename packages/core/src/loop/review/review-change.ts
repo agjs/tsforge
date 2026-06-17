@@ -292,12 +292,17 @@ function errText(err: unknown): string {
  *  abort the whole review). */
 async function safeFind(
   provider: IProvider,
+  svc: TsService | null,
+  cwd: string,
   file: string,
   diff: string,
-  signal: string,
   log: (m: string) => void
 ): Promise<IRepoFinding[]> {
   try {
+    // callerSignal lives INSIDE the try so a LanguageService hiccup on one file
+    // degrades that file's review, never aborting the whole run.
+    const signal = callerSignal(svc, cwd, file);
+
     return await findInFile(provider, file, diff, signal);
   } catch (err) {
     log(`  ${file}: review failed — ${errText(err)}`);
@@ -349,8 +354,7 @@ export async function reviewChange(
   // isolated in try/catch so one bad file can't abort the whole review.
   for (const file of files) {
     const diff = await fileDiff(cwd, base, file, staged);
-    const signal = await callerSignal(svc, cwd, file);
-    const found = await safeFind(provider, file, diff, signal, log);
+    const found = await safeFind(provider, svc, cwd, file, diff, log);
 
     log(`  ${file}: ${found.length} candidate finding(s)`);
     raw.push(...found);

@@ -1590,12 +1590,20 @@ async function runReviewCommand(
   base: string
 ): Promise<void> {
   process.stdout.write("reviewing the current change…\n");
-  const report = await reviewChange(provider, dir, {
-    ...(base.length > 0 ? { base } : {}),
-    log: (m) => process.stdout.write(`  ↳ ${m}\n`),
-  });
 
-  process.stdout.write(`\n${formatReport(report)}\n`);
+  // Guard the REPL: a review error (git/fs/model) must not crash the session.
+  try {
+    const report = await reviewChange(provider, dir, {
+      ...(base.length > 0 ? { base } : {}),
+      log: (m) => process.stdout.write(`  ↳ ${m}\n`),
+    });
+
+    process.stdout.write(`\n${formatReport(report)}\n`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    process.stdout.write(`\nreview failed: ${message}\n`);
+  }
 }
 
 async function reviewMode(args: ICliArgs): Promise<number> {
