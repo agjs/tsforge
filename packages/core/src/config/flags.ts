@@ -34,10 +34,12 @@ export const flags = {
    *  default OFF until a sweep validates it). */
   simplicity: (): boolean => isOn(ENV_FLAG.simplicity),
   /** TDD-first mode: appends test-first guidance to the build prompt AND elevates
-   *  the `test-sibling-required` meta-rule to an ERROR — so a logic module without
-   *  a co-located test fails the gate (the harness obsesses over tests, not just
-   *  suggests them). Default OFF. */
-  tdd: (): boolean => isOn(ENV_FLAG.tdd),
+   *  the `test-sibling-required` meta-rule to an ERROR — so a logic file the agent
+   *  TOUCHES without a test fails the gate (the harness obsesses over tests, not
+   *  just suggests them). Quality + strictness out of the box, so DEFAULT ON; set
+   *  TSFORGE_TDD=0 to opt out. The error is scoped to changed files (see the rule),
+   *  so it never blocks on a repo's pre-existing untested code. */
+  tdd: (): boolean => process.env.TSFORGE_TDD !== "0",
   /** Free, local web access (web_fetch + web_search) — opt-in (default OFF) so
    *  eval sweeps stay deterministic and offline. No key, no paid service:
    *  web_fetch extracts locally; web_search uses DuckDuckGo (or a self-hosted

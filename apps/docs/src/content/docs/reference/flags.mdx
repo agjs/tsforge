@@ -15,7 +15,7 @@ description: Canonical list of every TSFORGE_* environment variable.
 | `TSFORGE_NO_ASTGREP` | off | disable ast-grep rewrite (`=1`) |
 | `TSFORGE_FORCE_TOOLS` | off | force tool_choice required (`=1`) |
 | `TSFORGE_SIMPLICITY` | off | shortest-solution guidance, scratch non-web (`=1`) |
-| `TSFORGE_TDD` | off | test-first guidance + `test-sibling-required` becomes an error (`=1`) |
+| `TSFORGE_TDD` | ON (`≠ "0"`) | test-first guidance + `test-sibling-required` is an error on changed logic files (`=0` to opt out) |
 | `TSFORGE_WEB` | off | free, local web access — the `web_fetch` + `web_search` tools (`=1`) |
 | `TSFORGE_NO_UPDATE_CHECK` | off | silence the startup "update available" check (`=1`) |
 | `TSFORGE_NO_GIT_TOOL` | off | withhold the `git_context` tool (`=1`) |

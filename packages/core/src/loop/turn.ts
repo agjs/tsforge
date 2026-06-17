@@ -11,7 +11,7 @@ import {
   type IErrorItem,
 } from "../validate";
 import { isInScope } from "../lib/scope";
-import { fileExists, resolveScopeFiles } from "../lib/fs";
+import { fileExists, resolveScopeFiles, runArgvCommand } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
 import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
@@ -774,6 +774,31 @@ export function persistDetail(e: IErrorItem): string {
  * optional fix command, validate, and return a terminal result (done/stuck) or
  * null to keep going (having fed the failures back into the conversation).
  */
+/** Repo-relative files changed vs git HEAD (working tree + staged). Empty when
+ *  not a git repo or git is absent — callers then fall back to non-scoped behavior. */
+async function gitChangedFiles(cwd: string): Promise<string[]> {
+  const out = new Set<string>();
+
+  // --relative → paths relative to cwd (matches sourceFiles even in a monorepo
+  // subdir, where the git root differs from the project root).
+  for (const args of [
+    ["diff", "--name-only", "--relative", "HEAD"],
+    ["diff", "--name-only", "--relative", "--staged"],
+  ]) {
+    const res = await runArgvCommand(cwd, ["git", ...args]);
+
+    if (res.exitCode === 0) {
+      for (const f of res.stdout.split("\n").map((s) => s.trim())) {
+        if (f.length > 0) {
+          out.add(f);
+        }
+      }
+    }
+  }
+
+  return [...out];
+}
+
 export async function settleGate(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -827,9 +852,13 @@ export async function settleGate(
   let metaViolations: IMetaRuleViolation[] = [];
 
   try {
+    // Files changed vs git HEAD — lets change-scoped rules (test-sibling-required)
+    // enforce only on what's being worked on, not a repo's pre-existing debt.
+    const changed = await gitChangedFiles(cwd);
     const metaContext = buildMetaRuleContext(
       cwd,
-      ctx.stackProfile?.packs ?? []
+      ctx.stackProfile?.packs ?? [],
+      changed
     );
 
     metaViolations = runMetaRules(META_RULES, metaContext, ctx.ruleOverrides);

@@ -489,7 +489,8 @@ test("test-sibling-required: detects missing test for .utils.ts", () => {
     "export const add = (a: number, b: number) => a + b;"
   );
 
-  const ctx = buildMetaRuleContext(tempDir, []);
+  // Scoped to changed files: the agent touched helpers.utils.ts.
+  const ctx = buildMetaRuleContext(tempDir, [], ["src/helpers.utils.ts"]);
   const violations = runMetaRules(META_RULES, ctx);
 
   const relevant = violations.filter(
@@ -497,7 +498,7 @@ test("test-sibling-required: detects missing test for .utils.ts", () => {
   );
 
   expect(relevant.length).toBeGreaterThan(0);
-  expect(relevant[0]?.message).toContain("Missing unit-test sibling");
+  expect(relevant[0]?.message).toContain("Missing test");
 });
 
 test("test-sibling-required: passes when test exists", () => {
@@ -513,7 +514,8 @@ test("test-sibling-required: passes when test exists", () => {
     "import { add } from '../src/helpers.utils'; test(() => expect(add(1, 2)).toBe(3));"
   );
 
-  const ctx = buildMetaRuleContext(tempDir, []);
+  // Mirrored tests/ file satisfies it even though the file is in the changed set.
+  const ctx = buildMetaRuleContext(tempDir, [], ["src/helpers.utils.ts"]);
   const violations = runMetaRules(META_RULES, ctx);
 
   const relevant = violations.filter(
@@ -530,7 +532,7 @@ test("test-sibling-required: exempts index.ts", () => {
     "export { add } from './helpers.utils';"
   );
 
-  const ctx = buildMetaRuleContext(tempDir, []);
+  const ctx = buildMetaRuleContext(tempDir, [], ["src/index.ts"]);
   const violations = runMetaRules(META_RULES, ctx);
 
   const relevant = violations.filter(
