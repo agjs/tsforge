@@ -18,6 +18,7 @@ export const TOOL_NAME = {
   renameSymbol: "rename_symbol",
   moveFile: "move_file",
   organizeImports: "organize_imports",
+  gitContext: "git_context",
   scaffoldUi: "scaffold_ui",
   scaffoldRoutes: "scaffold_routes",
   scaffoldWeb: "scaffold_web",
@@ -37,6 +38,9 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   TOOL_NAME.findReferences,
   TOOL_NAME.typeAt,
   TOOL_NAME.diagnostics,
+  // git_context only inspects history/diffs — no workspace mutation — so it is a
+  // plan-mode tool too (scope a review/fix while planning, before any edit).
+  TOOL_NAME.gitContext,
   // Web tools are read-only (no workspace mutation), so they're usable in plan
   // mode too — research while planning. Network egress here is structured and
   // opt-in (TSFORGE_WEB), unlike the raw `run` curl path plan mode blocks.
@@ -440,3 +444,47 @@ export const LSP_TOOLS = [
     },
   },
 ];
+
+/** Read-only, structured git introspection — scope a review or a fix to what
+ *  actually changed. Wraps the `git` binary via an explicit argv (no shell); the
+ *  op is a fixed read-only allowlist. Offered on existing-code runs (gated like
+ *  the nav set; greenfield has no history). TSFORGE_NO_GIT_TOOL forces it off. */
+export const GIT_CONTEXT_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.gitContext,
+    description:
+      "Inspect the repository's git state (read-only) to scope your work to what changed. ops: 'diff' (working-tree or staged changes, optionally vs a ref, optionally a path), 'changed_files' (files changed with +adds/-dels), 'log' (recent commits; pass path + lineStart/lineEnd for a line range's history), 'blame' (who last touched a line range — needs path), 'show' (a commit's message + diff — needs sha).",
+    parameters: {
+      type: "object",
+      properties: {
+        op: {
+          type: "string",
+          enum: ["diff", "changed_files", "log", "blame", "show"],
+        },
+        ref: {
+          type: "string",
+          description:
+            "git ref to compare against (e.g. main, HEAD~3); default is the working tree",
+        },
+        path: { type: "string", description: "limit to a file or directory" },
+        sha: { type: "string", description: "commit SHA (for op 'show')" },
+        staged: {
+          type: "boolean",
+          description: "diff the staged index instead of the working tree",
+        },
+        lineStart: { type: "number", description: "start line (blame / log)" },
+        lineEnd: { type: "number", description: "end line (blame / log)" },
+        max: {
+          type: "number",
+          description: "max commits for op 'log' (default 15)",
+        },
+        maxChars: {
+          type: "number",
+          description: "cap on returned characters (default 4000)",
+        },
+      },
+      required: ["op"],
+    },
+  },
+};

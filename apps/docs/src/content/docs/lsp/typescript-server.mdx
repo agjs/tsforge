@@ -29,6 +29,8 @@ Offered when tsforge detects real code to explore (existing repo, resumed sessio
 
 Disable navigation tools: `TSFORGE_NO_LSP_TOOLS=1`. Disable write feedback: `TSFORGE_LSP_WRITE_FEEDBACK=0`.
 
+On existing repos the model is also offered `git_context` — read-only, structured access to history and diffs (scope a fix to what changed). It is git-backed, not part of the language server, so `TSFORGE_NO_LSP_TOOLS` does not affect it; disable it with `TSFORGE_NO_GIT_TOOL=1`. See [Git context](/reference/flags/#git-context).
+
 ## Safe auto-fixes
 
 tsforge can apply TypeScript quick fixes that match its strict gate (imports, unused vars, missing `await`). It skips fixes that add `!` or unsafe `as` casts.

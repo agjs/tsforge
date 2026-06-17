@@ -76,21 +76,31 @@ function parseFeatureVariants(): IFeatureVariant[] {
   return variants;
 }
 
-/** Map feature variant to env vars. Each feature dim maps to a TSFORGE_* var. */
+/** Feature dim → the TSFORGE_* env var it toggles ("1" on / "0" off). */
+const DIM_ENV: Record<string, string> = {
+  ttsr: "TSFORGE_TTSR",
+  hashline: "TSFORGE_HASHLINE",
+  lsp_write_feedback: "TSFORGE_LSP_WRITE_FEEDBACK",
+  simplicity: "TSFORGE_SIMPLICITY",
+};
+
+/** Map feature variant to env vars. Most dims set their var to the state; `git`
+ *  is inverted (it gates a NO_ flag): git=on → git_context available. */
 function variantToEnvVars(variant: IFeatureVariant): Record<string, string> {
   const envVars: Record<string, string> = {};
 
   for (const [dim, state] of Object.entries(variant)) {
-    if (dim === "ttsr") {
-      envVars.TSFORGE_TTSR = state === "1" ? "1" : "0";
-    } else if (dim === "hashline") {
-      envVars.TSFORGE_HASHLINE = state === "1" ? "1" : "0";
-    } else if (dim === "lsp_write_feedback") {
-      envVars.TSFORGE_LSP_WRITE_FEEDBACK = state === "1" ? "1" : "0";
-    } else if (dim === "simplicity") {
-      envVars.TSFORGE_SIMPLICITY = state === "1" ? "1" : "0";
+    if (dim === "git") {
+      envVars.TSFORGE_NO_GIT_TOOL = state === "1" ? "0" : "1";
+
+      continue;
     }
-    // else: unknown dimension, skip
+
+    const varName = DIM_ENV[dim];
+
+    if (varName !== undefined) {
+      envVars[varName] = state === "1" ? "1" : "0";
+    }
   }
 
   return envVars;
@@ -253,6 +263,23 @@ async function setupRunDir(
   }
 }
 
+/** Run a seed's optional `setup.sh` in the run dir (after files are laid down) —
+ *  how a brownfield seed builds its git history and leaves the RED working tree.
+ *  Absent for greenfield seeds (no-op). Trusted: the corpus is our own code. */
+async function runSeedSetup(dir: string): Promise<void> {
+  if (!(await Bun.file(join(dir, "setup.sh")).exists())) {
+    return;
+  }
+
+  const proc = Bun.spawn(["sh", "setup.sh"], {
+    cwd: dir,
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+
+  await proc.exited;
+}
+
 /** Remove task files in scratch mode (keep in existing mode). */
 async function startRed(
   dir: string,
@@ -287,6 +314,10 @@ async function runOne(
     );
 
     await startRed(runDir, spec);
+    // Build any git history the seed needs (brownfield seeds ship a setup.sh that
+    // git-inits + commits + leaves the buggy working tree). Runs after startRed so
+    // the RED state is whatever setup.sh leaves on disk.
+    await runSeedSetup(runDir);
 
     // Apply tsforge's STRICT FLOOR (bundled tsc-strict + eslint) to the eval
     // gate — the SAME gate the interactive CLI builds. Eval mode otherwise

@@ -32,6 +32,7 @@ import {
   LSP_TOOLS,
   WEB_FETCH_TOOL,
   WEB_SEARCH_TOOL,
+  GIT_CONTEXT_TOOL,
   TOOL_NAME,
 } from "../agent";
 import { TsService, type ITsDiagnostic } from "../lsp";
@@ -68,34 +69,41 @@ const HASHLINE_TOOLS = flags.hashlineEditTool() ? [EDIT_LINES_TOOL] : [];
 // The full advertisable set: base + hashline + LSP nav + the (gated) web tools.
 // Its element union is also the return TYPE of toolsFor — every narrower runtime
 // list below is assignable to it, so each tool stays independently gated.
-const ALL_TOOLS = [
-  ...BASE_TOOLS,
-  ...HASHLINE_TOOLS,
-  ...LSP_TOOLS,
-  WEB_FETCH_TOOL,
-  WEB_SEARCH_TOOL,
-];
+/** Every tool the harness can advertise — the element union all the narrower
+ *  per-context lists below are assignable to (each tool stays independently gated
+ *  in toolsFor). */
+type AdvertisedTool =
+  | (typeof BASE_TOOLS)[number]
+  | (typeof HASHLINE_TOOLS)[number]
+  | (typeof LSP_TOOLS)[number]
+  | typeof WEB_FETCH_TOOL
+  | typeof WEB_SEARCH_TOOL
+  | typeof GIT_CONTEXT_TOOL;
 
 /** Free, local web tools (fetch + search) — advertised only under TSFORGE_WEB so
  *  eval sweeps stay deterministic and offline by default. Available on both
  *  scratch and existing-code runs when enabled (unlike the LSP nav set). */
-function webTools(): typeof ALL_TOOLS {
+function webTools(): AdvertisedTool[] {
   return flags.webTools() ? [WEB_FETCH_TOOL, WEB_SEARCH_TOOL] : [];
 }
 
-export function toolsFor(hasExistingCode: boolean): typeof ALL_TOOLS {
+/** Read-only git introspection — existing-code runs only (greenfield has no
+ *  history), withheld under TSFORGE_NO_GIT_TOOL. Not an LSP tool (no tsconfig
+ *  needed), so it survives TSFORGE_NO_LSP_TOOLS — it's gated only on history. */
+function gitTools(hasExistingCode: boolean): AdvertisedTool[] {
+  return hasExistingCode && !flags.noGitTool() ? [GIT_CONTEXT_TOOL] : [];
+}
+
+export function toolsFor(hasExistingCode: boolean): AdvertisedTool[] {
   const web = webTools();
+  const git = gitTools(hasExistingCode);
 
   if (flags.noLspTools() || !hasExistingCode) {
-    return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...web];
+    return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...web, ...git];
   }
 
-  // existing-code + LSP + web enabled is exactly the full set.
-  if (flags.webTools()) {
-    return ALL_TOOLS;
-  }
-
-  return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...LSP_TOOLS];
+  // existing-code: base + LSP nav + (gated) web + (gated) git.
+  return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...LSP_TOOLS, ...web, ...git];
 }
 
 /** The model wrote prose but issued NO tool call while the gate is still red —

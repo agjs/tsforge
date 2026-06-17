@@ -18,6 +18,17 @@ description: Canonical list of every TSFORGE_* environment variable.
 | `TSFORGE_TDD` | off | test-first guidance + `test-sibling-required` becomes an error (`=1`) |
 | `TSFORGE_WEB` | off | free, local web access — the `web_fetch` + `web_search` tools (`=1`) |
 | `TSFORGE_NO_UPDATE_CHECK` | off | silence the startup "update available" check (`=1`) |
+| `TSFORGE_NO_GIT_TOOL` | off | withhold the `git_context` tool (`=1`) |
+
+## Git context
+
+On existing-code runs tsforge offers `git_context` — a read-only tool giving the model structured, token-bounded access to repo state, so it can scope a review or a fix to **what actually changed** instead of shelling out to raw `git`. Ops: `diff`, `changed_files`, `log` (incl. a line range's history), `blame`, and `show`. It wraps the `git` binary via an explicit argv (no shell), validates the `sha`, and rejects shell metacharacters / option injection in `ref`/`path`; output is char-capped (`maxChars` to raise it).
+
+Offered only when there is existing code to inspect (greenfield scratch builds have no history), and it survives `TSFORGE_NO_LSP_TOOLS` since it is not an LSP tool. Being read-only, it is available in [plan mode](/cli/plan-mode/) too.
+
+| Variable | Default | Toggles |
+| --- | --- | --- |
+| `TSFORGE_NO_GIT_TOOL` | off | withhold `git_context` (`=1`) |
 
 ## Web access
 

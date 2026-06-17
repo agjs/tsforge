@@ -28,10 +28,15 @@ A **seed** is the task you run the model against. Committed seeds live in [`eval
 - `checkout` — multi-file pricing engine (cart + coupons + tax, integer cents).
 - `auth` — multi-file session service (password policy + lockout + token expiry).
 - `query` — multi-file mini-SQL engine (lexer → recursive-descent parser → executor).
+- `fix-regression` — **brownfield**: an existing repo with git history where a recent commit broke `slugify`; the fix is a `git diff` away. Used to exercise [`git_context`](/reference/flags/#git-context).
 
-The first two are warm-ups a strong model one-shots; the last three are multi-file and deliberately harder, so a feature has room to move the pass rate (and the [failure breakdown](#why-runs-failed)) off the ceiling.
+The first two are warm-ups a strong model one-shots; the next three are multi-file and deliberately harder, so a feature has room to move the pass rate (and the [failure breakdown](#why-runs-failed)) off the ceiling.
 
 Pick one with `TSFORGE_SEED=<name>`. A sweep first looks for a local working copy at `evals/<name>/`, then falls back to the committed `evals/corpus/<name>/`. To add your own, drop a folder under `evals/corpus/` with a `<name>.spec.md` plus its fixture files — see [Spec format](/spec/format/).
+
+### Brownfield seeds
+
+A greenfield seed is regenerated from scratch (the sweep deletes the task's files and the model rebuilds them). A **brownfield** seed instead sets `mode: existing` in its spec, so the buggy code is kept and the model edits it in place. Such a seed may also ship a `setup.sh`, which the sweep runs in the run directory after laying down the files — it `git init`s, makes the commits, and leaves the red working tree. That is how a `git_context` task has real history (`log`/`blame`/`show`) and a working-tree `diff` to inspect. Greenfield seeds have no `setup.sh` and are unaffected.
 
 ## Running a sweep
 
@@ -60,6 +65,18 @@ bun run eval:sweep
 ```
 
 Runs `3 repeats × 2 temps × 4 variants = 24` runs with IDs like `orders-ttsr=on,hashline=off-t0.5-...`.
+
+### git_context on/off
+
+```bash
+TSFORGE_SEED=fix-regression \
+TSFORGE_TEMPS=0 \
+TSFORGE_REPEATS=2 \
+TSFORGE_FEATURE_VARIANTS=git \
+bun run eval:sweep
+```
+
+The `git` dimension toggles `git_context` (on → available; off → `TSFORGE_NO_GIT_TOOL=1`). Pair it with a brownfield seed so there is history to inspect.
 
 Each run directory contains `run.log` (human transcript) and `result.json` (structured metrics + feature flags). A sweep also writes `evals/runs/sweep-<seed>-<ts>.json` with every run record.
 
