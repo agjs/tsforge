@@ -92,6 +92,19 @@ test("rejects shell metacharacters and option injection", async () => {
   expect(await doGit({ op: "show", sha: "$(touch x)" }, ctx(repo))).toContain(
     "valid `sha`"
   );
+  // whitespace-prefixed option must not slip past the leading-dash guard
+  expect(
+    await doGit({ op: "diff", ref: "  --upload-pack=evil" }, ctx(repo))
+  ).toContain("unsafe ref");
+});
+
+test("blame tolerates a reversed line range", async () => {
+  const out = await doGit(
+    { op: "blame", path: "a.ts", lineStart: 2, lineEnd: 1 },
+    ctx(repo)
+  );
+
+  expect(out.toLowerCase()).toContain("export const");
 });
 
 test("unknown op is rejected", async () => {

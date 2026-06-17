@@ -11,7 +11,12 @@ const SHA_RE = /^[0-9a-fA-F]{4,40}$/;
 const UNSAFE = /[;&|`$(){}<>\n\r]/;
 
 function unsafe(value: string): boolean {
-  return value.length > 0 && (UNSAFE.test(value) || value.startsWith("-"));
+  // Trim first: " -x" would otherwise slip past the leading-dash check.
+  const trimmed = value.trim();
+
+  return (
+    trimmed.length > 0 && (UNSAFE.test(trimmed) || trimmed.startsWith("-"))
+  );
 }
 
 /** A positive integer arg, or undefined when missing/invalid. */
@@ -68,8 +73,10 @@ function buildLog(args: Record<string, unknown>, path: string): Built {
   const end = intArg(args, "lineEnd");
 
   if (start !== undefined && end !== undefined && path.length > 0) {
+    const [s, e] = start > end ? [end, start] : [start, end];
+
     return {
-      argv: ["git", "log", `-L${start},${end}:${path}`, `--max-count=${max}`],
+      argv: ["git", "log", `-L${s},${e}:${path}`, `--max-count=${max}`],
     };
   }
 
@@ -98,7 +105,9 @@ function buildBlame(args: Record<string, unknown>, path: string): Built {
   const argv = ["git", "blame", "--date=short"];
 
   if (start !== undefined && end !== undefined) {
-    argv.push(`-L${start},${end}`);
+    const [s, e] = start > end ? [end, start] : [start, end];
+
+    argv.push(`-L${s},${e}`);
   }
 
   argv.push("--", path);
@@ -181,10 +190,10 @@ export async function doGit(
     return "git_context: not a git repository (no .git found)";
   }
 
-  const body =
-    res.exitCode !== 0 && res.stdout.trim().length === 0
-      ? res.stderr
-      : res.stdout;
+  // On failure prefer stderr (the real error); fall back to stdout when git
+  // wrote partial output there. On success, stdout is the result.
+  const failed = res.exitCode !== 0;
+  const body = failed && res.stderr.trim().length > 0 ? res.stderr : res.stdout;
   const max = intArg(args, "maxChars") ?? LOOP_LIMITS.maxToolOutputChars;
   const clipped = body.length > max;
   const out = body.slice(0, max);
