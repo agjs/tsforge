@@ -11,7 +11,9 @@ evals/*
 .env
 .env.*
 !.env.example
-.claude/
+# Ignore local Claude state, but version committed skills under .claude/skills/.
+.claude/*
+!.claude/skills/
 evals/runs/
 evals/.web-cache-*/
 .tsforge/

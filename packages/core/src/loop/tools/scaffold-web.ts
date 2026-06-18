@@ -23,13 +23,41 @@ export async function doScaffoldWeb(
   const requested = str(args, "framework").toLowerCase();
   const framework = requested === "vanilla" ? "vanilla" : "react";
 
-  await ctx.setupWeb(framework);
+  let result: { files: readonly string[]; depsInstalled: boolean };
 
-  return (
-    `Scaffolded a ${framework} project (stack + deps installed) and switched to ` +
-    "the web gate. Now BUILD it: first write the type contract — each domain's " +
+  try {
+    result = await ctx.setupWeb(framework);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    return `scaffold_web FAILED: ${message}. The workspace was not set up — fix the cause or build against the existing project.`;
+  }
+
+  // Report the scaffold's writes so the loop re-gates the change (without per-file
+  // write-guarding these generated/vendored shells). Mirror scaffold_ui/_routes:
+  // emit `mutated` only when something was actually written.
+  if (result.files.length > 0) {
+    ctx.report({
+      kind: "tool",
+      task: ctx.task,
+      message: `scaffold_web: wrote ${String(result.files.length)} ${framework} file(s)`,
+      mutated: result.files,
+    });
+  }
+
+  const next =
+    "Now BUILD it: first write the type contract — each domain's " +
     "`src/<domain>/<domain>.types.ts` (+ `.constants.ts`) — then implement the " +
-    "routes/features against those types using @/components/ui. Run the gate when " +
-    "done; it confirms the build, types, lint, and a browser render."
-  );
+    "routes/features against those types using @/components/ui.";
+
+  // Tell the model the TRUTH about install: a failed install means the build gate
+  // (vite build / tsc) cannot run yet, so it must not assume a green path.
+  return result.depsInstalled
+    ? `Scaffolded a ${framework} project (stack + deps installed) and switched to ` +
+        `the web gate. ${next} Run the gate when done; it confirms the build, ` +
+        "types, lint, and a browser render."
+    : `Scaffolded a ${framework} project and switched to the web gate, but ` +
+        "DEPENDENCY INSTALL FAILED — `node_modules` is incomplete, so the build " +
+        "gate (vite build / tsc) cannot pass yet. Run `bun install` (via the `run` " +
+        `tool) and confirm it succeeds BEFORE relying on the gate. ${next}`;
 }

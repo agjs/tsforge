@@ -338,21 +338,26 @@ function turnsToGreenLine(turns: number | null): string {
 }
 
 /** Lay down a stack's skeleton and install its dependencies, reporting progress —
- *  the model can't build until deps resolve. */
+ *  the model can't build until deps resolve. Returns the files actually written and
+ *  whether install succeeded so the `scaffold_web` tool can account for the mutation
+ *  and tell the model the truth (instead of always claiming "deps installed"). */
 async function setUpWebProject(
   dir: string,
   framework: WebFramework
-): Promise<void> {
-  await scaffoldWeb(dir, framework);
+): Promise<{ files: readonly string[]; depsInstalled: boolean }> {
+  const files = await scaffoldWeb(dir, framework);
+
   process.stdout.write(`  ↳ installing ${frameworkLabel(framework)}…\n`);
 
-  const ok = await installWebDeps(dir);
+  const depsInstalled = await installWebDeps(dir);
 
   process.stdout.write(
-    ok
+    depsInstalled
       ? "  ↳ dependencies ready\n"
       : "  ⚠ dependency install failed — run `bun install` yourself\n"
   );
+
+  return { files, depsInstalled };
 }
 
 /** Parse a numeric env var, returning undefined for unset/blank/non-numeric
@@ -525,11 +530,18 @@ const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
 const SPINNER_TICK_MS = 120;
 const ERASE_LINE = `\r${String.fromCharCode(27)}[2K`;
 
+/** Minimal stdout surface the spinner needs — injectable so the inline-write
+ *  behaviour is unit-testable without touching the real terminal. */
+export interface ISpinnerOut {
+  write: (s: string) => void;
+  isTTY?: boolean;
+}
+
 /** Animated activity line (`⠋ thinking · 12s`) for the silent stretches of a
  *  turn — hidden chain-of-thought, prompt processing, a slow first token. TTY
  *  only. Any rendered event clears it before printing (the next tick redraws),
  *  so it never interleaves with streamed text or boxes. */
-function makeSpinner(): {
+export function makeSpinner(out: ISpinnerOut = process.stdout): {
   start: () => void;
   clear: () => void;
   stop: () => void;
@@ -537,6 +549,9 @@ function makeSpinner(): {
   onTick: (cb: () => void) => void;
   setInlineGate: (fn: () => boolean) => void;
   frameLabel: () => string;
+  /** Advance one frame and (if the inline gate allows) write the activity line.
+   *  Exposed for deterministic tests; the live spinner drives it via setInterval. */
+  tick: () => void;
 } {
   let timer: ReturnType<typeof setInterval> | null = null;
   let startedAt = 0;
@@ -554,7 +569,7 @@ function makeSpinner(): {
 
   const clear = (): void => {
     if (drawn) {
-      process.stdout.write(ERASE_LINE);
+      out.write(ERASE_LINE);
       drawn = false;
     }
   };
@@ -563,7 +578,7 @@ function makeSpinner(): {
     frame = (frame + 1) % SPINNER_FRAMES.length;
 
     if (inlineGate()) {
-      process.stdout.write(
+      out.write(
         `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secsNow()}s${RESET}`
       );
       drawn = true;
@@ -573,6 +588,7 @@ function makeSpinner(): {
   };
 
   return {
+    tick,
     setInlineGate: (fn: () => boolean): void => {
       inlineGate = fn;
     },
@@ -581,7 +597,7 @@ function makeSpinner(): {
         ? ""
         : `${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secsNow()}s`,
     start: (): void => {
-      if (!process.stdout.isTTY || timer !== null) {
+      if (out.isTTY !== true || timer !== null) {
         return;
       }
 
@@ -1078,11 +1094,15 @@ async function repl(args: ICliArgs): Promise<number> {
   // fold into phase 2) — the design phase has run and is waiting at the checkpoint.
   let awaitingPlanApproval = false;
 
-  const configureWeb = async (framework: WebFramework): Promise<void> => {
+  const configureWeb = async (
+    framework: WebFramework
+  ): Promise<{ files: readonly string[]; depsInstalled: boolean }> => {
     process.stdout.write(
       `\n  ↳ scaffolding a ${frameworkLabel(framework)} project\n`
     );
-    await setUpWebProject(args.dir, framework);
+
+    const setup = await setUpWebProject(args.dir, framework);
+
     session.setGate(buildWebGate(framework, undefined, args.dir).command);
     session.setFix(buildWebFix(framework));
     session.setIncrementalCheck(buildWebTscCheck());
@@ -1097,12 +1117,16 @@ async function repl(args: ICliArgs): Promise<number> {
     // ceiling here — the interactive session already rides the high runaway
     // backstop (interactiveBackstopTurns) and stops on the progress guards, so a
     // long, converging build is never cut off mid-write.
+
+    return setup;
   };
 
   // The `scaffold_web` tool invokes this when the AGENT decides to build a web app
   // (the framework string is validated tool-side). `configureWeb` closes over the
   // mutable `session`, so this stays correct across `/clear`; re-applied below.
-  const setupWeb = (framework: string): Promise<void> =>
+  const setupWeb = (
+    framework: string
+  ): Promise<{ files: readonly string[]; depsInstalled: boolean }> =>
     configureWeb(framework === "vanilla" ? "vanilla" : "react");
 
   session.setSetupWeb(setupWeb);
@@ -1458,11 +1482,14 @@ async function repl(args: ICliArgs): Promise<number> {
   // inactive and `prompt()` falls back to the inline status line (pipes, --log).
   const statusBar = new StatusBar(process.stdout, true, true);
 
-  // While the bar is pinned it shows the spinner activity itself (via statusInfo),
-  // so suppress the spinner's inline write — it lands on the readline input line
-  // and would erase what the user types mid-turn. The bar repaints with cursor
-  // save/restore, so typing stays intact. No bar (pipe/tiny TTY) → inline as before.
-  spinner.setInlineGate(() => !statusBar.active);
+  // In the interactive REPL a readline prompt owns stdin for the WHOLE session, so
+  // the spinner's carriage-return inline write would clobber whatever the user is
+  // typing mid-turn — regardless of whether the pinned bar is active. So suppress
+  // the inline write unconditionally here: when the bar is up (≥5 rows) it shows the
+  // activity itself via statusInfo; on a sub-5-row TTY there's simply no inline
+  // spinner (correct — better silent than corrupting the input line). The default
+  // `() => true` gate still applies to any non-interactive spinner use.
+  spinner.setInlineGate(() => false);
 
   // Repaint the bar on every spinner tick so tok/s and the context meter update
   // live mid-turn (both read live session state), not just at turn boundaries.

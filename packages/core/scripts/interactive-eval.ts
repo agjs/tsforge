@@ -133,8 +133,9 @@ async function main(): Promise<number> {
   session.setSetupWeb(async (framework) => {
     const fw = framework === "vanilla" ? "vanilla" : "react";
 
-    await scaffoldWeb(dir, fw);
-    await installWebDeps(dir);
+    const files = await scaffoldWeb(dir, fw);
+    const depsInstalled = await installWebDeps(dir);
+
     session.setGate(buildWebGate(fw).command);
     session.setFix(buildWebFix(fw));
     session.setIncrementalCheck(buildWebTscCheck());
@@ -143,6 +144,8 @@ async function main(): Promise<number> {
     session.guide(webGuidance(fw));
     session.setMaxTurns(LOOP_LIMITS.webMaxTurns);
     verdict.scaffolded = true;
+
+    return { files, depsInstalled };
   });
 
   let result: ISendResult;

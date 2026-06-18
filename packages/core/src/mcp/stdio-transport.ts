@@ -67,6 +67,10 @@ export class StdioMcpTransport implements IMcpTransport {
   private readonly pending = new Map<number, IPending>();
   private readonly timeoutMs: number;
   private nextId = 0;
+  /** Set once the server's stdout closes (clean exit or crash) — so a request
+   *  issued AFTER the connection died fails fast instead of waiting out its
+   *  timeout. The readLoop's end is the single source of truth for "gone". */
+  private connectionClosed = false;
 
   constructor(
     private readonly name: string,
@@ -89,7 +93,18 @@ export class StdioMcpTransport implements IMcpTransport {
     });
 
     this.proc = proc;
-    void this.readLoop(proc.stdout);
+    // Fire-and-forget, but NOT swallowed: when the read loop ends — stdout closed
+    // on a clean exit, or a read error on a crash — fail every in-flight request
+    // immediately with a clear "connection closed", rather than letting each one
+    // wait out its 30s timeout and surface a misleading "timed out".
+    void this.readLoop(proc.stdout)
+      .catch(() => undefined)
+      .finally(() => {
+        this.connectionClosed = true;
+        this.failAllPending(
+          `MCP server '${this.name}' connection closed unexpectedly`
+        );
+      });
 
     await this.request("initialize", {
       protocolVersion: PROTOCOL_VERSION,
@@ -110,16 +125,24 @@ export class StdioMcpTransport implements IMcpTransport {
   }
 
   close(): Promise<void> {
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("transport closed"));
-    }
-
-    this.pending.clear();
+    this.connectionClosed = true;
+    this.failAllPending("transport closed");
     this.proc?.kill();
     this.proc = null;
 
     return Promise.resolve();
+  }
+
+  /** Reject every in-flight request and clear the table — used both on an explicit
+   *  close and when the read loop ends (the server went away). Idempotent: an empty
+   *  table is a no-op, so a clean close before the loop's finally fires is harmless. */
+  private failAllPending(message: string): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(message));
+    }
+
+    this.pending.clear();
   }
 
   private async readLoop(stdout: ReadableStream<Uint8Array>): Promise<void> {
@@ -172,6 +195,16 @@ export class StdioMcpTransport implements IMcpTransport {
 
     if (proc === null) {
       return Promise.reject(new Error("transport not connected"));
+    }
+
+    // The connection already died — fail now, don't register a pending that would
+    // only ever resolve via its timeout (the readLoop has already ended, so nothing
+    // will fail it later). This also closes the race where the server exits between
+    // connect() and a later call.
+    if (this.connectionClosed) {
+      return Promise.reject(
+        new Error(`MCP server '${this.name}' connection closed`)
+      );
     }
 
     const id = this.nextId;

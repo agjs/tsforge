@@ -75,6 +75,28 @@ function isModelEntry(value: unknown): value is IModelEntry {
   );
 }
 
+/** A hand-edited `"maxTokens": "8192"` (string) passes `isModelEntry` (which only
+ *  checks baseUrl/model) and the `??` fallback treats it as truthy, so the wrong
+ *  type reaches the request body and the provider rejects it confusingly. Catch it
+ *  here with an actionable message, matching this file's "fail loud, not silent"
+ *  contract. Runs on the raw record so the typeof check is real (post-narrow it
+ *  would be dead). JSON can't yield NaN, so a plain type check is enough. */
+function assertNumericFields(name: string, entry: unknown): void {
+  if (!isRecord(entry)) {
+    return; // isModelEntry rejects non-records with its own message
+  }
+
+  for (const field of ["maxTokens", "contextWindow"]) {
+    const value = entry[field];
+
+    if (value !== undefined && typeof value !== "number") {
+      throw new Error(
+        `models.json: model "${name}" field ${field} must be a number, got ${typeof value}`
+      );
+    }
+  }
+}
+
 /** Validate a parsed object into a registry, with actionable errors — the file is
  *  hand-edited, so a clear message beats a silent fallback. */
 export function parseModelsConfig(raw: unknown): IModelsConfig {
@@ -97,6 +119,7 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
       );
     }
 
+    assertNumericFields(name, entry);
     models[name] = entry;
   }
 

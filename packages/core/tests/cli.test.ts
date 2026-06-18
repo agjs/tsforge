@@ -83,3 +83,34 @@ test("spinnerPhase tracks the turn's activity", async () => {
     spinnerPhase({ kind: "done", task: "s", message: "green" })
   ).toBeNull();
 });
+
+// P2 (review): the spinner's inline write uses a carriage return (`\r…[2K`), which
+// lands on the readline input line and clobbers what the user is typing mid-turn.
+// The interactive REPL keeps a readline prompt attached for the whole session, so
+// the inline write must be gated OFF there regardless of the status bar. This tests
+// the gate mechanism the fix relies on: gate false → no inline write at all.
+test("spinner suppresses its inline carriage-return write when the gate is off", async () => {
+  const { makeSpinner } = await import("../src/cli");
+  const writes: string[] = [];
+  const out = {
+    write: (s: string): void => {
+      writes.push(s);
+    },
+    isTTY: true,
+  };
+
+  const spinner = makeSpinner(out);
+
+  spinner.setInlineGate(() => false);
+  spinner.tick();
+
+  // Nothing written: no carriage return, so the readline buffer is untouched.
+  expect(writes).toHaveLength(0);
+
+  // Gate on (the non-interactive fallback) → the inline activity line IS written.
+  spinner.setInlineGate(() => true);
+  spinner.tick();
+
+  expect(writes.join("")).toContain("\r");
+  expect(writes.join("")).toContain("thinking");
+});
