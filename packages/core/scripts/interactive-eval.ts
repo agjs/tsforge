@@ -138,6 +138,7 @@ async function main(): Promise<number> {
     session.setGate(buildWebGate(fw).command);
     session.setFix(buildWebFix(fw));
     session.setIncrementalCheck(buildWebTscCheck());
+    await session.refreshTsService();
     session.setLintFile(makeFileLinter(fw, dir, WEB_PACKS));
     session.guide(webGuidance(fw));
     session.setMaxTurns(LOOP_LIMITS.webMaxTurns);

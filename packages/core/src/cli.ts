@@ -1086,8 +1086,11 @@ async function repl(args: ICliArgs): Promise<number> {
     session.setGate(buildWebGate(framework, undefined, args.dir).command);
     session.setFix(buildWebFix(framework));
     session.setIncrementalCheck(buildWebTscCheck());
-    // Switch the per-write lint moat to the web rules too, so component-architecture
-    // / no-jsx-computation / cast violations surface per file from here on.
+    // The project only now has a tsconfig + node_modules — rebuild the TS service
+    // so the per-write guard actually runs (it's skipped on a null service), and
+    // switch the lint moat to the web rules so component-architecture /
+    // no-jsx-computation / cast violations surface per file, not at the gate.
+    await session.refreshTsService();
     session.setLintFile(makeFileLinter(framework, args.dir, WEB_PACKS));
     session.guide(webGuidance(framework));
     // A from-scratch web build legitimately needs many turns. Don't pin a low

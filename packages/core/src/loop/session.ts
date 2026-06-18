@@ -173,22 +173,21 @@ export function filterGateStream(
 
     let nl = buf.indexOf("\n");
 
+    // Emit only COMPLETE (newline-terminated) lines; HOLD any trailing partial
+    // until its newline. This is what makes the JSON drop reliable: the eslint
+    // blob is one complete line, always evaluated whole and dropped — the old
+    // partial flush leaked the JSON across chunk boundaries. Gate output
+    // (vite/tsc/test) is line-based, so live progress isn't lost.
     while (nl !== -1) {
       const line = buf.slice(0, nl + 1);
+
+      buf = buf.slice(nl + 1);
 
       if (!isEslintJson(line)) {
         sink(line);
       }
 
-      buf = buf.slice(nl + 1);
       nl = buf.indexOf("\n");
-    }
-
-    // Flush a trailing partial line for responsiveness — UNLESS it has begun an
-    // eslint-JSON blob (`[{`), which we hold until its newline so it's dropped whole.
-    if (buf.length > 0 && !buf.trimStart().startsWith("[{")) {
-      sink(buf);
-      buf = "";
     }
   };
 }
@@ -724,6 +723,16 @@ export class Session {
    *  Used at create and when `scaffold_web` flips a session to the web stack. */
   setLintFile(lintFile: FileLinter | undefined): void {
     this.ctx.lintFile = lintFile;
+  }
+
+  /** Rebuild the in-process TS LanguageService. `scaffold_web` creates the
+   *  project's tsconfig + node_modules AFTER the (empty-dir) session was created,
+   *  so the service built at create time is empty/null and the per-write guard —
+   *  which holds BOTH the tsc diagnostics AND the eslint lint moat — was skipped
+   *  for the whole web build (`tsService !== null` was false). Rebuilding here
+   *  makes per-write feedback actually fire in web sessions, matching headless. */
+  async refreshTsService(): Promise<void> {
+    this.ctx.tsService = await buildTsService(this.ctx.cwd);
   }
 
   /** Replace the editable scope globs mid-session. */
