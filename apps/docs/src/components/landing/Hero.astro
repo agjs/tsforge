@@ -13,9 +13,9 @@ const INSTALL = "curl -fsSL https://tsforge.dev/install.sh | bash";
   <div class="pointer-events-none absolute inset-0 grid-bg opacity-30"></div>
 
   <div
-    class="relative mx-auto max-w-[1400px] px-6 pt-12 pb-16 md:pt-28 md:pb-32 grid lg:grid-cols-[1.05fr_0.95fr] gap-10 lg:gap-20 items-center"
+    class="relative mx-auto max-w-[1400px] px-6 pt-12 pb-16 md:pt-28 md:pb-32 grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-10 lg:gap-20 items-center"
   >
-    <div class="animate-fade-up">
+    <div class="animate-fade-up min-w-0">
       <div class="flex items-center gap-3 mb-8">
         <span class="h-px w-8 bg-primary"></span>
         <span class="mono-caps !text-[color:var(--color-primary)]">Full-stack TypeScript Harness</span>
@@ -61,7 +61,7 @@ const INSTALL = "curl -fsSL https://tsforge.dev/install.sh | bash";
             <span class="font-mono text-[11px]">$</span>
           </div>
           <code
-            class="flex-1 px-3 py-3 font-mono text-[12.5px] text-foreground whitespace-nowrap overflow-x-auto"
+            class="min-w-0 flex-1 px-3 py-3 font-mono text-[12.5px] text-foreground whitespace-nowrap overflow-x-auto"
             >{INSTALL}</code
           >
           <button
@@ -80,7 +80,7 @@ const INSTALL = "curl -fsSL https://tsforge.dev/install.sh | bash";
       </div>
     </div>
 
-    <div class="animate-fade-up [animation-delay:120ms]">
+    <div class="animate-fade-up [animation-delay:120ms] min-w-0">
       <GateScene />
     </div>
   </div>
