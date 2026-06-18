@@ -1311,6 +1311,9 @@ async function repl(args: ICliArgs): Promise<number> {
 
         activeName = result.activeName;
         contextWindow = result.contextWindow;
+        // Keep auto-compaction in sync with the new model's window — not just the
+        // status bar. Otherwise a swap to a smaller model compacts too late.
+        session.setContextWindow(contextWindow);
         break;
       }
 

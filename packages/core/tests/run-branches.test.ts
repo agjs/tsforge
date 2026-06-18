@@ -75,6 +75,9 @@ test("a git_context tool call runs inside a full loop turn, then drives to done"
   execFileSync("git", ["init", "-q"], { cwd: dir });
   execFileSync("git", ["config", "user.email", "t@t.t"], { cwd: dir });
   execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+  // Don't inherit a global commit.gpgsign=true — signing via an unavailable agent
+  // would make this temp-repo commit fail spuriously.
+  execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir });
   execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "init"], {
     cwd: dir,
   });

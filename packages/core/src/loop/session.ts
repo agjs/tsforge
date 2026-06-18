@@ -668,6 +668,14 @@ export class Session {
     this.ctx.task.files = globs;
   }
 
+  /** Update the context window mid-session (e.g. after a `/model` hot-swap to a
+   *  model with a different window). Without this, `autoCompactPct()` keeps using
+   *  the original window, so switching to a SMALLER model would compact too late
+   *  and overflow it — even though the status bar already shows the new size. */
+  setContextWindow(window: number): void {
+    this.cfg.contextWindow = window;
+  }
+
   /** Wire the web-setup callback the `scaffold_web` tool invokes when the AGENT
    *  decides the task is a from-scratch web app — scaffolds the stack and flips
    *  this session to the web gate/guidance. Late-bound (after create) because the

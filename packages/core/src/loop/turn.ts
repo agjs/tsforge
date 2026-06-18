@@ -528,11 +528,14 @@ export async function runToolCalls(
       feedback = await runWriteGuard(ctx, wrote.path);
     }
 
-    // A semantic write (rename/organize_imports) is scope-enforced internally and
-    // mutates on success — re-gate to confirm. (These don't feed state.edits.)
+    // A semantic write (rename/organize_imports/move_file) is scope-enforced
+    // internally and mutates on success — re-gate to confirm. move_file relocates
+    // a file AND rewrites every importer, so omitting it let a move end as
+    // "responded" without the gate ever running. (These don't feed state.edits.)
     if (
       call.name === TOOL_NAME.renameSymbol ||
-      call.name === TOOL_NAME.organizeImports
+      call.name === TOOL_NAME.organizeImports ||
+      call.name === TOOL_NAME.moveFile
     ) {
       touchedEditable = true;
     }

@@ -548,6 +548,53 @@ test("auto-compacts before a send once context exceeds the window threshold", as
   }
 });
 
+// P2: a `/model` hot-swap to a smaller-window model must update auto-compaction,
+// not just the status bar. setContextWindow feeds autoCompactPct; without it the
+// session keeps the original (larger) window and compacts too late, overflowing
+// the new model.
+test("setContextWindow makes auto-compaction use the new (smaller) window", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let compactions = 0;
+    const provider: IProvider = {
+      async complete(messages) {
+        if (
+          (messages[0]?.content ?? "").includes("compacting a coding session")
+        ) {
+          compactions += 1;
+
+          return { content: "summary", toolCalls: [] };
+        }
+
+        // 90 tokens: 9% of the original 1000-window (safe), but 90% of a
+        // hot-swapped 100-window (over the 80% threshold).
+        return {
+          content: "ok",
+          toolCalls: [],
+          usage: { promptTokens: 90, completionTokens: 5, totalTokens: 95 },
+        };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      contextWindow: 1000,
+      autoCompactAt: 0.8,
+    });
+
+    await session.send("first"); // 90/1000 = 9% → no compaction
+    expect(compactions).toBe(0);
+
+    session.setContextWindow(100); // swap to a smaller model
+
+    await session.send("second"); // now 90/100 = 90% ≥ 80% → compacts
+    expect(compactions).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("does NOT auto-compact when no context window is configured", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
 

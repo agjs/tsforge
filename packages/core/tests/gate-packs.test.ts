@@ -93,7 +93,7 @@ describe("gate command construction", () => {
   test("includes TSFORGE_PACKS env prefix when packs are provided", async () => {
     const gate = await buildGate(fixtureDir, ["drizzle", "elysia"]);
 
-    expect(gate.command).toContain("TSFORGE_PACKS=drizzle,elysia");
+    expect(gate.command).toContain("TSFORGE_PACKS='drizzle,elysia'");
     expect(gate.command).toContain("bun");
   });
 
@@ -109,8 +109,8 @@ describe("gate command construction", () => {
       "timestamp-must-specify-mode": "off",
     });
 
-    expect(gate.command).toContain("TSFORGE_PACKS=drizzle");
-    expect(gate.command).toContain("TSFORGE_RULE_OVERRIDES=");
+    expect(gate.command).toContain("TSFORGE_PACKS='drizzle'");
+    expect(gate.command).toContain("TSFORGE_RULE_OVERRIDES='");
     expect(gate.command).toContain("timestamp-must-specify-mode");
   });
 
@@ -149,6 +149,94 @@ describe("makeFileLinter with packs (API path)", () => {
 
     expect(packProblems).toEqual([]);
   });
+});
+
+/** Run a gate sub-command string through `sh -c` — exactly how the real gate
+ *  runs it. This is what exercises the env-prefix shell quoting; running eslint
+ *  via argv `env:{}` (as runGateEslint does) bypasses the shell and hides the
+ *  bug. Returns the tsforge/* rule IDs eslint reported on stdout. */
+async function runGateLintViaShell(command: string): Promise<string[]> {
+  const proc = Bun.spawn(["sh", "-c", command], {
+    cwd: fixtureDir,
+    env: process.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = await new Response(proc.stdout).text();
+
+  await proc.exited;
+
+  const parsed: unknown = JSON.parse(stdout);
+
+  if (!isLintedFileArray(parsed)) {
+    throw new Error(`unexpected eslint output: ${stdout.slice(0, 200)}`);
+  }
+
+  return parsed
+    .flatMap((f) => f.messages)
+    .map((m) => m.ruleId ?? "")
+    .filter((id) => id.startsWith("tsforge/"));
+}
+
+/** Pull the eslint sub-command (env prefix + invocation) out of the full gate
+ *  command so it can be run alone and its JSON output parsed. */
+function lintSubCommand(gateCommand: string): string {
+  const part = gateCommand
+    .split(" && ")
+    .find((p) => p.includes("eslint") && p.includes("TSFORGE_PACKS"));
+
+  if (part === undefined) {
+    throw new Error(`no lint sub-command in: ${gateCommand}`);
+  }
+
+  return part;
+}
+
+// P1: rule overrides are handed to the bundled eslint config via a shell env
+// prefix. The JSON value MUST be shell-quoted — an unquoted `{"x":"off"}` has its
+// quotes stripped by `sh -c` to `{x:off}`, fails JSON.parse, and is silently
+// ignored, so the override never applies. These run the REAL command via a shell.
+describe("rule overrides take effect through the shell (P1b)", () => {
+  test("override 'off' suppresses the rule through sh -c", async () => {
+    const gate = await buildGate(fixtureDir, ["drizzle"], {
+      "timestamp-must-specify-mode": "off",
+    });
+    const ruleIds = await runGateLintViaShell(lintSubCommand(gate.command));
+
+    expect(ruleIds).not.toContain("tsforge/timestamp-must-specify-mode");
+  }, 30_000);
+
+  test("without the override the same shell path still flags it", async () => {
+    const gate = await buildGate(fixtureDir, ["drizzle"]);
+    const ruleIds = await runGateLintViaShell(lintSubCommand(gate.command));
+
+    expect(ruleIds).toContain("tsforge/timestamp-must-specify-mode");
+  }, 30_000);
+
+  // P1b (security): single-quoting the JSON is not enough on its own — a `'` in an
+  // override key (e.g. from a malicious tsforge.config.json) must be escaped, or it
+  // breaks out of the quoting and injects shell commands run by `sh -c`.
+  test("a single quote in an override key cannot inject shell commands", async () => {
+    const marker = join(fixtureDir, "pwned.txt");
+
+    rmSync(marker, { force: true });
+
+    // Key crafted to break out of a naive single-quote wrap and run `touch`.
+    const gate = await buildGate(fixtureDir, ["drizzle"], {
+      "x'; touch pwned.txt; '": "off",
+    });
+    const proc = Bun.spawn(["sh", "-c", lintSubCommand(gate.command)], {
+      cwd: fixtureDir,
+      env: process.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    await proc.exited;
+
+    // With proper escaping the key is inert data, not a command — no file written.
+    expect(await Bun.file(marker).exists()).toBe(false);
+  }, 30_000);
 });
 
 describe("gate eslint CLI path (end-to-end)", () => {
