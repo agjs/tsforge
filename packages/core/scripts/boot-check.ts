@@ -78,6 +78,12 @@ async function main(): Promise<number> {
     stdout: "ignore",
     stderr: "pipe",
     env: process.env,
+    // Own process group, so the `finally` can kill the WHOLE group. The command runs
+    // via `sh -c`, so `child.kill()` would only reap the shell wrapper and orphan the
+    // actual server (it reparents to init and keeps holding the port → next gate run
+    // clashes). Same fix as runArgvCommand. setsid isn't on macOS; `detached` is the
+    // portable way to get a new group.
+    detached: true,
   });
 
   // Drain stderr in the BACKGROUND into a capped tail. We must not await it to EOF:
@@ -102,7 +108,9 @@ async function main(): Promise<number> {
 
     if (status === null) {
       process.stderr.write(
-        `boot-check: server did not answer ${cfg.url} within ${cfg.timeoutMs}ms (or only returned 5xx). It must boot and serve a non-5xx response.\n${stderrTail.slice(0, 800)}\n`
+        // `stderrTail` is the LAST 2000 chars; take the last 800 of that — the
+        // crash/traceback is at the end, not the start.
+        `boot-check: server did not answer ${cfg.url} within ${cfg.timeoutMs}ms (or only returned 5xx). It must boot and serve a non-5xx response.\n${stderrTail.slice(-800)}\n`
       );
 
       return 1;
@@ -114,7 +122,17 @@ async function main(): Promise<number> {
 
     return 0;
   } finally {
-    child.kill();
+    // Kill the whole process group (negative pid) — the `sh -c` wrapper AND the
+    // server it spawned. Fall back to the lone child if the group is already gone.
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      try {
+        child.kill();
+      } catch {
+        // already exited
+      }
+    }
   }
 }
 

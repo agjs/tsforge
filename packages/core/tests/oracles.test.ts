@@ -162,6 +162,28 @@ describe("gate wiring for opt-in oracles", () => {
 
       // On the old code this would time out (exit 1); now the server answers → 0.
       expect(await proc.exited).toBe(0);
+
+      // No-leak: boot-check spawns via `sh -c`, so a bare child.kill() would orphan
+      // the server (it'd keep holding the port). With detached + group-kill, the
+      // port is reclaimable shortly after exit. Retry briefly for kill propagation.
+      let reclaimed = false;
+
+      for (let attempt = 0; attempt < 10 && !reclaimed; attempt += 1) {
+        try {
+          const s = Bun.serve({
+            port,
+            hostname: "127.0.0.1",
+            fetch: () => new Response("ok"),
+          });
+
+          await s.stop(true);
+          reclaimed = true;
+        } catch {
+          await Bun.sleep(100);
+        }
+      }
+
+      expect(reclaimed).toBe(true);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
