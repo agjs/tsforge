@@ -36,6 +36,7 @@ traced it to a concrete `file:line`.
    - **location** `file:line`
    - **evidence** the repro or the exact code path (quote the lines)
    - **fix** a concrete sketch (and the regression test that would lock it)
+
    If the subsystem is clean, say so explicitly and list which invariants you verified
    and how — "clean" with no evidence is not an acceptable result.
 
