@@ -13,6 +13,7 @@ import {
   buildRequestBody,
   buildRequestHeaders,
   chatCompletionsUrl,
+  isDeepseekStyle,
 } from "./request";
 
 export { salvageToolCalls } from "./wire";
@@ -25,7 +26,32 @@ export { salvageToolCalls } from "./wire";
  * ./transport — this class just orchestrates one request.
  */
 export class OpenAICompatibleProvider implements IProvider {
+  /** DeepSeek 400s when thinking is toggled mid-conversation: a thinking-ENABLED
+   *  request rejects a history whose earlier assistant turns have no
+   *  `reasoning_content`. The harness runs interactive turns thinking-OFF (fast
+   *  streaming) and flips thinking ON for gate-repair — on DeepSeek that mixed
+   *  history is rejected. So for DeepSeek we LATCH the session's first thinking
+   *  mode and reuse it for every later turn (never flip). Other providers keep
+   *  per-turn control. `pinned` records whether the latch has been set. */
+  private thinkingPinned = false;
+  private pinnedThinking: boolean | undefined;
+
   constructor(private cfg: IOpenAICompatibleConfig) {}
+
+  /** For DeepSeek, force every turn to the session's first thinking mode (see
+   *  `thinkingPinned`); a no-op for other providers. */
+  private withPinnedThinking(opts: ICompleteOptions): ICompleteOptions {
+    if (!isDeepseekStyle(this.cfg)) {
+      return opts;
+    }
+
+    if (!this.thinkingPinned) {
+      this.pinnedThinking = opts.enableThinking;
+      this.thinkingPinned = true;
+    }
+
+    return { ...opts, enableThinking: this.pinnedThinking };
+  }
 
   /** Hot-swap the endpoint/model/key (used by `/model` to switch live): the
    *  running session keeps this provider reference and picks up the new config on
@@ -43,11 +69,12 @@ export class OpenAICompatibleProvider implements IProvider {
     messages: IChatMessage[],
     opts: ICompleteOptions = {}
   ): Promise<IModelResponse> {
+    const effectiveOpts = this.withPinnedThinking(opts);
     const doFetch = this.cfg.fetch ?? fetch;
-    const streaming = opts.onToken !== undefined;
+    const streaming = effectiveOpts.onToken !== undefined;
     const headers = buildRequestHeaders(this.cfg);
     const body = JSON.stringify(
-      buildRequestBody(this.cfg, messages, opts, streaming)
+      buildRequestBody(this.cfg, messages, effectiveOpts, streaming)
     );
 
     // Retry transient CONNECTION blips (socket close / unable-to-connect) — the
@@ -60,7 +87,7 @@ export class OpenAICompatibleProvider implements IProvider {
       headers,
       body,
       this.cfg.timeoutMs ?? PROVIDER_LIMITS.requestTimeoutMs,
-      opts.signal
+      effectiveOpts.signal
     );
 
     if (!res.ok) {
@@ -71,8 +98,12 @@ export class OpenAICompatibleProvider implements IProvider {
       );
     }
 
-    if (opts.onToken !== undefined) {
-      return streamResponse(res, opts.onToken, opts.ttsrManager);
+    if (effectiveOpts.onToken !== undefined) {
+      return streamResponse(
+        res,
+        effectiveOpts.onToken,
+        effectiveOpts.ttsrManager
+      );
     }
 
     const data: unknown = await res.json();

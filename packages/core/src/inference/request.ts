@@ -18,6 +18,13 @@ function interpolateEnv(
   );
 }
 
+/** True when this config talks to DeepSeek's thinking API (explicit `reasoning:
+ *  "deepseek"` or auto-detected from the url/model). DeepSeek 400s if thinking is
+ *  toggled mid-conversation, so the provider latches one mode per session. */
+export function isDeepseekStyle(cfg: IOpenAICompatibleConfig): boolean {
+  return style(cfg) === "deepseek";
+}
+
 function style(cfg: IOpenAICompatibleConfig): ReasoningStyle {
   if (cfg.reasoning !== undefined) {
     return cfg.reasoning;
