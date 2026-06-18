@@ -438,13 +438,21 @@ export const WEB_PACKS: readonly string[] = [
   "tanstack-query",
 ];
 
+/** POSIX-safe single-quote a value for interpolation into a `sh -c` command:
+ *  wrap in single quotes and rewrite each embedded `'` as `'\''` (close quote,
+ *  escaped quote, reopen). Single quoting is required because the value is a JSON
+ *  blob — left unquoted, the shell strips its double quotes (`{"a":"off"}` →
+ *  `{a:off}`), which fails `JSON.parse` in the config and is silently ignored, so
+ *  rule overrides never reached eslint. Escaping the embedded quote is required
+ *  because a pack id or rule key can carry a `'` (e.g. from a malicious
+ *  tsforge.config.json in an untrusted repo) — naive single-quoting would let it
+ *  break out and inject shell commands. */
+function shSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 /** Build the `KEY='val' ` shell prefix that hands packs (+ rule overrides) to a
- *  bundled eslint config, which reads them from the environment at load time.
- *  The whole command runs through `sh -c`, so the JSON value MUST be single-
- *  quoted: an unquoted `{"a":"off"}` has its double quotes stripped by the shell
- *  to `{a:off}`, which fails `JSON.parse` in the config and is then silently
- *  ignored — so rule overrides never reached eslint. JSON.stringify never emits
- *  a single quote, so single-quoting the value is lossless. */
+ *  bundled eslint config, which reads them from the environment at load time. */
 function packEnvPrefix(
   packs?: readonly string[],
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
@@ -452,11 +460,13 @@ function packEnvPrefix(
   const envParts: string[] = [];
 
   if (packs !== undefined && packs.length > 0) {
-    envParts.push(`TSFORGE_PACKS='${packs.join(",")}'`);
+    envParts.push(`TSFORGE_PACKS=${shSingleQuote(packs.join(","))}`);
   }
 
   if (ruleOverrides !== undefined && Object.keys(ruleOverrides).length > 0) {
-    envParts.push(`TSFORGE_RULE_OVERRIDES='${JSON.stringify(ruleOverrides)}'`);
+    envParts.push(
+      `TSFORGE_RULE_OVERRIDES=${shSingleQuote(JSON.stringify(ruleOverrides))}`
+    );
   }
 
   return envParts.length > 0 ? `${envParts.join(" ")} ` : "";

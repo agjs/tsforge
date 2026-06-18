@@ -212,6 +212,31 @@ describe("rule overrides take effect through the shell (P1b)", () => {
 
     expect(ruleIds).toContain("tsforge/timestamp-must-specify-mode");
   }, 30_000);
+
+  // P1b (security): single-quoting the JSON is not enough on its own — a `'` in an
+  // override key (e.g. from a malicious tsforge.config.json) must be escaped, or it
+  // breaks out of the quoting and injects shell commands run by `sh -c`.
+  test("a single quote in an override key cannot inject shell commands", async () => {
+    const marker = join(fixtureDir, "pwned.txt");
+
+    rmSync(marker, { force: true });
+
+    // Key crafted to break out of a naive single-quote wrap and run `touch`.
+    const gate = await buildGate(fixtureDir, ["drizzle"], {
+      "x'; touch pwned.txt; '": "off",
+    });
+    const proc = Bun.spawn(["sh", "-c", lintSubCommand(gate.command)], {
+      cwd: fixtureDir,
+      env: process.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    await proc.exited;
+
+    // With proper escaping the key is inert data, not a command — no file written.
+    expect(await Bun.file(marker).exists()).toBe(false);
+  }, 30_000);
 });
 
 describe("gate eslint CLI path (end-to-end)", () => {
