@@ -23,13 +23,20 @@ function isTestPath(file: string): boolean {
 /** A source file that EXPORTS logic and should therefore have a test. Only `.ts`:
  *  presentational `.tsx`/`.jsx` components are exempt (in-loop unit tests for them
  *  are low-value and would make from-scratch web builds impractical — put testable
- *  logic in `.ts`). Also excludes tests, declarations, barrels, and type-only modules. */
+ *  logic in `.ts`). `*.hooks.ts` is also exempt: React hooks (useState/useEffect/
+ *  useFrame) need a DOM/fiber render environment to test, so the rule only forced
+ *  placeholder tests — put pure, testable logic in `.logic.ts`/`.ts`. Also excludes
+ *  tests, declarations, barrels, and type-only modules. */
 function isLogicFile(file: string, content: string): boolean {
   if (!file.endsWith(".ts") || file.endsWith(".d.ts")) {
     return false;
   }
 
-  if (isTestPath(file) || file.endsWith(".types.ts")) {
+  if (
+    isTestPath(file) ||
+    file.endsWith(".types.ts") ||
+    file.endsWith(".hooks.ts")
+  ) {
     return false;
   }
 

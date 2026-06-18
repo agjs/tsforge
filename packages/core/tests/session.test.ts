@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
-import { Session } from "../src/loop";
+import { Session, filterGateStream } from "../src/loop";
 
 /** A provider that yields immediately (no tool calls) — the "model is done" case. */
 function yields(content = "ok"): IProvider {
@@ -1012,4 +1012,26 @@ test("TSFORGE_TDD=0 omits test-first guidance from the interactive prompt", asyn
     delete process.env.TSFORGE_TDD;
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// The web gate runs `eslint --format json`; its single giant JSON line used to
+// stream raw to the terminal at the end of every run. filterGateStream drops it
+// (whole, even across chunk splits) while passing build/test progress through.
+test("filterGateStream drops the eslint JSON blob but keeps build progress", async () => {
+  const out: string[] = [];
+  const sink = filterGateStream((t) => out.push(t));
+
+  sink("vite v6 building for production...\n");
+  sink("✓ 180 modules transformed.\n");
+  // The eslint JSON, arriving split across two chunks, then its newline.
+  sink('[{"filePath":"/x/a.ts","messages":[{"ruleId":"tsforge/no-jsx-comp');
+  sink('utation","severity":2}],"errorCount":1}]\n');
+  sink("✓ built in 1.6s\n");
+
+  const joined = out.join("");
+
+  expect(joined).toContain("modules transformed");
+  expect(joined).toContain("built in 1.6s");
+  expect(joined).not.toContain("filePath");
+  expect(joined).not.toContain("no-jsx-computation");
 });

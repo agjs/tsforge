@@ -149,6 +149,50 @@ export interface ISendOptions {
 
 const SESSION_ID = "session";
 
+/** Wrap a live gate-output sink so the machine-readable `eslint --format json`
+ *  blob NEVER reaches the terminal — it's a single giant JSON line the harness
+ *  parses internally and a human must not see (it was dumping raw at the end of
+ *  every web run). Buffers across chunk boundaries: a line that begins `[{` is
+ *  held until its newline, then dropped if it's the eslint JSON; everything else
+ *  (vite build progress, tsc, test output) passes through unchanged. */
+export function filterGateStream(
+  sink: (text: string) => void
+): (text: string) => void {
+  let buf = "";
+
+  const isEslintJson = (line: string): boolean => {
+    const t = line.trimStart();
+
+    return (
+      t.startsWith("[{") && t.includes('"filePath"') && t.includes('"messages"')
+    );
+  };
+
+  return (text: string): void => {
+    buf += text;
+
+    let nl = buf.indexOf("\n");
+
+    while (nl !== -1) {
+      const line = buf.slice(0, nl + 1);
+
+      if (!isEslintJson(line)) {
+        sink(line);
+      }
+
+      buf = buf.slice(nl + 1);
+      nl = buf.indexOf("\n");
+    }
+
+    // Flush a trailing partial line for responsiveness — UNLESS it has begun an
+    // eslint-JSON blob (`[{`), which we hold until its newline so it's dropped whole.
+    if (buf.length > 0 && !buf.trimStart().startsWith("[{")) {
+      sink(buf);
+      buf = "";
+    }
+  };
+}
+
 /** Build the assistant history message, carrying `reasoningContent` when the
  *  model produced it (DeepSeek's thinking mode requires it replayed). */
 function assistantMessage(res: IModelResponse): IChatMessage {
@@ -557,10 +601,11 @@ export class Session {
           ? [...cfg.history]
           : [{ role: "system", content: systemPrompt(cfg, workspaceMap) }],
       // Stream the gate's output live (the interactive CLI), so a slow gate
-      // (vite build + chromium) shows progress instead of running silently.
-      onGateChunk: (text) => {
+      // (vite build + chromium) shows progress instead of running silently — but
+      // filtered so the raw eslint JSON blob never floods the terminal.
+      onGateChunk: filterGateStream((text) => {
         report({ kind: "token", task: SESSION_ID, message: text });
-      },
+      }),
     };
 
     const session = new Session(cfg, ctx);
@@ -669,6 +714,16 @@ export class Session {
    *  every few edits while building, so errors surface early instead of piling up. */
   setIncrementalCheck(command: string): void {
     this.incrementalCheck = command;
+  }
+
+  /** Wire the PER-WRITE lint moat — the gate's eslint rules applied to each file
+   *  AS it's written, so `as`-casts, no-jsx-computation, hooks-in-component-body,
+   *  component-folder-structure, etc. surface immediately instead of as an
+   *  end-of-turn pile-up. The interactive session was missing this (only headless
+   *  builds wired it), so a whole web app's worth of violations dumped at the gate.
+   *  Used at create and when `scaffold_web` flips a session to the web stack. */
+  setLintFile(lintFile: FileLinter | undefined): void {
+    this.ctx.lintFile = lintFile;
   }
 
   /** Replace the editable scope globs mid-session. */

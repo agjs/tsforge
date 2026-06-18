@@ -50,6 +50,9 @@ import {
   scaffoldWeb,
   installWebDeps,
   webGuidance,
+  makeFileLinter,
+  WEB_PACKS,
+  type FileLinter,
 } from "./detect-gate";
 import type { WebFramework } from "./web-templates";
 import { isRecord } from "./lib/guards";
@@ -811,7 +814,7 @@ function browserCheckCommand(htmlFile: string): string {
 async function resolveGate(
   args: ICliArgs,
   resumed: ISessionRecord | null
-): Promise<{ accept: string; gateLabel: string }> {
+): Promise<{ accept: string; gateLabel: string; lintFile?: FileLinter }> {
   const base = await baseGate(args, resumed);
 
   if (args.browser.length === 0) {
@@ -826,6 +829,7 @@ async function resolveGate(
       base.accept.length > 0
         ? `${base.gateLabel} + browser render`
         : "browser render",
+    ...(base.lintFile === undefined ? {} : { lintFile: base.lintFile }),
   };
 }
 
@@ -834,7 +838,7 @@ async function resolveGate(
 async function baseGate(
   args: ICliArgs,
   resumed: ISessionRecord | null
-): Promise<{ accept: string; gateLabel: string }> {
+): Promise<{ accept: string; gateLabel: string; lintFile?: FileLinter }> {
   if (resumed !== null) {
     const label = resumed.accept.length > 0 ? resumed.accept : "none";
 
@@ -848,7 +852,14 @@ async function baseGate(
   if (args.web) {
     const web = buildWebGate("react", undefined, args.dir);
 
-    return { accept: web.command, gateLabel: web.label };
+    // PER-WRITE lint moat: the web gate's eslint rules applied to each file as the
+    // model writes it, so architecture/cast violations surface immediately instead
+    // of as an end-of-turn pile-up.
+    return {
+      accept: web.command,
+      gateLabel: web.label,
+      lintFile: makeFileLinter("react", args.dir, WEB_PACKS),
+    };
   }
 
   if (args.noGate) {
@@ -882,7 +893,16 @@ async function baseGate(
     }
   );
 
-  return { accept: auto.command, gateLabel: auto.label };
+  return {
+    accept: auto.command,
+    gateLabel: auto.label,
+    lintFile: makeFileLinter(
+      "core",
+      args.dir,
+      activePacks,
+      Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined
+    ),
+  };
 }
 
 /** Interactive REPL: a persistent gate-anchored conversation. */
@@ -916,7 +936,7 @@ async function repl(args: ICliArgs): Promise<number> {
   }
 
   const id = resumed?.id ?? newSessionId();
-  const { accept, gateLabel } = await resolveGate(args, resumed);
+  const { accept, gateLabel, lintFile } = await resolveGate(args, resumed);
   const files = resumed !== null ? resumed.files : scopeOf(args);
   const logFile = resolveLogPath(id, args.log);
 
@@ -946,6 +966,9 @@ async function repl(args: ICliArgs): Promise<number> {
     accept,
     contextWindow,
     report,
+    // PER-WRITE lint moat (eslint rules per file as it's written), so violations
+    // surface immediately instead of piling up at the end-of-turn gate.
+    ...(lintFile === undefined ? {} : { lintFile }),
     ...(resumed === null ? {} : { history: resumed.messages }),
     // --web pre-scaffolds the project above, so it gets the web gate/guidance
     // directly. EVERY OTHER interactive session offers `scaffold_web` (+ the
@@ -1063,6 +1086,9 @@ async function repl(args: ICliArgs): Promise<number> {
     session.setGate(buildWebGate(framework, undefined, args.dir).command);
     session.setFix(buildWebFix(framework));
     session.setIncrementalCheck(buildWebTscCheck());
+    // Switch the per-write lint moat to the web rules too, so component-architecture
+    // / no-jsx-computation / cast violations surface per file from here on.
+    session.setLintFile(makeFileLinter(framework, args.dir, WEB_PACKS));
     session.guide(webGuidance(framework));
     // A from-scratch web build legitimately needs many turns. Don't pin a low
     // ceiling here — the interactive session already rides the high runaway

@@ -29,6 +29,8 @@ import {
   scaffoldWeb,
   installWebDeps,
   webGuidance,
+  makeFileLinter,
+  WEB_PACKS,
 } from "../src/detect-gate";
 import { resolveActiveModel } from "../src/models-config";
 import { OpenAICompatibleProvider } from "../src/inference";
@@ -136,6 +138,7 @@ async function main(): Promise<number> {
     session.setGate(buildWebGate(fw).command);
     session.setFix(buildWebFix(fw));
     session.setIncrementalCheck(buildWebTscCheck());
+    session.setLintFile(makeFileLinter(fw, dir, WEB_PACKS));
     session.guide(webGuidance(fw));
     session.setMaxTurns(LOOP_LIMITS.webMaxTurns);
     verdict.scaffolded = true;
