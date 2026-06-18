@@ -8,8 +8,11 @@
 .tf-landing-footer {
   /* Full-bleed regardless of the splash container's max-width/padding. */
   width: 100vw;
+  max-width: 100vw;
   margin-left: calc(50% - 50vw);
   margin-right: calc(50% - 50vw);
+  /* Clip the bleed so the scrollbar width can't introduce horizontal scroll. */
+  overflow-x: clip;
   font-family: var(--font-sans);
   color: var(--color-foreground);
 }
