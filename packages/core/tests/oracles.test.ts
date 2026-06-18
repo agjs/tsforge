@@ -118,4 +118,74 @@ describe("gate wiring for opt-in oracles", () => {
     expect(on.label).toContain("test coverage");
     expect(on.label).toContain("boot smoke");
   });
+
+  // P3 (review): boot-check left the server's stdout piped-but-unread and only
+  // drained stderr on failure. A server that logs a lot on boot would fill the pipe
+  // and block on write → never answer → boot-check times out. With stdout ignored +
+  // stderr background-drained, a chatty-but-healthy server still answers 200.
+  test("boot-check survives a server that floods its output then answers", async () => {
+    // Free port: serveEphemeral binds 127.0.0.1; read the port, then release it.
+    const probe = await serveEphemeral({ fetch: () => new Response("ok") });
+    const port = probe.port;
+
+    await probe.stop(true);
+
+    const tmp = mkdtempSync(join(tmpdir(), "tsforge-boot-hang-"));
+
+    try {
+      const serverFile = join(tmp, "server.ts");
+
+      // Flood stdout + stderr with far more than a pipe buffer (~64KB) BEFORE
+      // serving, then answer 200 and stay up.
+      writeFileSync(
+        serverFile,
+        [
+          'const big = "x".repeat(300000);',
+          "process.stderr.write(big);",
+          "process.stdout.write(big);",
+          `Bun.serve({ port: ${String(port)}, hostname: "127.0.0.1", fetch: () => new Response("ok") });`,
+        ].join("\n")
+      );
+
+      const bootCheck = join(import.meta.dir, "..", "scripts", "boot-check.ts");
+      const proc = Bun.spawn(["bun", bootCheck], {
+        cwd: tmp,
+        env: {
+          ...process.env,
+          TSFORGE_BOOT: `bun ${serverFile}`,
+          TSFORGE_BOOT_URL: `http://127.0.0.1:${String(port)}/`,
+          TSFORGE_BOOT_TIMEOUT: "8000",
+        },
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+
+      // On the old code this would time out (exit 1); now the server answers → 0.
+      expect(await proc.exited).toBe(0);
+
+      // No-leak: boot-check spawns via `sh -c`, so a bare child.kill() would orphan
+      // the server (it'd keep holding the port). With detached + group-kill, the
+      // port is reclaimable shortly after exit. Retry briefly for kill propagation.
+      let reclaimed = false;
+
+      for (let attempt = 0; attempt < 10 && !reclaimed; attempt += 1) {
+        try {
+          const s = Bun.serve({
+            port,
+            hostname: "127.0.0.1",
+            fetch: () => new Response("ok"),
+          });
+
+          await s.stop(true);
+          reclaimed = true;
+        } catch {
+          await Bun.sleep(100);
+        }
+      }
+
+      expect(reclaimed).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 25000);
 });

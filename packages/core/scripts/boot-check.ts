@@ -73,19 +73,44 @@ async function main(): Promise<number> {
 
   const child = Bun.spawn(["sh", "-c", cfg.command], {
     cwd: process.cwd(),
-    stdout: "pipe",
+    // stdout is never consumed — discard it so a chatty server can't fill the pipe
+    // and block on write. stderr we keep, but drain it continuously below.
+    stdout: "ignore",
     stderr: "pipe",
     env: process.env,
+    // Own process group, so the `finally` can kill the WHOLE group. The command runs
+    // via `sh -c`, so `child.kill()` would only reap the shell wrapper and orphan the
+    // actual server (it reparents to init and keeps holding the port → next gate run
+    // clashes). Same fix as runArgvCommand. setsid isn't on macOS; `detached` is the
+    // portable way to get a new group.
+    detached: true,
   });
+
+  // Drain stderr in the BACKGROUND into a capped tail. We must not await it to EOF:
+  // on the success path the server stays alive, so the stream never ends — awaiting
+  // would hang. A live reader also keeps the pipe from filling (which would block a
+  // chatty server). `child.kill()` in `finally` closes the stream and ends the loop.
+  let stderrTail = "";
+  const drainStderr = (async (): Promise<void> => {
+    const decoder = new TextDecoder();
+
+    for await (const chunk of child.stderr) {
+      stderrTail = (stderrTail + decoder.decode(chunk, { stream: true })).slice(
+        -2000
+      );
+    }
+  })();
+
+  void drainStderr.catch(() => undefined);
 
   try {
     const status = await pollUntilReady(cfg.url, cfg.timeoutMs);
 
     if (status === null) {
-      const err = await new Response(child.stderr).text();
-
       process.stderr.write(
-        `boot-check: server did not answer ${cfg.url} within ${cfg.timeoutMs}ms (or only returned 5xx). It must boot and serve a non-5xx response.\n${err.slice(0, 800)}\n`
+        // `stderrTail` is the LAST 2000 chars; take the last 800 of that — the
+        // crash/traceback is at the end, not the start.
+        `boot-check: server did not answer ${cfg.url} within ${cfg.timeoutMs}ms (or only returned 5xx). It must boot and serve a non-5xx response.\n${stderrTail.slice(-800)}\n`
       );
 
       return 1;
@@ -97,7 +122,17 @@ async function main(): Promise<number> {
 
     return 0;
   } finally {
-    child.kill();
+    // Kill the whole process group (negative pid) — the `sh -c` wrapper AND the
+    // server it spawned. Fall back to the lone child if the group is already gone.
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      try {
+        child.kill();
+      } catch {
+        // already exited
+      }
+    }
   }
 }
 

@@ -29,6 +29,10 @@ export async function doScaffoldRoutes(
   for (const [rel, content] of Object.entries(files)) {
     const path = normalizeWorkspacePath(ctx.cwd, rel);
 
+    // Scope check only — deliberately NOT the vendored guard. This tool's JOB is to
+    // write the generated route shells; gating it on `isVendored` would refuse the
+    // very files it owns if the vendored set ever covered them. (edit/create DO
+    // reject vendored paths — there the model must not rewrite a generated shell.)
     if (!writable(path, ctx.files)) {
       continue;
     }
