@@ -123,8 +123,10 @@ test("scaffoldWeb(react) lays the full kit; gate builds with Vite + browser", as
     expect(await Bun.file(join(dir, "vite.config.ts")).exists()).toBe(true);
     expect(await Bun.file(join(dir, "components.json")).exists()).toBe(true);
     expect(await Bun.file(join(dir, "src/main.tsx")).exists()).toBe(true);
-    expect(await Bun.file(join(dir, "src/lib/utils.ts")).exists()).toBe(true);
-    expect(await Bun.file(join(dir, "src/lib/sort.ts")).exists()).toBe(true); // typed sortBy
+    expect(await Bun.file(join(dir, "src/lib/utils.ts")).exists()).toBe(true); // cn() — the only shipped lib helper
+    // The old vendored SDK (sort/result/api/use-resource/mocks) is gone — the
+    // model writes its own data layer, gated like any code.
+    expect(await Bun.file(join(dir, "src/lib/sort.ts")).exists()).toBe(false);
     expect(
       await Bun.file(join(dir, "src/components/ui/button.tsx")).exists()
     ).toBe(true);

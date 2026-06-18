@@ -34,10 +34,6 @@ const VITE_ENV_DTS = `/// <reference types="vite/client" />
 const PRETTIER_IGNORE = `node_modules
 dist
 src/components/ui
-src/lib
-src/mocks/db.ts
-src/mocks/browser.ts
-public/mockServiceWorker.js
 *.gen.ts
 `;
 
@@ -57,7 +53,6 @@ const REACT_PACKAGE_JSON = `{
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@faker-js/faker": "^9.5.0",
     "@radix-ui/react-slot": "^1.1.1",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-router": "^1.95.0",
@@ -76,7 +71,6 @@ const REACT_PACKAGE_JSON = `{
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
-    "msw": "^2.7.0",
     "tailwindcss": "^4.0.0",
     "tw-animate-css": "^1.0.0",
     "typescript": "^5.7.0",
@@ -348,7 +342,6 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { worker } from "./mocks/browser";
 import { routeTree } from "./routeTree.gen";
 import "./index.css";
 
@@ -368,23 +361,13 @@ if (rootElement === null) {
   throw new Error("missing #root element");
 }
 
-const root = createRoot(rootElement);
-
-// Start the MSW mock API BEFORE mounting — there is no real backend, so the app's
-// fetches must be intercepted from the very first render (in dev AND in the build).
-async function start(): Promise<void> {
-  await worker.start({ onUnhandledRequest: "bypass", quiet: true });
-
-  root.render(
-    <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>
-    </StrictMode>,
-  );
-}
-
-void start();
+createRoot(rootElement).render(
+  <StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
+  </StrictMode>,
+);
 `;
 
 // A STUB of TanStack Router's generated route tree, registering only the stock "/"
@@ -474,8 +457,8 @@ const REACT_GUIDANCE = [
   "        (NO `DealsTable` around <Table> — render <Table> with deal columns instead).",
   "      – <feature>.types.ts — the feature's interfaces/types (I-prefixed).",
   "      – <feature>.constants.ts — its `as const` registries/label maps/column specs.",
-  "      – (NO <feature>.hooks.ts query wrapper — the SDK's useResource IS the data",
-  "        hook; add a hook file ONLY for genuine derived/computed state, never to fetch.)",
+  "      – <feature>.hooks.ts — custom hooks (data fetching, derived/computed state).",
+  "        Hooks live HERE, never in a component body (no-state-in-component-body).",
   "  • A component .tsx (index.tsx or components/<X>.tsx) = imports + the component,",
   "    nothing else. A constant (label map, column spec) → <feature>.constants.ts. A type",
   "    → <feature>.types.ts (shared across features → src/shared/shared.types.ts). A pure",
@@ -483,15 +466,13 @@ const REACT_GUIDANCE = [
   "    component is a GATE ERROR (component-file-purity / component-folder-structure).",
   "  • Shared, reusable UI primitives live in @/components/ui (scaffold_ui) — they are",
   "    feature-agnostic. Anything feature-specific is a view component, never a primitive.",
-  "  • NO RUNTIME VALIDATION / PARSING — there is NO backend, network, or uploaded",
-  "    data here; EVERY value originates from your own typed code + seed, so TypeScript",
-  "    has already proven its shape. The TYPE SYSTEM is the only validation. NEVER create",
-  "    a `*.validators.ts`; NEVER write a `parse<X>` / `validate<X>` / `is<X>` function",
-  "    that takes `unknown` or `Record<string, unknown>` and checks fields with `typeof`",
-  "    / `in` — that is dead ceremony for data the compiler already guarantees, and it is",
-  "    REJECTED. Instead: type the value correctly at its source and use it directly; for",
-  "    a literal use `x satisfies IType`; narrow a discriminated union with a plain",
-  "    `switch (x.kind)`. If you typed it right, there is nothing to validate.",
+  "  • NO CEREMONIAL VALIDATION for data you DEFINE in-app — a seed/constant you wrote",
+  "    with a type already has its shape proven by the compiler, so NEVER create a",
+  "    `*.validators.ts` or a `parse<X>`/`validate<X>`/`is<X>` over your own typed data:",
+  "    that is dead ceremony and is REJECTED. Type it at the source and use it directly;",
+  "    for a literal use `x satisfies IType`; narrow a discriminated union with a plain",
+  "    `switch (x.kind)`. (The ONE place validation IS warranted: a real `fetch` response",
+  "    — it crosses `unknown`, so narrow it with a guard there, never `as`-cast it.)",
   "  • ROUTES ARE THE APP — every PAGE the user asked for must be a real route, and a",
   "    component never mounted in a route is DEAD CODE. CREATE THEM ALL AT ONCE with the",
   "    `scaffold_routes` tool: call it ONCE (right after your types + services) listing",
@@ -555,64 +536,29 @@ const REACT_GUIDANCE = [
   "    spinner — the gate REJECTS loading text (no-loading-text-use-skeleton). Request",
   "    `skeleton` from scaffold_ui. Pattern: `if (isLoading) return <Skeleton className=",
   '    "h-9 w-full" />;` (size with Tailwind h-/w- classes; render several for a list).',
-  "  • DATA LAYER — a REAL mock API (MSW), do NOT hand-roll it (biggest speed+quality",
-  "    lever). The app does REAL `fetch()` to REST endpoints intercepted in-browser by",
-  "    Mock Service Worker — already wired and started in src/main.tsx. Two vendored",
-  "    generics (in src/lib + src/mocks; NEVER edit them — a type error involving them",
-  "    is a wrong CALL SITE) give you the whole loop in two lines per feature:",
-  "      – REGISTER the endpoint: in src/mocks/handlers.ts add ONE line —",
-  "        `...mockResource('/api/deals', SEED_DEALS)` [mockResource from @/mocks/db].",
-  "        It serves GET (list), GET /:id, POST, PATCH /:id, DELETE /:id over an in-",
-  "        memory faker-seeded store. handlers.ts is the ONLY mock file you edit.",
-  "      – CONSUME it: `const { items, isLoading, error, mutations } =",
-  "        useResource<IDeal>('/api/deals')` [useResource from @/lib/use-resource] IS",
-  "        the data hook — cached list, isLoading/error, and create/update/remove",
-  "        mutations WITH optimistic updates + rollback. Pass the SAME path string you",
-  "        registered. Do NOT write a <feature>.hooks.ts query wrapper or call fetch",
-  "        yourself — useResource is the only data access.",
-  "      – useForm({ initial, validate, submit }) [from @/lib/use-form] IS form state:",
-  "        values, per-field errors, async submit status. Do NOT hand-roll form state.",
-  "      – SEED DATA — GENERATE with faker. NEVER hand-write literal arrays, and NEVER",
-  "        index (no Array.from((_,i)=>…), no `arr[i]`, no `id:`item-${i}``, no `pickX(i)`",
-  "        helpers). Indexing is the root of all the garbage: `arr[i]` is T | undefined",
-  "        under noUncheckedIndexedAccess, which then forces `if (x===undefined) throw`",
-  "        guards. There is NO index. Build the seed INDEX-FREE with two faker helpers:",
-  "          • `faker.helpers.multiple(factory, { count: N })` — runs the factory N times,",
-  "            no counter. The factory's RETURN-TYPE annotation is the whole validation.",
-  "          • `faker.helpers.arrayElement(arr)` — picks one element, returns T (NOT T |",
-  "            undefined), for fixed sets / string-literal unions / RELATED seed arrays.",
-  "        `faker.string.uuid()` for ids. Pattern:",
-  "          `faker.seed(42);`",
-  "          `export const SEED_NOTIFS: readonly INotif[] = faker.helpers.multiple(`",
-  "          `  (): INotif => ({ id: faker.string.uuid(), kind: faker.helpers.arrayElement(`",
-  "          `    ['like','reply','follow']), from: faker.helpers.arrayElement(SEED_USERS),`",
-  "          `    text: faker.lorem.sentence() }), { count: 15 });`",
-  "        No `i`, no `arr[i % len]`, no undefined-guards, no parser — the type system +",
-  "        the factory return type ARE the validation. Define each SEED in the view's",
-  "        <feature>.constants.ts and pass it to mockResource. The mock API echoes your",
-  "        typed SEED and useResource<T> types the response, so the contract is proven",
-  "        end-to-end — NEVER write a runtime parser/validator (no parse<X>, no pObject,",
-  "        no `typeof` guards, no `as` casts) even though it now crosses a fetch.",
-  "      – Result/ok/err [from @/lib/result] for any fallible op.",
-  "      – objectKeys(x)/objectEntries(x) [from @/lib/object] for TYPED keys of an",
-  "        `as const` object. NEVER write `Object.keys(x) as (keyof typeof x)[]` —",
-  "        the gate REJECTS that `as` cast; call objectKeys(x) instead.",
-  "      – sortBy(rows, key, dir) [from @/lib/sort] for sortable tables/lists: pass",
-  "        the column key as a plain STRING, get a sorted copy. NEVER write",
-  "        `[...rows].sort((a, b) => a[sortKey] - b[sortKey])` — a string can't index",
-  "        an entity (TS7053) and the `as` to silence it is banned. sortBy does it safely.",
-  "      – LABEL / LOOKUP MAPS (status→label, kind→color, etc.) keyed by a union: TYPE",
-  "        the map `Record<TheUnion, V>` so indexing by a value of that union is CAST-FREE.",
-  "        e.g. `const KIND_LABEL: Record<ActivityKind, string> = { call: 'Call', … }` →",
-  "        `KIND_LABEL[activity.kind]` needs NO cast. NEVER write the map as a bare",
-  "        `as const` and then index it `MAP[key as keyof typeof MAP]` — that `as` is",
-  "        REJECTED. The map's KEY type, not a cast, is what makes the lookup type-check.",
+  "  • DATA LAYER — there is NO backend and NO scaffolded SDK/mock layer; you write",
+  "    your own data access, and the gate holds it to the SAME strictness as any code",
+  "    (no `as`, no eslint-disable). Two cases:",
+  "      – LOCAL / DEMO data (the common case): define typed constants in",
+  "        <feature>.constants.ts — `export const SEED_DEALS = [...] satisfies readonly",
+  "        IDeal[]` (or annotate `: readonly IDeal[]`). Plain literals, no `as`; the",
+  "        `satisfies`/annotation IS the validation. Render them directly. Write seed",
+  "        data INDEX-FREE — no `arr[i]` (it's `T | undefined` under",
+  "        noUncheckedIndexedAccess), no `id: `item-${i}``; just list the objects, or",
+  "        build them with `Array.from({ length: N }, () => ({...}))` (no index param).",
+  "      – ASYNC / fetch: @tanstack/react-query is installed and QueryClientProvider is",
+  "        wired in src/main.tsx. Write your OWN hook in <feature>.hooks.ts — a",
+  "        `useQuery`/`useMutation` wrapping `fetch` — returning typed data + isLoading +",
+  "        error. The fetch response crosses `unknown`: NARROW it (a type guard / a",
+  "        `switch` on a discriminant), do NOT `as`-cast it. Keep the hook in",
+  "        <feature>.hooks.ts, never in a component body (no-state-in-component-body).",
+  "      – LABEL / LOOKUP MAPS keyed by a union: TYPE the map `Record<TheUnion, V>` so",
+  "        indexing by a union value is CAST-FREE — `const KIND_LABEL: Record<Kind, string>",
+  "        = { call: 'Call', … }` → `KIND_LABEL[x.kind]` needs NO cast. NEVER write it as a",
+  "        bare `as const` then index `MAP[key as keyof typeof MAP]` — that `as` is REJECTED.",
   "    So a feature is mostly: src/views/<Feature>/{<feature>.types.ts + a `satisfies`-typed",
-  "    SEED const in <feature>.constants.ts + index.tsx + components/}, plus ONE",
-  "    `mockResource('/api/x', SEED)` line in src/mocks/handlers.ts, calling",
-  "    useResource/useForm. Far fewer lines, fewer bugs. Only write a custom hook if the",
-  "    SDK genuinely can't express it. QueryClientProvider + the MSW worker are already",
-  "    wired in src/main.tsx.",
+  "    SEED/const in <feature>.constants.ts + index.tsx + components/}, plus a",
+  "    <feature>.hooks.ts only if it has data fetching or derived state.",
   "  • Style with Tailwind classes via className using theme tokens",
   "    (bg-background, text-foreground, border-border), not raw colors.",
   "  • Need charts? `recharts` is installed — import from 'recharts'. Need drag-and-",
@@ -754,338 +700,6 @@ const VANILLA_GUIDANCE = [
   "unit-testable. Test the store; the entry/view need no test.",
 ].join("\n");
 
-// ── Harness SDK primitives (vendored): the toolkit the model COMPOSES with
-// instead of hand-writing per-domain services/hooks/forms/validators. One
-// tested generic each — quality UP, tokens DOWN. *.gen-style vendored code.
-const SDK_RESULT_TS = `// A Result type + constructors — the harness SDK's error spine. Fallible operations
-// return Result instead of throwing, so callers handle failure explicitly.
-export type Result<T, E> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: E };
-
-export function ok<T>(value: T): Result<T, never> {
-  return { ok: true, value };
-}
-
-export function err<E>(error: E): Result<never, E> {
-  return { ok: false, error };
-}
-`;
-
-const SDK_OBJECT_TS = `// Typed Object helpers. This vendored, lint-exempt file is the ONE sanctioned home
-// for the Object.keys cast. In YOUR code use objectKeys(x) instead of
-// \`Object.keys(x) as (keyof typeof x)[]\` — the strict gate rejects that cast.
-export function objectKeys<T extends object>(obj: T): (keyof T)[] {
-  return Object.keys(obj) as (keyof T)[];
-}
-
-export function objectEntries<T extends object>(obj: T): [keyof T, T[keyof T]][] {
-  return Object.entries(obj) as [keyof T, T[keyof T]][];
-}
-`;
-
-const SDK_SORT_TS = `// Typed sorting for tables/lists. The strict gate rejects \`row[sortKey]\` when
-// sortKey is a string (TS7053: a string can't index an entity), and bans the \`as\`
-// cast that would silence it. This vendored, lint-exempt helper does the indexing
-// safely ONCE here: pass the column key as a plain string and get a sorted COPY
-// (handles readonly input → mutable output). In YOUR code:
-//   const rows = sortBy(transactions, sortKey, sortDir)  // sortKey: string is fine
-// — never write \`[...rows].sort((a, b) => a[sortKey] - b[sortKey])\`.
-export function sortBy<T extends object>(
-  rows: readonly T[],
-  key: string,
-  direction: "asc" | "desc" = "asc"
-): T[] {
-  const dir = direction === "asc" ? 1 : -1;
-
-  return [...rows].sort((a, b) => {
-    const av = (a as Record<string, unknown>)[key];
-    const bv = (b as Record<string, unknown>)[key];
-
-    if (typeof av === "number" && typeof bv === "number") {
-      return (av - bv) * dir;
-    }
-
-    return String(av ?? "").localeCompare(String(bv ?? "")) * dir;
-  });
-}
-`;
-
-const SDK_API_TS = `// The typed fetch client — every data op goes over a REAL network call to a REST
-// endpoint, intercepted in-browser by MSW (see src/mocks/). Returns Result instead
-// of throwing, so callers handle failure explicitly. This is vendored + lint-exempt
-// (the boundary cast on the JSON body lives here, ONCE — your code never casts).
-import type { Result } from "@/lib/result";
-import { err, ok } from "@/lib/result";
-
-async function request<T>(
-  method: string,
-  path: string,
-  body?: unknown
-): Promise<Result<T, string>> {
-  try {
-    const res = await fetch(path, {
-      method,
-      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      return err(method + " " + path + " failed: " + String(res.status));
-    }
-
-    if (res.status === 204) {
-      return ok(undefined as T);
-    }
-
-    return ok((await res.json()) as T);
-  } catch (error) {
-    return err(error instanceof Error ? error.message : "network error");
-  }
-}
-
-export function apiGet<T>(path: string): Promise<Result<T, string>> {
-  return request<T>("GET", path);
-}
-
-export function apiPost<T>(path: string, body: unknown): Promise<Result<T, string>> {
-  return request<T>("POST", path, body);
-}
-
-export function apiPatch<T>(path: string, body: unknown): Promise<Result<T, string>> {
-  return request<T>("PATCH", path, body);
-}
-
-export function apiDelete(path: string): Promise<Result<true, string>> {
-  return request<true>("DELETE", path);
-}
-`;
-
-const SDK_USE_RESOURCE_TS = `// useResource — the TanStack Query layer for a REST resource, once: cached list,
-// loading/error state, and create/update/remove mutations with OPTIMISTIC updates
-// + rollback + invalidation built in. Pass the resource's base path (the same one
-// you registered with mockResource in src/mocks/handlers.ts):
-//   const { items, isLoading, mutations } = useResource<IDeal>("/api/deals")
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
-
-export interface IEntity {
-  readonly id: string;
-}
-
-export interface IMutationApi<T extends IEntity> {
-  create: (draft: Omit<T, "id">) => void;
-  update: (input: { readonly id: string; readonly patch: Partial<Omit<T, "id">> }) => void;
-  remove: (id: string) => void;
-  isPending: boolean;
-}
-
-export interface IResourceApi<T extends IEntity> {
-  items: readonly T[];
-  isLoading: boolean;
-  error: string | undefined;
-  refetch: () => void;
-  mutations: IMutationApi<T>;
-}
-
-async function unwrap<T>(promise: Promise<{ ok: true; value: T } | { ok: false; error: string }>): Promise<T> {
-  const result = await promise;
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-  return result.value;
-}
-
-export function useResource<T extends IEntity>(path: string): IResourceApi<T> {
-  const client = useQueryClient();
-  const queryKey = [path];
-
-  const query = useQuery({
-    queryKey,
-    queryFn: () => unwrap(apiGet<readonly T[]>(path)),
-  });
-
-  const invalidate = (): void => {
-    void client.invalidateQueries({ queryKey });
-  };
-
-  const create = useMutation({
-    mutationFn: (draft: Omit<T, "id">) => unwrap(apiPost<T>(path, draft)),
-    onSettled: invalidate,
-  });
-
-  const update = useMutation({
-    mutationFn: (input: { readonly id: string; readonly patch: Partial<Omit<T, "id">> }) =>
-      unwrap(apiPatch<T>(path + "/" + input.id, input.patch)),
-    onMutate: async (input) => {
-      await client.cancelQueries({ queryKey });
-      const previous = client.getQueryData<readonly T[]>(queryKey);
-      if (previous !== undefined) {
-        client.setQueryData<readonly T[]>(
-          queryKey,
-          previous.map((item) => (item.id === input.id ? { ...item, ...input.patch } : item))
-        );
-      }
-      return { previous };
-    },
-    onError: (_error, _input, context) => {
-      if (context?.previous !== undefined) {
-        client.setQueryData(queryKey, context.previous);
-      }
-    },
-    onSettled: invalidate,
-  });
-
-  const remove = useMutation({
-    mutationFn: (id: string) => unwrap(apiDelete(path + "/" + id)),
-    onSettled: invalidate,
-  });
-
-  return {
-    items: query.data ?? [],
-    isLoading: query.isPending,
-    error: query.error === null ? undefined : query.error.message,
-    refetch: () => {
-      void query.refetch();
-    },
-    mutations: {
-      create: create.mutate,
-      update: update.mutate,
-      remove: remove.mutate,
-      isPending: create.isPending || update.isPending || remove.isPending,
-    },
-  };
-}
-`;
-
-const SDK_MOCKS_DB_TS = `// mockResource — one tested generic that IS a REST endpoint set: in-memory CRUD
-// over a faker-seeded store, exposed as MSW handlers. Registering a resource is one
-// line in src/mocks/handlers.ts:
-//   ...mockResource("/api/deals", SEED_DEALS)
-// It serves GET (list), GET /:id, POST, PATCH /:id, DELETE /:id. Vendored + lint-
-// exempt (the boundary casts on request bodies live here, ONCE). NEVER edit this.
-import { http, HttpResponse, type RequestHandler } from "msw";
-import { faker } from "@faker-js/faker";
-
-export interface IEntity {
-  readonly id: string;
-}
-
-export function mockResource<T extends IEntity>(
-  path: string,
-  seed: readonly T[]
-): RequestHandler[] {
-  const store = new Map<string, T>();
-  for (const entity of seed) {
-    store.set(entity.id, entity);
-  }
-
-  return [
-    http.get(path, () => HttpResponse.json([...store.values()])),
-    http.get(path + "/:id", ({ params }) => {
-      const found = store.get(String(params.id));
-      return found === undefined
-        ? new HttpResponse(null, { status: 404 })
-        : HttpResponse.json(found);
-    }),
-    http.post(path, async ({ request }) => {
-      const draft = (await request.json()) as Omit<T, "id">;
-      const entity = { ...draft, id: faker.string.uuid() } as T;
-      store.set(entity.id, entity);
-      return HttpResponse.json(entity, { status: 201 });
-    }),
-    http.patch(path + "/:id", async ({ params, request }) => {
-      const current = store.get(String(params.id));
-      if (current === undefined) {
-        return new HttpResponse(null, { status: 404 });
-      }
-      const patch = (await request.json()) as Partial<Omit<T, "id">>;
-      const updated = { ...current, ...patch };
-      store.set(updated.id, updated);
-      return HttpResponse.json(updated);
-    }),
-    http.delete(path + "/:id", ({ params }) => {
-      const existed = store.delete(String(params.id));
-      return new HttpResponse(null, { status: existed ? 204 : 404 });
-    }),
-  ];
-}
-`;
-
-const SDK_MOCKS_BROWSER_TS = `// The MSW worker, wired from your handlers. Vendored — NEVER edit. Register your
-// resources in src/mocks/handlers.ts; main.tsx starts this before the app mounts.
-import { setupWorker } from "msw/browser";
-import { handlers } from "@/mocks/handlers";
-
-export const worker = setupWorker(...handlers);
-`;
-
-const MOCKS_HANDLERS_TS = `// YOUR mock API. Register each resource here with mockResource (one line per
-// resource), passing your faker-generated SEED. This is the ONLY mock file you
-// edit — src/mocks/db.ts and src/mocks/browser.ts are vendored.
-//   import { mockResource } from "@/mocks/db";
-//   import { SEED_DEALS } from "@/views/Deals/deals.constants";
-//   export const handlers: RequestHandler[] = [...mockResource("/api/deals", SEED_DEALS)];
-import { type RequestHandler } from "msw";
-
-export const handlers: RequestHandler[] = [];
-`;
-
-const SDK_USE_FORM_TS = `// useForm — declarative form state: values, per-field errors, async submit with
-// loading/success/error status. A form becomes initial + validate + submit; the
-// plumbing (touched, submitting, error/success handling) lives here, once.
-import { useCallback, useState } from "react";
-import type { Result } from "@/lib/result";
-
-export type TFormStatus = "idle" | "submitting" | "success" | "error";
-export type TFieldErrors<T> = Partial<Record<keyof T, string>>;
-
-export interface IFormApi<T> {
-  values: T;
-  errors: TFieldErrors<T>;
-  status: TFormStatus;
-  submitError: string | undefined;
-  setField: <K extends keyof T>(key: K, value: T[K]) => void;
-  handleSubmit: () => Promise<void>;
-}
-
-export interface IFormOptions<T> {
-  readonly initial: T;
-  readonly validate: (values: T) => TFieldErrors<T>;
-  readonly submit: (values: T) => Promise<Result<unknown, string>>;
-}
-
-export function useForm<T>(options: IFormOptions<T>): IFormApi<T> {
-  const [values, setValues] = useState<T>(options.initial);
-  const [errors, setErrors] = useState<TFieldErrors<T>>({});
-  const [status, setStatus] = useState<TFormStatus>("idle");
-  const [submitError, setSubmitError] = useState<string | undefined>(undefined);
-
-  const setField = useCallback(<K extends keyof T>(key: K, value: T[K]): void => {
-    setValues((prev) => ({ ...prev, [key]: value }));
-  }, []);
-
-  const handleSubmit = useCallback(async (): Promise<void> => {
-    const found = options.validate(values);
-    setErrors(found);
-    if (Object.keys(found).length > 0) {
-      return;
-    }
-    setStatus("submitting");
-    setSubmitError(undefined);
-    const result = await options.submit(values);
-    if (result.ok) {
-      setStatus("success");
-    } else {
-      setStatus("error");
-      setSubmitError(result.error);
-    }
-  }, [options, values]);
-
-  return { values, errors, status, submitError, setField, handleSubmit };
-}
-`;
-
 export const WEB_TEMPLATES: Record<WebFramework, IWebTemplate> = {
   react: {
     label: "Vite + React + shadcn/ui + TanStack",
@@ -1098,15 +712,6 @@ export const WEB_TEMPLATES: Record<WebFramework, IWebTemplate> = {
       "src/vite-env.d.ts": VITE_ENV_DTS,
       ".prettierignore": PRETTIER_IGNORE,
       "src/lib/utils.ts": CN_UTILS,
-      "src/lib/result.ts": SDK_RESULT_TS,
-      "src/lib/object.ts": SDK_OBJECT_TS,
-      "src/lib/sort.ts": SDK_SORT_TS,
-      "src/lib/api.ts": SDK_API_TS,
-      "src/lib/use-resource.ts": SDK_USE_RESOURCE_TS,
-      "src/lib/use-form.ts": SDK_USE_FORM_TS,
-      "src/mocks/db.ts": SDK_MOCKS_DB_TS,
-      "src/mocks/browser.ts": SDK_MOCKS_BROWSER_TS,
-      "src/mocks/handlers.ts": MOCKS_HANDLERS_TS,
       "src/index.css": REACT_INDEX_CSS,
       "src/components/ui/button.tsx": BUTTON_TSX,
       "src/routes/__root.tsx": ROOT_ROUTE_TSX,
@@ -1114,14 +719,13 @@ export const WEB_TEMPLATES: Record<WebFramework, IWebTemplate> = {
       "src/routeTree.gen.ts": ROUTE_TREE_GEN,
       "src/main.tsx": REACT_MAIN_TSX,
     },
-    eslintIgnore: [
-      "src/components/ui/**",
-      "src/lib/**",
-      "src/mocks/db.ts",
-      "src/mocks/browser.ts",
-      "public/mockServiceWorker.js",
-      "**/*.gen.ts",
-    ],
+    // Ignored: the GENERATED route tree, the shadcn primitives, and the entry
+    // wiring src/main.tsx (it carries TanStack's `declare module … interface
+    // Register` augmentation — an external contract whose name we can't I-prefix).
+    // The data layer (api/use-resource/use-form/mocks) is no longer scaffolded —
+    // the model writes its own, gated like any code — and src/lib/utils.ts is
+    // clean, editable, and linted like everything else.
+    eslintIgnore: ["src/components/ui/**", "src/main.tsx", "**/*.gen.ts"],
     guidance: REACT_GUIDANCE,
   },
   vanilla: {

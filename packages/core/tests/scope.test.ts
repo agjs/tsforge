@@ -7,21 +7,18 @@ import {
   WEB_VENDORED_PATTERNS,
 } from "../src/lib/scope";
 
-test("isVendored protects shipped SDK/generated files, frees model files", () => {
+test("only the generated route tree is vendored; everything else is editable", () => {
   const p = WEB_VENDORED_PATTERNS;
 
-  // The untouchable shipped SDK + generated files.
-  expect(isVendored("src/lib/use-resource.ts", p)).toBe(true);
-  expect(isVendored("src/lib/api.ts", p)).toBe(true);
-  expect(isVendored("src/mocks/db.ts", p)).toBe(true);
-  expect(isVendored("src/mocks/browser.ts", p)).toBe(true);
+  // The ONE untouchable file: the build-regenerated route tree.
   expect(isVendored("src/routeTree.gen.ts", p)).toBe(true);
 
-  // Files the GUIDANCE tells the model to write must be ALLOWED.
-  expect(isVendored("src/components/ui/card.tsx", p)).toBe(false); // new primitive
-  expect(isVendored("src/components/ui/button.tsx", p)).toBe(false); // editable primitive
-  expect(isVendored("src/lib/format.ts", p)).toBe(false); // new helper
-  expect(isVendored("src/mocks/handlers.ts", p)).toBe(false); // model's mock registry
+  // The old vendored SDK is gone — those files (api/use-resource/result/mocks)
+  // are no longer scaffolded, and src/lib is now ordinary editable code.
+  expect(isVendored("src/lib/utils.ts", p)).toBe(false); // cn() — clean, editable
+  expect(isVendored("src/lib/format.ts", p)).toBe(false); // model's own helper
+  expect(isVendored("src/components/ui/card.tsx", p)).toBe(false);
+  expect(isVendored("src/components/ui/button.tsx", p)).toBe(false);
   expect(isVendored("src/views/Deals/index.tsx", p)).toBe(false);
 });
 

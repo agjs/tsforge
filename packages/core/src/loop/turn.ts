@@ -1082,7 +1082,13 @@ export async function settleGate(
     };
   }
 
-  const feedback = await gateFeedback(gateErrors, task, cwd, metaViolations);
+  const feedback = await gateFeedback(
+    gateErrors,
+    task,
+    cwd,
+    metaViolations,
+    ctx.vendored ?? []
+  );
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
 
   messages.push({ role: "user", content: `${notice}${feedback}` });
