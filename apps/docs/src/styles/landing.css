@@ -4,7 +4,8 @@
    out of Starlight's splash content container so the sections can span the full
    viewport, and trims the default splash chrome. */
 
-.tf-landing {
+.tf-landing,
+.tf-landing-footer {
   /* Full-bleed regardless of the splash container's max-width/padding. */
   width: 100vw;
   margin-left: calc(50% - 50vw);

@@ -14,8 +14,9 @@
 
   /* Surfaces */
   --sl-color-bg: var(--background);
-  --sl-color-bg-nav: color-mix(in oklch, var(--background) 80%, transparent);
+  --sl-color-bg-nav: var(--background);
   --sl-color-bg-sidebar: var(--background);
+  --tf-nav-bg-scrolled: var(--background);
   --sl-color-bg-inline-code: color-mix(in oklch, var(--primary) 14%, var(--card));
   --sl-color-bg-accent: var(--primary);
 
@@ -70,11 +71,15 @@ h1[data-page-title],
   letter-spacing: -0.01em;
 }
 
-/* ── Top nav (Starlight header bar) ── */
-header.header {
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in oklch, var(--background) 80%, transparent);
-  backdrop-filter: blur(12px);
+/* ── Top nav (Starlight header bar) — same bg as the page, just a hairline. ── */
+header.header,
+body > .page > header.header,
+html:not([data-has-hero]) body > .page > header.header,
+html.tf-nav-scrolled body > .page > header.header {
+  border-bottom: 1px solid var(--border) !important;
+  background: var(--background) !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
 }
 
 /* Hide any theme/language picker — the site is dark-only. */
@@ -172,28 +177,48 @@ starlight-toc a[aria-current="true"] {
   font-family: var(--sl-font-mono);
 }
 
-/* ── Code window (Expressive Code) → Lovable macOS CodeBlock ── */
-.expressive-code .frame {
-  border-radius: 0;
+/* ── Code window (Expressive Code) → Lovable macOS CodeBlock ──
+   Flat: no shadow, no gradient border, sharp corners. Every block gets the same
+   header — three red/yellow/green traffic-light dots over a hairline — so we
+   hide EC's own dots/tab header and draw a uniform one. */
+.expressive-code {
+  --ec-brdRad: 0px;
+  --ec-frm-trmTtbDotsOpa: 0;
 }
-.expressive-code .frame pre {
-  border: 1px solid var(--border);
-  border-radius: 0;
+.expressive-code figure.frame {
+  position: relative;
+  box-shadow: none !important;
+  background: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  overflow: visible;
+}
+.expressive-code figure.frame::before {
+  /* hide EC's own dot/glow layers if any */
+  background-image: none;
+}
+.expressive-code figure.frame figcaption.header {
+  display: none !important;
+}
+.expressive-code figure.frame pre {
+  position: relative;
+  border: 1px solid var(--border) !important;
+  border-radius: 0 !important;
   background: oklch(0.13 0.02 265) !important;
+  box-shadow: none !important;
   font-family: var(--sl-font-mono);
   font-size: 13px;
+  padding-top: 2.7rem;
 }
-.expressive-code .frame pre > code {
+.expressive-code figure.frame pre > code {
   font-family: var(--sl-font-mono);
 }
-/* macOS traffic-light dots in a hairline header on every block. */
-.expressive-code .frame:not(.has-title):not(.is-terminal) pre {
-  padding-top: 2.6rem;
-}
-.expressive-code .frame:not(.has-title):not(.is-terminal)::before {
+/* Traffic-light dots + hairline header band, drawn on the frame. */
+.expressive-code figure.frame > pre::before {
   content: "";
   position: absolute;
-  top: 13px;
+  z-index: 2;
+  top: 14px;
   left: 16px;
   width: 8px;
   height: 8px;
@@ -202,28 +227,28 @@ starlight-toc a[aria-current="true"] {
   box-shadow:
     16px 0 0 oklch(0.78 0.16 85),
     32px 0 0 var(--success);
-  z-index: 1;
 }
-.expressive-code .frame:not(.has-title):not(.is-terminal)::after {
+.expressive-code figure.frame > pre::after {
   content: "";
   position: absolute;
-  top: 2.2rem;
+  z-index: 2;
+  top: 2.3rem;
   left: 0;
   right: 0;
   border-top: 1px solid var(--border);
-  z-index: 1;
 }
-/* Titled / terminal frame headers → sharp, hairline, mono. */
-.expressive-code .frame .header,
-.expressive-code figcaption.header {
-  border-radius: 0;
-  font-family: var(--sl-font-mono);
-}
-.expressive-code .frame.is-terminal .header::before {
-  /* recolor the existing terminal dots to the palette */
-  filter: none;
+/* Copy button — vertically centered inside the 2.3rem dots header band. */
+.expressive-code .copy {
+  top: 0 !important;
+  right: 0.5rem !important;
+  inset-block: 0 auto;
+  height: 2.3rem;
+  display: flex;
+  align-items: center;
 }
 .expressive-code .copy button {
+  width: 1.9rem;
+  height: 1.9rem;
   border-radius: 0;
   border: 1px solid var(--border);
   background: color-mix(in oklch, var(--card) 70%, transparent);
@@ -263,4 +288,193 @@ starlight-toc a[aria-current="true"] {
 /* Buttons / links rendered by Starlight components keep sharp corners. */
 .sl-markdown-content :is(.sl-link-button) {
   border-radius: 0;
+}
+
+/* ===== Review fixes (visual diff vs Lovable) ===== */
+
+/* Flat page background — Lovable has no gradient/glow wash. */
+body {
+  background: var(--background) !important;
+}
+
+/* Install-box copy button: just the icon with a left hairline — no UA gray
+   fill, no border box, no shadow (Lovable). */
+.tf-landing .tf-copy {
+  background: transparent !important;
+  border: none !important;
+  border-left: 1px solid var(--border) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  color: var(--muted-foreground);
+}
+.tf-landing .tf-copy:hover {
+  color: var(--foreground);
+}
+
+/* Nav links were falling back to the UA visited-link purple (Tailwind's layered
+   utilities lose to Starlight's unlayered anchor rules in the header). Set the
+   colors explicitly here (unlayered, last in source order → wins). */
+.tf-nav a {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+.tf-nav a:hover {
+  color: var(--foreground);
+}
+.tf-nav a[aria-label="tsforge home"],
+.tf-nav a[aria-label="tsforge on GitHub"] {
+  color: var(--foreground);
+}
+.tf-nav a[aria-label="tsforge home"] span {
+  color: inherit;
+}
+
+/* ⌘K shortcut hint — give the two keys room to breathe. */
+.tf-nav-search kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+}
+.tf-nav-search kbd kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15em;
+  height: 1.3em;
+  padding: 0 0.3em;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--sl-font-mono);
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* Tables → Lovable: sharp, flat, hairline. Kill the rounded gradient frame and
+   the per-column accent gradient from custom.css. */
+.sl-markdown-content .tf-table-scroll {
+  border-radius: 0 !important;
+  border: 1px solid var(--border) !important;
+  background: var(--background) !important;
+  box-shadow: none !important;
+}
+.sl-markdown-content table :is(th, td):not(:where(.not-content *, .starlight-aside *)) {
+  border-color: var(--border) !important;
+}
+.sl-markdown-content table th:not(:where(.not-content *, .starlight-aside *)) {
+  background: color-mix(in oklch, var(--card) 55%, transparent) !important;
+  color: var(--foreground) !important;
+  font-family: var(--sl-font-mono);
+  font-weight: 500;
+}
+.sl-markdown-content
+  table
+  :is(th, td):nth-child(2):not(:where(.not-content *, .starlight-aside *)) {
+  background: none !important;
+  border-inline-color: var(--border) !important;
+}
+.sl-markdown-content
+  table
+  tbody
+  tr:hover
+  td:not(:where(.not-content *, .starlight-aside *)) {
+  background: color-mix(in oklch, var(--card) 40%, transparent) !important;
+}
+
+/* ===== Kill every shadow / glow — Lovable is flat ===== */
+.sl-markdown-content *:not(:focus-visible),
+.tf-landing *:not(:focus-visible),
+.tf-landing-footer *,
+header.header,
+.sidebar-pane,
+.sidebar-pane *,
+.expressive-code *,
+[class*="tf-harness-board"],
+[class*="tf-harness-board"] *,
+.mermaid,
+.mermaid * {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+/* Mermaid neon node/edge glow is a drop-shadow filter — flatten it. */
+.mermaid,
+.mermaid *,
+[class*="tf-harness-board"] * {
+  filter: none !important;
+}
+
+/* ===== Harness board diagram (styles were lost when landing.css was rewritten).
+   Dark-only image, flat frame, card-style subsystem links. ===== */
+.tf-harness-board {
+  margin-block: 1.6rem;
+}
+.tf-harness-board__img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.tf-harness-board__img--light {
+  display: none !important;
+}
+.tf-harness-board__frame {
+  position: relative;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--card);
+  overflow: hidden;
+}
+.tf-harness-board__links {
+  margin-top: 1rem;
+}
+.tf-harness-board__link-list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+@media (min-width: 48rem) {
+  .tf-harness-board__link-list {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.tf-harness-board__link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  text-decoration: none;
+  transition: border-color 140ms ease;
+}
+.tf-harness-board__link strong {
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--foreground);
+}
+.tf-harness-board__link span {
+  font-family: var(--sl-font-mono);
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
+.tf-harness-board__link:hover {
+  border-color: var(--primary);
+}
+.tf-harness-board__link:hover strong {
+  color: var(--primary);
+}
+.tf-harness-board--compact .tf-harness-board__links {
+  display: none;
+}
+.tf-diagram-caption {
+  margin: 0.85rem auto 0;
+  max-width: 56ch;
+  text-align: center;
+  font-style: italic;
+  color: var(--muted-foreground);
 }
