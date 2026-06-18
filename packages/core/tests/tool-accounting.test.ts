@@ -2,8 +2,24 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runToolCalls, type ILoopCtx, type ILoopState } from "../src/loop";
+import {
+  runToolCalls,
+  countsAsMutation,
+  type ILoopCtx,
+  type ILoopState,
+} from "../src/loop";
 import { TsService } from "../src/lsp";
+
+// P1 (review): add_dependency rewrites package.json even in a narrow-scoped task
+// where it isn't in the editable globs. That sanctioned manifest change MUST still
+// re-gate (the supply-chain meta-rules catch unpinned/git/tarball deps) — so the
+// mutation predicate exempts package.json from the scope check, but nothing else.
+test("countsAsMutation: package.json always counts; other out-of-scope paths don't", () => {
+  expect(countsAsMutation("package.json", ["src/**"])).toBe(true);
+  expect(countsAsMutation("src/a.ts", ["src/**"])).toBe(true);
+  expect(countsAsMutation("secret.ts", ["src/**"])).toBe(false);
+  expect(countsAsMutation("vendor/x.ts", ["src/**"])).toBe(false);
+});
 
 function freshState(): ILoopState {
   return {

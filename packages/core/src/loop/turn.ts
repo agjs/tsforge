@@ -452,6 +452,16 @@ async function runWriteGuard(ctx: ILoopCtx, path: string): Promise<string> {
   }
 }
 
+/** Whether a `mutated` path counts toward re-gating + the change scope. Mutating
+ *  handlers self-enforce scope before they write, so this is mostly a backstop —
+ *  EXCEPT package.json: `add_dependency` is sanctioned to rewrite the manifest even
+ *  when it sits outside the task's editable globs, and that change MUST re-gate so
+ *  the supply-chain meta-rules run (unpinned / git / tarball deps). A narrow-scoped
+ *  task would otherwise let a `bun add` bypass the gate entirely. */
+export function countsAsMutation(file: string, taskFiles: string[]): boolean {
+  return basename(file) === "package.json" || isInScope(file, taskFiles);
+}
+
 /** Add paths (cwd-relative, forward-slashed) to the session's change set — the
  *  scope change-scoped gate rules (test-sibling-required) enforce on. Lazy-inits
  *  `touched` so a custom loop runner that forgot to seed it self-heals rather than
@@ -509,7 +519,7 @@ export async function runToolCalls(
 
       if (event.mutated !== undefined) {
         for (const f of event.mutated) {
-          if (isInScope(f, ctx.task.files)) {
+          if (countsAsMutation(f, ctx.task.files)) {
             mutated.push(f);
           }
         }
