@@ -329,25 +329,31 @@ body {
   color: inherit;
 }
 
-/* ⌘K shortcut hint — give the two keys room to breathe. */
+/* ⌘K shortcut hint — ONE subtle box with the two keys inside (no nested
+   borders, no per-key boxes). */
 .tf-nav-search kbd {
   display: inline-flex;
   align-items: center;
   gap: 0.25em;
-}
-.tf-nav-search kbd kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.15em;
-  height: 1.3em;
-  padding: 0 0.3em;
+  padding: 0.1em 0.45em;
   border: 1px solid var(--border);
   border-radius: 0;
   background: transparent;
   font-family: var(--sl-font-mono);
   font-size: 10px;
-  line-height: 1;
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
+.tf-nav-search kbd kbd {
+  border: none !important;
+  background: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  min-width: auto !important;
+  height: auto !important;
+  box-shadow: none !important;
+  font-size: inherit;
+  color: inherit;
 }
 
 /* Tables → Lovable: sharp, flat, hairline. Kill the rounded gradient frame and
@@ -396,11 +402,21 @@ header.header,
   box-shadow: none !important;
   text-shadow: none !important;
 }
-/* Mermaid neon node/edge glow is a drop-shadow filter — flatten it. */
-.mermaid,
-.mermaid *,
+/* Flatten the harness-board image filters. NOTE: do NOT put `.mermaid *` here —
+   a blanket filter override breaks astro-mermaid's click-to-zoom. */
 [class*="tf-harness-board"] * {
   filter: none !important;
+}
+
+/* Mermaid: flat container (glow box-shadow is already killed above), no gradient
+   border/background — but leave the diagram interaction (zoom) untouched. */
+.sl-markdown-content .mermaid {
+  background: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 0 !important;
+}
+.sl-markdown-content .mermaid::before {
+  display: none !important;
 }
 
 /* ===== Harness board diagram (styles were lost when landing.css was rewritten).
