@@ -265,17 +265,19 @@ const INTERIM_CHECK_NOTE =
 const IMPLEMENT_STEP =
   "STEP 2 of 2 — build the app in THIS ORDER, so every file compiles the moment " +
   "you write it (each step depends only on earlier ones — no forward references):\n" +
-  "1) DATA LAYER — each domain's faker seed (in <feature>.constants.ts) + ONE " +
-  "`mockResource('/api/x', SEED)` line registered in src/mocks/handlers.ts. Small " +
-  "files; emit them together.\n" +
+  "1) DATA — each domain's types (<feature>.types.ts) + typed seed/constants " +
+  "(<feature>.constants.ts), e.g. `export const SEED = [...] satisfies readonly " +
+  "IThing[]` (plain literals, no `as`). Need async? Write your OWN hook in " +
+  "<feature>.hooks.ts (react-query/fetch), narrowing the response. Small files; " +
+  "emit them together.\n" +
   "2) ROUTES — call `scaffold_routes` ONCE with EVERY page the app needs (list, " +
   "detail with $param like /accounts/$accountId, and create/edit like " +
   "/deals/create). This writes all route files at once, so from here every " +
   "<Link to>/navigate target type-checks — NEVER hand-write a route file.\n" +
   "3) SHELL — the app-shell layout + nav linking those routes.\n" +
   "4) FILL, FEATURE BY FEATURE — replace each route's placeholder with its real " +
-  "component (import your types + `useResource('/api/x')` + @/components/ui + " +
-  "<Link> to any route). FINISH one feature before starting the next.\n" +
+  "component (import your types + your seed/hook + @/components/ui + <Link> to any " +
+  "route). FINISH one feature before starting the next.\n" +
   "PACE: write ONE coherent slice per turn — a single feature's few files together " +
   "(or one file if it's large) — then let the gate check it. Do NOT dump the whole " +
   "app in one response (it gets cut off and the work is lost); do NOT trickle one " +
