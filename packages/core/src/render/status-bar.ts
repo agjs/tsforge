@@ -69,10 +69,15 @@ function statusSegment(status: string): ISegment {
 
 /** The ordered segments shown on the bar (model, meter, tok/s, turns, status, scope). */
 function barSegments(info: IStatusInfo): ISegment[] {
-  const segs: ISegment[] = [
-    { text: info.model, code: STYLE.brand },
-    meterSegment(info),
-  ];
+  const segs: ISegment[] = [{ text: info.model, code: STYLE.brand }];
+
+  // The live "thinking · 12s" spinner rides HERE while a turn runs — it used to
+  // animate on the readline input line and erase whatever the user was typing.
+  if (info.activity !== undefined && info.activity.length > 0) {
+    segs.push({ text: info.activity, code: STYLE.dim });
+  }
+
+  segs.push(meterSegment(info));
 
   if (info.tokensPerSecond !== undefined && info.tokensPerSecond > 0) {
     segs.push({
