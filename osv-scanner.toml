@@ -18,3 +18,23 @@ reason = "esbuild (transitive via Vite/Astro/Wrangler) is a build-time dev depen
 id = "GHSA-g7r4-m6w7-qqqr"
 ignoreUntil = 2026-09-12T00:00:00Z
 reason = "esbuild (transitive via Vite/Astro/Wrangler) is a build-time dev dependency only; not shipped in the published package."
+
+# dompurify reaches us only through mermaid in the @tsforge/docs site workspace —
+# a build-time/docs dev dependency, not in the published @agjs/tsforge package.
+[[IgnoredVulns]]
+id = "GHSA-cmwh-pvxp-8882"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "dompurify (transitive via mermaid in the docs-site workspace) is a build-time/docs dev dependency only; not shipped in the published package. Re-evaluate when mermaid ships a patched dompurify range."
+
+# undici 7.24.8 reaches us only via wrangler → miniflare (docs-site deploy tooling,
+# a dev dependency). The PUBLISHED package's undici (via jsdom) is already 7.28.0,
+# i.e. patched — so there is no runtime or published-artifact exposure to either CVE.
+[[IgnoredVulns]]
+id = "CVE-2026-9678"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "undici 7.24.8 reaches us only via wrangler→miniflare (docs-deploy dev dependency); the published package's undici (via jsdom) is already 7.28.0 (patched). Re-evaluate when wrangler/miniflare bump undici."
+
+[[IgnoredVulns]]
+id = "CVE-2026-9697"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "undici 7.24.8 (SOCKS5 ProxyAgent TLS-validation bypass) reaches us only via wrangler→miniflare (docs-deploy dev dependency), not the tsforge runtime; the published package's undici (via jsdom) is already 7.28.0 (patched). Re-evaluate when wrangler/miniflare bump undici."
