@@ -50,7 +50,8 @@ const REACT_PACKAGE_JSON = `{
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "bun test"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -71,6 +72,7 @@ const REACT_PACKAGE_JSON = `{
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@tanstack/router-plugin": "^1.95.0",
+    "@types/bun": "^1.3.14",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
@@ -617,10 +619,14 @@ const REACT_GUIDANCE = [
   "    drop? `@dnd-kit/core` + `@dnd-kit/sortable` are installed. Do NOT add other",
   "    deps (only these + the scaffold's are installed; the build can't fetch more).",
   "Imports use the @/ alias (e.g. @/views/<Feature>/<feature>.types, @/components/ui/button).",
-  "Do NOT write a checks.json or any browser interaction test. The gate already",
-  "builds the app with Vite and renders it in a real browser, FAILING on any",
-  "runtime/console error — that IS the acceptance. Spend your effort on a working,",
-  "clean app that renders without errors, not on test assertions.",
+  "Do NOT write a checks.json or browser-interaction/DOM test, and do NOT set up a",
+  "test runner — `bun test` is ALREADY wired (the `test` script + @types/bun ship in",
+  "package.json). The gate builds with Vite and renders in a real browser, FAILING on",
+  "any runtime/console error — that IS the app's acceptance. SEPARATELY the harness",
+  "enforces TDD on LOGIC: every `.ts` module that exports a function/class needs a",
+  "co-located `<name>.test.ts` using bun:test (`import { test, expect } from",
+  '"bun:test"`). Presentational `.tsx` components need NO test. So put real logic',
+  "(rules, reducers, derived state, formatting) in `.ts` modules and test those.",
   "Do NOT run `tsc`, `eslint`, `vite build`, or the gate command yourself to check",
   "your work — the harness type-checks each file the moment you write it and runs",
   "the full gate automatically, feeding back the exact errors concisely. Running",
@@ -649,10 +655,12 @@ const VANILLA_PACKAGE_JSON = `{
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "bun test"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
+    "@types/bun": "^1.3.14",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0"
@@ -734,9 +742,14 @@ const VANILLA_GUIDANCE = [
   "  • src/view.ts — DOM rendering (build/update elements with createElement)",
   "  • src/main.ts — the entry that wires store + view + events into #app",
   "Style with Tailwind utility classes. Keep functions small and single-purpose.",
-  "Do NOT write a checks.json or browser interaction test. The gate builds with",
-  "Vite and renders the app in a real browser, failing on any runtime error — that",
-  "is the acceptance. Focus on a working app that renders cleanly.",
+  "Do NOT write a checks.json or browser-interaction/DOM test, and do NOT set up a",
+  "test runner — `bun test` is ALREADY wired (the `test` script + @types/bun ship in",
+  "package.json). The gate builds with Vite and renders in a real browser, failing on",
+  "any runtime error — that IS the app's acceptance. SEPARATELY the harness enforces",
+  "TDD on LOGIC: src/store.ts (pure, DOM-free) and any other `.ts` module that exports",
+  "a function needs a co-located `<name>.test.ts` using bun:test (`import { test,",
+  'expect } from "bun:test"`). That is exactly why store logic is kept pure and out of',
+  "view.ts — so it is unit-testable. Test the store; the entry/view need no test.",
 ].join("\n");
 
 // ── Harness SDK primitives (vendored): the toolkit the model COMPOSES with
