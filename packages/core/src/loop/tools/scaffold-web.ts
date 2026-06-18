@@ -26,7 +26,9 @@ export async function doScaffoldWeb(
   let result: { files: readonly string[]; depsInstalled: boolean };
 
   try {
-    result = await ctx.setupWeb(framework);
+    result = await ctx.setupWeb(framework, {
+      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 

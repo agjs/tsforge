@@ -495,6 +495,37 @@ test("scaffold_web tells the model the truth (and still re-gates) when install f
   }
 });
 
+test("scaffold_web forwards the turn's abort signal to setupWeb (cancellable install)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-sig-"));
+
+  try {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const ctx: ILoopCtx = {
+      ...ctxFor(dir, ["**/*"]),
+      signal: controller.signal,
+      setupWeb: (_fw, options) => {
+        received = options?.signal;
+
+        return Promise.resolve({
+          files: ["src/main.tsx"],
+          depsInstalled: true,
+        });
+      },
+    };
+
+    await runToolCalls(
+      [{ name: "scaffold_web", arguments: { framework: "react" } }],
+      ctx,
+      freshState()
+    );
+
+    expect(received).toBe(controller.signal);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("scaffold_web that writes nothing does NOT re-gate (no false 'done')", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-noop-"));
 

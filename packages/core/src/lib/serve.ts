@@ -16,7 +16,13 @@ export async function serveEphemeral(
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return Bun.serve({ port: 0, fetch: options.fetch });
+      // Bind to loopback explicitly (not the 0.0.0.0 wildcard) — no LAN exposure
+      // and no macOS firewall prompt for a throwaway test/gate server.
+      return Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        fetch: options.fetch,
+      });
     } catch (err) {
       lastErr = err;
       // Give the OS a moment to release whatever transiently collided before the

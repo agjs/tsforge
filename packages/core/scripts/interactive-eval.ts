@@ -130,11 +130,11 @@ async function main(): Promise<number> {
   });
 
   // The REPL's configureWeb, inlined: scaffold + deps + switch to the web gate.
-  session.setSetupWeb(async (framework) => {
+  session.setSetupWeb(async (framework, options) => {
     const fw = framework === "vanilla" ? "vanilla" : "react";
 
     const files = await scaffoldWeb(dir, fw);
-    const depsInstalled = await installWebDeps(dir);
+    const depsInstalled = await installWebDeps(dir, options);
 
     session.setGate(buildWebGate(fw).command);
     session.setFix(buildWebFix(fw));

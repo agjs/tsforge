@@ -5,9 +5,12 @@ import type { SessionSnapshotStore } from "../../files/hashline";
 import type { McpRegistry } from "../../mcp";
 
 /** Turn a workspace into a web project. Resolves with the files actually written
- *  (mutation accounting / re-gate) and whether dependency install succeeded. */
+ *  (mutation accounting / re-gate) and whether dependency install succeeded. The
+ *  optional `signal` lets the caller cancel the (potentially slow) dependency
+ *  install when the turn is aborted (Ctrl-C), not just on the kill-timeout. */
 export type SetupWebFn = (
-  framework: string
+  framework: string,
+  options?: { signal?: AbortSignal }
 ) => Promise<{ files: readonly string[]; depsInstalled: boolean }>;
 
 export interface IToolContext {

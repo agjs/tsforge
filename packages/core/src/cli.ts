@@ -38,7 +38,7 @@ import {
   type IStatusInfo,
 } from "./render";
 import type { ITask } from "./spec";
-import type { Reporter, ILoopEvent } from "./loop";
+import type { Reporter, ILoopEvent, SetupWebFn } from "./loop";
 import { loadLedger, activeRules, forgetMemory } from "./loop/memory";
 import {
   buildGate,
@@ -343,13 +343,14 @@ function turnsToGreenLine(turns: number | null): string {
  *  and tell the model the truth (instead of always claiming "deps installed"). */
 async function setUpWebProject(
   dir: string,
-  framework: WebFramework
+  framework: WebFramework,
+  options: { signal?: AbortSignal } = {}
 ): Promise<{ files: readonly string[]; depsInstalled: boolean }> {
   const files = await scaffoldWeb(dir, framework);
 
   process.stdout.write(`  ↳ installing ${frameworkLabel(framework)}…\n`);
 
-  const depsInstalled = await installWebDeps(dir);
+  const depsInstalled = await installWebDeps(dir, options);
 
   process.stdout.write(
     depsInstalled
@@ -1095,13 +1096,14 @@ async function repl(args: ICliArgs): Promise<number> {
   let awaitingPlanApproval = false;
 
   const configureWeb = async (
-    framework: WebFramework
+    framework: WebFramework,
+    options: { signal?: AbortSignal } = {}
   ): Promise<{ files: readonly string[]; depsInstalled: boolean }> => {
     process.stdout.write(
       `\n  ↳ scaffolding a ${frameworkLabel(framework)} project\n`
     );
 
-    const setup = await setUpWebProject(args.dir, framework);
+    const setup = await setUpWebProject(args.dir, framework, options);
 
     session.setGate(buildWebGate(framework, undefined, args.dir).command);
     session.setFix(buildWebFix(framework));
@@ -1124,10 +1126,8 @@ async function repl(args: ICliArgs): Promise<number> {
   // The `scaffold_web` tool invokes this when the AGENT decides to build a web app
   // (the framework string is validated tool-side). `configureWeb` closes over the
   // mutable `session`, so this stays correct across `/clear`; re-applied below.
-  const setupWeb = (
-    framework: string
-  ): Promise<{ files: readonly string[]; depsInstalled: boolean }> =>
-    configureWeb(framework === "vanilla" ? "vanilla" : "react");
+  const setupWeb: SetupWebFn = (framework, options) =>
+    configureWeb(framework === "vanilla" ? "vanilla" : "react", options);
 
   session.setSetupWeb(setupWeb);
 
