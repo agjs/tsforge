@@ -6,15 +6,30 @@ export const WEB_FETCH_MAX_CHARS = 8000;
 
 const MAX_ALLOWED_CHARS = WEB_FETCH_MAX_CHARS * 8;
 
-/** Loopback / link-local / RFC-1918 hosts — blocked so a model-issued URL can't
- *  reach the host's cloud-metadata endpoint or poke internal services (SSRF). */
+/** Loopback / link-local / RFC-1918 IPv4 (+ localhost) — blocked so a model-issued
+ *  URL can't reach the host's cloud-metadata endpoint or poke internal services. */
 const PRIVATE_HOST_RE =
   /^(?:localhost|0\.0\.0\.0|127\.|10\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/i;
 
 function isPrivateHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, "");
+  const host = hostname.replace(/^\[|\]$/gu, "").toLowerCase();
 
-  return host === "::1" || PRIVATE_HOST_RE.test(host);
+  if (host === "::1" || host === "::" || PRIVATE_HOST_RE.test(host)) {
+    return true;
+  }
+
+  // IPv4-mapped IPv6 (::ffff:…) — blocked wholesale. The URL parser canonicalizes
+  // the embedded v4 to hex (::ffff:127.0.0.1 → ::ffff:7f00:1), so matching dotted
+  // decimal is unreliable; mapped addresses have no legitimate web_fetch use and
+  // are a known SSRF evasion, so reject the whole prefix.
+  if (host.startsWith("::ffff:")) {
+    return true;
+  }
+
+  // IPv6 unique-local (fc00::/7 → fc.. / fd..) and link-local (fe80::/10).
+  return (
+    /^f[cd][0-9a-f]{0,2}:/u.test(host) || /^fe[89ab][0-9a-f]?:/u.test(host)
+  );
 }
 
 /** Parse + vet a fetch target: absolute http(s) only, public host only. Returns
@@ -121,11 +136,69 @@ export async function doWebFetch(
   return truncate(content, maxChars(args));
 }
 
+/** Max redirect hops followed before giving up. */
+const MAX_REDIRECTS = 5;
+
+const FETCH_HEADERS = { "user-agent": "tsforge-web-fetch/1.0 (+local)" };
+
+/** A raw HTTP response with enough surface to follow redirects. `fetch`'s real
+ *  Response satisfies this; tests inject a fake to exercise the redirect guard. */
+export interface IRawResponse {
+  ok: boolean;
+  status: number;
+  headers: { get(name: string): string | null };
+  text(): Promise<string>;
+}
+
+export type RawFetch = (
+  url: string,
+  init: { redirect: "manual"; headers: Record<string, string> }
+) => Promise<IRawResponse>;
+
+/**
+ * Follow redirects MANUALLY, re-validating EVERY hop's host. `redirect: "follow"`
+ * is an SSRF hole: a public URL can 30x-redirect to localhost / the cloud-metadata
+ * endpoint, which the one-time upfront host check never sees. Here each Location is
+ * vetted with `validateFetchUrl` (public http(s) host only) before we follow it.
+ */
+export async function fetchFollowingRedirects(
+  start: string,
+  rawFetch: RawFetch
+): Promise<IFetchResponse> {
+  let current = start;
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    const res = await rawFetch(current, {
+      redirect: "manual",
+      headers: FETCH_HEADERS,
+    });
+
+    if (res.status < 300 || res.status >= 400) {
+      return res;
+    }
+
+    const location = res.headers.get("location");
+
+    if (location === null || location.length === 0) {
+      return res;
+    }
+
+    const next = new URL(location, current);
+
+    if (validateFetchUrl(next.href) === null) {
+      throw new Error(
+        `blocked a redirect to a non-public host (${next.hostname})`
+      );
+    }
+
+    current = next.href;
+  }
+
+  throw new Error("too many redirects");
+}
+
 async function realFetch(url: string): Promise<IFetchResponse> {
-  return fetch(url, {
-    redirect: "follow",
-    headers: { "user-agent": "tsforge-web-fetch/1.0 (+local)" },
-  });
+  return fetchFollowingRedirects(url, (target, init) => fetch(target, init));
 }
 
 function stripTags(html: string): string {

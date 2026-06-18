@@ -46,6 +46,18 @@ export async function readFile(
   }
 
   const content = await handle.text();
+  const allLines = content.split("\n");
+  // Cap the DISPLAYED output so a huge file can't flood the model's context. The
+  // hashline snapshot below still records the FULL content, so range edits beyond
+  // the cap keep working; only the rendered view is bounded.
+  const truncated = allLines.length > MAX_READ_LINES;
+  const lines = truncated ? allLines.slice(0, MAX_READ_LINES) : allLines;
+  const note = truncated
+    ? `\n\n… [truncated: ${MAX_READ_LINES} of ${allLines.length} lines shown. ` +
+      `Read a specific range or search with \`run\` — e.g. ` +
+      `\`sed -n '${MAX_READ_LINES + 1},${MAX_READ_LINES + 200}p' ${r.file}\` ` +
+      `or \`rg <pattern> ${r.file}\`.]`
+    : "";
 
   // Annotate with hashline header if enabled
   if (flags.hashlineEditTool()) {
@@ -53,16 +65,19 @@ export async function readFile(
 
     const hash = ctx.snapshotStore.record(r.file, content);
     const header = formatHashHeader(r.file, hash);
-    const lines = content.split("\n");
     const annotated = lines
       .map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`)
       .join("\n");
 
-    return `${header}\n${annotated}`;
+    return `${header}\n${annotated}${note}`;
   }
 
-  return content;
+  return `${lines.join("\n")}${note}`;
 }
+
+/** Cap on the lines a single `read` renders — a huge file would otherwise wall
+ *  the model's context. The full content is still snapshotted for hashline edits. */
+const MAX_READ_LINES = 1500;
 
 /** Commands a plan-mode `run` may execute — pure inspection, never mutation. */
 const READ_ONLY_COMMANDS = new Set([
@@ -90,24 +105,111 @@ const READ_ONLY_GIT = new Set(["status", "log", "diff", "show", "branch"]);
  *  `| tee`, command substitution). Their PRESENCE disqualifies — conservative. */
 const SHELL_WRITE_RE = /[>;&|`]|\$\(/;
 
+/** `find` actions that mutate or execute, not just match (`find . -delete`,
+ *  `-exec rm {} +`). Allowlisting `find` without this let plan mode delete files. */
+const FIND_MUTATING = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fprint",
+  "-fprint0",
+  "-fprintf",
+  "-fls",
+]);
+
+/** `git branch` flags that delete/rename/copy a branch. A bare positional
+ *  (`git branch foo`) also CREATES a branch, so any non-flag arg disqualifies. */
+const GIT_BRANCH_MUTATING = new Set([
+  "-d",
+  "-D",
+  "-m",
+  "-M",
+  "-c",
+  "-C",
+  "-f",
+  "--delete",
+  "--move",
+  "--copy",
+  "--force",
+  "--edit-description",
+]);
+
+/** `tsc` flags that EMIT files to disk (the rest of a `--noEmit` typecheck is
+ *  read-only). Bare `tsc`/`tsc -p x` also emit, so a read-only run must say so. */
+const TSC_EMITTING = new Set([
+  "--outDir",
+  "--outFile",
+  "--out",
+  "-d",
+  "--declaration",
+  "--emitDeclarationOnly",
+  "--build",
+  "-b",
+]);
+
+/** `tsc` invocations that don't touch disk even without `--noEmit`. */
+const TSC_INFO_FLAGS = new Set([
+  "--version",
+  "-v",
+  "--help",
+  "-h",
+  "--showConfig",
+  "--listFilesOnly",
+]);
+
+function gitIsReadOnly(sub: string | undefined, rest: string[]): boolean {
+  if (sub === undefined || !READ_ONLY_GIT.has(sub)) {
+    return false;
+  }
+
+  if (sub === "branch") {
+    // Only listing is read-only: reject delete/rename/force flags AND any
+    // positional (which would create/rename a branch).
+    return !rest.some((a) => GIT_BRANCH_MUTATING.has(a) || !a.startsWith("-"));
+  }
+
+  return true;
+}
+
+function tscIsReadOnly(rest: string[]): boolean {
+  if (rest.some((a) => TSC_EMITTING.has(a))) {
+    return false;
+  }
+
+  // Emits by default — a read-only run must pass --noEmit (or be an info query).
+  return rest.includes("--noEmit") || rest.some((a) => TSC_INFO_FLAGS.has(a));
+}
+
 /**
- * Deterministically read-only: exactly one allowlisted command, no redirects/
- * pipes/chaining. Used by plan mode so the model can explore (`ls`, `rg`,
- * `git log`, `tsc --noEmit`) without any path to mutating the workspace.
+ * Deterministically read-only: exactly one allowlisted command with no
+ * redirects/pipes/chaining AND no MUTATING FLAGS for that command. Used by plan
+ * mode so the model can explore (`ls`, `rg`, `git log`, `tsc --noEmit`) with no
+ * path to mutating the workspace — an allowlisted command can still write via a
+ * flag (`find . -delete`, `git branch -D`, `tsc --outDir`), so each is checked.
  */
 export function isReadOnlyCommand(command: string): boolean {
   if (SHELL_WRITE_RE.test(command)) {
     return false;
   }
 
-  const [head, sub] = command.trim().split(/\s+/);
+  const [head, ...rest] = command.trim().split(/\s+/);
 
   if (head === undefined || !READ_ONLY_COMMANDS.has(head)) {
     return false;
   }
 
   if (head === "git") {
-    return sub !== undefined && READ_ONLY_GIT.has(sub);
+    return gitIsReadOnly(rest[0], rest.slice(1));
+  }
+
+  if (head === "find") {
+    return !rest.some((a) => FIND_MUTATING.has(a));
+  }
+
+  if (head === "tsc") {
+    return tscIsReadOnly(rest);
   }
 
   return true;
