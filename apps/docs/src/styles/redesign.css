@@ -447,14 +447,17 @@ header.header,
 .sl-markdown-content .mermaid::before {
   display: none !important;
 }
-/* Kill the neon node/edge drop-shadow glow (targeted, so the diagram subtree
-   stays interactive and click-to-zoom keeps working). */
+/* Kill the neon glow. The halo is a drop-shadow filter on the <svg> itself
+   (plus a hover glow on nodes); flatten all of them. Targeted to filter only,
+   so the diagram stays interactive and click-to-zoom keeps working. */
+.mermaid svg,
+.mermaid > svg,
+.mermaid-zoom-dialog svg,
 .mermaid svg .node :is(rect, polygon, circle, ellipse, path),
+.mermaid svg .node:hover :is(rect, polygon, circle, ellipse, path),
 .mermaid svg .edgePath path,
 .mermaid svg .edgePaths path,
-.mermaid-zoom-dialog svg .node :is(rect, polygon, circle, ellipse, path),
-.mermaid-zoom-dialog svg .edgePath path,
-.mermaid-zoom-dialog svg .edgePaths path {
+.mermaid-zoom-dialog svg .node :is(rect, polygon, circle, ellipse, path) {
   filter: none !important;
 }
 
