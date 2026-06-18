@@ -33,7 +33,6 @@ import {
   WEB_FETCH_TOOL,
   WEB_SEARCH_TOOL,
   GIT_CONTEXT_TOOL,
-  TOOL_NAME,
 } from "../agent";
 import { TsService, type ITsDiagnostic } from "../lsp";
 import type { McpRegistry } from "../mcp";
@@ -453,6 +452,20 @@ async function runWriteGuard(ctx: ILoopCtx, path: string): Promise<string> {
   }
 }
 
+/** Add paths (cwd-relative, forward-slashed) to the session's change set — the
+ *  scope change-scoped gate rules (test-sibling-required) enforce on. Lazy-inits
+ *  `touched` so a custom loop runner that forgot to seed it self-heals rather than
+ *  silently dropping enforcement. */
+function recordTouched(ctx: ILoopCtx, files: readonly string[]): void {
+  ctx.touched ??= new Set<string>();
+
+  for (const f of files) {
+    const rel = isAbsolute(f) ? relative(ctx.cwd, f) : f;
+
+    ctx.touched.add(rel.replaceAll("\\", "/"));
+  }
+}
+
 /**
  * Run the model's tool calls: execute each, feed the result back, and report
  * whether any touched an editable file (which means we should re-gate). Mutates
@@ -480,6 +493,9 @@ export async function runToolCalls(
     // only on a successful write, so failures/rejects never count. See P1/P2.
     // (Object ref, not a captured `let`: CFA de-narrows a property after a call.)
     const wrote = { value: false, path: "" };
+    // Files mutated by a tool the model did NOT hand-write (semantic ops,
+    // scaffolds). These re-gate and join the change scope but skip the write-guard.
+    const mutated: string[] = [];
 
     const report: Reporter = (event) => {
       if (
@@ -489,6 +505,14 @@ export async function runToolCalls(
       ) {
         wrote.value = true;
         wrote.path = event.file;
+      }
+
+      if (event.mutated !== undefined) {
+        for (const f of event.mutated) {
+          if (isInScope(f, ctx.task.files)) {
+            mutated.push(f);
+          }
+        }
       }
 
       ctx.report(event);
@@ -514,30 +538,22 @@ export async function runToolCalls(
     if (wrote.value) {
       touchedEditable = true;
       state.edits += 1;
-      // Record what the agent wrote (cwd-relative) so change-scoped gate rules
-      // (test-sibling-required) know which files to enforce on.
-      const rel = isAbsolute(wrote.path)
-        ? relative(ctx.cwd, wrote.path)
-        : wrote.path;
-
-      // Lazy-init rather than `?.add` so a custom loop runner that forgot to seed
-      // `touched` self-heals instead of silently skipping TDD enforcement — the
-      // exact silent-no-op class this fix exists to kill.
-      ctx.touched ??= new Set<string>();
-      ctx.touched.add(rel.replaceAll("\\", "/"));
+      // Record what the agent wrote so change-scoped gate rules (test-sibling-
+      // required) know which files to enforce on, then write-guard just this file.
+      recordTouched(ctx, [wrote.path]);
       feedback = await runWriteGuard(ctx, wrote.path);
     }
 
-    // A semantic write (rename/organize_imports/move_file) is scope-enforced
-    // internally and mutates on success — re-gate to confirm. move_file relocates
-    // a file AND rewrites every importer, so omitting it let a move end as
-    // "responded" without the gate ever running. (These don't feed state.edits.)
-    if (
-      call.name === TOOL_NAME.renameSymbol ||
-      call.name === TOOL_NAME.organizeImports ||
-      call.name === TOOL_NAME.moveFile
-    ) {
+    // A tool that mutated files without the model hand-writing them (a successful
+    // semantic op or scaffold) must re-gate so the change is verified — the signal
+    // comes from the handler's `mutated` event, emitted ONLY on a real change.
+    // Keying off the tool NAME (the old approach) miscounted a rejected/no-op op
+    // as a mutation, letting a green gate claim "done" though nothing happened, and
+    // missed scaffolds entirely, letting them skip the gate. These paths join the
+    // change scope but are NOT write-guarded — generated shells aren't re-checked.
+    if (mutated.length > 0) {
       touchedEditable = true;
+      recordTouched(ctx, mutated);
     }
 
     ctx.messages.push({

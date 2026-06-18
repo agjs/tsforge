@@ -114,27 +114,7 @@ export function doLsp(
   // here, before doSymbolLsp's `need {file, symbol}` guard would wrongly reject a
   // valid `{file}`-only call (its schema requires only `file`). See P1 review.
   if (name === TOOL_NAME.organizeImports) {
-    if (file.length === 0) {
-      return "organize_imports: need `file`";
-    }
-
-    if (!writable(file, ctx.files)) {
-      return reject(
-        ctx,
-        "organize_imports",
-        `organize_imports ${file} REJECTED: out of scope.`
-      );
-    }
-
-    const n = svc.organizeImports(file);
-
-    ctx.report({
-      kind: "tool",
-      task: ctx.task,
-      message: `organize_imports ${file} (${n})`,
-    });
-
-    return `organize_imports: ${n} change(s) in ${file}`;
+    return doOrganizeImports(svc, file, ctx);
   }
 
   // move_file takes {from, to} (not {file, symbol}) — handle before doSymbolLsp's
@@ -146,6 +126,37 @@ export function doLsp(
 
   // The remaining tools address a symbol by name within a file.
   return doSymbolLsp(name, svc, file, args, ctx, rel);
+}
+
+/** organize_imports: scope-enforced, single-file import cleanup. Emits `mutated`
+ *  (re-gate + change-scope) only when imports actually changed. */
+function doOrganizeImports(
+  svc: LspService,
+  file: string,
+  ctx: IToolContext
+): string {
+  if (file.length === 0) {
+    return "organize_imports: need `file`";
+  }
+
+  if (!writable(file, ctx.files)) {
+    return reject(
+      ctx,
+      "organize_imports",
+      `organize_imports ${file} REJECTED: out of scope.`
+    );
+  }
+
+  const n = svc.organizeImports(file);
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task,
+    message: `organize_imports ${file} (${n})`,
+    ...(n > 0 ? { mutated: [file] } : {}),
+  });
+
+  return `organize_imports: ${n} change(s) in ${file}`;
 }
 
 /** move_file: relocate a file and rewrite every importer's specifier. */
@@ -181,6 +192,9 @@ function doMoveFile(
     kind: "tool",
     task: ctx.task,
     message: `move_file ${from}→${to} (${changed ?? 0})`,
+    // moveTargets includes the destination + every rewritten importer; re-gate
+    // and change-scope them — only when the move actually happened.
+    ...(changed === null ? {} : { mutated: targets }),
   });
 
   return changed === null
@@ -261,6 +275,8 @@ function doSymbolLsp(
     kind: "tool",
     task: ctx.task,
     message: `rename_symbol ${symbol}→${newName} (${changed ?? 0})`,
+    // Re-gate + change-scope the rewritten files — only on a real rename.
+    ...(changed === null ? {} : { mutated: targets }),
   });
 
   return changed === null

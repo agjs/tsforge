@@ -40,6 +40,13 @@ export interface ILoopEvent {
   /** For `stuck` events: a human-readable blocker diagnosis. */
   detail?: string;
   file?: string;
+  /** Files a tool MUTATED without the model hand-writing them — semantic ops
+   *  (move/rename/organize) and scaffolds. Accounting-only: it tells the loop the
+   *  workspace changed (so the gate must run, and these paths join the change
+   *  scope) WITHOUT triggering the per-write guard, which must not re-check
+   *  generated shells. Emitted only on a real mutation — never on a reject/no-op,
+   *  so a rejected op can't be miscounted as a successful one. */
+  mutated?: readonly string[];
   /** For `create` events: the new file's content (rendered as a code block). */
   content?: string;
   /** For `edit` events: the replaced / replacement snippets (rendered as a diff). */
