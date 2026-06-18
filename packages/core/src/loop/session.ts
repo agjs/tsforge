@@ -19,7 +19,7 @@ import {
 import { flags } from "../config";
 import { readFiles } from "../lib/fs";
 import { WEB_VENDORED_PATTERNS } from "../lib/scope";
-import { validate, type ErrorParser } from "../validate";
+import { validate, isEslintJsonLine, type ErrorParser } from "../validate";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -160,14 +160,6 @@ export function filterGateStream(
 ): (text: string) => void {
   let buf = "";
 
-  const isEslintJson = (line: string): boolean => {
-    const t = line.trimStart();
-
-    return (
-      t.startsWith("[{") && t.includes('"filePath"') && t.includes('"messages"')
-    );
-  };
-
   return (text: string): void => {
     buf += text;
 
@@ -183,7 +175,7 @@ export function filterGateStream(
 
       buf = buf.slice(nl + 1);
 
-      if (!isEslintJson(line)) {
+      if (!isEslintJsonLine(line)) {
         sink(line);
       }
 

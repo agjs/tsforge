@@ -1,7 +1,31 @@
 import type { ITask } from "../spec";
 import type { ErrorParser, ErrorSet, IValidateResult } from "./validate.types";
 import { runAccept, type IAcceptOptions } from "./accept";
-import { parserFor } from "./parse";
+import { parserFor, isEslintJsonLine } from "./parse";
+
+/** Longest fallback message we'll surface — a vite/render error fits; a wall of
+ *  build logs does not. */
+const FALLBACK_CAP = 1200;
+
+/** Build the human-readable fallback message for a gate that failed without any
+ *  parseable errors (e.g. a render/build failure). Drops eslint's machine JSON
+ *  line — it's never for human eyes — and caps the length so the terminal isn't
+ *  flooded with raw build output. */
+function fallbackMessage(output: string): string {
+  const cleaned = output
+    .split("\n")
+    .filter((line) => !isEslintJsonLine(line))
+    .join("\n")
+    .trim();
+
+  if (cleaned.length === 0) {
+    return "command exited non-zero";
+  }
+
+  return cleaned.length > FALLBACK_CAP
+    ? `${cleaned.slice(0, FALLBACK_CAP)}\n… (output truncated)`
+    : cleaned;
+}
 
 /**
  * Run a task's gate and turn the result into a structured error set. When no
@@ -24,11 +48,10 @@ export async function validate(
 
   // A failing gate must surface at least one error, even with empty output.
   const parsed = parser(r.output);
-  const trimmed = r.output.trim();
   const fallback: ErrorSet = [
     {
       key: "nonzero",
-      message: trimmed.length > 0 ? trimmed : "command exited non-zero",
+      message: fallbackMessage(r.output),
     },
   ];
 
