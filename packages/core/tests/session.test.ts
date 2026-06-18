@@ -1035,3 +1035,31 @@ test("filterGateStream drops the eslint JSON blob but keeps build progress", asy
   expect(joined).not.toContain("filePath");
   expect(joined).not.toContain("no-jsx-computation");
 });
+
+// A gate process can exit with its last line un-terminated (no trailing \n).
+// The buffer holds that partial to keep the JSON drop reliable, so flush() must
+// emit it at stream end — otherwise the final status line is swallowed.
+test("filterGateStream.flush emits a trailing newline-less line", () => {
+  const out: string[] = [];
+  const sink = filterGateStream((t) => out.push(t));
+
+  sink("running gate…\n");
+  sink("✗ FAILED"); // no trailing newline — process exited here
+  expect(out.join("")).not.toContain("FAILED"); // still buffered
+
+  sink.flush();
+
+  expect(out.join("")).toContain("✗ FAILED");
+});
+
+// flush must still apply the JSON filter — a half-streamed eslint blob with no
+// final newline must not leak just because the stream ended.
+test("filterGateStream.flush still drops a trailing eslint JSON blob", () => {
+  const out: string[] = [];
+  const sink = filterGateStream((t) => out.push(t));
+
+  sink('[{"filePath":"/x/a.ts","messages":[{"ruleId":"r","severity":2}]}]');
+  sink.flush();
+
+  expect(out.join("")).not.toContain("filePath");
+});

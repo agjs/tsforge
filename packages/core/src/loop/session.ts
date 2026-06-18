@@ -149,39 +149,55 @@ export interface ISendOptions {
 
 const SESSION_ID = "session";
 
+/** A gate-output sink that also carries `flush()` — call it when the stream
+ *  ends to emit any trailing line the process printed without a newline. */
+export type IGateStreamSink = ((text: string) => void) & { flush: () => void };
+
 /** Wrap a live gate-output sink so the machine-readable `eslint --format json`
  *  blob NEVER reaches the terminal — it's a single giant JSON line the harness
  *  parses internally and a human must not see (it was dumping raw at the end of
  *  every web run). Buffers across chunk boundaries: a line that begins `[{` is
  *  held until its newline, then dropped if it's the eslint JSON; everything else
- *  (vite build progress, tsc, test output) passes through unchanged. */
+ *  (vite build progress, tsc, test output) passes through unchanged. Call
+ *  `flush()` at stream end so a final newline-less line isn't swallowed. */
 export function filterGateStream(
   sink: (text: string) => void
-): (text: string) => void {
+): IGateStreamSink {
   let buf = "";
 
-  return (text: string): void => {
+  const emit = (line: string): void => {
+    if (!isEslintJsonLine(line)) {
+      sink(line);
+    }
+  };
+
+  const fn = (text: string): void => {
     buf += text;
 
     let nl = buf.indexOf("\n");
 
     // Emit only COMPLETE (newline-terminated) lines; HOLD any trailing partial
-    // until its newline. This is what makes the JSON drop reliable: the eslint
-    // blob is one complete line, always evaluated whole and dropped — the old
-    // partial flush leaked the JSON across chunk boundaries. Gate output
+    // until its newline (or flush()). This is what makes the JSON drop reliable:
+    // the eslint blob is one complete line, always evaluated whole and dropped —
+    // the old partial flush leaked the JSON across chunk boundaries. Gate output
     // (vite/tsc/test) is line-based, so live progress isn't lost.
     while (nl !== -1) {
-      const line = buf.slice(0, nl + 1);
-
+      emit(buf.slice(0, nl + 1));
       buf = buf.slice(nl + 1);
-
-      if (!isEslintJsonLine(line)) {
-        sink(line);
-      }
-
       nl = buf.indexOf("\n");
     }
   };
+
+  // When the gate process exits, its last chunk may not end in a newline — emit
+  // that remainder (still JSON-filtered) so no output is permanently lost.
+  fn.flush = (): void => {
+    if (buf.length > 0) {
+      emit(buf);
+      buf = "";
+    }
+  };
+
+  return fn;
 }
 
 /** Build the assistant history message, carrying `reasoningContent` when the
@@ -724,6 +740,9 @@ export class Session {
    *  for the whole web build (`tsService !== null` was false). Rebuilding here
    *  makes per-write feedback actually fire in web sessions, matching headless. */
   async refreshTsService(): Promise<void> {
+    // Dispose the old service first — it holds program/document-registry refs
+    // that would otherwise leak when we drop the reference.
+    this.ctx.tsService?.dispose();
     this.ctx.tsService = await buildTsService(this.ctx.cwd);
   }
 
