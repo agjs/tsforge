@@ -1,0 +1,266 @@
+/* =====================================================================
+   "TypeSafe Haven" redesign skin — dark-only OKLCH theme over Starlight.
+   Loaded last (after custom.css/landing.css) so it owns the final look.
+   Tokens come from tailwind.css (:root --background/--primary/etc).
+   ===================================================================== */
+
+:root,
+:root[data-theme="dark"],
+:root[data-theme="light"] {
+  color-scheme: dark;
+
+  --sl-font: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Surfaces */
+  --sl-color-bg: var(--background);
+  --sl-color-bg-nav: color-mix(in oklch, var(--background) 80%, transparent);
+  --sl-color-bg-sidebar: var(--background);
+  --sl-color-bg-inline-code: color-mix(in oklch, var(--primary) 14%, var(--card));
+  --sl-color-bg-accent: var(--primary);
+
+  /* Hairlines / borders */
+  --sl-color-hairline: var(--border);
+  --sl-color-hairline-light: var(--border);
+  --sl-color-hairline-shade: var(--border);
+
+  /* Text */
+  --sl-color-text: var(--foreground);
+  --sl-color-text-accent: var(--primary);
+  --sl-color-text-invert: var(--primary-foreground);
+  --sl-color-white: var(--foreground);
+  --sl-color-black: var(--background);
+
+  /* Accent ramp */
+  --sl-color-accent: var(--primary);
+  --sl-color-accent-low: color-mix(in oklch, var(--primary) 18%, transparent);
+  --sl-color-accent-high: var(--primary);
+
+  /* Gray ramp → muted/border tokens */
+  --sl-color-gray-1: var(--foreground);
+  --sl-color-gray-2: color-mix(in oklch, var(--foreground) 75%, var(--muted-foreground));
+  --sl-color-gray-3: var(--muted-foreground);
+  --sl-color-gray-4: var(--muted-foreground);
+  --sl-color-gray-5: var(--border-strong);
+  --sl-color-gray-6: var(--border);
+  --sl-color-gray-7: var(--card);
+
+  /* Sharp corners everywhere */
+  --sl-border-radius: 0px;
+}
+
+html,
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--sl-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: color-mix(in oklch, var(--primary) 35%, transparent);
+  color: var(--foreground);
+}
+
+/* Headings use the mono display face (matches the landing). */
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6),
+h1[data-page-title],
+.content-panel h1 {
+  font-family: var(--sl-font-mono);
+  letter-spacing: -0.01em;
+}
+
+/* ── Top nav (Starlight header bar) ── */
+header.header {
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--background) 80%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+/* Hide any theme/language picker — the site is dark-only. */
+starlight-theme-select,
+starlight-lang-select {
+  display: none !important;
+}
+
+/* Search box → Lovable "Search rules, APIs… ⌘K" look. */
+.tf-nav-search button[data-open-modal] {
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: color-mix(in oklch, var(--card) 60%, transparent);
+  color: var(--muted-foreground);
+  font-family: var(--sl-font-mono);
+  font-size: 12px;
+  height: 2.25rem;
+}
+.tf-nav-search button[data-open-modal]:hover {
+  border-color: var(--border-strong);
+}
+.tf-nav-search kbd {
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+/* ── Sidebar ── */
+.sidebar-pane {
+  border-right: 1px solid var(--border);
+  background: var(--background);
+}
+nav.sidebar .top-level > li > details > summary .group-label .large,
+.sidebar-content .group-label > span {
+  font-family: var(--sl-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.sidebar-content a {
+  border-radius: 0;
+  border-left: 1px solid transparent;
+  color: var(--muted-foreground);
+  font-size: 0.86rem;
+}
+.sidebar-content a:hover {
+  color: var(--foreground);
+  background: color-mix(in oklch, var(--card) 50%, transparent);
+}
+.sidebar-content a[aria-current="page"] {
+  border-left-color: var(--primary);
+  color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 8%, transparent);
+  font-weight: 500;
+}
+
+/* ── Right-hand table of contents ── */
+starlight-toc nav > h2,
+mobile-starlight-toc nav > h2 {
+  font-family: var(--sl-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+}
+starlight-toc a {
+  border-left: 1px solid transparent;
+  border-radius: 0;
+  color: var(--muted-foreground);
+}
+starlight-toc a:hover,
+starlight-toc a[aria-current="true"] {
+  border-left-color: var(--primary);
+  color: var(--foreground);
+}
+
+/* ── Prose ── */
+.sl-markdown-content {
+  color: color-mix(in oklch, var(--foreground) 88%, transparent);
+  line-height: 1.75;
+}
+.sl-markdown-content a:not(:where(.not-content *)) {
+  color: var(--primary);
+  text-underline-offset: 3px;
+}
+.sl-markdown-content :not(pre) > code {
+  border: 1px solid color-mix(in oklch, var(--primary) 30%, transparent);
+  border-radius: 0;
+  background: color-mix(in oklch, var(--primary) 12%, var(--card));
+  color: var(--foreground);
+  font-family: var(--sl-font-mono);
+}
+
+/* ── Code window (Expressive Code) → Lovable macOS CodeBlock ── */
+.expressive-code .frame {
+  border-radius: 0;
+}
+.expressive-code .frame pre {
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: oklch(0.13 0.02 265) !important;
+  font-family: var(--sl-font-mono);
+  font-size: 13px;
+}
+.expressive-code .frame pre > code {
+  font-family: var(--sl-font-mono);
+}
+/* macOS traffic-light dots in a hairline header on every block. */
+.expressive-code .frame:not(.has-title):not(.is-terminal) pre {
+  padding-top: 2.6rem;
+}
+.expressive-code .frame:not(.has-title):not(.is-terminal)::before {
+  content: "";
+  position: absolute;
+  top: 13px;
+  left: 16px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--destructive);
+  box-shadow:
+    16px 0 0 oklch(0.78 0.16 85),
+    32px 0 0 var(--success);
+  z-index: 1;
+}
+.expressive-code .frame:not(.has-title):not(.is-terminal)::after {
+  content: "";
+  position: absolute;
+  top: 2.2rem;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--border);
+  z-index: 1;
+}
+/* Titled / terminal frame headers → sharp, hairline, mono. */
+.expressive-code .frame .header,
+.expressive-code figcaption.header {
+  border-radius: 0;
+  font-family: var(--sl-font-mono);
+}
+.expressive-code .frame.is-terminal .header::before {
+  /* recolor the existing terminal dots to the palette */
+  filter: none;
+}
+.expressive-code .copy button {
+  border-radius: 0;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--card) 70%, transparent);
+}
+.expressive-code .copy button:hover {
+  border-color: var(--primary);
+}
+
+/* ── Asides / callouts → Lovable Callout (left rule + mono-caps label) ── */
+.sl-markdown-content .starlight-aside {
+  border-radius: 0;
+  border: none;
+  border-left: 2px solid var(--primary);
+  background: color-mix(in oklch, var(--primary) 6%, transparent);
+  padding: 0.85rem 1rem;
+}
+.starlight-aside__title {
+  font-family: var(--sl-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+}
+.starlight-aside--tip {
+  border-left-color: var(--success);
+  background: color-mix(in oklch, var(--success) 6%, transparent);
+}
+.starlight-aside--caution {
+  border-left-color: oklch(0.78 0.16 85);
+  background: color-mix(in oklch, oklch(0.78 0.16 85) 7%, transparent);
+}
+.starlight-aside--danger {
+  border-left-color: var(--destructive);
+  background: color-mix(in oklch, var(--destructive) 7%, transparent);
+}
+
+/* Buttons / links rendered by Starlight components keep sharp corners. */
+.sl-markdown-content :is(.sl-link-button) {
+  border-radius: 0;
+}

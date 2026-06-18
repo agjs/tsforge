@@ -1,0 +1,59 @@
+---
+const steps = [
+  {
+    n: "01",
+    title: "Propose",
+    body: "You (or an agent) describe the change. tsforge reads the repo, the LSP graph, and the rule catalog before touching a file.",
+    snippet: ['> tsforge "add refresh-token rotation"', "  reading repo · map + LSP graph"],
+  },
+  {
+    n: "02",
+    title: "Build",
+    body: "Edits are applied as typed, minimal patches. Every patch is checked against the in-process language service before it touches disk.",
+    snippet: ["~ edit auth.service.ts", "~ edit auth.controller.ts", "  patch ok · 0 lsp diagnostics"],
+  },
+  {
+    n: "03",
+    title: "Gate",
+    body: "tsc, type-aware ESLint, the tsforge meta-rules, and your test suite must all pass. If anything fails, tsforge re-plans and retries — bounded, autonomous, deterministic.",
+    snippet: ["→ tsc --noEmit · ok", "→ eslint(tsforge) · ok", "→ bun test · pass", "✓ checkpoint saved"],
+  },
+];
+
+const lineClass = (l: string): string =>
+  l.startsWith("✓") ? "text-success" : l.startsWith("→") ? "text-foreground" : "text-muted-foreground";
+---
+
+<section class="hairline-b">
+  <div class="mx-auto max-w-[1400px] px-6 py-24">
+    <div class="max-w-2xl mb-16">
+      <div class="flex items-center gap-3 mb-5">
+        <span class="h-px w-8 bg-primary"></span>
+        <span class="mono-caps">03 — The loop</span>
+      </div>
+      <h2 class="font-mono text-[34px] md:text-[44px] leading-[1.05] tracking-[-0.02em]">
+        Propose. Build. Gate.<br />
+        <span class="text-muted-foreground">Until it passes.</span>
+      </h2>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-px bg-border border border-border">
+      {
+        steps.map((s) => (
+          <div class="bg-background p-8 group">
+            <div class="font-mono text-[64px] leading-none tracking-tighter text-foreground/15 group-hover:text-primary/40 transition-colors">
+              {s.n}
+            </div>
+            <h3 class="font-mono text-[20px] mt-4 tracking-tight">{s.title}</h3>
+            <p class="mt-3 text-[13.5px] text-muted-foreground leading-relaxed max-w-[34ch]">{s.body}</p>
+            <div class="mt-6 font-mono text-[11.5px] bg-card/60 border border-border p-3 space-y-1">
+              {s.snippet.map((l) => (
+                <div class={lineClass(l)}>{l}</div>
+              ))}
+            </div>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>

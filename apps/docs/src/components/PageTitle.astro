@@ -70,15 +70,17 @@ const verifiedOn = entry?.data?.verifiedOn as string | undefined;
     align-items: center;
     gap: 0.4rem;
     margin: 0;
-    padding: 0.15rem 0.55rem 0.15rem 0.4rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--sl-color-accent) 8%, transparent);
-    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 22%, transparent);
+    padding: 0.25rem 0.6rem;
+    border-radius: 0;
+    background: color-mix(in oklch, var(--sl-color-accent) 8%, transparent);
+    border: 1px solid var(--sl-color-hairline);
     color: var(--sl-color-text-accent);
-    font-size: 0.78rem;
+    font-family: var(--sl-font-mono);
+    font-size: 0.66rem;
     font-weight: 500;
     line-height: 1.2;
-    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
     width: fit-content;
   }
 

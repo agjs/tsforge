@@ -1,0 +1,22 @@
+---
+/* Marketing landing page, rendered as Starlight's Hero override on the splash
+   index. Composes the section partials; the nav lives in Header.astro and the
+   footer in Footer.astro (which branches to the mega-footer on the splash). */
+import Hero from "./landing/Hero.astro";
+import Stats from "./landing/Stats.astro";
+import Bento from "./landing/Bento.astro";
+import RulesMarquee from "./landing/RulesMarquee.astro";
+import GateExplained from "./landing/GateExplained.astro";
+import TerminalShowcase from "./landing/TerminalShowcase.astro";
+import CTA from "./landing/CTA.astro";
+---
+
+<div class="tf-landing bg-background text-foreground">
+  <Hero />
+  <Stats />
+  <Bento />
+  <RulesMarquee />
+  <GateExplained />
+  <TerminalShowcase />
+  <CTA />
+</div>

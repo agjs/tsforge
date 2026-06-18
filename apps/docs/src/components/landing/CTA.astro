@@ -1,0 +1,32 @@
+---
+import Icon from "./Icon.astro";
+---
+
+<section class="hairline-b relative overflow-hidden">
+  <div class="absolute inset-0 grid-bg opacity-40"></div>
+  <div class="absolute inset-0 bg-gradient-to-b from-transparent via-background/30 to-background"></div>
+  <div class="relative mx-auto max-w-[1400px] px-6 py-28 text-center">
+    <div class="mono-caps mb-6 !text-[color:var(--color-primary)]">No more vibe code.</div>
+    <h2 class="font-mono text-[40px] md:text-[64px] leading-[1.02] tracking-[-0.03em] max-w-4xl mx-auto">
+      Put the harness around your TypeScript. <span class="text-muted-foreground">Sleep better.</span>
+    </h2>
+    <div class="mt-10 flex flex-wrap justify-center gap-3">
+      <a
+        href="/quickstart/"
+        class="group inline-flex items-center gap-2 bg-primary text-primary-foreground h-12 px-6 font-medium text-[13px]"
+      >
+        Install tsforge
+        <Icon name="arrow-right" class="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+      </a>
+      <a
+        href="/reference/rules-catalog/"
+        class="inline-flex items-center gap-2 border border-border h-12 px-6 text-[13px] hover:border-border-strong"
+      >
+        Read the rulebook
+      </a>
+    </div>
+    <div class="mt-10 font-mono text-[11px] text-muted-foreground">
+      MIT · made by people who hate <span class="line-through decoration-destructive/60">as any</span>
+    </div>
+  </div>
+</section>
