@@ -624,9 +624,10 @@ const REACT_GUIDANCE = [
   "package.json). The gate builds with Vite and renders in a real browser, FAILING on",
   "any runtime/console error — that IS the app's acceptance. SEPARATELY the harness",
   "enforces TDD on LOGIC: every `.ts` module that exports a function/class needs a",
-  "co-located `<name>.test.ts` using bun:test (`import { test, expect } from",
-  '"bun:test"`). Presentational `.tsx` components need NO test. So put real logic',
-  "(rules, reducers, derived state, formatting) in `.ts` modules and test those.",
+  "co-located `<name>.test.ts` using bun:test —",
+  '  `import { test, expect } from "bun:test"`.',
+  "Presentational `.tsx` components need NO test. So put real logic (rules, reducers,",
+  "derived state, formatting) in `.ts` modules and test those.",
   "Do NOT run `tsc`, `eslint`, `vite build`, or the gate command yourself to check",
   "your work — the harness type-checks each file the moment you write it and runs",
   "the full gate automatically, feeding back the exact errors concisely. Running",
@@ -747,9 +748,10 @@ const VANILLA_GUIDANCE = [
   "package.json). The gate builds with Vite and renders in a real browser, failing on",
   "any runtime error — that IS the app's acceptance. SEPARATELY the harness enforces",
   "TDD on LOGIC: src/store.ts (pure, DOM-free) and any other `.ts` module that exports",
-  "a function needs a co-located `<name>.test.ts` using bun:test (`import { test,",
-  'expect } from "bun:test"`). That is exactly why store logic is kept pure and out of',
-  "view.ts — so it is unit-testable. Test the store; the entry/view need no test.",
+  "a function needs a co-located `<name>.test.ts` using bun:test —",
+  '  `import { test, expect } from "bun:test"`.',
+  "That is exactly why store logic is kept pure and out of view.ts — so it is",
+  "unit-testable. Test the store; the entry/view need no test.",
 ].join("\n");
 
 // ── Harness SDK primitives (vendored): the toolkit the model COMPOSES with
