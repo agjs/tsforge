@@ -42,6 +42,9 @@ beforeEach(() => {
   git("init", "-q");
   git("config", "user.email", "t@t.t");
   git("config", "user.name", "t");
+  // Don't inherit a global commit.gpgsign=true — signing via an unavailable agent
+  // would make these temp-repo commits fail spuriously.
+  git("config", "commit.gpgsign", "false");
   writeFileSync(
     join(repo, "discount.ts"),
     "export function discount(price: number, off: number): number {\n  return price - off;\n}\n"
@@ -139,6 +142,7 @@ test("injects the caller blast-radius signal into the find prompt", async () => 
   pgit("init", "-q");
   pgit("config", "user.email", "t@t.t");
   pgit("config", "user.name", "t");
+  pgit("config", "commit.gpgsign", "false");
   pgit("add", "-A");
   pgit("commit", "-q", "-m", "init");
   writeFileSync(

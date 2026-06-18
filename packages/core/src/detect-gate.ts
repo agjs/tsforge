@@ -438,9 +438,13 @@ export const WEB_PACKS: readonly string[] = [
   "tanstack-query",
 ];
 
-/** Build the `KEY=val ` shell prefix that hands packs (+ rule overrides) to a
+/** Build the `KEY='val' ` shell prefix that hands packs (+ rule overrides) to a
  *  bundled eslint config, which reads them from the environment at load time.
- *  JSON.stringify emits no spaces, so this survives a later whitespace-collapse. */
+ *  The whole command runs through `sh -c`, so the JSON value MUST be single-
+ *  quoted: an unquoted `{"a":"off"}` has its double quotes stripped by the shell
+ *  to `{a:off}`, which fails `JSON.parse` in the config and is then silently
+ *  ignored — so rule overrides never reached eslint. JSON.stringify never emits
+ *  a single quote, so single-quoting the value is lossless. */
 function packEnvPrefix(
   packs?: readonly string[],
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
@@ -448,11 +452,11 @@ function packEnvPrefix(
   const envParts: string[] = [];
 
   if (packs !== undefined && packs.length > 0) {
-    envParts.push(`TSFORGE_PACKS=${packs.join(",")}`);
+    envParts.push(`TSFORGE_PACKS='${packs.join(",")}'`);
   }
 
   if (ruleOverrides !== undefined && Object.keys(ruleOverrides).length > 0) {
-    envParts.push(`TSFORGE_RULE_OVERRIDES=${JSON.stringify(ruleOverrides)}`);
+    envParts.push(`TSFORGE_RULE_OVERRIDES='${JSON.stringify(ruleOverrides)}'`);
   }
 
   return envParts.length > 0 ? `${envParts.join(" ")} ` : "";

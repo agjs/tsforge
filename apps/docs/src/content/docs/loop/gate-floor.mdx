@@ -70,10 +70,12 @@ Why separate? tsforge ships rules tuned for AI-written code and your stack (Reac
 
 The core ESLint config is **syntactic-only** (no type-aware rules) so it runs on any `.ts` file without the target's full type graph. It also caps **cognitive complexity at 20** and **nesting depth at 4** — a sprawling, deeply-nested function fails the gate until it is split into named helpers.
 
-Whenever the project has a `tsconfig.json`, tsforge adds a **type-aware pass** that catches what `tsc --strict` and the syntactic rules can't:
+On the **strict** [profile](/guardrails/config/#profiles) — any project with a `tsconfig.json` — tsforge adds a **type-aware pass** that catches what `tsc --strict` and the syntactic rules can't:
 
 - **Async correctness** — `no-floating-promises`, `no-misused-promises`: a dropped `await` is a gate error.
-- **Implicit-`any` containment** — the `no-unsafe-*` family. `no-explicit-any` bans the literal `any` token, but it cannot see `any` that leaks in from an untyped boundary (`JSON.parse`, `await res.json()`, an untyped dependency), which `tsc` propagates silently. These rules force you to validate the boundary, then the data is typed. Web-app gates run this pass too.
+- **Implicit-`any` containment** — the `no-unsafe-*` family. `no-explicit-any` bans the literal `any` token, but it cannot see `any` that leaks in from an untyped boundary (`JSON.parse`, `await res.json()`, an untyped dependency), which `tsc` propagates silently. These rules force you to validate the boundary, then the data is typed.
+
+The default `recommended` profile keeps the gate syntactic-only — faster, and these type-aware rules can be noisy on existing code. Set `"profile": "strict"` in [tsforge.config.json](/guardrails/config/) to turn the pass on. Web-app gates run it regardless of profile.
 
 Baseline stylistic rules (all stacks) include blank lines before `return` and around block-like statements via `@stylistic/padding-line-between-statements`. That rule is **auto-fixed by `eslint --fix`**, not Prettier — Prettier does not enforce semantic blank lines. Non-web sessions run the same eslint + prettier janitor (`buildCoreFix`) before the gate, so the blank line is inserted without model turns.
 

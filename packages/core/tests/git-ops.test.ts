@@ -26,6 +26,9 @@ beforeAll(() => {
   git(repo, "init", "-q");
   git(repo, "config", "user.email", "t@t.t");
   git(repo, "config", "user.name", "t");
+  // Don't inherit a global commit.gpgsign=true — signing via an unavailable agent
+  // (e.g. a locked 1Password) would make the temp-repo commits fail spuriously.
+  git(repo, "config", "commit.gpgsign", "false");
   writeFileSync(
     join(repo, "a.ts"),
     "export const a = 1;\nexport const b = 2;\n"
