@@ -10,6 +10,7 @@ import {
   scaffoldWeb,
   discoverTestCommand,
   buildCoreFix,
+  formatFile,
 } from "../src/detect-gate";
 
 const ROOT = join(import.meta.dir, "..", "..", "..");
@@ -19,6 +20,24 @@ const STRICT_CONFIG = join(import.meta.dir, "..", "strict.eslint.config.mjs");
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "tsforge-gate-"));
 }
+
+// P3 (review): formatFile used raw Bun.spawn (no kill-timeout) on the per-write hot
+// path. It now routes eslint --fix + prettier --write through the shared
+// runArgvCommand (timeout-bounded). This locks that the refactor still formats.
+test("formatFile normalizes a messy file (via the shared timeout-bounded runner)", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(join(dir, "m.ts"), "export  const   x=1");
+    await formatFile(dir, "m.ts");
+
+    expect(await readFile(join(dir, "m.ts"), "utf8")).toBe(
+      "export const x = 1;\n"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("greenfield TS project: brings a strict tsconfig + gates on tsc AND eslint", async () => {
   const dir = await tempDir();

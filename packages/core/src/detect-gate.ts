@@ -9,6 +9,11 @@ import { runArgvCommand } from "./lib/fs/process";
  *  a cold registry, short enough that a wedged install can't hang the session. */
 const INSTALL_TIMEOUT_MS = 300_000;
 
+/** Hard ceiling for the per-write formatters (eslint --fix / prettier --write) so a
+ *  hung formatter can't wedge the write-guard hot path. Formatting one file is fast;
+ *  30s is generous slack. */
+const FORMAT_TIMEOUT_MS = 30_000;
+
 /**
  * Build the gate that confirms "done" — and makes tsforge a TypeScript-SPECIALIZED
  * harness, not a generic file editor. It enforces strict TS on whatever the model
@@ -606,32 +611,26 @@ export function buildCoreFix(): string {
 export async function formatFile(cwd: string, file: string): Promise<void> {
   const abs = join(cwd, file);
 
-  try {
-    await Bun.spawn(
-      [
-        "bun",
-        ESLINT_BIN,
-        "--no-config-lookup",
-        "-c",
-        STRICT_CONFIG,
-        "--fix",
-        abs,
-      ],
-      { cwd, stdout: "ignore", stderr: "ignore" }
-    ).exited;
-  } catch {
-    // best-effort — the settle gate still fixes + validates
-  }
-
-  try {
-    await Bun.spawn(["bun", PRETTIER_BIN, "--write", abs], {
-      cwd,
-      stdout: "ignore",
-      stderr: "ignore",
-    }).exited;
-  } catch {
-    // best-effort
-  }
+  // Route through the shared runner so a hung eslint/prettier is killed by the
+  // timeout instead of wedging this per-write path (it runs inside the write-guard).
+  // runArgvCommand never throws and captures output, so this stays best-effort: a
+  // non-zero exit or timeout is ignored — the settle gate is still the authority.
+  await runArgvCommand(
+    cwd,
+    [
+      "bun",
+      ESLINT_BIN,
+      "--no-config-lookup",
+      "-c",
+      STRICT_CONFIG,
+      "--fix",
+      abs,
+    ],
+    { timeoutMs: FORMAT_TIMEOUT_MS }
+  );
+  await runArgvCommand(cwd, ["bun", PRETTIER_BIN, "--write", abs], {
+    timeoutMs: FORMAT_TIMEOUT_MS,
+  });
 }
 
 /** Write `content` to `name` only if it doesn't already exist. Returns true when

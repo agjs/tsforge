@@ -1,5 +1,8 @@
 import { join } from "node:path";
-import { readProcessOutput } from "../lib/fs";
+import { runArgvCommand } from "../lib/fs";
+
+/** Hard ceiling for an ast-grep pass so a hung binary can't wedge the settle phase. */
+const ASTGREP_TIMEOUT_MS = 30_000;
 
 /**
  * Deterministic, SAFE strict-TS idiom rewrites via ast-grep (structural, not
@@ -91,14 +94,13 @@ const AST_GREP = join(REPO_ROOT, "node_modules", ".bin", "ast-grep");
 async function astGrep(
   args: string[]
 ): Promise<{ stdout: string; ok: boolean }> {
-  const proc = Bun.spawn([AST_GREP, ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
+  // Shared runner: same kill-timeout discipline as every other harness command, so
+  // a hung ast-grep can't wedge the settle phase.
+  const run = await runArgvCommand(process.cwd(), [AST_GREP, ...args], {
+    timeoutMs: ASTGREP_TIMEOUT_MS,
   });
-  const { stdout } = await readProcessOutput(proc.stdout, proc.stderr);
-  const code = await proc.exited;
 
-  return { stdout, ok: code === 0 };
+  return { stdout: run.stdout, ok: run.exitCode === 0 && !run.timedOut };
 }
 
 /**
