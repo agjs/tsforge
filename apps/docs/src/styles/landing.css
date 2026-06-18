@@ -17,18 +17,19 @@
   color: var(--color-foreground);
 }
 
-/* Strip the splash template's padding/max-width so the landing sits flush under
-   the nav and the section borders reach the edges. */
+/* Strip the splash template's padding/max-width on EVERY wrapper between the
+   viewport and the landing (incl. .content-panel, which keeps padding on mobile
+   and threw off the full-bleed math). !important to beat Starlight's media
+   queries. With these flush at the viewport edge, .tf-landing's bleed is a no-op
+   and nothing overflows. */
+html[data-has-hero] .main-frame,
+html[data-has-hero] .main-pane,
 html[data-has-hero] .main-pane > main,
-html[data-has-hero] .sl-container {
-  max-width: none;
-  padding: 0;
-  margin: 0;
-}
-
-html[data-has-hero] .main-frame {
-  padding-top: 0;
-  padding-inline: 0;
+html[data-has-hero] .sl-container,
+html[data-has-hero] .content-panel {
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
 }
 
 /* The splash page never shows the article footer or page sidebar. */
