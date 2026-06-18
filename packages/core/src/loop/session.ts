@@ -34,7 +34,7 @@ import type { Reporter, ILoopEvent } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
-import { CHAT_SYSTEM, COMPACT_SYSTEM } from "./prompt";
+import { CHAT_SYSTEM, COMPACT_SYSTEM, TDD_GUIDANCE } from "./prompt";
 import {
   buildTsService,
   BUILD_NUDGE,
@@ -352,7 +352,13 @@ function systemPrompt(cfg: ISessionConfig, workspaceMap: string): string {
 
   const prefix = workspaceMap.length > 0 ? `${workspaceMap}\n\n` : "";
 
-  return `${CHAT_SYSTEM}\n\n${prefix}${lines.join("\n")}`;
+  // TDD-first (default ON) — the headless build prompt gets this via
+  // buildSystemPrompt, but the interactive path never did, so the CLI agent was
+  // never TOLD to write tests first and leaned entirely on the late gate. Inject
+  // it here too so test-first is the out-of-the-box default everywhere.
+  const tdd = flags.tdd() ? `${TDD_GUIDANCE}\n\n` : "";
+
+  return `${CHAT_SYSTEM}\n\n${tdd}${prefix}${lines.join("\n")}`;
 }
 
 export class Session {

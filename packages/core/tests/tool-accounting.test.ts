@@ -244,6 +244,77 @@ test("a rejected (out-of-scope) move_file does NOT re-gate (no false 'done')", a
   }
 });
 
+// WS1: structural meta-rules used to fire only at the end-of-turn gate. The
+// single-file-safe subset now runs PER-WRITE, so a logic file created without a
+// test gets the test-sibling nudge immediately in the tool result — not after the
+// model has built more on top of it.
+test("a created logic file without a test gets an immediate per-write nudge", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-perwrite-"));
+
+  try {
+    const ctx = ctxFor(dir, ["**/*"]);
+    const state = freshState();
+
+    await runToolCalls(
+      [
+        {
+          name: "create",
+          arguments: {
+            file: "calc.ts",
+            content:
+              "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+          },
+        },
+      ],
+      ctx,
+      state
+    );
+
+    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
+
+    // The structural nudge rode back on THIS write (not deferred to the gate).
+    expect(toolMsg).toContain("test-sibling-required");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A co-located test means no nudge — the per-write check is satisfied immediately.
+test("a created logic file WITH a co-located test gets no test nudge", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-perwrite2-"));
+
+  try {
+    await Bun.write(
+      join(dir, "calc.test.ts"),
+      'import { test } from "bun:test";\ntest("x", () => {});\n'
+    );
+
+    const ctx = ctxFor(dir, ["**/*"]);
+    const state = freshState();
+
+    await runToolCalls(
+      [
+        {
+          name: "create",
+          arguments: {
+            file: "calc.ts",
+            content:
+              "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+          },
+        },
+      ],
+      ctx,
+      state
+    );
+
+    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
+
+    expect(toolMsg).not.toContain("test-sibling-required");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a failed edit (oldString not found) is NOT counted", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-"));
 
