@@ -237,18 +237,16 @@ starlight-toc a[aria-current="true"] {
   right: 0;
   border-top: 1px solid var(--border);
 }
-/* Copy button — vertically centered inside the 2.3rem dots header band. */
+/* Copy button — pinned to the top-right, inside the dots header band. */
 .expressive-code .copy {
-  top: 0 !important;
+  top: 0.4rem !important;
+  bottom: auto !important;
   right: 0.5rem !important;
-  inset-block: 0 auto;
-  height: 2.3rem;
-  display: flex;
-  align-items: center;
+  height: auto !important;
 }
 .expressive-code .copy button {
-  width: 1.9rem;
-  height: 1.9rem;
+  width: 1.6rem;
+  height: 1.6rem;
   border-radius: 0;
   border: 1px solid var(--border);
   background: color-mix(in oklch, var(--card) 70%, transparent);
@@ -327,6 +325,37 @@ body {
 }
 .tf-nav a[aria-label="tsforge home"] span {
   color: inherit;
+}
+
+/* ROOT FIX for the recurring "purple link" bug: Tailwind's text-* color
+   utilities sit in a cascade @layer, which loses to Starlight's UNLAYERED
+   `a { color }` rule — so every landing/footer anchor ignored its text-* class
+   and fell back to the link color. Re-assert the intended colors unlayered (so
+   they win), honoring each anchor's utility class; anchors with no text class
+   default to foreground (footer links to muted). */
+.tf-landing :is(a, button).text-primary-foreground {
+  color: var(--primary-foreground) !important;
+}
+.tf-landing :is(a, button).text-primary,
+.tf-landing-footer a.text-primary {
+  color: var(--primary) !important;
+}
+.tf-landing :is(a, button).text-muted-foreground,
+.tf-landing-footer a.text-muted-foreground {
+  color: var(--muted-foreground) !important;
+}
+.tf-landing :is(a, button).text-foreground,
+.tf-landing-footer a.text-foreground {
+  color: var(--foreground) !important;
+}
+.tf-landing a:not([class*="text-"]) {
+  color: var(--foreground);
+}
+.tf-landing-footer a:not([class*="text-"]) {
+  color: var(--muted-foreground);
+}
+.tf-landing-footer a:not([class*="text-"]):hover {
+  color: var(--foreground);
 }
 
 /* ⌘K shortcut hint — ONE subtle box with the two keys inside (no nested
@@ -417,6 +446,16 @@ header.header,
 }
 .sl-markdown-content .mermaid::before {
   display: none !important;
+}
+/* Kill the neon node/edge drop-shadow glow (targeted, so the diagram subtree
+   stays interactive and click-to-zoom keeps working). */
+.mermaid svg .node :is(rect, polygon, circle, ellipse, path),
+.mermaid svg .edgePath path,
+.mermaid svg .edgePaths path,
+.mermaid-zoom-dialog svg .node :is(rect, polygon, circle, ellipse, path),
+.mermaid-zoom-dialog svg .edgePath path,
+.mermaid-zoom-dialog svg .edgePaths path {
+  filter: none !important;
 }
 
 /* ===== Harness board diagram (styles were lost when landing.css was rewritten).

@@ -16,11 +16,12 @@ const callouts: [string, string][] = [
           <span class="mono-caps">04 — In your terminal</span>
         </div>
         <h2 class="font-mono text-[34px] md:text-[42px] leading-[1.05] tracking-[-0.02em]">
-          Reads like a teammate. Outputs like a receipt.
+          See what changed, and what proved it safe.
         </h2>
         <p class="mt-5 text-[15px] text-muted-foreground max-w-[50ch]">
-          No vibes. Every change ships with the diagnostics that proved it safe. Every checkpoint
-          is reproducible. Every gate failure tells you exactly which rule rejected the code.
+          Every run prints the edits it made and the gate that signed off: the actual tsc, ESLint,
+          and test output. A failure names the rule that rejected the code. Nothing hides behind a
+          spinner.
         </p>
         <div class="mt-8 grid grid-cols-2 gap-px bg-border max-w-md border border-border">
           {

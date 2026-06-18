@@ -17,9 +17,11 @@ const navItems = [
 
 const version = `v${pkg.version}`;
 
-// Real GitHub star count, fetched at build time (unauthenticated). Degrades to
-// no count if the API is unreachable/rate-limited so the build never fails.
-let stars: number | null = null;
+// Real GitHub star count. Fetched at build time (unauthenticated); a baked
+// fallback guarantees a number shows even if the API is rate-limited/offline,
+// and a tiny client script (below) refreshes it live so it never goes stale.
+const FALLBACK_STARS = 19;
+let stars: number = FALLBACK_STARS;
 try {
   const res = await fetch("https://api.github.com/repos/agjs/tsforge", {
     headers: { "User-Agent": "tsforge-docs", Accept: "application/vnd.github+json" },
@@ -30,15 +32,12 @@ try {
     if (typeof count === "number") stars = count;
   }
 } catch {
-  stars = null;
+  stars = FALLBACK_STARS;
 }
 
-const starLabel =
-  stars === null
-    ? "GitHub"
-    : stars >= 1000
-      ? `${(stars / 1000).toFixed(1)}k`
-      : String(stars);
+const formatStars = (n: number): string =>
+  n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+const starLabel = formatStars(stars);
 ---
 
 <div class="tf-nav mx-auto flex h-full w-full max-w-[1400px] items-center gap-8 px-6">

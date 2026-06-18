@@ -3,19 +3,19 @@ const steps = [
   {
     n: "01",
     title: "Propose",
-    body: "You (or an agent) describe the change. tsforge reads the repo, the LSP graph, and the rule catalog before touching a file.",
-    snippet: ['> tsforge "add refresh-token rotation"', "  reading repo · map + LSP graph"],
+    body: "The model starts primed on the import graph and the rule packs your stack triggers, so the first patch already respects your module boundaries. No blank-prompt guessing.",
+    snippet: ['> tsforge "add refresh-token rotation"', "  primed · import graph + active packs"],
   },
   {
     n: "02",
     title: "Build",
-    body: "Edits are applied as typed, minimal patches. Every patch is checked against the in-process language service before it touches disk.",
+    body: "Patches are type-checked in-process against the language service before they touch disk. One that wouldn't compile never lands; the model gets the diagnostic and revises.",
     snippet: ["~ edit auth.service.ts", "~ edit auth.controller.ts", "  patch ok · 0 lsp diagnostics"],
   },
   {
     n: "03",
     title: "Gate",
-    body: "tsc, type-aware ESLint, the tsforge meta-rules, and your test suite must all pass. If anything fails, tsforge re-plans and retries — bounded, autonomous, deterministic.",
+    body: "tsc strict, type-aware ESLint, the meta-rules, and your tests run as one exit condition. Red re-plans within a turn budget. Green is the only way out.",
     snippet: ["→ tsc --noEmit · ok", "→ eslint(tsforge) · ok", "→ bun test · pass", "✓ checkpoint saved"],
   },
 ];

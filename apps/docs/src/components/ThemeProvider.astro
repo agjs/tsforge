@@ -16,3 +16,37 @@
     },
   };
 </script>
+
+{/* Click-to-zoom for mermaid diagrams: opens the rendered SVG in a native
+    dialog (styled via .mermaid-zoom-dialog in custom.css). */}
+<script>
+  function setupMermaidZoom(): void {
+    const diagrams = document.querySelectorAll<HTMLElement>(".mermaid");
+    diagrams.forEach((el) => {
+      if (el.dataset.zoomReady === "1") return;
+      el.dataset.zoomReady = "1";
+      el.style.cursor = "zoom-in";
+      el.addEventListener("click", () => {
+        const svg = el.querySelector("svg");
+        if (svg === null) return;
+        const dialog = document.createElement("dialog");
+        dialog.className = "mermaid-zoom-dialog";
+        dialog.appendChild(svg.cloneNode(true));
+        document.body.appendChild(dialog);
+        dialog.addEventListener("click", () => dialog.close());
+        dialog.addEventListener("close", () => dialog.remove());
+        dialog.showModal();
+      });
+    });
+  }
+
+  const run = (): void => {
+    setupMermaidZoom();
+    // Mermaid renders asynchronously; re-scan shortly after load.
+    window.setTimeout(setupMermaidZoom, 600);
+    window.setTimeout(setupMermaidZoom, 1500);
+  };
+
+  document.addEventListener("astro:page-load", run);
+  run();
+</script>
