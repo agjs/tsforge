@@ -44,26 +44,64 @@ export function genericErrors(output: string): IErrorItem[] {
   return text.length > 0 ? [{ key: "raw", message: text.slice(0, 500) }] : [];
 }
 
+/** A line is eslint's `--format json` blob when it begins `[{` and carries the
+ *  array's tell-tale keys. The single source of truth shared by the parser
+ *  (which extracts it) and the live-stream filter (which hides it). */
+export function isEslintJsonLine(line: string): boolean {
+  const t = line.trimStart();
+
+  return (
+    t.startsWith("[{") && t.includes('"filePath"') && t.includes('"messages"')
+  );
+}
+
+/** Parse `s` as a JSON array, or null if it isn't one (no throw). */
+function tryParseArray(s: string): unknown[] | null {
+  try {
+    const data: unknown = JSON.parse(s);
+
+    return isArray(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Parse `eslint --format json`. Errors (severity 2) only; warnings ignored.
  * Carries the `ruleId` — including custom plugin rules like
  * `@boring-stack/structured-logging` — so the repair loop sees exactly which
  * rule failed. Narrowed with guards (no type assertions).
+ *
+ * The WEB gate chains eslint inside `bun run build && tsc && eslint … && …`, so
+ * the captured output is the vite build text WITH eslint's single JSON line
+ * embedded — `JSON.parse` of the whole thing throws and every web lint error
+ * used to dump as one raw blob (the gate's "pile of garbage"). So: parse the
+ * whole output when it's pure JSON (the core gate), else scan for the standalone
+ * JSON-array line(s) and union them — the chain can run eslint twice (syntactic
+ * + type-aware), each emitting its own array.
  */
 export function parseEslintJson(output: string): IErrorItem[] {
-  let data: unknown;
+  const whole = tryParseArray(output);
 
-  try {
-    data = JSON.parse(output);
-  } catch {
-    return [];
+  if (whole !== null) {
+    return whole.flatMap(eslintFileItems);
   }
 
-  if (!isArray(data)) {
-    return [];
+  const items: IErrorItem[] = [];
+
+  for (const line of output.split("\n")) {
+    if (!line.trimStart().startsWith("[")) {
+      continue;
+    }
+
+    const arr = tryParseArray(line.trim());
+
+    if (arr !== null) {
+      items.push(...arr.flatMap(eslintFileItems));
+    }
   }
 
-  return data.flatMap(eslintFileItems);
+  return items;
 }
 
 /** Error items from one eslint JSON file entry (severity-2 messages only). */

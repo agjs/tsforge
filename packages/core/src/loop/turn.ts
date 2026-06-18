@@ -144,8 +144,10 @@ export interface ILoopCtx {
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>;
   /** When set, the gate's command output is streamed here live (the CLI wires
    *  this so a slow gate like `vite build` + browser isn't silent dead air).
-   *  Omitted on the eval path, where output is just captured for scoring. */
-  onGateChunk?: (text: string) => void;
+   *  Omitted on the eval path, where output is just captured for scoring.
+   *  `flush()` (when present) is called once the gate exits to emit any final
+   *  line the process printed without a trailing newline. */
+  onGateChunk?: ((text: string) => void) & { flush?: () => void };
   /** Cancellation for the in-flight turn — threaded into tool `run` commands and
    *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
    *  just the model call. Set per-send by the Session. */
@@ -944,6 +946,10 @@ export async function settleGate(
     ...(ctx.onGateChunk === undefined ? {} : { onChunk: ctx.onGateChunk }),
     ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
   });
+
+  // The gate process has exited — flush any final newline-less line the stream
+  // filter is still holding so it reaches the terminal.
+  ctx.onGateChunk?.flush?.();
 
   // Run meta-rules against the project — project structure invariants the gate
   // can't express. Convert error-severity violations to gate failures; warn

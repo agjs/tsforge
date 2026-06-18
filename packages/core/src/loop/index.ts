@@ -15,6 +15,7 @@ export {
 export {
   Session,
   PLAN_APPROVED_NOTE,
+  filterGateStream,
   type ISessionConfig,
   type ISendResult,
 } from "./session";

@@ -563,6 +563,14 @@ export class TsService {
     return match === null ? undefined : match.index;
   }
 
+  /** Release the underlying LanguageService — it holds program/document-registry
+   *  references that won't be GC'd while the service is live. Call before
+   *  dropping a TsService (e.g. rebuilding it after a scaffold) so the old one
+   *  doesn't leak. */
+  dispose(): void {
+    this.service.dispose();
+  }
+
   /** 1-based line number of a byte offset in a file (for readable tool output). */
   private lineOf(file: string, position: number): number {
     const text = ts.sys.readFile(file) ?? "";

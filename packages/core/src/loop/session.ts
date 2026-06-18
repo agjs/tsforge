@@ -19,7 +19,7 @@ import {
 import { flags } from "../config";
 import { readFiles } from "../lib/fs";
 import { WEB_VENDORED_PATTERNS } from "../lib/scope";
-import { validate, type ErrorParser } from "../validate";
+import { validate, isEslintJsonLine, type ErrorParser } from "../validate";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -148,6 +148,57 @@ export interface ISendOptions {
 }
 
 const SESSION_ID = "session";
+
+/** A gate-output sink that also carries `flush()` — call it when the stream
+ *  ends to emit any trailing line the process printed without a newline. */
+export type IGateStreamSink = ((text: string) => void) & { flush: () => void };
+
+/** Wrap a live gate-output sink so the machine-readable `eslint --format json`
+ *  blob NEVER reaches the terminal — it's a single giant JSON line the harness
+ *  parses internally and a human must not see (it was dumping raw at the end of
+ *  every web run). Buffers across chunk boundaries: a line that begins `[{` is
+ *  held until its newline, then dropped if it's the eslint JSON; everything else
+ *  (vite build progress, tsc, test output) passes through unchanged. Call
+ *  `flush()` at stream end so a final newline-less line isn't swallowed. */
+export function filterGateStream(
+  sink: (text: string) => void
+): IGateStreamSink {
+  let buf = "";
+
+  const emit = (line: string): void => {
+    if (!isEslintJsonLine(line)) {
+      sink(line);
+    }
+  };
+
+  const fn = (text: string): void => {
+    buf += text;
+
+    let nl = buf.indexOf("\n");
+
+    // Emit only COMPLETE (newline-terminated) lines; HOLD any trailing partial
+    // until its newline (or flush()). This is what makes the JSON drop reliable:
+    // the eslint blob is one complete line, always evaluated whole and dropped —
+    // the old partial flush leaked the JSON across chunk boundaries. Gate output
+    // (vite/tsc/test) is line-based, so live progress isn't lost.
+    while (nl !== -1) {
+      emit(buf.slice(0, nl + 1));
+      buf = buf.slice(nl + 1);
+      nl = buf.indexOf("\n");
+    }
+  };
+
+  // When the gate process exits, its last chunk may not end in a newline — emit
+  // that remainder (still JSON-filtered) so no output is permanently lost.
+  fn.flush = (): void => {
+    if (buf.length > 0) {
+      emit(buf);
+      buf = "";
+    }
+  };
+
+  return fn;
+}
 
 /** Build the assistant history message, carrying `reasoningContent` when the
  *  model produced it (DeepSeek's thinking mode requires it replayed). */
@@ -557,10 +608,11 @@ export class Session {
           ? [...cfg.history]
           : [{ role: "system", content: systemPrompt(cfg, workspaceMap) }],
       // Stream the gate's output live (the interactive CLI), so a slow gate
-      // (vite build + chromium) shows progress instead of running silently.
-      onGateChunk: (text) => {
+      // (vite build + chromium) shows progress instead of running silently — but
+      // filtered so the raw eslint JSON blob never floods the terminal.
+      onGateChunk: filterGateStream((text) => {
         report({ kind: "token", task: SESSION_ID, message: text });
-      },
+      }),
     };
 
     const session = new Session(cfg, ctx);
@@ -669,6 +721,29 @@ export class Session {
    *  every few edits while building, so errors surface early instead of piling up. */
   setIncrementalCheck(command: string): void {
     this.incrementalCheck = command;
+  }
+
+  /** Wire the PER-WRITE lint moat — the gate's eslint rules applied to each file
+   *  AS it's written, so `as`-casts, no-jsx-computation, hooks-in-component-body,
+   *  component-folder-structure, etc. surface immediately instead of as an
+   *  end-of-turn pile-up. The interactive session was missing this (only headless
+   *  builds wired it), so a whole web app's worth of violations dumped at the gate.
+   *  Used at create and when `scaffold_web` flips a session to the web stack. */
+  setLintFile(lintFile: FileLinter | undefined): void {
+    this.ctx.lintFile = lintFile;
+  }
+
+  /** Rebuild the in-process TS LanguageService. `scaffold_web` creates the
+   *  project's tsconfig + node_modules AFTER the (empty-dir) session was created,
+   *  so the service built at create time is empty/null and the per-write guard —
+   *  which holds BOTH the tsc diagnostics AND the eslint lint moat — was skipped
+   *  for the whole web build (`tsService !== null` was false). Rebuilding here
+   *  makes per-write feedback actually fire in web sessions, matching headless. */
+  async refreshTsService(): Promise<void> {
+    // Dispose the old service first — it holds program/document-registry refs
+    // that would otherwise leak when we drop the reference.
+    this.ctx.tsService?.dispose();
+    this.ctx.tsService = await buildTsService(this.ctx.cwd);
   }
 
   /** Replace the editable scope globs mid-session. */

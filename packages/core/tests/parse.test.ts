@@ -5,6 +5,7 @@ import {
   parseEslintJson,
   combinedParser,
   parserFor,
+  isEslintJsonLine,
 } from "../src/validate";
 
 test("parseTsc extracts file/line/rule per diagnostic", () => {
@@ -64,6 +65,78 @@ test("parseEslintJson extracts errors, including custom plugin rule ids", () => 
 
 test("parseEslintJson tolerates non-JSON output", () => {
   expect(parseEslintJson("not json at all")).toEqual([]);
+});
+
+test("parseEslintJson extracts the JSON line from mixed web-gate output", () => {
+  // The web gate is `bun run build && tsc && eslint --format json && …`, so the
+  // captured output is vite build TEXT with eslint's single JSON line embedded.
+  // `JSON.parse` of the whole thing throws — the old parser returned [] and the
+  // whole wall (incl. the raw JSON) dumped as one fallback blob. It must now
+  // pull the located error out of the noise.
+  const eslint = JSON.stringify([
+    {
+      filePath: "/r/src/views/Foo/index.tsx",
+      messages: [
+        {
+          ruleId: "no-restricted-syntax",
+          severity: 2,
+          message: "No `as` type casts",
+          line: 12,
+          column: 5,
+        },
+      ],
+    },
+  ]);
+  const out = [
+    "vite v6.4.3 building for production...",
+    "✓ 188 modules transformed.",
+    "✓ built in 1.71s",
+    eslint,
+    "$ next step never reached",
+  ].join("\n");
+  const items = parseEslintJson(out);
+
+  expect(items).toHaveLength(1);
+  expect(items[0]).toMatchObject({
+    file: "/r/src/views/Foo/index.tsx",
+    line: 12,
+    rule: "no-restricted-syntax",
+  });
+});
+
+test("parseEslintJson unions two chained eslint runs (syntactic + type-aware)", () => {
+  // The web gate runs eslint twice: `lint && type-aware`. When the first passes
+  // it prints `[]`; the type-aware run prints the real errors. Taking the FIRST
+  // array line would miss them — every JSON-array line must be unioned.
+  const empty = JSON.stringify([]);
+  const typeAware = JSON.stringify([
+    {
+      filePath: "/r/src/views/Foo/foo.hooks.ts",
+      messages: [
+        {
+          ruleId: "@typescript-eslint/no-floating-promises",
+          severity: 2,
+          message: "Promises must be awaited.",
+          line: 8,
+          column: 3,
+        },
+      ],
+    },
+  ]);
+  const out = ["✓ built in 1.71s", empty, typeAware].join("\n");
+  const items = parseEslintJson(out);
+
+  expect(items).toHaveLength(1);
+  expect(items[0]!.rule).toBe("@typescript-eslint/no-floating-promises");
+});
+
+test("isEslintJsonLine flags the eslint blob, not ordinary output", () => {
+  expect(
+    isEslintJsonLine('[{"filePath":"/a.ts","messages":[],"errorCount":0}]')
+  ).toBe(true);
+  expect(isEslintJsonLine("✓ built in 1.71s")).toBe(false);
+  expect(isEslintJsonLine("[vite] hmr update")).toBe(false);
+  expect(isEslintJsonLine("[]")).toBe(false);
 });
 
 test("parserFor picks a parser by command", () => {
