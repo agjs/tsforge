@@ -88,12 +88,26 @@ const INSTALL = "curl -fsSL https://tsforge.dev/install.sh | bash";
 
 <script>
   document.querySelectorAll<HTMLButtonElement>(".tf-copy").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const text = btn.dataset.copy ?? "";
-      void navigator.clipboard.writeText(text).then(() => {
+      try {
+        await navigator.clipboard.writeText(text);
+        // Visual feedback for sighted users (CSS swaps the icon to a check)
+        // plus the accessible label for screen readers.
+        btn.dataset.copied = "1";
         btn.setAttribute("aria-label", "Copied");
-        window.setTimeout(() => btn.setAttribute("aria-label", "Copy install command"), 2000);
-      });
+        window.setTimeout(() => {
+          delete btn.dataset.copied;
+          btn.setAttribute("aria-label", "Copy install command");
+        }, 2000);
+      } catch {
+        btn.dataset.copied = "error";
+        btn.setAttribute("aria-label", "Copy failed — select and copy manually");
+        window.setTimeout(() => {
+          delete btn.dataset.copied;
+          btn.setAttribute("aria-label", "Copy install command");
+        }, 2000);
+      }
     });
   });
 </script>

@@ -308,6 +308,12 @@ body {
 .tf-landing .tf-copy:hover {
   color: var(--foreground);
 }
+.tf-landing .tf-copy[data-copied="1"] {
+  color: var(--success) !important;
+}
+.tf-landing .tf-copy[data-copied="error"] {
+  color: var(--destructive) !important;
+}
 
 /* Nav links were falling back to the UA visited-link purple (Tailwind's layered
    utilities lose to Starlight's unlayered anchor rules in the header). Set the

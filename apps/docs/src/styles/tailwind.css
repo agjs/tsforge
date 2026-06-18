@@ -236,3 +236,22 @@
 .animate-fade-up {
   animation: fade-up 0.6s ease-out both;
 }
+
+/* Respect reduced-motion (WCAG 2.2.2): stop the looping marquee/scanline/token
+   flow and entrance animations for users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-cursor,
+  .animate-marquee,
+  .animate-gate-pulse,
+  .animate-stamp-in,
+  .animate-scanline,
+  .animate-fade-up,
+  [style*="token-flow"],
+  [style*="token-reject"] {
+    animation: none !important;
+  }
+  .animate-fade-up {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
