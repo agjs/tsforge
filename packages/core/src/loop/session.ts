@@ -306,6 +306,30 @@ const REPETITION_RESTEER =
   "the SINGLE next tool call that makes concrete progress (create or edit ONE " +
   "file). No prose.";
 
+/** Consecutive turns of tool calls that touch NO editable file before we treat the
+ *  model as spinning. The gate progress guards (samePersist/gateStuckRepeats) only
+ *  evaluate after a write, so a model that reads/searches forever without ever
+ *  editing slips past them all the way to the turn backstop — this is their
+ *  cross-turn analogue. Set well above genuine multi-file exploration (each turn may
+ *  read several files) so real work never trips it; a scaffold/edit resets it. */
+const READONLY_STREAK_LIMIT = 12;
+
+/** How many times we re-steer a read-only spin before giving up. */
+const MAX_READONLY_RECOVERIES = 2;
+
+/** Pushed on a read-only spin in a BUILD (gated) session — demand a concrete edit. */
+const READONLY_RESTEER_BUILD =
+  "You have made many tool calls in a row WITHOUT writing any file — only reading " +
+  "or searching. STOP exploring. Emit the SINGLE next change now: create or edit " +
+  "ONE file to make concrete progress. No more reads. No prose.";
+
+/** Pushed on a read-only spin in a CONVERSATIONAL (no-gate) session — demand an
+ *  answer (there is nothing to edit, so the failure is never wrapping up). */
+const READONLY_RESTEER_ANSWER =
+  "You have made many tool calls in a row without answering — only reading or " +
+  "searching. You have enough context now. STOP reading and give your answer, " +
+  "with no further tool calls.";
+
 /** Prefaces interim-check feedback so the model fixes real errors and ignores the
  *  expected "module not found" noise from files it hasn't created yet. */
 const INTERIM_CHECK_NOTE =
@@ -1427,11 +1451,18 @@ export class Session {
     turn: number,
     turnStart: number,
     sendStart: number
-  ): Promise<{ edited: boolean; editsSinceCheck: number }> {
+  ): Promise<{
+    edited: boolean;
+    editsSinceCheck: number;
+    progressed: boolean;
+  }> {
     const { ctx, state, report } = this;
     const before = state.edits;
-    const edited =
-      (await runToolCalls(res.toolCalls, ctx, state)) || acc.edited;
+    // `progressed` = this turn touched an editable file (hand-write OR scaffold/
+    // semantic mutation), the per-turn signal the read-only-spin guard counts on.
+    // `edited` stays cumulative for the gate-confirm decision.
+    const progressed = await runToolCalls(res.toolCalls, ctx, state);
+    const edited = progressed || acc.edited;
 
     emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
 
@@ -1442,7 +1473,138 @@ export class Session {
       acc.checkEvery
     );
 
-    return { edited, editsSinceCheck };
+    return { edited, editsSinceCheck, progressed };
+  }
+
+  /** A working turn (the model emitted tool calls): run them via `runEditTurn`,
+   *  then apply the read-only-spin guard. Returns the carried counters plus an
+   *  `action` — a terminal `ISendResult` to stop on, or "continue" to keep
+   *  looping. Keeps the guard's bookkeeping out of `drive`'s loop body. A turn
+   *  that touched an editable file resets the streak; a pure read/search/run turn
+   *  extends it, and past the limit `readonlySpinStop` re-steers (bounded) or stops. */
+  private async runToolTurn(
+    res: IModelResponse,
+    carry: {
+      edited: boolean;
+      editsSinceCheck: number;
+      checkEvery: number;
+      readonlyStreak: number;
+      readonlyRecoveries: number;
+    },
+    turn: number,
+    turnStart: number,
+    sendStart: number
+  ): Promise<{
+    action: ISendResult | "continue";
+    edited: boolean;
+    editsSinceCheck: number;
+    readonlyStreak: number;
+    readonlyRecoveries: number;
+  }> {
+    const { edited, editsSinceCheck, progressed } = await this.runEditTurn(
+      res,
+      {
+        edited: carry.edited,
+        editsSinceCheck: carry.editsSinceCheck,
+        checkEvery: carry.checkEvery,
+      },
+      turn,
+      turnStart,
+      sendStart
+    );
+
+    const base = { action: "continue" as const, edited, editsSinceCheck };
+
+    if (progressed) {
+      return {
+        ...base,
+        readonlyStreak: 0,
+        readonlyRecoveries: carry.readonlyRecoveries,
+      };
+    }
+
+    const readonlyStreak = carry.readonlyStreak + 1;
+    const spin = this.readonlySpinStop(
+      readonlyStreak,
+      carry.readonlyRecoveries,
+      turn
+    );
+
+    // Re-steered: reset the streak and spend one recovery, then keep looping so
+    // the model gets a fair window to act on the nudge before the next check.
+    if (spin === "retry") {
+      return {
+        ...base,
+        readonlyStreak: 0,
+        readonlyRecoveries: carry.readonlyRecoveries + 1,
+      };
+    }
+
+    if (spin !== null) {
+      return {
+        ...base,
+        action: spin,
+        readonlyStreak,
+        readonlyRecoveries: carry.readonlyRecoveries,
+      };
+    }
+
+    return {
+      ...base,
+      readonlyStreak,
+      readonlyRecoveries: carry.readonlyRecoveries,
+    };
+  }
+
+  /** Resolve a turn where the model yielded with NO tool calls: a conversational
+   *  reply, the narrate-instead-of-build failure (resolveNoEditYield), or a gate
+   *  confirm after edits. Returns a terminal `ISendResult` or "continue", plus the
+   *  next-turn `buildNudges`/`forceTool` state for the caller to carry. Side effects
+   *  (repair flag, nudge messages, timing) happen here so `drive`'s loop stays lean. */
+  private async resolveYield(
+    res: IModelResponse,
+    edited: boolean,
+    buildNudges: number,
+    turn: number,
+    turnStart: number,
+    sendStart: number
+  ): Promise<{
+    action: ISendResult | "continue";
+    buildNudges: number;
+    forceTool: boolean;
+  }> {
+    // With no gate it's a conversational reply; with a gate but no edits this send,
+    // decide whether that's a real answer or the narrate-instead-of-build failure.
+    if (!this.hasGate || !edited) {
+      const outcome = this.resolveNoEditYield(res.content, turn, buildNudges);
+
+      emitTiming(this.report, SESSION_ID, turn, turnStart, sendStart);
+
+      if (outcome.result !== null) {
+        return { action: outcome.result, buildNudges, forceTool: false };
+      }
+
+      // It just narrated code — force a tool call next turn.
+      return {
+        action: "continue",
+        buildNudges: buildNudges + 1,
+        forceTool: true,
+      };
+    }
+
+    // Gate confirms. Green/stuck ⇒ terminal; null ⇒ red, feedback pushed.
+    const settled = await this.settleTurn(turn, turnStart, sendStart);
+
+    if (settled !== null) {
+      return { action: settled, buildNudges, forceTool: false };
+    }
+
+    // Gate came back RED → enter repair mode (think to converge on the fix), nudge
+    // it to act (not narrate), and FORCE a tool call next turn so it can't narrate.
+    this.repairing = true;
+    this.ctx.messages.push({ role: "user", content: NO_TOOL_CALL_NUDGE });
+
+    return { action: "continue", buildNudges, forceTool: true };
   }
 
   /** Run the gate once the model has stopped after editing: a terminal result
@@ -1602,12 +1764,55 @@ export class Session {
     return stop ?? "retry";
   }
 
+  /** Handle a read-only spin: the model keeps calling tools but never touches an
+   *  editable file, so the gate-based progress guards never get a cycle to judge
+   *  and the run would otherwise grind to the turn backstop. Re-steer toward a
+   *  concrete change (build) or an answer (conversational) a bounded number of
+   *  times, then stop honestly. Returns a stop result, "retry" to re-steer +
+   *  continue, or null when the streak is still under the limit. The caller resets
+   *  the streak on "retry" so each re-steer gets a fair window before the next. */
+  private readonlySpinStop(
+    streak: number,
+    recoveries: number,
+    turn: number
+  ): ISendResult | "retry" | null {
+    if (streak < READONLY_STREAK_LIMIT) {
+      return null;
+    }
+
+    if (recoveries >= MAX_READONLY_RECOVERIES) {
+      this.report({
+        kind: "stuck",
+        task: SESSION_ID,
+        message:
+          "⚠ model kept calling read-only tools without making progress after " +
+          "re-steering — stopped. Narrow the task or steer toward a concrete step.",
+      });
+
+      return { status: "stuck", turns: turn };
+    }
+
+    this.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: this.hasGate
+        ? "⚠ only reading, no edits — steering toward a concrete change"
+        : "⚠ only reading, no answer — steering toward a reply",
+    });
+    this.ctx.messages.push({
+      role: "user",
+      content: this.hasGate ? READONLY_RESTEER_BUILD : READONLY_RESTEER_ANSWER,
+    });
+
+    return "retry";
+  }
+
   private async driveInner(
     maxTurns: number,
     sendStart: number,
     opts: ISendOptions
   ): Promise<ISendResult> {
-    const { ctx, report } = this;
+    const { report } = this;
     // The gate confirms CHANGES, not answers: it fires only once the model has
     // actually edited a file this turn. So a pure question never triggers a gate
     // run (even with one configured) — and an auto-detected gate stays unobtrusive.
@@ -1626,6 +1831,11 @@ export class Session {
     // Times a model request timed out this send — a single over-long turn must not
     // throw away prior progress; we re-steer to a small turn and continue.
     let timeouts = 0;
+    // Consecutive tool-call turns this send that touched NO editable file (the
+    // read-only spin), and how many times we've re-steered out of one. The
+    // gate-based guards can't see this — they only fire after a write.
+    let readonlyStreak = 0;
+    let readonlyRecoveries = 0;
     // Edits since the last incremental check — drives "check every few edits".
     let editsSinceCheck = 0;
     const checkEvery = this.cfg.checkEvery ?? CHECK_EVERY;
@@ -1702,51 +1912,55 @@ export class Session {
       // FORCED-TOOLS: a lone yield_status call becomes a normal stop.
       this.resolveYieldCalls(res);
 
-      // Still working — run the calls and keep going (we gate only when it stops).
+      // Still working — run the calls, apply the read-only-spin guard, and keep
+      // going (we gate only when it stops). The guard's bookkeeping lives in
+      // runToolTurn so this loop body stays lean.
       if (res.toolCalls.length > 0) {
-        ({ edited, editsSinceCheck } = await this.runEditTurn(
+        const r = await this.runToolTurn(
           res,
-          { edited, editsSinceCheck, checkEvery },
+          {
+            edited,
+            editsSinceCheck,
+            checkEvery,
+            readonlyStreak,
+            readonlyRecoveries,
+          },
           turn,
           turnStart,
           sendStart
-        ));
+        );
 
-        continue;
-      }
+        edited = r.edited;
+        editsSinceCheck = r.editsSinceCheck;
+        readonlyStreak = r.readonlyStreak;
+        readonlyRecoveries = r.readonlyRecoveries;
 
-      // The model yielded with no tool calls. With no gate it's a conversational
-      // reply; with a gate but no edits this send, decide whether that's a real
-      // answer or the narrate-instead-of-build failure (see resolveNoEditYield).
-      if (!this.hasGate || !edited) {
-        const outcome = this.resolveNoEditYield(res.content, turn, buildNudges);
-
-        emitTiming(report, SESSION_ID, turn, turnStart, sendStart);
-
-        if (outcome.result !== null) {
-          return outcome.result;
+        if (r.action !== "continue") {
+          return r.action;
         }
 
-        buildNudges += 1;
-        forceTool = true; // it just narrated code — force a tool call next turn
-
         continue;
       }
 
-      // Gate confirms. Green/stuck ⇒ terminal; null ⇒ red, feedback pushed.
-      const settled = await this.settleTurn(turn, turnStart, sendStart);
+      // The model yielded with no tool calls: a conversational reply, the
+      // narrate-instead-of-build failure, or a gate confirm. resolveYield maps it
+      // to a terminal result or "continue" (carrying the next forceTool/nudge
+      // state), keeping this loop body lean.
+      const y = await this.resolveYield(
+        res,
+        edited,
+        buildNudges,
+        turn,
+        turnStart,
+        sendStart
+      );
 
-      if (settled !== null) {
-        return settled;
+      buildNudges = y.buildNudges;
+      forceTool = y.forceTool;
+
+      if (y.action !== "continue") {
+        return y.action;
       }
-
-      // Gate came back RED → enter repair mode (think to converge on the fix).
-      this.repairing = true;
-
-      // Stopped while still red without acting → nudge it to act, not narrate,
-      // and FORCE a tool call on the next turn so it can't narrate again.
-      ctx.messages.push({ role: "user", content: NO_TOOL_CALL_NUDGE });
-      forceTool = true;
     }
 
     report({
