@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
@@ -683,6 +683,158 @@ test("recovers from a repetition loop by forcing a tool call, then proceeds", as
     // it then created a file and the gate confirmed.
     expect(choices[1]).toBe("required");
     expect(result.status).toBe("done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The read-only spin: the model calls read-only tools forever and never edits, so
+// the gate-based progress guards (samePersist/gateStuckRepeats) never get a cycle
+// to judge. Without a cross-turn guard this runs to the turn backstop. These three
+// tests pin the guard: stop bounded, recover on real progress, and branch the
+// re-steer message by gate presence.
+test("read-only spin (gated): re-steered, then stopped well before the backstop", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    await writeFile(join(dir, "seed.ts"), "export const seed = 1;\n");
+
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        // Never edits — just reads the same file every turn (the spin).
+        return {
+          content: "",
+          toolCalls: [
+            { id: String(calls), name: "read", arguments: { file: "seed.ts" } },
+          ],
+        };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+
+    const result = await session.send("update the app");
+
+    expect(result.status).toBe("stuck");
+    // STREAK_LIMIT 12 × (RECOVERIES 2 re-steers + 1 final) = 36 — far below the
+    // 250-turn interactive backstop, which is the whole point.
+    expect(result.turns).toBe(36);
+    // The build-flavored re-steer fired (not the conversational one).
+    expect(
+      session.messages.some(
+        (m) => m.role === "user" && m.content.includes("STOP exploring")
+      )
+    ).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("read-only spin recovers when the model then edits → reaches done", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    await writeFile(join(dir, "seed.ts"), "export const seed = 1;\n");
+
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        // Spin to the first re-steer (turn 12), then make real progress.
+        if (calls <= 12) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: String(calls),
+                name: "read",
+                arguments: { file: "seed.ts" },
+              },
+            ],
+          };
+        }
+
+        if (calls === 13) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "edit",
+                name: "create",
+                arguments: { file: "x.ts", content: "export const x = 1;\n" },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+
+    const result = await session.send("update the app");
+
+    // A real edit resets the streak, so the spin guard does NOT trip — the gate
+    // confirms instead.
+    expect(result.status).toBe("done");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("read-only spin (no gate): re-steers toward an answer, then the model replies", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    await writeFile(join(dir, "seed.ts"), "export const seed = 1;\n");
+
+    let calls = 0;
+    const provider: IProvider = {
+      async complete() {
+        calls += 1;
+
+        // Read forever until the re-steer lands (turn 12), then answer.
+        if (calls <= 12) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: String(calls),
+                name: "read",
+                arguments: { file: "seed.ts" },
+              },
+            ],
+          };
+        }
+
+        return { content: "here is the answer", toolCalls: [] };
+      },
+    };
+    // No gate (no accept) → conversational session.
+    const session = await Session.create({ provider, cwd: dir });
+
+    const result = await session.send("what does this do?");
+
+    expect(result.status).toBe("responded");
+    // The conversational re-steer fired (not the build one).
+    expect(
+      session.messages.some(
+        (m) => m.role === "user" && m.content.includes("give your answer")
+      )
+    ).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
