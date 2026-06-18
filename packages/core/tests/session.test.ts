@@ -983,3 +983,33 @@ test("a plain prose answer (no markup, no dump) still ends as responded", async 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// TDD is ON by default, but the interactive system prompt never carried the
+// test-first guidance (only the headless build prompt did) — so the CLI agent was
+// never told to write tests first. It must now appear in the seeded system message.
+test("interactive system prompt includes test-first guidance when TDD is on", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const session = await Session.create({ provider: yields(), cwd: dir });
+
+    expect(session.messages[0]?.role).toBe("system");
+    expect(session.messages[0]?.content).toContain("TEST-FIRST (TDD)");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("TSFORGE_TDD=0 omits test-first guidance from the interactive prompt", async () => {
+  process.env.TSFORGE_TDD = "0";
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const session = await Session.create({ provider: yields(), cwd: dir });
+
+    expect(session.messages[0]?.content).not.toContain("TEST-FIRST (TDD)");
+  } finally {
+    delete process.env.TSFORGE_TDD;
+    await rm(dir, { recursive: true, force: true });
+  }
+});

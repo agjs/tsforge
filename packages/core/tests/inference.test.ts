@@ -371,3 +371,52 @@ test("includes tools + tool_choice in the body when provided", async () => {
   expect(Array.isArray(body.tools)).toBe(true);
   expect(body.tool_choice).toBe("auto");
 });
+
+// DeepSeek 400s if thinking is toggled mid-conversation: a thinking-ENABLED
+// request rejects a history whose earlier assistant turns lack reasoning_content.
+// The harness runs interactive turns thinking-off and flips thinking ON for gate
+// repair — on DeepSeek that mixed history crashes. The provider latches the first
+// thinking mode per session and never flips it (for deepseek only).
+test("deepseek latches the session's first thinking mode and never flips it", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const capture = (async (_url: string, init: { body: string }) => {
+    bodies.push(JSON.parse(init.body) as Record<string, unknown>);
+
+    return okResponse();
+  }) as unknown as typeof fetch;
+
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-v4-pro",
+    reasoning: "deepseek",
+    fetch: capture,
+  });
+
+  await p.complete([{ role: "user", content: "a" }], { enableThinking: false });
+  // The gate-repair flip — must be IGNORED for deepseek to keep the history consistent.
+  await p.complete([{ role: "user", content: "b" }], { enableThinking: true });
+
+  expect(bodies[0]?.thinking).toEqual({ type: "disabled" });
+  expect(bodies[1]?.thinking).toEqual({ type: "disabled" });
+});
+
+test("qwen keeps per-turn thinking control (no latch)", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const capture = (async (_url: string, init: { body: string }) => {
+    bodies.push(JSON.parse(init.body) as Record<string, unknown>);
+
+    return okResponse();
+  }) as unknown as typeof fetch;
+
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "qwen",
+    fetch: capture,
+  });
+
+  await p.complete([{ role: "user", content: "a" }], { enableThinking: false });
+  await p.complete([{ role: "user", content: "b" }], { enableThinking: true });
+
+  expect(bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: false });
+  expect(bodies[1]?.chat_template_kwargs).toEqual({ enable_thinking: true });
+});

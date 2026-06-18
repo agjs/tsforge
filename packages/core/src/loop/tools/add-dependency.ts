@@ -67,5 +67,14 @@ export async function doAddDependency(
     return `add_dependency failed (exit ${String(res.exitCode)}):\n${res.stdout}${res.stderr}`;
   }
 
+  // The install rewrote package.json (+ lockfile) — re-gate so the supply-chain
+  // meta-rules re-check it. Accounting-only (no write-guard); success path only.
+  ctx.report({
+    kind: "tool",
+    task: ctx.task,
+    message: `package.json updated (${specs.length} dep(s))`,
+    mutated: ["package.json"],
+  });
+
   return `installed ${specs.join(", ")}${dev ? " (dev)" : ""} — import and use them now.`;
 }

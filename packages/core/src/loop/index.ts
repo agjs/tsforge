@@ -8,6 +8,7 @@ export {
   buildTsService,
   runToolCalls,
   settleGate,
+  countsAsMutation,
   type ILoopCtx,
   type ILoopState,
 } from "./turn";

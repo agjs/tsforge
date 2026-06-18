@@ -379,45 +379,7 @@ export async function installWebDeps(cwd: string): Promise<boolean> {
     }
   }
 
-  await initMswWorker(cwd);
-
   return true;
-}
-
-/** Lay down `public/mockServiceWorker.js` via the MSW CLI — the in-browser mock
- *  API the React scaffold relies on. The worker script is version-matched to the
- *  installed msw (so we never ship a stale, version-pinned blob) and Vite copies
- *  `public/` into `dist/`, so the gate's built-app smoke serves it at
- *  `/mockServiceWorker.js`. No-op when msw isn't installed (e.g. the vanilla
- *  scaffold) or the worker already exists; best-effort so it never breaks install. */
-async function initMswWorker(cwd: string): Promise<void> {
-  const hasMsw = await Bun.file(
-    join(cwd, "node_modules", "msw", "package.json")
-  ).exists();
-  const alreadyInit = await Bun.file(
-    join(cwd, "public", "mockServiceWorker.js")
-  ).exists();
-
-  if (!hasMsw || alreadyInit) {
-    return;
-  }
-
-  try {
-    // `--no-save`, NOT a bare `init`: bare `init` (save flag absent) drops into an
-    // interactive @inquirer "save the worker dir to package.json?" prompt, which has
-    // no TTY in this headless pipeline and crashes the msw child with ExitPromptError.
-    // `--save` would answer it but rewrites package.json un-prettified (fails the
-    // gate's format check). `--no-save` copies the worker, skips package.json, and
-    // never prompts. The worker lands at the default `/mockServiceWorker.js`, which
-    // `worker.start()` finds without any config.
-    await Bun.spawn(["bunx", "msw", "init", "public", "--no-save"], {
-      cwd,
-      stdout: "inherit",
-      stderr: "inherit",
-    }).exited;
-  } catch {
-    // best-effort — a missing worker surfaces as a clear runtime error in the gate
-  }
 }
 
 /** The full web ladder: `vite build` + tsc strict + web eslint (vendored-exempt) +
@@ -524,9 +486,17 @@ export function buildWebGate(
     : null;
   const lintChain = typeAware === null ? lint : `${lint} && ${typeAware}`;
 
+  // Run the project's bun tests when any exist. Test files use `bun:test` (a test
+  // runtime, not part of the app build) — they're EXCLUDED from the app's tsconfig
+  // so `tsc` doesn't choke on `bun:test`, and run here instead so a broken test
+  // still fails the gate. Guarded because `bun test` exits non-zero when it finds
+  // NO tests, which would wrongly fail a freshly scaffolded app. Re-evaluated each
+  // gate run, so tests the model adds mid-build are picked up.
+  const tests = `if find src -name '*.test.ts' -o -name '*.test.tsx' 2>/dev/null | grep -q .; then bun test; fi`;
+
   return {
-    command: `${build} && ${tsc} && ${lintChain} && ${stubs} && ${format} && ${render}`,
-    label: `${template.label} (build + behaviour smoke)`,
+    command: `${build} && ${tsc} && ${lintChain} && ${stubs} && ${format} && ${tests} && ${render}`,
+    label: `${template.label} (build + tests + behaviour smoke)`,
   };
 }
 

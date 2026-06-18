@@ -2,7 +2,9 @@ import { test, expect } from "bun:test";
 import {
   validateFetchUrl,
   doWebFetch,
+  fetchFollowingRedirects,
   type IWebFetchDeps,
+  type RawFetch,
 } from "../src/loop/tools/web-fetch";
 import type { IToolContext } from "../src/loop/tools/execute-tool";
 
@@ -44,6 +46,65 @@ test("validateFetchUrl rejects localhost and private addresses (SSRF guard)", ()
   ).toBeNull();
   expect(validateFetchUrl("http://10.0.0.5/")).toBeNull();
   expect(validateFetchUrl("http://192.168.1.1/")).toBeNull();
+});
+
+test("validateFetchUrl rejects IPv6 private + IPv4-mapped loopback (SSRF guard)", () => {
+  expect(validateFetchUrl("http://[::1]/")).toBeNull(); // loopback
+  expect(validateFetchUrl("http://[fc00::1]/")).toBeNull(); // ULA fc00::/7
+  expect(validateFetchUrl("http://[fd12:3456::1]/")).toBeNull(); // ULA
+  expect(validateFetchUrl("http://[fe80::1]/")).toBeNull(); // link-local
+  expect(validateFetchUrl("http://[::ffff:127.0.0.1]/")).toBeNull(); // mapped loopback
+  expect(validateFetchUrl("http://[::ffff:169.254.169.254]/")).toBeNull(); // mapped metadata
+});
+
+test("fetchFollowingRedirects re-validates each hop and blocks a redirect to localhost", async () => {
+  // A public URL 302-redirecting to localhost (the classic SSRF bypass of a
+  // one-time upfront host check) must be refused at the hop, not followed.
+  const raw: RawFetch = async (url) => {
+    if (url === "https://evil.example.com/") {
+      return {
+        ok: false,
+        status: 302,
+        headers: {
+          get: (n) => (n === "location" ? "http://127.0.0.1/" : null),
+        },
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`should never fetch ${url}`);
+  };
+
+  await expect(
+    fetchFollowingRedirects("https://evil.example.com/", raw)
+  ).rejects.toThrow(/non-public host/u);
+});
+
+test("fetchFollowingRedirects follows a redirect to another public host", async () => {
+  const raw: RawFetch = async (url) => {
+    if (url === "https://a.example.com/") {
+      return {
+        ok: false,
+        status: 301,
+        headers: {
+          get: (n) => (n === "location" ? "https://b.example.com/" : null),
+        },
+        text: async () => "",
+      };
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => "final",
+    };
+  };
+
+  const res = await fetchFollowingRedirects("https://a.example.com/", raw);
+
+  expect(res.status).toBe(200);
+  expect(await res.text()).toBe("final");
 });
 
 test("doWebFetch rejects an invalid URL without touching the network", async () => {

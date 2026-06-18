@@ -51,6 +51,9 @@ export async function doScaffoldUi(
     kind: "tool",
     task: ctx.task,
     message: `scaffold_ui: wrote ${String(written.length)} themed file(s) [${theme}] — ${components.join(", ")}`,
+    // Re-gate after mutating the workspace — without write-guarding each generated
+    // (vendored) primitive. Empty when nothing was written.
+    ...(written.length > 0 ? { mutated: written } : {}),
   });
 
   return (

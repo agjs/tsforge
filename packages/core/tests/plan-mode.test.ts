@@ -204,6 +204,23 @@ test("isReadOnlyCommand: allowlisted inspection passes, anything mutating fails"
   expect(isReadOnlyCommand("echo $(rm x)")).toBe(false);
   expect(isReadOnlyCommand("npm install")).toBe(false);
   expect(isReadOnlyCommand("")).toBe(false);
+
+  // Allowlisted commands that MUTATE via a flag — the head/subcommand check used
+  // to wave these through (Codex review). Each must now be rejected.
+  expect(isReadOnlyCommand("find . -delete")).toBe(false);
+  expect(isReadOnlyCommand("find . -exec rm {} +")).toBe(false);
+  expect(isReadOnlyCommand("git branch -D main")).toBe(false);
+  expect(isReadOnlyCommand("git branch newbranch")).toBe(false); // creates a branch
+  expect(isReadOnlyCommand("tsc --outDir dist")).toBe(false);
+  expect(isReadOnlyCommand("tsc")).toBe(false); // bare tsc EMITS by default
+  expect(isReadOnlyCommand("tsc -p tsconfig.json --build")).toBe(false);
+
+  // And the read-only shapes of those same commands still pass.
+  expect(isReadOnlyCommand("find . -name '*.ts'")).toBe(true);
+  expect(isReadOnlyCommand("git branch")).toBe(true); // bare list
+  expect(isReadOnlyCommand("git branch -a")).toBe(true);
+  expect(isReadOnlyCommand("tsc -p tsconfig.json --noEmit")).toBe(true);
+  expect(isReadOnlyCommand("tsc --version")).toBe(true);
 });
 
 test("scaffoldWeb sessions offer scaffold_web — except while plan mode is on", async () => {

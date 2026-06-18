@@ -532,6 +532,8 @@ function makeSpinner(): {
   stop: () => void;
   setLabel: (label: string) => void;
   onTick: (cb: () => void) => void;
+  setInlineGate: (fn: () => boolean) => void;
+  frameLabel: () => string;
 } {
   let timer: ReturnType<typeof setInterval> | null = null;
   let startedAt = 0;
@@ -539,6 +541,13 @@ function makeSpinner(): {
   let drawn = false;
   let label = "thinking";
   let onTickCb: (() => void) | null = null;
+  // When the status bar is active it shows the activity itself, so the inline
+  // write (which lands on the readline input line and erases what the user is
+  // typing) is suppressed. Default true for the no-bar fallback (pipes, tiny TTY).
+  let inlineGate: () => boolean = () => true;
+
+  const secsNow = (): number =>
+    Math.round((performance.now() - startedAt) / 1000);
 
   const clear = (): void => {
     if (drawn) {
@@ -548,17 +557,26 @@ function makeSpinner(): {
   };
 
   const tick = (): void => {
-    const secs = Math.round((performance.now() - startedAt) / 1000);
-
     frame = (frame + 1) % SPINNER_FRAMES.length;
-    process.stdout.write(
-      `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secs}s${RESET}`
-    );
-    drawn = true;
-    onTickCb?.(); // repaint the pinned status bar with live tok/s / context
+
+    if (inlineGate()) {
+      process.stdout.write(
+        `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secsNow()}s${RESET}`
+      );
+      drawn = true;
+    }
+
+    onTickCb?.(); // repaint the pinned status bar with live activity / tok/s
   };
 
   return {
+    setInlineGate: (fn: () => boolean): void => {
+      inlineGate = fn;
+    },
+    frameLabel: (): string =>
+      timer === null
+        ? ""
+        : `${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secsNow()}s`,
     start: (): void => {
       if (!process.stdout.isTTY || timer !== null) {
         return;
@@ -1402,11 +1420,20 @@ async function repl(args: ICliArgs): Promise<number> {
     status: lastStatus,
     scope: scopeLabel(session.scope) + (planMode ? " · PLAN" : ""),
     tokensPerSecond: session.metrics.lastTokensPerSecond,
+    ...(spinner.frameLabel().length > 0
+      ? { activity: spinner.frameLabel() }
+      : {}),
   });
 
   // Pinned bottom status bar when we're on a real terminal; otherwise the bar is
   // inactive and `prompt()` falls back to the inline status line (pipes, --log).
   const statusBar = new StatusBar(process.stdout, true, true);
+
+  // While the bar is pinned it shows the spinner activity itself (via statusInfo),
+  // so suppress the spinner's inline write — it lands on the readline input line
+  // and would erase what the user types mid-turn. The bar repaints with cursor
+  // save/restore, so typing stays intact. No bar (pipe/tiny TTY) → inline as before.
+  spinner.setInlineGate(() => !statusBar.active);
 
   // Repaint the bar on every spinner tick so tok/s and the context meter update
   // live mid-turn (both read live session state), not just at turn boundaries.

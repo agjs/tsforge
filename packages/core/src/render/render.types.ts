@@ -21,4 +21,8 @@ export interface IStatusInfo {
   /** Output generation rate of the last model call (tokens/second); omitted or
    *  0 before the first call. */
   tokensPerSecond?: number;
+  /** Live activity indicator (e.g. `⠋ thinking · 12s`) shown WHILE a turn runs,
+   *  so the spinner animates IN the bar instead of on the readline input line
+   *  (which it would otherwise clobber). Omitted between turns. */
+  activity?: string;
 }

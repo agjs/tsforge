@@ -2,8 +2,24 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runToolCalls, type ILoopCtx, type ILoopState } from "../src/loop";
+import {
+  runToolCalls,
+  countsAsMutation,
+  type ILoopCtx,
+  type ILoopState,
+} from "../src/loop";
 import { TsService } from "../src/lsp";
+
+// P1 (review): add_dependency rewrites package.json even in a narrow-scoped task
+// where it isn't in the editable globs. That sanctioned manifest change MUST still
+// re-gate (the supply-chain meta-rules catch unpinned/git/tarball deps) — so the
+// mutation predicate exempts package.json from the scope check, but nothing else.
+test("countsAsMutation: package.json always counts; other out-of-scope paths don't", () => {
+  expect(countsAsMutation("package.json", ["src/**"])).toBe(true);
+  expect(countsAsMutation("src/a.ts", ["src/**"])).toBe(true);
+  expect(countsAsMutation("secret.ts", ["src/**"])).toBe(false);
+  expect(countsAsMutation("vendor/x.ts", ["src/**"])).toBe(false);
+});
 
 function freshState(): ILoopState {
   return {
@@ -136,6 +152,164 @@ test("a move_file re-gates even though it is not an edit/create", async () => {
     // ...and it re-gates (this was `false` before the fix). Semantic writes
     // don't feed state.edits, so only the re-gate signal changes.
     expect(touched).toBe(true);
+    // The moved file joins the change scope (so test-sibling et al. cover it).
+    expect([...(ctx.touched ?? [])]).toContain("lib/types.ts");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// P1: scaffold_routes writes route stub files but reports `kind:"tool"`, so the
+// old event-only accounting left `touched:false` — a turn could write stubs and
+// skip the gate (which fails while a stub is unfilled). It now emits `mutated`.
+test("scaffold_routes re-gates the turn despite reporting a tool event", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-routes-"));
+
+  try {
+    const ctx = ctxFor(dir, ["**/*"]);
+    const state = freshState();
+    const touched = await runToolCalls(
+      [{ name: "scaffold_routes", arguments: { routes: ["/", "/about"] } }],
+      ctx,
+      state
+    );
+
+    expect(touched).toBe(true);
+    // The generated stubs joined the change scope but were NOT write-guarded.
+    expect(ctx.touched?.size ?? 0).toBeGreaterThan(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// P1: a rejected (out-of-scope) move_file must NOT re-gate — the old name-based
+// branch set touched:true by tool NAME, so a rejected op could let a green gate
+// claim "done" though nothing moved. Now the signal is the `mutated` event, which
+// a reject never emits.
+test("a rejected (out-of-scope) move_file does NOT re-gate (no false 'done')", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-reject-"));
+
+  try {
+    await Bun.write(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          target: "ES2022",
+          module: "ES2022",
+          moduleResolution: "bundler",
+          strict: true,
+          skipLibCheck: true,
+        },
+        include: ["**/*.ts"],
+      })
+    );
+    await Bun.write(
+      join(dir, "types.ts"),
+      "export interface IThing {\n  value: number;\n}\n"
+    );
+    // use.ts imports types.ts and is OUT of editable scope → moving types.ts
+    // would rewrite a read-only importer, so the move is rejected.
+    await Bun.write(
+      join(dir, "use.ts"),
+      'import type { IThing } from "./types";\nexport const f = (t: IThing): number => t.value;\n'
+    );
+
+    const ctx: ILoopCtx = {
+      task: { id: "t", accept: "true", files: ["types.ts", "lib/types.ts"] },
+      cwd: dir,
+      tsService: new TsService(dir),
+      parse: undefined,
+      report: () => undefined,
+      messages: [],
+    };
+    const state = freshState();
+    const touched = await runToolCalls(
+      [
+        {
+          name: "move_file",
+          arguments: { from: "types.ts", to: "lib/types.ts" },
+        },
+      ],
+      ctx,
+      state
+    );
+
+    expect(touched).toBe(false);
+    // Nothing moved.
+    expect(await Bun.file(join(dir, "types.ts")).exists()).toBe(true);
+    expect(await Bun.file(join(dir, "lib/types.ts")).exists()).toBe(false);
+    expect(ctx.touched?.size ?? 0).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// WS1: structural meta-rules used to fire only at the end-of-turn gate. The
+// single-file-safe subset now runs PER-WRITE, so a logic file created without a
+// test gets the test-sibling nudge immediately in the tool result — not after the
+// model has built more on top of it.
+test("a created logic file without a test gets an immediate per-write nudge", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-perwrite-"));
+
+  try {
+    const ctx = ctxFor(dir, ["**/*"]);
+    const state = freshState();
+
+    await runToolCalls(
+      [
+        {
+          name: "create",
+          arguments: {
+            file: "calc.ts",
+            content:
+              "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+          },
+        },
+      ],
+      ctx,
+      state
+    );
+
+    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
+
+    // The structural nudge rode back on THIS write (not deferred to the gate).
+    expect(toolMsg).toContain("test-sibling-required");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A co-located test means no nudge — the per-write check is satisfied immediately.
+test("a created logic file WITH a co-located test gets no test nudge", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-perwrite2-"));
+
+  try {
+    await Bun.write(
+      join(dir, "calc.test.ts"),
+      'import { test } from "bun:test";\ntest("x", () => {});\n'
+    );
+
+    const ctx = ctxFor(dir, ["**/*"]);
+    const state = freshState();
+
+    await runToolCalls(
+      [
+        {
+          name: "create",
+          arguments: {
+            file: "calc.ts",
+            content:
+              "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+          },
+        },
+      ],
+      ctx,
+      state
+    );
+
+    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
+
+    expect(toolMsg).not.toContain("test-sibling-required");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

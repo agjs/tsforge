@@ -33,7 +33,6 @@ import {
   WEB_FETCH_TOOL,
   WEB_SEARCH_TOOL,
   GIT_CONTEXT_TOOL,
-  TOOL_NAME,
 } from "../agent";
 import { TsService, type ITsDiagnostic } from "../lsp";
 import type { McpRegistry } from "../mcp";
@@ -43,6 +42,8 @@ import {
   buildMetaRuleContext,
   runMetaRules,
   META_RULES,
+  PER_WRITE_META_RULES,
+  type IMetaRuleContext,
   type IMetaRuleViolation,
 } from "../meta-rules";
 
@@ -422,34 +423,137 @@ async function writeGuard(
   );
 }
 
+/** A meta-rule context scoped to ONE just-written file, so the per-write rules
+ *  check exactly that file. The file is placed in whichever list field matches its
+ *  kind (mirroring buildMetaRuleContext's categorization); the other lists are
+ *  empty, so a rule for a different category is a no-op. Cheap: no directory walk. */
+function singleFileMetaContext(
+  cwd: string,
+  path: string,
+  packs: readonly string[]
+): IMetaRuleContext {
+  const rel = (isAbsolute(path) ? relative(cwd, path) : path).replaceAll(
+    "\\",
+    "/"
+  );
+  const base = basename(rel);
+  const isSource = /\.tsx?$/u.test(rel) && !rel.endsWith(".gen.ts");
+  const isWorkflow = /^\.github\/workflows\/.+\.ya?ml$/u.test(rel);
+  const isDockerfile =
+    base === "Dockerfile" ||
+    base.startsWith("Dockerfile.") ||
+    base.endsWith(".Dockerfile");
+  const one = [rel];
+
+  const readFile = (p: string): string | null => {
+    try {
+      return readFileSync(join(cwd, p), "utf8");
+    } catch {
+      return null;
+    }
+  };
+
+  return {
+    root: cwd,
+    packageJson: null,
+    sourceFiles: isSource ? one : [],
+    changedFiles: one,
+    configFiles: [],
+    workflowFiles: isWorkflow ? one : [],
+    dockerfiles: isDockerfile ? one : [],
+    activePacks: packs,
+    readFile,
+  };
+}
+
+/** Run the single-file-safe meta-rules on the just-written file and format any
+ *  violations as an early advisory — the structural counterpart to the type/lint
+ *  write-guard, so "missing test", "eslint-disable", etc. surface NOW (one file)
+ *  instead of at the end-of-turn gate. The gate stays the hard wall. Best-effort. */
+function perWriteMetaFeedback(ctx: ILoopCtx, path: string): string {
+  try {
+    const metaCtx = singleFileMetaContext(
+      ctx.cwd,
+      path,
+      ctx.stackProfile?.packs ?? []
+    );
+    const violations = runMetaRules(
+      PER_WRITE_META_RULES,
+      metaCtx,
+      ctx.ruleOverrides
+    );
+
+    if (violations.length === 0) {
+      return "";
+    }
+
+    const lines = violations
+      .slice(0, MAX_WRITE_GUARD_DIAGS)
+      .map((v) => `  • [${v.ruleId}] ${v.message}`)
+      .join("\n");
+
+    return `\n\n⚠ STRUCTURE check — fix now, while this is one file (the gate enforces these):\n${lines}`;
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Invoke the write-guard for a just-written file — best-effort: a guard failure
  * must NEVER break the build (the gate stays the authority), so a null service or
  * any thrown error degrades to no feedback. Extracted so `runToolCalls` stays
- * under the cognitive-complexity bar.
+ * under the cognitive-complexity bar. Two layers: the type/lint guard (needs the
+ * LanguageService) and the per-write structural meta-rules (no service needed, so
+ * they run even without a tsconfig — e.g. a missing-test nudge).
  */
 async function runWriteGuard(ctx: ILoopCtx, path: string): Promise<string> {
-  if (
-    ctx.tsService === null ||
-    path.length === 0 ||
-    !flags.lspWriteFeedback()
-  ) {
+  if (path.length === 0) {
     return "";
   }
 
-  try {
-    return await writeGuard(
-      {
-        tsService: ctx.tsService,
-        cwd: ctx.cwd,
-        ...(ctx.lintFile === undefined ? {} : { lintFile: ctx.lintFile }),
-      },
-      path,
-      ctx.report,
-      ctx.task.id
-    );
-  } catch {
-    return "";
+  let guard = "";
+
+  if (ctx.tsService !== null && flags.lspWriteFeedback()) {
+    try {
+      guard = await writeGuard(
+        {
+          tsService: ctx.tsService,
+          cwd: ctx.cwd,
+          ...(ctx.lintFile === undefined ? {} : { lintFile: ctx.lintFile }),
+        },
+        path,
+        ctx.report,
+        ctx.task.id
+      );
+    } catch {
+      guard = "";
+    }
+  }
+
+  return `${guard}${perWriteMetaFeedback(ctx, path)}`;
+}
+
+/** Whether a `mutated` path counts toward re-gating + the change scope. Mutating
+ *  handlers self-enforce scope before they write, so this is mostly a backstop —
+ *  EXCEPT package.json: `add_dependency` is sanctioned to rewrite the manifest even
+ *  when it sits outside the task's editable globs, and that change MUST re-gate so
+ *  the supply-chain meta-rules run (unpinned / git / tarball deps). A narrow-scoped
+ *  task would otherwise let a `bun add` bypass the gate entirely. */
+export function countsAsMutation(file: string, taskFiles: string[]): boolean {
+  return basename(file) === "package.json" || isInScope(file, taskFiles);
+}
+
+/** Add paths (cwd-relative, forward-slashed) to the session's change set — the
+ *  scope change-scoped gate rules (test-sibling-required) enforce on. Lazy-inits
+ *  `touched` so a custom loop runner that forgot to seed it self-heals rather than
+ *  silently dropping enforcement. */
+function recordTouched(ctx: ILoopCtx, files: readonly string[]): void {
+  ctx.touched ??= new Set<string>();
+
+  for (const f of files) {
+    const rel = isAbsolute(f) ? relative(ctx.cwd, f) : f;
+
+    ctx.touched.add(rel.replaceAll("\\", "/"));
   }
 }
 
@@ -480,6 +584,9 @@ export async function runToolCalls(
     // only on a successful write, so failures/rejects never count. See P1/P2.
     // (Object ref, not a captured `let`: CFA de-narrows a property after a call.)
     const wrote = { value: false, path: "" };
+    // Files mutated by a tool the model did NOT hand-write (semantic ops,
+    // scaffolds). These re-gate and join the change scope but skip the write-guard.
+    const mutated: string[] = [];
 
     const report: Reporter = (event) => {
       if (
@@ -489,6 +596,14 @@ export async function runToolCalls(
       ) {
         wrote.value = true;
         wrote.path = event.file;
+      }
+
+      if (event.mutated !== undefined) {
+        for (const f of event.mutated) {
+          if (countsAsMutation(f, ctx.task.files)) {
+            mutated.push(f);
+          }
+        }
       }
 
       ctx.report(event);
@@ -514,30 +629,22 @@ export async function runToolCalls(
     if (wrote.value) {
       touchedEditable = true;
       state.edits += 1;
-      // Record what the agent wrote (cwd-relative) so change-scoped gate rules
-      // (test-sibling-required) know which files to enforce on.
-      const rel = isAbsolute(wrote.path)
-        ? relative(ctx.cwd, wrote.path)
-        : wrote.path;
-
-      // Lazy-init rather than `?.add` so a custom loop runner that forgot to seed
-      // `touched` self-heals instead of silently skipping TDD enforcement — the
-      // exact silent-no-op class this fix exists to kill.
-      ctx.touched ??= new Set<string>();
-      ctx.touched.add(rel.replaceAll("\\", "/"));
+      // Record what the agent wrote so change-scoped gate rules (test-sibling-
+      // required) know which files to enforce on, then write-guard just this file.
+      recordTouched(ctx, [wrote.path]);
       feedback = await runWriteGuard(ctx, wrote.path);
     }
 
-    // A semantic write (rename/organize_imports/move_file) is scope-enforced
-    // internally and mutates on success — re-gate to confirm. move_file relocates
-    // a file AND rewrites every importer, so omitting it let a move end as
-    // "responded" without the gate ever running. (These don't feed state.edits.)
-    if (
-      call.name === TOOL_NAME.renameSymbol ||
-      call.name === TOOL_NAME.organizeImports ||
-      call.name === TOOL_NAME.moveFile
-    ) {
+    // A tool that mutated files without the model hand-writing them (a successful
+    // semantic op or scaffold) must re-gate so the change is verified — the signal
+    // comes from the handler's `mutated` event, emitted ONLY on a real change.
+    // Keying off the tool NAME (the old approach) miscounted a rejected/no-op op
+    // as a mutation, letting a green gate claim "done" though nothing happened, and
+    // missed scaffolds entirely, letting them skip the gate. These paths join the
+    // change scope but are NOT write-guarded — generated shells aren't re-checked.
+    if (mutated.length > 0) {
       touchedEditable = true;
+      recordTouched(ctx, mutated);
     }
 
     ctx.messages.push({
@@ -975,7 +1082,13 @@ export async function settleGate(
     };
   }
 
-  const feedback = await gateFeedback(gateErrors, task, cwd, metaViolations);
+  const feedback = await gateFeedback(
+    gateErrors,
+    task,
+    cwd,
+    metaViolations,
+    ctx.vendored ?? []
+  );
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
 
   messages.push({ role: "user", content: `${notice}${feedback}` });

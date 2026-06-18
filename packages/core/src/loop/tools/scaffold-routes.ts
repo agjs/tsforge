@@ -55,14 +55,19 @@ export async function doScaffoldRoutes(
     kind: "tool",
     task: ctx.task,
     message: `scaffold_routes: created ${String(written.length)} new route stub(s)${keptNote}`,
+    // Re-gate + change-scope the new stubs so the gate runs (it fails while any
+    // stub is unfilled) — WITHOUT write-guarding each generated shell. Empty when
+    // nothing new was written, so a no-op call doesn't force a gate run.
+    ...(written.length > 0 ? { mutated: written } : {}),
   });
 
   return (
     `scaffold_routes: created ${String(written.length)} NEW route stub(s)${keptNote}. ` +
     `It is ADDITIVE and safe to call again — it NEVER overwrites a route you've already ` +
     `built, only adds missing ones. New stubs are PLACEHOLDERS (data-tsforge-stub): replace ` +
-    `EACH with the real page (its list/detail/form using your types + useResource('/api/x') ` +
-    `+ @/components/ui). The gate FAILS while any stub remains. To FILL a route, EDIT its file ` +
+    `EACH with the real page (its list/detail/form using your types + your own data ` +
+    `(seed/constants or a <feature>.hooks.ts) + @/components/ui). The gate FAILS while any ` +
+    `stub remains. To FILL a route, EDIT its file ` +
     `directly — do NOT call scaffold_routes again to "reset" it.`
   );
 }

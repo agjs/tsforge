@@ -58,6 +58,23 @@ describe("buildBarFrame", () => {
     // Wide: the full set is shown.
     expect(buildBarFrame(INFO, 200, 24, false)).toContain("src/**");
   });
+
+  // WS4: the spinner activity rides IN the bar (not on the readline input line,
+  // which it used to erase). When present it renders; between turns it's absent.
+  test("renders the live activity indicator when present", () => {
+    const frame = buildBarFrame(
+      { ...INFO, activity: "⠋ thinking · 12s" },
+      200,
+      24,
+      false
+    );
+
+    expect(frame).toContain("⠋ thinking · 12s");
+  });
+
+  test("omits the activity segment between turns (no activity)", () => {
+    expect(buildBarFrame(INFO, 200, 24, false)).not.toContain("thinking");
+  });
 });
 
 describe("StatusBar activation", () => {

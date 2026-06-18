@@ -81,3 +81,33 @@ export const META_RULES: readonly IMetaRule[] = [
   // Structure (cross-file)
   noCircularImportsRule,
 ];
+
+/**
+ * The subset safe to run PER-WRITE (on the single file the model just wrote),
+ * surfacing structural problems immediately instead of only at the end-of-turn
+ * gate. A rule qualifies only if it inspects a per-file LIST (changedFiles /
+ * sourceFiles / workflowFiles / dockerfiles) and self-checks the path — so scoping
+ * the context to one file makes it check exactly that file. Excluded: rules that
+ * key off `root`/`packageJson`/the whole graph (tsconfig-*, next-*, supply-chain,
+ * no-circular-imports) — they'd fire on every write or need project-wide context,
+ * so they stay gate-only. The gate still runs the FULL set as the hard wall.
+ */
+const PER_WRITE_RULE_IDS = new Set<string>([
+  "test-sibling-required",
+  "no-eslint-disable-comments",
+  "no-ts-suppressions",
+  "workflow-actions-pinned",
+  "workflow-runner-pinned",
+  "workflow-timeout-required",
+  "workflow-permissions-explicit",
+  "workflow-permissions-least-privilege",
+  "no-pull-request-target-untrusted-checkout",
+  "no-github-context-in-shell",
+  "dockerfile-base-image-pinned",
+  "dockerfile-non-root-user",
+  "dockerfile-no-secrets-in-env-arg",
+]);
+
+export const PER_WRITE_META_RULES: readonly IMetaRule[] = META_RULES.filter(
+  (r) => PER_WRITE_RULE_IDS.has(r.id)
+);
