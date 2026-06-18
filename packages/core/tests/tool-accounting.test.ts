@@ -10,6 +10,7 @@ import {
 } from "../src/loop";
 import { TsService } from "../src/lsp";
 import { makeFileLinter, WEB_PACKS } from "../src/detect-gate";
+import { TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../src/agent";
 
 // The interactive web session was missing the per-write lint moat (only headless
 // wired `lintFile`), so eslint/architecture violations piled up at the end-of-turn
@@ -392,6 +393,154 @@ test("a failed edit (oldString not found) is NOT counted", async () => {
 
     expect(touched).toBe(false);
     expect(state.edits).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The MUTATING-TOOL ACCOUNTING CONTRACT, made structural: every registered tool is
+// classified exactly once — read-only (plan-mode safe), mutating (must report a
+// change so the gate re-runs), or special (run/yield, exempt with a reason). A NEW
+// tool that lands in zero buckets fails here until someone decides which it is —
+// the guard that would have caught scaffold_web silently mutating from day one.
+const MUTATING_TOOLS = new Set<string>([
+  TOOL_NAME.edit,
+  TOOL_NAME.editLines,
+  TOOL_NAME.create,
+  TOOL_NAME.renameSymbol,
+  TOOL_NAME.moveFile,
+  TOOL_NAME.organizeImports,
+  TOOL_NAME.scaffoldUi,
+  TOOL_NAME.scaffoldRoutes,
+  TOOL_NAME.scaffoldWeb,
+  TOOL_NAME.addDependency,
+]);
+// run = the model's raw shell (writes are its own, not scoped harness edits);
+// yield_status = turn control, never touches the workspace.
+const SPECIAL_TOOLS = new Set<string>([TOOL_NAME.run, TOOL_NAME.yieldStatus]);
+
+test("every registered tool is classified read-only, mutating, or special", () => {
+  for (const name of Object.values(TOOL_NAME)) {
+    const buckets = [
+      READ_ONLY_TOOL_NAMES.has(name),
+      MUTATING_TOOLS.has(name),
+      SPECIAL_TOOLS.has(name),
+    ].filter(Boolean).length;
+
+    expect({ name, buckets }).toEqual({ name, buckets: 1 });
+  }
+});
+
+// P1 (review): scaffold_web mutates the workspace via ctx.setupWeb but emitted NO
+// `mutated` event, so the loop never re-gated — a whole Vite app could be scaffolded
+// and the gate never run. With setupWeb returning the written files, scaffold_web
+// now reports them and the turn re-gates (and the files join the change scope).
+function webCtx(
+  cwd: string,
+  setup: () => Promise<{ files: readonly string[]; depsInstalled: boolean }>
+): ILoopCtx {
+  return { ...ctxFor(cwd, ["**/*"]), setupWeb: setup };
+}
+
+test("scaffold_web re-gates the turn and joins the scaffolded files to scope", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-"));
+
+  try {
+    const written = ["src/main.tsx", "index.html"];
+    const ctx = webCtx(dir, () =>
+      Promise.resolve({ files: written, depsInstalled: true })
+    );
+    const touched = await runToolCalls(
+      [{ name: "scaffold_web", arguments: { framework: "react" } }],
+      ctx,
+      freshState()
+    );
+
+    expect(touched).toBe(true);
+
+    for (const f of written) {
+      expect([...(ctx.touched ?? [])]).toContain(f);
+    }
+
+    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
+
+    expect(toolMsg).toContain("deps installed");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("scaffold_web tells the model the truth (and still re-gates) when install failed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-fail-"));
+
+  try {
+    const ctx = webCtx(dir, () =>
+      Promise.resolve({ files: ["src/main.tsx"], depsInstalled: false })
+    );
+    const touched = await runToolCalls(
+      [{ name: "scaffold_web", arguments: { framework: "react" } }],
+      ctx,
+      freshState()
+    );
+
+    expect(touched).toBe(true);
+
+    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
+
+    // Must NOT claim a clean install; must tell the model to run `bun install`.
+    expect(toolMsg).not.toContain("deps installed");
+    expect(toolMsg).toContain("bun install");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("scaffold_web forwards the turn's abort signal to setupWeb (cancellable install)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-sig-"));
+
+  try {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+    const ctx: ILoopCtx = {
+      ...ctxFor(dir, ["**/*"]),
+      signal: controller.signal,
+      setupWeb: (_fw, options) => {
+        received = options?.signal;
+
+        return Promise.resolve({
+          files: ["src/main.tsx"],
+          depsInstalled: true,
+        });
+      },
+    };
+
+    await runToolCalls(
+      [{ name: "scaffold_web", arguments: { framework: "react" } }],
+      ctx,
+      freshState()
+    );
+
+    expect(received).toBe(controller.signal);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("scaffold_web that writes nothing does NOT re-gate (no false 'done')", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-noop-"));
+
+  try {
+    const ctx = webCtx(dir, () =>
+      Promise.resolve({ files: [], depsInstalled: true })
+    );
+    const touched = await runToolCalls(
+      [{ name: "scaffold_web", arguments: { framework: "react" } }],
+      ctx,
+      freshState()
+    );
+
+    expect(touched).toBe(false);
+    expect(ctx.touched?.size ?? 0).toBe(0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

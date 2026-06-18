@@ -16,6 +16,7 @@ import {
   READ_ONLY_TOOL_NAMES,
   TOOL_NAME,
 } from "../agent";
+import type { SetupWebFn } from "./tools";
 import { flags } from "../config";
 import { readFiles } from "../lib/fs";
 import { WEB_VENDORED_PATTERNS } from "../lib/scope";
@@ -763,7 +764,7 @@ export class Session {
    *  decides the task is a from-scratch web app — scaffolds the stack and flips
    *  this session to the web gate/guidance. Late-bound (after create) because the
    *  callback closes over this session to reconfigure it. */
-  setSetupWeb(fn: (framework: string) => Promise<void>): void {
+  setSetupWeb(fn: SetupWebFn): void {
     this.ctx.setupWeb = fn;
   }
 

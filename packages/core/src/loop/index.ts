@@ -1,5 +1,6 @@
 export * from "./loop.types";
 export * from "./loop.constants";
+export type { SetupWebFn } from "./tools";
 export { runTask } from "./run";
 export { runSpec } from "./run-spec";
 export { qualityRepair } from "./quality";

@@ -8,6 +8,7 @@ import {
 } from "../scripts/test-coverage-check";
 import { bootConfig, pollUntilReady } from "../scripts/boot-check";
 import { buildGate } from "../src/detect-gate";
+import { serveEphemeral } from "../src/lib/serve";
 
 describe("test-coverage oracle", () => {
   test("parseLcovCoverage sums line + function coverage and takes the weaker", () => {
@@ -49,24 +50,7 @@ describe("boot oracle", () => {
   });
 
   test("pollUntilReady returns the status of a live server", async () => {
-    // Retry the bind: `port: 0` should pick a free ephemeral port, but some Bun
-    // builds (< the 1.3.14 this repo pins) intermittently throw EADDRINUSE on it.
-    // Retrying a few times makes the test deterministic regardless of Bun build.
-    const serve = (): ReturnType<typeof Bun.serve> => {
-      let lastErr: unknown;
-
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        try {
-          return Bun.serve({ port: 0, fetch: () => new Response("ok") });
-        } catch (err) {
-          lastErr = err;
-        }
-      }
-
-      throw lastErr instanceof Error ? lastErr : new Error("serve failed");
-    };
-
-    const server = serve();
+    const server = await serveEphemeral({ fetch: () => new Response("ok") });
 
     try {
       const status = await pollUntilReady(

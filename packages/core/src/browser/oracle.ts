@@ -1,5 +1,6 @@
 import { resolve, dirname, basename, join } from "node:path";
 import { isRecord } from "../lib/guards";
+import { serveEphemeral } from "../lib/serve";
 // `playwright` is an OPTIONAL peer: bundling it (+ a browser binary) into every
 // install is too heavy, so the import is dynamic and the render-check skips when
 // it's absent. The type-only import is erased at runtime, so it can't crash a
@@ -222,7 +223,7 @@ export async function renderCheck(
     // ALL checks (incl the route crawl, which needs SPA fallback).
     if (opts.file !== undefined) {
       const abs = resolve(opts.file);
-      const server = startStaticServer(dirname(abs));
+      const server = await startStaticServer(dirname(abs));
       const base = `http://localhost:${String(server.port)}`;
 
       try {
@@ -349,9 +350,10 @@ async function capturePage(
  *  extension-less path that isn't a real file → index.html (so the client router
  *  renders that route). Missing ASSETS (paths with a `.`) still 404, so a broken
  *  bundle/import surfaces as a real error. */
-function startStaticServer(root: string): ReturnType<typeof Bun.serve> {
-  return Bun.serve({
-    port: 0,
+function startStaticServer(
+  root: string
+): Promise<ReturnType<typeof Bun.serve>> {
+  return serveEphemeral({
     fetch: async (req): Promise<Response> => {
       const path = new URL(req.url).pathname;
       const rel =

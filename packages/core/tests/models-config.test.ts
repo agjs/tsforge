@@ -93,6 +93,41 @@ test("parseModelsConfig rejects bad shapes with actionable errors", () => {
   ).toThrow(/not one of/);
 });
 
+// P2 (review): a hand-edited `"maxTokens": "8192"` (string) passed validation and
+// reached the request body as a string, which the provider rejects confusingly.
+// Numeric fields must be type-checked with an actionable message.
+test("parseModelsConfig requires maxTokens / contextWindow to be positive integers", () => {
+  // Wrong type (string), non-integer (float), and non-positive all rejected.
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m", maxTokens: "8192" } },
+    })
+  ).toThrow(/maxTokens must be a positive integer/);
+
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m", maxTokens: 8192.5 } },
+    })
+  ).toThrow(/maxTokens must be a positive integer/);
+
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m", contextWindow: 0 } },
+    })
+  ).toThrow(/contextWindow must be a positive integer/);
+
+  // A correct integer still parses.
+  expect(
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m", maxTokens: 8192 } },
+    }).models.a?.maxTokens
+  ).toBe(8192);
+});
+
 test("setActiveModel switches + persists; unknown name throws with the options", async () => {
   await saveModelsConfig({
     active: "qwen-local",

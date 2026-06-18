@@ -130,11 +130,12 @@ async function main(): Promise<number> {
   });
 
   // The REPL's configureWeb, inlined: scaffold + deps + switch to the web gate.
-  session.setSetupWeb(async (framework) => {
+  session.setSetupWeb(async (framework, options) => {
     const fw = framework === "vanilla" ? "vanilla" : "react";
 
-    await scaffoldWeb(dir, fw);
-    await installWebDeps(dir);
+    const files = await scaffoldWeb(dir, fw);
+    const depsInstalled = await installWebDeps(dir, options);
+
     session.setGate(buildWebGate(fw).command);
     session.setFix(buildWebFix(fw));
     session.setIncrementalCheck(buildWebTscCheck());
@@ -143,6 +144,8 @@ async function main(): Promise<number> {
     session.guide(webGuidance(fw));
     session.setMaxTurns(LOOP_LIMITS.webMaxTurns);
     verdict.scaffolded = true;
+
+    return { files, depsInstalled };
   });
 
   let result: ISendResult;

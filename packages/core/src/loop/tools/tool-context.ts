@@ -4,6 +4,15 @@ import type { Reporter } from "../loop.types";
 import type { SessionSnapshotStore } from "../../files/hashline";
 import type { McpRegistry } from "../../mcp";
 
+/** Turn a workspace into a web project. Resolves with the files actually written
+ *  (mutation accounting / re-gate) and whether dependency install succeeded. The
+ *  optional `signal` lets the caller cancel the (potentially slow) dependency
+ *  install when the turn is aborted (Ctrl-C), not just on the kill-timeout. */
+export type SetupWebFn = (
+  framework: string,
+  options?: { signal?: AbortSignal }
+) => Promise<{ files: readonly string[]; depsInstalled: boolean }>;
+
 export interface IToolContext {
   cwd: string;
   /** Editable scope — `edit`/`create` outside it are rejected. */
@@ -25,8 +34,11 @@ export interface IToolContext {
    *  the session to the web gate/guidance. Wired by the interactive CLI so the
    *  AGENT decides whether to scaffold (via the `scaffold_web` tool) instead of a
    *  brittle up-front classifier. Absent where unsupported (headless already
-   *  scaffolds up front), in which case the tool reports it's unavailable. */
-  setupWeb?: (framework: string) => Promise<void>;
+   *  scaffolds up front), in which case the tool reports it's unavailable.
+   *  Resolves with the files it actually wrote (for mutation accounting / re-gate)
+   *  and whether dependency install succeeded (so the tool can tell the model the
+   *  truth instead of always claiming "deps installed"). */
+  setupWeb?: SetupWebFn;
   /** PLAN MODE: mutating tools are rejected at dispatch and `run` only accepts
    *  read-only commands — the hard guarantee behind the filtered tool list (a
    *  salvaged/forced call could otherwise still write). */

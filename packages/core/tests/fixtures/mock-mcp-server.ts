@@ -53,6 +53,13 @@ function handle(message: unknown): void {
       },
     });
   } else if (message.method === "tools/call") {
+    // Crash mode (opt-in via env): exit WITHOUT responding to a call, to simulate
+    // a server that dies mid-session. Exercises the transport's connection-closed
+    // handling — the in-flight request must fail fast, not wait out its timeout.
+    if (process.env.MOCK_MCP_CRASH_ON_CALL === "1") {
+      process.exit(1);
+    }
+
     send({
       jsonrpc: "2.0",
       id,

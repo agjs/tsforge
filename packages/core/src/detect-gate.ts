@@ -3,6 +3,11 @@ import { existsSync } from "node:fs";
 import { ESLint } from "eslint";
 import { WEB_TEMPLATES, type WebFramework } from "./web-templates";
 import { isRecord } from "./lib/guards";
+import { runArgvCommand } from "./lib/fs/process";
+
+/** Hard ceiling for `bun install` during web scaffolding (5 min) — long enough for
+ *  a cold registry, short enough that a wedged install can't hang the session. */
+const INSTALL_TIMEOUT_MS = 300_000;
 
 /**
  * Build the gate that confirms "done" — and makes tsforge a TypeScript-SPECIALIZED
@@ -281,16 +286,23 @@ export function makeFileLinter(
 
 /** Lay down a stack's opinionated skeleton (non-destructive — only missing files).
  *  Dependency install is separate (`installWebDeps`) so this stays pure + fast +
- *  offline-testable. */
+ *  offline-testable. Returns the paths it ACTUALLY wrote (skips files already on
+ *  disk) so the caller can report them as a mutation and re-gate. */
 export async function scaffoldWeb(
   cwd: string,
   framework: WebFramework
-): Promise<void> {
+): Promise<readonly string[]> {
+  const written: string[] = [];
+
   for (const [path, content] of Object.entries(
     WEB_TEMPLATES[framework].files
   )) {
-    await ensureFile(cwd, path, content);
+    if (await ensureFile(cwd, path, content)) {
+      written.push(path);
+    }
   }
+
+  return written;
 }
 
 /**
@@ -365,21 +377,26 @@ export function webGuidance(framework: WebFramework): string {
 
 /** Install the scaffold's dependencies (react/vite/tailwind/…) with bun, streaming
  *  progress to the terminal. Required before the gate's tsc + vite build can run.
- *  Skipped when deps are already present. Returns false on a failed install. */
-export async function installWebDeps(cwd: string): Promise<boolean> {
-  if (!(await Bun.file(join(cwd, "node_modules", ".bin", "vite")).exists())) {
-    const proc = Bun.spawn(["bun", "install"], {
-      cwd,
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-
-    if ((await proc.exited) !== 0) {
-      return false;
-    }
+ *  Skipped when deps are already present. Returns false on a failed/timed-out
+ *  install. Routes through the shared `runArgvCommand` so the install honours the
+ *  same cancellation + kill-timeout as every other harness command (a wedged
+ *  registry can't hang the session forever). */
+export async function installWebDeps(
+  cwd: string,
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {}
+): Promise<boolean> {
+  if (await Bun.file(join(cwd, "node_modules", ".bin", "vite")).exists()) {
+    return true;
   }
 
-  return true;
+  const { signal, timeoutMs = INSTALL_TIMEOUT_MS } = opts;
+  const run = await runArgvCommand(cwd, ["bun", "install"], {
+    timeoutMs,
+    onChunk: (text) => process.stdout.write(text),
+    ...(signal === undefined ? {} : { signal }),
+  });
+
+  return run.exitCode === 0 && !run.timedOut;
 }
 
 /** The full web ladder: `vite build` + tsc strict + web eslint (vendored-exempt) +
@@ -617,16 +634,22 @@ export async function formatFile(cwd: string, file: string): Promise<void> {
   }
 }
 
+/** Write `content` to `name` only if it doesn't already exist. Returns true when
+ *  it actually wrote (so the caller can account for the mutation). */
 async function ensureFile(
   cwd: string,
   name: string,
   content: string
-): Promise<void> {
+): Promise<boolean> {
   const file = Bun.file(join(cwd, name));
 
-  if (!(await file.exists())) {
-    await Bun.write(file, content);
+  if (await file.exists()) {
+    return false;
   }
+
+  await Bun.write(file, content);
+
+  return true;
 }
 
 /** The bundled `prettier --write` command. Prepended to the EVAL gate so the

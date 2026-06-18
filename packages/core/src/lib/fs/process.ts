@@ -66,29 +66,54 @@ export async function runArgvCommand(
   let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
 
   try {
-    proc = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
+    // `detached: true` makes the child its OWN process-group leader (pgid == pid),
+    // so the kill below can take down the whole group — the `sh -c` wrapper AND any
+    // `&`-backgrounded grandchildren. Without it, killing only the wrapper leaves a
+    // `(sleep …; touch x) &` child running, which then reparents to init and can
+    // still mutate the workspace after a timeout/abort. (setsid isn't on macOS, so
+    // `detached` is the portable way to get a new group.)
+    proc = Bun.spawn(argv, {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      detached: true,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 
     return { stdout: "", stderr: message, exitCode: 127, timedOut: false };
   }
 
+  // Signal the whole process group (negative pid). Falls back to the lone child if
+  // the group is already gone (ESRCH) or not permitted (EPERM) — never throws.
+  const killGroup = (): void => {
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch {
+      try {
+        proc.kill();
+      } catch {
+        // already exited
+      }
+    }
+  };
+
   let timedOut = false;
   const timer =
     timeoutMs > 0
       ? setTimeout(() => {
           timedOut = true;
-          proc.kill();
+          killGroup();
         }, timeoutMs)
       : null;
 
   const onAbort = (): void => {
-    proc.kill();
+    killGroup();
   };
 
   if (signal !== undefined) {
     if (signal.aborted) {
-      proc.kill();
+      killGroup();
     } else {
       signal.addEventListener("abort", onAbort, { once: true });
     }

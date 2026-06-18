@@ -17,7 +17,7 @@ import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
-import { executeTool } from "./tools";
+import { executeTool, type SetupWebFn } from "./tools";
 import {
   astGrepFix,
   dropRedundantAnnotations,
@@ -154,7 +154,7 @@ export interface ILoopCtx {
   signal?: AbortSignal;
   /** Wired by the interactive CLI: turn this workspace into a web project (the
    *  `scaffold_web` tool calls it). Threaded into the tool context. */
-  setupWeb?: (framework: string) => Promise<void>;
+  setupWeb?: SetupWebFn;
   /** VENDORED file globs the model must not rewrite (web-scaffold sessions only).
    *  Threaded into the tool context; absent ⇒ the vendored guard is inert. */
   vendored?: readonly string[];
