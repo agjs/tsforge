@@ -83,17 +83,37 @@ export default defineConfig({
         "./src/styles/tailwind.css",
         "./src/styles/custom.css",
         "./src/styles/landing.css",
+        "./src/styles/redesign.css",
       ],
       tableOfContents: false,
       components: {
         Footer: "./src/components/Footer.astro",
         Header: "./src/components/Header.astro",
-        Hero: "./src/components/LandingHero.astro",
+        Hero: "./src/components/Landing.astro",
         PageTitle: "./src/components/PageTitle.astro",
         Pagination: "./src/components/Pagination.astro",
         ThemeProvider: "./src/components/ThemeProvider.astro",
       },
       head: [
+        {
+          tag: "link",
+          attrs: { rel: "preconnect", href: "https://fonts.googleapis.com" },
+        },
+        {
+          tag: "link",
+          attrs: {
+            rel: "preconnect",
+            href: "https://fonts.gstatic.com",
+            crossorigin: true,
+          },
+        },
+        {
+          tag: "link",
+          attrs: {
+            rel: "stylesheet",
+            href: "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap",
+          },
+        },
         {
           tag: "meta",
           attrs: { property: "og:type", content: "website" },

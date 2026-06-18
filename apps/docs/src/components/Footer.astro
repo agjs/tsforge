@@ -2,15 +2,95 @@
 import EditLink from "virtual:starlight/components/EditLink";
 import LastUpdated from "virtual:starlight/components/LastUpdated";
 import Pagination from "virtual:starlight/components/Pagination";
-import config from "virtual:starlight/user-config";
-import { Icon } from "@astrojs/starlight/components";
+import pkg from "../../package.json";
 
 const route = Astro.locals.starlightRoute;
 const isLanding = route.id === "" || route.id === "index";
+const version = `v${pkg.version}`;
+
+const cols: { title: string; links: { label: string; href: string }[] }[] = [
+  {
+    title: "Product",
+    links: [
+      { label: "Quickstart", href: "/quickstart/" },
+      { label: "How it works", href: "/big-picture/" },
+      { label: "CLI", href: "/cli/interactive/" },
+      { label: "Review", href: "/cli/review/" },
+    ],
+  },
+  {
+    title: "Reference",
+    links: [
+      { label: "Commands", href: "/reference/commands/" },
+      { label: "Rule catalog", href: "/reference/rules-catalog/" },
+      { label: "Config", href: "/guardrails/config/" },
+      { label: "Roadmap", href: "/reference/roadmap/" },
+    ],
+  },
+  {
+    title: "Under the hood",
+    links: [
+      { label: "The gate", href: "/loop/gate-floor/" },
+      { label: "LSP", href: "/lsp/typescript-server/" },
+      { label: "MCP", href: "/integrations/mcp/" },
+      { label: "Models", href: "/inference/models-json/" },
+    ],
+  },
+  {
+    title: "Project",
+    links: [
+      { label: "GitHub", href: "https://github.com/agjs/tsforge" },
+      { label: "npm", href: "https://www.npmjs.com/package/@agjs/tsforge" },
+      { label: "License", href: "https://github.com/agjs/tsforge/blob/main/LICENSE" },
+    ],
+  },
+];
 ---
 
 {
-  !isLanding && (
+  isLanding ? (
+    <footer class="tf-landing-footer bg-background text-foreground">
+      <div class="mx-auto max-w-[1400px] px-6 py-16 grid grid-cols-2 md:grid-cols-5 gap-8">
+        <div class="col-span-2 md:col-span-1">
+          <div class="flex items-center gap-2">
+            <span class="grid h-6 w-6 place-items-center bg-primary text-primary-foreground font-mono text-[11px] font-bold">
+              ƒ
+            </span>
+            <span class="font-mono text-[15px] text-foreground">tsforge</span>
+          </div>
+          <p class="mt-4 font-mono text-[11px] text-muted-foreground max-w-[26ch]">
+            A TypeScript harness for full-stack apps. Strict by default.
+          </p>
+        </div>
+        {cols.map((c) => (
+          <div>
+            <div class="mono-caps mb-4">{c.title}</div>
+            <ul class="space-y-2.5">
+              {c.links.map((l) => (
+                <li>
+                  <a
+                    href={l.href}
+                    class="text-[13px] text-muted-foreground no-underline hover:text-foreground transition-colors"
+                  >
+                    {l.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+      <div class="hairline-t">
+        <div class="mx-auto max-w-[1400px] px-6 py-5 flex flex-wrap items-center justify-between font-mono text-[11px] text-muted-foreground gap-3">
+          <span>© 2026 tsforge · MIT</span>
+          <span>
+            build · <span class="text-foreground">{version}</span> · gate{" "}
+            <span class="text-success">passing</span>
+          </span>
+        </div>
+      </div>
+    </footer>
+  ) : (
     <footer class="not-content mt-[3.4rem] flex flex-col gap-[1.35rem] border-t border-[var(--sl-color-gray-6)] pt-[1.1rem]">
       <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 text-sm text-[var(--sl-color-gray-3)] [&_a]:inline-flex [&_a]:min-h-8 [&_a]:items-center [&_a]:gap-2 [&_a]:rounded-full [&_a]:border [&_a]:border-transparent [&_a]:px-2.5 [&_a]:py-1 [&_a]:text-[var(--sl-color-gray-3)] [&_a]:no-underline [&_a]:transition-colors [&_a:hover]:border-[color-mix(in_srgb,var(--sl-color-accent)_34%,transparent)] [&_a:hover]:bg-[color-mix(in_srgb,var(--sl-color-accent)_10%,transparent)] [&_a:hover]:text-[var(--sl-color-white)] [&_p]:m-0 [&_p]:text-[var(--sl-color-gray-3)] [&_time]:text-[var(--sl-color-gray-2)]">
         <EditLink />
@@ -18,17 +98,6 @@ const isLanding = route.id === "" || route.id === "index";
       </div>
 
       <Pagination />
-
-      {
-        config.credits && (
-          <a
-            class="mx-auto my-5 inline-flex w-fit items-center gap-2 text-xs text-[var(--sl-color-gray-3)] no-underline hover:text-[var(--sl-color-white)] [&_svg]:text-[var(--sl-color-orange)]"
-            href="https://starlight.astro.build"
-          >
-            <Icon name="starlight" /> {Astro.locals.t("builtWithStarlight.label")}
-          </a>
-        )
-      }
     </footer>
   )
 }

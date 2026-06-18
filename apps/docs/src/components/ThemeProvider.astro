@@ -1,46 +1,52 @@
 ---
 /*
- * Starlight ThemeProvider override.
+ * Starlight ThemeProvider override — dark-only.
  *
- * Default behaviour reads OS prefers-color-scheme and uses light for
- * users whose OS is light. We force dark as the default for first-time
- * visitors so the docs match the brand surface; the toggle still works
- * and the user's pick persists in localStorage, so we only override the
- * "no stored preference" branch.
+ * The site uses a single OKLCH dark palette (the Lovable "TypeSafe Haven"
+ * design has no light variant), so we force `data-theme="dark"` unconditionally
+ * and drop the picker. Inlined to avoid any flash.
  */
-import { Icon } from "@astrojs/starlight/components";
 ---
 
-{/* Inlined to avoid FOUC. */}
 <script is:inline>
-  window.StarlightThemeProvider = (() => {
-    const storedTheme =
-      typeof localStorage !== "undefined" &&
-      localStorage.getItem("starlight-theme");
-    const theme = storedTheme || "dark";
-    document.documentElement.dataset.theme = theme === "light" ? "light" : "dark";
-    return {
-      updatePickers(theme = storedTheme || "auto") {
-        document.querySelectorAll("starlight-theme-select").forEach((picker) => {
-          const select = picker.querySelector("select");
-          if (select) select.value = theme;
-          /** @type {HTMLTemplateElement | null} */
-          const tmpl = document.querySelector(`#theme-icons`);
-          const newIcon = tmpl && tmpl.content.querySelector("." + theme);
-          if (newIcon) {
-            const oldIcon = picker.querySelector("svg.label-icon");
-            if (oldIcon) {
-              oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
-            }
-          }
-        });
-      },
-    };
-  })();
+  document.documentElement.dataset.theme = "dark";
+  window.StarlightThemeProvider = {
+    updatePickers() {
+      /* dark-only — nothing to update */
+    },
+  };
 </script>
 
-<template id="theme-icons">
-  <Icon name="sun" class="light" />
-  <Icon name="moon" class="dark" />
-  <Icon name="laptop" class="auto" />
-</template>
+{/* Click-to-zoom for mermaid diagrams: opens the rendered SVG in a native
+    dialog (styled via .mermaid-zoom-dialog in custom.css). */}
+<script>
+  function setupMermaidZoom(): void {
+    const diagrams = document.querySelectorAll<HTMLElement>(".mermaid");
+    diagrams.forEach((el) => {
+      if (el.dataset.zoomReady === "1") return;
+      el.dataset.zoomReady = "1";
+      el.style.cursor = "zoom-in";
+      el.addEventListener("click", () => {
+        const svg = el.querySelector("svg");
+        if (svg === null) return;
+        const dialog = document.createElement("dialog");
+        dialog.className = "mermaid-zoom-dialog";
+        dialog.appendChild(svg.cloneNode(true));
+        document.body.appendChild(dialog);
+        dialog.addEventListener("click", () => dialog.close());
+        dialog.addEventListener("close", () => dialog.remove());
+        dialog.showModal();
+      });
+    });
+  }
+
+  const run = (): void => {
+    setupMermaidZoom();
+    // Mermaid renders asynchronously; re-scan shortly after load.
+    window.setTimeout(setupMermaidZoom, 600);
+    window.setTimeout(setupMermaidZoom, 1500);
+  };
+
+  document.addEventListener("astro:page-load", run);
+  run();
+</script>
