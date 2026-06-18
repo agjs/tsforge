@@ -154,7 +154,15 @@ test("scaffoldWeb(react) lays the full kit; gate builds with Vite + browser", as
     expect(gate.command).toContain("src/components/ui/**"); // vendored exempt
     expect(gate.command).toContain("*.gen.ts"); // generated exempt
     expect(gate.command).toContain("dist/index.html"); // render the BUILT app
+    expect(gate.command).toContain("bun test"); // runs the model's tests when present
     expect(gate.label).toContain("Vite");
+
+    // Test files use bun:test (a test runtime) and are EXCLUDED from the app's
+    // tsconfig — else the gate's tsc fails to resolve `bun:test` and every test
+    // the model writes reds the gate (the live web-eval bug). bun test runs them.
+    const tsconfig = await readFile(join(dir, "tsconfig.json"), "utf8");
+
+    expect(tsconfig).toContain("*.test.ts");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

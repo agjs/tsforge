@@ -114,7 +114,7 @@ const REACT_TSCONFIG = `{
     "paths": { "@/*": ["./src/*"] }
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", "dist", "build"]
+  "exclude": ["node_modules", "dist", "build", "**/*.test.ts", "**/*.test.tsx"]
 }
 `;
 
@@ -639,7 +639,7 @@ const VANILLA_TSCONFIG = `{
     "noEmit": true
   },
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "dist", "build"]
+  "exclude": ["node_modules", "dist", "build", "**/*.test.ts", "**/*.test.tsx"]
 }
 `;
 

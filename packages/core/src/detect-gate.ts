@@ -486,9 +486,17 @@ export function buildWebGate(
     : null;
   const lintChain = typeAware === null ? lint : `${lint} && ${typeAware}`;
 
+  // Run the project's bun tests when any exist. Test files use `bun:test` (a test
+  // runtime, not part of the app build) — they're EXCLUDED from the app's tsconfig
+  // so `tsc` doesn't choke on `bun:test`, and run here instead so a broken test
+  // still fails the gate. Guarded because `bun test` exits non-zero when it finds
+  // NO tests, which would wrongly fail a freshly scaffolded app. Re-evaluated each
+  // gate run, so tests the model adds mid-build are picked up.
+  const tests = `if find src -name '*.test.ts' -o -name '*.test.tsx' 2>/dev/null | grep -q .; then bun test; fi`;
+
   return {
-    command: `${build} && ${tsc} && ${lintChain} && ${stubs} && ${format} && ${render}`,
-    label: `${template.label} (build + behaviour smoke)`,
+    command: `${build} && ${tsc} && ${lintChain} && ${stubs} && ${format} && ${tests} && ${render}`,
+    label: `${template.label} (build + tests + behaviour smoke)`,
   };
 }
 
