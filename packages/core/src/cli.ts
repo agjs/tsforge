@@ -137,6 +137,9 @@ export interface ICliArgs {
   /** Run the gate first and tell the reviewer to skip what it already covers
    *  (`tsforge review --with-gate`). */
   withGate: boolean;
+  /** Seed a brownfield run with a deterministic caller blast-radius scout
+   *  (`--scout`). */
+  scout: boolean;
   /** Explicit base ref to diff against for review (`--base <ref>`). */
   base: string;
   /** Build a structural workspace map (`tsforge map`). */
@@ -171,6 +174,7 @@ const BOOL_FLAGS: Record<
   | "strictFloorOnly"
   | "staged"
   | "withGate"
+  | "scout"
 > = {
   "--continue": "continue",
   "-c": "continue",
@@ -181,6 +185,7 @@ const BOOL_FLAGS: Record<
   "--strict-floor-only": "strictFloorOnly",
   "--staged": "staged",
   "--with-gate": "withGate",
+  "--scout": "scout",
 };
 
 const VALUE_FLAGS = new Set([
@@ -214,6 +219,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     review: false,
     staged: false,
     withGate: false,
+    scout: false,
     base: "",
     map: false,
     trace: false,
@@ -344,6 +350,7 @@ function applyRecipeFlags(args: ICliArgs, recipe: ITaskRecipe): void {
   args.plan = args.plan || recipe.plan === true;
   args.log = args.log || recipe.log === true;
   args.withGate = args.withGate || recipe.withGate === true;
+  args.scout = args.scout || recipe.scout === true;
 }
 
 // Default editable scope: the whole workspace — like any agentic CLI, the agent
@@ -879,6 +886,7 @@ async function runOnce(args: ICliArgs): Promise<number> {
     onEvent: makeReporter(logFile, "cli"),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
+    ...(args.scout ? { scout: true } : {}),
   });
   const ok = result.status === RUN_STATUS.done;
 
@@ -1109,6 +1117,15 @@ async function repl(args: ICliArgs): Promise<number> {
 
   if (logFile.length > 0) {
     process.stdout.write(`  ↳ logging this run to ${logFile}\n`);
+  }
+
+  // Scout seeds a one-shot drive-to-green run's first prompt; interactive sessions
+  // gather context conversationally, so it doesn't apply here. Say so rather than
+  // silently ignore the flag.
+  if (args.scout) {
+    process.stdout.write(
+      '  ↳ note: --scout applies to one-shot runs (tsforge "task" --files … --scout); ignored in interactive mode\n'
+    );
   }
 
   const thinkingTokenBudget = envNumber("TSFORGE_THINKING_BUDGET");

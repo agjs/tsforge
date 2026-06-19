@@ -117,6 +117,9 @@ export interface IRunOptions {
   thinkingTokenBudget?: number;
   /** Hard backstop on model turns (default LOOP_LIMITS.maxTurns). */
   maxTurns?: number;
+  /** Seed the run with a deterministic pre-edit scout bundle (caller blast-radius
+   *  of the editable files). Opt-in; only fires on brownfield (existing-code) runs. */
+  scout?: boolean;
 }
 
 export interface ISpecResult {

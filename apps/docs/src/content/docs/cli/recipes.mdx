@@ -50,6 +50,7 @@ A project recipe **overrides** a global one with the same id. `tsforge recipes` 
 | `thinkingBudget` | run limit | reasoning-token cap per call |
 | `policyMode` | `--policy-mode` | `plan` / `default` / `acceptEdits` / `ci` / `dontAsk` / `bypassPermissions` |
 | `base`, `staged` | `--base` / `--staged` | for review-style runs |
+| `scout` | `--scout` | seed a [pre-edit blast-radius scout](/loop/scout/) |
 | `web`, `plan`, `log`, `strictFloorOnly` | the matching flags | booleans |
 
 A recipe is, in effect, a saved set of CLI options: `tsforge run <id>` applies them, and you can also combine `--recipe <id>` with other commands (e.g. `tsforge review --recipe …`). **An explicit CLI flag always wins** over the recipe, so `tsforge run api-endpoint --files lib/**` overrides just the scope.

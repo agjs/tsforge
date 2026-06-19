@@ -63,6 +63,16 @@ test("`tsforge recipes` and `--recipe <id>` are recognized", () => {
   );
 });
 
+test("--scout parses, and a recipe can turn scout on", () => {
+  expect(parseArgs(["fix it", "--scout"]).scout).toBe(true);
+  expect(parseArgs(["fix it"]).scout).toBe(false);
+
+  const args = parseArgs(["fix it"]);
+
+  applyRecipe(args, { id: "brownfield", scout: true });
+  expect(args.scout).toBe(true);
+});
+
 test("applyRecipe fills defaults but an explicit CLI value always wins", () => {
   const recipe: ITaskRecipe = {
     id: "api-endpoint",

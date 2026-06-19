@@ -116,4 +116,16 @@ describe("eval metrics: analyzeEvents", () => {
     expect(m.finalStatus).toBe("done");
     expect(m.avgTokensPerSecond).toBe(40);
   });
+
+  test("wall-clock accumulates ms then rounds once (sub-second turns don't vanish)", () => {
+    // Three 400ms turns = 1200ms. Per-event rounding floored each to 0s (→ 0s
+    // total); accumulate-then-round gives the correct 1s.
+    const subSecond: ILoopEvent[] = [
+      { kind: "timing", task: "1", message: "", ms: 400 },
+      { kind: "timing", task: "1", message: "", ms: 400 },
+      { kind: "timing", task: "1", message: "", ms: 400 },
+    ];
+
+    expect(analyzeEvents(subSecond).wallClockSeconds).toBe(1);
+  });
 });

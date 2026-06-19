@@ -2,7 +2,7 @@ import type { ITask } from "../spec";
 import type { IChatMessage, IModelResponse, IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate";
 import { parseEslintJson } from "../validate";
-import { readFiles } from "../lib/fs";
+import { readFiles, type IFileView } from "../lib/fs";
 import {
   DEFAULT_TEMPERATURE,
   RUN_STATUS,
@@ -20,6 +20,7 @@ import { flags } from "../config";
 import type { ITsforgeProjectConfig } from "../config";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { buildSystemPrompt, seedPrompt } from "./prompt";
+import { buildScoutContext } from "./scout";
 import { detectStack } from "../stack-detection";
 import type { TtsrManager } from "./ttsr";
 import {
@@ -228,6 +229,22 @@ async function resolveStackForRun(
  * This is the RED-first, drive-to-green wrapper the EVAL harness uses; the
  * interactive CLI composes the same `turn.ts` primitives via `Session`.
  */
+function scoutSeed(
+  opts: IRunOptions,
+  tsService: Parameters<typeof buildScoutContext>[0],
+  cwd: string,
+  editable: readonly IFileView[],
+  hasExistingCode: boolean
+): string {
+  // Opt-in, brownfield-only (a from-scratch build has no callers to map). Kept out
+  // of runTask so its branch doesn't add to that function's complexity.
+  if (opts.scout !== true || !hasExistingCode) {
+    return "";
+  }
+
+  return buildScoutContext(tsService, cwd, editable);
+}
+
 export async function runTask(
   task: ITask,
   cwd: string,
@@ -317,6 +334,11 @@ export async function runTask(
   // gates the scratch-simplicity guidance (from-scratch builds only).
   const hasExistingCode = editable.some((f) => f.content.trim().length > 0);
 
+  // Build the LanguageService once, up front: scout needs it to seed the prompt,
+  // and the loop reuses it (don't build twice).
+  const tsService = await buildTsService(cwd);
+  const scout = scoutSeed(opts, tsService, cwd, editable, hasExistingCode);
+
   const messages: IChatMessage[] = [
     {
       role: "system",
@@ -324,7 +346,7 @@ export async function runTask(
     },
     {
       role: "user",
-      content: seedPrompt(task, editable, context, stackProfile),
+      content: seedPrompt(task, editable, context, stackProfile, scout),
     },
   ];
 
@@ -342,7 +364,7 @@ export async function runTask(
   const ctx: ILoopCtx = {
     task,
     cwd,
-    tsService: await buildTsService(cwd),
+    tsService,
     parse: effectiveParse,
     report,
     messages,

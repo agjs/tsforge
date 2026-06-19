@@ -208,6 +208,21 @@ test("without a gate signal the find prompt has no gate clause (back-compat)", a
   expect(sink.value.toLowerCase()).not.toContain("already failing");
 });
 
+test("formatReport shows the gate-aware note even when 0 findings", () => {
+  // A --with-gate run that skipped rules but found nothing must still say so —
+  // otherwise it reads as "all clear" with no hint the gate had failures.
+  const text = formatReport({
+    base: "HEAD",
+    changedFiles: ["a.ts"],
+    findings: [],
+    rejected: 3,
+    gateFailingRules: ["TS2322", "no-as-cast"],
+  });
+
+  expect(text).toContain("No functional issues found");
+  expect(text).toContain("gate-aware: skipped 2");
+});
+
 test("the senior-review rubric ships with the expected lenses", () => {
   const ids = LENSES.map((l) => l.id);
 

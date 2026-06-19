@@ -46,10 +46,18 @@ export interface ITaskRecipe {
   readonly log?: boolean;
   /** Run a gate-aware functional review after green (→ `review --with-gate`). */
   readonly withGate?: boolean;
+  /** Seed a deterministic pre-edit caller blast-radius scout (→ `--scout`). */
+  readonly scout?: boolean;
 }
 
 function optString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function optBool(value: unknown): boolean | undefined {
@@ -99,6 +107,7 @@ function assignFlags(recipe: Mutable, raw: Record<string, unknown>): void {
   recipe.plan = optBool(raw.plan);
   recipe.log = optBool(raw.log);
   recipe.withGate = optBool(raw.withGate);
+  recipe.scout = optBool(raw.scout);
 }
 
 type Mutable = { -readonly [K in keyof ITaskRecipe]: ITaskRecipe[K] };
@@ -123,6 +132,7 @@ const KNOWN_KEYS = new Set<string>([
   "plan",
   "log",
   "withGate",
+  "scout",
 ]);
 
 /** Keys present in the raw recipe that this version doesn't recognize. */

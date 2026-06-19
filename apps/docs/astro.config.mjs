@@ -172,6 +172,7 @@ export default defineConfig({
             { label: "Drive a change to green", link: "/workflows/fix-to-green/" },
             { label: "Review your changes", link: "/cli/review/" },
             { label: "Recipes", link: "/cli/recipes/" },
+            { label: "Pre-edit scout", link: "/loop/scout/" },
             { label: "Map the repo", link: "/cli/map/" },
             { label: "Plan mode", link: "/cli/plan-mode/" },
           ],
