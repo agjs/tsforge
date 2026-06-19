@@ -183,10 +183,21 @@ export async function runArgvCommand(
     // ALWAYS bound the final drain: a backgrounded/orphaned grandchild can hold the
     // output pipe open long after the process we waited on is gone (Bun also leaves
     // a killed process's streams open), so the pumps could otherwise never resolve.
+    // Clear the deadline when the pumps win so no timer lingers after a fast command.
+    const flush: { timer: ReturnType<typeof setTimeout> | null } = {
+      timer: null,
+    };
+
     await Promise.race([
       pumps,
-      new Promise<void>((resolve) => setTimeout(resolve, FLUSH_GRACE_MS)),
+      new Promise<void>((resolve) => {
+        flush.timer = setTimeout(resolve, FLUSH_GRACE_MS);
+      }),
     ]);
+
+    if (flush.timer !== null) {
+      clearTimeout(flush.timer);
+    }
 
     return { stdout: buf.out, stderr: buf.err, exitCode, timedOut };
   } finally {

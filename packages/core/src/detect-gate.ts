@@ -1,5 +1,5 @@
 import { join, dirname } from "node:path";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { ESLint } from "eslint";
 import { WEB_TEMPLATES, type WebFramework } from "./web-templates";
 import { isRecord } from "./lib/guards";
@@ -200,17 +200,39 @@ function ensureWebGateTsconfig(cwd: string): string {
 
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, WEB_GATE_TSCONFIG_FILE), STRICT_WEB_TSCONFIG_OVERLAY);
-
-  const ignore = join(dir, ".gitignore");
-
-  if (!existsSync(ignore)) {
-    writeFileSync(
-      ignore,
-      `${WEB_GATE_TSCONFIG_FILE}\n${GATE_TSCONFIG_FILE}\n${GATE_TSBUILDINFO_FILE}\n`
-    );
-  }
+  ensureGateIgnore(dir);
 
   return `${GATE_TSCONFIG_DIR}/${WEB_GATE_TSCONFIG_FILE}`;
+}
+
+/** Keep tsforge's `.tsforge/` cache artifacts out of git WITHOUT clobbering a
+ *  pre-existing `.tsforge/.gitignore` (a previous core-gate run, or one the user
+ *  authored): create it if absent, otherwise APPEND only the entries it's missing
+ *  so the web-gate overlay never shows up in `git status`. */
+function ensureGateIgnore(dir: string): void {
+  const ignore = join(dir, ".gitignore");
+  const entries = [
+    WEB_GATE_TSCONFIG_FILE,
+    GATE_TSCONFIG_FILE,
+    GATE_TSBUILDINFO_FILE,
+  ];
+
+  if (!existsSync(ignore)) {
+    writeFileSync(ignore, `${entries.join("\n")}\n`);
+
+    return;
+  }
+
+  const current = readFileSync(ignore, "utf8");
+  const have = new Set(current.split("\n").map((line) => line.trim()));
+  const missing = entries.filter((entry) => !have.has(entry));
+
+  if (missing.length > 0) {
+    writeFileSync(
+      ignore,
+      `${current.replace(/\n*$/u, "\n")}${missing.join("\n")}\n`
+    );
+  }
 }
 
 // The web-stack scaffolds (Vite + React full-kit, or Vite vanilla) live in the

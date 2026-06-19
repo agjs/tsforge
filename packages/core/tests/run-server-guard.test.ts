@@ -29,6 +29,12 @@ test("flags never-exiting dev servers and watchers", () => {
     "sudo npm run dev",
     "PORT=3000 bun run dev",
     "vite || echo fail",
+    // delegated through a package runner — the binary's OWN flags must be checked,
+    // not stripped (these previously bypassed the guard)
+    "npx tsc --watch",
+    "npx tsc -w -p tsconfig.json",
+    "bunx tail -f log.txt",
+    "bun x vite",
   ];
 
   for (const cmd of servers) {
@@ -46,6 +52,7 @@ test("lets one-shot commands (incl. builds) through", () => {
     "astro build",
     "ng build",
     "npx vite build",
+    "npx tsc --noEmit", // delegated one-shot typecheck — not a watcher
     "tsc --noEmit",
     "tail -n 50 log.txt",
     "ls -la",

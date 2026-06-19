@@ -299,6 +299,45 @@ function binaryIsServer(base: string, sub: string | undefined): boolean {
   return SUBCOMMAND_SERVER_BINARIES.has(base) && SERVER_SUBCOMMANDS.has(sub);
 }
 
+/** A resolved command head + its args (no package-runner indirection): a watcher
+ *  (`tsc --watch`, `tail -f`) or a server binary (`vite`, `vite dev`). */
+function headIsServer(base: string, rest: readonly string[]): boolean {
+  if (base === "tail") {
+    return rest.includes("-f") || rest.includes("-F");
+  }
+
+  if (base === "tsc") {
+    return rest.includes("-w") || rest.includes("--watch");
+  }
+
+  return binaryIsServer(
+    base,
+    rest.find((a) => !a.startsWith("-"))
+  );
+}
+
+/** A `<pm> [run|exec|x] <script-or-binary> [args]` invocation — a server SCRIPT
+ *  (`npm run dev`) or a DELEGATED binary, whose own flags must be re-checked so
+ *  `npx tsc --watch` / `bunx tail -f` don't slip past (the flags were stripped to
+ *  find the delegate). */
+function pkgRunnerIsServer(rest: string[]): boolean {
+  const args = rest.filter((a) => !a.startsWith("-"));
+  const start =
+    args[0] === "run" || args[0] === "exec" || args[0] === "x" ? 1 : 0;
+  const first = args[start];
+
+  if (first === undefined) {
+    return false;
+  }
+
+  if (SERVER_SUBCOMMANDS.has(first)) {
+    return true;
+  }
+
+  // Delegated binary (`npx <bin> …`): judge it by ITS OWN args, flags included.
+  return headIsServer(first, rest.slice(rest.indexOf(first) + 1));
+}
+
 /**
  * A long-running dev server / watcher that never exits on its own (`vite`,
  * `bun run dev`, `next dev`, `tsc --watch`, `tail -f`, …). Running one in the build
@@ -322,33 +361,11 @@ export function isLongRunningServerCommand(command: string): boolean {
   const base = head.split("/").pop() ?? head;
   const rest = tokens.slice(1);
 
-  if (base === "tail") {
-    return rest.includes("-f") || rest.includes("-F");
-  }
-
-  if (base === "tsc") {
-    return rest.includes("-w") || rest.includes("--watch");
-  }
-
   if (PKG_RUNNERS.has(base)) {
-    const args = rest.filter((a) => !a.startsWith("-"));
-    const start =
-      args[0] === "run" || args[0] === "exec" || args[0] === "x" ? 1 : 0;
-    const first = args[start];
-
-    if (first === undefined) {
-      return false;
-    }
-
-    return (
-      SERVER_SUBCOMMANDS.has(first) || binaryIsServer(first, args[start + 1])
-    );
+    return pkgRunnerIsServer(rest);
   }
 
-  return binaryIsServer(
-    base,
-    rest.find((a) => !a.startsWith("-"))
-  );
+  return headIsServer(base, rest);
 }
 
 export async function runShell(
