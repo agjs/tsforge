@@ -268,17 +268,37 @@ const SUBCOMMAND_SERVER_BINARIES = new Set([
  *  help and exit. */
 const BARE_SERVER_BINARIES = new Set(["vite", "vitest"]);
 
-/** Tokens of the FIRST command in a chain (head of `;`/`&&`/`||`/`|`), with env
- *  assignments and `sudo`/`env` wrappers stripped. */
-function leadingCommandTokens(command: string): string[] {
-  const first = command.trim().split(/&&|\|\||[;|]/)[0] ?? "";
-  const tokens = first
+/** Command wrappers that delegate to the REAL command after them (and their own
+ *  args), so the head must be taken from beyond them. */
+const COMMAND_WRAPPERS = new Set([
+  "sudo",
+  "env",
+  "exec",
+  "nohup",
+  "setsid",
+  "stdbuf",
+  "nice",
+  "time",
+  "command",
+]);
+
+/** Strip wrapping quotes / a leading `(` subshell / trailing `)` from a token so
+ *  `"npm"`, `'vite'`, `(npm` resolve to the bare command name. */
+function unwrapToken(token: string): string {
+  return token.replace(/^[("']+/u, "").replace(/[)"']+$/u, "");
+}
+
+/** Tokens of ONE shell segment, with quotes/parens stripped, env assignments
+ *  dropped, and leading wrapper commands (`sudo`/`env`/`exec`/…) skipped. */
+function segmentTokens(segment: string): string[] {
+  const tokens = segment
     .trim()
     .split(/\s+/)
+    .map(unwrapToken)
     .filter((t) => t.length > 0 && !t.includes("="));
   let i = 0;
 
-  while (i < tokens.length && (tokens[i] === "sudo" || tokens[i] === "env")) {
+  while (i < tokens.length && COMMAND_WRAPPERS.has(tokens[i] ?? "")) {
     i += 1;
   }
 
@@ -299,8 +319,29 @@ function binaryIsServer(base: string, sub: string | undefined): boolean {
   return SUBCOMMAND_SERVER_BINARIES.has(base) && SERVER_SUBCOMMANDS.has(sub);
 }
 
+/** Language-runtime built-in servers: `php -S`, `python -m http.server`,
+ *  `deno task <server>` / `deno run --watch`. */
+function isRuntimeServer(base: string, rest: readonly string[]): boolean {
+  if (base === "php") {
+    return rest.includes("-S");
+  }
+
+  if (base === "python" || base === "python3") {
+    return rest.includes("http.server");
+  }
+
+  if (base === "deno") {
+    return (
+      rest.includes("--watch") ||
+      (rest[0] === "task" && SERVER_SUBCOMMANDS.has(rest[1] ?? ""))
+    );
+  }
+
+  return false;
+}
+
 /** A resolved command head + its args (no package-runner indirection): a watcher
- *  (`tsc --watch`, `tail -f`) or a server binary (`vite`, `vite dev`). */
+ *  (`tsc --watch`, `tail -f`), a runtime server, or a server binary (`vite dev`). */
 function headIsServer(base: string, rest: readonly string[]): boolean {
   if (base === "tail") {
     return rest.includes("-f") || rest.includes("-F");
@@ -310,10 +351,33 @@ function headIsServer(base: string, rest: readonly string[]): boolean {
     return rest.includes("-w") || rest.includes("--watch");
   }
 
+  if (isRuntimeServer(base, rest)) {
+    return true;
+  }
+
   return binaryIsServer(
     base,
     rest.find((a) => !a.startsWith("-"))
   );
+}
+
+/** Is THIS single segment a foreground server/watcher? */
+function segmentIsServer(segment: string): boolean {
+  const tokens = segmentTokens(segment);
+  const head = tokens[0];
+
+  if (head === undefined) {
+    return false;
+  }
+
+  const base = head.split("/").pop() ?? head;
+  const rest = tokens.slice(1);
+
+  if (PKG_RUNNERS.has(base)) {
+    return pkgRunnerIsServer(rest);
+  }
+
+  return headIsServer(base, rest);
 }
 
 /** A `<pm> [run|exec|x] <script-or-binary> [args]` invocation — a server SCRIPT
@@ -340,32 +404,27 @@ function pkgRunnerIsServer(rest: string[]): boolean {
 
 /**
  * A long-running dev server / watcher that never exits on its own (`vite`,
- * `bun run dev`, `next dev`, `tsc --watch`, `tail -f`, …). Running one in the build
- * loop stalls it — the gate already builds AND headlessly smoke-tests the app, so
- * the model never needs to. Best-effort: the run tool's kill-timeout + bounded
- * drain are the hard backstop for anything this misses. An explicitly backgrounded
- * command (`… &`) returns immediately, so it is allowed through.
+ * `bun run dev`, `next dev`, `tsc --watch`, `tail -f`, `php -S`, …). Running one in
+ * the build loop stalls it — the gate already builds AND headlessly smoke-tests the
+ * app, so the model never needs to. Checks EVERY segment of a chain (`cd app &&
+ * npm run dev`), looks through wrappers (`exec`/`sudo`/quotes/subshell), and judges
+ * package-runner delegates by their own flags. Best-effort: the run tool's
+ * kill-timeout + bounded drain are the hard backstop for anything this misses. An
+ * explicitly backgrounded whole command (`… &`, not `&&`) returns immediately, so it
+ * is allowed through.
  */
 export function isLongRunningServerCommand(command: string): boolean {
-  if (/&\s*$/.test(command.trim())) {
+  const trimmed = command.trim();
+
+  // A trailing single `&` (not `&&`) backgrounds the command — it returns at once.
+  if (/(?:^|[^&])&$/u.test(trimmed)) {
     return false;
   }
 
-  const tokens = leadingCommandTokens(command);
-  const head = tokens[0];
-
-  if (head === undefined) {
-    return false;
-  }
-
-  const base = head.split("/").pop() ?? head;
-  const rest = tokens.slice(1);
-
-  if (PKG_RUNNERS.has(base)) {
-    return pkgRunnerIsServer(rest);
-  }
-
-  return headIsServer(base, rest);
+  // A server anywhere in a `&&`/`||`/`;`/`|` chain stalls the loop just the same.
+  return trimmed
+    .split(/&&|\|\||[;|]/u)
+    .some((segment) => segmentIsServer(segment));
 }
 
 export async function runShell(

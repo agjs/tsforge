@@ -35,6 +35,23 @@ test("flags never-exiting dev servers and watchers", () => {
     "npx tsc -w -p tsconfig.json",
     "bunx tail -f log.txt",
     "bun x vite",
+    // a server ANYWHERE in a chain stalls the loop just the same
+    "cd src && npm run dev",
+    "echo starting; npm run dev",
+    "cat log | npm run dev",
+    "false || npm run dev",
+    "npm run build && npm run preview",
+    // wrappers / subshell / quotes must be seen through
+    "exec npm run dev",
+    "(npm run dev)",
+    '"npm" run dev',
+    "'vite'",
+    "nohup vite",
+    // language-runtime built-in servers
+    "deno task dev",
+    "php -S localhost:8000",
+    "python -m http.server 8000",
+    "python3 -m http.server",
   ];
 
   for (const cmd of servers) {
@@ -59,6 +76,10 @@ test("lets one-shot commands (incl. builds) through", () => {
     "git status",
     "echo dev", // not a server invocation
     "node scripts/seed.ts",
+    "cd app && bun run build", // chain of one-shots
+    "vite build && echo done",
+    "cat a.txt | grep error",
+    "python script.py", // not http.server
   ];
 
   for (const cmd of oneShot) {
