@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isRecord } from "../lib/guards";
@@ -183,9 +183,7 @@ async function loadDir(
 ): Promise<void> {
   for (const name of await jsonFilesIn(dir)) {
     const path = join(dir, name);
-    const text = await Bun.file(path)
-      .text()
-      .catch(() => "");
+    const text = await readFile(path, "utf8").catch(() => "");
     let parsed: unknown;
 
     try {
@@ -202,6 +200,14 @@ async function loadDir(
         `recipe '${name}': not a valid recipe (needs a kebab-case id) — skipped`
       );
       continue;
+    }
+
+    const expectedId = name.slice(0, -".json".length);
+
+    if (recipe.id !== expectedId) {
+      report(
+        `recipe '${name}': id '${recipe.id}' does not match the filename — invoke it as '${recipe.id}'`
+      );
     }
 
     const unknown = unrecognizedKeys(parsed);

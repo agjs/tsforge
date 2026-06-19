@@ -85,6 +85,11 @@ describe("loadRecipes", () => {
         join(cwd, ".tsforge/recipes/proj-only.json"),
         JSON.stringify({ id: "proj-only", gate: "p" })
       );
+      // id ≠ filename: registers under its declared id but warns about the mismatch.
+      await writeFile(
+        join(cwd, ".tsforge/recipes/mismatch.json"),
+        JSON.stringify({ id: "not-mismatch", gate: "g" })
+      );
       await writeFile(join(cwd, ".tsforge/recipes/broken.json"), "{ not json");
 
       const reports: string[] = [];
@@ -92,11 +97,17 @@ describe("loadRecipes", () => {
 
       expect(recipes.map((r) => r.id)).toEqual([
         "global-only",
+        "not-mismatch",
         "proj-only",
         "shared",
       ]);
       expect(findRecipe(recipes, "shared")?.gate).toBe("project-gate"); // project wins
       expect(reports.some((m) => m.includes("broken.json"))).toBe(true);
+      expect(
+        reports.some(
+          (m) => m.includes("mismatch.json") && m.includes("not-mismatch")
+        )
+      ).toBe(true);
     } finally {
       if (prev === undefined) {
         delete process.env.TSFORGE_HOME;

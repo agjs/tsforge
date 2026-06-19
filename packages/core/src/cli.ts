@@ -147,6 +147,9 @@ export interface ICliArgs {
   recipe: string;
   /** List discovered recipes (`tsforge recipes`). */
   recipes: boolean;
+  /** The `run` subcommand was used (`tsforge run <id>`) — tracked so a missing id
+   *  is an explicit error, not a silent fall-through to the interactive REPL. */
+  run: boolean;
   /** Model name override (from a recipe); "" = the active model. */
   model: string;
   /** Hard turn cap (from a recipe); 0 = the loop default. */
@@ -216,6 +219,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     trace: false,
     recipe: "",
     recipes: false,
+    run: false,
     model: "",
     maxTurns: 0,
     thinkingBudget: 0,
@@ -257,6 +261,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
   } else if (positional[0] === "recipes") {
     out.recipes = true;
   } else if (positional[0] === "run") {
+    out.run = true;
     out.recipe = positional[1] ?? "";
     out.task = positional.slice(2).join(" ").trim();
   }
@@ -2166,6 +2171,14 @@ export async function main(): Promise<number> {
 
   if (args.recipes) {
     return recipesMode(args);
+  }
+
+  if (args.run && args.recipe.length === 0) {
+    process.stdout.write(
+      "missing recipe id — usage: tsforge run <id> [task] (see `tsforge recipes`)\n"
+    );
+
+    return 1;
   }
 
   // A `--recipe`/`run <id>` overlays the recipe's fields onto args (CLI wins),

@@ -44,8 +44,16 @@ test("bare invocation parses to an empty interactive session", () => {
 test("`tsforge run <id>` parses the recipe id and trailing task", () => {
   const a = parseArgs(["run", "api-endpoint", "add", "a", "route"]);
 
+  expect(a.run).toBe(true);
   expect(a.recipe).toBe("api-endpoint");
   expect(a.task).toBe("add a route");
+});
+
+test("`tsforge run` with no id flags the run subcommand (so main can error)", () => {
+  const a = parseArgs(["run"]);
+
+  expect(a.run).toBe(true);
+  expect(a.recipe).toBe("");
 });
 
 test("`tsforge recipes` and `--recipe <id>` are recognized", () => {
