@@ -171,6 +171,7 @@ export default defineConfig({
             { label: "Chat with your repo", link: "/cli/interactive/" },
             { label: "Drive a change to green", link: "/workflows/fix-to-green/" },
             { label: "Review your changes", link: "/cli/review/" },
+            { label: "Recipes", link: "/cli/recipes/" },
             { label: "Map the repo", link: "/cli/map/" },
             { label: "Plan mode", link: "/cli/plan-mode/" },
           ],

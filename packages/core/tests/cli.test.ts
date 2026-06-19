@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
-import { parseArgs, isOneShot } from "../src/cli";
+import { parseArgs, isOneShot, applyRecipe } from "../src/cli";
+import type { ITaskRecipe } from "../src/config/recipes";
 
 test("parses task + files + accept + dir", () => {
   const a = parseArgs([
@@ -38,6 +39,50 @@ test("bare invocation parses to an empty interactive session", () => {
   expect(a.files).toEqual([]);
   expect(a.accept).toBe("");
   expect(isOneShot(a)).toBe(false);
+});
+
+test("`tsforge run <id>` parses the recipe id and trailing task", () => {
+  const a = parseArgs(["run", "api-endpoint", "add", "a", "route"]);
+
+  expect(a.recipe).toBe("api-endpoint");
+  expect(a.task).toBe("add a route");
+});
+
+test("`tsforge recipes` and `--recipe <id>` are recognized", () => {
+  expect(parseArgs(["recipes"]).recipes).toBe(true);
+  expect(parseArgs(["--recipe", "web-build", "build it"]).recipe).toBe(
+    "web-build"
+  );
+});
+
+test("applyRecipe fills defaults but an explicit CLI value always wins", () => {
+  const recipe: ITaskRecipe = {
+    id: "api-endpoint",
+    files: ["src/api/**"],
+    gate: "bun run validate",
+    model: "qwen3-coder",
+    maxTurns: 25,
+    policyMode: "default",
+    web: true,
+  };
+
+  // Nothing on the CLI → recipe fills everything.
+  const filled = parseArgs([]);
+
+  applyRecipe(filled, recipe);
+  expect(filled.files).toEqual(["src/api/**"]);
+  expect(filled.accept).toBe("bun run validate");
+  expect(filled.model).toBe("qwen3-coder");
+  expect(filled.maxTurns).toBe(25);
+  expect(filled.policyMode).toBe("default");
+  expect(filled.web).toBe(true);
+
+  // An explicit --files overrides the recipe's scope; the rest still fill.
+  const overridden = parseArgs(["--files", "lib/**"]);
+
+  applyRecipe(overridden, recipe);
+  expect(overridden.files).toEqual(["lib/**"]); // CLI wins
+  expect(overridden.accept).toBe("bun run validate"); // recipe fills
 });
 
 test("plan approval is narrow — a 'yes' answering a question must not implement", async () => {
