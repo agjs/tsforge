@@ -32,6 +32,32 @@ test("a timed-out command's backgrounded child cannot mutate afterwards", async 
   }
 });
 
+// THE WEDGE: a foreground command exits, but a backgrounded/orphaned child keeps
+// the stdout pipe open. The drain (`new Response(stdout).text()`) then blocks on
+// the open pipe — so a model that did `bun run dev` (or anything that leaves a
+// server holding the pipe) would hang the whole harness with no escape. The drain
+// must be bounded so the tool ALWAYS returns, losing none of the real output.
+test("returns promptly even when a leftover child holds the output pipe open", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-proc-pipe-"));
+
+  try {
+    const start = Bun.nanoseconds();
+    // `echo` prints, then a detached child holds stdout open for 4s while the parent
+    // `sh` exits immediately — the NON-killed path. Without the bounded drain the
+    // read blocks the full 4s; with it, we return ~FLUSH_GRACE_MS later.
+    const run = await runShellCommand(dir, "echo ready; sleep 4 &", {
+      timeoutMs: 30_000,
+    });
+    const elapsedMs = (Bun.nanoseconds() - start) / 1e6;
+
+    expect(run.timedOut).toBe(false);
+    expect(run.stdout).toContain("ready");
+    expect(elapsedMs).toBeLessThan(2500);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a quick command still returns its output and does not report a timeout", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-proc-ok-"));
 

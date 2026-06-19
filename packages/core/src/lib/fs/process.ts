@@ -33,6 +33,19 @@ export interface IShellRun {
   timedOut: boolean;
 }
 
+/** Conventional exit code for a process terminated by SIGKILL (128 + 9). */
+const SIGKILL_EXIT = 137;
+/** After a kill is signalled, how long to wait for the process to actually be
+ *  reaped before giving up — covers a child that escaped its group (e.g. called
+ *  `setsid`) and so survives the group SIGKILL. Without this bound, `proc.exited`
+ *  could never resolve and the tool would hang forever. */
+const KILL_GRACE_MS = 2_000;
+/** Once the awaited process is gone, how long to let the output pumps drain before
+ *  returning regardless — a backgrounded/orphaned grandchild can keep the output
+ *  pipe open indefinitely, so the read is ALWAYS bounded. It loses nothing: the
+ *  pumps read concurrently, so all emitted output is already captured by now. */
+const FLUSH_GRACE_MS = 500;
+
 /**
  * Spawn `sh -c command` in `cwd` and capture stdout/stderr — the ONE place that
  * runs a shell command for the harness (the `run` tool and the gate both route
@@ -84,8 +97,23 @@ export async function runArgvCommand(
     return { stdout: "", stderr: message, exitCode: 127, timedOut: false };
   }
 
+  let timedOut = false;
+  let resolveEscaped: (() => void) | null = null;
+  // Held in an object so TS doesn't flow-narrow it to `null` for the cleanup below
+  // (its only assignment is inside the killGroup closure, invisible to that flow).
+  const escape: { timer: ReturnType<typeof setTimeout> | null } = {
+    timer: null,
+  };
+  // Resolves only once a kill has been signalled AND the process still hasn't been
+  // reaped a grace period later — i.e. it escaped its group and survived SIGKILL.
+  // Racing it against `proc.exited` guarantees the wait below always settles.
+  const escaped = new Promise<void>((resolve) => {
+    resolveEscaped = resolve;
+  });
+
   // Signal the whole process group (negative pid). Falls back to the lone child if
-  // the group is already gone (ESRCH) or not permitted (EPERM) — never throws.
+  // the group is already gone (ESRCH) or not permitted (EPERM) — never throws. Arms
+  // the escape timer so a process that outlives the kill can't wedge the harness.
   const killGroup = (): void => {
     try {
       process.kill(-proc.pid, "SIGKILL");
@@ -96,9 +124,10 @@ export async function runArgvCommand(
         // already exited
       }
     }
+
+    escape.timer ??= setTimeout(() => resolveEscaped?.(), KILL_GRACE_MS);
   };
 
-  let timedOut = false;
   const timer =
     timeoutMs > 0
       ? setTimeout(() => {
@@ -121,10 +150,6 @@ export async function runArgvCommand(
 
   const decoder = new TextDecoder();
   const buf: { out: string; err: string } = { out: "", err: "" };
-  // Read through a closure so control-flow analysis treats these as `boolean`
-  // (the setTimeout/abort mutations are invisible to it, else it narrows to
-  // literal `false` and the kill branch reads as dead code).
-  const wasKilled = (): boolean => timedOut || (signal?.aborted ?? false);
 
   const pump = async (
     stream: ReadableStream<Uint8Array>,
@@ -146,22 +171,31 @@ export async function runArgvCommand(
       pump(proc.stdout, "out"),
       pump(proc.stderr, "err"),
     ]);
-    const exitCode = await proc.exited;
 
-    // A KILLED process can leave its piped streams open in Bun, so the pumps
-    // would hang forever — flush briefly, then return what we captured. On a
-    // normal exit the streams close and the pumps resolve on their own.
-    await (wasKilled()
-      ? Promise.race([
-          pumps,
-          new Promise<void>((resolve) => setTimeout(resolve, 100)),
-        ])
-      : pumps);
+    // Wait for a clean exit, but give up if a killed process escaped its group and
+    // can't be reaped (`escaped` resolves KILL_GRACE_MS after the kill) — otherwise
+    // a `setsid`-detached server would leave this hanging forever.
+    const exitCode = await Promise.race([
+      proc.exited,
+      escaped.then(() => SIGKILL_EXIT),
+    ]);
+
+    // ALWAYS bound the final drain: a backgrounded/orphaned grandchild can hold the
+    // output pipe open long after the process we waited on is gone (Bun also leaves
+    // a killed process's streams open), so the pumps could otherwise never resolve.
+    await Promise.race([
+      pumps,
+      new Promise<void>((resolve) => setTimeout(resolve, FLUSH_GRACE_MS)),
+    ]);
 
     return { stdout: buf.out, stderr: buf.err, exitCode, timedOut };
   } finally {
     if (timer !== null) {
       clearTimeout(timer);
+    }
+
+    if (escape.timer !== null) {
+      clearTimeout(escape.timer);
     }
 
     if (signal !== undefined) {
