@@ -86,16 +86,13 @@ jobs:
             exit 1
           fi
 
-          # Count only findings osv-scanner did NOT suppress via osv-scanner.toml.
-          # Accepted-risk IgnoredVulns carry a SARIF `suppressions` entry, so the
-          # gate must honor the allowlist instead of failing on every known
-          # dev-dependency advisory (which counting raw `results[]` did).
-          ACTIONABLE=$(jq -r '[.runs[].results[]? | select((.suppressions // []) | length == 0)] | length' osv-results.sarif)
-          SUPPRESSED=$(jq -r '[.runs[].results[]? | select((.suppressions // []) | length > 0)] | length' osv-results.sarif)
-          echo "osv-scanner findings: ${ACTIONABLE} actionable, ${SUPPRESSED} accepted-risk (osv exit ${OSV_EXIT:-?})"
+          # osv-scanner EXCLUDES osv-scanner.toml-ignored advisories from its
+          # output, so any remaining result is an un-accepted finding.
+          UNFILTERED=$(jq -r '[.runs[].results[]?] | length' osv-results.sarif)
+          echo "Unfiltered osv-scanner findings: ${UNFILTERED}"
 
-          if [ "${ACTIONABLE}" != "0" ]; then
-            echo "osv-scanner reported ${ACTIONABLE} actionable vulnerabilities (not in osv-scanner.toml). Triage and add an entry, or fix the dependency. See SARIF in the Security tab."
+          if [ "${UNFILTERED}" != "0" ]; then
+            echo "osv-scanner reported ${UNFILTERED} unfiltered vulnerabilities. See SARIF in the Security tab."
             exit 1
           fi
 
