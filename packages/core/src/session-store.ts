@@ -166,6 +166,11 @@ async function readRecord(path: string): Promise<ISessionRecord | null> {
           ? data.files.filter((f): f is string => typeof f === "string")
           : [],
         updatedAt: data.updatedAt,
+        // Restored so a resumed session keeps its read-only guarantee; saveSession
+        // persists it but readRecord dropped it, so `--continue` always lost it.
+        ...(typeof data.planMode === "boolean"
+          ? { planMode: data.planMode }
+          : {}),
         messages: toMessages(data.messages),
       };
     }
@@ -215,6 +220,12 @@ function toMessage(raw: unknown): IChatMessage | null {
 
   if (toolCalls.length > 0) {
     message.toolCalls = toolCalls;
+  }
+
+  // DeepSeek reasoning replay REQUIRES the prior turn's reasoning_content, so it
+  // must survive a resume — toMessage previously dropped it on every reload.
+  if (typeof raw.reasoningContent === "string") {
+    message.reasoningContent = raw.reasoningContent;
   }
 
   return message;

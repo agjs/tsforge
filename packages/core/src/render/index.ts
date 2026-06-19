@@ -8,6 +8,8 @@ export {
 export {
   StatusBar,
   buildBarFrame,
+  buildInputFrame,
+  MIN_ROWS,
   type IStatusBarTerminal,
 } from "./status-bar";
 export { welcomeBanner, type IBannerInfo } from "./banner";

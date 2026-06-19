@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { join, isAbsolute } from "node:path";
 import { appendFileSync, mkdirSync } from "node:fs";
+import { Writable } from "node:stream";
 import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
 import { formatHelp, takesArg } from "./cli/commands";
@@ -32,6 +33,7 @@ import {
   renderMessage,
   renderStatus,
   StatusBar,
+  MIN_ROWS,
   welcomeBanner,
   STYLE,
   RESET,
@@ -649,6 +651,11 @@ export function spinnerPhase(event: ILoopEvent): string | null {
   return event.kind === "cycle" ? "thinking" : null;
 }
 
+/** When the interactive REPL pins an editable input row, streamed output must be
+ *  written THROUGH the StatusBar (so it scrolls in the region above the row and
+ *  the cursor stays parked on the row). Null elsewhere ⇒ a plain stdout write. */
+let interactiveStream: ((text: string) => void) | null = null;
+
 const render: Reporter = (event) => {
   const phase = spinnerPhase(event);
 
@@ -660,7 +667,12 @@ const render: Reporter = (event) => {
 
   if (out.length > 0) {
     spinner.clear();
-    process.stdout.write(out);
+
+    if (interactiveStream !== null) {
+      interactiveStream(out);
+    } else {
+      process.stdout.write(out);
+    }
   }
 };
 
@@ -1057,7 +1069,26 @@ async function repl(args: ICliArgs): Promise<number> {
     updateNotice,
   });
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // Pin an editable input row only on a real TTY tall enough to host the bar.
+  // In that mode readline does line-EDITING but must not RENDER (we paint the
+  // row ourselves), so it gets a discard sink for output; otherwise it writes to
+  // stdout as before (pipes, small terminals — behaviour unchanged).
+  const useInputRow =
+    process.stdin.isTTY &&
+    process.stdout.isTTY &&
+    process.stdout.rows >= MIN_ROWS;
+
+  const inputSink = new Writable({
+    write(_chunk, _enc, cb): void {
+      cb();
+    },
+  });
+
+  const rl = createInterface({
+    input: process.stdin,
+    output: useInputRow ? inputSink : process.stdout,
+    terminal: true,
+  });
 
   // Ctrl-C: while a turn is running, abort it and return to the prompt; while
   // idle at the prompt, quit. (readline emits SIGINT on the interface, so the
@@ -1480,7 +1511,35 @@ async function repl(args: ICliArgs): Promise<number> {
 
   // Pinned bottom status bar when we're on a real terminal; otherwise the bar is
   // inactive and `prompt()` falls back to the inline status line (pipes, --log).
-  const statusBar = new StatusBar(process.stdout, true, true);
+  const statusBar = new StatusBar(process.stdout, true, true, useInputRow);
+
+  // Route streamed agent output through the bar so it scrolls above the pinned
+  // input row; cleared on loop exit so later/headless writes go straight to stdout.
+  if (useInputRow) {
+    interactiveStream = (text): void => {
+      statusBar.writeStream(text);
+    };
+  }
+
+  // Mirror readline's buffer onto the input row after each keypress. setImmediate
+  // lets readline update rl.line/rl.cursor first (it processes the key async).
+  const syncInput = (): void => {
+    if (useInputRow) {
+      setImmediate(() => {
+        statusBar.setInput(rl.line, rl.cursor);
+      });
+    }
+  };
+
+  // Echo a CLI-side line (queued-steer notice, etc.) into the scroll region so it
+  // doesn't clobber the pinned input row; plain write when the row isn't active.
+  const echo = (text: string): void => {
+    if (useInputRow) {
+      statusBar.writeStream(text);
+    } else {
+      process.stdout.write(text);
+    }
+  };
 
   // In the interactive REPL a readline prompt owns stdin for the WHOLE session, so
   // the spinner's carriage-return inline write would clobber whatever the user is
@@ -1525,9 +1584,17 @@ async function repl(args: ICliArgs): Promise<number> {
     }
   };
 
-  // The prompt. With the bar pinned it repaints the bar and shows only the
-  // input marker; otherwise it prints the inline status line above the marker.
+  // The prompt. With the editable input row pinned it's always visible, so we
+  // just repaint the bar + row; with the bar (no input row) it shows the inline
+  // marker; otherwise it prints the inline status line above the marker.
   const prompt = (): void => {
+    if (useInputRow) {
+      statusBar.setInput(rl.line, rl.cursor);
+      statusBar.update(statusInfo());
+
+      return;
+    }
+
     if (statusBar.active) {
       statusBar.update(statusInfo());
       process.stdout.write("\n› ");
@@ -1610,6 +1677,13 @@ async function repl(args: ICliArgs): Promise<number> {
         }
       } finally {
         paletteOpen = false;
+
+        // The palette ran on the alternate screen; repaint the pinned row + bar
+        // and reflect any prefilled buffer back onto the input row.
+        if (useInputRow) {
+          statusBar.update(statusInfo());
+          syncInput();
+        }
       }
     };
 
@@ -1619,6 +1693,8 @@ async function repl(args: ICliArgs): Promise<number> {
     if (process.stdin.isTTY) {
       emitKeypressEvents(process.stdin);
       process.stdin.on("keypress", (str: string | undefined) => {
+        syncInput(); // keep the pinned input row in sync as the user types
+
         if (busy || paletteOpen || str !== "/") {
           return;
         }
@@ -1645,13 +1721,20 @@ async function repl(args: ICliArgs): Promise<number> {
         return;
       }
 
+      // readline's output is sinked in input-row mode, so the submitted line is
+      // never echoed to scrollback — record it ourselves so the transcript reads
+      // naturally above the (now-cleared) input row.
+      if (useInputRow) {
+        echo(`${STYLE.dim}›${RESET} ${line}\n`);
+      }
+
       if (busy) {
         if (line === "/exit" || line === "/quit") {
           active?.abort();
           rl.close();
         } else {
           pending.push(line);
-          process.stdout.write("  ↳ queued (steers the next turn)\n");
+          echo("  ↳ queued (steers the next turn)\n");
         }
 
         return;
@@ -1677,6 +1760,7 @@ async function repl(args: ICliArgs): Promise<number> {
   });
 
   statusBar.teardown(); // belt-and-suspenders: restore the terminal on loop exit
+  interactiveStream = null; // later/headless writes go straight to stdout again
 
   return 0;
 }

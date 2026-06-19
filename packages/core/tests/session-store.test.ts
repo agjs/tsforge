@@ -64,6 +64,44 @@ test("saves and resumes the newest session for a directory", async () => {
   expect(resumed?.messages[2]?.toolCalls?.[0]?.name).toBe("read");
 });
 
+test("resume preserves planMode (read-only guarantee survives --continue)", async () => {
+  await saveSession({
+    id: "pm",
+    cwd: "/proj/pm",
+    accept: "",
+    files: [],
+    updatedAt: 1000,
+    planMode: true,
+    messages: [{ role: "system", content: "sys" }],
+  });
+
+  const resumed = await latestSession("/proj/pm");
+
+  expect(resumed?.planMode).toBe(true);
+});
+
+test("resume preserves assistant reasoningContent (DeepSeek replay)", async () => {
+  await saveSession({
+    id: "rc",
+    cwd: "/proj/rc",
+    accept: "",
+    files: [],
+    updatedAt: 1000,
+    messages: [
+      { role: "system", content: "sys" },
+      {
+        role: "assistant",
+        content: "answer",
+        reasoningContent: "step-by-step thinking",
+      },
+    ],
+  });
+
+  const resumed = await latestSession("/proj/rc");
+
+  expect(resumed?.messages[1]?.reasoningContent).toBe("step-by-step thinking");
+});
+
 // Each input contains a secret; after redaction the secret must be GONE and a
 // [redacted] marker present. `needle` is a recognizable slice of the secret.
 const SECRET_CASES: { name: string; input: string; needle: string }[] = [

@@ -7,7 +7,15 @@ const ESC = "\x1b";
 const RESERVED_ROWS = 2;
 
 /** Below this height, a 2-row bar would crowd the conversation — fall back to inline. */
-const MIN_ROWS = 5;
+export const MIN_ROWS = 5;
+
+/** Reset all SGR attributes — written after a stream chunk so the input row below
+ *  it is never painted in leftover color from mid-stream markdown. */
+const RESET_SGR = `${ESC}[0m`;
+
+/** The editable input prompt and the columns it occupies (`›` + space). */
+const PROMPT = "› ";
+const PROMPT_COLS = 2;
 
 /** Cells in the context meter. */
 const METER_CELLS = 9;
@@ -127,6 +135,27 @@ function topBorder(columns: number, color: boolean): string {
 }
 
 /**
+ * The two painted bar rows (border + segments) at the bottom, positioned
+ * ABSOLUTELY with no cursor save/restore. Callers decide cursor handling: the
+ * no-input bar wraps this in save/restore (`buildBarFrame`); the input-row mode
+ * re-parks the cursor on the input row itself afterwards.
+ */
+function buildBarBody(
+  info: IStatusInfo,
+  columns: number,
+  rows: number,
+  color: boolean
+): string {
+  const borderRow = rows - 1;
+  const segs = assemble(barSegments(info), columns, color);
+
+  return (
+    `${ESC}[${borderRow};1H${ESC}[2K${topBorder(columns, color)}` +
+    `${ESC}[${rows};1H${ESC}[2K${segs}`
+  );
+}
+
+/**
  * The escape sequence that paints the boxed bar on the reserved bottom TWO rows
  * WITHOUT moving the user's cursor: save → border row → segments row → restore.
  * Pure and width-aware, so it can be asserted in tests with no terminal.
@@ -137,14 +166,59 @@ export function buildBarFrame(
   rows: number,
   color: boolean
 ): string {
-  const borderRow = rows - 1;
-  const segs = assemble(barSegments(info), columns, color);
-
   return (
     `${ESC}7` + // save cursor
-    `${ESC}[${borderRow};1H${ESC}[2K${topBorder(columns, color)}` +
-    `${ESC}[${rows};1H${ESC}[2K${segs}` +
+    buildBarBody(info, columns, rows, color) +
     `${ESC}8` // restore cursor
+  );
+}
+
+/** Horizontally scroll a single-line buffer so the cursor stays visible within
+ *  `avail` columns: shows the whole line when it fits, else a window ending at
+ *  the cursor. Returns the visible slice and the cursor's column WITHIN it. */
+function clipInput(
+  line: string,
+  cursor: number,
+  avail: number
+): { visible: string; cursorCol: number } {
+  if (avail <= 0) {
+    return { visible: "", cursorCol: 0 };
+  }
+
+  if (line.length <= avail) {
+    return { visible: line, cursorCol: cursor };
+  }
+
+  const start = Math.max(0, cursor - avail + 1);
+
+  return {
+    visible: line.slice(start, start + avail),
+    cursorCol: cursor - start,
+  };
+}
+
+/**
+ * The escape sequence that paints the editable input row (`› <text>`) on the
+ * row just above the bar and LEAVES the cursor parked there at the typing
+ * column — the stable input line the user edits while agent output streams into
+ * the scroll region above. Pure/width-aware for FakeTerm assertions.
+ */
+export function buildInputFrame(
+  line: string,
+  cursor: number,
+  columns: number,
+  rows: number,
+  color: boolean
+): string {
+  const inputRow = rows - 2;
+  const avail = Math.max(0, columns - PROMPT_COLS);
+  const { visible, cursorCol } = clipInput(line, cursor, avail);
+
+  return (
+    `${ESC}[${inputRow};1H${ESC}[2K` +
+    paint(PROMPT, STYLE.dim, color) +
+    visible +
+    `${ESC}[${inputRow};${PROMPT_COLS + cursorCol + 1}H`
   );
 }
 
@@ -157,16 +231,29 @@ export function buildBarFrame(
  */
 export class StatusBar {
   private installed = false;
+  /** Mirror of the editable buffer (input-row mode only), so a bar repaint or a
+   *  stream chunk can re-paint the input row and re-park the cursor. */
+  private line = "";
+  private cursorPos = 0;
 
   constructor(
     private readonly out: IStatusBarTerminal,
     private readonly enabled = true,
-    private readonly color = true
+    private readonly color = true,
+    /** Reserve an extra editable input row above the bar and park the cursor on
+     *  it. The CLI enables this only on a real TTY tall enough to host it; when
+     *  off, behaviour is identical to the original 2-row bar. */
+    private readonly withInput = false
   ) {}
 
   /** Whether the bar is currently pinned (false ⇒ caller uses the inline line). */
   get active(): boolean {
     return this.installed;
+  }
+
+  /** Bottom rows reserved: the 2-row bar, plus the input row when enabled. */
+  private get reserved(): number {
+    return this.withInput ? RESERVED_ROWS + 1 : RESERVED_ROWS;
   }
 
   private canActivate(): boolean {
@@ -185,22 +272,74 @@ export class StatusBar {
 
     const rows = this.out.rows ?? 0;
 
-    this.out.write("\n".repeat(RESERVED_ROWS)); // make room for the bar
-    this.out.write(`${ESC}[1;${rows - RESERVED_ROWS}r`); // confine scrolling
-    this.out.write(`${ESC}[${rows - RESERVED_ROWS};1H`); // cursor back in-region
+    this.out.write("\n".repeat(this.reserved)); // make room for the bar
+    this.out.write(`${ESC}[1;${rows - this.reserved}r`); // confine scrolling
+    this.out.write(`${ESC}[${rows - this.reserved};1H`); // cursor back in-region
     this.installed = true;
+
+    // Save the in-region cursor as the STREAM cursor; writeStream restores to it
+    // before each chunk and re-saves after, so output scrolls in-region while the
+    // live cursor rests on the input row below.
+    if (this.withInput) {
+      this.out.write(`${ESC}7`);
+    }
+
     this.update(info);
   }
 
-  /** Repaint the bar with the latest state. */
+  /** Repaint the bar with the latest state (and the input row, in input mode). */
   update(info: IStatusInfo): void {
     if (!this.installed) {
       return;
     }
 
+    const columns = this.out.columns ?? 80;
+    const rows = this.out.rows ?? 0;
+
+    if (this.withInput) {
+      // Absolute-positioned body (no save/restore — that slot holds the stream
+      // cursor), then re-park the cursor on the input row.
+      this.out.write(buildBarBody(info, columns, rows, this.color));
+      this.paintInput();
+
+      return;
+    }
+
+    this.out.write(buildBarFrame(info, columns, rows, this.color));
+  }
+
+  /** Update the editable buffer mirror and repaint the input row (input mode). */
+  setInput(line: string, cursor: number): void {
+    this.line = line;
+    this.cursorPos = cursor;
+
+    if (this.installed && this.withInput) {
+      this.paintInput();
+    }
+  }
+
+  /** Write agent output INTO the scroll region, keeping the input row and cursor
+   *  stable below it. Falls back to a plain write when the input row isn't active
+   *  (non-TTY, small terminal, or not installed) — the original behaviour. */
+  writeStream(text: string): void {
+    if (!this.installed || !this.withInput) {
+      this.out.write(text);
+
+      return;
+    }
+
+    this.out.write(`${ESC}8`); // restore stream cursor (into the region)
+    this.out.write(text); // scrolls within the region
+    this.out.write(`${ESC}7`); // save the advanced stream cursor
+    this.out.write(RESET_SGR); // don't bleed mid-stream color into the input row
+    this.paintInput();
+  }
+
+  private paintInput(): void {
     this.out.write(
-      buildBarFrame(
-        info,
+      buildInputFrame(
+        this.line,
+        this.cursorPos,
         this.out.columns ?? 80,
         this.out.rows ?? 0,
         this.color
@@ -214,11 +353,21 @@ export class StatusBar {
       return;
     }
 
-    this.out.write(`${ESC}[1;${(this.out.rows ?? 0) - RESERVED_ROWS}r`);
+    const rows = this.out.rows ?? 0;
+
+    this.out.write(`${ESC}[1;${rows - this.reserved}r`);
+
+    // The saved stream cursor may now point off-screen — re-anchor it to the
+    // bottom of the (resized) region so output continues there.
+    if (this.withInput) {
+      this.out.write(`${ESC}[${rows - this.reserved};1H`);
+      this.out.write(`${ESC}7`);
+    }
+
     this.update(info);
   }
 
-  /** Reset the scroll region, clear the bar rows, and show the cursor. Idempotent. */
+  /** Reset the scroll region, clear the reserved rows, and show the cursor. Idempotent. */
   teardown(): void {
     if (!this.installed) {
       return;
@@ -227,8 +376,11 @@ export class StatusBar {
     const rows = this.out.rows ?? 0;
 
     this.out.write(`${ESC}[r`); // reset scroll region to full screen
-    this.out.write(`${ESC}[${rows - 1};1H${ESC}[2K`); // clear border row
-    this.out.write(`${ESC}[${rows};1H${ESC}[2K`); // clear segments row
+
+    for (let row = rows - this.reserved + 1; row <= rows; row += 1) {
+      this.out.write(`${ESC}[${row};1H${ESC}[2K`); // clear each reserved row
+    }
+
     this.out.write(`${ESC}[?25h`); // ensure the cursor is visible
     this.installed = false;
   }
