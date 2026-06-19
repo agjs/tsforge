@@ -60,6 +60,12 @@ export class McpRegistry {
     return this.byName.has(name);
   }
 
+  /** Distinct registered server names — the policy layer denies an
+   *  `mcp__<server>__*` call whose server isn't in this set. */
+  serverNames(): string[] {
+    return [...new Set([...this.byName.values()].map((t) => t.server))];
+  }
+
   /** Call a registered MCP tool. Never throws: a transport failure is returned
    *  as text so the model treats it as a tool result. */
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {

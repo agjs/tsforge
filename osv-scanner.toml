@@ -38,3 +38,32 @@ reason = "undici 7.24.8 reaches us only via wrangler→miniflare (docs-deploy de
 id = "CVE-2026-9697"
 ignoreUntil = 2026-09-12T00:00:00Z
 reason = "undici 7.24.8 (SOCKS5 ProxyAgent TLS-validation bypass) reaches us only via wrangler→miniflare (docs-deploy dev dependency), not the tsforge runtime; the published package's undici (via jsdom) is already 7.28.0 (patched). Re-evaluate when wrangler/miniflare bump undici."
+
+# Five further undici advisories published 2026-06-19, all against the SAME
+# dev-only undici@7.24.8 (verified: bun.lock pins it ONLY at miniflare/undici;
+# the runtime undici via jsdom is 7.28.0 and is NOT flagged). Same accepted-risk
+# rationale as the two CVEs above — not in the published @agjs/tsforge package.
+[[IgnoredVulns]]
+id = "GHSA-35p6-xmwp-9g52"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "undici 7.24.8 (miniflare→wrangler dev dependency only); runtime undici (via jsdom) is 7.28.0/unaffected; not shipped in the published package. Re-evaluate when wrangler/miniflare bump undici."
+
+[[IgnoredVulns]]
+id = "GHSA-g8m3-5g58-fq7m"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "undici 7.24.8 (miniflare→wrangler dev dependency only); runtime undici (via jsdom) is 7.28.0/unaffected; not shipped in the published package. Re-evaluate when wrangler/miniflare bump undici."
+
+[[IgnoredVulns]]
+id = "GHSA-hm92-r4w5-c3mj"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "undici 7.24.8 (miniflare→wrangler dev dependency only); runtime undici (via jsdom) is 7.28.0/unaffected; not shipped in the published package. Re-evaluate when wrangler/miniflare bump undici."
+
+[[IgnoredVulns]]
+id = "GHSA-p88m-4jfj-68fv"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "undici 7.24.8 (miniflare→wrangler dev dependency only); runtime undici (via jsdom) is 7.28.0/unaffected; not shipped in the published package. Re-evaluate when wrangler/miniflare bump undici."
+
+[[IgnoredVulns]]
+id = "GHSA-vxpw-j846-p89q"
+ignoreUntil = 2026-09-12T00:00:00Z
+reason = "undici 7.24.8 (miniflare→wrangler dev dependency only); runtime undici (via jsdom) is 7.28.0/unaffected; not shipped in the published package. Re-evaluate when wrangler/miniflare bump undici."

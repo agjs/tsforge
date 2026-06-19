@@ -17,6 +17,8 @@ import type {
 } from "./loop.types";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import { flags } from "../config";
+import type { ITsforgeProjectConfig } from "../config";
+import type { PolicyMode, IPolicyRules } from "../policy";
 import { buildSystemPrompt, seedPrompt } from "./prompt";
 import { detectStack } from "../stack-detection";
 import type { TtsrManager } from "./ttsr";
@@ -173,12 +175,25 @@ function effectiveParserFor(
 
 /** Detect the stack and fold in tsforge.config.json pack/rule overrides, plus any
  *  rule packs from configured external plugins. */
+/** The optional policy fields for the loop context (kept off `runTask` so its
+ *  `exactOptionalPropertyTypes` spreads don't inflate its cognitive complexity). */
+function policyCtxFields(policy: ITsforgeProjectConfig["policy"]): {
+  policyMode?: PolicyMode;
+  policyRules?: IPolicyRules;
+} {
+  return {
+    ...(policy?.mode === undefined ? {} : { policyMode: policy.mode }),
+    ...(policy?.rules === undefined ? {} : { policyRules: policy.rules }),
+  };
+}
+
 async function resolveStackForRun(
   cwd: string,
   report: (message: string) => void
 ): Promise<{
   stackProfile: Awaited<ReturnType<typeof detectStack>>;
   ruleOverrides: Readonly<Record<string, "error" | "warn" | "off">>;
+  policy: ITsforgeProjectConfig["policy"];
 }> {
   const detectedProfile = await detectStack(cwd);
   const { loadTsforgeConfig, resolveActivePacks, normalizeRuleOverrides } =
@@ -198,6 +213,7 @@ async function resolveStackForRun(
         externalIds.length > 0 ? [...activePacks, ...externalIds] : activePacks,
     },
     ruleOverrides: normalizeRuleOverrides(cfg),
+    policy: cfg.policy,
   };
 }
 
@@ -280,7 +296,7 @@ export async function runTask(
   });
 
   // Detect stack once per run, early; tsforge.config.json may adjust it
-  const { stackProfile, ruleOverrides } = await resolveStackForRun(
+  const { stackProfile, ruleOverrides, policy } = await resolveStackForRun(
     cwd,
     (message) => {
       report({ kind: "tool", task: task.id, message });
@@ -334,6 +350,9 @@ export async function runTask(
     touched: new Set<string>(),
     ruleOverrides:
       Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
+    // Config-driven policy applies to headless runs too (the critical denies
+    // already do, mode-independent; this adds `policy.mode`/`rules`).
+    ...policyCtxFields(policy),
   };
   const state: ILoopState = {
     prevGateErrors: red.errors,

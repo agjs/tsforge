@@ -8,4 +8,5 @@ useDefault = true
 description = "Test fixtures that exercise secret redaction — not real credentials."
 paths = [
   '''packages/core/tests/session-store\.test\.ts''',
+  '''packages/core/tests/ledger\.test\.ts''',
 ]

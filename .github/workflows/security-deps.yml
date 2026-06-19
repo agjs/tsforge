@@ -86,6 +86,8 @@ jobs:
             exit 1
           fi
 
+          # osv-scanner EXCLUDES osv-scanner.toml-ignored advisories from its
+          # output, so any remaining result is an un-accepted finding.
           UNFILTERED=$(jq -r '[.runs[].results[]?] | length' osv-results.sarif)
           echo "Unfiltered osv-scanner findings: ${UNFILTERED}"
 
@@ -102,9 +104,14 @@ jobs:
 
       - name: bun audit
         if: steps.filter.outputs.code == 'true'
-        # GHSA-vmh5-mc38-953g (undici SOCKS5 ProxyAgent TLS bypass) is accepted-risk:
-        # undici 7.24.8 reaches us only via wrangler→miniflare (docs-deploy dev dep),
+        # All ignored GHSAs are undici@7.24.8 advisories — accepted-risk: undici
+        # 7.24.8 reaches us only via wrangler→miniflare (docs-deploy dev dep),
         # never the published @agjs/tsforge package (its undici via jsdom is already
         # 7.28.0/patched). Mirrors the osv-scanner.toml allowlist; re-evaluate by
-        # 2026-09-12 / when wrangler bumps undici. (bun audit keys on the GHSA id.)
-        run: bun audit --audit-level=high --ignore=GHSA-vmh5-mc38-953g
+        # 2026-09-12 / when wrangler bumps undici. (bun audit keys on the GHSA id;
+        # --audit-level=high means only the high-severity undici GHSAs need listing.)
+        run: >-
+          bun audit --audit-level=high
+          --ignore=GHSA-vmh5-mc38-953g
+          --ignore=GHSA-hm92-r4w5-c3mj
+          --ignore=GHSA-vxpw-j846-p89q

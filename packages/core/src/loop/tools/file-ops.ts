@@ -158,6 +158,10 @@ const TSC_EMITTING = new Set([
   "--emitDeclarationOnly",
   "--build",
   "-b",
+  // Write a `.tsbuildinfo` to disk even alongside `--noEmit`, so a "read-only"
+  // typecheck that carries them isn't read-only.
+  "--tsBuildInfoFile",
+  "--incremental",
 ]);
 
 /** `tsc` invocations that don't touch disk even without `--noEmit`. */

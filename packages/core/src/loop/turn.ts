@@ -11,13 +11,14 @@ import {
   type IErrorItem,
 } from "../validate";
 import { isInScope } from "../lib/scope";
+import type { PolicyMode, IPolicyRules } from "../policy";
 import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
 import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
-import { executeTool, type SetupWebFn } from "./tools";
+import { executeTool, type SetupWebFn, type IToolContext } from "./tools";
 import {
   astGrepFix,
   dropRedundantAnnotations,
@@ -161,6 +162,14 @@ export interface ILoopCtx {
   /** PLAN MODE (set via Session.setPlanMode): threaded into the tool context so
    *  mutating tools are rejected at dispatch — the model only plans. */
   readOnly?: boolean;
+  /** Active policy mode for the unified action-policy layer (executeTool). Plan
+   *  mode forces `"plan"`; otherwise the base mode from CLI/config (default
+   *  `"default"`). Threaded into the tool context. */
+  policyMode?: PolicyMode;
+  /** Config-driven policy rules (deny/allow/ask) threaded to the tool context. */
+  policyRules?: IPolicyRules;
+  /** Whether an interactive per-action approval path exists (false today). */
+  interactive?: boolean;
   /** Connected MCP servers (opt-in via tsforge.config.json `mcpServers`). Threaded
    *  into the tool context so `mcp__<server>__<tool>` calls dispatch to them. */
   mcpRegistry?: McpRegistry;
@@ -559,6 +568,26 @@ function recordTouched(ctx: ILoopCtx, files: readonly string[]): void {
   }
 }
 
+/** Build the per-call tool context from the loop context. Extracted so the
+ *  optional-field spreads don't inflate `runToolCalls`'s cognitive complexity. */
+function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
+  return {
+    cwd: ctx.cwd,
+    files: ctx.task.files,
+    report,
+    task: ctx.task.id,
+    tsService: ctx.tsService,
+    ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    ...(ctx.setupWeb === undefined ? {} : { setupWeb: ctx.setupWeb }),
+    ...(ctx.vendored === undefined ? {} : { vendored: ctx.vendored }),
+    ...(ctx.readOnly === undefined ? {} : { readOnly: ctx.readOnly }),
+    ...(ctx.policyMode === undefined ? {} : { policyMode: ctx.policyMode }),
+    ...(ctx.policyRules === undefined ? {} : { policyRules: ctx.policyRules }),
+    ...(ctx.interactive === undefined ? {} : { interactive: ctx.interactive }),
+    ...(ctx.mcpRegistry === undefined ? {} : { mcpRegistry: ctx.mcpRegistry }),
+  };
+}
+
 /**
  * Run the model's tool calls: execute each, feed the result back, and report
  * whether any touched an editable file (which means we should re-gate). Mutates
@@ -611,20 +640,7 @@ export async function runToolCalls(
       ctx.report(event);
     };
 
-    const result = await executeTool(call, {
-      cwd: ctx.cwd,
-      files: ctx.task.files,
-      report,
-      task: ctx.task.id,
-      tsService: ctx.tsService,
-      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
-      ...(ctx.setupWeb === undefined ? {} : { setupWeb: ctx.setupWeb }),
-      ...(ctx.vendored === undefined ? {} : { vendored: ctx.vendored }),
-      ...(ctx.readOnly === undefined ? {} : { readOnly: ctx.readOnly }),
-      ...(ctx.mcpRegistry === undefined
-        ? {}
-        : { mcpRegistry: ctx.mcpRegistry }),
-    });
+    const result = await executeTool(call, toolContextFor(ctx, report));
 
     let feedback = "";
 

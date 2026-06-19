@@ -164,7 +164,11 @@ test("plan mode blocks a mutating run command but allows a read-only one", async
           return {
             content: "",
             toolCalls: [
-              { id: "1", name: "run", arguments: { command: "rm -rf x" } },
+              {
+                id: "1",
+                name: "run",
+                arguments: { command: "touch newfile.ts" },
+              },
               { id: "2", name: "run", arguments: { command: "ls" } },
             ],
           };
@@ -214,6 +218,9 @@ test("isReadOnlyCommand: allowlisted inspection passes, anything mutating fails"
   expect(isReadOnlyCommand("tsc --outDir dist")).toBe(false);
   expect(isReadOnlyCommand("tsc")).toBe(false); // bare tsc EMITS by default
   expect(isReadOnlyCommand("tsc -p tsconfig.json --build")).toBe(false);
+  // --tsBuildInfoFile / --incremental write a .tsbuildinfo even with --noEmit.
+  expect(isReadOnlyCommand("tsc --noEmit --tsBuildInfoFile x")).toBe(false);
+  expect(isReadOnlyCommand("tsc --noEmit --incremental")).toBe(false);
 
   // And the read-only shapes of those same commands still pass.
   expect(isReadOnlyCommand("find . -name '*.ts'")).toBe(true);

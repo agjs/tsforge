@@ -293,6 +293,10 @@ function renderEventBody(event: ILoopEvent, color: boolean): string {
     case "tool":
       return `  ${paint(event.message, STYLE.dim, color)}\n`;
 
+    case "policy":
+      // Ledger-only signal; a denial is already shown via its `tool` event.
+      return "";
+
     case "timing":
       // Noise on screen (the status line shows turns + elapsed); log only.
       return color ? "" : `  ${event.message}\n`;
