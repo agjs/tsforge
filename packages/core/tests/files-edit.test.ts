@@ -90,6 +90,25 @@ test("fuzzy edit preserves CRLF line endings (no mixed endings) — issue #24", 
   }
 });
 
+test("fuzzy delete (empty newString) removes the matched lines, no blank line", async () => {
+  // Wrong indentation forces the fuzzy path; an empty newString should DELETE
+  // the matched line, not replace it with a blank line.
+  const dir = await tmp({ "a.ts": "keep1\n    a\n    b\nkeep2\n" });
+
+  try {
+    // "a\nb" isn't a substring (content indents b), so the exact match misses and
+    // the fuzzy path deletes lines a+b. The result must NOT contain a blank line.
+    const r = await applyEdits(dir, "a.ts", [
+      { oldString: "a\nb", newString: "" },
+    ]);
+
+    expect(r).toMatchObject({ ok: true });
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe("keep1\nkeep2\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("missing-file when the target does not exist", async () => {
   const dir = await tmp({});
 

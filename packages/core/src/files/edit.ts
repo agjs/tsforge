@@ -190,7 +190,9 @@ function fuzzyLineReplace(
   const start = starts[0] ?? 0;
   const rebuilt = [
     ...contentLines.slice(0, start),
-    ...newString.split(/\r?\n/),
+    // An empty newString DELETES the matched window — `"".split()` yields `[""]`,
+    // which would leave a stray blank line, so insert nothing instead.
+    ...(newString === "" ? [] : newString.split(/\r?\n/)),
     ...contentLines.slice(start + needle.length),
   ];
 
