@@ -47,6 +47,7 @@ export interface IReviewReport {
   /** How many raw findings the verify pass rejected (precision signal). */
   rejected: number;
   /** Failing gate rules the find pass was told to skip (from a gate-aware run);
-   *  empty when review ran without a gate signal. */
-  gateFailingRules: string[];
+   *  empty/omitted when review ran without a gate signal. Optional so a report from
+   *  an older/external caller (without the field) stays valid. */
+  gateFailingRules?: string[];
 }

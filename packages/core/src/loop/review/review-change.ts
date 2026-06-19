@@ -433,10 +433,11 @@ export function formatReport(report: IReviewReport): string {
     (f) =>
       `${f.severity.toUpperCase()} ${f.file}:${f.line} [${f.lens}]\n  ${f.claim}\n  → ${f.reason}`
   );
+  const gateFailingRules = report.gateFailingRules ?? [];
   const gateNote =
-    report.gateFailingRules.length > 0
+    gateFailingRules.length > 0
       ? [
-          `(gate-aware: skipped ${report.gateFailingRules.length} failing gate rule(s) the gate already covers)`,
+          `(gate-aware: skipped ${gateFailingRules.length} failing gate rule(s) the gate already covers)`,
         ]
       : [];
 

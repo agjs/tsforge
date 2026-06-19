@@ -1873,28 +1873,41 @@ async function runReviewCommand(
 /** Run the auto/explicit gate ONCE and return its distinct failing rule ids, so a
  *  gate-aware review skips what the gate already covers. Green/no-gate → []. */
 async function gateFailingRules(args: ICliArgs): Promise<string[]> {
-  const gate = await resolveGate(args, null);
+  // Running the gate can throw (missing deps, a broken gate command, env issues).
+  // A gate-aware review is an enhancement, never a hard dependency — on any failure
+  // fall back to a full review instead of crashing the command.
+  try {
+    const gate = await resolveGate(args, null);
 
-  if (gate.accept.length === 0) {
-    return [];
-  }
-
-  const task: ITask = { id: "review", accept: gate.accept, files: [] };
-  const result = await validate(task, args.dir);
-
-  if (result.passed) {
-    return [];
-  }
-
-  const rules = new Set<string>();
-
-  for (const error of result.errors) {
-    if (typeof error.rule === "string" && error.rule.length > 0) {
-      rules.add(error.rule);
+    if (gate.accept.length === 0) {
+      return [];
     }
-  }
 
-  return [...rules];
+    const task: ITask = { id: "review", accept: gate.accept, files: [] };
+    const result = await validate(task, args.dir);
+
+    if (result.passed) {
+      return [];
+    }
+
+    const rules = new Set<string>();
+
+    for (const error of result.errors) {
+      if (typeof error.rule === "string" && error.rule.length > 0) {
+        rules.add(error.rule);
+      }
+    }
+
+    return [...rules];
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    process.stdout.write(
+      `gate: couldn't run the gate (${message}) — falling back to full review\n`
+    );
+
+    return [];
+  }
 }
 
 async function reviewMode(args: ICliArgs): Promise<number> {
