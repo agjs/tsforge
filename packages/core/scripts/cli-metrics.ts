@@ -48,6 +48,8 @@ interface IMetrics {
   buildNudges: number;
   salvaged: number;
   hallucinatedImports: string[];
+  policyDenies: number;
+  policyAsks: number;
   wallClockSeconds: number;
 }
 
@@ -86,7 +88,9 @@ const HANDLERS: Record<
     m.edits += 1;
   },
   timing: (m, e) => {
-    m.wallClockSeconds += Math.round(num(e.ms) / 1000);
+    // Accumulate raw ms; analyze() rounds ONCE at the end (per-event rounding
+    // would floor sub-second turns to 0s).
+    m.wallClockSeconds += num(e.ms);
   },
   validated: (m) => {
     m.gateRuns += 1;
@@ -96,6 +100,12 @@ const HANDLERS: Record<
   },
   stuck: (m) => {
     m.finalStatus = "stuck";
+  },
+  policy: (m, e) => {
+    const decision = str(e.decision);
+
+    m.policyDenies += decision === "deny" ? 1 : 0;
+    m.policyAsks += decision === "ask" ? 1 : 0;
   },
   tool: (m, e) => {
     const msg = str(e.message);
@@ -122,6 +132,8 @@ function emptyMetrics(): IMetrics {
     buildNudges: 0,
     salvaged: 0,
     hallucinatedImports: [],
+    policyDenies: 0,
+    policyAsks: 0,
     wallClockSeconds: 0,
   };
 }
@@ -168,6 +180,8 @@ function analyze(lines: string[]): IMetrics {
 
   m.filesCreated = created.size;
   m.hallucinatedImports = [...hallucinated];
+  // wallClockSeconds accumulated raw ms above — convert to seconds once.
+  m.wallClockSeconds = Math.round(m.wallClockSeconds / 1000);
 
   return m;
 }
@@ -206,6 +220,7 @@ async function main(): Promise<void> {
     ["peak context", `${m.peakContext} (${pct}% of window)`],
     ["edits/creates", `${m.edits} (${m.filesCreated} files created)`],
     ["gate runs", String(m.gateRuns)],
+    ["policy denials/asks", `${m.policyDenies} / ${m.policyAsks}`],
     ["auto-compactions", String(m.compactions)],
     ["build nudges", String(m.buildNudges)],
     ["salvaged tool calls", String(m.salvaged)],

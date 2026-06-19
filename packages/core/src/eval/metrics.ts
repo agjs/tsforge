@@ -82,6 +82,9 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
   const created = new Set<string>();
   let tpsSum = 0;
   let tpsCount = 0;
+  // Accumulate raw ms and round ONCE at the end: rounding each timing event
+  // would floor sub-second turns to 0s (400+400+400ms → 0s instead of 1s).
+  let wallMs = 0;
 
   for (const event of events) {
     if (event.kind === "cycle") {
@@ -104,7 +107,7 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
     } else if (event.kind === "edit") {
       m.edits += 1;
     } else if (event.kind === "timing") {
-      m.wallClockSeconds += Math.round((event.ms ?? 0) / 1000);
+      wallMs += event.ms ?? 0;
     } else if (event.kind === "validated") {
       m.gateRuns += 1;
     } else if (event.kind === "done") {
@@ -119,6 +122,7 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
 
   m.filesCreated = created.size;
   m.avgTokensPerSecond = tpsCount > 0 ? Math.round(tpsSum / tpsCount) : 0;
+  m.wallClockSeconds = Math.round(wallMs / 1000);
   m.failureClass = classifyRun(events).failureClass;
 
   return m;

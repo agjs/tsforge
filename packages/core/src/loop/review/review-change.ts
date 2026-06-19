@@ -422,8 +422,21 @@ export function formatReport(report: IReviewReport): string {
     return "No changed source files to review.";
   }
 
+  // The gate-aware note must show even when nothing was found — otherwise a
+  // `--with-gate` run that skipped rules reads as "all clear" with no hint why.
+  const gateFailingRules = report.gateFailingRules ?? [];
+  const gateNote =
+    gateFailingRules.length > 0
+      ? [
+          `(gate-aware: skipped ${gateFailingRules.length} failing gate rule(s) the gate already covers)`,
+        ]
+      : [];
+
   if (report.findings.length === 0) {
-    return `No functional issues found across ${report.changedFiles.length} changed file(s) (${report.rejected} candidate(s) rejected on verification).`;
+    return [
+      `No functional issues found across ${report.changedFiles.length} changed file(s) (${report.rejected} candidate(s) rejected on verification).`,
+      ...gateNote,
+    ].join("\n");
   }
 
   const sorted = [...report.findings].sort(
@@ -433,13 +446,6 @@ export function formatReport(report: IReviewReport): string {
     (f) =>
       `${f.severity.toUpperCase()} ${f.file}:${f.line} [${f.lens}]\n  ${f.claim}\n  → ${f.reason}`
   );
-  const gateFailingRules = report.gateFailingRules ?? [];
-  const gateNote =
-    gateFailingRules.length > 0
-      ? [
-          `(gate-aware: skipped ${gateFailingRules.length} failing gate rule(s) the gate already covers)`,
-        ]
-      : [];
 
   return [
     `Review of ${report.changedFiles.length} changed file(s) vs ${report.base}:`,

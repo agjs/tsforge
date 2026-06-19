@@ -47,6 +47,18 @@ describe("parseRecipe", () => {
     expect(r?.maxTurns).toBeUndefined();
   });
 
+  test("a whitespace-only string field becomes undefined (not a broken value)", () => {
+    const r = parseRecipe({ id: "x", gate: "   ", model: "\t", base: "\n" });
+
+    expect(r?.gate).toBeUndefined();
+    expect(r?.model).toBeUndefined();
+    expect(r?.base).toBeUndefined();
+    // and a real value is trimmed
+    expect(parseRecipe({ id: "x", gate: "  bun test  " })?.gate).toBe(
+      "bun test"
+    );
+  });
+
   test("flags fields it doesn't yet apply (so they don't silently vanish)", () => {
     // `profile`/`tools` aren't applied in v1 — surface them rather than ignore.
     expect(
