@@ -17,6 +17,7 @@ import {
   TOOL_NAME,
 } from "../agent";
 import type { SetupWebFn } from "./tools";
+import type { PolicyMode } from "../policy";
 import { flags } from "../config";
 import { readFiles } from "../lib/fs";
 import { WEB_VENDORED_PATTERNS } from "../lib/scope";
@@ -77,6 +78,9 @@ export interface ISessionConfig {
   thinkingTokenBudget?: number;
   /** Per-`send` turn cap (default LOOP_LIMITS.maxTurns). */
   maxTurns?: number;
+  /** Base policy mode (from `--policy-mode`/config). Plan mode overrides it with
+   *  `"plan"`; absent ⇒ `"default"`. */
+  policyMode?: PolicyMode;
   /** Resume from a saved conversation (incl. its system message) instead of
    *  starting fresh — used by `--continue`. */
   history?: IChatMessage[];
@@ -484,6 +488,10 @@ export class Session {
    *  advertised tool list per call — `this.tools` itself is never mutated, so
    *  toggling off restores everything with zero bookkeeping. */
   private planMode = false;
+  /** The policy mode to fall back to when plan mode is OFF — from CLI/config
+   *  (wired in `create`), default `"default"`. Plan mode overrides it with
+   *  `"plan"`; toggling plan off restores THIS, not a hard `"default"`. */
+  private baseMode: PolicyMode = "default";
   /** Attach PLAN_MODE_NOTE to the NEXT send only (not every revision reply). */
   private planIntroPending = false;
   /** FORCED-TOOLS experiment — see ISessionConfig.forceTools. */
@@ -543,6 +551,8 @@ export class Session {
     }
 
     this.ctx = ctx;
+    this.baseMode = cfg.policyMode ?? "default";
+    this.ctx.policyMode = this.planMode ? "plan" : this.baseMode;
     // Buffer events off ctx.report (where edit/create/validated flow) so the
     // post-send memory hook can mine them; still forward to the original reporter.
     const rawCtxReport = ctx.report;
@@ -732,6 +742,9 @@ export class Session {
   setPlanMode(on: boolean): void {
     this.planMode = on;
     this.ctx.readOnly = on; // the hard guarantee at the execute layer
+    // Plan forces the read-only policy mode; toggling off restores the base mode
+    // (e.g. an explicit --policy-mode ci), not a hard reset to "default".
+    this.ctx.policyMode = on ? "plan" : this.baseMode;
     this.planIntroPending = on;
   }
 

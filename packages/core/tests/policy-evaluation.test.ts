@@ -275,14 +275,17 @@ describe("evaluatePolicy — critical denies win in every mode", () => {
     }
   });
 
-  test("out-of-scope write denied even in bypassPermissions", () => {
+  test("scope is deferred to the tool layer, not a policy critical", () => {
+    // Out-of-scope writes are enforced unconditionally by the write tools
+    // (writable/isVendored) in every mode, so policy intentionally does NOT
+    // critical-deny them here (that would only front-run the richer tool
+    // message). Policy's verdict for an in-scope-shaped path is the mode default.
     const v = evaluatePolicy(
       action("edit_file", { paths: ["../escape.ts"] }),
       ctx("bypassPermissions")
     );
 
-    expect(v.decision).toBe("deny");
-    expect(v.matchedRules).toContain("critical:out-of-scope-write");
+    expect(v.decision).toBe("allow");
   });
 
   test("private-key read denied; bypassPermissions otherwise allows", () => {

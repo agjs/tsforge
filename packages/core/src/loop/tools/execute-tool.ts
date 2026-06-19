@@ -11,6 +11,11 @@ import { doAddDependency } from "./add-dependency";
 import { doWebFetch } from "./web-fetch";
 import { doWebSearch } from "./web-search";
 import { reject, type IToolContext } from "./tool-context";
+import {
+  classifyAction,
+  evaluatePolicy,
+  type IPolicyContext,
+} from "../../policy";
 
 export type { IToolContext } from "./tool-context";
 
@@ -52,6 +57,21 @@ function isToolName(name: string): name is ToolName {
   return Object.hasOwn(HANDLERS, name);
 }
 
+/** Build the policy context from the ambient tool context. Mode defaults to
+ *  `"default"` (drive-to-green) when unset; MCP server names come from the
+ *  registry so a forged/unregistered `mcp__*` call is a critical deny. */
+function policyContextFrom(ctx: IToolContext): IPolicyContext {
+  const servers = ctx.mcpRegistry?.serverNames();
+
+  return {
+    mode: ctx.policyMode ?? "default",
+    cwd: ctx.cwd,
+    files: ctx.files,
+    interactive: ctx.interactive ?? false,
+    ...(servers === undefined ? {} : { mcpServers: servers }),
+  };
+}
+
 /**
  * Perform one tool call and return the text result fed back to the model as a
  * tool message. Dispatch only — the handlers live in file-ops (read/run/edit/
@@ -62,9 +82,25 @@ export async function executeTool(
   call: IToolCall,
   ctx: IToolContext
 ): Promise<string> {
+  // UNIFIED POLICY (deny-first), evaluated BEFORE any routing so it wraps
+  // built-in, MCP, plugin, and unknown tools alike. Tool-local guards (scope,
+  // vendored, SSRF, argv) still run afterwards — policy is an outer layer, not a
+  // replacement. The model proposes; the harness enforces.
+  const verdict = evaluatePolicy(
+    classifyAction(call, ctx.cwd),
+    policyContextFrom(ctx)
+  );
+
+  if (verdict.decision !== "allow") {
+    return reject(
+      ctx,
+      call.name,
+      `policy ${verdict.decision}: ${verdict.reason}`
+    );
+  }
+
   // MCP tools (mcp__<server>__<tool>) are dispatched to their server. They are
-  // external context sources — never workspace mutations — so they bypass the
-  // built-in name table and the plan-mode write guard below.
+  // external context sources — never workspace mutations.
   if (ctx.mcpRegistry?.has(call.name) === true) {
     return ctx.mcpRegistry.callTool(call.name, call.arguments);
   }

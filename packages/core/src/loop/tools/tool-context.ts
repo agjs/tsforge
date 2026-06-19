@@ -3,6 +3,7 @@ import type { TsService } from "../../lsp";
 import type { Reporter } from "../loop.types";
 import type { SessionSnapshotStore } from "../../files/hashline";
 import type { McpRegistry } from "../../mcp";
+import type { PolicyMode } from "../../policy";
 
 /** Turn a workspace into a web project. Resolves with the files actually written
  *  (mutation accounting / re-gate) and whether dependency install succeeded. The
@@ -43,6 +44,13 @@ export interface IToolContext {
    *  read-only commands — the hard guarantee behind the filtered tool list (a
    *  salvaged/forced call could otherwise still write). */
   readOnly?: boolean;
+  /** Active policy mode for the unified action-policy layer (executeTool runs
+   *  every call through `evaluatePolicy` first). Absent ⇒ `"default"` (the
+   *  autonomous drive-to-green default), so existing call sites are unchanged. */
+  policyMode?: PolicyMode;
+  /** Whether a real interactive per-action approval path exists. Absent/false ⇒
+   *  a policy `ask` resolves to `deny` (no approval UI today). */
+  interactive?: boolean;
   /** Hashline snapshot store for stale-anchor recovery (per-session, lazily initialized). */
   snapshotStore?: SessionSnapshotStore;
   /** Connected MCP servers. When present, `mcp__<server>__<tool>` calls are routed

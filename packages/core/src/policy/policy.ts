@@ -1,4 +1,3 @@
-import { writable } from "../lib/scope";
 import { isDestructiveShell, isPrivateKeyPath } from "./patterns";
 import type {
   ActionKind,
@@ -124,9 +123,11 @@ interface ICriticalHit {
 }
 
 /** Denials that win in EVERY mode (incl. bypassPermissions). Returns null when
- *  nothing critical matches. Vendored writes are intentionally NOT here — the
- *  scaffold tools legitimately author vendored files; scope (`writable`) is the
- *  hard floor that still catches `../` escapes and out-of-scope writes. */
+ *  nothing critical matches. These are protections with NO unconditional
+ *  tool-local equivalent. Out-of-scope and vendored writes are deliberately NOT
+ *  here: the write tools already enforce `writable`/`isVendored` in every mode
+ *  (and scaffold tools legitimately author vendored files), so duplicating it
+ *  here would only front-run their richer, model-guiding rejection messages. */
 function criticalDeny(
   action: IProposedAction,
   ctx: IPolicyContext
@@ -140,17 +141,6 @@ function criticalDeny(
       reason: `destructive shell command blocked: ${preview(action.command)}`,
       rule: "critical:destructive-shell",
     };
-  }
-
-  if (WRITE_KINDS.has(action.kind) && action.paths !== undefined) {
-    const escaped = action.paths.find((p) => !writable(p, [...ctx.files]));
-
-    if (escaped !== undefined) {
-      return {
-        reason: `write outside the editable scope blocked: ${escaped}`,
-        rule: "critical:out-of-scope-write",
-      };
-    }
   }
 
   if (action.kind === "read_file" && action.paths !== undefined) {
@@ -279,6 +269,29 @@ function evaluation(
   };
 }
 
+/** A human-readable reason for a mode-default verdict — informative for the
+ *  model (especially the plan-mode read-only nudge), while `matchedRules` keeps
+ *  the stable `mode:<mode>` id for the ledger/tests. */
+function modeReason(
+  mode: PolicyMode,
+  kind: ActionKind,
+  decision: PolicyDecision
+): string {
+  if (kind === "unknown") {
+    return "unrecognized action — unknown tools are never run without explicit approval";
+  }
+
+  if (decision !== "deny") {
+    return `mode:${mode}`;
+  }
+
+  if (mode === "plan") {
+    return "plan mode is read-only — explore with read-only tools and present your plan as text; the user must approve it before files can change";
+  }
+
+  return `${mode} mode does not allow this ${kind} action (ambiguous/unsafe actions are not auto-approved)`;
+}
+
 /** Resolve a decision: an `ask` with no interactive approval path becomes a
  *  `deny` (TSForge has no per-action prompt yet, so this is always the case). */
 function resolve(
@@ -325,5 +338,11 @@ export function evaluatePolicy(
 
   const base = MODE_MATRIX[ctx.mode][action.kind];
 
-  return resolve(base, `mode:${ctx.mode}`, [`mode:${ctx.mode}`], action, ctx);
+  return resolve(
+    base,
+    modeReason(ctx.mode, action.kind, base),
+    [`mode:${ctx.mode}`],
+    action,
+    ctx
+  );
 }
