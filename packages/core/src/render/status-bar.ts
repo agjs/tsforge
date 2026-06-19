@@ -377,7 +377,11 @@ export class StatusBar {
 
     this.out.write(`${ESC}[r`); // reset scroll region to full screen
 
-    for (let row = rows - this.reserved + 1; row <= rows; row += 1) {
+    // Clamp to row 1: a resize below `reserved` after install would otherwise
+    // make the start non-positive and emit invalid `${ESC}[0;1H` sequences.
+    const startRow = Math.max(1, rows - this.reserved + 1);
+
+    for (let row = startRow; row <= rows; row += 1) {
       this.out.write(`${ESC}[${row};1H${ESC}[2K`); // clear each reserved row
     }
 

@@ -23,7 +23,7 @@ class FakeTerm implements IStatusBarTerminal {
 
   constructor(
     readonly isTTY: boolean,
-    readonly rows: number,
+    public rows: number,
     readonly columns: number
   ) {}
 
@@ -234,6 +234,21 @@ describe("StatusBar with input row", () => {
     expect(out.startsWith("\x1b7")).toBe(false);
     expect(out).toContain("\x1b[24;1H"); // segments repainted
     expect(out).toContain("\x1b[22;1H"); // input row repainted last
+  });
+
+  test("teardown after a shrink below the reserved height emits no row index < 1", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term); // reserves 3 rows
+
+    bar.install(INFO);
+    term.rows = 2; // resized smaller than `reserved` before teardown
+    term.writes.length = 0;
+    bar.teardown();
+
+    // Every cursor-position sequence must target a 1-indexed (>= 1) row.
+    for (const match of term.text().matchAll(/\[(-?\d+);1H/g)) {
+      expect(Number(match[1])).toBeGreaterThanOrEqual(1);
+    }
   });
 
   test("teardown clears all THREE reserved rows", () => {
