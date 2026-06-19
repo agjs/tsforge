@@ -36,6 +36,16 @@ It is **functional** review — logic, regressions, edge cases, and business rul
 
 The same review is available inside an interactive session as **`/review`** (optionally `/review <base>` to diff against a specific ref).
 
+## Recipes
+
+```bash
+tsforge recipes                          # list this repo's recipes
+tsforge run api-endpoint "add a route"   # run a saved recipe by name
+tsforge run api-endpoint --files lib/**  # ...with a CLI override (CLI wins)
+```
+
+A recipe is declarative JSON in `.tsforge/recipes/<id>.json` (project) or `~/.tsforge/recipes/<id>.json` (global) that composes a run's options — model, gate, scope, limits, policy mode. See [Recipes](/cli/recipes/).
+
 ## Map the repo to prime the agent
 
 ```bash
