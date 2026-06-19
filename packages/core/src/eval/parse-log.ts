@@ -63,13 +63,18 @@ function toRisk(value: unknown): ILoopEvent["risk"] {
 
 /** The event's field source. The `--log` ledger wraps every event in `payload`
  *  ({type, payload:{kind,…}}); a legacy/raw stream IS the event ({kind,…}). Read
- *  through whichever shape this line is, so both parse identically. */
+ *  through whichever shape this line is, so both parse identically. A wrapped
+ *  ledger line never has a top-level `kind` (it lives in `payload`), so gating on
+ *  its ABSENCE keeps a legacy flat event that happens to carry its own `payload`
+ *  field (e.g. tool args) from being misread as wrapped. */
 function eventSource(record: unknown): Record<string, unknown> | null {
   if (!isRecord(record)) {
     return null;
   }
 
-  return isRecord(record.payload) ? record.payload : record;
+  return !("kind" in record) && isRecord(record.payload)
+    ? record.payload
+    : record;
 }
 
 function assignText(event: ILoopEvent, src: Record<string, unknown>): void {

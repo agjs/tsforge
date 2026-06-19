@@ -146,8 +146,11 @@ function analyze(lines: string[]): IMetrics {
 
     // The `--log` ledger wraps each event in `payload` ({type, payload:{kind,…}});
     // a legacy flat line IS the event. Read through whichever shape this line is,
-    // or every field comes back empty and the metrics silently read zero.
-    const src = isRecord(event.payload) ? event.payload : event;
+    // or every field comes back empty and the metrics silently read zero. Gate on
+    // top-level `kind` being ABSENT (only the wrapped shape lacks it) so a flat
+    // event carrying its own `payload` field isn't misread as wrapped.
+    const src =
+      !("kind" in event) && isRecord(event.payload) ? event.payload : event;
 
     // Concatenate ALL message/output text, then scan once — a "Cannot find
     // module" can be split across streamed token chunks.

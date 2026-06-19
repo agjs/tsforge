@@ -103,6 +103,23 @@ describe("trace parser: writer↔reader contract", () => {
 
     expect(parsed.map((e) => e.kind)).toEqual(["cycle", "done"]);
   });
+
+  // A flat event can legitimately carry its OWN `payload` field (e.g. tool args).
+  // The source-shape check must key on top-level `kind` being absent — not just on
+  // a `payload` existing — or the flat event's real fields get discarded.
+  test("a flat event with its own `payload` field still reads top-level fields", () => {
+    const line = JSON.stringify({
+      kind: "run",
+      task: "t",
+      message: "ran",
+      payload: { foo: "bar" },
+    });
+    const parsed = parseEventLog(line);
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.kind).toBe("run");
+    expect(parsed[0]?.message).toBe("ran");
+  });
 });
 
 describe("trace metrics: policy counts", () => {
