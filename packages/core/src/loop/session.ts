@@ -551,7 +551,8 @@ export class Session {
     }
 
     this.ctx = ctx;
-    this.baseMode = cfg.policyMode ?? "default";
+    // create() already resolved the base mode (CLI > config > default) onto ctx.
+    this.baseMode = ctx.policyMode ?? "default";
     this.ctx.policyMode = this.planMode ? "plan" : this.baseMode;
     // Buffer events off ctx.report (where edit/create/validated flow) so the
     // post-send memory hook can mine them; still forward to the original reporter.
@@ -589,6 +590,11 @@ export class Session {
     // pack selection and rule-severity overrides.
     const detected = await detectStack(cfg.cwd);
     const projectConfig = await loadTsforgeConfig(cfg.cwd);
+    // Base policy mode + rules: CLI (`--policy-mode` via cfg) wins over the
+    // config file's `policy.mode`, else `"default"`. Plan mode overrides this
+    // base at runtime (setPlanMode).
+    const baseMode = cfg.policyMode ?? projectConfig.policy?.mode ?? "default";
+    const policyRules = projectConfig.policy?.rules;
     const activePacks = resolveActivePacks(detected.packs, projectConfig);
     // Opt-in: load rule packs from external plugins and fold their ids into the
     // active packs so the gate runs them. loadAndRegisterPlugins never throws.
@@ -636,6 +642,8 @@ export class Session {
       report,
       stackProfile,
       touched: new Set<string>(),
+      policyMode: baseMode,
+      ...(policyRules === undefined ? {} : { policyRules }),
       ...(mcpRegistry === null ? {} : { mcpRegistry }),
       ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
       messages:

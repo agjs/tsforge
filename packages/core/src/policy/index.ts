@@ -9,6 +9,12 @@ export type {
   IPolicyRules,
   IPolicyContext,
 } from "./policy.types";
-export { evaluatePolicy } from "./policy";
+export {
+  evaluatePolicy,
+  POLICY_MODES,
+  isPolicyMode,
+  ACTION_KINDS,
+  isActionKind,
+} from "./policy";
 export { classifyAction } from "./classify";
 export { isDestructiveShell, isPrivateKeyPath } from "./patterns";

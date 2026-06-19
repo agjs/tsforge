@@ -69,6 +69,7 @@ function policyContextFrom(ctx: IToolContext): IPolicyContext {
     files: ctx.files,
     interactive: ctx.interactive ?? false,
     ...(servers === undefined ? {} : { mcpServers: servers }),
+    ...(ctx.policyRules === undefined ? {} : { rules: ctx.policyRules }),
   };
 }
 

@@ -2,6 +2,14 @@ import { join } from "node:path";
 import { isRecord } from "../lib/guards";
 import { PACK_REGISTRY } from "../stack-detection";
 import { parseMcpServers, type IMcpServerConfig } from "../mcp";
+import {
+  isPolicyMode,
+  isActionKind,
+  POLICY_MODES,
+  type PolicyMode,
+  type IPolicyRule,
+  type IPolicyRules,
+} from "../policy";
 import { parsePlugins, type IExternalPlugin } from "./external-plugins";
 import {
   DEFAULT_PROFILE,
@@ -50,6 +58,17 @@ export interface ITsforgeProjectConfig {
    * exported packs to use. Opt-in: absent ⇒ only built-in packs.
    */
   readonly plugins?: readonly IExternalPlugin[];
+
+  /**
+   * Unified action-policy settings. `mode` sets the base enforcement strength
+   * (overridden by `--policy-mode` and by plan mode); `rules` are deny/allow/ask
+   * lists evaluated before the mode default (deny-first). Opt-in: absent ⇒ the
+   * `default` mode with no extra rules.
+   */
+  readonly policy?: {
+    readonly mode?: PolicyMode;
+    readonly rules?: IPolicyRules;
+  };
 }
 
 function warnConfig(msg: string): void {
@@ -213,6 +232,146 @@ function validateRules(
 /** Validate each known field of an already-parsed config object, dropping any
  *  that fail their per-field validator. Kept separate from the file IO so the
  *  loader stays simple. */
+/** A single policy rule — warn-and-drop: unknown/typed-wrong fields are dropped,
+ *  an empty rule (matches everything) is a deliberate catch-all. */
+function validatePolicyRule(parsed: unknown): IPolicyRule | undefined {
+  if (!isRecord(parsed)) {
+    warnConfig("tsforge.config.json: a policy rule must be an object");
+
+    return undefined;
+  }
+
+  const rule: {
+    kind?: IPolicyRule["kind"];
+    toolName?: string;
+    pathPattern?: string;
+    commandPrefix?: string;
+    commandPattern?: string;
+    mcpServer?: string;
+  } = {};
+
+  if (isActionKind(parsed.kind)) {
+    rule.kind = parsed.kind;
+  }
+
+  if (typeof parsed.toolName === "string") {
+    rule.toolName = parsed.toolName;
+  }
+
+  if (typeof parsed.pathPattern === "string") {
+    rule.pathPattern = parsed.pathPattern;
+  }
+
+  if (typeof parsed.commandPrefix === "string") {
+    rule.commandPrefix = parsed.commandPrefix;
+  }
+
+  if (typeof parsed.commandPattern === "string") {
+    rule.commandPattern = parsed.commandPattern;
+  }
+
+  if (typeof parsed.mcpServer === "string") {
+    rule.mcpServer = parsed.mcpServer;
+  }
+
+  return rule;
+}
+
+function validateRuleList(parsed: unknown, label: string): IPolicyRule[] {
+  if (!Array.isArray(parsed)) {
+    warnConfig(`tsforge.config.json: policy.rules.${label} must be an array`);
+
+    return [];
+  }
+
+  const out: IPolicyRule[] = [];
+
+  for (const entry of parsed) {
+    const rule = validatePolicyRule(entry);
+
+    if (rule !== undefined) {
+      out.push(rule);
+    }
+  }
+
+  return out;
+}
+
+function validatePolicyRules(parsed: unknown): IPolicyRules | undefined {
+  if (!isRecord(parsed)) {
+    warnConfig('tsforge.config.json: "policy.rules" must be an object');
+
+    return undefined;
+  }
+
+  const rules: {
+    deny?: IPolicyRule[];
+    allow?: IPolicyRule[];
+    ask?: IPolicyRule[];
+  } = {};
+
+  if (parsed.deny !== undefined) {
+    rules.deny = validateRuleList(parsed.deny, "deny");
+  }
+
+  if (parsed.allow !== undefined) {
+    rules.allow = validateRuleList(parsed.allow, "allow");
+  }
+
+  if (parsed.ask !== undefined) {
+    rules.ask = validateRuleList(parsed.ask, "ask");
+  }
+
+  return rules;
+}
+
+function validatePolicy(
+  parsed: unknown
+): { mode?: PolicyMode; rules?: IPolicyRules } | undefined {
+  if (!isRecord(parsed)) {
+    warnConfig(
+      `tsforge.config.json: "policy" must be an object, got ${typeof parsed}`
+    );
+
+    return undefined;
+  }
+
+  const policy: { mode?: PolicyMode; rules?: IPolicyRules } = {};
+
+  if (parsed.mode !== undefined) {
+    if (isPolicyMode(parsed.mode)) {
+      policy.mode = parsed.mode;
+    } else {
+      warnConfig(
+        `tsforge.config.json: policy.mode must be one of ${POLICY_MODES.join(", ")}, got ${JSON.stringify(parsed.mode)}`
+      );
+    }
+  }
+
+  if (parsed.rules !== undefined) {
+    policy.rules = validatePolicyRules(parsed.rules);
+  }
+
+  return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
+/** Validate + assign the optional `policy` block (kept off `buildConfigFields`
+ *  so its per-field branches don't push the function over the complexity cap). */
+function assignPolicy(
+  parsed: Record<string, unknown>,
+  configFields: { policy?: { mode?: PolicyMode; rules?: IPolicyRules } }
+): void {
+  if (parsed.policy === undefined) {
+    return;
+  }
+
+  const policy = validatePolicy(parsed.policy);
+
+  if (policy !== undefined) {
+    configFields.policy = policy;
+  }
+}
+
 function buildConfigFields(
   parsed: Record<string, unknown>
 ): ITsforgeProjectConfig {
@@ -223,6 +382,7 @@ function buildConfigFields(
     rules?: Record<string, "error" | "warn" | "off">;
     mcpServers?: Record<string, IMcpServerConfig>;
     plugins?: readonly IExternalPlugin[];
+    policy?: { mode?: PolicyMode; rules?: IPolicyRules };
   } = {};
 
   if (parsed.profile !== undefined) {
@@ -272,6 +432,8 @@ function buildConfigFields(
       configFields.plugins = plugins;
     }
   }
+
+  assignPolicy(parsed, configFields);
 
   return configFields;
 }

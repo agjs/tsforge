@@ -17,6 +17,7 @@ import {
   formatReport,
 } from "./loop";
 import { buildAndPersistMap, mapStatus, forgetMap } from "./codebase";
+import { isPolicyMode } from "./policy";
 import {
   PROVIDER_LIMITS,
   PROVIDER_DEFAULTS,
@@ -133,6 +134,9 @@ export interface ICliArgs {
   base: string;
   /** Build a structural workspace map (`tsforge map`). */
   map: boolean;
+  /** Base policy mode (`--policy-mode <plan|default|acceptEdits|ci|dontAsk|
+   *  bypassPermissions>`); overrides the config file's policy.mode. */
+  policyMode: string;
 }
 
 const BOOL_FLAGS: Record<
@@ -157,6 +161,7 @@ const VALUE_FLAGS = new Set([
   "--browser",
   "--resume",
   "--base",
+  "--policy-mode",
 ]);
 
 /** Parse argv (without the tsforge binary name). Always succeeds — mode is decided in main. */
@@ -179,6 +184,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     staged: false,
     base: "",
     map: false,
+    policyMode: "",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -232,6 +238,8 @@ function applyValueFlag(flag: string, value: string, out: ICliArgs): void {
     out.resumeId = value;
   } else if (flag === "--base") {
     out.base = value;
+  } else if (flag === "--policy-mode") {
+    out.policyMode = value;
   } else {
     out.accept = value; // --accept / --gate
   }
@@ -1021,6 +1029,8 @@ async function repl(args: ICliArgs): Promise<number> {
       : { scaffoldWeb: true, fix: buildCoreFix() }),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
+    // `--policy-mode` (validated) overrides the config file's policy.mode.
+    ...(isPolicyMode(args.policyMode) ? { policyMode: args.policyMode } : {}),
     // Thinking OFF for interactive replies so they STREAM immediately instead of
     // stalling on a long hidden chain-of-thought (qwen-local defaults thinking on).
     // The session still flips thinking ON automatically while repairing gate errors.

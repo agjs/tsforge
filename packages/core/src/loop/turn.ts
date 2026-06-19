@@ -11,7 +11,7 @@ import {
   type IErrorItem,
 } from "../validate";
 import { isInScope } from "../lib/scope";
-import type { PolicyMode } from "../policy";
+import type { PolicyMode, IPolicyRules } from "../policy";
 import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
 import type { IRunResult, Reporter } from "./loop.types";
@@ -166,6 +166,8 @@ export interface ILoopCtx {
    *  mode forces `"plan"`; otherwise the base mode from CLI/config (default
    *  `"default"`). Threaded into the tool context. */
   policyMode?: PolicyMode;
+  /** Config-driven policy rules (deny/allow/ask) threaded to the tool context. */
+  policyRules?: IPolicyRules;
   /** Whether an interactive per-action approval path exists (false today). */
   interactive?: boolean;
   /** Connected MCP servers (opt-in via tsforge.config.json `mcpServers`). Threaded
@@ -580,6 +582,7 @@ function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
     ...(ctx.vendored === undefined ? {} : { vendored: ctx.vendored }),
     ...(ctx.readOnly === undefined ? {} : { readOnly: ctx.readOnly }),
     ...(ctx.policyMode === undefined ? {} : { policyMode: ctx.policyMode }),
+    ...(ctx.policyRules === undefined ? {} : { policyRules: ctx.policyRules }),
     ...(ctx.interactive === undefined ? {} : { interactive: ctx.interactive }),
     ...(ctx.mcpRegistry === undefined ? {} : { mcpRegistry: ctx.mcpRegistry }),
   };

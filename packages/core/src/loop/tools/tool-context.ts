@@ -3,7 +3,7 @@ import type { TsService } from "../../lsp";
 import type { Reporter } from "../loop.types";
 import type { SessionSnapshotStore } from "../../files/hashline";
 import type { McpRegistry } from "../../mcp";
-import type { PolicyMode } from "../../policy";
+import type { PolicyMode, IPolicyRules } from "../../policy";
 
 /** Turn a workspace into a web project. Resolves with the files actually written
  *  (mutation accounting / re-gate) and whether dependency install succeeded. The
@@ -48,6 +48,9 @@ export interface IToolContext {
    *  every call through `evaluatePolicy` first). Absent ⇒ `"default"` (the
    *  autonomous drive-to-green default), so existing call sites are unchanged. */
   policyMode?: PolicyMode;
+  /** Config-driven policy rules (deny/allow/ask), evaluated before the mode
+   *  default. Absent ⇒ mode default only. */
+  policyRules?: IPolicyRules;
   /** Whether a real interactive per-action approval path exists. Absent/false ⇒
    *  a policy `ask` resolves to `deny` (no approval UI today). */
   interactive?: boolean;

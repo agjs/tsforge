@@ -10,6 +10,41 @@ import type {
   RiskLevel,
 } from "./policy.types";
 
+/** Every valid policy mode — the single source for config/CLI validation. */
+export const POLICY_MODES: readonly PolicyMode[] = [
+  "plan",
+  "default",
+  "acceptEdits",
+  "ci",
+  "dontAsk",
+  "bypassPermissions",
+];
+
+const POLICY_MODE_SET = new Set<string>(POLICY_MODES);
+
+export function isPolicyMode(value: unknown): value is PolicyMode {
+  return typeof value === "string" && POLICY_MODE_SET.has(value);
+}
+
+/** Every action kind — for validating a config rule's `kind` field. */
+export const ACTION_KINDS: readonly ActionKind[] = [
+  "read_file",
+  "write_file",
+  "edit_file",
+  "delete_file",
+  "shell",
+  "network",
+  "mcp_tool",
+  "plugin_tool",
+  "unknown",
+];
+
+const ACTION_KIND_SET = new Set<string>(ACTION_KINDS);
+
+export function isActionKind(value: unknown): value is ActionKind {
+  return typeof value === "string" && ACTION_KIND_SET.has(value);
+}
+
 /**
  * Per-mode default verdict for each action kind — consulted only AFTER critical
  * denies and config rules. `default` preserves TSForge's autonomous
