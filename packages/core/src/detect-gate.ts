@@ -1,5 +1,5 @@
 import { join, dirname } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { ESLint } from "eslint";
 import { WEB_TEMPLATES, type WebFramework } from "./web-templates";
 import { isRecord } from "./lib/guards";
@@ -158,11 +158,60 @@ const STRICT_TSCONFIG_OVERLAY = `{
 /** The gate overlay's home: tsforge's cache dir + the overlay filename. */
 const GATE_TSCONFIG_DIR = ".tsforge";
 const GATE_TSCONFIG_FILE = "tsconfig.gate.json";
+/** The project's own TypeScript config (the model-editable one). */
+const PROJECT_TSCONFIG = "tsconfig.json";
 /** Persistent incremental-typecheck cache (in .tsforge/, git-ignored). Reused
  *  across settles so a warm `tsc` only re-checks what changed — tsc stays the
  *  authority, just amortized. */
 const GATE_TSBUILDINFO_FILE = "gate.tsbuildinfo";
 const INCREMENTAL_FLAGS = `--incremental --tsBuildInfoFile ${GATE_TSCONFIG_DIR}/${GATE_TSBUILDINFO_FILE}`;
+
+/** The web gate typechecks through this HARNESS-OWNED overlay, NOT the project's
+ *  own tsconfig.json. That file is model-editable and tooling (shadcn init, the
+ *  model fixing a path) routinely rewrites it and drops the test-file exclude.
+ *  When the exclude is gone, tsc pulls the model's co-located test files into the
+ *  program and their `import … from "bun:test"` becomes a gate-failing TS2307 —
+ *  `bun:test` is a Bun runtime module that `bun test` resolves natively but tsc
+ *  can't (it needs the exclude OR @types/bun, and neither is guaranteed to survive
+ *  an install flake / a rewrite). The overlay extends the project config (so paths/
+ *  jsx/lib still resolve) but FORCES the exclude, so test files are run by `bun test`
+ *  and never typechecked — robust to any rewrite of tsconfig.json. (Mirrors the core
+ *  gate's `.tsforge/tsconfig.gate.json` overlay.) */
+const WEB_GATE_TSCONFIG_FILE = "tsconfig.web-gate.json";
+const STRICT_WEB_TSCONFIG_OVERLAY = `{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "noEmit": true, "skipLibCheck": true },
+  "include": ["../**/*.ts", "../**/*.tsx"],
+  "exclude": ["../node_modules", "../dist", "../build", "../.tsforge", "../**/*.test.ts", "../**/*.test.tsx"]
+}
+`;
+
+/** Write the web-gate tsconfig overlay under `.tsforge/` and return the `tsc -p`
+ *  target for it. Falls back to the project tsconfig when none exists yet (called
+ *  before scaffolding) — the gate is rebuilt once the project is laid down. Sync +
+ *  idempotent so the synchronous gate builders can call it without a signature
+ *  change. */
+function ensureWebGateTsconfig(cwd: string): string {
+  if (!existsSync(join(cwd, PROJECT_TSCONFIG))) {
+    return PROJECT_TSCONFIG;
+  }
+
+  const dir = join(cwd, GATE_TSCONFIG_DIR);
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, WEB_GATE_TSCONFIG_FILE), STRICT_WEB_TSCONFIG_OVERLAY);
+
+  const ignore = join(dir, ".gitignore");
+
+  if (!existsSync(ignore)) {
+    writeFileSync(
+      ignore,
+      `${WEB_GATE_TSCONFIG_FILE}\n${GATE_TSCONFIG_FILE}\n${GATE_TSBUILDINFO_FILE}\n`
+    );
+  }
+
+  return `${GATE_TSCONFIG_DIR}/${WEB_GATE_TSCONFIG_FILE}`;
+}
 
 // The web-stack scaffolds (Vite + React full-kit, or Vite vanilla) live in the
 // registry; this module just lays them down and builds their gate. shadcn/TanStack
@@ -466,7 +515,7 @@ export function buildWebGate(
     .map((glob) => `--ignore-pattern "${glob}"`)
     .join(" ");
   const build = `bun run build`;
-  const tsc = `"${TSC_BIN}" --noEmit -p tsconfig.json`;
+  const tsc = `"${TSC_BIN}" --noEmit -p ${ensureWebGateTsconfig(cwd)}`;
   const lint =
     `${packEnvPrefix(packs)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --format json .`.replace(
       /\s+/g,
@@ -500,7 +549,7 @@ export function buildWebGate(
   // historically did not, so a dropped `await` in a handler/effect/mutation passed.
   // Splice it in after the syntactic lint when the scaffold has a tsconfig (it
   // always does), reusing the SHIPPED strict.type-aware config verbatim.
-  const typeAware = existsSync(join(cwd, "tsconfig.json"))
+  const typeAware = existsSync(join(cwd, PROJECT_TSCONFIG))
     ? `bun "${ESLINT_BIN}" --no-config-lookup -c "${TYPE_AWARE_CONFIG}" ${ignores} --format json .`.replace(
         /\s+/g,
         " "
@@ -550,8 +599,12 @@ export function buildWebTypeGate(
 /** Just `tsc --noEmit` — the FAST incremental check run every few edits while
  *  building, so type errors (the avalanche source) surface early. Lint waits for
  *  the full gate (running it every few edits is noisy on half-written files). */
-export function buildWebTscCheck(): string {
-  return `"${TSC_BIN}" --noEmit -p tsconfig.json`;
+export function buildWebTscCheck(cwd: string = process.cwd()): string {
+  // Same overlay as the gate: the per-write check runs WHILE the model is writing
+  // test siblings, so without the forced test-exclude it would spuriously red every
+  // edit with a `bun:test` TS2307 — the very thing that nudges the model into
+  // mangling tsconfig.json in the first place.
+  return `"${TSC_BIN}" --noEmit -p ${ensureWebGateTsconfig(cwd)}`;
 }
 
 /**
@@ -793,7 +846,7 @@ async function hasTestFiles(cwd: string): Promise<boolean> {
  * whatever the repo set.)
  */
 async function tscPart(cwd: string): Promise<string | null> {
-  const hasTsconfig = await Bun.file(join(cwd, "tsconfig.json")).exists();
+  const hasTsconfig = await Bun.file(join(cwd, PROJECT_TSCONFIG)).exists();
 
   if (hasTsconfig) {
     // EPHEMERAL gate artifact: lives in .tsforge/ (Bun.write makes the dir), so
@@ -811,7 +864,7 @@ async function tscPart(cwd: string): Promise<string | null> {
   // actually a TS project (has a package.json), so we never litter a random dir.
   // Unlike the overlay, a greenfield tsconfig.json is a DURABLE project file.
   if (await Bun.file(join(cwd, "package.json")).exists()) {
-    await Bun.write(join(cwd, "tsconfig.json"), STRICT_TSCONFIG);
+    await Bun.write(join(cwd, PROJECT_TSCONFIG), STRICT_TSCONFIG);
     // The buildinfo lives in .tsforge/ (git-ignored), NOT next to the durable
     // tsconfig — so incremental never leaks a cache file into the user's tree.
     await ignoreGateArtifact(cwd);
@@ -868,7 +921,7 @@ function lintPart(
 
 /** Optional type-aware async rules — only when target has tsconfig.json. */
 async function typeAwareLintPart(cwd: string): Promise<IGate | null> {
-  const hasTsconfig = await Bun.file(join(cwd, "tsconfig.json")).exists();
+  const hasTsconfig = await Bun.file(join(cwd, PROJECT_TSCONFIG)).exists();
 
   if (!hasTsconfig) {
     return null;

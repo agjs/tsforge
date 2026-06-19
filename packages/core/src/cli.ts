@@ -1024,7 +1024,7 @@ async function repl(args: ICliArgs): Promise<number> {
           scaffoldUi: true,
           guidance: webGuidance("react"),
           fix: buildWebFix("react"),
-          incrementalCheck: buildWebTscCheck(),
+          incrementalCheck: buildWebTscCheck(args.dir),
         }
       : { scaffoldWeb: true, fix: buildCoreFix() }),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
@@ -1151,7 +1151,7 @@ async function repl(args: ICliArgs): Promise<number> {
 
     session.setGate(buildWebGate(framework, undefined, args.dir).command);
     session.setFix(buildWebFix(framework));
-    session.setIncrementalCheck(buildWebTscCheck());
+    session.setIncrementalCheck(buildWebTscCheck(args.dir));
     // The project only now has a tsconfig + node_modules — rebuild the TS service
     // so the per-write guard actually runs (it's skipped on a null service), and
     // switch the lint moat to the web rules so component-architecture /
