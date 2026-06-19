@@ -215,7 +215,7 @@ test("scaffoldWeb(vanilla) lays a Vite + TS skeleton; gate has no vendored exemp
 
     expect(pkg).not.toContain("react");
 
-    const gate = buildWebGate("vanilla");
+    const gate = buildWebGate("vanilla", undefined, dir);
 
     expect(gate.command).toContain("bun run build");
     expect(gate.command).toContain("dist/index.html");

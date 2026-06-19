@@ -232,6 +232,142 @@ export function isReadOnlyCommand(command: string): boolean {
   return true;
 }
 
+/** Package managers whose `<dev|start|serve|…>` script starts a never-exiting
+ *  process (`bun run dev`, `npm start`); `npx`/`bunx` instead delegate to a binary. */
+const PKG_RUNNERS = new Set(["bun", "npm", "pnpm", "yarn", "npx", "bunx"]);
+/** Subcommand / script names that start a dev server or watcher (never exit). */
+const SERVER_SUBCOMMANDS = new Set([
+  "dev",
+  "start",
+  "serve",
+  "preview",
+  "watch",
+]);
+/** Binaries that ARE a server/watcher regardless of args — they take a file/dir/
+ *  port positional, never an exiting subcommand. */
+const ALWAYS_SERVER_BINARIES = new Set([
+  "nodemon",
+  "serve",
+  "http-server",
+  "live-server",
+  "webpack-dev-server",
+]);
+/** Framework CLIs where a SERVER subcommand (`dev`/`serve`/…) means it never
+ *  exits, but `build`/`generate`/`run` exit. */
+const SUBCOMMAND_SERVER_BINARIES = new Set([
+  "vite",
+  "vitest",
+  "next",
+  "nuxt",
+  "astro",
+  "remix",
+  "ng",
+]);
+/** Of those, the ones that start a server when run BARE (no subcommand) — `vite`
+ *  defaults to the dev server, `vitest` to watch mode; `next`/`ng`/… just print
+ *  help and exit. */
+const BARE_SERVER_BINARIES = new Set(["vite", "vitest"]);
+
+/** Tokens of the FIRST command in a chain (head of `;`/`&&`/`||`/`|`), with env
+ *  assignments and `sudo`/`env` wrappers stripped. */
+function leadingCommandTokens(command: string): string[] {
+  const first = command.trim().split(/&&|\|\||[;|]/)[0] ?? "";
+  const tokens = first
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length > 0 && !t.includes("="));
+  let i = 0;
+
+  while (i < tokens.length && (tokens[i] === "sudo" || tokens[i] === "env")) {
+    i += 1;
+  }
+
+  return tokens.slice(i);
+}
+
+/** A known server/watcher binary, judged by its first subcommand — `serve dist`
+ *  (always), `vite`/`vite dev` (server), `vite build`/`next` (exits) → false. */
+function binaryIsServer(base: string, sub: string | undefined): boolean {
+  if (ALWAYS_SERVER_BINARIES.has(base)) {
+    return true;
+  }
+
+  if (sub === undefined) {
+    return BARE_SERVER_BINARIES.has(base);
+  }
+
+  return SUBCOMMAND_SERVER_BINARIES.has(base) && SERVER_SUBCOMMANDS.has(sub);
+}
+
+/** A resolved command head + its args (no package-runner indirection): a watcher
+ *  (`tsc --watch`, `tail -f`) or a server binary (`vite`, `vite dev`). */
+function headIsServer(base: string, rest: readonly string[]): boolean {
+  if (base === "tail") {
+    return rest.includes("-f") || rest.includes("-F");
+  }
+
+  if (base === "tsc") {
+    return rest.includes("-w") || rest.includes("--watch");
+  }
+
+  return binaryIsServer(
+    base,
+    rest.find((a) => !a.startsWith("-"))
+  );
+}
+
+/** A `<pm> [run|exec|x] <script-or-binary> [args]` invocation — a server SCRIPT
+ *  (`npm run dev`) or a DELEGATED binary, whose own flags must be re-checked so
+ *  `npx tsc --watch` / `bunx tail -f` don't slip past (the flags were stripped to
+ *  find the delegate). */
+function pkgRunnerIsServer(rest: string[]): boolean {
+  const args = rest.filter((a) => !a.startsWith("-"));
+  const start =
+    args[0] === "run" || args[0] === "exec" || args[0] === "x" ? 1 : 0;
+  const first = args[start];
+
+  if (first === undefined) {
+    return false;
+  }
+
+  if (SERVER_SUBCOMMANDS.has(first)) {
+    return true;
+  }
+
+  // Delegated binary (`npx <bin> …`): judge it by ITS OWN args, flags included.
+  return headIsServer(first, rest.slice(rest.indexOf(first) + 1));
+}
+
+/**
+ * A long-running dev server / watcher that never exits on its own (`vite`,
+ * `bun run dev`, `next dev`, `tsc --watch`, `tail -f`, …). Running one in the build
+ * loop stalls it — the gate already builds AND headlessly smoke-tests the app, so
+ * the model never needs to. Best-effort: the run tool's kill-timeout + bounded
+ * drain are the hard backstop for anything this misses. An explicitly backgrounded
+ * command (`… &`) returns immediately, so it is allowed through.
+ */
+export function isLongRunningServerCommand(command: string): boolean {
+  if (/&\s*$/.test(command.trim())) {
+    return false;
+  }
+
+  const tokens = leadingCommandTokens(command);
+  const head = tokens[0];
+
+  if (head === undefined) {
+    return false;
+  }
+
+  const base = head.split("/").pop() ?? head;
+  const rest = tokens.slice(1);
+
+  if (PKG_RUNNERS.has(base)) {
+    return pkgRunnerIsServer(rest);
+  }
+
+  return headIsServer(base, rest);
+}
+
 export async function runShell(
   args: Record<string, unknown>,
   ctx: IToolContext
@@ -252,6 +388,19 @@ export async function runShell(
       "run",
       "plan mode: only read-only commands are allowed (ls, cat, rg, grep, find, " +
         `git status/log/diff/show/branch, tsc — no pipes/redirects). Blocked: ${r.command}`
+    );
+  }
+
+  if (isLongRunningServerCommand(r.command)) {
+    return reject(
+      ctx,
+      "run",
+      `"${r.command}" looks like a long-running dev server / watcher — it never ` +
+        "exits, so it would stall the build loop. You do not need to run one: the " +
+        "gate already builds the app and smoke-tests it in a headless browser. To " +
+        "debug a blank page, read the build output and the component/source files; " +
+        "page rendering is handled for you. (If you truly need a process running, " +
+        "background it with a trailing `&` so the command returns.)"
     );
   }
 
