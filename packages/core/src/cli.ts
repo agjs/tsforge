@@ -19,6 +19,7 @@ import {
 } from "./loop";
 import { buildAndPersistMap, mapStatus, forgetMap } from "./codebase";
 import { parseEventLog, formatTrace } from "./eval";
+import { validate } from "./validate";
 import { isPolicyMode } from "./policy";
 import {
   PROVIDER_LIMITS,
@@ -132,6 +133,9 @@ export interface ICliArgs {
   review: boolean;
   /** Review only staged changes (`--staged`). */
   staged: boolean;
+  /** Run the gate first and tell the reviewer to skip what it already covers
+   *  (`tsforge review --with-gate`). */
+  withGate: boolean;
   /** Explicit base ref to diff against for review (`--base <ref>`). */
   base: string;
   /** Build a structural workspace map (`tsforge map`). */
@@ -145,7 +149,14 @@ export interface ICliArgs {
 
 const BOOL_FLAGS: Record<
   string,
-  "continue" | "noGate" | "web" | "log" | "plan" | "strictFloorOnly" | "staged"
+  | "continue"
+  | "noGate"
+  | "web"
+  | "log"
+  | "plan"
+  | "strictFloorOnly"
+  | "staged"
+  | "withGate"
 > = {
   "--continue": "continue",
   "-c": "continue",
@@ -155,6 +166,7 @@ const BOOL_FLAGS: Record<
   "--plan": "plan",
   "--strict-floor-only": "strictFloorOnly",
   "--staged": "staged",
+  "--with-gate": "withGate",
 };
 
 const VALUE_FLAGS = new Set([
@@ -186,6 +198,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     strictFloorOnly: false,
     review: false,
     staged: false,
+    withGate: false,
     base: "",
     map: false,
     trace: false,
@@ -1857,11 +1870,49 @@ async function runReviewCommand(
   }
 }
 
+/** Run the auto/explicit gate ONCE and return its distinct failing rule ids, so a
+ *  gate-aware review skips what the gate already covers. Green/no-gate → []. */
+async function gateFailingRules(args: ICliArgs): Promise<string[]> {
+  const gate = await resolveGate(args, null);
+
+  if (gate.accept.length === 0) {
+    return [];
+  }
+
+  const task: ITask = { id: "review", accept: gate.accept, files: [] };
+  const result = await validate(task, args.dir);
+
+  if (result.passed) {
+    return [];
+  }
+
+  const rules = new Set<string>();
+
+  for (const error of result.errors) {
+    if (typeof error.rule === "string" && error.rule.length > 0) {
+      rules.add(error.rule);
+    }
+  }
+
+  return [...rules];
+}
+
 async function reviewMode(args: ICliArgs): Promise<number> {
   const { entry } = await resolveActiveModel();
+  const rules = args.withGate ? await gateFailingRules(args) : [];
+
+  if (args.withGate) {
+    process.stdout.write(
+      rules.length > 0
+        ? `gate: ${rules.length} failing rule(s) — review will skip what they cover\n`
+        : "gate: green — full functional review\n"
+    );
+  }
+
   const report = await reviewChange(makeProvider(entry), args.dir, {
     ...(args.base.length > 0 ? { base: args.base } : {}),
     staged: args.staged,
+    ...(rules.length > 0 ? { gateFailingRules: rules } : {}),
     log: (m) => process.stdout.write(`  ↳ ${m}\n`),
   });
 

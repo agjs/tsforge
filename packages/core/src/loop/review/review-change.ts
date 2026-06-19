@@ -27,6 +27,10 @@ export interface IReviewOptions {
   /** Run the adversarial-verify pass (default true). Off = raw findings pass
    *  through unverified — for A/B measuring verify's effect on precision. */
   verify?: boolean;
+  /** Rules the automated gate is CURRENTLY failing on (a gate-aware run). The find
+   *  pass is told NOT to duplicate what these cover — the gate loop fixes them —
+   *  so it spends its attention on the behaviour of the code the gate accepts. */
+  gateFailingRules?: readonly string[];
   /** Progress callback (one line per step). */
   log?: (message: string) => void;
 }
@@ -102,7 +106,7 @@ async function fileDiff(
   return out.slice(0, DIFF_CHARS);
 }
 
-const FIND_SYSTEM = [
+const FIND_SYSTEM_BASE = [
   "You are a senior engineer reviewing a code change for FUNCTIONAL problems: logic errors, regressions, missed edge cases, and broken business rules.",
   "A separate automated gate already covers types, structure, and style — do NOT report those. Only functional/behavioural issues.",
   "Review the change THROUGH these lenses:",
@@ -111,10 +115,22 @@ const FIND_SYSTEM = [
   'Respond with ONLY JSON: {"findings":[{"line":<number>,"severity":"error|warning|info","lens":"<lens id>","claim":"<what is wrong>","reason":"<why>"}]}.',
 ].join("\n\n");
 
+/** The find-pass system prompt, optionally with a gate-aware clause: when the
+ *  caller knows which rules the gate is ALREADY failing, tell the model not to
+ *  duplicate them — its attention goes to the behaviour of the green code. */
+function buildFindSystem(gateFailingRules: readonly string[]): string {
+  if (gateFailingRules.length === 0) {
+    return FIND_SYSTEM_BASE;
+  }
+
+  return `${FIND_SYSTEM_BASE}\n\nThe automated gate is ALREADY failing on these rule(s): ${gateFailingRules.join(", ")}. Do NOT report problems those rules cover — the gate loop will fix them. Focus on the BEHAVIOUR of the code the gate already accepts.`;
+}
+
 /** One find pass over a single changed file's diff (per-file decomposition keeps
  *  a small model in its reliable zone). */
 async function findInFile(
   provider: IProvider,
+  system: string,
   file: string,
   diff: string,
   signal: string
@@ -130,7 +146,7 @@ async function findInFile(
 
   const res = await provider.complete(
     [
-      { role: "system", content: FIND_SYSTEM },
+      { role: "system", content: system },
       {
         role: "user",
         content: `File: ${file}\n\nDiff (base → working tree):\n${diff}${callers}`,
@@ -292,6 +308,7 @@ function errText(err: unknown): string {
  *  abort the whole review). */
 async function safeFind(
   provider: IProvider,
+  system: string,
   svc: TsService | null,
   cwd: string,
   file: string,
@@ -303,7 +320,7 @@ async function safeFind(
     // degrades that file's review, never aborting the whole run.
     const signal = callerSignal(svc, cwd, file);
 
-    return await findInFile(provider, file, diff, signal);
+    return await findInFile(provider, system, file, diff, signal);
   } catch (err) {
     log(`  ${file}: review failed — ${errText(err)}`);
 
@@ -339,10 +356,16 @@ export async function reviewChange(
 ): Promise<IReviewReport> {
   const log = opts.log ?? ((): void => undefined);
   const staged = opts.staged ?? false;
+  const gateFailingRules = [...(opts.gateFailingRules ?? [])];
+  const system = buildFindSystem(gateFailingRules);
   const base = await detectBase(cwd, opts.base);
   const files = await changedFiles(cwd, base, staged);
 
   log(`reviewing ${files.length} changed file(s) vs ${base}`);
+
+  if (gateFailingRules.length > 0) {
+    log(`gate-aware: skipping ${gateFailingRules.length} failing gate rule(s)`);
+  }
 
   // In-process TS LanguageService (null without a tsconfig) — powers the
   // caller blast-radius signal. Built once; falls back gracefully when absent.
@@ -354,7 +377,7 @@ export async function reviewChange(
   // isolated in try/catch so one bad file can't abort the whole review.
   for (const file of files) {
     const diff = await fileDiff(cwd, base, file, staged);
-    const found = await safeFind(provider, svc, cwd, file, diff, log);
+    const found = await safeFind(provider, system, svc, cwd, file, diff, log);
 
     log(`  ${file}: ${found.length} candidate finding(s)`);
     raw.push(...found);
@@ -378,7 +401,13 @@ export async function reviewChange(
 
   log(`verified ${verified.length} finding(s), rejected ${rejected}`);
 
-  return { base, changedFiles: files, findings: verified, rejected };
+  return {
+    base,
+    changedFiles: files,
+    findings: verified,
+    rejected,
+    gateFailingRules,
+  };
 }
 
 const SEVERITY_RANK: Record<Severity, number> = {
@@ -404,10 +433,17 @@ export function formatReport(report: IReviewReport): string {
     (f) =>
       `${f.severity.toUpperCase()} ${f.file}:${f.line} [${f.lens}]\n  ${f.claim}\n  → ${f.reason}`
   );
+  const gateNote =
+    report.gateFailingRules.length > 0
+      ? [
+          `(gate-aware: skipped ${report.gateFailingRules.length} failing gate rule(s) the gate already covers)`,
+        ]
+      : [];
 
   return [
     `Review of ${report.changedFiles.length} changed file(s) vs ${report.base}:`,
     `${report.findings.length} verified finding(s), ${report.rejected} rejected.`,
+    ...gateNote,
     "",
     ...lines,
   ].join("\n");

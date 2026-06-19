@@ -46,4 +46,7 @@ export interface IReviewReport {
   findings: IVerifiedFinding[];
   /** How many raw findings the verify pass rejected (precision signal). */
   rejected: number;
+  /** Failing gate rules the find pass was told to skip (from a gate-aware run);
+   *  empty when review ran without a gate signal. */
+  gateFailingRules: string[];
 }

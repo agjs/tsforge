@@ -173,6 +173,41 @@ test("injects the caller blast-radius signal into the find prompt", async () => 
   }
 });
 
+/** Capture the find-pass SYSTEM prompt (the one that is NOT the verify prompt). */
+function captureFindSystem(sink: { value: string }): IProvider {
+  return {
+    async complete(messages) {
+      const sys = messages.find((m) => m.role === "system")?.content ?? "";
+
+      if (!sys.includes("verifying a code-review finding")) {
+        sink.value = sys;
+      }
+
+      return { content: JSON.stringify({ findings: [] }), toolCalls: [] };
+    },
+  };
+}
+
+test("gate-aware review tells the find pass not to duplicate failing gate rules", async () => {
+  const sink = { value: "" };
+
+  await reviewChange(captureFindSystem(sink), repo, {
+    gateFailingRules: ["no-as-cast", "TS2322"],
+  });
+
+  expect(sink.value).toContain("no-as-cast");
+  expect(sink.value).toContain("TS2322");
+  expect(sink.value.toLowerCase()).toContain("already failing");
+});
+
+test("without a gate signal the find prompt has no gate clause (back-compat)", async () => {
+  const sink = { value: "" };
+
+  await reviewChange(captureFindSystem(sink), repo);
+
+  expect(sink.value.toLowerCase()).not.toContain("already failing");
+});
+
 test("the senior-review rubric ships with the expected lenses", () => {
   const ids = LENSES.map((l) => l.id);
 

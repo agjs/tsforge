@@ -27,6 +27,7 @@ Environment variables: [Environment variables](/reference/flags/). Interactive u
 tsforge review                 # functional review of the current diff
 tsforge review --staged        # only staged changes (pre-commit)
 tsforge review --base develop  # diff against an explicit base ref
+tsforge review --with-gate     # run the gate first; skip what it already covers
 ```
 
 `tsforge review` reviews the change you're working on — the working tree (committed **and** uncommitted edits) vs the auto-detected base (merge-base with `main`/`master`). No commit or push required.
