@@ -133,7 +133,8 @@ export function seedPrompt(
   task: ITask,
   editable: IFileView[],
   context: IFileView[],
-  stack?: IStackProfile
+  stack?: IStackProfile,
+  scout?: string
 ): string {
   const intent =
     task.intent !== undefined && task.intent.length > 0
@@ -155,11 +156,13 @@ export function seedPrompt(
       : `Read-only context (do NOT edit)${ctx.mapped ? " — MAP; read specifics on demand" : ""}:\n${ctx.text}`;
 
   const stackText = stack !== undefined ? buildStackGuidance(stack) : "";
+  const scoutText = scout !== undefined && scout.length > 0 ? scout : "";
 
   return [
     `Task ${task.id}.`,
     intent,
     stackText,
+    scoutText,
     `Acceptance command (run this to verify — it must exit 0): ${task.accept}`,
     `Editable files: ${task.files.join(", ")}`,
     `Current editable contents:\n${editableText}`,

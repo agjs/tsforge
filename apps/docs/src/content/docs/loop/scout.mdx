@@ -1,0 +1,32 @@
+---
+title: Pre-edit scout
+description: Before editing existing code, tsforge can seed the run with a deterministic caller blast-radius — who depends on the files about to change — so a small model edits with awareness instead of blind.
+---
+
+A small local model editing brownfield code can't see what depends on it, so it breaks callers it never read — and then burns repair turns fixing the regressions. The **scout** removes that blind spot: before the first edit, it hands the model the **blast radius** of the files it's about to change.
+
+```bash
+tsforge "rename area() to rect()" --files "src/geometry.ts" --scout
+```
+
+## What it adds
+
+For each editable file that already exists, scout computes — **type-exactly, from the TypeScript LanguageService** — who calls that file's exports, and seeds it into the opening context:
+
+```
+Blast radius — who calls the files you're about to change (type-exact; check these for regressions before editing):
+src/geometry.ts:
+- area → src/floorplan.ts:12; src/report.ts:48
+```
+
+That's the same caller signal [`tsforge review`](/cli/review/) uses, applied **before** the edit instead of after.
+
+## Deterministic by design
+
+Scout makes **no model call** — it's pure compiler facts (the divergence from Codebuff's LLM file-picker). It's:
+
+- **Opt-in** — off unless you pass `--scout` (or a [recipe](/cli/recipes/) sets `"scout": true`). One-shots stay fast by default.
+- **Brownfield only** — it does nothing on a from-scratch build (there are no callers yet) or when there's no `tsconfig.json`.
+- **Bounded** — capped in files probed and total size, so it primes context without flooding it.
+
+→ [Review your changes](/cli/review/) · [Recipes](/cli/recipes/) · [Map the repo](/cli/map/)
