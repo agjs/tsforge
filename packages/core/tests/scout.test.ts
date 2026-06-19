@@ -61,3 +61,22 @@ test("scout is empty with no LanguageService (no tsconfig)", () => {
     buildScoutContext(null, "/tmp", [{ path: "a.ts", content: "x" }])
   ).toBe("");
 });
+
+test("a non-TS editable file is skipped, not crashed on", async () => {
+  const dir = fixture();
+
+  try {
+    writeFileSync(join(dir, "data.json"), '{"a":1}\n');
+    const svc = await buildTsService(dir);
+    // util.ts (has callers) + a .json file the service can't analyze.
+    const out = buildScoutContext(svc, dir, [
+      { path: "data.json", content: '{"a":1}' },
+      { path: "util.ts", content: "export function area(){}" },
+    ]);
+
+    // No throw; the TS file still contributes its blast radius.
+    expect(out).toContain("caller.ts");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

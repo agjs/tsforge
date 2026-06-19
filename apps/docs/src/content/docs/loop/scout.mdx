@@ -25,8 +25,12 @@ That's the same caller signal [`tsforge review`](/cli/review/) uses, applied **b
 
 Scout makes **no model call** — it's pure compiler facts (the divergence from Codebuff's LLM file-picker). It's:
 
-- **Opt-in** — off unless you pass `--scout` (or a [recipe](/cli/recipes/) sets `"scout": true`). One-shots stay fast by default.
-- **Brownfield only** — it does nothing on a from-scratch build (there are no callers yet) or when there's no `tsconfig.json`.
-- **Bounded** — capped in files probed and total size, so it primes context without flooding it.
+- **Opt-in** — off unless you pass `--scout` (or a [recipe](/cli/recipes/) sets `"scout": true`). Runs stay fast by default.
+- **Brownfield only** — it does nothing on a from-scratch build (there are no callers yet) or when there's no `tsconfig.json`. A non-TS editable file (`.json`, `.md`) is skipped, never a crash.
+- **Bounded** — capped in files probed and total size; if it hits the size cap it trims to the last whole line and appends `… [scout truncated]`, so the model never sees a half-written call site.
+
+## Scope
+
+Scout seeds the opening prompt of a **one-shot** drive-to-green run (`tsforge "task" --files … --scout`, or a recipe run with `"scout": true`). Interactive sessions gather context conversationally, so the flag doesn't apply there — passing `--scout` to an interactive session prints a note saying so rather than silently ignoring it.
 
 → [Review your changes](/cli/review/) · [Recipes](/cli/recipes/) · [Map the repo](/cli/map/)

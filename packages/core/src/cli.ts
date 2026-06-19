@@ -1119,6 +1119,15 @@ async function repl(args: ICliArgs): Promise<number> {
     process.stdout.write(`  ↳ logging this run to ${logFile}\n`);
   }
 
+  // Scout seeds a one-shot drive-to-green run's first prompt; interactive sessions
+  // gather context conversationally, so it doesn't apply here. Say so rather than
+  // silently ignore the flag.
+  if (args.scout) {
+    process.stdout.write(
+      '  ↳ note: --scout applies to one-shot runs (tsforge "task" --files … --scout); ignored in interactive mode\n'
+    );
+  }
+
   const thinkingTokenBudget = envNumber("TSFORGE_THINKING_BUDGET");
   // Auto-compaction threshold (fraction of the window); session default 0.8.
   const autoCompactAt = envNumber("TSFORGE_COMPACT_AT");

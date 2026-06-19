@@ -35,7 +35,7 @@ export function buildScoutContext(
       continue;
     }
 
-    const signal = callerSignal(svc, cwd, file.path);
+    const signal = safeCallerSignal(svc, cwd, file.path);
 
     if (signal.length > 0) {
       sections.push(`${file.path}:\n${signal}`);
@@ -48,5 +48,30 @@ export function buildScoutContext(
 
   const bundle = `Blast radius — who calls the files you're about to change (type-exact; check these for regressions before editing):\n${sections.join("\n\n")}`;
 
-  return bundle.slice(0, SCOUT_CHARS);
+  return capBundle(bundle);
+}
+
+/** callerSignal, but a throw (a non-TS editable file the service can't analyze,
+ *  e.g. .json/.md) degrades to "" so scout skips that file instead of aborting. */
+function safeCallerSignal(svc: TsService, cwd: string, file: string): string {
+  try {
+    return callerSignal(svc, cwd, file);
+  } catch {
+    return "";
+  }
+}
+
+/** Cap the bundle at SCOUT_CHARS, trimming to the last whole line and flagging the
+ *  cut — so the model never sees a path/call site sliced mid-word with no signal
+ *  that more was dropped. */
+function capBundle(bundle: string): string {
+  if (bundle.length <= SCOUT_CHARS) {
+    return bundle;
+  }
+
+  const cut = bundle.slice(0, SCOUT_CHARS);
+  const lastNewline = cut.lastIndexOf("\n");
+  const trimmed = lastNewline > 0 ? cut.slice(0, lastNewline) : cut;
+
+  return `${trimmed}\n… [scout truncated]`;
 }
