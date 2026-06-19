@@ -85,12 +85,31 @@ const starLabel = formatStars(stars);
 <script>
   // Refresh the GitHub star count in the browser so it's never stale: the
   // server-rendered value is baked at build time and falls back to a constant
-  // whenever GitHub rate-limits the unauthenticated build-time fetch. Each
-  // visitor's browser re-fetches once; on any failure we keep the SSR value.
+  // whenever GitHub rate-limits the unauthenticated build-time fetch. Starlight
+  // is multi-page, so without caching every navigation would re-hit the API and
+  // could exhaust the 60-req/hr unauthenticated budget; a short sessionStorage
+  // TTL keeps it fresh while collapsing per-navigation refetches to one.
   (async () => {
     const el = document.querySelector("[data-gh-stars]");
 
     if (!el) return;
+
+    const CACHE_KEY = "tsforge-stars";
+    const TTL_MS = 15 * 60 * 1000;
+    const format = (n: number): string =>
+      n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) ?? "null");
+
+      if (cached && Date.now() < cached.expires) {
+        el.textContent = cached.label;
+
+        return;
+      }
+    } catch {
+      /* malformed cache — fall through and refetch */
+    }
 
     try {
       const res = await fetch("https://api.github.com/repos/agjs/tsforge", {
@@ -104,7 +123,12 @@ const starLabel = formatStars(stars);
 
       if (typeof n !== "number") return;
 
-      el.textContent = n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+      const label = format(n);
+      el.textContent = label;
+      sessionStorage.setItem(
+        CACHE_KEY,
+        JSON.stringify({ label, expires: Date.now() + TTL_MS })
+      );
     } catch {
       /* offline / rate-limited — keep the server-rendered value */
     }
