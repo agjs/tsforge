@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { join, isAbsolute } from "node:path";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { Writable } from "node:stream";
 import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
@@ -10,6 +10,8 @@ import {
   runTask,
   RUN_STATUS,
   Session,
+  LedgerWriter,
+  ledgerTypeFor,
   PLAN_APPROVED_NOTE,
   reviewChange,
   formatReport,
@@ -682,22 +684,23 @@ const render: Reporter = (event) => {
  *  file it wrote, the gate verdicts, and the loops it got stuck in. Append-only
  *  (NOT overwritten like the session JSON), and unredacted — it's an opt-in local
  *  debug artifact. Logging failures never break the session. */
-function makeReporter(logFile: string): Reporter {
+function makeReporter(
+  logFile: string,
+  runId: string,
+  sessionId?: string
+): Reporter {
   if (logFile.length === 0) {
     return render;
   }
 
+  const ledger = new LedgerWriter(logFile, runId, sessionId);
+
   return (event) => {
     render(event);
 
-    try {
-      appendFileSync(
-        logFile,
-        `${JSON.stringify({ t: Date.now(), ...event })}\n`
-      );
-    } catch {
-      // A logging failure must never interrupt the session.
-    }
+    const { kind, ...rest } = event;
+
+    ledger.record(ledgerTypeFor(event), { kind, ...rest });
   };
 }
 
@@ -740,7 +743,7 @@ async function runOnce(args: ICliArgs): Promise<number> {
   const thinkingTokenBudget = envNumber("TSFORGE_THINKING_BUDGET");
   const { entry } = await resolveActiveModel();
   const result = await runTask(task, args.dir, makeProvider(entry), {
-    onEvent: makeReporter(logFile),
+    onEvent: makeReporter(logFile, "cli"),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
   });
   const ok = result.status === RUN_STATUS.done;
@@ -987,7 +990,7 @@ async function repl(args: ICliArgs): Promise<number> {
     envNumber("TSFORGE_CONTEXT_WINDOW") ??
     (await detectContextWindow(provider.config)) ??
     32_768;
-  const report = makeReporter(logFile);
+  const report = makeReporter(logFile, id, id);
   const config = {
     provider,
     cwd: args.dir,

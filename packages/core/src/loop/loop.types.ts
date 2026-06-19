@@ -24,7 +24,10 @@ export interface ILoopEvent {
     | "repair"
     | "timing"
     | "usage"
-    | "ttsr";
+    | "ttsr"
+    // A unified-policy verdict for one proposed action (ledger-only; renders to
+    // nothing on the terminal — a deny is already surfaced via its `tool` event).
+    | "policy";
   task: string;
   message: string;
   cycle?: number;
@@ -75,6 +78,10 @@ export interface ILoopEvent {
    *  analyzer (which model / how big a context window the metrics are against). */
   model?: string;
   contextWindow?: number;
+  /** For `policy` events: the verdict and risk for one proposed action (the
+   *  matched rules ride in `rules`, the reason in `message`). */
+  decision?: "allow" | "ask" | "deny";
+  risk?: "low" | "medium" | "high" | "critical";
 }
 
 export type Reporter = (event: ILoopEvent) => void;

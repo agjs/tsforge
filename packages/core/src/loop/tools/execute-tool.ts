@@ -86,10 +86,18 @@ export async function executeTool(
   // built-in, MCP, plugin, and unknown tools alike. Tool-local guards (scope,
   // vendored, SSRF, argv) still run afterwards — policy is an outer layer, not a
   // replacement. The model proposes; the harness enforces.
-  const verdict = evaluatePolicy(
-    classifyAction(call, ctx.cwd),
-    policyContextFrom(ctx)
-  );
+  const action = classifyAction(call, ctx.cwd);
+  const verdict = evaluatePolicy(action, policyContextFrom(ctx));
+
+  // A typed ledger signal for every decision (renders to nothing on screen).
+  ctx.report({
+    kind: "policy",
+    task: ctx.task,
+    message: `${action.kind} ${call.name}: ${verdict.reason}`,
+    decision: verdict.decision,
+    risk: verdict.risk,
+    rules: verdict.matchedRules,
+  });
 
   if (verdict.decision !== "allow") {
     return reject(

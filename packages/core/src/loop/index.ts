@@ -1,5 +1,7 @@
 export * from "./loop.types";
 export * from "./loop.constants";
+export { LedgerWriter, ledgerTypeFor } from "./ledger-writer";
+export type { IBaseLedgerEvent, LedgerEventType } from "./ledger.types";
 export type { SetupWebFn } from "./tools";
 export { runTask } from "./run";
 export { runSpec } from "./run-spec";
