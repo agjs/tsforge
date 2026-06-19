@@ -19,6 +19,8 @@ import {
 } from "./loop";
 import { buildAndPersistMap, mapStatus, forgetMap } from "./codebase";
 import { parseEventLog, formatTrace } from "./eval";
+import { loadRecipes, findRecipe, type ITaskRecipe } from "./config/recipes";
+import { validate } from "./validate";
 import { isPolicyMode } from "./policy";
 import {
   PROVIDER_LIMITS,
@@ -132,12 +134,28 @@ export interface ICliArgs {
   review: boolean;
   /** Review only staged changes (`--staged`). */
   staged: boolean;
+  /** Run the gate first and tell the reviewer to skip what it already covers
+   *  (`tsforge review --with-gate`). */
+  withGate: boolean;
   /** Explicit base ref to diff against for review (`--base <ref>`). */
   base: string;
   /** Build a structural workspace map (`tsforge map`). */
   map: boolean;
   /** Summarize a `--log` run (`tsforge trace [logfile]`); `task` carries the path. */
   trace: boolean;
+  /** Recipe id to apply (`tsforge run <id>` or `--recipe <id>`); "" = none. */
+  recipe: string;
+  /** List discovered recipes (`tsforge recipes`). */
+  recipes: boolean;
+  /** The `run` subcommand was used (`tsforge run <id>`) — tracked so a missing id
+   *  is an explicit error, not a silent fall-through to the interactive REPL. */
+  run: boolean;
+  /** Model name override (from a recipe); "" = the active model. */
+  model: string;
+  /** Hard turn cap (from a recipe); 0 = the loop default. */
+  maxTurns: number;
+  /** Reasoning-token cap (from a recipe); 0 = the env/default. */
+  thinkingBudget: number;
   /** Base policy mode (`--policy-mode <plan|default|acceptEdits|ci|dontAsk|
    *  bypassPermissions>`); overrides the config file's policy.mode. */
   policyMode: string;
@@ -145,7 +163,14 @@ export interface ICliArgs {
 
 const BOOL_FLAGS: Record<
   string,
-  "continue" | "noGate" | "web" | "log" | "plan" | "strictFloorOnly" | "staged"
+  | "continue"
+  | "noGate"
+  | "web"
+  | "log"
+  | "plan"
+  | "strictFloorOnly"
+  | "staged"
+  | "withGate"
 > = {
   "--continue": "continue",
   "-c": "continue",
@@ -155,6 +180,7 @@ const BOOL_FLAGS: Record<
   "--plan": "plan",
   "--strict-floor-only": "strictFloorOnly",
   "--staged": "staged",
+  "--with-gate": "withGate",
 };
 
 const VALUE_FLAGS = new Set([
@@ -166,6 +192,7 @@ const VALUE_FLAGS = new Set([
   "--resume",
   "--base",
   "--policy-mode",
+  "--recipe",
 ]);
 
 /** Parse argv (without the tsforge binary name). Always succeeds — mode is decided in main. */
@@ -186,9 +213,16 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     strictFloorOnly: false,
     review: false,
     staged: false,
+    withGate: false,
     base: "",
     map: false,
     trace: false,
+    recipe: "",
+    recipes: false,
+    run: false,
+    model: "",
+    maxTurns: 0,
+    thinkingBudget: 0,
     policyMode: "",
   };
 
@@ -224,6 +258,12 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
   } else if (positional[0] === "trace") {
     out.trace = true;
     out.task = positional.slice(1).join(" ").trim();
+  } else if (positional[0] === "recipes") {
+    out.recipes = true;
+  } else if (positional[0] === "run") {
+    out.run = true;
+    out.recipe = positional[1] ?? "";
+    out.task = positional.slice(2).join(" ").trim();
   }
 
   out.dir = isAbsolute(out.dir) ? out.dir : join(process.cwd(), out.dir);
@@ -248,9 +288,62 @@ function applyValueFlag(flag: string, value: string, out: ICliArgs): void {
     out.base = value;
   } else if (flag === "--policy-mode") {
     out.policyMode = value;
+  } else if (flag === "--recipe") {
+    out.recipe = value;
   } else {
     out.accept = value; // --accept / --gate
   }
+}
+
+/** Overlay a recipe's fields onto the parsed args. An explicit CLI value ALWAYS
+ *  wins (a recipe only fills a field still at its default), so `tsforge run x
+ *  --files src/**` overrides the recipe's scope. Booleans can only be turned ON
+ *  by a recipe — a CLI flag can't switch a recipe's `true` back off. */
+export function applyRecipe(args: ICliArgs, recipe: ITaskRecipe): void {
+  if (args.task.length === 0 && recipe.task !== undefined) {
+    args.task = recipe.task;
+  }
+
+  if (args.files.length === 0 && recipe.files !== undefined) {
+    args.files = [...recipe.files];
+  }
+
+  if (args.accept.length === 0 && recipe.gate !== undefined) {
+    args.accept = recipe.gate;
+  }
+
+  if (args.model.length === 0 && recipe.model !== undefined) {
+    args.model = recipe.model;
+  }
+
+  if (args.base.length === 0 && recipe.base !== undefined) {
+    args.base = recipe.base;
+  }
+
+  if (args.policyMode.length === 0 && recipe.policyMode !== undefined) {
+    args.policyMode = recipe.policyMode;
+  }
+
+  if (args.maxTurns === 0 && recipe.maxTurns !== undefined) {
+    args.maxTurns = recipe.maxTurns;
+  }
+
+  if (args.thinkingBudget === 0 && recipe.thinkingBudget !== undefined) {
+    args.thinkingBudget = recipe.thinkingBudget;
+  }
+
+  applyRecipeFlags(args, recipe);
+}
+
+/** Recipe booleans (split out to keep applyRecipe's complexity in check). */
+function applyRecipeFlags(args: ICliArgs, recipe: ITaskRecipe): void {
+  args.staged = args.staged || recipe.staged === true;
+  args.strictFloorOnly =
+    args.strictFloorOnly || recipe.strictFloorOnly === true;
+  args.web = args.web || recipe.web === true;
+  args.plan = args.plan || recipe.plan === true;
+  args.log = args.log || recipe.log === true;
+  args.withGate = args.withGate || recipe.withGate === true;
 }
 
 // Default editable scope: the whole workspace — like any agentic CLI, the agent
@@ -740,6 +833,27 @@ function resolveLogPath(id: string, enabled: boolean): string {
   return join(dir, `${stamp}-${id}.jsonl`);
 }
 
+/** The model for a run: a recipe's named model (from ~/.tsforge/models.json) when
+ *  set and known, else the active model. An unknown name warns and falls back. */
+async function modelForRun(
+  args: ICliArgs
+): Promise<{ name: string; entry: IModelEntry }> {
+  if (args.model.length > 0) {
+    const cfg = await loadModelsConfig();
+    const entry = cfg.models[args.model];
+
+    if (entry !== undefined) {
+      return { name: args.model, entry };
+    }
+
+    process.stdout.write(
+      `  recipe model '${args.model}' not in models.json — using the active model\n`
+    );
+  }
+
+  return resolveActiveModel();
+}
+
 /** One-shot: drive a single task to green, then exit. */
 async function runOnce(args: ICliArgs): Promise<number> {
   const task: ITask = {
@@ -756,11 +870,15 @@ async function runOnce(args: ICliArgs): Promise<number> {
     process.stdout.write(`  ↳ logging this run to ${logFile}\n`);
   }
 
-  const thinkingTokenBudget = envNumber("TSFORGE_THINKING_BUDGET");
-  const { entry } = await resolveActiveModel();
+  const thinkingTokenBudget =
+    args.thinkingBudget > 0
+      ? args.thinkingBudget
+      : envNumber("TSFORGE_THINKING_BUDGET");
+  const { entry } = await modelForRun(args);
   const result = await runTask(task, args.dir, makeProvider(entry), {
     onEvent: makeReporter(logFile, "cli"),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+    ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
   });
   const ok = result.status === RUN_STATUS.done;
 
@@ -955,9 +1073,10 @@ async function baseGate(
 
 /** Interactive REPL: a persistent gate-anchored conversation. */
 async function repl(args: ICliArgs): Promise<number> {
-  // The active model comes from the registry (~/.tsforge/models.json) unless an
-  // explicit TSFORGE_* env overrides it; `/model <name>` switches it live.
-  const activeModel = await resolveActiveModel();
+  // The active model comes from the registry (~/.tsforge/models.json) unless a
+  // recipe names one or an explicit TSFORGE_* env overrides it; `/model <name>`
+  // switches it live.
+  const activeModel = await modelForRun(args);
   const provider = makeProvider(activeModel.entry);
   let activeName = activeModel.name;
 
@@ -1857,11 +1976,62 @@ async function runReviewCommand(
   }
 }
 
+/** Run the auto/explicit gate ONCE and return its distinct failing rule ids, so a
+ *  gate-aware review skips what the gate already covers. Green/no-gate → []. */
+async function gateFailingRules(args: ICliArgs): Promise<string[]> {
+  // Running the gate can throw (missing deps, a broken gate command, env issues).
+  // A gate-aware review is an enhancement, never a hard dependency — on any failure
+  // fall back to a full review instead of crashing the command.
+  try {
+    const gate = await resolveGate(args, null);
+
+    if (gate.accept.length === 0) {
+      return [];
+    }
+
+    const task: ITask = { id: "review", accept: gate.accept, files: [] };
+    const result = await validate(task, args.dir);
+
+    if (result.passed) {
+      return [];
+    }
+
+    const rules = new Set<string>();
+
+    for (const error of result.errors) {
+      if (typeof error.rule === "string" && error.rule.length > 0) {
+        rules.add(error.rule);
+      }
+    }
+
+    return [...rules];
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    process.stdout.write(
+      `gate: couldn't run the gate (${message}) — falling back to full review\n`
+    );
+
+    return [];
+  }
+}
+
 async function reviewMode(args: ICliArgs): Promise<number> {
   const { entry } = await resolveActiveModel();
+  const rules = args.withGate ? await gateFailingRules(args) : [];
+
+  if (args.withGate) {
+    process.stdout.write(
+      rules.length > 0
+        ? `gate: ${rules.length} failing rule(s) — review will skip what they cover\n`
+        : "gate: green — full functional review\n"
+    );
+  }
+
   const report = await reviewChange(makeProvider(entry), args.dir, {
     ...(args.base.length > 0 ? { base: args.base } : {}),
     staged: args.staged,
+    ...(rules.length > 0 ? { gateFailingRules: rules } : {}),
     log: (m) => process.stdout.write(`  ↳ ${m}\n`),
   });
 
@@ -1875,6 +2045,58 @@ async function mapMode(args: ICliArgs): Promise<number> {
   await runMapCommand(args.dir, args.task);
 
   return 0;
+}
+
+/** `tsforge recipes` — list the recipes discovered for this repo. */
+async function recipesMode(args: ICliArgs): Promise<number> {
+  const recipes = await loadRecipes(args.dir, (m) =>
+    process.stdout.write(`  ${m}\n`)
+  );
+
+  if (recipes.length === 0) {
+    process.stdout.write(
+      "no recipes found — add .tsforge/recipes/<id>.json (see the docs)\n"
+    );
+
+    return 0;
+  }
+
+  process.stdout.write("Recipes:\n");
+
+  for (const recipe of recipes) {
+    const desc =
+      recipe.description === undefined ? "" : ` — ${recipe.description}`;
+
+    process.stdout.write(`  ${recipe.id}${desc}\n`);
+  }
+
+  return 0;
+}
+
+/** Resolve `--recipe`/`tsforge run <id>` and overlay it onto args. Returns an
+ *  exit code to abort on (unknown id), or null to continue dispatching. */
+async function applyRecipeArg(args: ICliArgs): Promise<number | null> {
+  if (args.recipe.length === 0) {
+    return null;
+  }
+
+  const recipes = await loadRecipes(args.dir, (m) =>
+    process.stdout.write(`  ${m}\n`)
+  );
+  const recipe = findRecipe(recipes, args.recipe);
+
+  if (recipe === undefined) {
+    process.stdout.write(
+      `unknown recipe: ${args.recipe} — run \`tsforge recipes\` to list them\n`
+    );
+
+    return 1;
+  }
+
+  applyRecipe(args, recipe);
+  process.stdout.write(`using recipe '${recipe.id}'\n`);
+
+  return null;
 }
 
 /** Resolve the newest `--log` JSONL under ~/.tsforge/logs, or "" if none. */
@@ -1946,6 +2168,26 @@ async function traceMode(args: ICliArgs): Promise<number> {
 
 export async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.recipes) {
+    return recipesMode(args);
+  }
+
+  if (args.run && args.recipe.length === 0) {
+    process.stdout.write(
+      "missing recipe id — usage: tsforge run <id> [task] (see `tsforge recipes`)\n"
+    );
+
+    return 1;
+  }
+
+  // A `--recipe`/`run <id>` overlays the recipe's fields onto args (CLI wins),
+  // then dispatch continues as if those were passed directly.
+  const recipeAbort = await applyRecipeArg(args);
+
+  if (recipeAbort !== null) {
+    return recipeAbort;
+  }
 
   if (args.review) {
     return reviewMode(args);

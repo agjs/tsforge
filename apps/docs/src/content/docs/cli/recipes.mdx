@@ -1,0 +1,59 @@
+---
+title: Recipes
+description: Save a run setup as declarative JSON and invoke it by name with tsforge run <id> — a deterministic, reviewable alternative to retyping flags.
+---
+
+A **recipe** is a named, declarative run setup checked into your repo. Instead of retyping `--files`, `--accept`, the model, and limits every time, you write them once and invoke by name:
+
+```bash
+tsforge run api-endpoint "add a DELETE /users/:id route"
+tsforge recipes                # list the recipes this repo has
+```
+
+A recipe is **data, not code** — it composes options tsforge already has. It never executes arbitrary logic and never spawns sub-agents, so it stays deterministic and reviewable in a PR. (This is the deliberate divergence from Codebuff's executable `.ts` agent definitions.)
+
+## Where recipes live
+
+```
+.tsforge/recipes/<id>.json     # project recipes (checked in, shared with the team)
+~/.tsforge/recipes/<id>.json   # your personal recipes, across all repos
+```
+
+A project recipe **overrides** a global one with the same id. `tsforge recipes` lists everything it found.
+
+## Example
+
+```json
+// .tsforge/recipes/api-endpoint.json
+{
+  "id": "api-endpoint",
+  "description": "Add an API route under src/api, strict gate",
+  "gate": "bun run validate",
+  "files": ["src/api/**"],
+  "model": "qwen3-coder",
+  "maxTurns": 30,
+  "policyMode": "default"
+}
+```
+
+## Fields
+
+| Field | Maps to | Notes |
+| --- | --- | --- |
+| `id` | — | required, kebab-case; the name you invoke |
+| `description` | — | shown by `tsforge recipes` |
+| `task` | the prompt | a CLI positional still overrides it |
+| `files` | `--files` | editable scope globs |
+| `gate` | `--accept` | the command that confirms "done" |
+| `model` | the run's model | a name from `~/.tsforge/models.json` |
+| `maxTurns` | run limit | hard cap on model turns |
+| `thinkingBudget` | run limit | reasoning-token cap per call |
+| `policyMode` | `--policy-mode` | `plan` / `default` / `acceptEdits` / `ci` / `dontAsk` / `bypassPermissions` |
+| `base`, `staged` | `--base` / `--staged` | for review-style runs |
+| `web`, `plan`, `log`, `strictFloorOnly` | the matching flags | booleans |
+
+A recipe is, in effect, a saved set of CLI options: `tsforge run <id>` applies them, and you can also combine `--recipe <id>` with other commands (e.g. `tsforge review --recipe …`). **An explicit CLI flag always wins** over the recipe, so `tsforge run api-endpoint --files lib/**` overrides just the scope.
+
+Fields this version doesn't recognize (a typo, or a not-yet-supported field like `profile`/`tools`) are **reported, not silently ignored** — so a recipe never quietly does less than it says.
+
+→ [Commands](/reference/commands/) · [tsforge.config.json](/guardrails/config/) · [Models](/inference/models-json/)

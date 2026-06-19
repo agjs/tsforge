@@ -9,9 +9,14 @@ description: "tsforge review — a functional code review of the change you're o
 tsforge review                 # review the current diff
 tsforge review --staged        # only staged changes (pre-commit)
 tsforge review --base develop   # diff against a specific ref
+tsforge review --with-gate     # run the gate first; skip what it already covers
 ```
 
 Inside a session, the same review is available as `/review`.
+
+## Gate-aware review
+
+With `--with-gate`, tsforge runs [the gate](/loop/gate-floor/) once before reviewing and tells the reviewer **which rules are already failing**, so it won't spend its attention re-reporting a type or lint error the gate loop will fix anyway. The review focuses on the behaviour of the code the gate already accepts — exactly the part the gate is blind to. The report notes how many gate rules were skipped. Without the flag, review runs as before (no gate run).
 
 ## What it reviews
 

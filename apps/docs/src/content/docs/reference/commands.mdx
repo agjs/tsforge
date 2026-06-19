@@ -27,6 +27,7 @@ Environment variables: [Environment variables](/reference/flags/). Interactive u
 tsforge review                 # functional review of the current diff
 tsforge review --staged        # only staged changes (pre-commit)
 tsforge review --base develop  # diff against an explicit base ref
+tsforge review --with-gate     # run the gate first; skip what it already covers
 ```
 
 `tsforge review` reviews the change you're working on — the working tree (committed **and** uncommitted edits) vs the auto-detected base (merge-base with `main`/`master`). No commit or push required.
@@ -34,6 +35,16 @@ tsforge review --base develop  # diff against an explicit base ref
 It is **functional** review — logic, regressions, edge cases, and business rules — guided by a built-in senior-review rubric (lenses), with each finding adversarially re-checked against the real code so false positives are dropped. Types, structure, and style are out of scope (the gate covers those). When a `tsconfig.json` is present it also feeds the reviewer a **caller blast-radius** signal (who calls each changed export, computed type-exactly) so the regression lens has concrete call sites to check. Exits non-zero if any **error**-severity finding survives, so it's CI-usable.
 
 The same review is available inside an interactive session as **`/review`** (optionally `/review <base>` to diff against a specific ref).
+
+## Recipes
+
+```bash
+tsforge recipes                          # list this repo's recipes
+tsforge run api-endpoint "add a route"   # run a saved recipe by name
+tsforge run api-endpoint --files lib/**  # ...with a CLI override (CLI wins)
+```
+
+A recipe is declarative JSON in `.tsforge/recipes/<id>.json` (project) or `~/.tsforge/recipes/<id>.json` (global) that composes a run's options — model, gate, scope, limits, policy mode. See [Recipes](/cli/recipes/).
 
 ## Map the repo to prime the agent
 
