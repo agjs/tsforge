@@ -97,16 +97,30 @@ describe("LedgerWriter", () => {
   test("redacts secrets in payload strings", async () => {
     await withLog(async (file, read) => {
       const w = new LedgerWriter(file, "r");
+      // Built at runtime so no literal token sits in source (gitleaks); redactText
+      // still matches `sk-[A-Za-z0-9_-]{16,}` on the assembled value.
+      const secret = `sk-${"a1B2c3D4".repeat(3)}`;
 
-      w.record("tool_call_finished", {
-        command: "curl -H 'Authorization: Bearer sk-abcdefghijklmnopqrstuvwx'",
-      });
+      w.record("tool_call_finished", { command: `deploy --token ${secret}` });
 
       const [event] = await read();
       const command = String(event?.payload.command ?? "");
 
-      expect(command).not.toContain("sk-abcdefghijklmnopqrstuvwx");
+      expect(command).not.toContain(secret);
       expect(command).toContain("[redacted]");
+    });
+  });
+
+  test("preserves a non-plain object (Date → ISO string, not {})", async () => {
+    await withLog(async (file, read) => {
+      const when = new Date(0);
+
+      new LedgerWriter(file, "r").record("run_started", { at: when });
+
+      const [event] = await read();
+
+      // Date serializes via its own toJSON, not flattened to an empty object.
+      expect(event?.payload.at).toBe(when.toISOString());
     });
   });
 

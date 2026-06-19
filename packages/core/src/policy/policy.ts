@@ -192,8 +192,9 @@ function criticalDeny(
   if (
     action.kind === "mcp_tool" &&
     action.mcpServer !== undefined &&
-    ctx.mcpServers !== undefined &&
-    !ctx.mcpServers.includes(action.mcpServer)
+    // Undefined ⇒ no MCP servers configured ⇒ NO mcp tool is registered, so any
+    // `mcp__*` call must be denied (not waved through to the mode default).
+    !(ctx.mcpServers ?? []).includes(action.mcpServer)
   ) {
     return {
       reason: `unregistered MCP server blocked: ${action.mcpServer}`,
@@ -204,13 +205,46 @@ function criticalDeny(
   return null;
 }
 
-function safeRegexTest(pattern: string, value: string): boolean {
+// Compiled-pattern caches keyed by the rule object — evaluatePolicy runs on
+// every tool call, so we compile each rule's regex/glob ONCE, not per check.
+// (Config rule objects are stable for a session; a malformed regex caches null
+// so it simply never matches.)
+const regexCache = new WeakMap<IPolicyRule, RegExp | null>();
+const globCache = new WeakMap<IPolicyRule, Bun.Glob>();
+
+function ruleRegex(rule: IPolicyRule, pattern: string): RegExp | null {
+  const cached = regexCache.get(rule);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  let compiled: RegExp | null;
+
   try {
-    return new RegExp(pattern).test(value);
+    compiled = new RegExp(pattern);
   } catch {
     // A malformed regex in config never matches (config load also warns on it).
-    return false;
+    compiled = null;
   }
+
+  regexCache.set(rule, compiled);
+
+  return compiled;
+}
+
+function ruleGlob(rule: IPolicyRule, pattern: string): Bun.Glob {
+  const cached = globCache.get(rule);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const glob = new Bun.Glob(pattern);
+
+  globCache.set(rule, glob);
+
+  return glob;
 }
 
 /** Whether every PRESENT field of the rule matches the action (AND). An empty
@@ -235,15 +269,17 @@ function ruleMatches(rule: IPolicyRule, action: IProposedAction): boolean {
     return false;
   }
 
-  if (
-    rule.commandPattern !== undefined &&
-    !safeRegexTest(rule.commandPattern, action.command ?? "")
-  ) {
-    return false;
+  if (rule.commandPattern !== undefined) {
+    // A null (malformed) regex never matches.
+    const regex = ruleRegex(rule, rule.commandPattern);
+
+    if (regex?.test(action.command ?? "") !== true) {
+      return false;
+    }
   }
 
   if (rule.pathPattern !== undefined) {
-    const glob = new Bun.Glob(rule.pathPattern);
+    const glob = ruleGlob(rule, rule.pathPattern);
 
     if (!(action.paths ?? []).some((p) => glob.match(p))) {
       return false;

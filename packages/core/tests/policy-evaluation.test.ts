@@ -113,6 +113,17 @@ describe("destructive-shell detection", () => {
     expect(isDestructiveShell("FOO=1 shred secret")).toBe(true);
   });
 
+  test("sees through env/sudo wrappers and their flags", () => {
+    expect(isDestructiveShell("env rm -rf /")).toBe(true);
+    expect(isDestructiveShell("env VAR=x rm -rf /")).toBe(true);
+    expect(isDestructiveShell("sudo -u root rm -rf /")).toBe(true);
+    expect(isDestructiveShell("nohup rm -rf /")).toBe(true);
+    expect(isDestructiveShell("ls && sudo rm -rf x")).toBe(true);
+    // wrapper with a non-destructive head stays clean
+    expect(isDestructiveShell("env node build.js")).toBe(false);
+    expect(isDestructiveShell("sudo -u deploy npm ci")).toBe(false);
+  });
+
   test("does not flag benign commands that merely contain the substring", () => {
     expect(isDestructiveShell("npm run build")).toBe(false);
     expect(isDestructiveShell("echo 'rm is dangerous'")).toBe(false);
@@ -312,6 +323,16 @@ describe("evaluatePolicy — critical denies win in every mode", () => {
     expect(
       evaluatePolicy(action("mcp_tool", { mcpServer: "github" }), c).decision
     ).toBe("allow");
+  });
+
+  test("any MCP tool is denied when no servers are configured (undefined)", () => {
+    // ctx() leaves mcpServers undefined ⇒ no MCP registered ⇒ deny, not allow.
+    expect(
+      evaluatePolicy(
+        action("mcp_tool", { mcpServer: "anything" }),
+        ctx("default")
+      ).decision
+    ).toBe("deny");
   });
 
   test("bypassPermissions allows ordinary writes/shell/unknown (post-critical)", () => {

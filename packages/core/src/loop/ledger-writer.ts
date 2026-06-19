@@ -64,7 +64,15 @@ function capValue(value: unknown): unknown {
   }
 
   if (value !== null && typeof value === "object") {
-    return capPayload(value);
+    // Only recurse into PLAIN objects: Object.entries() returns [] for Date /
+    // RegExp / Map / class instances, which would silently flatten them to `{}`.
+    // Pass those through so JSON.stringify uses their own serialization (e.g.
+    // Date → ISO string via toJSON).
+    const proto: unknown = Object.getPrototypeOf(value);
+
+    return proto === Object.prototype || proto === null
+      ? capPayload(value)
+      : value;
   }
 
   return value;
