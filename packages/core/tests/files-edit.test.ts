@@ -66,6 +66,30 @@ test("ambiguous when oldString matches more than once; file unchanged", async ()
   }
 });
 
+test("fuzzy edit preserves CRLF line endings (no mixed endings) — issue #24", async () => {
+  // CRLF file; oldString has wrong indentation so the exact match misses and the
+  // fuzzy (trim-normalized) fallback fires. The result must stay all-CRLF.
+  const dir = await tmp({ "crlf.ts": "line1\r\n\tindented2\r\nline3\r\n" });
+
+  try {
+    // applyEdits carries the indentation-tolerant fuzzy fallback; the missing
+    // tab + missing \r makes the exact match miss and the fuzzy path fire.
+    const r = await applyEdits(dir, "crlf.ts", [
+      { oldString: "line1\nindented2", newString: "line1\nINDENTED2" },
+    ]);
+
+    expect(r.ok).toBe(true);
+
+    const out = await Bun.file(join(dir, "crlf.ts")).text();
+
+    expect(out).toContain("INDENTED2");
+    // After stripping every proper CRLF pair, no lone \n may remain.
+    expect(out.replace(/\r\n/g, "").includes("\n")).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("missing-file when the target does not exist", async () => {
   const dir = await tmp({});
 

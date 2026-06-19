@@ -141,8 +141,13 @@ function fuzzyLineReplace(
   newString: string
 ): { text: string; matches: number } {
   const norm = (s: string): string => s.trim();
-  const contentLines = content.split("\n");
-  const oldLines = oldString.split("\n");
+  // Preserve the file's native line ending. Splitting on /\r?\n/ strips any \r
+  // from existing lines, and rebuilding with the detected EOL gives uniform
+  // endings — otherwise a CRLF file gets `\n`-only new lines spliced into
+  // `\r\n` surroundings (mixed endings). See issue #24.
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
+  const contentLines = content.split(/\r?\n/);
+  const oldLines = oldString.split(/\r?\n/);
 
   // Drop blank leading/trailing lines (the model often adds a stray newline).
   while (oldLines.length > 0 && norm(oldLines[0] ?? "") === "") {
@@ -185,9 +190,9 @@ function fuzzyLineReplace(
   const start = starts[0] ?? 0;
   const rebuilt = [
     ...contentLines.slice(0, start),
-    ...newString.split("\n"),
+    ...newString.split(/\r?\n/),
     ...contentLines.slice(start + needle.length),
   ];
 
-  return { text: rebuilt.join("\n"), matches: 1 };
+  return { text: rebuilt.join(eol), matches: 1 };
 }
