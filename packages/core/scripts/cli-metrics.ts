@@ -144,10 +144,15 @@ function analyze(lines: string[]): IMetrics {
       continue;
     }
 
+    // The `--log` ledger wraps each event in `payload` ({type, payload:{kind,…}});
+    // a legacy flat line IS the event. Read through whichever shape this line is,
+    // or every field comes back empty and the metrics silently read zero.
+    const src = isRecord(event.payload) ? event.payload : event;
+
     // Concatenate ALL message/output text, then scan once — a "Cannot find
     // module" can be split across streamed token chunks.
-    allText += `${str(event.message)}\n${str(event.output)}\n`;
-    HANDLERS[str(event.kind)]?.(m, event, created);
+    allText += `${str(src.message)}\n${str(src.output)}\n`;
+    HANDLERS[str(src.kind)]?.(m, src, created);
   }
 
   const hallucinated = new Set<string>();

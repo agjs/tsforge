@@ -218,6 +218,7 @@ export default defineConfig({
             { label: "Web scaffolding", link: "/scaffold/web/" },
             { label: "Model adapter", link: "/inference/adapter/" },
             { label: "Token metrics", link: "/observability/metrics/" },
+            { label: "Trace a run", link: "/observability/trace/" },
           ],
         },
         {

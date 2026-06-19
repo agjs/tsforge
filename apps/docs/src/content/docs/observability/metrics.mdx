@@ -41,14 +41,22 @@ A low number usually points at the *serving* setup (quantization, batch size, GP
 
 ## 3. `--log` — analyse a whole run
 
-Start the CLI (or an eval) with `--log` and every model call is written to `~/.tsforge/logs/<timestamp>.jsonl` as a `usage` event:
+Start the CLI (or an eval) with `--log` and the whole run is written to `~/.tsforge/logs/<timestamp>.jsonl` as a typed ledger — one event per line, each wrapped in a `payload` (model calls, tool calls, policy decisions, gate verdicts):
 
 ```json
-{ "kind": "usage", "task": "session", "promptTokens": 2031,
-  "completionTokens": 240, "tokensPerSecond": 46, "ms": 5200 }
+{ "type": "model_call_finished", "runId": "…", "timestamp": "…",
+  "payload": { "kind": "usage", "promptTokens": 2031,
+               "completionTokens": 240, "tokensPerSecond": 46, "ms": 5200 } }
 ```
 
-Turn a log into a summary with the built-in analyzer:
+Turn a log into a one-screen summary — including **policy denials by risk** — with [`tsforge trace`](/observability/trace/):
+
+```bash
+tsforge trace            # newest log
+tsforge trace run.jsonl  # a specific one
+```
+
+There's also the lower-level analyzer script (same numbers, more fields like hallucinated imports):
 
 ```bash
 bun run packages/core/scripts/cli-metrics.ts            # newest log

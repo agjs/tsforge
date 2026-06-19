@@ -32,6 +32,13 @@ export interface IRunMetrics {
   wallClockSeconds: number;
   /** Mean output rate across calls that reported one (tokens/second). */
   avgTokensPerSecond: number;
+  /** Policy verdicts that DENIED a proposed action (the safety tripwire count). */
+  policyDenies: number;
+  /** Policy verdicts that asked for confirmation (resolve-to-deny in headless). */
+  policyAsks: number;
+  /** Denials bucketed by risk (e.g. {"high":1,"critical":1}); empty when none —
+   *  so a run shows not just how often the policy fired but how dangerous it was. */
+  denialsByRisk: Record<string, number>;
 }
 
 function emptyMetrics(): IRunMetrics {
@@ -48,7 +55,24 @@ function emptyMetrics(): IRunMetrics {
     turnsToGreen: null,
     wallClockSeconds: 0,
     avgTokensPerSecond: 0,
+    policyDenies: 0,
+    policyAsks: 0,
+    denialsByRisk: {},
   };
+}
+
+/** Tally one policy verdict into the metrics (deny → bucketed by risk; ask → its
+ *  own counter). Allows are not counted — only the tripwires matter for a run. */
+function countPolicy(m: IRunMetrics, event: ILoopEvent): void {
+  if (event.decision === "deny") {
+    m.policyDenies += 1;
+
+    const risk = event.risk ?? "low";
+
+    m.denialsByRisk[risk] = (m.denialsByRisk[risk] ?? 0) + 1;
+  } else if (event.decision === "ask") {
+    m.policyAsks += 1;
+  }
 }
 
 /** Reduce a run's event stream to its behavioral metrics. Pure — feed it the
@@ -88,6 +112,8 @@ export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
       m.turnsToGreen ??= m.turns;
     } else if (event.kind === "stuck") {
       m.finalStatus = "stuck";
+    } else if (event.kind === "policy") {
+      countPolicy(m, event);
     }
   }
 

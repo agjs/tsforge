@@ -21,6 +21,7 @@ const KNOWN_KINDS = new Set<string>([
   "timing",
   "usage",
   "ttsr",
+  "policy",
 ]);
 
 function isKind(value: string): value is ILoopEvent["kind"] {
@@ -31,6 +32,12 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
 function stringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -39,15 +46,121 @@ function stringArray(value: unknown): string[] | undefined {
   return value.filter((v): v is string => typeof v === "string");
 }
 
-/** Coerce one parsed JSONL record into an ILoopEvent, or null when it isn't one.
- *  Reads only the fields the failure classifier + metrics consume — enough to
- *  reconstruct a typed event stream from a `--log` file. */
-function coerceEvent(record: unknown): ILoopEvent | null {
+function toDecision(value: unknown): ILoopEvent["decision"] {
+  return value === "allow" || value === "ask" || value === "deny"
+    ? value
+    : undefined;
+}
+
+function toRisk(value: unknown): ILoopEvent["risk"] {
+  return value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "critical"
+    ? value
+    : undefined;
+}
+
+/** The event's field source. The `--log` ledger wraps every event in `payload`
+ *  ({type, payload:{kind,…}}); a legacy/raw stream IS the event ({kind,…}). Read
+ *  through whichever shape this line is, so both parse identically. */
+function eventSource(record: unknown): Record<string, unknown> | null {
   if (!isRecord(record)) {
     return null;
   }
 
-  const kind = record.kind;
+  return isRecord(record.payload) ? record.payload : record;
+}
+
+function assignText(event: ILoopEvent, src: Record<string, unknown>): void {
+  const output = optionalString(src.output);
+  const file = optionalString(src.file);
+  const model = optionalString(src.model);
+  const detail = optionalString(src.detail);
+
+  if (output !== undefined) {
+    event.output = output;
+  }
+
+  if (file !== undefined) {
+    event.file = file;
+  }
+
+  if (model !== undefined) {
+    event.model = model;
+  }
+
+  if (detail !== undefined) {
+    event.detail = detail;
+  }
+}
+
+function assignNumbers(event: ILoopEvent, src: Record<string, unknown>): void {
+  const ms = optionalNumber(src.ms);
+  const promptTokens = optionalNumber(src.promptTokens);
+  const completionTokens = optionalNumber(src.completionTokens);
+  const totalTokens = optionalNumber(src.totalTokens);
+  const tokensPerSecond = optionalNumber(src.tokensPerSecond);
+  const contextWindow = optionalNumber(src.contextWindow);
+
+  if (ms !== undefined) {
+    event.ms = ms;
+  }
+
+  if (promptTokens !== undefined) {
+    event.promptTokens = promptTokens;
+  }
+
+  if (completionTokens !== undefined) {
+    event.completionTokens = completionTokens;
+  }
+
+  if (totalTokens !== undefined) {
+    event.totalTokens = totalTokens;
+  }
+
+  if (tokensPerSecond !== undefined) {
+    event.tokensPerSecond = tokensPerSecond;
+  }
+
+  if (contextWindow !== undefined) {
+    event.contextWindow = contextWindow;
+  }
+}
+
+function assignVerdict(event: ILoopEvent, src: Record<string, unknown>): void {
+  const decision = toDecision(src.decision);
+  const risk = toRisk(src.risk);
+  const rules = stringArray(src.rules);
+
+  if (decision !== undefined) {
+    event.decision = decision;
+  }
+
+  if (risk !== undefined) {
+    event.risk = risk;
+  }
+
+  if (typeof src.passed === "boolean") {
+    event.passed = src.passed;
+  }
+
+  if (rules !== undefined) {
+    event.rules = rules;
+  }
+}
+
+/** Coerce one parsed JSONL record into an ILoopEvent, or null when it isn't one.
+ *  Carries the fields the failure classifier, the metrics, and the trace summary
+ *  consume — enough to reconstruct a typed event stream from a `--log` file. */
+function coerceEvent(record: unknown): ILoopEvent | null {
+  const src = eventSource(record);
+
+  if (src === null) {
+    return null;
+  }
+
+  const kind = src.kind;
 
   if (typeof kind !== "string" || !isKind(kind)) {
     return null;
@@ -55,29 +168,20 @@ function coerceEvent(record: unknown): ILoopEvent | null {
 
   const event: ILoopEvent = {
     kind,
-    task: optionalString(record.task) ?? "",
-    message: optionalString(record.message) ?? "",
+    task: optionalString(src.task) ?? "",
+    message: optionalString(src.message) ?? "",
   };
-  const output = optionalString(record.output);
-  const rules = stringArray(record.rules);
 
-  if (output !== undefined) {
-    event.output = output;
-  }
-
-  if (typeof record.passed === "boolean") {
-    event.passed = record.passed;
-  }
-
-  if (rules !== undefined) {
-    event.rules = rules;
-  }
+  assignText(event, src);
+  assignNumbers(event, src);
+  assignVerdict(event, src);
 
   return event;
 }
 
 /** Parse a `--log` JSONL transcript (one serialized event per line) into a typed
- *  event stream. Malformed lines and non-event records are skipped. */
+ *  event stream. Malformed lines and non-event records are skipped. Tolerates
+ *  both the ledger shape ({type, payload:{kind,…}}) and the flat shape ({kind,…}). */
 export function parseEventLog(jsonl: string): ILoopEvent[] {
   const events: ILoopEvent[] = [];
 
