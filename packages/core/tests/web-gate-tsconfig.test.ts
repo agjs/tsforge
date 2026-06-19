@@ -67,3 +67,29 @@ test("web gate tsc stays green on a bun:test sibling even when tsconfig.json dro
     await rm(dir, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("appending to a CRLF .tsforge/.gitignore preserves CRLF (no mixed endings)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-webgate-ignore-"));
+
+  try {
+    await writeFile(join(dir, "tsconfig.json"), "{}");
+    // A pre-existing CRLF .gitignore (e.g. authored on Windows) missing our entries.
+    await mkdir(join(dir, ".tsforge"), { recursive: true });
+    await writeFile(
+      join(dir, ".tsforge/.gitignore"),
+      "node_modules\r\n*.log\r\n"
+    );
+
+    // buildWebGate → ensureWebGateTsconfig → ensureGateIgnore appends the overlay.
+    buildWebGate("react", undefined, dir);
+
+    const out = await Bun.file(join(dir, ".tsforge/.gitignore")).text();
+
+    expect(out).toContain("tsconfig.web-gate.json");
+    expect(out).toContain("node_modules"); // pre-existing entry preserved
+    // After stripping every proper CRLF pair, no lone \n may remain (issue #24 lens).
+    expect(out.replace(/\r\n/g, "").includes("\n")).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

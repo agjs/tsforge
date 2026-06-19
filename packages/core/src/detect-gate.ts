@@ -223,16 +223,33 @@ function ensureGateIgnore(dir: string): void {
     return;
   }
 
-  const current = readFileSync(ignore, "utf8");
-  const have = new Set(current.split("\n").map((line) => line.trim()));
+  const next = gitignoreWithEntries(readFileSync(ignore, "utf8"), entries);
+
+  if (next !== null) {
+    writeFileSync(ignore, next);
+  }
+}
+
+/** Compute new `.gitignore` content with any missing `entries` appended, PRESERVING
+ *  the file's EOL style (a CRLF file stays all-CRLF — appending `\n` after CRLF
+ *  lines produced mixed endings; mirrors the issue #24 fuzzy-edit fix). Returns null
+ *  when nothing is missing, so the caller skips a no-op write. */
+function gitignoreWithEntries(
+  current: string,
+  entries: readonly string[]
+): string | null {
+  const have = new Set(current.split(/\r?\n/).map((line) => line.trim()));
   const missing = entries.filter((entry) => !have.has(entry));
 
-  if (missing.length > 0) {
-    writeFileSync(
-      ignore,
-      `${current.replace(/\n*$/u, "\n")}${missing.join("\n")}\n`
-    );
+  if (missing.length === 0) {
+    return null;
   }
+
+  const eol = current.includes("\r\n") ? "\r\n" : "\n";
+  const base = current.replace(/(?:\r?\n)+$/u, "");
+  const prefix = base.length > 0 ? `${base}${eol}` : "";
+
+  return `${prefix}${missing.join(eol)}${eol}`;
 }
 
 // The web-stack scaffolds (Vite + React full-kit, or Vite vanilla) live in the
@@ -914,14 +931,10 @@ async function ignoreGateArtifact(cwd: string): Promise<void> {
 
   // Exists (maybe a user's, or an older tsforge one without the buildinfo line):
   // append only the missing entries so we never clobber what's there.
-  const current = await file.text();
-  const missing = entries.filter((e) => !current.split("\n").includes(e));
+  const next = gitignoreWithEntries(await file.text(), entries);
 
-  if (missing.length > 0) {
-    await Bun.write(
-      ignore,
-      `${current.replace(/\n*$/u, "\n")}${missing.join("\n")}\n`
-    );
+  if (next !== null) {
+    await Bun.write(ignore, next);
   }
 }
 
