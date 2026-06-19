@@ -49,6 +49,7 @@ test("flags never-exiting dev servers and watchers", () => {
     "nohup vite",
     // language-runtime built-in servers
     "deno task dev",
+    "deno task --cwd app dev", // task name behind a value-flag
     "php -S localhost:8000",
     "python -m http.server 8000",
     "python3 -m http.server",
@@ -83,6 +84,22 @@ test("lets one-shot commands (incl. builds) through", () => {
   ];
 
   for (const cmd of oneShot) {
+    expect(isLongRunningServerCommand(cmd)).toBe(false);
+  }
+});
+
+test("does not false-positive on a server name inside a quoted string", () => {
+  // The separator/binary lives in a quoted arg — splitting on it or matching the
+  // head would wrongly block a perfectly fine one-shot command.
+  const quoted = [
+    'git commit -m "feat: add vite; fix tests"',
+    'echo "starting || vite"',
+    'echo "run npm run dev later"',
+    `git commit -m 'serve the dist; then vite'`,
+    "node -e \"console.log('next dev')\"",
+  ];
+
+  for (const cmd of quoted) {
     expect(isLongRunningServerCommand(cmd)).toBe(false);
   }
 });

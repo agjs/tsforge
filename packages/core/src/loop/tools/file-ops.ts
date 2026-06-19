@@ -331,9 +331,14 @@ function isRuntimeServer(base: string, rest: readonly string[]): boolean {
   }
 
   if (base === "deno") {
+    if (rest.includes("--watch")) {
+      return true;
+    }
+
+    // `deno task <name>` — the name can sit behind flags (`deno task --cwd app dev`),
+    // so match a server name ANYWHERE after `task`, not just at a fixed position.
     return (
-      rest.includes("--watch") ||
-      (rest[0] === "task" && SERVER_SUBCOMMANDS.has(rest[1] ?? ""))
+      rest[0] === "task" && rest.slice(1).some((a) => SERVER_SUBCOMMANDS.has(a))
     );
   }
 
@@ -359,6 +364,16 @@ function headIsServer(base: string, rest: readonly string[]): boolean {
     base,
     rest.find((a) => !a.startsWith("-"))
   );
+}
+
+/** Blank (→ single space) quoted spans that protect an argument — those containing
+ *  whitespace or a shell separator (`;`/`|`/`&`). A quoted bare word (`'vite'`) is
+ *  left as-is so a genuinely-quoted command name is still detected. */
+function blankProtectedQuotes(command: string): string {
+  const blank = (match: string, inner: string): string =>
+    /[\s;|&]/u.test(inner) ? " " : match;
+
+  return command.replace(/"([^"]*)"/gu, blank).replace(/'([^']*)'/gu, blank);
 }
 
 /** Is THIS single segment a foreground server/watcher? */
@@ -414,15 +429,19 @@ function pkgRunnerIsServer(rest: string[]): boolean {
  * is allowed through.
  */
 export function isLongRunningServerCommand(command: string): boolean {
-  const trimmed = command.trim();
+  // Blank out quoted spans that PROTECT an argument (they contain whitespace or a
+  // shell separator) FIRST, so a `;`/`||`/binary-name inside a commit message or an
+  // echo string can't cause a false split/match. A quoted bare word (`'vite'`,
+  // `"npm"`) is left intact — `unwrapToken` resolves it to the real command.
+  const unquoted = blankProtectedQuotes(command.trim()).trim();
 
   // A trailing single `&` (not `&&`) backgrounds the command — it returns at once.
-  if (/(?:^|[^&])&$/u.test(trimmed)) {
+  if (/(?:^|[^&])&$/u.test(unquoted)) {
     return false;
   }
 
   // A server anywhere in a `&&`/`||`/`;`/`|` chain stalls the loop just the same.
-  return trimmed
+  return unquoted
     .split(/&&|\|\||[;|]/u)
     .some((segment) => segmentIsServer(segment));
 }
