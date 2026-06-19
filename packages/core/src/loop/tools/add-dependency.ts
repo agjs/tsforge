@@ -1,14 +1,17 @@
 import { join } from "node:path";
-import { runCommand } from "../../agent";
+import { runArgv } from "../../agent";
 import { reject, str, type IToolContext } from "./tool-context";
 
 /** A valid npm package spec: optional @scope/, name, optional @version-range.
  *  Anything else (flags, paths, shell metacharacters) is rejected — the names
- *  are the ONLY untrusted text that reaches the `bun add` command line. The
- *  first character class deliberately excludes `-` so a leading flag like
- *  `-g`/`--registry` can never validate as a name. */
+ *  are the ONLY untrusted text that reaches the `bun add` argv. The first
+ *  character class deliberately excludes `-` so a leading flag like
+ *  `-g`/`--registry` can never validate as a name. The version class excludes
+ *  shell-redirection chars (`<`/`>`): even though we now spawn an explicit argv
+ *  (no shell), keeping them out is defense-in-depth and these range operators
+ *  aren't needed for `bun add` (use `^`/`~`/exact). */
 const PACKAGE_SPEC_RE =
-  /^(@[a-z0-9~][a-z0-9-._~]*\/)?[a-z0-9~][a-z0-9-._~]*(@[a-zA-Z0-9.^~<>=+-]+)?$/;
+  /^(@[a-z0-9~][a-z0-9-._~]*\/)?[a-z0-9~][a-z0-9-._~]*(@[a-zA-Z0-9.^~=+-]+)?$/;
 
 /** Parse + validate the space-separated package list; null if any spec is bad. */
 export function parsePackageSpecs(packages: string): string[] | null {
@@ -53,13 +56,13 @@ export async function doAddDependency(
   }
 
   const dev = args.dev === true;
-  const command = `bun add ${dev ? "-d " : ""}${specs.join(" ")}`;
+  const argv = ["bun", "add", ...(dev ? ["-d"] : []), ...specs];
 
-  ctx.report({ kind: "tool", task: ctx.task, message: `↳ ${command}` });
+  ctx.report({ kind: "tool", task: ctx.task, message: `↳ ${argv.join(" ")}` });
 
-  const res = await runCommand(
+  const res = await runArgv(
     ctx.cwd,
-    command,
+    argv,
     ctx.signal === undefined ? {} : { signal: ctx.signal }
   );
 

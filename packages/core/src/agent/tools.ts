@@ -1,6 +1,6 @@
 import type { ICreateFile, IReplacement } from "../files";
 import { isArray, isRecord } from "../lib/guards";
-import { runShellCommand } from "../lib/fs";
+import { runShellCommand, runArgvCommand } from "../lib/fs";
 import { coerceStringToArray, trimMarkdownFences } from "./tool-repair";
 import type { IShellResult } from "./agent.types";
 
@@ -174,6 +174,32 @@ export async function runCommand(
 ): Promise<IShellResult> {
   const timeoutMs = opts.timeoutMs ?? runToolTimeoutMs();
   const run = await runShellCommand(cwd, command, {
+    timeoutMs,
+    ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+  });
+
+  const note = run.timedOut
+    ? `\n[command killed after ${timeoutMs}ms timeout — TSFORGE_RUN_TIMEOUT_MS to change]`
+    : "";
+
+  return {
+    stdout: run.stdout,
+    stderr: run.stderr + note,
+    exitCode: run.exitCode,
+  };
+}
+
+/** Like `runCommand` but spawns an explicit argv with NO shell, so arguments are
+ *  passed literally and can't be expanded/redirected/injected. Use this whenever
+ *  any argument is built from model- or content-supplied text (e.g. `bun add
+ *  <pkg>`). Same timeout/abort semantics and timeout note as `runCommand`. */
+export async function runArgv(
+  cwd: string,
+  argv: string[],
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {}
+): Promise<IShellResult> {
+  const timeoutMs = opts.timeoutMs ?? runToolTimeoutMs();
+  const run = await runArgvCommand(cwd, argv, {
     timeoutMs,
     ...(opts.signal === undefined ? {} : { signal: opts.signal }),
   });

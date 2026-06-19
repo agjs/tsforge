@@ -119,6 +119,17 @@ const FIND_MUTATING = new Set([
   "-fls",
 ]);
 
+/** Flags that make an otherwise read-only git subcommand WRITE a file to disk
+ *  (`git diff --output=x`, `git diff -o x`). Matched as the exact token or its
+ *  `=value` form, so `--output`, `--output=x`, and `-o` are all caught. */
+const GIT_OUTPUT_FLAGS = new Set(["--output", "-o"]);
+
+function isGitOutputFlag(arg: string): boolean {
+  const name = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+
+  return GIT_OUTPUT_FLAGS.has(name);
+}
+
 /** `git branch` flags that delete/rename/copy a branch. A bare positional
  *  (`git branch foo`) also CREATES a branch, so any non-flag arg disqualifies. */
 const GIT_BRANCH_MUTATING = new Set([
@@ -170,7 +181,9 @@ function gitIsReadOnly(sub: string | undefined, rest: string[]): boolean {
     return !rest.some((a) => GIT_BRANCH_MUTATING.has(a) || !a.startsWith("-"));
   }
 
-  return true;
+  // diff/show/log inspect by default but can be redirected to a file via
+  // `--output`/`-o` — that's a write, so disqualify it.
+  return !rest.some(isGitOutputFlag);
 }
 
 function tscIsReadOnly(rest: string[]): boolean {
@@ -288,7 +301,10 @@ export async function runShell(
  * point is to break the loop where a model "fixes" generic SDK types it can never
  * satisfy: the message redirects it to its own call site.
  */
-function vendoredRejectMessage(op: "edit" | "create", file: string): string {
+export function vendoredRejectMessage(
+  op: "edit" | "create",
+  file: string
+): string {
   return `${op} ${file} REJECTED: this is a VENDORED, already-type-correct harness file you must NOT modify. A type error involving it means the bug is at YOUR CALL SITE — fix how you USE it (the types/args you pass), not the file itself.`;
 }
 
