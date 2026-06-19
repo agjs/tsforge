@@ -11,6 +11,7 @@ export {
   type IFailureSignals,
 } from "./failure-class";
 export { parseEventLog } from "./parse-log";
+export { formatTrace } from "./trace";
 export {
   buildSweepReport,
   renderSweepReportMarkdown,

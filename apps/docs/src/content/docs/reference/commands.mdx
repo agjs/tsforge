@@ -45,6 +45,15 @@ tsforge map forget     # delete it
 
 `tsforge map` (or `/map` in a session) builds a deterministic structural map of a TypeScript repo — the directory shape, what each module exports, and the **hub modules** everything imports — and persists it under `.tsforge/`. On the next session it's injected into the agent's context so it starts oriented instead of exploring from scratch. All compiler facts (no AI guessing, no extra dependencies); it primes future sessions (run `/clear` to apply mid-session). Best for existing repos; greenfield builds don't need it.
 
+## Trace a run
+
+```bash
+tsforge trace            # summarize the newest --log run
+tsforge trace run.jsonl  # a specific log file
+```
+
+`tsforge trace` (or `/trace` in a session) reads a `--log` ledger and prints a one-screen summary — model/tool calls, **policy decisions** (allow/ask/deny by risk), gate verdicts, and turns-to-green — deterministically, with no model call. See [Trace a run](/observability/trace/).
+
 ## Merge gate (repo root)
 
 Commands for people working on the tsforge repository itself:

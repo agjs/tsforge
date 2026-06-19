@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { join, isAbsolute } from "node:path";
 import { mkdirSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { Writable } from "node:stream";
 import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
@@ -17,6 +18,7 @@ import {
   formatReport,
 } from "./loop";
 import { buildAndPersistMap, mapStatus, forgetMap } from "./codebase";
+import { parseEventLog, formatTrace } from "./eval";
 import { isPolicyMode } from "./policy";
 import {
   PROVIDER_LIMITS,
@@ -134,6 +136,8 @@ export interface ICliArgs {
   base: string;
   /** Build a structural workspace map (`tsforge map`). */
   map: boolean;
+  /** Summarize a `--log` run (`tsforge trace [logfile]`); `task` carries the path. */
+  trace: boolean;
   /** Base policy mode (`--policy-mode <plan|default|acceptEdits|ci|dontAsk|
    *  bypassPermissions>`); overrides the config file's policy.mode. */
   policyMode: string;
@@ -184,6 +188,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     staged: false,
     base: "",
     map: false,
+    trace: false,
     policyMode: "",
   };
 
@@ -215,6 +220,9 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     out.task = positional.slice(1).join(" ").trim();
   } else if (positional[0] === "map") {
     out.map = true;
+    out.task = positional.slice(1).join(" ").trim();
+  } else if (positional[0] === "trace") {
+    out.trace = true;
     out.task = positional.slice(1).join(" ").trim();
   }
 
@@ -1403,6 +1411,10 @@ async function repl(args: ICliArgs): Promise<number> {
         await runMapCommand(args.dir, arg);
         break;
 
+      case "trace":
+        await runTraceCommand(arg, logFile);
+        break;
+
       case "files": {
         const globs = arg
           .split(",")
@@ -1865,6 +1877,73 @@ async function mapMode(args: ICliArgs): Promise<number> {
   return 0;
 }
 
+/** Resolve the newest `--log` JSONL under ~/.tsforge/logs, or "" if none. */
+async function newestLogFile(): Promise<string> {
+  try {
+    // Filenames are ISO-timestamp-prefixed, so lexicographic sort = chronological.
+    const names = (await readdir(logsDir()))
+      .filter((n) => n.endsWith(".jsonl"))
+      .sort();
+    const latest = names.at(-1);
+
+    return latest === undefined ? "" : join(logsDir(), latest);
+  } catch {
+    return "";
+  }
+}
+
+/** A user-supplied log path resolved against cwd, or "" when none was given. */
+function resolveLogArg(arg: string): string {
+  if (arg.length === 0) {
+    return "";
+  }
+
+  return isAbsolute(arg) ? arg : join(process.cwd(), arg);
+}
+
+/** `tsforge trace [logfile]` / `/trace` — summarize a `--log` run: model/tool
+ *  calls, policy decisions (allow/ask/deny by risk), gate verdicts, and
+ *  turns-to-green. Deterministic, no model call. With no path it prefers `prefer`
+ *  (the live session log) and falls back to the newest log on disk. */
+async function runTraceCommand(arg: string, prefer = ""): Promise<number> {
+  let file = resolveLogArg(arg);
+
+  if (file.length === 0) {
+    file = prefer;
+  }
+
+  if (file.length === 0) {
+    file = await newestLogFile();
+  }
+
+  if (file.length === 0) {
+    process.stdout.write(
+      "no log to analyze — run with --log first, or pass a path\n"
+    );
+
+    return 1;
+  }
+
+  const text = await Bun.file(file)
+    .text()
+    .catch(() => "");
+  const events = parseEventLog(text);
+
+  if (events.length === 0) {
+    process.stdout.write(`no events parsed from ${file}\n`);
+
+    return 1;
+  }
+
+  process.stdout.write(`trace of ${file}\n\n${formatTrace(events)}\n`);
+
+  return 0;
+}
+
+async function traceMode(args: ICliArgs): Promise<number> {
+  return runTraceCommand(args.task);
+}
+
 export async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -1874,6 +1953,10 @@ export async function main(): Promise<number> {
 
   if (args.map) {
     return mapMode(args);
+  }
+
+  if (args.trace) {
+    return traceMode(args);
   }
 
   // A positional task with a scope + gate ⇒ one-shot; otherwise interactive.
