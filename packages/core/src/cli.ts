@@ -676,12 +676,14 @@ async function baseGate(
     normalizeRuleOverrides,
     resolveProjectProfile,
   } = await import("./config/tsforge-config");
+  const { resolveConventions } = await import("./infer-rules/conventions");
 
   const stackProfile = await detectStack(args.dir);
   const config = await loadTsforgeConfig(args.dir);
   const activePacks = resolveActivePacks(stackProfile.packs, config);
   const ruleOverrides = normalizeRuleOverrides(config);
   const profile = resolveProjectProfile(config);
+  const conventions = resolveConventions(config.conventions);
 
   const auto = await buildGate(
     args.dir,
@@ -693,6 +695,7 @@ async function baseGate(
       // not just that it type-checks and lints. discoverTestCommand appends them
       // only when the project actually has tests; --strict-floor-only opts out.
       includeTests: !args.strictFloorOnly,
+      conventions,
     }
   );
 
@@ -703,7 +706,8 @@ async function baseGate(
       "core",
       args.dir,
       activePacks,
-      Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined
+      Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
+      conventions
     ),
   };
 }

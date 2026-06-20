@@ -1,4 +1,4 @@
-import { resolveConventions } from "./conventions";
+import { isDefaultConventions, resolveConventions } from "./conventions";
 import type { IConventions } from "./conventions.types";
 import type {
   EslintSurface,
@@ -114,6 +114,36 @@ export function conventionRuleEntries(
   }
 
   return entries;
+}
+
+/** The JSON value for the `TSFORGE_CONVENTIONS` gate-command env, or undefined to
+ *  OMIT it — a default convention set emits nothing, so a default project's gate
+ *  command is unchanged. The bundled `.mjs` parses this with {@link parseConventionsEnv}. */
+export function conventionsEnvValue(
+  conventions: IConventions | undefined
+): string | undefined {
+  if (conventions === undefined || isDefaultConventions(conventions)) {
+    return undefined;
+  }
+
+  return JSON.stringify(conventions);
+}
+
+/** The convention-managed rules as an EXPLICIT record for the in-process write-time
+ *  linter's `overrideConfig` (which layers over the bundled `.mjs`). Unlike
+ *  {@link conventionRuleEntries}, a disabled rule is set to `"off"` (not omitted) so
+ *  the override actually disables the bundled config's copy. */
+export function conventionOverrideRules(
+  conventions: IConventions,
+  surface: EslintSurface
+): Record<string, RuleEntry> {
+  const entries = conventionRuleEntries(conventions, surface);
+
+  return {
+    "@typescript-eslint/naming-convention":
+      entries["@typescript-eslint/naming-convention"] ?? "off",
+    "no-restricted-syntax": entries["no-restricted-syntax"] ?? "off",
+  };
 }
 
 /** Parse the JSON `TSFORGE_CONVENTIONS` env channel into a fully-resolved set,

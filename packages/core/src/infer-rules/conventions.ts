@@ -65,3 +65,15 @@ export function resolveConventions(
 ): IConventions {
   return { ...DEFAULT_CONVENTIONS, ...partial };
 }
+
+/** True when every field equals the house default — used to SKIP emitting the
+ *  `TSFORGE_CONVENTIONS` env/override, so a default project's gate command and
+ *  prompts are byte-identical to before this feature existed. */
+export function isDefaultConventions(conventions: IConventions): boolean {
+  return (
+    conventions.interfaces === DEFAULT_CONVENTIONS.interfaces &&
+    conventions.enums === DEFAULT_CONVENTIONS.enums &&
+    conventions.tests === DEFAULT_CONVENTIONS.tests &&
+    conventions.componentFolders === DEFAULT_CONVENTIONS.componentFolders
+  );
+}

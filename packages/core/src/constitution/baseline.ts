@@ -46,6 +46,15 @@ const PRETTIER = `{
 }
 `;
 
+// This is the BROWNFIELD floor written into a target repo's own eslint.config.js
+// (a serialized source string, not an in-memory config). Its interface-naming +
+// no-enum rules below encode the DEFAULT conventions (I-prefix, enum ban) — the
+// same values infer-rules/conventions DEFAULT_CONVENTIONS produces. The live gate,
+// the write-time linter, and the prompts read project conventions DYNAMICALLY
+// (TSFORGE_CONVENTIONS); this brought floor intentionally uses the defaults for
+// V1 (per the setup plan: honoring per-repo conventions here is secondary to a
+// drift-free runtime). Changing DEFAULT_CONVENTIONS trips the conventions tests,
+// which is the reminder to revisit this block.
 const ESLINT = `import pluginJs from "@eslint/js";
 import tseslint from "typescript-eslint";
 import configPrettier from "eslint-config-prettier";
