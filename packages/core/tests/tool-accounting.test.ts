@@ -716,3 +716,35 @@ test("add_dependency rejects an invalid package spec and does not mutate", async
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// The vendored "you cannot edit this file" concept was removed entirely — a model
+// may now edit ANY in-scope file, including a generated `*.gen.ts` (the build
+// regenerates it anyway; guidance, not a hard block, steers the model off it).
+test("a generated *.gen.ts file is editable (the vendored block is gone)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-"));
+
+  try {
+    const state = freshState();
+    const touched = await runToolCalls(
+      [
+        {
+          name: "create",
+          arguments: {
+            file: "src/routeTree.gen.ts",
+            content: "export const routeTree = {};\n",
+          },
+        },
+      ],
+      ctxFor(dir, ["**/*"]),
+      state
+    );
+
+    expect(touched).toBe(true);
+    expect(state.edits).toBe(1);
+    expect(await Bun.file(join(dir, "src/routeTree.gen.ts")).exists()).toBe(
+      true
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

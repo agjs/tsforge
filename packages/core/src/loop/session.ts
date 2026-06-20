@@ -20,7 +20,6 @@ import type { SetupWebFn } from "./tools";
 import type { PolicyMode } from "../policy";
 import { flags } from "../config";
 import { readFiles } from "../lib/fs";
-import { WEB_VENDORED_PATTERNS } from "../lib/scope";
 import { validate, isEslintJsonLine, type ErrorParser } from "../validate";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
@@ -631,11 +630,9 @@ export class Session {
     // repo's structure. Cheap: loads + marks drift, never rebuilds here.
     const workspaceMap = await recallMapBlock(cfg.cwd);
 
-    const isWebScaffold = cfg.scaffoldWeb === true || cfg.scaffoldUi === true;
     const ctx: ILoopCtx = {
       task,
       cwd: cfg.cwd,
-      ...(isWebScaffold ? { vendored: WEB_VENDORED_PATTERNS } : {}),
       tsService: await buildTsService(cfg.cwd),
       ...(cfg.lintFile === undefined ? {} : { lintFile: cfg.lintFile }),
       parse: cfg.parse,

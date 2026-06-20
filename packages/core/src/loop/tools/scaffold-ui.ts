@@ -37,10 +37,8 @@ export async function doScaffoldUi(
     return `scaffold_ui REJECTED: \`components\` must be a non-empty array from: ${COMPONENT_NAMES.join(", ")}.`;
   }
 
-  // Plan the writes: scope check only — deliberately NOT the vendored guard. This
-  // tool's JOB is to materialize the generated UI primitives; gating it on
-  // `isVendored` would refuse the very files it owns. (edit/create DO reject
-  // vendored paths — there the model must not rewrite a generated shell.)
+  // Plan the writes (scope check only): this tool materializes the generated UI
+  // primitives, so it just needs each within the editable scope.
   const pending: IWriteFile[] = [];
 
   for (const [rel, content] of Object.entries(

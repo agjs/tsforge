@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { applyEdits } from "../../files/edit";
 import { applyCreate } from "../../files/create";
 import { EDIT_FAIL_REASON } from "../../files";
-import { writable, normalizeWorkspacePath, isVendored } from "../../lib/scope";
+import { writable, normalizeWorkspacePath } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
@@ -525,20 +525,6 @@ export async function runShell(
   return `exit ${res.exitCode}\n${output}${guidance}`;
 }
 
-/**
- * The rejection shown when the model tries to write a VENDORED file. These are
- * tested, already-type-correct harness files (the SDK in `src/lib/`, the UI
- * primitives in `src/components/ui/`, the MSW machinery, `*.gen.ts`). The whole
- * point is to break the loop where a model "fixes" generic SDK types it can never
- * satisfy: the message redirects it to its own call site.
- */
-export function vendoredRejectMessage(
-  op: "edit" | "create",
-  file: string
-): string {
-  return `${op} ${file} REJECTED: this is a VENDORED, already-type-correct harness file you must NOT modify. A type error involving it means the bug is at YOUR CALL SITE — fix how you USE it (the types/args you pass), not the file itself.`;
-}
-
 export async function doEdit(
   args: Record<string, unknown>,
   ctx: IToolContext
@@ -554,14 +540,6 @@ export async function doEdit(
   }
 
   edit.file = normalizeWorkspacePath(ctx.cwd, edit.file);
-
-  if (isVendored(edit.file, ctx.vendored ?? [])) {
-    return reject(
-      ctx,
-      "edit:vendored",
-      vendoredRejectMessage("edit", edit.file)
-    );
-  }
 
   if (!writable(edit.file, ctx.files)) {
     return reject(
@@ -660,14 +638,6 @@ export async function doCreate(
   }
 
   create.file = normalizeWorkspacePath(ctx.cwd, create.file);
-
-  if (isVendored(create.file, ctx.vendored ?? [])) {
-    return reject(
-      ctx,
-      "create:vendored",
-      vendoredRejectMessage("create", create.file)
-    );
-  }
 
   if (!writable(create.file, ctx.files)) {
     return reject(

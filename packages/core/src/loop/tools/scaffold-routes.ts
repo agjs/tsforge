@@ -34,8 +34,7 @@ export async function doScaffoldRoutes(
   for (const [rel, content] of Object.entries(files)) {
     const path = normalizeWorkspacePath(ctx.cwd, rel);
 
-    // Scope check only — deliberately NOT the vendored guard (this tool owns these
-    // generated shells; see scaffold-ui for the rationale).
+    // Scope check only — this tool owns these generated route shells.
     if (!writable(path, ctx.files)) {
       continue;
     }
