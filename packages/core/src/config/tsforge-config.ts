@@ -10,6 +10,13 @@ import {
   type IPolicyRule,
   type IPolicyRules,
 } from "../policy";
+import {
+  isComponentFoldersConvention,
+  isEnumConvention,
+  isInterfaceConvention,
+  isTestConvention,
+} from "../infer-rules/conventions";
+import type { IConventions } from "../infer-rules/conventions.types";
 import { parsePlugins, type IExternalPlugin } from "./external-plugins";
 import {
   DEFAULT_PROFILE,
@@ -69,6 +76,15 @@ export interface ITsforgeProjectConfig {
     readonly mode?: PolicyMode;
     readonly rules?: IPolicyRules;
   };
+
+  /**
+   * Project conventions inferred by `tsforge setup` — TASTE only (interface
+   * naming, enums, test layout, component folders). Each field tunes a stylistic
+   * rule; unset fields fall back to tsforge's house defaults. These can NEVER
+   * relax the safety floor (no `any`/`as`/`!`, complexity, etc.). Opt-in: absent
+   * ⇒ tsforge's default house style.
+   */
+  readonly conventions?: Readonly<Partial<IConventions>>;
 }
 
 function warnConfig(msg: string): void {
@@ -105,6 +121,18 @@ function warnInvalidRuleSeverity(key: string, value: unknown): void {
   const msg = `tsforge.config.json: rule "${key}" severity must be "error", "warn", or "off", got "${String(value)}"`;
 
   warnConfig(msg);
+}
+
+function warnInvalidConventionsType(value: unknown): void {
+  warnConfig(
+    `tsforge.config.json: "conventions" must be an object, got ${typeof value}`
+  );
+}
+
+function warnInvalidConvention(key: string, value: unknown): void {
+  warnConfig(
+    `tsforge.config.json: conventions.${key} has invalid value "${String(value)}" (ignored)`
+  );
 }
 
 function warnInvalidJsonRoot(rootValue: unknown): void {
@@ -227,6 +255,55 @@ function validateRules(
   }
 
   return Object.keys(rulesFields).length > 0 ? rulesFields : undefined;
+}
+
+/** Validate the `conventions` block — warn-and-drop per sub-field. Each field is
+ *  optional taste (interface naming, enums, test layout, component folders); an
+ *  invalid value is warned and dropped so the resolved default applies. */
+function validateConventions(
+  parsed: unknown
+): Readonly<Partial<IConventions>> | undefined {
+  if (!isRecord(parsed)) {
+    warnInvalidConventionsType(parsed);
+
+    return undefined;
+  }
+
+  const out: { -readonly [K in keyof IConventions]?: IConventions[K] } = {};
+
+  if (parsed.interfaces !== undefined) {
+    if (isInterfaceConvention(parsed.interfaces)) {
+      out.interfaces = parsed.interfaces;
+    } else {
+      warnInvalidConvention("interfaces", parsed.interfaces);
+    }
+  }
+
+  if (parsed.enums !== undefined) {
+    if (isEnumConvention(parsed.enums)) {
+      out.enums = parsed.enums;
+    } else {
+      warnInvalidConvention("enums", parsed.enums);
+    }
+  }
+
+  if (parsed.tests !== undefined) {
+    if (isTestConvention(parsed.tests)) {
+      out.tests = parsed.tests;
+    } else {
+      warnInvalidConvention("tests", parsed.tests);
+    }
+  }
+
+  if (parsed.componentFolders !== undefined) {
+    if (isComponentFoldersConvention(parsed.componentFolders)) {
+      out.componentFolders = parsed.componentFolders;
+    } else {
+      warnInvalidConvention("componentFolders", parsed.componentFolders);
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Validate each known field of an already-parsed config object, dropping any
@@ -372,6 +449,24 @@ function assignPolicy(
   }
 }
 
+/** Validate + assign the optional `conventions` block (kept off
+ *  `buildConfigFields` so its per-field branches don't push it over the
+ *  complexity cap — mirrors `assignPolicy`). */
+function assignConventions(
+  parsed: Record<string, unknown>,
+  configFields: { conventions?: Readonly<Partial<IConventions>> }
+): void {
+  if (parsed.conventions === undefined) {
+    return;
+  }
+
+  const conventions = validateConventions(parsed.conventions);
+
+  if (conventions !== undefined) {
+    configFields.conventions = conventions;
+  }
+}
+
 function buildConfigFields(
   parsed: Record<string, unknown>
 ): ITsforgeProjectConfig {
@@ -383,6 +478,7 @@ function buildConfigFields(
     mcpServers?: Record<string, IMcpServerConfig>;
     plugins?: readonly IExternalPlugin[];
     policy?: { mode?: PolicyMode; rules?: IPolicyRules };
+    conventions?: Readonly<Partial<IConventions>>;
   } = {};
 
   if (parsed.profile !== undefined) {
@@ -434,6 +530,7 @@ function buildConfigFields(
   }
 
   assignPolicy(parsed, configFields);
+  assignConventions(parsed, configFields);
 
   return configFields;
 }
