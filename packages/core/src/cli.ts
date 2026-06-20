@@ -1163,9 +1163,13 @@ async function repl(args: ICliArgs): Promise<number> {
         break;
 
       case "compact": {
-        // Compaction is a full model round-trip (can take many seconds); show the
-        // spinner so the UI doesn't look frozen, and ALWAYS stop it (even on a
-        // provider error) so the prompt comes back cleanly.
+        // Compaction is a full model round-trip (can take many seconds). Drive the
+        // SAME live-activity path a turn uses: lastStatus → "● working" on the bar,
+        // spinner.start() runs the tick timer whose onTick repaints the bar with the
+        // "⠋ compacting · Ns" activity segment (the inline spinner is suppressed in
+        // the REPL, so the bar IS the loader). ALWAYS restore + stop, even on a
+        // provider error, so the prompt comes back clean and idle.
+        lastStatus = "working";
         spinner.start();
         spinner.setLabel("compacting");
 
@@ -1176,6 +1180,7 @@ async function repl(args: ICliArgs): Promise<number> {
           process.stdout.write(`compacted ${before} → ${after} messages\n`);
         } finally {
           spinner.stop();
+          lastStatus = "ready";
         }
 
         break;

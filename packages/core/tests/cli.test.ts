@@ -189,3 +189,33 @@ test("spinner suppresses its inline carriage-return write when the gate is off",
   expect(writes.join("")).toContain("\r");
   expect(writes.join("")).toContain("thinking");
 });
+
+// The /compact handler shows progress by driving this exact path: start() runs the
+// tick timer, setLabel("compacting") names it, and each tick fires onTick — which in
+// the REPL repaints the pinned status bar with frameLabel() as its activity segment
+// (the inline write is gated off there, so the bar IS the visible loader). Lock that
+// frameLabel reflects the label and onTick fires, so the loader can't silently vanish.
+test("spinner exposes a live 'compacting' activity label and repaints via onTick", async () => {
+  const { makeSpinner } = await import("../src/cli");
+  const out = { write: (): void => undefined, isTTY: true };
+  const spinner = makeSpinner(out);
+
+  // before start: no activity (frameLabel empty → the bar shows no loader)
+  expect(spinner.frameLabel()).toBe("");
+
+  let repaints = 0;
+
+  spinner.onTick(() => {
+    repaints += 1;
+  });
+  spinner.setInlineGate(() => false); // REPL gates the inline write off
+  spinner.start();
+  spinner.setLabel("compacting");
+  spinner.tick();
+
+  expect(spinner.frameLabel()).toContain("compacting");
+  expect(repaints).toBeGreaterThan(0); // each tick repaints the status bar
+
+  spinner.stop();
+  expect(spinner.frameLabel()).toBe(""); // stopped → loader cleared
+});
