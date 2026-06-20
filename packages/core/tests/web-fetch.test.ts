@@ -5,8 +5,12 @@ import {
   fetchFollowingRedirects,
   type IWebFetchDeps,
   type RawFetch,
+  type ResolveHost,
 } from "../src/loop/tools/web-fetch";
 import type { IToolContext } from "../src/loop/tools/execute-tool";
+
+/** Deterministic, offline resolver: every host maps to a public IP. */
+const publicResolve: ResolveHost = async () => ["93.184.216.34"];
 
 const ctx = (): IToolContext => ({
   cwd: ".",
@@ -76,8 +80,53 @@ test("fetchFollowingRedirects re-validates each hop and blocks a redirect to loc
   };
 
   await expect(
-    fetchFollowingRedirects("https://evil.example.com/", raw)
+    fetchFollowingRedirects("https://evil.example.com/", raw, publicResolve)
   ).rejects.toThrow(/non-public host/u);
+});
+
+test("fetchFollowingRedirects blocks a public-looking host that resolves to loopback", async () => {
+  // Wildcard-DNS SSRF: the hostname STRING is public, but it resolves to 127.0.0.1.
+  let fetched = false;
+
+  const raw: RawFetch = async () => {
+    fetched = true;
+
+    throw new Error("should never fetch a host resolving to a private IP");
+  };
+
+  const resolveLoopback: ResolveHost = async () => ["127.0.0.1"];
+
+  await expect(
+    fetchFollowingRedirects("https://127-0-0-1.sslip.io/", raw, resolveLoopback)
+  ).rejects.toThrow(/private address/u);
+  expect(fetched).toBe(false);
+});
+
+test("fetchFollowingRedirects blocks a redirect whose destination resolves private", async () => {
+  // First hop is genuinely public; the redirect target's NAME is public but it
+  // resolves to a private IP — must be refused at the resolution check.
+  const raw: RawFetch = async (url) => {
+    if (url === "https://a.example.com/") {
+      return {
+        ok: false,
+        status: 302,
+        headers: {
+          get: (n) =>
+            n === "location" ? "https://foo.127.0.0.1.nip.io/" : null,
+        },
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`should never fetch ${url}`);
+  };
+
+  const resolve: ResolveHost = async (host) =>
+    host === "a.example.com" ? ["93.184.216.34"] : ["127.0.0.1"];
+
+  await expect(
+    fetchFollowingRedirects("https://a.example.com/", raw, resolve)
+  ).rejects.toThrow(/private address/u);
 });
 
 test("fetchFollowingRedirects follows a redirect to another public host", async () => {
@@ -101,7 +150,11 @@ test("fetchFollowingRedirects follows a redirect to another public host", async 
     };
   };
 
-  const res = await fetchFollowingRedirects("https://a.example.com/", raw);
+  const res = await fetchFollowingRedirects(
+    "https://a.example.com/",
+    raw,
+    publicResolve
+  );
 
   expect(res.status).toBe(200);
   expect(await res.text()).toBe("final");

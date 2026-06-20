@@ -9,9 +9,21 @@ import {
   makeFileLinter,
   scaffoldWeb,
   discoverTestCommand,
+  webTestProbe,
   buildCoreFix,
   formatFile,
 } from "../src/detect-gate";
+
+/** Run only the find-condition of the web test probe in `cwd`; true when it
+ *  detects at least one test file (i.e. `bun test` would run). */
+function probeDetects(cwd: string): boolean {
+  const cond = webTestProbe()
+    .replace(/^if /u, "")
+    .replace(/; then bun test; fi$/u, "");
+  const r = Bun.spawnSync(["sh", "-c", `${cond} && echo FOUND`], { cwd });
+
+  return r.stdout.toString().includes("FOUND");
+}
 
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const ESLINT_BIN = join(ROOT, "node_modules", ".bin", "eslint");
@@ -182,6 +194,48 @@ test("scaffoldWeb(react) lays the full kit; gate builds with Vite + browser", as
     const tsconfig = await readFile(join(dir, "tsconfig.json"), "utf8");
 
     expect(tsconfig).toContain("*.test.ts");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("web gate test probe runs a mirrored tests/ file, not just co-located src tests", async () => {
+  // A model can satisfy test-sibling-required with tests/foo.test.ts; the OLD
+  // probe (`find src …`) never saw it, so the gate skipped it entirely. The
+  // aligned probe scans the whole project (same extensions as core discovery).
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "tests"), { recursive: true });
+    await writeFile(
+      join(dir, "tests", "foo.test.ts"),
+      "import { test } from 'bun:test';\ntest('x', () => {});\n"
+    );
+
+    expect(probeDetects(dir)).toBe(true);
+
+    // and a co-located spec (different extension) is found too
+    const dir2 = await tempDir();
+
+    try {
+      await mkdir(join(dir2, "src"), { recursive: true });
+      await writeFile(join(dir2, "src", "a.spec.tsx"), "// spec");
+      expect(probeDetects(dir2)).toBe(true);
+    } finally {
+      await rm(dir2, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("web gate test probe finds nothing in a project with no tests", async () => {
+  const dir = await tempDir();
+
+  try {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(join(dir, "src", "index.ts"), "export const x = 1;\n");
+    expect(probeDetects(dir)).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
