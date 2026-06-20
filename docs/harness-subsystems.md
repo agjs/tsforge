@@ -130,6 +130,48 @@ Vite/React/vanilla templates, the vendored guard, the web gate.
 **Invariants** only `*.gen.ts`/vendored shells are write-guard-exempt; scaffold is
 non-destructive (only missing files); a scaffold reports its writes (re-gate).
 
+## setup / conventions — `src/infer-rules/*`, `src/setup/*`, `src/render/wizard.ts`, the bundled `.mjs` configs
+
+`tsforge setup` infers a repo's conventions (interface naming, enums, test layout,
+component folders) and writes them to `tsforge.config.json`. The contract is that
+conventions are **taste only** and a single source drives BOTH enforcement and
+guidance, so the gate and the prompts can never disagree.
+
+**Invariants**
+- The safety floor (no `any`/`as`/`!`, complexity cap, `eqeqeq`, `no-var`,
+  `prefer-const`) can NEVER be relaxed through `conventions` OR `TSFORGE_RULE_OVERRIDES`,
+  on either bundled surface — enforced by `PROTECTED_BUNDLED_RULES` +
+  `applyBundledOverrides`, surface-aware (only protects a rule the surface already has).
+- Allowing enums removes ONLY the enum selector; the `as`/`<>` cast bans stay.
+- A DEFAULT convention set emits no `TSFORGE_CONVENTIONS` and the `.mjs` fallback equals
+  the old hardcoded rules — a default project is byte-identical to pre-feature.
+- A failed import of the convention builder inside a `.mjs` falls back to the hardcoded
+  house-style rules (never silently drops the enum/cast/naming bans).
+- The gate (`TSFORGE_CONVENTIONS` env via `packEnvPrefix`) and the write-time linter
+  (`makeFileLinter` overrideConfig) resolve the SAME conventions.
+- The wizard writes nothing until Apply; cancel/back writes nothing; the interactive
+  driver restores keypress listeners + cursor on every exit path (no terminal wedge).
+- The writer preserves unrelated config keys; the conventions block is wholly
+  setup-owned (a re-run replaces it, or removes it when all choices are default).
+- The scanner is read-only (TS AST only) and never executes a target's config; bounded
+  by MAX_FILES/MAX_BYTES.
+
+**Scope note (deliberate, documented)** Conventions govern the CORE/brownfield path
+(auto gate + `buildSystemPrompt`/chat/TDD + write-time linter). The `--web` SCAFFOLD
+path (`buildWebGate`/`configureWeb` + `REACT_GUIDANCE`/`webGuidance`/`BUILD_PREAMBLE`)
+intentionally uses tsforge's house style — it's greenfield, and its gate + guidance are
+consistent with each other. The eval-sweep agent (`src/agent/model-agent.ts`) also still
+carries house-style guidance (eval-only path). Both are tracked follow-ups, not bugs.
+
+**Risk areas** an override key slipping past the protected set; a `.mjs` rebuild that
+drops a ban; the gate honoring a convention the prompt contradicts; a wizard exit path
+that leaks keypress listeners.
+
+**Checklist** `tests/eslint-conventions.test.ts` (guard + split), `tests/gate-conventions.test.ts`
+(real spawned gate), `tests/prompt-conventions.test.ts` (no stale I-prefix),
+`tests/wizard.test.ts` (reducer/render/lifecycle), `tests/write-config.test.ts` (merge),
+`tests/scan.test.ts` (read-only + caps).
+
 ## lib/fs — `src/lib/fs/process.ts`, fs helpers, `src/lib/scope.ts`
 
 The ONE shared command runner; path normalization; scope checks.

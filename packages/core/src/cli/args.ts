@@ -64,6 +64,12 @@ export interface ICliArgs {
   /** Base policy mode (`--policy-mode <plan|default|acceptEdits|ci|dontAsk|
    *  bypassPermissions>`); overrides the config file's policy.mode. */
   policyMode: string;
+  /** Run the onboarding wizard that infers + writes project conventions
+   *  (`tsforge setup`). */
+  setup: boolean;
+  /** Write the scan's recommended conventions non-interactively (`tsforge setup
+   *  --yes`). */
+  setupYes: boolean;
 }
 
 const BOOL_FLAGS: Record<
@@ -77,6 +83,7 @@ const BOOL_FLAGS: Record<
   | "staged"
   | "withGate"
   | "scout"
+  | "setupYes"
 > = {
   "--continue": "continue",
   "-c": "continue",
@@ -88,6 +95,7 @@ const BOOL_FLAGS: Record<
   "--staged": "staged",
   "--with-gate": "withGate",
   "--scout": "scout",
+  "--yes": "setupYes",
 };
 
 const VALUE_FLAGS = new Set([
@@ -132,6 +140,8 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     maxTurns: 0,
     thinkingBudget: 0,
     policyMode: "",
+    setup: false,
+    setupYes: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -168,6 +178,8 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     out.task = positional.slice(1).join(" ").trim();
   } else if (positional[0] === "recipes") {
     out.recipes = true;
+  } else if (positional[0] === "setup") {
+    out.setup = true;
   } else if (positional[0] === "run") {
     out.run = true;
     out.recipe = positional[1] ?? "";

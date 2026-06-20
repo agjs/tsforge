@@ -69,6 +69,10 @@ export const COMMANDS: readonly ICommandSpec[] = [
     arg: "[forget]",
     summary: "show learned failure→fix lessons (forget to clear)",
   },
+  {
+    name: "/setup",
+    summary: "infer + write project conventions (the setup wizard)",
+  },
   { name: "/exit", summary: "leave the session" },
 ] as const;
 

@@ -35,7 +35,9 @@ import type { Reporter, ILoopEvent } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
-import { CHAT_SYSTEM, COMPACT_SYSTEM, TDD_GUIDANCE } from "./prompt";
+import { buildChatSystem, buildTddGuidance, COMPACT_SYSTEM } from "./prompt";
+import { resolveConventions } from "../infer-rules/conventions";
+import type { IConventions } from "../infer-rules/conventions.types";
 import {
   buildTsService,
   BUILD_NUDGE,
@@ -408,7 +410,11 @@ const MALFORMED_CALL_NUDGE =
 /** CHAT_SYSTEM + the (optional) workspace map + a short orientation to the
  *  workspace and gate. The map block, when present, is injected right after
  *  CHAT_SYSTEM so the agent is oriented before the task-specific lines. */
-function systemPrompt(cfg: ISessionConfig, workspaceMap: string): string {
+function systemPrompt(
+  cfg: ISessionConfig,
+  workspaceMap: string,
+  conventions: IConventions
+): string {
   const lines = [`Workspace: ${cfg.cwd}`];
   const files = cfg.files ?? [];
   const wholeRepo = files.length === 0 || files.includes("**/*");
@@ -437,9 +443,9 @@ function systemPrompt(cfg: ISessionConfig, workspaceMap: string): string {
   // buildSystemPrompt, but the interactive path never did, so the CLI agent was
   // never TOLD to write tests first and leaned entirely on the late gate. Inject
   // it here too so test-first is the out-of-the-box default everywhere.
-  const tdd = flags.tdd() ? `${TDD_GUIDANCE}\n\n` : "";
+  const tdd = flags.tdd() ? `${buildTddGuidance(conventions)}\n\n` : "";
 
-  return `${CHAT_SYSTEM}\n\n${tdd}${prefix}${lines.join("\n")}`;
+  return `${buildChatSystem(conventions)}\n\n${tdd}${prefix}${lines.join("\n")}`;
 }
 
 export class Session {
@@ -646,7 +652,16 @@ export class Session {
       messages:
         cfg.history !== undefined && cfg.history.length > 0
           ? [...cfg.history]
-          : [{ role: "system", content: systemPrompt(cfg, workspaceMap) }],
+          : [
+              {
+                role: "system",
+                content: systemPrompt(
+                  cfg,
+                  workspaceMap,
+                  resolveConventions(projectConfig.conventions)
+                ),
+              },
+            ],
       // Stream the gate's output live (the interactive CLI), so a slow gate
       // (vite build + chromium) shows progress instead of running silently — but
       // filtered so the raw eslint JSON blob never floods the terminal.

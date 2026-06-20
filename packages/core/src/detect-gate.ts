@@ -4,6 +4,11 @@ import { ESLint } from "eslint";
 import { WEB_TEMPLATES, type WebFramework } from "./web-templates";
 import { isRecord } from "./lib/guards";
 import { runArgvCommand } from "./lib/fs/process";
+import {
+  conventionOverrideRules,
+  conventionsEnvValue,
+} from "./infer-rules/eslint-conventions";
+import type { IConventions } from "./infer-rules/conventions.types";
 
 /** Hard ceiling for `bun install` during web scaffolding (5 min) — long enough for
  *  a cold registry, short enough that a wedged install can't hang the session. */
@@ -299,7 +304,8 @@ export function makeFileLinter(
   framework: WebFramework | "core",
   cwd: string,
   packIds?: readonly string[],
-  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
+  conventions?: IConventions
 ): FileLinter {
   const overrideConfigFile =
     framework === "core" ? STRICT_CONFIG : STRICT_WEB_CONFIG;
@@ -324,6 +330,25 @@ export function makeFileLinter(
         // Add ignores config if needed
         if (ignores.length > 0) {
           eOpts.overrideConfig = [{ ignores }];
+        }
+
+        // Conventions OVERRIDE the bundled config's naming/no-restricted-syntax in
+        // process — so write-time feedback matches the gate (which gets the same
+        // choice via TSFORGE_CONVENTIONS). A disabled rule is set "off" here, not
+        // omitted, so it actually disables the bundled copy.
+        if (conventions !== undefined) {
+          const convConfig: Record<string, unknown> = {
+            files: ["**/*.ts", "**/*.tsx"],
+            rules: conventionOverrideRules(
+              conventions,
+              framework === "core" ? "core" : "web"
+            ),
+          };
+
+          eOpts.overrideConfig =
+            eOpts.overrideConfig !== undefined
+              ? [...eOpts.overrideConfig, convConfig]
+              : [convConfig];
         }
 
         // Add pack rules if provided
@@ -527,7 +552,8 @@ function shSingleQuote(value: string): string {
  *  bundled eslint config, which reads them from the environment at load time. */
 function packEnvPrefix(
   packs?: readonly string[],
-  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
+  conventions?: IConventions
 ): string {
   const envParts: string[] = [];
 
@@ -541,13 +567,21 @@ function packEnvPrefix(
     );
   }
 
+  const conv = conventionsEnvValue(conventions);
+
+  if (conv !== undefined) {
+    envParts.push(`TSFORGE_CONVENTIONS=${shSingleQuote(conv)}`);
+  }
+
   return envParts.length > 0 ? `${envParts.join(" ")} ` : "";
 }
 
 export function buildWebGate(
   framework: WebFramework,
   packs: readonly string[] = WEB_PACKS,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
+  conventions?: IConventions
 ): IGate {
   const template = WEB_TEMPLATES[framework];
   const ignores = template.eslintIgnore
@@ -556,7 +590,7 @@ export function buildWebGate(
   const build = `bun run build`;
   const tsc = `"${TSC_BIN}" --noEmit -p ${ensureWebGateTsconfig(cwd)}`;
   const lint =
-    `${packEnvPrefix(packs)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --format json .`.replace(
+    `${packEnvPrefix(packs, ruleOverrides, conventions)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --format json .`.replace(
       /\s+/g,
       " "
     );
@@ -755,7 +789,11 @@ export async function buildGate(
   cwd: string,
   packs?: readonly string[],
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
-  options?: { enableTypeAware?: boolean; includeTests?: boolean }
+  options?: {
+    enableTypeAware?: boolean;
+    includeTests?: boolean;
+    conventions?: IConventions;
+  }
 ): Promise<IGate> {
   const parts: string[] = [];
   const labels: string[] = [];
@@ -767,7 +805,7 @@ export async function buildGate(
     labels.push("tsc --strict");
   }
 
-  const lint = lintPart(packs, ruleOverrides);
+  const lint = lintPart(packs, ruleOverrides, options?.conventions);
 
   parts.push(lint.command);
   labels.push(lint.label);
@@ -946,10 +984,11 @@ async function ignoreGateArtifact(cwd: string): Promise<void> {
  *  overrides are passed via TSFORGE_RULE_OVERRIDES (JSON-encoded map). */
 function lintPart(
   packs?: readonly string[],
-  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
+  conventions?: IConventions
 ): IGate {
   return {
-    command: `${packEnvPrefix(packs, ruleOverrides)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
+    command: `${packEnvPrefix(packs, ruleOverrides, conventions)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
     label: "strict TypeScript (tsforge)",
   };
 }

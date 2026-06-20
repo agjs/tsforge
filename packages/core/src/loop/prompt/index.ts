@@ -4,6 +4,8 @@ export {
   COMPACT_SYSTEM,
   SCRATCH_SIMPLICITY_GUIDANCE,
   TDD_GUIDANCE,
+  buildChatSystem,
+  buildTddGuidance,
   buildSystemPrompt,
   seedPrompt,
 } from "./prompt";

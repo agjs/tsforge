@@ -16,6 +16,7 @@ Add **`tsforge.config.json`** at your repo root when you want to override what t
 | `packs.include` | string[] | Add packs after detection |
 | `packs.exclude` | string[] | Remove packs after detection |
 | `rules` | object | Per-rule severity: `"error"`, `"warn"`, or `"off"` (overrides profile defaults) |
+| `conventions` | object | Project taste tsforge adapts to: `interfaces`, `enums`, `tests`, `componentFolders` — written by [`tsforge setup`](/cli/setup/) |
 | `plugins` | object[] | External modules providing extra rule packs (see below) |
 | `mcpServers` | object | External [MCP servers](/integrations/mcp/) whose tools the agent can call |
 

@@ -7,7 +7,10 @@
 // via AST selectors), since `as const` is idiomatic for typed literal registries.
 //
 // Stack-aware rule packs are loaded via TSFORGE_PACKS env var (comma-separated
-// pack IDs), allowing the gate to inject stack-specific rules dynamically.
+// pack IDs). Rule overrides via TSFORGE_RULE_OVERRIDES (JSON severity map), and
+// project CONVENTIONS via TSFORGE_CONVENTIONS (JSON) — the latter rebuilds the
+// naming-convention / no-restricted-syntax rule OPTIONS (the single source shared
+// with the gate command, the write-time linter, and the prompts).
 import tseslint from "typescript-eslint";
 import stylistic from "@stylistic/eslint-plugin";
 import pluginReact from "eslint-plugin-react";
@@ -19,12 +22,25 @@ import sonarjs from "eslint-plugin-sonarjs";
 let packConfig = [];
 const packIds = (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
 const isWebStack = packIds.length > 0;
+let ruleOverrides = {};
+
+if (process.env.TSFORGE_RULE_OVERRIDES !== undefined) {
+  try {
+    ruleOverrides = JSON.parse(process.env.TSFORGE_RULE_OVERRIDES);
+    if (typeof ruleOverrides !== "object" || ruleOverrides === null) {
+      ruleOverrides = {};
+    }
+  } catch {
+    // If parsing fails, silently ignore overrides
+  }
+}
+
 if (packIds.length > 0) {
   try {
     const { buildPackEslintConfig } = await import(
       "./src/rule-packs/index.ts"
     );
-    const { plugin, rules } = buildPackEslintConfig(packIds);
+    const { plugin, rules } = buildPackEslintConfig(packIds, ruleOverrides);
     packConfig = [
       {
         files: ["**/*.ts", "**/*.tsx"],
@@ -35,6 +51,50 @@ if (packIds.length > 0) {
   } catch {
     // If pack loading fails, silently continue without them
   }
+}
+
+// Convention-managed rules — default to the web house style (I-prefix with the
+// TanStack `Register` exemption + enum ban + the value-changing cast bans) so a
+// failed import NEVER drops the cast/enum safety; the builder then rebuilds them
+// from TSFORGE_CONVENTIONS (enum ban split from the ALWAYS-on cast bans).
+let conventionRules = {
+  "@typescript-eslint/naming-convention": [
+    "error",
+    {
+      selector: "interface",
+      format: ["PascalCase"],
+      prefix: ["I"],
+      filter: { regex: "^(Register)$", match: false },
+    },
+  ],
+  "no-restricted-syntax": [
+    "error",
+    {
+      selector: "TSEnumDeclaration",
+      message: "Use 'as const' object literals instead of enums.",
+    },
+    {
+      selector: "TSAsExpression[typeAnnotation.typeName.name!='const']",
+      message:
+        "No `as` type casts — type it properly (annotate, narrow, or guard). `as const` is allowed.",
+    },
+    {
+      selector: "TSTypeAssertion",
+      message:
+        "No angle-bracket type assertions — type it properly. `as const` is allowed.",
+    },
+  ],
+};
+let applyBundledOverrides = (rules) => rules;
+
+try {
+  const conv = await import("./src/infer-rules/eslint-conventions.ts");
+  const conventions = conv.parseConventionsEnv(process.env.TSFORGE_CONVENTIONS);
+  conventionRules = conv.conventionRuleEntries(conventions, "web");
+  applyBundledOverrides = (rules) =>
+    conv.applyBundledOverrides(rules, ruleOverrides);
+} catch {
+  // Keep the hardcoded house-style defaults above.
 }
 
 // Custom rule: ONE React component per .tsx file (boringstack). The classic
@@ -103,6 +163,65 @@ const oneComponentPerFile = {
   },
 };
 
+// Bundled web rules MINUS the two convention-managed ones. NOTE: we do NOT use
+// `consistent-type-assertions: never` here — that also bans `as const`, which is
+// idiomatic for typed literal/tuple data. Value-changing casts (`x as Foo`,
+// `<Foo>x`) are banned via the AST selectors inside the convention-managed
+// `no-restricted-syntax` (ALWAYS on, independent of the enum choice).
+const webBundledRules = {
+  // Concern-mixing / copy-paste ceiling (syntactic — mirrors the core config).
+  // cc <= 20 forces decomposition into named helpers; max-depth/max-params are
+  // zero-dep ESLint-core complements.
+  "sonarjs/cognitive-complexity": ["error", 20],
+  "sonarjs/no-identical-functions": "error",
+  "max-depth": ["error", 4],
+  "max-params": ["error", 4],
+  "@typescript-eslint/no-explicit-any": "error",
+  "@typescript-eslint/no-non-null-assertion": "error",
+  "@typescript-eslint/no-inferrable-types": "error",
+  // ONE React component per .tsx file (boringstack). Enforced by the custom
+  // rule defined above — eslint-plugin-react/no-multi-comp crashes on ESLint 10
+  // and @eslint-react has no equivalent, so we ship our own.
+  "boringstack/one-component-per-file": "error",
+  "react/jsx-key": "error",
+  "react/no-array-index-key": "error",
+  "react/button-has-type": "error",
+  "react-hooks/rules-of-hooks": "error",
+  "react-hooks/exhaustive-deps": "warn",
+  "prefer-const": "error",
+  "prefer-template": "error",
+  "no-var": "error",
+  // Blank-line discipline (mirrors the core config) — the model rarely gets
+  // spacing right, so prettier --write + this rule's --fix make it free. Uses
+  // @stylistic (the rule's maintained home; the core rule is deprecated and
+  // spams `usedDeprecatedRules` into eslint's --format json gate output).
+  "@stylistic/padding-line-between-statements": [
+    "error",
+    { blankLine: "always", prev: "import", next: "*" },
+    { blankLine: "any", prev: "import", next: "import" },
+    { blankLine: "always", prev: "*", next: "return" },
+    { blankLine: "always", prev: "*", next: "throw" },
+    { blankLine: "always", prev: ["const", "let", "var"], next: "*" },
+    {
+      blankLine: "any",
+      prev: ["const", "let", "var"],
+      next: ["const", "let", "var"],
+    },
+    { blankLine: "always", prev: "block-like", next: "*" },
+    { blankLine: "always", prev: "*", next: "block-like" },
+  ],
+  eqeqeq: ["error", "always"],
+  curly: ["error", "all"],
+};
+
+// Pack rules win last (they already had TSFORGE_RULE_OVERRIDES applied via
+// buildPackEslintConfig), so apply the bundled-override pass only to the bundled +
+// convention rules, then layer pack rules on top — unchanged from before.
+const rules = {
+  ...applyBundledOverrides({ ...webBundledRules, ...conventionRules }),
+  ...packConfig.reduce((acc, cfg) => ({ ...acc, ...(cfg.rules ?? {}) }), {}),
+};
+
 export default tseslint.config(
   { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**"] },
   {
@@ -121,85 +240,7 @@ export default tseslint.config(
         )
         .reduce((acc, cfg) => ({ ...acc, ...cfg.plugins }), {}),
     },
-    rules: {
-      // NOTE: we do NOT use `consistent-type-assertions: never` here — that also
-      // bans `as const`, which is idiomatic and the cleanest escape for typed
-      // literal/tuple data (and it makes a fixed array a tuple, so literal-index
-      // access is defined, not `T | undefined`). Instead we ban only the
-      // value-changing forms (`x as Foo`, `<Foo>x`) via AST selectors below.
-      // Concern-mixing / copy-paste ceiling (syntactic — mirrors the core config).
-      // cc <= 20 forces decomposition into named helpers; max-depth/max-params are
-      // zero-dep ESLint-core complements.
-      "sonarjs/cognitive-complexity": ["error", 20],
-      "sonarjs/no-identical-functions": "error",
-      "max-depth": ["error", 4],
-      "max-params": ["error", 4],
-      "@typescript-eslint/no-explicit-any": "error",
-      "@typescript-eslint/no-non-null-assertion": "error",
-      "@typescript-eslint/no-inferrable-types": "error",
-      // I-prefixed interfaces (house style), EXCEPT library-mandated augmentation
-      // names you cannot rename (TanStack Router's `interface Register`).
-      "@typescript-eslint/naming-convention": [
-        "error",
-        {
-          selector: "interface",
-          format: ["PascalCase"],
-          prefix: ["I"],
-          filter: { regex: "^(Register)$", match: false },
-        },
-      ],
-      // ONE React component per .tsx file (boringstack). Enforced by the custom
-      // rule defined above — eslint-plugin-react/no-multi-comp crashes on ESLint 10
-      // and @eslint-react has no equivalent, so we ship our own.
-      "boringstack/one-component-per-file": "error",
-      "react/jsx-key": "error",
-      "react/no-array-index-key": "error",
-      "react/button-has-type": "error",
-      "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
-      "prefer-const": "error",
-      "prefer-template": "error",
-      "no-var": "error",
-      // Blank-line discipline (mirrors the core config) — the model rarely gets
-      // spacing right, so prettier --write + this rule's --fix make it free. Uses
-      // @stylistic (the rule's maintained home; the core rule is deprecated and
-      // spams `usedDeprecatedRules` into eslint's --format json gate output).
-      "@stylistic/padding-line-between-statements": [
-        "error",
-        { blankLine: "always", prev: "import", next: "*" },
-        { blankLine: "any", prev: "import", next: "import" },
-        { blankLine: "always", prev: "*", next: "return" },
-        { blankLine: "always", prev: "*", next: "throw" },
-        { blankLine: "always", prev: ["const", "let", "var"], next: "*" },
-        {
-          blankLine: "any",
-          prev: ["const", "let", "var"],
-          next: ["const", "let", "var"],
-        },
-        { blankLine: "always", prev: "block-like", next: "*" },
-        { blankLine: "always", prev: "*", next: "block-like" },
-      ],
-      eqeqeq: ["error", "always"],
-      curly: ["error", "all"],
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "TSEnumDeclaration",
-          message: "Use 'as const' object literals instead of enums.",
-        },
-        {
-          selector: "TSAsExpression[typeAnnotation.typeName.name!='const']",
-          message:
-            "No `as` type casts — type it properly (annotate, narrow, or guard). `as const` is allowed.",
-        },
-        {
-          selector: "TSTypeAssertion",
-          message:
-            "No angle-bracket type assertions — type it properly. `as const` is allowed.",
-        },
-      ],
-      ...packConfig.reduce((acc, cfg) => ({ ...acc, ...(cfg.rules ?? {}) }), {}),
-    },
+    rules,
     settings: {
       react: { version: "detect" },
     },

@@ -168,6 +168,7 @@ export default defineConfig({
         {
           label: "Everyday use",
           items: [
+            { label: "Set up a repo", link: "/cli/setup/" },
             { label: "Chat with your repo", link: "/cli/interactive/" },
             { label: "Drive a change to green", link: "/workflows/fix-to-green/" },
             { label: "Review your changes", link: "/cli/review/" },
