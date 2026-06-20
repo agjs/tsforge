@@ -482,6 +482,15 @@ export async function runShell(
     );
   }
 
+  // Show WHAT is about to run BEFORE it runs (mirrors web_fetch/web_search) — a
+  // long build/test otherwise looks frozen with no clue what's executing. The
+  // command, exit code, and (condensed) output still follow in the `run` event.
+  ctx.report({
+    kind: "tool",
+    task: ctx.task,
+    message: `↳ run ${r.command}`,
+  });
+
   const res = await runCommand(
     ctx.cwd,
     r.command,

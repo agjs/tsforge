@@ -255,6 +255,37 @@ test("run executes a command and returns its output + exit code", async () => {
   }
 });
 
+test("run announces the command up-front (↳ run …) before the result event", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const events: { kind: string; message: string }[] = [];
+    const capturing: IToolContext = {
+      cwd: dir,
+      files: [],
+      task: "t",
+      report: (e) => events.push({ kind: e.kind, message: e.message }),
+    };
+
+    await executeTool(
+      { name: "run", arguments: { command: "echo hi" } },
+      capturing
+    );
+
+    const announce = events.findIndex(
+      (e) => e.kind === "tool" && e.message === "↳ run echo hi"
+    );
+    const result = events.findIndex((e) => e.kind === "run");
+
+    // the command is shown the instant it starts (so a slow build isn't a frozen
+    // screen), and BEFORE the run-result event that carries exit code + output
+    expect(announce).toBeGreaterThanOrEqual(0);
+    expect(result).toBeGreaterThan(announce);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("run condenses eslint JSON, aggregating a repeated rule into one line", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
