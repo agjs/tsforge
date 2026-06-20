@@ -194,8 +194,10 @@ export default defineConfig({
           items: [
             { label: "Models (any provider)", link: "/inference/models-json/" },
             { label: "tsforge.config.json", link: "/guardrails/config/" },
+            { label: "Permissions & policy", link: "/guardrails/policy/" },
             { label: "Environment variables", link: "/reference/flags/" },
             { label: "MCP servers", link: "/integrations/mcp/" },
+            { label: "Web access", link: "/integrations/web-tools/" },
           ],
         },
         {

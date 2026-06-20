@@ -19,6 +19,7 @@ Add **`tsforge.config.json`** at your repo root when you want to override what t
 | `conventions` | object | Project taste tsforge adapts to: `interfaces`, `enums`, `tests`, `componentFolders` — written by [`tsforge setup`](/cli/setup/) |
 | `plugins` | object[] | External modules providing extra rule packs (see below) |
 | `mcpServers` | object | External [MCP servers](/integrations/mcp/) whose tools the agent can call |
+| `policy` | object | Permission `mode` + deny/allow/ask `rules` for tool actions — see [Permissions & policy](/guardrails/policy/) |
 
 Resolution order: detect from the repo → apply **`profile`** (packs + default severities) → apply `stack` → apply `include` → apply `exclude` → add external plugin packs → dedupe → merge `rules` overrides (user wins).
 
