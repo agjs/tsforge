@@ -32,7 +32,7 @@ Offered only when there is existing code to inspect (greenfield scratch builds h
 
 ## Web access
 
-Opt-in, free, and fully local — no API key, no paid service. `TSFORGE_WEB=1` adds two read-only tools: `web_fetch` (retrieve a URL → readable markdown, extracted on-machine) and `web_search` (discover sources). Search defaults to DuckDuckGo's keyless HTML endpoint; point at a self-hosted [SearXNG](https://docs.searxng.org/) instance for full privacy/control.
+Opt-in, free, and fully local — no API key, no paid service. `TSFORGE_WEB=1` adds two read-only tools: `web_fetch` (retrieve a URL → readable markdown, extracted on-machine) and `web_search` (discover sources). Search defaults to DuckDuckGo's keyless HTML endpoint; point at a self-hosted [SearXNG](https://docs.searxng.org/) instance for full privacy/control. Full guide: [Web access](/integrations/web-tools/).
 
 | Variable | Default | Toggles |
 | --- | --- | --- |
@@ -91,6 +91,7 @@ Extra gate steps (default off; each skips cleanly when nothing applies). See [Ho
 | --- | --- |
 | `TSFORGE_PACKS` | comma-separated pack IDs |
 | `TSFORGE_RULE_OVERRIDES` | JSON severity map |
+| `TSFORGE_CONVENTIONS` | JSON conventions block (interface naming / enums) — rebuilds the bundled rule options; written by [`tsforge setup`](/cli/setup/) |
 
 ## Eval scripts
 
@@ -109,4 +110,4 @@ Extra gate steps (default off; each skips cleanly when nothing applies). See [Ho
 | `TSFORGE_BROWSER_TESTS` | off (`=1` for Playwright integration) |
 | `TSFORGE_WEB_LIVE_TESTS` | off (`=1` for live `web_fetch`/`web_search` network tests) |
 
-→ [Commands](/reference/commands/)
+→ [Commands](/reference/commands/) · [Permissions & policy](/guardrails/policy/)

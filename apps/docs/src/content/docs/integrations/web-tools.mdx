@@ -1,0 +1,30 @@
+---
+title: Web access (free, local)
+description: "Opt-in web_fetch + web_search tools — no API key, no paid service. Fully local extraction, DuckDuckGo by default, SearXNG for full privacy."
+---
+
+Set `TSFORGE_WEB=1` to give the agent two read-only web tools. They're **free and fully local** — no API key, no paid search service, nothing leaves your machine except the fetch itself. Off by default, so a run without the flag has no network reach beyond your model endpoint.
+
+```bash
+TSFORGE_WEB=1 tsforge "update the deprecated API call — check the library's current docs"
+```
+
+## The tools
+
+- **`web_fetch`** — retrieve a URL and return readable markdown. The page is fetched and the content extracted **on-machine** (no third-party reader API), so you get clean text without shipping the URL to a service.
+- **`web_search`** — discover sources for a query. Defaults to DuckDuckGo's keyless HTML endpoint; point it at a self-hosted [SearXNG](https://docs.searxng.org/) instance for full privacy and control:
+
+```bash
+TSFORGE_WEB=1 TSFORGE_SEARXNG_URL=http://localhost:8888 tsforge
+```
+
+## Why opt-in
+
+The tools are read-only and offline-safe, but web access is still more reach than the agent has by default — so it's a deliberate flag, not an always-on capability. Under a policy mode that denies `network` (e.g. `ci`), the tools are unavailable even with the flag set. See [Permissions & policy](/guardrails/policy/).
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `TSFORGE_WEB` | off | enable `web_fetch` + `web_search` (`=1`) |
+| `TSFORGE_SEARXNG_URL` | unset | route `web_search` to a self-hosted SearXNG instance |
+
+→ [Environment variables](/reference/flags/) · [MCP servers](/integrations/mcp/) · [Permissions & policy](/guardrails/policy/)
