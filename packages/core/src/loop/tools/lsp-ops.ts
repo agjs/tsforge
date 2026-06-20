@@ -1,7 +1,7 @@
 import { relative } from "node:path";
 import { fileArg, TOOL_NAME, type ToolName } from "../../agent";
 import { runArgvCommand } from "../../lib/fs";
-import { writable, isVendored } from "../../lib/scope";
+import { writable } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import { str, reject, type IToolContext } from "./tool-context";
 
@@ -174,9 +174,7 @@ function doMoveFile(
   }
 
   const targets = svc.moveTargets(from, to).map(rel);
-  const blocked = targets.filter(
-    (t) => !writable(t, ctx.files) || isVendored(t, ctx.vendored ?? [])
-  );
+  const blocked = targets.filter((t) => !writable(t, ctx.files));
 
   if (blocked.length > 0) {
     return reject(

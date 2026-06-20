@@ -6,8 +6,7 @@ import {
 import { extractHash } from "../../files/hashline-format";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
 import { toHashlineEdit } from "../../agent";
-import { writable, normalizeWorkspacePath, isVendored } from "../../lib/scope";
-import { vendoredRejectMessage } from "./file-ops";
+import { writable, normalizeWorkspacePath } from "../../lib/scope";
 
 /**
  * Hashline edit handler: content-hash-anchored line edits with stale-anchor recovery.
@@ -34,17 +33,9 @@ export async function doHashlineEdit(
   }
 
   // Same write policy as `edit`/`create` (file-ops): normalize the path, then
-  // refuse vendored files and anything outside the editable scope. Without this
-  // `edit_lines` was a hole — a `../` path reached applyHashlineEdit unchecked.
+  // refuse anything outside the editable scope. Without this `edit_lines` was a
+  // hole — a `../` path reached applyHashlineEdit unchecked.
   edit.file = normalizeWorkspacePath(ctx.cwd, edit.file);
-
-  if (isVendored(edit.file, ctx.vendored ?? [])) {
-    return reject(
-      ctx,
-      "edit_lines:vendored",
-      vendoredRejectMessage("edit", edit.file)
-    );
-  }
 
   if (!writable(edit.file, ctx.files)) {
     return reject(

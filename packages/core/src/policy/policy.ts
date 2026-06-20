@@ -175,9 +175,8 @@ interface ICriticalHit {
 /** Denials that win in EVERY mode (incl. bypassPermissions). Returns null when
  *  nothing critical matches. These are protections with NO unconditional
  *  tool-local equivalent. Out-of-scope and vendored writes are deliberately NOT
- *  here: the write tools already enforce `writable`/`isVendored` in every mode
- *  (and scaffold tools legitimately author vendored files), so duplicating it
- *  here would only front-run their richer, model-guiding rejection messages. */
+ *  here: the write tools already enforce `writable` in every mode, so duplicating
+ *  it here would only front-run their richer, model-guiding rejection messages. */
 function criticalDeny(
   action: IProposedAction,
   ctx: IPolicyContext

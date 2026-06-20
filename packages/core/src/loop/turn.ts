@@ -153,9 +153,6 @@ export interface ILoopCtx {
   /** Wired by the interactive CLI: turn this workspace into a web project (the
    *  `scaffold_web` tool calls it). Threaded into the tool context. */
   setupWeb?: SetupWebFn;
-  /** VENDORED file globs the model must not rewrite (web-scaffold sessions only).
-   *  Threaded into the tool context; absent ⇒ the vendored guard is inert. */
-  vendored?: readonly string[];
   /** PLAN MODE (set via Session.setPlanMode): threaded into the tool context so
    *  mutating tools are rejected at dispatch — the model only plans. */
   readOnly?: boolean;
@@ -237,7 +234,6 @@ function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
     tsService: ctx.tsService,
     ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
     ...(ctx.setupWeb === undefined ? {} : { setupWeb: ctx.setupWeb }),
-    ...(ctx.vendored === undefined ? {} : { vendored: ctx.vendored }),
     ...(ctx.readOnly === undefined ? {} : { readOnly: ctx.readOnly }),
     ...(ctx.policyMode === undefined ? {} : { policyMode: ctx.policyMode }),
     ...(ctx.policyRules === undefined ? {} : { policyRules: ctx.policyRules }),
@@ -762,13 +758,7 @@ export async function settleGate(
     };
   }
 
-  const feedback = await gateFeedback(
-    gateErrors,
-    task,
-    cwd,
-    metaViolations,
-    ctx.vendored ?? []
-  );
+  const feedback = await gateFeedback(gateErrors, task, cwd, metaViolations);
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
 
   messages.push({ role: "user", content: `${notice}${feedback}` });

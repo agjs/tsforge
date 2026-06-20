@@ -2,7 +2,7 @@ import { join, basename, isAbsolute, relative } from "node:path";
 import type { ITask } from "../../spec";
 import type { ErrorSet } from "../../validate";
 import type { IMetaRuleViolation } from "../../meta-rules";
-import { isInScope, isVendored } from "../../lib/scope";
+import { isInScope } from "../../lib/scope";
 import { readFiles } from "../../lib/fs";
 import { ruleHelp, idiomHints } from "../feedback/rule-docs";
 import {
@@ -24,30 +24,22 @@ export async function gateFeedback(
   errors: ErrorSet,
   task: ITask,
   cwd: string,
-  metaViolations: readonly IMetaRuleViolation[] = [],
-  vendored: readonly string[] = []
+  metaViolations: readonly IMetaRuleViolation[] = []
 ): Promise<string> {
   const own = errors.filter((e) => {
     if (e.file === undefined) {
       return true;
     }
 
-    // A VENDORED file is read-only even though a whole-repo scope glob ("**/*")
-    // technically matches it — tsc type-checks vendored files (eslint ignores
-    // them), so a wrong CALL SITE can surface a TS error located INSIDE one. Never
-    // show those as the model's to fix; they go in the read-only note and resolve
-    // once the call site is correct. This is the leak that had the model trying to
-    // "fix" types in vendored SDK files it cannot edit.
+    // eslint emits ABSOLUTE filePaths; normalize to workspace-relative so a
+    // scoped task (`src/**`) correctly matches its own errors instead of relying
+    // on the looser basename fallback.
     const rel = (
       isAbsolute(e.file) ? relative(cwd, e.file) : e.file
     ).replaceAll("\\", "/");
 
-    if (isVendored(rel, vendored) || isVendored(basename(e.file), vendored)) {
-      return false;
-    }
-
     return (
-      isInScope(e.file, task.files) || isInScope(basename(e.file), task.files)
+      isInScope(rel, task.files) || isInScope(basename(e.file), task.files)
     );
   });
   const readOnly = errors.length - own.length;

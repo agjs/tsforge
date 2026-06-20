@@ -154,8 +154,10 @@ export async function writeFilesOrRollback(
         ? new Uint8Array(await handle.arrayBuffer())
         : null;
 
-      await Bun.write(abs, file.content);
+      // Record BEFORE writing: a write that truncates-then-throws (disk full)
+      // must still be rolled back to `prior`, so the entry has to exist already.
       done.push({ abs, prior });
+      await Bun.write(abs, file.content);
     }
 
     return { ok: true, written: files.map((f) => f.path) };

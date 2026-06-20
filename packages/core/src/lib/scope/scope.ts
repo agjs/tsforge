@@ -27,14 +27,6 @@ export function isInScope(file: string, patterns: string[]): boolean {
   return patterns.some((pattern) => new Bun.Glob(pattern).match(file));
 }
 
-/** True when `file` matches one of `patterns` — the VENDORED, harness-authored
- *  files the model must not rewrite. `patterns` is supplied per-session
- *  (`IToolContext.vendored`), so it is empty (⇒ always false) outside a web
- *  scaffold. Expects the workspace-relative form (`normalizeWorkspacePath` first). */
-export function isVendored(file: string, patterns: readonly string[]): boolean {
-  return patterns.some((pattern) => new Bun.Glob(pattern).match(file));
-}
-
 /** A file the model may write: its editable scope, OR a throwaway scratch file.
  *  A path that escapes the workspace (`../…`) or is absolute is NEVER writable —
  *  a recursive glob would otherwise match a traversal path. Normalize with

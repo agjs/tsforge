@@ -9,9 +9,10 @@
  *             codegen) + TanStack Query. The opinionated default.
  *   vanilla — Vite + TypeScript + Tailwind, no UI framework. The neutral choice.
  *
- * shadcn components + the generated routeTree.gen.ts are VENDORED/GENERATED — not
- * the model's output — so each stack lists `eslintIgnore` globs that exempt them
- * from the bundled strict eslint (they're still type-checked by tsc + vite build).
+ * shadcn components + the generated routeTree.gen.ts are GENERATED, not the model's
+ * output — so each stack lists `eslintIgnore` globs that exempt them from the
+ * bundled strict eslint (they're still type-checked by tsc + vite build, and the
+ * model may freely edit them — the eslintIgnore is only about not LINTING codegen).
  */
 export type WebFramework = "react" | "vanilla";
 

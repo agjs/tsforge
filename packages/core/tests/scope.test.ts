@@ -1,32 +1,9 @@
 import { test, expect } from "bun:test";
-import {
-  isInScope,
-  isVendored,
-  writable,
-  normalizeWorkspacePath,
-  WEB_VENDORED_PATTERNS,
-} from "../src/lib/scope";
+import { isInScope, writable, normalizeWorkspacePath } from "../src/lib/scope";
 
-test("only the generated route tree is vendored; everything else is editable", () => {
-  const p = WEB_VENDORED_PATTERNS;
-
-  // The ONE untouchable file: the build-regenerated route tree.
-  expect(isVendored("src/routeTree.gen.ts", p)).toBe(true);
-
-  // The old vendored SDK is gone — those files (api/use-resource/result/mocks)
-  // are no longer scaffolded, and src/lib is now ordinary editable code.
-  expect(isVendored("src/lib/utils.ts", p)).toBe(false); // cn() — clean, editable
-  expect(isVendored("src/lib/format.ts", p)).toBe(false); // model's own helper
-  expect(isVendored("src/components/ui/card.tsx", p)).toBe(false);
-  expect(isVendored("src/components/ui/button.tsx", p)).toBe(false);
-  expect(isVendored("src/views/Deals/index.tsx", p)).toBe(false);
-});
-
-test("isVendored is inert with no patterns (non-web / normal repos unaffected)", () => {
-  expect(isVendored("src/lib/use-resource.ts", [])).toBe(false);
-  expect(isVendored("src/lib/sort.ts", [])).toBe(false);
-  expect(isVendored("anything.gen.ts", [])).toBe(false);
-});
+// The vendored "you cannot edit this file" concept was removed entirely — a model
+// may edit anything in scope, including generated files (the build regenerates
+// `*.gen.ts` anyway). Scope + traversal safety are all that remain below.
 
 test("matches exact paths and globs; empty patterns match nothing", () => {
   expect(isInScope("todo.ts", ["todo.ts"])).toBe(true);

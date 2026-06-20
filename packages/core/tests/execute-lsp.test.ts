@@ -240,28 +240,6 @@ test("move_file is REJECTED when an importer is out of editable scope", async ()
   }
 });
 
-test("move_file is REJECTED when the destination is vendored (read-only)", async () => {
-  const ctx: IToolContext = {
-    ...(await setup(["types.ts", "use.ts", "lib/types.ts"])),
-    vendored: ["lib/**"],
-  };
-
-  try {
-    const r = await executeTool(
-      {
-        name: "move_file",
-        arguments: { from: "types.ts", to: "lib/types.ts" },
-      },
-      ctx
-    );
-
-    expect(r).toContain("REJECTED");
-    expect(await Bun.file(join(ctx.cwd, "types.ts")).exists()).toBe(true);
-  } finally {
-    await rm(ctx.cwd, { recursive: true, force: true });
-  }
-});
-
 test("semantic tools degrade gracefully without a TsService", async () => {
   const ctx = await setup(["types.ts"]);
   const noLsp: IToolContext = { ...ctx, tsService: null };
