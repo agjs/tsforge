@@ -40,7 +40,7 @@ export function makeSpinner(out: ISpinnerOut = process.stdout): {
   let inlineGate: () => boolean = () => true;
 
   const secsNow = (): number =>
-    Math.round((performance.now() - startedAt) / 1000);
+    startedAt === 0 ? 0 : Math.round((performance.now() - startedAt) / 1000);
 
   const clear = (): void => {
     if (drawn) {

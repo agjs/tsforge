@@ -98,17 +98,22 @@ function writeGuardLines(
 
   const lineOf = (offset: number): number =>
     text.slice(0, offset).split("\n").length;
-  const typeLines = typeErrors.map(
-    (d) => `  L${String(lineOf(d.start))}: ${d.message} (TS${String(d.code)})`
-  );
-  const lintLines = lintProblems.map(
-    (p) => `  L${String(p.line)}: ${p.message} (${p.ruleId})`
-  );
-  const all = [...typeLines, ...lintLines];
-  const shown = all.slice(0, MAX_WRITE_GUARD_DIAGS).join("\n");
+  // Slice to the cap BEFORE mapping: lineOf does O(offset) string work per diag,
+  // so mapping every error in a large file (then discarding all but 5) is wasteful.
+  // Output is identical to map-all-then-slice (type errors fill the budget first).
+  const total = typeErrors.length + lintProblems.length;
+  const typeLines = typeErrors
+    .slice(0, MAX_WRITE_GUARD_DIAGS)
+    .map(
+      (d) => `  L${String(lineOf(d.start))}: ${d.message} (TS${String(d.code)})`
+    );
+  const lintLines = lintProblems
+    .slice(0, MAX_WRITE_GUARD_DIAGS - typeLines.length)
+    .map((p) => `  L${String(p.line)}: ${p.message} (${p.ruleId})`);
+  const shown = [...typeLines, ...lintLines].join("\n");
   const more =
-    all.length > MAX_WRITE_GUARD_DIAGS
-      ? `\n  …and ${String(all.length - MAX_WRITE_GUARD_DIAGS)} more`
+    total > MAX_WRITE_GUARD_DIAGS
+      ? `\n  …and ${String(total - MAX_WRITE_GUARD_DIAGS)} more`
       : "";
 
   return `${shown}${more}`;
