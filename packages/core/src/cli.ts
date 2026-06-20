@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { join, isAbsolute } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { Writable } from "node:stream";
 import { createInterface } from "node:readline/promises";
@@ -712,6 +712,19 @@ async function baseGate(
   };
 }
 
+/** One-line nudge when the repo has no config yet — setup adapts the guardrails
+ *  to this repo's conventions. Just a hint; never auto-runs. */
+function maybePrintNoConfigHint(
+  dir: string,
+  resumed: ISessionRecord | null
+): void {
+  if (resumed === null && !existsSync(join(dir, "tsforge.config.json"))) {
+    process.stdout.write(
+      "No project config. Run tsforge setup (or /setup) to adapt guardrails to this repo.\n"
+    );
+  }
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 async function repl(args: ICliArgs): Promise<number> {
   // The active model comes from the registry (~/.tsforge/models.json) unless a
@@ -858,6 +871,8 @@ async function repl(args: ICliArgs): Promise<number> {
     model: modelInfo(provider.config),
     updateNotice,
   });
+
+  maybePrintNoConfigHint(args.dir, resumed);
 
   // Pin an editable input row only on a real TTY tall enough to host the bar.
   // In that mode readline does line-EDITING but must not RENDER (we paint the
@@ -1183,6 +1198,20 @@ async function repl(args: ICliArgs): Promise<number> {
       case "trace":
         await runTraceCommand(arg, logFile);
         break;
+
+      case "setup": {
+        const { runSetup } = await import("./setup/run-setup");
+
+        await runSetup({
+          cwd: args.dir,
+          yes: false,
+          color: process.stdout.isTTY,
+        });
+        process.stdout.write(
+          "(conventions written — they apply to the next session)\n"
+        );
+        break;
+      }
 
       case "files": {
         const globs = arg
@@ -1697,6 +1726,18 @@ async function mapMode(args: ICliArgs): Promise<number> {
   return 0;
 }
 
+/** `tsforge setup` — the onboarding wizard that infers + writes project
+ *  conventions. `--yes` writes the recommendations non-interactively. */
+async function setupMode(args: ICliArgs): Promise<number> {
+  const { runSetup } = await import("./setup/run-setup");
+
+  return runSetup({
+    cwd: args.dir,
+    yes: args.setupYes,
+    color: process.stdout.isTTY,
+  });
+}
+
 /** `tsforge recipes` — list the recipes discovered for this repo. */
 async function recipesMode(args: ICliArgs): Promise<number> {
   const recipes = await loadRecipes(args.dir, (m) =>
@@ -1849,6 +1890,10 @@ export async function main(): Promise<number> {
 
   if (args.trace) {
     return traceMode(args);
+  }
+
+  if (args.setup) {
+    return setupMode(args);
   }
 
   // A positional task with a scope + gate ⇒ one-shot; otherwise interactive.

@@ -56,6 +56,18 @@ test("`tsforge run` with no id flags the run subcommand (so main can error)", ()
   expect(a.recipe).toBe("");
 });
 
+test("`tsforge setup` flags the setup subcommand; --yes sets setupYes", () => {
+  const a = parseArgs(["setup"]);
+
+  expect(a.setup).toBe(true);
+  expect(a.setupYes).toBe(false);
+
+  const b = parseArgs(["setup", "--yes"]);
+
+  expect(b.setup).toBe(true);
+  expect(b.setupYes).toBe(true);
+});
+
 test("`tsforge recipes` and `--recipe <id>` are recognized", () => {
   expect(parseArgs(["recipes"]).recipes).toBe(true);
   expect(parseArgs(["--recipe", "web-build", "build it"]).recipe).toBe(
