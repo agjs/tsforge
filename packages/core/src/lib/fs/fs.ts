@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { Glob } from "bun";
 import type { IFileView } from "./fs.types";
 
@@ -96,6 +97,76 @@ export async function readFiles(
   }
 
   return views;
+}
+
+/** One pending write in a batch. */
+export interface IWriteFile {
+  path: string;
+  content: string;
+}
+
+/** Result of a batch write: the paths written on success, or the failure reason. */
+export type IBatchWriteResult =
+  | { ok: true; written: string[] }
+  | { ok: false; reason: string };
+
+/** A file touched by the batch, with the bytes to restore it to on rollback
+ *  (`null` = it didn't exist before, so rollback removes it). */
+interface ITouched {
+  abs: string;
+  prior: Uint8Array | null;
+}
+
+/** Best-effort restore of a partial batch, newest first: bring each touched path
+ *  back to its prior bytes, or remove it if it didn't exist before. A rollback
+ *  failure is swallowed so it can't mask the original write error. */
+async function rollback(done: readonly ITouched[]): Promise<void> {
+  for (const entry of [...done].reverse()) {
+    try {
+      await (entry.prior === null
+        ? rm(entry.abs, { force: true })
+        : Bun.write(entry.abs, entry.prior));
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+/**
+ * Write a batch of files ATOMICALLY: either all land, or NONE do. On any write
+ * failure (e.g. EACCES), every file already written in THIS batch is rolled back
+ * — a path that existed is RESTORED to its previous bytes (never deleted), one
+ * that didn't is removed — so a partial mutation never reaches disk. This is the
+ * contract the scaffolds + semantic edits rely on to emit `mutated` only once,
+ * after a full success. Parent dirs are created as needed (via `Bun.write`).
+ */
+export async function writeFilesOrRollback(
+  cwd: string,
+  files: readonly IWriteFile[]
+): Promise<IBatchWriteResult> {
+  const done: ITouched[] = [];
+
+  try {
+    for (const file of files) {
+      const abs = join(cwd, file.path);
+      const handle = Bun.file(abs);
+      const prior = (await handle.exists())
+        ? new Uint8Array(await handle.arrayBuffer())
+        : null;
+
+      await Bun.write(abs, file.content);
+      done.push({ abs, prior });
+    }
+
+    return { ok: true, written: files.map((f) => f.path) };
+  } catch (err) {
+    await rollback(done);
+
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /**

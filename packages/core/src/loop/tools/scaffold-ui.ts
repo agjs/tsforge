@@ -1,5 +1,5 @@
-import { join } from "node:path";
 import { writable, normalizeWorkspacePath } from "../../lib/scope";
+import { writeFilesOrRollback, type IWriteFile } from "../../lib/fs";
 import {
   materializeComponents,
   asThemeName,
@@ -7,7 +7,7 @@ import {
   COMPONENT_NAMES,
   THEME_NAMES,
 } from "../../web-components";
-import { type IToolContext } from "./tool-context";
+import { reject, type IToolContext } from "./tool-context";
 
 /**
  * `scaffold_ui` — materialize tested, THEMED UI primitives so the model never
@@ -16,6 +16,10 @@ import { type IToolContext } from "./tool-context";
  * with the theme's per-component classes baked in. Overwrites (re-theming is
  * idempotent). Reports ONE summary event — deliberately NOT per-file `create`
  * events, so the write-guard doesn't re-check known-good vendored files.
+ *
+ * The writes are ATOMIC (writeFilesOrRollback): either every primitive lands and
+ * we emit `mutated` once, or none does and we reject — never a half-written set
+ * with no re-gate (the partial-mutation contract break the harness review found).
  */
 export async function doScaffoldUi(
   args: Record<string, unknown>,
@@ -33,36 +37,54 @@ export async function doScaffoldUi(
     return `scaffold_ui REJECTED: \`components\` must be a non-empty array from: ${COMPONENT_NAMES.join(", ")}.`;
   }
 
-  const files = materializeComponents(theme, components);
-  const written: string[] = [];
+  // Plan the writes: scope check only — deliberately NOT the vendored guard. This
+  // tool's JOB is to materialize the generated UI primitives; gating it on
+  // `isVendored` would refuse the very files it owns. (edit/create DO reject
+  // vendored paths — there the model must not rewrite a generated shell.)
+  const pending: IWriteFile[] = [];
 
-  for (const [rel, content] of Object.entries(files)) {
+  for (const [rel, content] of Object.entries(
+    materializeComponents(theme, components)
+  )) {
     const path = normalizeWorkspacePath(ctx.cwd, rel);
 
-    // Scope check only — deliberately NOT the vendored guard. This tool's JOB is to
-    // materialize the generated UI primitives; gating it on `isVendored` would refuse
-    // the very files it owns if the vendored set ever covered them. (edit/create DO
-    // reject vendored paths — there the model must not rewrite a generated shell.)
-    if (!writable(path, ctx.files)) {
-      continue;
+    if (writable(path, ctx.files)) {
+      pending.push({ path, content });
     }
+  }
 
-    await Bun.write(join(ctx.cwd, path), content);
-    written.push(path);
+  // Nothing in scope → reject honestly; do NOT tell the model to import primitives
+  // from @/components/ui that were never written.
+  if (pending.length === 0) {
+    return reject(
+      ctx,
+      "scaffold_ui",
+      "no UI primitives are within the editable scope (`--files`) — widen the scope, or compose the existing components instead."
+    );
+  }
+
+  const result = await writeFilesOrRollback(ctx.cwd, pending);
+
+  if (!result.ok) {
+    return reject(
+      ctx,
+      "scaffold_ui",
+      `could not write the themed files (${result.reason}) — disk left unchanged.`
+    );
   }
 
   ctx.report({
     kind: "tool",
     task: ctx.task,
-    message: `scaffold_ui: wrote ${String(written.length)} themed file(s) [${theme}] — ${components.join(", ")}`,
+    message: `scaffold_ui: wrote ${String(result.written.length)} themed file(s) [${theme}] — ${components.join(", ")}`,
     // Re-gate after mutating the workspace — without write-guarding each generated
-    // (vendored) primitive. Empty when nothing was written.
-    ...(written.length > 0 ? { mutated: written } : {}),
+    // (vendored) primitive. Emitted ONLY after a full, successful batch.
+    mutated: result.written,
   });
 
   return (
-    `scaffold_ui: wrote ${String(written.length)} file(s) with the "${theme}" theme ` +
-    `(${written.join(", ")}). Import these from @/components/ui (e.g. \`import { Button } ` +
+    `scaffold_ui: wrote ${String(result.written.length)} file(s) with the "${theme}" theme ` +
+    `(${result.written.join(", ")}). Import these from @/components/ui (e.g. \`import { Button } ` +
     `from "@/components/ui/button"\`) and COMPOSE them — do NOT re-create any primitive ` +
     `or edit the files under src/components/ui.`
   );

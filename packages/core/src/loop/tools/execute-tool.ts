@@ -135,5 +135,16 @@ export async function executeTool(
     );
   }
 
-  return HANDLERS[call.name](call.arguments, ctx);
+  // Error boundary: a handler must hand the model a tool-error STRING, never throw
+  // into the loop (an unguarded `Bun.write` EACCES, a parse failure, etc. would
+  // otherwise crash `runToolCalls` mid-turn). Catch only the built-in dispatch —
+  // policy/MCP/unknown above already return text. Mutating handlers roll back their
+  // own partial writes (writeFilesOrRollback), so a caught throw left disk clean.
+  try {
+    return await HANDLERS[call.name](call.arguments, ctx);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    return reject(ctx, call.name, `${call.name} FAILED: ${message}`);
+  }
 }
