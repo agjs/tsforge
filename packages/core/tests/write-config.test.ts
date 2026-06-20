@@ -40,6 +40,25 @@ describe("mergeSetupConfig (pure)", () => {
 
     expect(merged.profile).toBe("security");
   });
+
+  test("an empty conventions decision REMOVES a stale block (re-run to defaults)", () => {
+    const merged = mergeSetupConfig(
+      { plugins: ["p"], conventions: { interfaces: "bare-pascal-case" } },
+      { conventions: {} }
+    );
+
+    expect("conventions" in merged).toBe(false);
+    expect(merged.plugins).toEqual(["p"]); // unrelated keys still preserved
+  });
+
+  test("a non-empty decision REPLACES the prior block wholesale", () => {
+    const merged = mergeSetupConfig(
+      { conventions: { interfaces: "bare-pascal-case", enums: "allow" } },
+      { conventions: { tests: "mirrored" } }
+    );
+
+    expect(merged.conventions).toEqual({ tests: "mirrored" });
+  });
 });
 
 describe("writeSetupConfig (IO)", () => {

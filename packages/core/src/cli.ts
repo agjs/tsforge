@@ -653,6 +653,11 @@ async function baseGate(
   }
 
   if (args.web) {
+    // The --web SCAFFOLD path is greenfield: tsforge writes the skeleton in its
+    // own house style, so the web gate + web guidance deliberately stay on the
+    // defaults and do NOT thread project `conventions` (which govern the core
+    // brownfield path). Keeping both on house style avoids a gate/guidance
+    // contradiction. See docs/harness-subsystems.md "setup / conventions".
     const web = buildWebGate("react", undefined, args.dir);
 
     // PER-WRITE lint moat: the web gate's eslint rules applied to each file as the

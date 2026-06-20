@@ -25,7 +25,15 @@ export function mergeSetupConfig(
   }
 
   if (setup.conventions !== undefined) {
-    out.conventions = setup.conventions;
+    // The conventions block is wholly setup-owned. A present block REPLACES the
+    // existing one so a re-run reflects the new decision exactly; an EMPTY block
+    // (all choices back to default) REMOVES it, so a re-run can't leave a stale
+    // non-default block the overview said it wouldn't write.
+    if (Object.keys(setup.conventions).length > 0) {
+      out.conventions = setup.conventions;
+    } else {
+      delete out.conventions;
+    }
   }
 
   return out;

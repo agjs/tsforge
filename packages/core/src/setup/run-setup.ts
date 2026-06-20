@@ -24,9 +24,10 @@ const SAFETY_NOTE =
   "Safety rules (no `any`/`as`/`!`, complexity cap, `===`) are NEVER weakened by setup.";
 
 function setupFor(conventions: IConventions): ISetupConfig {
-  const diff = nonDefaultConventions(conventions);
-
-  return Object.keys(diff).length > 0 ? { conventions: diff } : {};
+  // ALWAYS carry a conventions block (possibly empty) so the writer replaces or
+  // removes any prior block — re-running setup re-decides all four keys, and the
+  // written file always matches the choices the overview showed.
+  return { conventions: nonDefaultConventions(conventions) };
 }
 
 /** Write the chosen conventions + evidence and print a calm summary. Returns the

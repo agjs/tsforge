@@ -92,6 +92,41 @@ describe("wizard reducer", () => {
     expect(s.status).toBe("cancel");
   });
 
+  test("defensive: an empty steps array reaches a terminal state, never wedges", () => {
+    // stepIndex 0 >= length 0 ⇒ already the overview; confirm applies, cancel cancels.
+    expect(reduceWizard(initWizard([]), "confirm", []).status).toBe("apply");
+    expect(reduceWizard(initWizard([]), "cancel", []).status).toBe("cancel");
+  });
+
+  test("defensive: init drops out-of-range defaultChecked indices", () => {
+    const step: IWizardStep = {
+      key: "m",
+      kind: "multi",
+      title: "M",
+      explanation: "",
+      evidence: [],
+      options: [{ label: "a", value: "a" }],
+      defaultChecked: [0, 5, 10],
+    };
+
+    expect(initWizard([step]).multi.m).toEqual([0]);
+  });
+
+  test("defensive: toggle on a zero-option multi is a no-op", () => {
+    const step: IWizardStep = {
+      key: "empty",
+      kind: "multi",
+      title: "E",
+      explanation: "",
+      evidence: [],
+      options: [],
+    };
+
+    const s = reduceWizard(initWizard([step]), "toggle", [step]);
+
+    expect(s.multi.empty).toEqual([]);
+  });
+
   test("back from overview returns to the last step", () => {
     let s = driveWizard(STEPS, ["confirm", "confirm"]); // at overview
 

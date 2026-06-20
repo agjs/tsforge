@@ -25,7 +25,10 @@ export function initWizard(steps: readonly IWizardStep[]): IWizardState {
 
   for (const s of steps) {
     if (s.kind === "multi") {
-      multi[s.key] = [...(s.defaultChecked ?? [])];
+      // Drop any default-checked index that's out of range for the options.
+      multi[s.key] = (s.defaultChecked ?? []).filter(
+        (i) => i >= 0 && i < s.options.length
+      );
     }
   }
 
@@ -57,6 +60,11 @@ function cursorForStep(step: IWizardStep, state: IWizardState): number {
 }
 
 function toggleCheck(state: IWizardState, step: IWizardStep): IWizardState {
+  // No options ⇒ nothing to toggle (clampIndex would otherwise yield index 0).
+  if (step.options.length === 0) {
+    return state;
+  }
+
   const set = new Set(state.multi[step.key] ?? []);
 
   if (set.has(state.cursor)) {
@@ -186,7 +194,15 @@ export function reduceWizard(
 
   const step = steps[state.stepIndex];
 
-  return step === undefined ? state : reduceStep(state, action, step, steps);
+  // A hole in the steps (e.g. an empty steps array) must still ADVANCE on confirm
+  // so the flow can reach the overview rather than wedging on a missing step.
+  if (step === undefined) {
+    return action === "confirm"
+      ? { ...state, stepIndex: state.stepIndex + 1 }
+      : state;
+  }
+
+  return reduceStep(state, action, step, steps);
 }
 
 /** Fold a sequence of actions from the initial state — used by tests. */

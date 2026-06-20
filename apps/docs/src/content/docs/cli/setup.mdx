@@ -42,7 +42,9 @@ One choice drives both halves of the harness, so they can never disagree:
 - **The gate** stops failing your code on a convention you opted out of (choose `bare-pascal-case` and `eslint` no longer demands the `I`).
 - **The prompts** tell the model to write your style from the start, instead of writing `IFoo` and getting corrected.
 
-Setup writes `tsforge.config.json` (merged — your `mcpServers`, `plugins`, and `policy` are preserved) plus `.tsforge/setup-evidence.json` for audit. Only the choices that differ from the defaults are written, so the file stays minimal.
+Setup writes `tsforge.config.json` (merged — your `mcpServers`, `plugins`, and `policy` are preserved) plus `.tsforge/setup-evidence.json` for audit. Only the choices that differ from the defaults are written, so the file stays minimal. Re-running setup re-decides all four conventions, so the file always matches what the overview showed.
+
+Conventions govern your everyday sessions (the auto gate, the write-time linter, and the prompts). Scaffolding a brand-new app with `--web` uses tsforge's house style for the generated skeleton, regardless of `conventions` — it's greenfield code tsforge writes itself.
 
 ## Non-interactive use
 
