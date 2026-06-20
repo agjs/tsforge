@@ -1,0 +1,51 @@
+---
+title: Set up a repo
+description: "tsforge setup — a wizard that infers your repo's conventions and writes tsforge.config.json so the guardrails match your style, without weakening the safety floor."
+---
+
+By default tsforge brings one opinion: `I`-prefixed interfaces, no enums, tests beside their source, the `src/views/` layout. That's right for a fresh project tsforge scaffolds, but an existing repo usually has its own conventions. `tsforge setup` scans your repo, shows you what it found, and writes those preferences into `tsforge.config.json` so tsforge adapts to your style instead of imposing its own.
+
+```bash
+tsforge setup          # the interactive wizard
+tsforge setup --yes    # write the scan's recommendations, no prompts
+```
+
+Inside a session, the same wizard is available as `/setup`. tsforge never runs it for you — if a repo has no config, you'll just see a one-line hint suggesting it.
+
+## What it can change — and what it can't
+
+There are two kinds of rules, and setup only touches one of them.
+
+**The safety floor is never negotiable.** No `any`, no `as`/`<>` casts, no non-null `!`, `===`, no `var`, the complexity cap — these catch real bugs and unsafe code. The wizard physically cannot turn them off, and a hand-edited config can't either.
+
+**Conventions are taste**, and these are what setup adapts:
+
+| Convention | Choices |
+| --- | --- |
+| `interfaces` | `i-prefix` · `bare-pascal-case` · `off` |
+| `enums` | `ban` · `allow` |
+| `tests` | `co-located` · `mirrored` · `either` |
+| `componentFolders` | `tsforge-views` · `repo` · `warn` |
+
+Allowing enums removes only the enum ban — the separate `as`-cast ban stays intact. Relaxing a convention never relaxes safety.
+
+## How the wizard works
+
+Each step shows the evidence the scan found (e.g. "300 bare PascalCase, 12 I-prefixed"), the recommended choice, and exactly which config field it sets. Arrow keys to move, Enter to choose, `b` to go back, `q` to cancel. A final overview shows the exact `tsforge.config.json` fragment that will be written — **nothing is written until you Apply**, and Cancel writes nothing.
+
+The scan is read-only: it parses your TypeScript via the compiler's AST and never executes your `eslint.config.*`, `prettier.config.*`, or any project JavaScript.
+
+## Where the choices take effect
+
+One choice drives both halves of the harness, so they can never disagree:
+
+- **The gate** stops failing your code on a convention you opted out of (choose `bare-pascal-case` and `eslint` no longer demands the `I`).
+- **The prompts** tell the model to write your style from the start, instead of writing `IFoo` and getting corrected.
+
+Setup writes `tsforge.config.json` (merged — your `mcpServers`, `plugins`, and `policy` are preserved) plus `.tsforge/setup-evidence.json` for audit. Only the choices that differ from the defaults are written, so the file stays minimal.
+
+## Non-interactive use
+
+Outside a terminal, `tsforge setup` prints the scan and the proposed config and writes nothing — re-run it in a terminal, or pass `--yes` to write the recommendations. If an existing `tsforge.config.json` is invalid JSON, setup refuses to overwrite it and tells you to fix it first.
+
+→ [tsforge.config.json](/guardrails/config/) · [Commands](/reference/commands/) · [Map the repo](/cli/map/)

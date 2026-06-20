@@ -21,6 +21,15 @@ bun run tsforge
 
 Environment variables: [Environment variables](/reference/flags/). Interactive usage: [Interactive CLI](/cli/interactive/).
 
+## Set up a repo
+
+```bash
+tsforge setup          # the interactive conventions wizard
+tsforge setup --yes    # write the scan's recommendations, no prompts
+```
+
+`tsforge setup` (or `/setup` in a session) scans the repo and writes a `conventions` block to `tsforge.config.json` so the guardrails match your repo's taste — interface naming, enums, test layout, component folders. It never weakens the safety floor (no `any`/`as`/`!`, complexity cap, `===`), and writes nothing until you Apply. Outside a terminal it prints the proposal and writes nothing unless you pass `--yes`. See [Set up a repo](/cli/setup/).
+
 ## Review the change you're on
 
 ```bash
