@@ -459,6 +459,11 @@ export function runWizard(
       stdin.removeListener("keypress", onKey);
       out(`${SHOW_CURSOR}${EXIT_ALT}`);
 
+      // Restore the saved keypress listeners. They come from `rawListeners` typed
+      // as `Function[]`, which isn't assignable to the listener signature, so we
+      // forward through a thin wrapper (House rules forbid `as`). This mirrors the
+      // reviewed `pickCommand` pattern; within a run `onKey` is detached first, so
+      // there's no duplication.
       for (const l of saved) {
         stdin.on("keypress", (...args: unknown[]) => {
           Reflect.apply(l, stdin, args);

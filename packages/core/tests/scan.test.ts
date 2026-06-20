@@ -1,5 +1,11 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recommendConventions, scanRepo } from "../src/infer-rules/scan";
@@ -168,6 +174,32 @@ describe("folder + tooling scan", () => {
 
       expect(report.folders.features).toBe(true);
       expect(recommendConventions(report).componentFolders).toBe("repo");
+    });
+  });
+});
+
+describe("scan resilience", () => {
+  test("an unreadable file mid-scan does not crash the scan", async () => {
+    const files: IFixtureFile[] = [
+      { path: "src/ok.ts", content: "export interface User { id: string; }" },
+      {
+        path: "src/locked.ts",
+        content: "export interface Order { n: number; }",
+      },
+    ];
+
+    await withRepo(files, async (cwd) => {
+      chmodSync(join(cwd, "src/locked.ts"), 0o000);
+
+      try {
+        // Must resolve (not reject) even if a file errors on read; the readable
+        // file is still tallied.
+        const report = await scanRepo(cwd);
+
+        expect(report.interfaces.total).toBeGreaterThanOrEqual(1);
+      } finally {
+        chmodSync(join(cwd, "src/locked.ts"), 0o644);
+      }
     });
   });
 });

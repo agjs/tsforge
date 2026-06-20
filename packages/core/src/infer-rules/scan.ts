@@ -147,8 +147,14 @@ export async function scanRepo(cwd: string): Promise<IScanReport> {
       continue;
     }
 
-    if (tallyFile(await file.text(), rel, iface)) {
-      enumFiles += 1;
+    try {
+      if (tallyFile(await file.text(), rel, iface)) {
+        enumFiles += 1;
+      }
+    } catch {
+      // A file deleted/locked/permission-denied mid-scan must not crash the
+      // wizard — skip it and keep scanning.
+      continue;
     }
 
     filesScanned += 1;

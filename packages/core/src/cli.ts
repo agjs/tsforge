@@ -1207,14 +1207,13 @@ async function repl(args: ICliArgs): Promise<number> {
       case "setup": {
         const { runSetup } = await import("./setup/run-setup");
 
+        // runSetup prints its own apply/cancel summary — don't add a second,
+        // possibly-misleading line (it would claim success even on cancel).
         await runSetup({
           cwd: args.dir,
           yes: false,
           color: process.stdout.isTTY,
         });
-        process.stdout.write(
-          "(conventions written — they apply to the next session)\n"
-        );
         break;
       }
 
