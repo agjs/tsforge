@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { writable, normalizeWorkspacePath } from "../../lib/scope";
+import { writeFilesOrRollback, type IWriteFile } from "../../lib/fs";
 import { materializeRoutes, asRoutePaths } from "../../web-routes";
-import { type IToolContext } from "./tool-context";
+import { reject, type IToolContext } from "./tool-context";
 
 /**
  * `scaffold_routes` — materialize ALL of an app's routes as file-based stubs from
@@ -11,6 +12,10 @@ import { type IToolContext } from "./tool-context";
  * owns HOW (correct createFileRoute + $param filename mapping). Like scaffold_ui:
  * overwrites stubs idempotently and reports ONE summary event (not per-file
  * `create`s) so the write-guard doesn't re-check the generated shells.
+ *
+ * Writes are ATOMIC (writeFilesOrRollback) and `mutated` is emitted ONLY after a
+ * full success — a mid-batch failure rolls back, so the workspace never holds a
+ * half-written route set with no re-gate.
  */
 export async function doScaffoldRoutes(
   args: Record<string, unknown>,
@@ -23,16 +28,14 @@ export async function doScaffoldRoutes(
   }
 
   const files = materializeRoutes(paths);
-  const written: string[] = [];
+  const pending: IWriteFile[] = [];
   const kept: string[] = [];
 
   for (const [rel, content] of Object.entries(files)) {
     const path = normalizeWorkspacePath(ctx.cwd, rel);
 
-    // Scope check only — deliberately NOT the vendored guard. This tool's JOB is to
-    // write the generated route shells; gating it on `isVendored` would refuse the
-    // very files it owns if the vendored set ever covered them. (edit/create DO
-    // reject vendored paths — there the model must not rewrite a generated shell.)
+    // Scope check only — deliberately NOT the vendored guard (this tool owns these
+    // generated shells; see scaffold-ui for the rationale).
     if (!writable(path, ctx.files)) {
       continue;
     }
@@ -46,14 +49,41 @@ export async function doScaffoldRoutes(
       continue;
     }
 
-    await Bun.write(join(ctx.cwd, path), content);
-    written.push(path);
+    pending.push({ path, content });
+  }
+
+  // Nothing in scope at all (no new stubs AND none already exist) → reject
+  // honestly rather than report a misleading "created 0" success.
+  if (pending.length === 0 && kept.length === 0) {
+    return reject(
+      ctx,
+      "scaffold_routes",
+      "no routes are within the editable scope (`--files`) — widen the scope to scaffold these routes."
+    );
   }
 
   const keptNote =
     kept.length > 0
       ? ` (kept ${String(kept.length)} existing route(s) untouched)`
       : "";
+
+  // Atomic write of the new stubs. A no-op (nothing new in scope) skips the batch
+  // entirely, so it emits no `mutated` and doesn't force a gate run.
+  let written: string[] = [];
+
+  if (pending.length > 0) {
+    const result = await writeFilesOrRollback(ctx.cwd, pending);
+
+    if (!result.ok) {
+      return reject(
+        ctx,
+        "scaffold_routes",
+        `could not write the route stubs (${result.reason}) — disk left unchanged.`
+      );
+    }
+
+    written = result.written;
+  }
 
   ctx.report({
     kind: "tool",

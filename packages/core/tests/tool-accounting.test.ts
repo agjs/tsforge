@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,7 +7,9 @@ import {
   countsAsMutation,
   type ILoopCtx,
   type ILoopState,
+  type ILoopEvent,
 } from "../src/loop";
+import { THEME_NAMES, COMPONENT_NAMES } from "../src/web-components";
 import { TsService } from "../src/lsp";
 import { makeFileLinter, WEB_PACKS } from "../src/detect-gate";
 import { TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../src/agent";
@@ -541,6 +543,175 @@ test("scaffold_web that writes nothing does NOT re-gate (no false 'done')", asyn
 
     expect(touched).toBe(false);
     expect(ctx.touched?.size ?? 0).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── P1/P2 contract regression tests (harness review: tools) ────────────────────
+
+/** A report sink that records every event, plus the ctx wired to it. */
+function collectingCtx(
+  cwd: string,
+  files: string[]
+): { ctx: ILoopCtx; events: ILoopEvent[] } {
+  const events: ILoopEvent[] = [];
+  const ctx: ILoopCtx = {
+    task: { id: "t", accept: "true", files },
+    cwd,
+    tsService: null,
+    parse: undefined,
+    report: (e) => {
+      events.push(e);
+    },
+    messages: [],
+  };
+
+  return { ctx, events };
+}
+
+/** True when the FS enforces a chmod 555 (root bypasses perms → caller skips). */
+async function permsEnforced(dir: string): Promise<boolean> {
+  try {
+    await Bun.write(join(dir, ".probe"), "x");
+    await rm(join(dir, ".probe"), { force: true });
+
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+// P1: a handler that THROWS (here `create` hitting an unwritable dir → EACCES) must
+// be caught at the executeTool boundary and returned as a tool-error string — never
+// thrown into runToolCalls. The write didn't happen, so it isn't counted.
+test("a throwing create is caught (no crash), reported FAILED, and not counted", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-"));
+
+  try {
+    await mkdir(join(dir, "ro"), { recursive: true });
+    await chmod(join(dir, "ro"), 0o555);
+
+    if (!(await permsEnforced(join(dir, "ro")))) {
+      return; // running as root — perms not enforced
+    }
+
+    const { ctx } = collectingCtx(dir, ["**/*"]);
+    const state = freshState();
+    const touched = await runToolCalls(
+      [
+        {
+          name: "create",
+          arguments: { file: "ro/x.ts", content: "export const x = 1;\n" },
+        },
+      ],
+      ctx,
+      state
+    );
+
+    expect(touched).toBe(false);
+    expect(state.edits).toBe(0);
+    const msg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
+
+    expect(msg).toContain("FAILED");
+    expect(await Bun.file(join(dir, "ro/x.ts")).exists()).toBe(false);
+  } finally {
+    await chmod(join(dir, "ro"), 0o755).catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// P1: scaffold_ui writes are ATOMIC — when a write fails the batch rolls back, so a
+// pre-existing file is left untouched, nothing is counted, and NO `mutated` event
+// fires (a half-written set must never re-gate as if it succeeded).
+test("scaffold_ui rolls back on a write failure: disk unchanged, no mutated event", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-"));
+
+  try {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await Bun.write(join(dir, "src/index.css"), "MARKER");
+    await chmod(join(dir, "src"), 0o555);
+
+    if (!(await permsEnforced(join(dir, "src")))) {
+      return;
+    }
+
+    const { ctx, events } = collectingCtx(dir, ["**/*"]);
+    const touched = await runToolCalls(
+      [
+        {
+          name: "scaffold_ui",
+          arguments: {
+            theme: THEME_NAMES[0],
+            components: [COMPONENT_NAMES[0]],
+          },
+        },
+      ],
+      ctx,
+      freshState()
+    );
+
+    expect(touched).toBe(false);
+    expect(events.some((e) => e.mutated !== undefined)).toBe(false);
+    expect(await Bun.file(join(dir, "src/index.css")).text()).toBe("MARKER");
+  } finally {
+    await chmod(join(dir, "src"), 0o755).catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// P2: scaffold_ui with nothing in the editable scope must REJECT honestly — never
+// emit the success copy that tells the model to import primitives never written.
+test("scaffold_ui out of scope rejects without the import advice", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-"));
+
+  try {
+    const { ctx } = collectingCtx(dir, ["src/lib/**"]);
+    const touched = await runToolCalls(
+      [
+        {
+          name: "scaffold_ui",
+          arguments: {
+            theme: THEME_NAMES[0],
+            components: [COMPONENT_NAMES[0]],
+          },
+        },
+      ],
+      ctx,
+      freshState()
+    );
+
+    expect(touched).toBe(false);
+    const msg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
+
+    expect(msg).not.toContain("Import these from @/components/ui");
+    expect(msg.toLowerCase()).toContain("scope");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// add_dependency validates names offline (no network) — an invalid spec rejects and
+// nothing is written/counted.
+test("add_dependency rejects an invalid package spec and does not mutate", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-"));
+
+  try {
+    await Bun.write(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "t", version: "1.0.0" })
+    );
+
+    const { ctx } = collectingCtx(dir, ["**/*"]);
+    const state = freshState();
+    const touched = await runToolCalls(
+      [{ name: "add_dependency", arguments: { packages: "../evil" } }],
+      ctx,
+      state
+    );
+
+    expect(touched).toBe(false);
+    expect(state.edits).toBe(0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

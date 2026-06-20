@@ -183,29 +183,102 @@ export class TsService {
     return undefined;
   }
 
+  /** Compute the new text for one file's edits (back-to-front so earlier spans
+   *  keep their offsets); null when the file can't be read. */
+  private editedText(fc: ts.FileTextChanges): string | null {
+    const original = ts.sys.readFile(fc.fileName);
+
+    if (original === undefined) {
+      return null;
+    }
+
+    const sorted = [...fc.textChanges].sort(
+      (a, b) => b.span.start - a.span.start
+    );
+    let text = original;
+
+    for (const tc of sorted) {
+      text =
+        text.slice(0, tc.span.start) +
+        tc.newText +
+        text.slice(tc.span.start + tc.span.length);
+    }
+
+    return text;
+  }
+
+  /**
+   * Apply a multi-file edit set ATOMICALLY: compute every new file text first,
+   * then write them; if any write throws (e.g. EACCES), restore the files already
+   * written in this batch to their prior content and re-throw. Without this a
+   * partial rename/organize/quick-fix could leave the tree half-edited (the
+   * partial-mutation contract break). The caller (executeTool's boundary) turns the
+   * re-thrown error into a tool-error string.
+   */
   private applyChanges(changes: readonly ts.FileTextChanges[]): void {
+    const planned: { fileName: string; text: string; prior: string }[] = [];
+
     for (const fc of changes) {
-      const original = ts.sys.readFile(fc.fileName);
+      const text = this.editedText(fc);
+      const prior = ts.sys.readFile(fc.fileName);
 
-      if (original === undefined) {
-        continue;
+      if (text !== null && prior !== undefined) {
+        planned.push({ fileName: fc.fileName, text, prior });
+      }
+    }
+
+    const written: { fileName: string; prior: string }[] = [];
+
+    try {
+      for (const p of planned) {
+        ts.sys.writeFile(p.fileName, p.text);
+        written.push({ fileName: p.fileName, prior: p.prior });
+      }
+    } catch (err) {
+      for (const w of [...written].reverse()) {
+        try {
+          ts.sys.writeFile(w.fileName, w.prior);
+        } catch {
+          // best-effort restore
+        }
       }
 
-      // Apply edits back-to-front so earlier spans keep their offsets.
-      const sorted = [...fc.textChanges].sort(
-        (a, b) => b.span.start - a.span.start
-      );
-      let text = original;
-
-      for (const tc of sorted) {
-        text =
-          text.slice(0, tc.span.start) +
-          tc.newText +
-          text.slice(tc.span.start + tc.span.length);
+      for (const p of planned) {
+        this.refresh(p.fileName);
       }
 
-      ts.sys.writeFile(fc.fileName, text);
-      this.refresh(fc.fileName);
+      throw err;
+    }
+
+    for (const p of planned) {
+      this.refresh(p.fileName);
+    }
+  }
+
+  /** Undo a failed move: restore every snapshotted file to its prior content and
+   *  remove the destination if this move created it. Best-effort; re-grounds each
+   *  touched file so the in-memory service matches disk again. */
+  private restoreMove(
+    snapshots: ReadonlyMap<string, string>,
+    toAbs: string,
+    destExisted: boolean
+  ): void {
+    for (const [file, prior] of snapshots) {
+      try {
+        ts.sys.writeFile(file, prior);
+      } catch {
+        // best-effort
+      }
+
+      this.refresh(file);
+    }
+
+    if (!destExisted) {
+      try {
+        rmSync(toAbs, { force: true });
+      } catch {
+        // best-effort
+      }
     }
   }
 
@@ -506,15 +579,43 @@ export class TsService {
 
     const edits = this.moveEdits(fromAbs, toAbs);
 
-    // Apply the import rewrites (importers + the moved file's own imports) while
-    // the file still lives at its old path, THEN relocate the edited content.
-    this.applyChanges(edits);
+    // Snapshot every file the move touches (import rewrites + the source) so a
+    // failure midway (e.g. an unwritable destination) leaves the tree exactly as
+    // it was — never a half-applied rename with the source already deleted.
+    const snapshots = new Map<string, string>();
 
-    const moved = ts.sys.readFile(fromAbs) ?? original;
+    // Include toAbs: if the destination already exists (an overwriting move), its
+    // prior content must be restorable too. A non-existent dest isn't snapshotted
+    // (readFile → undefined), so restoreMove removes it instead.
+    for (const target of new Set([
+      ...edits.map((e) => e.fileName),
+      fromAbs,
+      toAbs,
+    ])) {
+      const prior = ts.sys.readFile(target);
 
-    mkdirSync(dirname(toAbs), { recursive: true });
-    ts.sys.writeFile(toAbs, moved);
-    rmSync(fromAbs, { force: true });
+      if (prior !== undefined) {
+        snapshots.set(target, prior);
+      }
+    }
+
+    const destExisted = ts.sys.readFile(toAbs) !== undefined;
+
+    try {
+      // Apply the import rewrites (importers + the moved file's own imports) while
+      // the file still lives at its old path, THEN relocate the edited content.
+      this.applyChanges(edits);
+
+      const moved = ts.sys.readFile(fromAbs) ?? original;
+
+      mkdirSync(dirname(toAbs), { recursive: true });
+      ts.sys.writeFile(toAbs, moved);
+      rmSync(fromAbs, { force: true });
+    } catch (err) {
+      this.restoreMove(snapshots, toAbs, destExisted);
+
+      throw err;
+    }
 
     const stale = this.files.indexOf(fromAbs);
 
