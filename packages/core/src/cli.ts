@@ -19,7 +19,16 @@ import {
 } from "./loop";
 import { buildAndPersistMap, mapStatus, forgetMap } from "./codebase";
 import { parseEventLog, formatTrace } from "./eval";
-import { loadRecipes, findRecipe, type ITaskRecipe } from "./config/recipes";
+import { loadRecipes, findRecipe } from "./config/recipes";
+import {
+  parseArgs,
+  applyRecipe,
+  isOneShot,
+  scopeOf,
+  WHOLE_REPO,
+  type ICliArgs,
+} from "./cli/args";
+import { makeSpinner, spinnerPhase } from "./render/spinner";
 import { validate } from "./validate";
 import { isPolicyMode } from "./policy";
 import {
@@ -47,7 +56,7 @@ import {
   type IStatusInfo,
 } from "./render";
 import type { ITask } from "./spec";
-import type { Reporter, ILoopEvent, SetupWebFn } from "./loop";
+import type { Reporter, SetupWebFn } from "./loop";
 import { loadLedger, activeRules, forgetMemory } from "./loop/memory";
 import {
   buildGate,
@@ -104,269 +113,7 @@ import {
  * Slash commands (/help, /clear, /exit) follow the standard harness UX. Provider
  * via TSFORGE_* env.
  */
-export interface ICliArgs {
-  /** Empty ⇒ interactive REPL; non-empty ⇒ one-shot task. */
-  task: string;
-  dir: string;
-  files: string[];
-  accept: string;
-  /** Resume the most recent saved session for this dir (`--continue` / `-c`). */
-  continue: boolean;
-  /** Resume a specific session by id (`--resume <id>`). */
-  resumeId: string;
-  /** Skip auto-detecting a gate from the project (`--no-gate`). */
-  noGate: boolean;
-  /** An HTML file to render-check in headless chromium as part of the gate (`--browser`). */
-  browser: string;
-  /** Scaffold + gate a web app: skeleton + tsc/eslint/build/browser ladder (`--web`). */
-  web: boolean;
-  /** Append the full event stream (reasoning, tool writes, gate verdicts) as JSONL
-   *  to an auto-named file under ~/.tsforge/logs/ for later evaluation (`--log`). */
-  log: boolean;
-  /** Plan mode: a from-scratch build pauses after the design phase to show its
-   *  plan for review/edit before implementing (`--plan`; also toggled by /plan). */
-  plan: boolean;
-  /** Keep the auto-gate at the strict TS floor only — do NOT append the
-   *  project's discovered tests (`--strict-floor-only`). By default the auto-gate
-   *  also runs the project's tests, so "green" means floor + tests pass. */
-  strictFloorOnly: boolean;
-  /** Review the change you're on (functional review of the diff) (`tsforge review`). */
-  review: boolean;
-  /** Review only staged changes (`--staged`). */
-  staged: boolean;
-  /** Run the gate first and tell the reviewer to skip what it already covers
-   *  (`tsforge review --with-gate`). */
-  withGate: boolean;
-  /** Seed a brownfield run with a deterministic caller blast-radius scout
-   *  (`--scout`). */
-  scout: boolean;
-  /** Explicit base ref to diff against for review (`--base <ref>`). */
-  base: string;
-  /** Build a structural workspace map (`tsforge map`). */
-  map: boolean;
-  /** Summarize a `--log` run (`tsforge trace [logfile]`); `task` carries the path. */
-  trace: boolean;
-  /** Recipe id to apply (`tsforge run <id>` or `--recipe <id>`); "" = none. */
-  recipe: string;
-  /** List discovered recipes (`tsforge recipes`). */
-  recipes: boolean;
-  /** The `run` subcommand was used (`tsforge run <id>`) — tracked so a missing id
-   *  is an explicit error, not a silent fall-through to the interactive REPL. */
-  run: boolean;
-  /** Model name override (from a recipe); "" = the active model. */
-  model: string;
-  /** Hard turn cap (from a recipe); 0 = the loop default. */
-  maxTurns: number;
-  /** Reasoning-token cap (from a recipe); 0 = the env/default. */
-  thinkingBudget: number;
-  /** Base policy mode (`--policy-mode <plan|default|acceptEdits|ci|dontAsk|
-   *  bypassPermissions>`); overrides the config file's policy.mode. */
-  policyMode: string;
-}
-
-const BOOL_FLAGS: Record<
-  string,
-  | "continue"
-  | "noGate"
-  | "web"
-  | "log"
-  | "plan"
-  | "strictFloorOnly"
-  | "staged"
-  | "withGate"
-  | "scout"
-> = {
-  "--continue": "continue",
-  "-c": "continue",
-  "--no-gate": "noGate",
-  "--web": "web",
-  "--log": "log",
-  "--plan": "plan",
-  "--strict-floor-only": "strictFloorOnly",
-  "--staged": "staged",
-  "--with-gate": "withGate",
-  "--scout": "scout",
-};
-
-const VALUE_FLAGS = new Set([
-  "--dir",
-  "--files",
-  "--accept",
-  "--gate",
-  "--browser",
-  "--resume",
-  "--base",
-  "--policy-mode",
-  "--recipe",
-]);
-
-/** Parse argv (without the tsforge binary name). Always succeeds — mode is decided in main. */
-export function parseArgs(argv: readonly string[]): ICliArgs {
-  const positional: string[] = [];
-  const out: ICliArgs = {
-    task: "",
-    dir: ".",
-    files: [],
-    accept: "",
-    continue: false,
-    resumeId: "",
-    noGate: false,
-    browser: "",
-    web: false,
-    log: false,
-    plan: false,
-    strictFloorOnly: false,
-    review: false,
-    staged: false,
-    withGate: false,
-    scout: false,
-    base: "",
-    map: false,
-    trace: false,
-    recipe: "",
-    recipes: false,
-    run: false,
-    model: "",
-    maxTurns: 0,
-    thinkingBudget: 0,
-    policyMode: "",
-  };
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-
-    if (arg === undefined) {
-      continue;
-    }
-
-    const boolKey = BOOL_FLAGS[arg];
-
-    if (boolKey !== undefined) {
-      out[boolKey] = true;
-    } else if (VALUE_FLAGS.has(arg) && argv[i + 1] !== undefined) {
-      applyValueFlag(arg, argv[i + 1] ?? "", out);
-      i += 1;
-    } else if (!VALUE_FLAGS.has(arg)) {
-      positional.push(arg);
-    }
-  }
-
-  out.task = positional.join(" ").trim();
-
-  // `tsforge review` / `tsforge map` are subcommands, not tasks: the first
-  // positional selects them.
-  if (positional[0] === "review") {
-    out.review = true;
-    out.task = positional.slice(1).join(" ").trim();
-  } else if (positional[0] === "map") {
-    out.map = true;
-    out.task = positional.slice(1).join(" ").trim();
-  } else if (positional[0] === "trace") {
-    out.trace = true;
-    out.task = positional.slice(1).join(" ").trim();
-  } else if (positional[0] === "recipes") {
-    out.recipes = true;
-  } else if (positional[0] === "run") {
-    out.run = true;
-    out.recipe = positional[1] ?? "";
-    out.task = positional.slice(2).join(" ").trim();
-  }
-
-  out.dir = isAbsolute(out.dir) ? out.dir : join(process.cwd(), out.dir);
-
-  return out;
-}
-
-/** Assign one `--flag value` into the args (mutates `out`). */
-function applyValueFlag(flag: string, value: string, out: ICliArgs): void {
-  if (flag === "--dir") {
-    out.dir = value;
-  } else if (flag === "--files") {
-    out.files = value
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-  } else if (flag === "--browser") {
-    out.browser = value;
-  } else if (flag === "--resume") {
-    out.resumeId = value;
-  } else if (flag === "--base") {
-    out.base = value;
-  } else if (flag === "--policy-mode") {
-    out.policyMode = value;
-  } else if (flag === "--recipe") {
-    out.recipe = value;
-  } else {
-    out.accept = value; // --accept / --gate
-  }
-}
-
-/** Overlay a recipe's fields onto the parsed args. An explicit CLI value ALWAYS
- *  wins (a recipe only fills a field still at its default), so `tsforge run x
- *  --files src/**` overrides the recipe's scope. Booleans can only be turned ON
- *  by a recipe — a CLI flag can't switch a recipe's `true` back off. */
-export function applyRecipe(args: ICliArgs, recipe: ITaskRecipe): void {
-  if (args.task.length === 0 && recipe.task !== undefined) {
-    args.task = recipe.task;
-  }
-
-  if (args.files.length === 0 && recipe.files !== undefined) {
-    args.files = [...recipe.files];
-  }
-
-  if (args.accept.length === 0 && recipe.gate !== undefined) {
-    args.accept = recipe.gate;
-  }
-
-  if (args.model.length === 0 && recipe.model !== undefined) {
-    args.model = recipe.model;
-  }
-
-  if (args.base.length === 0 && recipe.base !== undefined) {
-    args.base = recipe.base;
-  }
-
-  if (args.policyMode.length === 0 && recipe.policyMode !== undefined) {
-    args.policyMode = recipe.policyMode;
-  }
-
-  if (args.maxTurns === 0 && recipe.maxTurns !== undefined) {
-    args.maxTurns = recipe.maxTurns;
-  }
-
-  if (args.thinkingBudget === 0 && recipe.thinkingBudget !== undefined) {
-    args.thinkingBudget = recipe.thinkingBudget;
-  }
-
-  applyRecipeFlags(args, recipe);
-}
-
-/** Recipe booleans (split out to keep applyRecipe's complexity in check). */
-function applyRecipeFlags(args: ICliArgs, recipe: ITaskRecipe): void {
-  args.staged = args.staged || recipe.staged === true;
-  args.strictFloorOnly =
-    args.strictFloorOnly || recipe.strictFloorOnly === true;
-  args.web = args.web || recipe.web === true;
-  args.plan = args.plan || recipe.plan === true;
-  args.log = args.log || recipe.log === true;
-  args.withGate = args.withGate || recipe.withGate === true;
-  args.scout = args.scout || recipe.scout === true;
-}
-
-// Default editable scope: the whole workspace — like any agentic CLI, the agent
-// may edit any file. `--files` only NARROWS this (a safety/eval tripwire); it's
-// never required. `**/*` matches top-level and nested paths alike.
-const WHOLE_REPO = ["**/*"];
-
-/** Resolve the editable scope: an explicit `--files` narrowing, else the whole repo. */
-function scopeOf(args: ICliArgs): string[] {
-  return args.files.length > 0 ? args.files : WHOLE_REPO;
-}
-
-/** One-shot mode = a task PLUS a gate to drive to green; else interactive. */
-export function isOneShot(args: ICliArgs): boolean {
-  return args.task.length > 0 && args.accept.length > 0;
-}
+export { parseArgs, applyRecipe, isOneShot, type ICliArgs } from "./cli/args";
 
 /** A unique-enough id for a new session (time + a little randomness). */
 function newSessionId(): string {
@@ -647,127 +394,9 @@ async function printSessions(dir: string): Promise<void> {
   }
 }
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_TICK_MS = 120;
-const ERASE_LINE = `\r${String.fromCharCode(27)}[2K`;
-
-/** Minimal stdout surface the spinner needs — injectable so the inline-write
- *  behaviour is unit-testable without touching the real terminal. */
-export interface ISpinnerOut {
-  write: (s: string) => void;
-  isTTY?: boolean;
-}
-
-/** Animated activity line (`⠋ thinking · 12s`) for the silent stretches of a
- *  turn — hidden chain-of-thought, prompt processing, a slow first token. TTY
- *  only. Any rendered event clears it before printing (the next tick redraws),
- *  so it never interleaves with streamed text or boxes. */
-export function makeSpinner(out: ISpinnerOut = process.stdout): {
-  start: () => void;
-  clear: () => void;
-  stop: () => void;
-  setLabel: (label: string) => void;
-  onTick: (cb: () => void) => void;
-  setInlineGate: (fn: () => boolean) => void;
-  frameLabel: () => string;
-  /** Advance one frame and (if the inline gate allows) write the activity line.
-   *  Exposed for deterministic tests; the live spinner drives it via setInterval. */
-  tick: () => void;
-} {
-  let timer: ReturnType<typeof setInterval> | null = null;
-  let startedAt = 0;
-  let frame = 0;
-  let drawn = false;
-  let label = "thinking";
-  let onTickCb: (() => void) | null = null;
-  // When the status bar is active it shows the activity itself, so the inline
-  // write (which lands on the readline input line and erases what the user is
-  // typing) is suppressed. Default true for the no-bar fallback (pipes, tiny TTY).
-  let inlineGate: () => boolean = () => true;
-
-  const secsNow = (): number =>
-    Math.round((performance.now() - startedAt) / 1000);
-
-  const clear = (): void => {
-    if (drawn) {
-      out.write(ERASE_LINE);
-      drawn = false;
-    }
-  };
-
-  const tick = (): void => {
-    frame = (frame + 1) % SPINNER_FRAMES.length;
-
-    if (inlineGate()) {
-      out.write(
-        `${ERASE_LINE}  ${STYLE.dim}${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secsNow()}s${RESET}`
-      );
-      drawn = true;
-    }
-
-    onTickCb?.(); // repaint the pinned status bar with live activity / tok/s
-  };
-
-  return {
-    tick,
-    setInlineGate: (fn: () => boolean): void => {
-      inlineGate = fn;
-    },
-    frameLabel: (): string =>
-      timer === null
-        ? ""
-        : `${SPINNER_FRAMES[frame] ?? ""} ${label} · ${secsNow()}s`,
-    start: (): void => {
-      if (out.isTTY !== true || timer !== null) {
-        return;
-      }
-
-      label = "thinking";
-      startedAt = performance.now();
-      timer = setInterval(tick, SPINNER_TICK_MS);
-    },
-    clear,
-    stop: (): void => {
-      if (timer !== null) {
-        clearInterval(timer);
-        timer = null;
-      }
-
-      clear();
-    },
-    setLabel: (l: string): void => {
-      label = l;
-    },
-    onTick: (cb: () => void): void => {
-      onTickCb = cb;
-    },
-  };
-}
+export { makeSpinner, spinnerPhase, type ISpinnerOut } from "./render/spinner";
 
 const spinner = makeSpinner();
-
-/** What the spinner should say given the latest event — the activity line
- *  follows the turn's phase instead of claiming "thinking" during a gate run
- *  or a dependency install. Null = keep the current label. */
-export function spinnerPhase(event: ILoopEvent): string | null {
-  if (event.kind === "token") {
-    if (event.channel === "tool") {
-      return "writing";
-    }
-
-    return event.channel === "reasoning" ? "thinking" : null;
-  }
-
-  if (event.kind === "run" || event.kind === "validated") {
-    return "checking";
-  }
-
-  if (event.kind === "tool" && /install/i.test(event.message)) {
-    return "installing deps";
-  }
-
-  return event.kind === "cycle" ? "thinking" : null;
-}
 
 /** When the interactive REPL pins an editable input row, streamed output must be
  *  written THROUGH the StatusBar (so it scrolls in the region above the row and

@@ -52,6 +52,21 @@ export function isActionKind(value: unknown): value is ActionKind {
  * `plan` is read-only; the rest tighten. `bypassPermissions` allows everything
  * here, but the critical-deny set still fires before this table is reached.
  */
+/**
+ * Per-mode default decision for each action kind (a rule can still override, and
+ * critical denies always win). The intentional postures:
+ * - `default`: interactive day-to-day — writes/shell/network allowed, delete + the
+ *   unknown action ask/deny.
+ * - `plan`: read-only exploration — writes/mcp denied; shell allowed but the run
+ *   tool's own `isReadOnlyCommand` guard keeps it read-only.
+ * - `acceptEdits`: interactive auto-accept of edits, but shell still ASKS (the one
+ *   field that distinguishes it from the automation modes) and network is denied.
+ * - `ci` and `dontAsk` are intentionally IDENTICAL: both are non-interactive, so
+ *   anything that would otherwise prompt is denied outright (shell/network/unknown
+ *   = deny). Kept as two named modes because they signal different intent at the
+ *   call site (CI pipeline vs. a local "never prompt me" run) and may diverge later.
+ * - `bypassPermissions`: allow everything (the escape hatch; critical denies still apply).
+ */
 const MODE_MATRIX: Readonly<
   Record<PolicyMode, Record<ActionKind, PolicyDecision>>
 > = {
