@@ -18,6 +18,7 @@ import type {
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import { flags } from "../config";
 import type { ITsforgeProjectConfig } from "../config";
+import type { IConventions } from "../infer-rules/conventions.types";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { buildSystemPrompt, seedPrompt } from "./prompt";
 import { buildScoutContext } from "./scout";
@@ -195,10 +196,12 @@ async function resolveStackForRun(
   stackProfile: Awaited<ReturnType<typeof detectStack>>;
   ruleOverrides: Readonly<Record<string, "error" | "warn" | "off">>;
   policy: ITsforgeProjectConfig["policy"];
+  conventions: IConventions;
 }> {
   const detectedProfile = await detectStack(cwd);
   const { loadTsforgeConfig, resolveActivePacks, normalizeRuleOverrides } =
     await import("../config/tsforge-config");
+  const { resolveConventions } = await import("../infer-rules/conventions");
   const { loadAndRegisterPlugins } = await import("../config/external-plugins");
   const cfg = await loadTsforgeConfig(cwd);
   const activePacks = resolveActivePacks(detectedProfile.packs, cfg);
@@ -215,6 +218,7 @@ async function resolveStackForRun(
     },
     ruleOverrides: normalizeRuleOverrides(cfg),
     policy: cfg.policy,
+    conventions: resolveConventions(cfg.conventions),
   };
 }
 
@@ -313,12 +317,10 @@ export async function runTask(
   });
 
   // Detect stack once per run, early; tsforge.config.json may adjust it
-  const { stackProfile, ruleOverrides, policy } = await resolveStackForRun(
-    cwd,
-    (message) => {
+  const { stackProfile, ruleOverrides, policy, conventions } =
+    await resolveStackForRun(cwd, (message) => {
       report({ kind: "tool", task: task.id, message });
-    }
-  );
+    });
 
   report({
     kind: "tool",
@@ -342,7 +344,7 @@ export async function runTask(
   const messages: IChatMessage[] = [
     {
       role: "system",
-      content: buildSystemPrompt(hasExistingCode, stackProfile),
+      content: buildSystemPrompt(hasExistingCode, stackProfile, conventions),
     },
     {
       role: "user",
