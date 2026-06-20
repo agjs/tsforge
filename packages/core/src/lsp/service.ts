@@ -231,8 +231,9 @@ export class TsService {
 
     try {
       for (const p of planned) {
-        ts.sys.writeFile(p.fileName, p.text);
+        // Record BEFORE writing so a write that fails mid-way is still rolled back.
         written.push({ fileName: p.fileName, prior: p.prior });
+        ts.sys.writeFile(p.fileName, p.text);
       }
     } catch (err) {
       for (const w of [...written].reverse()) {

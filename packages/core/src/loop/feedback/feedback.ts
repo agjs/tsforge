@@ -1,4 +1,4 @@
-import { join, basename, isAbsolute } from "node:path";
+import { join, basename, isAbsolute, relative } from "node:path";
 import type { ITask } from "../../spec";
 import type { ErrorSet } from "../../validate";
 import type { IMetaRuleViolation } from "../../meta-rules";
@@ -31,8 +31,15 @@ export async function gateFeedback(
       return true;
     }
 
+    // eslint emits ABSOLUTE filePaths; normalize to workspace-relative so a
+    // scoped task (`src/**`) correctly matches its own errors instead of relying
+    // on the looser basename fallback.
+    const rel = (
+      isAbsolute(e.file) ? relative(cwd, e.file) : e.file
+    ).replaceAll("\\", "/");
+
     return (
-      isInScope(e.file, task.files) || isInScope(basename(e.file), task.files)
+      isInScope(rel, task.files) || isInScope(basename(e.file), task.files)
     );
   });
   const readOnly = errors.length - own.length;
