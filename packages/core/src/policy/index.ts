@@ -17,4 +17,4 @@ export {
   isActionKind,
 } from "./policy";
 export { classifyAction } from "./classify";
-export { isDestructiveShell, isPrivateKeyPath } from "./patterns";
+export { isDestructiveShell, isPrivateKeyPath, pipesToShell } from "./patterns";

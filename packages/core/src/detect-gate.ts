@@ -633,10 +633,10 @@ export function buildWebGate(
   // Run the project's bun tests when any exist. Test files use `bun:test` (a test
   // runtime, not part of the app build) — they're EXCLUDED from the app's tsconfig
   // so `tsc` doesn't choke on `bun:test`, and run here instead so a broken test
-  // still fails the gate. Guarded because `bun test` exits non-zero when it finds
-  // NO tests, which would wrongly fail a freshly scaffolded app. Re-evaluated each
-  // gate run, so tests the model adds mid-build are picked up.
-  const tests = `if find src -name '*.test.ts' -o -name '*.test.tsx' 2>/dev/null | grep -q .; then bun test; fi`;
+  // still fails the gate. The probe mirrors core `hasTestFiles` discovery (same
+  // extensions, project-wide incl. a mirrored `tests/` dir) so a required test
+  // isn't silently skipped; see `webTestProbe`.
+  const tests = webTestProbe();
 
   return {
     command: `${build} && ${tsc} && ${lintChain} && ${stubs} && ${format} && ${tests} && ${render}`,
@@ -870,6 +870,14 @@ function appendOptInOracles(
  *  NOT count as "the project has tests". */
 const PLACEHOLDER_TEST = /no test specified/i;
 
+/** Extensions a test/spec file can have. SINGLE source for both the core glob
+ *  discovery (`hasTestFiles`) and the web gate's shell probe (`webTestProbe`) so
+ *  the two never drift on what counts as a test. */
+const TEST_EXTS = ["ts", "tsx", "js", "jsx"] as const;
+
+/** Directories never searched for tests (deps + build output). */
+const TEST_PRUNE_DIRS = ["node_modules", "dist", "build", ".tsforge"] as const;
+
 /**
  * The project's test command for the gate, or null when there's nothing to run.
  * Prefers an explicit, real package.json `test` script (run via `bun run test`);
@@ -904,7 +912,7 @@ export async function discoverTestCommand(cwd: string): Promise<string | null> {
 /** True when the project has at least one *.test.* / *.spec.* file (outside
  *  node_modules) — the signal that a bare `bun test` has something to run. */
 async function hasTestFiles(cwd: string): Promise<boolean> {
-  const glob = new Bun.Glob("**/*.{test,spec}.{ts,tsx,js,jsx}");
+  const glob = new Bun.Glob(`**/*.{test,spec}.{${TEST_EXTS.join(",")}}`);
 
   for await (const path of glob.scan({ cwd, onlyFiles: true })) {
     if (!path.includes("node_modules")) {
@@ -913,6 +921,25 @@ async function hasTestFiles(cwd: string): Promise<boolean> {
   }
 
   return false;
+}
+
+/** A shell snippet that runs `bun test` IFF the project has any test/spec file
+ *  (anywhere outside deps/build), matching the SAME extension set as the core
+ *  `hasTestFiles` discovery. Evaluated at gate-RUN time, not build time, so a
+ *  test the model adds mid-build is picked up; the `find` guard is required
+ *  because `bun test` exits non-zero when it finds NO tests (which would wrongly
+ *  fail a freshly scaffolded app). Crucially the probe is project-wide — a
+ *  mirrored `tests/` file (which satisfies test-sibling-required) is run too, not
+ *  just co-located `src/` tests, so the web gate can't skip a required test. */
+export function webTestProbe(): string {
+  const names = TEST_EXTS.flatMap((e) => [
+    `-name '*.test.${e}'`,
+    `-name '*.spec.${e}'`,
+  ]).join(" -o ");
+  const prune = TEST_PRUNE_DIRS.map((d) => `-name ${d}`).join(" -o ");
+  const find = `find . -type d \\( ${prune} \\) -prune -o -type f \\( ${names} \\) -print`;
+
+  return `if ${find} 2>/dev/null | grep -q .; then bun test; fi`;
 }
 
 /**

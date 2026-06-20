@@ -7,7 +7,8 @@ export const WEB_FETCH_MAX_CHARS = 8000;
 const MAX_ALLOWED_CHARS = WEB_FETCH_MAX_CHARS * 8;
 
 /** Loopback / link-local / RFC-1918 IPv4 (+ localhost) — blocked so a model-issued
- *  URL can't reach the host's cloud-metadata endpoint or poke internal services. */
+ *  URL can't reach the host's cloud-metadata endpoint or poke internal services.
+ *  Applied to BOTH literal URL hosts and DNS-resolved IPs (same classifier). */
 const PRIVATE_HOST_RE =
   /^(?:localhost|0\.0\.0\.0|127\.|10\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/i;
 
@@ -155,19 +156,69 @@ export type RawFetch = (
   init: { redirect: "manual"; headers: Record<string, string> }
 ) => Promise<IRawResponse>;
 
+/** Resolve a hostname to its IP addresses. Injected so tests stay offline. */
+export type ResolveHost = (hostname: string) => Promise<readonly string[]>;
+
+const realResolve: ResolveHost = async (hostname) => {
+  const { lookup } = await import("node:dns/promises");
+  const records = await lookup(hostname, { all: true });
+
+  return records.map((r) => r.address);
+};
+
+/**
+ * Reject a host that RESOLVES to a private/loopback/link-local IP, even when the
+ * hostname string looks public. Wildcard-DNS services (`127-0-0-1.sslip.io`,
+ * `foo.127.0.0.1.nip.io`) defeat a string-only check; this resolves the name and
+ * re-runs the SAME IP classifier on every returned address.
+ *
+ * Residual: DNS rebinding (TOCTOU between this lookup and undici's own connect)
+ * is not fully closed without pinning the IP and connecting to it with a Host
+ * header — out of scope here; this closes the wildcard-DNS / public-name class.
+ */
+async function assertPublicResolution(
+  url: URL,
+  resolve: ResolveHost
+): Promise<void> {
+  let addresses: readonly string[];
+
+  try {
+    addresses = await resolve(url.hostname);
+  } catch {
+    throw new Error(`could not resolve host (${url.hostname})`);
+  }
+
+  if (addresses.length === 0) {
+    throw new Error(`host did not resolve (${url.hostname})`);
+  }
+
+  const priv = addresses.find((ip) => isPrivateHost(ip));
+
+  if (priv !== undefined) {
+    throw new Error(
+      `blocked a host resolving to a private address (${url.hostname} → ${priv})`
+    );
+  }
+}
+
 /**
  * Follow redirects MANUALLY, re-validating EVERY hop's host. `redirect: "follow"`
  * is an SSRF hole: a public URL can 30x-redirect to localhost / the cloud-metadata
- * endpoint, which the one-time upfront host check never sees. Here each Location is
- * vetted with `validateFetchUrl` (public http(s) host only) before we follow it.
+ * endpoint, which the one-time upfront host check never sees. Each Location is
+ * vetted with `validateFetchUrl` (public http(s) host string) AND each hop's host
+ * is DNS-resolved and re-checked against the private-IP classifier before we
+ * connect — so a public-looking name resolving to a private IP is refused too.
  */
 export async function fetchFollowingRedirects(
   start: string,
-  rawFetch: RawFetch
+  rawFetch: RawFetch,
+  resolve: ResolveHost = realResolve
 ): Promise<IFetchResponse> {
   let current = start;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    await assertPublicResolution(new URL(current), resolve);
+
     const res = await rawFetch(current, {
       redirect: "manual",
       headers: FETCH_HEADERS,

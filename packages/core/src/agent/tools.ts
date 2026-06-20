@@ -15,17 +15,28 @@ function runToolTimeoutMs(): number {
   return Number.isFinite(env) && env >= 0 ? env : DEFAULT_RUN_TIMEOUT_MS;
 }
 
-/**
- * Resolve the target file path from a tool call. Our schema asks for `file`, but
- * the model frequently reaches for `path` (the Claude-Code convention) and other
- * synonyms. A schema mismatch on the very FIRST tool call poisons the whole
- * trajectory — observed on react-board: 7 rejected reads in turn 1 sent the
- * model into an inert "let me read…" loop. So we accept the aliases instead of
- * rejecting (input-repair: meet the model where it is). `file` wins if present.
- * Also applies L1 coercions: trims markdown fences, coerces if stringified.
- */
-export function fileArg(args: Record<string, unknown>): string | null {
-  for (const key of ["file", "path", "filename", "filepath", "filePath"]) {
+/** Arg keys that may carry the target file path. Our schema asks for `file`, but
+ *  models reach for `path` (the Claude-Code convention) and other synonyms. This
+ *  is the SINGLE source of truth for which keys name a file: the handlers resolve
+ *  the path from it (`fileArg`) AND the policy layer extracts paths from it
+ *  (`fileArgCandidates`), so a deny can't be dodged with an alias the policy
+ *  doesn't inspect. `file` wins if present (first in the list). */
+export const FILE_ARG_KEYS: readonly string[] = [
+  "file",
+  "path",
+  "filename",
+  "filepath",
+  "filePath",
+];
+
+/** Every present file-path value from a tool call, in `FILE_ARG_KEYS` order,
+ *  with the same L1 coercions `fileArg` applies (markdown-fence trim, stringified
+ *  string). The policy layer uses this so it sees EVERY path the handler could
+ *  resolve — not just the schema's `file` — closing alias-based deny bypasses. */
+export function fileArgCandidates(args: Record<string, unknown>): string[] {
+  const out: string[] = [];
+
+  for (const key of FILE_ARG_KEYS) {
     const value = args[key];
 
     if (value === undefined || value === null) {
@@ -36,16 +47,28 @@ export function fileArg(args: Record<string, unknown>): string | null {
     const trimmed = trimMarkdownFences(value);
 
     if (trimmed !== null && trimmed.length > 0) {
-      return trimmed;
+      out.push(trimmed);
+      continue;
     }
 
     // Already a string but not markdown-wrapped.
     if (typeof value === "string" && value.length > 0) {
-      return value;
+      out.push(value);
     }
   }
 
-  return null;
+  return out;
+}
+
+/**
+ * Resolve the target file path from a tool call — the first present alias (so
+ * `file` wins), or null. A schema mismatch on the very FIRST tool call poisons
+ * the whole trajectory — observed on react-board: 7 rejected reads in turn 1
+ * sent the model into an inert "let me read…" loop. So we accept the aliases
+ * instead of rejecting (input-repair: meet the model where it is).
+ */
+export function fileArg(args: Record<string, unknown>): string | null {
+  return fileArgCandidates(args)[0] ?? null;
 }
 
 /**

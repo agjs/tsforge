@@ -1,4 +1,4 @@
-import { TOOL_NAME } from "../agent";
+import { TOOL_NAME, fileArgCandidates } from "../agent";
 import type { IToolCall } from "../inference";
 import { normalizeWorkspacePath } from "../lib/scope";
 import type { ActionKind, IProposedAction } from "./policy.types";
@@ -32,8 +32,8 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.webSearch]: "network",
 };
 
-/** Arg keys that carry a file path the action touches. */
-const PATH_KEYS: readonly string[] = ["file", "from", "to"];
+/** Extra path-bearing arg keys beyond the file aliases (move's source/target). */
+const MOVE_PATH_KEYS: readonly string[] = ["from", "to"];
 
 function str(args: Record<string, unknown>, key: string): string {
   const v = args[key];
@@ -41,18 +41,31 @@ function str(args: Record<string, unknown>, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
-/** Workspace-relative, normalized paths from the call's path-bearing args. */
+/** Workspace-relative, normalized, deduped paths the action touches. Sourced
+ *  from `fileArgCandidates` — the SAME file-alias set + coercions the handlers
+ *  resolve — plus move's `from`/`to`, so a private-key/scope deny can't be
+ *  dodged by naming the file `path`/`filename`/… instead of `file`. */
 function extractPaths(
   args: Record<string, unknown>,
   cwd: string
 ): readonly string[] {
-  const out: string[] = [];
+  const raw = [...fileArgCandidates(args)];
 
-  for (const key of PATH_KEYS) {
+  for (const key of MOVE_PATH_KEYS) {
     const value = str(args, key);
 
     if (value.length > 0) {
-      out.push(normalizeWorkspacePath(cwd, value));
+      raw.push(value);
+    }
+  }
+
+  const out: string[] = [];
+
+  for (const value of raw) {
+    const norm = normalizeWorkspacePath(cwd, value);
+
+    if (!out.includes(norm)) {
+      out.push(norm);
     }
   }
 
