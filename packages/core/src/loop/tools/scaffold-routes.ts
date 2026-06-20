@@ -52,6 +52,16 @@ export async function doScaffoldRoutes(
     pending.push({ path, content });
   }
 
+  // Nothing in scope at all (no new stubs AND none already exist) → reject
+  // honestly rather than report a misleading "created 0" success.
+  if (pending.length === 0 && kept.length === 0) {
+    return reject(
+      ctx,
+      "scaffold_routes",
+      "no routes are within the editable scope (`--files`) — widen the scope to scaffold these routes."
+    );
+  }
+
   const keptNote =
     kept.length > 0
       ? ` (kept ${String(kept.length)} existing route(s) untouched)`

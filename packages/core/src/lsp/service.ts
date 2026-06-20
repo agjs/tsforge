@@ -584,7 +584,14 @@ export class TsService {
     // it was — never a half-applied rename with the source already deleted.
     const snapshots = new Map<string, string>();
 
-    for (const target of new Set([...edits.map((e) => e.fileName), fromAbs])) {
+    // Include toAbs: if the destination already exists (an overwriting move), its
+    // prior content must be restorable too. A non-existent dest isn't snapshotted
+    // (readFile → undefined), so restoreMove removes it instead.
+    for (const target of new Set([
+      ...edits.map((e) => e.fileName),
+      fromAbs,
+      toAbs,
+    ])) {
       const prior = ts.sys.readFile(target);
 
       if (prior !== undefined) {
