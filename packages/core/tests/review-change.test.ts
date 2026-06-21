@@ -4,7 +4,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
-import { reviewChange, formatReport, LENSES } from "../src/loop/review";
+import {
+  reviewChange,
+  formatReport,
+  changedLineRanges,
+  LENSES,
+} from "../src/loop/review";
 
 /** A provider that answers the find pass and the verify pass differently,
  *  keyed on the system prompt (so call order doesn't matter). */
@@ -221,6 +226,109 @@ test("formatReport shows the gate-aware note even when 0 findings", () => {
 
   expect(text).toContain("No functional issues found");
   expect(text).toContain("gate-aware: skipped 2");
+});
+
+test("reviews a brand-new UNTRACKED source file (not just tracked diffs)", async () => {
+  // A newly created, never-`git add`ed file is invisible to `git diff <base>`;
+  // without unioning `ls-files --others` it would be silently skipped.
+  writeFileSync(
+    join(repo, "newmod.ts"),
+    "export function f(): number {\n  return 1 - 2;\n}\n"
+  );
+
+  const report = await reviewChange(stub(FINDINGS, true), repo);
+
+  expect(report.changedFiles).toContain("newmod.ts");
+  // FINDINGS cites line 2, inside the synthesized added range → kept.
+  expect(report.findings.some((f) => f.file === "newmod.ts")).toBe(true);
+});
+
+test("drops a finding on a pre-existing line outside the changed hunk", async () => {
+  const big = mkdtempSync(join(tmpdir(), "tsforge-review-big-"));
+  const bgit = (...a: string[]): void =>
+    void execFileSync("git", a, { cwd: big, stdio: "ignore" });
+
+  try {
+    bgit("init", "-q");
+    bgit("config", "user.email", "t@t.t");
+    bgit("config", "user.name", "t");
+    bgit("config", "commit.gpgsign", "false");
+
+    const orig = Array.from(
+      { length: 30 },
+      (_, i) => `const v${String(i)} = ${String(i)};`
+    ).join("\n");
+
+    writeFileSync(join(big, "big.ts"), `${orig}\n`);
+    bgit("add", "-A");
+    bgit("commit", "-q", "-m", "init");
+
+    // Change ONLY line 20 → its hunk (3 lines of context) is far from line 2.
+    const lines = orig.split("\n");
+
+    lines[19] = "const v19 = 999;";
+    writeFileSync(join(big, "big.ts"), `${lines.join("\n")}\n`);
+
+    const twoFindings = JSON.stringify({
+      findings: [
+        {
+          line: 20,
+          severity: "error",
+          lens: "correctness",
+          claim: "on the changed line",
+          reason: "x",
+        },
+        {
+          line: 2,
+          severity: "error",
+          lens: "correctness",
+          claim: "pre-existing, untouched line",
+          reason: "y",
+        },
+      ],
+    });
+
+    const report = await reviewChange(stub(twoFindings, true), big);
+
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0]?.line).toBe(20);
+    expect(report.preexisting).toBe(1);
+  } finally {
+    rmSync(big, { recursive: true, force: true });
+  }
+});
+
+test("formatReport warns loudly when coverage is capped or truncated", () => {
+  const text = formatReport({
+    base: "HEAD",
+    changedFiles: ["a.ts"],
+    findings: [],
+    rejected: 0,
+    totalChangedFiles: 30,
+    truncatedFiles: ["b.ts"],
+  });
+
+  // capped: reviewed 1 of 30 — must NOT read as complete
+  expect(text).toContain("reviewed 1 of 30");
+  expect(text).toContain("not reviewed");
+  // truncated: a prefix-only file is named
+  expect(text).toContain("truncated");
+  expect(text).toContain("b.ts");
+});
+
+test("changedLineRanges parses add/modify hunks and delete-only (+c,0) hunks", () => {
+  // a normal modify hunk: new-side lines 17..23
+  expect(changedLineRanges("@@ -17,7 +17,7 @@ ctx\n more")).toEqual([[17, 23]]);
+
+  // a single-line hunk with implicit count (no ",d")
+  expect(changedLineRanges("@@ -5 +5 @@")).toEqual([[5, 5]]);
+
+  // a PURE DELETION hunk (+9,0): no new lines, but the boundary at line 9 is
+  // touched — must yield a range (9..10), not be silently dropped.
+  expect(changedLineRanges("@@ -10,5 +9,0 @@")).toEqual([[9, 10]]);
+
+  // delete at file start (+0,0) clamps to line 1, never 0.
+  expect(changedLineRanges("@@ -1,3 +0,0 @@")).toEqual([[1, 2]]);
 });
 
 test("the senior-review rubric ships with the expected lenses", () => {

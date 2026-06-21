@@ -1,6 +1,7 @@
 export {
   reviewChange,
   formatReport,
+  changedLineRanges,
   type IReviewOptions,
 } from "./review-change";
 export { LENSES } from "./lenses";

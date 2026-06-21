@@ -94,6 +94,29 @@ describe("policy config parsing (warn-and-drop)", () => {
       }
     );
   });
+
+  test("a rule whose ONLY fields are invalid is dropped, not turned into a catch-all", async () => {
+    // `{ kind: "shel" }` is a typo: the invalid field is dropped, leaving `{}` —
+    // which the policy treats as match-EVERYTHING. That would silently turn a
+    // typo'd deny into a GLOBAL deny (or allow). It must be dropped instead.
+    await withConfig(
+      { policy: { rules: { deny: [{ kind: "shel" }] } } },
+      async (dir) => {
+        const deny = (await loadTsforgeConfig(dir)).policy?.rules?.deny ?? [];
+
+        expect(deny).toHaveLength(0);
+      }
+    );
+  });
+
+  test("a literal empty rule {} is preserved as an intentional catch-all", async () => {
+    await withConfig({ policy: { rules: { deny: [{}] } } }, async (dir) => {
+      const deny = (await loadTsforgeConfig(dir)).policy?.rules?.deny ?? [];
+
+      expect(deny).toHaveLength(1);
+      expect(Object.keys(deny[0] ?? {})).toHaveLength(0);
+    });
+  });
 });
 
 describe("policy config → session enforcement", () => {
