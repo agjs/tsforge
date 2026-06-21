@@ -272,6 +272,21 @@ test("source-text rules are change-scoped: ignore pre-existing untouched files",
   expect(relevant).toEqual([]);
 });
 
+test("isScannableSource: covers .ts/.tsx/.mts/.cts, skips generated variants", async () => {
+  const { isScannableSource } =
+    await import("../src/meta-rules/rules/source-text/is-scannable");
+
+  for (const ext of ["ts", "tsx", "mts", "cts"]) {
+    expect(isScannableSource(`src/app.${ext}`)).toBe(true);
+    expect(
+      isScannableSource(`src/routeTree.gen.${ext === "tsx" ? "ts" : ext}`)
+    ).toBe(false);
+  }
+
+  expect(isScannableSource("src/data.json")).toBe(false);
+  expect(isScannableSource("README.md")).toBe(false);
+});
+
 // === Config Rules ===
 
 test("tsconfig-paths-exist: detects missing include path", () => {
