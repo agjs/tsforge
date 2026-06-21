@@ -90,6 +90,18 @@ describe("buildRequestBody: base body", () => {
     expect(body({}, { temperature: 0.5 }).temperature).toBe(0.5);
   });
 
+  test("a non-finite tuning param never reaches the wire (NaN/Infinity dropped)", () => {
+    // JSON.stringify(NaN) is `null` — a server reads that as an explicit choice,
+    // not "unset". The builder must omit the field entirely instead.
+    expect("temperature" in body({}, { temperature: NaN })).toBe(false);
+    expect("temperature" in body({}, { temperature: Infinity })).toBe(false);
+    expect("repetition_penalty" in body({ repetitionPenalty: NaN }, {})).toBe(
+      false
+    );
+    // a finite value still passes through
+    expect(body({ repetitionPenalty: 1.1 }, {}).repetition_penalty).toBe(1.1);
+  });
+
   test("extraBody is merged last and overrides built-ins", () => {
     const b = body(
       { extraBody: { temperature: 0.9, custom_flag: true } },
