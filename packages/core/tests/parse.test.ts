@@ -6,6 +6,7 @@ import {
   combinedParser,
   parserFor,
   isEslintJsonLine,
+  fallbackMessage,
 } from "../src/validate";
 
 test("parseTsc extracts file/line/rule per diagnostic", () => {
@@ -193,4 +194,29 @@ test("combinedParser structures eslint JSON output (the tsc-passes phase)", () =
     line: 58,
     rule: "@typescript-eslint/no-non-null-assertion",
   });
+});
+
+test("fallbackMessage drops eslint's machine JSON line", () => {
+  const eslintJson = `[{"filePath":"/r/a.ts","messages":[]}]`;
+  const msg = fallbackMessage(`vite build failed: bad import\n${eslintJson}`);
+
+  expect(msg).toBe("vite build failed: bad import");
+  expect(msg).not.toContain('"filePath"');
+});
+
+test("fallbackMessage caps a wall of build output and marks the truncation", () => {
+  const blob = "x".repeat(5000);
+  const msg = fallbackMessage(blob);
+
+  // capped to FALLBACK_CAP (1200) + the truncation marker, not the raw 5000.
+  expect(msg.length).toBeLessThan(1300);
+  expect(msg.startsWith("x".repeat(1200))).toBe(true);
+  expect(msg).toContain("… (output truncated)");
+});
+
+test("fallbackMessage degrades to a fixed string when nothing human-readable remains", () => {
+  const onlyJson = `[{"filePath":"/r/a.ts","messages":[]}]`;
+
+  expect(fallbackMessage(onlyJson)).toBe("command exited non-zero");
+  expect(fallbackMessage("   \n  ")).toBe("command exited non-zero");
 });

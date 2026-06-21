@@ -278,9 +278,7 @@ test("isScannableSource: covers .ts/.tsx/.mts/.cts, skips generated variants", a
 
   for (const ext of ["ts", "tsx", "mts", "cts"]) {
     expect(isScannableSource(`src/app.${ext}`)).toBe(true);
-    expect(
-      isScannableSource(`src/routeTree.gen.${ext === "tsx" ? "ts" : ext}`)
-    ).toBe(false);
+    expect(isScannableSource(`src/routeTree.gen.${ext}`)).toBe(false);
   }
 
   expect(isScannableSource("src/data.json")).toBe(false);
