@@ -66,14 +66,14 @@ Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` t
 - **elysia/prefer-direct-return** [WARN]: Inside Elysia route handlers, return values directly instead of wrapping them in `new Response(...)` or `Response.json(...)` — Elysia handles serialization and content-type automatically.
 - **elysia/prefer-static-services** [WARN]: Discourage `new Service()` inside Elysia route handlers when the class is stateless — prefer static methods or a singleton.
 - **elysia/prefer-throw-status** [WARN]: Inside Elysia route handlers, prefer `throw status(...)` over try/catch blocks that build their own Response — local catches bypass Elysia's typed onError pipeline.
+- **elysia/require-elysia-plugin-name** [ERROR]: Exported Elysia plugin instances must declare `new Elysia({ name: '...' })` so the runtime can deduplicate plugin re-imports.
 - **elysia/require-hooks-before-routes** [ERROR]: Elysia hooks (onError, onBeforeHandle, etc.) must register before any route methods on the same instance — top-down waterfall semantics mean a hook registered after a route does not apply to it.
-- **elysia/require-plugin-name** [ERROR]: Exported Elysia plugin instances must declare `new Elysia({ name: '...' })` so the runtime can deduplicate plugin re-imports.
 - **env-access/no-direct-process-env** [ERROR]: Disallow direct `process.env` access — force every consumer through a typed, boot-validated singleton.
 - **env-access/no-process-exit** [ERROR]: Disallow `process.exit()` outside the centralized shutdown and CLI entrypoints — forces graceful teardown through the error-handlers module.
 - **fastify/error-handler-must-set-status** [ERROR]: Custom Fastify setErrorHandler callbacks must call reply.code() or reply.status() — automatic status mapping is disabled when a custom handler is registered.
 - **fastify/prefer-return-over-reply-send** [WARN]: Inside Fastify route handlers, prefer `return data` over `return reply.send(data)` so fast-json-stringify can serialize responses.
+- **fastify/require-fastify-plugin-name** [ERROR]: fastify-plugin (fp) wrappers must include a `name` option so Fastify can deduplicate plugin registration.
 - **fastify/require-fp-for-shared-plugins** [ERROR]: Fastify plugins that call fastify.decorate, fastify.addHook, or fastify.register must be wrapped in fastify-plugin (fp) to break encapsulation and share state.
-- **fastify/require-plugin-name** [ERROR]: fastify-plugin (fp) wrappers must include a `name` option so Fastify can deduplicate plugin registration.
 - **fastify/require-response-schema** [WARN]: Fastify routes should declare schema.response for compiled fast-json-stringify serialization.
 - **fastify/require-route-schema** [ERROR]: Fastify POST/PUT/PATCH routes must declare schema.body; GET/DELETE routes must declare schema.querystring or schema.params.
 - **fastify/test-inject-must-close-app** [ERROR]: Test files using fastify.inject must register teardown that calls app.close() to drain connections.

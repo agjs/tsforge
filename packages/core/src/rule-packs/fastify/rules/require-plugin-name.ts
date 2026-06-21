@@ -3,7 +3,7 @@ import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
 import { createRule } from "../../create-rule";
 import { findObjectProperty } from "../utils/fastifyChain";
 
-export const RULE_NAME = "require-plugin-name";
+export const RULE_NAME = "require-fastify-plugin-name";
 
 type MessageIds = "missingPluginName";
 

@@ -337,10 +337,15 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "fastify.post('/users', async () => ({ ok: true }));",
     good: "fastify.post('/users', { schema: { body: UserSchema } }, async () => ({ ok: true }));",
   },
-  "tsforge/require-plugin-name": {
+  "tsforge/require-fastify-plugin-name": {
     what: "fastify-plugin wrappers need a name option.",
     bad: "export default fp(dbPlugin);",
     good: "export default fp(dbPlugin, { name: 'db-connector', fastify: '5.x' });",
+  },
+  "tsforge/require-elysia-plugin-name": {
+    what: "Exported Elysia plugin instances need a name so the runtime can dedupe re-imports.",
+    bad: "export const plugin = new Elysia();",
+    good: "export const plugin = new Elysia({ name: 'auth-plugin' });",
   },
 };
 

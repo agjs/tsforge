@@ -20,7 +20,7 @@ const rules: Record<string, TSESLint.RuleModule<string, readonly unknown[]>> = {
   "prefer-static-services": preferStaticServicesRule,
   "prefer-throw-status": preferThrowStatusRule,
   "require-hooks-before-routes": requireHooksBeforeRoutesRule,
-  "require-plugin-name": requirePluginNameRule,
+  "require-elysia-plugin-name": requirePluginNameRule,
 };
 
 export const elysiaPack: IRulePack = {
@@ -36,7 +36,7 @@ export const elysiaPack: IRulePack = {
     "prefer-static-services": "warn",
     "prefer-throw-status": "warn",
     "require-hooks-before-routes": "error",
-    "require-plugin-name": "error",
+    "require-elysia-plugin-name": "error",
   },
 };
 

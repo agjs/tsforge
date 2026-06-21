@@ -42,6 +42,11 @@ export function makeSpinner(out: ISpinnerOut = process.stdout): {
   const secsNow = (): number =>
     startedAt === 0 ? 0 : Math.round((performance.now() - startedAt) / 1000);
 
+  // Erase iff WE drew a line. The guard is `drawn`, NOT `inlineGate()`: do not
+  // add a gate check here. `drawn` is only ever set by a tick that already passed
+  // the gate, so a clear can never touch the input row uninvited. But if the gate
+  // flips on→off between a draw and this clear, gating the erase would orphan the
+  // spinner line on the readline input row — `drawn` erases exactly what we wrote.
   const clear = (): void => {
     if (drawn) {
       out.write(ERASE_LINE);

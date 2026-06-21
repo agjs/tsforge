@@ -305,6 +305,20 @@ describe("buildPackEslintConfig", () => {
     }).not.toThrow();
   });
 
+  test("elysia + fastify coexist without a rule-name collision", () => {
+    // Both packs once defined a rule keyed `require-plugin-name`, so enabling
+    // both (a monorepo with services in each framework) threw an uncaught
+    // "Rule collision" that crashed the gate. The rules are now framework-scoped.
+    expect(() => {
+      buildPackEslintConfig(["elysia", "fastify"]);
+    }).not.toThrow();
+
+    const { rules } = buildPackEslintConfig(["elysia", "fastify"]);
+
+    expect(rules["tsforge/require-elysia-plugin-name"]).toBe("error");
+    expect(rules["tsforge/require-fastify-plugin-name"]).toBe("error");
+  });
+
   test("should map rule names to severities with tsforge/ prefix", () => {
     const { rules } = buildPackEslintConfig(["env-access"]);
 
@@ -1614,8 +1628,8 @@ describe("elysia pack", () => {
       "prefer-direct-return",
       "prefer-static-services",
       "prefer-throw-status",
+      "require-elysia-plugin-name",
       "require-hooks-before-routes",
-      "require-plugin-name",
     ]);
   });
 
@@ -1764,20 +1778,20 @@ describe("elysia pack", () => {
     expect(messages).toHaveLength(0);
   });
 
-  test("require-plugin-name: reports unnamed exported Elysia instance", () => {
+  test("require-elysia-plugin-name: reports unnamed exported Elysia instance", () => {
     const code = `
       export const plugin = new Elysia();
     `;
-    const messages = lint("elysia", "require-plugin-name", code);
+    const messages = lint("elysia", "require-elysia-plugin-name", code);
 
     expect(messages.map((m) => m.messageId)).toContain("missingPluginName");
   });
 
-  test("require-plugin-name: allows named plugin export", () => {
+  test("require-elysia-plugin-name: allows named plugin export", () => {
     const code = `
       export const plugin = new Elysia({ name: "auth-plugin" });
     `;
-    const messages = lint("elysia", "require-plugin-name", code);
+    const messages = lint("elysia", "require-elysia-plugin-name", code);
 
     expect(messages).toHaveLength(0);
   });
@@ -3145,7 +3159,7 @@ fastify.post("/users", { schema: { body: UserSchema } }, async () => ({ ok: true
     expect(messages).toHaveLength(0);
   });
 
-  test("require-plugin-name: reports fp without name", () => {
+  test("require-fastify-plugin-name: reports fp without name", () => {
     const code = `
 import fp from "fastify-plugin";
 export default fp(async function dbPlugin(fastify) {
@@ -3154,7 +3168,7 @@ export default fp(async function dbPlugin(fastify) {
 `;
     const messages = lint(
       "fastify",
-      "require-plugin-name",
+      "require-fastify-plugin-name",
       code,
       "src/plugins/db.ts"
     );
@@ -3162,7 +3176,7 @@ export default fp(async function dbPlugin(fastify) {
     expect(messages.map((m) => m.messageId)).toContain("missingPluginName");
   });
 
-  test("require-plugin-name: allows fp with name", () => {
+  test("require-fastify-plugin-name: allows fp with name", () => {
     const code = `
 import fp from "fastify-plugin";
 export default fp(async function dbPlugin(fastify) {
@@ -3171,7 +3185,7 @@ export default fp(async function dbPlugin(fastify) {
 `;
     const messages = lint(
       "fastify",
-      "require-plugin-name",
+      "require-fastify-plugin-name",
       code,
       "src/plugins/db.ts"
     );

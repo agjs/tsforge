@@ -190,6 +190,40 @@ test("spinner suppresses its inline carriage-return write when the gate is off",
   expect(writes.join("")).toContain("thinking");
 });
 
+// clear() must erase a line the spinner drew even if the inline gate has since
+// flipped OFF — otherwise a stale spinner frame is orphaned on the readline input
+// row. The guard is `drawn`, not the live gate. Regression for a tempting-but-wrong
+// "add an inlineGate() check to clear() for consistency" change.
+test("spinner clear() erases a drawn line even after the gate flips off", async () => {
+  const { makeSpinner } = await import("../src/cli");
+  const writes: string[] = [];
+  const out = {
+    write: (s: string): void => {
+      writes.push(s);
+    },
+    isTTY: true,
+  };
+
+  const spinner = makeSpinner(out);
+
+  // Gate on → tick draws the activity line (drawn = true).
+  spinner.setInlineGate(() => true);
+  spinner.tick();
+  expect(writes.join("")).toContain("thinking");
+
+  // Gate flips off, THEN we clear. The erase must still fire.
+  spinner.setInlineGate(() => false);
+  writes.length = 0;
+  spinner.clear();
+
+  expect(writes.join("")).toContain("[2K");
+
+  // And a second clear is a no-op (nothing left drawn).
+  writes.length = 0;
+  spinner.clear();
+  expect(writes).toHaveLength(0);
+});
+
 // The /compact handler shows progress by driving this exact path: start() runs the
 // tick timer, setLabel("compacting") names it, and each tick fires onTick — which in
 // the REPL repaints the pinned status bar with frameLabel() as its activity segment
