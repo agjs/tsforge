@@ -118,9 +118,11 @@ async function collectChangedFiles(
   const untracked = new Set(untrackedList);
 
   const all: string[] = [];
+  const seen = new Set<string>();
 
   for (const file of [...tracked, ...untrackedList]) {
-    if (!all.includes(file)) {
+    if (!seen.has(file)) {
+      seen.add(file);
       all.push(file);
     }
   }
@@ -168,8 +170,9 @@ async function syntheticAddedDiff(cwd: string, file: string): Promise<string> {
 }
 
 /** New-side line ranges a unified diff touches, from its `@@ -a,b +c,d @@` heads.
- *  A finding outside every range sits on code the change didn't touch. */
-function changedLineRanges(diff: string): [number, number][] {
+ *  A finding outside every range sits on code the change didn't touch. Exported
+ *  for direct unit tests (incl. the delete-only `+c,0` edge). */
+export function changedLineRanges(diff: string): [number, number][] {
   const ranges: [number, number][] = [];
   const re = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gmu;
 
@@ -177,14 +180,23 @@ function changedLineRanges(diff: string): [number, number][] {
     const start = Number.parseInt(m[1] ?? "", 10);
     const count = m[2] === undefined ? 1 : Number.parseInt(m[2], 10);
 
-    if (
-      Number.isFinite(start) &&
-      start > 0 &&
-      Number.isFinite(count) &&
-      count > 0
-    ) {
-      ranges.push([start, start + count - 1]);
+    if (!Number.isFinite(start) || !Number.isFinite(count) || count < 0) {
+      continue;
     }
+
+    if (count > 0) {
+      ranges.push([start, start + count - 1]);
+      continue;
+    }
+
+    // A pure DELETION hunk has new-side count 0 (`@@ -10,5 +9,0 @@`): no new lines
+    // exist, but the change touches the boundary at `start` (the surviving line
+    // the deleted block sat next to). Cover that line and the one after it —
+    // clamped to >= 1 since `+0,0` (delete at file start) yields start 0 — so a
+    // finding adjacent to a deletion still counts as on-change.
+    const at = Math.max(1, start);
+
+    ranges.push([at, at + 1]);
   }
 
   return ranges;

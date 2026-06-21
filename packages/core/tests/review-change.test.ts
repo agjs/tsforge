@@ -4,7 +4,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
-import { reviewChange, formatReport, LENSES } from "../src/loop/review";
+import {
+  reviewChange,
+  formatReport,
+  changedLineRanges,
+  LENSES,
+} from "../src/loop/review";
 
 /** A provider that answers the find pass and the verify pass differently,
  *  keyed on the system prompt (so call order doesn't matter). */
@@ -309,6 +314,21 @@ test("formatReport warns loudly when coverage is capped or truncated", () => {
   // truncated: a prefix-only file is named
   expect(text).toContain("truncated");
   expect(text).toContain("b.ts");
+});
+
+test("changedLineRanges parses add/modify hunks and delete-only (+c,0) hunks", () => {
+  // a normal modify hunk: new-side lines 17..23
+  expect(changedLineRanges("@@ -17,7 +17,7 @@ ctx\n more")).toEqual([[17, 23]]);
+
+  // a single-line hunk with implicit count (no ",d")
+  expect(changedLineRanges("@@ -5 +5 @@")).toEqual([[5, 5]]);
+
+  // a PURE DELETION hunk (+9,0): no new lines, but the boundary at line 9 is
+  // touched — must yield a range (9..10), not be silently dropped.
+  expect(changedLineRanges("@@ -10,5 +9,0 @@")).toEqual([[9, 10]]);
+
+  // delete at file start (+0,0) clamps to line 1, never 0.
+  expect(changedLineRanges("@@ -1,3 +0,0 @@")).toEqual([[1, 2]]);
 });
 
 test("the senior-review rubric ships with the expected lenses", () => {
