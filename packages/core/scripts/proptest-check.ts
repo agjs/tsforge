@@ -20,6 +20,17 @@ import {
   renderPropertyFile,
   propTestPath,
 } from "../src/proptest/discover";
+import { runArgvCommand } from "../src/lib/fs";
+
+/** Hard cap on the generated property suite. fast-check shrinking on a genuinely
+ *  non-terminating function could otherwise hang the gate indefinitely (observed:
+ *  a 15-minute wedge). Treat exceeding it as a failure, not a hang. Overridable
+ *  via TSFORGE_PROPTEST_TIMEOUT_MS (also the seam the regression test uses). */
+function proptestTimeoutMs(): number {
+  const env = Number(process.env.TSFORGE_PROPTEST_TIMEOUT_MS);
+
+  return Number.isFinite(env) && env > 0 ? env : 120_000;
+}
 
 /** Build a Program from the project's tsconfig (or a permissive default). */
 function buildProgram(cwd: string): ts.Program | null {
@@ -50,16 +61,26 @@ function fastCheckPath(): string | null {
   }
 }
 
-async function runGeneratedSuite(testFile: string): Promise<number> {
-  const proc = Bun.spawn(["bun", "test", testFile], {
-    cwd: process.cwd(),
-    stdout: "inherit",
-    stderr: "inherit",
+export async function runGeneratedSuite(testFile: string): Promise<number> {
+  // Route through the shared runner so a non-terminating property can't wedge the
+  // gate: it enforces a kill-timeout AND a whole-process-group kill (raw Bun.spawn
+  // did neither). Stream output live so fuzz failures stay visible.
+  const timeoutMs = proptestTimeoutMs();
+  const run = await runArgvCommand(process.cwd(), ["bun", "test", testFile], {
+    timeoutMs,
+    onChunk: (text) => process.stdout.write(text),
   });
 
-  await proc.exited;
+  if (run.timedOut) {
+    process.stdout.write(
+      `\nproptest-check: generated suite exceeded ${String(timeoutMs)}ms ` +
+        "and was killed — a property under test may not terminate. Treating as a failure.\n"
+    );
 
-  return proc.exitCode ?? -1;
+    return 1;
+  }
+
+  return run.exitCode;
 }
 
 async function main(): Promise<number> {
