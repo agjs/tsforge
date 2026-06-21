@@ -1,4 +1,8 @@
-import { isDefaultConventions, resolveConventions } from "./conventions";
+import {
+  isDefaultConventions,
+  pickValidConventions,
+  resolveConventions,
+} from "./conventions";
 import type { IConventions } from "./conventions.types";
 import type {
   EslintSurface,
@@ -156,7 +160,11 @@ export function parseConventionsEnv(raw: string | undefined): IConventions {
   try {
     const parsed: unknown = JSON.parse(raw);
 
-    return resolveConventions(isRecord(parsed) ? parsed : undefined);
+    // Validate field-by-field: a null/garbage value must FALL BACK to the house
+    // default, never overwrite it (which would silently loosen a convention).
+    return resolveConventions(
+      isRecord(parsed) ? pickValidConventions(parsed) : undefined
+    );
   } catch {
     return resolveConventions(undefined);
   }

@@ -41,9 +41,18 @@ export async function applyEdit(cwd: string, edit: IEdit): Promise<EditResult> {
   }
 
   // Unique match: split/join avoids `$`-pattern interpretation in newString.
-  await Bun.write(path, content.split(edit.oldString).join(edit.newString));
+  const next = content.split(edit.oldString).join(edit.newString);
 
-  return { ok: true, file: edit.file };
+  // A same-content replacement (oldString === newString, or it was already
+  // applied) leaves the file byte-identical. Skip the write and flag it so the
+  // caller doesn't count a no-op as a mutation or trigger a needless re-gate.
+  if (next === content) {
+    return { ok: true, file: edit.file, changed: false };
+  }
+
+  await Bun.write(path, next);
+
+  return { ok: true, file: edit.file, changed: true };
 }
 
 /**
@@ -70,7 +79,8 @@ export async function applyEdits(
     return { ok: false, file, index: 0, reason: EDIT_FAIL_REASON.notFound };
   }
 
-  let content = await f.text();
+  const original = await f.text();
+  let content = original;
 
   for (let i = 0; i < edits.length; i += 1) {
     const replacement = edits[i];
@@ -122,9 +132,16 @@ export async function applyEdits(
     content = content.split(replacement.oldString).join(replacement.newString);
   }
 
+  // A batch that resolves to byte-identical content (all replacements were no-ops
+  // or already applied) must not be counted as a mutation — skip the write and
+  // flag it so the caller neither re-gates nor tallies a phantom edit.
+  if (content === original) {
+    return { ok: true, file, count: edits.length, changed: false };
+  }
+
   await Bun.write(path, content);
 
-  return { ok: true, file, count: edits.length };
+  return { ok: true, file, count: edits.length, changed: true };
 }
 
 /**

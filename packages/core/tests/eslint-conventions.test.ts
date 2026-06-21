@@ -140,6 +140,22 @@ describe("parseConventionsEnv", () => {
       resolveConventions(undefined)
     );
   });
+
+  test("a null/invalid field FALLS BACK to the default (never loosens it)", () => {
+    // `{"interfaces":null}` used to overwrite the house default with null, which
+    // dropped the I-prefix naming requirement — a silent loosening. It must now
+    // be ignored, leaving the full defaults intact.
+    expect(parseConventionsEnv('{"interfaces":null}')).toEqual(
+      resolveConventions(undefined)
+    );
+    expect(parseConventionsEnv('{"enums":"klingon","interfaces":7}')).toEqual(
+      resolveConventions(undefined)
+    );
+    // A valid field still applies even alongside a garbage one.
+    expect(
+      parseConventionsEnv('{"interfaces":"bare-pascal-case","tests":null}')
+    ).toEqual(resolveConventions({ interfaces: "bare-pascal-case" }));
+  });
 });
 
 describe("applyBundledOverrides protected-rule guard", () => {

@@ -14,7 +14,13 @@ export type EditFailReason =
   (typeof EDIT_FAIL_REASON)[keyof typeof EDIT_FAIL_REASON];
 
 export type EditResult =
-  | { ok: true; file: string }
+  | {
+      ok: true;
+      file: string;
+      /** False when the match resolved to identical content (a no-op write) — the
+       *  caller must NOT count it as a mutation or re-gate on it. */
+      changed: boolean;
+    }
   | {
       ok: false;
       file: string;
@@ -30,7 +36,14 @@ export interface IReplacement {
 }
 
 export type EditsResult =
-  | { ok: true; file: string; count: number }
+  | {
+      ok: true;
+      file: string;
+      count: number;
+      /** False when the batch resolved to identical content (a no-op write) — the
+       *  caller must NOT count it as a mutation or re-gate on it. */
+      changed: boolean;
+    }
   | {
       ok: false;
       file: string;
@@ -72,7 +85,14 @@ export type HashlineFailReason =
   | "invalid-op";
 
 export type HashlineResult =
-  | { ok: true; file: string; newHash: string }
+  | {
+      ok: true;
+      file: string;
+      newHash: string;
+      /** False when the ops resolved to identical content (a no-op write) — the
+       *  caller must NOT count it as a mutation or re-gate on it. */
+      changed: boolean;
+    }
   | {
       ok: false;
       file: string;

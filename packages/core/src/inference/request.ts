@@ -54,7 +54,8 @@ function reasoningFields(
         ...(opts.enableThinking === undefined
           ? {}
           : { chat_template_kwargs: { enable_thinking: opts.enableThinking } }),
-        ...(opts.thinkingTokenBudget === undefined
+        ...(opts.thinkingTokenBudget === undefined ||
+        !Number.isFinite(opts.thinkingTokenBudget)
           ? {}
           : { thinking_token_budget: opts.thinkingTokenBudget }),
       };
@@ -82,7 +83,14 @@ function reasoningFields(
 
 /** The output-token cap field — o-series renamed `max_tokens` → `max_completion_tokens`. */
 function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, number> {
-  const max = cfg.maxTokens ?? PROVIDER_LIMITS.maxTokens;
+  // A NaN/Infinity maxTokens (bad config/env) would JSON.stringify to `null`,
+  // which a server reads as an explicit choice, not "unset" — fall back to the
+  // provider default instead (matches the temperature/repetitionPenalty guard).
+  const configured = cfg.maxTokens;
+  const max =
+    configured !== undefined && Number.isFinite(configured)
+      ? configured
+      : PROVIDER_LIMITS.maxTokens;
 
   return style(cfg) === "openai"
     ? { max_completion_tokens: max }

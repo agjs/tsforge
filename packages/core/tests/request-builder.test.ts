@@ -100,6 +100,20 @@ describe("buildRequestBody: base body", () => {
     );
     // a finite value still passes through
     expect(body({ repetitionPenalty: 1.1 }, {}).repetition_penalty).toBe(1.1);
+
+    // maxTokens: a non-finite cap must fall back to the provider default, never
+    // serialize to `null` (which a server reads as "no limit" / an error).
+    expect(body({ maxTokens: NaN }, {}).max_tokens).toBe(16384);
+    expect(body({ maxTokens: Infinity }, {}).max_tokens).toBe(16384);
+    expect(body({ maxTokens: 2048 }, {}).max_tokens).toBe(2048);
+
+    // thinkingTokenBudget (qwen): a non-finite budget is dropped, not sent as null.
+    expect(
+      "thinking_token_budget" in body({}, { thinkingTokenBudget: NaN })
+    ).toBe(false);
+    expect(body({}, { thinkingTokenBudget: 512 }).thinking_token_budget).toBe(
+      512
+    );
   });
 
   test("extraBody is merged last and overrides built-ins", () => {

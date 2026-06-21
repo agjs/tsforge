@@ -124,15 +124,18 @@ async function applyAgentEdit(
   const result = await applyEdits(ctx.cwd, edit.file, edit.edits);
 
   if (result.ok) {
-    for (const r of edit.edits) {
-      ctx.report?.({
-        kind: "edit",
-        task: ctx.task.id,
-        file: edit.file,
-        message: `edit ${edit.file}`,
-        oldString: r.oldString,
-        newString: r.newString,
-      });
+    // Skip the mutation event for a no-op edit (same content) so it isn't counted.
+    if (result.changed) {
+      for (const r of edit.edits) {
+        ctx.report?.({
+          kind: "edit",
+          task: ctx.task.id,
+          file: edit.file,
+          message: `edit ${edit.file}`,
+          oldString: r.oldString,
+          newString: r.newString,
+        });
+      }
     }
 
     return null;

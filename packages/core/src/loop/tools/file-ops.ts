@@ -576,6 +576,13 @@ export async function doEdit(
   const result = await applyEdits(ctx.cwd, edit.file, edit.edits);
 
   if (result.ok) {
+    // A no-op edit (same content / already applied) wrote nothing — report NO
+    // mutation event so it can't trigger a re-gate or count toward "done", and
+    // tell the model plainly so it doesn't think it made progress.
+    if (!result.changed) {
+      return `edit ${edit.file}: no change — the file already matches (oldString and newString are identical, or this edit was already applied). Move on to the next fix or run the gate.`;
+    }
+
     for (const r of edit.edits) {
       ctx.report({
         kind: "edit",

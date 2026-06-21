@@ -211,6 +211,67 @@ describe("SessionSnapshotStore", () => {
 });
 
 describe("applyHashlineEdit", () => {
+  test("a no-op edit (replace with identical content) reports changed:false and writes nothing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-"));
+
+    try {
+      const filePath = "test.ts";
+      const content = "line 1\nline 2\nline 3\n";
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+
+      // Replace line 2 with its EXACT current text → resolves to identical content.
+      const input = `¶${filePath}#${hash}\nreplace 2..2:\n+line 2`;
+      const parsed = parseHashlineEdit(input);
+
+      const result = await applyHashlineEdit(
+        store,
+        dir,
+        filePath,
+        hash,
+        parsed.ops
+      );
+
+      expect(result).toMatchObject({ ok: true, changed: false });
+      // The file is left byte-identical.
+      expect(await Bun.file(join(dir, filePath)).text()).toBe(content);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a real replace reports changed:true", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hashline-"));
+
+    try {
+      const filePath = "test.ts";
+      const content = "line 1\nline 2\nline 3\n";
+
+      await Bun.write(join(dir, filePath), content);
+
+      const store = new SessionSnapshotStore();
+      const hash = store.record(filePath, content);
+
+      const input = `¶${filePath}#${hash}\nreplace 2..2:\n+changed line`;
+      const parsed = parseHashlineEdit(input);
+
+      const result = await applyHashlineEdit(
+        store,
+        dir,
+        filePath,
+        hash,
+        parsed.ops
+      );
+
+      expect(result).toMatchObject({ ok: true, changed: true });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("applies replace operation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "hashline-"));
 

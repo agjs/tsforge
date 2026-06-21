@@ -57,6 +57,37 @@ export function isComponentFoldersConvention(
   return typeof v === "string" && COMPONENT_FOLDER_SET.has(v);
 }
 
+/** Keep only the fields whose value is a VALID convention, dropping everything
+ *  else (null, wrong type, unknown enum). Untrusted channels — the
+ *  `TSFORGE_CONVENTIONS` env in particular — must pass through here before
+ *  {@link resolveConventions}, otherwise a `{"interfaces":null}` would overwrite
+ *  the house default with null and silently LOOSEN a convention (e.g. drop the
+ *  I-prefix requirement). Mirrors the field-by-field validation the config loader
+ *  applies, via the same guards. */
+export function pickValidConventions(
+  parsed: Readonly<Record<string, unknown>>
+): Partial<IConventions> {
+  const out: { -readonly [K in keyof IConventions]?: IConventions[K] } = {};
+
+  if (isInterfaceConvention(parsed.interfaces)) {
+    out.interfaces = parsed.interfaces;
+  }
+
+  if (isEnumConvention(parsed.enums)) {
+    out.enums = parsed.enums;
+  }
+
+  if (isTestConvention(parsed.tests)) {
+    out.tests = parsed.tests;
+  }
+
+  if (isComponentFoldersConvention(parsed.componentFolders)) {
+    out.componentFolders = parsed.componentFolders;
+  }
+
+  return out;
+}
+
 /** Fill any unset field from {@link DEFAULT_CONVENTIONS}, yielding a fully-decided
  *  set. This is THE function every consumer (gate, linter, prompts) calls so they
  *  all agree on the same resolved choices. */

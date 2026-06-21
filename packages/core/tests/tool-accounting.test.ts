@@ -125,6 +125,39 @@ test("a successful in-scope create counts as one edit and re-gates", async () =>
   }
 });
 
+// P2: a same-content edit (oldString === newString, or already-applied) writes
+// nothing. The handler must NOT emit an edit event for it, so it neither counts
+// toward `state.edits` nor re-gates — otherwise a no-op edit lets a green gate
+// claim "done" though disk never changed (and can mask a spinning model).
+test("a no-op edit (same content) is NOT counted and does not re-gate", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-noop-"));
+
+  try {
+    await Bun.write(join(dir, "x.ts"), "export const x = 1;\n");
+
+    const state = freshState();
+    const touched = await runToolCalls(
+      [
+        {
+          name: "edit",
+          arguments: {
+            file: "x.ts",
+            oldString: "const x = 1;",
+            newString: "const x = 1;", // identical → no real change
+          },
+        },
+      ],
+      ctxFor(dir, ["**/*"]),
+      state
+    );
+
+    expect(touched).toBe(false);
+    expect(state.edits).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("an out-of-scope edit is NOT counted and does not re-gate", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-"));
 
