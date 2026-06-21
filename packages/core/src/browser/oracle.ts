@@ -1,4 +1,11 @@
-import { resolve, dirname, basename, join } from "node:path";
+import {
+  resolve,
+  dirname,
+  basename,
+  join,
+  relative,
+  isAbsolute,
+} from "node:path";
 import { isRecord } from "../lib/guards";
 import { serveEphemeral } from "../lib/serve";
 // `playwright` is an OPTIONAL peer: bundling it (+ a browser binary) into every
@@ -349,8 +356,9 @@ async function capturePage(
 /** Serve a directory on an ephemeral localhost port. SPA FALLBACK: an
  *  extension-less path that isn't a real file → index.html (so the client router
  *  renders that route). Missing ASSETS (paths with a `.`) still 404, so a broken
- *  bundle/import surfaces as a real error. */
-function startStaticServer(
+ *  bundle/import surfaces as a real error. Exported for the traversal/404
+ *  regression test. */
+export function startStaticServer(
   root: string
 ): Promise<ReturnType<typeof Bun.serve>> {
   return serveEphemeral({
@@ -358,7 +366,19 @@ function startStaticServer(
       const path = new URL(req.url).pathname;
       const rel =
         path === "/" ? "index.html" : decodeURIComponent(path.slice(1));
-      const handle = Bun.file(join(root, rel));
+      const base = resolve(root);
+      const full = resolve(base, rel);
+
+      // Path-traversal guard: `decodeURIComponent` turns `%2e%2e%2f` back into
+      // `../`, so a request like `/..%2F..%2Fetc%2Fpasswd` would otherwise escape
+      // the served root. Reject anything that resolves outside `base`.
+      const within = relative(base, full);
+
+      if (within.startsWith("..") || isAbsolute(within)) {
+        return new Response("not found", { status: 404 });
+      }
+
+      const handle = Bun.file(full);
 
       if (await handle.exists()) {
         return new Response(handle);

@@ -1,8 +1,9 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderCheck } from "../src/browser";
+import { startStaticServer } from "../src/browser/oracle";
 
 /** Write a tiny SPA fixture: one index.html whose inline script renders per
  *  location.pathname — throws on "/bad", leaves the root blank on "/blank". With
@@ -50,6 +51,44 @@ const enabled = process.env.TSFORGE_BROWSER_TESTS === "1";
 const hasChromium = enabled && (await chromiumAvailable());
 // skipped unless TSFORGE_BROWSER_TESTS=1 and Playwright chromium is installed
 const browserTest = hasChromium ? test : test.skip;
+
+// Static-server logic needs NO browser, so it runs in the default suite. Covers
+// the 404/SPA-fallback contract AND the path-traversal guard (decodeURIComponent
+// must not let `/..%2F…` escape the served root).
+test("static server: 404s missing assets, SPA-falls-back, blocks ../ traversal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-static-"));
+  const root = join(dir, "site");
+
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, "index.html"), "<h1>home</h1>");
+  await writeFile(join(root, "app.js"), "console.log(1)");
+  // a secret OUTSIDE the served root — traversal must never reach it
+  await writeFile(join(dir, "secret.txt"), "TOPSECRET");
+
+  const server = await startStaticServer(root);
+  const base = `http://localhost:${String(server.port)}`;
+
+  try {
+    expect((await fetch(`${base}/app.js`)).status).toBe(200); // real asset
+
+    const miss = await fetch(`${base}/missing.js`); // has a dot → 404, not index
+
+    expect(miss.status).toBe(404);
+
+    const route = await fetch(`${base}/some/route`); // extensionless → SPA fallback
+
+    expect(route.status).toBe(200);
+    expect(await route.text()).toContain("home");
+
+    const trav = await fetch(`${base}/..%2Fsecret.txt`); // encoded ../ escape
+
+    expect(trav.status).toBe(404);
+    expect(await trav.text()).not.toContain("TOPSECRET");
+  } finally {
+    await server.stop(true);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 browserTest("renders clean HTML and confirms expected content", async () => {
   const result = await renderCheck({
