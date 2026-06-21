@@ -95,7 +95,8 @@ describe("mcp: jsonrpc framing", () => {
     expect(
       errorText({ jsonrpc: "2.0", id: 1, error: { code: -32600 } })
     ).not.toBe(null);
-    expect(errorText({ jsonrpc: "2.0", id: 1, error: "boom" })).not.toBe(null);
+    // a bare string error is surfaced verbatim (more actionable than the generic)
+    expect(errorText({ jsonrpc: "2.0", id: 1, error: "boom" })).toBe("boom");
 
     // No error member ⇒ a real success ⇒ null (so the caller resolves the result).
     expect(errorText({ jsonrpc: "2.0", id: 1, result: { ok: true } })).toBe(

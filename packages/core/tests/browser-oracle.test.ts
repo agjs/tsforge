@@ -62,6 +62,8 @@ test("static server: 404s missing assets, SPA-falls-back, blocks ../ traversal",
   await mkdir(root, { recursive: true });
   await writeFile(join(root, "index.html"), "<h1>home</h1>");
   await writeFile(join(root, "app.js"), "console.log(1)");
+  // a legitimately-named dotfile inside the root — the guard must NOT 404 it
+  await writeFile(join(root, "..foo.js"), "ok-inside");
   // a secret OUTSIDE the served root — traversal must never reach it
   await writeFile(join(dir, "secret.txt"), "TOPSECRET");
 
@@ -84,6 +86,12 @@ test("static server: 404s missing assets, SPA-falls-back, blocks ../ traversal",
 
     expect(trav.status).toBe(404);
     expect(await trav.text()).not.toContain("TOPSECRET");
+
+    // a file NAMED `..foo.js` inside the root is served (not a false-positive 404)
+    const dotfile = await fetch(`${base}/..foo.js`);
+
+    expect(dotfile.status).toBe(200);
+    expect(await dotfile.text()).toBe("ok-inside");
   } finally {
     await server.stop(true);
     await rm(dir, { recursive: true, force: true });

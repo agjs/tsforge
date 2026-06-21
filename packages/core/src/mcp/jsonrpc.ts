@@ -74,6 +74,11 @@ export function errorText(value: unknown): string | null {
     return null;
   }
 
+  // Some non-standard servers send a bare string error — surface it verbatim.
+  if (typeof error === "string") {
+    return error;
+  }
+
   if (isRecord(error) && typeof error.message === "string") {
     return error.message;
   }

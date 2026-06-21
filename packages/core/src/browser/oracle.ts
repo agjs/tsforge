@@ -374,7 +374,14 @@ export function startStaticServer(
       // the served root. Reject anything that resolves outside `base`.
       const within = relative(base, full);
 
-      if (within.startsWith("..") || isAbsolute(within)) {
+      // Match a real escape only — `..`, `../…`, `..\…`, or an absolute path — so
+      // a legitimately-named file like `..foo` inside the root isn't false-404'd.
+      if (
+        within === ".." ||
+        within.startsWith("../") ||
+        within.startsWith("..\\") ||
+        isAbsolute(within)
+      ) {
         return new Response("not found", { status: 404 });
       }
 
