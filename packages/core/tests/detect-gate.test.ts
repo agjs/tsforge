@@ -434,6 +434,58 @@ test("buildGate includeTests: appends tests only when the project has them", asy
   }
 });
 
+test("opt-in oracles join the gate ONLY when their env var is set", async () => {
+  const dir = await tempDir();
+  const keys = [
+    "TSFORGE_COVERAGE",
+    "TSFORGE_BOOT",
+    "TSFORGE_PROPTEST",
+  ] as const;
+  const saved = new Map(keys.map((k) => [k, process.env[k]]));
+
+  for (const k of keys) {
+    Reflect.deleteProperty(process.env, k);
+  }
+
+  try {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+
+    // Default: none of the oracles are present.
+    const off = await buildGate(dir);
+
+    expect(off.label).not.toContain("test coverage");
+    expect(off.label).not.toContain("boot smoke");
+    expect(off.label).not.toContain("property tests");
+
+    // Each env var pulls in exactly its oracle.
+    process.env.TSFORGE_COVERAGE = "80";
+    expect((await buildGate(dir)).label).toContain("test coverage");
+    delete process.env.TSFORGE_COVERAGE;
+
+    process.env.TSFORGE_BOOT = "bun run start";
+    expect((await buildGate(dir)).label).toContain("boot smoke");
+    delete process.env.TSFORGE_BOOT;
+
+    process.env.TSFORGE_PROPTEST = "1";
+    expect((await buildGate(dir)).label).toContain("property tests");
+    delete process.env.TSFORGE_PROPTEST;
+
+    // An empty value does NOT count as set (guards against `export X=`).
+    process.env.TSFORGE_COVERAGE = "";
+    expect((await buildGate(dir)).label).not.toContain("test coverage");
+  } finally {
+    for (const [k, v] of saved) {
+      if (v === undefined) {
+        Reflect.deleteProperty(process.env, k);
+      } else {
+        process.env[k] = v;
+      }
+    }
+
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("scaffoldWeb never overwrites an existing file", async () => {
   const dir = await tempDir();
 
