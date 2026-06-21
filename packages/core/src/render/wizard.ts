@@ -457,7 +457,17 @@ export function runWizard(
 
     const finish = (): void => {
       stdin.removeListener("keypress", onKey);
-      out(`${SHOW_CURSOR}${EXIT_ALT}`);
+
+      // The terminal write is best-effort and must NEVER throw out of finish: a
+      // throwing `out` (e.g. EPIPE on a closed stdout) would otherwise skip the
+      // listener restore + resolve below AND re-enter finish via onKey's catch,
+      // wedging the terminal (dead keypress, hung Promise) on exit. The terminal
+      // is already gone in that case, so there's nothing to restore on it.
+      try {
+        out(`${SHOW_CURSOR}${EXIT_ALT}`);
+      } catch {
+        // swallow — the stream is closed; cleanup below still runs
+      }
 
       // Restore the saved keypress listeners. They come from `rawListeners` typed
       // as `Function[]`, which isn't assignable to the listener signature, so we

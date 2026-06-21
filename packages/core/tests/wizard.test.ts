@@ -1,9 +1,11 @@
 import { describe, test, expect } from "bun:test";
+import { EventEmitter } from "node:events";
 import {
   driveWizard,
   initWizard,
   reduceWizard,
   renderFrame,
+  runWizard,
 } from "../src/render/wizard";
 import type { IWizardStep } from "../src/render/wizard.types";
 
@@ -167,5 +169,80 @@ describe("wizard render (no color)", () => {
     expect(frame).toContain("Naming: bare PascalCase");
     expect(frame).toContain("PREVIEW-BLOCK");
     expect(frame).toContain("enter apply");
+  });
+});
+
+describe("runWizard interactive teardown", () => {
+  /** A minimal TTY-shaped stdin: an EventEmitter plus the stream methods the
+   *  driver / emitKeypressEvents touch. We drive it by emitting `keypress`. */
+  class FakeStdin extends EventEmitter {
+    isTTY = true;
+
+    setRawMode(): this {
+      return this;
+    }
+
+    resume(): this {
+      return this;
+    }
+
+    pause(): this {
+      return this;
+    }
+
+    setEncoding(): this {
+      return this;
+    }
+  }
+
+  test("finish() restores listeners and resolves even when the terminal write throws", async () => {
+    const fake = new FakeStdin();
+    // A pre-existing keypress listener that MUST survive (be restored) on exit.
+    let preexistingCalls = 0;
+
+    const preexisting = (): void => {
+      preexistingCalls += 1;
+    };
+
+    fake.on("keypress", preexisting);
+
+    const realStdin = process.stdin;
+
+    Object.defineProperty(process, "stdin", {
+      value: fake,
+      configurable: true,
+    });
+
+    try {
+      // `out` throws on the finish-specific write (SHOW_CURSOR = ESC[?25h),
+      // simulating an EPIPE on a closed stdout during teardown.
+      const out = (s: string): void => {
+        if (s.includes("[?25h")) {
+          throw new Error("EPIPE: terminal write failed");
+        }
+      };
+
+      const done = runWizard(STEPS, false, () => "", out);
+
+      // Drive a cancel keypress → terminal state → finish() (whose out throws).
+      fake.emit("keypress", undefined, { name: "escape" });
+
+      // The fix's guarantee: the promise still resolves (no hang)...
+      const state = await done;
+
+      expect(state.status).toBe("cancel");
+
+      // ...exactly one keypress listener remains (the restored one, not onKey)...
+      expect(fake.listeners("keypress").length).toBe(1);
+
+      // ...and it forwards to the original listener (restoration really happened).
+      fake.emit("keypress", undefined, { name: "down" });
+      expect(preexistingCalls).toBe(1);
+    } finally {
+      Object.defineProperty(process, "stdin", {
+        value: realStdin,
+        configurable: true,
+      });
+    }
   });
 });
