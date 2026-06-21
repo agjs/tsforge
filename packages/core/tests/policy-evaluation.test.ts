@@ -424,6 +424,10 @@ describe("evaluatePolicy — critical denies win in every mode", () => {
   test("benign shell commands are not tripped by the key-read guard", () => {
     for (const command of [
       "git commit -m wip",
+      // a key word INSIDE a quoted multi-word string (commit message) must not
+      // be torn into a bare `id_rsa`/`.pem` token and falsely denied.
+      'git commit -m "fix id_rsa"',
+      'git commit -m "update deploy.pem handling"',
       "bun test packages",
       "cat src/index.ts",
       "ls -la src",

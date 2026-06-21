@@ -191,7 +191,16 @@ export function isPrivateKeyPath(path: string): boolean {
  *  commands (`git commit`, `bun test`) stay allowed. Tokens are split on shell
  *  metacharacters and unquoted so `"~/.ssh/id_rsa"` is still seen. */
 export function commandReadsPrivateKey(command: string): boolean {
-  return command
-    .split(/[\s;&|<>()`'"]+/u)
-    .some((token) => token.length > 0 && isPrivateKeyPath(unquote(token)));
+  // Tokenize so a QUOTED string stays ONE token (then gets unquoted), rather than
+  // splitting on the spaces inside it — otherwise a key word inside a quoted
+  // commit message / grep pattern (`git commit -m "fix id_rsa"`) would be torn
+  // into a bare `id_rsa` token and falsely tripped. Only a token that, whole and
+  // unquoted, IS a key path trips the guard.
+  const tokens = command.match(/"[^"]*"|'[^']*'|[^\s;&|<>()`"']+/gu) ?? [];
+
+  return tokens.some((token) => {
+    const path = unquote(token);
+
+    return path.length > 0 && isPrivateKeyPath(path);
+  });
 }
