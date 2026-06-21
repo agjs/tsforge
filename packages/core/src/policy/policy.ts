@@ -1,4 +1,9 @@
-import { isDestructiveShell, isPrivateKeyPath, pipesToShell } from "./patterns";
+import {
+  commandReadsPrivateKey,
+  isDestructiveShell,
+  isPrivateKeyPath,
+  pipesToShell,
+} from "./patterns";
 import type {
   ActionKind,
   IPolicyContext,
@@ -212,6 +217,19 @@ function criticalDeny(
         rule: "critical:private-key-read",
       };
     }
+  }
+
+  // The `read` tool's private-key deny holds in every mode; a shell command that
+  // reads the same material (`cat ~/.ssh/id_rsa`) must not be a side door around it.
+  if (
+    action.kind === "shell" &&
+    action.command !== undefined &&
+    commandReadsPrivateKey(action.command)
+  ) {
+    return {
+      reason: `private-key file access blocked: ${preview(action.command)}`,
+      rule: "critical:private-key-read",
+    };
   }
 
   if (

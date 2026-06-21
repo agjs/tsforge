@@ -146,12 +146,16 @@ function buildBarBody(
   rows: number,
   color: boolean
 ): string {
-  const borderRow = rows - 1;
+  // Clamp to row 1 so a terminal shrunk below the reserved height can never emit
+  // an invalid `${ESC}[0;1H` / `${ESC}[-1;1H` (normal terminals are >= MIN_ROWS,
+  // where the clamp is a no-op).
+  const segRow = Math.max(1, rows);
+  const borderRow = Math.max(1, rows - 1);
   const segs = assemble(barSegments(info), columns, color);
 
   return (
     `${ESC}[${borderRow};1H${ESC}[2K${topBorder(columns, color)}` +
-    `${ESC}[${rows};1H${ESC}[2K${segs}`
+    `${ESC}[${segRow};1H${ESC}[2K${segs}`
   );
 }
 
@@ -210,7 +214,9 @@ export function buildInputFrame(
   rows: number,
   color: boolean
 ): string {
-  const inputRow = rows - 2;
+  // Clamp to row 1 so a shrunk terminal can't emit an invalid `${ESC}[0;1H`
+  // (normal terminals are >= MIN_ROWS, where this is a no-op).
+  const inputRow = Math.max(1, rows - 2);
   const avail = Math.max(0, columns - PROMPT_COLS);
   const { visible, cursorCol } = clipInput(line, cursor, avail);
 
@@ -355,12 +361,17 @@ export class StatusBar {
 
     const rows = this.out.rows ?? 0;
 
-    this.out.write(`${ESC}[1;${rows - this.reserved}r`);
+    // Clamp to row 1: a resize BELOW `reserved` (a terminal shrunk after install)
+    // would otherwise make `rows - reserved` non-positive and emit invalid
+    // `${ESC}[1;-1r` / `${ESC}[-1;1H` sequences. Mirrors teardown()'s clamp.
+    const regionEnd = Math.max(1, rows - this.reserved);
+
+    this.out.write(`${ESC}[1;${regionEnd}r`);
 
     // The saved stream cursor may now point off-screen — re-anchor it to the
     // bottom of the (resized) region so output continues there.
     if (this.withInput) {
-      this.out.write(`${ESC}[${rows - this.reserved};1H`);
+      this.out.write(`${ESC}[${regionEnd};1H`);
       this.out.write(`${ESC}7`);
     }
 

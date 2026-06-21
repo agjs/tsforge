@@ -66,6 +66,55 @@ test("ambiguous when oldString matches more than once; file unchanged", async ()
   }
 });
 
+test("same-content edit is ok but flagged changed:false (no-op, not a mutation)", async () => {
+  const dir = await tmp({ "a.ts": "export const x = 1;\n" });
+
+  try {
+    const single = await applyEdit(dir, {
+      file: "a.ts",
+      oldString: "const x = 1;",
+      newString: "const x = 1;", // identical → no real change
+    });
+
+    expect(single).toMatchObject({ ok: true, changed: false });
+
+    const batch = await applyEdits(dir, "a.ts", [
+      { oldString: "const x = 1;", newString: "const x = 1;" },
+    ]);
+
+    expect(batch).toMatchObject({ ok: true, changed: false });
+
+    // The file is left byte-identical.
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe(
+      "export const x = 1;\n"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a real edit reports changed:true", async () => {
+  const dir = await tmp({ "a.ts": "export const x = 1;\n" });
+
+  try {
+    const single = await applyEdit(dir, {
+      file: "a.ts",
+      oldString: "= 1",
+      newString: "= 2",
+    });
+
+    expect(single).toMatchObject({ ok: true, changed: true });
+
+    const batch = await applyEdits(dir, "a.ts", [
+      { oldString: "= 2", newString: "= 3" },
+    ]);
+
+    expect(batch).toMatchObject({ ok: true, count: 1, changed: true });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("fuzzy edit preserves CRLF line endings (no mixed endings) — issue #24", async () => {
   // CRLF file; oldString has wrong indentation so the exact match misses and the
   // fuzzy (trim-normalized) fallback fires. The result must stay all-CRLF.

@@ -182,3 +182,16 @@ const PRIVATE_KEY_PATTERNS: readonly RegExp[] = [
 export function isPrivateKeyPath(path: string): boolean {
   return PRIVATE_KEY_PATTERNS.some((re) => re.test(path));
 }
+
+/** True when a shell command references private-key material as one of its tokens
+ *  (`cat ~/.ssh/id_rsa`, `cp deploy.pem /tmp`, `base64 server.key`). The `read`
+ *  tool denies these in EVERY mode; the `run` tool must not be a side door around
+ *  that same critical guard. Conservative: only a token that itself looks like key
+ *  material (the SAME patterns as {@link isPrivateKeyPath}) trips it, so ordinary
+ *  commands (`git commit`, `bun test`) stay allowed. Tokens are split on shell
+ *  metacharacters and unquoted so `"~/.ssh/id_rsa"` is still seen. */
+export function commandReadsPrivateKey(command: string): boolean {
+  return command
+    .split(/[\s;&|<>()`'"]+/u)
+    .some((token) => token.length > 0 && isPrivateKeyPath(unquote(token)));
+}

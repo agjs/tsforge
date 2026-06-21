@@ -402,6 +402,38 @@ describe("evaluatePolicy — critical denies win in every mode", () => {
     expect(evaluatePolicy(a, ctx("bypassPermissions")).decision).toBe("deny");
   });
 
+  test("private-key read via the shell tool is also critically denied", () => {
+    // The `read` tool's private-key deny holds in every mode; the `run` tool must
+    // not be a side door (`cat ~/.ssh/id_rsa`). Denied even under bypassPermissions.
+    for (const command of [
+      "cat ~/.ssh/id_rsa",
+      'cat "/home/u/.ssh/id_rsa"',
+      "cp deploy.pem /tmp/x",
+      "base64 server.key",
+    ]) {
+      const v = evaluatePolicy(
+        action("shell", { command }),
+        ctx("bypassPermissions")
+      );
+
+      expect(v.decision).toBe("deny");
+      expect(v.matchedRules).toContain("critical:private-key-read");
+    }
+  });
+
+  test("benign shell commands are not tripped by the key-read guard", () => {
+    for (const command of [
+      "git commit -m wip",
+      "bun test packages",
+      "cat src/index.ts",
+      "ls -la src",
+    ]) {
+      expect(
+        evaluatePolicy(action("shell", { command }), ctx("default")).decision
+      ).toBe("allow");
+    }
+  });
+
   test("scope is deferred to the tool layer, not a policy critical", () => {
     // Out-of-scope writes are enforced unconditionally by the write tools
     // (writable/isVendored) in every mode, so policy intentionally does NOT

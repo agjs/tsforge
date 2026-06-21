@@ -251,6 +251,28 @@ describe("StatusBar with input row", () => {
     }
   });
 
+  test("resize after a shrink below the reserved height emits no row index < 1", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term); // reserves 3 rows
+
+    bar.install(INFO);
+    term.rows = 1; // shrunk below `reserved` (3) after install
+    term.writes.length = 0;
+    bar.resize(INFO);
+
+    const out = term.text();
+
+    // The scroll-region end (`[1;Nr`) must stay >= 1 (never `[1;-2r`).
+    for (const match of out.matchAll(/\[1;(-?\d+)r/g)) {
+      expect(Number(match[1])).toBeGreaterThanOrEqual(1);
+    }
+
+    // Every cursor-position sequence must target a 1-indexed (>= 1) row.
+    for (const match of out.matchAll(/\[(-?\d+);1H/g)) {
+      expect(Number(match[1])).toBeGreaterThanOrEqual(1);
+    }
+  });
+
   test("teardown clears all THREE reserved rows", () => {
     const term = new FakeTerm(true, 24, 80);
     const bar = withInput(term);
