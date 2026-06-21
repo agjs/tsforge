@@ -351,6 +351,19 @@ function validatePolicyRule(parsed: unknown): IPolicyRule | undefined {
     rule.mcpServer = parsed.mcpServer;
   }
 
+  // A rule that PROVIDED fields but produced NO valid matcher (e.g. a typo like
+  // `{ kind: "shel" }`) would collapse to `{}` — which the policy treats as a
+  // match-EVERYTHING catch-all, turning a typo into a global allow/deny. Drop it
+  // with a warning. A literal `{}` (no fields provided) is preserved as an
+  // intentional catch-all.
+  if (Object.keys(rule).length === 0 && Object.keys(parsed).length > 0) {
+    warnConfig(
+      "tsforge.config.json: a policy rule had fields but no valid matcher (all unknown/wrong-typed) — dropped (an empty rule would match everything)"
+    );
+
+    return undefined;
+  }
+
   return rule;
 }
 

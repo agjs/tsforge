@@ -73,37 +73,149 @@ async function detectBase(cwd: string, override?: string): Promise<string> {
   return "HEAD";
 }
 
-/** Changed source files in the working tree vs `base` (or staged-only). */
-async function changedFiles(
-  cwd: string,
-  base: string,
-  staged: boolean
-): Promise<string[]> {
-  // --diff-filter=d drops deleted files — no point reviewing a file that's gone.
-  const argv = staged
-    ? ["diff", "--name-only", "--diff-filter=d", "--staged"]
-    : ["diff", "--name-only", "--diff-filter=d", base];
-  const out = await gitText(cwd, argv);
+const SOURCE_RE = /\.(ts|tsx|js|jsx|mts|cts)$/;
 
+function splitFiles(out: string): string[] {
   return out
     .split("\n")
     .map((f) => f.trim())
-    .filter((f) => /\.(ts|tsx|js|jsx|mts|cts)$/.test(f))
-    .slice(0, MAX_FILES);
+    .filter((f) => SOURCE_RE.test(f));
+}
+
+/** The set of changed source files to review, with coverage bookkeeping so a
+ *  capped run never reports as if it were complete. */
+interface IChangeSet {
+  /** Files to review (deduped, capped at MAX_FILES). */
+  files: string[];
+  /** Total candidate files BEFORE the cap (files.length when nothing was dropped). */
+  totalCandidates: number;
+  /** Which of `files` are untracked (need a synthesized added-file diff). */
+  untracked: ReadonlySet<string>;
+}
+
+/** Changed source files in the working tree vs `base` (or staged-only), INCLUDING
+ *  brand-new untracked files. `git diff` against a ref only sees TRACKED files, so
+ *  without unioning `ls-files --others` a newly created (never `git add`ed) source
+ *  file is silently skipped — the review would report "nothing to review" for a
+ *  whole new module. Staged mode reviews the index only, where a new file is
+ *  already tracked, so untracked files are excluded there. */
+async function collectChangedFiles(
+  cwd: string,
+  base: string,
+  staged: boolean
+): Promise<IChangeSet> {
+  // --diff-filter=d drops deleted files — no point reviewing a file that's gone.
+  const trackedArgv = staged
+    ? ["diff", "--name-only", "--diff-filter=d", "--staged"]
+    : ["diff", "--name-only", "--diff-filter=d", base];
+  const tracked = splitFiles(await gitText(cwd, trackedArgv));
+
+  const untrackedList = staged
+    ? []
+    : splitFiles(
+        await gitText(cwd, ["ls-files", "--others", "--exclude-standard"])
+      );
+  const untracked = new Set(untrackedList);
+
+  const all: string[] = [];
+
+  for (const file of [...tracked, ...untrackedList]) {
+    if (!all.includes(file)) {
+      all.push(file);
+    }
+  }
+
+  return {
+    files: all.slice(0, MAX_FILES),
+    totalCandidates: all.length,
+    untracked,
+  };
+}
+
+/** A file's diff plus coverage flags. `ranges` is the new-side line spans the
+ *  change actually touched (parsed from the FULL diff, before truncation) — used
+ *  to keep findings on changed lines rather than pre-existing code. */
+interface IFileDiff {
+  diff: string;
+  truncated: boolean;
+  ranges: readonly (readonly [number, number])[];
+}
+
+/** Synthesize an all-added unified diff for an untracked file (it has no `base`
+ *  side to diff against), so the find pass sees it as a fully new addition and the
+ *  hunk parser marks every line as changed. */
+async function syntheticAddedDiff(cwd: string, file: string): Promise<string> {
+  const abs = isAbsolute(file) ? file : join(cwd, file);
+  const text = await Bun.file(abs)
+    .text()
+    .catch(() => "");
+
+  if (text.length === 0) {
+    return "";
+  }
+
+  const lines = text.split("\n");
+
+  // A trailing newline leaves a final empty element — drop it so the @@ count
+  // matches the real line count.
+  if (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+
+  const body = lines.map((l) => `+${l}`).join("\n");
+
+  return `--- /dev/null\n+++ b/${file}\n@@ -0,0 +1,${String(lines.length)} @@\n${body}`;
+}
+
+/** New-side line ranges a unified diff touches, from its `@@ -a,b +c,d @@` heads.
+ *  A finding outside every range sits on code the change didn't touch. */
+function changedLineRanges(diff: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  const re = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gmu;
+
+  for (let m = re.exec(diff); m !== null; m = re.exec(diff)) {
+    const start = Number.parseInt(m[1] ?? "", 10);
+    const count = m[2] === undefined ? 1 : Number.parseInt(m[2], 10);
+
+    if (
+      Number.isFinite(start) &&
+      start > 0 &&
+      Number.isFinite(count) &&
+      count > 0
+    ) {
+      ranges.push([start, start + count - 1]);
+    }
+  }
+
+  return ranges;
+}
+
+function lineInRanges(
+  line: number,
+  ranges: readonly (readonly [number, number])[]
+): boolean {
+  return ranges.some(([from, to]) => line >= from && line <= to);
 }
 
 async function fileDiff(
   cwd: string,
   base: string,
   file: string,
-  staged: boolean
-): Promise<string> {
-  const argv = staged
-    ? ["diff", "--staged", "--", file]
-    : ["diff", base, "--", file];
-  const out = await gitText(cwd, argv);
+  staged: boolean,
+  untracked: boolean
+): Promise<IFileDiff> {
+  const raw = untracked
+    ? await syntheticAddedDiff(cwd, file)
+    : await gitText(
+        cwd,
+        staged ? ["diff", "--staged", "--", file] : ["diff", base, "--", file]
+      );
 
-  return out.slice(0, DIFF_CHARS);
+  return {
+    diff: raw.slice(0, DIFF_CHARS),
+    truncated: raw.length > DIFF_CHARS,
+    ranges: changedLineRanges(raw),
+  };
 }
 
 const FIND_SYSTEM_BASE = [
@@ -359,9 +471,19 @@ export async function reviewChange(
   const gateFailingRules = [...(opts.gateFailingRules ?? [])];
   const system = buildFindSystem(gateFailingRules);
   const base = await detectBase(cwd, opts.base);
-  const files = await changedFiles(cwd, base, staged);
+  const { files, totalCandidates, untracked } = await collectChangedFiles(
+    cwd,
+    base,
+    staged
+  );
 
   log(`reviewing ${files.length} changed file(s) vs ${base}`);
+
+  if (totalCandidates > files.length) {
+    log(
+      `⚠ coverage: ${totalCandidates} changed files, reviewing the first ${files.length} (MAX_FILES=${MAX_FILES})`
+    );
+  }
 
   if (gateFailingRules.length > 0) {
     log(`gate-aware: skipping ${gateFailingRules.length} failing gate rule(s)`);
@@ -371,16 +493,45 @@ export async function reviewChange(
   // caller blast-radius signal. Built once; falls back gracefully when absent.
   const svc: TsService | null = await buildTsService(cwd);
   const raw: IRepoFinding[] = [];
+  const truncatedFiles: string[] = [];
+  let preexisting = 0;
 
   // Sequential on purpose: this harness targets a single local-model server, so
   // we don't fan out concurrent requests that would swamp it. Each file is
   // isolated in try/catch so one bad file can't abort the whole review.
   for (const file of files) {
-    const diff = await fileDiff(cwd, base, file, staged);
+    const { diff, truncated, ranges } = await fileDiff(
+      cwd,
+      base,
+      file,
+      staged,
+      untracked.has(file)
+    );
+
+    if (truncated) {
+      truncatedFiles.push(file);
+    }
+
     const found = await safeFind(provider, system, svc, cwd, file, diff, log);
 
-    log(`  ${file}: ${found.length} candidate finding(s)`);
-    raw.push(...found);
+    // Keep only findings ON a changed line — a finding on pre-existing code the
+    // change didn't touch is not a regression in THIS change. Skip the filter
+    // when no hunks parsed (can't tell), so we never silently drop everything.
+    const onChange =
+      ranges.length === 0
+        ? found
+        : found.filter((f) => lineInRanges(f.line, ranges));
+
+    preexisting += found.length - onChange.length;
+
+    log(
+      `  ${file}: ${onChange.length} candidate finding(s)${
+        found.length !== onChange.length
+          ? ` (${found.length - onChange.length} on pre-existing lines, skipped)`
+          : ""
+      }`
+    );
+    raw.push(...onChange);
   }
 
   const doVerify = opts.verify ?? true;
@@ -407,6 +558,9 @@ export async function reviewChange(
     findings: verified,
     rejected,
     gateFailingRules,
+    totalChangedFiles: totalCandidates,
+    truncatedFiles,
+    preexisting,
   };
 }
 
@@ -432,9 +586,29 @@ export function formatReport(report: IReviewReport): string {
         ]
       : [];
 
+  // Coverage warnings: a capped/truncated run must NOT read as if it reviewed
+  // everything. Shown in BOTH the clean and the findings branch.
+  const reviewed = report.changedFiles.length;
+  const total = report.totalChangedFiles ?? reviewed;
+  const truncated = report.truncatedFiles ?? [];
+  const coverageNotes: string[] = [];
+
+  if (total > reviewed) {
+    coverageNotes.push(
+      `⚠ coverage: reviewed ${reviewed} of ${total} changed file(s); ${total - reviewed} not reviewed (cap ${MAX_FILES}) — re-run scoped to cover them.`
+    );
+  }
+
+  if (truncated.length > 0) {
+    coverageNotes.push(
+      `⚠ ${truncated.length} file(s) had diffs truncated at ${DIFF_CHARS} chars — review saw only a prefix: ${truncated.join(", ")}`
+    );
+  }
+
   if (report.findings.length === 0) {
     return [
-      `No functional issues found across ${report.changedFiles.length} changed file(s) (${report.rejected} candidate(s) rejected on verification).`,
+      `No functional issues found across ${reviewed} reviewed file(s) (${report.rejected} candidate(s) rejected on verification).`,
+      ...coverageNotes,
       ...gateNote,
     ].join("\n");
   }
@@ -448,8 +622,9 @@ export function formatReport(report: IReviewReport): string {
   );
 
   return [
-    `Review of ${report.changedFiles.length} changed file(s) vs ${report.base}:`,
+    `Review of ${reviewed} changed file(s) vs ${report.base}:`,
     `${report.findings.length} verified finding(s), ${report.rejected} rejected.`,
+    ...coverageNotes,
     ...gateNote,
     "",
     ...lines,
