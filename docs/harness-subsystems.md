@@ -127,8 +127,13 @@ context, never workspace mutations); a dead server degrades, not crashes.
 
 Vite/React/vanilla templates, the vendored guard, the web gate.
 
-**Invariants** only `*.gen.ts`/vendored shells are write-guard-exempt; scaffold is
-non-destructive (only missing files); a scaffold reports its writes (re-gate).
+**Invariants** only `*.gen.ts`/vendored shells are write-guard-exempt; a scaffold
+reports its writes (re-gate). Destructiveness is per-tool, by design: `scaffold_web`
+and `scaffold_routes` are non-destructive (write only MISSING files — never clobber a
+user file), while `scaffold_ui` deliberately OVERWRITES its `src/components/ui/*`
+primitives (re-theming is idempotent; the model is told never to hand-edit them, so
+they're effectively vendored). A "scaffold only writes missing files" blanket
+invariant is WRONG for `scaffold_ui` — check the per-tool contract, not the umbrella.
 
 ## setup / conventions — `src/infer-rules/*`, `src/setup/*`, `src/render/wizard.ts`, the bundled `.mjs` configs
 

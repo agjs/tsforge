@@ -8,7 +8,7 @@ import {
   isNewElysiaExpression,
 } from "../utils/elysiaChain";
 
-export const RULE_NAME = "require-plugin-name";
+export const RULE_NAME = "require-elysia-plugin-name";
 
 export interface RequirePluginNameOptions {
   readonly allowAnonymousDefault?: boolean;

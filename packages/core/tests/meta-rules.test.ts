@@ -156,7 +156,7 @@ test("no-eslint-disable-comments: detects eslint-disable", () => {
   `
   );
 
-  const ctx = buildMetaRuleContext(tempDir, []);
+  const ctx = buildMetaRuleContext(tempDir, [], ["src/bad.ts"]);
   const violations = runMetaRules(META_RULES, ctx);
 
   const relevant = violations.filter(
@@ -176,7 +176,7 @@ test("no-eslint-disable-comments: passes without violations", () => {
   `
   );
 
-  const ctx = buildMetaRuleContext(tempDir, []);
+  const ctx = buildMetaRuleContext(tempDir, [], ["src/good.ts"]);
   const violations = runMetaRules(META_RULES, ctx);
 
   const relevant = violations.filter(
@@ -196,7 +196,9 @@ test("source-text rules: skip *.gen.ts (codegen ships eslint-disable + @ts-noche
   `
   );
 
-  const ctx = buildMetaRuleContext(tempDir, []);
+  // The .gen.ts is in the change set, so the skip must come from the rule's own
+  // path self-check (isScannableSource), not from an upstream file-walk filter.
+  const ctx = buildMetaRuleContext(tempDir, [], ["src/routeTree.gen.ts"]);
   const violations = runMetaRules(META_RULES, ctx);
 
   const relevant = violations.filter(
@@ -218,7 +220,7 @@ test("no-ts-suppressions: detects @ts-ignore", () => {
   `
   );
 
-  const ctx = buildMetaRuleContext(tempDir, []);
+  const ctx = buildMetaRuleContext(tempDir, [], ["src/bad.ts"]);
   const violations = runMetaRules(META_RULES, ctx);
 
   const relevant = violations.filter((v) => v.ruleId === "no-ts-suppressions");
@@ -236,12 +238,53 @@ test("no-ts-suppressions: detects @ts-expect-error", () => {
   `
   );
 
-  const ctx = buildMetaRuleContext(tempDir, []);
+  const ctx = buildMetaRuleContext(tempDir, [], ["src/bad.ts"]);
   const violations = runMetaRules(META_RULES, ctx);
 
   const relevant = violations.filter((v) => v.ruleId === "no-ts-suppressions");
 
   expect(relevant.length).toBeGreaterThan(0);
+});
+
+test("source-text rules are change-scoped: ignore pre-existing untouched files", () => {
+  // A brownfield repo with a legacy file that already has an eslint-disable plus
+  // a TS suppression comment. The agent touched NOTHING (changedFiles=[]), so the
+  // gate must not flag the legacy file — otherwise it can never go green on a repo
+  // it didn't author. Regression for the full-tree-scan change-scoping break.
+  mkdirSync(join(tempDir, "src"), { recursive: true });
+  writeFileSync(
+    join(tempDir, "src", "legacy.ts"),
+    `/* eslint-disable no-console */
+    // @ts-ignore
+    export const legacy = 1;
+  `
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, [], []);
+  const violations = runMetaRules(META_RULES, ctx);
+
+  const relevant = violations.filter(
+    (v) =>
+      v.ruleId === "no-eslint-disable-comments" ||
+      v.ruleId === "no-ts-suppressions"
+  );
+
+  expect(relevant).toEqual([]);
+});
+
+test("isScannableSource: covers .ts/.tsx/.mts/.cts, skips generated variants", async () => {
+  const { isScannableSource } =
+    await import("../src/meta-rules/rules/source-text/is-scannable");
+
+  for (const ext of ["ts", "tsx", "mts", "cts"]) {
+    expect(isScannableSource(`src/app.${ext}`)).toBe(true);
+    expect(
+      isScannableSource(`src/routeTree.gen.${ext === "tsx" ? "ts" : ext}`)
+    ).toBe(false);
+  }
+
+  expect(isScannableSource("src/data.json")).toBe(false);
+  expect(isScannableSource("README.md")).toBe(false);
 });
 
 // === Config Rules ===
