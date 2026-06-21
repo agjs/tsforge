@@ -15,6 +15,11 @@ import {
   buildMetaRuleContext,
   runMetaRules,
 } from "../src/meta-rules";
+import type {
+  IMetaRule,
+  IMetaRuleContext,
+  IMetaRuleViolation,
+} from "../src/meta-rules";
 
 let tempDir: string;
 
@@ -1223,6 +1228,85 @@ test("no-circular-imports: passes an acyclic graph", () => {
   const violations = runMetaRules(META_RULES, ctx).filter(
     (v) => v.ruleId === "no-circular-imports"
   );
+
+  expect(violations).toHaveLength(0);
+});
+
+// === Per-rule isolation (a throwing rule must not disable the others) ===
+
+function emptyMetaContext(): IMetaRuleContext {
+  return {
+    root: "/ws",
+    packageJson: null,
+    sourceFiles: [],
+    changedFiles: [],
+    configFiles: [],
+    workflowFiles: [],
+    dockerfiles: [],
+    activePacks: [],
+    readFile: () => null,
+  };
+}
+
+test("runMetaRules isolates a throwing rule — others still enforce, no silent disable", () => {
+  const boom: IMetaRule = {
+    id: "boom-rule",
+    category: "config",
+    description: "throws on purpose",
+    severity: "error",
+    run: () => {
+      throw new Error("kaboom");
+    },
+  };
+
+  const good: IMetaRule = {
+    id: "good-rule",
+    category: "config",
+    description: "reports a real violation",
+    severity: "error",
+    run: (): IMetaRuleViolation[] => [
+      {
+        file: "src/a.ts",
+        ruleId: "good-rule",
+        severity: "error",
+        message: "real violation",
+      },
+    ],
+  };
+
+  // boom runs FIRST: before the fix it threw out of runMetaRules and the good
+  // rule never ran (its real error went unreported — a false green).
+  const violations = runMetaRules([boom, good], emptyMetaContext());
+
+  // The good rule's real error still surfaces (enforcement preserved)...
+  const goodHit = violations.find((v) => v.ruleId === "good-rule");
+
+  expect(goodHit).toBeDefined();
+  expect(goodHit?.severity).toBe("error");
+
+  // ...and the throwing rule is surfaced as a NON-blocking warning, not a crash.
+  const boomHit = violations.find((v) => v.ruleId === "boom-rule");
+
+  expect(boomHit).toBeDefined();
+  expect(boomHit?.severity).toBe("warn");
+  expect(boomHit?.message).toContain("failed to run");
+  expect(boomHit?.message).toContain("kaboom");
+});
+
+test("runMetaRules: a throwing rule silenced via override does not run or report", () => {
+  const boom: IMetaRule = {
+    id: "boom-rule",
+    category: "config",
+    description: "throws on purpose",
+    severity: "error",
+    run: () => {
+      throw new Error("kaboom");
+    },
+  };
+
+  const violations = runMetaRules([boom], emptyMetaContext(), {
+    "boom-rule": "off",
+  });
 
   expect(violations).toHaveLength(0);
 });
