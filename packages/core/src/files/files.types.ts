@@ -85,7 +85,14 @@ export type HashlineFailReason =
   | "invalid-op";
 
 export type HashlineResult =
-  | { ok: true; file: string; newHash: string }
+  | {
+      ok: true;
+      file: string;
+      newHash: string;
+      /** False when the ops resolved to identical content (a no-op write) — the
+       *  caller must NOT count it as a mutation or re-gate on it. */
+      changed: boolean;
+    }
   | {
       ok: false;
       file: string;

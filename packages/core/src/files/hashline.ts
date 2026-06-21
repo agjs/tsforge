@@ -160,6 +160,9 @@ export interface IHashlineResult {
   ok: boolean;
   file: string;
   newHash?: string;
+  /** On a successful edit: false when the ops resolved to identical content (a
+   *  no-op write). The caller must NOT count a no-op as a mutation or re-gate. */
+  changed?: boolean;
   reason?: string; // error reason
   suggestions?: string[]; // actionable feedback
 }
@@ -354,6 +357,26 @@ export function parseHashlineEdit(input: string): {
 /**
  * Apply hashline edits to file content. Handles stale-tag recovery via 3-way merge.
  */
+/** Write the resolved text and build the success result — but skip the write when
+ *  the ops resolved to identical content (a no-op), flagging `changed:false` so the
+ *  caller doesn't count a phantom mutation or trigger a needless re-gate. */
+async function commitHashline(
+  store: SessionSnapshotStore,
+  path: string,
+  file: string,
+  text: string,
+  liveContent: string
+): Promise<IHashlineResult> {
+  const changed = text !== liveContent;
+
+  if (changed) {
+    await Bun.write(path, text);
+    store.record(file, text);
+  }
+
+  return { ok: true, file, newHash: computeFileHash(text), changed };
+}
+
 export async function applyHashlineEdit(
   store: SessionSnapshotStore,
   cwd: string,
@@ -390,16 +413,7 @@ export async function applyHashlineEdit(
       return { ...result, file };
     }
 
-    const newHash = computeFileHash(result.text);
-
-    await Bun.write(path, result.text);
-    store.record(file, result.text);
-
-    return {
-      ok: true,
-      file,
-      newHash,
-    };
+    return commitHashline(store, path, file, result.text, liveContent);
   }
 
   // Case 2: Hash is stale, try recovery via snapshot
@@ -415,16 +429,13 @@ export async function applyHashlineEdit(
         mergedResult.cleanMerge &&
         mergedResult.text !== undefined
       ) {
-        const newHash = computeFileHash(mergedResult.text);
-
-        await Bun.write(path, mergedResult.text);
-        store.record(file, mergedResult.text);
-
-        return {
-          ok: true,
+        return commitHashline(
+          store,
+          path,
           file,
-          newHash,
-        };
+          mergedResult.text,
+          liveContent
+        );
       }
 
       if (!mergedResult.ok || !mergedResult.cleanMerge) {

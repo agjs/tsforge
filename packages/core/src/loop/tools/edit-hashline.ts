@@ -80,6 +80,12 @@ export async function doHashlineEdit(
   );
 
   if (result.ok) {
+    // A no-op edit (ops resolved to identical content) wrote nothing — report NO
+    // mutation event so it can't trigger a re-gate or count toward "done".
+    if (result.changed !== true) {
+      return `edit_lines ${edit.file}: no change — the ops resolved to identical content. Move on to the next fix or run the gate.`;
+    }
+
     ctx.report({
       kind: "edit",
       task: ctx.task,
