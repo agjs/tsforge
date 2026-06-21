@@ -225,3 +225,21 @@ test("doWebFetch handles a network error gracefully", async () => {
 
   expect(r.toLowerCase()).toContain("failed");
 });
+
+test("doWebFetch returns a string when the extractor throws (never propagates)", async () => {
+  // The handler must own its failure: an extractor throw becomes a tool-error
+  // string, not an exception into the loop.
+  const r = await doWebFetch(
+    { url: "https://example.com" },
+    ctx(),
+    deps({
+      extract: async () => {
+        throw new Error("readability blew up");
+      },
+    })
+  );
+
+  expect(typeof r).toBe("string");
+  expect(r).toContain("web_fetch");
+  expect(r).toContain("failed to extract");
+});
