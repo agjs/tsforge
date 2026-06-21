@@ -132,7 +132,18 @@ export async function doWebFetch(
     return `web_fetch: failed to fetch ${url.href} — ${msg}`;
   }
 
-  const content = await deps.extract(body, url.href);
+  let content: string;
+
+  try {
+    content = await deps.extract(body, url.href);
+  } catch (err) {
+    // Self-contained: an extractor throw must become a tool-error STRING, not
+    // propagate into the loop (the outer dispatch boundary would catch it, but a
+    // handler owning its own failure gives the model a precise, actionable message).
+    const msg = err instanceof Error ? err.message : "unknown error";
+
+    return `web_fetch: fetched ${url.href} but failed to extract readable content — ${msg}`;
+  }
 
   return truncate(content, maxChars(args));
 }

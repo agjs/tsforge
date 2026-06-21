@@ -94,7 +94,7 @@ degenerate stream; reasoning/content channels are kept distinct.
 **Risk areas** repetition penalty penalizing tool-call JSON (→ narration, no writes);
 reasoning-token capture for the active provider dialect.
 
-## rule-packs / meta-rules — `src/rules/*`, packs, `scripts/build-rule-docs.ts`
+## rule-packs / meta-rules — `src/meta-rules/*`, `src/rule-packs/*`, `src/infer-rules/*`, `scripts/build-rule-docs.ts`
 
 ESLint rule packs, structural meta-rules, profile gating.
 
@@ -178,8 +178,10 @@ The ONE shared command runner; path normalization; scope checks.
 
 **Invariants** ONE place runs shell commands (gate + `run` both route here) so
 cancellation + kill-timeout are uniform; a timeout/abort kills the whole process
-group (no leaked `&` child); argv (no-shell) form for any model/content-built command;
-a missing binary → exit 127, not a throw.
+group (no leaked `&` child); argv (no-shell) form for any content-built command (e.g.
+`add_dependency` → `bun add …`) — the model's own `run` tool is the one deliberate
+shell form, gated by `isReadOnlyCommand` in plan mode and the destructive-shell policy
+otherwise; a missing binary → exit 127, not a throw.
 
 **Risk areas** kill that leaves grandchildren (the fixed P2a); shell-injection via the
 shell form; an uncapped read.

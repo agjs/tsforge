@@ -10,6 +10,7 @@ import {
   type IMcpToolInfo,
   type IMcpTransport,
 } from "../src/mcp";
+import { errorText } from "../src/mcp/jsonrpc";
 
 class FakeTransport implements IMcpTransport {
   connected = false;
@@ -76,6 +77,32 @@ describe("mcp: jsonrpc framing", () => {
     const d = new LineDecoder();
 
     expect(d.push('not json\n\n{"ok":true}\n')).toEqual([{ ok: true }]);
+  });
+
+  test("errorText: a present error member is never null (no message ⇒ generic)", () => {
+    // A well-formed error message passes through verbatim.
+    expect(
+      errorText({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32600, message: "bad" },
+      })
+    ).toBe("bad");
+
+    // A malformed error (error member present, no string message) must STILL be
+    // an error — else the transport resolves message.result to `undefined`, which
+    // the model reads as a successful empty result (lost error signal).
+    expect(
+      errorText({ jsonrpc: "2.0", id: 1, error: { code: -32600 } })
+    ).not.toBe(null);
+    // a bare string error is surfaced verbatim (more actionable than the generic)
+    expect(errorText({ jsonrpc: "2.0", id: 1, error: "boom" })).toBe("boom");
+
+    // No error member ⇒ a real success ⇒ null (so the caller resolves the result).
+    expect(errorText({ jsonrpc: "2.0", id: 1, result: { ok: true } })).toBe(
+      null
+    );
+    expect(errorText("not an object")).toBe(null);
   });
 });
 

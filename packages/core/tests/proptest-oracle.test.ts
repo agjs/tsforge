@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
 import { propertyTargets, renderPropertyFile } from "../src/proptest/discover";
+import { runGeneratedSuite } from "../scripts/proptest-check";
 
 const PROPTEST_SCRIPT = join(
   import.meta.dir,
@@ -116,6 +117,41 @@ test("oracle PASSES a total function", async () => {
   try {
     expect(await runOracle(dir)).toBe(0);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("runGeneratedSuite kills a non-terminating suite at the timeout (no infinite hang)", async () => {
+  // A property whose function never returns would otherwise wedge the gate
+  // indefinitely (observed: a 15-minute hang). The shared runner's kill-timeout
+  // must cap it and report a failure instead.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "tsforge-pt-hang-")));
+  const testFile = join(dir, "hang.test.ts");
+
+  writeFileSync(
+    testFile,
+    `import { test } from "bun:test";\n` +
+      `test("never resolves", async () => { await new Promise(() => undefined); });\n`
+  );
+
+  const prev = process.env.TSFORGE_PROPTEST_TIMEOUT_MS;
+
+  process.env.TSFORGE_PROPTEST_TIMEOUT_MS = "500";
+
+  const started = Date.now();
+
+  try {
+    const code = await runGeneratedSuite(testFile);
+
+    expect(code).toBe(1); // timed out ⇒ treated as a failure, not a hang
+    expect(Date.now() - started).toBeLessThan(20_000); // killed promptly
+  } finally {
+    if (prev === undefined) {
+      Reflect.deleteProperty(process.env, "TSFORGE_PROPTEST_TIMEOUT_MS");
+    } else {
+      process.env.TSFORGE_PROPTEST_TIMEOUT_MS = prev;
+    }
+
     rmSync(dir, { recursive: true, force: true });
   }
 });

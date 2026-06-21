@@ -58,7 +58,11 @@ export function isResponseFor(
   return isRecord(value) && value.jsonrpc === "2.0" && value.id === id;
 }
 
-/** Extract a human-readable error string from a JSON-RPC error member. */
+/** Extract a human-readable error string from a JSON-RPC error member. Returns
+ *  null ONLY when there is no error member at all (a real success). A present-but-
+ *  malformed error (e.g. `{error:{code:-32600}}` with no `message`) still returns a
+ *  string, so the caller rejects rather than resolving `message.result` to
+ *  `undefined` — which the model would otherwise read as a successful empty result. */
 export function errorText(value: unknown): string | null {
   if (!isRecord(value)) {
     return null;
@@ -66,9 +70,18 @@ export function errorText(value: unknown): string | null {
 
   const error = value.error;
 
+  if (error === undefined || error === null) {
+    return null;
+  }
+
+  // Some non-standard servers send a bare string error — surface it verbatim.
+  if (typeof error === "string") {
+    return error;
+  }
+
   if (isRecord(error) && typeof error.message === "string") {
     return error.message;
   }
 
-  return null;
+  return "MCP error response with no message field";
 }

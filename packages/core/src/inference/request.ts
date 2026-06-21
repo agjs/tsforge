@@ -116,9 +116,13 @@ export function buildRequestBody(
   opts: ICompleteOptions,
   streaming: boolean
 ): Record<string, unknown> {
-  // o-series rejects `temperature` entirely; everywhere else send it only when set.
+  // o-series rejects `temperature` entirely; everywhere else send it only when set
+  // AND finite — a NaN/Infinity (bad config/env) would JSON.stringify to `null`,
+  // which a server reads as an explicit choice, not "unset". Drop it instead.
   const omitTemperature =
-    style(cfg) === "openai" || opts.temperature === undefined;
+    style(cfg) === "openai" ||
+    opts.temperature === undefined ||
+    !Number.isFinite(opts.temperature);
 
   // DeepSeek's thinking mode requires each prior assistant turn's
   // `reasoning_content` replayed; other providers don't want it.
@@ -129,7 +133,8 @@ export function buildRequestBody(
     messages: messages.map((m) => toWire(m, includeReasoning)),
     ...tokenCapField(cfg),
     ...(omitTemperature ? {} : { temperature: opts.temperature }),
-    ...(cfg.repetitionPenalty === undefined
+    ...(cfg.repetitionPenalty === undefined ||
+    !Number.isFinite(cfg.repetitionPenalty)
       ? {}
       : { repetition_penalty: cfg.repetitionPenalty }),
     ...toolsBlock(cfg, opts),
