@@ -162,6 +162,15 @@ async function score(
   // would throw ENOENT on a glob scope (e.g. `src/**/*.ts`), which `ITask.files`
   // explicitly allows.
   const views = await readFiles(cwd, task.files);
+
+  // Nothing resolved (an empty glob match, or every file over the size cap): there
+  // is no artifact to assess. Return the floor WITHOUT calling the judge — an empty
+  // code window scores unpredictably and burns an LLM call. Degrade, never throw:
+  // quality repair is a best-effort post-green pass, not a gate.
+  if (views.length === 0) {
+    return { quality: 0, notes: "no files in scope to judge" };
+  }
+
   const code = views.map((v) => `// ${v.path}\n${v.content}\n`).join("\n");
 
   const result = await judge(judgeProvider, {

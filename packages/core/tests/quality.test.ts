@@ -112,6 +112,44 @@ test("scores a GLOB-scoped task without throwing (globs are expanded)", async ()
   }
 });
 
+// Regression: an empty scope (glob matched nothing / all over the size cap) must
+// NOT send an empty code window to the judge — it scores unpredictably and wastes
+// an LLM call. score() returns the floor without calling the provider.
+test("an empty scope returns the floor without calling the judge", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-quality-empty-"));
+
+  try {
+    let judgeCalls = 0;
+    const judgeProvider: IProvider = {
+      async complete() {
+        judgeCalls += 1;
+
+        return { content: JSON.stringify({ overall: 5 }), toolCalls: [] };
+      },
+    };
+    const agent: IAgent = {
+      async implement() {
+        // no-op: nothing to edit when the scope is empty
+      },
+    };
+
+    const result = await qualityRepair(
+      { id: "1", accept: "true", files: ["does/not/exist/**/*.ts"] },
+      dir,
+      agent,
+      judgeProvider,
+      { goal: "g", criteria: "c" },
+      { target: 5, maxAttempts: 2 }
+    );
+
+    expect(judgeCalls).toBe(0); // never judged an empty window — the point of the guard
+    expect(result.quality).toBe(0); // floor, not an unpredictable empty-window score
+    expect(result.notes).toContain("no files in scope");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("reverts an attempt that breaks the gate", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-quality-"));
 

@@ -20,6 +20,20 @@ a guard that doesn't guard); **P2** a partial fix, missing test, or hidden failu
 
 Drives a turn: dispatch tool calls, account for writes, re-gate, settle.
 
+**Invariants**
+- Every workspace mutation re-gates. A tool that writes without the model
+  hand-writing it must surface `event.mutated`; an `edit`/`create` surfaces `event.file`.
+- A write is counted ONLY when it actually wrote (no name-based pre-counting — a
+  rejected/no-op op must not let a green gate claim "done").
+- The per-write guard runs on hand-written files only, never on generated/vendored shells.
+- Mutated paths join the change scope (so change-scoped rules cover them).
+
+**Risk areas** new mutating tool that forgets `mutated`; re-gate keyed off tool name;
+scope check on the raw arg instead of the normalized written path.
+
+**Checklist** every mutating tool emits `mutated`/`edit`/`create` (cross-check the
+`tools` table); rejects emit nothing; `countsAsMutation` exempts only `package.json`.
+
 ## loop / repair + snapshot — `src/loop/file-snapshot.ts`, `src/loop/quality.ts`, `src/loop/review-repair.ts`
 
 "Try an edit, keep only if it helps" loops: snapshot the editable scope → let the
@@ -66,20 +80,6 @@ the loop; the judge seeing the generator's trace.
 
 **Checklist** `tests/greenfield.test.ts`, `tests/greenfield-planner.test.ts`
 (unsafe-id drop), `tests/greenfield-contract.test.ts` (path-escape → `feature.md`).
-
-**Invariants**
-- Every workspace mutation re-gates. A tool that writes without the model
-  hand-writing it must surface `event.mutated`; an `edit`/`create` surfaces `event.file`.
-- A write is counted ONLY when it actually wrote (no name-based pre-counting — a
-  rejected/no-op op must not let a green gate claim "done").
-- The per-write guard runs on hand-written files only, never on generated/vendored shells.
-- Mutated paths join the change scope (so change-scoped rules cover them).
-
-**Risk areas** new mutating tool that forgets `mutated`; re-gate keyed off tool name;
-scope check on the raw arg instead of the normalized written path.
-
-**Checklist** every mutating tool emits `mutated`/`edit`/`create` (cross-check the
-`tools` table); rejects emit nothing; `countsAsMutation` exempts only `package.json`.
 
 ## tools — `src/loop/tools/*`
 
