@@ -121,6 +121,26 @@ describe("negotiateContract", () => {
     expect(res.rounds).toBe(3);
   });
 
+  test("a revision shows the generator its OWN previous proposal", async () => {
+    // The generator returns a round-numbered proposal and records every prompt.
+    const prompts: string[] = [];
+    let round = 0;
+    const recordingGen: IProvider = {
+      async complete(messages) {
+        round += 1;
+        prompts.push(messages.find((m) => m.role === "user")?.content ?? "");
+
+        return { content: `PROPOSAL_ROUND_${round}`, toolCalls: [] };
+      },
+    };
+
+    await negotiateContract(recordingGen, evaluator(1), feature, 3);
+
+    // Round 2's prompt must echo round 1's proposal so it can revise, not restart.
+    expect(prompts[1]).toContain("PROPOSAL_ROUND_1");
+    expect(prompts[1]).toContain("objected");
+  });
+
   test("the evaluator is shown the proposal + feature but never a trace", async () => {
     const seen: IChatMessage[] = [];
     const spyEvaluator: IProvider = {

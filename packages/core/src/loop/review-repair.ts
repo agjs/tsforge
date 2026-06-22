@@ -88,41 +88,50 @@ export async function reviewRepair(
   // must restore.
   const snapshot = await snapshotFiles(cwd, task.files);
 
-  await agent.implement({
-    cwd,
-    task,
-    errors: findingsToErrors(findings),
-    cycle: 1,
-    report,
-  });
+  // A throw mid-repair (agent error, fix-command crash, gate runner failure)
+  // must still roll the workspace back — otherwise a half-applied edit batch is
+  // left on disk. Restore, then rethrow so the caller still sees the failure.
+  try {
+    await agent.implement({
+      cwd,
+      task,
+      errors: findingsToErrors(findings),
+      cycle: 1,
+      report,
+    });
 
-  if (task.fix !== undefined && task.fix.length > 0) {
-    await runAccept({ ...task, accept: task.fix }, cwd);
-  }
+    if (task.fix !== undefined && task.fix.length > 0) {
+      await runAccept({ ...task, accept: task.fix }, cwd);
+    }
 
-  const gate = await validate(task, cwd, opts.parse);
+    const gate = await validate(task, cwd, opts.parse);
 
-  if (!gate.passed) {
+    if (gate.passed) {
+      report({
+        kind: "fix",
+        task: task.id,
+        message: "post-green review repair kept (gate green)",
+      });
+
+      return { findings: findings.length, repaired: true, reverted: false };
+    }
+  } catch (error) {
     await restoreFiles(cwd, snapshot);
-    report({
-      kind: "reverted",
-      task: task.id,
-      message: "review repair broke the gate",
-    });
-    report({
-      kind: "fix",
-      task: task.id,
-      message: "post-green review repair broke the gate — reverted",
-    });
 
-    return { findings: findings.length, repaired: false, reverted: true };
+    throw error;
   }
 
+  await restoreFiles(cwd, snapshot);
+  report({
+    kind: "reverted",
+    task: task.id,
+    message: "review repair broke the gate",
+  });
   report({
     kind: "fix",
     task: task.id,
-    message: "post-green review repair kept (gate green)",
+    message: "post-green review repair broke the gate — reverted",
   });
 
-  return { findings: findings.length, repaired: true, reverted: false };
+  return { findings: findings.length, repaired: false, reverted: true };
 }

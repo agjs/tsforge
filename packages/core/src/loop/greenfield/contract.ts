@@ -83,11 +83,15 @@ export function parseObjection(raw: string): IObjection {
 async function propose(
   generator: IProvider,
   feature: IFeature,
-  objections: string
+  objections: string,
+  previousContract: string
 ): Promise<string> {
+  // The provider call is stateless, so a revision must be shown its OWN prior
+  // proposal (plus the objection) — otherwise it "revises" from scratch and the
+  // negotiation can't converge.
   const ask =
     objections.length > 0
-      ? `Feature: ${feature.desc}\n\nThe reviewer objected: ${objections}\nRevise the contract.`
+      ? `Feature: ${feature.desc}\n\nYour previous contract:\n${previousContract}\n\nThe reviewer objected: ${objections}\nRevise the contract to address the objection.`
       : `Feature: ${feature.desc}\n\nPropose the build contract.`;
   const res = await generator.complete(
     [
@@ -135,7 +139,7 @@ export async function negotiateContract(
   let contract = "";
 
   for (let round = 1; round <= maxRounds; round += 1) {
-    contract = await propose(generator, feature, objections);
+    contract = await propose(generator, feature, objections, contract);
     transcript.push({ role: "generator", content: contract });
 
     const verdict = await review(evaluator, feature, contract);

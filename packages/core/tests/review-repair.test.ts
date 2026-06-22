@@ -129,6 +129,29 @@ test("verified finding + a repair that breaks the gate → reverted, file restor
   expect(readFileSync(join(repo, "discount.ts"), "utf8")).toBe(CHANGED);
 });
 
+test("an agent that throws mid-repair still rolls the workspace back, then rethrows", async () => {
+  const throwingAgent: IAgent = {
+    async implement() {
+      // mutate, THEN throw — the half-applied edit must not survive
+      writeFileSync(join(repo, "discount.ts"), "// HALF-APPLIED\n");
+
+      throw new Error("model exploded");
+    },
+  };
+
+  await expect(
+    reviewRepair(
+      stub(ONE_FINDING, true),
+      repo,
+      task("grep -q REPAIRED discount.ts"),
+      throwingAgent
+    )
+  ).rejects.toThrow("model exploded");
+
+  // the pre-repair content is restored despite the throw
+  expect(readFileSync(join(repo, "discount.ts"), "utf8")).toBe(CHANGED);
+});
+
 test("a revert emits a `reverted` accounting event", async () => {
   const events: string[] = [];
   const agent = fakeAgent(repo, "// BROKEN\n");

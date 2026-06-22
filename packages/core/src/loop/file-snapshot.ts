@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { resolveScopeFiles } from "../lib/fs";
 
 /** A snapshot of file contents keyed by workspace-relative path. */
 export type FileSnapshot = Map<string, string>;
@@ -8,14 +9,20 @@ export type FileSnapshot = Map<string, string>;
  * later `restoreFiles` can roll an edit batch back verbatim. The shared substrate
  * for every "try an edit, keep only if it helps" loop (quality repair, review
  * repair) — one definition so the revert semantics can't drift between them.
+ *
+ * `files` is the editable SCOPE, so it may contain globs (e.g. the whole-repo
+ * default `**\/*`). Those are expanded to concrete paths first — a literal
+ * `Bun.file("**\/*")` never exists, which would silently snapshot nothing and
+ * make `restoreFiles` a no-op (a broken revert by default).
  */
 export async function snapshotFiles(
   cwd: string,
   files: readonly string[]
 ): Promise<FileSnapshot> {
   const snapshot: FileSnapshot = new Map();
+  const resolved = await resolveScopeFiles(cwd, files);
 
-  for (const file of files) {
+  for (const file of resolved) {
     const handle = Bun.file(join(cwd, file));
 
     if (await handle.exists()) {
