@@ -451,12 +451,33 @@ export function runWizard(
 
     stdin.removeAllListeners("keypress");
 
+    // Raw mode is what turns an arrow key into a decoded `up`/`down` keypress
+    // instead of a raw `^[[A` the terminal echoes. When there were already
+    // keypress listeners (the REPL's readline, for `/setup`), a consumer owns raw
+    // mode — leave it. With none (standalone `tsforge setup`, cooked stdin) the
+    // wizard must enable it itself and restore on exit, or arrows do nothing.
+    const ownsRawMode =
+      stdin.isTTY &&
+      typeof stdin.setRawMode === "function" &&
+      saved.length === 0;
+
+    if (ownsRawMode) {
+      stdin.setRawMode(true);
+      stdin.resume();
+    }
+
     const draw = (): void => {
       out(`${CLEAR_HOME}${renderFrame(state, steps, color, extra(state))}`);
     };
 
     const finish = (): void => {
       stdin.removeListener("keypress", onKey);
+
+      // Undo the raw mode WE enabled (never touch it when a consumer owned it).
+      if (ownsRawMode) {
+        stdin.setRawMode(false);
+        stdin.pause();
+      }
 
       // The terminal write is best-effort and must NEVER throw out of finish: a
       // throwing `out` (e.g. EPIPE on a closed stdout) would otherwise skip the
