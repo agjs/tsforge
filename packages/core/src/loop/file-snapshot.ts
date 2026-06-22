@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { rm } from "node:fs/promises";
-import { resolveScopeFiles, resolveScopeFilesForRollback } from "../lib/fs";
+import { resolveScopeFilesForRollback, isBinaryPath } from "../lib/fs";
 
 /** Per-file size cap on snapshot CONTENT (matches readFiles' MAX_FILE_BYTES): a
  *  source file we'd ever edit is well under this. Oversize files are still
@@ -23,26 +23,13 @@ export interface IFileSnapshot {
   contents: Map<string, string>;
 }
 
-/** Every TEXT file in scope (uncapped) — the files whose content a revert can
- *  rewrite. Binaries are intentionally excluded here (writing back `.text()` of a
- *  binary would corrupt it); they're tracked for tombstoning via `existedSet`. */
-function textFiles(cwd: string, scope: readonly string[]): Promise<string[]> {
-  return resolveScopeFiles(cwd, scope, Number.POSITIVE_INFINITY);
-}
-
-/** Every file in scope (uncapped) INCLUDING binaries/assets — the complete set a
- *  revert must reason about, so a created `.svg`/image gets tombstoned and a
- *  pre-existing one is never mistaken for newly-created. */
-function existedSet(cwd: string, scope: readonly string[]): Promise<string[]> {
-  return resolveScopeFilesForRollback(cwd, scope);
-}
-
 /**
  * Capture a rollback point for `scope` (which may contain globs — e.g. the
- * whole-repo `**\/*`). Records pre-existing contents (text only) AND the full
- * pre-existing path set (incl. binaries) so a later `restoreFiles` can both
- * rewrite edits and remove files the attempt created. The shared substrate for
- * quality- and review-repair, so the revert semantics can't drift between them.
+ * whole-repo `**\/*`). One traversal (binary-inclusive, uncapped): every existing
+ * file is recorded in `existed` for tombstoning, and the text ones small enough
+ * to back are content-captured for rewrite. Binaries are tracked by path but not
+ * content (writing back their `.text()` would corrupt them). The shared substrate
+ * for quality- and review-repair, so the revert semantics can't drift between them.
  */
 export async function snapshotFiles(
   cwd: string,
@@ -51,16 +38,16 @@ export async function snapshotFiles(
   const existed = new Set<string>();
   const contents = new Map<string, string>();
 
-  for (const file of await existedSet(cwd, scope)) {
-    if (await Bun.file(join(cwd, file)).exists()) {
-      existed.add(file);
-    }
-  }
-
-  for (const file of await textFiles(cwd, scope)) {
+  for (const file of await resolveScopeFilesForRollback(cwd, scope)) {
     const handle = Bun.file(join(cwd, file));
 
-    if ((await handle.exists()) && handle.size <= MAX_SNAPSHOT_BYTES) {
+    if (!(await handle.exists())) {
+      continue;
+    }
+
+    existed.add(file);
+
+    if (!isBinaryPath(file) && handle.size <= MAX_SNAPSHOT_BYTES) {
       contents.set(file, await handle.text());
     }
   }
@@ -82,7 +69,7 @@ export async function restoreFiles(snapshot: IFileSnapshot): Promise<void> {
     await Bun.write(join(cwd, file), content);
   }
 
-  for (const file of await existedSet(cwd, scope)) {
+  for (const file of await resolveScopeFilesForRollback(cwd, scope)) {
     if (!existed.has(file)) {
       await rm(join(cwd, file), { force: true });
     }

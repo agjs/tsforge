@@ -33,6 +33,13 @@ function isGlobPattern(path: string): boolean {
   return /[*?[\]{}]/.test(path);
 }
 
+/** True for binary-ish paths (images, fonts, archives…) — reading these as text
+ *  is meaningless, so a content snapshot skips them (it would corrupt them on
+ *  write-back). They're still tracked by path for rollback tombstoning. */
+export function isBinaryPath(path: string): boolean {
+  return BINARY_EXT.test(path);
+}
+
 /** In a dependency/build/vcs dir we never read OR mutate (so never tombstone). */
 function inIgnoredDir(rel: string): boolean {
   return rel.split("/").some((seg) => IGNORE_SEGMENTS.has(seg));
