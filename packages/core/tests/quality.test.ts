@@ -60,6 +60,58 @@ test("drives quality up, keeping improvements, until target", async () => {
   }
 });
 
+// Regression: `ITask.files` is documented as "editable scope GLOBS". `score()`
+// used to read each entry literally (`Bun.file(join(cwd, "src/**/*.ts")).text()`),
+// which throws ENOENT on a glob — crashing the whole repair before the first
+// judge call. It must expand globs through the shared walker, like `scopeCode`.
+test("scores a GLOB-scoped task without throwing (globs are expanded)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-quality-glob-"));
+
+  try {
+    await Bun.write(join(dir, "src", "a.ts"), "export const a = 1;");
+    await Bun.write(join(dir, "src", "b.ts"), "export const b = 2;");
+
+    const seen: string[] = [];
+    const judgeProvider: IProvider = {
+      async complete(messages) {
+        seen.push(messages.map((m) => m.content).join("\n"));
+
+        return {
+          content: JSON.stringify({
+            overall: 5,
+            correctness: 5,
+            design: 5,
+            readability: 5,
+            notes: "great",
+          }),
+          toolCalls: [],
+        };
+      },
+    };
+    const agent: IAgent = {
+      async implement() {
+        // already at target; never invoked
+      },
+    };
+
+    const result = await qualityRepair(
+      { id: "1", accept: "true", files: ["src/**/*.ts"] },
+      dir,
+      agent,
+      judgeProvider,
+      { goal: "g", criteria: "c" },
+      { target: 5, maxAttempts: 1 }
+    );
+
+    expect(result.quality).toBe(5);
+    // The judge actually saw both glob-matched files' contents.
+    expect(seen[0]).toContain("export const a = 1;");
+    expect(seen[0]).toContain("export const b = 2;");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("reverts an attempt that breaks the gate", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-quality-"));
 
