@@ -14,6 +14,27 @@ export type {
 export { snapshotFiles, restoreFiles } from "./file-snapshot";
 export type { FileSnapshot } from "./file-snapshot";
 export {
+  runGreenfield,
+  evaluateFeature,
+  loadState,
+  saveState,
+  writeSpec,
+  writeProgress,
+  renderProgress,
+  greenfieldDir,
+} from "./greenfield";
+export type {
+  IFeature,
+  IFeatureVerdict,
+  IGreenfieldState,
+  IGreenfieldResult,
+  IGreenfieldDeps,
+  IGreenfieldOptions,
+  IEvaluateDeps,
+  IGateOutcome,
+  IJudgeOutcome,
+} from "./greenfield";
+export {
   toolsFor,
   buildTsService,
   runToolCalls,

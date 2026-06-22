@@ -51,6 +51,10 @@ export interface ITaskRecipe {
   readonly withReview?: boolean;
   /** Seed a deterministic pre-edit caller blast-radius scout (→ `--scout`). */
   readonly scout?: boolean;
+  /** Run mode. `"greenfield"` selects the feature-checklist outer loop
+   *  (`runGreenfield`) instead of the default single-task loop. Omitted ⇒ the
+   *  normal brownfield/one-shot run. */
+  readonly mode?: "greenfield";
 }
 
 function optString(value: unknown): string | undefined {
@@ -100,6 +104,10 @@ function assignScalars(recipe: Mutable, raw: Record<string, unknown>): void {
   if (isPolicyMode(raw.policyMode)) {
     recipe.policyMode = raw.policyMode;
   }
+
+  if (raw.mode === "greenfield") {
+    recipe.mode = raw.mode;
+  }
 }
 
 /** Assign the optional boolean flags onto a recipe under construction. */
@@ -138,6 +146,7 @@ const KNOWN_KEYS = new Set<string>([
   "withGate",
   "withReview",
   "scout",
+  "mode",
 ]);
 
 /** Keys present in the raw recipe that this version doesn't recognize. */

@@ -44,6 +44,14 @@ describe("parseRecipe", () => {
     ).toBeUndefined();
   });
 
+  test("accepts mode:greenfield and drops any other mode value", () => {
+    expect(parseRecipe({ id: "build-app", mode: "greenfield" })?.mode).toBe(
+      "greenfield"
+    );
+    expect(parseRecipe({ id: "x", mode: "spaceship" })?.mode).toBeUndefined();
+    expect(unrecognizedKeys({ id: "x", mode: "greenfield" })).toEqual([]);
+  });
+
   test("rejects a recipe with no id or a non-kebab id", () => {
     expect(parseRecipe({ gate: "x" })).toBeNull();
     expect(parseRecipe({ id: "Has Spaces" })).toBeNull();
