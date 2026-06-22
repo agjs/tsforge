@@ -10,3 +10,4 @@ export {
   seedPrompt,
 } from "./prompt";
 export { renderFileSection, exportedSymbols } from "./project-map";
+export { parseAtPaths, resolveAtMentions, composeMessage } from "./at-mention";

@@ -7,6 +7,9 @@ import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
 import { formatHelp, takesArg } from "./cli/commands";
 import { pickCommand } from "./render/command-menu";
+import { pickFile, shouldOpenAtPicker } from "./render/file-menu";
+import { resolveScopeFiles } from "./lib/fs";
+import { composeMessage } from "./loop/prompt";
 import {
   runTask,
   RUN_STATUS,
@@ -1016,8 +1019,14 @@ async function repl(args: ICliArgs): Promise<number> {
     await persist();
   };
 
+  // Free-text user sends route through here: resolve `@file` mentions to inlined
+  // contents (composeMessage) before handing the message to the session. The
+  // plan-approval / staged-build sends call session.send directly and are not
+  // touched, so only ordinary messages get mention expansion.
   const runSend = (line: string): Promise<void> =>
-    drive((opts) => session.send(line, opts));
+    drive(async (opts) =>
+      session.send(await composeMessage(args.dir, line), opts)
+    );
 
   // A from-scratch web build: stage it (plan + types, then implement) so the
   // model designs the type contract before writing UI — far less API invention.
@@ -1537,23 +1546,60 @@ async function repl(args: ICliArgs): Promise<number> {
       }
     };
 
-    // Press `/` on an empty line ⇒ open the palette. setImmediate lets readline
-    // finish inserting the slash first, so `rl.line === "/"` confirms it's a fresh
-    // command start (not a slash mid-text). No-op while busy or already open.
+    // Open the interactive `@` file picker: pick a workspace file from a navigable
+    // list, then insert its path after the typed `@` (the surrounding message is
+    // kept — unlike the `/` palette we do NOT clear the line). At send time the
+    // `@path` is expanded to the file's contents (see composeMessage / runSend).
+    const openFilePicker = async (): Promise<void> => {
+      paletteOpen = true;
+
+      try {
+        const files = await resolveScopeFiles(args.dir, ["**/*"]);
+        const picked = await pickFile(files, process.stdout.isTTY);
+
+        if (picked !== null) {
+          rl.write(`${picked} `); // append after the already-typed `@`
+        }
+      } finally {
+        paletteOpen = false;
+
+        if (useInputRow) {
+          statusBar.update(statusInfo());
+          syncInput();
+        }
+      }
+    };
+
+    // `/` on an empty line opens the palette; `@` at a word boundary opens the file
+    // picker. setImmediate lets readline insert the key first, so we can inspect the
+    // settled buffer (`rl.line === "/"` / shouldOpenAtPicker). The shared paletteOpen
+    // guard keeps the two overlays mutually exclusive. No-op while busy.
     if (process.stdin.isTTY) {
       emitKeypressEvents(process.stdin);
       process.stdin.on("keypress", (str: string | undefined) => {
         syncInput(); // keep the pinned input row in sync as the user types
 
-        if (busy || paletteOpen || str !== "/") {
+        if (busy || paletteOpen) {
           return;
         }
 
-        setImmediate(() => {
-          if (!busy && !paletteOpen && rl.line === "/") {
-            void openPalette();
-          }
-        });
+        if (str === "/") {
+          setImmediate(() => {
+            if (!busy && !paletteOpen && rl.line === "/") {
+              void openPalette();
+            }
+          });
+        } else if (str === "@") {
+          setImmediate(() => {
+            if (
+              !busy &&
+              !paletteOpen &&
+              shouldOpenAtPicker(rl.line, rl.cursor)
+            ) {
+              void openFilePicker();
+            }
+          });
+        }
       });
     }
 
