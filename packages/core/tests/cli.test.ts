@@ -85,6 +85,28 @@ test("--scout parses, and a recipe can turn scout on", () => {
   expect(args.scout).toBe(true);
 });
 
+test("--greenfield parses, and a recipe with mode:greenfield turns it on + routes role models", () => {
+  expect(parseArgs(["build an app", "--greenfield"]).greenfield).toBe(true);
+  expect(parseArgs(["build an app"]).greenfield).toBe(false);
+
+  const args = parseArgs(["build a kanban app"]);
+
+  applyRecipe(args, {
+    id: "kanban",
+    mode: "greenfield",
+    gate: "bun run build",
+    plannerModel: "planner",
+    workModel: "coder",
+    evaluatorModel: "judge",
+  });
+
+  expect(args.greenfield).toBe(true);
+  expect(args.accept).toBe("bun run build");
+  expect(args.plannerModel).toBe("planner");
+  expect(args.workModel).toBe("coder");
+  expect(args.evaluatorModel).toBe("judge");
+});
+
 test("applyRecipe fills defaults but an explicit CLI value always wins", () => {
   const recipe: ITaskRecipe = {
     id: "api-endpoint",

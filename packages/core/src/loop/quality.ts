@@ -6,6 +6,7 @@ import { validate, type ErrorParser } from "../validate";
 import { runAccept } from "../validate";
 import { judge } from "../eval";
 import { qualityHints } from "./feedback";
+import { snapshotFiles, restoreFiles } from "./file-snapshot";
 import type { Reporter } from "./loop.types";
 
 export interface IQualityResult {
@@ -59,7 +60,7 @@ export async function qualityRepair(
   while (best.quality < target && attempts < maxAttempts) {
     attempts += 1;
 
-    const snapshot = await snapshotFiles(task, cwd);
+    const snapshot = await snapshotFiles(cwd, task.files);
 
     // Turn the reviewer's prose into concrete bad→good guidance where we have a
     // card for the issue it named (the quality channel — these are idiomatic
@@ -90,7 +91,8 @@ export async function qualityRepair(
     const gate = await validate(task, cwd, opts.parse);
 
     if (!gate.passed) {
-      await restoreFiles(snapshot, cwd);
+      await restoreFiles(snapshot);
+      report({ kind: "reverted", task: task.id, message: "gate broken" });
       report({
         kind: "fix",
         task: task.id,
@@ -109,7 +111,8 @@ export async function qualityRepair(
         message: `quality ↑ ${best.quality}/5`,
       });
     } else {
-      await restoreFiles(snapshot, cwd);
+      await restoreFiles(snapshot);
+      report({ kind: "reverted", task: task.id, message: "no quality gain" });
       report({
         kind: "fix",
         task: task.id,
@@ -145,30 +148,4 @@ async function score(
   });
 
   return { quality: result.overall, notes: result.notes };
-}
-
-async function snapshotFiles(
-  task: ITask,
-  cwd: string
-): Promise<Map<string, string>> {
-  const snapshot = new Map<string, string>();
-
-  for (const file of task.files) {
-    const handle = Bun.file(join(cwd, file));
-
-    if (await handle.exists()) {
-      snapshot.set(file, await handle.text());
-    }
-  }
-
-  return snapshot;
-}
-
-async function restoreFiles(
-  snapshot: Map<string, string>,
-  cwd: string
-): Promise<void> {
-  for (const [file, content] of snapshot) {
-    await Bun.write(join(cwd, file), content);
-  }
 }

@@ -1,6 +1,6 @@
 import type { ITask } from "../spec";
 import type { IChatMessage, IModelResponse, IProvider } from "../inference";
-import { validate, type ErrorParser } from "../validate";
+import { validate, type ErrorParser, type IValidateResult } from "../validate";
 import { parseEslintJson } from "../validate";
 import { readFiles, type IFileView } from "../lib/fs";
 import {
@@ -249,6 +249,56 @@ function scoutSeed(
   return buildScoutContext(tsService, cwd, editable);
 }
 
+/**
+ * Validate the goalpost up front. RED-first: the gate must fail before we build,
+ * so a no-op can't pass for success — UNLESS `requireRed` is false (greenfield,
+ * where the global gate is a guardrail, not the per-feature signal). Returns the
+ * gate result plus an `early` run result to stop on (already green + RED required),
+ * or `early: null` to proceed (after reporting the RED event).
+ */
+async function redPrecheck(
+  task: ITask,
+  cwd: string,
+  parse: ErrorParser | undefined,
+  requireRed: boolean,
+  report: Reporter
+): Promise<{ red: IValidateResult; early: IRunResult | null }> {
+  const red = await validate(task, cwd, parse);
+
+  if (red.passed && requireRed) {
+    report({
+      kind: "done",
+      task: task.id,
+      cycles: 0,
+      message: `task ${task.id}: already green`,
+    });
+
+    return {
+      red,
+      early: {
+        task: task.id,
+        redConfirmed: false,
+        status: RUN_STATUS.redNotConfirmed,
+        cycles: 0,
+        edits: 0,
+        regressions: 0,
+      },
+    };
+  }
+
+  report({
+    kind: "red",
+    task: task.id,
+    errors: red.errors.length,
+    // Carry the failing rule codes so the memory miner can seed the baseline
+    // failure set — a one-turn red→green fix has no prior `validated` event.
+    rules: red.errors.flatMap((e) => (e.rule === undefined ? [] : [e.rule])),
+    message: `task ${task.id}: RED (${red.errors.length} error(s))`,
+  });
+
+  return { red, early: null };
+}
+
 export async function runTask(
   task: ITask,
   cwd: string,
@@ -285,36 +335,18 @@ export async function runTask(
     message: `task ${task.id}: checking current state`,
   });
 
-  // RED: the goalpost must fail before we build.
-  const red = await validate(task, cwd, effectiveParse);
+  const requireRed = opts.requireRed ?? true;
+  const { red, early } = await redPrecheck(
+    task,
+    cwd,
+    effectiveParse,
+    requireRed,
+    report
+  );
 
-  if (red.passed) {
-    report({
-      kind: "done",
-      task: task.id,
-      cycles: 0,
-      message: `task ${task.id}: already green`,
-    });
-
-    return {
-      task: task.id,
-      redConfirmed: false,
-      status: RUN_STATUS.redNotConfirmed,
-      cycles: 0,
-      edits: 0,
-      regressions: 0,
-    };
+  if (early !== null) {
+    return early;
   }
-
-  report({
-    kind: "red",
-    task: task.id,
-    errors: red.errors.length,
-    // Carry the failing rule codes so the memory miner can seed the baseline
-    // failure set — a one-turn red→green fix has no prior `validated` event.
-    rules: red.errors.flatMap((e) => (e.rule === undefined ? [] : [e.rule])),
-    message: `task ${task.id}: RED (${red.errors.length} error(s))`,
-  });
 
   // Detect stack once per run, early; tsforge.config.json may adjust it
   const { stackProfile, ruleOverrides, policy, conventions } =

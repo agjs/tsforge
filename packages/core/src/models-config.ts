@@ -234,3 +234,29 @@ export async function resolveActiveModel(): Promise<{
 
   return { name: cfg.active, entry: cfg.models[cfg.active] ?? QWEN_LOCAL };
 }
+
+/** Resolve a model by its registry name, falling back to the active model when
+ *  the name is unset or not in the registry. The seam for greenfield role routing
+ *  (planner / work / evaluator): an unconfigured role transparently reuses the
+ *  active model, so a single-endpoint setup still runs. Explicit TSFORGE_* env
+ *  still wins (it overrides the whole registry), matching resolveActiveModel. */
+export async function resolveModelByName(
+  name: string | undefined
+): Promise<{ name: string; entry: IModelEntry }> {
+  const env = envModelEntry();
+
+  if (env !== undefined) {
+    return { name: name ?? "env", entry: env };
+  }
+
+  if (name === undefined || name.length === 0) {
+    return resolveActiveModel();
+  }
+
+  const cfg = await loadModelsConfig();
+  const entry = cfg.models[name];
+
+  return entry === undefined
+    ? { name: cfg.active, entry: cfg.models[cfg.active] ?? QWEN_LOCAL }
+    : { name, entry };
+}

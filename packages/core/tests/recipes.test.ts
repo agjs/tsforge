@@ -33,6 +33,47 @@ describe("parseRecipe", () => {
     expect("bogusField" in (r ?? {})).toBe(false);
   });
 
+  test("parses the withReview flag and does not flag it as unrecognized", () => {
+    const r = parseRecipe({ id: "repair-with-review", withReview: true });
+
+    expect(r?.withReview).toBe(true);
+    expect(unrecognizedKeys({ id: "x", withReview: true })).toEqual([]);
+    // a non-boolean withReview is dropped, never coerced
+    expect(
+      parseRecipe({ id: "x", withReview: "yes" })?.withReview
+    ).toBeUndefined();
+  });
+
+  test("parses the greenfield role models", () => {
+    const r = parseRecipe({
+      id: "build-app",
+      mode: "greenfield",
+      plannerModel: "big-thinker",
+      workModel: "fast-coder",
+      evaluatorModel: "harsh-judge",
+    });
+
+    expect(r?.plannerModel).toBe("big-thinker");
+    expect(r?.workModel).toBe("fast-coder");
+    expect(r?.evaluatorModel).toBe("harsh-judge");
+    expect(
+      unrecognizedKeys({
+        id: "x",
+        plannerModel: "a",
+        workModel: "b",
+        evaluatorModel: "c",
+      })
+    ).toEqual([]);
+  });
+
+  test("accepts mode:greenfield and drops any other mode value", () => {
+    expect(parseRecipe({ id: "build-app", mode: "greenfield" })?.mode).toBe(
+      "greenfield"
+    );
+    expect(parseRecipe({ id: "x", mode: "spaceship" })?.mode).toBeUndefined();
+    expect(unrecognizedKeys({ id: "x", mode: "greenfield" })).toEqual([]);
+  });
+
   test("rejects a recipe with no id or a non-kebab id", () => {
     expect(parseRecipe({ gate: "x" })).toBeNull();
     expect(parseRecipe({ id: "Has Spaces" })).toBeNull();

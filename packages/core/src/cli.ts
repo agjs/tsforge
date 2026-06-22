@@ -13,7 +13,8 @@ import {
   shouldOpenAtPicker,
   type IPickerView,
 } from "./render/file-menu";
-import { listWorkspaceFiles } from "./lib/fs";
+import { listWorkspaceFiles, readFiles } from "./lib/fs";
+import { renderCheck } from "./browser";
 import { composeMessage } from "./loop/prompt";
 import {
   runTask,
@@ -23,8 +24,22 @@ import {
   ledgerTypeFor,
   PLAN_APPROVED_NOTE,
   reviewChange,
+  reviewRepair,
   formatReport,
+  runGreenfield,
+  prepareState,
+  evaluateFeature,
+  planFeatures,
+  judgeFeature,
+  negotiateContract,
+  writeContract,
+  contractEnabled,
+  type IFeature,
+  type IGreenfieldDeps,
+  type Reporter,
+  type SetupWebFn,
 } from "./loop";
+import { modelAgent } from "./agent";
 import { buildAndPersistMap, mapStatus, forgetMap } from "./codebase";
 import { parseEventLog, formatTrace } from "./eval";
 import { loadRecipes, findRecipe } from "./config/recipes";
@@ -47,6 +62,7 @@ import {
 } from "./inference";
 import {
   resolveActiveModel,
+  resolveModelByName,
   setActiveModel,
   loadModelsConfig,
   resolveApiKey,
@@ -64,7 +80,6 @@ import {
   type IStatusInfo,
 } from "./render";
 import type { ITask } from "./spec";
-import type { Reporter, SetupWebFn } from "./loop";
 import { loadLedger, activeRules, forgetMemory } from "./loop/memory";
 import {
   buildGate,
@@ -519,8 +534,10 @@ async function runOnce(args: ICliArgs): Promise<number> {
       ? args.thinkingBudget
       : envNumber("TSFORGE_THINKING_BUDGET");
   const { entry } = await modelForRun(args);
-  const result = await runTask(task, args.dir, makeProvider(entry), {
-    onEvent: makeReporter(logFile, "cli"),
+  const provider = makeProvider(entry);
+  const report = makeReporter(logFile, "cli");
+  const result = await runTask(task, args.dir, provider, {
+    onEvent: report,
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
     ...(args.scout ? { scout: true } : {}),
@@ -530,6 +547,15 @@ async function runOnce(args: ICliArgs): Promise<number> {
   process.stdout.write(
     `\n${ok ? "✓ done" : `✗ ${result.status}`} in ${String(result.cycles)} turn(s)\n`
   );
+
+  // Optional post-green adversarial review + one repair cycle (reverts if it
+  // breaks the gate). Only meaningful once the task is actually green.
+  if (ok && args.withReview) {
+    await reviewRepair(provider, args.dir, task, modelAgent(provider), {
+      ...(args.base.length > 0 ? { base: args.base } : {}),
+      onEvent: report,
+    });
+  }
 
   return ok ? 0 : 1;
 }
@@ -1959,6 +1985,209 @@ async function traceMode(args: ICliArgs): Promise<number> {
   return runTraceCommand(args.task);
 }
 
+/** Concatenate the editable scope into a single, size-capped code window for the
+ *  feature judge — the BUILT ARTIFACT only (design-rule #2: no tool trace). */
+async function scopeCode(dir: string, files: string[]): Promise<string> {
+  const views = await readFiles(dir, files);
+  const joined = views.map((v) => `// ${v.path}\n${v.content}`).join("\n\n");
+  const CAP = 16000;
+
+  return joined.length > CAP ? `${joined.slice(0, CAP)}\n…[truncated]` : joined;
+}
+
+/** Build the greenfield deps: implement one feature with the work model (reusing
+ *  the headless runTask driver against the build gate), then evaluate it through
+ *  the layered stack — deterministic gate, optional browser steps, reject-by-
+ *  default judge on the EVALUATOR model (which only ever sees the built code). */
+function greenfieldDeps(
+  args: ICliArgs,
+  work: OpenAICompatibleProvider,
+  evaluator: OpenAICompatibleProvider,
+  scope: string[],
+  report: Reporter
+): IGreenfieldDeps {
+  const featureTask = (feature: IFeature): ITask => ({
+    id: feature.id,
+    intent: `${args.task}\n\nImplement this feature: ${feature.desc}`,
+    accept: args.accept,
+    files: scope,
+    context: [],
+  });
+
+  // Optional pre-build contract negotiation (EXPERIMENTAL, gated by
+  // TSFORGE_CONTRACT). When on, the generator + evaluator agree a contract first
+  // and it anchors the implement prompt.
+  const contractPrefix = async (feature: IFeature): Promise<string> => {
+    if (!contractEnabled()) {
+      return "";
+    }
+
+    const result = await negotiateContract(work, evaluator, feature);
+
+    await writeContract(args.dir, feature, result);
+    report({
+      kind: "fix",
+      task: "greenfield",
+      message: `contract '${feature.id}': ${result.agreed ? "agreed" : "no agreement"} after ${result.rounds} round(s)`,
+    });
+
+    // Don't claim agreement the negotiation didn't reach — an unagreed contract
+    // is the generator's best proposal, labelled honestly so the build prompt
+    // doesn't assert a safety guarantee that isn't there.
+    const heading = result.agreed
+      ? "Agreed build contract"
+      : "Proposed build contract (negotiation did not converge)";
+
+    return `${heading}:\n${result.contract}\n\n`;
+  };
+
+  const thinkingTokenBudget =
+    args.thinkingBudget > 0
+      ? args.thinkingBudget
+      : envNumber("TSFORGE_THINKING_BUDGET");
+
+  return {
+    implement: async (feature) => {
+      const prefix = await contractPrefix(feature);
+      const base = featureTask(feature);
+
+      await runTask(
+        { ...base, intent: `${prefix}${base.intent ?? ""}` },
+        args.dir,
+        work,
+        {
+          onEvent: report,
+          // The global gate is often already green between features, so don't
+          // bail RED-first — the model must still build this feature.
+          requireRed: false,
+          ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+          ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
+        }
+      );
+    },
+    evaluate: (feature) =>
+      evaluateFeature(feature, {
+        gate: async () => {
+          const v = await validate(featureTask(feature), args.dir);
+
+          return { passed: v.passed, output: v.output };
+        },
+        // The browser layer runs the feature's steps only when a render target
+        // (`--browser <html>`) is configured; otherwise it's a no-op skip (the
+        // build gate already browser-smokes web apps).
+        browser: async () =>
+          args.browser.length > 0
+            ? renderCheck({
+                file: args.browser,
+                smoke: true,
+                ...(feature.steps === undefined
+                  ? {}
+                  : { steps: feature.steps }),
+              })
+            : { ok: true, errors: [], skipped: true },
+        judge: async () =>
+          judgeFeature(evaluator, {
+            feature: feature.desc,
+            code: await scopeCode(args.dir, scope),
+          }),
+      }),
+  };
+}
+
+/** Run the `--notify` shell command (if any) with the run outcome in
+ *  $TSFORGE_STATUS — a ping for unattended/cron runs. Best-effort: a failing or
+ *  missing notifier never changes the run's exit code. */
+async function runNotify(cmd: string, status: string): Promise<void> {
+  if (cmd.length === 0) {
+    return;
+  }
+
+  try {
+    const proc = Bun.spawn(["sh", "-c", cmd], {
+      env: { ...process.env, TSFORGE_STATUS: status },
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+
+    await proc.exited;
+  } catch {
+    // A broken notifier must not break the run.
+  }
+}
+
+/** `tsforge --greenfield "<goal>"` / a recipe with `mode: "greenfield"`: plan a
+ *  feature checklist (planner model), then drive it to all-green one feature at a
+ *  time on the existing gate + browser + judge stack, persisting state so a long
+ *  run resumes. Roles route to separate models when configured, else all share
+ *  the active model. */
+async function greenfieldMode(args: ICliArgs): Promise<number> {
+  if (args.task.length === 0) {
+    process.stdout.write(
+      'missing build goal — usage: tsforge --greenfield "build a kanban app"\n'
+    );
+
+    return 1;
+  }
+
+  if (args.accept.length === 0) {
+    process.stdout.write(
+      "greenfield needs a build gate — pass --accept '<cmd>' or set `gate` in the recipe\n"
+    );
+
+    return 1;
+  }
+
+  // Each role falls back to the recipe's `model` (then the active model), per the
+  // recipe contract — a recipe that sets only `model` must route ALL roles there,
+  // not just the work role.
+  const roleName = (specific: string): string =>
+    specific.length > 0 ? specific : args.model;
+  const planner = makeProvider(
+    (await resolveModelByName(roleName(args.plannerModel))).entry
+  );
+  const work = makeProvider(
+    (await resolveModelByName(roleName(args.workModel))).entry
+  );
+  const evaluator = makeProvider(
+    (await resolveModelByName(roleName(args.evaluatorModel))).entry
+  );
+
+  const state = await prepareState(args.dir, args.task, (goal) =>
+    planFeatures(planner, goal)
+  );
+
+  if (state === null) {
+    process.stdout.write("planner produced no features — nothing to build\n");
+
+    return 1;
+  }
+
+  const report = makeReporter(
+    resolveLogPath("greenfield", args.log),
+    "greenfield"
+  );
+  const scope = scopeOf(args);
+  const result = await runGreenfield(
+    args.dir,
+    state,
+    greenfieldDeps(args, work, evaluator, scope, report),
+    { onEvent: report }
+  );
+
+  const done = result.features.filter((f) => f.passes).length;
+
+  process.stdout.write(
+    `\n${result.status === "done" ? "✓ all features verified" : `✗ stuck on '${result.stuckFeature ?? "?"}'`} (${done}/${result.features.length})\n`
+  );
+
+  await runNotify(
+    args.notify,
+    `greenfield ${result.status} ${done}/${result.features.length}`
+  );
+
+  return result.status === "done" ? 0 : 1;
+}
+
 export async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -1996,6 +2225,10 @@ export async function main(): Promise<number> {
 
   if (args.setup) {
     return setupMode(args);
+  }
+
+  if (args.greenfield) {
+    return greenfieldMode(args);
   }
 
   // A positional task with a scope + gate ⇒ one-shot; otherwise interactive.

@@ -26,6 +26,13 @@ export interface ITaskRecipe {
   readonly gate?: string;
   /** A configured model name from `~/.tsforge/models.json` (→ the run's model). */
   readonly model?: string;
+  /** Greenfield role models (names from `~/.tsforge/models.json`). Each defaults
+   *  to `model`/the active model when unset, so single-endpoint setups still work
+   *  (same model, different role prompts). The evaluator stays trace-blind
+   *  regardless of which model backs it. */
+  readonly plannerModel?: string;
+  readonly workModel?: string;
+  readonly evaluatorModel?: string;
   /** Hard cap on model turns (→ run option `maxTurns`). */
   readonly maxTurns?: number;
   /** Reasoning-token cap per call (→ run option `thinkingTokenBudget`). */
@@ -46,8 +53,15 @@ export interface ITaskRecipe {
   readonly log?: boolean;
   /** Run a gate-aware functional review after green (→ `review --with-gate`). */
   readonly withGate?: boolean;
+  /** After green, run the adversarial review and feed verified findings into ONE
+   *  repair cycle (revert if it breaks the gate) (→ `--with-review`). */
+  readonly withReview?: boolean;
   /** Seed a deterministic pre-edit caller blast-radius scout (→ `--scout`). */
   readonly scout?: boolean;
+  /** Run mode. `"greenfield"` selects the feature-checklist outer loop
+   *  (`runGreenfield`) instead of the default single-task loop. Omitted ⇒ the
+   *  normal brownfield/one-shot run. */
+  readonly mode?: "greenfield";
 }
 
 function optString(value: unknown): string | undefined {
@@ -89,6 +103,9 @@ function assignScalars(recipe: Mutable, raw: Record<string, unknown>): void {
   recipe.task = optString(raw.task);
   recipe.gate = optString(raw.gate);
   recipe.model = optString(raw.model);
+  recipe.plannerModel = optString(raw.plannerModel);
+  recipe.workModel = optString(raw.workModel);
+  recipe.evaluatorModel = optString(raw.evaluatorModel);
   recipe.base = optString(raw.base);
   recipe.files = stringArray(raw.files);
   recipe.maxTurns = optPositive(raw.maxTurns);
@@ -96,6 +113,10 @@ function assignScalars(recipe: Mutable, raw: Record<string, unknown>): void {
 
   if (isPolicyMode(raw.policyMode)) {
     recipe.policyMode = raw.policyMode;
+  }
+
+  if (raw.mode === "greenfield") {
+    recipe.mode = raw.mode;
   }
 }
 
@@ -107,6 +128,7 @@ function assignFlags(recipe: Mutable, raw: Record<string, unknown>): void {
   recipe.plan = optBool(raw.plan);
   recipe.log = optBool(raw.log);
   recipe.withGate = optBool(raw.withGate);
+  recipe.withReview = optBool(raw.withReview);
   recipe.scout = optBool(raw.scout);
 }
 
@@ -122,6 +144,9 @@ const KNOWN_KEYS = new Set<string>([
   "files",
   "gate",
   "model",
+  "plannerModel",
+  "workModel",
+  "evaluatorModel",
   "maxTurns",
   "thinkingBudget",
   "policyMode",
@@ -132,7 +157,9 @@ const KNOWN_KEYS = new Set<string>([
   "plan",
   "log",
   "withGate",
+  "withReview",
   "scout",
+  "mode",
 ]);
 
 /** Keys present in the raw recipe that this version doesn't recognize. */

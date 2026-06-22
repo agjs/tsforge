@@ -39,9 +39,19 @@ export interface ICliArgs {
   /** Run the gate first and tell the reviewer to skip what it already covers
    *  (`tsforge review --with-gate`). */
   withGate: boolean;
+  /** After a one-shot run goes green, run the adversarial review and feed verified
+   *  findings into ONE repair cycle, reverting it if it breaks the gate
+   *  (`--with-review`). */
+  withReview: boolean;
   /** Seed a brownfield run with a deterministic caller blast-radius scout
    *  (`--scout`). */
   scout: boolean;
+  /** Run the greenfield feature-checklist outer loop (`--greenfield`, or a recipe
+   *  with `mode: "greenfield"`). `task` carries the one-line build goal. */
+  greenfield: boolean;
+  /** Shell command to run on completion of an unattended run (`--notify <cmd>`),
+   *  with the outcome in $TSFORGE_STATUS. "" = no notification. */
+  notify: string;
   /** Explicit base ref to diff against for review (`--base <ref>`). */
   base: string;
   /** Build a structural workspace map (`tsforge map`). */
@@ -57,6 +67,10 @@ export interface ICliArgs {
   run: boolean;
   /** Model name override (from a recipe); "" = the active model. */
   model: string;
+  /** Greenfield role models (from a recipe); "" = fall back to `model`/active. */
+  plannerModel: string;
+  workModel: string;
+  evaluatorModel: string;
   /** Hard turn cap (from a recipe); 0 = the loop default. */
   maxTurns: number;
   /** Reasoning-token cap (from a recipe); 0 = the env/default. */
@@ -82,7 +96,9 @@ const BOOL_FLAGS: Record<
   | "strictFloorOnly"
   | "staged"
   | "withGate"
+  | "withReview"
   | "scout"
+  | "greenfield"
   | "setupYes"
 > = {
   "--continue": "continue",
@@ -94,7 +110,9 @@ const BOOL_FLAGS: Record<
   "--strict-floor-only": "strictFloorOnly",
   "--staged": "staged",
   "--with-gate": "withGate",
+  "--with-review": "withReview",
   "--scout": "scout",
+  "--greenfield": "greenfield",
   "--yes": "setupYes",
 };
 
@@ -108,6 +126,7 @@ const VALUE_FLAGS = new Set([
   "--base",
   "--policy-mode",
   "--recipe",
+  "--notify",
 ]);
 
 /** Parse argv (without the tsforge binary name). Always succeeds — mode is decided in main. */
@@ -129,7 +148,10 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     review: false,
     staged: false,
     withGate: false,
+    withReview: false,
     scout: false,
+    greenfield: false,
+    notify: "",
     base: "",
     map: false,
     trace: false,
@@ -137,6 +159,9 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     recipes: false,
     run: false,
     model: "",
+    plannerModel: "",
+    workModel: "",
+    evaluatorModel: "",
     maxTurns: 0,
     thinkingBudget: 0,
     policyMode: "",
@@ -210,6 +235,8 @@ function applyValueFlag(flag: string, value: string, out: ICliArgs): void {
     out.policyMode = value;
   } else if (flag === "--recipe") {
     out.recipe = value;
+  } else if (flag === "--notify") {
+    out.notify = value;
   } else {
     out.accept = value; // --accept / --gate
   }
@@ -236,6 +263,8 @@ export function applyRecipe(args: ICliArgs, recipe: ITaskRecipe): void {
     args.model = recipe.model;
   }
 
+  applyRecipeModels(args, recipe);
+
   if (args.base.length === 0 && recipe.base !== undefined) {
     args.base = recipe.base;
   }
@@ -255,6 +284,22 @@ export function applyRecipe(args: ICliArgs, recipe: ITaskRecipe): void {
   applyRecipeFlags(args, recipe);
 }
 
+/** Recipe greenfield role models (split out to keep applyRecipe's complexity in
+ *  check). A recipe only fills a role still at its default. */
+function applyRecipeModels(args: ICliArgs, recipe: ITaskRecipe): void {
+  if (args.plannerModel.length === 0 && recipe.plannerModel !== undefined) {
+    args.plannerModel = recipe.plannerModel;
+  }
+
+  if (args.workModel.length === 0 && recipe.workModel !== undefined) {
+    args.workModel = recipe.workModel;
+  }
+
+  if (args.evaluatorModel.length === 0 && recipe.evaluatorModel !== undefined) {
+    args.evaluatorModel = recipe.evaluatorModel;
+  }
+}
+
 /** Recipe booleans (split out to keep applyRecipe's complexity in check). */
 function applyRecipeFlags(args: ICliArgs, recipe: ITaskRecipe): void {
   args.staged = args.staged || recipe.staged === true;
@@ -264,7 +309,9 @@ function applyRecipeFlags(args: ICliArgs, recipe: ITaskRecipe): void {
   args.plan = args.plan || recipe.plan === true;
   args.log = args.log || recipe.log === true;
   args.withGate = args.withGate || recipe.withGate === true;
+  args.withReview = args.withReview || recipe.withReview === true;
   args.scout = args.scout || recipe.scout === true;
+  args.greenfield = args.greenfield || recipe.mode === "greenfield";
 }
 
 // Default editable scope: the whole workspace — like any agentic CLI, the agent

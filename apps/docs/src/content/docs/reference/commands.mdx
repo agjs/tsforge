@@ -55,6 +55,23 @@ tsforge run api-endpoint --files lib/**  # ...with a CLI override (CLI wins)
 
 A recipe is declarative JSON in `.tsforge/recipes/<id>.json` (project) or `~/.tsforge/recipes/<id>.json` (global) that composes a run's options — model, gate, scope, limits, policy mode. See [Recipes](/cli/recipes/).
 
+## Build a whole app (greenfield)
+
+```bash
+tsforge --greenfield "build a kanban board" --accept "bun run build"
+tsforge --greenfield "..." --notify 'curl -s "$WEBHOOK?s=$TSFORGE_STATUS"'
+```
+
+`--greenfield` (or a recipe with `mode: "greenfield"`) plans a feature checklist and drives it to all-green one feature at a time, persisting state under `.tsforge/greenfield/` so a long run resumes. Each feature is verified by the gate, the browser oracle, and a reject-by-default judge. `--notify <cmd>` runs a shell command on completion with the outcome in `$TSFORGE_STATUS`. See [Greenfield builds](/loop/greenfield/).
+
+## Drive one change, then review it
+
+```bash
+tsforge "fix the off-by-one in paginate" --accept "bun test" --with-review
+```
+
+`--with-review` runs the functional review **after** the gate goes green and feeds any verified findings into a single repair pass, reverting it if it breaks the gate. Also a recipe field (`withReview`).
+
 ## Map the repo to prime the agent
 
 ```bash
@@ -72,7 +89,7 @@ tsforge trace            # summarize the newest --log run
 tsforge trace run.jsonl  # a specific log file
 ```
 
-`tsforge trace` (or `/trace` in a session) reads a `--log` ledger and prints a one-screen summary — model/tool calls, **policy decisions** (allow/ask/deny by risk), gate verdicts, and turns-to-green — deterministically, with no model call. See [Trace a run](/observability/trace/).
+`tsforge trace` (or `/trace` in a session) reads a `--log` ledger and prints a one-screen summary — model/tool calls, **policy decisions** (allow/ask/deny by risk), gate verdicts, turns-to-green, and the **accept rate / cost-per-accepted-change** (how many edits stuck vs were reverted) — deterministically, with no model call. See [Trace a run](/observability/trace/).
 
 ## Merge gate (repo root)
 

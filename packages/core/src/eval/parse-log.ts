@@ -21,6 +21,7 @@ const KNOWN_KINDS = new Set<string>([
   "timing",
   "usage",
   "ttsr",
+  "reverted",
   "policy",
 ]);
 

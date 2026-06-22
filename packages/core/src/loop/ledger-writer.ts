@@ -26,6 +26,8 @@ export function ledgerTypeFor(event: ILoopEvent): LedgerEventType {
     case "create":
     case "run":
       return "tool_call_finished";
+    case "reverted":
+      return "edit_reverted";
     case "policy":
       return "policy_decision";
     case "tool":
