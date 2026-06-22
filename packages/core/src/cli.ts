@@ -7,8 +7,13 @@ import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
 import { formatHelp, takesArg } from "./cli/commands";
 import { pickCommand } from "./render/command-menu";
-import { pickFile, shouldOpenAtPicker } from "./render/file-menu";
-import { resolveScopeFiles } from "./lib/fs";
+import {
+  pickFileInline,
+  formatCompletionRows,
+  shouldOpenAtPicker,
+  type IPickerView,
+} from "./render/file-menu";
+import { listWorkspaceFiles } from "./lib/fs";
 import { composeMessage } from "./loop/prompt";
 import {
   runTask,
@@ -1546,16 +1551,37 @@ async function repl(args: ICliArgs): Promise<number> {
       }
     };
 
-    // Open the interactive `@` file picker: pick a workspace file from a navigable
-    // list, then insert its path after the typed `@` (the surrounding message is
-    // kept — unlike the `/` palette we do NOT clear the line). At send time the
-    // `@path` is expanded to the file's contents (see composeMessage / runSend).
+    // Open the interactive `@` file picker: a compact dropdown rendered INLINE just
+    // above the input row (the conversation stays visible — no alternate screen),
+    // recency-ordered, type to fuzzy-filter. The buffer keeps its `@`; the live
+    // query is echoed onto the input row for feedback (it isn't in readline's
+    // buffer — the picker owns input). On select, the full path is appended after
+    // the `@`; at send time `@path` expands to the file's contents (see runSend).
     const openFilePicker = async (): Promise<void> => {
       paletteOpen = true;
 
+      const base = rl.line; // text up to and including the just-typed `@`
+
+      const view: IPickerView = {
+        render: (query, items, selected): void => {
+          const rows = formatCompletionRows(
+            items,
+            selected,
+            process.stdout.columns,
+            process.stdout.isTTY
+          );
+
+          statusBar.setInput(`${base}${query}`, base.length + query.length);
+          statusBar.setOverlay(rows, statusInfo());
+        },
+        close: (): void => {
+          statusBar.clearOverlay(statusInfo());
+        },
+      };
+
       try {
-        const files = await resolveScopeFiles(args.dir, ["**/*"]);
-        const picked = await pickFile(files, process.stdout.isTTY);
+        const files = await listWorkspaceFiles(args.dir);
+        const picked = await pickFileInline(files, view);
 
         if (picked !== null) {
           rl.write(`${picked} `); // append after the already-typed `@`
@@ -1589,7 +1615,10 @@ async function repl(args: ICliArgs): Promise<number> {
               void openPalette();
             }
           });
-        } else if (str === "@") {
+        } else if (str === "@" && useInputRow) {
+          // The inline dropdown renders above the input row, so it needs that row
+          // (a tall-enough TTY). Without it we skip the picker — `@path` typed by
+          // hand still expands at send time (composeMessage), just no live popup.
           setImmediate(() => {
             if (
               !busy &&

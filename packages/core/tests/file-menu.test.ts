@@ -1,7 +1,8 @@
 import { test, expect } from "bun:test";
 import {
   filterFiles,
-  renderFileMenu,
+  formatCompletionRows,
+  truncatePath,
   shouldOpenAtPicker,
 } from "../src/render/file-menu";
 
@@ -13,12 +14,13 @@ const FILES = [
   "README.md",
 ];
 
-test("filterFiles: empty query returns all (capped to a screenful)", () => {
-  expect(filterFiles(FILES, "")).toEqual(FILES.slice(0, 50));
+test("filterFiles: empty query returns the caller's order, capped tight (8)", () => {
+  expect(filterFiles(FILES, "")).toEqual(FILES); // fewer than the cap ⇒ all, in order
 
-  const many = Array.from({ length: 60 }, (_, i) => `f${String(i)}.ts`);
+  const many = Array.from({ length: 30 }, (_, i) => `f${String(i)}.ts`);
 
-  expect(filterFiles(many, "")).toHaveLength(50);
+  expect(filterFiles(many, "")).toHaveLength(8); // a dropdown, not a whole-tree dump
+  expect(filterFiles(many, "")).toEqual(many.slice(0, 8)); // preserves input order
 });
 
 test("filterFiles: substring match is case-insensitive over the whole path", () => {
@@ -31,20 +33,39 @@ test("filterFiles: basename-prefix matches rank ahead of mid-path matches", () =
   expect(filterFiles(FILES, "ba")[0]).toBe("bar.ts");
 });
 
-test("renderFileMenu: marks the selected row; header echoes the @query", () => {
-  const items = filterFiles(FILES, "");
-  const out = renderFileMenu(items, 2, "", false);
-  const lines = out.split("\n");
-
-  expect(lines).toHaveLength(items.length + 1); // header + one row per file
-  expect(lines[0]?.startsWith("@")).toBe(true);
-  expect(lines[3]?.startsWith("›")).toBe(true); // selected index 2 → row line 3
-  expect(out).toContain("src/cli.ts");
-  expect(out).not.toContain(String.fromCharCode(27)); // color=false ⇒ no ANSI
+test("filterFiles: ties preserve caller order (recency), no alphabetical reshuffle", () => {
+  expect(filterFiles(["z/app.ts", "a/api.ts"], "a")).toEqual([
+    "z/app.ts",
+    "a/api.ts",
+  ]);
 });
 
-test("renderFileMenu: empty result shows a 'no matching file' line", () => {
-  expect(renderFileMenu([], 0, "zzz", false)).toContain("no matching file");
+test("truncatePath: keeps the tail (filename) with a leading ellipsis when clipped", () => {
+  expect(truncatePath("src/cli.ts", 40)).toBe("src/cli.ts"); // fits ⇒ unchanged
+  expect(truncatePath("packages/core/src/render/status-bar.ts", 12)).toBe(
+    "…atus-bar.ts" // exactly 12 cols: ellipsis + last 11 chars
+  );
+  expect(truncatePath("anything", 0)).toBe("");
+});
+
+test("formatCompletionRows: one truncated row per file; selected gutter; no wrap", () => {
+  const rows = formatCompletionRows(FILES, 1, 40, false);
+
+  expect(rows).toHaveLength(FILES.length);
+  expect(rows[1]?.startsWith("›")).toBe(true); // selected row marked
+
+  for (const r of rows) {
+    expect(r.length).toBeLessThanOrEqual(40); // never wider than the terminal
+  }
+
+  expect(rows.join("\n")).not.toContain(String.fromCharCode(27)); // color off ⇒ no ANSI
+});
+
+test("formatCompletionRows: empty list still shows a 'no matching file' row", () => {
+  const rows = formatCompletionRows([], 0, 40, false);
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toContain("no matching file");
 });
 
 test("shouldOpenAtPicker: fires at line start and after whitespace", () => {
@@ -53,10 +74,10 @@ test("shouldOpenAtPicker: fires at line start and after whitespace", () => {
 });
 
 test("shouldOpenAtPicker: does NOT fire inside a word (email / mid-token)", () => {
-  expect(shouldOpenAtPicker("ag@", 3)).toBe(false); // email-like, no boundary
+  expect(shouldOpenAtPicker("ag@", 3)).toBe(false);
   expect(shouldOpenAtPicker("foo@", 4)).toBe(false);
 });
 
 test("shouldOpenAtPicker: false when the char before the cursor is not @", () => {
-  expect(shouldOpenAtPicker("@x", 2)).toBe(false); // cursor sits after a typed char
+  expect(shouldOpenAtPicker("@x", 2)).toBe(false);
 });

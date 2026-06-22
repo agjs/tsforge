@@ -3,6 +3,7 @@ import {
   StatusBar,
   buildBarFrame,
   buildInputFrame,
+  buildOverlayFrame,
   type IStatusInfo,
   type IStatusBarTerminal,
 } from "../src/render";
@@ -288,5 +289,64 @@ describe("StatusBar with input row", () => {
     expect(out).toContain("\x1b[23;1H"); // border row cleared
     expect(out).toContain("\x1b[24;1H"); // segments row cleared
     expect(out).toContain("\x1b[?25h"); // show cursor
+  });
+});
+
+describe("buildOverlayFrame (@-picker dropdown)", () => {
+  test("paints rows bottom-aligned directly above the input row", () => {
+    // rows=24 ⇒ input row is 22; a 2-line popup sits on rows 20 and 21.
+    const frame = buildOverlayFrame(["a.ts", "b.ts"], 0, 24);
+
+    expect(frame).toContain("\x1b[20;1H\x1b[2Ka.ts");
+    expect(frame).toContain("\x1b[21;1H\x1b[2Kb.ts");
+    expect(frame).not.toContain("\x1b[22;1H"); // never touches the input row
+  });
+
+  test("a shrunk list clears the old top rows above the new ones", () => {
+    // Was 3 rows tall, now 1 ⇒ still operate over 3 rows; top 2 are cleared blank.
+    const frame = buildOverlayFrame(["only.ts"], 3, 24);
+
+    expect(frame).toContain("\x1b[19;1H\x1b[2K"); // cleared (old) row, no content
+    expect(frame).toContain("\x1b[20;1H\x1b[2K");
+    expect(frame).toContain("\x1b[21;1H\x1b[2Konly.ts"); // new row, bottom-aligned
+  });
+
+  test("clamps so it never addresses above row 1 on a short terminal", () => {
+    const frame = buildOverlayFrame(["x", "y", "z"], 0, 5); // input row = 3
+
+    expect(frame).not.toContain("\x1b[0;1H"); // never row 0 / negative
+    expect(frame).not.toContain("\x1b[-1;1H");
+    expect(frame).toContain("\x1b[1;1H"); // clamped to row 1
+  });
+});
+
+describe("StatusBar @-picker overlay", () => {
+  test("setOverlay paints the popup, then clearOverlay erases it", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = new StatusBar(term, true, false, true); // withInput
+
+    bar.install(INFO);
+    bar.setInput("explain @", 9);
+    term.writes.length = 0;
+
+    bar.setOverlay(["src/a.ts", "src/b.ts"], INFO);
+    expect(term.text()).toContain("src/a.ts");
+    expect(term.text()).toContain("\x1b[21;1H"); // popup row above the input row (22)
+
+    term.writes.length = 0;
+    bar.clearOverlay(INFO);
+    expect(term.text()).toContain("\x1b[20;1H\x1b[2K"); // old popup rows erased
+    expect(term.text()).toContain("\x1b[21;1H\x1b[2K");
+  });
+
+  test("setOverlay is a no-op without an input row (no inline surface)", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = new StatusBar(term, true, false, false); // no input row
+
+    bar.install(INFO);
+    term.writes.length = 0;
+    bar.setOverlay(["a.ts"], INFO);
+
+    expect(term.writes).toHaveLength(0);
   });
 });

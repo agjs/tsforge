@@ -2,18 +2,9 @@ import { emitKeypressEvents } from "node:readline";
 import { STYLE, paint } from "./style";
 import { clampIndex } from "./command-menu";
 
-const ESC = String.fromCharCode(27);
-// Same alternate-screen approach as the `/` command palette (see command-menu.ts):
-// render on the ALT buffer so frames redraw cleanly instead of fighting the status
-// bar's scroll region, and exit restores the previous screen verbatim.
-const ENTER_ALT = `${ESC}[?1049h${ESC}[r`;
-const EXIT_ALT = `${ESC}[?1049l`;
-const HIDE_CURSOR = `${ESC}[?25l`;
-const SHOW_CURSOR = `${ESC}[?25h`;
-const CLEAR_HOME = `${ESC}[2J${ESC}[H`;
-
-/** Most files shown at once — keeps the menu a screenful, not a 400-line dump. */
-const MAX_VISIBLE = 50;
+/** Rows shown in the popup at once — a tight dropdown above the prompt, never a
+ *  whole-tree dump. On an empty query these are the most-recently-modified files. */
+const MAX_VISIBLE = 8;
 
 /** Basename of a workspace-relative path (the part after the last `/`). */
 function baseName(path: string): string {
@@ -21,7 +12,8 @@ function baseName(path: string): string {
 }
 
 /** Lower rank = better match: basename-prefix beats path-prefix beats basename
- *  substring beats anywhere. Stable within a rank by path (see filterFiles). */
+ *  substring beats anywhere. Ties keep the caller's order (recency) — sort is
+ *  stable — so the most-recently-touched match within a rank surfaces first. */
 function rank(path: string, q: string): number {
   const base = baseName(path).toLowerCase();
   const full = path.toLowerCase();
@@ -42,7 +34,8 @@ function rank(path: string, q: string): number {
 }
 
 /** Filter files by a query (the text typed after `@`), case-insensitive substring
- *  over the whole path, best matches first. Empty query ⇒ the first MAX_VISIBLE. */
+ *  over the whole path, best matches first (ties keep caller/recency order — sort
+ *  is stable). Empty query ⇒ the first MAX_VISIBLE of the caller's order. */
 export function filterFiles(files: readonly string[], query: string): string[] {
   const q = query.toLowerCase();
 
@@ -52,43 +45,47 @@ export function filterFiles(files: readonly string[], query: string): string[] {
 
   return files
     .filter((f) => f.toLowerCase().includes(q))
-    .sort((a, b) => {
-      const byRank = rank(a, q) - rank(b, q);
-
-      return byRank === 0 ? a.localeCompare(b) : byRank;
-    })
+    .sort((a, b) => rank(a, q) - rank(b, q))
     .slice(0, MAX_VISIBLE);
 }
 
-/** Render the file picker as a block of lines (no trailing newline). The header
- *  echoes the current `@`-query + key hints; the selected row is highlighted. */
-export function renderFileMenu(
-  items: readonly string[],
-  selected: number,
-  query: string,
-  color: boolean
-): string {
-  const header =
-    paint(`@${query}`, STYLE.brand, color) +
-    paint(
-      "  ↑/↓ select · type to filter · enter link · esc cancel",
-      STYLE.dim,
-      color
-    );
-
-  if (items.length === 0) {
-    return `${header}\n  ${paint("no matching file", STYLE.dim, color)}`;
+/** Truncate a path to `max` columns keeping its TAIL (the filename matters most),
+ *  prefixing `…` when clipped. `max <= 0` ⇒ empty. */
+export function truncatePath(path: string, max: number): string {
+  if (max <= 0) {
+    return "";
   }
 
-  const rows = items.map((path, i) => {
+  if (path.length <= max) {
+    return path;
+  }
+
+  return `…${path.slice(-(max - 1))}`;
+}
+
+/**
+ * The popup rows for the inline file dropdown — one painted line per visible file,
+ * each truncated to `columns` (no wrapping), the selected row gutter-highlighted.
+ * Pure/width-aware so it can be asserted without a terminal. Empty list ⇒ a single
+ * "no matching file" row so the dropdown never silently vanishes mid-type.
+ */
+export function formatCompletionRows(
+  items: readonly string[],
+  selected: number,
+  columns: number,
+  color: boolean
+): string[] {
+  if (items.length === 0) {
+    return [`  ${paint("no matching file", STYLE.dim, color)}`];
+  }
+
+  return items.map((path, i) => {
     const active = i === selected;
     const gutter = active ? paint("›", STYLE.brand, color) : " ";
-    const label = paint(path, active ? STYLE.brand : STYLE.bold, color);
+    const text = truncatePath(path, Math.max(0, columns - 2));
 
-    return `${gutter} ${label}`;
+    return `${gutter} ${paint(text, active ? STYLE.brand : STYLE.dim, color)}`;
   });
-
-  return [header, ...rows].join("\n");
 }
 
 /** True when an `@` just typed at `cursor` starts a fresh mention — i.e. the `@`
@@ -112,19 +109,29 @@ interface IKeyInfo {
 }
 
 /**
- * The interactive `@` file picker. A direct sibling of `pickCommand` — it owns
- * `keypress` input for its lifetime (stash + detach the existing listeners so only
- * `onKey` reacts), renders a navigable file list on the alternate screen, and
- * resolves to the chosen path or null (Esc / Ctrl-C / backspace-past-empty).
- * `finish()` ALWAYS restores the saved listeners. No-ops to null off a TTY.
- *
- * Like pickCommand, stdin stays in readline's raw, flowing mode — we only swap WHO
+ * The terminal-facing side of the inline picker, supplied by the CLI. `render` is
+ * called on every change with the current query + filtered items so the host can
+ * paint the dropdown above the input row and echo the live `@query`; `close` tears
+ * the dropdown down. Keeping these as callbacks lets pickFileInline own only the
+ * keypress state machine, with no knowledge of the status bar.
+ */
+export interface IPickerView {
+  render(query: string, items: readonly string[], selected: number): void;
+  close(): void;
+}
+
+/**
+ * The interactive `@` file picker, rendered INLINE (no alternate screen): it owns
+ * `keypress` for its lifetime — stash + detach the existing listeners so only
+ * `onKey` reacts — drives a tight dropdown via `view`, and resolves to the chosen
+ * path or null (Esc / Ctrl-C / backspace-past-empty). Enter or Tab accept the
+ * highlighted row. `view.close()` + listener restore ALWAYS run. No-ops to null
+ * off a TTY. stdin stays in readline's raw, flowing mode — we only swap WHO
  * listens, never toggle raw mode, so the terminal can't be left wedged.
  */
-export function pickFile(
+export function pickFileInline(
   files: readonly string[],
-  color: boolean,
-  out: (s: string) => void = (s) => process.stdout.write(s)
+  view: IPickerView
 ): Promise<string | null> {
   const stdin = process.stdin;
 
@@ -146,13 +153,12 @@ export function pickFile(
       const items = filterFiles(files, query);
 
       selected = clampIndex(selected, items.length);
-
-      out(`${CLEAR_HOME}${renderFileMenu(items, selected, query, color)}`);
+      view.render(query, items, selected);
     };
 
     const finish = (result: string | null): void => {
       stdin.removeListener("keypress", onKey);
-      out(`${SHOW_CURSOR}${EXIT_ALT}`);
+      view.close();
 
       for (const l of saved) {
         stdin.on("keypress", (...args: unknown[]) => {
@@ -163,18 +169,20 @@ export function pickFile(
       resolve(result);
     };
 
+    const accept = (): void => {
+      const items = filterFiles(files, query);
+
+      finish(items[clampIndex(selected, items.length)] ?? null);
+    };
+
     const onKey = (str: string | undefined, key: IKeyInfo): void => {
       try {
         if ((key.ctrl === true && key.name === "c") || key.name === "escape") {
           finish(null);
-
-          return;
-        }
-
-        const items = filterFiles(files, query);
-
-        if (key.name === "return" || key.name === "enter") {
-          finish(items[clampIndex(selected, items.length)] ?? null);
+        } else if (key.name === "return" || key.name === "enter") {
+          accept();
+        } else if (key.name === "tab") {
+          accept();
         } else if (key.name === "up") {
           selected -= 1;
           draw();
@@ -200,7 +208,6 @@ export function pickFile(
     };
 
     stdin.on("keypress", onKey);
-    out(`${ENTER_ALT}${HIDE_CURSOR}`);
     draw();
   });
 }
