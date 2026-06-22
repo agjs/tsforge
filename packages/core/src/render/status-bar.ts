@@ -229,6 +229,36 @@ export function buildInputFrame(
 }
 
 /**
+ * Paint a transient popup of `lines` directly ABOVE the input row (an `@`-file
+ * dropdown), bottom-aligned against the prompt. `clearRows` is the height of the
+ * previous popup so a shrinking list erases its old top rows. Pure/width-aware:
+ * positions absolutely, clears each row first, and writes nothing into the bar or
+ * input row (the caller repaints those). Clamped so it never addresses above row 1.
+ */
+export function buildOverlayFrame(
+  lines: readonly string[],
+  clearRows: number,
+  rows: number
+): string {
+  const inputRow = Math.max(1, rows - 2);
+  const count = Math.min(
+    Math.max(lines.length, clearRows),
+    Math.max(0, inputRow - 1)
+  );
+  const blank = count - lines.length; // cleared (old) rows sit above the new list
+  let out = "";
+
+  for (let i = 0; i < count; i += 1) {
+    const row = Math.max(1, inputRow - count + i);
+    const line = i - blank >= 0 ? (lines[i - blank] ?? "") : "";
+
+    out += `${ESC}[${row};1H${ESC}[2K${line}`;
+  }
+
+  return out;
+}
+
+/**
  * An always-visible status bar pinned to the terminal's bottom via an ANSI scroll
  * region (DECSTBM). Streaming output and readline input scroll in the region
  * above it; the bar is repainted on state changes and resize. Inactive (no-op)
@@ -241,6 +271,9 @@ export class StatusBar {
    *  stream chunk can re-paint the input row and re-park the cursor. */
   private line = "";
   private cursorPos = 0;
+  /** Height of the `@`-picker popup currently painted above the input row (0 = none),
+   *  so the next paint knows how many old rows to erase. */
+  private overlayRows = 0;
 
   constructor(
     private readonly out: IStatusBarTerminal,
@@ -338,6 +371,39 @@ export class StatusBar {
     this.out.write(text); // scrolls within the region
     this.out.write(`${ESC}7`); // save the advanced stream cursor
     this.out.write(RESET_SGR); // don't bleed mid-stream color into the input row
+    this.paintInput();
+  }
+
+  /** Paint the `@`-picker dropdown of `lines` just above the input row, then
+   *  repaint the bar + input row and re-park the cursor. Safe to call repeatedly as
+   *  the list filters — a shrinking list erases its old rows. Input-row mode only;
+   *  a no-op otherwise (the caller then has no inline surface and skips the picker). */
+  setOverlay(lines: readonly string[], info: IStatusInfo): void {
+    if (!this.installed || !this.withInput) {
+      return;
+    }
+
+    const columns = this.out.columns ?? 80;
+    const rows = this.out.rows ?? 0;
+
+    this.out.write(buildOverlayFrame(lines, this.overlayRows, rows));
+    this.overlayRows = lines.length;
+    this.out.write(buildBarBody(info, columns, rows, this.color));
+    this.paintInput();
+  }
+
+  /** Erase the `@`-picker dropdown and repaint the bar + input row. Idempotent. */
+  clearOverlay(info: IStatusInfo): void {
+    if (!this.installed || !this.withInput || this.overlayRows === 0) {
+      return;
+    }
+
+    const columns = this.out.columns ?? 80;
+    const rows = this.out.rows ?? 0;
+
+    this.out.write(buildOverlayFrame([], this.overlayRows, rows));
+    this.overlayRows = 0;
+    this.out.write(buildBarBody(info, columns, rows, this.color));
     this.paintInput();
   }
 

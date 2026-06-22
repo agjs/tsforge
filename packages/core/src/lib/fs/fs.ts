@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { Glob } from "bun";
 import type { IFileView } from "./fs.types";
 
@@ -196,4 +196,26 @@ export async function resolveScopeFiles(
   }
 
   return [...out];
+}
+
+/**
+ * All readable workspace files (same scope as the glob expansion above), ordered
+ * MOST-RECENTLY-MODIFIED first. This is the source for the `@` file picker: a
+ * recency order means the files you're actually working on surface at the top
+ * instead of an alphabetical dump of the whole tree. Unstattable files sort last.
+ */
+export async function listWorkspaceFiles(cwd: string): Promise<string[]> {
+  const files = await resolveScopeFiles(cwd, ["**/*"]);
+
+  const stamped = await Promise.all(
+    files.map(async (path) => {
+      try {
+        return { path, mtimeMs: (await stat(join(cwd, path))).mtimeMs };
+      } catch {
+        return { path, mtimeMs: 0 };
+      }
+    })
+  );
+
+  return stamped.sort((a, b) => b.mtimeMs - a.mtimeMs).map((f) => f.path);
 }

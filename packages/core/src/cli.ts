@@ -8,6 +8,14 @@ import { emitKeypressEvents } from "node:readline";
 import { formatHelp, takesArg } from "./cli/commands";
 import { pickCommand } from "./render/command-menu";
 import {
+  pickFileInline,
+  formatCompletionRows,
+  shouldOpenAtPicker,
+  type IPickerView,
+} from "./render/file-menu";
+import { listWorkspaceFiles } from "./lib/fs";
+import { composeMessage } from "./loop/prompt";
+import {
   runTask,
   RUN_STATUS,
   Session,
@@ -1016,8 +1024,14 @@ async function repl(args: ICliArgs): Promise<number> {
     await persist();
   };
 
+  // Free-text user sends route through here: resolve `@file` mentions to inlined
+  // contents (composeMessage) before handing the message to the session. The
+  // plan-approval / staged-build sends call session.send directly and are not
+  // touched, so only ordinary messages get mention expansion.
   const runSend = (line: string): Promise<void> =>
-    drive((opts) => session.send(line, opts));
+    drive(async (opts) =>
+      session.send(await composeMessage(args.dir, line), opts)
+    );
 
   // A from-scratch web build: stage it (plan + types, then implement) so the
   // model designs the type contract before writing UI — far less API invention.
@@ -1537,23 +1551,84 @@ async function repl(args: ICliArgs): Promise<number> {
       }
     };
 
-    // Press `/` on an empty line ⇒ open the palette. setImmediate lets readline
-    // finish inserting the slash first, so `rl.line === "/"` confirms it's a fresh
-    // command start (not a slash mid-text). No-op while busy or already open.
+    // Open the interactive `@` file picker: a compact dropdown rendered INLINE just
+    // above the input row (the conversation stays visible — no alternate screen),
+    // recency-ordered, type to fuzzy-filter. The buffer keeps its `@`; the live
+    // query is echoed onto the input row for feedback (it isn't in readline's
+    // buffer — the picker owns input). On select, the full path is appended after
+    // the `@`; at send time `@path` expands to the file's contents (see runSend).
+    const openFilePicker = async (): Promise<void> => {
+      paletteOpen = true;
+
+      const base = rl.line; // text up to and including the just-typed `@`
+
+      const view: IPickerView = {
+        render: (query, items, selected): void => {
+          const rows = formatCompletionRows(
+            items,
+            selected,
+            process.stdout.columns,
+            process.stdout.isTTY
+          );
+
+          statusBar.setInput(`${base}${query}`, base.length + query.length);
+          statusBar.setOverlay(rows, statusInfo());
+        },
+        close: (): void => {
+          statusBar.clearOverlay(statusInfo());
+        },
+      };
+
+      try {
+        const files = await listWorkspaceFiles(args.dir);
+        const picked = await pickFileInline(files, view);
+
+        if (picked !== null) {
+          rl.write(`${picked} `); // append after the already-typed `@`
+        }
+      } finally {
+        paletteOpen = false;
+
+        if (useInputRow) {
+          statusBar.update(statusInfo());
+          syncInput();
+        }
+      }
+    };
+
+    // `/` on an empty line opens the palette; `@` at a word boundary opens the file
+    // picker. setImmediate lets readline insert the key first, so we can inspect the
+    // settled buffer (`rl.line === "/"` / shouldOpenAtPicker). The shared paletteOpen
+    // guard keeps the two overlays mutually exclusive. No-op while busy.
     if (process.stdin.isTTY) {
       emitKeypressEvents(process.stdin);
       process.stdin.on("keypress", (str: string | undefined) => {
         syncInput(); // keep the pinned input row in sync as the user types
 
-        if (busy || paletteOpen || str !== "/") {
+        if (busy || paletteOpen) {
           return;
         }
 
-        setImmediate(() => {
-          if (!busy && !paletteOpen && rl.line === "/") {
-            void openPalette();
-          }
-        });
+        if (str === "/") {
+          setImmediate(() => {
+            if (!busy && !paletteOpen && rl.line === "/") {
+              void openPalette();
+            }
+          });
+        } else if (str === "@" && useInputRow) {
+          // The inline dropdown renders above the input row, so it needs that row
+          // (a tall-enough TTY). Without it we skip the picker — `@path` typed by
+          // hand still expands at send time (composeMessage), just no live popup.
+          setImmediate(() => {
+            if (
+              !busy &&
+              !paletteOpen &&
+              shouldOpenAtPicker(rl.line, rl.cursor)
+            ) {
+              void openFilePicker();
+            }
+          });
+        }
       });
     }
 
