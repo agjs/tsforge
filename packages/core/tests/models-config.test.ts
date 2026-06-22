@@ -10,6 +10,7 @@ import {
   resolveApiKey,
   envModelEntry,
   resolveActiveModel,
+  resolveModelByName,
   modelsConfigPath,
   defaultModelsConfig,
 } from "../src/models-config";
@@ -47,6 +48,24 @@ function restore(name: string, value: string | undefined): void {
     process.env[name] = value;
   }
 }
+
+test("resolveModelByName: known name, unknown name, and unset all resolve", async () => {
+  await saveModelsConfig({
+    active: "work",
+    models: {
+      work: { baseUrl: "http://w", model: "work-model" },
+      judge: { baseUrl: "http://j", model: "judge-model" },
+    },
+  });
+
+  // a known role name resolves to that entry
+  expect((await resolveModelByName("judge")).entry.model).toBe("judge-model");
+  // an unknown name falls back to the active model (never throws)
+  expect((await resolveModelByName("nope")).entry.model).toBe("work-model");
+  // unset / empty falls back to the active model too
+  expect((await resolveModelByName(undefined)).entry.model).toBe("work-model");
+  expect((await resolveModelByName("")).entry.model).toBe("work-model");
+});
 
 test("missing registry → the built-in local-qwen default (no file written)", async () => {
   const cfg = await loadModelsConfig();

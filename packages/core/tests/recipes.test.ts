@@ -44,6 +44,28 @@ describe("parseRecipe", () => {
     ).toBeUndefined();
   });
 
+  test("parses the greenfield role models", () => {
+    const r = parseRecipe({
+      id: "build-app",
+      mode: "greenfield",
+      plannerModel: "big-thinker",
+      workModel: "fast-coder",
+      evaluatorModel: "harsh-judge",
+    });
+
+    expect(r?.plannerModel).toBe("big-thinker");
+    expect(r?.workModel).toBe("fast-coder");
+    expect(r?.evaluatorModel).toBe("harsh-judge");
+    expect(
+      unrecognizedKeys({
+        id: "x",
+        plannerModel: "a",
+        workModel: "b",
+        evaluatorModel: "c",
+      })
+    ).toEqual([]);
+  });
+
   test("accepts mode:greenfield and drops any other mode value", () => {
     expect(parseRecipe({ id: "build-app", mode: "greenfield" })?.mode).toBe(
       "greenfield"

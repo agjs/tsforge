@@ -1,11 +1,27 @@
 import { test, expect } from "bun:test";
-import { judge } from "../src/eval";
-import type { IProvider } from "../src/inference";
+import { judge, JUDGE_INPUT_SHAPE } from "../src/eval";
+import type { IProvider, IChatMessage } from "../src/inference";
 
 function providerSaying(content: string): IProvider {
   return {
     async complete() {
       return { content, toolCalls: [] };
+    },
+  };
+}
+
+/** A provider that records the messages it was given, for prompt assertions. */
+function capturingProvider(): { provider: IProvider; seen: IChatMessage[] } {
+  const seen: IChatMessage[] = [];
+
+  return {
+    seen,
+    provider: {
+      async complete(messages) {
+        seen.push(...messages);
+
+        return { content: '{"overall":3}', toolCalls: [] };
+      },
     },
   };
 }
@@ -37,6 +53,48 @@ test("tolerates a fenced JSON block", async () => {
   const s = await judge(provider, { goal: "g", criteria: "c", code: "x" });
 
   expect(s.overall).toBe(2);
+});
+
+// Design-rule #2: the evaluator must NEVER see the generator's trace/reasoning.
+// JUDGE_INPUT_SHAPE is `Record<keyof IJudgeInput, true>`, so adding a field to
+// IJudgeInput forces it to appear here — and this test rejects any trace-ish name.
+test("the judge input shape carries NO trace/reasoning fields (ratchet)", () => {
+  const keys = Object.keys(JUDGE_INPUT_SHAPE).map((k) => k.toLowerCase());
+  const forbidden = [
+    "trace",
+    "toolcalls",
+    "tool_calls",
+    "reasoning",
+    "thinking",
+    "transcript",
+    "history",
+    "messages",
+    "events",
+    "steps",
+  ];
+
+  for (const bad of forbidden) {
+    expect(keys).not.toContain(bad);
+  }
+
+  // It IS exactly the artifact-only triple — if this changes, re-audit rule #2.
+  expect(keys.sort()).toEqual(["code", "criteria", "goal"]);
+});
+
+test("the judge prompt is built only from goal/criteria/code", async () => {
+  const { provider, seen } = capturingProvider();
+
+  await judge(provider, {
+    goal: "GOAL_SENTINEL",
+    criteria: "CRIT_SENTINEL",
+    code: "CODE_SENTINEL",
+  });
+
+  const user = seen.find((m) => m.role === "user")?.content ?? "";
+
+  expect(user).toContain("GOAL_SENTINEL");
+  expect(user).toContain("CRIT_SENTINEL");
+  expect(user).toContain("CODE_SENTINEL");
 });
 
 test("falls back gracefully on an unparseable response", async () => {

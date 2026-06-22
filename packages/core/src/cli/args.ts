@@ -46,6 +46,9 @@ export interface ICliArgs {
   /** Seed a brownfield run with a deterministic caller blast-radius scout
    *  (`--scout`). */
   scout: boolean;
+  /** Run the greenfield feature-checklist outer loop (`--greenfield`, or a recipe
+   *  with `mode: "greenfield"`). `task` carries the one-line build goal. */
+  greenfield: boolean;
   /** Explicit base ref to diff against for review (`--base <ref>`). */
   base: string;
   /** Build a structural workspace map (`tsforge map`). */
@@ -61,6 +64,10 @@ export interface ICliArgs {
   run: boolean;
   /** Model name override (from a recipe); "" = the active model. */
   model: string;
+  /** Greenfield role models (from a recipe); "" = fall back to `model`/active. */
+  plannerModel: string;
+  workModel: string;
+  evaluatorModel: string;
   /** Hard turn cap (from a recipe); 0 = the loop default. */
   maxTurns: number;
   /** Reasoning-token cap (from a recipe); 0 = the env/default. */
@@ -88,6 +95,7 @@ const BOOL_FLAGS: Record<
   | "withGate"
   | "withReview"
   | "scout"
+  | "greenfield"
   | "setupYes"
 > = {
   "--continue": "continue",
@@ -101,6 +109,7 @@ const BOOL_FLAGS: Record<
   "--with-gate": "withGate",
   "--with-review": "withReview",
   "--scout": "scout",
+  "--greenfield": "greenfield",
   "--yes": "setupYes",
 };
 
@@ -137,6 +146,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     withGate: false,
     withReview: false,
     scout: false,
+    greenfield: false,
     base: "",
     map: false,
     trace: false,
@@ -144,6 +154,9 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     recipes: false,
     run: false,
     model: "",
+    plannerModel: "",
+    workModel: "",
+    evaluatorModel: "",
     maxTurns: 0,
     thinkingBudget: 0,
     policyMode: "",
@@ -243,6 +256,8 @@ export function applyRecipe(args: ICliArgs, recipe: ITaskRecipe): void {
     args.model = recipe.model;
   }
 
+  applyRecipeModels(args, recipe);
+
   if (args.base.length === 0 && recipe.base !== undefined) {
     args.base = recipe.base;
   }
@@ -262,6 +277,22 @@ export function applyRecipe(args: ICliArgs, recipe: ITaskRecipe): void {
   applyRecipeFlags(args, recipe);
 }
 
+/** Recipe greenfield role models (split out to keep applyRecipe's complexity in
+ *  check). A recipe only fills a role still at its default. */
+function applyRecipeModels(args: ICliArgs, recipe: ITaskRecipe): void {
+  if (args.plannerModel.length === 0 && recipe.plannerModel !== undefined) {
+    args.plannerModel = recipe.plannerModel;
+  }
+
+  if (args.workModel.length === 0 && recipe.workModel !== undefined) {
+    args.workModel = recipe.workModel;
+  }
+
+  if (args.evaluatorModel.length === 0 && recipe.evaluatorModel !== undefined) {
+    args.evaluatorModel = recipe.evaluatorModel;
+  }
+}
+
 /** Recipe booleans (split out to keep applyRecipe's complexity in check). */
 function applyRecipeFlags(args: ICliArgs, recipe: ITaskRecipe): void {
   args.staged = args.staged || recipe.staged === true;
@@ -273,6 +304,7 @@ function applyRecipeFlags(args: ICliArgs, recipe: ITaskRecipe): void {
   args.withGate = args.withGate || recipe.withGate === true;
   args.withReview = args.withReview || recipe.withReview === true;
   args.scout = args.scout || recipe.scout === true;
+  args.greenfield = args.greenfield || recipe.mode === "greenfield";
 }
 
 // Default editable scope: the whole workspace — like any agentic CLI, the agent

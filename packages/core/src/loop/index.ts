@@ -15,7 +15,12 @@ export { snapshotFiles, restoreFiles } from "./file-snapshot";
 export type { FileSnapshot } from "./file-snapshot";
 export {
   runGreenfield,
+  prepareState,
   evaluateFeature,
+  planFeatures,
+  parsePlan,
+  judgeFeature,
+  parseFeatureVerdict,
   loadState,
   saveState,
   writeSpec,
@@ -33,6 +38,8 @@ export type {
   IEvaluateDeps,
   IGateOutcome,
   IJudgeOutcome,
+  IPlan,
+  IFeatureJudgeInput,
 } from "./greenfield";
 export {
   toolsFor,

@@ -1,5 +1,6 @@
 import type { Reporter } from "../loop.types";
-import { saveState, writeProgress } from "./state";
+import { saveState, writeProgress, loadState, writeSpec } from "./state";
+import type { IPlan } from "./plan";
 import type {
   IGreenfieldState,
   IGreenfieldDeps,
@@ -7,6 +8,39 @@ import type {
   IGreenfieldResult,
   IFeature,
 } from "./greenfield.types";
+
+/**
+ * Resolve the state to run: resume the persisted checklist if one exists, else
+ * plan a fresh one from the goal (writing spec.md + features.json). Returns null
+ * when there's no prior state AND planning yields nothing to build. The planner
+ * is injected so this is testable without a model. Resume-first is the long-run
+ * contract: an interrupted build picks up from the last verified feature.
+ */
+export async function prepareState(
+  cwd: string,
+  goal: string,
+  plan: (goal: string) => Promise<IPlan | null>
+): Promise<IGreenfieldState | null> {
+  const existing = await loadState(cwd);
+
+  if (existing !== null && existing.features.length > 0) {
+    return existing;
+  }
+
+  const planned = await plan(goal);
+
+  if (planned === null) {
+    return null;
+  }
+
+  await writeSpec(cwd, planned.spec);
+
+  const state: IGreenfieldState = { goal, features: planned.features };
+
+  await saveState(cwd, state);
+
+  return state;
+}
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 

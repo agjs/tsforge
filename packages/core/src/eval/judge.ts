@@ -8,6 +8,24 @@ import { extractJson } from "../lib/json";
  * judge. Provider-agnostic: point it at a flagship model to measure the local
  * model's gap to flagship quality.
  */
+/**
+ * Every field the quality judge is allowed to see — built from the BUILT ARTIFACT
+ * only (goal, acceptance criteria, code), never the generator's tool trace,
+ * reasoning, or message history. This is design-rule #2 from the long-running-agent
+ * workshop: the evaluator must not see HOW the code was produced, only WHAT was
+ * produced, or it can be talked into approving by a persuasive trace.
+ *
+ * Typed `Record<keyof IJudgeInput, true>` so the list is FORCED to track the
+ * interface: adding a field to IJudgeInput is a compile error until it's listed
+ * here, where the trace-blindness test (judge.test.ts) rejects any trace-ish name.
+ * That makes the rule a ratchet, not a comment.
+ */
+export const JUDGE_INPUT_SHAPE: Record<keyof IJudgeInput, true> = {
+  goal: true,
+  criteria: true,
+  code: true,
+};
+
 const SYSTEM =
   "You are a senior TypeScript reviewer. Score the solution 1–5 on each of: " +
   "correctness/robustness (beyond the given tests), design, and readability/idiomatic TS. " +

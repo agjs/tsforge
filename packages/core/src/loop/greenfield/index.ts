@@ -1,4 +1,4 @@
-export { runGreenfield } from "./run";
+export { runGreenfield, prepareState } from "./run";
 export {
   loadState,
   saveState,
@@ -9,6 +9,10 @@ export {
 } from "./state";
 export { evaluateFeature } from "./evaluate";
 export type { IEvaluateDeps, IGateOutcome, IJudgeOutcome } from "./evaluate";
+export { planFeatures, parsePlan } from "./plan";
+export type { IPlan } from "./plan";
+export { judgeFeature, parseFeatureVerdict } from "./judge";
+export type { IFeatureJudgeInput } from "./judge";
 export type {
   IFeature,
   IFeatureVerdict,

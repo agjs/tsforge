@@ -26,6 +26,13 @@ export interface ITaskRecipe {
   readonly gate?: string;
   /** A configured model name from `~/.tsforge/models.json` (→ the run's model). */
   readonly model?: string;
+  /** Greenfield role models (names from `~/.tsforge/models.json`). Each defaults
+   *  to `model`/the active model when unset, so single-endpoint setups still work
+   *  (same model, different role prompts). The evaluator stays trace-blind
+   *  regardless of which model backs it. */
+  readonly plannerModel?: string;
+  readonly workModel?: string;
+  readonly evaluatorModel?: string;
   /** Hard cap on model turns (→ run option `maxTurns`). */
   readonly maxTurns?: number;
   /** Reasoning-token cap per call (→ run option `thinkingTokenBudget`). */
@@ -96,6 +103,9 @@ function assignScalars(recipe: Mutable, raw: Record<string, unknown>): void {
   recipe.task = optString(raw.task);
   recipe.gate = optString(raw.gate);
   recipe.model = optString(raw.model);
+  recipe.plannerModel = optString(raw.plannerModel);
+  recipe.workModel = optString(raw.workModel);
+  recipe.evaluatorModel = optString(raw.evaluatorModel);
   recipe.base = optString(raw.base);
   recipe.files = stringArray(raw.files);
   recipe.maxTurns = optPositive(raw.maxTurns);
@@ -134,6 +144,9 @@ const KNOWN_KEYS = new Set<string>([
   "files",
   "gate",
   "model",
+  "plannerModel",
+  "workModel",
+  "evaluatorModel",
   "maxTurns",
   "thinkingBudget",
   "policyMode",
