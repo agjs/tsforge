@@ -9,6 +9,17 @@ export function greenfieldDir(cwd: string): string {
   return join(cwd, ".tsforge", "greenfield");
 }
 
+/**
+ * A safe feature id: kebab-case, no slashes or dots. Feature ids come from the
+ * model (the planner) and are later used to build file paths
+ * (`contracts/<id>.md`), so an id like `../../README` would escape the state dir.
+ * Validate at parse/load time so a malicious/hallucinated id is dropped, never
+ * trusted as a path component.
+ */
+export function isFeatureId(id: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*$/u.test(id);
+}
+
 function featuresPath(cwd: string): string {
   return join(greenfieldDir(cwd), "features.json");
 }
@@ -31,7 +42,7 @@ function toFeature(value: unknown): IFeature | null {
 
   const { id, desc, passes, attempts, steps } = value;
 
-  if (typeof id !== "string" || typeof desc !== "string") {
+  if (typeof id !== "string" || typeof desc !== "string" || !isFeatureId(id)) {
     return null;
   }
 

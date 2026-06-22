@@ -71,6 +71,18 @@ export async function qualityRepair(
         ? `\n\nConcrete fixes for the idioms it named:\n${hints}`
         : "";
 
+    // Count this attempt's mutations so a revert subtracts the whole batch from
+    // the accept rate, not just 1.
+    let mutations = 0;
+
+    const countingReport: Reporter = (event) => {
+      if (event.kind === "edit" || event.kind === "create") {
+        mutations += 1;
+      }
+
+      report(event);
+    };
+
     await agent.implement({
       cwd,
       task,
@@ -81,7 +93,7 @@ export async function qualityRepair(
         },
       ],
       cycle: attempts,
-      report,
+      report: countingReport,
     });
 
     if (task.fix !== undefined && task.fix.length > 0) {
@@ -92,7 +104,12 @@ export async function qualityRepair(
 
     if (!gate.passed) {
       await restoreFiles(snapshot);
-      report({ kind: "reverted", task: task.id, message: "gate broken" });
+      report({
+        kind: "reverted",
+        task: task.id,
+        count: mutations,
+        message: "gate broken",
+      });
       report({
         kind: "fix",
         task: task.id,
@@ -112,7 +129,12 @@ export async function qualityRepair(
       });
     } else {
       await restoreFiles(snapshot);
-      report({ kind: "reverted", task: task.id, message: "no quality gain" });
+      report({
+        kind: "reverted",
+        task: task.id,
+        count: mutations,
+        message: "no quality gain",
+      });
       report({
         kind: "fix",
         task: task.id,

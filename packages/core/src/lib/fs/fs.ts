@@ -33,26 +33,31 @@ function isGlobPattern(path: string): boolean {
   return /[*?[\]{}]/.test(path);
 }
 
-function ignored(rel: string): boolean {
-  return (
-    rel.split("/").some((seg) => IGNORE_SEGMENTS.has(seg)) ||
-    BINARY_EXT.test(rel)
-  );
+/** In a dependency/build/vcs dir we never read OR mutate (so never tombstone). */
+function inIgnoredDir(rel: string): boolean {
+  return rel.split("/").some((seg) => IGNORE_SEGMENTS.has(seg));
 }
 
-/** Expand a glob scope to the concrete, readable files under `cwd` (sorted),
- *  skipping ignored dirs and binary files, capped at `limit` (default
- *  MAX_GLOB_FILES — the prompt-safety bound). Pass `Infinity` when completeness
- *  matters more than prompt size (e.g. a rollback snapshot must see every file). */
+function ignored(rel: string): boolean {
+  return inIgnoredDir(rel) || BINARY_EXT.test(rel);
+}
+
+/** Expand a glob scope to the concrete files under `cwd` (sorted), capped at
+ *  `limit` (default MAX_GLOB_FILES — the prompt-safety bound; pass `Infinity` when
+ *  completeness matters more than prompt size). `skip` decides what to exclude:
+ *  the default drops ignored dirs AND binaries (prompt/context use); rollback
+ *  passes `inIgnoredDir` so it still SEES created assets (`.svg`, images) it must
+ *  delete — filtering those out would leave them behind on a revert. */
 async function expandGlob(
   cwd: string,
   pattern: string,
-  limit = MAX_GLOB_FILES
+  limit = MAX_GLOB_FILES,
+  skip: (rel: string) => boolean = ignored
 ): Promise<string[]> {
   const found: string[] = [];
 
   for await (const rel of new Glob(pattern).scan({ cwd, onlyFiles: true })) {
-    if (!ignored(rel)) {
+    if (!skip(rel)) {
       found.push(rel);
     }
 
@@ -195,6 +200,40 @@ export async function resolveScopeFiles(
   for (const path of paths) {
     if (isGlobPattern(path)) {
       for (const match of await expandGlob(cwd, path, limit)) {
+        out.add(match);
+      }
+    } else {
+      out.add(path);
+    }
+  }
+
+  return [...out];
+}
+
+/**
+ * Resolve a scope for ROLLBACK: every file under `cwd` (uncapped) excluding only
+ * ignored dirs (node_modules, dist, .git…) — but INCLUDING binaries/assets the
+ * prompt-facing resolver drops. A failed repair can create `icon.svg` under a
+ * `**\/*` scope; rollback must see it to delete it, or it reports "reverted" while
+ * leaving the file behind. Separate from `resolveScopeFiles` precisely so the
+ * prompt/context filtering never silently narrows what a revert can clean up.
+ */
+export async function resolveScopeFilesForRollback(
+  cwd: string,
+  paths: readonly string[]
+): Promise<string[]> {
+  const out = new Set<string>();
+
+  for (const path of paths) {
+    if (isGlobPattern(path)) {
+      const matches = await expandGlob(
+        cwd,
+        path,
+        Number.POSITIVE_INFINITY,
+        inIgnoredDir
+      );
+
+      for (const match of matches) {
         out.add(match);
       }
     } else {

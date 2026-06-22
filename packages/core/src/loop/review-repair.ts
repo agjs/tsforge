@@ -88,6 +88,18 @@ export async function reviewRepair(
   // must restore.
   const snapshot = await snapshotFiles(cwd, task.files);
 
+  // Count the mutations this attempt applies, so a revert subtracts the whole
+  // batch from the accept rate (not just 1).
+  let mutations = 0;
+
+  const countingReport: Reporter = (event) => {
+    if (event.kind === "edit" || event.kind === "create") {
+      mutations += 1;
+    }
+
+    report(event);
+  };
+
   // A throw mid-repair (agent error, fix-command crash, gate runner failure)
   // must still roll the workspace back — otherwise a half-applied edit batch is
   // left on disk. Restore, then rethrow so the caller still sees the failure.
@@ -97,7 +109,7 @@ export async function reviewRepair(
       task,
       errors: findingsToErrors(findings),
       cycle: 1,
-      report,
+      report: countingReport,
     });
 
     if (task.fix !== undefined && task.fix.length > 0) {
@@ -125,6 +137,7 @@ export async function reviewRepair(
   report({
     kind: "reverted",
     task: task.id,
+    count: mutations,
     message: "review repair broke the gate",
   });
   report({

@@ -2,6 +2,7 @@ import type { IProvider } from "../../inference";
 import { isRecord } from "../../lib/guards";
 import { extractJson } from "../../lib/json";
 import type { IStep } from "../../browser";
+import { isFeatureId } from "./state";
 import type { IFeature } from "./greenfield.types";
 
 /** The planner's output: a human-readable spec + a fresh feature checklist. */
@@ -33,7 +34,7 @@ function toFeature(value: unknown): IFeature | null {
 
   const { id, desc, steps } = value;
 
-  if (typeof id !== "string" || typeof desc !== "string") {
+  if (typeof id !== "string" || typeof desc !== "string" || !isFeatureId(id)) {
     return null;
   }
 

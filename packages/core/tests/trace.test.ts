@@ -188,6 +188,34 @@ describe("trace metrics: accept rate / cost per accepted change", () => {
     expect(m.costPerAcceptedChange).toBe(300); // 600 tokens / 2 accepted
   });
 
+  test("a reverted batch subtracts its full mutation count, not just 1", () => {
+    // 5 mutations, one reverted batch of 4 → 1 accepted (not 4).
+    const m = analyzeEvents([
+      { kind: "edit", task: "t", message: "" },
+      { kind: "edit", task: "t", message: "" },
+      { kind: "edit", task: "t", message: "" },
+      { kind: "edit", task: "t", message: "" },
+      { kind: "create", task: "t", message: "", file: "src/n.ts" },
+      { kind: "reverted", task: "t", message: "", count: 4 },
+      { kind: "usage", task: "t", message: "", completionTokens: 500 },
+    ]);
+
+    expect(m.edits).toBe(5);
+    expect(m.editsReverted).toBe(4);
+    expect(m.acceptRate).toBeCloseTo(1 / 5, 5);
+    expect(m.costPerAcceptedChange).toBe(500); // 500 tokens / 1 accepted
+  });
+
+  test("a reverted event with no count falls back to 1 (back-compat)", () => {
+    const m = analyzeEvents([
+      { kind: "edit", task: "t", message: "" },
+      { kind: "edit", task: "t", message: "" },
+      { kind: "reverted", task: "t", message: "" },
+    ]);
+
+    expect(m.editsReverted).toBe(1);
+  });
+
   test("no edits ⇒ acceptRate 0 and costPerAcceptedChange 0 (no divide-by-zero)", () => {
     const m = analyzeEvents([
       { kind: "usage", task: "t", message: "", completionTokens: 100 },
@@ -226,6 +254,20 @@ describe("trace metrics: accept rate / cost per accepted change", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("the reverted batch count round-trips through the ledger", () => {
+    const line = JSON.stringify({
+      eventId: "e1",
+      runId: "r1",
+      timestamp: "2026-06-22T00:00:00.000Z",
+      type: ledgerTypeFor({ kind: "reverted", task: "t", message: "" }),
+      payload: { kind: "reverted", task: "t", message: "", count: 3 },
+    });
+    const parsed = parseEventLog(line);
+
+    expect(parsed[0]?.count).toBe(3);
+    expect(analyzeEvents(parsed).editsReverted).toBe(3);
   });
 
   test("the reverted event maps to the edit_reverted ledger type", () => {

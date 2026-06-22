@@ -2078,7 +2078,12 @@ function greenfieldDeps(
         browser: async () =>
           args.browser.length > 0
             ? renderCheck({
-                file: args.browser,
+                // Resolve a relative --browser against the RUN dir (--dir), not the
+                // launcher's cwd — greenfield checks run in-process, unlike the
+                // normal gate which already runs inside --dir.
+                file: isAbsolute(args.browser)
+                  ? args.browser
+                  : join(args.dir, args.browser),
                 smoke: true,
                 ...(feature.steps === undefined
                   ? {}

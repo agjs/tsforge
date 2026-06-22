@@ -70,6 +70,34 @@ test("restoreFiles tombstones files created after the snapshot", async () => {
   expect(existsSync(join(dir, "src", "b.ts"))).toBe(true);
 });
 
+// Regression: the prompt-facing resolver skips binaries/assets (.svg, images),
+// so tombstoning through it left a failed repair's created icon.svg on disk.
+// Rollback must use the binary-inclusive resolver.
+test("restoreFiles tombstones a created binary/asset file (svg)", async () => {
+  const snap = await snapshotFiles(dir, ["**/*"]);
+
+  writeFileSync(join(dir, "src", "icon.svg"), "<svg></svg>");
+  writeFileSync(join(dir, "logo.png"), "PNGDATA");
+
+  await restoreFiles(snap);
+
+  expect(existsSync(join(dir, "src", "icon.svg"))).toBe(false);
+  expect(existsSync(join(dir, "logo.png"))).toBe(false);
+});
+
+test("restoreFiles preserves a PRE-EXISTING asset file (not tombstoned)", async () => {
+  writeFileSync(join(dir, "src", "keep.svg"), "<svg>keep</svg>");
+
+  const snap = await snapshotFiles(dir, ["**/*"]);
+
+  writeFileSync(join(dir, "src", "new.ts"), "// new\n");
+  await restoreFiles(snap);
+
+  // the asset that existed at snapshot time survives; the new .ts is tombstoned
+  expect(existsSync(join(dir, "src", "keep.svg"))).toBe(true);
+  expect(existsSync(join(dir, "src", "new.ts"))).toBe(false);
+});
+
 test("a literal scope still snapshots exactly those files", async () => {
   const snap = await snapshotFiles(dir, ["src/a.ts"]);
 

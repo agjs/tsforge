@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { IProvider } from "../../inference";
 import { isRecord } from "../../lib/guards";
 import { extractJson } from "../../lib/json";
-import { greenfieldDir } from "./state";
+import { greenfieldDir, isFeatureId } from "./state";
 import type { IFeature } from "./greenfield.types";
 
 /**
@@ -181,5 +181,10 @@ export async function writeContract(
     ...result.transcript.map((t) => `### ${t.role}\n\n${t.content}\n`),
   ].join("\n");
 
-  await writeFile(join(dir, `${feature.id}.md`), `${body}\n`);
+  // Defence in depth: ids are validated kebab at parse/load, but derive the
+  // filename from a basename anyway so a path-like id can never escape `dir`
+  // (`../../README` → `README`). A non-conforming id falls back to "feature".
+  const safeId = isFeatureId(feature.id) ? feature.id : "feature";
+
+  await writeFile(join(dir, `${basename(safeId)}.md`), `${body}\n`);
 }

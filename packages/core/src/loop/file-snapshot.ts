@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { rm } from "node:fs/promises";
-import { resolveScopeFiles } from "../lib/fs";
+import { resolveScopeFiles, resolveScopeFilesForRollback } from "../lib/fs";
 
 /** Per-file size cap on snapshot CONTENT (matches readFiles' MAX_FILE_BYTES): a
  *  source file we'd ever edit is well under this. Oversize files are still
@@ -23,18 +23,26 @@ export interface IFileSnapshot {
   contents: Map<string, string>;
 }
 
-/** Resolve a scope to concrete files WITHOUT the prompt-safety cap — a rollback
- *  must see every file, or a large repo would snapshot/tombstone incompletely. */
-function resolveAll(cwd: string, scope: readonly string[]): Promise<string[]> {
+/** Every TEXT file in scope (uncapped) — the files whose content a revert can
+ *  rewrite. Binaries are intentionally excluded here (writing back `.text()` of a
+ *  binary would corrupt it); they're tracked for tombstoning via `existedSet`. */
+function textFiles(cwd: string, scope: readonly string[]): Promise<string[]> {
   return resolveScopeFiles(cwd, scope, Number.POSITIVE_INFINITY);
+}
+
+/** Every file in scope (uncapped) INCLUDING binaries/assets — the complete set a
+ *  revert must reason about, so a created `.svg`/image gets tombstoned and a
+ *  pre-existing one is never mistaken for newly-created. */
+function existedSet(cwd: string, scope: readonly string[]): Promise<string[]> {
+  return resolveScopeFilesForRollback(cwd, scope);
 }
 
 /**
  * Capture a rollback point for `scope` (which may contain globs — e.g. the
- * whole-repo `**\/*`). Records pre-existing contents AND the pre-existing path
- * set so a later `restoreFiles` can both rewrite edits and remove files the
- * attempt created. The shared substrate for quality- and review-repair, so the
- * revert semantics can't drift between them.
+ * whole-repo `**\/*`). Records pre-existing contents (text only) AND the full
+ * pre-existing path set (incl. binaries) so a later `restoreFiles` can both
+ * rewrite edits and remove files the attempt created. The shared substrate for
+ * quality- and review-repair, so the revert semantics can't drift between them.
  */
 export async function snapshotFiles(
   cwd: string,
@@ -43,16 +51,16 @@ export async function snapshotFiles(
   const existed = new Set<string>();
   const contents = new Map<string, string>();
 
-  for (const file of await resolveAll(cwd, scope)) {
+  for (const file of await existedSet(cwd, scope)) {
+    if (await Bun.file(join(cwd, file)).exists()) {
+      existed.add(file);
+    }
+  }
+
+  for (const file of await textFiles(cwd, scope)) {
     const handle = Bun.file(join(cwd, file));
 
-    if (!(await handle.exists())) {
-      continue;
-    }
-
-    existed.add(file);
-
-    if (handle.size <= MAX_SNAPSHOT_BYTES) {
+    if ((await handle.exists()) && handle.size <= MAX_SNAPSHOT_BYTES) {
       contents.set(file, await handle.text());
     }
   }
@@ -63,8 +71,9 @@ export async function snapshotFiles(
 /**
  * Roll the workspace back to a snapshot: rewrite every captured file, then delete
  * any file now present in scope that did NOT exist at snapshot time (a tombstone
- * for a helper/test the failed attempt created). Without the tombstone pass a
- * reverted repair would leave new files behind.
+ * for a helper/test/asset the failed attempt created). The tombstone scan is
+ * binary-inclusive and uncapped, or a created asset would report "reverted" while
+ * surviving on disk.
  */
 export async function restoreFiles(snapshot: IFileSnapshot): Promise<void> {
   const { cwd, scope, existed, contents } = snapshot;
@@ -73,7 +82,7 @@ export async function restoreFiles(snapshot: IFileSnapshot): Promise<void> {
     await Bun.write(join(cwd, file), content);
   }
 
-  for (const file of await resolveAll(cwd, scope)) {
+  for (const file of await existedSet(cwd, scope)) {
     if (!existed.has(file)) {
       await rm(join(cwd, file), { force: true });
     }
