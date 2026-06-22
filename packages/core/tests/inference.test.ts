@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { OpenAICompatibleProvider } from "../src/inference";
+import { parseResponse, toWire } from "../src/inference/wire";
 
 function okResponse(): Response {
   return new Response(
@@ -419,4 +420,67 @@ test("qwen keeps per-turn thinking control (no latch)", async () => {
 
   expect(bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: false });
   expect(bodies[1]?.chat_template_kwargs).toEqual({ enable_thinking: true });
+});
+
+// DeepSeek's thinking mode requires an assistant turn's reasoning_content to be
+// CAPTURED from the response and REPLAYED on the next request — drop it and the
+// next turn's history is malformed (the provider crashes). This pins the full
+// round-trip across the two pure wire helpers: capture (parseResponse) → replay
+// (toWire), with the channel kept distinct from content.
+test("captures reasoning_content from a response and replays it for DeepSeek only", () => {
+  const captured = parseResponse({
+    choices: [
+      {
+        message: {
+          content: "the answer is 42",
+          reasoning_content: "let me think step by step…",
+        },
+      },
+    ],
+  });
+
+  // capture: reasoning lands on its own channel, not mixed into content.
+  expect(captured.content).toBe("the answer is 42");
+  expect(captured.reasoning).toBe("let me think step by step…");
+
+  // replay: DeepSeek (includeReasoning=true) gets reasoning_content back…
+  expect(
+    toWire(
+      {
+        role: "assistant",
+        content: captured.content,
+        reasoningContent: captured.reasoning,
+      },
+      true
+    )
+  ).toMatchObject({
+    role: "assistant",
+    content: "the answer is 42",
+    reasoning_content: "let me think step by step…",
+  });
+
+  // …every other provider must NOT receive it.
+  expect(
+    toWire(
+      {
+        role: "assistant",
+        content: captured.content,
+        reasoningContent: captured.reasoning,
+      },
+      false
+    ).reasoning_content
+  ).toBeUndefined();
+});
+
+test("a response without reasoning_content carries no reasoning channel", () => {
+  const captured = parseResponse({
+    choices: [{ message: { content: "plain answer" } }],
+  });
+
+  expect(captured.reasoning).toBeUndefined();
+  // even on DeepSeek, an empty/absent reasoning field is never serialized.
+  expect(
+    toWire({ role: "assistant", content: "plain answer" }, true)
+      .reasoning_content
+  ).toBeUndefined();
 });

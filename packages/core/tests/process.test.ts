@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runShellCommand } from "../src/lib/fs/process";
+import { runShellCommand, runArgvCommand } from "../src/lib/fs/process";
 
 // P2 (review): a timed-out command killed only the `sh -c` wrapper, so a
 // `&`-backgrounded grandchild survived and could still mutate the workspace AFTER
@@ -53,6 +53,27 @@ test("returns promptly even when a leftover child holds the output pipe open", a
     expect(run.timedOut).toBe(false);
     expect(run.stdout).toContain("ready");
     expect(elapsedMs).toBeLessThan(2500);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A missing binary must surface as exit 127 — NEVER a throw into the loop. If
+// `Bun.spawn` rejects (ENOENT), the catch must convert it to a tool-error result
+// so a model that runs a non-existent command gets feedback, not a crashed turn.
+test("a missing binary returns exit 127 without throwing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-proc-127-"));
+
+  try {
+    const run = await runArgvCommand(
+      dir,
+      ["tsforge-nonexistent-binary-xyz", "--version"],
+      { timeoutMs: 5000 }
+    );
+
+    expect(run.exitCode).toBe(127);
+    expect(run.timedOut).toBe(false);
+    expect(run.stderr.length).toBeGreaterThan(0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

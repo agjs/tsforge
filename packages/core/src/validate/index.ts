@@ -1,5 +1,5 @@
 export * from "./validate.types";
-export { validate } from "./validate";
+export { validate, fallbackMessage } from "./validate";
 export {
   parseTsc,
   genericErrors,

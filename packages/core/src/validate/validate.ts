@@ -11,7 +11,7 @@ const FALLBACK_CAP = 1200;
  *  parseable errors (e.g. a render/build failure). Drops eslint's machine JSON
  *  line — it's never for human eyes — and caps the length so the terminal isn't
  *  flooded with raw build output. */
-function fallbackMessage(output: string): string {
+export function fallbackMessage(output: string): string {
   const cleaned = output
     .split("\n")
     .filter((line) => !isEslintJsonLine(line))
