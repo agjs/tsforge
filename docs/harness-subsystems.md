@@ -34,6 +34,53 @@ scope check on the raw arg instead of the normalized written path.
 **Checklist** every mutating tool emits `mutated`/`edit`/`create` (cross-check the
 `tools` table); rejects emit nothing; `countsAsMutation` exempts only `package.json`.
 
+## loop / repair + snapshot — `src/loop/file-snapshot.ts`, `src/loop/quality.ts`, `src/loop/review-repair.ts`
+
+"Try an edit, keep only if it helps" loops: snapshot the editable scope → let the
+agent edit → re-gate (and for quality, re-judge) → keep only on improvement, else
+roll back. The revert is the load-bearing safety property.
+
+**Invariants**
+- Snapshot/restore is glob-aware: `task.files` is documented as GLOBS, so anything
+  that walks the scope must expand them (`snapshotFiles`, `score`, `scopeCode` all
+  go through the shared walker), never read a literal glob path.
+- Restore rewrites every content-backed file AND tombstones any file the attempt
+  created (binary-inclusive, uncapped scan — a created `.svg`/image must be deleted,
+  or "reverted" lies). Pre-existing files survive.
+- A `reverted` event carries `count` = the batch's mutation count (so accept-rate
+  subtracts the whole batch, not 1).
+- A throw mid-repair still restores before rethrowing (no half-applied batch on disk).
+
+**Risk areas** a scope walker that reads `task.files` literally (ENOENT on a glob —
+fixed in `score`); content cap (128 KiB) silently NOT restoring an edited oversize/
+binary file while still emitting `reverted`; a created dir left behind (cosmetic).
+
+**Checklist** `tests/file-snapshot.test.ts` (glob expand, tombstone, binary asset),
+`tests/quality.test.ts` (glob scope, gate-break revert), `tests/review-repair.test.ts`
+(throw-restores, batch `count`).
+
+## loop / greenfield — `src/loop/greenfield/*`
+
+Filesystem-state outer loop: a `features.json` checklist drives an implement→evaluate
+→persist cycle per feature until all green or a feature exhausts its attempts.
+
+**Invariants**
+- Feature ids come from the model and become path components (`contracts/<id>.md`),
+  so they're validated kebab (`isFeatureId`) at parse/load AND `basename`-guarded at
+  the write point (defence in depth against `../` traversal).
+- State persists after every attempt (resume-first: an interrupted run picks up from
+  the last verified feature; a feature loaded at `attempts>=max` is `stuck`, never re-run).
+- The evaluator is layered + short-circuits gate → browser → judge; the gate stays
+  the authority, the browser layer is skip-tolerant, the judge is reject-by-default
+  and trace-blind (design-rule #2: it sees the built artifact, never the generator trace).
+- Contract negotiation is OFF unless `TSFORGE_CONTRACT` is set.
+
+**Risk areas** an unsafe id slipping past `isFeatureId`; an exhausted feature wedging
+the loop; the judge seeing the generator's trace.
+
+**Checklist** `tests/greenfield.test.ts`, `tests/greenfield-planner.test.ts`
+(unsafe-id drop), `tests/greenfield-contract.test.ts` (path-escape → `feature.md`).
+
 ## tools — `src/loop/tools/*`
 
 Tool handlers + dispatch. Handlers return a `string` (model feedback); mutations are

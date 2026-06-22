@@ -1,9 +1,9 @@
-import { join } from "node:path";
 import type { ITask } from "../spec";
 import type { IAgent } from "../agent";
 import type { IProvider } from "../inference";
 import { validate, type ErrorParser } from "../validate";
 import { runAccept } from "../validate";
+import { readFiles } from "../lib/fs";
 import { judge } from "../eval";
 import { qualityHints } from "./feedback";
 import { snapshotFiles, restoreFiles } from "./file-snapshot";
@@ -157,11 +157,21 @@ async function score(
   judgeProvider: IProvider,
   meta: IQualityMeta
 ): Promise<IScore> {
-  let code = "";
+  // Expand the editable scope through the shared walker (globs, dedupe, size-cap)
+  // — the same path `scopeCode`/`snapshotFiles` take. A literal per-file read here
+  // would throw ENOENT on a glob scope (e.g. `src/**/*.ts`), which `ITask.files`
+  // explicitly allows.
+  const views = await readFiles(cwd, task.files);
 
-  for (const file of task.files) {
-    code += `// ${file}\n${await Bun.file(join(cwd, file)).text()}\n\n`;
+  // Nothing resolved (an empty glob match, or every file over the size cap): there
+  // is no artifact to assess. Return the floor WITHOUT calling the judge — an empty
+  // code window scores unpredictably and burns an LLM call. Degrade, never throw:
+  // quality repair is a best-effort post-green pass, not a gate.
+  if (views.length === 0) {
+    return { quality: 0, notes: "no files in scope to judge" };
   }
+
+  const code = views.map((v) => `// ${v.path}\n${v.content}\n`).join("\n");
 
   const result = await judge(judgeProvider, {
     goal: meta.goal,
