@@ -125,6 +125,13 @@ export interface IRunOptions {
   /** Seed the run with a deterministic pre-edit scout bundle (caller blast-radius
    *  of the editable files). Opt-in; only fires on brownfield (existing-code) runs. */
   scout?: boolean;
+  /** Require the gate to be RED before building (default true). The normal
+   *  contract: a task must fail first, so a no-op can't be mistaken for success.
+   *  Set false for greenfield feature builds, where the global gate is a guardrail
+   *  (often already green from prior features) rather than the per-feature signal —
+   *  the model must still implement the feature, and the per-feature browser/judge
+   *  layers decide whether it's done. */
+  requireRed?: boolean;
 }
 
 export interface ISpecResult {

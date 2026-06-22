@@ -116,12 +116,12 @@ export async function reviewRepair(
       return { findings: findings.length, repaired: true, reverted: false };
     }
   } catch (error) {
-    await restoreFiles(cwd, snapshot);
+    await restoreFiles(snapshot);
 
     throw error;
   }
 
-  await restoreFiles(cwd, snapshot);
+  await restoreFiles(snapshot);
   report({
     kind: "reverted",
     task: task.id,

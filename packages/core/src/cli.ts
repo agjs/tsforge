@@ -2031,8 +2031,20 @@ function greenfieldDeps(
       message: `contract '${feature.id}': ${result.agreed ? "agreed" : "no agreement"} after ${result.rounds} round(s)`,
     });
 
-    return `Agreed build contract:\n${result.contract}\n\n`;
+    // Don't claim agreement the negotiation didn't reach — an unagreed contract
+    // is the generator's best proposal, labelled honestly so the build prompt
+    // doesn't assert a safety guarantee that isn't there.
+    const heading = result.agreed
+      ? "Agreed build contract"
+      : "Proposed build contract (negotiation did not converge)";
+
+    return `${heading}:\n${result.contract}\n\n`;
   };
+
+  const thinkingTokenBudget =
+    args.thinkingBudget > 0
+      ? args.thinkingBudget
+      : envNumber("TSFORGE_THINKING_BUDGET");
 
   return {
     implement: async (feature) => {
@@ -2043,7 +2055,14 @@ function greenfieldDeps(
         { ...base, intent: `${prefix}${base.intent ?? ""}` },
         args.dir,
         work,
-        { onEvent: report }
+        {
+          onEvent: report,
+          // The global gate is often already green between features, so don't
+          // bail RED-first — the model must still build this feature.
+          requireRed: false,
+          ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+          ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
+        }
       );
     },
     evaluate: (feature) =>
@@ -2118,13 +2137,19 @@ async function greenfieldMode(args: ICliArgs): Promise<number> {
     return 1;
   }
 
-  const workName = args.workModel.length > 0 ? args.workModel : args.model;
+  // Each role falls back to the recipe's `model` (then the active model), per the
+  // recipe contract — a recipe that sets only `model` must route ALL roles there,
+  // not just the work role.
+  const roleName = (specific: string): string =>
+    specific.length > 0 ? specific : args.model;
   const planner = makeProvider(
-    (await resolveModelByName(args.plannerModel)).entry
+    (await resolveModelByName(roleName(args.plannerModel))).entry
   );
-  const work = makeProvider((await resolveModelByName(workName)).entry);
+  const work = makeProvider(
+    (await resolveModelByName(roleName(args.workModel))).entry
+  );
   const evaluator = makeProvider(
-    (await resolveModelByName(args.evaluatorModel)).entry
+    (await resolveModelByName(roleName(args.evaluatorModel))).entry
   );
 
   const state = await prepareState(args.dir, args.task, (goal) =>

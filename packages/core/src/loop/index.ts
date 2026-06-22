@@ -12,7 +12,7 @@ export type {
   IReviewRepairOptions,
 } from "./review-repair";
 export { snapshotFiles, restoreFiles } from "./file-snapshot";
-export type { FileSnapshot } from "./file-snapshot";
+export type { IFileSnapshot } from "./file-snapshot";
 export {
   runGreenfield,
   prepareState,

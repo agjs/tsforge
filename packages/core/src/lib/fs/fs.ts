@@ -41,8 +41,14 @@ function ignored(rel: string): boolean {
 }
 
 /** Expand a glob scope to the concrete, readable files under `cwd` (sorted),
- *  skipping ignored dirs and binary files, capped at MAX_GLOB_FILES. */
-async function expandGlob(cwd: string, pattern: string): Promise<string[]> {
+ *  skipping ignored dirs and binary files, capped at `limit` (default
+ *  MAX_GLOB_FILES — the prompt-safety bound). Pass `Infinity` when completeness
+ *  matters more than prompt size (e.g. a rollback snapshot must see every file). */
+async function expandGlob(
+  cwd: string,
+  pattern: string,
+  limit = MAX_GLOB_FILES
+): Promise<string[]> {
   const found: string[] = [];
 
   for await (const rel of new Glob(pattern).scan({ cwd, onlyFiles: true })) {
@@ -50,7 +56,7 @@ async function expandGlob(cwd: string, pattern: string): Promise<string[]> {
       found.push(rel);
     }
 
-    if (found.length >= MAX_GLOB_FILES) {
+    if (found.length >= limit) {
       break;
     }
   }
@@ -181,13 +187,14 @@ export async function writeFilesOrRollback(
  */
 export async function resolveScopeFiles(
   cwd: string,
-  paths: readonly string[]
+  paths: readonly string[],
+  limit = MAX_GLOB_FILES
 ): Promise<string[]> {
   const out = new Set<string>();
 
   for (const path of paths) {
     if (isGlobPattern(path)) {
-      for (const match of await expandGlob(cwd, path)) {
+      for (const match of await expandGlob(cwd, path, limit)) {
         out.add(match);
       }
     } else {

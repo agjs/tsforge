@@ -32,6 +32,28 @@ test("red-not-confirmed when the goalpost already passes — model never runs", 
   expect(called).toBe(false);
 });
 
+// Greenfield uses requireRed:false because the global gate is often already green
+// between features — the model must still build the feature, not bail RED-first.
+test("requireRed:false runs the model even when the gate already passes", async () => {
+  let called = false;
+  const provider: IProvider = {
+    async complete() {
+      called = true;
+
+      return { content: "", toolCalls: [] };
+    },
+  };
+  const r = await runTask(
+    { id: "1", accept: "true", files: [] },
+    ".",
+    provider,
+    { requireRed: false }
+  );
+
+  expect(called).toBe(true); // the model ran despite green
+  expect(r.status).not.toBe("red-not-confirmed");
+});
+
 test("stuck when the model never makes the goalpost pass", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-stuck-"));
 

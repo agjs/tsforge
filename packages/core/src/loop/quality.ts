@@ -91,7 +91,7 @@ export async function qualityRepair(
     const gate = await validate(task, cwd, opts.parse);
 
     if (!gate.passed) {
-      await restoreFiles(cwd, snapshot);
+      await restoreFiles(snapshot);
       report({ kind: "reverted", task: task.id, message: "gate broken" });
       report({
         kind: "fix",
@@ -111,7 +111,7 @@ export async function qualityRepair(
         message: `quality ↑ ${best.quality}/5`,
       });
     } else {
-      await restoreFiles(cwd, snapshot);
+      await restoreFiles(snapshot);
       report({ kind: "reverted", task: task.id, message: "no quality gain" });
       report({
         kind: "fix",
