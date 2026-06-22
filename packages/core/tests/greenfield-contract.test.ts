@@ -1,5 +1,6 @@
 import { test, expect, describe, afterEach } from "bun:test";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider, IChatMessage } from "../src/inference";
@@ -172,6 +173,28 @@ describe("writeContract", () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  test("a path-like feature id cannot escape the contracts dir", async () => {
+    dir = await mkdtemp(join(tmpdir(), "tsforge-contract-esc-"));
+    const evil = {
+      id: "../../../README",
+      desc: "x",
+      passes: false,
+      attempts: 0,
+    };
+    const res = await negotiateContract(generator("p"), evaluator(0), evil);
+
+    await writeContract(dir, evil, res);
+
+    // nothing written outside .tsforge/greenfield/contracts (no clobbered README)
+    const escaped = join(dir, "..", "..", "..", "README.md");
+
+    expect(existsSync(escaped)).toBe(false);
+    // an unsafe id falls back to a safe name inside the contracts dir
+    expect(
+      existsSync(join(greenfieldDir(dir), "contracts", "feature.md"))
+    ).toBe(true);
   });
 
   test("persists a transcript under .tsforge/greenfield/contracts", async () => {

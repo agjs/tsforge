@@ -131,7 +131,10 @@ function tallyEvent(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
       m.edits += 1;
       break;
     case "reverted":
-      m.editsReverted += 1;
+      // A reverted batch may have rolled back several mutations; subtract them
+      // all (default 1 for an older/countless event) so accept-rate isn't
+      // optimistic on multi-file repairs.
+      m.editsReverted += event.count ?? 1;
       break;
     case "timing":
       acc.wallMs += event.ms ?? 0;

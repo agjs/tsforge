@@ -50,6 +50,22 @@ describe("planner: parsePlan / planFeatures", () => {
     expect(parsePlan(JSON.stringify({ spec: "x" }))).toBeNull();
   });
 
+  test("drops features with unsafe (non-kebab / path-like) ids", () => {
+    const plan = parsePlan(
+      JSON.stringify({
+        spec: "x",
+        features: [
+          { id: "../../../README", desc: "path traversal" },
+          { id: "has/slash", desc: "slash" },
+          { id: "Has Space", desc: "space" },
+          { id: "good-feature", desc: "fine" },
+        ],
+      })
+    );
+
+    expect(plan?.features.map((f) => f.id)).toEqual(["good-feature"]);
+  });
+
   test("planFeatures tolerates a fenced JSON block", async () => {
     const plan = await planFeatures(
       providerSaying("```json\n" + GOOD + "\n```"),

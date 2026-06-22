@@ -152,6 +152,37 @@ test("an agent that throws mid-repair still rolls the workspace back, then rethr
   expect(readFileSync(join(repo, "discount.ts"), "utf8")).toBe(CHANGED);
 });
 
+test("a reverted batch reports its mutation count (multi-file accounting)", async () => {
+  // An agent that emits 3 edit events (then leaves the gate failing) → the
+  // reverted event must carry count:3, not 1.
+  const multiEditAgent: IAgent = {
+    async implement(ctx) {
+      for (const f of ["a", "b", "c"]) {
+        ctx.report?.({ kind: "edit", task: ctx.task.id, message: f });
+      }
+
+      writeFileSync(join(repo, "discount.ts"), "// still broken\n");
+    },
+  };
+  const reverts: number[] = [];
+
+  await reviewRepair(
+    stub(ONE_FINDING, true),
+    repo,
+    task("grep -q REPAIRED discount.ts"),
+    multiEditAgent,
+    {
+      onEvent: (e) => {
+        if (e.kind === "reverted") {
+          reverts.push(e.count ?? -1);
+        }
+      },
+    }
+  );
+
+  expect(reverts).toEqual([3]);
+});
+
 test("a revert emits a `reverted` accounting event", async () => {
   const events: string[] = [];
   const agent = fakeAgent(repo, "// BROKEN\n");

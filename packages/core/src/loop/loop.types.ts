@@ -28,7 +28,8 @@ export interface ILoopEvent {
     // An edit batch was rolled back because it broke the gate or failed to raise
     // quality (accounting-only; renders to nothing — the human-facing message
     // rides a `fix` event). Feeds the accept-rate / cost-per-accepted-change
-    // metrics: a reverted edit was spent but never accepted.
+    // metrics: the reverted edits were spent but never accepted. Carries `count`
+    // = how many mutations the batch rolled back (defaults to 1 if absent).
     | "reverted"
     // A unified-policy verdict for one proposed action (ledger-only; renders to
     // nothing on the terminal — a deny is already surfaced via its `tool` event).
@@ -37,6 +38,9 @@ export interface ILoopEvent {
   message: string;
   cycle?: number;
   cycles?: number;
+  /** For `reverted` events: how many file mutations the rolled-back batch
+   *  contained, so the accept-rate metric subtracts the whole batch, not just 1. */
+  count?: number;
   /** For `timing` events: how long the turn took, in milliseconds. */
   ms?: number;
   errors?: number;

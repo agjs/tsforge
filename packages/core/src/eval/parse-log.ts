@@ -102,7 +102,13 @@ function assignText(event: ILoopEvent, src: Record<string, unknown>): void {
 }
 
 function assignNumbers(event: ILoopEvent, src: Record<string, unknown>): void {
+  const count = optionalNumber(src.count);
   const ms = optionalNumber(src.ms);
+
+  if (count !== undefined) {
+    event.count = count;
+  }
+
   const promptTokens = optionalNumber(src.promptTokens);
   const completionTokens = optionalNumber(src.completionTokens);
   const totalTokens = optionalNumber(src.totalTokens);
