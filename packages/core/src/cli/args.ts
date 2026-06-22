@@ -39,6 +39,10 @@ export interface ICliArgs {
   /** Run the gate first and tell the reviewer to skip what it already covers
    *  (`tsforge review --with-gate`). */
   withGate: boolean;
+  /** After a one-shot run goes green, run the adversarial review and feed verified
+   *  findings into ONE repair cycle, reverting it if it breaks the gate
+   *  (`--with-review`). */
+  withReview: boolean;
   /** Seed a brownfield run with a deterministic caller blast-radius scout
    *  (`--scout`). */
   scout: boolean;
@@ -82,6 +86,7 @@ const BOOL_FLAGS: Record<
   | "strictFloorOnly"
   | "staged"
   | "withGate"
+  | "withReview"
   | "scout"
   | "setupYes"
 > = {
@@ -94,6 +99,7 @@ const BOOL_FLAGS: Record<
   "--strict-floor-only": "strictFloorOnly",
   "--staged": "staged",
   "--with-gate": "withGate",
+  "--with-review": "withReview",
   "--scout": "scout",
   "--yes": "setupYes",
 };
@@ -129,6 +135,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     review: false,
     staged: false,
     withGate: false,
+    withReview: false,
     scout: false,
     base: "",
     map: false,
@@ -264,6 +271,7 @@ function applyRecipeFlags(args: ICliArgs, recipe: ITaskRecipe): void {
   args.plan = args.plan || recipe.plan === true;
   args.log = args.log || recipe.log === true;
   args.withGate = args.withGate || recipe.withGate === true;
+  args.withReview = args.withReview || recipe.withReview === true;
   args.scout = args.scout || recipe.scout === true;
 }
 

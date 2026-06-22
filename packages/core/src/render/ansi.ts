@@ -293,6 +293,11 @@ function renderEventBody(event: ILoopEvent, color: boolean): string {
     case "tool":
       return `  ${paint(event.message, STYLE.dim, color)}\n`;
 
+    case "reverted":
+      // Accounting-only (feeds accept-rate); the human-facing "reverted" message
+      // rides the paired `fix` event, so this would only double-print.
+      return "";
+
     case "policy":
       // Ledger-only signal; a denial is already shown via its `tool` event.
       return "";

@@ -33,6 +33,17 @@ describe("parseRecipe", () => {
     expect("bogusField" in (r ?? {})).toBe(false);
   });
 
+  test("parses the withReview flag and does not flag it as unrecognized", () => {
+    const r = parseRecipe({ id: "repair-with-review", withReview: true });
+
+    expect(r?.withReview).toBe(true);
+    expect(unrecognizedKeys({ id: "x", withReview: true })).toEqual([]);
+    // a non-boolean withReview is dropped, never coerced
+    expect(
+      parseRecipe({ id: "x", withReview: "yes" })?.withReview
+    ).toBeUndefined();
+  });
+
   test("rejects a recipe with no id or a non-kebab id", () => {
     expect(parseRecipe({ gate: "x" })).toBeNull();
     expect(parseRecipe({ id: "Has Spaces" })).toBeNull();

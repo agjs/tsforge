@@ -21,6 +21,16 @@ export interface IRunMetrics {
   peakContext: number;
   /** File mutations (`edit` + `create`). */
   edits: number;
+  /** Edit batches rolled back (`reverted` events) — gate-break or no quality gain.
+   *  Spent but never accepted; the numerator of wasted edit effort. */
+  editsReverted: number;
+  /** Share of mutations that stuck: (edits − editsReverted) / edits, in [0,1];
+   *  0 when there were no edits. The article's hidden trap — tokens mean nothing
+   *  if most edits get reverted. */
+  acceptRate: number;
+  /** Total completion tokens per edit that STAYED (tokensOut / net-accepted);
+   *  0 when nothing was accepted. Cost of one durable change, not one attempt. */
+  costPerAcceptedChange: number;
   /** Distinct files created. */
   filesCreated: number;
   /** Gate runs (`validated` events). */
@@ -50,6 +60,9 @@ function emptyMetrics(): IRunMetrics {
     tokensOut: 0,
     peakContext: 0,
     edits: 0,
+    editsReverted: 0,
+    acceptRate: 0,
+    costPerAcceptedChange: 0,
     filesCreated: 0,
     gateRuns: 0,
     turnsToGreen: null,
@@ -75,54 +88,94 @@ function countPolicy(m: IRunMetrics, event: ILoopEvent): void {
   }
 }
 
+/** Running sums that don't live on IRunMetrics until the end (averages and a
+ *  once-rounded wall clock), threaded through the per-event tally. */
+interface IAccum {
+  tpsSum: number;
+  tpsCount: number;
+  wallMs: number;
+  created: Set<string>;
+}
+
+/** Fold one `usage` event in (split out so the per-event tally stays flat). */
+function tallyUsage(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
+  m.modelCalls += 1;
+  m.tokensOut += event.completionTokens ?? 0;
+  m.peakContext = Math.max(m.peakContext, event.promptTokens ?? 0);
+
+  if (event.tokensPerSecond !== undefined && event.tokensPerSecond > 0) {
+    acc.tpsSum += event.tokensPerSecond;
+    acc.tpsCount += 1;
+  }
+}
+
+/** Fold one event into the running metrics. A switch (not an else-if chain) so
+ *  adding a kind doesn't compound the function's cognitive complexity. */
+function tallyEvent(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
+  switch (event.kind) {
+    case "cycle":
+      m.turns += 1;
+      break;
+    case "usage":
+      tallyUsage(m, event, acc);
+      break;
+    case "create":
+      m.edits += 1;
+
+      if (event.file !== undefined && event.file.length > 0) {
+        acc.created.add(event.file);
+      }
+
+      break;
+    case "edit":
+      m.edits += 1;
+      break;
+    case "reverted":
+      m.editsReverted += 1;
+      break;
+    case "timing":
+      acc.wallMs += event.ms ?? 0;
+      break;
+    case "validated":
+      m.gateRuns += 1;
+      break;
+    case "done":
+      m.finalStatus = "done";
+      m.turnsToGreen ??= m.turns;
+      break;
+    case "stuck":
+      m.finalStatus = "stuck";
+      break;
+    case "policy":
+      countPolicy(m, event);
+      break;
+    default:
+      break;
+  }
+}
+
 /** Reduce a run's event stream to its behavioral metrics. Pure — feed it the
  *  events from a `--log` JSONL or a captured `onEvent` stream. */
 export function analyzeEvents(events: readonly ILoopEvent[]): IRunMetrics {
   const m = emptyMetrics();
-  const created = new Set<string>();
-  let tpsSum = 0;
-  let tpsCount = 0;
   // Accumulate raw ms and round ONCE at the end: rounding each timing event
   // would floor sub-second turns to 0s (400+400+400ms → 0s instead of 1s).
-  let wallMs = 0;
+  const acc: IAccum = { tpsSum: 0, tpsCount: 0, wallMs: 0, created: new Set() };
 
   for (const event of events) {
-    if (event.kind === "cycle") {
-      m.turns += 1;
-    } else if (event.kind === "usage") {
-      m.modelCalls += 1;
-      m.tokensOut += event.completionTokens ?? 0;
-      m.peakContext = Math.max(m.peakContext, event.promptTokens ?? 0);
-
-      if (event.tokensPerSecond !== undefined && event.tokensPerSecond > 0) {
-        tpsSum += event.tokensPerSecond;
-        tpsCount += 1;
-      }
-    } else if (event.kind === "create") {
-      m.edits += 1;
-
-      if (event.file !== undefined && event.file.length > 0) {
-        created.add(event.file);
-      }
-    } else if (event.kind === "edit") {
-      m.edits += 1;
-    } else if (event.kind === "timing") {
-      wallMs += event.ms ?? 0;
-    } else if (event.kind === "validated") {
-      m.gateRuns += 1;
-    } else if (event.kind === "done") {
-      m.finalStatus = "done";
-      m.turnsToGreen ??= m.turns;
-    } else if (event.kind === "stuck") {
-      m.finalStatus = "stuck";
-    } else if (event.kind === "policy") {
-      countPolicy(m, event);
-    }
+    tallyEvent(m, event, acc);
   }
 
-  m.filesCreated = created.size;
-  m.avgTokensPerSecond = tpsCount > 0 ? Math.round(tpsSum / tpsCount) : 0;
-  m.wallClockSeconds = Math.round(wallMs / 1000);
+  m.filesCreated = acc.created.size;
+
+  const netAccepted = Math.max(0, m.edits - m.editsReverted);
+
+  m.acceptRate = m.edits > 0 ? netAccepted / m.edits : 0;
+  m.costPerAcceptedChange =
+    netAccepted > 0 ? Math.round(m.tokensOut / netAccepted) : 0;
+  m.avgTokensPerSecond =
+    acc.tpsCount > 0 ? Math.round(acc.tpsSum / acc.tpsCount) : 0;
+  m.wallClockSeconds = Math.round(acc.wallMs / 1000);
   m.failureClass = classifyRun(events).failureClass;
 
   return m;

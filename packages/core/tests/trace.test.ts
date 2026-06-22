@@ -162,6 +162,88 @@ describe("trace metrics: policy counts", () => {
   });
 });
 
+describe("trace metrics: accept rate / cost per accepted change", () => {
+  // 3 edits, 1 reverted → 2 accepted; 600 completion tokens → 300/accepted.
+  function churnEvents(): ILoopEvent[] {
+    return [
+      { kind: "edit", task: "t", message: "" },
+      { kind: "edit", task: "t", message: "" },
+      {
+        kind: "usage",
+        task: "t",
+        message: "",
+        completionTokens: 600,
+      },
+      { kind: "reverted", task: "t", message: "gate broken" },
+      { kind: "create", task: "t", message: "", file: "src/new.ts" },
+    ];
+  }
+
+  test("analyzeEvents derives editsReverted, acceptRate, costPerAcceptedChange", () => {
+    const m = analyzeEvents(churnEvents());
+
+    expect(m.edits).toBe(3); // 2 edit + 1 create
+    expect(m.editsReverted).toBe(1);
+    expect(m.acceptRate).toBeCloseTo(2 / 3, 5);
+    expect(m.costPerAcceptedChange).toBe(300); // 600 tokens / 2 accepted
+  });
+
+  test("no edits ⇒ acceptRate 0 and costPerAcceptedChange 0 (no divide-by-zero)", () => {
+    const m = analyzeEvents([
+      { kind: "usage", task: "t", message: "", completionTokens: 100 },
+    ]);
+
+    expect(m.edits).toBe(0);
+    expect(m.acceptRate).toBe(0);
+    expect(m.costPerAcceptedChange).toBe(0);
+  });
+
+  test("all edits reverted ⇒ acceptRate 0 and cost 0 (nothing stuck)", () => {
+    const m = analyzeEvents([
+      { kind: "edit", task: "t", message: "" },
+      { kind: "reverted", task: "t", message: "" },
+      { kind: "usage", task: "t", message: "", completionTokens: 500 },
+    ]);
+
+    expect(m.acceptRate).toBe(0);
+    expect(m.costPerAcceptedChange).toBe(0);
+  });
+
+  test("reverted events round-trip through a real LedgerWriter --log", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-revert-"));
+
+    try {
+      const file = join(dir, "run.jsonl");
+
+      writeLedger(file, churnEvents());
+
+      const parsed = parseEventLog(await Bun.file(file).text());
+      const m = analyzeEvents(parsed);
+
+      expect(parsed.some((e) => e.kind === "reverted")).toBe(true);
+      expect(m.editsReverted).toBe(1);
+      expect(m.costPerAcceptedChange).toBe(300);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the reverted event maps to the edit_reverted ledger type", () => {
+    expect(ledgerTypeFor({ kind: "reverted", task: "t", message: "" })).toBe(
+      "edit_reverted"
+    );
+  });
+
+  test("formatTrace surfaces the accept-rate line", () => {
+    const out = formatTrace(churnEvents());
+
+    expect(out).toContain("accept rate");
+    expect(out).toContain("67%"); // round(2/3 * 100)
+    expect(out).toContain("cost/accepted");
+    expect(out).toContain("300 tok");
+  });
+});
+
 describe("trace formatter", () => {
   test("formatTrace renders the headline run signals", () => {
     const events: ILoopEvent[] = [

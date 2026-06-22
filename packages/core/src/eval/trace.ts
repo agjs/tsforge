@@ -48,6 +48,16 @@ export function formatTrace(events: readonly ILoopEvent[]): string {
         : String(m.peakContext),
     ],
     ["edits/creates", `${m.edits} (${m.filesCreated} created)`],
+    [
+      "accept rate",
+      m.edits > 0
+        ? `${Math.round(m.acceptRate * 100)}% (${m.editsReverted} reverted)`
+        : "—",
+    ],
+    [
+      "cost/accepted",
+      m.costPerAcceptedChange > 0 ? `${m.costPerAcceptedChange} tok` : "—",
+    ],
     ["gate runs", String(m.gateRuns)],
     [
       "policy denials",

@@ -23,8 +23,10 @@ import {
   ledgerTypeFor,
   PLAN_APPROVED_NOTE,
   reviewChange,
+  reviewRepair,
   formatReport,
 } from "./loop";
+import { modelAgent } from "./agent";
 import { buildAndPersistMap, mapStatus, forgetMap } from "./codebase";
 import { parseEventLog, formatTrace } from "./eval";
 import { loadRecipes, findRecipe } from "./config/recipes";
@@ -519,8 +521,10 @@ async function runOnce(args: ICliArgs): Promise<number> {
       ? args.thinkingBudget
       : envNumber("TSFORGE_THINKING_BUDGET");
   const { entry } = await modelForRun(args);
-  const result = await runTask(task, args.dir, makeProvider(entry), {
-    onEvent: makeReporter(logFile, "cli"),
+  const provider = makeProvider(entry);
+  const report = makeReporter(logFile, "cli");
+  const result = await runTask(task, args.dir, provider, {
+    onEvent: report,
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
     ...(args.scout ? { scout: true } : {}),
@@ -530,6 +534,15 @@ async function runOnce(args: ICliArgs): Promise<number> {
   process.stdout.write(
     `\n${ok ? "✓ done" : `✗ ${result.status}`} in ${String(result.cycles)} turn(s)\n`
   );
+
+  // Optional post-green adversarial review + one repair cycle (reverts if it
+  // breaks the gate). Only meaningful once the task is actually green.
+  if (ok && args.withReview) {
+    await reviewRepair(provider, args.dir, task, modelAgent(provider), {
+      ...(args.base.length > 0 ? { base: args.base } : {}),
+      onEvent: report,
+    });
+  }
 
   return ok ? 0 : 1;
 }

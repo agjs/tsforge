@@ -25,6 +25,11 @@ export interface ILoopEvent {
     | "timing"
     | "usage"
     | "ttsr"
+    // An edit batch was rolled back because it broke the gate or failed to raise
+    // quality (accounting-only; renders to nothing — the human-facing message
+    // rides a `fix` event). Feeds the accept-rate / cost-per-accepted-change
+    // metrics: a reverted edit was spent but never accepted.
+    | "reverted"
     // A unified-policy verdict for one proposed action (ledger-only; renders to
     // nothing on the terminal — a deny is already surfaced via its `tool` event).
     | "policy";

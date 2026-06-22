@@ -6,6 +6,13 @@ export type { SetupWebFn } from "./tools";
 export { runTask } from "./run";
 export { runSpec } from "./run-spec";
 export { qualityRepair } from "./quality";
+export { reviewRepair } from "./review-repair";
+export type {
+  IReviewRepairResult,
+  IReviewRepairOptions,
+} from "./review-repair";
+export { snapshotFiles, restoreFiles } from "./file-snapshot";
+export type { FileSnapshot } from "./file-snapshot";
 export {
   toolsFor,
   buildTsService,

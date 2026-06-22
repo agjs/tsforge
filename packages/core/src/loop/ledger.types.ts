@@ -14,6 +14,8 @@ export type LedgerEventType =
   | "tool_call_started"
   | "tool_call_finished"
   | "tool_call_failed"
+  /** An applied edit batch was rolled back (gate-break or no quality gain). */
+  | "edit_reverted"
   | "policy_decision"
   | "gate_started"
   | "gate_finished"
