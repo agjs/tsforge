@@ -31,6 +31,9 @@ import {
   evaluateFeature,
   planFeatures,
   judgeFeature,
+  negotiateContract,
+  writeContract,
+  contractEnabled,
   type IFeature,
   type IGreenfieldDeps,
   type Reporter,
@@ -2011,9 +2014,37 @@ function greenfieldDeps(
     context: [],
   });
 
+  // Optional pre-build contract negotiation (EXPERIMENTAL, gated by
+  // TSFORGE_CONTRACT). When on, the generator + evaluator agree a contract first
+  // and it anchors the implement prompt.
+  const contractPrefix = async (feature: IFeature): Promise<string> => {
+    if (!contractEnabled()) {
+      return "";
+    }
+
+    const result = await negotiateContract(work, evaluator, feature);
+
+    await writeContract(args.dir, feature, result);
+    report({
+      kind: "fix",
+      task: "greenfield",
+      message: `contract '${feature.id}': ${result.agreed ? "agreed" : "no agreement"} after ${result.rounds} round(s)`,
+    });
+
+    return `Agreed build contract:\n${result.contract}\n\n`;
+  };
+
   return {
     implement: async (feature) => {
-      await runTask(featureTask(feature), args.dir, work, { onEvent: report });
+      const prefix = await contractPrefix(feature);
+      const base = featureTask(feature);
+
+      await runTask(
+        { ...base, intent: `${prefix}${base.intent ?? ""}` },
+        args.dir,
+        work,
+        { onEvent: report }
+      );
     },
     evaluate: (feature) =>
       evaluateFeature(feature, {
@@ -2042,6 +2073,27 @@ function greenfieldDeps(
           }),
       }),
   };
+}
+
+/** Run the `--notify` shell command (if any) with the run outcome in
+ *  $TSFORGE_STATUS — a ping for unattended/cron runs. Best-effort: a failing or
+ *  missing notifier never changes the run's exit code. */
+async function runNotify(cmd: string, status: string): Promise<void> {
+  if (cmd.length === 0) {
+    return;
+  }
+
+  try {
+    const proc = Bun.spawn(["sh", "-c", cmd], {
+      env: { ...process.env, TSFORGE_STATUS: status },
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+
+    await proc.exited;
+  } catch {
+    // A broken notifier must not break the run.
+  }
 }
 
 /** `tsforge --greenfield "<goal>"` / a recipe with `mode: "greenfield"`: plan a
@@ -2101,6 +2153,11 @@ async function greenfieldMode(args: ICliArgs): Promise<number> {
 
   process.stdout.write(
     `\n${result.status === "done" ? "✓ all features verified" : `✗ stuck on '${result.stuckFeature ?? "?"}'`} (${done}/${result.features.length})\n`
+  );
+
+  await runNotify(
+    args.notify,
+    `greenfield ${result.status} ${done}/${result.features.length}`
   );
 
   return result.status === "done" ? 0 : 1;

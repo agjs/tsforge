@@ -1,0 +1,71 @@
+---
+title: Greenfield builds
+description: Build a whole app feature-by-feature with a filesystem-tracked checklist, a planner/generator/evaluator split, and the same gate + browser + judge verification used everywhere else.
+---
+
+Most of tsforge drives **one change to green**. Greenfield mode drives a **whole build to green**, one feature at a time, keeping its state on disk so a long run can be interrupted and resumed without losing the plot.
+
+```bash
+tsforge --greenfield "build a kanban board" --accept "bun run build"
+```
+
+## How it works
+
+1. **Plan** — a planner model turns your one-line goal into a high-level spec and a flat feature checklist (sprints, not file-level steps). Written to `.tsforge/greenfield/`.
+2. **Loop** — for the first unfinished feature: the work model implements it, then the **layered evaluator** verifies it. On success the feature is ticked; the loop moves on.
+3. **Stop** — when every feature is verified (`done`), or a single feature exhausts its attempts (`stuck`) so a non-converging feature can't wedge the whole build.
+
+The state lives in the repo, not the model's context:
+
+| File | Purpose |
+| --- | --- |
+| `.tsforge/greenfield/spec.md` | The planner's high-level spec |
+| `.tsforge/greenfield/features.json` | The checklist (`{id, desc, passes, attempts}`) — the source of truth |
+| `.tsforge/greenfield/progress.md` | Human-readable status |
+
+Because `features.json` is the source of truth, re-running the same command **resumes** from the last verified feature.
+
+## The layered evaluator
+
+Each feature passes only if all three layers agree, checked cheapest-first and short-circuiting on the first failure:
+
+1. **Gate** — the deterministic build gate (`--accept`: tsc / eslint / tests, and the browser smoke that the web gate already runs). The authority for "done".
+2. **Browser** — optional per-feature interaction steps via the Playwright oracle (skipped gracefully when Playwright isn't installed, so it never blocks).
+3. **Judge** — a harsh, reject-by-default quality review that sees **only the built code**, never how it was produced.
+
+That last point is a deliberate rule: the evaluator never sees the generator's reasoning or tool trace, so it judges the result, not the persuasion behind it.
+
+## Role-based model routing
+
+Each role can run on its own model (names from your [models.json](/inference/models-json/)); any role left unset falls back to the active model, so a single-endpoint setup still works:
+
+```json
+{
+  "id": "kanban",
+  "mode": "greenfield",
+  "gate": "bun run build",
+  "plannerModel": "big-thinker",
+  "workModel": "fast-coder",
+  "evaluatorModel": "harsh-judge"
+}
+```
+
+```bash
+tsforge run kanban "build a kanban board"
+```
+
+## Contract negotiation (experimental)
+
+Set `TSFORGE_CONTRACT=1` to make the generator and evaluator agree a **build contract** for each feature *before* building — the generator proposes "I'll build X, verified by Y" and the evaluator pushes back until it's concrete. The agreed contract then anchors the implementation, and the negotiation is saved to `.tsforge/greenfield/contracts/<feature>.md`. Off by default — it's unproven and adds model calls.
+
+## Unattended runs & scheduling
+
+Greenfield runs are long and headless-friendly. There's no built-in scheduler — wire one with your OS:
+
+```bash
+# nightly build attempt, pinging you when it finishes or gets stuck
+0 2 * * *  tsforge run kanban "build a kanban board" \
+             --log --notify 'curl -s "$WEBHOOK?status=$TSFORGE_STATUS"'
+```
+
+`--notify <cmd>` runs a shell command on completion with the outcome in `$TSFORGE_STATUS` (e.g. `greenfield done 7/7` or `greenfield stuck 3/7`). It's best-effort: a failing notifier never changes the run's exit code. Pair it with `--log` and [`tsforge trace`](/observability/trace/) to inspect what happened.

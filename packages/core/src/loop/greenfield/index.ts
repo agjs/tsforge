@@ -13,6 +13,13 @@ export { planFeatures, parsePlan } from "./plan";
 export type { IPlan } from "./plan";
 export { judgeFeature, parseFeatureVerdict } from "./judge";
 export type { IFeatureJudgeInput } from "./judge";
+export {
+  negotiateContract,
+  parseObjection,
+  writeContract,
+  contractEnabled,
+} from "./contract";
+export type { IContractResult, IContractTurn, IObjection } from "./contract";
 export type {
   IFeature,
   IFeatureVerdict,

@@ -21,6 +21,10 @@ export {
   parsePlan,
   judgeFeature,
   parseFeatureVerdict,
+  negotiateContract,
+  parseObjection,
+  writeContract,
+  contractEnabled,
   loadState,
   saveState,
   writeSpec,
@@ -40,6 +44,9 @@ export type {
   IJudgeOutcome,
   IPlan,
   IFeatureJudgeInput,
+  IContractResult,
+  IContractTurn,
+  IObjection,
 } from "./greenfield";
 export {
   toolsFor,

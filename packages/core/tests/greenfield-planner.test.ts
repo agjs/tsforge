@@ -38,7 +38,9 @@ describe("planner: parsePlan / planFeatures", () => {
 
     expect(plan?.spec).toContain("Build it");
     expect(plan?.features.map((f) => f.id)).toEqual(["list-todos", "add-todo"]);
-    expect(plan?.features.every((f) => !f.passes && f.attempts === 0)).toBe(true);
+    expect(plan?.features.every((f) => !f.passes && f.attempts === 0)).toBe(
+      true
+    );
     expect(plan?.features[1]?.steps).toHaveLength(1);
   });
 
@@ -96,10 +98,8 @@ describe("prepareState: resume-first, else plan", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  const stubPlan =
-    (plan: IPlan | null) =>
-    async (): Promise<IPlan | null> =>
-      plan;
+  const stubPlan = (plan: IPlan | null) => async (): Promise<IPlan | null> =>
+    plan;
 
   test("plans fresh when no state exists (writes spec.md + features.json)", async () => {
     let planCalls = 0;
@@ -107,14 +107,17 @@ describe("prepareState: resume-first, else plan", () => {
       planCalls += 1;
       expect(g).toBe("build x");
 
-      return { spec: "# spec", features: [{ id: "a", desc: "do a", passes: false, attempts: 0 }] };
+      return {
+        spec: "# spec",
+        features: [{ id: "a", desc: "do a", passes: false, attempts: 0 }],
+      };
     });
 
     expect(planCalls).toBe(1);
     expect(state?.features.map((f) => f.id)).toEqual(["a"]);
-    expect(await readFile(join(greenfieldDir(dir), "spec.md"), "utf8")).toContain(
-      "spec"
-    );
+    expect(
+      await readFile(join(greenfieldDir(dir), "spec.md"), "utf8")
+    ).toContain("spec");
     expect((await loadState(dir))?.goal).toBe("build x");
   });
 

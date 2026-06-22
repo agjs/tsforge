@@ -105,7 +105,10 @@ describe("evaluateFeature: layered, short-circuiting", () => {
     const v = await evaluateFeature(
       feature("a"),
       deps({
-        gate: async () => ({ passed: false, output: "TS2322 type error\nmore" }),
+        gate: async () => ({
+          passed: false,
+          output: "TS2322 type error\nmore",
+        }),
         browser: async () => {
           browserCalled = true;
 
@@ -123,7 +126,9 @@ describe("evaluateFeature: layered, short-circuiting", () => {
   test("a skipped render-check does NOT block (playwright absent)", async () => {
     const v = await evaluateFeature(
       feature("a"),
-      deps({ browser: async () => ({ ok: false, errors: ["x"], skipped: true }) })
+      deps({
+        browser: async () => ({ ok: false, errors: ["x"], skipped: true }),
+      })
     );
 
     expect(v.passed).toBe(true);
@@ -132,7 +137,9 @@ describe("evaluateFeature: layered, short-circuiting", () => {
   test("a real browser failure blocks at the browser stage", async () => {
     const v = await evaluateFeature(
       feature("a"),
-      deps({ browser: async () => ({ ok: false, errors: ["console error: boom"] }) })
+      deps({
+        browser: async () => ({ ok: false, errors: ["console error: boom"] }),
+      })
     );
 
     expect(v.passed).toBe(false);
@@ -238,10 +245,7 @@ describe("runGreenfield: outer loop", () => {
 
     await runGreenfield(dir, s, deps);
 
-    const md = await readFile(
-      join(greenfieldDir(dir), "progress.md"),
-      "utf8"
-    );
+    const md = await readFile(join(greenfieldDir(dir), "progress.md"), "utf8");
 
     expect(md).toContain("1/1 features verified");
   });

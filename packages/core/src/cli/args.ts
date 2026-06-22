@@ -49,6 +49,9 @@ export interface ICliArgs {
   /** Run the greenfield feature-checklist outer loop (`--greenfield`, or a recipe
    *  with `mode: "greenfield"`). `task` carries the one-line build goal. */
   greenfield: boolean;
+  /** Shell command to run on completion of an unattended run (`--notify <cmd>`),
+   *  with the outcome in $TSFORGE_STATUS. "" = no notification. */
+  notify: string;
   /** Explicit base ref to diff against for review (`--base <ref>`). */
   base: string;
   /** Build a structural workspace map (`tsforge map`). */
@@ -123,6 +126,7 @@ const VALUE_FLAGS = new Set([
   "--base",
   "--policy-mode",
   "--recipe",
+  "--notify",
 ]);
 
 /** Parse argv (without the tsforge binary name). Always succeeds — mode is decided in main. */
@@ -147,6 +151,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     withReview: false,
     scout: false,
     greenfield: false,
+    notify: "",
     base: "",
     map: false,
     trace: false,
@@ -230,6 +235,8 @@ function applyValueFlag(flag: string, value: string, out: ICliArgs): void {
     out.policyMode = value;
   } else if (flag === "--recipe") {
     out.recipe = value;
+  } else if (flag === "--notify") {
+    out.notify = value;
   } else {
     out.accept = value; // --accept / --gate
   }

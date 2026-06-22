@@ -171,6 +171,7 @@ export default defineConfig({
             { label: "Set up a repo", link: "/cli/setup/" },
             { label: "Chat with your repo", link: "/cli/interactive/" },
             { label: "Drive a change to green", link: "/workflows/fix-to-green/" },
+            { label: "Build a whole app", link: "/loop/greenfield/" },
             { label: "Review your changes", link: "/cli/review/" },
             { label: "Recipes", link: "/cli/recipes/" },
             { label: "Pre-edit scout", link: "/loop/scout/" },

@@ -65,7 +65,10 @@ beforeEach(() => {
   git("config", "user.email", "t@t.t");
   git("config", "user.name", "t");
   git("config", "commit.gpgsign", "false");
-  writeFileSync(join(repo, "discount.ts"), "// discount\nconst x = price - off;\n");
+  writeFileSync(
+    join(repo, "discount.ts"),
+    "// discount\nconst x = price - off;\n"
+  );
   git("add", "-A");
   git("commit", "-q", "-m", "init");
   // an uncommitted change on line 2 — the diff under review
@@ -78,7 +81,12 @@ afterEach(() => {
 
 test("no verified findings → no repair, agent never called", async () => {
   const agent = fakeAgent(repo, "should not be written");
-  const res = await reviewRepair(stub(NO_FINDINGS, true), repo, task("true"), agent);
+  const res = await reviewRepair(
+    stub(NO_FINDINGS, true),
+    repo,
+    task("true"),
+    agent
+  );
 
   expect(res.findings).toBe(0);
   expect(res.repaired).toBe(false);
