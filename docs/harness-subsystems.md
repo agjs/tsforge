@@ -224,21 +224,28 @@ that leaks keypress listeners.
 `tests/wizard.test.ts` (reducer/render/lifecycle), `tests/write-config.test.ts` (merge),
 `tests/scan.test.ts` (read-only + caps).
 
-## lib/fs — `src/lib/fs/process.ts`, fs helpers, `src/lib/scope.ts`
+## lib/fs — `src/lib/fs/process.ts`, fs helpers, `src/lib/scope/scope.ts`
 
 The ONE shared command runner; path normalization; scope checks.
 
-**Invariants** ONE place runs shell commands (gate + `run` both route here) so
-cancellation + kill-timeout are uniform; a timeout/abort kills the whole process
-group (no leaked `&` child); argv (no-shell) form for any content-built command (e.g.
-`add_dependency` → `bun add …`) — the model's own `run` tool is the one deliberate
-shell form, gated by `isReadOnlyCommand` in plan mode and the destructive-shell policy
-otherwise; a missing binary → exit 127, not a throw.
+**Invariants** ONE place runs shell commands (gate + `run` + the `--notify` hook all
+route through `runShellCommand`/`runArgvCommand`) so cancellation + kill-timeout are
+uniform; a timeout/abort kills the whole process group (no leaked `&` child); the
+final output drain is always bounded (`FLUSH_GRACE_MS`); argv (no-shell) form for any
+content-built command (e.g. `add_dependency` → `bun add …`) — the model's own `run`
+tool is the one deliberate shell form, gated by `isReadOnlyCommand` in plan mode and
+the destructive-shell policy otherwise; a missing binary → exit 127, not a throw; a
+custom `env` REPLACES the inherited env (pass `{ ...process.env, … }` to add a var).
+The long-lived MCP stdio transport (`src/mcp/stdio-transport.ts`) is the one
+deliberate exception — a persistent server, not a one-shot command.
 
 **Risk areas** kill that leaves grandchildren (the fixed P2a); shell-injection via the
-shell form; an uncapped read.
+shell form; an uncapped read; a NEW spawn site that bypasses the runner and so skips
+the kill-timeout (the fixed `runNotify` hang).
 
-**Checklist** `tests/process.test.ts` group-kill; content-built commands use `runArgvCommand`.
+**Checklist** `tests/process.test.ts` group-kill + bounded drain + missing-binary 127
++ custom env; `tests/cli.test.ts` `runNotify` is timeout-bounded; content-built
+commands use `runArgvCommand`.
 
 ---
 

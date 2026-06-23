@@ -1,6 +1,32 @@
 import { test, expect } from "bun:test";
-import { parseArgs, isOneShot, applyRecipe } from "../src/cli";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseArgs, isOneShot, applyRecipe, runNotify } from "../src/cli";
 import type { ITaskRecipe } from "../src/config/recipes";
+
+// Regression: runNotify used to spawn `sh -c cmd` with a bare `await proc.exited`
+// — no timeout. A hanging notifier (curl to a dead host, a stray `read`) wedged
+// the run forever at the finish line of an unattended/cron build. It now routes
+// through the shared runner with NOTIFY_TIMEOUT_MS, so it ALWAYS returns.
+test("runNotify is bounded — a hanging notifier cannot wedge the run", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-notify-"));
+
+  try {
+    const start = Bun.nanoseconds();
+
+    // `sleep 30` stands in for a foreground-hanging notifier. With the override
+    // timeout (300ms) the runner kills it; the old unbounded `await proc.exited`
+    // would block the full 30s. Asserting a sub-5s return is impossible without
+    // the kill-timeout the shared runner provides.
+    await runNotify(dir, "sleep 30", "done 3/3", 300);
+    const elapsedMs = (Bun.nanoseconds() - start) / 1e6;
+
+    expect(elapsedMs).toBeLessThan(5000);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("parses task + files + accept + dir", () => {
   const a = parseArgs([

@@ -13,7 +13,7 @@ import {
   shouldOpenAtPicker,
   type IPickerView,
 } from "./render/file-menu";
-import { listWorkspaceFiles, readFiles } from "./lib/fs";
+import { listWorkspaceFiles, readFiles, runShellCommand } from "./lib/fs";
 import { renderCheck } from "./browser";
 import { composeMessage } from "./loop/prompt";
 import {
@@ -2099,22 +2099,31 @@ function greenfieldDeps(
   };
 }
 
+/** A `--notify` hook is bounded: an unattended/cron run must not hang forever on a
+ *  notifier that wedges (a `curl` to a dead host with no `--max-time`, a stray
+ *  `read` on stdin). 30s is generous for a real ping yet always lets the run end. */
+const NOTIFY_TIMEOUT_MS = 30_000;
+
 /** Run the `--notify` shell command (if any) with the run outcome in
- *  $TSFORGE_STATUS — a ping for unattended/cron runs. Best-effort: a failing or
- *  missing notifier never changes the run's exit code. */
-async function runNotify(cmd: string, status: string): Promise<void> {
+ *  $TSFORGE_STATUS — a ping for unattended/cron runs. Best-effort: a failing,
+ *  missing, OR HANGING notifier never changes the run's exit code, because it
+ *  routes through the shared runner (uniform kill-timeout) and is bounded. */
+export async function runNotify(
+  cwd: string,
+  cmd: string,
+  status: string,
+  timeoutMs: number = NOTIFY_TIMEOUT_MS
+): Promise<void> {
   if (cmd.length === 0) {
     return;
   }
 
   try {
-    const proc = Bun.spawn(["sh", "-c", cmd], {
+    await runShellCommand(cwd, cmd, {
+      timeoutMs,
       env: { ...process.env, TSFORGE_STATUS: status },
-      stdout: "inherit",
-      stderr: "inherit",
+      onChunk: (text) => process.stdout.write(text),
     });
-
-    await proc.exited;
   } catch {
     // A broken notifier must not break the run.
   }
@@ -2186,6 +2195,7 @@ async function greenfieldMode(args: ICliArgs): Promise<number> {
   );
 
   await runNotify(
+    args.dir,
     args.notify,
     `greenfield ${result.status} ${done}/${result.features.length}`
   );
