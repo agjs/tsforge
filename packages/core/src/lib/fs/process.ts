@@ -22,6 +22,10 @@ export interface IShellRunOptions {
   timeoutMs?: number;
   /** Forward each decoded output chunk live; omit to just capture. */
   onChunk?: (text: string) => void;
+  /** Full environment for the child (REPLACES the inherited env, like Bun.spawn).
+   *  Omit to inherit `process.env`. Pass `{ ...process.env, KEY: val }` to add a
+   *  var while keeping the rest — e.g. the `--notify` hook injecting a status. */
+  env?: Record<string, string | undefined>;
 }
 
 /** Result of `runShellCommand` — captured streams + how it ended. */
@@ -74,7 +78,7 @@ export async function runArgvCommand(
   argv: string[],
   opts: IShellRunOptions = {}
 ): Promise<IShellRun> {
-  const { signal, timeoutMs = 0, onChunk } = opts;
+  const { signal, timeoutMs = 0, onChunk, env } = opts;
 
   let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
 
@@ -90,6 +94,7 @@ export async function runArgvCommand(
       stdout: "pipe",
       stderr: "pipe",
       detached: true,
+      ...(env === undefined ? {} : { env }),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -79,6 +79,25 @@ test("a missing binary returns exit 127 without throwing", async () => {
   }
 });
 
+// The shared runner must be able to inject env (the `--notify` hook passes
+// $TSFORGE_STATUS this way). Without an `env` option, a notifier routed through
+// the runner couldn't learn the run outcome.
+test("runShellCommand passes a custom env to the child", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-proc-env-"));
+
+  try {
+    const run = await runShellCommand(dir, 'printf "%s" "$TSFORGE_STATUS"', {
+      timeoutMs: 5000,
+      env: { ...process.env, TSFORGE_STATUS: "done 3/3" },
+    });
+
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe("done 3/3");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a quick command still returns its output and does not report a timeout", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-proc-ok-"));
 
