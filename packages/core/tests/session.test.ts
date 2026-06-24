@@ -1215,3 +1215,54 @@ test("filterGateStream.flush still drops a trailing eslint JSON blob", () => {
 
   expect(out.join("")).not.toContain("filePath");
 });
+
+test("a never-yielding edit loop is bounded: a gate is FORCED and the guards stop it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const gateLog = join(dir, "gate-runs.log");
+    // The model NEVER yields — it overwrites one file it authored, with new content,
+    // every single turn (the index.css churn pathology). Before the fix the full
+    // gate only ran on yield, so it never ran → the no-progress guards never ticked
+    // → it churned to the maxTurns backstop. Now a gate is FORCED after
+    // FULL_GATE_EVERY edits, surfacing the failure AND advancing the guards.
+    let n = 0;
+    const provider: IProvider = {
+      async complete() {
+        n += 1;
+
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: String(n),
+              name: "create",
+              arguments: {
+                file: "churn.ts",
+                content: `export const x = ${n};\n`,
+              },
+            },
+          ],
+        };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: `sh -c "echo run >> '${gateLog}'; exit 1"`, // always red; logs each run
+      files: ["**/*"],
+      maxTurns: 120,
+    });
+    const result = await session.send("keep editing churn.ts");
+
+    const ran = (await Bun.file(gateLog).exists())
+      ? (await Bun.file(gateLog).text()).trim().split("\n").length
+      : 0;
+
+    expect(ran).toBeGreaterThan(0); // a gate was forced despite the model never yielding
+    expect(result.status).toBe("stuck"); // the no-progress guards stopped it
+    expect(result.turns).toBeLessThan(120); // before the runaway backstop
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30000);
