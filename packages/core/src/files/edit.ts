@@ -172,7 +172,7 @@ function fuzzyLineReplace(
       .replace(/[‘’‚‛]/gu, "'")
       .replace(/[“”„‟]/gu, '"')
       .replace(/[‐-―−]/gu, "-")
-      .replace(/[  -   　]/gu, " ")
+      .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/gu, " ")
       .trim()
       .replace(/['"`]/gu, '"') // unify quote style (straight + the folded curly)
       .replace(/\s+/gu, " ") // collapse internal whitespace runs

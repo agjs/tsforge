@@ -45,7 +45,9 @@ export const noSelfImportRule = createRule<[], MessageIds>({
 
       if (
         typeof source !== "string" ||
-        (!source.startsWith("./") && !source.startsWith("../") && source !== ".")
+        (!source.startsWith("./") &&
+          !source.startsWith("../") &&
+          source !== ".")
       ) {
         return;
       }

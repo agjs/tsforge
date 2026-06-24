@@ -75,8 +75,8 @@ export async function fetchWithRetry(
       // Past the quick-blip window we're waiting for the endpoint to come back —
       // emit a heartbeat (stderr, captured in run logs) so a long wait isn't silent.
       if (elapsed >= PROVIDER_LIMITS.retryBackoffMs * 4) {
-        console.error(
-          `⏳ model endpoint unreachable — retrying (${String(Math.round(elapsed / 1000))}s elapsed, up to ${String(Math.round(connectRetryMs / 1000))}s)`
+        process.stderr.write(
+          `⏳ model endpoint unreachable — retrying (${String(Math.round(elapsed / 1000))}s elapsed, up to ${String(Math.round(connectRetryMs / 1000))}s)\n`
         );
       }
 

@@ -32,10 +32,8 @@ export function resolveLocalModule(
   ];
 
   for (const c of candidates) {
-    if (c.endsWith(".ts") || c.endsWith(".tsx")) {
-      if (existsSync(c)) {
-        return c;
-      }
+    if ((c.endsWith(".ts") || c.endsWith(".tsx")) && existsSync(c)) {
+      return c;
     }
   }
 
@@ -80,7 +78,7 @@ export function readExportedNames(absFile: string): string[] {
       }
 
       // `a as b` exposes `b`; a bare `a` exposes `a`.
-      const exposed = / as /u.test(part) ? part.split(/ as /u)[1] : part;
+      const exposed = part.includes(" as ") ? part.split(/ as /u)[1] : part;
       const name = exposed?.trim().replace(/^type\s+/u, "");
 
       if (name !== undefined && /^[A-Za-z_$][\w$]*$/u.test(name)) {

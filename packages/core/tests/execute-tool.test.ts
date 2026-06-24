@@ -178,7 +178,13 @@ test("create OVERWRITES a file the model authored this session (in `touched`)", 
         name: "create",
         arguments: { file: "store.ts", content: "export const x = 1;\n" },
       },
-      { cwd: dir, files: ["store.ts"], task: "t", report: () => undefined, touched }
+      {
+        cwd: dir,
+        files: ["store.ts"],
+        task: "t",
+        report: () => undefined,
+        touched,
+      }
     );
 
     expect(r).toContain("overwrote");
@@ -240,9 +246,9 @@ test("run REJECTS a shell redirect that writes an in-scope project file", async 
     expect(r).toContain("REJECTED");
     expect(r).toContain("create");
     // Nothing was written via the shell.
-    expect(await Bun.file(join(dir, "src/views/Dashboard/index.tsx")).exists()).toBe(
-      false
-    );
+    expect(
+      await Bun.file(join(dir, "src/views/Dashboard/index.tsx")).exists()
+    ).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -253,7 +259,10 @@ test("run ALLOWS shell redirects to /tmp and build-log targets (not project file
 
   try {
     const tmpWrite = await executeTool(
-      { name: "run", arguments: { command: "echo hi > /tmp/tsforge-scratch.txt" } },
+      {
+        name: "run",
+        arguments: { command: "echo hi > /tmp/tsforge-scratch.txt" },
+      },
       ctx(dir, ["src/**"])
     );
     const logRedirect = await executeTool(

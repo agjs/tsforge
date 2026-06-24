@@ -608,10 +608,11 @@ test("test-sibling-required: exempts logic files an EXISTING test file imports d
       'test("auth", () => { expect(validate("x")).toBe(false); expect(issue("a")).toBe("tok-a"); });\n'
   );
 
-  const ctx = buildMetaRuleContext(tempDir, [], [
-    "passwords.ts",
-    "sessions.ts",
-  ]);
+  const ctx = buildMetaRuleContext(
+    tempDir,
+    [],
+    ["passwords.ts", "sessions.ts"]
+  );
   const violations = runMetaRules(META_RULES, ctx).filter(
     (v) => v.ruleId === "test-sibling-required"
   );

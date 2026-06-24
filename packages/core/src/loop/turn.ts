@@ -545,7 +545,10 @@ function autoFixNotice(files: string[]): string {
  * yet it never gets closer to green). Convergence — not a turn count — bounds a run,
  * so a large app may take any number of turns as long as the error count trends down.
  */
-export function trackNetProgress(state: ILoopState, errorCount: number): boolean {
+export function trackNetProgress(
+  state: ILoopState,
+  errorCount: number
+): boolean {
   if (errorCount < state.bestErrorCount) {
     state.bestErrorCount = errorCount;
     state.noNewLow = 0;

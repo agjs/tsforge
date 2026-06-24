@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { isRecord, isArray } from "../lib/guards";
 
 /** TS/JS source files a single-file parse is meaningful for. */
 const TS_LIKE = /\.(?:m|c)?[tj]sx?$/u;
@@ -41,10 +42,13 @@ export function syntaxErrorCount(file: string, text: string): number {
 
   // `parseDiagnostics` carries the syntactic errors. It isn't on the public
   // SourceFile type, but it's stable and what TS-based tooling reads for a
-  // program-free syntax check.
-  const diagnostics = (
-    sf as unknown as { parseDiagnostics?: readonly ts.Diagnostic[] }
-  ).parseDiagnostics;
+  // program-free syntax check. Narrow off `unknown` (no cast) — we only need its
+  // length, so an array of unknown is enough.
+  const node: unknown = sf;
+  const diagnostics =
+    isRecord(node) && isArray(node.parseDiagnostics)
+      ? node.parseDiagnostics
+      : undefined;
 
   return diagnostics?.length ?? 0;
 }

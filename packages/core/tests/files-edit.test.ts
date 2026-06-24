@@ -301,7 +301,10 @@ test("fuzzy fallback tolerates internal-whitespace drift", async () => {
   try {
     const r = await applyEdits(dir, "a.ts", [
       // Model's oldString has different internal spacing inside the call.
-      { oldString: "const sum = foo( a,b );", newString: "const sum = bar(a, b);" },
+      {
+        oldString: "const sum = foo( a,b );",
+        newString: "const sum = bar(a, b);",
+      },
     ]);
 
     expect(r).toMatchObject({ ok: true, count: 1 });

@@ -163,10 +163,7 @@ describe("buildExportIndex + unresolvedNameHint (TS2304)", () => {
 
     try {
       await mkdir(join(dir, "src"), { recursive: true });
-      await writeFile(
-        join(dir, "src/thing.ts"),
-        "export const Thing = 1;\n"
-      );
+      await writeFile(join(dir, "src/thing.ts"), "export const Thing = 1;\n");
 
       const index = buildExportIndex(dir);
       const self = selfSpecifier(join(dir, "src/thing.ts"), dir);
