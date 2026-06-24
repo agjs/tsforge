@@ -36,10 +36,18 @@ async function readClonedManifest(
     return null;
   }
 
+  // The file IS present → it is the source of truth. A parse failure is a hard
+  // error (a broken BoringStack manifest), NOT a silent fall-back to the stale
+  // bundle — that would scaffold with the wrong config behind the user's back.
   try {
     return parseManifest(JSON.parse(await fs.readText(path)));
-  } catch {
-    return null;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+
+    throw new Error(
+      `scaffold: cloned ${CLONE_MANIFEST} is present but invalid — refusing to fall back to the bundled manifest: ${reason}`,
+      { cause: err }
+    );
   }
 }
 
@@ -81,13 +89,10 @@ export async function runScaffold(
   dest: string,
   deps: IScaffoldDeps
 ): Promise<IScaffoldOutcome> {
-  // Fail fast on an obviously-invalid config BEFORE the (slow) clone, using the
-  // bundled bootstrap manifest. The clone's manifest is re-validated below.
-  assertValid(answersToPlan(bootstrap, answers));
-
-  // The bundled manifest is only the bootstrap (repo + ref). After cloning, the
-  // repo's OWN `.tsforge/scaffold-manifest.json` is the source of truth — so a
-  // pinned `--ref` or BoringStack manifest drift is honored, not the stale bundle.
+  // The bundled manifest is ONLY the bootstrap (repo + ref); validation happens
+  // post-clone against the repo's own manifest. We deliberately do NOT pre-validate
+  // against the bundle — a config valid under a newer `--ref` must not be rejected
+  // by stale bundled cross-rules.
   const { resolvedSha } = await cloneRepo(
     bootstrap.repo,
     bootstrap.defaultRef,

@@ -197,3 +197,48 @@ describe("runScaffold — astro", () => {
     expect(outcome.booted).toBe(false);
   });
 });
+
+describe("runScaffold — clone manifest is the ONLY source of truth (Codex P1 round 2)", () => {
+  const fixturePath = join(
+    import.meta.dir,
+    "fixtures/scaffold/scaffold-manifest.json"
+  );
+
+  test("validation uses the clone's rules, not stale bundled cross-rules", async () => {
+    // EMAIL_PROVIDER=smtp + WITH_MAILPIT=0 violates the BUNDLED smtp⇒mailpit rule.
+    // A clone whose manifest dropped that rule must NOT be rejected.
+    const relaxed = JSON.parse(readFileSync(fixturePath, "utf8"));
+
+    relaxed.crossRules = [];
+
+    const { fs } = memFs({
+      [`${DEST}/infra/compose/compose/.env.example`]: "STACK=dev\n",
+      [`${DEST}/.tsforge/scaffold-manifest.json`]: JSON.stringify(relaxed),
+    });
+
+    const outcome = await runScaffold(
+      MANIFEST,
+      answers("boringstack", { EMAIL_PROVIDER: "smtp", WITH_MAILPIT: "0" }),
+      DEST,
+      { run: runner(), fs, boot: { poll: pollUp }, skipBoot: true }
+    );
+
+    expect(outcome.dir).toBe(DEST); // succeeded — not rejected by the stale bundle
+  });
+
+  test("a malformed cloned manifest throws (no silent fallback to the bundle)", async () => {
+    const { fs } = memFs({
+      [`${DEST}/infra/compose/compose/.env.example`]: "STACK=dev\n",
+      [`${DEST}/.tsforge/scaffold-manifest.json`]: "{ not valid json",
+    });
+
+    await expect(
+      runScaffold(MANIFEST, answers("boringstack"), DEST, {
+        run: runner(),
+        fs,
+        boot: { poll: pollUp },
+        skipBoot: true,
+      })
+    ).rejects.toThrow(/present but invalid|refusing/iu);
+  });
+});
