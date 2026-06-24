@@ -11,7 +11,9 @@ export type {
   IScaffoldManifest,
   IScaffoldPlan,
 } from "./scaffold.types";
-export { parseManifest } from "./boringstack-manifest";
+export { parseManifest, loadBundledManifest } from "./boringstack-manifest";
+export { parseScaffoldArgs } from "./scaffold-cli";
+export type { IScaffoldCliOptions } from "./scaffold-cli";
 export { answersToPlan } from "./plan";
 export { coverageGaps, envKeysOf } from "./env-surface";
 export { buildScaffoldSteps, stateToAnswers } from "./wizard";

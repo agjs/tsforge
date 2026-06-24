@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { isRecord, isArray } from "../lib/guards";
 import type {
   IArchetype,
@@ -7,6 +8,23 @@ import type {
   IConfigFieldKind,
   IScaffoldManifest,
 } from "./scaffold.types";
+
+let bundled: IScaffoldManifest | undefined;
+
+/** The manifest bundled with tsforge — the bootstrap copy used to know boringstack's
+ *  repo + defaultRef BEFORE cloning. Mirrors boringstack's `.tsforge/
+ *  scaffold-manifest.json` (the source of truth); a guard test keeps them in sync,
+ *  and post-clone the wizard can re-read the clone's copy for exact-commit fidelity.
+ *  Parsed once (validated through {@link parseManifest}) and cached. */
+export function loadBundledManifest(): IScaffoldManifest {
+  bundled ??= parseManifest(
+    JSON.parse(
+      readFileSync(new URL("./scaffold-manifest.json", import.meta.url), "utf8")
+    )
+  );
+
+  return bundled;
+}
 
 /** Parse + validate the boringstack scaffold manifest (read from the cloned repo
  *  or a test fixture). Narrows `unknown` with guards (no casts); throws a clear
