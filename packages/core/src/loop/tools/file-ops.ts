@@ -642,10 +642,12 @@ export async function doEdit(
   const where =
     edit.edits.length > 1 ? ` (replacement #${result.index + 1})` : "";
 
+  const authored = ctx.touched?.has(edit.file.replaceAll("\\", "/")) ?? false;
+
   return reject(
     ctx,
     `edit:${result.reason}`,
-    `edit ${edit.file} REJECTED${where}: ${editFailHelp(edit.file, result)}`
+    `edit ${edit.file} REJECTED${where}: ${editFailHelp(edit.file, result, authored)}`
   );
 }
 
@@ -659,7 +661,8 @@ export async function doEdit(
  */
 function editFailHelp(
   file: string,
-  result: { reason: string; matches?: number }
+  result: { reason: string; matches?: number },
+  authored: boolean
 ): string {
   if (result.reason === EDIT_FAIL_REASON.ambiguous) {
     return `oldString matched ${result.matches ?? 0} places — include more surrounding lines to make it unique`;
@@ -670,7 +673,15 @@ function editFailHelp(
   }
 
   if (result.reason === EDIT_FAIL_REASON.notFound) {
-    return `the file ${file} EXISTS, but your oldString text was not found in it. Do NOT use \`create\` (it already exists). \`read\` the file to see its exact current contents, then edit with text copied verbatim from it.`;
+    // A file the model AUTHORED this session can be fully rewritten via `create`
+    // (the overwrite escape hatch) — so when it's painted into a corner with stale
+    // anchors or a too-large edit, offer that rather than steering it away from the
+    // one clean exit (observed: ~20 turns thrashing edit↔read on its own service file).
+    const rewrite = authored
+      ? ` Since you created ${file} this session, you may also \`create\` it again to fully rewrite it.`
+      : " Do NOT use `create` (it already exists).";
+
+    return `the file ${file} EXISTS, but your oldString text was not found in it.${rewrite} \`read\` the file to see its exact current contents, then edit with text copied verbatim from it.`;
   }
 
   return result.reason;

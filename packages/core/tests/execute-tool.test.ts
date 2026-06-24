@@ -622,3 +622,39 @@ test("web_search dispatches to its handler (empty query rejected, no network)", 
   expect(r).toContain("web_search");
   expect(r).not.toContain("plan mode");
 });
+
+test("edit not-found on a file the model AUTHORED offers the create-rewrite escape hatch", async () => {
+  // F24: the model painted its own service file into a corner (stale anchors +
+  // too-large edits) and thrashed ~20 turns because the not-found message said
+  // "Do NOT use create". For a file it authored this session, create-overwrite IS
+  // the clean full-rewrite path — so the message must offer it.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    await Bun.write(join(dir, "mine.ts"), "const a = 1;\n");
+
+    const r = await executeTool(
+      {
+        name: "edit",
+        arguments: {
+          file: "mine.ts",
+          oldString: "const z = 99;",
+          newString: "const z = 100;",
+        },
+      },
+      {
+        cwd: dir,
+        files: ["mine.ts"],
+        task: "t",
+        report: () => undefined,
+        touched: new Set<string>(["mine.ts"]), // authored this session
+      }
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(r).toMatch(/you may also `create` it again|fully rewrite/u);
+    expect(r).not.toContain("Do NOT use `create`"); // authored → not steered away
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
