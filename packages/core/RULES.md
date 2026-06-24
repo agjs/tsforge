@@ -34,6 +34,7 @@ Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` t
 - **security/no-spawn-with-shell** [ERROR]: Disallow child_process.spawn/spawnSync with shell: true — shell execution enables command injection.
 - **typescript-core/fetch-must-check-ok** [ERROR]: HTTP fetch responses must check `.ok` or status before calling `.json()`.
 - **typescript-core/json-parse-must-validate** [ERROR]: Disallow bare JSON.parse on untrusted input — validate through a schema library.
+- **typescript-core/no-self-import** [ERROR]: Disallow a module importing or re-exporting from itself (a circular self-reference whose binding doesn't exist).
 - **typescript-core/no-unsafe-boundary-cast** [ERROR]: Disallow type assertions immediately after parsing untrusted boundary input.
 
 ### Tier: framework
@@ -101,11 +102,11 @@ Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` t
 - **react-component-architecture/dangerous-html-requires-sanitize** [ERROR]: dangerouslySetInnerHTML requires a sanitization library (DOMPurify or equivalent) imported in the same file.
 - **react-component-architecture/forwardref-display-name** [ERROR]: forwardRef components must have displayName set
 - **react-component-architecture/index-must-reexport-default** [ERROR]: index.ts in component folders must re-export the component default export and types
-- **react-component-architecture/max-hooks-per-file** [WARN]: Flag query/hook modules that export more than N hooks. Same-kind modules pass the single-semantic-module rule but still grow into god files; this rule sets a hard ceiling so the split conversation happens early.
-- **react-component-architecture/no-anonymous-useEffect** [WARN]: Disallow anonymous arrow functions passed to useEffect — use a named function for debuggable stack traces.
+- **react-component-architecture/max-hooks-per-file** [ERROR]: Flag query/hook modules that export more than N hooks. Same-kind modules pass the single-semantic-module rule but still grow into god files; this rule sets a hard ceiling so the split conversation happens early.
+- **react-component-architecture/no-anonymous-useEffect** [ERROR]: Disallow anonymous arrow functions passed to useEffect — use a named function for debuggable stack traces.
 - **react-component-architecture/no-component-invocation** [ERROR]: Disallow invoking React components as plain functions — use JSX (`<Header />`) instead of `{Header()}`.
 - **react-component-architecture/no-cross-feature-imports** [ERROR]: Prevent imports across different features
-- **react-component-architecture/no-derived-state-in-effect** [WARN]: Disallow setting local state inside useEffect when the value can be derived during render (or memoized with useMemo).
+- **react-component-architecture/no-derived-state-in-effect** [ERROR]: Disallow setting local state inside useEffect when the value can be derived during render (or memoized with useMemo).
 - **react-component-architecture/no-jsx-computation** [ERROR]: Move complex computations out of JSX into hooks or helper functions
 - **react-component-architecture/no-loading-text-use-skeleton** [ERROR]: Loading states must render a <Skeleton/>, not loading text or a spinner
 - **react-component-architecture/no-nested-component** [ERROR]: Disallow declaring React components inside another component body — nested components reset state on every parent render.
