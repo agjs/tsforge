@@ -151,16 +151,20 @@ const IGNORE_DIRS = new Set([
 function collectTsFiles(root: string): string[] {
   const out: string[] = [];
 
-  const walk = (dir: string): void => {
-    let entries: ReturnType<typeof readdirSync>;
-
+  // `encoding: "utf8"` pins the Dirent name type to `string` (newer @types/node
+  // otherwise resolves `withFileTypes` to a Buffer-named Dirent). Inferred return —
+  // never names `Dirent` explicitly, which is generic in some @types/node versions
+  // and not others.
+  const readEntries = (dir: string) => {
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      return readdirSync(dir, { withFileTypes: true, encoding: "utf8" });
     } catch {
-      return;
+      return [];
     }
+  };
 
-    for (const entry of entries) {
+  const walk = (dir: string): void => {
+    for (const entry of readEntries(dir)) {
       if (entry.isDirectory()) {
         if (!IGNORE_DIRS.has(entry.name)) {
           walk(join(dir, entry.name));
