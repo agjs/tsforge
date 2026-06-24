@@ -21,6 +21,20 @@ bun run tsforge
 
 Environment variables: [Environment variables](/reference/flags/). Interactive usage: [Interactive CLI](/cli/interactive/).
 
+## Scaffold a new project
+
+```bash
+tsforge scaffold --dest ./my-app                       # full BoringStack (interactive)
+tsforge scaffold --dest ./site --archetype astro       # Astro static site
+tsforge scaffold --dest ./my-app --set WITH_OBSERVABILITY=0 --no-boot
+```
+
+`tsforge scaffold` stands up a new project from [BoringStack](https://boringstack.xyz) —
+clone → configure (via BoringStack's own scripts) → boot → hands off the build gate.
+Interactively it previews the container topology + required secrets before applying.
+Greenfield only; editing an existing repo never scaffolds. See
+[Greenfield scaffolding](/scaffold/boringstack/).
+
 ## Set up a repo
 
 ```bash
