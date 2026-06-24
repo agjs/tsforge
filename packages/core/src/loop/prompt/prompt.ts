@@ -18,7 +18,7 @@ function gateRulesSentence(conventions: IConventions): string {
   const naming = interfaceNamingPhrase(conventions);
   const namingPart = naming === null ? "" : `${naming}; `;
 
-  return `The gate is \`tsc\` strict + eslint with every rule an error, so write TypeScript that satisfies it: ${namingPart}\`===\`; no \`var\`; never the non-null \`!\` — guard index access (\`const x = arr[i]; if (x === undefined) {...}\`); no \`any\` and no \`as\` — type every parameter (e.g. \`.reduce((acc: number, r: number) => …, 0)\`); explicit boolean conditions. When the gate flags errors in read-only files (tests/types), they come from your editable file being missing or wrong-shaped and vanish once it's correct — don't edit them.`;
+  return `The gate is \`tsc\` strict + eslint with every rule an error, so write TypeScript that satisfies it: ${namingPart}\`===\`; no \`var\`; never the non-null \`!\` — guard index access (\`const x = arr[i]; if (x === undefined) {...}\`); no \`any\` and no \`as\` — type every parameter (e.g. \`.reduce((acc: number, r: number) => …, 0)\`); for IDs use a plain alias (\`type UserId = string\`) validated at the boundary, NOT branded/nominal types (\`string & { _brand }\`) — they require an \`as\` cast to construct, which the gate rejects; explicit boolean conditions. When the gate flags errors in read-only files (tests/types), they come from your editable file being missing or wrong-shaped and vanish once it's correct — don't edit them.`;
 }
 
 /** The implement-agent system prompt: who it is, the tools, and the strict-TS
