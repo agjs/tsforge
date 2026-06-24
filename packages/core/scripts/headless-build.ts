@@ -25,6 +25,7 @@ import {
   makeFileLinter,
   scaffoldWeb,
   webGuidance,
+  WEB_PACKS,
 } from "../src/detect-gate";
 import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
@@ -129,7 +130,7 @@ async function runPlanned(
   const designed = await session.designBuild(
     prompt,
     {},
-    buildWebTypeGate(framework).command
+    buildWebTypeGate(framework, undefined, dir).command
   );
 
   if (designed.status === "interrupted") {
@@ -209,6 +210,9 @@ async function main(): Promise<void> {
     model: entry.model,
     apiKey: resolveApiKey(entry),
     maxTokens: entry.maxTokens ?? PROVIDER_LIMITS.maxTokens,
+    // Unattended build: ride out a model-server restart (the local Spark bouncing)
+    // for up to 3 min rather than failing the whole run on a transient drop.
+    connectRetryMs: 180_000,
   });
 
   const report = makeReporter(logFile, agentLog);
@@ -235,17 +239,23 @@ async function main(): Promise<void> {
     // so the model can't satisfice on a subset (4-of-8 entities greened before).
     accept:
       entities.length > 0
-        ? `${buildWebGate(framework).command} && bun "${join(import.meta.dir, "coverage-check.ts")}" "${dir}" ${entities
+        ? `${buildWebGate(framework, undefined, dir).command} && bun "${join(import.meta.dir, "coverage-check.ts")}" "${dir}" ${entities
             .map((e) => JSON.stringify(e))
             .join(" ")}`
-        : buildWebGate(framework).command,
+        : buildWebGate(framework, undefined, dir).command,
     fix: buildWebFix(framework),
-    incrementalCheck: buildWebTscCheck(),
+    incrementalCheck: buildWebTscCheck(dir),
     // WRITE-TIME LINT: surface the gate's eslint moat rules (no-as, I-prefix,
     // prefer-template) on each file the instant it's written — tsc can't see them,
     // so without this they pile up unseen until the gate (a run log showed 12 `as`
     // casts accumulating that way). cwd = the run dir so vendored ignores resolve.
-    lintFile: makeFileLinter(framework, dir),
+    // Pass WEB_PACKS so write-time lint enforces the SAME rules the gate does —
+    // incl. the react-component-architecture moat (no inline helpers/types/consts
+    // in a component, extract computations). Without it those rules were inert at
+    // write time and only detonated at the gate as a 20-violation avalanche, the
+    // exact end-of-build cascade the write-guard exists to prevent. (cli.ts and
+    // interactive-eval.ts already pass WEB_PACKS; the headless/eval path didn't.)
+    lintFile: makeFileLinter(framework, dir, WEB_PACKS),
     // Offer the themed-UI-primitives tool so the model generates button/card/input/
     // etc. (tested, theme-coherent) instead of re-authoring them every build.
     scaffoldUi: framework === "react",
@@ -274,7 +284,7 @@ async function main(): Promise<void> {
     : await session.buildStaged(
         prompt,
         {},
-        buildWebTypeGate(framework).command
+        buildWebTypeGate(framework, undefined, dir).command
       );
 
   // The run dir IS the persistent, runnable artifact (per-run, never clobbered):

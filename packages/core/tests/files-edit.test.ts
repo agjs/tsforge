@@ -248,6 +248,72 @@ test("applyEdits falls back to indentation-tolerant match when exact fails", asy
   }
 });
 
+test("fuzzy fallback tolerates quote-style drift (single vs double)", async () => {
+  // The file (prettier) uses double quotes; the model wrote the oldString with
+  // single quotes — the dominant local-model edit miss. Should still match.
+  const dir = await tmp({
+    "a.ts": 'import { IUser } from "@/features/users/users.types";\n',
+  });
+
+  try {
+    const r = await applyEdits(dir, "a.ts", [
+      {
+        oldString: "import { IUser } from '@/features/users/users.types';",
+        newString: "import type { IUser } from '@/features/users/users.types';",
+      },
+    ]);
+
+    expect(r).toMatchObject({ ok: true, count: 1 });
+    expect(await Bun.file(join(dir, "a.ts")).text()).toContain(
+      "import type { IUser }"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("fuzzy fallback tolerates Unicode drift (smart quotes, NBSP, en-dash)", async () => {
+  // File has ASCII straight quotes + normal spaces; the model emitted smart quotes,
+  // a non-breaking space, and an en-dash (common in LLM/pasted output).
+  const dir = await tmp({
+    "a.ts": 'const label = "A - B";\nconst path = "@/x";\n',
+  });
+
+  try {
+    const r = await applyEdits(dir, "a.ts", [
+      {
+        // “ ” smart quotes, NBSP between A/B, en-dash – instead of hyphen.
+        oldString: "const label = “A – B”;",
+        newString: 'const label = "A then B";',
+      },
+    ]);
+
+    expect(r).toMatchObject({ ok: true, count: 1 });
+    expect(await Bun.file(join(dir, "a.ts")).text()).toContain("A then B");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("fuzzy fallback tolerates internal-whitespace drift", async () => {
+  const dir = await tmp({ "a.ts": "const sum = foo(a, b);\n" });
+
+  try {
+    const r = await applyEdits(dir, "a.ts", [
+      // Model's oldString has different internal spacing inside the call.
+      {
+        oldString: "const sum = foo( a,b );",
+        newString: "const sum = bar(a, b);",
+      },
+    ]);
+
+    expect(r).toMatchObject({ ok: true, count: 1 });
+    expect(await Bun.file(join(dir, "a.ts")).text()).toContain("bar(a, b)");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("fuzzy fallback does NOT guess when the line-match is ambiguous", async () => {
   const dir = await tmp({ "a.ts": "  doThing();\n\n  doThing();\n" });
 

@@ -109,9 +109,9 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     good: "const first = arr[0]; if (first === undefined) { return; }",
   },
   "@typescript-eslint/consistent-type-assertions": {
-    what: "No `as` casts. Use a type guard or `satisfies`.",
-    bad: "const u = json as IUser;",
-    good: "if (isUser(json)) { const u = json; /* narrowed */ }",
+    what: "No `as` casts. Narrow with a type guard or use `satisfies`. Branded/nominal ID types (`string & { _brand }`) are off-pattern here — they cannot be constructed without a cast, so don't reach for them; use a plain alias (`type UserId = string`) and validate untrusted values at the boundary.",
+    bad: "type UserId = string & { _brand: 'UserId' };\nconst id = raw as unknown as UserId;",
+    good: "type UserId = string; // plain alias — no cast to construct\nconst id: UserId = UserSchema.shape.id.parse(raw); // validate at the boundary",
   },
   "@typescript-eslint/strict-boolean-expressions": {
     what: "Conditions must be explicit booleans — no truthy strings/numbers/nullables.",

@@ -114,6 +114,13 @@ export interface IOpenAICompatibleConfig {
    */
   timeoutMs?: number;
   /**
+   * Budget (ms) to keep retrying transient CONNECTION failures (server down /
+   * restarting) before giving up (default LIMITS.connectRetryMs ≈ 2.4s). An
+   * unattended run (headless/eval) sets this high (minutes) so a build survives a
+   * model-server restart instead of failing and discarding all progress.
+   */
+  connectRetryMs?: number;
+  /**
    * Hard cap on tokens per response (default LIMITS.maxTokens). Bounds a
    * degenerate repetition loop so one runaway generation can't spew until the
    * context limit. Generous enough for whole-file tool-call output.

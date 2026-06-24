@@ -1,6 +1,10 @@
 import { test, expect, describe } from "bun:test";
 
-import { trackErrorAges, persistDetail } from "../src/loop/turn";
+import {
+  trackErrorAges,
+  trackNetProgress,
+  persistDetail,
+} from "../src/loop/turn";
 import type { ILoopState } from "../src/loop";
 import { LOOP_LIMITS } from "../src/loop";
 import type { ErrorSet, IErrorItem } from "../src/validate";
@@ -9,6 +13,8 @@ function freshState(): ILoopState {
   return {
     prevGateErrors: [],
     gateNoProgress: 0,
+    bestErrorCount: Number.POSITIVE_INFINITY,
+    noNewLow: 0,
     errorAge: new Map(),
     lastGateCount: -1,
     edits: 0,
@@ -95,5 +101,53 @@ describe("trackErrorAges (samePersist no-progress guard)", () => {
     expect(detail).toContain("no-explicit-any");
     expect(detail).toContain("src/views/Foo/index.tsx");
     expect(detail).toContain(String(N));
+  });
+});
+
+describe("trackNetProgress (convergence guard, replaces the turn cap)", () => {
+  const M = LOOP_LIMITS.noProgressCycles;
+
+  test("never trips while the error count keeps reaching new lows (converging)", () => {
+    const state = freshState();
+    // Steady descent — every cycle a new low. Even well past the threshold it must
+    // not stop: a big app converging slowly should run as long as it needs.
+    let tripped = false;
+
+    for (let count = 50; count >= 1; count -= 1) {
+      tripped = tripped || trackNetProgress(state, count);
+    }
+
+    expect(tripped).toBe(false);
+    expect(state.bestErrorCount).toBe(1);
+  });
+
+  test("absorbs a feature-add spike, then resets on a new low", () => {
+    const state = freshState();
+
+    expect(trackNetProgress(state, 20)).toBe(false); // best 20
+    // Spike (wrote new files): a few cycles ABOVE best — counts as no-progress…
+    expect(trackNetProgress(state, 35)).toBe(false);
+    expect(trackNetProgress(state, 30)).toBe(false);
+    // …but dropping BELOW the prior best resets the counter (real progress).
+    expect(trackNetProgress(state, 18)).toBe(false);
+    expect(state.noNewLow).toBe(0);
+    expect(state.bestErrorCount).toBe(18);
+  });
+
+  test("STOPS when churning without a new low (the through-12 failure mode)", () => {
+    const state = freshState();
+
+    trackNetProgress(state, 12); // best 12
+    // Error count oscillates 12↔15 but never beats 12 — shuffling, not converging.
+    // (The set-guard resets each cycle and no single error survives samePersist, so
+    // this is the only guard that catches it.)
+    let tripped = false;
+
+    for (let i = 0; i < M; i += 1) {
+      tripped = trackNetProgress(state, i % 2 === 0 ? 15 : 13);
+    }
+
+    expect(tripped).toBe(true);
+    expect(state.noNewLow).toBeGreaterThanOrEqual(M);
   });
 });

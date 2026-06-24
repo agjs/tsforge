@@ -277,6 +277,15 @@ export const PLAN_APPROVED_NOTE =
 /** Default edits between incremental checks. */
 const CHECK_EVERY = 3;
 
+/** Force the FULL gate after this many edits without the model yielding. The
+ *  incremental check (CHECK_EVERY) is TS-only and the full gate normally runs only
+ *  on yield — so a model stuck editing one file (never yielding) would never run
+ *  the build, never see build/CSS errors, and never tick the no-progress guards
+ *  (observed: 190 turns / 2 gate runs on a corrupted index.css). This bounds blind
+ *  edit-churn: every Nth edit re-gates, surfacing the real error AND advancing the
+ *  guards so a genuine loop is stopped. */
+const FULL_GATE_EVERY = 9;
+
 /** How many times a send recovers from a repetition loop before giving up. */
 const MAX_DEGENERATION_RECOVERIES = 2;
 
@@ -571,6 +580,8 @@ export class Session {
     this.state = {
       prevGateErrors: [],
       gateNoProgress: 0,
+      bestErrorCount: Number.POSITIVE_INFINITY,
+      noNewLow: 0,
       errorAge: new Map(),
       lastGateCount: -1,
       edits: 0,
@@ -1589,6 +1600,78 @@ export class Session {
     };
   }
 
+  /** A working turn (the model emitted tool calls) that also bounds blind
+   *  edit-churn: run the calls via `runToolTurn`, track edits since the last full
+   *  gate, and force a gate once they cross `FULL_GATE_EVERY` (so the build runs +
+   *  the no-progress guards tick even if the model never yields). Returns the
+   *  carried loop state, including whether the next turn must force a tool call. */
+  private async handleWorkingTurn(
+    res: IModelResponse,
+    carry: {
+      edited: boolean;
+      editsSinceCheck: number;
+      editsSinceGate: number;
+      checkEvery: number;
+      readonlyStreak: number;
+      readonlyRecoveries: number;
+    },
+    turn: number,
+    turnStart: number,
+    sendStart: number
+  ): Promise<{
+    action: ISendResult | "continue";
+    edited: boolean;
+    editsSinceCheck: number;
+    editsSinceGate: number;
+    readonlyStreak: number;
+    readonlyRecoveries: number;
+    forceTool: boolean;
+  }> {
+    const editsBefore = this.state.edits;
+    const r = await this.runToolTurn(
+      res,
+      {
+        edited: carry.edited,
+        editsSinceCheck: carry.editsSinceCheck,
+        checkEvery: carry.checkEvery,
+        readonlyStreak: carry.readonlyStreak,
+        readonlyRecoveries: carry.readonlyRecoveries,
+      },
+      turn,
+      turnStart,
+      sendStart
+    );
+
+    let editsSinceGate =
+      carry.editsSinceGate + (this.state.edits - editsBefore);
+    const carried = {
+      edited: r.edited,
+      editsSinceCheck: r.editsSinceCheck,
+      readonlyStreak: r.readonlyStreak,
+      readonlyRecoveries: r.readonlyRecoveries,
+    };
+
+    if (r.action !== "continue") {
+      return { ...carried, editsSinceGate, action: r.action, forceTool: false };
+    }
+
+    // Only force a gate when one is configured. With no gate the "gate" is empty
+    // and trivially passes → forcing it would wrongly return done mid-edit, before
+    // the model yields its final response (a no-gate session never terminates on a
+    // gate). The churn guard exists to surface gate failures, so it's a no-op here.
+    if (this.hasGate && editsSinceGate >= FULL_GATE_EVERY) {
+      editsSinceGate = 0;
+
+      const forced = await this.gateAfterChurn(turn, turnStart, sendStart);
+
+      return forced !== null
+        ? { ...carried, editsSinceGate, action: forced, forceTool: false }
+        : { ...carried, editsSinceGate, action: "continue", forceTool: true };
+    }
+
+    return { ...carried, editsSinceGate, action: "continue", forceTool: false };
+  }
+
   /** Resolve a turn where the model yielded with NO tool calls: a conversational
    *  reply, the narrate-instead-of-build failure (resolveNoEditYield), or a gate
    *  confirm after edits. Returns a terminal `ISendResult` or "continue", plus the
@@ -1638,6 +1721,31 @@ export class Session {
     this.ctx.messages.push({ role: "user", content: NO_TOOL_CALL_NUDGE });
 
     return { action: "continue", buildNudges, forceTool: true };
+  }
+
+  /** Force the full gate mid-edit when the model has churned `FULL_GATE_EVERY`
+   *  edits without yielding (it would otherwise never run the build or tick the
+   *  no-progress guards). Terminal result (done/stuck) or null when still red —
+   *  settleGate has already pushed the gate errors into the conversation, so the
+   *  caller just forces the model to act on them. */
+  private async gateAfterChurn(
+    turn: number,
+    turnStart: number,
+    sendStart: number
+  ): Promise<ISendResult | null> {
+    this.report({
+      kind: "tool",
+      task: SESSION_ID,
+      message: `⚙ forcing a gate after ${String(FULL_GATE_EVERY)} edits without a checkpoint`,
+    });
+
+    const forced = await this.settleTurn(turn, turnStart, sendStart);
+
+    if (forced === null) {
+      this.repairing = true;
+    }
+
+    return forced;
   }
 
   /** Run the gate once the model has stopped after editing: a terminal result
@@ -1804,6 +1912,31 @@ export class Session {
    *  times, then stop honestly. Returns a stop result, "retry" to re-steer +
    *  continue, or null when the streak is still under the limit. The caller resets
    *  the streak on "retry" so each re-steer gets a fair window before the next. */
+  /** The CONCRETE outstanding gate failure(s) to inject into a read-only-spin
+   *  re-steer. Observed: the model runs `bun run build`, sees exit 0, declares
+   *  "done", and spins re-verifying — never acting on the gate's REAL unmet
+   *  requirement (e.g. entity-coverage: 3 entities have no UI). A passing build is
+   *  NOT the gate; naming the actual red turns the spin into targeted work. */
+  private outstandingGateNote(): string {
+    const errs = this.state.prevGateErrors;
+
+    if (errs.length === 0) {
+      return "";
+    }
+
+    const lines = errs
+      .slice(0, 5)
+      .map((e) => `  - ${e.message}`)
+      .join("\n");
+    const more =
+      errs.length > 5 ? `\n  …and ${String(errs.length - 5)} more` : "";
+
+    return (
+      `\n\nA passing \`bun run build\` is NOT the gate. The gate is still RED — ` +
+      `do the OUTSTANDING work now, do not re-verify the build:\n${lines}${more}`
+    );
+  }
+
   private readonlySpinStop(
     streak: number,
     recoveries: number,
@@ -1825,16 +1958,20 @@ export class Session {
       return { status: "stuck", turns: turn };
     }
 
+    const gateNote = this.hasGate ? this.outstandingGateNote() : "";
+
     this.report({
       kind: "tool",
       task: SESSION_ID,
       message: this.hasGate
-        ? "⚠ only reading, no edits — steering toward a concrete change"
+        ? `⚠ only reading, no edits — steering toward a concrete change${gateNote.length > 0 ? ` (re-pointed at ${String(this.state.prevGateErrors.length)} outstanding gate error(s))` : ""}`
         : "⚠ only reading, no answer — steering toward a reply",
     });
     this.ctx.messages.push({
       role: "user",
-      content: this.hasGate ? READONLY_RESTEER_BUILD : READONLY_RESTEER_ANSWER,
+      content: this.hasGate
+        ? READONLY_RESTEER_BUILD + gateNote
+        : READONLY_RESTEER_ANSWER,
     });
 
     return "retry";
@@ -1871,7 +2008,16 @@ export class Session {
     let readonlyRecoveries = 0;
     // Edits since the last incremental check — drives "check every few edits".
     let editsSinceCheck = 0;
+    // Edits since the last FULL gate — forces a gate when the model edit-churns
+    // without yielding (see FULL_GATE_EVERY), so the build runs + the guards tick.
+    let editsSinceGate = 0;
     const checkEvery = this.cfg.checkEvery ?? CHECK_EVERY;
+
+    // Each drive (a send, or a staged build PHASE) converges independently, so the
+    // net-progress watermark must start fresh — otherwise phase 2 inherits phase 1's
+    // low error count and the guard misfires (its errors never beat the old best).
+    this.state.bestErrorCount = Number.POSITIVE_INFINITY;
+    this.state.noNewLow = 0;
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       const turnStart = performance.now();
@@ -1949,11 +2095,12 @@ export class Session {
       // going (we gate only when it stops). The guard's bookkeeping lives in
       // runToolTurn so this loop body stays lean.
       if (res.toolCalls.length > 0) {
-        const r = await this.runToolTurn(
+        const w = await this.handleWorkingTurn(
           res,
           {
             edited,
             editsSinceCheck,
+            editsSinceGate,
             checkEvery,
             readonlyStreak,
             readonlyRecoveries,
@@ -1963,13 +2110,15 @@ export class Session {
           sendStart
         );
 
-        edited = r.edited;
-        editsSinceCheck = r.editsSinceCheck;
-        readonlyStreak = r.readonlyStreak;
-        readonlyRecoveries = r.readonlyRecoveries;
+        edited = w.edited;
+        editsSinceCheck = w.editsSinceCheck;
+        editsSinceGate = w.editsSinceGate;
+        readonlyStreak = w.readonlyStreak;
+        readonlyRecoveries = w.readonlyRecoveries;
+        forceTool = w.forceTool;
 
-        if (r.action !== "continue") {
-          return r.action;
+        if (w.action !== "continue") {
+          return w.action;
         }
 
         continue;
@@ -1990,6 +2139,8 @@ export class Session {
 
       buildNudges = y.buildNudges;
       forceTool = y.forceTool;
+      // A yield runs the gate (when edited), so the churn counter starts fresh.
+      editsSinceGate = 0;
 
       if (y.action !== "continue") {
         return y.action;

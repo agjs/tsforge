@@ -1072,7 +1072,11 @@ async function repl(args: ICliArgs): Promise<number> {
     withPlan
       ? runPlanned(line, framework)
       : drive((opts) =>
-          session.buildStaged(line, opts, buildWebTypeGate(framework).command)
+          session.buildStaged(
+            line,
+            opts,
+            buildWebTypeGate(framework, undefined, args.dir).command
+          )
         );
 
   // Plan mode: run the design phase, then show the model's plan and PAUSE — the
@@ -1089,7 +1093,7 @@ async function repl(args: ICliArgs): Promise<number> {
       const designed = await session.designBuild(
         line,
         opts,
-        buildWebTypeGate(framework).command
+        buildWebTypeGate(framework, undefined, args.dir).command
       );
 
       if (designed.status !== "interrupted") {
@@ -2203,8 +2207,51 @@ async function greenfieldMode(args: ICliArgs): Promise<number> {
   return result.status === "done" ? 0 : 1;
 }
 
+/**
+ * `tsforge scaffold …` — greenfield wizard that stands up boringstack (or its
+ * Astro static site). Delegates the remaining argv to the scaffold command's own
+ * parser (--archetype/--stack/--dest/--set/--multi/--ref/--no-boot), so its
+ * vocabulary doesn't collide with the harness flags. Prints the handoff (where +
+ * how to run the gate); the model-driven build loop is then a normal `tsforge`
+ * invocation against that dir + gate.
+ */
+async function scaffoldMode(argv: readonly string[]): Promise<number> {
+  const { runScaffoldCommand } = await import("./scaffold/scaffold-command");
+  const outcome = await runScaffoldCommand(argv, process.stdout.isTTY);
+
+  if (outcome === null) {
+    process.stdout.write("scaffold: cancelled — nothing was created.\n");
+
+    return 1;
+  }
+
+  process.stdout.write(
+    [
+      "",
+      `scaffold ready → ${outcome.dir}`,
+      `  cloned   ${outcome.resolvedSha}`,
+      `  booted   ${String(outcome.booted)}${outcome.bootError === undefined ? "" : ` (${outcome.bootError})`}`,
+      "",
+      "configured .env:",
+      ...outcome.summary.map((l) => `  ${l}`),
+      "",
+      "build it:",
+      `  tsforge --dir ${outcome.gateCwd} --accept '${outcome.gateCommand}' "<your first feature>"`,
+      "",
+    ].join("\n")
+  );
+
+  return outcome.bootError === undefined ? 0 : 1;
+}
+
 export async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+  const raw = process.argv.slice(2);
+
+  if (raw[0] === "scaffold") {
+    return scaffoldMode(raw.slice(1));
+  }
+
+  const args = parseArgs(raw);
 
   if (args.recipes) {
     return recipesMode(args);

@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { makeFileLinter } from "../src/detect-gate";
+import { makeFileLinter, WEB_PACKS } from "../src/detect-gate";
 import { resolveConventions } from "../src/infer-rules/conventions";
 
 // Integration test for the REAL gate path: spawn the bundled eslint config the
@@ -181,5 +181,35 @@ describe("write-time linter honors conventions (overrideConfig path)", () => {
 
     expect(def.some((m) => m.ruleId === NAMING)).toBe(true);
     expect(bare.some((m) => m.ruleId === NAMING)).toBe(false);
+  });
+
+  // Finding 9: write-time lint must enforce the SAME packs as the gate. The
+  // headless/eval path called makeFileLinter without WEB_PACKS, so the
+  // react-component-architecture moat was inert at write time and only fired at the
+  // gate as an avalanche. Guard: with WEB_PACKS the inline helper is flagged; the
+  // pack must actually be wired into write-time feedback.
+  test("WEB_PACKS makes the component-architecture moat fire at write time", async () => {
+    const f = join(dir, "index.tsx");
+
+    writeFileSync(
+      f,
+      "export function fmt(n: number): string { return n.toFixed(2); }\n" +
+        "export const View = (): JSX.Element => <div>{fmt(1)}</div>;\n"
+    );
+
+    const isArch = (m: { message?: string }): boolean =>
+      /inline helper|Extract this computation|inline types|inline constants/iu.test(
+        m.message ?? ""
+      );
+
+    const withPacks = await makeFileLinter(
+      "react",
+      f.replace(/[^/]+$/u, ""),
+      WEB_PACKS
+    )(f);
+    const noPacks = await makeFileLinter("react", f.replace(/[^/]+$/u, ""))(f);
+
+    expect(withPacks.some(isArch)).toBe(true);
+    expect(noPacks.some(isArch)).toBe(false);
   });
 });

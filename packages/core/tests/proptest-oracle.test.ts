@@ -19,6 +19,23 @@ const PROPTEST_SCRIPT = join(
   "proptest-check.ts"
 );
 
+// The proptest oracle is OPT-IN and degrades to a no-op skip when fast-check isn't
+// resolvable ("install it to enable"). The two subprocess tests below only mean
+// something when it IS installed — otherwise the oracle skips (exit 0) and the
+// assertions would pass/fail for the wrong reason. Gate them on its presence, the
+// same way browser-oracle gates on chromium. (The kill-timeout test needs no
+// fast-check — it runs a hand-written hanging suite — so it stays ungated.)
+const hasFastCheck = ((): boolean => {
+  try {
+    import.meta.resolve("fast-check");
+
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const fcTest = hasFastCheck ? test : test.skip;
+
 const TSCONFIG = JSON.stringify({
   compilerOptions: {
     strict: true,
@@ -96,20 +113,23 @@ async function runOracle(dir: string): Promise<number> {
   return proc.exitCode ?? -1;
 }
 
-test("oracle FAILS on a function that throws for some valid typed input", async () => {
-  // head([]) → xs[0] is undefined → .valueOf() throws. fast-check will find [].
-  const dir = fixture(
-    "export function head(xs: number[]): number { return xs[0].valueOf(); }\n"
-  );
+fcTest(
+  "oracle FAILS on a function that throws for some valid typed input",
+  async () => {
+    // head([]) → xs[0] is undefined → .valueOf() throws. fast-check will find [].
+    const dir = fixture(
+      "export function head(xs: number[]): number { return xs[0].valueOf(); }\n"
+    );
 
-  try {
-    expect(await runOracle(dir)).toBe(1);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      expect(await runOracle(dir)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
-});
+);
 
-test("oracle PASSES a total function", async () => {
+fcTest("oracle PASSES a total function", async () => {
   const dir = fixture(
     "export function inc(n: number): number { return n + 1; }\n"
   );

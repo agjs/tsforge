@@ -413,6 +413,8 @@ export async function runTask(
   const state: ILoopState = {
     prevGateErrors: red.errors,
     gateNoProgress: 0,
+    bestErrorCount: Number.POSITIVE_INFINITY,
+    noNewLow: 0,
     errorAge: new Map(),
     lastGateCount: -1,
     edits: 0,

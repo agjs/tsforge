@@ -53,19 +53,35 @@ export const noJsxComputationRule = createRule<RuleOptions, MessageIds>({
 
     return {
       "JSXExpressionContainer > CallExpression"(node: TSESTree.CallExpression) {
-        if (node.callee.type === AST_NODE_TYPES.MemberExpression) {
-          const prop = node.callee.property;
-
-          if (
-            prop.type === AST_NODE_TYPES.Identifier &&
-            ARRAY_METHODS.includes(prop.name)
-          ) {
-            context.report({
-              node,
-              messageId: "noComputation",
-            });
-          }
+        if (node.callee.type !== AST_NODE_TYPES.MemberExpression) {
+          return;
         }
+
+        const prop = node.callee.property;
+
+        if (
+          prop.type !== AST_NODE_TYPES.Identifier ||
+          !ARRAY_METHODS.includes(prop.name)
+        ) {
+          return;
+        }
+
+        // Allow the idiomatic list render — a SIMPLE (non-chained) `.map()` directly
+        // in JSX, e.g. `{items.map((i) => <Row key={i.id} />)}`. Still flag (a) the
+        // other array methods (filter/reduce/sort/find — data transforms that belong
+        // in a hook/helper) and (b) a CHAINED `.map()` (`items.filter(...).map(...)`),
+        // which is real computation smuggled into the markup.
+        const isChained =
+          node.callee.object.type === AST_NODE_TYPES.CallExpression;
+
+        if (prop.name === "map" && !isChained) {
+          return;
+        }
+
+        context.report({
+          node,
+          messageId: "noComputation",
+        });
       },
       "JSXExpressionContainer > ConditionalExpression"(
         node: TSESTree.ConditionalExpression

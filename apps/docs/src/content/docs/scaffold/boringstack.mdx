@@ -1,0 +1,114 @@
+---
+title: Greenfield scaffolding
+description: Stand up a new project from BoringStack (or its Astro static site) with the tsforge scaffold wizard.
+---
+
+Use this when you want a **new project from scratch**. Instead of letting the model
+invent a stack — or tsforge synthesizing one (the legacy [Web scaffolding](/scaffold/web/)) —
+the wizard stands up [**BoringStack**](https://boringstack.xyz), a proven full-stack
+TypeScript template, by driving BoringStack's **own** setup scripts. tsforge holds no
+stack knowledge of its own: the entire config surface is declared in a manifest
+committed in the BoringStack repo, which tsforge reads after cloning.
+
+## Two archetypes
+
+| Archetype | What you get | Gate |
+| --- | --- | --- |
+| `boringstack` | The full stack: Bun + Elysia + Drizzle API (`apps/api`) + Vite/React UI (`apps/ui`), Postgres + Valkey, and whatever observability/billing/auth services your toggles enable | `cd apps/api && bun run validate` · `cd apps/ui && bun run validate` · `bun run check` |
+| `astro` | The Astro Starlight static site (`apps/docs`) — no API, no Docker, no `.env` | `bun run build` |
+
+## When it runs
+
+Greenfield only. Editing an existing repo never scaffolds — tsforge auto-detects the
+gate and patches in place. The wizard is its own subcommand so its flags don't collide
+with the harness flags:
+
+```bash
+tsforge scaffold --dest ./my-app
+```
+
+Interactively (a TTY), it asks the archetype's questions and shows a live preview of
+the **consequence** before anything is written: the container topology (the 5-vs-20
+service difference your toggles make), the secrets you'll need to supply, and any
+blocking cross-rule violation. Off a TTY, it uses flags directly.
+
+## What it does, in order
+
+1. **Clone** BoringStack at the manifest's `defaultRef`, resolving the exact commit
+   SHA into `<project>/.tsforge/scaffold.json` for replay.
+2. **Configure** by driving BoringStack's own scripts — `scripts/rename-project.sh`,
+   then `setup.sh` (which bootstraps `compose/.env` and generates a GlitchTip secret) —
+   then writing your toggle/provider answers into the right `.env` file (infra toggles
+   → `infra/compose/compose/.env`; app features → `infra/compose/compose/api.<stack>.env`).
+   Prod-only secrets (`JWT_SECRET`, `MFA_ENCRYPTION_KEY`, `VALKEY_PASSWORD`) are
+   generated; secret values are written to disk but **never** logged.
+3. **Boot** the stack with `setup.sh --up` and health-poll the API + UI (skip with
+   `--no-boot` / `STACK=smoke`). Boot is a one-time scaffold-step, not part of the
+   per-edit gate.
+4. **Hand off** — prints the exact command to start building features against the
+   scaffolded project (its own `bun run validate` becomes the gate).
+
+## Flags
+
+| Flag | Meaning |
+| --- | --- |
+| `--dest <dir>` | Where to create the project (required) |
+| `--archetype <boringstack\|astro>` | Default `boringstack` |
+| `--stack <dev\|prod\|smoke>` | Default `dev` |
+| `--set KEY=VALUE` | Set a toggle/provider answer (repeatable) — e.g. `--set WITH_OBSERVABILITY=0` |
+| `--multi KEY=a,b` | Set a multi-select answer — e.g. `--multi OAUTH_PROVIDERS=google,github` |
+| `--ref <git-ref>` | Override the manifest's clone ref |
+| `--no-boot` | Clone + configure, but don't start Docker |
+
+After it finishes:
+
+```bash
+tsforge --dir ./my-app --accept '(cd apps/api && bun run validate) && (cd apps/ui && bun run validate) && bun run check' "add a deals resource end-to-end"
+```
+
+## The manifest (single source of truth)
+
+tsforge models none of BoringStack's surface itself. `.tsforge/scaffold-manifest.json`
+**in the BoringStack repo** declares every toggle, provider choice, secret, the
+services each toggle spawns, cross-rules (OAuth ⇒ Valkey, `EMAIL_PROVIDER=smtp` ⇒
+`WITH_MAILPIT`, OTel-vs-Sentry exclusion), and which `.env` file each value targets.
+tsforge reads it post-clone and a **completeness alarm** fails the build if a watched
+`WITH_*`/`*_ENABLED` toggle in BoringStack's `.env.example` isn't modelled — so the
+wizard can never silently drop a capability. Evolving BoringStack means editing that
+manifest, not tsforge.
+
+## How to test it
+
+**Unit (fast, no clone/Docker)** — the planner, manifest parser, wizard flow, env
+apply, and completeness alarm are pure and fully covered:
+
+```bash
+bun test packages/core/tests/scaffold-*.test.ts
+```
+
+This includes a snapshot of BoringStack's real `.env.example` files asserting the
+bundled manifest has zero coverage gaps, plus an exhaustive on/off matrix for every
+toggle and provider.
+
+**Real clone + configure (opt-in, needs a local BoringStack checkout)** — runs git +
+BoringStack's actual `setup.sh`, no Docker boot:
+
+```bash
+TSFORGE_SCAFFOLD_E2E=1 BORINGSTACK_REPO=/path/to/boringstack \
+  bun test packages/core/tests/scaffold-clone-configure.e2e.test.ts
+```
+
+**End-to-end by hand** — drive the whole flow against a local checkout (the
+`BORINGSTACK_REPO` override avoids hitting GitHub):
+
+```bash
+BORINGSTACK_REPO=/path/to/boringstack \
+  bun packages/core/scripts/headless-scaffold-build.ts \
+  --dest /tmp/acme --set WITH_OBSERVABILITY=0 --multi OAUTH_PROVIDERS=google --no-boot
+```
+
+It prints the cloned SHA, the configured `.env` (secrets redacted), the composed gate
+command, and the next step. A full boot (omit `--no-boot`) additionally health-checks
+the running stack.
+
+→ [Greenfield loop](/loop/greenfield/) · [How tsforge builds the gate](/loop/gate-floor/)

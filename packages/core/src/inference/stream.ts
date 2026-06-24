@@ -6,7 +6,12 @@ import type {
   TokenChannel,
 } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
-import { parseArgs, parseUsage, salvageToolCalls } from "./wire";
+import {
+  parseArgs,
+  parseUsage,
+  salvageToolCalls,
+  salvageFusedToolName,
+} from "./wire";
 import { StreamGuard } from "./stream-guard";
 
 interface IStreamDelta {
@@ -168,11 +173,16 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
   const usage = acc.usage === undefined ? {} : { usage: acc.usage };
   const reasoning =
     acc.reasoning.length > 0 ? { reasoning: acc.reasoning } : {};
-  const toolCalls: IToolCall[] = [...acc.calls.values()].map((c) => ({
-    id: c.id,
-    name: c.name,
-    arguments: parseArgs(c.args),
-  }));
+  const toolCalls: IToolCall[] = [...acc.calls.values()].map((c) => {
+    // Rescue a structured call whose `name` absorbed the XML body (qwen emitted a
+    // bare `edit<parameter=file>…` the server couldn't split) — otherwise the
+    // garbage name hits the policy as an "unknown tool" and the model loops on it.
+    const fused = salvageFusedToolName(c.name, c.args);
+
+    return fused === null
+      ? { id: c.id, name: c.name, arguments: parseArgs(c.args) }
+      : { id: c.id, name: fused.name, arguments: fused.arguments };
+  });
 
   const ttsrFired =
     acc.ttsrFired !== null

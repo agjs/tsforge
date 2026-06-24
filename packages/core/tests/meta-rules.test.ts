@@ -588,6 +588,62 @@ test("test-sibling-required: exempts index.ts", () => {
   expect(relevant.length).toBe(0);
 });
 
+test("test-sibling-required: exempts logic files an EXISTING test file imports directly", () => {
+  // The auth/checkout/query shape: one read-only spec test imports several sibling
+  // impl files. Each is tested THROUGH that test, so demanding co-located siblings
+  // too is unsatisfiable (the model spiraled to its turn cap). Co-located + alias
+  // (@/) import forms both count.
+  writeFileSync(
+    join(tempDir, "passwords.ts"),
+    "export function validate(pw: string): boolean { return pw.length > 8; }"
+  );
+  writeFileSync(
+    join(tempDir, "sessions.ts"),
+    "export const issue = (id: string): string => `tok-${id}`;"
+  );
+  writeFileSync(
+    join(tempDir, "auth.test.ts"),
+    'import { validate } from "./passwords";\n' +
+      'import { issue } from "./sessions";\n' +
+      'test("auth", () => { expect(validate("x")).toBe(false); expect(issue("a")).toBe("tok-a"); });\n'
+  );
+
+  const ctx = buildMetaRuleContext(
+    tempDir,
+    [],
+    ["passwords.ts", "sessions.ts"]
+  );
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "test-sibling-required"
+  );
+
+  expect(violations.length).toBe(0);
+});
+
+test("test-sibling-required: still fires for a logic file NO test imports", () => {
+  // Guard the exemption isn't too broad: an unimported sibling still needs a test.
+  writeFileSync(
+    join(tempDir, "passwords.ts"),
+    "export function validate(pw: string): boolean { return pw.length > 8; }"
+  );
+  writeFileSync(
+    join(tempDir, "orphan.ts"),
+    "export function lonely(): number { return 1; }"
+  );
+  writeFileSync(
+    join(tempDir, "auth.test.ts"),
+    'import { validate } from "./passwords";\ntest("auth", () => expect(validate("x")).toBe(false));\n'
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, [], ["orphan.ts"]);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "test-sibling-required"
+  );
+
+  expect(violations.length).toBeGreaterThan(0);
+  expect(violations[0]?.file).toBe("orphan.ts");
+});
+
 // === CI Rules ===
 
 test("workflow-actions-pinned: detects floating @main", () => {

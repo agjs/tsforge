@@ -1,10 +1,10 @@
 import { join } from "node:path";
 import { EDIT_FAIL_REASON } from "./files.constants";
 import type {
-  IEdit,
   EditResult,
-  IReplacement,
   EditsResult,
+  IEdit,
+  IReplacement,
 } from "./files.types";
 
 /**
@@ -157,7 +157,29 @@ function fuzzyLineReplace(
   oldString: string,
   newString: string
 ): { text: string; matches: number } {
-  const norm = (s: string): string => s.trim();
+  // Normalize a line for COMPARISON only (the matched window is replaced verbatim
+  // with newString, and the gate/formatter re-validate). Beyond leading/trailing
+  // whitespace we also (a) collapse internal whitespace runs and (b) unify quote
+  // styles — the two cosmetic drifts a local model reliably gets wrong: it writes
+  // `'@/x'` against a prettier-formatted `"@/x"`, or `foo( a, b )` vs `foo(a, b)`.
+  // Exact match is tried FIRST (caller), so this only widens genuine misses; the
+  // unique-window guard below still blocks any ambiguous match.
+  const norm = (s: string): string =>
+    s
+      // Unicode fold FIRST (LLM/paste output emits these): NFKC, then curly quotes
+      // → straight, Unicode dashes → `-`, exotic spaces (NBSP, ideographic) → space.
+      .normalize("NFKC")
+      .replace(/[‘’‚‛]/gu, "'")
+      .replace(/[“”„‟]/gu, '"')
+      .replace(/[‐-―−]/gu, "-")
+      .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/gu, " ")
+      .trim()
+      .replace(/['"`]/gu, '"') // unify quote style (straight + the folded curly)
+      .replace(/\s+/gu, " ") // collapse internal whitespace runs
+      .replace(/\s*([^\w\s])\s*/gu, "$1"); // drop whitespace AROUND punctuation
+  // ^ `foo( a, b )`, `foo(a,b)`, and `foo(a, b)` all normalize equal, but two
+  //   identifiers keep their separating space (`const x` never becomes `constx`),
+  //   so the match stays meaningful. Unique-window guard still blocks ambiguity.
   // Preserve the file's native line ending. Splitting on /\r?\n/ strips any \r
   // from existing lines, and rebuilding with the detected EOL gives uniform
   // endings — otherwise a CRLF file gets `\n`-only new lines spliced into

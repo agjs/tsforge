@@ -622,8 +622,15 @@ export function buildWebGate(
   // historically did not, so a dropped `await` in a handler/effect/mutation passed.
   // Splice it in after the syntactic lint when the scaffold has a tsconfig (it
   // always does), reusing the SHIPPED strict.type-aware config verbatim.
+  // Type-aware lint uses `projectService` — every file it lints must be in the
+  // tsconfig's program. The app tsconfig DELIBERATELY excludes `*.test.ts(x)` (so
+  // tsc/the overlay don't choke on `bun:test`), so type-aware-linting a test file
+  // makes the project service throw "not found by the project service — include it
+  // in tsconfig.json" — which sends the model off to EDIT tsconfig (the exact rabbit
+  // hole we fight elsewhere). Ignore test files here too, matching the tsconfig.
+  const typeAwareIgnores = `${ignores} --ignore-pattern "**/*.test.ts" --ignore-pattern "**/*.test.tsx"`;
   const typeAware = existsSync(join(cwd, PROJECT_TSCONFIG))
-    ? `bun "${ESLINT_BIN}" --no-config-lookup -c "${TYPE_AWARE_CONFIG}" ${ignores} --format json .`.replace(
+    ? `bun "${ESLINT_BIN}" --no-config-lookup -c "${TYPE_AWARE_CONFIG}" ${typeAwareIgnores} --format json .`.replace(
         /\s+/g,
         " "
       )
@@ -653,13 +660,20 @@ export function buildWebGate(
  */
 export function buildWebTypeGate(
   framework: WebFramework,
-  packs: readonly string[] = WEB_PACKS
+  packs: readonly string[] = WEB_PACKS,
+  cwd: string = process.cwd()
 ): IGate {
   const template = WEB_TEMPLATES[framework];
   const ignores = template.eslintIgnore
     .map((glob) => `--ignore-pattern "${glob}"`)
     .join(" ");
-  const tsc = `"${TSC_BIN}" --noEmit -p tsconfig.json`;
+  // Same forced-test-exclude overlay as the full gate and the per-write check:
+  // the DESIGN phase can have co-located `*.test.ts` siblings in scope, and any
+  // rewrite of tsconfig.json (shadcn init, the model fixing a path) drops the
+  // test-exclude — pulling them into `tsc` as `bun:test` TS2307s that nudge the
+  // model into endlessly mangling tsconfig.json. Bypassing the overlay here was
+  // the lone hole; see ensureWebGateTsconfig / buildWebTscCheck.
+  const tsc = `"${TSC_BIN}" --noEmit -p ${ensureWebGateTsconfig(cwd)}`;
   const lint =
     `${packEnvPrefix(packs)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_WEB_CONFIG}" ${ignores} --format json .`.replace(
       /\s+/g,

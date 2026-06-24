@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildWebGate } from "../src/detect-gate";
+import { buildWebGate, buildWebTypeGate } from "../src/detect-gate";
 
 // Issue: a `bun:test` import in a scaffolded web app reds the gate with TS2307
 // ("Cannot find module 'bun:test'"). Root cause: the web gate ran `tsc -p
@@ -51,8 +51,72 @@ test("web gate tsc stays green on a bun:test sibling even when tsconfig.json dro
     expect(gate.command).toContain(".tsforge/tsconfig.web-gate.json");
     expect(gate.command).not.toContain("-p tsconfig.json");
 
+    // The type-aware lint (projectService) must IGNORE test files — they're excluded
+    // from the tsconfig, so linting them would throw "not found by the project
+    // service" and nudge the model to edit tsconfig (a rabbit hole).
+    expect(gate.command).toContain("strict.type-aware.eslint.config.mjs");
+    expect(gate.command).toContain('--ignore-pattern "**/*.test.ts"');
+    expect(gate.command).toContain('--ignore-pattern "**/*.test.tsx"');
+
     // Run JUST the overlay typecheck (the real gate also builds/lints, which needs
     // installed deps). Exit 0 == the test file was excluded; bun:test never loaded.
+    const tscBin = join(process.cwd(), "node_modules/.bin/tsc");
+    const proc = Bun.spawn(
+      [tscBin, "--noEmit", "-p", ".tsforge/tsconfig.web-gate.json"],
+      { cwd: dir, stdout: "pipe", stderr: "pipe" }
+    );
+    const output = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+
+    expect(output).not.toContain("bun:test");
+    expect(exitCode).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+// Same hole, the DESIGN-phase gate: buildWebTypeGate ran `tsc -p tsconfig.json`
+// while the other two builders had already migrated to the forced-exclude overlay.
+// In staged web builds the design phase can have co-located `*.test.ts` siblings in
+// scope, so a clobbered tsconfig.json reds the type gate on bun:test — the model then
+// spirals editing tsconfig. Assert the DESIGN gate also typechecks through the overlay.
+test("web TYPE gate (design phase) typechecks through the overlay, not the model-editable tsconfig.json", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-webtypegate-"));
+
+  try {
+    // CLOBBERED project tsconfig — no `**/*.test.ts` exclude, no @types/bun.
+    await writeFile(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "bundler",
+          strict: true,
+          skipLibCheck: true,
+          noEmit: true,
+        },
+        include: ["**/*.ts"],
+        exclude: ["node_modules"],
+      })
+    );
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(
+      join(dir, "src/impl.ts"),
+      "export const add = (a: number, b: number): number => a + b;\n"
+    );
+    await writeFile(
+      join(dir, "src/impl.test.ts"),
+      'import { test, expect } from "bun:test";\n' +
+        'import { add } from "./impl";\n' +
+        'test("add", () => {\n  expect(add(1, 2)).toBe(3);\n});\n'
+    );
+
+    const gate = buildWebTypeGate("react", undefined, dir);
+
+    expect(gate.command).toContain(".tsforge/tsconfig.web-gate.json");
+    expect(gate.command).not.toContain("-p tsconfig.json");
+
     const tscBin = join(process.cwd(), "node_modules/.bin/tsc");
     const proc = Bun.spawn(
       [tscBin, "--noEmit", "-p", ".tsforge/tsconfig.web-gate.json"],
