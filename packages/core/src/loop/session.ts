@@ -1655,7 +1655,11 @@ export class Session {
       return { ...carried, editsSinceGate, action: r.action, forceTool: false };
     }
 
-    if (editsSinceGate >= FULL_GATE_EVERY) {
+    // Only force a gate when one is configured. With no gate the "gate" is empty
+    // and trivially passes → forcing it would wrongly return done mid-edit, before
+    // the model yields its final response (a no-gate session never terminates on a
+    // gate). The churn guard exists to surface gate failures, so it's a no-op here.
+    if (this.hasGate && editsSinceGate >= FULL_GATE_EVERY) {
       editsSinceGate = 0;
 
       const forced = await this.gateAfterChurn(turn, turnStart, sendStart);

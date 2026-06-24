@@ -1266,3 +1266,49 @@ test("a never-yielding edit loop is bounded: a gate is FORCED and the guards sto
     await rm(dir, { recursive: true, force: true });
   }
 }, 30000);
+
+test("a no-gate session does NOT force a gate on edit-churn (regression: F23 must be hasGate-guarded)", async () => {
+  // Codex P1: the churn force-gate fired even with no accept gate; the empty gate
+  // trivially passed → send() returned {status:done} at turn 9, before the model
+  // yielded its real reply. A no-gate session must run past FULL_GATE_EVERY edits
+  // to the model's actual yield.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    let n = 0;
+    const provider: IProvider = {
+      async complete() {
+        n += 1;
+
+        if (n <= 10) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: String(n),
+                name: "create",
+                arguments: {
+                  file: `f${n}.ts`,
+                  content: `export const x${n} = ${n};\n`,
+                },
+              },
+            ],
+          };
+        }
+
+        return { content: "all ten files created", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"], // scoped so creates land — but NO accept gate (hasGate=false)
+    });
+    const result = await session.send("create ten files");
+
+    expect(result.status).toBe("responded"); // NOT "done" — no gate to confirm
+    expect(result.turns).toBeGreaterThan(9); // ran past FULL_GATE_EVERY, didn't stop at 9
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30000);
