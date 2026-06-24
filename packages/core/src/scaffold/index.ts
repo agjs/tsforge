@@ -17,6 +17,7 @@ export type { IScaffoldCliOptions } from "./scaffold-cli";
 export { answersToPlan } from "./plan";
 export { coverageGaps, envKeysOf } from "./env-surface";
 export { buildScaffoldSteps, stateToAnswers } from "./wizard";
+export { scaffoldPreview } from "./preview";
 export {
   applyEnvEdits,
   summarizeEnvEdits,
