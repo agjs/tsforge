@@ -80,8 +80,19 @@ export async function fetchWithRetry(
         );
       }
 
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, backoff);
+      // Abortable backoff: a caller abort (Ctrl-C) during a multi-second backoff
+      // must reject immediately, not hang until the timer fires.
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, backoff);
+
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(signalReason(signal));
+          },
+          { once: true }
+        );
       });
     }
   }

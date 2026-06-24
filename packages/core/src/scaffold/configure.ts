@@ -37,7 +37,9 @@ export function applyEnvEdits(
     resolved.set(e.key, e.value);
   }
 
-  const lines = envText.split("\n");
+  // Preserve the file's existing line ending (don't force LF into a CRLF file).
+  const eol = envText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = envText.split(/\r?\n/u);
   const written = new Set<string>();
 
   const next = lines.map((line) => {
@@ -57,13 +59,13 @@ export function applyEnvEdits(
     .map(([key, value]) => `${key}=${value}`);
 
   if (appends.length === 0) {
-    return next.join("\n");
+    return next.join(eol);
   }
 
   // Append after the existing body, avoiding a leading blank-line run.
-  const body = next.join("\n").replace(/\n+$/u, "\n");
+  const body = next.join(eol).replace(/(?:\r?\n)+$/u, eol);
 
-  return `${body}${appends.join("\n")}\n`;
+  return `${body}${appends.join(eol)}${eol}`;
 }
 
 const REDACTED = "••• (set, hidden)";
@@ -124,21 +126,30 @@ export async function applyScaffold(
   const randSecret = deps.randSecret ?? generateSecret;
   const commands: string[] = [];
 
+  // A failing setup script must abort, not silently leave a half-configured repo.
+  const runStep = async (argv: readonly string[]): Promise<void> => {
+    const res = await run(dir, [...argv]);
+
+    if (res.exitCode !== 0) {
+      throw new Error(
+        `scaffold: \`${argv.join(" ")}\` failed (exit ${String(res.exitCode)}): ${res.stderr.trim()}`
+      );
+    }
+
+    commands.push(argv.join(" "));
+  };
+
   // 1. Rename — only when every rename param was supplied.
   if (
     plan.renameArgs.length > 0 &&
     plan.renameArgs.every((a) => a.length > 0)
   ) {
-    const argv = ["bash", "scripts/rename-project.sh", ...plan.renameArgs];
-
-    await run(dir, argv);
-    commands.push(argv.join(" "));
+    await runStep(["bash", "scripts/rename-project.sh", ...plan.renameArgs]);
   }
 
   // 2. Bootstrap compose/.env (+ GlitchTip secret) via boringstack's setup.sh —
   //    WITHOUT --up, so booting stays a separate, explicit step (boot.ts).
-  await run(dir, ["bash", "setup.sh"]);
-  commands.push("bash setup.sh");
+  await runStep(["bash", "setup.sh"]);
 
   // 3. Env edits, grouped per target file; seed a missing file from `.example`.
   const generateByKey = new Map(

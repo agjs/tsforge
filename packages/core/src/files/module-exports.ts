@@ -60,6 +60,12 @@ export function readExportedNames(absFile: string): string[] {
     return [];
   }
 
+  // Strip comments first: a comment inside an export block (`export { a, // x\n b }`)
+  // would otherwise survive the comma-split and fail identifier validation, silently
+  // dropping valid exports. Best-effort (may also blank `//` inside a string literal,
+  // which is harmless — we only scan for export declarations/lists).
+  text = text.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/\/\/[^\n]*/gu, "");
+
   const names = new Set<string>();
   let m: RegExpExecArray | null;
 

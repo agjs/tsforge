@@ -61,7 +61,9 @@ export const noSelfImportRule = createRule<[], MessageIds>({
       );
 
       // Direct (`./Foo` in Foo.tsx) or barrel (`.` / `./` in index.tsx) self-import.
-      if (resolved === self || `${resolved}/index` === self) {
+      // `join` (not `${resolved}/index`) so the barrel check uses the platform
+      // separator — `resolved`/`self` are `join`-based, so `\` on Windows.
+      if (resolved === self || join(resolved, "index") === self) {
         context.report({
           node: node.source ?? node,
           messageId: "selfImport",
