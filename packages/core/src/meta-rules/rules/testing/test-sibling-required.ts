@@ -1,5 +1,5 @@
 import { join, dirname, basename } from "node:path";
-import { statSync } from "node:fs";
+import { statSync, readdirSync } from "node:fs";
 import type { IMetaRule, IMetaRuleViolation } from "../../meta-rules.types";
 import { flags } from "../../../config";
 
@@ -88,13 +88,120 @@ function hasTest(root: string, file: string): boolean {
   return candidates.some((c) => c.length > 0 && fileExistsAt(root, c));
 }
 
+/** Static module specifiers a file imports / re-exports from (handles `import x
+ *  from`, `import type … from`, side-effect `import "x"`, and `export … from`).
+ *  `[^'"]` spans newlines, so multi-line import lists are covered. */
+function importSpecifiers(content: string): string[] {
+  const specs: string[] = [];
+  const re =
+    /(?:import|export)[^'"]*?from\s*['"]([^'"]+)['"]|import\s*['"]([^'"]+)['"]/gu;
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(content)) !== null) {
+    const spec = m[1] ?? m[2];
+
+    if (spec !== undefined) {
+      specs.push(spec);
+    }
+  }
+
+  return specs;
+}
+
+/** Resolve an import specifier (seen in `fromFile`) to a repo-relative module
+ *  path WITHOUT extension, or null for bare/package imports. Handles `./`, `../`,
+ *  and the `@/` → `src/` alias the web scaffold uses. */
+function resolveSpecifier(fromFile: string, spec: string): string | null {
+  let rel: string;
+
+  if (spec.startsWith("@/")) {
+    rel = `src/${spec.slice(2)}`;
+  } else if (spec.startsWith("./") || spec.startsWith("../")) {
+    rel = join(dirname(fromFile), spec);
+  } else {
+    return null; // bare/package import — not a local logic file
+  }
+
+  return rel.replace(/\\/gu, "/").replace(/\.[tj]sx?$/u, "");
+}
+
+/** Repo-relative test-file paths to check for coverage of `file`: the harness's
+ *  `sourceFiles` (src/tests/scripts layouts) UNION the logic file's OWN directory
+ *  (catches the flat/root layout — e.g. a "generic stack, no package.json" eval
+ *  run dir — that `sourceFiles` doesn't scan). */
+function candidateTestFiles(
+  root: string,
+  file: string,
+  sourceFiles: readonly string[]
+): string[] {
+  const out = new Set<string>();
+
+  for (const sf of sourceFiles) {
+    const norm = sf.replace(/\\/gu, "/");
+
+    if (isTestPath(norm) && norm !== file) {
+      out.add(norm);
+    }
+  }
+
+  const dir = dirname(file);
+
+  try {
+    for (const entry of readdirSync(join(root, dir))) {
+      const rel = (dir === "." ? entry : `${dir}/${entry}`).replace(
+        /\\/gu,
+        "/"
+      );
+
+      if (isTestPath(rel) && rel !== file) {
+        out.add(rel);
+      }
+    }
+  } catch {
+    // dir unreadable — sourceFiles alone
+  }
+
+  return [...out];
+}
+
+/** A logic file is already COVERED if some EXISTING test file imports it directly
+ *  — the harness tests it THROUGH that test, so also demanding a co-located
+ *  sibling makes the rule unsatisfiable for specs where ONE test file covers
+ *  several sibling modules (observed: auth/checkout/query deadlocking the model
+ *  to its turn cap). Direct import only — a directly-imported module is exercised
+ *  by the test; transitive coverage is deliberately NOT counted. */
+function coveredByExistingTest(
+  root: string,
+  file: string,
+  sourceFiles: readonly string[],
+  readFile: (relPath: string) => string | null
+): boolean {
+  const target = file.replace(/\\/gu, "/").replace(/\.[tj]sx?$/u, "");
+
+  for (const testFile of candidateTestFiles(root, file, sourceFiles)) {
+    const content = readFile(testFile);
+
+    if (content === null) {
+      continue;
+    }
+
+    for (const spec of importSpecifiers(content)) {
+      if (resolveSpecifier(testFile, spec) === target) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 export const testSiblingRequiredRule: IMetaRule = {
   id: "test-sibling-required",
   category: "testing",
   description:
     "A logic file (one that exports a function or class) the agent changes must have a test — co-located (*.test.ts) or mirrored under tests/.",
   severity: "warn",
-  run({ root, changedFiles, readFile }) {
+  run({ root, changedFiles, sourceFiles, readFile }) {
     // TDD mode (default ON) makes a missing test a hard gate failure; off → a
     // nudge. SCOPED to the files the agent changed this session (not the whole
     // tree), so it never blocks on a repo's pre-existing untested code. Iterating
@@ -117,7 +224,8 @@ export const testSiblingRequiredRule: IMetaRule = {
       if (
         content === null ||
         !isLogicFile(norm, content) ||
-        hasTest(root, norm)
+        hasTest(root, norm) ||
+        coveredByExistingTest(root, norm, sourceFiles, readFile)
       ) {
         continue;
       }

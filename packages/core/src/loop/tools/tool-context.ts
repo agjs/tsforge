@@ -52,6 +52,12 @@ export interface IToolContext {
   interactive?: boolean;
   /** Hashline snapshot store for stale-anchor recovery (per-session, lazily initialized). */
   snapshotStore?: SessionSnapshotStore;
+  /** Files the model has SUCCESSFULLY WRITTEN this session (create/edit/edit_lines
+   *  on an in-scope file) — the session change-set, populated post-write, never on
+   *  reads. `create` consults it to allow a full-rewrite overwrite of a file the
+   *  model authored itself (vs. refusing to clobber pre-existing code). Same Set
+   *  reference as the loop ctx, so writes from prior turns are visible. */
+  touched?: Set<string>;
   /** Connected MCP servers. When present, `mcp__<server>__<tool>` calls are routed
    *  here. These are external context/tool sources — they never touch the editable
    *  scope or the deterministic gate. Absent ⇒ no MCP configured. */

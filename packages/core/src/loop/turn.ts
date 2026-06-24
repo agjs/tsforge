@@ -173,6 +173,13 @@ export interface ILoopCtx {
 export interface ILoopState {
   prevGateErrors: ErrorSet;
   gateNoProgress: number;
+  /** Fewest gate errors seen so far (the convergence watermark) + how many cycles
+   *  since it last hit a NEW low. Drives the net-progress stop: a churning build
+   *  whose error SET keeps shuffling (so `gateNoProgress` resets) and whose errors
+   *  never survive `samePersist` consecutive cycles evades both other guards — but
+   *  if the count isn't trending DOWN it isn't converging, regardless of turn count. */
+  bestErrorCount: number;
+  noNewLow: number;
   /** Per-error-key (file:rule) survival count: how many consecutive gate cycles
    *  each error has persisted. Drives the primary `samePersist` no-progress stop. */
   errorAge: Map<string, number>;
@@ -239,6 +246,9 @@ function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
     ...(ctx.policyRules === undefined ? {} : { policyRules: ctx.policyRules }),
     ...(ctx.interactive === undefined ? {} : { interactive: ctx.interactive }),
     ...(ctx.mcpRegistry === undefined ? {} : { mcpRegistry: ctx.mcpRegistry }),
+    // Share the session change-set BY REFERENCE so `create` can see which files the
+    // model authored in PRIOR turns (recordTouched mutates this same Set post-write).
+    ...(ctx.touched === undefined ? {} : { touched: ctx.touched }),
   };
 }
 
@@ -527,6 +537,26 @@ function autoFixNotice(files: string[]): string {
 }
 
 /**
+ * Net-progress guard step: track the fewest gate errors ever seen (the convergence
+ * watermark). A new low = real progress → reset the counter; otherwise count a
+ * cycle of no improvement. Returns true once the count hasn't beaten its best in
+ * `noProgressCycles` cycles — the model is churning without converging (errors
+ * shuffle so the whole-set guard resets, and no single error survives `samePersist`,
+ * yet it never gets closer to green). Convergence — not a turn count — bounds a run,
+ * so a large app may take any number of turns as long as the error count trends down.
+ */
+export function trackNetProgress(state: ILoopState, errorCount: number): boolean {
+  if (errorCount < state.bestErrorCount) {
+    state.bestErrorCount = errorCount;
+    state.noNewLow = 0;
+  } else {
+    state.noNewLow += 1;
+  }
+
+  return state.noNewLow >= LOOP_LIMITS.noProgressCycles;
+}
+
+/**
  * Advance each error's per-(file:rule) survival count and return the first error
  * that has now persisted for `samePersist` consecutive gate cycles — the model
  * keeps failing at the SAME thing — or null. Rebuilds the map from the CURRENT
@@ -739,6 +769,30 @@ export async function settleGate(
 
   if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
     const detail = `gate unchanged ${String(LOOP_LIMITS.gateStuckRepeats)} cycles (${String(gateErrors.length)} error(s) not converging)`;
+
+    report({
+      kind: "stuck",
+      task: task.id,
+      cycles: turn,
+      detail,
+      message: `task ${task.id}: stuck — ${detail}`,
+    });
+
+    return {
+      task: task.id,
+      redConfirmed: true,
+      status: RUN_STATUS.stuck,
+      cycles: turn,
+      reason: STUCK_REASON.stalled,
+      detail,
+    };
+  }
+
+  // NET-PROGRESS stop (the convergence guard, not a turn count): big apps run as
+  // long as the error count keeps dropping; we stop when it churns without getting
+  // closer to green — the through-12 failure mode that evaded both guards above.
+  if (trackNetProgress(state, gateErrors.length)) {
+    const detail = `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(LOOP_LIMITS.noProgressCycles)} cycles (best ${String(state.bestErrorCount)}) — not converging`;
 
     report({
       kind: "stuck",

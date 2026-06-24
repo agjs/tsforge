@@ -4,6 +4,7 @@ import { exportedFunctionsRequireReturnTypeRule } from "./rules/exported-functio
 import { fetchMustCheckOkRule } from "./rules/fetch-must-check-ok";
 import { jsonParseMustValidateRule } from "./rules/json-parse-must-validate";
 import { noUnsafeBoundaryCastRule } from "./rules/no-unsafe-boundary-cast";
+import { noSelfImportRule } from "./rules/no-self-import";
 import type { IRulePack } from "../rule-packs.types";
 
 const rules: Record<string, TSESLint.RuleModule<string, readonly unknown[]>> = {
@@ -12,6 +13,7 @@ const rules: Record<string, TSESLint.RuleModule<string, readonly unknown[]>> = {
   "fetch-must-check-ok": fetchMustCheckOkRule,
   "json-parse-must-validate": jsonParseMustValidateRule,
   "no-unsafe-boundary-cast": noUnsafeBoundaryCastRule,
+  "no-self-import": noSelfImportRule,
 };
 
 export const typescriptCorePack: IRulePack = {
@@ -24,6 +26,7 @@ export const typescriptCorePack: IRulePack = {
     "fetch-must-check-ok": "error",
     "json-parse-must-validate": "error",
     "no-unsafe-boundary-cast": "error",
+    "no-self-import": "error",
   },
 };
 

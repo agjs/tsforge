@@ -14,6 +14,8 @@ import {
   parseHashlineEdit,
   applyHashlineEdit,
 } from "../src/files/hashline";
+import { doHashlineEdit } from "../src/loop/tools/edit-hashline";
+import { syntaxErrorCount } from "../src/files/syntax-check";
 
 describe("hashline-format", () => {
   test("computeFileHash: same content produces same hash", () => {
@@ -523,6 +525,72 @@ describe("applyHashlineEdit", () => {
 
       // Should have the merge: line 1 modified, lines 2-4 from live
       expect(newContent).toBe("modified line 1\nline 2\nline 3\nline 4\n");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("syntaxErrorCount", () => {
+  test("counts parse errors and ignores non-TS files", () => {
+    expect(syntaxErrorCount("a.ts", "export const x = 1;\n")).toBe(0);
+    expect(syntaxErrorCount("a.ts", "export const x = (\n")).toBeGreaterThan(0);
+    // .tsx parsed as TSX → JSX is valid, not a syntax error.
+    expect(
+      syntaxErrorCount("a.tsx", "export const C = () => <div>hi</div>;\n")
+    ).toBe(0);
+    // Non-TS/JS files are never syntax-checked.
+    expect(syntaxErrorCount("a.md", "# not ( valid ts")).toBe(0);
+    expect(syntaxErrorCount("a.json", "{ broken")).toBe(0);
+  });
+});
+
+describe("edit_lines syntax-regression guard", () => {
+  test("reverts an edit that introduces a new syntax error", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-hl-guard-"));
+
+    try {
+      const original = "export const x = 1;\nexport const y = 2;\n";
+      const file = "foo.ts";
+
+      await Bun.write(join(dir, file), original);
+      const hash = computeFileHash(original);
+
+      // Replace line 2 with an unbalanced expression → a parse error.
+      const input = `¶${file}#${hash}\nreplace 2..2:\n+export const y = (`;
+      const out = await doHashlineEdit(
+        { file, input, hash },
+        { cwd: dir, files: [file], task: "t", report: () => undefined }
+      );
+
+      expect(out).toContain("REVERTED");
+      // File rolled back to its pre-edit content — corruption never persists.
+      expect(await Bun.file(join(dir, file)).text()).toBe(original);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("commits a clean edit (no syntax regression)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-hl-ok-"));
+
+    try {
+      const original = "export const x = 1;\nexport const y = 2;\n";
+      const file = "foo.ts";
+
+      await Bun.write(join(dir, file), original);
+      const hash = computeFileHash(original);
+
+      const input = `¶${file}#${hash}\nreplace 2..2:\n+export const y = 3;`;
+      const out = await doHashlineEdit(
+        { file, input, hash },
+        { cwd: dir, files: [file], task: "t", report: () => undefined }
+      );
+
+      expect(out).toContain("edited");
+      expect(await Bun.file(join(dir, file)).text()).toContain(
+        "export const y = 3;"
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

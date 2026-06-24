@@ -155,9 +155,17 @@ function gatherSignals(
 ): IFailureSignals {
   const rules = finalRules(events, finalErrors);
   const text = runText(events, finalErrors);
+  // TS2307 in the FINAL gate rules is authoritative. The `runText` keyword scan,
+  // by contrast, spans EVERY event message — so a TRANSIENT "cannot find module"
+  // from an early turn (e.g. a multi-file task before all siblings exist yet)
+  // would permanently trip this and outrank the run's real terminal cause
+  // (observed: a test-sibling-required deadlock mislabeled `hallucinated-import`).
+  // Only fall back to the text scan when there are NO structured final rules to
+  // classify from — i.e. it's a genuine fallback for unstructured logs, not a
+  // veto over a decisive gate error.
   const missingModule =
     rules.filter((r) => r === "TS2307").length +
-    (MISSING_MODULE.test(text) ? 1 : 0);
+    (rules.length === 0 && MISSING_MODULE.test(text) ? 1 : 0);
 
   return {
     repairs: events.filter((e) => e.kind === "repair").length,

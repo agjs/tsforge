@@ -1,9 +1,11 @@
+import { join } from "node:path";
 import {
   applyHashlineEdit,
   parseHashlineEdit,
   SessionSnapshotStore,
 } from "../../files/hashline";
 import { extractHash } from "../../files/hashline-format";
+import { syntaxErrorCount } from "../../files/syntax-check";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
 import { toHashlineEdit } from "../../agent";
 import { writable, normalizeWorkspacePath } from "../../lib/scope";
@@ -63,7 +65,7 @@ export async function doHashlineEdit(
   }
 
   // Ensure the store exists on the context
-  ctx.snapshotStore ??= new SessionSnapshotStore();
+  const snapshotStore = (ctx.snapshotStore ??= new SessionSnapshotStore());
 
   // Hash source priority: the `¶path#HASH` header the model wrote in `input`
   // (the format it saw on read), else the `hash` arg — tolerantly extracted so
@@ -72,7 +74,7 @@ export async function doHashlineEdit(
   const fileHash = parsed.fileHash ?? extractHash(edit.hash);
 
   const result = await applyHashlineEdit(
-    ctx.snapshotStore,
+    snapshotStore,
     ctx.cwd,
     edit.file,
     fileHash,
@@ -84,6 +86,31 @@ export async function doHashlineEdit(
     // mutation event so it can't trigger a re-gate or count toward "done".
     if (result.changed !== true) {
       return `edit_lines ${edit.file}: no change — the ops resolved to identical content. Move on to the next fix or run the gate.`;
+    }
+
+    // SYNTAX-REGRESSION GUARD: unlike `edit` (which rejects too-large/oldString
+    // mismatches BEFORE writing), a well-formed, correctly-anchored hashline edit
+    // commits unconditionally — so a mis-addressed op silently corrupts the file
+    // (top-of-file TS1xxx parse errors), and the model then edits the broken file,
+    // thrashing. Worse, tsc masks the file's real semantic errors behind the parse
+    // error, so the model sees 1-2 errors instead of the true 20+. If THIS edit
+    // INTRODUCED new syntax errors, revert to the pre-edit content and steer the
+    // model to re-read. Guarded on an INCREASE (not "any error") so it never traps
+    // the model on a file that was already broken.
+    const before = syntaxErrorCount(edit.file, result.previousContent ?? "");
+    const after = syntaxErrorCount(edit.file, result.newContent ?? "");
+
+    if (after > before) {
+      const prev = result.previousContent ?? "";
+
+      await Bun.write(join(ctx.cwd, edit.file), prev);
+      snapshotStore.record(edit.file, prev);
+
+      return reject(
+        ctx,
+        "edit_lines:syntax-regression",
+        `edit_lines ${edit.file} REVERTED: your edit introduced ${String(after - before)} new syntax error(s) — the file no longer parses, so it was rolled back to its previous content. Your line ops likely landed on the wrong lines. \`read\` ${edit.file} again to get fresh line anchors, then make a SMALL, targeted edit of only the broken lines.`
+      );
     }
 
     ctx.report({

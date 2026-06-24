@@ -48,11 +48,16 @@ export const reactComponentArchitecturePack: IRulePack = {
     "dangerous-html-requires-sanitize": "error",
     "forwardref-display-name": "error",
     "index-must-reexport-default": "error",
-    "max-hooks-per-file": "warn",
-    "no-anonymous-useEffect": "warn",
+    "max-hooks-per-file": "error",
+    "no-anonymous-useEffect": "error",
     "no-component-invocation": "error",
     "no-cross-feature-imports": "error",
-    "no-derived-state-in-effect": "warn",
+    "no-derived-state-in-effect": "error",
+    // Stays WARN: inline event handlers (`onClick={() => setOpen(true)}`,
+    // `onChange={(e) => setX(e.target.value)}`) are idiomatic React; hard-blocking
+    // them forces awkward extraction and avalanched a form-heavy build (32 at one
+    // gate). Advisory only — the other promoted rules flag genuine smells, this
+    // one flags a standard pattern.
     "no-inline-jsx-functions": "warn",
     "no-jsx-computation": "error",
     "no-loading-text-use-skeleton": "error",

@@ -12,8 +12,15 @@ function isTransientNetworkError(err: unknown): boolean {
 
 /**
  * Retry a request on transient connection failures only (HTTP errors surface via
- * `res.ok`, not a throw). Fresh AbortSignal per attempt; small linear backoff.
+ * `res.ok`, not a throw). Fresh AbortSignal per attempt; capped linear backoff.
  * The connect completes before any stream begins, so this is safe for streaming.
+ *
+ * BUDGET-based, not a fixed attempt count: keep retrying transient connection
+ * errors until `connectRetryMs` is exhausted. The default (~2.4s) matches the old
+ * 4-attempt window so interactive stays snappy on a dead server; an unattended run
+ * passes a large budget so a build RIDES OUT a model-server restart (which the old
+ * 2.4s window couldn't — a 22-turn build was lost when the Spark bounced). Backoff
+ * is capped (connectRetryMaxBackoffMs) so a long budget polls in modest steps.
  */
 export async function fetchWithRetry(
   doFetch: typeof fetch,
@@ -21,12 +28,15 @@ export async function fetchWithRetry(
   headers: Record<string, string>,
   body: string,
   timeoutMs: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  connectRetryMs: number = PROVIDER_LIMITS.connectRetryMs
 ): Promise<Response> {
-  const maxAttempts = 4;
-  let lastErr: unknown;
+  const start = Date.now();
+  let attempt = 0;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  for (;;) {
+    attempt += 1;
+
     // A caller abort (Ctrl-C) is terminal — don't start another attempt.
     if (isAborted(signal)) {
       throw signalReason(signal);
@@ -46,24 +56,35 @@ export async function fetchWithRetry(
         signal: attemptSignal,
       });
     } catch (err) {
-      lastErr = err;
+      const elapsed = Date.now() - start;
+      const backoff = Math.min(
+        PROVIDER_LIMITS.retryBackoffMs * attempt,
+        PROVIDER_LIMITS.connectRetryMaxBackoffMs
+      );
 
-      // A caller abort never retries (it isn't a transient network blip).
+      // A caller abort never retries; nor does a non-transient error; nor once the
+      // retry budget (incl. the next backoff) would be exhausted.
       if (
         isAborted(signal) ||
         !isTransientNetworkError(err) ||
-        attempt === maxAttempts
+        elapsed + backoff >= connectRetryMs
       ) {
         throw err;
       }
 
+      // Past the quick-blip window we're waiting for the endpoint to come back —
+      // emit a heartbeat (stderr, captured in run logs) so a long wait isn't silent.
+      if (elapsed >= PROVIDER_LIMITS.retryBackoffMs * 4) {
+        console.error(
+          `⏳ model endpoint unreachable — retrying (${String(Math.round(elapsed / 1000))}s elapsed, up to ${String(Math.round(connectRetryMs / 1000))}s)`
+        );
+      }
+
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, PROVIDER_LIMITS.retryBackoffMs * attempt);
+        setTimeout(resolve, backoff);
       });
     }
   }
-
-  throw lastErr instanceof Error ? lastErr : new Error("fetch failed");
 }
 
 /** Read `aborted` through a function boundary so the loop-level narrowing (which

@@ -273,7 +273,12 @@ test("scaffoldWeb(vanilla) lays a Vite + TS skeleton; gate has no vendored exemp
 
     expect(gate.command).toContain("bun run build");
     expect(gate.command).toContain("dist/index.html");
-    expect(gate.command).not.toContain("--ignore-pattern");
+    // No VENDORED exempts (vanilla has no ui/lib/*.gen.ts). The type-aware lint
+    // does ignore test files (they're outside the tsconfig) — that's expected and
+    // is the only --ignore-pattern present.
+    expect(gate.command).not.toContain("/ui/");
+    expect(gate.command).not.toContain(".gen.ts");
+    expect(gate.command).toContain('--ignore-pattern "**/*.test.ts"');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

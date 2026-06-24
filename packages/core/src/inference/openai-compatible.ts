@@ -16,7 +16,7 @@ import {
   isDeepseekStyle,
 } from "./request";
 
-export { salvageToolCalls } from "./wire";
+export { salvageToolCalls, salvageFusedToolName } from "./wire";
 
 /**
  * Talks to any OpenAI-compatible `/chat/completions` endpoint — which Ollama,
@@ -87,7 +87,8 @@ export class OpenAICompatibleProvider implements IProvider {
       headers,
       body,
       this.cfg.timeoutMs ?? PROVIDER_LIMITS.requestTimeoutMs,
-      effectiveOpts.signal
+      effectiveOpts.signal,
+      this.cfg.connectRetryMs ?? PROVIDER_LIMITS.connectRetryMs
     );
 
     if (!res.ok) {

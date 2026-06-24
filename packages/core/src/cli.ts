@@ -1072,7 +1072,11 @@ async function repl(args: ICliArgs): Promise<number> {
     withPlan
       ? runPlanned(line, framework)
       : drive((opts) =>
-          session.buildStaged(line, opts, buildWebTypeGate(framework).command)
+          session.buildStaged(
+            line,
+            opts,
+            buildWebTypeGate(framework, undefined, args.dir).command
+          )
         );
 
   // Plan mode: run the design phase, then show the model's plan and PAUSE — the
@@ -1089,7 +1093,7 @@ async function repl(args: ICliArgs): Promise<number> {
       const designed = await session.designBuild(
         line,
         opts,
-        buildWebTypeGate(framework).command
+        buildWebTypeGate(framework, undefined, args.dir).command
       );
 
       if (designed.status !== "interrupted") {

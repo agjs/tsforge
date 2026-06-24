@@ -571,6 +571,8 @@ export class Session {
     this.state = {
       prevGateErrors: [],
       gateNoProgress: 0,
+      bestErrorCount: Number.POSITIVE_INFINITY,
+      noNewLow: 0,
       errorAge: new Map(),
       lastGateCount: -1,
       edits: 0,
@@ -1804,6 +1806,31 @@ export class Session {
    *  times, then stop honestly. Returns a stop result, "retry" to re-steer +
    *  continue, or null when the streak is still under the limit. The caller resets
    *  the streak on "retry" so each re-steer gets a fair window before the next. */
+  /** The CONCRETE outstanding gate failure(s) to inject into a read-only-spin
+   *  re-steer. Observed: the model runs `bun run build`, sees exit 0, declares
+   *  "done", and spins re-verifying — never acting on the gate's REAL unmet
+   *  requirement (e.g. entity-coverage: 3 entities have no UI). A passing build is
+   *  NOT the gate; naming the actual red turns the spin into targeted work. */
+  private outstandingGateNote(): string {
+    const errs = this.state.prevGateErrors;
+
+    if (errs.length === 0) {
+      return "";
+    }
+
+    const lines = errs
+      .slice(0, 5)
+      .map((e) => `  - ${e.message}`)
+      .join("\n");
+    const more =
+      errs.length > 5 ? `\n  …and ${String(errs.length - 5)} more` : "";
+
+    return (
+      `\n\nA passing \`bun run build\` is NOT the gate. The gate is still RED — ` +
+      `do the OUTSTANDING work now, do not re-verify the build:\n${lines}${more}`
+    );
+  }
+
   private readonlySpinStop(
     streak: number,
     recoveries: number,
@@ -1825,16 +1852,20 @@ export class Session {
       return { status: "stuck", turns: turn };
     }
 
+    const gateNote = this.hasGate ? this.outstandingGateNote() : "";
+
     this.report({
       kind: "tool",
       task: SESSION_ID,
       message: this.hasGate
-        ? "⚠ only reading, no edits — steering toward a concrete change"
+        ? `⚠ only reading, no edits — steering toward a concrete change${gateNote.length > 0 ? ` (re-pointed at ${String(this.state.prevGateErrors.length)} outstanding gate error(s))` : ""}`
         : "⚠ only reading, no answer — steering toward a reply",
     });
     this.ctx.messages.push({
       role: "user",
-      content: this.hasGate ? READONLY_RESTEER_BUILD : READONLY_RESTEER_ANSWER,
+      content: this.hasGate
+        ? READONLY_RESTEER_BUILD + gateNote
+        : READONLY_RESTEER_ANSWER,
     });
 
     return "retry";
@@ -1872,6 +1903,12 @@ export class Session {
     // Edits since the last incremental check — drives "check every few edits".
     let editsSinceCheck = 0;
     const checkEvery = this.cfg.checkEvery ?? CHECK_EVERY;
+
+    // Each drive (a send, or a staged build PHASE) converges independently, so the
+    // net-progress watermark must start fresh — otherwise phase 2 inherits phase 1's
+    // low error count and the guard misfires (its errors never beat the old best).
+    this.state.bestErrorCount = Number.POSITIVE_INFINITY;
+    this.state.noNewLow = 0;
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       const turnStart = performance.now();

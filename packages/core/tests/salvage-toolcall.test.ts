@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { salvageToolCalls } from "../src/inference";
+import { salvageToolCalls, salvageFusedToolName } from "../src/inference";
 
 // The exact malformed output captured from a react-board run (the local model
 // emitted tool calls as non-standard XML that vLLM left in content).
@@ -95,6 +95,46 @@ test("returns nothing for plain prose", () => {
   expect(
     salvageToolCalls("I will now create the file with the functions.")
   ).toEqual([]);
+});
+
+// Captured live 2026-06-23 from aeon-qwen3.6-27b: a STRUCTURED tool_call whose
+// `function.name` swallowed the whole XML body (no `<function=>` wrapper, so the
+// server parser couldn't split it). It rendered as `edit<parameter=file…`, hit the
+// policy as an "unknown tool", and the model looped on it to the stall cap.
+test("salvageFusedToolName recovers a structured name that absorbed the parameter XML", () => {
+  const fused = salvageFusedToolName(
+    "edit\n<parameter=file>src/data/store.ts</parameter>\n" +
+      "<parameter=oldString>const x = 1 as any;</parameter>\n" +
+      "<parameter=newString>const x = 1;</parameter>",
+    ""
+  );
+
+  expect(fused?.name).toBe("edit");
+  expect(fused?.arguments).toMatchObject({
+    file: "src/data/store.ts",
+    oldString: "const x = 1 as any;",
+    newString: "const x = 1;",
+  });
+});
+
+test("salvageFusedToolName handles the <function=NAME> wrapper + missing close tag", () => {
+  // function= prefix, </function> tail, and the LAST parameter with no </parameter>.
+  const fused = salvageFusedToolName(
+    "function=create<parameter=file>a.ts</parameter><parameter=content>export const z = 1;</function>",
+    ""
+  );
+
+  expect(fused?.name).toBe("create");
+  expect(fused?.arguments.content).toBe("export const z = 1;");
+});
+
+test("salvageFusedToolName leaves a well-formed call and unknown tools alone", () => {
+  // A normal call (name + JSON args) is NOT this fused form → null (parsed normally).
+  expect(salvageFusedToolName("edit", '{"file":"a.ts"}')).toBeNull();
+  // An unknown tool name is never salvaged into a real call.
+  expect(
+    salvageFusedToolName("frobnicate<parameter=x>1</parameter>", "")
+  ).toBeNull();
 });
 
 // The Qwen-channel pipe form captured live from qwen3.6-35b-a3b in the CLI:

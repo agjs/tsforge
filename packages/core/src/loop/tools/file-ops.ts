@@ -105,6 +105,27 @@ const READ_ONLY_GIT = new Set(["status", "log", "diff", "show", "branch"]);
  *  `| tee`, command substitution). Their PRESENCE disqualifies — conservative. */
 const SHELL_WRITE_RE = /[>;&|`]|\$\(/;
 
+/** Path targets a shell command WRITES via `>`/`>>` redirect or `tee` — so the
+ *  run tool can refuse a write that should go through `create`/`edit` (which the
+ *  model bypasses by `cat > src/foo.tsx << EOF`, skipping the write-guard, the
+ *  lint moat, and scope enforcement). Skips `>&`/`>(` (fd-dup / process subst). */
+function shellWriteTargets(command: string): string[] {
+  const targets: string[] = [];
+  const re =
+    /(?:^|[\s|;&])(?:\d*>>?(?![&(])|tee\b)\s*(['"]?)([^\s'"|;&<>()]+)\1/gu;
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(command)) !== null) {
+    const target = m[2];
+
+    if (target !== undefined && !target.startsWith("-")) {
+      targets.push(target);
+    }
+  }
+
+  return targets;
+}
+
 /** `find` actions that mutate or execute, not just match (`find . -delete`,
  *  `-exec rm {} +`). Allowlisting `find` without this let plan mode delete files. */
 const FIND_MUTATING = new Set([
@@ -469,6 +490,24 @@ export async function runShell(
     );
   }
 
+  // Refuse a shell redirect/tee that WRITES an in-scope project file. The model
+  // reaches for `cat > src/foo.tsx << EOF` to escape edit-tool friction, but that
+  // bypasses the write-guard (no per-file type/lint feedback → errors pile to the
+  // gate), the scope check, and hashline snapshots. Steer it back to create/edit —
+  // `create` can now fully overwrite a file the model authored this session, so
+  // this closes the hole WITHOUT trapping it. /tmp + out-of-scope targets are fine.
+  const scopedWrite = shellWriteTargets(r.command).find((t) =>
+    writable(normalizeWorkspacePath(ctx.cwd, t), ctx.files)
+  );
+
+  if (scopedWrite !== undefined) {
+    return reject(
+      ctx,
+      "run:shell-write",
+      `run ${r.command} REJECTED: writing a project file via a shell redirect (\`> ${scopedWrite}\`) bypasses the type/lint guard and scope checks. Use \`create\` to write or fully rewrite ${scopedWrite} (it overwrites a file you created this session), or \`edit\`/\`edit_lines\` for targeted changes — those get checked the instant you write.`
+    );
+  }
+
   if (isLongRunningServerCommand(r.command)) {
     return reject(
       ctx,
@@ -663,23 +702,37 @@ export async function doCreate(
     );
   }
 
-  const result = await applyCreate(ctx.cwd, create);
+  // A file the model AUTHORED this session (in the write-only change-set) may be
+  // fully rewritten via `create` — it's the model's own work, already rewritable
+  // via `edit`, so this grants no new power; it just provides the whole-file-rewrite
+  // path the model otherwise lacks. Without it, a model that wrote a file badly (e.g.
+  // seed data with `as` casts) thrashes edit(too-large)↔create(exists)↔edit_lines to
+  // the turn cap. A file the model did NOT author (pre-existing/scaffold code) still
+  // can't be clobbered by `create`.
+  const authored = ctx.touched?.has(create.file.replaceAll("\\", "/")) ?? false;
+  const result = await applyCreate(ctx.cwd, create, authored);
 
   if (result.ok) {
+    const overwrote = authored;
+
     ctx.report({
       kind: "create",
       task: ctx.task,
       file: create.file,
-      message: `create ${create.file}`,
+      message: overwrote
+        ? `create ${create.file} (overwrote your earlier version)`
+        : `create ${create.file}`,
       content: create.content,
     });
 
-    return `created ${create.file}`;
+    return overwrote
+      ? `overwrote ${create.file} — full rewrite of the file you created earlier this session.`
+      : `created ${create.file}`;
   }
 
   return reject(
     ctx,
     "create:exists",
-    `create ${create.file} REJECTED: already exists — use \`edit\``
+    `create ${create.file} REJECTED: already exists and you didn't create it this session — use \`edit\` to change it.`
   );
 }

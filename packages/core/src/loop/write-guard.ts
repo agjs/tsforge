@@ -6,6 +6,12 @@ import type { FileLinter, IFileLintProblem } from "../detect-gate";
 import { formatFile } from "../detect-gate";
 import { stripLiteralCasts } from "./astgrep-fix";
 import {
+  missingExportHint,
+  unresolvedNameHint,
+  buildExportIndex,
+  selfSpecifier,
+} from "../files/module-exports";
+import {
   runMetaRules,
   PER_WRITE_META_RULES,
   type IMetaRuleContext,
@@ -85,6 +91,7 @@ const MAX_WRITE_GUARD_DIAGS = 5;
 /** Render the per-issue lines (type errors + lint problems), capped + ordered. */
 function writeGuardLines(
   absPath: string,
+  cwd: string,
   typeErrors: readonly ITsDiagnostic[],
   lintProblems: readonly IFileLintProblem[]
 ): string {
@@ -102,11 +109,24 @@ function writeGuardLines(
   // so mapping every error in a large file (then discarding all but 5) is wasteful.
   // Output is identical to map-all-then-slice (type errors fill the budget first).
   const total = typeErrors.length + lintProblems.length;
-  const typeLines = typeErrors
-    .slice(0, MAX_WRITE_GUARD_DIAGS)
-    .map(
-      (d) => `  L${String(lineOf(d.start))}: ${d.message} (TS${String(d.code)})`
-    );
+  const capped = typeErrors.slice(0, MAX_WRITE_GUARD_DIAGS);
+  // Build the project export index ONLY if a `Cannot find name` (TS2304) is among
+  // the shown errors — it walks src/, so it's lazy. The self-specifier excludes a
+  // symbol the file exports itself from being suggested as a self-import.
+  const index = capped.some((d) => d.code === 2304)
+    ? buildExportIndex(cwd)
+    : null;
+  const self = selfSpecifier(absPath, cwd);
+  const typeLines = capped.map(
+    (d) =>
+      `  L${String(lineOf(d.start))}: ${d.message} (TS${String(d.code)})` +
+      // On `has no exported member` (TS2305/TS2724): what the imported LOCAL module
+      // actually exports. On `Cannot find name` (TS2304): where that symbol IS
+      // exported + the import to add. Either way the model fixes the import in one
+      // shot instead of re-guessing across turns.
+      missingExportHint(d.code, d.message, absPath, cwd) +
+      (index === null ? "" : unresolvedNameHint(d.code, d.message, index, self))
+  );
   const lintLines = lintProblems
     .slice(0, MAX_WRITE_GUARD_DIAGS - typeLines.length)
     .map((p) => `  L${String(p.line)}: ${p.message} (${p.ruleId})`);
@@ -129,6 +149,7 @@ const MAX_DEP_ERRORS = 2;
  * write-guard reaching across the import graph (see TsService.dependantErrors).
  */
 function dependantBlastRadius(
+  cwd: string,
   dependants: readonly { file: string; errors: readonly ITsDiagnostic[] }[]
 ): string {
   if (dependants.length === 0) {
@@ -146,12 +167,20 @@ function dependantBlastRadius(
 
     const lineOf = (offset: number): number =>
       text.slice(0, offset).split("\n").length;
+    const shown = d.errors.slice(0, MAX_DEP_ERRORS);
+    const index = shown.some((e) => e.code === 2304)
+      ? buildExportIndex(cwd)
+      : null;
+    const self = selfSpecifier(d.file, cwd);
 
-    return d.errors
-      .slice(0, MAX_DEP_ERRORS)
+    return shown
       .map(
         (e) =>
-          `  ${basename(d.file)}:${String(lineOf(e.start))} ${e.message} (TS${String(e.code)})`
+          `  ${basename(d.file)}:${String(lineOf(e.start))} ${e.message} (TS${String(e.code)})` +
+          missingExportHint(e.code, e.message, d.file, cwd) +
+          (index === null
+            ? ""
+            : unresolvedNameHint(e.code, e.message, index, self))
       )
       .join("\n");
   });
@@ -231,8 +260,8 @@ async function writeGuard(
     return "";
   }
 
-  const detail = writeGuardLines(absPath, typeErrors, lintProblems);
-  const blast = dependantBlastRadius(dependants);
+  const detail = writeGuardLines(absPath, cwd, typeErrors, lintProblems);
+  const blast = dependantBlastRadius(cwd, dependants);
   const depNote =
     dependants.length > 0
       ? `, ${String(dependants.length)} dependant file(s) broken`

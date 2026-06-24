@@ -2249,7 +2249,9 @@ describe("react-component-architecture pack", () => {
     expect(rule.meta.schema).toBeDefined();
   });
 
-  test("no-jsx-computation: reports .map() inside JSX", () => {
+  test("no-jsx-computation: ALLOWS a simple list-render .map() inside JSX", () => {
+    // Narrowed: a bare `{items.map((i) => <li/>)}` is the idiomatic React list
+    // render and is no longer flagged (chained array ops still are — see below).
     const code = `
       export function List({ items }: { items: string[] }) {
         return <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>;
@@ -2262,7 +2264,7 @@ describe("react-component-architecture pack", () => {
       "src/List.tsx"
     );
 
-    expect(messages.map((m) => m.messageId)).toContain("noComputation");
+    expect(messages.map((m) => m.messageId)).not.toContain("noComputation");
   });
 
   test("no-jsx-computation: reports arithmetic in JSX", () => {
@@ -3829,5 +3831,106 @@ export async function run(model: unknown) {
     );
 
     expect(messages).toHaveLength(0);
+  });
+});
+
+describe("react-component-architecture: no-jsx-computation (narrowed)", () => {
+  test("ALLOWS a simple non-chained list-render .map() in JSX", () => {
+    const code =
+      "export const List = ({ items }: { items: number[] }) => (\n" +
+      "  <ul>{items.map((i) => <li key={i}>{i}</li>)}</ul>\n" +
+      ");\n";
+    const messages = lint(
+      "react-component-architecture",
+      "no-jsx-computation",
+      code,
+      "src/views/List.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).not.toContain("noComputation");
+  });
+
+  test("FLAGS a chained .filter().map() in JSX", () => {
+    const code =
+      "export const List = ({ items }: { items: { on: boolean }[] }) => (\n" +
+      "  <ul>{items.filter((i) => i.on).map((i) => <li />)}</ul>\n" +
+      ");\n";
+    const messages = lint(
+      "react-component-architecture",
+      "no-jsx-computation",
+      code,
+      "src/views/List.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("noComputation");
+  });
+
+  test("FLAGS a bare .filter()/.reduce() and arithmetic in JSX", () => {
+    const filter = lint(
+      "react-component-architecture",
+      "no-jsx-computation",
+      "export const V = ({ xs }: { xs: number[] }) => <div>{xs.filter((x) => x > 0)}</div>;\n",
+      "src/views/V.tsx"
+    );
+    const arith = lint(
+      "react-component-architecture",
+      "no-jsx-computation",
+      "export const V = ({ a, b }: { a: number; b: number }) => <div>{a + b}</div>;\n",
+      "src/views/V.tsx"
+    );
+
+    expect(filter.map((m) => m.messageId)).toContain("noComputation");
+    expect(arith.map((m) => m.messageId)).toContain("noComputation");
+  });
+});
+
+describe("react-component-architecture: promoted severities", () => {
+  test("genuine-smell rules are gate-blocking errors", () => {
+    const cfg = RULE_PACKS["react-component-architecture"].rulesConfig;
+
+    expect(cfg["max-hooks-per-file"]).toBe("error");
+    expect(cfg["no-anonymous-useEffect"]).toBe("error");
+    expect(cfg["no-derived-state-in-effect"]).toBe("error");
+  });
+
+  test("no-inline-jsx-functions stays advisory (idiomatic inline handlers)", () => {
+    const cfg = RULE_PACKS["react-component-architecture"].rulesConfig;
+
+    expect(cfg["no-inline-jsx-functions"]).toBe("warn");
+  });
+});
+
+describe("typescript-core: no-self-import", () => {
+  test("FLAGS a file importing its own export from itself", () => {
+    const messages = lint(
+      "typescript-core",
+      "no-self-import",
+      'import { DashboardContent } from "./DashboardContent";\nexport function DashboardContent() { return null; }\n',
+      "src/views/Dashboard/DashboardContent.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("selfImport");
+  });
+
+  test("FLAGS a barrel re-exporting from '.' (index importing itself)", () => {
+    const messages = lint(
+      "typescript-core",
+      "no-self-import",
+      'export { Foo } from ".";\n',
+      "src/features/foo/index.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("selfImport");
+  });
+
+  test("ALLOWS importing a DIFFERENT sibling module", () => {
+    const messages = lint(
+      "typescript-core",
+      "no-self-import",
+      'import { Other } from "./Other";\nexport function DashboardContent() { return Other; }\n',
+      "src/views/Dashboard/DashboardContent.tsx"
+    );
+
+    expect(messages.map((m) => m.messageId)).not.toContain("selfImport");
   });
 });

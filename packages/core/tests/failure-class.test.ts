@@ -59,6 +59,29 @@ describe("classifyRun", () => {
     expect(out.failureClass).toBe(FAILURE_CLASS.hallucinatedImport);
   });
 
+  test("TRANSIENT 'cannot find module' (resolved by the terminal turn) does NOT mask the real gate cause", () => {
+    // A multi-file task: an early turn red'd with a missing sibling import, then
+    // the model created it. The run's TERMINAL cause is a test-sibling deadlock
+    // (lint rule). The stale early "cannot find module" must NOT win — it was a
+    // whole-transcript text-scan artifact (the auth/checkout sweep bug).
+    const out = classifyRun([
+      ev("validated", {
+        passed: false,
+        rules: ["TS2307"],
+        message: "red: Cannot find module './sessions'",
+      }),
+      ev("validated", {
+        passed: false,
+        rules: ["test-sibling-required", "test-sibling-required"],
+        message: "Missing test for a logic file you changed.",
+      }),
+      STUCK,
+    ]);
+
+    expect(out.failureClass).toBe(FAILURE_CLASS.lintRule);
+    expect(out.detail).toBe("test-sibling-required");
+  });
+
   test("repair events with no gate errors → tool-malformed", () => {
     const out = classifyRun([
       ev("repair", { message: "edit:L3-re-ask" }),
