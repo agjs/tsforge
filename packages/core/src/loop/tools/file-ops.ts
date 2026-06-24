@@ -111,8 +111,11 @@ const SHELL_WRITE_RE = /[>;&|`]|\$\(/;
  *  lint moat, and scope enforcement). Skips `>&`/`>(` (fd-dup / process subst). */
 function shellWriteTargets(command: string): string[] {
   const targets: string[] = [];
+  // After `tee`, skip option tokens (`-a`, `--append`) so `tee -a src/foo.ts`
+  // captures the FILE, not the flag (which would otherwise slip the write past
+  // the guard since flag tokens are dropped below).
   const re =
-    /(?:^|[\s|;&])(?:\d*>>?(?![&(])|tee\b)\s*(['"]?)([^\s'"|;&<>()]+)\1/gu;
+    /(?:^|[\s|;&])(?:\d*>>?(?![&(])|tee\b(?:\s+-+\S+)*)\s*(['"]?)([^\s'"|;&<>()]+)\1/gu;
   let m: RegExpExecArray | null;
 
   while ((m = re.exec(command)) !== null) {

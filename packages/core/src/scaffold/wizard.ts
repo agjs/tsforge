@@ -56,7 +56,9 @@ function oneOfStep(field: IConfigField, stack: IStack): IWizardStep {
     label: o,
     value: o,
   }));
-  const def = defaultFor(field, stack);
+  // STACK *is* the chosen stack — default its step to `stack`, not the field's
+  // dev-only default (else a --stack prod wizard would clobber STACK back to dev).
+  const def = field.key === "STACK" ? stack : defaultFor(field, stack);
   const idx =
     typeof def === "string" ? options.findIndex((o) => o.value === def) : -1;
 

@@ -62,8 +62,18 @@ export async function bootStack(
     statuses.push({ url, status: await deps.poll(url, timeoutMs) });
   }
 
+  const unreachable = statuses.filter((s) => s.status === null);
+
   return {
-    booted: statuses.every((s) => s.status !== null),
+    booted: unreachable.length === 0,
     statuses,
+    // A timed-out health check IS a boot failure — surface it as an error so
+    // callers (cli/headless) exit non-zero instead of silently reporting
+    // `booted: false` and exiting 0.
+    ...(unreachable.length === 0
+      ? {}
+      : {
+          error: `boot health check failed — no response within ${String(timeoutMs)}ms: ${unreachable.map((s) => s.url).join(", ")}`,
+        }),
   };
 }

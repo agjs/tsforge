@@ -148,6 +148,40 @@ describe("runScaffold — full boringstack", () => {
   });
 });
 
+describe("runScaffold — clone manifest is the source of truth (Codex P1)", () => {
+  test("uses the cloned repo's manifest over the bundled bootstrap", async () => {
+    // The clone ships its OWN manifest (here manifestVersion 2); runScaffold must
+    // plan/record from THAT, not the bundled v1 it was handed for bootstrap.
+    const cloneManifest = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "fixtures/scaffold/scaffold-manifest.json"),
+        "utf8"
+      )
+    );
+
+    cloneManifest.manifestVersion = 2;
+
+    const { fs, store } = memFs({
+      [`${DEST}/infra/compose/compose/.env.example`]: "STACK=dev\n",
+      [`${DEST}/.tsforge/scaffold-manifest.json`]:
+        JSON.stringify(cloneManifest),
+    });
+
+    await runScaffold(MANIFEST, answers("boringstack"), DEST, {
+      run: runner(),
+      fs,
+      boot: { poll: pollUp },
+      skipBoot: true,
+    });
+
+    const record = JSON.parse(
+      store.get(`${DEST}/.tsforge/scaffold.json`) ?? "{}"
+    );
+
+    expect(record.manifestVersion).toBe(2); // the clone's, not bundled v1
+  });
+});
+
 describe("runScaffold — astro", () => {
   test("hands off the subPath dir with the build gate, no boot", async () => {
     const { fs } = memFs();

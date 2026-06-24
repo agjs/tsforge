@@ -10,6 +10,8 @@ type IStack = IScaffoldAnswers["stack"];
 type IEffective = (key: string) => string | readonly string[];
 
 const ON_VALUES = new Set(["1", "true"]);
+/** The env var that selects the stack — its value is the chosen STACK, not a field default. */
+const STACK_KEY = "STACK";
 
 /** Pure resolver: answers + manifest → the deterministic plan (env edits, container
  *  topology, conditional-required secrets, cross-rule violations). No I/O — Apply
@@ -23,6 +25,12 @@ export function answersToPlan(
   const effective = makeEffective(manifest, answers);
   const whenActive = makeWhenActive(effective);
   const services = computeServices(manifest, effective, isFull);
+  const secrets = computeSecrets(
+    manifest,
+    effective,
+    whenActive,
+    answers.stack
+  );
 
   return {
     archetype: answers.archetype,
@@ -32,11 +40,11 @@ export function answersToPlan(
 
       return typeof v === "string" ? v : "";
     }),
-    envEdits: isFull ? computeEnvEdits(manifest, effective, answers.stack) : [],
-    services: [...services].sort(),
-    requiredSecrets: isFull
-      ? computeSecrets(manifest, effective, whenActive, answers.stack)
+    envEdits: isFull
+      ? computeEnvEdits(manifest, effective, answers, secrets.files)
       : [],
+    services: [...services].sort(),
+    requiredSecrets: isFull ? secrets.required : [],
     violations: isFull ? computeViolations(manifest, whenActive, services) : [],
   };
 }
@@ -54,6 +62,13 @@ function makeEffective(
 
     if (raw !== undefined) {
       return raw;
+    }
+
+    // STACK *is* the chosen stack — its env value tracks answers.stack, not the
+    // field's per-stack default (which only carries dev). Otherwise `--stack prod`
+    // wrote STACK= and `--stack smoke` wrote STACK=dev. An explicit --set wins above.
+    if (key === STACK_KEY) {
+      return answers.stack;
     }
 
     const field = byKey.get(key);
@@ -113,31 +128,57 @@ function computeServices(
   return services;
 }
 
+/** Required secrets + the env file each belongs in (the requiring field's resolved
+ *  envFile) — so a user-supplied value (`--set RESEND_API_KEY=…`) is written to the
+ *  right place. `required` is the surfaced checklist; `files` covers only the
+ *  requiresSecrets-derived keys (generated secret FIELDS are emitted by envEditFor). */
+interface ISecretInfo {
+  readonly required: readonly string[];
+  readonly files: ReadonlyMap<string, string>;
+}
+
 function computeSecrets(
   manifest: IScaffoldManifest,
   effective: IEffective,
   whenActive: (token: string) => boolean,
   stack: IStack
-): readonly string[] {
+): ISecretInfo {
   const required = new Set<string>();
+  const files = new Map<string, string>();
 
   for (const field of manifest.fields) {
-    collectSecrets(field, effective(field.key), whenActive, stack, required);
+    collectSecrets(field, effective(field.key), {
+      whenActive,
+      stack,
+      manifest,
+      into: required,
+      files,
+    });
   }
 
-  return [...required].sort();
+  return { required: [...required].sort(), files };
+}
+
+interface ICollectCtx {
+  readonly whenActive: (token: string) => boolean;
+  readonly stack: IStack;
+  readonly manifest: IScaffoldManifest;
+  readonly into: Set<string>;
+  readonly files: Map<string, string>;
 }
 
 function collectSecrets(
   field: IConfigField,
   eff: string | readonly string[],
-  whenActive: (token: string) => boolean,
-  stack: IStack,
-  into: Set<string>
+  ctx: ICollectCtx
 ): void {
   // A prod-only secret FIELD (JWT_SECRET, VALKEY_PASSWORD) is required in prod.
-  if (field.kind === "secret" && field.prodOnly === true && stack === "prod") {
-    into.add(field.key);
+  if (
+    field.kind === "secret" &&
+    field.prodOnly === true &&
+    ctx.stack === "prod"
+  ) {
+    ctx.into.add(field.key);
   }
 
   const map = field.requiresSecrets;
@@ -147,47 +188,74 @@ function collectSecrets(
   }
 
   // Infra secrets (GRAFANA/GLITCHTIP) are dev-auto-generated → only prod-required.
-  if (field.requiresSecretsProdOnly === true && stack !== "prod") {
+  if (field.requiresSecretsProdOnly === true && ctx.stack !== "prod") {
     return;
   }
 
   // Gated on an enabling toggle (AI provider keys only matter when AI_ENABLED).
   if (
     field.requiresSecretsWhen !== undefined &&
-    !whenActive(field.requiresSecretsWhen)
+    !ctx.whenActive(field.requiresSecretsWhen)
   ) {
     return;
   }
 
+  const file = fieldEnvFile(ctx.manifest, field, ctx.stack);
+
   for (const v of activeValues(field, eff)) {
     for (const secret of map[v] ?? []) {
-      into.add(secret);
+      ctx.into.add(secret);
+      ctx.files.set(secret, file); // where a supplied value should be written
     }
   }
+}
+
+/** The repo-relative env file a field's value (and its required secrets) target:
+ *  the field's own `envFile`, else the group's, else the manifest default — with
+ *  `${STACK}` resolved. */
+function fieldEnvFile(
+  manifest: IScaffoldManifest,
+  field: IConfigField,
+  stack: IStack
+): string {
+  const template =
+    field.envFile ??
+    manifest.envFileByGroup?.[field.group] ??
+    manifest.envFileDefault ??
+    "";
+
+  return envFile(template, stack);
 }
 
 function computeEnvEdits(
   manifest: IScaffoldManifest,
   effective: IEffective,
-  stack: IStack
+  answers: IScaffoldAnswers,
+  secretFiles: ReadonlyMap<string, string>
 ): readonly IEnvEdit[] {
   const edits: IEnvEdit[] = [];
 
   for (const field of manifest.fields) {
-    const template =
-      field.envFile ??
-      manifest.envFileByGroup?.[field.group] ??
-      manifest.envFileDefault ??
-      "";
     const edit = envEditFor(
       field,
       effective(field.key),
-      stack,
-      envFile(template, stack)
+      answers.stack,
+      fieldEnvFile(manifest, field, answers.stack)
     );
 
     if (edit !== null) {
       edits.push(edit);
+    }
+  }
+
+  // User-supplied required secrets (RESEND_API_KEY, OAuth creds, …): these aren't
+  // manifest fields, so `--set KEY=value` is the only way to provide them. Write
+  // each provided value to the requiring field's env file, flagged secret.
+  for (const [key, file] of secretFiles) {
+    const v = answers.values[key];
+
+    if (typeof v === "string" && v.length > 0) {
+      edits.push({ key, value: v, secret: true, file });
     }
   }
 

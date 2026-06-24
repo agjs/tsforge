@@ -333,3 +333,55 @@ describe("answersToPlan — astro archetype", () => {
     expect(plan.violations).toEqual([]);
   });
 });
+
+describe("answersToPlan — Codex PR review fixes", () => {
+  test("STACK env value tracks the chosen stack, not the field default (P1)", () => {
+    const stackVal = (s: IScaffoldAnswers["stack"]): string | undefined =>
+      answersToPlan(MANIFEST, answers({}, s)).envEdits.find(
+        (e) => e.key === "STACK"
+      )?.value;
+
+    expect(stackVal("dev")).toBe("dev");
+    expect(stackVal("prod")).toBe("prod"); // was "" before the fix
+    expect(stackVal("smoke")).toBe("smoke"); // was "dev" before the fix
+  });
+
+  test("a user-supplied required secret is written (secret) to the app env (P2)", () => {
+    const plan = answersToPlan(
+      MANIFEST,
+      answers({ EMAIL_PROVIDER: "resend", RESEND_API_KEY: "re_123" })
+    );
+    const edit = plan.envEdits.find((e) => e.key === "RESEND_API_KEY");
+
+    expect(edit?.value).toBe("re_123");
+    expect(edit?.secret).toBe(true);
+    expect(edit?.file).toBe("infra/compose/compose/api.dev.env");
+  });
+
+  test("a required secret with no supplied value is surfaced but not written (P2)", () => {
+    const plan = answersToPlan(MANIFEST, answers({ EMAIL_PROVIDER: "resend" }));
+
+    expect(plan.requiredSecrets).toContain("RESEND_API_KEY");
+    expect(
+      plan.envEdits.find((e) => e.key === "RESEND_API_KEY")
+    ).toBeUndefined();
+  });
+
+  test("supplied OAuth credential secrets are written too (P2)", () => {
+    const plan = answersToPlan(
+      MANIFEST,
+      answers({
+        OAUTH_PROVIDERS: ["google"],
+        GOOGLE_OAUTH_CLIENT_ID: "gid",
+        GOOGLE_OAUTH_CLIENT_SECRET: "gsec",
+      })
+    );
+
+    expect(
+      plan.envEdits.find((e) => e.key === "GOOGLE_OAUTH_CLIENT_ID")?.value
+    ).toBe("gid");
+    expect(
+      plan.envEdits.find((e) => e.key === "GOOGLE_OAUTH_CLIENT_SECRET")?.secret
+    ).toBe(true);
+  });
+});

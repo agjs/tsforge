@@ -2,12 +2,46 @@ import { applyScaffold, type IConfigureDeps } from "./configure";
 import { cloneRepo, scaffoldRecord } from "./clone";
 import { bootStack, type IBootDeps } from "./boot";
 import { answersToPlan } from "./plan";
+import { parseManifest } from "./boringstack-manifest";
 import type { IScaffoldFs } from "./io";
 import type {
   IArchetypeProfile,
   IScaffoldAnswers,
   IScaffoldManifest,
+  IScaffoldPlan,
 } from "./scaffold.types";
+
+/** Repo-relative path to BoringStack's committed scaffold manifest. */
+const CLONE_MANIFEST = ".tsforge/scaffold-manifest.json";
+
+/** A cross-rule violation means the config is invalid and must never be applied. */
+function assertValid(plan: IScaffoldPlan): void {
+  if (plan.violations.length > 0) {
+    throw new Error(
+      `scaffold: configuration is invalid — ${plan.violations.join("; ")}`
+    );
+  }
+}
+
+/** Read + parse the manifest committed in the freshly-cloned repo (the source of
+ *  truth). Null when absent or unparseable, so the caller falls back to the bundled
+ *  bootstrap copy. */
+async function readClonedManifest(
+  fs: IScaffoldFs,
+  dest: string
+): Promise<IScaffoldManifest | null> {
+  const path = `${dest}/${CLONE_MANIFEST}`;
+
+  if (!(await fs.exists(path))) {
+    return null;
+  }
+
+  try {
+    return parseManifest(JSON.parse(await fs.readText(path)));
+  } catch {
+    return null;
+  }
+}
 
 /** Compose an archetype's gate list into a single shell command. A gate whose
  *  `cwd` is `.` runs in place; others are wrapped in a subshell `cd`. The whole
@@ -42,29 +76,33 @@ export interface IScaffoldOutcome {
  * Throws on a cross-rule violation — an invalid config must never be applied.
  */
 export async function runScaffold(
-  manifest: IScaffoldManifest,
+  bootstrap: IScaffoldManifest,
   answers: IScaffoldAnswers,
   dest: string,
   deps: IScaffoldDeps
 ): Promise<IScaffoldOutcome> {
-  const plan = answersToPlan(manifest, answers);
+  // Fail fast on an obviously-invalid config BEFORE the (slow) clone, using the
+  // bundled bootstrap manifest. The clone's manifest is re-validated below.
+  assertValid(answersToPlan(bootstrap, answers));
 
-  if (plan.violations.length > 0) {
-    throw new Error(
-      `scaffold: configuration is invalid — ${plan.violations.join("; ")}`
-    );
-  }
-
+  // The bundled manifest is only the bootstrap (repo + ref). After cloning, the
+  // repo's OWN `.tsforge/scaffold-manifest.json` is the source of truth — so a
+  // pinned `--ref` or BoringStack manifest drift is honored, not the stale bundle.
   const { resolvedSha } = await cloneRepo(
-    manifest.repo,
-    manifest.defaultRef,
+    bootstrap.repo,
+    bootstrap.defaultRef,
     dest,
     deps.run
   );
 
+  const manifest = (await readClonedManifest(deps.fs, dest)) ?? bootstrap;
+  const plan = answersToPlan(manifest, answers);
+
+  assertValid(plan);
+
   await writeRecord(deps.fs, dest, {
-    source: manifest.repo,
-    ref: manifest.defaultRef,
+    source: bootstrap.repo,
+    ref: bootstrap.defaultRef,
     resolvedSha,
     archetype: answers.archetype,
     manifestVersion: manifest.manifestVersion,

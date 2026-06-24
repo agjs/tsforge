@@ -254,6 +254,32 @@ test("run REJECTS a shell redirect that writes an in-scope project file", async 
   }
 });
 
+test("run REJECTS `tee -a` writing an in-scope file (flag before the path)", async () => {
+  // `tee -a src/foo.ts` — the guard must skip the `-a` option and still catch the
+  // file, or the write slips past create/edit (the guard, lint moat, and scope).
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const r = await executeTool(
+      {
+        name: "run",
+        arguments: {
+          command:
+            "echo 'export const x = 1;' | tee -a src/views/Dashboard/index.tsx",
+        },
+      },
+      ctx(dir, ["src/**"])
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(
+      await Bun.file(join(dir, "src/views/Dashboard/index.tsx")).exists()
+    ).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("run ALLOWS shell redirects to /tmp and build-log targets (not project files)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 

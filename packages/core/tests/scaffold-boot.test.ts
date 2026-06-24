@@ -93,3 +93,16 @@ describe("bootStack", () => {
     expect(result.error).toMatch(/no such service/u);
   });
 });
+
+describe("bootStack — health-check failure is an error (Codex P1)", () => {
+  test("a timed-out health poll sets `error` (so callers exit non-zero)", async () => {
+    const poll: IReadyPoller = (url) =>
+      Promise.resolve(url.includes("7330") ? null : 200);
+
+    const result = await bootStack(DIR, MANIFEST, { run: shell(0), poll });
+
+    expect(result.booted).toBe(false);
+    expect(result.error).toMatch(/health check failed/iu);
+    expect(result.error).toContain("7330");
+  });
+});
