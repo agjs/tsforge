@@ -83,7 +83,6 @@ const DIM_ENV: Record<string, string> = {
   lsp_write_feedback: "TSFORGE_LSP_WRITE_FEEDBACK",
   simplicity: "TSFORGE_SIMPLICITY",
   web: "TSFORGE_WEB",
-  script: "TSFORGE_SCRIPT",
 };
 
 /** Map feature variant to env vars. Most dims set their var to the state; `git`
@@ -94,6 +93,14 @@ function variantToEnvVars(variant: IFeatureVariant): Record<string, string> {
   for (const [dim, state] of Object.entries(variant)) {
     if (dim === "git") {
       envVars.TSFORGE_NO_GIT_TOOL = state === "1" ? "0" : "1";
+
+      continue;
+    }
+
+    // `script` is default-ON; like `git` it gates a NO_ flag, so script=on →
+    // the tool is available (NO_SCRIPT unset), script=off → withheld.
+    if (dim === "script") {
+      envVars.TSFORGE_NO_SCRIPT = state === "1" ? "0" : "1";
 
       continue;
     }

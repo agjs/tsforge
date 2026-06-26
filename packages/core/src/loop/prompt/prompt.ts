@@ -58,17 +58,19 @@ export function buildWebResearchGuidance(): string {
 
 export function buildScriptToolGuidance(): string {
   return [
-    "SCRIPT — batch repetitive tool work into ONE turn with the `script` tool:",
-    "  • When you'd otherwise call the same tool many times (read/scan 5+ files,",
-    "    fetch+compare several packages, transform-then-write across files), write",
-    "    one TypeScript program instead — it runs in a single turn.",
-    "  • `import { read, run, search, web_search, edit, create } from './tsforge-tools'`",
-    "    — each stub is async and returns the tool's text result; `console.log` only",
-    "    what you need back (the rest never enters your context).",
-    "  • File changes MUST go through the `edit`/`create` stubs (NOT `node:fs`/",
+    "SCRIPT — one program for work where you must READ each file to compute its change:",
+    "  • Reach for `script` ONLY when the change to many (≈5+) files DEPENDS on first",
+    "    reading each file — e.g. update a call in every file using a value declared in",
+    "    that same file. Normally that's a read turn THEN an edit turn (the contents",
+    "    flood your context); a script does read→edit per file in ONE loop, one turn,",
+    "    and only its `console.log` returns.",
+    "  • `import { read, edit, create, run } from './tsforge-tools'` — each stub is",
+    "    async and returns the tool's text result. Log a short summary, not the files.",
+    "  • Edits/creates MUST go through the `edit`/`create` stubs (NOT `node:fs`/",
     "    `Bun.write`) so they still pass scope + the type/lint gate.",
-    "  • Use it for fan-out/aggregation, not a single edit — one `edit` call is cheaper",
-    "    than a script. It cannot call `script` itself.",
+    "  • Do NOT use it when you can already act in one turn WITHOUT reading first —",
+    "    creating several files from the spec, or a single edit. Emitting those tool",
+    "    calls directly is simpler and no slower. It cannot call `script` itself.",
   ].join("\n");
 }
 
