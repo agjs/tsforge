@@ -2,7 +2,13 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, isOneShot, applyRecipe, runNotify } from "../src/cli";
+import {
+  parseArgs,
+  isOneShot,
+  applyRecipe,
+  runNotify,
+  createPasteBatcher,
+} from "../src/cli";
 import type { ITaskRecipe } from "../src/config/recipes";
 
 // Regression: runNotify used to spawn `sh -c cmd` with a bare `await proc.exited`
@@ -300,4 +306,49 @@ test("spinner exposes a live 'compacting' activity label and repaints via onTick
 
   spinner.stop();
   expect(spinner.frameLabel()).toBe(""); // stopped → loader cleared
+});
+
+// Regression: a multi-line PASTE fired one readline `line` event per newline, so
+// each line submitted separately — N messages, or mid-run N "↳ queued (steers the
+// next turn)" notices for ONE paste. The batcher coalesces a burst (same tick)
+// into a single newline-joined message.
+test("createPasteBatcher coalesces a multi-line paste into one message", () => {
+  const flushed: string[] = [];
+  // Synchronous scheduler: run the flush immediately so the test is deterministic
+  // (the burst is pushed before the scheduled flush, exactly as in one tick).
+  const pending: (() => void)[] = [];
+  const onLine = createPasteBatcher(
+    (m) => flushed.push(m),
+    (fn) => pending.push(fn)
+  );
+
+  // A paste: many lines (incl. a blank one) delivered before the tick settles.
+  for (const l of ["line one", "line two", "", "line four"]) {
+    onLine(l);
+  }
+
+  // Nothing flushed until the scheduled tick runs.
+  expect(flushed).toEqual([]);
+
+  pending.forEach((fn) => fn());
+
+  expect(flushed).toEqual(["line one\nline two\n\nline four"]);
+});
+
+test("createPasteBatcher submits a single typed line unchanged, once", () => {
+  const flushed: string[] = [];
+  const pending: (() => void)[] = [];
+  const onLine = createPasteBatcher(
+    (m) => flushed.push(m),
+    (fn) => pending.push(fn)
+  );
+
+  onLine("just one line");
+  pending.forEach((fn) => fn());
+
+  // A later, separate line (new tick) flushes on its own — not merged with the first.
+  onLine("a second, separate message");
+  pending.slice(1).forEach((fn) => fn());
+
+  expect(flushed).toEqual(["just one line", "a second, separate message"]);
 });

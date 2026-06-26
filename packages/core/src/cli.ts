@@ -573,6 +573,43 @@ export function isPlanApproval(line: string): boolean {
   return /^(approve|approved|go|lgtm|implement)[.!]?$/i.test(line.trim());
 }
 
+/**
+ * Coalesce the burst of `line` events a multi-line PASTE produces into ONE
+ * message. A terminal delivers a pasted block as many newline-separated lines in
+ * a single tick, and readline emits a `line` event per newline — so without this
+ * each line was submitted separately: N messages, and mid-run, N "↳ queued (steers
+ * the next turn)" notices for a single paste. Buffering the lines and flushing them
+ * joined by newline on the next tick turns one paste into one message; a single
+ * human-typed line (one event, then an idle gap) flushes unchanged a tick later.
+ * `schedule` is injectable so the batching is deterministically testable.
+ */
+export function createPasteBatcher(
+  flush: (message: string) => void,
+  schedule: (fn: () => void) => void = (fn) => {
+    setImmediate(fn);
+  }
+): (raw: string) => void {
+  let batch: string[] = [];
+  let scheduled = false;
+
+  return (raw: string): void => {
+    batch.push(raw);
+
+    if (scheduled) {
+      return;
+    }
+
+    scheduled = true;
+    schedule(() => {
+      const message = batch.join("\n");
+
+      batch = [];
+      scheduled = false;
+      flush(message);
+    });
+  };
+}
+
 // The /help body is generated from the command registry (src/cli/commands.ts) so
 // the help text and the interactive `/` palette can never drift.
 const HELP = formatHelp();
@@ -1665,8 +1702,11 @@ async function repl(args: ICliArgs): Promise<number> {
     // Event-driven (not for-await) so stdin is read DURING a run: a line typed
     // mid-run is queued to steer the next turn (or, if "/exit", aborts). This is
     // what makes it feel like a real harness — you can redirect without waiting.
-    rl.on("line", (raw) => {
-      const line = raw.trim();
+    // Submit ONE message (already paste-coalesced). A multi-line paste arrives as
+    // many `line` events in one tick; the batcher joins them so this runs once with
+    // the whole block, instead of once per line (which read as N steer messages).
+    const submitLine = (message: string): void => {
+      const line = message.trim();
 
       if (line.length === 0) {
         if (!busy) {
@@ -1696,6 +1736,12 @@ async function repl(args: ICliArgs): Promise<number> {
       }
 
       void runLine(line);
+    };
+
+    const onPastedLine = createPasteBatcher(submitLine);
+
+    rl.on("line", (raw) => {
+      onPastedLine(raw);
     });
 
     rl.on("close", () => {
