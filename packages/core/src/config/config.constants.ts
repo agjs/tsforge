@@ -9,6 +9,7 @@ export const ENV_FLAG = {
   simplicity: "TSFORGE_SIMPLICITY",
   tdd: "TSFORGE_TDD",
   webTools: "TSFORGE_WEB",
+  scriptTool: "TSFORGE_SCRIPT",
   noUpdateCheck: "TSFORGE_NO_UPDATE_CHECK",
   noGitTool: "TSFORGE_NO_GIT_TOOL",
 } as const;

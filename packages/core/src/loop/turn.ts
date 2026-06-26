@@ -35,6 +35,7 @@ import {
   WEB_BROWSE_TOOL,
   PACKAGE_INFO_TOOL,
   PACKAGE_DOCS_TOOL,
+  SCRIPT_TOOL,
   GIT_CONTEXT_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
@@ -83,6 +84,7 @@ type AdvertisedTool =
   | typeof WEB_BROWSE_TOOL
   | typeof PACKAGE_INFO_TOOL
   | typeof PACKAGE_DOCS_TOOL
+  | typeof SCRIPT_TOOL
   | typeof GIT_CONTEXT_TOOL;
 
 /** Free, local web tools (fetch + search) — advertised only under TSFORGE_WEB so
@@ -107,16 +109,32 @@ function gitTools(hasExistingCode: boolean): AdvertisedTool[] {
   return hasExistingCode && !flags.noGitTool() ? [GIT_CONTEXT_TOOL] : [];
 }
 
+/** Programmatic Tool Calling — advertised only under TSFORGE_SCRIPT. Available on
+ *  both scratch and existing-code runs (like web tools); the plan-mode path never
+ *  calls toolsFor with it because the dispatch guard already rejects a mutating
+ *  tool, so a script can't write while planning. */
+function scriptTools(): AdvertisedTool[] {
+  return flags.scriptTool() ? [SCRIPT_TOOL] : [];
+}
+
 export function toolsFor(hasExistingCode: boolean): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
+  const script = scriptTools();
 
   if (flags.noLspTools() || !hasExistingCode) {
-    return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...web, ...git];
+    return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...web, ...git, ...script];
   }
 
-  // existing-code: base + LSP nav + (gated) web + (gated) git.
-  return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...LSP_TOOLS, ...web, ...git];
+  // existing-code: base + LSP nav + (gated) web + (gated) git + (gated) script.
+  return [
+    ...BASE_TOOLS,
+    ...HASHLINE_TOOLS,
+    ...LSP_TOOLS,
+    ...web,
+    ...git,
+    ...script,
+  ];
 }
 
 /** The model wrote prose but issued NO tool call while the gate is still red —

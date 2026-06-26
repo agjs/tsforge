@@ -45,6 +45,9 @@ export const flags = {
    *  web_fetch extracts locally; web_search uses DuckDuckGo (or a self-hosted
    *  SearXNG via TSFORGE_SEARXNG_URL). */
   webTools: (): boolean => isOn(ENV_FLAG.webTools),
+  /** Programmatic Tool Calling: advertise the `script` tool (opt-in, like web
+   *  tools, so eval sweeps stay deterministic by default). */
+  scriptTool: (): boolean => isOn(ENV_FLAG.scriptTool),
   /** Disable the startup "update available" npm-registry check (default ON, i.e.
    *  the check runs only in interactive non-CI sessions). Set to "1" for offline
    *  environments or to silence the notice. */

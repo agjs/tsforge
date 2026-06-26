@@ -82,6 +82,8 @@ const DIM_ENV: Record<string, string> = {
   hashline: "TSFORGE_HASHLINE",
   lsp_write_feedback: "TSFORGE_LSP_WRITE_FEEDBACK",
   simplicity: "TSFORGE_SIMPLICITY",
+  web: "TSFORGE_WEB",
+  script: "TSFORGE_SCRIPT",
 };
 
 /** Map feature variant to env vars. Most dims set their var to the state; `git`
