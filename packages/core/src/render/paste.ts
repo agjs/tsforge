@@ -26,10 +26,31 @@ export interface IPasteScan {
 export interface IPasteScanner {
   feed(chunk: string): IPasteScan;
   isActive(): boolean;
+  forceEnd(): string | null;
 }
 
 function normalizeNewlines(s: string): string {
   return s.replace(/\r\n?|\n/gu, "\n");
+}
+
+function finalizePasteContent(s: string): string {
+  // Decode tmux CSI-u control sequences: ESC[codepoint;modu → String.fromCharCode(codepoint)
+  const csiURegex = String.raw`\x1b\[(\d+);\d+u`;
+  let decoded = s.replace(new RegExp(csiURegex, "g"), (_match, codepoint) => {
+    return String.fromCharCode(Number(codepoint));
+  });
+
+  // Normalize newlines first (CR/CRLF → LF)
+  decoded = normalizeNewlines(decoded);
+
+  // Strip non-printable control chars except newline
+  // Keep: \n (0x0a), printable ASCII (0x20–0x7e), and anything >= 0x80 (UTF-8 multibyte)
+  // Remove: < 0x20 except 0x0a, and 0x7f (DEL)
+  const controlCharRegex = String.raw`[\x00-\x08\x0b-\x1f\x7f]`;
+
+  decoded = decoded.replace(new RegExp(controlCharRegex, "g"), "");
+
+  return decoded;
 }
 
 export function createPasteScanner(): IPasteScanner {
@@ -63,12 +84,24 @@ export function createPasteScanner(): IPasteScanner {
       }
 
       buf += rest.slice(0, end);
-      const content = normalizeNewlines(buf);
+      const content = finalizePasteContent(buf);
 
       active = false;
       buf = "";
 
       return { content, active: false };
+    },
+    forceEnd(): string | null {
+      if (!active) {
+        return null;
+      }
+
+      const content = finalizePasteContent(buf);
+
+      active = false;
+      buf = "";
+
+      return content;
     },
   };
 }
