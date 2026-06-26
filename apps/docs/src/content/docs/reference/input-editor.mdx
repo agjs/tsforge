@@ -1,0 +1,89 @@
+---
+title: Input Editor
+description: Multi-line input editor keybindings, paste handling, and fallback mode.
+---
+
+The Dreamdata Platform's CLI uses an interactive multi-line input editor for the REPL session. It supports full keyboard navigation, history recall, word deletion, and multi-line paste.
+
+## Submit vs. newline
+
+| Key | Behavior |
+| --- | --- |
+| **Enter** | Submit message to the agent |
+| **Shift+Enter** | Insert newline in buffer |
+| **Alt+Enter** | Insert newline in buffer |
+| **`\` then Enter** | Insert newline (remove the trailing backslash) |
+
+When you press Enter with an empty buffer or at the top level, your message is submitted. To write multiple lines, use Shift+Enter, Alt+Enter, or end a line with a backslash and press Enter.
+
+## Navigation and editing
+
+### Motion
+| Key | Action |
+| --- | --- |
+| **←/→** | Move cursor left/right (one character) |
+| **Ctrl+← / Ctrl+→** | Move by word |
+| **Home / End** | Move to start/end of current line |
+| **Ctrl+Home / Ctrl+End** | Move to start/end of entire buffer |
+| **↑/↓** | Recall input history (at buffer edges only) |
+
+### Deletion
+| Key | Action |
+| --- | --- |
+| **Backspace** | Delete character before cursor |
+| **Delete** | Delete character at cursor |
+| **Ctrl+W** | Delete word before cursor |
+| **Alt+Backspace** | Delete word before cursor (alias) |
+| **Ctrl+U** | Delete to start of line |
+| **Ctrl+K** | Delete to end of line |
+
+### Kill ring (copy/paste buffer)
+| Key | Action |
+| --- | --- |
+| **Ctrl+Y** | Yank (paste) last deleted text |
+| **Alt+Y** | Yank-pop (rotate through deleted text) |
+
+### Undo
+| Key | Action |
+| --- | --- |
+| **Ctrl+_** (Ctrl+underscore) | Undo last change |
+
+## History navigation
+
+When your cursor is at the **top** of the buffer (line 0, any column), press **↑** to recall the previous submitted message. When at the **bottom** (last line), press **↓** to scroll forward through history. The draft you were typing is preserved and restored when you exit history.
+
+## Multi-line paste
+
+Paste a block of text with Ctrl+V (or ⌘V on macOS). The pasted content lands in the buffer as-is and may span multiple lines. You can edit it like any buffer text. When you press Enter, the entire buffer (including pasted lines) is submitted as a single message.
+
+Very large pastes are displayed as `[paste #N +M lines]` in the UI and expand to their full content when sent.
+
+## Command palette and file picker
+
+| Key | Action |
+| --- | --- |
+| **`/`** | Open command palette (when buffer contains only `/`) |
+| **`@`** | Open file picker (when buffer contains only `@`) |
+
+Typing `/` or `@` followed by other text inserts those characters normally.
+
+## Keyboard interrupt
+
+| Key | Action |
+| --- | --- |
+| **Ctrl+C** | Interrupt the current model run (does not exit the session) |
+| **Ctrl+D** | Exit the CLI (on empty buffer only) |
+
+## Fallback: basic input mode
+
+If the multi-line editor has compatibility issues, you can fall back to simple single-line (readline) input:
+
+```bash
+TSFORGE_BASIC_INPUT=1 tsforge
+```
+
+This mode still accepts slash commands and works in pipes, but does not support Shift+Enter, multi-line paste, or kill-ring operations.
+
+## Terminal compatibility
+
+The editor auto-detects your terminal's keyboard encoding (Kitty CSI-u, xterm modifyOtherKeys, or legacy). Resizing your terminal window updates the editor immediately. On non-TTY streams (pipes, files, CI), the editor is automatically skipped and replaced by line-buffered stdin reading.
