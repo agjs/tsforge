@@ -6,6 +6,8 @@ import { renderEditor } from "./view";
 export interface IEditorHandle {
   onSubmit(cb: (message: string) => void): void;
   onChange(cb: () => void): void;
+  onInterrupt(cb: () => void): void;
+  onExit(cb: () => void): void;
   getBuffer(): EditorBuffer;
   close(): void;
 }
@@ -47,18 +49,13 @@ function buildKeyDispatchTable(): Map<string, KeyAction> {
     buf.insert("\t");
   });
 
-  // Motion keys
+  // Motion keys — note: up/down are handled specially in handleCharKey
+  // when at buffer edges for history navigation
   table.set("left", (buf) => {
     buf.moveLeft();
   });
   table.set("right", (buf) => {
     buf.moveRight();
-  });
-  table.set("up", (buf) => {
-    buf.moveUp();
-  });
-  table.set("down", (buf) => {
-    buf.moveDown();
   });
   table.set("home", (buf) => {
     buf.moveLineStart();
@@ -133,6 +130,12 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   let isOpen = true;
   const submitCallbacks: ((message: string) => void)[] = [];
   const changeCallbacks: (() => void)[] = [];
+  const interruptCallbacks: (() => void)[] = [];
+  const exitCallbacks: (() => void)[] = [];
+
+  // In-session history: submitted messages for up/down navigation
+  const history: string[] = [];
+  let historyIndex = -1; // -1 = not in history, >= 0 = viewing history item
   let dataListener: ((chunk: string) => void) | null = null;
 
   function repaint(): void {
@@ -165,6 +168,61 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     });
   }
 
+  // Save the current buffer as a history item and emit onSubmit callbacks
+  function saveToHistory(message: string): void {
+    history.push(message);
+    historyIndex = -1;
+  }
+
+  // Navigate history: up arrow when cursor is on first line → prev item, down arrow when on last line → next
+
+  function navigateHistoryUp(): void {
+    if (historyIndex === -1) {
+      // Save current draft before entering history
+      const draftText = buffer.getText();
+
+      buffer.setText("", false); // Save a slot for the draft
+      history.push(draftText);
+      historyIndex = history.length - 2;
+    } else if (historyIndex > 0) {
+      historyIndex -= 1;
+    } else {
+      return; // Already at the top
+    }
+
+    if (historyIndex >= 0 && historyIndex < history.length) {
+      buffer.setText(history[historyIndex] ?? "");
+      repaint();
+      notifyChange();
+    }
+  }
+
+  function navigateHistoryDown(): void {
+    if (historyIndex === -1) {
+      return; // Not in history
+    }
+
+    historyIndex += 1;
+
+    if (historyIndex === history.length - 1) {
+      // Restore draft
+      const draft = history[historyIndex];
+
+      buffer.setText(draft ?? "");
+      history.pop();
+      historyIndex = -1;
+    } else if (historyIndex < history.length) {
+      buffer.setText(history[historyIndex] ?? "");
+    } else {
+      // Fell off the end
+      historyIndex = -1;
+      buffer.setText("");
+    }
+
+    repaint();
+    notifyChange();
+  }
+
   function handleReturnKey(ctrl: boolean, alt: boolean, shift: boolean): void {
     const bufferText = buffer.getText();
     const { col } = buffer.getCursor();
@@ -192,6 +250,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     } else if (!ctrl && !alt && !shift) {
       const message = buffer.expand();
 
+      saveToHistory(message);
       buffer.setText("");
       repaint();
       notifyChange();
@@ -207,6 +266,24 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     alt: boolean,
     shift: boolean
   ): void {
+    // Ctrl-C: interrupt the current run
+    if (ctrl && text === "c") {
+      interruptCallbacks.forEach((cb) => {
+        cb();
+      });
+
+      return;
+    }
+
+    // Ctrl-D on an empty buffer: exit
+    if (ctrl && text === "d" && buffer.getText().length === 0) {
+      exitCallbacks.forEach((cb) => {
+        cb();
+      });
+
+      return;
+    }
+
     if (ctrl || alt || shift) {
       const keyParts: string[] = [];
 
@@ -265,6 +342,90 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     }
   }
 
+  function dispatchKeyEvent(event: {
+    name: string;
+    text: string;
+    ctrl: boolean;
+    alt: boolean;
+    shift: boolean;
+  }): void {
+    const { name, text, ctrl, alt, shift } = event;
+
+    if (name === "return") {
+      handleReturnKey(ctrl, alt, shift);
+
+      return;
+    }
+
+    if (name === "char") {
+      handleCharKey(text, ctrl, alt, shift);
+
+      return;
+    }
+
+    // History navigation: up/down at buffer edges
+    if (name === "up") {
+      const { line } = buffer.getCursor();
+
+      if (line === 0) {
+        navigateHistoryUp();
+
+        return;
+      }
+
+      buffer.moveUp();
+      repaint();
+      notifyChange();
+
+      return;
+    }
+
+    if (name === "down") {
+      const { line } = buffer.getCursor();
+      const lines = buffer.getText().split("\n");
+      const lastLine = lines.length - 1;
+
+      if (line === lastLine) {
+        navigateHistoryDown();
+
+        return;
+      }
+
+      buffer.moveDown();
+      repaint();
+      notifyChange();
+
+      return;
+    }
+
+    const keyParts: string[] = [];
+
+    if (ctrl) {
+      keyParts.push("ctrl");
+    }
+
+    if (alt) {
+      keyParts.push("alt");
+    }
+
+    if (shift) {
+      keyParts.push("shift");
+    }
+
+    keyParts.push(name);
+    const normalizedKey = keyParts.join("+");
+
+    const action = keyDispatchTable.get(normalizedKey);
+
+    if (action) {
+      action(buffer);
+      repaint();
+      notifyChange();
+    }
+
+    triggerPaletteOrPicker();
+  }
+
   function onDataChunk(chunk: string): void {
     if (!isOpen) {
       return;
@@ -288,44 +449,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     const keyEvents = decodeKeys(chunk);
 
     for (const event of keyEvents) {
-      const { name, text, ctrl, alt, shift } = event;
-
-      if (name === "return") {
-        handleReturnKey(ctrl, alt, shift);
-        continue;
-      }
-
-      if (name === "char") {
-        handleCharKey(text, ctrl, alt, shift);
-        continue;
-      }
-
-      const keyParts: string[] = [];
-
-      if (ctrl) {
-        keyParts.push("ctrl");
-      }
-
-      if (alt) {
-        keyParts.push("alt");
-      }
-
-      if (shift) {
-        keyParts.push("shift");
-      }
-
-      keyParts.push(name);
-      const normalizedKey = keyParts.join("+");
-
-      const action = keyDispatchTable.get(normalizedKey);
-
-      if (action) {
-        action(buffer);
-        repaint();
-        notifyChange();
-      }
-
-      triggerPaletteOrPicker();
+      dispatchKeyEvent(event);
     }
   }
 
@@ -369,6 +493,14 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     onChange(cb: () => void) {
       changeCallbacks.push(cb);
+    },
+
+    onInterrupt(cb: () => void) {
+      interruptCallbacks.push(cb);
+    },
+
+    onExit(cb: () => void) {
+      exitCallbacks.push(cb);
     },
 
     getBuffer(): EditorBuffer {
