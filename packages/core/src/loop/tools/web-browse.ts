@@ -112,7 +112,11 @@ function renderLinks(links: readonly IBrowseLink[]): string {
 }
 
 async function visibleText(page: IBrowsePage): Promise<string> {
-  return page.evaluate(() => document.body.innerText);
+  // document.body can be absent on a blank/failed load; the index lookup is
+  // genuinely nullable, so evaluate returns "" instead of throwing a TypeError.
+  return page.evaluate(
+    () => document.getElementsByTagName("body")[0]?.innerText ?? ""
+  );
 }
 
 async function visibleLinks(page: IBrowsePage): Promise<IBrowseLink[]> {

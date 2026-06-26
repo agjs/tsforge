@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve, relative, isAbsolute, dirname } from "node:path";
 import { isRecord } from "../../lib/guards";
 import { reject, str, type IToolContext } from "./tool-context";
 import { parsePackageSpecs } from "./add-dependency";
@@ -177,12 +177,81 @@ function repositoryUrl(value: unknown): string {
   return "";
 }
 
+/** Highest semver-sorted key that equals `prefix` or sits under it on a dot
+ *  boundary (so prefix "1" matches "1.2.0" but never "10.0.0"). `keys` are
+ *  already ascending, so the last match is the highest. */
+function highestWithPrefix(
+  keys: readonly string[],
+  prefix: string
+): string | null {
+  if (prefix.length === 0) {
+    return null;
+  }
+
+  const matches = keys.filter(
+    (key) => key === prefix || key.startsWith(`${prefix}.`)
+  );
+
+  return matches[matches.length - 1] ?? null;
+}
+
+/** Resolve a requested spec — a dist-tag name (`latest`/`next`), an exact
+ *  version, or a major/minor/range like `19` or `^19.0.0` — to a concrete
+ *  version key. The npm manifest indexes by EXACT version, so without this a
+ *  `react@19` request would miss versionRecord and report empty dependency
+ *  lists. Best-effort (not full semver-range satisfaction): falls back to the
+ *  raw spec when nothing matches. */
+function resolveRequested(
+  manifest: Record<string, unknown>,
+  requested: string
+): string {
+  const tags = manifest["dist-tags"];
+
+  if (isRecord(tags) && typeof tags[requested] === "string") {
+    return tags[requested];
+  }
+
+  const keys = sortedVersionKeys(manifest.versions);
+
+  if (keys.includes(requested)) {
+    return requested;
+  }
+
+  const cleaned = requested.replace(/^[\^~>=<\s]+/u, "").split("-")[0] ?? "";
+  const segments = cleaned.split(".").filter((part) => /^[0-9]+$/u.test(part));
+
+  if (segments.length === 0) {
+    return requested;
+  }
+
+  // `^` allows anything up to the next major → lock the major; `~` allows up to
+  // the next minor → lock major.minor; a bare partial (`19`, `19.1`) narrows
+  // from the most specific prefix outward to the major.
+  const major = segments[0] ?? "";
+  const minor = segments.slice(0, 2).join(".");
+  const prefixes = requested.startsWith("^")
+    ? [major]
+    : requested.startsWith("~")
+      ? [minor, major]
+      : [segments.join("."), minor, major];
+
+  for (const prefix of prefixes) {
+    const hit = highestWithPrefix(keys, prefix);
+
+    if (hit !== null) {
+      return hit;
+    }
+  }
+
+  return requested;
+}
+
 function selectedVersion(
   manifest: Record<string, unknown>,
   requested: string | null
 ): string {
   if (requested !== null && requested.length > 0) {
-    return requested;
+    return resolveRequested(manifest, requested);
   }
 
   const tags = manifest["dist-tags"];
@@ -377,15 +446,55 @@ async function readIfExists(path: string): Promise<string | null> {
   return file.text();
 }
 
-function nodeModulesPath(cwd: string, packageName: string): string {
-  return join(cwd, "node_modules", ...packageName.split("/"));
+/** Locate an installed package's directory, walking up parent `node_modules`
+ *  so hoisted monorepo deps resolve too. Uses the standard node algorithm (walk
+ *  ancestors) rather than `require.resolve(pkg + "/package.json")`, which throws
+ *  for packages whose `exports` map blocks the package.json subpath. Falls back
+ *  to the local `node_modules` path when nothing is found (→ no local docs). */
+async function resolvePackageRoot(
+  cwd: string,
+  packageName: string
+): Promise<string> {
+  const segments = packageName.split("/");
+  let dir = resolve(cwd);
+
+  for (;;) {
+    const candidate = join(dir, "node_modules", ...segments);
+
+    if (await Bun.file(join(candidate, "package.json")).exists()) {
+      return candidate;
+    }
+
+    const parent = dirname(dir);
+
+    if (parent === dir) {
+      return join(cwd, "node_modules", ...segments);
+    }
+
+    dir = parent;
+  }
+}
+
+/** Resolve `candidate` against `root`, returning the absolute path only if it
+ *  stays inside `root`. The `types` field comes from an installed package's own
+ *  package.json — a hostile dep could set it to `../../../etc/passwd` to have an
+ *  arbitrary file read and disclosed to the agent — so clamp it to the package. */
+function resolveWithin(root: string, candidate: string): string | null {
+  const target = resolve(root, candidate);
+  const rel = relative(root, target);
+
+  if (rel.length === 0 || (!rel.startsWith("..") && !isAbsolute(rel))) {
+    return target;
+  }
+
+  return null;
 }
 
 async function localDocs(
   cwd: string,
   packageName: string
 ): Promise<IPackageDocHit | null> {
-  const root = nodeModulesPath(cwd, packageName);
+  const root = await resolvePackageRoot(cwd, packageName);
   const pkgText = await readIfExists(join(root, "package.json"));
   const parts: string[] = [];
 
@@ -412,7 +521,8 @@ async function localDocs(
       const parsed: unknown = JSON.parse(pkgText);
 
       if (isRecord(parsed) && typeof parsed.types === "string") {
-        const types = await readIfExists(join(root, parsed.types));
+        const typesPath = resolveWithin(root, parsed.types);
+        const types = typesPath === null ? null : await readIfExists(typesPath);
 
         if (types !== null && types.trim().length > 0) {
           parts.push(
