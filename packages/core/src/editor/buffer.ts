@@ -21,6 +21,10 @@ export class EditorBuffer {
 
   private lastSnapshotKind: string | null = null;
 
+  private pastes: Map<number, string> = new Map<number, string>();
+
+  private pasteCounter = 0;
+
   constructor(initial = "") {
     this.lines = initial.split("\n");
     this.cursorLine = this.lines.length - 1;
@@ -83,6 +87,21 @@ export class EditorBuffer {
 
     this.maybeSnapshot(kind);
     this.insertRaw(text);
+  }
+
+  insertPaste(text: string): void {
+    const lineCount = text.split("\n").length;
+    const charCount = text.length;
+
+    if (lineCount > 10 || charCount > 1000) {
+      this.pasteCounter += 1;
+      const id = this.pasteCounter;
+
+      this.pastes.set(id, text);
+      this.insert(`[paste #${id} +${lineCount} lines]`);
+    } else {
+      this.insert(text);
+    }
   }
 
   newline(): void {
@@ -398,5 +417,12 @@ export class EditorBuffer {
       this.cursorCol = snapshot.cursorCol;
       this.lastSnapshotKind = null;
     }
+  }
+
+  expand(): string {
+    return this.getText().replace(
+      /\[paste #(\d+) \+\d+ lines\]/g,
+      (_, id) => this.pastes.get(Number(id)) ?? _
+    );
   }
 }

@@ -136,3 +136,23 @@ test("a yank is a single undo unit (no wasted undo step)", () => {
   b.undo(); // next undo reverts the "x" insert — NOT a wasted no-op
   expect(b.getText()).toBe("");
 });
+
+// region: Task 5 — large-paste markers + expand
+
+test("small paste inserts literally", () => {
+  const b = new EditorBuffer();
+
+  b.insertPaste("one\ntwo");
+  expect(b.getText()).toBe("one\ntwo");
+  expect(b.expand()).toBe("one\ntwo");
+});
+
+test("large paste shows a marker but expands on submit", () => {
+  const big = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
+  const b = new EditorBuffer();
+
+  b.insertPaste(big);
+  expect(b.getText()).toContain("[paste #1 +40 lines]");
+  expect(b.getText()).not.toContain("line 39");
+  expect(b.expand()).toBe(big);
+});
