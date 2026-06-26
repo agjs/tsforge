@@ -1,10 +1,20 @@
 import { graphemes } from "./segments";
+import { KillRing } from "./kill-ring";
 
 export class EditorBuffer {
   private lines: string[];
+
   private cursorLine: number;
+
   private cursorCol: number; // grapheme offset within lines[cursorLine]
+
   private stickyCol: number | null = null;
+
+  private killRing: KillRing = new KillRing();
+
+  private lastWasKill = false;
+
+  private lastYank: { start: number; length: number } | null = null;
 
   constructor(initial = "") {
     this.lines = initial.split("\n");
@@ -224,5 +234,109 @@ export class EditorBuffer {
 
   moveDown(): void {
     this.vertical(1);
+  }
+
+  deleteWordBackward(): void {
+    this.clearSticky();
+
+    const g = this.curG();
+    let start = this.cursorCol;
+
+    while (start > 0 && !this.isWordChar(g[start - 1] ?? "")) {
+      start -= 1;
+    }
+
+    while (start > 0 && this.isWordChar(g[start - 1] ?? "")) {
+      start -= 1;
+    }
+
+    const removed = g.slice(start, this.cursorCol).join("");
+
+    g.splice(start, this.cursorCol - start);
+    this.lines[this.cursorLine] = g.join("");
+    this.cursorCol = start;
+
+    this.killRing.push(removed, { accumulate: this.lastWasKill });
+    this.lastWasKill = true;
+  }
+
+  deleteWordForward(): void {
+    this.clearSticky();
+
+    const g = this.curG();
+    let end = this.cursorCol;
+
+    while (end < g.length && !this.isWordChar(g[end] ?? "")) {
+      end += 1;
+    }
+
+    while (end < g.length && this.isWordChar(g[end] ?? "")) {
+      end += 1;
+    }
+
+    const removed = g.slice(this.cursorCol, end).join("");
+
+    g.splice(this.cursorCol, end - this.cursorCol);
+    this.lines[this.cursorLine] = g.join("");
+
+    this.killRing.push(removed, { accumulate: this.lastWasKill });
+    this.lastWasKill = true;
+  }
+
+  deleteToLineStart(): void {
+    this.clearSticky();
+
+    const g = this.curG();
+    const removed = g.slice(0, this.cursorCol).join("");
+
+    g.splice(0, this.cursorCol);
+    this.lines[this.cursorLine] = g.join("");
+    this.cursorCol = 0;
+
+    this.killRing.push(removed, { accumulate: this.lastWasKill });
+    this.lastWasKill = true;
+  }
+
+  deleteToLineEnd(): void {
+    this.clearSticky();
+
+    const g = this.curG();
+    const removed = g.slice(this.cursorCol).join("");
+
+    g.splice(this.cursorCol);
+    this.lines[this.cursorLine] = g.join("");
+
+    this.killRing.push(removed, { accumulate: this.lastWasKill });
+    this.lastWasKill = true;
+  }
+
+  yank(): void {
+    this.clearSticky();
+
+    const text = this.killRing.current();
+    const startCol = this.cursorCol;
+
+    this.insert(text);
+    this.lastYank = { start: startCol, length: graphemes(text).length };
+    this.lastWasKill = false;
+  }
+
+  yankPop(): void {
+    this.clearSticky();
+
+    if (this.lastYank === null) {
+      return;
+    }
+
+    this.killRing.rotate();
+    const text = this.killRing.current();
+    const g = this.curG();
+    const oldLength = this.lastYank.length;
+    const startCol = this.lastYank.start;
+
+    g.splice(startCol, oldLength, ...graphemes(text));
+    this.lines[this.cursorLine] = g.join("");
+    this.cursorCol = startCol + graphemes(text).length;
+    this.lastYank = { start: startCol, length: graphemes(text).length };
   }
 }

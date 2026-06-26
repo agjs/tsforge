@@ -73,3 +73,24 @@ test("moveDocStart/End jump to buffer ends", () => {
   b.moveDocEnd();
   expect(b.getCursor()).toEqual({ line: 2, col: 1 });
 });
+
+// region: Task 3 — kill-ring + region deletes with yank/yank-pop
+
+test("Ctrl-K (deleteToLineEnd) then yank round-trips", () => {
+  const b = new EditorBuffer("hello world");
+
+  b.moveLineStart();
+  b.moveWordRight(); // col 5 (after hello)
+  b.deleteToLineEnd();
+  expect(b.getText()).toBe("hello");
+  b.moveLineEnd();
+  b.yank();
+  expect(b.getText()).toBe("hello world");
+});
+
+test("deleteWordBackward removes the previous word", () => {
+  const b = new EditorBuffer("foo bar");
+
+  b.deleteWordBackward();
+  expect(b.getText()).toBe("foo ");
+});
