@@ -111,6 +111,60 @@ function recordKeys(value: unknown): string[] {
   return isRecord(value) ? Object.keys(value).sort() : [];
 }
 
+function numericParts(version: string): number[] {
+  const main = version.split("+")[0]?.split("-")[0] ?? "";
+
+  return main.split(".").map((part) => {
+    const n = Number.parseInt(part, 10);
+
+    return Number.isFinite(n) ? n : 0;
+  });
+}
+
+function comparePrerelease(a: string, b: string): number {
+  // A release with no prerelease tag outranks any prerelease (1.0.0 > 1.0.0-rc).
+  const aPre = a.split("+")[0]?.split("-").slice(1).join("-") ?? "";
+  const bPre = b.split("+")[0]?.split("-").slice(1).join("-") ?? "";
+
+  if (aPre === bPre) {
+    return 0;
+  }
+
+  if (aPre.length === 0) {
+    return 1;
+  }
+
+  if (bPre.length === 0) {
+    return -1;
+  }
+
+  return aPre < bPre ? -1 : 1;
+}
+
+/** Ascending semver order. npm's `versions` object has no guaranteed key order,
+ *  and a plain lexical sort misorders releases (1.2.0 < 1.10.0 numerically but
+ *  not as strings) — so the "recent" list and the no-dist-tag latest fallback
+ *  must compare version components numerically. */
+function compareVersions(a: string, b: string): number {
+  const pa = numericParts(a);
+  const pb = numericParts(b);
+  const len = Math.max(pa.length, pb.length);
+
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+
+  return comparePrerelease(a, b);
+}
+
+function sortedVersionKeys(value: unknown): string[] {
+  return isRecord(value) ? Object.keys(value).sort(compareVersions) : [];
+}
+
 function repositoryUrl(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -137,8 +191,7 @@ function selectedVersion(
     return tags.latest;
   }
 
-  const versions = manifest.versions;
-  const keys = recordKeys(versions);
+  const keys = sortedVersionKeys(manifest.versions);
 
   return keys[keys.length - 1] ?? "";
 }
@@ -203,7 +256,7 @@ function formatPackageInfo(
     repositoryUrl(manifest.repository)
   );
   const deprecated = stringProp(source, "deprecated");
-  const versions = recordKeys(manifest.versions);
+  const versions = sortedVersionKeys(manifest.versions);
   const recent = versions.slice(Math.max(0, versions.length - 12));
 
   return [

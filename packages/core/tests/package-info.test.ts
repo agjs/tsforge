@@ -148,3 +148,25 @@ test("package tools reject invalid args without touching the network", async () 
   expect(info).toContain("package_info");
   expect(docs).toContain("source");
 });
+
+test("recent versions and no-dist-tag latest sort by semver, not lexically", async () => {
+  // Object key order is unspecified and a lexical sort misorders these
+  // (1.10.0 < 1.9.0 as strings). With no dist-tags, latest must be the highest
+  // semver, and "recent" must end on it.
+  const manifest = {
+    name: "pkg",
+    versions: {
+      "1.9.0": { version: "1.9.0" },
+      "1.10.0": { version: "1.10.0" },
+      "1.2.0": { version: "1.2.0" },
+      "1.10.0-rc.1": { version: "1.10.0-rc.1" },
+    },
+  };
+
+  const out = await doPackageInfo({ package: "pkg" }, ctx(), deps(manifest));
+
+  // No dist-tags → fallback latest is the highest stable semver, not "1.9.0".
+  expect(out).toContain("selected: 1.10.0");
+  // Recent list is semver-ascending and the prerelease sorts below its release.
+  expect(out).toContain("recent: 1.2.0, 1.9.0, 1.10.0-rc.1, 1.10.0");
+});
