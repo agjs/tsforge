@@ -40,3 +40,36 @@ test("emoji is one grapheme for cursor + delete", () => {
   b.deleteBackward(); // removes 👍 as one unit
   expect(b.getText()).toBe("ab");
 });
+
+// region: Task 2 — word/line/doc navigation + sticky-column vertical moves
+
+test("moveWordLeft/Right stop at word boundaries", () => {
+  const b = new EditorBuffer("foo bar baz");
+
+  b.moveLineStart();
+  b.moveWordRight();
+  expect(b.getCursor().col).toBe(3); // end of "foo"
+  b.moveWordRight();
+  expect(b.getCursor().col).toBe(7); // end of "bar"
+  b.moveWordLeft();
+  expect(b.getCursor().col).toBe(4); // start of "bar"
+});
+
+test("moveUp keeps sticky column across a short line", () => {
+  const b = new EditorBuffer("hello\nhi\nworld");
+
+  b.moveDocEnd(); // line 2 (world), col 5
+  b.moveUp(); // line 1 (hi) — clamps to col 2
+  expect(b.getCursor()).toEqual({ line: 1, col: 2 });
+  b.moveUp(); // line 0 (hello) — sticky restores col 5
+  expect(b.getCursor()).toEqual({ line: 0, col: 5 });
+});
+
+test("moveDocStart/End jump to buffer ends", () => {
+  const b = new EditorBuffer("a\nb\nc");
+
+  b.moveDocStart();
+  expect(b.getCursor()).toEqual({ line: 0, col: 0 });
+  b.moveDocEnd();
+  expect(b.getCursor()).toEqual({ line: 2, col: 1 });
+});
