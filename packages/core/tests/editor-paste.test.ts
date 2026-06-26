@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { createPasteScanner } from "../src/render/paste";
+import { createPasteScanner } from "../src/editor/paste";
 
 describe("PasteScanner", () => {
   test("extracts a real bracketed paste, CR→\\n, no markers", () => {
