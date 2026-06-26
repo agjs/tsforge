@@ -1,4 +1,5 @@
 import { graphemes } from "./segments";
+import { paint, STYLE } from "../render/style";
 
 export interface IEditorInput {
   lines: string[];
@@ -202,7 +203,6 @@ function renderLineToFrame(
   isCurrentLine: boolean,
   cursorCol: number,
   columns: number,
-  clippedAbove: boolean,
   currentTotalRows: number
 ): {
   frameStr: string;
@@ -224,10 +224,8 @@ function renderLineToFrame(
     frameStr += wrappedRow.text;
 
     if (isCurrentLine && wrappedRow.cursorRow !== undefined) {
-      const offset = clippedAbove ? 1 : 0;
-
       foundCursor = {
-        row: currentTotalRows + wrappedRow.cursorRow + offset,
+        row: currentTotalRows + wrappedRow.cursorRow,
         col: wrappedRow.cursorCol ?? 0,
       };
     }
@@ -255,7 +253,8 @@ function buildFrameString(
   window: IVisibleWindow,
   cursorLine: number,
   cursorCol: number,
-  columns: number
+  columns: number,
+  color: boolean
 ): {
   frame: string;
   cursorRow: number;
@@ -270,7 +269,7 @@ function buildFrameString(
   // Add "↑ N more" indicator if clipped above
   if (window.clippedAbove) {
     const moreCount = window.startLine;
-    const indicator = `↑ ${moreCount} more`;
+    const indicator = paint(`↑ ${moreCount} more`, STYLE.dim, color);
 
     frame += indicator + "\n";
     totalVisualRows += 1;
@@ -295,7 +294,6 @@ function buildFrameString(
       isCurrentLine,
       cursorCol,
       columns,
-      window.clippedAbove,
       totalVisualRows
     );
 
@@ -310,7 +308,6 @@ function buildFrameString(
     // Add newline between logical lines (but not after last line)
     if (lineIdx < window.endLine - 1) {
       frame += "\n";
-      totalVisualRows += 1;
     }
   }
 
@@ -320,7 +317,7 @@ function buildFrameString(
     totalVisualRows += 1;
 
     const moreCount = lines.length - window.endLine;
-    const indicator = `↓ ${moreCount} more`;
+    const indicator = paint(`↓ ${moreCount} more`, STYLE.dim, color);
 
     frame += indicator;
   }
@@ -343,7 +340,7 @@ export function renderEditor(
   opts: IEditorOptions
 ): IEditorFrame {
   const { lines, cursorLine, cursorCol } = input;
-  const { columns, maxRows } = opts;
+  const { columns, maxRows, color } = opts;
 
   // Handle empty buffer
   if (lines.length === 0 || columns <= 0 || maxRows <= 0) {
@@ -359,7 +356,7 @@ export function renderEditor(
     cursorRow,
     cursorCol: cursorColResult,
     totalRows,
-  } = buildFrameString(lines, window, cursorLine, cursorCol, columns);
+  } = buildFrameString(lines, window, cursorLine, cursorCol, columns, color);
 
   return {
     frame,
