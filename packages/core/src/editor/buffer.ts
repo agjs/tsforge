@@ -1,5 +1,6 @@
 import { graphemes } from "./segments";
 import { KillRing } from "./kill-ring";
+import { UndoStack, type ISnapshot } from "./undo-stack";
 
 export class EditorBuffer {
   private lines: string[];
@@ -15,6 +16,10 @@ export class EditorBuffer {
   private lastWasKill = false;
 
   private lastYank: { start: number; length: number } | null = null;
+
+  private undoStack: UndoStack = new UndoStack();
+
+  private lastSnapshotKind: string | null = null;
 
   constructor(initial = "") {
     this.lines = initial.split("\n");
@@ -38,10 +43,28 @@ export class EditorBuffer {
     this.stickyCol = null;
   }
 
+  private snapshot(): ISnapshot {
+    return {
+      lines: structuredClone(this.lines),
+      cursorLine: this.cursorLine,
+      cursorCol: this.cursorCol,
+    };
+  }
+
+  private maybeSnapshot(kind: string): void {
+    if (kind !== this.lastSnapshotKind) {
+      this.undoStack.push(this.snapshot());
+      this.lastSnapshotKind = kind;
+    }
+  }
+
   insert(text: string): void {
     this.clearSticky();
     // text has no newlines here (newline() handles those); split defensively.
     const parts = text.split("\n");
+    const kind = text.trim().length === 0 ? "insert-space" : "insert-word";
+
+    this.maybeSnapshot(kind);
 
     for (let i = 0; i < parts.length; i += 1) {
       if (i > 0) {
@@ -59,6 +82,8 @@ export class EditorBuffer {
 
   newline(): void {
     this.clearSticky();
+
+    this.maybeSnapshot("other");
     const g = this.curG();
     const left = g.slice(0, this.cursorCol).join("");
     const right = g.slice(this.cursorCol).join("");
@@ -70,6 +95,7 @@ export class EditorBuffer {
 
   deleteBackward(): void {
     this.clearSticky();
+    this.maybeSnapshot("delete");
 
     if (this.cursorCol > 0) {
       const g = this.curG();
@@ -99,6 +125,7 @@ export class EditorBuffer {
 
   deleteForward(): void {
     this.clearSticky();
+    this.maybeSnapshot("delete");
     const g = this.curG();
 
     if (this.cursorCol < g.length) {
@@ -238,6 +265,7 @@ export class EditorBuffer {
 
   deleteWordBackward(): void {
     this.clearSticky();
+    this.maybeSnapshot("delete");
 
     const g = this.curG();
     let start = this.cursorCol;
@@ -262,6 +290,7 @@ export class EditorBuffer {
 
   deleteWordForward(): void {
     this.clearSticky();
+    this.maybeSnapshot("delete");
 
     const g = this.curG();
     let end = this.cursorCol;
@@ -285,6 +314,7 @@ export class EditorBuffer {
 
   deleteToLineStart(): void {
     this.clearSticky();
+    this.maybeSnapshot("delete");
 
     const g = this.curG();
     const removed = g.slice(0, this.cursorCol).join("");
@@ -299,6 +329,7 @@ export class EditorBuffer {
 
   deleteToLineEnd(): void {
     this.clearSticky();
+    this.maybeSnapshot("delete");
 
     const g = this.curG();
     const removed = g.slice(this.cursorCol).join("");
@@ -312,6 +343,7 @@ export class EditorBuffer {
 
   yank(): void {
     this.clearSticky();
+    this.maybeSnapshot("other");
 
     const text = this.killRing.current();
     const startCol = this.cursorCol;
@@ -328,6 +360,7 @@ export class EditorBuffer {
       return;
     }
 
+    this.maybeSnapshot("other");
     this.killRing.rotate();
     const text = this.killRing.current();
     const g = this.curG();
@@ -338,5 +371,27 @@ export class EditorBuffer {
     this.lines[this.cursorLine] = g.join("");
     this.cursorCol = startCol + graphemes(text).length;
     this.lastYank = { start: startCol, length: graphemes(text).length };
+  }
+
+  undo(): void {
+    const snapshot = this.undoStack.undo(this.snapshot());
+
+    if (snapshot) {
+      this.lines = snapshot.lines;
+      this.cursorLine = snapshot.cursorLine;
+      this.cursorCol = snapshot.cursorCol;
+      this.lastSnapshotKind = null;
+    }
+  }
+
+  redo(): void {
+    const snapshot = this.undoStack.redo();
+
+    if (snapshot) {
+      this.lines = snapshot.lines;
+      this.cursorLine = snapshot.cursorLine;
+      this.cursorCol = snapshot.cursorCol;
+      this.lastSnapshotKind = null;
+    }
   }
 }

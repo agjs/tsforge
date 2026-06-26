@@ -94,3 +94,28 @@ test("deleteWordBackward removes the previous word", () => {
   b.deleteWordBackward();
   expect(b.getText()).toBe("foo ");
 });
+
+// region: Task 4 — undo/redo with word-coalescing
+
+test("undo reverts a word as one unit, redo restores it", () => {
+  const b = new EditorBuffer();
+
+  b.insert("h");
+  b.insert("i"); // coalesced
+  b.undo();
+  expect(b.getText()).toBe("");
+  b.redo();
+  expect(b.getText()).toBe("hi");
+});
+
+test("space then word are separate undo units", () => {
+  const b = new EditorBuffer();
+
+  b.insert("a");
+  b.insert(" ");
+  b.insert("b");
+  b.undo();
+  expect(b.getText()).toBe("a ");
+  b.undo();
+  expect(b.getText()).toBe("a");
+});
