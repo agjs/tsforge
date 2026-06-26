@@ -1,3 +1,5 @@
+import type { ToolName } from "./agent.types";
+
 /**
  * The canonical tool names. Schemas, dispatch, and any name comparison reference
  * these — never a bare string literal (so a rename is one edit and typos can't
@@ -28,31 +30,84 @@ export const TOOL_NAME = {
   webFetch: "web_fetch",
   webSearch: "web_search",
   webBrowse: "web_browse",
+  script: "script",
   yieldStatus: "yield_status",
 } as const;
 
-/** Tools that cannot mutate the workspace — the PLAN-MODE set. `run` is absent
- *  on purpose: it is special-cased (allowed only for read-only commands — see
- *  isReadOnlyCommand in loop/tools/file-ops). */
-export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
-  TOOL_NAME.read,
-  TOOL_NAME.search,
-  TOOL_NAME.symbolSearch,
-  TOOL_NAME.findReferences,
-  TOOL_NAME.typeAt,
-  TOOL_NAME.diagnostics,
+/** Per-tool capability flags — the single source of truth the plan-mode set and
+ *  the script-exposable subset are derived from (so a new tool declares its
+ *  behaviour ONCE here instead of being added to several hand-kept sets).
+ *  - `readOnly`: cannot mutate the workspace ⇒ allowed in plan mode. `run` is
+ *    deliberately false: it is special-cased (allowed only for read-only
+ *    commands — see isReadOnlyCommand in loop/tools/file-ops).
+ *  - `scriptExposable`: safe + useful to call from inside a `script` program via
+ *    the generated RPC stubs. Excludes the heavy/interactive scaffolds, the
+ *    dependency installer, the turn-ending yield, and `script` itself (no
+ *    recursion). Mutating tools (edit/create/…) ARE exposable — they still flow
+ *    back through executeTool's scope + write-guard + gate. */
+export interface IToolSpec {
+  readOnly: boolean;
+  scriptExposable: boolean;
+}
+
+export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
+  [TOOL_NAME.read]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.run]: { readOnly: false, scriptExposable: true },
+  [TOOL_NAME.edit]: { readOnly: false, scriptExposable: true },
+  [TOOL_NAME.editLines]: { readOnly: false, scriptExposable: true },
+  [TOOL_NAME.create]: { readOnly: false, scriptExposable: true },
+  [TOOL_NAME.search]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.symbolSearch]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.findReferences]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.typeAt]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.diagnostics]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.renameSymbol]: { readOnly: false, scriptExposable: true },
+  [TOOL_NAME.moveFile]: { readOnly: false, scriptExposable: true },
+  [TOOL_NAME.organizeImports]: { readOnly: false, scriptExposable: true },
   // git_context only inspects history/diffs — no workspace mutation — so it is a
   // plan-mode tool too (scope a review/fix while planning, before any edit).
-  TOOL_NAME.gitContext,
-  TOOL_NAME.packageInfo,
-  TOOL_NAME.packageDocs,
+  [TOOL_NAME.gitContext]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.scaffoldUi]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.scaffoldRoutes]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.scaffoldWeb]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.addDependency]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.packageInfo]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.packageDocs]: { readOnly: true, scriptExposable: true },
   // Web tools are read-only (no workspace mutation), so they're usable in plan
   // mode too — research while planning. Network egress here is structured and
   // opt-in (TSFORGE_WEB), unlike the raw `run` curl path plan mode blocks.
-  TOOL_NAME.webFetch,
-  TOOL_NAME.webSearch,
-  TOOL_NAME.webBrowse,
-]);
+  [TOOL_NAME.webFetch]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.webSearch]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.webBrowse]: { readOnly: true, scriptExposable: true },
+  // `script` mutates (it can call edit/create) and must never call itself.
+  [TOOL_NAME.script]: { readOnly: false, scriptExposable: false },
+  [TOOL_NAME.yieldStatus]: { readOnly: false, scriptExposable: false },
+};
+
+function toolNamesWhere(
+  pick: (spec: IToolSpec) => boolean
+): ReadonlySet<string> {
+  const names = new Set<string>();
+
+  for (const [name, spec] of Object.entries(TOOL_SPECS)) {
+    if (pick(spec)) {
+      names.add(name);
+    }
+  }
+
+  return names;
+}
+
+/** Tools that cannot mutate the workspace — the PLAN-MODE set (derived from
+ *  TOOL_SPECS). `run` is absent on purpose (special-cased; see above). */
+export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = toolNamesWhere(
+  (spec) => spec.readOnly
+);
+
+/** Tools the model may call from inside a `script` program (derived). */
+export const SCRIPT_EXPOSABLE_TOOLS: ReadonlySet<string> = toolNamesWhere(
+  (spec) => spec.scriptExposable
+);
 
 /** The model's own decision to start a from-scratch WEB app: scaffolds the stack
  *  (Vite + the chosen framework + deps) and switches the session to the web gate.
@@ -366,6 +421,34 @@ export const PACKAGE_DOCS_TOOL = {
         },
       },
       required: ["package"],
+    },
+  },
+};
+
+/** Programmatic Tool Calling: the model writes ONE TypeScript program that calls
+ *  tools through generated stubs, collapsing a multi-step tool chain into a single
+ *  turn. Opt-in (TSFORGE_SCRIPT) and withheld in plan mode (it can write). */
+export const SCRIPT_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.script,
+    description:
+      "Run ONE TypeScript program that calls tools via stubs imported from `./tsforge-tools`, instead of many separate tool turns. Best for repetitive multi-step work — read/scan many files, fetch+compare several packages, transform-then-write across files. Each stub (e.g. `read`, `run`, `web_search`, `edit`, `create`) is async and returns the tool's text result; only your script's stdout (use console.log) comes back to you. File changes MUST go through the `edit`/`create` stubs (not direct fs writes) so they pass the scope + type/lint gate. Bounded by a wall-clock timeout and a tool-call cap.",
+    parameters: {
+      type: "object",
+      properties: {
+        code: {
+          type: "string",
+          description:
+            "the TypeScript program; `import { read, run, web_search, edit, create } from './tsforge-tools'` and console.log what you want returned",
+        },
+        timeoutMs: {
+          type: "number",
+          description:
+            "optional wall-clock budget in ms (default 60000, max 300000)",
+        },
+      },
+      required: ["code"],
     },
   },
 };

@@ -8,6 +8,7 @@ afterEach(() => {
   delete process.env.TSFORGE_NO_LSP_TOOLS;
   delete process.env.TSFORGE_WEB;
   delete process.env.TSFORGE_NO_GIT_TOOL;
+  delete process.env.TSFORGE_NO_SCRIPT;
 });
 
 test("scratch (no existing code) gets only the base tools — no LSP nav set", () => {
@@ -21,6 +22,7 @@ test("scratch (no existing code) gets only the base tools — no LSP nav set", (
     "edit_lines",
     "read",
     "run",
+    "script",
   ]);
 });
 
@@ -51,6 +53,7 @@ test("TSFORGE_NO_LSP_TOOLS=1 forces base-only — but git_context survives", () 
     "git_context",
     "read",
     "run",
+    "script",
   ]);
 });
 
@@ -91,4 +94,16 @@ test("web tools are available on scratch tasks too when enabled", () => {
   expect(n).toContain("web_browse");
   expect(n).toContain("package_info");
   expect(n).toContain("package_docs");
+});
+
+test("the script tool is on by default for scratch and existing code", () => {
+  expect(names(toolsFor(true))).toContain("script");
+  expect(names(toolsFor(false))).toContain("script");
+});
+
+test("TSFORGE_NO_SCRIPT=1 withholds the script tool (kill switch)", () => {
+  process.env.TSFORGE_NO_SCRIPT = "1";
+
+  expect(names(toolsFor(true))).not.toContain("script");
+  expect(names(toolsFor(false))).not.toContain("script");
 });

@@ -56,6 +56,24 @@ export function buildWebResearchGuidance(): string {
   ].join("\n");
 }
 
+export function buildScriptToolGuidance(): string {
+  return [
+    "SCRIPT — one program for work where you must READ each file to compute its change:",
+    "  • Reach for `script` ONLY when the change to many (≈5+) files DEPENDS on first",
+    "    reading each file — e.g. update a call in every file using a value declared in",
+    "    that same file. Normally that's a read turn THEN an edit turn (the contents",
+    "    flood your context); a script does read→edit per file in ONE loop, one turn,",
+    "    and only its `console.log` returns.",
+    "  • `import { read, edit, create, run } from './tsforge-tools'` — each stub is",
+    "    async and returns the tool's text result. Log a short summary, not the files.",
+    "  • Edits/creates MUST go through the `edit`/`create` stubs (NOT `node:fs`/",
+    "    `Bun.write`) so they still pass scope + the type/lint gate.",
+    "  • Do NOT use it when you can already act in one turn WITHOUT reading first —",
+    "    creating several files from the spec, or a single edit. Emitting those tool",
+    "    calls directly is simpler and no slower. It cannot call `script` itself.",
+  ].join("\n");
+}
+
 /** Appended to SYSTEM for from-scratch, NON-web utility builds when the simplicity
  *  flag is on. Pushes the model toward the shortest correct solution — the axis the
  *  gate is blind to (it checks correctness, never concision). Carve-outs keep it
@@ -123,6 +141,10 @@ export function buildSystemPrompt(
     blocks.push(buildWebResearchGuidance());
   }
 
+  if (flags.scriptTool()) {
+    blocks.push(buildScriptToolGuidance());
+  }
+
   // Simplicity: from-scratch, non-web only (an A/B-gated concision push).
   if (flags.simplicity() && !hasExistingCode && !webish) {
     blocks.push(buildScratchSimplicityGuidance(conventions));
@@ -161,6 +183,12 @@ export function buildChatSystem(conventions: IConventions): string {
   if (flags.webTools()) {
     lines.push(
       "Web tools are enabled: use `package_info` for latest npm metadata, `package_docs` for package APIs, `web_search` to discover current sources, `web_fetch` for static pages, and `web_browse` for JS-rendered pages. Prefer official sources; use `domains`, `recency`, and `maxResults` when searching."
+    );
+  }
+
+  if (flags.scriptTool()) {
+    lines.push(
+      "The `script` tool is enabled: for repetitive multi-step tool work (scan many files, fetch+compare several packages, transform-then-write), write ONE TypeScript program importing stubs from `./tsforge-tools` instead of many tool turns; route file changes through the `edit`/`create` stubs."
     );
   }
 

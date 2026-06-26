@@ -127,6 +127,46 @@ test("a successful in-scope create counts as one edit and re-gates", async () =>
   }
 });
 
+// Critical (PR #50 review): ONE `script` call can write MANY files via its
+// edit/create stubs. runToolCalls tracked a single `wrote.path` and overwrote it
+// per event, so every file but the LAST skipped the write-guard AND `touched`
+// (which drives change-scoped rules like test-sibling-required). All written
+// files must be recorded + counted.
+test("a script that writes several files records ALL of them in touched", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-script-"));
+
+  try {
+    const ctx: ILoopCtx = { ...ctxFor(dir, ["**/*"]), touched: new Set() };
+    const state = freshState();
+    const code = [
+      'import { create } from "./tsforge-tools";',
+      'await create({ file: "a.ts", content: "export const a = 1;\\n" });',
+      'await create({ file: "b.ts", content: "export const b = 2;\\n" });',
+      'await create({ file: "c.ts", content: "export const c = 3;\\n" });',
+      'console.log("done");',
+    ].join("\n");
+
+    const touched = await runToolCalls(
+      [{ name: TOOL_NAME.script, arguments: { code } }],
+      ctx,
+      state
+    );
+
+    expect(touched).toBe(true);
+    // All three writes counted (not just the last), and all three recorded.
+    expect(state.edits).toBe(3);
+    expect([...(ctx.touched ?? [])].sort()).toEqual(["a.ts", "b.ts", "c.ts"]);
+    expect(await Bun.file(join(dir, "a.ts")).exists()).toBe(true);
+    expect(await Bun.file(join(dir, "c.ts")).exists()).toBe(true);
+    // The per-run temp dir is cleaned up (no `.tsforge-script-*` left behind).
+    const leftovers = [...new Bun.Glob(".tsforge-script-*").scanSync(dir)];
+
+    expect(leftovers).toHaveLength(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // P2: a same-content edit (oldString === newString, or already-applied) writes
 // nothing. The handler must NOT emit an edit event for it, so it neither counts
 // toward `state.edits` nor re-gates — otherwise a no-op edit lets a green gate
@@ -453,8 +493,14 @@ const MUTATING_TOOLS = new Set<string>([
   TOOL_NAME.addDependency,
 ]);
 // run = the model's raw shell (writes are its own, not scoped harness edits);
-// yield_status = turn control, never touches the workspace.
-const SPECIAL_TOOLS = new Set<string>([TOOL_NAME.run, TOOL_NAME.yieldStatus]);
+// yield_status = turn control, never touches the workspace; script = runs a
+// program whose tool calls (incl. edit/create) re-enter executeTool and report
+// their OWN mutations, so the script call itself accounts for nothing.
+const SPECIAL_TOOLS = new Set<string>([
+  TOOL_NAME.run,
+  TOOL_NAME.yieldStatus,
+  TOOL_NAME.script,
+]);
 
 test("every registered tool is classified read-only, mutating, or special", () => {
   for (const name of Object.values(TOOL_NAME)) {

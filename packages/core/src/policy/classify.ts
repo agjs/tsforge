@@ -28,6 +28,9 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.scaffoldWeb]: "write_file",
   [TOOL_NAME.run]: "shell",
   [TOOL_NAME.addDependency]: "shell",
+  // `script` runs a program that can call other tools — classify as shell so the
+  // policy treats it like `run` (its stub calls are each re-classified on dispatch).
+  [TOOL_NAME.script]: "shell",
   [TOOL_NAME.packageInfo]: "network",
   [TOOL_NAME.packageDocs]: "network",
   [TOOL_NAME.webFetch]: "network",

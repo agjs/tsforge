@@ -12,6 +12,7 @@ import { doWebFetch } from "./web-fetch";
 import { doWebSearch } from "./web-search";
 import { doWebBrowse } from "./web-browse";
 import { doPackageInfo, doPackageDocs } from "./package-info";
+import { doScript } from "./script-tool";
 import { reject, type IToolContext } from "./tool-context";
 import {
   classifyAction,
@@ -52,6 +53,10 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.webFetch]: doWebFetch,
   [TOOL_NAME.webSearch]: doWebSearch,
   [TOOL_NAME.webBrowse]: doWebBrowse,
+  // The script's stubs RPC back into executeTool — passed as `execute` here so
+  // script-tool.ts never imports this module (no cycle), and a nested `script`
+  // call is rejected (script is not in SCRIPT_EXPOSABLE_TOOLS).
+  [TOOL_NAME.script]: (a, c) => doScript(a, c, { execute: executeTool }),
   // yield_status is intercepted by the Session BEFORE tool dispatch (it ends the
   // turn); this handler only fires if one slips through with other calls.
   [TOOL_NAME.yieldStatus]: () =>
