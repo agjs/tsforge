@@ -1,5 +1,4 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { IToolCall } from "../../inference";
@@ -262,10 +261,16 @@ export async function doScript(
 
   ctx.report({ kind: "tool", task: ctx.task, message: "↳ script" });
 
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-script-"));
-  const server = startRpcServer(ctx, deps);
+  // Inside the workspace (hidden, dot-prefixed) — NOT the system tmp dir — so the
+  // script resolves the project's `node_modules` and relative imports by walking
+  // up from here to ctx.cwd. The dot prefix keeps eslint/tsc from picking it up,
+  // and it is removed in `finally`. Server starts INSIDE the try so a throw there
+  // can't leak the dir.
+  const dir = await mkdtemp(join(ctx.cwd, ".tsforge-script-"));
+  let server: IScriptServer | undefined;
 
   try {
+    server = startRpcServer(ctx, deps);
     await writeFile(
       join(dir, "tsforge-tools.ts"),
       generateToolStubs([...SCRIPT_EXPOSABLE_TOOLS])
@@ -303,7 +308,7 @@ export async function doScript(
 
     return `script exit ${String(exitCode)} (${String(server.callCount())} tool call${server.callCount() === 1 ? "" : "s"})\n${text}`;
   } finally {
-    server.stop();
+    server?.stop();
     await rm(dir, { recursive: true, force: true });
   }
 }

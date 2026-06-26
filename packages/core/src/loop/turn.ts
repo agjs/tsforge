@@ -109,10 +109,9 @@ function gitTools(hasExistingCode: boolean): AdvertisedTool[] {
   return hasExistingCode && !flags.noGitTool() ? [GIT_CONTEXT_TOOL] : [];
 }
 
-/** Programmatic Tool Calling — advertised only under TSFORGE_SCRIPT. Available on
- *  both scratch and existing-code runs (like web tools); the plan-mode path never
- *  calls toolsFor with it because the dispatch guard already rejects a mutating
- *  tool, so a script can't write while planning. */
+/** Programmatic Tool Calling — ON by default (withheld under TSFORGE_NO_SCRIPT).
+ *  Available on both scratch and existing-code runs; the plan-mode path rejects it
+ *  at dispatch (it's a mutating tool), so a script can't write while planning. */
 function scriptTools(): AdvertisedTool[] {
   return flags.scriptTool() ? [SCRIPT_TOOL] : [];
 }
@@ -309,8 +308,12 @@ export async function runToolCalls(
     // paths resolved). Scope-checking the raw tool arg here instead would miss a
     // write the handler normalized into scope, skipping the gate. The event fires
     // only on a successful write, so failures/rejects never count. See P1/P2.
-    // (Object ref, not a captured `let`: CFA de-narrows a property after a call.)
-    const wrote = { value: false, path: "" };
+    // EVERY in-scope file written during this tool call — a Set, not a single
+    // path, because ONE call can write MANY files: the `script` tool runs a
+    // program whose edit/create stubs each report a write through this same
+    // callback. Tracking only the last path would skip the write-guard + touched
+    // (and thus change-scoped rules like test-sibling-required) for the rest.
+    const wrote = new Set<string>();
     // Files mutated by a tool the model did NOT hand-write (semantic ops,
     // scaffolds). These re-gate and join the change scope but skip the write-guard.
     const mutated: string[] = [];
@@ -321,8 +324,7 @@ export async function runToolCalls(
         event.file !== undefined &&
         isInScope(event.file, ctx.task.files)
       ) {
-        wrote.value = true;
-        wrote.path = event.file;
+        wrote.add(event.file);
       }
 
       if (event.mutated !== undefined) {
@@ -340,13 +342,18 @@ export async function runToolCalls(
 
     let feedback = "";
 
-    if (wrote.value) {
+    if (wrote.size > 0) {
       touchedEditable = true;
-      state.edits += 1;
-      // Record what the agent wrote so change-scoped gate rules (test-sibling-
-      // required) know which files to enforce on, then write-guard just this file.
-      recordTouched(ctx, [wrote.path]);
-      feedback = await runWriteGuard(ctx, wrote.path);
+      state.edits += wrote.size;
+      const written = [...wrote];
+
+      // Record EVERY file written so change-scoped gate rules (test-sibling-
+      // required) enforce on all of them, then write-guard each.
+      recordTouched(ctx, written);
+
+      for (const path of written) {
+        feedback += await runWriteGuard(ctx, path);
+      }
     }
 
     // A tool that mutated files without the model hand-writing them (a successful

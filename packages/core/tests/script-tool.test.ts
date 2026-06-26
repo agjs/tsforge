@@ -1,5 +1,6 @@
-import { test, expect } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { test, expect, afterAll } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +13,15 @@ import { READ_ONLY_TOOL_NAMES, SCRIPT_EXPOSABLE_TOOLS } from "../src/agent";
 import type { IToolContext } from "../src/loop/tools/tool-context";
 import type { ILoopEvent } from "../src/loop/loop.types";
 
+// The script tool creates its temp dir inside ctx.cwd (so workspace module
+// resolution works) — point the default cwd at an isolated temp dir, never the
+// repo, so no `.tsforge-script-*` artifacts land here.
+const TMP_CWD = mkdtempSync(join(tmpdir(), "tsforge-script-cwd-"));
+
+afterAll(async () => {
+  await rm(TMP_CWD, { recursive: true, force: true });
+});
+
 interface ICtxOpts {
   cwd?: string;
   files?: string[];
@@ -20,7 +30,7 @@ interface ICtxOpts {
 
 function makeCtx(opts: ICtxOpts, events: ILoopEvent[]): IToolContext {
   return {
-    cwd: opts.cwd ?? ".",
+    cwd: opts.cwd ?? TMP_CWD,
     files: opts.files ?? [],
     task: "t",
     report: (e) => events.push(e),
@@ -98,6 +108,37 @@ test("a script collapses N tool calls into ONE turn and returns only stdout", as
   expect(out).toContain("GOT R:read R:read");
   // Each stub call is surfaced on the ledger for observability.
   expect(events.filter((e) => e.message === "↳ script:read")).toHaveLength(2);
+});
+
+test("a script resolves the workspace's node_modules (temp dir lives in cwd)", async () => {
+  // The temp dir is created INSIDE ctx.cwd so module resolution walks up to the
+  // project's node_modules — a script can import a workspace dep, not just stubs.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-script-nm-"));
+
+  try {
+    await mkdir(join(dir, "node_modules", "leftpad"), { recursive: true });
+    await writeFile(
+      join(dir, "node_modules", "leftpad", "package.json"),
+      JSON.stringify({ name: "leftpad", version: "1.0.0", main: "index.js" })
+    );
+    await writeFile(
+      join(dir, "node_modules", "leftpad", "index.js"),
+      'module.exports = { tag: () => "LEFTPAD_OK" };\n'
+    );
+
+    const events: ILoopEvent[] = [];
+    const code = ['import { tag } from "leftpad";', "console.log(tag());"].join(
+      "\n"
+    );
+
+    const out = await doScript({ code }, makeCtx({ cwd: dir }, events), {
+      execute: executeTool,
+    });
+
+    expect(out).toContain("LEFTPAD_OK");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("an in-scope create through the stub lands through executeTool + reports", async () => {
