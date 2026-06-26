@@ -32,6 +32,9 @@ import {
   LSP_TOOLS,
   WEB_FETCH_TOOL,
   WEB_SEARCH_TOOL,
+  WEB_BROWSE_TOOL,
+  PACKAGE_INFO_TOOL,
+  PACKAGE_DOCS_TOOL,
   GIT_CONTEXT_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
@@ -77,13 +80,24 @@ type AdvertisedTool =
   | (typeof LSP_TOOLS)[number]
   | typeof WEB_FETCH_TOOL
   | typeof WEB_SEARCH_TOOL
+  | typeof WEB_BROWSE_TOOL
+  | typeof PACKAGE_INFO_TOOL
+  | typeof PACKAGE_DOCS_TOOL
   | typeof GIT_CONTEXT_TOOL;
 
 /** Free, local web tools (fetch + search) — advertised only under TSFORGE_WEB so
  *  eval sweeps stay deterministic and offline by default. Available on both
  *  scratch and existing-code runs when enabled (unlike the LSP nav set). */
 function webTools(): AdvertisedTool[] {
-  return flags.webTools() ? [WEB_FETCH_TOOL, WEB_SEARCH_TOOL] : [];
+  return flags.webTools()
+    ? [
+        WEB_FETCH_TOOL,
+        WEB_SEARCH_TOOL,
+        WEB_BROWSE_TOOL,
+        PACKAGE_INFO_TOOL,
+        PACKAGE_DOCS_TOOL,
+      ]
+    : [];
 }
 
 /** Read-only git introspection — existing-code runs only (greenfield has no

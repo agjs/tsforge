@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, afterEach } from "bun:test";
 import {
   buildChatSystem,
   buildSystemPrompt,
@@ -9,6 +9,10 @@ import { resolveConventions } from "../src/infer-rules/conventions";
 const bare = resolveConventions({ interfaces: "bare-pascal-case" });
 const iprefix = resolveConventions({ interfaces: "i-prefix" });
 const off = resolveConventions({ interfaces: "off" });
+
+afterEach(() => {
+  delete process.env.TSFORGE_WEB;
+});
 
 describe("system prompt reflects interface convention", () => {
   test("i-prefix tells the model to use the I prefix", () => {
@@ -46,6 +50,28 @@ describe("chat prompt reflects interface convention", () => {
   test("bare-pascal-case removes I-prefix from the chat prompt", () => {
     expect(buildChatSystem(bare)).toContain("PascalCase with NO `I` prefix");
     expect(buildChatSystem(bare)).not.toContain("`I`-prefixed interfaces");
+  });
+});
+
+describe("web research guidance", () => {
+  test("web guidance is absent unless TSFORGE_WEB is enabled", () => {
+    expect(buildSystemPrompt(false, undefined, iprefix)).not.toContain(
+      "WEB RESEARCH"
+    );
+    expect(buildChatSystem(iprefix)).not.toContain("Web tools are enabled");
+  });
+
+  test("web guidance names the browsing tools and freshness controls", () => {
+    process.env.TSFORGE_WEB = "1";
+
+    const system = buildSystemPrompt(false, undefined, iprefix);
+    const chat = buildChatSystem(iprefix);
+
+    expect(system).toContain("WEB RESEARCH");
+    expect(system).toContain("web_search");
+    expect(system).toContain("recency");
+    expect(chat).toContain("web_fetch");
+    expect(chat).toContain("maxResults");
   });
 });
 

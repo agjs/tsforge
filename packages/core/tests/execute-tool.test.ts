@@ -623,6 +623,33 @@ test("web_search dispatches to its handler (empty query rejected, no network)", 
   expect(r).not.toContain("plan mode");
 });
 
+test("package and browser research tools are permitted in plan mode", async () => {
+  const ctx = {
+    cwd: ".",
+    files: [],
+    task: "t",
+    report: () => undefined,
+    readOnly: true,
+  };
+  const info = await executeTool(
+    { name: "package_info", arguments: { package: "../x" } },
+    ctx
+  );
+  const docs = await executeTool(
+    { name: "package_docs", arguments: { package: "../x" } },
+    ctx
+  );
+  const browse = await executeTool(
+    { name: "web_browse", arguments: { url: "file:///etc/passwd" } },
+    ctx
+  );
+
+  expect(info).toContain("package_info");
+  expect(docs).toContain("package_docs");
+  expect(browse).toContain("web_browse");
+  expect(`${info}\n${docs}\n${browse}`).not.toContain("plan mode");
+});
+
 test("edit not-found on a file the model AUTHORED offers the create-rewrite escape hatch", async () => {
   // F24: the model painted its own service file into a corner (stale anchors +
   // too-large edits) and thrashed ~20 turns because the not-found message said
