@@ -217,4 +217,119 @@ describe("EditorController", () => {
     // Buffer should be reset after submit
     expect(handle.getBuffer().getText()).toBe("");
   });
+
+  test("Ctrl-C (\\x03) invokes onInterrupt callback", () => {
+    const { stdin, handle } = makeHarness();
+    let interruptCount = 0;
+
+    handle.onInterrupt(() => {
+      interruptCount += 1;
+    });
+
+    stdin.feed("test");
+    stdin.feed("\x03"); // Ctrl-C
+    expect(interruptCount).toBe(1);
+  });
+
+  test("Ctrl-D (\\x04) on empty buffer invokes onExit callback", () => {
+    const { stdin, handle } = makeHarness();
+    let exitCount = 0;
+
+    handle.onExit(() => {
+      exitCount += 1;
+    });
+
+    // Buffer is empty, so Ctrl-D should exit
+    stdin.feed("\x04");
+    expect(exitCount).toBe(1);
+  });
+
+  test("Ctrl-D (\\x04) with text in buffer does NOT invoke onExit", () => {
+    const { stdin, handle } = makeHarness();
+    let exitCount = 0;
+
+    handle.onExit(() => {
+      exitCount += 1;
+    });
+
+    stdin.feed("hello");
+    stdin.feed("\x04"); // Ctrl-D with text in buffer
+    expect(exitCount).toBe(0); // Should NOT exit
+    // With text present, Ctrl-D is treated as a normal character (inserted as 'd')
+    // per the controller's logic (only exits on empty buffer)
+    expect(handle.getBuffer().getText()).toContain("hello");
+  });
+
+  test("Up arrow on first line recalls previous submitted message into buffer", () => {
+    const { stdin, handle, submits } = makeHarness();
+
+    // Submit a message
+    stdin.feed("first message");
+    stdin.feed("\r");
+    expect(submits).toEqual(["first message"]);
+    expect(handle.getBuffer().getText()).toBe("");
+
+    // Type a draft
+    stdin.feed("draft");
+    expect(handle.getBuffer().getText()).toBe("draft");
+
+    // Up arrow on first line (cursor is at end of line, move to line 0, then up)
+    // Since buffer is single-line, up arrow at line 0 should navigate history
+    stdin.feed("\x1b[A"); // Up arrow
+    expect(handle.getBuffer().getText()).toBe("first message");
+  });
+
+  test("Down arrow after Up returns to the draft", () => {
+    const { stdin, handle, submits } = makeHarness();
+
+    // Submit a message
+    stdin.feed("first message");
+    stdin.feed("\r");
+    expect(submits).toEqual(["first message"]);
+    expect(handle.getBuffer().getText()).toBe("");
+
+    // Type a draft
+    stdin.feed("draft");
+    expect(handle.getBuffer().getText()).toBe("draft");
+
+    // Up arrow to recall history
+    stdin.feed("\x1b[A");
+    expect(handle.getBuffer().getText()).toBe("first message");
+
+    // Down arrow to return to draft
+    stdin.feed("\x1b[B");
+    expect(handle.getBuffer().getText()).toBe("draft");
+  });
+
+  test("Multiple submits create history; Up navigates backward through it", () => {
+    const { stdin, handle } = makeHarness();
+
+    // Submit first message
+    stdin.feed("msg one");
+    stdin.feed("\r");
+    expect(handle.getBuffer().getText()).toBe("");
+
+    // Submit second message
+    stdin.feed("msg two");
+    stdin.feed("\r");
+    expect(handle.getBuffer().getText()).toBe("");
+
+    // Type a draft
+    stdin.feed("draft");
+
+    // Up twice: draft → msg two → msg one
+    stdin.feed("\x1b[A"); // msg two
+    expect(handle.getBuffer().getText()).toBe("msg two");
+
+    stdin.feed("\x1b[A"); // msg one
+    expect(handle.getBuffer().getText()).toBe("msg one");
+
+    // Down once: msg one → msg two
+    stdin.feed("\x1b[B");
+    expect(handle.getBuffer().getText()).toBe("msg two");
+
+    // Down again: msg two → draft
+    stdin.feed("\x1b[B");
+    expect(handle.getBuffer().getText()).toBe("draft");
+  });
 });

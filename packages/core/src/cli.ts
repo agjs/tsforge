@@ -767,14 +767,26 @@ function maybePrintNoConfigHint(
   }
 }
 
-/** Interactive REPL: a persistent gate-anchored conversation. */
-async function repl(args: ICliArgs): Promise<number> {
-  // The active model comes from the registry (~/.tsforge/models.json) unless a
-  // recipe names one or an explicit TSFORGE_* env overrides it; `/model <name>`
-  // switches it live.
+/** Initialize the REPL session: resolve model, gate, context window, and create
+ *  the session object. Returns the session, provider, and config metadata.
+ *  Extracted to reduce repl() cognitive complexity. */
+async function initReplSession(args: ICliArgs): Promise<{
+  session: Session;
+  provider: OpenAICompatibleProvider;
+  activeName: string;
+  contextWindow: number;
+  id: string;
+  gateLabel: string;
+  logFile: string;
+  persist: () => Promise<void>;
+  report: Reporter;
+  resumed: ISessionRecord | null;
+  files: string[];
+  activeModelEntry: IModelEntry;
+}> {
   const activeModel = await modelForRun(args);
   const provider = makeProvider(activeModel.entry);
-  let activeName = activeModel.name;
+  const activeName = activeModel.name;
 
   warnDefaultModelOnRemote(activeModel.entry);
 
@@ -822,10 +834,7 @@ async function repl(args: ICliArgs): Promise<number> {
   // The model's real context window: explicit env wins, else ask the server
   // (max_model_len), else a conservative fallback. Drives the status gauge AND
   // auto-compaction (the session compacts before a send once it nears the window).
-  // `let` so `/model` can refresh the gauge when switching to a model with a
-  // different window. Per-entry contextWindow wins, then explicit env, then the
-  // server's max_model_len, then a conservative fallback.
-  let contextWindow =
+  const contextWindow =
     activeModel.entry.contextWindow ??
     envNumber("TSFORGE_CONTEXT_WINDOW") ??
     (await detectContextWindow(provider.config)) ??
@@ -869,7 +878,7 @@ async function repl(args: ICliArgs): Promise<number> {
     enableThinking: false,
   };
 
-  let session = await Session.create(config);
+  const session = await Session.create(config);
 
   // A self-describing run-meta line at the top of the --log so the analyzer knows
   // which model / context window the metrics are against (the thread's advice:
@@ -881,6 +890,56 @@ async function repl(args: ICliArgs): Promise<number> {
     model: modelInfo(provider.config).model,
     contextWindow,
   });
+
+  const persist = async (): Promise<void> => {
+    await saveSession({
+      id,
+      cwd: args.dir,
+      // The LIVE gate/scope — not the startup constants. /gate, /files, and a web
+      // scaffold all mutate these mid-session; persisting the originals would
+      // silently restore stale settings on --continue. See P2 review.
+      accept: session.gate,
+      files: session.scope,
+      updatedAt: Date.now(),
+      planMode: false, // will be set by caller
+      messages: [...session.messages],
+    });
+  };
+
+  return {
+    session,
+    provider,
+    activeName,
+    contextWindow,
+    id,
+    gateLabel,
+    logFile,
+    persist,
+    report,
+    resumed,
+    files,
+    activeModelEntry: activeModel.entry,
+  };
+}
+
+/** Interactive REPL: a persistent gate-anchored conversation. */
+async function repl(args: ICliArgs): Promise<number> {
+  const {
+    session: initialSession,
+    provider,
+    activeName: initialActiveName,
+    contextWindow: initialContextWindow,
+    id,
+    gateLabel,
+    logFile,
+    resumed,
+    files,
+    activeModelEntry,
+  } = await initReplSession(args);
+
+  let session = initialSession;
+  let activeName = initialActiveName;
+  let contextWindow = initialContextWindow;
 
   const persist = async (): Promise<void> => {
     await saveSession({
@@ -1208,7 +1267,17 @@ async function repl(args: ICliArgs): Promise<number> {
         process.stdout.write(`${HELP}\n`);
         break;
       case "clear":
-        session = await Session.create(config);
+        // Rebuild the session with the current state (config is not reused;
+        // repl's /clear creates a fresh Session.create call)
+        session = await Session.create({
+          provider,
+          cwd: args.dir,
+          files: session.scope,
+          accept: session.gate,
+          contextWindow,
+          report: makeReporter(logFile, id, id),
+          enableThinking: false,
+        });
         session.setSetupWeb(setupWeb);
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
         planDiscussed = false;
@@ -1305,7 +1374,7 @@ async function repl(args: ICliArgs): Promise<number> {
           arg,
           provider,
           activeName,
-          fallbackEntry: activeModel.entry,
+          fallbackEntry: activeModelEntry,
           contextWindow,
         });
 
