@@ -48,6 +48,16 @@ export const LOOP_LIMITS = {
    */
   samePersist: 5,
   /**
+   * Net-progress guard: give up when the gate's TOTAL error count hasn't reached a
+   * new low in this many consecutive cycles — the model is churning without getting
+   * closer to green (errors shuffle, so `gateStuckRepeats` keeps resetting, and no
+   * single error survives `samePersist`). This — convergence, not a turn count — is
+   * what bounds a run: a big app may take any number of turns, but it must keep
+   * REDUCING errors. Generous enough to absorb a feature-add spike (write files →
+   * errors rise → fixed below the prior best resets it).
+   */
+  noProgressCycles: 12,
+  /**
    * Above this many chars of combined file content, the seed prompt sends a
    * navigable project MAP instead of full dumps. Below it, full dumps.
    */
@@ -60,11 +70,13 @@ export const LOOP_LIMITS = {
    *  pull the agent out the moment it stops converging, so this is set high enough
    *  that normal long, productive back-and-forth never trips it. */
   interactiveBackstopTurns: 250,
-  /** Turn budget for a from-scratch WEB build (heavy gate, many files): used by
-   *  headless web builds AND applied when an interactive session scaffolds via
-   *  `scaffold_web` — measured: a todo app was still WRITING components when it
-   *  hit the default 40 cap, before the gate ever ran. */
-  webMaxTurns: 180,
+  /** Web build RUNAWAY CEILING — NOT a completion budget. No fixed turn count fits
+   *  every app (size/complexity vary), so the real stop is the net-progress guard
+   *  (`noProgressCycles`) + `samePersist`/`gateStuckRepeats`: a build runs as long as
+   *  it keeps REDUCING errors, however many turns that takes. This is only a final
+   *  cost/infinite-loop safety for a pathological build that "progresses" forever
+   *  without finishing — set far above any real converging build. */
+  webMaxTurns: 400,
   /**
    * How many times a build turn may dump file contents as a chat message (instead
    * of calling `create`) before the session gives up. Each time we nudge it to use

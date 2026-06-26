@@ -136,9 +136,9 @@ async function main(): Promise<number> {
     const files = await scaffoldWeb(dir, fw);
     const depsInstalled = await installWebDeps(dir, options);
 
-    session.setGate(buildWebGate(fw).command);
+    session.setGate(buildWebGate(fw, undefined, dir).command);
     session.setFix(buildWebFix(fw));
-    session.setIncrementalCheck(buildWebTscCheck());
+    session.setIncrementalCheck(buildWebTscCheck(dir));
     await session.refreshTsService();
     session.setLintFile(makeFileLinter(fw, dir, WEB_PACKS));
     session.guide(webGuidance(fw));

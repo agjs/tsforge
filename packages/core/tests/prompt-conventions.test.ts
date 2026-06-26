@@ -85,3 +85,12 @@ describe("TDD guidance reflects test layout", () => {
     ).toContain("mirrored `tests/` file");
   });
 });
+
+describe("build prompt steers away from branded IDs (F22/F26 — always-on prevention)", () => {
+  test("the strict-rules line says use a plain alias for IDs, not branded types", () => {
+    const p = buildSystemPrompt(false, undefined, iprefix);
+
+    expect(p).toContain("branded");
+    expect(p).toContain("type UserId = string");
+  });
+});

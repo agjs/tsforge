@@ -81,6 +81,8 @@ function freshState(): ILoopState {
   return {
     prevGateErrors: [],
     gateNoProgress: 0,
+    bestErrorCount: Number.POSITIVE_INFINITY,
+    noNewLow: 0,
     errorAge: new Map(),
     lastGateCount: -1,
     edits: 0,

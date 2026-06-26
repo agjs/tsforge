@@ -165,6 +165,11 @@ export interface IHashlineResult {
   changed?: boolean;
   reason?: string; // error reason
   suggestions?: string[]; // actionable feedback
+  /** On a successful changed edit: the file content BEFORE the edit and the new
+   *  content written — so a caller can validate the result (e.g. a syntax-
+   *  regression guard) and revert by re-writing `previousContent` if needed. */
+  previousContent?: string;
+  newContent?: string;
 }
 
 const HL_PAYLOAD_PREFIX = "+";
@@ -374,7 +379,14 @@ async function commitHashline(
     store.record(file, text);
   }
 
-  return { ok: true, file, newHash: computeFileHash(text), changed };
+  return {
+    ok: true,
+    file,
+    newHash: computeFileHash(text),
+    changed,
+    previousContent: liveContent,
+    newContent: text,
+  };
 }
 
 export async function applyHashlineEdit(

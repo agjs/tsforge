@@ -36,20 +36,31 @@ export function bootConfig(
   };
 }
 
+/** A minimal fetch shape — just the status — so the poller can be driven with a
+ *  fake in tests without touching the network. */
+type IFetchLike = (
+  url: string,
+  init: { signal: AbortSignal }
+) => Promise<{ status: number }>;
+
 /** Poll `url` until it answers with status < 500, or the deadline passes.
- *  Returns the status code on success, or null on timeout. */
+ *  Returns the status code on success, or null on timeout. `now`/`sleep`/`fetchFn`
+ *  are injectable so the timeout path is unit-testable with a fake clock AND a
+ *  fake fetch — otherwise a real `fetch` to a dead URL can hang up to its abort
+ *  timeout per poll (flaky when the host drops rather than refuses the connection). */
 export async function pollUntilReady(
   url: string,
   timeoutMs: number,
   now: () => number = () => performance.now(),
   sleep: (ms: number) => Promise<void> = (ms) =>
-    new Promise((r) => setTimeout(r, ms))
+    new Promise((r) => setTimeout(r, ms)),
+  fetchFn: IFetchLike = fetch
 ): Promise<number | null> {
   const deadline = now() + timeoutMs;
 
   while (now() < deadline) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+      const res = await fetchFn(url, { signal: AbortSignal.timeout(2000) });
 
       if (res.status < 500) {
         return res.status;

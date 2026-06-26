@@ -92,7 +92,12 @@ export default defineConfig({
     tanstackRouter({ target: "react", autoCodeSplitting: true }),
     react(),
     tailwindcss(),
-    tsconfigPaths(),
+    // ignoreConfigErrors: an eval build runs nested under the harness repo, so
+    // vite-tsconfig-paths walks UP the tree and can hit a foreign/broken tsconfig
+    // (e.g. a stray test123/tsconfig.json) — without this it spews a parse error
+    // into the gate output that the model misreads as its own. The app's own
+    // tsconfig still resolves normally.
+    tsconfigPaths({ ignoreConfigErrors: true }),
   ],
 });
 `;
@@ -104,6 +109,7 @@ const REACT_TSCONFIG = `{
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    "types": [],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -630,6 +636,7 @@ const VANILLA_TSCONFIG = `{
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,

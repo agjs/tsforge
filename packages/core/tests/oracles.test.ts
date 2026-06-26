@@ -74,15 +74,29 @@ describe("boot oracle", () => {
       return Promise.resolve();
     };
 
-    // Port 1 is privileged/unused — fetch fails fast every poll.
+    // Inject a fetch that always rejects (endpoint down) — deterministic and with
+    // NO real network, so the timeout path is exercised on the fake clock alone.
+    // (A real fetch to a dead URL can hang up to its 2s abort per poll when the
+    // host drops the connection, which blew the test's time budget.)
+    let polls = 0;
+
+    const fetchFn = (): Promise<{ status: number }> => {
+      polls += 1;
+
+      return Promise.reject(new Error("ECONNREFUSED"));
+    };
+
     const status = await pollUntilReady(
       "http://localhost:1/",
       1000,
       now,
-      sleep
+      sleep,
+      fetchFn
     );
 
     expect(status).toBeNull();
+    // 1000ms budget / 250ms sleep ⇒ 4 polls, none answering.
+    expect(polls).toBe(4);
   });
 });
 

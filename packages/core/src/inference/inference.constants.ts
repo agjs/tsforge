@@ -13,6 +13,15 @@ export const PROVIDER_LIMITS = {
   requestTimeoutMs: 600_000,
   /** Linear backoff base per retry attempt (ms): attempt N waits N * this. */
   retryBackoffMs: 400,
+  /** Total budget (ms) to keep retrying TRANSIENT CONNECTION failures before
+   *  giving up — covers a quick blip. The default ≈ the previous fixed 4-attempt
+   *  window (interactive stays snappy on a truly dead server); a long unattended
+   *  run (headless/eval) overrides it via `connectRetryMs` so a build survives a
+   *  model-server RESTART instead of discarding all progress. */
+  connectRetryMs: 2_400,
+  /** Cap per-retry backoff (ms) so a LONG connectRetryMs budget waits in modest
+   *  steps (polling for the server to come back) rather than one huge sleep. */
+  connectRetryMaxBackoffMs: 5_000,
   /**
    * Recommended vLLM repetition penalty IF you opt in via
    * TSFORGE_REPETITION_PENALTY. OFF by default: applied globally it also

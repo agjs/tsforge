@@ -4,6 +4,7 @@ import {
   classifyAction,
   isDestructiveShell,
   isPrivateKeyPath,
+  commandReadsPrivateKey,
   pipesToShell,
   type ActionKind,
   type IPolicyContext,
@@ -211,6 +212,35 @@ describe("private-key path detection", () => {
     expect(isPrivateKeyPath("home/id_ed25519")).toBe(true);
     expect(isPrivateKeyPath(".env")).toBe(false);
     expect(isPrivateKeyPath("src/index.ts")).toBe(false);
+  });
+});
+
+describe("commandReadsPrivateKey", () => {
+  test("catches a key path used as a command argument", () => {
+    expect(commandReadsPrivateKey("cat ~/.ssh/id_rsa")).toBe(true);
+    expect(commandReadsPrivateKey("base64 deploy/server.key")).toBe(true);
+    expect(commandReadsPrivateKey("cp certs/app.pem /tmp")).toBe(true);
+  });
+
+  test("does NOT flag a heredoc BODY containing code like `row.key` (was a false deny)", () => {
+    const heredoc =
+      "cat > src/views/Accounts/index.tsx << 'ENDOFFILE'\n" +
+      "const k = row.key;\nconst s = sortConfig.key;\nENDOFFILE";
+
+    expect(commandReadsPrivateKey(heredoc)).toBe(false);
+  });
+
+  test("still catches a real key path on the heredoc COMMAND line", () => {
+    // The body is ignored, but a key path as an argument/redirect is not.
+    expect(commandReadsPrivateKey("cat deploy.pem << EOF\nbody\nEOF")).toBe(
+      true
+    );
+  });
+
+  test("does not tear a key word out of a quoted commit message", () => {
+    expect(commandReadsPrivateKey('git commit -m "fix id_rsa parsing"')).toBe(
+      false
+    );
   });
 });
 

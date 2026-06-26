@@ -688,5 +688,10 @@
     "what": "Disallow type assertions immediately after parsing untrusted boundary input.",
     "bad": "",
     "good": ""
+  },
+  "tsforge/no-self-import": {
+    "what": "Disallow a module importing or re-exporting from itself (a circular self-reference whose binding doesn't exist).",
+    "bad": "",
+    "good": ""
   }
 }

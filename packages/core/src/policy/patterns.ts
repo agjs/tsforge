@@ -183,6 +183,37 @@ export function isPrivateKeyPath(path: string): boolean {
   return PRIVATE_KEY_PATTERNS.some((re) => re.test(path));
 }
 
+/** Remove heredoc BODIES (`<<['"]?DELIM … DELIM`) from a command, keeping the
+ *  command line itself (with its redirects + the `<< DELIM` operator). So a key
+ *  path used as a real argument or redirect target on the command line is still
+ *  seen, while the embedded document content is not scanned. Handles `<<`, `<<-`,
+ *  `<<~`, and quoted/unquoted delimiters; an unterminated heredoc drops to EOF. */
+function stripHeredocBodies(command: string): string {
+  const lines = command.split("\n");
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+
+    out.push(line);
+
+    const m = /<<[-~]?\s*["']?([A-Za-z_]\w*)["']?/u.exec(line);
+
+    if (m) {
+      const delim = m[1];
+
+      i += 1;
+
+      while (i < lines.length && (lines[i] ?? "").trim() !== delim) {
+        i += 1;
+      }
+      // Skip the closing delimiter line too (loop's i++ advances past it).
+    }
+  }
+
+  return out.join("\n");
+}
+
 /** True when a shell command references private-key material as one of its tokens
  *  (`cat ~/.ssh/id_rsa`, `cp deploy.pem /tmp`, `base64 server.key`). The `read`
  *  tool denies these in EVERY mode; the `run` tool must not be a side door around
@@ -191,12 +222,19 @@ export function isPrivateKeyPath(path: string): boolean {
  *  commands (`git commit`, `bun test`) stay allowed. Tokens are split on shell
  *  metacharacters and unquoted so `"~/.ssh/id_rsa"` is still seen. */
 export function commandReadsPrivateKey(command: string): boolean {
+  // Strip heredoc BODIES first: `cat > x.tsx << 'EOF' … EOF` embeds FILE CONTENT
+  // (data being written), not key-path arguments. Scanning it tripped the guard on
+  // ordinary code — a `.tsx` body with `row.key`/`sortConfig.key` matched `/\.key$/`
+  // and was wrongly denied as "private-key file access". The guard targets key
+  // paths as command ARGUMENTS (`cat ~/.ssh/id_rsa`), which live on the command
+  // line, not in a heredoc body — so the body is irrelevant here.
+  const scanned = stripHeredocBodies(command);
   // Tokenize so a QUOTED string stays ONE token (then gets unquoted), rather than
   // splitting on the spaces inside it — otherwise a key word inside a quoted
   // commit message / grep pattern (`git commit -m "fix id_rsa"`) would be torn
   // into a bare `id_rsa` token and falsely tripped. Only a token that, whole and
   // unquoted, IS a key path trips the guard.
-  const tokens = command.match(/"[^"]*"|'[^']*'|[^\s;&|<>()`"']+/gu) ?? [];
+  const tokens = scanned.match(/"[^"]*"|'[^']*'|[^\s;&|<>()`"']+/gu) ?? [];
 
   return tokens.some((token) => {
     const path = unquote(token);

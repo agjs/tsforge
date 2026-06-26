@@ -5,8 +5,13 @@
 useDefault = true
 
 [allowlist]
-description = "Test fixtures that exercise secret redaction — not real credentials."
+description = "Test fixtures that exercise secret redaction, and the scaffold manifest (declares which secret KEYS a config requires — never their values)."
 paths = [
   '''packages/core/tests/session-store\.test\.ts''',
   '''packages/core/tests/ledger\.test\.ts''',
+  # The scaffold manifest names required-secret KEYS + cross-field gating tokens
+  # (e.g. requiresSecretsWhen: "AI_ENABLED=true") — no real credentials. The
+  # "Secret" in the field name trips the generic-api-key heuristic.
+  '''packages/core/src/scaffold/scaffold-manifest\.json''',
+  '''packages/core/tests/fixtures/scaffold/scaffold-manifest\.json''',
 ]

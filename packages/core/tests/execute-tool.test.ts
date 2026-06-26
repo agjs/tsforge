@@ -163,6 +163,146 @@ test("edit on an EXISTING file with an unmatched oldString says the file exists 
   }
 });
 
+test("create OVERWRITES a file the model authored this session (in `touched`)", async () => {
+  // The whole-file-rewrite escape hatch: a file the model created earlier (so it's
+  // in the session change-set) can be fully rewritten via `create`, instead of
+  // thrashing edit(too-large)↔create(exists) on its own seed-data file.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    await Bun.write(join(dir, "store.ts"), "export const x = 1 as any;\n");
+    const touched = new Set<string>(["store.ts"]); // model wrote it earlier
+
+    const r = await executeTool(
+      {
+        name: "create",
+        arguments: { file: "store.ts", content: "export const x = 1;\n" },
+      },
+      {
+        cwd: dir,
+        files: ["store.ts"],
+        task: "t",
+        report: () => undefined,
+        touched,
+      }
+    );
+
+    expect(r).toContain("overwrote");
+    expect(await Bun.file(join(dir, "store.ts")).text()).toBe(
+      "export const x = 1;\n"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("create does NOT overwrite a file the model did NOT author this session", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const original = "export const preexisting = true;\n";
+
+    await Bun.write(join(dir, "config.ts"), original);
+
+    const r = await executeTool(
+      {
+        name: "create",
+        arguments: { file: "config.ts", content: "export const wiped = 1;\n" },
+      },
+      // touched is empty → not authored → must be refused, file preserved.
+      {
+        cwd: dir,
+        files: ["config.ts"],
+        task: "t",
+        report: () => undefined,
+        touched: new Set<string>(),
+      }
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(await Bun.file(join(dir, "config.ts")).text()).toBe(original);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("run REJECTS a shell redirect that writes an in-scope project file", async () => {
+  // The model escapes edit-tool friction with `cat > src/foo.tsx << EOF`, which
+  // bypasses the write-guard + scope. It must be steered to create/edit instead.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const r = await executeTool(
+      {
+        name: "run",
+        arguments: {
+          command:
+            "cat > src/views/Dashboard/index.tsx << 'EOF'\nexport const x = 1;\nEOF",
+        },
+      },
+      ctx(dir, ["src/**"])
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(r).toContain("create");
+    // Nothing was written via the shell.
+    expect(
+      await Bun.file(join(dir, "src/views/Dashboard/index.tsx")).exists()
+    ).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("run REJECTS `tee -a` writing an in-scope file (flag before the path)", async () => {
+  // `tee -a src/foo.ts` — the guard must skip the `-a` option and still catch the
+  // file, or the write slips past create/edit (the guard, lint moat, and scope).
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const r = await executeTool(
+      {
+        name: "run",
+        arguments: {
+          command:
+            "echo 'export const x = 1;' | tee -a src/views/Dashboard/index.tsx",
+        },
+      },
+      ctx(dir, ["src/**"])
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(
+      await Bun.file(join(dir, "src/views/Dashboard/index.tsx")).exists()
+    ).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("run ALLOWS shell redirects to /tmp and build-log targets (not project files)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    const tmpWrite = await executeTool(
+      {
+        name: "run",
+        arguments: { command: "echo hi > /tmp/tsforge-scratch.txt" },
+      },
+      ctx(dir, ["src/**"])
+    );
+    const logRedirect = await executeTool(
+      { name: "run", arguments: { command: "echo build > /tmp/out.log 2>&1" } },
+      ctx(dir, ["src/**"])
+    );
+
+    expect(tmpWrite).not.toContain("REJECTED");
+    expect(logRedirect).not.toContain("REJECTED");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("edit on a MISSING file tells the model to use create", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
@@ -508,4 +648,40 @@ test("package and browser research tools are permitted in plan mode", async () =
   expect(docs).toContain("package_docs");
   expect(browse).toContain("web_browse");
   expect(`${info}\n${docs}\n${browse}`).not.toContain("plan mode");
+});
+
+test("edit not-found on a file the model AUTHORED offers the create-rewrite escape hatch", async () => {
+  // F24: the model painted its own service file into a corner (stale anchors +
+  // too-large edits) and thrashed ~20 turns because the not-found message said
+  // "Do NOT use create". For a file it authored this session, create-overwrite IS
+  // the clean full-rewrite path — so the message must offer it.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    await Bun.write(join(dir, "mine.ts"), "const a = 1;\n");
+
+    const r = await executeTool(
+      {
+        name: "edit",
+        arguments: {
+          file: "mine.ts",
+          oldString: "const z = 99;",
+          newString: "const z = 100;",
+        },
+      },
+      {
+        cwd: dir,
+        files: ["mine.ts"],
+        task: "t",
+        report: () => undefined,
+        touched: new Set<string>(["mine.ts"]), // authored this session
+      }
+    );
+
+    expect(r).toContain("REJECTED");
+    expect(r).toMatch(/you may also `create` it again|fully rewrite/u);
+    expect(r).not.toContain("Do NOT use `create`"); // authored → not steered away
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
