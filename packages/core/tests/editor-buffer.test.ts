@@ -119,3 +119,20 @@ test("space then word are separate undo units", () => {
   b.undo();
   expect(b.getText()).toBe("a");
 });
+
+test("a yank is a single undo unit (no wasted undo step)", () => {
+  const b = new EditorBuffer();
+
+  b.insert("x");
+  // set up the kill ring: kill some text so yank has content
+  b.setText("ab");
+  b.moveLineStart();
+  b.deleteToLineEnd(); // kills "ab" → buffer ""
+  b.insert("x"); // buffer "x"
+  b.yank(); // buffer "xab"
+  expect(b.getText()).toBe("xab");
+  b.undo(); // ONE undo reverts the whole yank
+  expect(b.getText()).toBe("x");
+  b.undo(); // next undo reverts the "x" insert — NOT a wasted no-op
+  expect(b.getText()).toBe("");
+});

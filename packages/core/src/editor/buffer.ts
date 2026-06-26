@@ -58,13 +58,10 @@ export class EditorBuffer {
     }
   }
 
-  insert(text: string): void {
-    this.clearSticky();
+  private insertRaw(text: string): void {
+    // Pure mutation: splice graphemes and advance cursor, no snapshot.
     // text has no newlines here (newline() handles those); split defensively.
     const parts = text.split("\n");
-    const kind = text.trim().length === 0 ? "insert-space" : "insert-word";
-
-    this.maybeSnapshot(kind);
 
     for (let i = 0; i < parts.length; i += 1) {
       if (i > 0) {
@@ -78,6 +75,14 @@ export class EditorBuffer {
       this.lines[this.cursorLine] = g.join("");
       this.cursorCol += graphemes(piece).length;
     }
+  }
+
+  insert(text: string): void {
+    this.clearSticky();
+    const kind = text.trim().length === 0 ? "insert-space" : "insert-word";
+
+    this.maybeSnapshot(kind);
+    this.insertRaw(text);
   }
 
   newline(): void {
@@ -348,7 +353,7 @@ export class EditorBuffer {
     const text = this.killRing.current();
     const startCol = this.cursorCol;
 
-    this.insert(text);
+    this.insertRaw(text);
     this.lastYank = { start: startCol, length: graphemes(text).length };
     this.lastWasKill = false;
   }
