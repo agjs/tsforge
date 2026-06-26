@@ -54,6 +54,8 @@ import {
 import { makeSpinner, spinnerPhase } from "./render/spinner";
 import { validate } from "./validate";
 import { isPolicyMode } from "./policy";
+import { startEditor, type IEditorHandle } from "./editor";
+import { flags } from "./config/flags";
 import {
   PROVIDER_LIMITS,
   PROVIDER_DEFAULTS,
@@ -1494,6 +1496,8 @@ async function repl(args: ICliArgs): Promise<number> {
     process.stdout.write("› ");
   };
 
+  let editorHandle: IEditorHandle | null = null;
+
   await new Promise<void>((resolveLoop) => {
     let busy = false;
     let closed = false;
@@ -1505,6 +1509,44 @@ async function repl(args: ICliArgs): Promise<number> {
       if (closed && !busy) {
         resolveLoop();
       }
+    };
+
+    // Submit a line of input: check if busy/pending, echo it, handle /exit, or run it.
+    const submitLine = (raw: string): void => {
+      const line = raw.trim();
+
+      if (line.length === 0) {
+        if (!busy) {
+          prompt();
+        }
+
+        return;
+      }
+
+      // readline's output is sinked in input-row mode, so the submitted line is
+      // never echoed to scrollback — record it ourselves so the transcript reads
+      // naturally above the (now-cleared) input row.
+      if (useInputRow) {
+        echo(`${STYLE.dim}›${RESET} ${line}\n`);
+      }
+
+      if (busy) {
+        if (line === "/exit" || line === "/quit") {
+          active?.abort();
+          rl.close();
+
+          if (editorHandle !== null) {
+            editorHandle.close();
+          }
+        } else {
+          pending.push(line);
+          echo("  ↳ queued (steers the next turn)\n");
+        }
+
+        return;
+      }
+
+      void runLine(line);
     };
 
     // Handle one idle line (slash command or a message), then any queued follow-up.
@@ -1630,7 +1672,10 @@ async function repl(args: ICliArgs): Promise<number> {
     // picker. setImmediate lets readline insert the key first, so we can inspect the
     // settled buffer (`rl.line === "/"` / shouldOpenAtPicker). The shared paletteOpen
     // guard keeps the two overlays mutually exclusive. No-op while busy.
-    if (process.stdin.isTTY) {
+    // When the editor is active, palette and picker are triggered via the editor's
+    // internal handlers (passed as openPalette/openFilePicker deps), not keypress.
+    if (process.stdin.isTTY && (!useInputRow || flags.basicInput())) {
+      // Only set up keypress detection for readline mode.
       emitKeypressEvents(process.stdin);
       process.stdin.on("keypress", (str: string | undefined) => {
         syncInput(); // keep the pinned input row in sync as the user types
@@ -1665,41 +1710,53 @@ async function repl(args: ICliArgs): Promise<number> {
     // Event-driven (not for-await) so stdin is read DURING a run: a line typed
     // mid-run is queued to steer the next turn (or, if "/exit", aborts). This is
     // what makes it feel like a real harness — you can redirect without waiting.
-    rl.on("line", (raw) => {
-      const line = raw.trim();
+    // When the editor is active, submitLine is wired via onSubmit; otherwise it's
+    // called here from readline.
+    if (useInputRow && !flags.basicInput()) {
+      // Use the multiline editor instead of readline.
+      const stdinAdapter = {
+        on: (event: string, cb: (data: string) => void) => {
+          process.stdin.on(event, cb);
+        },
+        removeListener: (event: string, cb: (data: string) => void) => {
+          process.stdin.removeListener(event, cb);
+        },
+        setRawMode: (mode: boolean) => {
+          process.stdin.setRawMode(mode);
+        },
+        resume: () => {
+          process.stdin.resume();
+        },
+      };
 
-      if (line.length === 0) {
-        if (!busy) {
-          prompt();
-        }
+      // setEncoding is optional on IStdin, so we can omit it here to avoid type
+      // conflicts with process.stdin.setEncoding's BufferEncoding parameter.
+      // The editor will work fine without it if process.stdin is in the right state.
 
-        return;
-      }
+      editorHandle = startEditor({
+        stdin: stdinAdapter,
+        out: (s: string) => {
+          statusBar.writeStream(s);
+        },
+        columns: process.stdout.columns,
+        rows: process.stdout.rows,
+        openPalette,
+        openFilePicker,
+      });
 
-      // readline's output is sinked in input-row mode, so the submitted line is
-      // never echoed to scrollback — record it ourselves so the transcript reads
-      // naturally above the (now-cleared) input row.
-      if (useInputRow) {
-        echo(`${STYLE.dim}›${RESET} ${line}\n`);
-      }
-
-      if (busy) {
-        if (line === "/exit" || line === "/quit") {
-          active?.abort();
-          rl.close();
-        } else {
-          pending.push(line);
-          echo("  ↳ queued (steers the next turn)\n");
-        }
-
-        return;
-      }
-
-      void runLine(line);
-    });
+      editorHandle.onSubmit(submitLine);
+    } else {
+      // Fall back to readline for non-TTY or when the basic flag is set.
+      rl.on("line", submitLine);
+    }
 
     rl.on("close", () => {
       closed = true;
+
+      if (editorHandle !== null) {
+        editorHandle.close();
+      }
+
       statusBar.teardown();
       maybeFinish();
     });
@@ -1713,6 +1770,16 @@ async function repl(args: ICliArgs): Promise<number> {
       prompt();
     }
   });
+
+  // Clean up the editor if it was active (it's already closed via rl.on("close")
+  // above, but this is belt-and-suspenders to ensure the terminal is fully restored).
+  const closeEditor = (handle: IEditorHandle | null): void => {
+    if (handle) {
+      handle.close();
+    }
+  };
+
+  closeEditor(editorHandle);
 
   statusBar.teardown(); // belt-and-suspenders: restore the terminal on loop exit
   interactiveStream = null; // later/headless writes go straight to stdout again

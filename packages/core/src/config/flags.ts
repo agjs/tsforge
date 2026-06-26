@@ -57,4 +57,7 @@ export const flags = {
   /** Withhold the read-only `git_context` tool on existing-code runs (default ON;
    *  set to "1" to force off, e.g. for eval sweeps or non-git workspaces). */
   noGitTool: (): boolean => isOn(ENV_FLAG.noGitTool),
+  /** Fall back to basic readline input (no multiline editor) in interactive mode.
+   *  Default OFF — the editor is on. Set to "1" to disable the editor. */
+  basicInput: (): boolean => isOn(ENV_FLAG.basicInput),
 };
