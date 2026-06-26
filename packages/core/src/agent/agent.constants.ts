@@ -23,8 +23,11 @@ export const TOOL_NAME = {
   scaffoldRoutes: "scaffold_routes",
   scaffoldWeb: "scaffold_web",
   addDependency: "add_dependency",
+  packageInfo: "package_info",
+  packageDocs: "package_docs",
   webFetch: "web_fetch",
   webSearch: "web_search",
+  webBrowse: "web_browse",
   yieldStatus: "yield_status",
 } as const;
 
@@ -41,11 +44,14 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   // git_context only inspects history/diffs — no workspace mutation — so it is a
   // plan-mode tool too (scope a review/fix while planning, before any edit).
   TOOL_NAME.gitContext,
+  TOOL_NAME.packageInfo,
+  TOOL_NAME.packageDocs,
   // Web tools are read-only (no workspace mutation), so they're usable in plan
   // mode too — research while planning. Network egress here is structured and
   // opt-in (TSFORGE_WEB), unlike the raw `run` curl path plan mode blocks.
   TOOL_NAME.webFetch,
   TOOL_NAME.webSearch,
+  TOOL_NAME.webBrowse,
 ]);
 
 /** The model's own decision to start a from-scratch WEB app: scaffolds the stack
@@ -254,13 +260,112 @@ export const WEB_SEARCH_TOOL = {
   function: {
     name: TOOL_NAME.webSearch,
     description:
-      "Search the web and get back ranked result titles, URLs, and snippets. Use it to DISCOVER sources when you don't already have a URL, then `web_fetch` the most relevant one. Free and keyless — DuckDuckGo by default, or a self-hosted SearXNG instance via the TSFORGE_SEARXNG_URL env var.",
+      "Search the web and get back ranked public result titles, URLs, and snippets. Use it to DISCOVER current sources when you don't already have a URL, then `web_fetch` the most relevant one. Supports `recency` for fresh docs/news, `domains` for official-site scoping, and `maxResults` for broader source discovery. Free and keyless — DuckDuckGo by default, or a user-run SearXNG instance via TSFORGE_SEARXNG_URL. Set TSFORGE_WEB_SEARCH_BACKEND=searxng to fail closed instead of falling back to DuckDuckGo.",
     parameters: {
       type: "object",
       properties: {
         query: { type: "string", description: "the search query" },
+        recency: {
+          type: "string",
+          enum: ["day", "month", "year"],
+          description:
+            "optional freshness window for fast-moving topics and current docs",
+        },
+        domains: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "optional public hostnames to search within, e.g. ['typescriptlang.org', 'nodejs.org']",
+        },
+        maxResults: {
+          type: "number",
+          description:
+            "optional result cap (default 8, maximum 20) when comparing multiple sources",
+        },
       },
       required: ["query"],
+    },
+  },
+};
+
+export const WEB_BROWSE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.webBrowse,
+    description:
+      "Open a public URL in a local headless Chromium browser via Playwright and return rendered visible text, final URL, title, and links. Use it when docs/sites require JavaScript or when web_fetch misses content. No hosted browser service or API key.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "absolute http(s) URL to open in the local browser",
+        },
+        waitMs: {
+          type: "number",
+          description:
+            "optional extra wait after DOMContentLoaded for client-rendered docs (default 750, max 10000)",
+        },
+        maxChars: {
+          type: "number",
+          description: "optional cap on returned visible text (default 10000)",
+        },
+      },
+      required: ["url"],
+    },
+  },
+};
+
+export const PACKAGE_INFO_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.packageInfo,
+    description:
+      "Read current npm package metadata from the configured npm registry with no API key: latest dist-tag, versions, deprecation, peer deps, homepage, repository, and dependency names. Use before installing or coding against a package API.",
+    parameters: {
+      type: "object",
+      properties: {
+        package: {
+          type: "string",
+          description:
+            "one npm package name, optionally @versioned, e.g. 'zod', 'react@19', '@tanstack/react-query'",
+        },
+        maxChars: {
+          type: "number",
+          description: "optional cap on returned characters (default 12000)",
+        },
+      },
+      required: ["package"],
+    },
+  },
+};
+
+export const PACKAGE_DOCS_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.packageDocs,
+    description:
+      "Read package documentation with no paid service: local node_modules README/package.json/types first, then npm registry README when needed. Use this for version-aware package docs before guessing APIs.",
+    parameters: {
+      type: "object",
+      properties: {
+        package: {
+          type: "string",
+          description:
+            "one npm package name, optionally @versioned, e.g. 'zod@4' or '@tanstack/react-query'",
+        },
+        source: {
+          type: "string",
+          enum: ["auto", "local", "registry"],
+          description:
+            "auto prefers installed local docs, local refuses network, registry uses npm metadata",
+        },
+        maxChars: {
+          type: "number",
+          description: "optional cap on returned characters (default 12000)",
+        },
+      },
+      required: ["package"],
     },
   },
 };

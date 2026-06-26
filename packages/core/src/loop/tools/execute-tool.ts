@@ -10,6 +10,8 @@ import { doScaffoldWeb } from "./scaffold-web";
 import { doAddDependency } from "./add-dependency";
 import { doWebFetch } from "./web-fetch";
 import { doWebSearch } from "./web-search";
+import { doWebBrowse } from "./web-browse";
+import { doPackageInfo, doPackageDocs } from "./package-info";
 import { reject, type IToolContext } from "./tool-context";
 import {
   classifyAction,
@@ -45,8 +47,11 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.scaffoldRoutes]: doScaffoldRoutes,
   [TOOL_NAME.scaffoldWeb]: doScaffoldWeb,
   [TOOL_NAME.addDependency]: doAddDependency,
+  [TOOL_NAME.packageInfo]: doPackageInfo,
+  [TOOL_NAME.packageDocs]: doPackageDocs,
   [TOOL_NAME.webFetch]: doWebFetch,
   [TOOL_NAME.webSearch]: doWebSearch,
+  [TOOL_NAME.webBrowse]: doWebBrowse,
   // yield_status is intercepted by the Session BEFORE tool dispatch (it ends the
   // turn); this handler only fires if one slips through with other calls.
   [TOOL_NAME.yieldStatus]: () =>

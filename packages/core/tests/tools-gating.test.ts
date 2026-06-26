@@ -66,14 +66,20 @@ test("web tools are absent unless TSFORGE_WEB=1", () => {
 
   expect(n).not.toContain("web_fetch");
   expect(n).not.toContain("web_search");
+  expect(n).not.toContain("web_browse");
+  expect(n).not.toContain("package_info");
+  expect(n).not.toContain("package_docs");
 });
 
-test("TSFORGE_WEB=1 exposes both free web tools (no key required)", () => {
+test("TSFORGE_WEB=1 exposes keyless web/package research tools", () => {
   process.env.TSFORGE_WEB = "1";
   const n = names(toolsFor(true));
 
   expect(n).toContain("web_fetch");
   expect(n).toContain("web_search");
+  expect(n).toContain("web_browse");
+  expect(n).toContain("package_info");
+  expect(n).toContain("package_docs");
 });
 
 test("web tools are available on scratch tasks too when enabled", () => {
@@ -82,4 +88,7 @@ test("web tools are available on scratch tasks too when enabled", () => {
 
   expect(n).toContain("web_fetch");
   expect(n).toContain("web_search");
+  expect(n).toContain("web_browse");
+  expect(n).toContain("package_info");
+  expect(n).toContain("package_docs");
 });

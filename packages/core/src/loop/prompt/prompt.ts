@@ -41,6 +41,21 @@ export function buildSystem(conventions: IConventions): string {
  *  don't thread conventions; the dynamic path uses {@link buildSystem}. */
 export const SYSTEM = buildSystem(DEFAULT_CONVENTIONS);
 
+export function buildWebResearchGuidance(): string {
+  return [
+    "WEB RESEARCH — keyless internet/package tools are enabled:",
+    "  • Package version/install question? Use `package_info` for npm registry",
+    "    dist-tags, versions, deprecations, peer deps, homepage, and repo.",
+    "  • Package API/docs question? Use `package_docs` first; it reads installed",
+    "    node_modules docs/types before falling back to the npm registry README.",
+    "  • Unknown public source? Use `web_search`, preferring official hosts with",
+    "    `domains` and `recency` (`day`/`month`/`year`) for fast-moving topics.",
+    "  • Known static page? Use `web_fetch`. JS-rendered docs/site? Use",
+    "    `web_browse`, which opens the URL in local Chromium via Playwright.",
+    "  • Do not guess APIs from memory when the user asks for latest/current info.",
+  ].join("\n");
+}
+
 /** Appended to SYSTEM for from-scratch, NON-web utility builds when the simplicity
  *  flag is on. Pushes the model toward the shortest correct solution — the axis the
  *  gate is blind to (it checks correctness, never concision). Carve-outs keep it
@@ -104,6 +119,10 @@ export function buildSystemPrompt(
   const webish = stack !== undefined && isWebStack(stack);
   const blocks: string[] = [buildSystem(conventions)];
 
+  if (flags.webTools()) {
+    blocks.push(buildWebResearchGuidance());
+  }
+
   // Simplicity: from-scratch, non-web only (an A/B-gated concision push).
   if (flags.simplicity() && !hasExistingCode && !webish) {
     blocks.push(buildScratchSimplicityGuidance(conventions));
@@ -128,8 +147,7 @@ export function buildSystemPrompt(
 export function buildChatSystem(conventions: IConventions): string {
   const naming = interfaceNamingPhrase(conventions);
   const namingPart = naming === null ? "" : `${naming}; `;
-
-  return [
+  const lines = [
     "You are tsforge, an expert TypeScript coding assistant. You are launched inside a repository, but NOT every request is about that repository. The user talks to you; you help by answering, and by inspecting/changing code with your tools.",
     "Tools: `read` (inspect a file), `run` (execute any shell command — `ls`, `rg`, tests, `tsc`), `edit` (replace an exact, unique snippet), `create` (a new file).",
     "File paths are RELATIVE to the workspace root: use `tsconfig.json` or `src/app.ts` — never an absolute path, and never repeat the workspace folder in the path.",
@@ -138,7 +156,15 @@ export function buildChatSystem(conventions: IConventions): string {
     "Be decisive, not exhaustive. When you do investigate, a few targeted reads beat reading everything — as soon as you can answer or act, STOP calling tools and reply.",
     "For a QUESTION about the repo, investigate briefly then give a concise, concrete answer (cite specific files/symbols; offer your top few recommendations, not a survey). For a CHANGE, make it with `edit`/`create`, verify by `run`ning the tests or `tsc`, then briefly state what you did.",
     `When you write code, use strict TypeScript: ${namingPart}\`===\`; no \`var\`; never the non-null \`!\` (guard index access: \`const x = arr[i]; if (x === undefined) {…}\`); no \`any\`/\`as\` (type parameters); explicit boolean conditions.`,
-  ].join("\n");
+  ];
+
+  if (flags.webTools()) {
+    lines.push(
+      "Web tools are enabled: use `package_info` for latest npm metadata, `package_docs` for package APIs, `web_search` to discover current sources, `web_fetch` for static pages, and `web_browse` for JS-rendered pages. Prefer official sources; use `domains`, `recency`, and `maxResults` when searching."
+    );
+  }
+
+  return lines.join("\n");
 }
 
 /** Default-conventions interactive prompt (back-compat constant). */

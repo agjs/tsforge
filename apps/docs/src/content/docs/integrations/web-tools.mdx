@@ -1,9 +1,9 @@
 ---
-title: Web access (free, local)
-description: "Opt-in web_fetch + web_search tools — no API key, no paid service. Fully local extraction, DuckDuckGo by default, SearXNG for full privacy."
+title: Web research (no API keys)
+description: "Opt-in web_fetch, web_search, package_info, package_docs, and web_browse tools — no paid search/browser API, no required service key."
 ---
 
-Set `TSFORGE_WEB=1` to give the agent two read-only web tools. They're **free and fully local** — no API key, no paid search service, nothing leaves your machine except the fetch itself. Off by default, so a run without the flag has no network reach beyond your model endpoint.
+Set `TSFORGE_WEB=1` to give the agent read-only internet research tools. They're built for **no required API keys and no paid vendor coupling**: npm metadata comes from the configured registry, search defaults to DuckDuckGo's keyless HTML endpoint, pages are extracted locally, and browser rendering uses local Playwright/Chromium when available. Off by default, so a run without the flag has no network reach beyond your model endpoint.
 
 ```bash
 TSFORGE_WEB=1 tsforge "update the deprecated API call — check the library's current docs"
@@ -11,11 +11,22 @@ TSFORGE_WEB=1 tsforge "update the deprecated API call — check the library's cu
 
 ## The tools
 
+- **`package_info`** — read current npm package metadata from the configured registry: latest dist-tag, versions, deprecation status, peer deps, homepage, repository, and dependency names.
+- **`package_docs`** — read package docs without a docs API: local `node_modules` README/package metadata/types first, then the npm registry README when needed.
 - **`web_fetch`** — retrieve a URL and return readable markdown. The page is fetched and the content extracted **on-machine** (no third-party reader API), so you get clean text without shipping the URL to a service.
-- **`web_search`** — discover sources for a query. Defaults to DuckDuckGo's keyless HTML endpoint; point it at a self-hosted [SearXNG](https://docs.searxng.org/) instance for full privacy and control:
+- **`web_browse`** — open a public URL in local headless Chromium via Playwright and return rendered visible text, final URL, title, and links. Use it for JavaScript-rendered docs that `web_fetch` cannot see. No hosted browser service.
+- **`web_search`** — discover sources for a query. It returns public result URLs only, supports `recency` (`day`, `month`, `year`), `domains` for official-site scoping, and `maxResults` up to 20. Defaults to DuckDuckGo's keyless HTML endpoint.
+
+SearXNG is **not bundled or started by tsforge**. If you run your own SearXNG service (Docker, Compose, or any deployment), point `TSFORGE_SEARXNG_URL` at it for full privacy/control:
 
 ```bash
 TSFORGE_WEB=1 TSFORGE_SEARXNG_URL=http://localhost:8888 tsforge
+```
+
+For current TypeScript/library work, ask the agent to search the official host first, then fetch the source it picks:
+
+```text
+Check the current TanStack Query docs before changing this hook. Use domain-scoped web search if needed.
 ```
 
 ## Why opt-in
@@ -24,7 +35,9 @@ The tools are read-only and offline-safe, but web access is still more reach tha
 
 | Env var | Default | Effect |
 | --- | --- | --- |
-| `TSFORGE_WEB` | off | enable `web_fetch` + `web_search` (`=1`) |
-| `TSFORGE_SEARXNG_URL` | unset | route `web_search` to a self-hosted SearXNG instance |
+| `TSFORGE_WEB` | off | enable keyless research tools (`=1`) |
+| `TSFORGE_NPM_REGISTRY` | npm registry | registry used by `package_info` / `package_docs` |
+| `TSFORGE_SEARXNG_URL` | unset | route `web_search` to a SearXNG instance you already run |
+| `TSFORGE_WEB_SEARCH_BACKEND` | auto | `duckduckgo` or `searxng`; `searxng` fails closed if no SearXNG URL is set |
 
 → [Environment variables](/reference/flags/) · [MCP servers](/integrations/mcp/) · [Permissions & policy](/guardrails/policy/)

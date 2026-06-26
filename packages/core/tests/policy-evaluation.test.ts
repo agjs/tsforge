@@ -47,8 +47,11 @@ describe("classifyAction", () => {
       ["scaffold_ui", "write_file"],
       ["run", "shell"],
       ["add_dependency", "shell"],
+      ["package_info", "network"],
+      ["package_docs", "network"],
       ["web_fetch", "network"],
       ["web_search", "network"],
+      ["web_browse", "network"],
     ];
 
     for (const [name, kind] of cases) {

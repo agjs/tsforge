@@ -28,8 +28,11 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.scaffoldWeb]: "write_file",
   [TOOL_NAME.run]: "shell",
   [TOOL_NAME.addDependency]: "shell",
+  [TOOL_NAME.packageInfo]: "network",
+  [TOOL_NAME.packageDocs]: "network",
   [TOOL_NAME.webFetch]: "network",
   [TOOL_NAME.webSearch]: "network",
+  [TOOL_NAME.webBrowse]: "network",
 };
 
 /** Extra path-bearing arg keys beyond the file aliases (move's source/target). */

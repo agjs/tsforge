@@ -16,7 +16,7 @@ description: Canonical list of every TSFORGE_* environment variable.
 | `TSFORGE_FORCE_TOOLS` | off | force tool_choice required (`=1`) |
 | `TSFORGE_SIMPLICITY` | off | shortest-solution guidance, scratch non-web (`=1`) |
 | `TSFORGE_TDD` | ON (`≠ "0"`) | test-first guidance + `test-sibling-required` is an error on changed logic files (`=0` to opt out) |
-| `TSFORGE_WEB` | off | free, local web access — the `web_fetch` + `web_search` tools (`=1`) |
+| `TSFORGE_WEB` | off | keyless web/package research tools (`=1`) |
 | `TSFORGE_CONTRACT` | off | experimental per-feature [contract negotiation](/loop/greenfield/) in greenfield builds (`=1`) |
 | `TSFORGE_NO_UPDATE_CHECK` | off | silence the startup "update available" check (`=1`) |
 | `TSFORGE_NO_GIT_TOOL` | off | withhold the `git_context` tool (`=1`) |
@@ -33,12 +33,14 @@ Offered only when there is existing code to inspect (greenfield scratch builds h
 
 ## Web access
 
-Opt-in, free, and fully local — no API key, no paid service. `TSFORGE_WEB=1` adds two read-only tools: `web_fetch` (retrieve a URL → readable markdown, extracted on-machine) and `web_search` (discover sources). Search defaults to DuckDuckGo's keyless HTML endpoint; point at a self-hosted [SearXNG](https://docs.searxng.org/) instance for full privacy/control. Full guide: [Web access](/integrations/web-tools/).
+Opt-in, free, and no required service keys. `TSFORGE_WEB=1` adds read-only research tools: `package_info`, `package_docs`, `web_fetch`, `web_search`, and `web_browse`. Search defaults to DuckDuckGo's keyless HTML endpoint. SearXNG is not bundled; set `TSFORGE_SEARXNG_URL` only when you already run a SearXNG service. Full guide: [Web access](/integrations/web-tools/).
 
 | Variable | Default | Toggles |
 | --- | --- | --- |
-| `TSFORGE_WEB` | off | enable `web_fetch` + `web_search` (`=1`) |
-| `TSFORGE_SEARXNG_URL` | unset | route `web_search` to a self-hosted SearXNG instance (e.g. `http://localhost:8888`) |
+| `TSFORGE_WEB` | off | enable keyless web/package research tools (`=1`) |
+| `TSFORGE_NPM_REGISTRY` | npm registry | registry used by `package_info` / `package_docs` |
+| `TSFORGE_SEARXNG_URL` | unset | route `web_search` to a SearXNG instance you already run (e.g. `http://localhost:8888`) |
+| `TSFORGE_WEB_SEARCH_BACKEND` | auto | `duckduckgo` or `searxng`; `searxng` fails closed if no SearXNG URL is set |
 
 ## Opt-in gate oracles
 
