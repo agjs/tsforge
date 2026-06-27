@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { initWizard, reduceWizard, renderFrame } from "../src/render/wizard";
+import {
+  actionFor,
+  initWizard,
+  reduceWizard,
+  renderFrame,
+} from "../src/render/wizard";
 import type { IWizardStep } from "../src/render/wizard.types";
 import {
   renderMenu,
@@ -247,5 +252,39 @@ describe("@-file picker e2e — rendered dropdown", () => {
     expect(screen.rowsContaining("five")).toBe(0); // ghost gone
     expect(screen.rowsContaining("three")).toBe(0); // ghost gone
     expect(screen.rowsContaining("two")).toBe(1); // still shown
+  });
+});
+
+describe("wizard key→action decode (guards the keypress mapping)", () => {
+  test("arrow keys map to navigation", () => {
+    expect(actionFor(undefined, { name: "up" })).toBe("up");
+    expect(actionFor(undefined, { name: "down" })).toBe("down");
+  });
+
+  test("space (by name or char) toggles a checkbox", () => {
+    expect(actionFor(undefined, { name: "space" })).toBe("toggle");
+    expect(actionFor(" ", { name: undefined })).toBe("toggle");
+  });
+
+  test("enter/return confirm; escape and ctrl+c cancel", () => {
+    expect(actionFor(undefined, { name: "return" })).toBe("confirm");
+    expect(actionFor(undefined, { name: "enter" })).toBe("confirm");
+    expect(actionFor(undefined, { name: "escape" })).toBe("cancel");
+    expect(actionFor("c", { name: "c", ctrl: true })).toBe("cancel");
+  });
+
+  test("'b' goes back, 'q' cancels, unknown keys are ignored", () => {
+    expect(actionFor("b", { name: "b" })).toBe("back");
+    expect(actionFor("q", { name: "q" })).toBe("cancel");
+    expect(actionFor("z", { name: "z" })).toBeNull();
+  });
+
+  test("the decoded action actually drives the reducer (down → cursor moves)", () => {
+    const action = actionFor(undefined, { name: "down" });
+    let state = initWizard(STEPS);
+
+    expect(action).not.toBeNull();
+    state = reduceWizard(state, action ?? "up", STEPS);
+    expect(state.cursor).toBe(1);
   });
 });
