@@ -473,7 +473,9 @@ export class StatusBar {
   /** Render a multi-row editor input block above the status bar. Each repaint
    *  clears the previous frame and redraws in place (absolute positioning).
    *  Input-row mode only; a no-op otherwise. The cursor is left parked at the
-   *  editor's cursor position. Shrinking blocks erase old top rows via editorRows. */
+   *  editor's cursor position. Shrinking blocks erase old top rows via editorRows.
+   *  When the editor height changes, the scroll region is resized so the editor
+   *  block is pinned (not scrollable) — streaming only scrolls above it. */
   setEditor(
     lines: readonly string[],
     cursorRow: number,
@@ -490,6 +492,19 @@ export class StatusBar {
     const inputRow = Math.max(1, rows - 2);
     const maxRows = Math.max(0, inputRow - 1);
     const clamped = lines.slice(0, maxRows);
+    const newHeight = clamped.length;
+
+    // If editor height changes, update the scroll region to exclude the new height.
+    // This pins the editor block (and bar + input) so they never scroll.
+    if (newHeight !== this.editorRows) {
+      const regionEnd = Math.max(1, rows - this.reserved - newHeight);
+
+      this.out.write(`${ESC}[1;${regionEnd}r`);
+
+      // Re-anchor the stream cursor to the new region boundary
+      this.out.write(`${ESC}[${regionEnd};1H`);
+      this.out.write(`${ESC}7`);
+    }
 
     this.out.write(
       buildEditorFrame(
@@ -502,7 +517,7 @@ export class StatusBar {
         this.editorRows
       )
     );
-    this.editorRows = clamped.length;
+    this.editorRows = newHeight;
   }
 
   /** Re-apply the scroll region after a terminal resize, then repaint. */
@@ -516,7 +531,8 @@ export class StatusBar {
     // Clamp to row 1: a resize BELOW `reserved` (a terminal shrunk after install)
     // would otherwise make `rows - reserved` non-positive and emit invalid
     // `${ESC}[1;-1r` / `${ESC}[-1;1H` sequences. Mirrors teardown()'s clamp.
-    const regionEnd = Math.max(1, rows - this.reserved);
+    // Also exclude the editor block from the scrollable region.
+    const regionEnd = Math.max(1, rows - this.reserved - this.editorRows);
 
     this.out.write(`${ESC}[1;${regionEnd}r`);
 

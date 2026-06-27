@@ -452,6 +452,95 @@ describe("StatusBar with multi-row editor", () => {
 
     expect(clearCount).toBeGreaterThanOrEqual(4);
   });
+
+  test("setEditor adjusts scroll region when height changes (pinned editor block)", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    // Initial scroll region: rows 1-21 (reserved = 3: bar + input = 2 + 1)
+    // Expect: \x1b[1;21r
+    expect(term.text()).toContain("\x1b[1;21r");
+
+    term.writes.length = 0;
+
+    // Set a 2-row editor block
+    bar.setEditor(["line 1", "line 2"], 0, 0);
+
+    const out = term.text();
+
+    // Scroll region must shrink to rows 1-19 (reserved=3 + editor=2)
+    // New regionEnd = 24 - 3 - 2 = 19
+    expect(out).toContain("\x1b[1;19r");
+
+    term.writes.length = 0;
+
+    // Shrink editor to 1 row
+    bar.setEditor(["only"], 0, 0);
+
+    const out2 = term.text();
+
+    // Scroll region expands back to rows 1-20 (reserved=3 + editor=1)
+    // New regionEnd = 24 - 3 - 1 = 20
+    expect(out2).toContain("\x1b[1;20r");
+  });
+
+  test("setEditor clamps editor height so scroll region stays >= 1 row", () => {
+    const term = new FakeTerm(true, 5, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    // On a 5-row terminal: reserved=3, so input row is at row 3
+    // maxRows for editor = max(0, 3 - 1) = 2
+    // But if we requested 50, it clamps to 2
+
+    const many = Array(50).fill("line");
+
+    bar.setEditor(many, 0, 0);
+
+    const out = term.text();
+
+    // Editor height should be clamped to 2 rows
+    // regionEnd = 5 - 3 - 2 = 0 → clamped to max(1, 0) = 1
+    // So scroll region is \x1b[1;1r (just 1 row for streaming)
+    expect(out).toContain("\x1b[1;1r");
+  });
+
+  test("resize after editor block adjust updates scroll region correctly", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    bar.setEditor(["line 1", "line 2", "line 3"], 0, 0);
+    // regionEnd = 24 - 3 - 3 = 18
+    expect(term.text()).toContain("\x1b[1;18r");
+
+    term.rows = 30; // resize taller
+    term.writes.length = 0;
+    bar.resize(INFO);
+
+    const out = term.text();
+
+    // After resize: regionEnd = 30 - 3 - 3 = 24
+    expect(out).toContain("\x1b[1;24r");
+  });
+
+  test("teardown resets scroll region and clears editor block height", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    bar.setEditor(["line 1", "line 2"], 0, 0);
+    term.writes.length = 0;
+    bar.teardown();
+
+    const out = term.text();
+
+    // Scroll region reset to full screen
+    expect(out).toContain("\x1b[r");
+    // Editor block height should be cleared for next activate
+    expect(bar.active).toBe(false);
+  });
 });
 
 describe("StatusBar @-picker overlay", () => {
