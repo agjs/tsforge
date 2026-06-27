@@ -1480,6 +1480,11 @@ async function repl(args: ICliArgs): Promise<number> {
   // inactive and `prompt()` falls back to the inline status line (pipes, --log).
   const statusBar = new StatusBar(process.stdout, true, true, useInputRow);
 
+  // Set once the multi-line editor is created (it lives in a nested scope); the
+  // resize handler below calls it so the editor re-wraps/re-windows at the new
+  // size instead of clipping the current line at its pre-resize dimensions.
+  let resizeEditor: ((columns: number, rows: number) => void) | null = null;
+
   // Route streamed agent output through the bar so it scrolls above the pinned
   // input row; cleared on loop exit so later/headless writes go straight to stdout.
   if (useInputRow) {
@@ -1527,6 +1532,9 @@ async function repl(args: ICliArgs): Promise<number> {
 
   process.stdout.on("resize", () => {
     statusBar.resize(statusInfo());
+    // The editor wraps/windows at the dimensions it was created with; without
+    // this it keeps using the pre-resize size and can clip the current line.
+    resizeEditor?.(process.stdout.columns, process.stdout.rows);
   });
 
   // Restore the terminal even on an unexpected exit (teardown is idempotent).
@@ -1879,6 +1887,10 @@ async function repl(args: ICliArgs): Promise<number> {
         openPalette,
         openFilePicker,
       });
+
+      resizeEditor = (columns, rows): void => {
+        editorHandle?.resize(columns, rows);
+      };
 
       editorHandle.onSubmit(submitLine);
       editorHandle.onInterrupt(() => {

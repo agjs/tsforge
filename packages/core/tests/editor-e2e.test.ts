@@ -592,3 +592,40 @@ describe("editor e2e — wrapped-line cursor math", () => {
     expect(joined).toContain("X0123456789abcdefghijklmno");
   });
 });
+
+describe("editor e2e — terminal resize updates the editor dimensions", () => {
+  test("after the terminal shrinks, the current line stays visible (no stale-dims clip)", () => {
+    const h = buildHarness(24, 80);
+
+    // A buffer that fits a 24-row terminal (maxRows = 21) but NOT a 10-row one.
+    for (let i = 0; i < 11; i += 1) {
+      h.stdin.feed(`line${i}`);
+      h.stdin.feed("\x1b\r");
+    }
+
+    h.stdin.feed("lastline");
+
+    // Shrink the terminal: the bar re-pins AND the editor must be told the new
+    // size (the bug: the editor kept windowing at rows=24 and clipped the cursor).
+    h.term.rows = 10;
+    h.bar.resize(INFO);
+    h.handle.resize(80, 10);
+    h.stdin.feed("!");
+
+    const screen = new VirtualScreen(10, 80);
+
+    screen.feed(h.term.text());
+    expect(screen.rowsContaining("lastline!")).toBe(1);
+  });
+
+  test("resize ignores non-positive dimensions (keeps the last good size)", () => {
+    const h = buildHarness(24, 80);
+
+    h.stdin.feed("keepme");
+    // A spurious 0×0 resize (can happen transiently) must not wipe the render.
+    h.handle.resize(0, 0);
+    h.stdin.feed("!");
+
+    expect(h.screen().rowsContaining("keepme!")).toBe(1);
+  });
+});
