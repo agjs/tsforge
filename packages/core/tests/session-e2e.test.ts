@@ -122,3 +122,94 @@ describe("session e2e — full agent loop via a scripted model", () => {
     expect(runs[0]?.exitCode).toBe(0);
   });
 });
+
+describe("session e2e — read/edit round-trips and multi-file builds", () => {
+  test("the edit tool replaces a snippet in a seeded file", async () => {
+    const s = await runScriptedSession({
+      task: "bump the constant",
+      seed: { "app.ts": "export const x = 1;\n" },
+      turns: [
+        {
+          toolCalls: [
+            call("edit", {
+              file: "app.ts",
+              oldString: "const x = 1",
+              newString: "const x = 2",
+            }),
+          ],
+        },
+        { content: "bumped" },
+      ],
+    });
+
+    expect(s.fileText("app.ts")).toContain("const x = 2");
+    expect(s.sawKind("edit")).toBe(true);
+  });
+
+  test("a read tool result flows back into the conversation for the model", async () => {
+    const s = await runScriptedSession({
+      task: "read the secret then echo it",
+      seed: { "data.txt": "SECRET-VALUE-42\n" },
+      turns: [
+        { toolCalls: [call("read", { file: "data.txt" })] },
+        // This turn REACTS to the read result: the tool output is now in the
+        // conversation, so the model can copy the value into a new file.
+        (messages) => {
+          const transcript = messages.map((m) => m.content).join("\n");
+          const saw = transcript.includes("SECRET-VALUE-42");
+
+          return {
+            toolCalls: [
+              call("create", {
+                file: "echo.txt",
+                content: saw ? "SECRET-VALUE-42\n" : "MISSING\n",
+              }),
+            ],
+          };
+        },
+        { content: "done" },
+      ],
+    });
+
+    // The read result reached the model, so it wrote the real value (not MISSING).
+    expect(s.fileText("echo.txt")).toContain("SECRET-VALUE-42");
+  });
+
+  test("a multi-file build creates every file in one session", async () => {
+    const s = await runScriptedSession({
+      task: "build a small module",
+      turns: [
+        {
+          toolCalls: [
+            call("create", {
+              file: "src/a.ts",
+              content: "export const a = 1;\n",
+            }),
+          ],
+        },
+        {
+          toolCalls: [
+            call("create", {
+              file: "src/b.ts",
+              content: "export const b = 2;\n",
+            }),
+          ],
+        },
+        {
+          toolCalls: [
+            call("create", {
+              file: "src/index.ts",
+              content: "export * from './a';\nexport * from './b';\n",
+            }),
+          ],
+        },
+        { content: "module built" },
+      ],
+    });
+
+    expect(s.fileExists("src/a.ts")).toBe(true);
+    expect(s.fileExists("src/b.ts")).toBe(true);
+    expect(s.fileExists("src/index.ts")).toBe(true);
+    expect(s.eventsOfKind("create").length).toBe(3);
+  });
+});
