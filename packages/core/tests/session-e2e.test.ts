@@ -47,7 +47,7 @@ describe("session e2e — full agent loop via a scripted model", () => {
   test("a passing gate (accept) confirms the change as done", async () => {
     const s = await runScriptedSession({
       task: "create a file then finish",
-      accept: "true", // gate always passes
+      accept: 'node -e "process.exit(0)"', // portable always-pass gate
       turns: [
         {
           toolCalls: [
@@ -68,7 +68,8 @@ describe("session e2e — full agent loop via a scripted model", () => {
     const s = await runScriptedSession({
       task: "make the gate pass",
       // Gate passes only once the model has created fixed.txt.
-      accept: "test -f fixed.txt",
+      accept:
+        "node -e \"process.exit(require('fs').existsSync('fixed.txt') ? 0 : 1)\"",
       maxTurns: 8,
       turns: [
         // Turn 1: a wrong mutation (creates the wrong file).
@@ -252,8 +253,9 @@ describe("session e2e — plan mode (read-only) and auto-fix", () => {
     const s = await runScriptedSession({
       task: "create a file; fix runs before the gate",
       // fix writes a marker; gate passes only if the marker exists → proves fix ran.
-      fix: "touch fix-ran.marker",
-      accept: "test -f fix-ran.marker",
+      fix: "node -e \"require('fs').writeFileSync('fix-ran.marker','')\"",
+      accept:
+        "node -e \"process.exit(require('fs').existsSync('fix-ran.marker') ? 0 : 1)\"",
       maxTurns: 6,
       turns: [
         {

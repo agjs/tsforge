@@ -44,6 +44,16 @@ export function scriptedModel(turns: readonly ScriptedTurn[]): IScriptedModel {
     },
 
     complete(messages: readonly IChatMessage[]): Promise<IModelResponse> {
+      // One call past the script returns the empty yield (the loop's natural
+      // stop). Any call beyond that means the loop failed to terminate — throw
+      // immediately so the test fails fast instead of hanging or hitting the
+      // runaway-turn backstop.
+      if (idx > turns.length) {
+        throw new Error(
+          `Scripted model called ${idx + 1} times, but the script has only ${turns.length} turns (loop did not terminate).`
+        );
+      }
+
       const turn = turns[idx];
 
       idx += 1;
