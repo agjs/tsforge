@@ -1530,12 +1530,18 @@ async function repl(args: ICliArgs): Promise<number> {
     }
   });
 
-  process.stdout.on("resize", () => {
+  // Named so it can be detached on loop exit (an anonymous listener on the
+  // global process.stdout would pin the whole REPL closure for the process
+  // lifetime). columns/rows are typed `number` here, so no nullish guard is
+  // needed; the editor's resize ignores non-positive values regardless.
+  const handleResize = (): void => {
     statusBar.resize(statusInfo());
     // The editor wraps/windows at the dimensions it was created with; without
     // this it keeps using the pre-resize size and can clip the current line.
     resizeEditor?.(process.stdout.columns, process.stdout.rows);
-  });
+  };
+
+  process.stdout.on("resize", handleResize);
 
   // Restore the terminal even on an unexpected exit (teardown is idempotent).
   process.on("exit", () => {
@@ -1929,6 +1935,7 @@ async function repl(args: ICliArgs): Promise<number> {
   });
 
   statusBar.teardown(); // belt-and-suspenders: restore the terminal on loop exit
+  process.stdout.off("resize", handleResize); // don't pin the REPL closure
   interactiveStream = null; // later/headless writes go straight to stdout again
 
   return 0;

@@ -556,9 +556,16 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     },
 
     resize(nextColumns: number, nextRows: number): void {
-      columns = nextColumns > 0 ? nextColumns : columns;
-      rows = nextRows > 0 ? nextRows : rows;
-      repaint();
+      const targetColumns = nextColumns > 0 ? nextColumns : columns;
+      const targetRows = nextRows > 0 ? nextRows : rows;
+
+      // Only repaint when the size actually changed — some terminals emit
+      // duplicate/high-frequency resize events, and a no-op repaint flickers.
+      if (targetColumns !== columns || targetRows !== rows) {
+        columns = targetColumns;
+        rows = targetRows;
+        repaint();
+      }
     },
 
     close(): void {
