@@ -11,6 +11,11 @@ export interface IEditorHandle {
   onInterrupt(cb: () => void): void;
   onExit(cb: () => void): void;
   getBuffer(): EditorBuffer;
+  /** Update the terminal dimensions and repaint. The CLI calls this on a
+   *  terminal resize; without it the editor keeps wrapping/windowing at the
+   *  dimensions captured when it was created, so after a resize the current
+   *  line can be clipped off the (now-shorter) block or wrapped at a stale width. */
+  resize(columns: number, rows: number): void;
   close(): void;
 }
 
@@ -141,11 +146,14 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     stdin,
     out,
     renderEditor: renderEditorFn,
-    columns = 80,
-    rows = 10,
     openPalette,
     openFilePicker,
   } = deps;
+
+  // Mutable so a terminal resize can update them (see the handle's `resize`);
+  // renderEditor wraps at `columns` and windows at `rows - EDITOR_RESERVED_ROWS`.
+  let columns = deps.columns ?? 80;
+  let rows = deps.rows ?? 10;
 
   const buffer = new EditorBuffer();
   const pasteScanner = createPasteScanner();
@@ -545,6 +553,19 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     getBuffer(): EditorBuffer {
       return buffer;
+    },
+
+    resize(nextColumns: number, nextRows: number): void {
+      const targetColumns = nextColumns > 0 ? nextColumns : columns;
+      const targetRows = nextRows > 0 ? nextRows : rows;
+
+      // Only repaint when the size actually changed — some terminals emit
+      // duplicate/high-frequency resize events, and a no-op repaint flickers.
+      if (targetColumns !== columns || targetRows !== rows) {
+        columns = targetColumns;
+        rows = targetRows;
+        repaint();
+      }
     },
 
     close(): void {
