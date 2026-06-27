@@ -213,3 +213,59 @@ describe("session e2e — read/edit round-trips and multi-file builds", () => {
     expect(s.eventsOfKind("create").length).toBe(3);
   });
 });
+
+describe("session e2e — plan mode (read-only) and auto-fix", () => {
+  test("plan mode rejects a create — the file is never written", async () => {
+    const s = await runScriptedSession({
+      task: "in plan mode, try to write a file",
+      policyMode: "plan",
+      turns: [
+        {
+          toolCalls: [
+            call("create", { file: "should-not-exist.ts", content: "x\n" }),
+          ],
+        },
+        { content: "tried to write" },
+      ],
+    });
+
+    // The read-only guarantee: no write escapes plan mode.
+    expect(s.fileExists("should-not-exist.ts")).toBe(false);
+  });
+
+  test("plan mode still allows a read tool", async () => {
+    const s = await runScriptedSession({
+      task: "read in plan mode",
+      policyMode: "plan",
+      seed: { "notes.txt": "PLAN-MODE-READ-OK\n" },
+      turns: [
+        { toolCalls: [call("read", { file: "notes.txt" })] },
+        { content: "read it" },
+      ],
+    });
+
+    // Reading is permitted; the result reached the conversation.
+    expect(s.status).toBe("responded");
+  });
+
+  test("the auto-fix command runs before re-validating the gate", async () => {
+    const s = await runScriptedSession({
+      task: "create a file; fix runs before the gate",
+      // fix writes a marker; gate passes only if the marker exists → proves fix ran.
+      fix: "touch fix-ran.marker",
+      accept: "test -f fix-ran.marker",
+      maxTurns: 6,
+      turns: [
+        {
+          toolCalls: [
+            call("create", { file: "a.ts", content: "export const a = 1;\n" }),
+          ],
+        },
+        { content: "done" }, // yield → fix runs → gate checks the marker
+      ],
+    });
+
+    expect(s.fileExists("fix-ran.marker")).toBe(true);
+    expect(s.status).toBe("done");
+  });
+});

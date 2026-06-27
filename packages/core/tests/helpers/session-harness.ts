@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Session, type ILoopEvent } from "../../src/loop";
+import type { PolicyMode } from "../../src/policy/policy.types";
 import {
   scriptedModel,
   type IScriptedModel,
@@ -32,6 +33,8 @@ export interface IRunScriptedSession {
   seed?: Record<string, string>;
   /** Per-send turn cap. */
   maxTurns?: number;
+  /** Policy mode — e.g. "plan" to forbid all writes. */
+  policyMode?: PolicyMode;
 }
 
 export interface IScriptedSessionResult {
@@ -88,6 +91,7 @@ export async function runScriptedSession(
     fix: opts.fix,
     context: opts.context,
     maxTurns: opts.maxTurns,
+    policyMode: opts.policyMode,
     report: (event: ILoopEvent) => {
       events.push(event);
     },
