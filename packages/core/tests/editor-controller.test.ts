@@ -41,6 +41,16 @@ class FakeStdin {
     });
   }
 
+  // Emit a raw Buffer (as process.stdin does when setEncoding wasn't applied),
+  // to prove the editor doesn't crash on Buffer chunks.
+  feedRaw(chunk: Buffer): void {
+    const callbacks = this.listeners.data ?? new Set();
+
+    callbacks.forEach((cb) => {
+      cb(chunk);
+    });
+  }
+
   setRawMode(_mode: boolean): this {
     // no-op for testing
     return this;
@@ -86,6 +96,17 @@ describe("EditorController", () => {
     stdin.feed("\r");
     expect(submits).toEqual(["hi"]);
     expect(handle.getBuffer().getText()).toBe("");
+  });
+
+  test("a raw Buffer keystroke is handled (does not crash; decodes to text)", () => {
+    // Regression: process.stdin emits Buffers when setEncoding wasn't applied;
+    // the editor must normalize them instead of throwing on the first key.
+    const { stdin, handle, submits } = makeHarness();
+
+    stdin.feedRaw(Buffer.from("hi", "utf8"));
+    expect(handle.getBuffer().getText()).toBe("hi");
+    stdin.feedRaw(Buffer.from("\r", "utf8"));
+    expect(submits).toEqual(["hi"]);
   });
 
   test("Shift+Enter inserts a newline, does NOT submit", () => {

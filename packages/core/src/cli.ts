@@ -1857,9 +1857,22 @@ async function repl(args: ICliArgs): Promise<number> {
           resume: () => {
             process.stdin.resume();
           },
+          // The editor does string ops per chunk; without UTF-8 encoding,
+          // process.stdin emits Buffers and the first keypress crashes.
+          setEncoding: () => {
+            process.stdin.setEncoding("utf8");
+          },
         },
         out: (s: string) => {
           statusBar.writeStream(s);
+        },
+        // Multi-row editor rendering callback: paints to the pinned input area
+        renderEditor: (
+          lines: string[],
+          cursorRow: number,
+          cursorCol: number
+        ) => {
+          statusBar.setEditor(lines, cursorRow, cursorCol);
         },
         columns: process.stdout.columns,
         rows: process.stdout.rows,

@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { EditorBuffer } from "./buffer";
 import { decodeKeys } from "./keys";
 import { createPasteScanner } from "./paste";
@@ -24,6 +25,11 @@ export interface IStdin {
 export interface IStartEditorDeps {
   stdin: IStdin;
   out: (s: string) => void;
+  renderEditor?: (
+    lines: string[],
+    cursorRow: number,
+    cursorCol: number
+  ) => void;
   columns?: number;
   rows?: number;
   openPalette?: () => Promise<void>;
@@ -31,6 +37,15 @@ export interface IStartEditorDeps {
 }
 
 type KeyAction = (buffer: EditorBuffer) => void;
+
+/** Debug logging helper: append to TSFORGE_EDITOR_DEBUG if set. */
+function debugLog(msg: string): void {
+  const path = process.env.TSFORGE_EDITOR_DEBUG;
+
+  if (path !== undefined) {
+    appendFileSync(path, `${msg}\n`);
+  }
+}
 
 /**
  * Build a dispatch table: normalized key string → buffer action.
@@ -118,6 +133,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   const {
     stdin,
     out,
+    renderEditor: renderEditorFn,
     columns = 80,
     rows = 10,
     openPalette,
@@ -161,7 +177,19 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       }
     );
 
-    out(frame.frame);
+    if (renderEditorFn) {
+      debugLog(
+        `[repaint] rows=${frame.rows} cursorRow=${frame.cursorRow} cursorCol=${frame.cursorCol} frame=${JSON.stringify(frame.frame)}`
+      );
+
+      // Extract visual lines from the rendered frame (simple split on \n)
+      const visualLines = frame.frame.split("\n");
+
+      renderEditorFn(visualLines, frame.cursorRow, frame.cursorCol);
+    } else {
+      // Fallback: stream the raw frame (the buggy path, used if renderEditor not provided)
+      out(frame.frame);
+    }
   }
 
   function notifyChange(): void {
@@ -420,15 +448,24 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     triggerPaletteOrPicker();
   }
 
-  function onDataChunk(chunk: string): void {
+  function onDataChunk(raw: string | Buffer): void {
     if (!isOpen) {
       return;
     }
+
+    // Robust against stdin emitting Buffers (when setEncoding wasn't applied):
+    // every downstream step (paste scan, key decode) does string ops, so a raw
+    // Buffer would throw on the first keystroke. Normalize to a UTF-8 string.
+    const chunk = typeof raw === "string" ? raw : raw.toString("utf8");
+
+    debugLog(`[input-chunk] raw=${JSON.stringify(chunk)}`);
 
     const wasActive = pasteScanner.isActive();
     const pasteScan = pasteScanner.feed(chunk);
 
     if (pasteScan.content !== null) {
+      debugLog(`[paste] content=${JSON.stringify(pasteScan.content)}`);
+
       buffer.insertPaste(pasteScan.content);
       repaint();
       notifyChange();
@@ -441,6 +478,8 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     }
 
     const keyEvents = decodeKeys(chunk);
+
+    debugLog(`[keys] decoded=${JSON.stringify(keyEvents)}`);
 
     for (const event of keyEvents) {
       dispatchKeyEvent(event);

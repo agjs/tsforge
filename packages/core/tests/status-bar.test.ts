@@ -3,6 +3,7 @@ import {
   StatusBar,
   buildBarFrame,
   buildInputFrame,
+  buildEditorFrame,
   buildOverlayFrame,
   type IStatusInfo,
   type IStatusBarTerminal,
@@ -317,6 +318,107 @@ describe("buildOverlayFrame (@-picker dropdown)", () => {
     expect(frame).not.toContain("\x1b[0;1H"); // never row 0 / negative
     expect(frame).not.toContain("\x1b[-1;1H");
     expect(frame).toContain("\x1b[1;1H"); // clamped to row 1
+  });
+});
+
+describe("buildEditorFrame", () => {
+  test("clears and renders each editor line, then parks the cursor", () => {
+    const frame = buildEditorFrame(
+      ["line one", "line two"],
+      1,
+      3,
+      80,
+      24,
+      false
+    );
+
+    // Two editor lines: one per line, all cleared first
+    expect(frame).toContain("\x1b[20;1H\x1b[2Kline one");
+    expect(frame).toContain("\x1b[21;1H\x1b[2Kline two");
+    // Cursor parked at blockStart + cursorRow = 20 + 1 = 21, cursorCol + 1 = 3 + 1 = 4
+    expect(frame.endsWith("\x1b[21;4H")).toBe(true);
+  });
+
+  test("renders all provided lines (caller must clamp beforehand)", () => {
+    // buildEditorFrame renders whatever lines are passed; the caller (setEditor)
+    // handles clamping. This tests that it renders all of them.
+    const lines = Array(5).fill("line");
+    const frame = buildEditorFrame(lines, 0, 0, 80, 24, false);
+
+    const lineMatches = frame.match(/line/g);
+
+    expect(lineMatches).toHaveLength(5);
+  });
+
+  test("parks cursor at blockStart + cursorRow, cursorCol + 1", () => {
+    const frame = buildEditorFrame(
+      ["first", "second", "third"],
+      2,
+      5,
+      80,
+      24,
+      false
+    );
+
+    // blockStart = max(1, 22 - 3) = 19; cursor at 19 + 2 = 21, col 5 + 1 = 6
+    expect(frame.endsWith("\x1b[21;6H")).toBe(true);
+  });
+
+  test("clamps block start to row 1 on a small terminal", () => {
+    // On a 5-row terminal: inputRow = max(1, 5 - 2) = 3
+    // blockStart = max(1, 3 - 1) = 2 (if 1 line); never goes to row 0 or negative
+    const frame = buildEditorFrame(["only"], 0, 0, 80, 5, false);
+
+    expect(frame).not.toContain("\x1b[0;1H");
+    expect(frame).not.toContain("\x1b[-1;1H");
+    expect(frame).toContain("\x1b[2;1H"); // blockStart clamped
+  });
+});
+
+describe("StatusBar with multi-row editor", () => {
+  const withInput = (term: FakeTerm): StatusBar =>
+    new StatusBar(term, true, false, true);
+
+  test("setEditor renders and parks the cursor (input mode only)", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    term.writes.length = 0;
+    bar.setEditor(["first line", "second line"], 1, 4);
+
+    const out = term.text();
+
+    expect(out).toContain("first line");
+    expect(out).toContain("second line");
+    // blockStart = 24 - 2 - 2 = 20; cursor at 20 + 1 = 21, col 4 + 1 = 5
+    expect(out.endsWith("\x1b[21;5H")).toBe(true);
+  });
+
+  test("setEditor is a no-op when not installed (non-TTY)", () => {
+    const term = new FakeTerm(false, 24, 80);
+    const bar = withInput(term);
+
+    bar.setEditor(["hi"], 0, 0);
+    expect(term.writes).toHaveLength(0);
+  });
+
+  test("setEditor clamps lines to available rows above input row", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    term.writes.length = 0;
+
+    // Try to set 50 lines, but only 21 rows available (24 - 2 input/bar rows - 1 for safety)
+    const manyLines = Array(50).fill("line");
+
+    bar.setEditor(manyLines, 0, 0);
+
+    const out = term.text();
+    const lineMatches = out.match(/line/g);
+
+    expect((lineMatches?.length ?? 0) <= 21).toBe(true);
   });
 });
 

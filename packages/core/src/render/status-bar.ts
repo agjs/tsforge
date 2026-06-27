@@ -229,6 +229,50 @@ export function buildInputFrame(
 }
 
 /**
+ * The escape sequence that paints a multi-row editor input block ABOVE the input row,
+ * cleared and redrawn in place each call. `lines` are the visual rows (wrapped);
+ * `cursorRow` and `cursorCol` position the cursor within them. The block is pinned
+ * absolutely, with the cursor left parked at the typing position.
+ * Pure/width-aware for FakeTerm assertions.
+ */
+export function buildEditorFrame(
+  lines: readonly string[],
+  cursorRow: number,
+  cursorCol: number,
+  columns: number,
+  rows: number,
+  color: boolean
+): string {
+  // columns and color kept for API consistency with buildInputFrame;
+  // future editors may use them for width-aware wrapping or syntax highlighting.
+  void columns;
+
+  void color;
+
+  const inputRow = Math.max(1, rows - 2);
+
+  // The editor block sits above the input row; clamp the starting row to 1.
+  const blockStart = Math.max(1, inputRow - lines.length);
+  let out = "";
+
+  // Clear and render each line of the editor block
+  for (let i = 0; i < lines.length; i += 1) {
+    const row = blockStart + i;
+    const line = lines[i] ?? "";
+
+    // Position at row, clear the line, then write the content
+    out += `${ESC}[${row};1H${ESC}[2K${line}`;
+  }
+
+  // Park the cursor at (blockStart + cursorRow, cursorCol + 1)
+  const cursorAbsRow = blockStart + cursorRow;
+
+  out += `${ESC}[${cursorAbsRow};${cursorCol + 1}H`;
+
+  return out;
+}
+
+/**
  * Paint a transient popup of `lines` directly ABOVE the input row (an `@`-file
  * dropdown), bottom-aligned against the prompt. `clearRows` is the height of the
  * previous popup so a shrinking list erases its old top rows. Pure/width-aware:
@@ -416,6 +460,32 @@ export class StatusBar {
         this.out.rows ?? 0,
         this.color
       )
+    );
+  }
+
+  /** Render a multi-row editor input block above the status bar. Each repaint
+   *  clears the previous frame and redraws in place (absolute positioning).
+   *  Input-row mode only; a no-op otherwise. The cursor is left parked at the
+   *  editor's cursor position. */
+  setEditor(
+    lines: readonly string[],
+    cursorRow: number,
+    cursorCol: number
+  ): void {
+    if (!this.installed || !this.withInput) {
+      return;
+    }
+
+    const columns = this.out.columns ?? 80;
+    const rows = this.out.rows ?? 0;
+
+    // Clamp the block height to the available rows above the input row
+    const inputRow = Math.max(1, rows - 2);
+    const maxRows = Math.max(0, inputRow - 1);
+    const clamped = lines.slice(0, maxRows);
+
+    this.out.write(
+      buildEditorFrame(clamped, cursorRow, cursorCol, columns, rows, this.color)
     );
   }
 
