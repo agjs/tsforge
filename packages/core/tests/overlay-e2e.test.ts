@@ -7,9 +7,50 @@ import {
   clampIndex,
 } from "../src/render/command-menu";
 import { COMMANDS } from "../src/cli/commands";
+import {
+  filterFiles,
+  formatCompletionRows,
+  truncatePath,
+} from "../src/render/file-menu";
+import {
+  StatusBar,
+  type IStatusInfo,
+  type IStatusBarTerminal,
+} from "../src/render";
 import { VirtualScreen } from "./helpers/virtual-screen";
 
 const CLEAR_HOME = "\x1b[2J\x1b[H";
+
+const BAR_INFO: IStatusInfo = {
+  model: "m",
+  contextTokens: 0,
+  contextWindow: 32000,
+  turns: 1,
+  elapsedMs: 0,
+  status: "idle",
+  scope: "src/**",
+  tokensPerSecond: 0,
+};
+
+class FakeTerm implements IStatusBarTerminal {
+  readonly writes: string[] = [];
+
+  constructor(
+    readonly isTTY: boolean,
+    public rows: number,
+    readonly columns: number
+  ) {}
+
+  write(data: string): boolean {
+    this.writes.push(data);
+
+    return true;
+  }
+
+  text(): string {
+    return this.writes.join("");
+  }
+}
 
 const STEPS: IWizardStep[] = [
   {
@@ -153,3 +194,58 @@ function findRow(screen: VirtualScreen, needle: string): number {
 
   return 0;
 }
+
+describe("@-file picker e2e — rendered dropdown", () => {
+  const FILES = [
+    "src/app.ts",
+    "src/app.test.ts",
+    "src/router.ts",
+    "README.md",
+    "package.json",
+  ];
+
+  test("a query narrows the visible rows; the selection shows a gutter", () => {
+    const items = filterFiles(FILES, "app");
+    const rows = formatCompletionRows(items, 0, 80, false);
+    const screen = new VirtualScreen(24, 80);
+
+    screen.feed("\x1b[2J\x1b[H" + rows.join("\n"));
+
+    expect(items.every((p) => p.includes("app"))).toBe(true);
+    expect(screen.rowsContaining("router.ts")).toBe(0); // filtered out
+    // The first (selected) row carries the active gutter "›".
+    expect(screen.row(1)).toContain("›");
+  });
+
+  test("an empty match renders the 'no matching file' hint", () => {
+    const rows = formatCompletionRows(filterFiles(FILES, "zzz"), 0, 80, false);
+    const screen = new VirtualScreen(24, 80);
+
+    screen.feed(rows.join("\n"));
+    expect(screen.text()).toContain("no matching file");
+  });
+
+  test("truncatePath shortens an over-long path to fit the width", () => {
+    const long = "src/very/deeply/nested/directory/structure/component.tsx";
+    const out = truncatePath(long, 20);
+
+    expect(out.length).toBeLessThanOrEqual(20);
+  });
+
+  test("the picker overlay shrinking leaves NO ghost rows (same class as the editor bug)", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = new StatusBar(term, true, false, true);
+
+    bar.install(BAR_INFO);
+    // Show a 5-item dropdown, then shrink to 2 — the dropped 3 must be erased.
+    bar.setOverlay(["one", "two", "three", "four", "five"], BAR_INFO);
+    bar.setOverlay(["one", "two"], BAR_INFO);
+
+    const screen = new VirtualScreen(24, 80);
+
+    screen.feed(term.text());
+    expect(screen.rowsContaining("five")).toBe(0); // ghost gone
+    expect(screen.rowsContaining("three")).toBe(0); // ghost gone
+    expect(screen.rowsContaining("two")).toBe(1); // still shown
+  });
+});
