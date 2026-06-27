@@ -152,16 +152,48 @@ profile-gated rules only fire under their profile; meta-rules are change-scoped.
 
 ## render / CLI — `src/cli.ts`, `src/render/*`
 
-Spinner, pinned status bar, readline REPL, command palette, plan-mode wiring.
+Spinner, pinned status bar (`status-bar.ts`), the multi-line input editor (driven via
+`src/editor/*`, replacing the old readline REPL since PR #52), command palette
+(`command-menu.ts`), `@`-file picker (`file-menu.ts`), setup wizard (`wizard.ts`),
+plan-mode wiring.
 
-**Invariants** nothing writes to the readline input line mid-turn (no inline `\r` while
-a prompt is attached); the status bar tears down idempotently on exit/resize/clear;
-mid-turn input is queued, not dropped.
+**Invariants** the status bar tears down idempotently on exit/resize/clear and never
+leaves a scroll region pinned after exit; the editor block is BOTTOM-anchored and a
+shrink clears its old top rows (no ghost rows) — same for the `@`-picker overlay
+(`buildOverlayFrame`); streamed agent output scrolls in the region ABOVE the pinned
+input, never over it; a terminal resize updates BOTH the bar's scroll region AND the
+editor's wrap/window dimensions (the editor caches its size — `IEditorHandle.resize`
+must be called or the current line is clipped at the stale size); mid-turn input is
+queued, not dropped.
 
 **Risk areas** inline spinner clobbering input on a tiny TTY (the fixed P2b); a scroll
-region left pinned after exit.
+region left pinned after exit; **stale editor dimensions after resize** (fixed: PR #54
+— editor cached columns/rows and the resize handler only re-pinned the bar); a render
+function asserted by escape-string substring instead of the rendered grid (use the
+`VirtualScreen` e2e harness — `tests/helpers/virtual-screen.ts` — which is what caught
+the ghost-row / non-ASCII / cursor-clip bugs string assertions missed).
 
-**Checklist** spinner inline gate off in the interactive REPL; teardown on `process.on("exit")`.
+**Checklist** spinner inline gate off in the interactive REPL; teardown on
+`process.on("exit")`; resize handler calls `statusBar.resize` AND `editorHandle.resize`.
+
+## editor — `src/editor/*` (`buffer.ts`, `keys.ts`, `paste.ts`, `view.ts`, `controller.ts`, `segments.ts`)
+
+The multi-line input editor that replaced readline: a grapheme-correct buffer, a key
+decoder (Kitty CSI-u + modifyOtherKeys + legacy), a bracketed-paste scanner, a
+wrap/window view renderer, and a controller wiring stdin → buffer → `setEditor`.
+
+**Invariants** cursor offsets are grapheme indices, never UTF-16 (`segments.ts`); a
+paste NEVER auto-submits — Enter submits, Shift/Alt+Enter and a trailing `\`+Enter
+insert a newline (`controller.ts`); all printable input is accepted, including
+non-ASCII / emoji / CJK — only C0/DEL/C1 controls are rejected (`keys.ts` — a
+`charCodeAt >= 0x7f` guard dropped every non-ASCII char, fixed via `codePointAt`);
+multi-line insert + undo is atomic; the view windows to the editor's visible capacity
+(`rows - EDITOR_RESERVED_ROWS`) so the cursor line is always shown.
+
+**Risk areas** a key guard that drops a valid grapheme; an in-place repaint that ghosts
+on shrink (top- vs bottom-anchored block); stale dims after resize; a paste path that
+auto-submits. **Tested via the `VirtualScreen` e2e harness** (`tests/editor-e2e.test.ts`)
+— assert the rendered grid, not emitted escape strings.
 
 ## mcp — `src/mcp/*`
 
