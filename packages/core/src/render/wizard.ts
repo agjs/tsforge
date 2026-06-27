@@ -384,8 +384,10 @@ interface IKeyInfo {
 }
 
 /** Map a raw keypress to a wizard action, or null to ignore. Digits jump the
- *  cursor and are handled by the driver (not here). */
-function actionFor(
+ *  cursor and are handled by the driver (not here). Exported so the key→action
+ *  decode is unit-testable without a PTY (the raw-mode plumbing around it is
+ *  not — see node-pty/Bun limits). */
+export function actionFor(
   str: string | undefined,
   key: IKeyInfo
 ): IWizardAction | null {
