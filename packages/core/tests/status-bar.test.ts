@@ -420,6 +420,38 @@ describe("StatusBar with multi-row editor", () => {
 
     expect((lineMatches?.length ?? 0) <= 21).toBe(true);
   });
+
+  test("setEditor shrinking a block clears old top rows (no ghost rows)", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+
+    // First: render a 4-row block
+    const fourLines = ["line 1", "line 2", "line 3", "line 4"];
+
+    bar.setEditor(fourLines, 3, 0);
+    term.writes.length = 0;
+
+    // Second: shrink to 1 row — the old rows 18-21 must be explicitly cleared
+    // buildEditorFrame will clear max(4, 1) = 4 rows starting at blockStart
+    bar.setEditor(["only line"], 0, 0);
+
+    const out = term.text();
+
+    // buildEditorFrame clears rows for max(previous, current) = max(4, 1) = 4 rows
+    // blockStart = max(1, 22 - 4) = 18
+    // So all 4 rows (18-21) are processed: row 18 gets "only line", rows 19-21 are cleared
+    expect(out).toContain("\x1b[18;1H\x1b[2Konly line"); // row 18 with content
+    expect(out).toContain("\x1b[19;1H\x1b[2K"); // row 19 cleared (no content)
+    expect(out).toContain("\x1b[20;1H\x1b[2K"); // row 20 cleared (no content)
+    expect(out).toContain("\x1b[21;1H\x1b[2K"); // row 21 cleared (no content)
+    // The key assertion: we've cleared the high-water-mark, so no stale text remains
+    // Count clear sequences (position + erase line) to verify all 4 rows are cleared
+    const clearCount = (out.match(/\[(\d+);1H.*?\[2K/g) ?? []).length;
+
+    expect(clearCount).toBeGreaterThanOrEqual(4);
+  });
 });
 
 describe("StatusBar @-picker overlay", () => {

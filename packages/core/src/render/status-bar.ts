@@ -231,7 +231,8 @@ export function buildInputFrame(
 /**
  * The escape sequence that paints a multi-row editor input block ABOVE the input row,
  * cleared and redrawn in place each call. `lines` are the visual rows (wrapped);
- * `cursorRow` and `cursorCol` position the cursor within them. The block is pinned
+ * `cursorRow` and `cursorCol` position the cursor within them. `clearRows` is the height
+ * of the previous block so a shrinking block erases its old top rows. The block is pinned
  * absolutely, with the cursor left parked at the typing position.
  * Pure/width-aware for FakeTerm assertions.
  */
@@ -241,7 +242,8 @@ export function buildEditorFrame(
   cursorCol: number,
   columns: number,
   rows: number,
-  color: boolean
+  color: boolean,
+  clearRows = 0
 ): string {
   // columns and color kept for API consistency with buildInputFrame;
   // future editors may use them for width-aware wrapping or syntax highlighting.
@@ -252,15 +254,17 @@ export function buildEditorFrame(
   const inputRow = Math.max(1, rows - 2);
 
   // The editor block sits above the input row; clamp the starting row to 1.
-  const blockStart = Math.max(1, inputRow - lines.length);
+  // When shrinking, we need to clear max(previous, current) rows so old top rows erase.
+  const count = Math.max(lines.length, clearRows);
+  const blockStart = Math.max(1, inputRow - count);
   let out = "";
 
-  // Clear and render each line of the editor block
-  for (let i = 0; i < lines.length; i += 1) {
+  // Clear all rows needed for the high-water-mark, rendering content only for current lines
+  for (let i = 0; i < count; i += 1) {
     const row = blockStart + i;
-    const line = lines[i] ?? "";
+    const line = i < lines.length ? (lines[i] ?? "") : "";
 
-    // Position at row, clear the line, then write the content
+    // Position at row, clear the line, then write the content (empty if past lines.length)
     out += `${ESC}[${row};1H${ESC}[2K${line}`;
   }
 
@@ -318,6 +322,9 @@ export class StatusBar {
   /** Height of the `@`-picker popup currently painted above the input row (0 = none),
    *  so the next paint knows how many old rows to erase. */
   private overlayRows = 0;
+  /** Height of the multi-row editor block currently painted above the input row (0 = none),
+   *  so the next paint knows how many old rows to erase when the block shrinks. */
+  private editorRows = 0;
 
   constructor(
     private readonly out: IStatusBarTerminal,
@@ -466,7 +473,7 @@ export class StatusBar {
   /** Render a multi-row editor input block above the status bar. Each repaint
    *  clears the previous frame and redraws in place (absolute positioning).
    *  Input-row mode only; a no-op otherwise. The cursor is left parked at the
-   *  editor's cursor position. */
+   *  editor's cursor position. Shrinking blocks erase old top rows via editorRows. */
   setEditor(
     lines: readonly string[],
     cursorRow: number,
@@ -485,8 +492,17 @@ export class StatusBar {
     const clamped = lines.slice(0, maxRows);
 
     this.out.write(
-      buildEditorFrame(clamped, cursorRow, cursorCol, columns, rows, this.color)
+      buildEditorFrame(
+        clamped,
+        cursorRow,
+        cursorCol,
+        columns,
+        rows,
+        this.color,
+        this.editorRows
+      )
     );
+    this.editorRows = clamped.length;
   }
 
   /** Re-apply the scroll region after a terminal resize, then repaint. */
@@ -534,5 +550,6 @@ export class StatusBar {
 
     this.out.write(`${ESC}[?25h`); // ensure the cursor is visible
     this.installed = false;
+    this.editorRows = 0; // reset editor block height
   }
 }
