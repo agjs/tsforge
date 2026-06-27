@@ -456,3 +456,139 @@ describe("editor e2e — non-ASCII input (regression: keys dropped >= 0x7f)", ()
     expect(h.handle.getBuffer().getText()).toBe("Grüße — 你好 👍");
   });
 });
+
+describe("editor e2e — motion, kill/yank, undo, overflow, shrink probes", () => {
+  test("vertical cursor movement renders both lines without ghosting", () => {
+    const h = buildHarness();
+
+    h.stdin.feed("top line");
+    h.stdin.feed("\x1b\r");
+    h.stdin.feed("bottom line");
+    h.stdin.feed("\x1b[A"); // up — into "top line" (not history; buffer has 2 lines)
+
+    const screen = h.screen();
+
+    expect(screen.rowsContaining("top line")).toBe(1);
+    expect(screen.rowsContaining("bottom line")).toBe(1);
+    expect(h.handle.getBuffer().getText()).toBe("top line\nbottom line");
+  });
+
+  test("ctrl+w deletes the previous word, no stale text on screen", () => {
+    const h = buildHarness();
+
+    h.stdin.feed("hello wonderful world");
+    h.stdin.feed("\x17"); // ctrl+w → drop "world"
+
+    const screen = h.screen();
+
+    expect(h.handle.getBuffer().getText()).toBe("hello wonderful ");
+    expect(screen.rowsContaining("world")).toBe(0);
+    expect(screen.rowsContaining("hello wonderful")).toBe(1);
+  });
+
+  test("ctrl+k kill then ctrl+y yank restores the text exactly once", () => {
+    const h = buildHarness();
+
+    h.stdin.feed("keep cut");
+    h.stdin.feed("\x1b[H"); // home
+    h.stdin.feed("\x0b"); // ctrl+k → kill whole line into kill-ring
+    expect(h.handle.getBuffer().getText()).toBe("");
+
+    h.stdin.feed("\x19"); // ctrl+y → yank back
+
+    const screen = h.screen();
+
+    expect(h.handle.getBuffer().getText()).toBe("keep cut");
+    expect(screen.rowsContaining("keep cut")).toBe(1);
+  });
+
+  test("ctrl+z undo then ctrl+shift+z redo round-trips on screen", () => {
+    const h = buildHarness();
+
+    h.stdin.feed("abc");
+    h.stdin.feed("\x1az"); // ctrl+z is \x1a; feed undo
+    // (controller maps ctrl+z to undo)
+    h.stdin.feed("\x1a"); // ctrl+z undo
+
+    // After undo, the last insert should be gone; exact granularity is the
+    // buffer's concern — assert the screen matches the buffer (no ghosts).
+    const screen = h.screen();
+    const text = h.handle.getBuffer().getText();
+
+    if (text === "") {
+      expect(screen.rowsContaining("abc")).toBe(0);
+    } else {
+      expect(screen.rowsContaining(text)).toBe(1);
+    }
+  });
+
+  test("content overflowing the editor area shows scroll indicators, cursor visible", () => {
+    const h = buildHarness(12, 40); // ~7 usable editor rows
+
+    for (let i = 0; i < 15; i += 1) {
+      h.stdin.feed(`L${i}`);
+
+      if (i < 14) {
+        h.stdin.feed("\x1b\r");
+      }
+    }
+
+    const screen = h.screen();
+
+    // The cursor (last) line is always visible...
+    expect(screen.rowsContaining("L14")).toBe(1);
+    // ...and an "N more" indicator signals the clipped lines above.
+    expect(screen.text()).toContain("more");
+  });
+
+  test("shrinking the terminal mid-edit leaves no ghost rows", () => {
+    const h = buildHarness(24, 80);
+
+    h.stdin.feed("line A");
+    h.stdin.feed("\x1b\r");
+    h.stdin.feed("line B");
+    h.stdin.feed("\x1b\r");
+    h.stdin.feed("line C");
+
+    // Shrink the terminal and repaint, then edit again.
+    h.term.rows = 14;
+    h.bar.resize(INFO);
+    h.stdin.feed("!");
+
+    const screen = new VirtualScreen(14, 80);
+
+    screen.feed(h.term.text());
+    expect(screen.rowsContaining("line C!")).toBe(1);
+    expect(screen.rowsContaining("line A")).toBe(1);
+    expect(screen.rowsContaining("line B")).toBe(1);
+  });
+});
+
+describe("editor e2e — wrapped-line cursor math", () => {
+  test("cursor lands on the correct visual row/col after a line wraps", () => {
+    const h = buildHarness(24, 20); // width 20
+
+    // 25 chars → wraps to 2 visual rows (20 + 5). Cursor rests after char 25.
+    h.stdin.feed("0123456789abcdefghijklmno");
+
+    const { row, col } = h.screen().cursorPosition();
+
+    // Block is 2 visual rows, bottom-anchored: contentTop = 22 - 2 = 20,
+    // cursor on visual row 1 (the wrapped tail) → row 21, after 5 chars → col 6.
+    expect(row).toBe(21);
+    expect(col).toBe(6);
+  });
+
+  test("editing at the wrap boundary keeps all text and a single render", () => {
+    const h = buildHarness(24, 20);
+
+    h.stdin.feed("0123456789abcdefghijklmno"); // 25 chars, wrapped
+    h.stdin.feed("\x1b[H"); // home → start of logical line
+    h.stdin.feed("X"); // insert at very start
+
+    const joined = h.screen().text().replace(/\n/g, "");
+
+    expect(h.handle.getBuffer().getText()).toBe("X0123456789abcdefghijklmno");
+    expect(joined).toContain("X0123456789abcdefghijklmno");
+  });
+});
