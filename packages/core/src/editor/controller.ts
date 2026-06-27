@@ -38,6 +38,13 @@ export interface IStartEditorDeps {
 
 type KeyAction = (buffer: EditorBuffer) => void;
 
+/** Rows the status bar reserves below the editor block: the 2-row bar plus the
+ *  prompt/input row. renderEditor must window to the SAME height the StatusBar
+ *  can actually paint (rows - this), or the cursor line gets clipped off the
+ *  bottom when the buffer is taller than the visible area. Mirrors
+ *  RESERVED_ROWS (2) + 1 in status-bar.ts. */
+const EDITOR_RESERVED_ROWS = 3;
+
 /** Debug logging helper: append to TSFORGE_EDITOR_DEBUG if set. */
 function debugLog(msg: string): void {
   const path = process.env.TSFORGE_EDITOR_DEBUG;
@@ -172,7 +179,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       },
       {
         columns,
-        maxRows: rows,
+        maxRows: Math.max(1, rows - EDITOR_RESERVED_ROWS),
         color: true,
       }
     );

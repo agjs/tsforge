@@ -252,24 +252,32 @@ export function buildEditorFrame(
   void color;
 
   const inputRow = Math.max(1, rows - 2);
+  const maxSpan = Math.max(0, inputRow - 1);
 
-  // The editor block sits above the input row; clamp the starting row to 1.
-  // When shrinking, we need to clear max(previous, current) rows so old top rows erase.
-  const count = Math.max(lines.length, clearRows);
-  const blockStart = Math.max(1, inputRow - count);
+  // The block is BOTTOM-anchored: content always occupies the bottom
+  // `lines.length` rows (resting just above the input row), and any cleared
+  // rows from a taller previous frame sit ABOVE it. `clearRows` is the previous
+  // block height, so the span [inputRow - count, inputRow - 1] fully covers
+  // wherever the prior frame painted — a shrinking block can't orphan its old
+  // top rows. (Top-anchoring left ghosts: the start moved down on shrink and
+  // the rows above it were never erased.) Mirrors buildOverlayFrame.
+  const count = Math.min(Math.max(lines.length, clearRows), maxSpan);
+  const blank = Math.max(0, count - lines.length); // cleared rows above content
+  const spanTop = Math.max(1, inputRow - count);
   let out = "";
 
-  // Clear all rows needed for the high-water-mark, rendering content only for current lines
   for (let i = 0; i < count; i += 1) {
-    const row = blockStart + i;
-    const line = i < lines.length ? (lines[i] ?? "") : "";
+    const row = spanTop + i;
+    const line = i - blank >= 0 ? (lines[i - blank] ?? "") : "";
 
-    // Position at row, clear the line, then write the content (empty if past lines.length)
+    // Position at row, clear the line, then write the content (empty for the
+    // cleared rows above the bottom-anchored content).
     out += `${ESC}[${row};1H${ESC}[2K${line}`;
   }
 
-  // Park the cursor at (blockStart + cursorRow, cursorCol + 1)
-  const cursorAbsRow = blockStart + cursorRow;
+  // Park the cursor relative to the bottom-anchored content top.
+  const contentTop = Math.max(1, inputRow - lines.length);
+  const cursorAbsRow = contentTop + cursorRow;
 
   out += `${ESC}[${cursorAbsRow};${cursorCol + 1}H`;
 

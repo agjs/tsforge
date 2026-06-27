@@ -162,9 +162,18 @@ function tryParsePrintable(
   chunk: string,
   idx: number
 ): { event: IKeyEvent; len: number } | null {
-  const ch = chunk.charCodeAt(idx);
+  // codePointAt (not charCodeAt) so an emoji / non-BMP char reads as one code
+  // point instead of a lone surrogate. Reject only true control ranges: C0
+  // controls, DEL, and C1 controls — everything else (accented Latin, CJK,
+  // emoji, …) is printable text the editor must accept.
+  const cp = chunk.codePointAt(idx);
 
-  if (ch < 0x20 || ch >= 0x7f) {
+  if (
+    cp === undefined ||
+    cp < 0x20 ||
+    cp === 0x7f ||
+    (cp >= 0x80 && cp <= 0x9f)
+  ) {
     return null;
   }
 

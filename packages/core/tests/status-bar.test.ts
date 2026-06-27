@@ -433,21 +433,22 @@ describe("StatusBar with multi-row editor", () => {
     bar.setEditor(fourLines, 3, 0);
     term.writes.length = 0;
 
-    // Second: shrink to 1 row — the old rows 18-21 must be explicitly cleared
-    // buildEditorFrame will clear max(4, 1) = 4 rows starting at blockStart
+    // Second: shrink to 1 row. The block is BOTTOM-anchored (content rests just
+    // above the input row at row 21); the old top rows from the 4-row frame must
+    // be explicitly cleared. clearRows = previous height (4), so the span is
+    // rows 18-21: rows 18-20 are blanked, the single line lands at row 21.
     bar.setEditor(["only line"], 0, 0);
 
     const out = term.text();
 
-    // buildEditorFrame clears rows for max(previous, current) = max(4, 1) = 4 rows
-    // blockStart = max(1, 22 - 4) = 18
-    // So all 4 rows (18-21) are processed: row 18 gets "only line", rows 19-21 are cleared
-    expect(out).toContain("\x1b[18;1H\x1b[2Konly line"); // row 18 with content
-    expect(out).toContain("\x1b[19;1H\x1b[2K"); // row 19 cleared (no content)
-    expect(out).toContain("\x1b[20;1H\x1b[2K"); // row 20 cleared (no content)
-    expect(out).toContain("\x1b[21;1H\x1b[2K"); // row 21 cleared (no content)
-    // The key assertion: we've cleared the high-water-mark, so no stale text remains
-    // Count clear sequences (position + erase line) to verify all 4 rows are cleared
+    expect(out).toContain("\x1b[18;1H\x1b[2K"); // row 18 cleared (old top row)
+    expect(out).toContain("\x1b[19;1H\x1b[2K"); // row 19 cleared
+    expect(out).toContain("\x1b[20;1H\x1b[2K"); // row 20 cleared
+    expect(out).toContain("\x1b[21;1H\x1b[2Konly line"); // content bottom-anchored
+    // The old top rows must be blanked, not left holding stale "line N" text.
+    expect(out).not.toContain("line 1");
+    expect(out).not.toContain("line 4");
+    // All 4 rows of the previous high-water-mark are cleared.
     const clearCount = (out.match(/\[(\d+);1H.*?\[2K/g) ?? []).length;
 
     expect(clearCount).toBeGreaterThanOrEqual(4);
