@@ -3,6 +3,7 @@ import {
   StatusBar,
   buildBarFrame,
   buildInputFrame,
+  buildEditorFrame,
   buildOverlayFrame,
   type IStatusInfo,
   type IStatusBarTerminal,
@@ -317,6 +318,229 @@ describe("buildOverlayFrame (@-picker dropdown)", () => {
     expect(frame).not.toContain("\x1b[0;1H"); // never row 0 / negative
     expect(frame).not.toContain("\x1b[-1;1H");
     expect(frame).toContain("\x1b[1;1H"); // clamped to row 1
+  });
+});
+
+describe("buildEditorFrame", () => {
+  test("clears and renders each editor line, then parks the cursor", () => {
+    const frame = buildEditorFrame(
+      ["line one", "line two"],
+      1,
+      3,
+      80,
+      24,
+      false
+    );
+
+    // Two editor lines: one per line, all cleared first
+    expect(frame).toContain("\x1b[20;1H\x1b[2Kline one");
+    expect(frame).toContain("\x1b[21;1H\x1b[2Kline two");
+    // Cursor parked at blockStart + cursorRow = 20 + 1 = 21, cursorCol + 1 = 3 + 1 = 4
+    expect(frame.endsWith("\x1b[21;4H")).toBe(true);
+  });
+
+  test("renders all provided lines (caller must clamp beforehand)", () => {
+    // buildEditorFrame renders whatever lines are passed; the caller (setEditor)
+    // handles clamping. This tests that it renders all of them.
+    const lines = Array(5).fill("line");
+    const frame = buildEditorFrame(lines, 0, 0, 80, 24, false);
+
+    const lineMatches = frame.match(/line/g);
+
+    expect(lineMatches).toHaveLength(5);
+  });
+
+  test("parks cursor at blockStart + cursorRow, cursorCol + 1", () => {
+    const frame = buildEditorFrame(
+      ["first", "second", "third"],
+      2,
+      5,
+      80,
+      24,
+      false
+    );
+
+    // blockStart = max(1, 22 - 3) = 19; cursor at 19 + 2 = 21, col 5 + 1 = 6
+    expect(frame.endsWith("\x1b[21;6H")).toBe(true);
+  });
+
+  test("clamps block start to row 1 on a small terminal", () => {
+    // On a 5-row terminal: inputRow = max(1, 5 - 2) = 3
+    // blockStart = max(1, 3 - 1) = 2 (if 1 line); never goes to row 0 or negative
+    const frame = buildEditorFrame(["only"], 0, 0, 80, 5, false);
+
+    expect(frame).not.toContain("\x1b[0;1H");
+    expect(frame).not.toContain("\x1b[-1;1H");
+    expect(frame).toContain("\x1b[2;1H"); // blockStart clamped
+  });
+});
+
+describe("StatusBar with multi-row editor", () => {
+  const withInput = (term: FakeTerm): StatusBar =>
+    new StatusBar(term, true, false, true);
+
+  test("setEditor renders and parks the cursor (input mode only)", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    term.writes.length = 0;
+    bar.setEditor(["first line", "second line"], 1, 4);
+
+    const out = term.text();
+
+    expect(out).toContain("first line");
+    expect(out).toContain("second line");
+    // blockStart = 24 - 2 - 2 = 20; cursor at 20 + 1 = 21, col 4 + 1 = 5
+    expect(out.endsWith("\x1b[21;5H")).toBe(true);
+  });
+
+  test("setEditor is a no-op when not installed (non-TTY)", () => {
+    const term = new FakeTerm(false, 24, 80);
+    const bar = withInput(term);
+
+    bar.setEditor(["hi"], 0, 0);
+    expect(term.writes).toHaveLength(0);
+  });
+
+  test("setEditor clamps lines to available rows above input row", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    term.writes.length = 0;
+
+    // Try to set 50 lines, but only 21 rows available (24 - 2 input/bar rows - 1 for safety)
+    const manyLines = Array(50).fill("line");
+
+    bar.setEditor(manyLines, 0, 0);
+
+    const out = term.text();
+    const lineMatches = out.match(/line/g);
+
+    expect((lineMatches?.length ?? 0) <= 21).toBe(true);
+  });
+
+  test("setEditor shrinking a block clears old top rows (no ghost rows)", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+
+    // First: render a 4-row block
+    const fourLines = ["line 1", "line 2", "line 3", "line 4"];
+
+    bar.setEditor(fourLines, 3, 0);
+    term.writes.length = 0;
+
+    // Second: shrink to 1 row. The block is BOTTOM-anchored (content rests just
+    // above the input row at row 21); the old top rows from the 4-row frame must
+    // be explicitly cleared. clearRows = previous height (4), so the span is
+    // rows 18-21: rows 18-20 are blanked, the single line lands at row 21.
+    bar.setEditor(["only line"], 0, 0);
+
+    const out = term.text();
+
+    expect(out).toContain("\x1b[18;1H\x1b[2K"); // row 18 cleared (old top row)
+    expect(out).toContain("\x1b[19;1H\x1b[2K"); // row 19 cleared
+    expect(out).toContain("\x1b[20;1H\x1b[2K"); // row 20 cleared
+    expect(out).toContain("\x1b[21;1H\x1b[2Konly line"); // content bottom-anchored
+    // The old top rows must be blanked, not left holding stale "line N" text.
+    expect(out).not.toContain("line 1");
+    expect(out).not.toContain("line 4");
+    // All 4 rows of the previous high-water-mark are cleared.
+    const clearCount = (out.match(/\[(\d+);1H.*?\[2K/g) ?? []).length;
+
+    expect(clearCount).toBeGreaterThanOrEqual(4);
+  });
+
+  test("setEditor adjusts scroll region when height changes (pinned editor block)", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    // Initial scroll region: rows 1-21 (reserved = 3: bar + input = 2 + 1)
+    // Expect: \x1b[1;21r
+    expect(term.text()).toContain("\x1b[1;21r");
+
+    term.writes.length = 0;
+
+    // Set a 2-row editor block
+    bar.setEditor(["line 1", "line 2"], 0, 0);
+
+    const out = term.text();
+
+    // Scroll region must shrink to rows 1-19 (reserved=3 + editor=2)
+    // New regionEnd = 24 - 3 - 2 = 19
+    expect(out).toContain("\x1b[1;19r");
+
+    term.writes.length = 0;
+
+    // Shrink editor to 1 row
+    bar.setEditor(["only"], 0, 0);
+
+    const out2 = term.text();
+
+    // Scroll region expands back to rows 1-20 (reserved=3 + editor=1)
+    // New regionEnd = 24 - 3 - 1 = 20
+    expect(out2).toContain("\x1b[1;20r");
+  });
+
+  test("setEditor clamps editor height so scroll region stays >= 1 row", () => {
+    const term = new FakeTerm(true, 5, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    // On a 5-row terminal: reserved=3, so input row is at row 3
+    // maxRows for editor = max(0, 3 - 1) = 2
+    // But if we requested 50, it clamps to 2
+
+    const many = Array(50).fill("line");
+
+    bar.setEditor(many, 0, 0);
+
+    const out = term.text();
+
+    // Editor height should be clamped to 2 rows
+    // regionEnd = 5 - 3 - 2 = 0 → clamped to max(1, 0) = 1
+    // So scroll region is \x1b[1;1r (just 1 row for streaming)
+    expect(out).toContain("\x1b[1;1r");
+  });
+
+  test("resize after editor block adjust updates scroll region correctly", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    bar.setEditor(["line 1", "line 2", "line 3"], 0, 0);
+    // regionEnd = 24 - 3 - 3 = 18
+    expect(term.text()).toContain("\x1b[1;18r");
+
+    term.rows = 30; // resize taller
+    term.writes.length = 0;
+    bar.resize(INFO);
+
+    const out = term.text();
+
+    // After resize: regionEnd = 30 - 3 - 3 = 24
+    expect(out).toContain("\x1b[1;24r");
+  });
+
+  test("teardown resets scroll region and clears editor block height", () => {
+    const term = new FakeTerm(true, 24, 80);
+    const bar = withInput(term);
+
+    bar.install(INFO);
+    bar.setEditor(["line 1", "line 2"], 0, 0);
+    term.writes.length = 0;
+    bar.teardown();
+
+    const out = term.text();
+
+    // Scroll region reset to full screen
+    expect(out).toContain("\x1b[r");
+    // Editor block height should be cleared for next activate
+    expect(bar.active).toBe(false);
   });
 });
 

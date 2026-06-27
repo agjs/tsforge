@@ -229,6 +229,62 @@ export function buildInputFrame(
 }
 
 /**
+ * The escape sequence that paints a multi-row editor input block ABOVE the input row,
+ * cleared and redrawn in place each call. `lines` are the visual rows (wrapped);
+ * `cursorRow` and `cursorCol` position the cursor within them. `clearRows` is the height
+ * of the previous block so a shrinking block erases its old top rows. The block is pinned
+ * absolutely, with the cursor left parked at the typing position.
+ * Pure/width-aware for FakeTerm assertions.
+ */
+export function buildEditorFrame(
+  lines: readonly string[],
+  cursorRow: number,
+  cursorCol: number,
+  columns: number,
+  rows: number,
+  color: boolean,
+  clearRows = 0
+): string {
+  // columns and color kept for API consistency with buildInputFrame;
+  // future editors may use them for width-aware wrapping or syntax highlighting.
+  void columns;
+
+  void color;
+
+  const inputRow = Math.max(1, rows - 2);
+  const maxSpan = Math.max(0, inputRow - 1);
+
+  // The block is BOTTOM-anchored: content always occupies the bottom
+  // `lines.length` rows (resting just above the input row), and any cleared
+  // rows from a taller previous frame sit ABOVE it. `clearRows` is the previous
+  // block height, so the span [inputRow - count, inputRow - 1] fully covers
+  // wherever the prior frame painted — a shrinking block can't orphan its old
+  // top rows. (Top-anchoring left ghosts: the start moved down on shrink and
+  // the rows above it were never erased.) Mirrors buildOverlayFrame.
+  const count = Math.min(Math.max(lines.length, clearRows), maxSpan);
+  const blank = Math.max(0, count - lines.length); // cleared rows above content
+  const spanTop = Math.max(1, inputRow - count);
+  let out = "";
+
+  for (let i = 0; i < count; i += 1) {
+    const row = spanTop + i;
+    const line = i - blank >= 0 ? (lines[i - blank] ?? "") : "";
+
+    // Position at row, clear the line, then write the content (empty for the
+    // cleared rows above the bottom-anchored content).
+    out += `${ESC}[${row};1H${ESC}[2K${line}`;
+  }
+
+  // Park the cursor relative to the bottom-anchored content top.
+  const contentTop = Math.max(1, inputRow - lines.length);
+  const cursorAbsRow = contentTop + cursorRow;
+
+  out += `${ESC}[${cursorAbsRow};${cursorCol + 1}H`;
+
+  return out;
+}
+
+/**
  * Paint a transient popup of `lines` directly ABOVE the input row (an `@`-file
  * dropdown), bottom-aligned against the prompt. `clearRows` is the height of the
  * previous popup so a shrinking list erases its old top rows. Pure/width-aware:
@@ -274,6 +330,9 @@ export class StatusBar {
   /** Height of the `@`-picker popup currently painted above the input row (0 = none),
    *  so the next paint knows how many old rows to erase. */
   private overlayRows = 0;
+  /** Height of the multi-row editor block currently painted above the input row (0 = none),
+   *  so the next paint knows how many old rows to erase when the block shrinks. */
+  private editorRows = 0;
 
   constructor(
     private readonly out: IStatusBarTerminal,
@@ -419,6 +478,56 @@ export class StatusBar {
     );
   }
 
+  /** Render a multi-row editor input block above the status bar. Each repaint
+   *  clears the previous frame and redraws in place (absolute positioning).
+   *  Input-row mode only; a no-op otherwise. The cursor is left parked at the
+   *  editor's cursor position. Shrinking blocks erase old top rows via editorRows.
+   *  When the editor height changes, the scroll region is resized so the editor
+   *  block is pinned (not scrollable) — streaming only scrolls above it. */
+  setEditor(
+    lines: readonly string[],
+    cursorRow: number,
+    cursorCol: number
+  ): void {
+    if (!this.installed || !this.withInput) {
+      return;
+    }
+
+    const columns = this.out.columns ?? 80;
+    const rows = this.out.rows ?? 0;
+
+    // Clamp the block height to the available rows above the input row
+    const inputRow = Math.max(1, rows - 2);
+    const maxRows = Math.max(0, inputRow - 1);
+    const clamped = lines.slice(0, maxRows);
+    const newHeight = clamped.length;
+
+    // If editor height changes, update the scroll region to exclude the new height.
+    // This pins the editor block (and bar + input) so they never scroll.
+    if (newHeight !== this.editorRows) {
+      const regionEnd = Math.max(1, rows - this.reserved - newHeight);
+
+      this.out.write(`${ESC}[1;${regionEnd}r`);
+
+      // Re-anchor the stream cursor to the new region boundary
+      this.out.write(`${ESC}[${regionEnd};1H`);
+      this.out.write(`${ESC}7`);
+    }
+
+    this.out.write(
+      buildEditorFrame(
+        clamped,
+        cursorRow,
+        cursorCol,
+        columns,
+        rows,
+        this.color,
+        this.editorRows
+      )
+    );
+    this.editorRows = newHeight;
+  }
+
   /** Re-apply the scroll region after a terminal resize, then repaint. */
   resize(info: IStatusInfo): void {
     if (!this.installed) {
@@ -430,7 +539,8 @@ export class StatusBar {
     // Clamp to row 1: a resize BELOW `reserved` (a terminal shrunk after install)
     // would otherwise make `rows - reserved` non-positive and emit invalid
     // `${ESC}[1;-1r` / `${ESC}[-1;1H` sequences. Mirrors teardown()'s clamp.
-    const regionEnd = Math.max(1, rows - this.reserved);
+    // Also exclude the editor block from the scrollable region.
+    const regionEnd = Math.max(1, rows - this.reserved - this.editorRows);
 
     this.out.write(`${ESC}[1;${regionEnd}r`);
 
@@ -464,5 +574,6 @@ export class StatusBar {
 
     this.out.write(`${ESC}[?25h`); // ensure the cursor is visible
     this.installed = false;
+    this.editorRows = 0; // reset editor block height
   }
 }

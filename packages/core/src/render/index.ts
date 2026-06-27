@@ -9,6 +9,7 @@ export {
   StatusBar,
   buildBarFrame,
   buildInputFrame,
+  buildEditorFrame,
   buildOverlayFrame,
   MIN_ROWS,
   type IStatusBarTerminal,

@@ -54,6 +54,9 @@ import {
 import { makeSpinner, spinnerPhase } from "./render/spinner";
 import { validate } from "./validate";
 import { isPolicyMode } from "./policy";
+import { startEditor, type IEditorHandle } from "./editor";
+import { renderEditor } from "./editor/view";
+import { flags } from "./config/flags";
 import {
   PROVIDER_LIMITS,
   PROVIDER_DEFAULTS,
@@ -764,14 +767,26 @@ function maybePrintNoConfigHint(
   }
 }
 
-/** Interactive REPL: a persistent gate-anchored conversation. */
-async function repl(args: ICliArgs): Promise<number> {
-  // The active model comes from the registry (~/.tsforge/models.json) unless a
-  // recipe names one or an explicit TSFORGE_* env overrides it; `/model <name>`
-  // switches it live.
+/** Initialize the REPL session: resolve model, gate, context window, and create
+ *  the session object. Returns the session, provider, and config metadata.
+ *  Extracted to reduce repl() cognitive complexity. */
+async function initReplSession(args: ICliArgs): Promise<{
+  session: Session;
+  provider: OpenAICompatibleProvider;
+  activeName: string;
+  contextWindow: number;
+  id: string;
+  gateLabel: string;
+  logFile: string;
+  persist: () => Promise<void>;
+  report: Reporter;
+  resumed: ISessionRecord | null;
+  files: string[];
+  activeModelEntry: IModelEntry;
+}> {
   const activeModel = await modelForRun(args);
   const provider = makeProvider(activeModel.entry);
-  let activeName = activeModel.name;
+  const activeName = activeModel.name;
 
   warnDefaultModelOnRemote(activeModel.entry);
 
@@ -819,10 +834,7 @@ async function repl(args: ICliArgs): Promise<number> {
   // The model's real context window: explicit env wins, else ask the server
   // (max_model_len), else a conservative fallback. Drives the status gauge AND
   // auto-compaction (the session compacts before a send once it nears the window).
-  // `let` so `/model` can refresh the gauge when switching to a model with a
-  // different window. Per-entry contextWindow wins, then explicit env, then the
-  // server's max_model_len, then a conservative fallback.
-  let contextWindow =
+  const contextWindow =
     activeModel.entry.contextWindow ??
     envNumber("TSFORGE_CONTEXT_WINDOW") ??
     (await detectContextWindow(provider.config)) ??
@@ -866,7 +878,7 @@ async function repl(args: ICliArgs): Promise<number> {
     enableThinking: false,
   };
 
-  let session = await Session.create(config);
+  const session = await Session.create(config);
 
   // A self-describing run-meta line at the top of the --log so the analyzer knows
   // which model / context window the metrics are against (the thread's advice:
@@ -878,6 +890,56 @@ async function repl(args: ICliArgs): Promise<number> {
     model: modelInfo(provider.config).model,
     contextWindow,
   });
+
+  const persist = async (): Promise<void> => {
+    await saveSession({
+      id,
+      cwd: args.dir,
+      // The LIVE gate/scope — not the startup constants. /gate, /files, and a web
+      // scaffold all mutate these mid-session; persisting the originals would
+      // silently restore stale settings on --continue. See P2 review.
+      accept: session.gate,
+      files: session.scope,
+      updatedAt: Date.now(),
+      planMode: false, // will be set by caller
+      messages: [...session.messages],
+    });
+  };
+
+  return {
+    session,
+    provider,
+    activeName,
+    contextWindow,
+    id,
+    gateLabel,
+    logFile,
+    persist,
+    report,
+    resumed,
+    files,
+    activeModelEntry: activeModel.entry,
+  };
+}
+
+/** Interactive REPL: a persistent gate-anchored conversation. */
+async function repl(args: ICliArgs): Promise<number> {
+  const {
+    session: initialSession,
+    provider,
+    activeName: initialActiveName,
+    contextWindow: initialContextWindow,
+    id,
+    gateLabel,
+    logFile,
+    resumed,
+    files,
+    activeModelEntry,
+  } = await initReplSession(args);
+
+  let session = initialSession;
+  let activeName = initialActiveName;
+  let contextWindow = initialContextWindow;
 
   const persist = async (): Promise<void> => {
     await saveSession({
@@ -922,17 +984,23 @@ async function repl(args: ICliArgs): Promise<number> {
     process.stdout.isTTY &&
     process.stdout.rows >= MIN_ROWS;
 
+  // In editor mode, do NOT create readline — the editor owns stdin exclusively.
+  // In fallback mode (non-TTY or basicInput), readline is the only consumer.
+  const useEditor = useInputRow && !flags.basicInput();
+
   const inputSink = new Writable({
     write(_chunk, _enc, cb): void {
       cb();
     },
   });
 
-  const rl = createInterface({
-    input: process.stdin,
-    output: useInputRow ? inputSink : process.stdout,
-    terminal: true,
-  });
+  const rl = useEditor
+    ? null
+    : createInterface({
+        input: process.stdin,
+        output: useInputRow ? inputSink : process.stdout,
+        terminal: true,
+      });
 
   // Ctrl-C: while a turn is running, abort it and return to the prompt; while
   // idle at the prompt, quit. (readline emits SIGINT on the interface, so the
@@ -942,13 +1010,15 @@ async function repl(args: ICliArgs): Promise<number> {
   // the model (see Session.send `steer`), instead of blocking until the run ends.
   const pending: string[] = [];
 
-  rl.on("SIGINT", () => {
-    if (active !== null) {
-      active.abort();
-    } else {
-      rl.close();
-    }
-  });
+  if (rl !== null) {
+    rl.on("SIGINT", () => {
+      if (active !== null) {
+        active.abort();
+      } else {
+        rl.close();
+      }
+    });
+  }
 
   // Explicit `--web` (no Q&A): the FIRST message is the build, so stage it
   // (plan+types → implement). Cleared after, so follow-ups are plain sends.
@@ -1197,7 +1267,17 @@ async function repl(args: ICliArgs): Promise<number> {
         process.stdout.write(`${HELP}\n`);
         break;
       case "clear":
-        session = await Session.create(config);
+        // Rebuild the session with the current state (config is not reused;
+        // repl's /clear creates a fresh Session.create call)
+        session = await Session.create({
+          provider,
+          cwd: args.dir,
+          files: session.scope,
+          accept: session.gate,
+          contextWindow,
+          report: makeReporter(logFile, id, id),
+          enableThinking: false,
+        });
         session.setSetupWeb(setupWeb);
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
         planDiscussed = false;
@@ -1294,7 +1374,7 @@ async function repl(args: ICliArgs): Promise<number> {
           arg,
           provider,
           activeName,
-          fallbackEntry: activeModel.entry,
+          fallbackEntry: activeModelEntry,
           contextWindow,
         });
 
@@ -1411,7 +1491,7 @@ async function repl(args: ICliArgs): Promise<number> {
   // Mirror readline's buffer onto the input row after each keypress. setImmediate
   // lets readline update rl.line/rl.cursor first (it processes the key async).
   const syncInput = (): void => {
-    if (useInputRow) {
+    if (useInputRow && rl !== null) {
       setImmediate(() => {
         statusBar.setInput(rl.line, rl.cursor);
       });
@@ -1476,7 +1556,10 @@ async function repl(args: ICliArgs): Promise<number> {
   // marker; otherwise it prints the inline status line above the marker.
   const prompt = (): void => {
     if (useInputRow) {
-      statusBar.setInput(rl.line, rl.cursor);
+      if (rl !== null) {
+        statusBar.setInput(rl.line, rl.cursor);
+      }
+
       statusBar.update(statusInfo());
 
       return;
@@ -1495,6 +1578,7 @@ async function repl(args: ICliArgs): Promise<number> {
   };
 
   await new Promise<void>((resolveLoop) => {
+    let editorHandle: IEditorHandle | null = null;
     let busy = false;
     let closed = false;
     let paletteOpen = false;
@@ -1507,6 +1591,47 @@ async function repl(args: ICliArgs): Promise<number> {
       }
     };
 
+    // Submit a line of input: check if busy/pending, echo it, handle /exit, or run it.
+    const submitLine = (raw: string): void => {
+      const line = raw.trim();
+
+      if (line.length === 0) {
+        if (!busy) {
+          prompt();
+        }
+
+        return;
+      }
+
+      // readline's output is sinked in input-row mode, so the submitted line is
+      // never echoed to scrollback — record it ourselves so the transcript reads
+      // naturally above the (now-cleared) input row.
+      if (useInputRow) {
+        echo(`${STYLE.dim}›${RESET} ${line}\n`);
+      }
+
+      if (busy) {
+        if (line === "/exit" || line === "/quit") {
+          active?.abort();
+
+          if (rl !== null) {
+            rl.close();
+          }
+
+          if (editorHandle !== null) {
+            editorHandle.close();
+          }
+        } else {
+          pending.push(line);
+          echo("  ↳ queued (steers the next turn)\n");
+        }
+
+        return;
+      }
+
+      void runLine(line);
+    };
+
     // Handle one idle line (slash command or a message), then any queued follow-up.
     const runLine = async (line: string): Promise<void> => {
       busy = true;
@@ -1514,7 +1639,9 @@ async function repl(args: ICliArgs): Promise<number> {
       try {
         if (line.startsWith("/")) {
           if (await command(line)) {
-            rl.close();
+            if (rl !== null) {
+              rl.close();
+            }
 
             return;
           }
@@ -1548,6 +1675,27 @@ async function repl(args: ICliArgs): Promise<number> {
       }
     };
 
+    // Helper: repaint the editor buffer to the status bar after palette insertion.
+    const repaintEditor = (handle: IEditorHandle): void => {
+      const { line, col } = handle.getBuffer().getCursor();
+      const lines = handle.getBuffer().getText().split("\n");
+
+      const frame = renderEditor(
+        {
+          lines,
+          cursorLine: line,
+          cursorCol: col,
+        },
+        {
+          columns: process.stdout.columns,
+          maxRows: process.stdout.rows,
+          color: true,
+        }
+      );
+
+      statusBar.writeStream(frame.frame);
+    };
+
     // Open the interactive `/` command palette: pick a command from a navigable
     // list, then either run it (no-arg) or prefill the line so the user types the
     // argument. Cancel ⇒ back to a clean prompt. Only meaningful on a TTY.
@@ -1555,28 +1703,39 @@ async function repl(args: ICliArgs): Promise<number> {
       paletteOpen = true;
 
       try {
-        rl.write(null, { ctrl: true, name: "u" }); // clear the typed "/"
-
         const picked = await pickCommand(process.stdout.isTTY);
 
-        // The palette ran on the alternate screen; exiting it restored the prompt
-        // verbatim, so don't re-draw it (that left stray `›` lines). On cancel,
-        // nothing to do; for an arg command, prefill so the user types the value.
         if (picked !== null) {
-          if (takesArg(picked)) {
-            rl.write(`${picked.name} `);
-          } else {
-            void runLine(picked.name);
+          if (editorHandle !== null) {
+            editorHandle.getBuffer().setText("");
+            editorHandle.getBuffer().insert(picked.name);
+
+            if (takesArg(picked)) {
+              editorHandle.getBuffer().insert(" ");
+            } else {
+              void runLine(picked.name);
+            }
+
+            repaintEditor(editorHandle);
+          } else if (rl !== null) {
+            rl.write(null, { ctrl: true, name: "u" }); // clear the typed "/"
+
+            if (takesArg(picked)) {
+              rl.write(`${picked.name} `);
+            } else {
+              void runLine(picked.name);
+            }
           }
         }
       } finally {
         paletteOpen = false;
 
-        // The palette ran on the alternate screen; repaint the pinned row + bar
-        // and reflect any prefilled buffer back onto the input row.
         if (useInputRow) {
           statusBar.update(statusInfo());
-          syncInput();
+
+          if (rl !== null) {
+            syncInput();
+          }
         }
       }
     };
@@ -1584,13 +1743,18 @@ async function repl(args: ICliArgs): Promise<number> {
     // Open the interactive `@` file picker: a compact dropdown rendered INLINE just
     // above the input row (the conversation stays visible — no alternate screen),
     // recency-ordered, type to fuzzy-filter. The buffer keeps its `@`; the live
-    // query is echoed onto the input row for feedback (it isn't in readline's
+    // query is echoed onto the input row for feedback (it isn't in readline's/editor's
     // buffer — the picker owns input). On select, the full path is appended after
     // the `@`; at send time `@path` expands to the file's contents (see runSend).
     const openFilePicker = async (): Promise<void> => {
       paletteOpen = true;
 
-      const base = rl.line; // text up to and including the just-typed `@`
+      const base =
+        editorHandle !== null
+          ? editorHandle.getBuffer().getText()
+          : rl !== null
+            ? rl.line
+            : ""; // text up to and including the just-typed `@`
 
       const view: IPickerView = {
         render: (query, items, selected): void => {
@@ -1614,23 +1778,33 @@ async function repl(args: ICliArgs): Promise<number> {
         const picked = await pickFileInline(files, view);
 
         if (picked !== null) {
-          rl.write(`${picked} `); // append after the already-typed `@`
+          if (editorHandle !== null) {
+            editorHandle.getBuffer().insert(`${picked} `);
+            repaintEditor(editorHandle);
+          } else if (rl !== null) {
+            rl.write(`${picked} `);
+          }
         }
       } finally {
         paletteOpen = false;
 
         if (useInputRow) {
           statusBar.update(statusInfo());
-          syncInput();
+
+          if (rl !== null) {
+            syncInput();
+          }
         }
       }
     };
 
     // `/` on an empty line opens the palette; `@` at a word boundary opens the file
-    // picker. setImmediate lets readline insert the key first, so we can inspect the
-    // settled buffer (`rl.line === "/"` / shouldOpenAtPicker). The shared paletteOpen
-    // guard keeps the two overlays mutually exclusive. No-op while busy.
-    if (process.stdin.isTTY) {
+    // picker. The editor handles these internally (via openPalette/openFilePicker deps);
+    // readline mode uses keypress detection. The shared paletteOpen guard keeps the
+    // two overlays mutually exclusive. No-op while busy.
+
+    if (process.stdin.isTTY && !useEditor && !flags.basicInput()) {
+      // Only set up keypress detection for readline mode (not editor mode).
       emitKeypressEvents(process.stdin);
       process.stdin.on("keypress", (str: string | undefined) => {
         syncInput(); // keep the pinned input row in sync as the user types
@@ -1639,13 +1813,13 @@ async function repl(args: ICliArgs): Promise<number> {
           return;
         }
 
-        if (str === "/") {
+        if (str === "/" && rl !== null) {
           setImmediate(() => {
             if (!busy && !paletteOpen && rl.line === "/") {
               void openPalette();
             }
           });
-        } else if (str === "@" && useInputRow) {
+        } else if (str === "@" && useInputRow && rl !== null) {
           // The inline dropdown renders above the input row, so it needs that row
           // (a tall-enough TTY). Without it we skip the picker — `@path` typed by
           // hand still expands at send time (composeMessage), just no live popup.
@@ -1665,41 +1839,69 @@ async function repl(args: ICliArgs): Promise<number> {
     // Event-driven (not for-await) so stdin is read DURING a run: a line typed
     // mid-run is queued to steer the next turn (or, if "/exit", aborts). This is
     // what makes it feel like a real harness — you can redirect without waiting.
-    rl.on("line", (raw) => {
-      const line = raw.trim();
+    // When the editor is active, submitLine is wired via onSubmit; otherwise it's
+    // called here from readline. Crucially: the editor owns stdin exclusively in
+    // editor mode, and readline is NOT created in that case.
+    if (useEditor) {
+      editorHandle = startEditor({
+        stdin: {
+          on: (event: string, cb: (data: string) => void) => {
+            process.stdin.on(event, cb);
+          },
+          removeListener: (event: string, cb: (data: string) => void) => {
+            process.stdin.removeListener(event, cb);
+          },
+          setRawMode: (mode: boolean) => {
+            process.stdin.setRawMode(mode);
+          },
+          resume: () => {
+            process.stdin.resume();
+          },
+          // The editor does string ops per chunk; without UTF-8 encoding,
+          // process.stdin emits Buffers and the first keypress crashes.
+          setEncoding: () => {
+            process.stdin.setEncoding("utf8");
+          },
+        },
+        out: (s: string) => {
+          statusBar.writeStream(s);
+        },
+        // Multi-row editor rendering callback: paints to the pinned input area
+        renderEditor: (
+          lines: string[],
+          cursorRow: number,
+          cursorCol: number
+        ) => {
+          statusBar.setEditor(lines, cursorRow, cursorCol);
+        },
+        columns: process.stdout.columns,
+        rows: process.stdout.rows,
+        openPalette,
+        openFilePicker,
+      });
 
-      if (line.length === 0) {
-        if (!busy) {
-          prompt();
-        }
-
-        return;
-      }
-
-      // readline's output is sinked in input-row mode, so the submitted line is
-      // never echoed to scrollback — record it ourselves so the transcript reads
-      // naturally above the (now-cleared) input row.
-      if (useInputRow) {
-        echo(`${STYLE.dim}›${RESET} ${line}\n`);
-      }
-
-      if (busy) {
-        if (line === "/exit" || line === "/quit") {
-          active?.abort();
-          rl.close();
+      editorHandle.onSubmit(submitLine);
+      editorHandle.onInterrupt(() => {
+        if (active === null) {
+          closed = true;
+          editorHandle?.close();
+          maybeFinish();
         } else {
-          pending.push(line);
-          echo("  ↳ queued (steers the next turn)\n");
+          active.abort();
         }
+      });
+      editorHandle.onExit(() => {
+        closed = true;
+        editorHandle?.close();
+        maybeFinish();
+      });
+    } else if (rl !== null) {
+      rl.on("line", submitLine);
+    }
 
-        return;
-      }
-
-      void runLine(line);
-    });
-
-    rl.on("close", () => {
+    rl?.on("close", () => {
       closed = true;
+      editorHandle?.close();
       statusBar.teardown();
       maybeFinish();
     });

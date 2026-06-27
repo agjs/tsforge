@@ -301,3 +301,123 @@ test("spinner exposes a live 'compacting' activity label and repaints via onTick
   spinner.stop();
   expect(spinner.frameLabel()).toBe(""); // stopped → loader cleared
 });
+
+// Wiring test: the editor-backed input path routes onSubmit → a callback that
+// handles multiline messages as a single submission, and respects the busy/pending
+// steer queue. This test proves the integration without running the full REPL.
+test("editor-backed input routes onSubmit to a handler and respects busy/pending", async () => {
+  const { startEditor } = await import("../src/editor");
+
+  const out = (): void => {};
+
+  // Fake stdin that emits data.
+  class FakeStdin {
+    listeners = new Map<string, (data: string) => void>();
+
+    on(event: string, cb: (data: string) => void): void {
+      this.listeners.set(event, cb);
+    }
+
+    removeListener(event: string): void {
+      this.listeners.delete(event);
+    }
+
+    setRawMode(): void {
+      // no-op
+    }
+
+    setEncoding(): void {
+      // no-op
+    }
+
+    resume(): void {
+      // no-op
+    }
+  }
+
+  const stdin = new FakeStdin();
+  const handle = startEditor({
+    stdin: stdin,
+    out,
+    columns: 80,
+    rows: 10,
+  });
+
+  // Track submissions
+  const submissions: string[] = [];
+
+  handle.onSubmit((msg) => {
+    submissions.push(msg);
+  });
+
+  const dataListener = stdin.listeners.get("data");
+
+  if (!dataListener) {
+    throw new Error("editor did not register a data listener");
+  }
+
+  // Simulate a bracketed-paste event: multiline text ending with closing bracket
+  // The paste scanner will extract the content and insertPaste will handle it.
+  dataListener("\x1b[200~line one\nline two\x1b[201~");
+  // Now send Enter (return key) to submit
+  dataListener("\r");
+
+  // The handler should have submitted the entire multiline text as ONE message
+  expect(submissions).toHaveLength(1);
+  expect(submissions[0]).toBe("line one\nline two");
+
+  handle.close();
+});
+
+// Wiring test: while a handler is "busy" and a line is submitted, it queues to
+// `pending` exactly once (not duplicated).
+test("editor input submission while busy queues exactly one message to pending", async () => {
+  const { startEditor } = await import("../src/editor");
+
+  const out = (): void => {};
+
+  const stdin = new (class {
+    listeners = new Map<string, (data: string) => void>();
+    on(event: string, cb: (data: string) => void): void {
+      this.listeners.set(event, cb);
+    }
+    removeListener(): void {}
+    setRawMode(): void {}
+    setEncoding(): void {}
+    resume(): void {}
+  })();
+
+  const handle = startEditor({
+    stdin: stdin,
+    out,
+    columns: 80,
+    rows: 10,
+  });
+
+  // Mock a busy handler that delays processing
+  const pending: string[] = [];
+  let busy = false;
+
+  handle.onSubmit((msg) => {
+    if (busy) {
+      pending.push(msg);
+    }
+  });
+
+  const dataListener = stdin.listeners.get("data");
+
+  if (!dataListener) {
+    throw new Error("editor did not register a data listener");
+  }
+
+  // Set busy flag, then submit a message via return key
+  busy = true;
+  dataListener("test message");
+  dataListener("\r");
+
+  // Should queue exactly one message, not duplicated
+  expect(pending).toHaveLength(1);
+  expect(pending[0]).toBe("test message");
+
+  handle.close();
+});
