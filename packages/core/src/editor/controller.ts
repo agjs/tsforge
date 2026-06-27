@@ -2,6 +2,7 @@ import { EditorBuffer } from "./buffer";
 import { decodeKeys } from "./keys";
 import { createPasteScanner } from "./paste";
 import { renderEditor } from "./view";
+import { graphemes } from "./segments";
 
 export interface IEditorHandle {
   onSubmit(cb: (message: string) => void): void;
@@ -136,6 +137,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   // In-session history: submitted messages for up/down navigation
   const history: string[] = [];
   let historyIndex = -1; // -1 = not in history, >= 0 = viewing history item
+  let draftText: string | null = null;
   let dataListener: ((chunk: string) => void) | null = null;
 
   function repaint(): void {
@@ -171,6 +173,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   // Save the current buffer as a history item and emit onSubmit callbacks
   function saveToHistory(message: string): void {
     history.push(message);
+    draftText = null;
     historyIndex = -1;
   }
 
@@ -179,11 +182,8 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   function navigateHistoryUp(): void {
     if (historyIndex === -1) {
       // Save current draft before entering history
-      const draftText = buffer.getText();
-
-      buffer.setText("", false); // Save a slot for the draft
-      history.push(draftText);
-      historyIndex = history.length - 2;
+      draftText = buffer.getText();
+      historyIndex = history.length - 1;
     } else if (historyIndex > 0) {
       historyIndex -= 1;
     } else {
@@ -202,21 +202,14 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       return; // Not in history
     }
 
-    historyIndex += 1;
-
     if (historyIndex === history.length - 1) {
       // Restore draft
-      const draft = history[historyIndex];
-
-      buffer.setText(draft ?? "");
-      history.pop();
+      buffer.setText(draftText ?? "");
+      draftText = null;
       historyIndex = -1;
-    } else if (historyIndex < history.length) {
-      buffer.setText(history[historyIndex] ?? "");
     } else {
-      // Fell off the end
-      historyIndex = -1;
-      buffer.setText("");
+      historyIndex += 1;
+      buffer.setText(history[historyIndex] ?? "");
     }
 
     repaint();
@@ -231,7 +224,8 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     let hasTrailingBackslash = false;
 
     if (col > 0) {
-      const beforeCursor = currentLine.substring(0, col);
+      const lineGraphemes = graphemes(currentLine);
+      const beforeCursor = lineGraphemes.slice(0, col).join("");
 
       if (beforeCursor.endsWith("\\")) {
         hasTrailingBackslash = true;

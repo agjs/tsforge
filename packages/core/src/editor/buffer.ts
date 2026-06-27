@@ -45,6 +45,7 @@ export class EditorBuffer {
 
   private clearSticky(): void {
     this.stickyCol = null;
+    this.lastYank = null;
   }
 
   private snapshot(): ISnapshot {
@@ -69,7 +70,7 @@ export class EditorBuffer {
 
     for (let i = 0; i < parts.length; i += 1) {
       if (i > 0) {
-        this.newline();
+        this.newline(false);
       }
 
       const piece = parts[i] ?? "";
@@ -104,10 +105,13 @@ export class EditorBuffer {
     }
   }
 
-  newline(): void {
+  newline(snapshot = true): void {
     this.clearSticky();
 
-    this.maybeSnapshot("other");
+    if (snapshot) {
+      this.maybeSnapshot("other");
+    }
+
     const g = this.curG();
     const left = g.slice(0, this.cursorCol).join("");
     const right = g.slice(this.cursorCol).join("");
@@ -378,7 +382,7 @@ export class EditorBuffer {
   }
 
   yankPop(): void {
-    this.clearSticky();
+    this.stickyCol = null;
 
     if (this.lastYank === null) {
       return;

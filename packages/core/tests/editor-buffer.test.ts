@@ -156,3 +156,50 @@ test("large paste shows a marker but expands on submit", () => {
   expect(b.getText()).not.toContain("line 39");
   expect(b.expand()).toBe(big);
 });
+
+// region: Gemini PR #52 regression tests — undo atomicity, yankPop corruption, grapheme correctness
+
+test("multiline insertPaste is reverted by ONE undo", () => {
+  const b = new EditorBuffer();
+
+  b.insertPaste("one\ntwo\nthree");
+  expect(b.getText()).toBe("one\ntwo\nthree");
+  expect(b.getCursor().line).toBe(2);
+
+  b.undo(); // ONE undo should revert the entire paste
+  expect(b.getText()).toBe("");
+  expect(b.getCursor()).toEqual({ line: 0, col: 0 });
+});
+
+test("multiline insert with newlines is ONE undo unit", () => {
+  const b = new EditorBuffer();
+
+  b.insert("a\nb\nc");
+  expect(b.getText()).toBe("a\nb\nc");
+
+  b.undo();
+  expect(b.getText()).toBe("");
+});
+
+test("yankPop after cursor move does NOT corrupt buffer", () => {
+  const b = new EditorBuffer("hello");
+
+  // Kill some text and yank it
+  b.moveLineStart();
+  b.deleteToLineEnd(); // kills "hello" → buffer is now ""
+  expect(b.getText()).toBe("");
+
+  // Yank it back → buffer is "hello"
+  b.yank();
+  expect(b.getText()).toBe("hello");
+
+  // Move right to change position; this should clear lastYank
+  b.moveLeft();
+  b.moveRight();
+
+  const textBefore = b.getText();
+
+  // yankPop should now be a safe no-op (lastYank was cleared by moveRight)
+  b.yankPop();
+  expect(b.getText()).toBe(textBefore);
+});

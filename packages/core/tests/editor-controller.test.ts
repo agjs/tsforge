@@ -332,4 +332,54 @@ describe("EditorController", () => {
     stdin.feed("\x1b[B");
     expect(handle.getBuffer().getText()).toBe("draft");
   });
+
+  // region: Gemini PR #52 regression tests
+
+  test("submitting while browsing history does NOT pollute history", () => {
+    const { stdin, handle, submits } = makeHarness();
+
+    // Submit first message
+    stdin.feed("msg one");
+    stdin.feed("\r");
+    expect(submits).toEqual(["msg one"]);
+    expect(handle.getBuffer().getText()).toBe("");
+
+    // Type a draft
+    stdin.feed("draft text");
+    expect(handle.getBuffer().getText()).toBe("draft text");
+
+    // Browse up into history
+    stdin.feed("\x1b[A"); // recall "msg one"
+    expect(handle.getBuffer().getText()).toBe("msg one");
+
+    // Submit while in history
+    stdin.feed("\r");
+    expect(submits).toEqual(["msg one", "msg one"]); // resubmitted
+    expect(handle.getBuffer().getText()).toBe("");
+
+    // Navigate history again — should only have the original plus the new submit
+    stdin.feed("new draft");
+    stdin.feed("\x1b[A"); // should go up to the last real submit
+    // History should be: ["msg one", "msg one"], and we should see "msg one" (the last one)
+    // NOT see "draft text" (the draft was not saved)
+    expect(handle.getBuffer().getText()).toBe("msg one");
+  });
+
+  test("trailing backslash after emoji inserts newline correctly", () => {
+    const { stdin, handle, submits } = makeHarness();
+
+    // Type text with backslash at end
+    stdin.feed("test\\");
+    expect(handle.getBuffer().getText()).toBe("test\\");
+
+    // Press Enter — should remove the backslash and insert a newline
+    stdin.feed("\r");
+    expect(submits).toEqual([]); // not submitted
+    expect(handle.getBuffer().getText()).toBe("test\n");
+
+    // Type more text and submit
+    stdin.feed("more");
+    stdin.feed("\r");
+    expect(submits).toEqual(["test\nmore"]);
+  });
 });

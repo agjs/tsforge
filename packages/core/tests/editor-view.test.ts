@@ -70,3 +70,22 @@ test("single line renders one row", () => {
   expect(r.frame).toContain("hello");
   expect(r.cursorRow).toBe(0);
 });
+
+// region: Gemini PR #52 regression tests
+
+test("emoji wrap and cursor positioning is grapheme-correct", () => {
+  // Emoji 👍 is 1 grapheme but multiple UTF-16 units
+  // Line: "hello 👍" (7 graphemes) + "world" (5 graphemes)
+  // Wrap at 8 columns: "hello 👍" = 8 graphemes → fits exactly
+  // "world" on next row
+  const line = "hello 👍world";
+  const r = renderEditor(
+    { lines: [line], cursorLine: 0, cursorCol: 8 }, // cursor at start of "world" (grapheme 8)
+    { columns: 8, maxRows: 6, color: false }
+  );
+
+  // The line should wrap into 2 rows
+  expect(r.rows).toBe(2);
+  expect(r.cursorRow).toBe(1); // cursor is on second visual row
+  expect(r.cursorCol).toBe(0); // at column 0 of the second row
+});

@@ -50,35 +50,38 @@ function wrapLine(
   const graphemeList = graphemes(line);
   const rows: IWrappedRow[] = [];
   let row = "";
+  let rowGraphemeCount = 0;
   let rowCursorCol: number | undefined;
   let visualRow = 0;
 
   for (let i = 0; i < graphemeList.length; i += 1) {
     const g = graphemeList[i];
 
-    if (row.length >= columns) {
+    if (rowGraphemeCount >= columns) {
       rows.push({
         text: row,
         cursorRow: rowCursorCol !== undefined ? visualRow : undefined,
         cursorCol: rowCursorCol,
       });
       row = "";
+      rowGraphemeCount = 0;
       rowCursorCol = undefined;
       visualRow += 1;
     }
 
     if (i === cursorCol) {
-      rowCursorCol = row.length;
+      rowCursorCol = rowGraphemeCount;
     }
 
     if (g !== undefined) {
       row += g;
+      rowGraphemeCount += 1;
     }
   }
 
   // Handle cursor at end of line
   if (graphemeList.length === cursorCol) {
-    rowCursorCol = row.length;
+    rowCursorCol = rowGraphemeCount;
   }
 
   // Push final row
