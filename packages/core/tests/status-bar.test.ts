@@ -8,6 +8,7 @@ import {
   type IStatusInfo,
   type IStatusBarTerminal,
 } from "../src/render";
+import { VirtualScreen } from "./helpers/virtual-screen";
 
 const INFO: IStatusInfo = {
   model: "qwen3.6-27b",
@@ -115,7 +116,14 @@ describe("StatusBar activation", () => {
 
     expect(bar.active).toBe(true);
     expect(term.text()).toContain("\x1b[1;22r"); // reserve bottom 2 rows (rows-2)
-    expect(term.text()).toContain("\x1b[24;1H"); // segments drawn on row 24
+
+    // The bar paints through the damage buffer, so assert the rendered screen
+    // (not exact bytes): the segments land on the bottom row.
+    const screen = new VirtualScreen(24, 80);
+
+    screen.feed(term.text());
+    expect(screen.row(24)).toContain("done");
+    expect(screen.row(24)).toContain("qwen3.6-27b");
   });
 
   test("teardown resets the scroll region and deactivates", () => {
@@ -185,32 +193,49 @@ describe("StatusBar with input row", () => {
 
     withInput(term).install(INFO);
 
-    expect(term.text()).toContain("\x1b[1;21r"); // region = rows-3 (24-3)
-    expect(term.text()).toContain("\x1b7"); // stream cursor saved for writeStream
-    expect(term.text()).toContain("\x1b[22;1H"); // input row painted (rows-2)
-    expect(term.text()).toContain("\x1b[24;1H"); // segments row still on row 24
+    const out = term.text();
+
+    expect(out).toContain("\x1b[1;21r"); // region = rows-3 (24-3), structural
+    expect(out).toContain("\x1b7"); // stream cursor saved for writeStream
+
+    // Rendered screen: the prompt sits on the input row (22) and the segments on
+    // the bottom row (24).
+    const screen = new VirtualScreen(24, 80);
+
+    screen.feed(out);
+    expect(screen.row(22)).toContain("›"); // input row prompt
+    expect(screen.row(24)).toContain("done"); // segments row
   });
 
-  test("writeStream restores into the region, writes, re-saves, repaints the row", () => {
+  test("writeStream restores into the region, writes, re-saves, then re-parks", () => {
     const term = new FakeTerm(true, 24, 80);
     const bar = withInput(term);
 
     bar.install(INFO);
     bar.setInput("typed", 5);
-    term.writes.length = 0;
+
+    const before = term.writes.length;
+
     bar.writeStream("agent output\n");
 
-    const out = term.text();
-    const order = [
-      out.indexOf("\x1b8"), // restore stream cursor (into region)
-      out.indexOf("agent output"), // the streamed text
-      out.lastIndexOf("\x1b7"), // re-save advanced stream cursor
-      out.indexOf("\x1b[22;1H"), // repaint input row afterwards
-    ];
+    // The structural save/restore dance still brackets the streamed text.
+    const streamOut = term.writes.slice(before).join("");
 
-    expect(order.every((i) => i >= 0)).toBe(true);
-    expect(order).toEqual([...order].sort((a, b) => a - b)); // strictly ordered
-    expect(out).toContain("› typed"); // the typed buffer survives the stream
+    expect(streamOut.indexOf("\x1b8")).toBeGreaterThanOrEqual(0); // restore stream cursor
+    expect(streamOut.indexOf("agent output")).toBeGreaterThan(
+      streamOut.indexOf("\x1b8")
+    );
+    expect(streamOut.lastIndexOf("\x1b7")).toBeGreaterThan(
+      streamOut.indexOf("agent output")
+    );
+
+    // Rendered screen: the typed buffer survives on the input row and the output
+    // landed in the scrolling region above it.
+    const screen = new VirtualScreen(24, 80);
+
+    screen.feed(term.text());
+    expect(screen.row(22)).toContain("typed");
+    expect(screen.text()).toContain("agent output");
   });
 
   test("a plain write falls back when not installed (non-TTY / small term)", () => {
@@ -221,7 +246,7 @@ describe("StatusBar with input row", () => {
     expect(term.text()).toBe("hi");
   });
 
-  test("update repaints the bar body without clobbering the stream-cursor slot", () => {
+  test("update does not clobber the stream-cursor slot and parks on the input row", () => {
     const term = new FakeTerm(true, 24, 80);
     const bar = withInput(term);
 
@@ -232,10 +257,19 @@ describe("StatusBar with input row", () => {
     const out = term.text();
 
     // Must NOT wrap in save/restore (that slot holds the stream cursor); it ends
-    // by parking on the input row instead.
+    // by parking the cursor on the input row (row 22).
+    const parkOnInputRow = new RegExp(`${String.fromCharCode(27)}\\[22;\\d+H$`);
+
     expect(out.startsWith("\x1b7")).toBe(false);
-    expect(out).toContain("\x1b[24;1H"); // segments repainted
-    expect(out).toContain("\x1b[22;1H"); // input row repainted last
+    expect(parkOnInputRow.test(out)).toBe(true);
+
+    // A changed update redraws the affected bottom-row content.
+    bar.update({ ...INFO, status: "stuck" });
+
+    const screen = new VirtualScreen(24, 80);
+
+    screen.feed(term.text());
+    expect(screen.row(24)).toContain("stuck");
   });
 
   test("teardown after a shrink below the reserved height emits no row index < 1", () => {

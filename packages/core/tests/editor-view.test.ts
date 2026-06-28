@@ -73,19 +73,19 @@ test("single line renders one row", () => {
 
 // region: Gemini PR #52 regression tests
 
-test("emoji wrap and cursor positioning is grapheme-correct", () => {
-  // Emoji 👍 is 1 grapheme but multiple UTF-16 units
-  // Line: "hello 👍" (7 graphemes) + "world" (5 graphemes)
-  // Wrap at 8 columns: "hello 👍" = 8 graphemes → fits exactly
-  // "world" on next row
+test("emoji wrap and cursor positioning is display-width-correct", () => {
+  // 👍 is one grapheme (multiple UTF-16 units) that occupies TWO columns.
+  // Line: "hello " (6 cols) + 👍 (2 cols) = 8 cols → fills an 8-column row exactly,
+  // so "world" wraps to the second row. Cursor at grapheme 7 = start of "world".
   const line = "hello 👍world";
   const r = renderEditor(
-    { lines: [line], cursorLine: 0, cursorCol: 8 }, // cursor at start of "world" (grapheme 8)
+    { lines: [line], cursorLine: 0, cursorCol: 7 },
     { columns: 8, maxRows: 6, color: false }
   );
 
-  // The line should wrap into 2 rows
+  // The line wraps into 2 rows, and the emoji is NOT crowded past the edge.
   expect(r.rows).toBe(2);
-  expect(r.cursorRow).toBe(1); // cursor is on second visual row
-  expect(r.cursorCol).toBe(0); // at column 0 of the second row
+  expect(r.frame.split("\n")[0]).toBe("hello 👍");
+  expect(r.cursorRow).toBe(1); // cursor is on the second visual row
+  expect(r.cursorCol).toBe(0); // at column 0 of the second row ("world")
 });

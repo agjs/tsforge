@@ -5,6 +5,7 @@ import { STYLE, paint } from "./style";
 import { box, GLYPH } from "./box";
 import { renderMarkdown, highlightCode } from "./markdown";
 import { StreamingMarkdown } from "./stream-markdown";
+import { renderDiff } from "./diff";
 
 /** Split highlighted/plain text into the body-line array a box expects. */
 function bodyLines(text: string): string[] {
@@ -127,19 +128,6 @@ export function renderMessage(
 
 function highlightTs(code: string, color: boolean): string {
   return highlightCode(code, "typescript", color);
-}
-
-function diff(oldString: string, newString: string, color: boolean): string {
-  const minus = oldString
-    .split("\n")
-    .map((l) => paint(`- ${l}`, STYLE.red, color))
-    .join("\n");
-  const plus = newString
-    .split("\n")
-    .map((l) => paint(`+ ${l}`, STYLE.green, color))
-    .join("\n");
-
-  return `${minus}\n${plus}`;
 }
 
 /**
@@ -265,7 +253,9 @@ function renderEventBody(event: ILoopEvent, color: boolean): string {
         return glyphLine(GLYPH.edit, event.message, STYLE.brand, color);
       }
 
-      const body = bodyLines(diff(event.oldString, event.newString, color));
+      const body = bodyLines(
+        renderDiff(event.oldString, event.newString, { color })
+      );
 
       return `\n${box(event.message, body, { glyph: GLYPH.edit, accent: STYLE.brand, color })}\n`;
     }

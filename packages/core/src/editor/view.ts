@@ -1,5 +1,6 @@
 import { graphemes } from "./segments";
 import { paint, STYLE } from "../render/style";
+import { displayWidth } from "../render/width";
 
 export interface IEditorInput {
   lines: string[];
@@ -50,38 +51,41 @@ function wrapLine(
   const graphemeList = graphemes(line);
   const rows: IWrappedRow[] = [];
   let row = "";
-  let rowGraphemeCount = 0;
+  // Column width consumed by the current visual row, so wide (CJK/emoji) cells
+  // wrap at the true edge and the cursor column reflects display columns.
+  let rowWidth = 0;
   let rowCursorCol: number | undefined;
   let visualRow = 0;
 
   for (let i = 0; i < graphemeList.length; i += 1) {
-    const g = graphemeList[i];
+    const g = graphemeList[i] ?? "";
+    const w = displayWidth(g);
 
-    if (rowGraphemeCount >= columns) {
+    // Wrap before a grapheme that would overflow the row (but never flush an
+    // empty row, so a lone cell wider than `columns` still gets placed).
+    if (rowWidth + w > columns && rowWidth > 0) {
       rows.push({
         text: row,
         cursorRow: rowCursorCol !== undefined ? visualRow : undefined,
         cursorCol: rowCursorCol,
       });
       row = "";
-      rowGraphemeCount = 0;
+      rowWidth = 0;
       rowCursorCol = undefined;
       visualRow += 1;
     }
 
     if (i === cursorCol) {
-      rowCursorCol = rowGraphemeCount;
+      rowCursorCol = rowWidth;
     }
 
-    if (g !== undefined) {
-      row += g;
-      rowGraphemeCount += 1;
-    }
+    row += g;
+    rowWidth += w;
   }
 
   // Handle cursor at end of line
   if (graphemeList.length === cursorCol) {
-    rowCursorCol = rowGraphemeCount;
+    rowCursorCol = rowWidth;
   }
 
   // Push final row
