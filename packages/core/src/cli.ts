@@ -295,6 +295,9 @@ export function providerConfig(entry: IModelEntry): IOpenAICompatibleConfig {
     ...(entry.reasoningEffort === undefined
       ? {}
       : { reasoningEffort: entry.reasoningEffort }),
+    ...(entry.guidedDecoding === undefined
+      ? {}
+      : { guidedDecoding: entry.guidedDecoding }),
     ...(entry.extraBody === undefined ? {} : { extraBody: entry.extraBody }),
     ...(entry.extraHeaders === undefined
       ? {}

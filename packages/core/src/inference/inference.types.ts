@@ -144,6 +144,15 @@ export interface IOpenAICompatibleConfig {
   reasoning?: ReasoningStyle;
   /** Reasoning effort for `deepseek`/`openai` styles (maps to `reasoning_effort`). */
   reasoningEffort?: "low" | "medium" | "high";
+  /**
+   * The endpoint supports OpenAI structured outputs (guided decoding) — i.e. it
+   * grammar-constrains tool calls to the advertised schema. vLLM/SGLang/llama.cpp
+   * local servers do; DeepSeek's CLOUD thinking API does NOT (it 400s on an
+   * explicit `tool_choice`). When true, the `deepseek` reasoning style is allowed
+   * to send `tool_choice` (forcing a well-formed call instead of free-form text
+   * the harness must salvage). Default false — preserves cloud-DeepSeek safety.
+   */
+  guidedDecoding?: boolean;
   /** Arbitrary fields merged into the request body LAST (override anything above) —
    *  the escape hatch for any provider-specific param. */
   extraBody?: Record<string, unknown>;

@@ -98,8 +98,12 @@ function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, number> {
 }
 
 /** The `tools` (+ `tool_choice`) request fields, with provider constraints
- *  applied: DeepSeek's thinking mode rejects an explicit `tool_choice`, so omit
- *  it entirely there (the model still gets the tools and decides). */
+ *  applied: DeepSeek's CLOUD thinking API rejects an explicit `tool_choice`, so
+ *  omit it there (the model still gets the tools and decides). A guided-decoding-
+ *  capable endpoint (local vLLM serving e.g. DeepSeek-V4-Flash) accepts it and
+ *  grammar-constrains the call — so `guidedDecoding` opts that endpoint back into
+ *  sending `tool_choice`, which forces a well-formed call instead of free-form
+ *  text the harness would otherwise have to salvage. */
 function toolsBlock(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
@@ -108,7 +112,7 @@ function toolsBlock(
     return {};
   }
 
-  if (style(cfg) === "deepseek") {
+  if (style(cfg) === "deepseek" && cfg.guidedDecoding !== true) {
     return { tools: opts.tools };
   }
 

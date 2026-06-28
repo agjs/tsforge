@@ -35,6 +35,11 @@ export interface IModelEntry {
   reasoning?: ReasoningStyle;
   /** Reasoning effort for `deepseek`/`openai` styles. */
   reasoningEffort?: "low" | "medium" | "high";
+  /** Endpoint supports OpenAI structured outputs (guided decoding). Set true for a
+   *  local vLLM/SGLang/llama.cpp server (it grammar-constrains tool calls); leave
+   *  false for the DeepSeek CLOUD API. Lets the `deepseek` style send `tool_choice`
+   *  to force well-formed calls instead of salvageable free-form text. */
+  guidedDecoding?: boolean;
   /** Arbitrary fields merged into the request body (override built-ins) — the
    *  escape hatch for any provider-specific param. */
   extraBody?: Record<string, unknown>;

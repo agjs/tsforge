@@ -63,6 +63,25 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.tool_choice).toBe("required");
   });
 
+  test("deepseek WITH guidedDecoding sends tool_choice (local vLLM accepts it)", () => {
+    const b = body(
+      { reasoning: "deepseek", guidedDecoding: true },
+      { tools: [{}], toolChoice: "required" }
+    );
+
+    expect(b.tools).toBeDefined();
+    expect(b.tool_choice).toBe("required");
+  });
+
+  test("guidedDecoding defaults tool_choice to auto when unset", () => {
+    const b = body(
+      { reasoning: "deepseek", guidedDecoding: true },
+      { tools: [{}] }
+    );
+
+    expect(b.tool_choice).toBe("auto");
+  });
+
   test("openai uses max_completion_tokens, reasoning_effort, and omits temperature", () => {
     const b = body(
       { reasoning: "openai", reasoningEffort: "medium" },
