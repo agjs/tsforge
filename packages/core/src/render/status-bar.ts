@@ -636,6 +636,14 @@ export class StatusBar {
     }
 
     const rows = this.out.rows ?? 0;
+    const columns = this.out.columns ?? 0;
+
+    // Terminals emit transient 0×0 sizes on minimize/resize; resizing the buffer
+    // to 0 rows would drop its committed state and wedge later paints. Skip until
+    // a real size arrives (the editor path guards the same way in cli.ts).
+    if (rows <= 0 || columns <= 0) {
+      return;
+    }
 
     // computeRegions clamps to row 1: a resize BELOW `reserved` (a terminal
     // shrunk after install) would otherwise make the boundary non-positive and
@@ -651,7 +659,7 @@ export class StatusBar {
 
     // The terminal reflowed: resize the damage buffer to the new dimensions and
     // drop its committed state so the next update repaints the bar in full.
-    this.screen?.resize(rows, this.out.columns ?? 80);
+    this.screen?.resize(rows, columns);
 
     // The saved stream cursor may now point off-screen — re-anchor it to the
     // bottom of the (resized) region so output continues there.

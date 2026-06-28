@@ -66,7 +66,13 @@ describe("ScreenBuffer — damage diff", () => {
     buf.flush(`${at(1, 1)}${clear}世界x`);
     const delta = buf.flush(`${at(1, 1)}${clear}ab`);
 
-    // "世界x" (5 cols) → "ab": the diff must clear the extra trailing columns.
+    // "世界x" is FIVE columns (世=2, 界=2, x=1). Replacing it with "ab" must
+    // clear the three trailing columns it occupied — assert on the delta directly,
+    // since VirtualScreen models every glyph as one column and so can't tell a
+    // width-2 cell from a width-1 one. The damaged run is "ab" + three spaces.
+    expect(delta).toContain(`${at(1, 1)}ab   `);
+
+    // And the rendered grid still shows just "ab".
     const v = new VirtualScreen(5, 20);
 
     v.feed(`${at(1, 1)}${clear}世界x`);

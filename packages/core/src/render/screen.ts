@@ -68,27 +68,33 @@ class FrameApplier {
   ) {}
 
   apply(frame: string): void {
+    // Segment the whole frame into graphemes ONCE (so a surrogate pair / ZWJ
+    // cluster stays intact), then iterate — control bytes and CSI punctuation are
+    // each their own single-char grapheme. The earlier per-char `slice` + segment
+    // was O(n²) on every flush.
+    const segs = graphemes(frame);
     let i = 0;
 
-    while (i < frame.length) {
-      const ch = frame[i] ?? "";
+    while (i < segs.length) {
+      const g = segs[i] ?? "";
 
-      if (ch === ESC) {
-        i = frame[i + 1] === "[" ? this.csi(frame, i + 2) : i + 2;
+      if (g === ESC) {
+        i = segs[i + 1] === "[" ? this.csi(segs, i + 2) : i + 2;
 
         continue;
       }
 
-      i = this.plain(frame, i);
+      this.plain(g);
+      i += 1;
     }
   }
 
-  private csi(frame: string, start: number): number {
+  private csi(segs: readonly string[], start: number): number {
     let j = start;
     let params = "";
 
-    while (j < frame.length) {
-      const c = frame[j] ?? "";
+    while (j < segs.length) {
+      const c = segs[j] ?? "";
 
       if ((c >= "0" && c <= "9") || c === ";") {
         params += c;
@@ -98,7 +104,7 @@ class FrameApplier {
       }
     }
 
-    this.applyCsi(frame[j] ?? "", params);
+    this.applyCsi(segs[j] ?? "", params);
 
     return j + 1;
   }
@@ -134,31 +140,21 @@ class FrameApplier {
     }
   }
 
-  /** Consume one printable grapheme (multi-byte safe) and place it, widening for
-   *  CJK/emoji by marking the trailing cell as a continuation. */
-  private plain(frame: string, i: number): number {
-    const ch = frame[i] ?? "";
-
-    if (ch === "\r") {
+  /** Place one printable grapheme, widening for CJK/emoji by marking the trailing
+   *  cell as a continuation. Control bytes (incl. LF) don't occur in the absolute-
+   *  positioned bar frames, so they're ignored rather than modelled as scrolling. */
+  private plain(grapheme: string): void {
+    if (grapheme === "\r") {
       this.cursor.col = 1;
 
-      return i + 1;
+      return;
     }
 
-    if (ch < " ") {
-      // LF and other control bytes don't occur in the absolute-positioned bar
-      // frames; ignore them rather than model region scrolling here.
-      return i + 1;
+    if (grapheme < " ") {
+      return;
     }
-
-    // Read a whole grapheme starting at i (so a surrogate pair / ZWJ stays intact).
-    const rest = frame.slice(i);
-    const [g] = graphemes(rest);
-    const grapheme = g ?? ch;
 
     this.put(grapheme);
-
-    return i + grapheme.length;
   }
 
   private put(grapheme: string): void {
