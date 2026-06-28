@@ -44,6 +44,13 @@ decoding — returning schema-conformant output. See memory
 - **Done when:** a tool-call turn against the local endpoint returns a
   schema-valid call without invoking salvage, and salvage still covers a
   capability-off endpoint (test both paths).
+- **Status (PR #56):** shipped via a `guidedDecoding` flag (registry entry or
+  `TSFORGE_GUIDED_DECODING` env, since the registry is gated). **Verified end-to-end**
+  on the live endpoint through the real provider + `toolsFor` schemas: guided-on
+  forces a structured `read(...)` call with `salvaged: 0` and empty content (no
+  narration); guided-off narrates first. Salvage remains the fallback for
+  non-guided endpoints. (`response_format: json_schema` passthrough is a noted
+  follow-up — tool calls cover the current need.)
 
 ### 2. SWE-agent Agent-Computer Interface (tool ergonomics)
 

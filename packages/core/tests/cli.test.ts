@@ -2,7 +2,13 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, isOneShot, applyRecipe, runNotify } from "../src/cli";
+import {
+  parseArgs,
+  isOneShot,
+  applyRecipe,
+  runNotify,
+  providerConfig,
+} from "../src/cli";
 import type { ITaskRecipe } from "../src/config/recipes";
 
 // Regression: runNotify used to spawn `sh -c cmd` with a bare `await proc.exited`
@@ -420,4 +426,36 @@ test("editor input submission while busy queues exactly one message to pending",
   expect(pending[0]).toBe("test message");
 
   handle.close();
+});
+
+test("providerConfig: TSFORGE_GUIDED_DECODING env enables guided decoding", () => {
+  const prev = process.env.TSFORGE_GUIDED_DECODING;
+
+  try {
+    process.env.TSFORGE_GUIDED_DECODING = "1";
+    expect(
+      providerConfig({ baseUrl: "http://x/v1", model: "m" }).guidedDecoding
+    ).toBe(true);
+
+    delete process.env.TSFORGE_GUIDED_DECODING;
+    expect(
+      providerConfig({ baseUrl: "http://x/v1", model: "m" }).guidedDecoding
+    ).toBeUndefined();
+
+    // A registry entry value wins over the env flag.
+    process.env.TSFORGE_GUIDED_DECODING = "1";
+    expect(
+      providerConfig({
+        baseUrl: "http://x/v1",
+        model: "m",
+        guidedDecoding: false,
+      }).guidedDecoding
+    ).toBe(false);
+  } finally {
+    if (prev === undefined) {
+      delete process.env.TSFORGE_GUIDED_DECODING;
+    } else {
+      process.env.TSFORGE_GUIDED_DECODING = prev;
+    }
+  }
 });
