@@ -136,14 +136,22 @@ export interface IOpenAICompatibleConfig {
   /**
    * How this provider wants reasoning/thinking expressed on the wire:
    *  - `qwen` (default): `chat_template_kwargs.enable_thinking` + `thinking_token_budget` (vLLM).
-   *  - `deepseek`: top-level `thinking: { type }` + `reasoning_effort`; never sends
-   *    `tool_choice: "required"` (DeepSeek's thinking mode rejects it).
+   *  - `deepseek`: top-level `thinking: { type }` + `reasoning_effort`; `tool_choice`
+   *    is suppressed ONLY on the DeepSeek CLOUD host (api.deepseek.com), which 400s
+   *    on it — a local/self-hosted DeepSeek still gets it.
    *  - `openai`: `reasoning_effort`; uses `max_completion_tokens` and omits `temperature` (o-series).
    *  - `none`: no reasoning fields.
    */
   reasoning?: ReasoningStyle;
   /** Reasoning effort for `deepseek`/`openai` styles (maps to `reasoning_effort`). */
   reasoningEffort?: "low" | "medium" | "high";
+  /**
+   * OPTIONAL override for guided-decoding (structured tool-call) support. Normally
+   * unset: the harness auto-detects it — every local/self-hosted endpoint sends
+   * `tool_choice`, and only DeepSeek's CLOUD thinking API (api.deepseek.com), which
+   * 400s on it, is suppressed. Set `true`/`false` only to override a misdetection.
+   */
+  guidedDecoding?: boolean;
   /** Arbitrary fields merged into the request body LAST (override anything above) —
    *  the escape hatch for any provider-specific param. */
   extraBody?: Record<string, unknown>;

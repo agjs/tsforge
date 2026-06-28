@@ -97,9 +97,11 @@ function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, number> {
     : { max_tokens: max };
 }
 
-/** The `tools` (+ `tool_choice`) request fields, with provider constraints
- *  applied: DeepSeek's thinking mode rejects an explicit `tool_choice`, so omit
- *  it entirely there (the model still gets the tools and decides). */
+/** The `tools` (+ `tool_choice`) request fields. `tool_choice` is sent by default
+ *  — it grammar-constrains the call to a well-formed schema instead of free-form
+ *  text the harness would have to salvage — and is suppressed ONLY for the deepseek
+ *  style on DeepSeek's CLOUD host, whose thinking API 400s on it (see
+ *  `suppressesToolChoice`). No configuration needed for the common local case. */
 function toolsBlock(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
@@ -108,11 +110,60 @@ function toolsBlock(
     return {};
   }
 
-  if (style(cfg) === "deepseek") {
+  if (style(cfg) === "deepseek" && suppressesToolChoice(cfg)) {
     return { tools: opts.tools };
   }
 
   return { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" };
+}
+
+/** Whether to omit `tool_choice` for a deepseek-style endpoint. AUTO by default,
+ *  so a normal user never configures anything: only DeepSeek's CLOUD thinking API
+ *  (api.deepseek.com) 400s on an explicit `tool_choice`; a local / self-hosted
+ *  DeepSeek (vLLM/SGLang/llama.cpp) accepts it and grammar-constrains the call, so
+ *  it's sent. The optional `guidedDecoding` flag only exists to override a
+ *  misdetection (true = always send, false = always omit). */
+function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
+  const override = guidedOverride(cfg);
+
+  if (override !== undefined) {
+    return !override;
+  }
+
+  return isDeepSeekCloudHost(cfg.baseUrl);
+}
+
+/** Normalize the optional `guidedDecoding` override — tolerates a stringified
+ *  boolean from a hand-edited models.json; undefined ⇒ auto-detect by host. */
+function guidedOverride(cfg: IOpenAICompatibleConfig): boolean | undefined {
+  const value: unknown = cfg.guidedDecoding;
+
+  if (value === true || value === "true") {
+    return true;
+  }
+
+  if (value === false || value === "false") {
+    return false;
+  }
+
+  return undefined;
+}
+
+/** True for the DeepSeek CLOUD API host (api.deepseek.com / *.deepseek.com) — the
+ *  only endpoint known to reject an explicit `tool_choice`. Tolerates a scheme-less
+ *  baseUrl (e.g. `api.deepseek.com/v1` from a hand-edited config): without a scheme
+ *  `new URL()` throws, which would miss the cloud host and wrongly SEND tool_choice
+ *  — the exact 400 this guards against — so prepend `https://` before parsing. */
+function isDeepSeekCloudHost(baseUrl: string): boolean {
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(baseUrl)
+    ? baseUrl
+    : `https://${baseUrl}`;
+
+  try {
+    return /(^|\.)deepseek\.com$/iu.test(new URL(withScheme).hostname);
+  } catch {
+    return false;
+  }
 }
 
 /** Build the request body object (pure). Field order keeps the qwen default

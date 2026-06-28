@@ -47,9 +47,19 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.chat_template_kwargs).toBeUndefined();
   });
 
-  test("deepseek sends tools but omits tool_choice (thinking mode rejects it)", () => {
+  test("local deepseek auto-sends tool_choice (no config — vLLM accepts it)", () => {
     const b = body(
-      { reasoning: "deepseek" },
+      { reasoning: "deepseek", baseUrl: "http://localhost:8000/v1" },
+      { tools: [{}], toolChoice: "required" }
+    );
+
+    expect(b.tools).toBeDefined();
+    expect(b.tool_choice).toBe("required");
+  });
+
+  test("DeepSeek CLOUD host auto-omits tool_choice (its thinking API 400s on it)", () => {
+    const b = body(
+      { reasoning: "deepseek", baseUrl: "https://api.deepseek.com/v1" },
       { tools: [{}], toolChoice: "required" }
     );
 
@@ -57,8 +67,59 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.tool_choice).toBeUndefined();
   });
 
+  test("scheme-less DeepSeek cloud baseUrl is still detected (omits tool_choice)", () => {
+    const b = body(
+      { reasoning: "deepseek", baseUrl: "api.deepseek.com/v1" },
+      { tools: [{}], toolChoice: "required" }
+    );
+
+    expect(b.tool_choice).toBeUndefined();
+  });
+
   test("non-deepseek still sends tool_choice", () => {
     const b = body({}, { tools: [{}], toolChoice: "required" });
+
+    expect(b.tool_choice).toBe("required");
+  });
+
+  test("guidedDecoding:false forces omit even on a local endpoint", () => {
+    const b = body(
+      {
+        reasoning: "deepseek",
+        baseUrl: "http://localhost:8000/v1",
+        guidedDecoding: false,
+      },
+      { tools: [{}], toolChoice: "required" }
+    );
+
+    expect(b.tool_choice).toBeUndefined();
+  });
+
+  test("guidedDecoding:true forces send even on the cloud host (override)", () => {
+    const b = body(
+      {
+        reasoning: "deepseek",
+        baseUrl: "https://api.deepseek.com/v1",
+        guidedDecoding: true,
+      },
+      { tools: [{}], toolChoice: "required" }
+    );
+
+    expect(b.tool_choice).toBe("required");
+  });
+
+  test("override tolerates a stringified boolean from hand-edited JSON", () => {
+    // Mirror a hand-edited models.json where the override is a JSON string, not a
+    // boolean — parsed (not cast) so the test stays type-honest about runtime input.
+    const cfg: IOpenAICompatibleConfig = JSON.parse(
+      '{"baseUrl":"https://api.deepseek.com/v1","model":"m","reasoning":"deepseek","guidedDecoding":"true"}'
+    );
+    const b = buildRequestBody(
+      cfg,
+      MSGS,
+      { tools: [{}], toolChoice: "required" },
+      false
+    );
 
     expect(b.tool_choice).toBe("required");
   });
@@ -215,7 +276,9 @@ describe("reasoning_content round-trip", () => {
     );
   });
 
-  test("auto-detected deepseek also omits tool_choice (thinking mode rejects it)", () => {
+  test("auto-detected deepseek on a non-cloud host still sends tool_choice", () => {
+    // Style is auto-detected as deepseek from the model name (for reasoning
+    // replay), but the host isn't api.deepseek.com, so tool_choice is sent.
     const b = buildRequestBody(
       cfg({ model: "deepseek-pro-4" }),
       MSGS,
@@ -224,7 +287,7 @@ describe("reasoning_content round-trip", () => {
     );
 
     expect(b.tools).toBeDefined();
-    expect(b.tool_choice).toBeUndefined();
+    expect(b.tool_choice).toBe("auto");
   });
 });
 

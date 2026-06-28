@@ -35,6 +35,10 @@ export interface IModelEntry {
   reasoning?: ReasoningStyle;
   /** Reasoning effort for `deepseek`/`openai` styles. */
   reasoningEffort?: "low" | "medium" | "high";
+  /** OPTIONAL override for guided-decoding (structured tool-call) support.
+   *  Normally leave unset — it's auto-detected per endpoint (local on, DeepSeek
+   *  cloud off). Set true/false only to correct a misdetection. */
+  guidedDecoding?: boolean;
   /** Arbitrary fields merged into the request body (override built-ins) — the
    *  escape hatch for any provider-specific param. */
   extraBody?: Record<string, unknown>;

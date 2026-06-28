@@ -295,6 +295,11 @@ export function providerConfig(entry: IModelEntry): IOpenAICompatibleConfig {
     ...(entry.reasoningEffort === undefined
       ? {}
       : { reasoningEffort: entry.reasoningEffort }),
+    // Optional override only — guided decoding is auto-detected by endpoint
+    // (local on, DeepSeek cloud off). Passed through when a model entry sets it.
+    ...(entry.guidedDecoding === undefined
+      ? {}
+      : { guidedDecoding: entry.guidedDecoding }),
     ...(entry.extraBody === undefined ? {} : { extraBody: entry.extraBody }),
     ...(entry.extraHeaders === undefined
       ? {}
