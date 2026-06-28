@@ -80,6 +80,21 @@ test("parseable JSON lacking a valid overall is also flagged scored:false", asyn
   expect(outOfRange.scored).toBe(false);
 });
 
+test("a judge provider that throws is no-signal, not a crash", async () => {
+  // Non-2xx / timeout / connection error from the judge endpoint must not bubble
+  // out of the best-effort quality pass — it's treated as no usable signal.
+  const throwing: IProvider = {
+    async complete() {
+      throw new Error("503 from judge endpoint");
+    },
+  };
+
+  const s = await judge(throwing, { goal: "g", criteria: "c", code: "x" });
+
+  expect(s.scored).toBe(false);
+  expect(s.overall).toBe(0);
+});
+
 test("tolerates a fenced JSON block", async () => {
   const provider = providerSaying(
     'Here is my review:\n```json\n{"overall":2,"correctness":2,"design":2,"readability":2,"notes":"weak"}\n```\n'

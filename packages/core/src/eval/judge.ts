@@ -44,16 +44,25 @@ export async function judge(
   provider: IProvider,
   input: IJudgeInput
 ): Promise<IJudgeScore> {
-  const res = await provider.complete(
-    [
-      { role: "system", content: SYSTEM },
-      {
-        role: "user",
-        content: `Goal: ${input.goal}\n\nAcceptance criteria:\n${input.criteria}\n\nSolution:\n${input.code}`,
-      },
-    ],
-    { temperature: 0 }
-  );
+  let res;
+
+  try {
+    res = await provider.complete(
+      [
+        { role: "system", content: SYSTEM },
+        {
+          role: "user",
+          content: `Goal: ${input.goal}\n\nAcceptance criteria:\n${input.criteria}\n\nSolution:\n${input.code}`,
+        },
+      ],
+      { temperature: 0 }
+    );
+  } catch {
+    // A judge call that errors (non-2xx, timeout, connection) is no signal — not a
+    // crash of the (best-effort) quality pass, and not a real 0/5. Treat it like an
+    // unparseable response so the caller skips the loop.
+    return { ...UNPARSEABLE, notes: "judge call failed" };
+  }
 
   let data: unknown;
 
