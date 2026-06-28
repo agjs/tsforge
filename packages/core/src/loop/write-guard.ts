@@ -16,6 +16,7 @@ import {
   PER_WRITE_META_RULES,
   type IMetaRuleContext,
 } from "../meta-rules";
+import { HL_LINE_SEP } from "../files/hashline-format";
 import type { Reporter } from "./loop.types";
 import type { ILoopCtx } from "./turn";
 
@@ -220,6 +221,9 @@ async function writeGuard(
   // `file` is workspace-relative (the create/edit handler normalized it); the
   // strip/linter/readFileSync need the absolute path.
   const absPath = join(cwd, file);
+  // Snapshot what the model just WROTE (before strip/format reshape it) so a clean
+  // write can echo back the post-format content only when it actually diverged.
+  const written = safeRead(absPath);
   // Strip the model's reflexive needless literal-to-union casts NOW (deterministic,
   // safe) so it's never told about them and never spends a turn removing them.
   const stripped = await stripLiteralCasts(absPath).catch(() => 0);
@@ -257,7 +261,11 @@ async function writeGuard(
   const total = typeErrors.length + lintProblems.length;
 
   if (total === 0 && dependants.length === 0) {
-    return "";
+    // Clean write. If strip/auto-format reshaped what the model wrote, its
+    // in-context copy is now stale — echo the post-format content so its NEXT edit
+    // anchors on disk reality, preventing the stale-anchor not-found the edit tool
+    // only recovers from. No-op when nothing changed (no divergence to report).
+    return reformatEcho(file, written, safeRead(absPath));
   }
 
   const detail = writeGuardLines(absPath, cwd, typeErrors, lintProblems);
@@ -285,6 +293,50 @@ async function writeGuard(
     "(edit this file) before writing others; ignore any 'cannot find module' for " +
     `files you'll create next:\n${detail}${blast}`
   );
+}
+
+/** Read a file synchronously, or "" if it can't be read (just-written files
+ *  always exist; this only guards a transient race). */
+function safeRead(absPath: string): string {
+  try {
+    return readFileSync(absPath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** Lines above which a reformat echo would cost more context than it saves; larger
+ *  files fall back to the corrective (re-read-on-not-found) path. */
+const REFORMAT_ECHO_MAX_LINES = 80;
+
+/**
+ * Feedback for a CLEAN write whose content the strip/auto-format pass reshaped:
+ * echo the post-format file so the model edits against disk reality, not the
+ * (now-stale) text it wrote — the preventive half of the edit-on-autoformat fix
+ * (the corrective half inlines content on a not-found rejection). Returns "" when
+ * nothing diverged (the model's copy is already correct) or the file is too large
+ * to inline cheaply (a short note then, so the model knows to re-read).
+ */
+export function reformatEcho(
+  file: string,
+  written: string,
+  current: string
+): string {
+  if (written === current || current.length === 0) {
+    return "";
+  }
+
+  const lines = current.split("\n");
+
+  if (lines.length > REFORMAT_ECHO_MAX_LINES) {
+    return `\n\nℹ ${file} was auto-formatted (imports/quotes/blank lines normalized) — re-read it before your next edit so your oldString matches what's on disk.`;
+  }
+
+  const numbered = lines
+    .map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`)
+    .join("\n");
+
+  return `\n\nℹ ${file} was auto-formatted — its CURRENT content is below; copy any future oldString from THIS (not from what you wrote):\n${numbered}`;
 }
 
 /** A meta-rule context scoped to ONE just-written file, so the per-write rules
