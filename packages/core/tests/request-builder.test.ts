@@ -82,6 +82,15 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.tool_choice).toBe("auto");
   });
 
+  test("guidedDecoding tolerates a stringified 'true' (hand-edited models.json)", () => {
+    const b = body(
+      { reasoning: "deepseek", guidedDecoding: "true" as unknown as boolean },
+      { tools: [{}], toolChoice: "required" }
+    );
+
+    expect(b.tool_choice).toBe("required");
+  });
+
   test("openai uses max_completion_tokens, reasoning_effort, and omits temperature", () => {
     const b = body(
       { reasoning: "openai", reasoningEffort: "medium" },

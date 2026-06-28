@@ -112,11 +112,20 @@ function toolsBlock(
     return {};
   }
 
-  if (style(cfg) === "deepseek" && cfg.guidedDecoding !== true) {
+  if (style(cfg) === "deepseek" && !isGuided(cfg)) {
     return { tools: opts.tools };
   }
 
   return { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" };
+}
+
+/** Whether guided decoding is enabled, tolerating a hand-edited `models.json`
+ *  that set the flag as the string `"true"` (a non-boolean JSON value would
+ *  otherwise silently disable it — a confusing footgun). */
+function isGuided(cfg: IOpenAICompatibleConfig): boolean {
+  const value: unknown = cfg.guidedDecoding;
+
+  return value === true || value === "true";
 }
 
 /** Build the request body object (pure). Field order keeps the qwen default
