@@ -326,7 +326,11 @@ export function reformatEcho(
     return "";
   }
 
-  const lines = current.split("\n");
+  // Drop the standard trailing newline before splitting, so a `…\n`-terminated
+  // file doesn't number a phantom empty last line the model could anchor on.
+  const lines = (current.endsWith("\n") ? current.slice(0, -1) : current).split(
+    "\n"
+  );
 
   if (lines.length > REFORMAT_ECHO_MAX_LINES) {
     return `\n\nℹ ${file} was auto-formatted (imports/quotes/blank lines normalized) — re-read it before your next edit so your oldString matches what's on disk.`;

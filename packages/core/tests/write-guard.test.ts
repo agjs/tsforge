@@ -18,10 +18,19 @@ describe("reformatEcho (preventive ACI echo on a clean write)", () => {
     const out = reformatEcho("a.ts", written, current);
 
     expect(out).toContain("auto-formatted");
-    expect(out).toContain("1"); // numbered
     expect(out).toContain('export const x = "a";'); // the actual on-disk text
     // Tells the model to anchor on THIS, not what it wrote.
     expect(out.toLowerCase()).toContain("oldstring");
+  });
+
+  test("does not number a phantom trailing line for a newline-terminated file", () => {
+    // Two real lines + standard trailing newline → exactly lines 1 and 2, no `3`.
+    const out = reformatEcho("a.ts", "a\nb", "const a = 1;\nconst b = 2;\n");
+    const lineNumbers = [...out.matchAll(/^(\d+)/gmu)].map((m) => m[1]);
+
+    expect(out).toContain("const a = 1;");
+    expect(out).toContain("const b = 2;");
+    expect(lineNumbers).toEqual(["1", "2"]); // no phantom "3" from the trailing \n
   });
 
   test("a large reshaped file gets a re-read note, not inlined content", () => {
