@@ -49,7 +49,7 @@ describe("buildRequestBody: reasoning styles", () => {
 
   test("local deepseek auto-sends tool_choice (no config — vLLM accepts it)", () => {
     const b = body(
-      { reasoning: "deepseek", baseUrl: "http://192.168.20.108:8000/v1" },
+      { reasoning: "deepseek", baseUrl: "http://localhost:8000/v1" },
       { tools: [{}], toolChoice: "required" }
     );
 
@@ -67,6 +67,15 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.tool_choice).toBeUndefined();
   });
 
+  test("scheme-less DeepSeek cloud baseUrl is still detected (omits tool_choice)", () => {
+    const b = body(
+      { reasoning: "deepseek", baseUrl: "api.deepseek.com/v1" },
+      { tools: [{}], toolChoice: "required" }
+    );
+
+    expect(b.tool_choice).toBeUndefined();
+  });
+
   test("non-deepseek still sends tool_choice", () => {
     const b = body({}, { tools: [{}], toolChoice: "required" });
 
@@ -77,7 +86,7 @@ describe("buildRequestBody: reasoning styles", () => {
     const b = body(
       {
         reasoning: "deepseek",
-        baseUrl: "http://192.168.20.108:8000/v1",
+        baseUrl: "http://localhost:8000/v1",
         guidedDecoding: false,
       },
       { tools: [{}], toolChoice: "required" }
@@ -99,14 +108,17 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.tool_choice).toBe("required");
   });
 
-  test("override tolerates a stringified boolean (hand-edited models.json)", () => {
-    const b = body(
-      {
-        reasoning: "deepseek",
-        baseUrl: "https://api.deepseek.com/v1",
-        guidedDecoding: "true" as unknown as boolean,
-      },
-      { tools: [{}], toolChoice: "required" }
+  test("override tolerates a stringified boolean from hand-edited JSON", () => {
+    // Mirror a hand-edited models.json where the override is a JSON string, not a
+    // boolean — parsed (not cast) so the test stays type-honest about runtime input.
+    const cfg: IOpenAICompatibleConfig = JSON.parse(
+      '{"baseUrl":"https://api.deepseek.com/v1","model":"m","reasoning":"deepseek","guidedDecoding":"true"}'
+    );
+    const b = buildRequestBody(
+      cfg,
+      MSGS,
+      { tools: [{}], toolChoice: "required" },
+      false
     );
 
     expect(b.tool_choice).toBe("required");

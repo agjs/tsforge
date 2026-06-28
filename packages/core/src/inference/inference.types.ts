@@ -136,8 +136,9 @@ export interface IOpenAICompatibleConfig {
   /**
    * How this provider wants reasoning/thinking expressed on the wire:
    *  - `qwen` (default): `chat_template_kwargs.enable_thinking` + `thinking_token_budget` (vLLM).
-   *  - `deepseek`: top-level `thinking: { type }` + `reasoning_effort`; never sends
-   *    `tool_choice: "required"` (DeepSeek's thinking mode rejects it).
+   *  - `deepseek`: top-level `thinking: { type }` + `reasoning_effort`; `tool_choice`
+   *    is suppressed ONLY on the DeepSeek CLOUD host (api.deepseek.com), which 400s
+   *    on it — a local/self-hosted DeepSeek still gets it.
    *  - `openai`: `reasoning_effort`; uses `max_completion_tokens` and omits `temperature` (o-series).
    *  - `none`: no reasoning fields.
    */

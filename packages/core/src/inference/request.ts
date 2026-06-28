@@ -97,13 +97,11 @@ function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, number> {
     : { max_tokens: max };
 }
 
-/** The `tools` (+ `tool_choice`) request fields, with provider constraints
- *  applied: DeepSeek's CLOUD thinking API rejects an explicit `tool_choice`, so
- *  omit it there (the model still gets the tools and decides). A guided-decoding-
- *  capable endpoint (local vLLM serving e.g. DeepSeek-V4-Flash) accepts it and
- *  grammar-constrains the call — so `guidedDecoding` opts that endpoint back into
- *  sending `tool_choice`, which forces a well-formed call instead of free-form
- *  text the harness would otherwise have to salvage. */
+/** The `tools` (+ `tool_choice`) request fields. `tool_choice` is sent by default
+ *  — it grammar-constrains the call to a well-formed schema instead of free-form
+ *  text the harness would have to salvage — and is suppressed ONLY for the deepseek
+ *  style on DeepSeek's CLOUD host, whose thinking API 400s on it (see
+ *  `suppressesToolChoice`). No configuration needed for the common local case. */
 function toolsBlock(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
@@ -152,10 +150,17 @@ function guidedOverride(cfg: IOpenAICompatibleConfig): boolean | undefined {
 }
 
 /** True for the DeepSeek CLOUD API host (api.deepseek.com / *.deepseek.com) — the
- *  only endpoint known to reject an explicit `tool_choice`. */
+ *  only endpoint known to reject an explicit `tool_choice`. Tolerates a scheme-less
+ *  baseUrl (e.g. `api.deepseek.com/v1` from a hand-edited config): without a scheme
+ *  `new URL()` throws, which would miss the cloud host and wrongly SEND tool_choice
+ *  — the exact 400 this guards against — so prepend `https://` before parsing. */
 function isDeepSeekCloudHost(baseUrl: string): boolean {
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(baseUrl)
+    ? baseUrl
+    : `https://${baseUrl}`;
+
   try {
-    return /(^|\.)deepseek\.com$/iu.test(new URL(baseUrl).hostname);
+    return /(^|\.)deepseek\.com$/iu.test(new URL(withScheme).hostname);
   } catch {
     return false;
   }
