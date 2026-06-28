@@ -2,6 +2,17 @@ import { graphemes } from "./segments";
 import { paint, STYLE } from "../render/style";
 import { displayWidth } from "../render/width";
 
+/** Columns a hard tab advances to (next multiple of 8) — terminals expand a
+ *  literal `\t` to the next tab stop, and `displayWidth` can't know the column,
+ *  so the editor's wrap math computes the advance here from the row position. */
+const TAB_STOP = 8;
+
+/** Display columns a grapheme occupies on the current visual row. A tab advances
+ *  to the next tab stop from `col`; everything else is its intrinsic width. */
+function cellWidth(g: string, col: number): number {
+  return g === "\t" ? TAB_STOP - (col % TAB_STOP) : displayWidth(g);
+}
+
 export interface IEditorInput {
   lines: string[];
   cursorLine: number;
@@ -59,7 +70,7 @@ function wrapLine(
 
   for (let i = 0; i < graphemeList.length; i += 1) {
     const g = graphemeList[i] ?? "";
-    const w = displayWidth(g);
+    let w = cellWidth(g, rowWidth);
 
     // Wrap before a grapheme that would overflow the row (but never flush an
     // empty row, so a lone cell wider than `columns` still gets placed).
@@ -73,6 +84,8 @@ function wrapLine(
       rowWidth = 0;
       rowCursorCol = undefined;
       visualRow += 1;
+      // A tab's advance depends on the column, so recompute it at the row start.
+      w = cellWidth(g, rowWidth);
     }
 
     if (i === cursorCol) {

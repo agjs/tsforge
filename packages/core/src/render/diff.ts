@@ -107,6 +107,10 @@ function collapseContext(ops: readonly IOp[], context: number): IOp[] {
   const flush = (atStart: boolean, atEnd: boolean): void => {
     if (run.length <= context * 2) {
       out.push(...run);
+    } else if (atStart && atEnd) {
+      // The whole diff is one unchanged run (a no-op diff): show leading context
+      // then collapse, rather than a bare "⋯" that hides that nothing changed.
+      out.push(...run.slice(0, context), { type: "eq", text: "⋯" });
     } else {
       if (!atStart) {
         out.push(...run.slice(0, context));

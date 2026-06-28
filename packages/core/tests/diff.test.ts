@@ -28,6 +28,19 @@ describe("renderDiff — unified", () => {
     expect(out.split("\n").filter((l) => l.startsWith("- "))).toEqual([]);
   });
 
+  test("a no-op diff keeps leading context, not just a bare gap marker", () => {
+    const same = Array.from({ length: 20 }, (_, i) => `line${i}`).join("\n");
+    const lines = strip(renderDiff(same, same, { color: false, context: 3 }))
+      .split("\n")
+      .filter((l) => l.length > 0);
+
+    // Not collapsed to a single "⋯": some real context survives.
+    expect(lines.some((l) => l.includes("line0"))).toBe(true);
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.filter((l) => l.startsWith("- ")).length).toBe(0);
+    expect(lines.filter((l) => l.startsWith("+ ")).length).toBe(0);
+  });
+
   test("collapses large unchanged runs to a gap marker", () => {
     const common = Array.from({ length: 20 }, (_, i) => `line${i}`).join("\n");
     const out = strip(

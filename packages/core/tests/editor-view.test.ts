@@ -73,6 +73,17 @@ test("single line renders one row", () => {
 
 // region: Gemini PR #52 regression tests
 
+test("a hard tab advances the cursor to the next tab stop", () => {
+  // "\tab": the tab expands to column 8 (a terminal's default tab stop), then
+  // "a","b" → the cursor sits at display column 10, not 2.
+  const r = renderEditor(
+    { lines: ["\tab"], cursorLine: 0, cursorCol: 3 },
+    { columns: 40, maxRows: 6, color: false }
+  );
+
+  expect(r.cursorCol).toBe(10);
+});
+
 test("emoji wrap and cursor positioning is display-width-correct", () => {
   // 👍 is one grapheme (multiple UTF-16 units) that occupies TWO columns.
   // Line: "hello " (6 cols) + 👍 (2 cols) = 8 cols → fills an 8-column row exactly,
