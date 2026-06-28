@@ -59,6 +59,11 @@ test("writable allows the co-located test sibling of an in-scope source", () => 
   expect(writable("parser.test.ts", scope)).toBe(true);
   expect(writable("src/a.spec.tsx", ["src/a.tsx"])).toBe(true);
 
+  // A `.tsx`/`.jsx` source is commonly tested by a plain `.test.ts` — match on the
+  // stem across source extensions, not the test file's own extension.
+  expect(writable("src/Component.test.ts", ["src/Component.tsx"])).toBe(true);
+  expect(writable("Widget.test.ts", ["Widget.jsx"])).toBe(true);
+
   // But NOT a test whose source is out of scope — no arbitrary test writes.
   expect(writable("pricing.test.ts", scope)).toBe(false);
   expect(writable("evil.test.ts", scope)).toBe(false);

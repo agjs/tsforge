@@ -45,23 +45,32 @@ export function writable(file: string, patterns: string[]): boolean {
   // writable too — otherwise the rule demands a file the scope forbids, the task is
   // unsatisfiable, and the model thrashes to the cycle cap (observed: multi-file
   // specs whose scope lists only sources, e.g. `lexer.ts`, deadlocking on
-  // `lexer.test.ts`). Only the test of an IN-SCOPE source is allowed.
-  const source = testSibling(file);
+  // `lexer.test.ts`). Match on the STEM across source extensions, since a `.tsx`
+  // source is commonly tested by a plain `.test.ts`. Only an IN-SCOPE source counts.
+  const stem = testStem(file);
 
-  return source !== null && isInScope(source, patterns);
+  return (
+    stem !== null &&
+    SOURCE_EXTENSIONS.some((ext) => isInScope(`${stem}.${ext}`, patterns))
+  );
 }
 
-/** The source path a `*.test.*` / `*.spec.*` file tests (strip the test/spec
- *  segment), or null when `file` isn't a test file. `lexer.test.ts` → `lexer.ts`,
- *  `src/a.spec.tsx` → `src/a.tsx`. */
-function testSibling(file: string): string | null {
-  const m = /^(.*)\.(?:test|spec)(\.[cm]?[jt]sx?)$/u.exec(file);
+/** Source extensions a co-located test may belong to — checked against the test's
+ *  stem so `Component.test.ts` is allowed when `Component.tsx` is in scope. */
+const SOURCE_EXTENSIONS = [
+  "ts",
+  "tsx",
+  "mts",
+  "cts",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+];
 
-  if (m === null) {
-    return null;
-  }
-
-  const [, base, ext] = m;
-
-  return base === undefined || ext === undefined ? null : `${base}${ext}`;
+/** The stem of a `*.test.*` / `*.spec.*` path (everything before `.test`/`.spec`),
+ *  or null when `file` isn't a test file. `lexer.test.ts` → `lexer`,
+ *  `src/Component.spec.tsx` → `src/Component`. */
+function testStem(file: string): string | null {
+  return /^(.*)\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u.exec(file)?.[1] ?? null;
 }
