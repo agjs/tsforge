@@ -37,22 +37,32 @@ const UNPARSEABLE: IJudgeScore = {
   design: 0,
   readability: 0,
   notes: "unparseable judge response",
+  scored: false,
 };
 
 export async function judge(
   provider: IProvider,
   input: IJudgeInput
 ): Promise<IJudgeScore> {
-  const res = await provider.complete(
-    [
-      { role: "system", content: SYSTEM },
-      {
-        role: "user",
-        content: `Goal: ${input.goal}\n\nAcceptance criteria:\n${input.criteria}\n\nSolution:\n${input.code}`,
-      },
-    ],
-    { temperature: 0 }
-  );
+  let res;
+
+  try {
+    res = await provider.complete(
+      [
+        { role: "system", content: SYSTEM },
+        {
+          role: "user",
+          content: `Goal: ${input.goal}\n\nAcceptance criteria:\n${input.criteria}\n\nSolution:\n${input.code}`,
+        },
+      ],
+      { temperature: 0 }
+    );
+  } catch {
+    // A judge call that errors (non-2xx, timeout, connection) is no signal — not a
+    // crash of the (best-effort) quality pass, and not a real 0/5. Treat it like an
+    // unparseable response so the caller skips the loop.
+    return { ...UNPARSEABLE, notes: "judge call failed" };
+  }
 
   let data: unknown;
 
@@ -66,12 +76,18 @@ export async function judge(
     return UNPARSEABLE;
   }
 
+  const overall = clampScore(data.overall);
+
   return {
-    overall: clampScore(data.overall),
+    overall,
     correctness: clampScore(data.correctness),
     design: clampScore(data.design),
     readability: clampScore(data.readability),
     notes: typeof data.notes === "string" ? data.notes : "",
+    // Parseable but lacking a valid 1–5 `overall` (missing/out-of-range → clamped
+    // to 0) is still no usable signal — flag it unscored so the caller skips the
+    // loop instead of acting on a fake 0/5.
+    scored: overall > 0,
   };
 }
 

@@ -43,6 +43,56 @@ test("parses a JSON quality score from the reviewer", async () => {
   expect(s.correctness).toBe(5);
   expect(s.readability).toBe(3);
   expect(s.notes).toContain("solid");
+  expect(s.scored).toBe(true); // a real, usable score
+});
+
+test("an unparseable response is flagged scored:false (no usable signal)", async () => {
+  const s = await judge(providerSaying("hmm, looks alright I guess"), {
+    goal: "g",
+    criteria: "c",
+    code: "x",
+  });
+
+  // Must be marked unscored so the caller skips the quality loop rather than
+  // feeding the generator a nonsense "0/5" critique.
+  expect(s.scored).toBe(false);
+  expect(s.overall).toBe(0);
+  expect(s.notes).toContain("unparseable");
+});
+
+test("parseable JSON lacking a valid overall is also flagged scored:false", async () => {
+  // Parses fine, but no usable 1–5 overall (missing / out of range → clamped to 0).
+  // That's still no signal — must not be treated as a real 0/5.
+  const missing = await judge(
+    providerSaying('{"design":4,"readability":4,"notes":"ok"}'),
+    { goal: "g", criteria: "c", code: "x" }
+  );
+
+  expect(missing.scored).toBe(false);
+  expect(missing.overall).toBe(0);
+
+  const outOfRange = await judge(providerSaying('{"overall":9,"notes":"ok"}'), {
+    goal: "g",
+    criteria: "c",
+    code: "x",
+  });
+
+  expect(outOfRange.scored).toBe(false);
+});
+
+test("a judge provider that throws is no-signal, not a crash", async () => {
+  // Non-2xx / timeout / connection error from the judge endpoint must not bubble
+  // out of the best-effort quality pass — it's treated as no usable signal.
+  const throwing: IProvider = {
+    async complete() {
+      throw new Error("503 from judge endpoint");
+    },
+  };
+
+  const s = await judge(throwing, { goal: "g", criteria: "c", code: "x" });
+
+  expect(s.scored).toBe(false);
+  expect(s.overall).toBe(0);
 });
 
 test("tolerates a fenced JSON block", async () => {

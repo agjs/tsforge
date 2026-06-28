@@ -180,3 +180,44 @@ test("reverts an attempt that breaks the gate", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// Regression: an UNPARSEABLE judge response (judge infra failure, not a real 0/5)
+// must NOT enter the improvement loop. Feeding the generator "a reviewer scored you
+// 0/5: 'unparseable judge response'" is a nonsense critique it can't act on — live,
+// the model spiraled on it and burned attempts. Treat it as no-signal: keep the
+// green baseline, run no improvement attempt.
+test("an unparseable judge response is no-signal — no improvement attempt", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-quality-unparse-"));
+
+  try {
+    await Bun.write(join(dir, "a.ts"), "export const a = 1;");
+
+    let implementCalls = 0;
+    const agent: IAgent = {
+      async implement() {
+        implementCalls += 1;
+      },
+    };
+    // Judge returns prose, not the required JSON → unparseable → scored:false.
+    const judgeProvider: IProvider = {
+      async complete() {
+        return { content: "Looks fine to me, honestly.", toolCalls: [] };
+      },
+    };
+
+    const result = await qualityRepair(
+      { id: "1", accept: "true", files: ["a.ts"] },
+      dir,
+      agent,
+      judgeProvider,
+      { goal: "g", criteria: "c" },
+      { target: 5, maxAttempts: 2 }
+    );
+
+    expect(implementCalls).toBe(0); // never fed the model a nonsense "0/5" critique
+    expect(result.attempts).toBe(0);
+    expect(result.notes).toContain("unparseable");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

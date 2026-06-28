@@ -47,7 +47,24 @@ export async function qualityRepair(
   const maxAttempts = opts.maxAttempts ?? 2;
   const report: Reporter = opts.onEvent ?? (() => undefined);
 
-  let best = await score(task, cwd, judgeProvider, meta);
+  const initial = await score(task, cwd, judgeProvider, meta);
+
+  // No usable judge signal (unparseable/errored response, or nothing in scope to
+  // assess): do NOT enter the improvement loop. Feeding the generator "a reviewer
+  // scored you 0/5: <error>" is a nonsense critique it can't act on — observed
+  // live, the model spirals on it and burns attempts for zero gain. Keep the green
+  // baseline and move on.
+  if (!initial.scored) {
+    report({
+      kind: "fix",
+      task: task.id,
+      message: `quality not scored (${initial.notes}) — skipping quality pass`,
+    });
+
+    return { quality: initial.quality, notes: initial.notes, attempts: 0 };
+  }
+
+  let best = initial;
 
   report({
     kind: "fix",
@@ -149,6 +166,9 @@ export async function qualityRepair(
 interface IScore {
   quality: number;
   notes: string;
+  /** False when there was no real judge signal (unparseable, or nothing in scope)
+   *  — the caller must not treat it as an actionable 0/5 critique. */
+  scored: boolean;
 }
 
 async function score(
@@ -168,7 +188,7 @@ async function score(
   // code window scores unpredictably and burns an LLM call. Degrade, never throw:
   // quality repair is a best-effort post-green pass, not a gate.
   if (views.length === 0) {
-    return { quality: 0, notes: "no files in scope to judge" };
+    return { quality: 0, notes: "no files in scope to judge", scored: false };
   }
 
   const code = views.map((v) => `// ${v.path}\n${v.content}\n`).join("\n");
@@ -179,5 +199,9 @@ async function score(
     code,
   });
 
-  return { quality: result.overall, notes: result.notes };
+  return {
+    quality: result.overall,
+    notes: result.notes,
+    scored: result.scored,
+  };
 }
