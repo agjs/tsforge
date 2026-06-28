@@ -13,6 +13,10 @@ export interface IJudgeScore {
   design: number;
   readability: number;
   notes: string;
+  /** False when the judge produced NO usable score (unparseable / errored). The
+   *  caller must treat this as "no signal" — never as a real 0/5 critique to act
+   *  on, or it feeds the generator a nonsense "improve this" instruction. */
+  scored: boolean;
 }
 
 export interface IRunRecord {

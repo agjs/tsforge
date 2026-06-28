@@ -37,6 +37,7 @@ const UNPARSEABLE: IJudgeScore = {
   design: 0,
   readability: 0,
   notes: "unparseable judge response",
+  scored: false,
 };
 
 export async function judge(
@@ -72,6 +73,7 @@ export async function judge(
     design: clampScore(data.design),
     readability: clampScore(data.readability),
     notes: typeof data.notes === "string" ? data.notes : "",
+    scored: true,
   };
 }
 

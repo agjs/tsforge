@@ -43,6 +43,21 @@ test("parses a JSON quality score from the reviewer", async () => {
   expect(s.correctness).toBe(5);
   expect(s.readability).toBe(3);
   expect(s.notes).toContain("solid");
+  expect(s.scored).toBe(true); // a real, usable score
+});
+
+test("an unparseable response is flagged scored:false (no usable signal)", async () => {
+  const s = await judge(providerSaying("hmm, looks alright I guess"), {
+    goal: "g",
+    criteria: "c",
+    code: "x",
+  });
+
+  // Must be marked unscored so the caller skips the quality loop rather than
+  // feeding the generator a nonsense "0/5" critique.
+  expect(s.scored).toBe(false);
+  expect(s.overall).toBe(0);
+  expect(s.notes).toContain("unparseable");
 });
 
 test("tolerates a fenced JSON block", async () => {
