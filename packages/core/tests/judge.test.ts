@@ -60,6 +60,26 @@ test("an unparseable response is flagged scored:false (no usable signal)", async
   expect(s.notes).toContain("unparseable");
 });
 
+test("parseable JSON lacking a valid overall is also flagged scored:false", async () => {
+  // Parses fine, but no usable 1–5 overall (missing / out of range → clamped to 0).
+  // That's still no signal — must not be treated as a real 0/5.
+  const missing = await judge(
+    providerSaying('{"design":4,"readability":4,"notes":"ok"}'),
+    { goal: "g", criteria: "c", code: "x" }
+  );
+
+  expect(missing.scored).toBe(false);
+  expect(missing.overall).toBe(0);
+
+  const outOfRange = await judge(providerSaying('{"overall":9,"notes":"ok"}'), {
+    goal: "g",
+    criteria: "c",
+    code: "x",
+  });
+
+  expect(outOfRange.scored).toBe(false);
+});
+
 test("tolerates a fenced JSON block", async () => {
   const provider = providerSaying(
     'Here is my review:\n```json\n{"overall":2,"correctness":2,"design":2,"readability":2,"notes":"weak"}\n```\n'

@@ -67,13 +67,18 @@ export async function judge(
     return UNPARSEABLE;
   }
 
+  const overall = clampScore(data.overall);
+
   return {
-    overall: clampScore(data.overall),
+    overall,
     correctness: clampScore(data.correctness),
     design: clampScore(data.design),
     readability: clampScore(data.readability),
     notes: typeof data.notes === "string" ? data.notes : "",
-    scored: true,
+    // Parseable but lacking a valid 1–5 `overall` (missing/out-of-range → clamped
+    // to 0) is still no usable signal — flag it unscored so the caller skips the
+    // loop instead of acting on a fake 0/5.
+    scored: overall > 0,
   };
 }
 
