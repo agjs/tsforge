@@ -72,5 +72,11 @@ const SOURCE_EXTENSIONS = [
  *  or null when `file` isn't a test file. `lexer.test.ts` → `lexer`,
  *  `src/Component.spec.tsx` → `src/Component`. */
 function testStem(file: string): string | null {
-  return /^(.*)\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u.exec(file)?.[1] ?? null;
+  // Restrict to REAL test-file extensions (ts/tsx/js/jsx/mts/cts/mjs/cjs) — a loose
+  // `[cm]?[jt]sx?` would also match non-existent ones like `.mjsx`/`.mtsx` and widen
+  // the writable set. No `*tsx`/`*jsx` with a c/m prefix exists.
+  return (
+    /^(.*)\.(?:test|spec)\.(?:tsx?|jsx?|[cm]ts|[cm]js)$/u.exec(file)?.[1] ??
+    null
+  );
 }

@@ -68,6 +68,14 @@ test("writable allows the co-located test sibling of an in-scope source", () => 
   expect(writable("pricing.test.ts", scope)).toBe(false);
   expect(writable("evil.test.ts", scope)).toBe(false);
 
+  // Only REAL test-file extensions count — a bogus `.mjsx`/`.mtsx` must not be
+  // treated as a test of `lexer` and slip into the writable set.
+  expect(writable("lexer.test.mjsx", scope)).toBe(false);
+  expect(writable("lexer.test.mtsx", scope)).toBe(false);
+  // …but the valid module variants do.
+  expect(writable("lexer.test.mts", scope)).toBe(true);
+  expect(writable("lexer.spec.js", scope)).toBe(true);
+
   // The source file itself is still writable; isInScope stays literal (sibling
   // allowance lives in writable, not isInScope).
   expect(writable("lexer.ts", scope)).toBe(true);
