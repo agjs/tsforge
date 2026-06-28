@@ -669,10 +669,11 @@ export async function doEdit(
  *  advising a `read` so a huge file can't flood the model's context. */
 const EDIT_REJECT_MAX_LINES = 400;
 
-/** The file's current content as numbered lines (same shape as `read`), or null
- *  if it's missing, too large to inline, or unreadable. Used to repair a stale-
- *  anchor edit in the SAME turn — the model copies its oldString from the post-
- *  format text. Returns null on any I/O error (race, permissions): the edit has
+/** The file's current content as numbered rows (line number + `HL_LINE_SEP` + text)
+ *  — like `read`'s body but WITHOUT its hashline header (this repairs a `str_replace`
+ *  edit, which anchors on verbatim text, not a line hash). Null if the file is
+ *  missing, too large to inline, or unreadable. Used to repair a stale-anchor edit in
+ *  the SAME turn — the model copies its oldString from the post-format text. Returns null on any I/O error (race, permissions): the edit has
  *  already failed, so enriching its message must never crash the tool — the caller
  *  then falls back to advising a `read`. */
 async function currentFileView(
