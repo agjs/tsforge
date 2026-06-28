@@ -66,6 +66,12 @@ decoding — returning schema-conformant output. See memory
 - **Effort:** M. **Risk:** low. **ROI:** high (no endpoint dependency).
 - **Done when:** read/edit tool responses carry window + outcome context, and an
   eval shows fewer wasted "re-read the file" turns.
+- **Status (PR #60):** the write-guard already echoes type/lint outcomes after a
+  write. Now adds the **preventive ACI echo** — a CLEAN write whose content the
+  strip/auto-format pass reshaped returns the post-format file (numbered, ≤80
+  lines) so the model edits against disk reality, not its now-stale copy. The
+  preventive complement to #57's corrective carry-content-on-not-found. No echo
+  when nothing diverged (no wasted tokens); a short re-read note for large files.
 
 ### 3. Robust edit application + lenient output parsing
 
