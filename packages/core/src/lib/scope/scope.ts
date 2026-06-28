@@ -36,5 +36,32 @@ export function writable(file: string, patterns: string[]): boolean {
     return false;
   }
 
-  return isInScope(file, patterns) || file.startsWith(SCRATCH_PREFIX);
+  if (isInScope(file, patterns) || file.startsWith(SCRATCH_PREFIX)) {
+    return true;
+  }
+
+  // The gate's `test-sibling-required` rule makes the model add a CO-LOCATED test
+  // for any source file it changes. So a test sibling of an in-scope source must be
+  // writable too — otherwise the rule demands a file the scope forbids, the task is
+  // unsatisfiable, and the model thrashes to the cycle cap (observed: multi-file
+  // specs whose scope lists only sources, e.g. `lexer.ts`, deadlocking on
+  // `lexer.test.ts`). Only the test of an IN-SCOPE source is allowed.
+  const source = testSibling(file);
+
+  return source !== null && isInScope(source, patterns);
+}
+
+/** The source path a `*.test.*` / `*.spec.*` file tests (strip the test/spec
+ *  segment), or null when `file` isn't a test file. `lexer.test.ts` → `lexer.ts`,
+ *  `src/a.spec.tsx` → `src/a.tsx`. */
+function testSibling(file: string): string | null {
+  const m = /^(.*)\.(?:test|spec)(\.[cm]?[jt]sx?)$/u.exec(file);
+
+  if (m === null) {
+    return null;
+  }
+
+  const [, base, ext] = m;
+
+  return base === undefined || ext === undefined ? null : `${base}${ext}`;
 }

@@ -45,3 +45,26 @@ test("a path escaping the workspace is not writable (no traversal)", () => {
   expect(writable(out, ["**/*"])).toBe(false);
   expect(writable("/etc/passwd", ["**/*"])).toBe(false);
 });
+
+// Regression: the gate's `test-sibling-required` rule makes the model add a
+// co-located test for any source it changes — so the editable scope must implicitly
+// allow that test sibling, or the rule demands a file the scope forbids and the
+// model stalls to the cycle cap (observed live on multi-file specs: `lexer.ts` in
+// scope, but `lexer.test.ts` rejected → deadlock).
+test("writable allows the co-located test sibling of an in-scope source", () => {
+  // Multi-file spec scope: only the sources are listed.
+  const scope = ["lexer.ts", "parser.ts", "executor.ts", "query.ts"];
+
+  expect(writable("lexer.test.ts", scope)).toBe(true);
+  expect(writable("parser.test.ts", scope)).toBe(true);
+  expect(writable("src/a.spec.tsx", ["src/a.tsx"])).toBe(true);
+
+  // But NOT a test whose source is out of scope — no arbitrary test writes.
+  expect(writable("pricing.test.ts", scope)).toBe(false);
+  expect(writable("evil.test.ts", scope)).toBe(false);
+
+  // The source file itself is still writable; isInScope stays literal (sibling
+  // allowance lives in writable, not isInScope).
+  expect(writable("lexer.ts", scope)).toBe(true);
+  expect(isInScope("lexer.test.ts", scope)).toBe(false);
+});
