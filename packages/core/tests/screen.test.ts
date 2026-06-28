@@ -49,6 +49,17 @@ describe("ScreenBuffer — damage diff", () => {
     expect(delta).not.toContain(clear);
   });
 
+  test("overwriting a wide cell's half clears the orphaned half", () => {
+    const buf = new ScreenBuffer(3, 10);
+
+    buf.flush(`${at(1, 1)}世`); // col1 wide char, col2 its continuation
+    const delta = buf.flush(`${at(1, 1)}x`); // overwrite the left half with a narrow char
+
+    // The diff must also blank the orphaned continuation column (write a space at
+    // col2), not leave a dangling right half — so the run is "x " not "x".
+    expect(delta).toContain(`${at(1, 1)}x `);
+  });
+
   test("wide characters occupy two columns and realign following cells", () => {
     const buf = new ScreenBuffer(5, 20);
 

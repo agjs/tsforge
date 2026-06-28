@@ -44,6 +44,19 @@ describe("renderDiff — unified", () => {
 
     expect(out).toBe("- foo\n+ bar");
   });
+
+  test("falls back to a plain replacement on very large inputs (no O(n·m) blowup)", () => {
+    // 600×600 = 360k DP cells, past the guard — must not allocate the matrix or
+    // hang; it degrades to all-old-removed then all-new-added.
+    const old = Array.from({ length: 600 }, (_, i) => `a${i}`).join("\n");
+    const next = Array.from({ length: 600 }, (_, i) => `b${i}`).join("\n");
+    const lines = strip(
+      renderDiff(old, next, { color: false, wordLevel: false })
+    ).split("\n");
+
+    expect(lines.filter((l) => l.startsWith("- ")).length).toBe(600);
+    expect(lines.filter((l) => l.startsWith("+ ")).length).toBe(600);
+  });
 });
 
 describe("renderDiff — word level", () => {

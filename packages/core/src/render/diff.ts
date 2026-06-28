@@ -31,11 +31,25 @@ interface IOp {
 
 const SEP = " │ ";
 
+/** Above this many DP cells (n·m) the LCS matrix would cost too much memory/CPU,
+ *  so we fall back to a plain replacement rather than freeze the terminal. */
+const MAX_DIFF_CELLS = 250_000;
+
 /** A longest-common-subsequence line diff: unchanged lines become `eq`, removed
- *  `del`, added `add`, in original order. O(n·m) DP — fine for edit-sized snippets. */
+ *  `del`, added `add`, in original order. O(n·m) DP — fine for edit-sized snippets.
+ *  Past `MAX_DIFF_CELLS` it degrades to "all old removed, all new added" (the
+ *  pre-LCS behaviour) so a huge input can't allocate a giant matrix or hang. */
 function diffLines(a: readonly string[], b: readonly string[]): IOp[] {
   const n = a.length;
   const m = b.length;
+
+  if (n * m > MAX_DIFF_CELLS) {
+    return [
+      ...a.map((text): IOp => ({ type: "del", text })),
+      ...b.map((text): IOp => ({ type: "add", text })),
+    ];
+  }
+
   const dp: number[][] = Array.from({ length: n + 1 }, () =>
     new Array<number>(m + 1).fill(0)
   );

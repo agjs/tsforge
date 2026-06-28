@@ -164,20 +164,35 @@ class FrameApplier {
   private put(grapheme: string): void {
     const line = this.grid[this.cursor.row - 1];
     const col = this.cursor.col - 1;
+    const w = displayWidth(grapheme);
 
     if (line === undefined || col < 0 || col >= this.cols) {
-      this.cursor.col += Math.max(1, displayWidth(grapheme));
+      this.cursor.col += Math.max(1, w);
 
       return;
     }
 
+    // Partially overwriting an existing wide (2-column) cell would orphan its
+    // other half. Clear that half so the grid stays self-consistent — otherwise
+    // a leftover continuation cell mis-renders or mis-diffs. The two cases (this
+    // cell is a continuation vs a wide head) are mutually exclusive.
+    const existing = line[col];
+
+    if (existing !== undefined) {
+      if (existing.ch === "" && col > 0) {
+        line[col - 1] = blank(); // overwriting the right half: clear the left
+      } else if (displayWidth(existing.ch) === 2 && col + 1 < this.cols) {
+        line[col + 1] = blank(); // overwriting a wide cell: clear its right half
+      }
+    }
+
     line[col] = { ch: grapheme, sgr: this.sgr };
 
-    if (displayWidth(grapheme) === 2 && col + 1 < this.cols) {
+    if (w === 2 && col + 1 < this.cols) {
       line[col + 1] = { ch: "", sgr: this.sgr };
     }
 
-    this.cursor.col += Math.max(1, displayWidth(grapheme));
+    this.cursor.col += Math.max(1, w);
   }
 }
 
