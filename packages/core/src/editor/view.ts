@@ -1,5 +1,17 @@
 import { graphemes } from "./segments";
 import { paint, STYLE } from "../render/style";
+import { displayWidth } from "../render/width";
+
+/** Columns a hard tab advances to (next multiple of 8) — terminals expand a
+ *  literal `\t` to the next tab stop, and `displayWidth` can't know the column,
+ *  so the editor's wrap math computes the advance here from the row position. */
+const TAB_STOP = 8;
+
+/** Display columns a grapheme occupies on the current visual row. A tab advances
+ *  to the next tab stop from `col`; everything else is its intrinsic width. */
+function cellWidth(g: string, col: number): number {
+  return g === "\t" ? TAB_STOP - (col % TAB_STOP) : displayWidth(g);
+}
 
 export interface IEditorInput {
   lines: string[];
@@ -50,38 +62,43 @@ function wrapLine(
   const graphemeList = graphemes(line);
   const rows: IWrappedRow[] = [];
   let row = "";
-  let rowGraphemeCount = 0;
+  // Column width consumed by the current visual row, so wide (CJK/emoji) cells
+  // wrap at the true edge and the cursor column reflects display columns.
+  let rowWidth = 0;
   let rowCursorCol: number | undefined;
   let visualRow = 0;
 
   for (let i = 0; i < graphemeList.length; i += 1) {
-    const g = graphemeList[i];
+    const g = graphemeList[i] ?? "";
+    let w = cellWidth(g, rowWidth);
 
-    if (rowGraphemeCount >= columns) {
+    // Wrap before a grapheme that would overflow the row (but never flush an
+    // empty row, so a lone cell wider than `columns` still gets placed).
+    if (rowWidth + w > columns && rowWidth > 0) {
       rows.push({
         text: row,
         cursorRow: rowCursorCol !== undefined ? visualRow : undefined,
         cursorCol: rowCursorCol,
       });
       row = "";
-      rowGraphemeCount = 0;
+      rowWidth = 0;
       rowCursorCol = undefined;
       visualRow += 1;
+      // A tab's advance depends on the column, so recompute it at the row start.
+      w = cellWidth(g, rowWidth);
     }
 
     if (i === cursorCol) {
-      rowCursorCol = rowGraphemeCount;
+      rowCursorCol = rowWidth;
     }
 
-    if (g !== undefined) {
-      row += g;
-      rowGraphemeCount += 1;
-    }
+    row += g;
+    rowWidth += w;
   }
 
   // Handle cursor at end of line
   if (graphemeList.length === cursorCol) {
-    rowCursorCol = rowGraphemeCount;
+    rowCursorCol = rowWidth;
   }
 
   // Push final row

@@ -1,5 +1,8 @@
 import type { IStatusInfo } from "./render.types";
 import { STYLE, paint } from "./style";
+import { displayWidth, graphemes } from "./width";
+import { computeRegions } from "./layout";
+import { ScreenBuffer } from "./screen";
 
 const ESC = "\x1b";
 
@@ -115,7 +118,7 @@ function assemble(segs: ISegment[], columns: number, color: boolean): string {
   let width = 1; // leading space
 
   for (const seg of segs) {
-    const add = (painted.length > 0 ? sep.length : 0) + seg.text.length;
+    const add = (painted.length > 0 ? sep.length : 0) + displayWidth(seg.text);
 
     if (width + add > columns) {
       break;
@@ -146,11 +149,9 @@ function buildBarBody(
   rows: number,
   color: boolean
 ): string {
-  // Clamp to row 1 so a terminal shrunk below the reserved height can never emit
-  // an invalid `${ESC}[0;1H` / `${ESC}[-1;1H` (normal terminals are >= MIN_ROWS,
-  // where the clamp is a no-op).
-  const segRow = Math.max(1, rows);
-  const borderRow = Math.max(1, rows - 1);
+  // Absolute rows come from the shared layout helper (clamped to row 1, so a
+  // terminal shrunk below the reserved height never emits an invalid sequence).
+  const { segRow, borderRow } = computeRegions({ rows });
   const segs = assemble(barSegments(info), columns, color);
 
   return (
@@ -189,15 +190,63 @@ function clipInput(
     return { visible: "", cursorCol: 0 };
   }
 
-  if (line.length <= avail) {
-    return { visible: line, cursorCol: cursor };
+  // `cursor` is a code-unit offset (from readline); its on-screen column is the
+  // display width of the text before it.
+  const cursorCol = displayWidth(line.slice(0, cursor));
+
+  if (displayWidth(line) <= avail) {
+    return { visible: line, cursorCol };
   }
 
-  const start = Math.max(0, cursor - avail + 1);
+  // Wider than the window: show a grapheme-aligned window of `avail` columns with
+  // the cursor parked near the right edge. The cursor's grapheme index is found
+  // from its code-unit offset, then we keep up to `avail - 1` columns to its left
+  // (reserving the last column for the cursor / one cell of look-ahead) and fill
+  // the window rightward — so a wide cell is never split.
+  const gs = graphemes(line);
+  let cursorG = gs.length;
+  let consumed = 0;
+
+  for (let i = 0; i < gs.length; i += 1) {
+    if (consumed >= cursor) {
+      cursorG = i;
+      break;
+    }
+
+    consumed += (gs[i] ?? "").length;
+  }
+
+  let leftCols = 0;
+  let startG = cursorG;
+
+  for (let i = cursorG - 1; i >= 0; i -= 1) {
+    const w = displayWidth(gs[i] ?? "");
+
+    if (leftCols + w > avail - 1) {
+      break;
+    }
+
+    leftCols += w;
+    startG = i;
+  }
+
+  let windowCols = 0;
+  let endG = startG;
+
+  for (let i = startG; i < gs.length; i += 1) {
+    const w = displayWidth(gs[i] ?? "");
+
+    if (windowCols + w > avail) {
+      break;
+    }
+
+    windowCols += w;
+    endG = i + 1;
+  }
 
   return {
-    visible: line.slice(start, start + avail),
-    cursorCol: cursor - start,
+    visible: gs.slice(startG, endG).join(""),
+    cursorCol: leftCols,
   };
 }
 
@@ -214,9 +263,7 @@ export function buildInputFrame(
   rows: number,
   color: boolean
 ): string {
-  // Clamp to row 1 so a shrunk terminal can't emit an invalid `${ESC}[0;1H`
-  // (normal terminals are >= MIN_ROWS, where this is a no-op).
-  const inputRow = Math.max(1, rows - 2);
+  const { inputRow } = computeRegions({ rows });
   const avail = Math.max(0, columns - PROMPT_COLS);
   const { visible, cursorCol } = clipInput(line, cursor, avail);
 
@@ -251,7 +298,7 @@ export function buildEditorFrame(
 
   void color;
 
-  const inputRow = Math.max(1, rows - 2);
+  const { inputRow } = computeRegions({ rows });
   const maxSpan = Math.max(0, inputRow - 1);
 
   // The block is BOTTOM-anchored: content always occupies the bottom
@@ -296,7 +343,7 @@ export function buildOverlayFrame(
   clearRows: number,
   rows: number
 ): string {
-  const inputRow = Math.max(1, rows - 2);
+  const { inputRow } = computeRegions({ rows });
   const count = Math.min(
     Math.max(lines.length, clearRows),
     Math.max(0, inputRow - 1)
@@ -333,6 +380,12 @@ export class StatusBar {
   /** Height of the multi-row editor block currently painted above the input row (0 = none),
    *  so the next paint knows how many old rows to erase when the block shrinks. */
   private editorRows = 0;
+  /** Damage buffer for the bar-owned rows (border, segments, input row). The bar
+   *  frames are flushed through it so a repaint emits only the cells that changed
+   *  — no full-row `ESC[2K` rewrites, no flicker. The editor block and `@`-picker
+   *  popup paint directly (they reclaim scroll-region rows and need explicit
+   *  clears), so the buffer never owns those rows. Undefined until install. */
+  private screen: ScreenBuffer | undefined;
 
   constructor(
     private readonly out: IStatusBarTerminal,
@@ -369,11 +422,15 @@ export class StatusBar {
     }
 
     const rows = this.out.rows ?? 0;
+    const { regionEnd } = computeRegions({ rows, reserved: this.reserved });
 
     this.out.write("\n".repeat(this.reserved)); // make room for the bar
-    this.out.write(`${ESC}[1;${rows - this.reserved}r`); // confine scrolling
-    this.out.write(`${ESC}[${rows - this.reserved};1H`); // cursor back in-region
+    this.out.write(`${ESC}[1;${regionEnd}r`); // confine scrolling
+    this.out.write(`${ESC}[${regionEnd};1H`); // cursor back in-region
     this.installed = true;
+    // The bar rows we just made room for are blank, matching the buffer's blank
+    // committed grid, so the first repaint emits content with no spurious clears.
+    this.screen = new ScreenBuffer(rows, this.out.columns ?? 80);
 
     // Save the in-region cursor as the STREAM cursor; writeStream restores to it
     // before each chunk and re-saves after, so output scrolls in-region while the
@@ -383,6 +440,29 @@ export class StatusBar {
     }
 
     this.update(info);
+  }
+
+  /**
+   * Flush a bar-owned frame (border, segments, input row) through the damage
+   * buffer, writing only the cells that changed. `parkOnInput` parks the cursor
+   * where the frame left it (the input row); otherwise the delta is wrapped in
+   * save/restore so the user's cursor never moves (bar-only mode). Falls back to
+   * a direct write if the buffer isn't installed.
+   */
+  private flushPinned(content: string, parkOnInput: boolean): void {
+    if (this.screen === undefined) {
+      this.out.write(content);
+
+      return;
+    }
+
+    const delta = this.screen.flush(content);
+
+    this.out.write(
+      parkOnInput
+        ? `${delta}${this.screen.parkSequence()}`
+        : `${ESC}7${delta}${ESC}8`
+    );
   }
 
   /** Repaint the bar with the latest state (and the input row, in input mode). */
@@ -395,15 +475,18 @@ export class StatusBar {
     const rows = this.out.rows ?? 0;
 
     if (this.withInput) {
-      // Absolute-positioned body (no save/restore — that slot holds the stream
-      // cursor), then re-park the cursor on the input row.
-      this.out.write(buildBarBody(info, columns, rows, this.color));
-      this.paintInput();
+      // Bar body + input row in one damage-diffed flush, parking on the input row
+      // (the stream-cursor slot is left untouched — it isn't part of this frame).
+      this.flushPinned(
+        buildBarBody(info, columns, rows, this.color) +
+          buildInputFrame(this.line, this.cursorPos, columns, rows, this.color),
+        true
+      );
 
       return;
     }
 
-    this.out.write(buildBarFrame(info, columns, rows, this.color));
+    this.flushPinned(buildBarBody(info, columns, rows, this.color), false);
   }
 
   /** Update the editable buffer mirror and repaint the input row (input mode). */
@@ -445,10 +528,11 @@ export class StatusBar {
     const columns = this.out.columns ?? 80;
     const rows = this.out.rows ?? 0;
 
+    // The popup paints directly (it reclaims scroll-region rows above the input
+    // row); the bar + input row repaint goes through the damage buffer.
     this.out.write(buildOverlayFrame(lines, this.overlayRows, rows));
     this.overlayRows = lines.length;
-    this.out.write(buildBarBody(info, columns, rows, this.color));
-    this.paintInput();
+    this.repaintBarAndInput(info, columns, rows);
   }
 
   /** Erase the `@`-picker dropdown and repaint the bar + input row. Idempotent. */
@@ -462,19 +546,32 @@ export class StatusBar {
 
     this.out.write(buildOverlayFrame([], this.overlayRows, rows));
     this.overlayRows = 0;
-    this.out.write(buildBarBody(info, columns, rows, this.color));
-    this.paintInput();
+    this.repaintBarAndInput(info, columns, rows);
+  }
+
+  /** Bar body + input row in one damage-diffed flush (parking on the input row). */
+  private repaintBarAndInput(
+    info: IStatusInfo,
+    columns: number,
+    rows: number
+  ): void {
+    this.flushPinned(
+      buildBarBody(info, columns, rows, this.color) +
+        buildInputFrame(this.line, this.cursorPos, columns, rows, this.color),
+      true
+    );
   }
 
   private paintInput(): void {
-    this.out.write(
+    this.flushPinned(
       buildInputFrame(
         this.line,
         this.cursorPos,
         this.out.columns ?? 80,
         this.out.rows ?? 0,
         this.color
-      )
+      ),
+      true
     );
   }
 
@@ -497,7 +594,7 @@ export class StatusBar {
     const rows = this.out.rows ?? 0;
 
     // Clamp the block height to the available rows above the input row
-    const inputRow = Math.max(1, rows - 2);
+    const { inputRow } = computeRegions({ rows });
     const maxRows = Math.max(0, inputRow - 1);
     const clamped = lines.slice(0, maxRows);
     const newHeight = clamped.length;
@@ -505,7 +602,11 @@ export class StatusBar {
     // If editor height changes, update the scroll region to exclude the new height.
     // This pins the editor block (and bar + input) so they never scroll.
     if (newHeight !== this.editorRows) {
-      const regionEnd = Math.max(1, rows - this.reserved - newHeight);
+      const { regionEnd } = computeRegions({
+        rows,
+        reserved: this.reserved,
+        editorRows: newHeight,
+      });
 
       this.out.write(`${ESC}[1;${regionEnd}r`);
 
@@ -535,14 +636,30 @@ export class StatusBar {
     }
 
     const rows = this.out.rows ?? 0;
+    const columns = this.out.columns ?? 0;
 
-    // Clamp to row 1: a resize BELOW `reserved` (a terminal shrunk after install)
-    // would otherwise make `rows - reserved` non-positive and emit invalid
-    // `${ESC}[1;-1r` / `${ESC}[-1;1H` sequences. Mirrors teardown()'s clamp.
-    // Also exclude the editor block from the scrollable region.
-    const regionEnd = Math.max(1, rows - this.reserved - this.editorRows);
+    // Terminals emit transient 0×0 sizes on minimize/resize; resizing the buffer
+    // to 0 rows would drop its committed state and wedge later paints. Skip until
+    // a real size arrives (the editor path guards the same way in cli.ts).
+    if (rows <= 0 || columns <= 0) {
+      return;
+    }
+
+    // computeRegions clamps to row 1: a resize BELOW `reserved` (a terminal
+    // shrunk after install) would otherwise make the boundary non-positive and
+    // emit invalid `${ESC}[1;-1r` / `${ESC}[-1;1H` sequences. The editor block is
+    // excluded from the scrollable region.
+    const { regionEnd } = computeRegions({
+      rows,
+      reserved: this.reserved,
+      editorRows: this.editorRows,
+    });
 
     this.out.write(`${ESC}[1;${regionEnd}r`);
+
+    // The terminal reflowed: resize the damage buffer to the new dimensions and
+    // drop its committed state so the next update repaints the bar in full.
+    this.screen?.resize(rows, columns);
 
     // The saved stream cursor may now point off-screen — re-anchor it to the
     // bottom of the (resized) region so output continues there.
@@ -575,5 +692,6 @@ export class StatusBar {
     this.out.write(`${ESC}[?25h`); // ensure the cursor is visible
     this.installed = false;
     this.editorRows = 0; // reset editor block height
+    this.screen = undefined; // next install starts a fresh damage buffer
   }
 }

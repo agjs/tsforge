@@ -1,4 +1,5 @@
 import { STYLE, paint } from "./style";
+import { displayWidth, padToWidth } from "./width";
 
 /**
  * Terminal drawing primitives — title-tabbed boxes and box-drawn tables, the look
@@ -66,7 +67,9 @@ export function box(
   }
 
   const opener = "┌─ ";
-  const rule = "─".repeat(Math.max(0, width - opener.length - head.length - 1));
+  const rule = "─".repeat(
+    Math.max(0, width - opener.length - displayWidth(head) - 1)
+  );
   const top = `${paint(opener, STYLE.dim, color)}${paint(head, `${accent}${STYLE.bold}`, color)} ${paint(rule, STYLE.dim, color)}`;
   const bar = paint("│", STYLE.dim, color);
   const bottom = paint(
@@ -99,7 +102,7 @@ export function table(
 
   const cols = Math.max(...rows.map((r) => r.length));
   const widths = Array.from({ length: cols }, (_, c) =>
-    Math.max(1, ...rows.map((r) => (r[c] ?? "").length))
+    Math.max(1, ...rows.map((r) => displayWidth(r[c] ?? "")))
   );
   const bar = paint("│", STYLE.dim, color);
 
@@ -113,7 +116,7 @@ export function table(
   const renderRow = (cells: readonly string[], header: boolean): string => {
     const inner = widths
       .map((w, c) => {
-        const cell = (cells[c] ?? "").padEnd(w);
+        const cell = padToWidth(cells[c] ?? "", w);
 
         return ` ${header ? paint(cell, `${STYLE.brand}${STYLE.bold}`, color) : cell} `;
       })

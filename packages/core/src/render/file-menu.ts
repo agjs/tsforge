@@ -1,6 +1,7 @@
 import { emitKeypressEvents } from "node:readline";
 import { STYLE, paint } from "./style";
 import { clampIndex } from "./command-menu";
+import { displayWidth, graphemes } from "./width";
 
 /** Rows shown in the popup at once — a tight dropdown above the prompt, never a
  *  whole-tree dump. On an empty query these are the most-recently-modified files. */
@@ -56,11 +57,28 @@ export function truncatePath(path: string, max: number): string {
     return "";
   }
 
-  if (path.length <= max) {
+  if (displayWidth(path) <= max) {
     return path;
   }
 
-  return `…${path.slice(-(max - 1))}`;
+  // Keep the grapheme-aligned tail that fits in `max - 1` columns (the `…` takes
+  // one), so a wide cell at the clip boundary is never split.
+  const gs = graphemes(path);
+  let cols = 0;
+  let startG = gs.length;
+
+  for (let i = gs.length - 1; i >= 0; i -= 1) {
+    const w = displayWidth(gs[i] ?? "");
+
+    if (cols + w > max - 1) {
+      break;
+    }
+
+    cols += w;
+    startG = i;
+  }
+
+  return `…${gs.slice(startG).join("")}`;
 }
 
 /**
