@@ -670,25 +670,32 @@ export async function doEdit(
 const EDIT_REJECT_MAX_LINES = 400;
 
 /** The file's current content as numbered lines (same shape as `read`), or null
- *  if it's missing or too large to inline. Used to repair a stale-anchor edit in
- *  the SAME turn — the model copies its oldString from the post-format text. */
+ *  if it's missing, too large to inline, or unreadable. Used to repair a stale-
+ *  anchor edit in the SAME turn — the model copies its oldString from the post-
+ *  format text. Returns null on any I/O error (race, permissions): the edit has
+ *  already failed, so enriching its message must never crash the tool — the caller
+ *  then falls back to advising a `read`. */
 async function currentFileView(
   cwd: string,
   file: string
 ): Promise<string | null> {
-  const handle = Bun.file(join(cwd, file));
+  try {
+    const handle = Bun.file(join(cwd, file));
 
-  if (!(await handle.exists())) {
+    if (!(await handle.exists())) {
+      return null;
+    }
+
+    const lines = (await handle.text()).split("\n");
+
+    if (lines.length > EDIT_REJECT_MAX_LINES) {
+      return null;
+    }
+
+    return lines.map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`).join("\n");
+  } catch {
     return null;
   }
-
-  const lines = (await handle.text()).split("\n");
-
-  if (lines.length > EDIT_REJECT_MAX_LINES) {
-    return null;
-  }
-
-  return lines.map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`).join("\n");
 }
 
 /**
