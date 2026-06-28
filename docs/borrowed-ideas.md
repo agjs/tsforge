@@ -82,6 +82,14 @@ decoding — returning schema-conformant output. See memory
   existing `files-edit` / `salvage-toolcall` tests). **ROI:** high.
 - **Done when:** near-miss edits (whitespace/indent drift) apply instead of
   failing, and malformed-but-recoverable tool calls parse without a retry.
+- **Status (PR #57):** the **edit-on-autoformat** friction (the local model's #1
+  reported pain — the write-guard reformats after a write, so the next edit's
+  oldString no longer matches) is addressed: (1) `fuzzyLineReplace` now also
+  tolerates prettier trailing commas + semicolon drift, so more near-miss edits
+  just land; (2) a not-found rejection now **inlines the file's current content**
+  (numbered, ≤400 lines) so the model repairs the stale anchor in the SAME turn
+  instead of spending one on a re-`read`. BAML-style lenient tool-call parsing and
+  the create-side ACI echo (#2) remain follow-ups.
 
 ---
 

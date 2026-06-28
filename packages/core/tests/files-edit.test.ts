@@ -3,6 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyEdit, applyEdits } from "../src/files/edit";
+import { doEdit } from "../src/loop/tools/file-ops";
+import type { IToolContext } from "../src/loop/tools/tool-context";
 
 async function tmp(files: Record<string, string>): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-edit-"));
@@ -134,6 +136,44 @@ test("fuzzy edit preserves CRLF line endings (no mixed endings) — issue #24", 
     expect(out).toContain("INDENTED2");
     // After stripping every proper CRLF pair, no lone \n may remain.
     expect(out.replace(/\r\n/g, "").includes("\n")).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("fuzzy edit tolerates a prettier trailing comma (multiline literal)", async () => {
+  // Prettier added a trailing comma after `b: 2`. The model's oldString ends the
+  // window at `b: 2` (no comma), so the EXACT match misses (`b: 2\n}` ≠ `b: 2,\n}`);
+  // only the comma-tolerant fuzzy path can match.
+  const dir = await tmp({ "a.ts": "const o = {\n  a: 1,\n  b: 2,\n};\n" });
+
+  try {
+    const r = await applyEdits(dir, "a.ts", [
+      { oldString: "  a: 1,\n  b: 2\n}", newString: "  a: 1,\n  b: 3\n}" },
+    ]);
+
+    expect(r.ok).toBe(true);
+    expect(await Bun.file(join(dir, "a.ts")).text()).toContain("b: 3");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("fuzzy edit tolerates semicolon-style drift", async () => {
+  // File has trailing semicolons (prettier); the model's multi-line oldString
+  // omits them, so the exact match misses and the semicolon-tolerant fuzzy fires.
+  const dir = await tmp({ "a.ts": "const a = 1;\nconst b = 2;\n" });
+
+  try {
+    const r = await applyEdits(dir, "a.ts", [
+      {
+        oldString: "const a = 1\nconst b = 2",
+        newString: "const a = 1\nconst b = 99",
+      },
+    ]);
+
+    expect(r.ok).toBe(true);
+    expect(await Bun.file(join(dir, "a.ts")).text()).toContain("const b = 99");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -341,6 +381,36 @@ test("applyEdits sees the result of earlier replacements (sequential)", async ()
 
     expect(r).toMatchObject({ ok: true, count: 2 });
     expect(await Bun.file(join(dir, "a.ts")).text()).toBe("z");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A not-found edit (stale anchor after auto-format) inlines the file's CURRENT
+// content into the rejection, so the model repairs it in the SAME turn instead
+// of spending one on a re-`read` — the model's #1 reported friction.
+test("not-found edit rejection carries the file's current content", async () => {
+  const dir = await tmp({ "a.ts": "const x = 1;\nconst y = 2;\n" });
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*.ts"],
+    task: "t",
+    report: () => undefined,
+  };
+
+  try {
+    const msg = await doEdit(
+      { file: "a.ts", oldString: "const z = 99;", newString: "const z = 0;" },
+      ctx
+    );
+
+    expect(msg).toContain("REJECTED");
+    expect(msg).toContain("CURRENT content is below");
+    // The actual current lines are present so the model can copy oldString verbatim.
+    expect(msg).toContain("const x = 1;");
+    expect(msg).toContain("const y = 2;");
+    // And it does NOT tell the model to go `read` the file (content is inline).
+    expect(msg).not.toContain("`read` a.ts to see");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
