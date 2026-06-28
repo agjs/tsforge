@@ -176,7 +176,11 @@ function fuzzyLineReplace(
       .trim()
       .replace(/['"`]/gu, '"') // unify quote style (straight + the folded curly)
       .replace(/\s+/gu, " ") // collapse internal whitespace runs
-      .replace(/\s*([^\w\s])\s*/gu, "$1"); // drop whitespace AROUND punctuation
+      .replace(/\s*([^\w\s])\s*/gu, "$1") // drop whitespace AROUND punctuation
+      .replace(/[;,]+$/u, ""); // drop a line-trailing `,`/`;` (prettier adds trailing
+  //   commas in multiline literals/args and normalizes semicolons — the model
+  //   writes `b` where the formatted file has `b,`, or `foo()` vs `foo();`). The
+  //   unique-window guard still blocks any ambiguous match this might widen into.
   // ^ `foo( a, b )`, `foo(a,b)`, and `foo(a, b)` all normalize equal, but two
   //   identifiers keep their separating space (`const x` never becomes `constx`),
   //   so the match stays meaningful. Unique-window guard still blocks ambiguity.

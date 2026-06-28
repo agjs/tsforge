@@ -643,12 +643,52 @@ export async function doEdit(
     edit.edits.length > 1 ? ` (replacement #${result.index + 1})` : "";
 
   const authored = ctx.touched?.has(edit.file.replaceAll("\\", "/")) ?? false;
+  let help = editFailHelp(edit.file, result, authored);
+
+  // A not-found edit is almost always a STALE ANCHOR — the auto-formatter rewrote
+  // the file after the model's last write, so its oldString no longer matches. The
+  // harness already has the current bytes, so inline them rather than make the
+  // model spend a turn re-`read`ing (its #1 reported friction).
+  if (result.reason === EDIT_FAIL_REASON.notFound) {
+    const view = await currentFileView(ctx.cwd, edit.file);
+
+    help +=
+      view === null
+        ? ` \`read\` ${edit.file} to see its exact current content, then edit with text copied verbatim.`
+        : ` Its CURRENT content is below — copy oldString verbatim from it and retry (no need to \`read\`):\n\n${view}`;
+  }
 
   return reject(
     ctx,
     `edit:${result.reason}`,
-    `edit ${edit.file} REJECTED${where}: ${editFailHelp(edit.file, result, authored)}`
+    `edit ${edit.file} REJECTED${where}: ${help}`
   );
+}
+
+/** Cap on lines inlined into a not-found edit rejection; above this, fall back to
+ *  advising a `read` so a huge file can't flood the model's context. */
+const EDIT_REJECT_MAX_LINES = 400;
+
+/** The file's current content as numbered lines (same shape as `read`), or null
+ *  if it's missing or too large to inline. Used to repair a stale-anchor edit in
+ *  the SAME turn — the model copies its oldString from the post-format text. */
+async function currentFileView(
+  cwd: string,
+  file: string
+): Promise<string | null> {
+  const handle = Bun.file(join(cwd, file));
+
+  if (!(await handle.exists())) {
+    return null;
+  }
+
+  const lines = (await handle.text()).split("\n");
+
+  if (lines.length > EDIT_REJECT_MAX_LINES) {
+    return null;
+  }
+
+  return lines.map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`).join("\n");
 }
 
 /**
@@ -681,7 +721,7 @@ function editFailHelp(
       ? ` Since you created ${file} this session, you may also \`create\` it again to fully rewrite it.`
       : " Do NOT use `create` (it already exists).";
 
-    return `the file ${file} EXISTS, but your oldString text was not found in it.${rewrite} \`read\` the file to see its exact current contents, then edit with text copied verbatim from it.`;
+    return `the file ${file} EXISTS, but your oldString text was not found in it (it was likely auto-reformatted after your last write — imports reordered, quotes/commas normalized).${rewrite}`;
   }
 
   return result.reason;
