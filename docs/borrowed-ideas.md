@@ -39,18 +39,20 @@ decoding — returning schema-conformant output. See memory
      a `/v1/models` ping + a tiny `response_format` smoke test, or config opt-in).
   2. When supported, emit `tools` + `tool_choice` (and/or `response_format`
      json_schema) on the wire for tool-call turns; keep salvage as fallback.
-  3. Add a config/env switch so cloud endpoints without it degrade gracefully.
+  3. **Auto-detect — no user knob.** The harness sends `tool_choice` by default;
+     it's suppressed ONLY for DeepSeek's cloud host (api.deepseek.com), which 400s
+     on it. A regular user configures nothing.
 - **Effort:** M. **Risk:** low (additive; fallback preserved). **ROI:** highest.
-- **Done when:** a tool-call turn against the local endpoint returns a
-  schema-valid call without invoking salvage, and salvage still covers a
-  capability-off endpoint (test both paths).
-- **Status (PR #56):** shipped via a `guidedDecoding` flag (registry entry or
-  `TSFORGE_GUIDED_DECODING` env, since the registry is gated). **Verified end-to-end**
-  on the live endpoint through the real provider + `toolsFor` schemas: guided-on
-  forces a structured `read(...)` call with `salvaged: 0` and empty content (no
-  narration); guided-off narrates first. Salvage remains the fallback for
-  non-guided endpoints. (`response_format: json_schema` passthrough is a noted
-  follow-up — tool calls cover the current need.)
+- **Done when:** a tool-call turn against a local endpoint returns a schema-valid
+  call without invoking salvage, with zero configuration, and the DeepSeek cloud
+  path still works.
+- **Status (PR #56):** shipped as **auto-detection by endpoint host** — local/self-
+  hosted endpoints send `tool_choice`, the DeepSeek cloud API is auto-suppressed.
+  No flag or env required (an optional `guidedDecoding` override exists only to
+  correct a misdetection). **Verified end-to-end, zero config**, through the real
+  provider + `toolsFor` schemas: a local DeepSeek endpoint forces a structured
+  `read(...)` call with `salvaged: 0` and no narration. Salvage remains the
+  fallback. (`response_format: json_schema` passthrough is a noted follow-up.)
 
 ### 2. SWE-agent Agent-Computer Interface (tool ergonomics)
 

@@ -269,18 +269,6 @@ function envNumber(name: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-/** Read a boolean env flag: `1`/`true`/`yes`/`on` ⇒ true, anything else set ⇒
- *  false, unset ⇒ undefined (so it doesn't override a registry value). */
-function envBool(name: string): boolean | undefined {
-  const raw = process.env[name]?.trim().toLowerCase();
-
-  if (raw === undefined || raw.length === 0) {
-    return undefined;
-  }
-
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-
 /** Wire-config from a registry entry: API key resolved at use time (inline or
  *  via apiKeyEnv); env still tunes maxTokens/penalty. Shared by initial
  *  construction, `/model` hot-swap, and the interactive eval script — so they
@@ -307,15 +295,11 @@ export function providerConfig(entry: IModelEntry): IOpenAICompatibleConfig {
     ...(entry.reasoningEffort === undefined
       ? {}
       : { reasoningEffort: entry.reasoningEffort }),
-    // Registry value wins; `TSFORGE_GUIDED_DECODING` is the env escape hatch
-    // (the registry lives in a gated home dir, so env is how a run/eval flips it).
-    ...((entry.guidedDecoding ?? envBool("TSFORGE_GUIDED_DECODING")) ===
-    undefined
+    // Optional override only — guided decoding is auto-detected by endpoint
+    // (local on, DeepSeek cloud off). Passed through when a model entry sets it.
+    ...(entry.guidedDecoding === undefined
       ? {}
-      : {
-          guidedDecoding:
-            entry.guidedDecoding ?? envBool("TSFORGE_GUIDED_DECODING"),
-        }),
+      : { guidedDecoding: entry.guidedDecoding }),
     ...(entry.extraBody === undefined ? {} : { extraBody: entry.extraBody }),
     ...(entry.extraHeaders === undefined
       ? {}

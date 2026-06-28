@@ -112,20 +112,53 @@ function toolsBlock(
     return {};
   }
 
-  if (style(cfg) === "deepseek" && !isGuided(cfg)) {
+  if (style(cfg) === "deepseek" && suppressesToolChoice(cfg)) {
     return { tools: opts.tools };
   }
 
   return { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" };
 }
 
-/** Whether guided decoding is enabled, tolerating a hand-edited `models.json`
- *  that set the flag as the string `"true"` (a non-boolean JSON value would
- *  otherwise silently disable it — a confusing footgun). */
-function isGuided(cfg: IOpenAICompatibleConfig): boolean {
+/** Whether to omit `tool_choice` for a deepseek-style endpoint. AUTO by default,
+ *  so a normal user never configures anything: only DeepSeek's CLOUD thinking API
+ *  (api.deepseek.com) 400s on an explicit `tool_choice`; a local / self-hosted
+ *  DeepSeek (vLLM/SGLang/llama.cpp) accepts it and grammar-constrains the call, so
+ *  it's sent. The optional `guidedDecoding` flag only exists to override a
+ *  misdetection (true = always send, false = always omit). */
+function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
+  const override = guidedOverride(cfg);
+
+  if (override !== undefined) {
+    return !override;
+  }
+
+  return isDeepSeekCloudHost(cfg.baseUrl);
+}
+
+/** Normalize the optional `guidedDecoding` override — tolerates a stringified
+ *  boolean from a hand-edited models.json; undefined ⇒ auto-detect by host. */
+function guidedOverride(cfg: IOpenAICompatibleConfig): boolean | undefined {
   const value: unknown = cfg.guidedDecoding;
 
-  return value === true || value === "true";
+  if (value === true || value === "true") {
+    return true;
+  }
+
+  if (value === false || value === "false") {
+    return false;
+  }
+
+  return undefined;
+}
+
+/** True for the DeepSeek CLOUD API host (api.deepseek.com / *.deepseek.com) — the
+ *  only endpoint known to reject an explicit `tool_choice`. */
+function isDeepSeekCloudHost(baseUrl: string): boolean {
+  try {
+    return /(^|\.)deepseek\.com$/iu.test(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 /** Build the request body object (pure). Field order keeps the qwen default
