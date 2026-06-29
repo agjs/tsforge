@@ -205,7 +205,11 @@ async function resolveDirs(): Promise<string[]> {
   if (args.length === 2 && /^\d+$/.test(args[1] ?? "")) {
     const prefix = args[0] ?? "";
     const count = Number(args[1]);
-    const all = await readdir(runsRoot, { withFileTypes: true });
+    // evals/runs/ may not exist yet on a clean checkout (no sweep has run) —
+    // treat that as "no runs" instead of crashing with ENOENT.
+    const all = await readdir(runsRoot, { withFileTypes: true }).catch(
+      () => []
+    );
     const dirs = all
       .filter((d) => d.isDirectory() && d.name.startsWith(prefix))
       .map((d) => d.name)
