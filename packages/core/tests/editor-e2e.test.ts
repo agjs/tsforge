@@ -397,8 +397,9 @@ describe("editor e2e — aggressive interaction probes", () => {
 
     const { row, col } = h.screen().cursorPosition();
 
-    // inputRow = 22, single line bottom-anchored at row 21, cursor after "hi".
-    expect(row).toBe(21);
+    // Single line anchored ON the input row (22) — where the cursor's home is —
+    // so text and cursor share the row (no "text one line above the cursor").
+    expect(row).toBe(22);
     expect(col).toBe(3); // 1-based: after 2 graphemes
   });
 
@@ -573,9 +574,10 @@ describe("editor e2e — wrapped-line cursor math", () => {
 
     const { row, col } = h.screen().cursorPosition();
 
-    // Block is 2 visual rows, bottom-anchored: contentTop = 22 - 2 = 20,
-    // cursor on visual row 1 (the wrapped tail) → row 21, after 5 chars → col 6.
-    expect(row).toBe(21);
+    // Block is 2 visual rows, bottom-anchored ON the input row: contentTop =
+    // 22 - 2 + 1 = 21, cursor on visual row 1 (the wrapped tail) → row 22, after
+    // 5 chars → col 6.
+    expect(row).toBe(22);
     expect(col).toBe(6);
   });
 

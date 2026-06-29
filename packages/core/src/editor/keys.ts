@@ -266,6 +266,11 @@ function parseOneKey(chunk: string, idx: number): IParseResult | null {
     }
   }
 
+  // A bare ESC (recognized sequences were tried above) — the user pressed Escape.
+  if (ch === 0x1b) {
+    return { event: createKeyEvent("escape"), len: 1 };
+  }
+
   // Printable
   return tryParsePrintable(chunk, idx);
 }

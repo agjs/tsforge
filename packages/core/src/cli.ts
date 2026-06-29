@@ -9,6 +9,7 @@ import { formatHelp, takesArg } from "./cli/commands";
 import { pickCommand } from "./render/command-menu";
 import {
   pickFileInline,
+  filterFiles,
   formatCompletionRows,
   shouldOpenAtPicker,
   type IPickerView,
@@ -75,6 +76,9 @@ import {
   renderEvent,
   renderMessage,
   renderStatus,
+  speakerLabel,
+  indentBlock,
+  BLOCK_INDENT,
   StatusBar,
   MIN_ROWS,
   welcomeBanner,
@@ -633,7 +637,9 @@ function printHeader(info: {
   process.stdout.write("\n── resuming conversation ──\n");
 
   for (const message of resumed.messages) {
-    process.stdout.write(renderMessage(message, { color: true }));
+    process.stdout.write(
+      renderMessage(message, { color: true, speaker: model.model })
+    );
   }
 
   process.stdout.write("\n──────────────────────────\n");
@@ -1490,13 +1496,54 @@ async function repl(args: ICliArgs): Promise<number> {
   // size instead of clipping the current line at its pre-resize dimensions.
   let resizeEditor: ((columns: number, rows: number) => void) | null = null;
 
+  // Each agent turn renders as a "▌ <model>" block with its body indented under the
+  // label (mirrors the user block). The label is emitted once, on the turn's first
+  // streamed output; `agentTurnOpen` is reset at the start of every runLine.
+  let agentTurnOpen = false;
+  let agentAtLineStart = true;
+
+  // Indent each streamed line under the agent label. Stateful so indentation is
+  // correct even when a line is split across chunks (tokens). ANSI codes carry no
+  // newlines, so they're treated as ordinary characters and never mis-indented.
+  const indentAgentChunk = (text: string): string => {
+    let out = "";
+
+    for (const ch of text) {
+      if (agentAtLineStart && ch !== "\n") {
+        out += BLOCK_INDENT;
+        agentAtLineStart = false;
+      }
+
+      out += ch;
+
+      if (ch === "\n") {
+        agentAtLineStart = true;
+      }
+    }
+
+    return out;
+  };
+
   // Route streamed agent output through the bar so it scrolls above the pinned
   // input row; cleared on loop exit so later/headless writes go straight to stdout.
   if (useInputRow) {
     interactiveStream = (text): void => {
-      statusBar.writeStream(text);
+      if (!agentTurnOpen) {
+        agentTurnOpen = true;
+        agentAtLineStart = true;
+        statusBar.writeStream(
+          `\n${speakerLabel(statusInfo().model, false, true)}\n`
+        );
+      }
+
+      statusBar.writeStream(indentAgentChunk(text));
     };
   }
+
+  // Start a fresh agent block for each turn (the label re-emits on its first output).
+  const beginAgentTurn = (): void => {
+    agentTurnOpen = false;
+  };
 
   // Mirror readline's buffer onto the input row after each keypress. setImmediate
   // lets readline update rl.line/rl.cursor first (it processes the key async).
@@ -1626,7 +1673,10 @@ async function repl(args: ICliArgs): Promise<number> {
       // never echoed to scrollback — record it ourselves so the transcript reads
       // naturally above the (now-cleared) input row.
       if (useInputRow) {
-        echo(`${STYLE.dim}›${RESET} ${line}\n`);
+        echo(
+          `\n${speakerLabel("you", true, true)}\n` +
+            `${STYLE.brand}${indentBlock(line)}${RESET}\n`
+        );
       }
 
       if (busy) {
@@ -1654,6 +1704,7 @@ async function repl(args: ICliArgs): Promise<number> {
     // Handle one idle line (slash command or a message), then any queued follow-up.
     const runLine = async (line: string): Promise<void> => {
       busy = true;
+      beginAgentTurn(); // the agent's response opens a fresh "▌ <model>" block
 
       try {
         if (line.startsWith("/")) {
@@ -1720,6 +1771,9 @@ async function repl(args: ICliArgs): Promise<number> {
     // argument. Cancel ⇒ back to a clean prompt. Only meaningful on a TTY.
     const openPalette = async (): Promise<void> => {
       paletteOpen = true;
+      // Suspend the editor's stdin ownership so the palette's keypress loop owns
+      // input (see openFilePicker). Resumed in finally.
+      editorHandle?.suspend();
 
       try {
         const picked = await pickCommand(process.stdout.isTTY);
@@ -1749,6 +1803,13 @@ async function repl(args: ICliArgs): Promise<number> {
       } finally {
         paletteOpen = false;
 
+        // Hand stdin back to the editor and repaint its input row (the overlay
+        // cleared it). No-op in readline mode (editorHandle is null).
+        if (editorHandle !== null) {
+          editorHandle.resume();
+          repaintEditor(editorHandle);
+        }
+
         if (useInputRow) {
           statusBar.update(statusInfo());
 
@@ -1767,6 +1828,10 @@ async function repl(args: ICliArgs): Promise<number> {
     // the `@`; at send time `@path` expands to the file's contents (see runSend).
     const openFilePicker = async (): Promise<void> => {
       paletteOpen = true;
+      // In editor mode the editor owns stdin via a `data` listener; suspend it so
+      // the inline picker's own `keypress` loop isn't fighting the editor for every
+      // keystroke (both would otherwise consume the same input). Resumed in finally.
+      editorHandle?.suspend();
 
       const base =
         editorHandle !== null
@@ -1806,6 +1871,13 @@ async function repl(args: ICliArgs): Promise<number> {
         }
       } finally {
         paletteOpen = false;
+
+        // Hand stdin back to the editor and repaint its input row (the overlay
+        // cleared it). No-op in readline mode (editorHandle is null).
+        if (editorHandle !== null) {
+          editorHandle.resume();
+          repaintEditor(editorHandle);
+        }
 
         if (useInputRow) {
           statusBar.update(statusInfo());
@@ -1862,6 +1934,34 @@ async function repl(args: ICliArgs): Promise<number> {
     // called here from readline. Crucially: the editor owns stdin exclusively in
     // editor mode, and readline is NOT created in that case.
     if (useEditor) {
+      // Editor-native `@`-completion: preload the workspace file list once, then
+      // filter it synchronously as the user types. The dropdown is painted ABOVE
+      // the editor block (not the readline input row), so it can't fight the editor
+      // for the cursor — the cause of the earlier display corruption.
+      let completionFiles: readonly string[] = [];
+
+      void listWorkspaceFiles(args.dir).then((files) => {
+        completionFiles = files;
+      });
+
+      const editorCompletion = {
+        items: (query: string): readonly string[] =>
+          filterFiles(completionFiles, query),
+        render: (items: readonly string[], selected: number): void => {
+          statusBar.setEditorOverlay(
+            formatCompletionRows(
+              items,
+              selected,
+              process.stdout.columns,
+              process.stdout.isTTY
+            )
+          );
+        },
+        clear: (): void => {
+          statusBar.clearEditorOverlay();
+        },
+      };
+
       editorHandle = startEditor({
         stdin: {
           on: (event: string, cb: (data: string) => void) => {
@@ -1897,6 +1997,7 @@ async function repl(args: ICliArgs): Promise<number> {
         rows: process.stdout.rows,
         openPalette,
         openFilePicker,
+        completion: editorCompletion,
       });
 
       resizeEditor = (columns, rows): void => {

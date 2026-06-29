@@ -4,6 +4,9 @@ export {
   renderMessage,
   renderStatus,
   statusSegments,
+  speakerLabel,
+  indentBlock,
+  BLOCK_INDENT,
 } from "./ansi";
 export {
   StatusBar,

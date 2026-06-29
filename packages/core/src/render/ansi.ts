@@ -97,6 +97,31 @@ export function renderStatus(
  * get markdown/code highlighting, tool calls collapse to a one-line summary, and
  * the system prompt + raw tool output are omitted (context, not conversation).
  */
+/** Indent under a speaker label so each turn reads as its own block. */
+export const BLOCK_INDENT = "    ";
+
+/** Indent every non-empty line of a block (blank lines stay blank — no trailing
+ *  whitespace). Used to inset a message body under its `▌ speaker` label. */
+export function indentBlock(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => (line.length > 0 ? BLOCK_INDENT + line : line))
+    .join("\n");
+}
+
+/** A `▌ name` speaker label — brand+bold for you, dim for the agent. */
+export function speakerLabel(
+  name: string,
+  accent: boolean,
+  color: boolean
+): string {
+  return paint(
+    `▌ ${name}`,
+    accent ? STYLE.brand + STYLE.bold : STYLE.dim,
+    color
+  );
+}
+
 export function renderMessage(
   message: IChatMessage,
   opts: IRenderOptions = {}
@@ -108,22 +133,29 @@ export function renderMessage(
   }
 
   if (message.role === "user") {
-    return `\n${paint("›", STYLE.brand + STYLE.bold, color)} ${message.content}\n`;
+    // `▌ you` label + brand-colored, indented body so YOUR turns read as a distinct
+    // block against the agent's default-foreground prose.
+    return (
+      `\n${speakerLabel("you", true, color)}\n` +
+      `${paint(indentBlock(message.content), STYLE.brand, color)}\n`
+    );
   }
 
   const parts: string[] = [];
 
   if (message.content.length > 0) {
-    parts.push(renderMarkdown(message.content, color));
+    parts.push(indentBlock(renderMarkdown(message.content, color)));
   }
 
   if (message.toolCalls !== undefined && message.toolCalls.length > 0) {
     const names = message.toolCalls.map((c) => c.name).join(", ");
 
-    parts.push(paint(`  · used ${names}`, STYLE.dim, color));
+    parts.push(indentBlock(paint(`· used ${names}`, STYLE.dim, color)));
   }
 
-  return parts.length > 0 ? `\n${parts.join("\n")}\n` : "";
+  return parts.length > 0
+    ? `\n${speakerLabel(opts.speaker ?? "assistant", false, color)}\n${parts.join("\n")}\n`
+    : "";
 }
 
 function highlightTs(code: string, color: boolean): string {
