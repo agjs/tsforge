@@ -170,11 +170,35 @@ function startRpcServer(ctx: IToolContext, deps: IScriptDeps): IScriptServer {
       message: `↳ script:${tool}`,
     });
 
+    // A tool call that FAILS inside a script reports a `tool_(input_)?rejected:`
+    // event and returns the rejection reason as its result STRING. Handing that
+    // back as a normal value lets the script silently treat the reason as data —
+    // a migrate run edited 8 files this way (each `tool_input_rejected:edit`),
+    // printed "Updated …", exited 0, and the model never saw the edits failed.
+    // Watch for the rejection event and surface it as an RPC error so the stub
+    // THROWS: the script fails loudly with the real reason instead of carrying on.
+    const rejections: string[] = [];
+    const watched: IToolContext = {
+      ...ctx,
+      report: (event) => {
+        if (
+          event.kind === "tool" &&
+          /^tool_(?:input_)?rejected:/u.test(event.message)
+        ) {
+          rejections.push(event.message);
+        }
+
+        ctx.report(event);
+      },
+    };
+
     const result = await serialize(() =>
-      deps.execute({ name: tool, arguments: args }, ctx)
+      deps.execute({ name: tool, arguments: args }, watched)
     );
 
-    return { result };
+    return rejections.length > 0
+      ? { error: `${tool} rejected: ${result}` }
+      : { result };
   }
 
   const server = Bun.serve({

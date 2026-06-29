@@ -163,6 +163,34 @@ test("a positional read('file') returns content, not a silent rejection", async 
   }
 });
 
+test("a tool call rejected inside a script THROWS with the reason, not silent data", async () => {
+  // Regression: a rejected in-script call used to return its rejection TEXT as a
+  // normal value, so the script carried on treating the reason as data (observed:
+  // a migrate run's 8 edits were all `tool_input_rejected:edit`, the script printed
+  // "Updated …" and exited 0, and the model never saw they failed). Now it throws.
+  const events: ILoopEvent[] = [];
+  const code = [
+    'import { read } from "./tsforge-tools";',
+    "try {",
+    "  await read({});", // no `file` → tool_input_rejected:read
+    '  console.log("NO_THROW");',
+    "} catch (e) {",
+    '  console.log("THREW", e.message);',
+    "}",
+  ].join("\n");
+
+  const out = await doScript({ code }, makeCtx({}, events), {
+    execute: executeTool,
+  });
+
+  expect(out).toContain("THREW");
+  expect(out).toContain("read rejected:"); // surfaced with the real reason
+  expect(out).not.toContain("NO_THROW"); // the call did NOT silently succeed
+  expect(events.some((e) => e.message === "tool_input_rejected:read")).toBe(
+    true
+  );
+});
+
 test("a script collapses N tool calls into ONE turn and returns only stdout", async () => {
   const calls: string[] = [];
   const events: ILoopEvent[] = [];
