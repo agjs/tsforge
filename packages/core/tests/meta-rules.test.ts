@@ -620,6 +620,61 @@ test("test-sibling-required: exempts logic files an EXISTING test file imports d
   expect(violations.length).toBe(0);
 });
 
+test("test-sibling-required: exempts a logic file a test reaches THROUGH a facade (one hop)", () => {
+  // The layered-spec shape that deadlocked query 2/3: query.test.ts imports only
+  // the facade query.ts, which imports lexer.ts. lexer is exercised through the
+  // facade, so no co-located lexer.test.ts should be demanded.
+  writeFileSync(
+    join(tempDir, "lexer.ts"),
+    "export function tokenize(s: string): string[] { return s.split(' '); }"
+  );
+  writeFileSync(
+    join(tempDir, "query.ts"),
+    'import { tokenize } from "./lexer";\nexport const query = (s: string): number => tokenize(s).length;'
+  );
+  writeFileSync(
+    join(tempDir, "query.test.ts"),
+    'import { query } from "./query";\ntest("q", () => expect(query("a b")).toBe(2));\n'
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, [], ["lexer.ts"]);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "test-sibling-required"
+  );
+
+  expect(violations.length).toBe(0);
+});
+
+test("test-sibling-required: does NOT count coverage beyond one hop", () => {
+  // Bound the facade exemption: a target reachable only via TWO hops (test → top →
+  // mid → deep) still needs its own test, so the relaxation can't silently excuse
+  // arbitrarily-deep untested chains.
+  writeFileSync(
+    join(tempDir, "deep.ts"),
+    "export function deep(): number { return 1; }"
+  );
+  writeFileSync(
+    join(tempDir, "mid.ts"),
+    'import { deep } from "./deep";\nexport const mid = (): number => deep();'
+  );
+  writeFileSync(
+    join(tempDir, "top.ts"),
+    'import { mid } from "./mid";\nexport const top = (): number => mid();'
+  );
+  writeFileSync(
+    join(tempDir, "top.test.ts"),
+    'import { top } from "./top";\ntest("t", () => expect(top()).toBe(1));\n'
+  );
+
+  const ctx = buildMetaRuleContext(tempDir, [], ["deep.ts"]);
+  const violations = runMetaRules(META_RULES, ctx).filter(
+    (v) => v.ruleId === "test-sibling-required"
+  );
+
+  expect(violations.length).toBeGreaterThan(0);
+  expect(violations[0]?.file).toBe("deep.ts");
+});
+
 test("test-sibling-required: still fires for a logic file NO test imports", () => {
   // Guard the exemption isn't too broad: an unimported sibling still needs a test.
   writeFileSync(
