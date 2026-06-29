@@ -1,6 +1,8 @@
 export interface IRenderOptions {
   /** Emit ANSI color codes (terminal) vs plain text (log files). Default true. */
   color?: boolean;
+  /** Speaker label for assistant turns (the model name). Default "assistant". */
+  speaker?: string;
 }
 
 /** A compact post-turn status line — the "where am I" summary modern CLIs show. */

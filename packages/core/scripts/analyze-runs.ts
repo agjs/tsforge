@@ -11,6 +11,9 @@ import { join } from "node:path";
 import { isRecord } from "../src/lib/guards";
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
+// Sweep writes each run to evals/runs/<runId> (see sweep.ts). Run dirs are
+// resolved from there, not the evals/ root (which only holds runs/, corpus/, …).
+const runsRoot = join(evalsRoot, "runs");
 
 interface IRunMetrics {
   runId: string;
@@ -40,7 +43,10 @@ interface IRunMetrics {
   quality: number | undefined;
 }
 
-const TIMING = /⏱ turn (\d+) took ([\d.]+)(s|ms) \(total ([\d.]+)(s|ms)\)/;
+// The turn-timing line (turn.ts reportTurnTiming). The `⏱` prefix was dropped
+// from the emitter, so it's optional here to stay compatible with both formats.
+const TIMING =
+  /(?:⏱ )?turn (\d+) took ([\d.]+)(s|ms) \(total ([\d.]+)(s|ms)\)/u;
 const RED = /turn \d+: red \((\d+) error/;
 const ASKING = /turn (\d+): asking model/;
 // Hand-counting = the model re-typing the file with SEQUENTIAL line numbers
@@ -199,16 +205,20 @@ async function resolveDirs(): Promise<string[]> {
   if (args.length === 2 && /^\d+$/.test(args[1] ?? "")) {
     const prefix = args[0] ?? "";
     const count = Number(args[1]);
-    const all = await readdir(evalsRoot, { withFileTypes: true });
+    // evals/runs/ may not exist yet on a clean checkout (no sweep has run) —
+    // treat that as "no runs" instead of crashing with ENOENT.
+    const all = await readdir(runsRoot, { withFileTypes: true }).catch(
+      () => []
+    );
     const dirs = all
       .filter((d) => d.isDirectory() && d.name.startsWith(prefix))
       .map((d) => d.name)
       .sort();
 
-    return dirs.slice(-count).map((name) => join(evalsRoot, name));
+    return dirs.slice(-count).map((name) => join(runsRoot, name));
   }
 
-  return args.map((a) => (a.startsWith("/") ? a : join(evalsRoot, a)));
+  return args.map((a) => (a.startsWith("/") ? a : join(runsRoot, a)));
 }
 
 function median(values: number[]): number {

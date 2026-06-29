@@ -164,12 +164,71 @@ function candidateTestFiles(
   return [...out];
 }
 
-/** A logic file is already COVERED if some EXISTING test file imports it directly
- *  — the harness tests it THROUGH that test, so also demanding a co-located
- *  sibling makes the rule unsatisfiable for specs where ONE test file covers
- *  several sibling modules (observed: auth/checkout/query deadlocking the model
- *  to its turn cap). Direct import only — a directly-imported module is exercised
- *  by the test; transitive coverage is deliberately NOT counted. */
+/** Source extensions tried when resolving an extension-less local import to a
+ *  readable module file (and its `index.*` barrel form). */
+const MODULE_EXTS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+];
+
+/** Read the source of a resolved (extension-less) local module, trying the usual
+ *  source extensions and an `index.*` barrel. Returns its text, or null. */
+function readModuleSource(
+  resolved: string,
+  readFile: (relPath: string) => string | null
+): string | null {
+  for (const ext of MODULE_EXTS) {
+    const direct = readFile(`${resolved}${ext}`);
+
+    if (direct !== null) {
+      return direct;
+    }
+  }
+
+  for (const ext of MODULE_EXTS) {
+    const barrel = readFile(`${resolved}/index${ext}`);
+
+    if (barrel !== null) {
+      return barrel;
+    }
+  }
+
+  return null;
+}
+
+/** One hop: does the local module at `resolved` (extension-less) import `target`
+ *  directly? Used to credit a facade that re-exports/uses the target. The facade's
+ *  own path is the resolution base so its relative imports resolve correctly. */
+function facadeImportsTarget(
+  resolved: string,
+  target: string,
+  readFile: (relPath: string) => string | null
+): boolean {
+  const facade = readModuleSource(resolved, readFile);
+
+  if (facade === null) {
+    return false;
+  }
+
+  return importSpecifiers(facade).some(
+    (inner) => resolveSpecifier(`${resolved}.ts`, inner) === target
+  );
+}
+
+/** A logic file is already COVERED if some EXISTING test file exercises it —
+ *  directly (the test imports it) OR through ONE hop (the test imports a local
+ *  facade module that imports it). Without the facade hop the rule is unsatisfiable
+ *  for the common layered-spec shape where one integration test drives several
+ *  internal modules via a facade — e.g. `query.test.ts` imports only `query.ts`,
+ *  which imports `lexer/parser/executor`; demanding a co-located `lexer.test.ts`
+ *  deadlocks the model (observed: query failing 2/3 on its turn cap). Bounded to a
+ *  SINGLE hop (no recursion) to stay cheap and not over-credit deep chains. */
 function coveredByExistingTest(
   root: string,
   file: string,
@@ -186,7 +245,17 @@ function coveredByExistingTest(
     }
 
     for (const spec of importSpecifiers(content)) {
-      if (resolveSpecifier(testFile, spec) === target) {
+      const resolved = resolveSpecifier(testFile, spec);
+
+      if (resolved === null) {
+        continue;
+      }
+
+      // Direct (test imports the file) OR one hop (test imports a facade that does).
+      if (
+        resolved === target ||
+        facadeImportsTarget(resolved, target, readFile)
+      ) {
         return true;
       }
     }

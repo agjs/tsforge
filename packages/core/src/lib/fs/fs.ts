@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { rm, stat } from "node:fs/promises";
 import { Glob } from "bun";
 import type { IFileView } from "./fs.types";
+import { runArgvCommand } from "./process";
 
 /** True when the file exists on disk (the one place this check lives). */
 export function fileExists(cwd: string, path: string): Promise<boolean> {
@@ -257,8 +258,39 @@ export async function resolveScopeFilesForRollback(
  * recency order means the files you're actually working on surface at the top
  * instead of an alphabetical dump of the whole tree. Unstattable files sort last.
  */
+/** Upper bound on picker candidates so a pathological repo can't stall the
+ *  per-file mtime stat. Far above any real source tree (this one has ~840). */
+const MAX_PICKER_FILES = 10_000;
+
+/** Tracked + untracked-but-not-ignored files via git — respects `.gitignore`, so
+ *  build output, eval-run artifacts, and other generated junk never reach the
+ *  picker. Returns null outside a git repo (or if git is unavailable), so the
+ *  caller can fall back to a glob walk. */
+async function gitWorkspaceFiles(cwd: string): Promise<string[] | null> {
+  const res = await runArgvCommand(cwd, [
+    "git",
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "-z",
+  ]);
+
+  if (res.exitCode !== 0) {
+    return null;
+  }
+
+  return res.stdout.split("\0").filter((f) => f.length > 0);
+}
+
+/** Workspace files for the `@`-mention picker, most-recently-modified first.
+ *  Sourced from git (gitignore-aware, uncapped) when in a repo, else a glob walk
+ *  (the 400-file prompt bound). Binaries are dropped either way. */
 export async function listWorkspaceFiles(cwd: string): Promise<string[]> {
-  const files = await resolveScopeFiles(cwd, ["**/*"]);
+  const gitFiles = await gitWorkspaceFiles(cwd);
+  const files = (gitFiles ?? (await resolveScopeFiles(cwd, ["**/*"])))
+    .filter((f) => !isBinaryPath(f))
+    .slice(0, MAX_PICKER_FILES);
 
   const stamped = await Promise.all(
     files.map(async (path) => {

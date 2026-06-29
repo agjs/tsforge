@@ -423,6 +423,16 @@ export class EditorBuffer {
     }
   }
 
+  /** Wipe the whole buffer in one keystroke. Snapshots first, so Ctrl-Z restores
+   *  what was typed — a clear is never a destructive dead-end. */
+  clear(): void {
+    this.clearSticky();
+    this.maybeSnapshot("clear");
+    this.lines = [""];
+    this.cursorLine = 0;
+    this.cursorCol = 0;
+  }
+
   expand(): string {
     return this.getText().replace(
       /\[paste #(\d+) \+\d+ lines\]/g,

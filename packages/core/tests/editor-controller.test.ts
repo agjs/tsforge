@@ -67,7 +67,10 @@ class FakeStdin {
   }
 }
 
-function makeHarness() {
+function makeHarness(deps?: {
+  openFilePicker?: () => Promise<void>;
+  openPalette?: () => Promise<void>;
+}) {
   const stdin = new FakeStdin();
   const outputs: string[] = [];
   const submits: string[] = [];
@@ -79,6 +82,8 @@ function makeHarness() {
     },
     columns: 80,
     rows: 10,
+    openFilePicker: deps?.openFilePicker,
+    openPalette: deps?.openPalette,
   });
 
   handle.onSubmit((message: string) => {
@@ -402,5 +407,115 @@ describe("EditorController", () => {
     stdin.feed("more");
     stdin.feed("\r");
     expect(submits).toEqual(["test\nmore"]);
+  });
+
+  test("Escape clears the whole input, and undo restores it", () => {
+    const { stdin, handle } = makeHarness();
+
+    stdin.feed("a draft I want to wipe");
+    expect(handle.getBuffer().getText()).toBe("a draft I want to wipe");
+
+    stdin.feed("\x1b"); // Escape → clear everything
+    expect(handle.getBuffer().getText()).toBe("");
+
+    handle.getBuffer().undo(); // Ctrl+Z path → restore
+    expect(handle.getBuffer().getText()).toBe("a draft I want to wipe");
+  });
+
+  test("Escape across multiple lines clears them all", () => {
+    const { stdin, handle } = makeHarness();
+
+    stdin.feed("line one");
+    stdin.feed("\x1b[13;2u"); // Shift+Enter → newline
+    stdin.feed("line two");
+    expect(handle.getBuffer().getText()).toBe("line one\nline two");
+
+    stdin.feed("\x1b");
+    expect(handle.getBuffer().getText()).toBe("");
+  });
+});
+
+describe("EditorController @/ overlay triggers", () => {
+  test("typing `@` at the start opens the file picker", () => {
+    let calls = 0;
+    const { stdin } = makeHarness({
+      openFilePicker: async () => {
+        calls += 1;
+      },
+    });
+
+    stdin.feed("@");
+    expect(calls).toBe(1);
+  });
+
+  test("`@` after whitespace opens the file picker", () => {
+    let calls = 0;
+    const { stdin } = makeHarness({
+      openFilePicker: async () => {
+        calls += 1;
+      },
+    });
+
+    stdin.feed("see ");
+    stdin.feed("@");
+    expect(calls).toBe(1);
+  });
+
+  test("`@` glued to a word does NOT open the file picker", () => {
+    let calls = 0;
+    const { stdin } = makeHarness({
+      openFilePicker: async () => {
+        calls += 1;
+      },
+    });
+
+    stdin.feed("foo");
+    stdin.feed("@"); // "foo@" — not a mention boundary
+    expect(calls).toBe(0);
+  });
+
+  test("`/` as the sole character opens the command palette", () => {
+    let palette = 0;
+    let picker = 0;
+    const { stdin } = makeHarness({
+      openPalette: async () => {
+        palette += 1;
+      },
+      openFilePicker: async () => {
+        picker += 1;
+      },
+    });
+
+    stdin.feed("/");
+    expect(palette).toBe(1);
+    expect(picker).toBe(0);
+  });
+
+  test("`/` not at the start does not open the palette", () => {
+    let palette = 0;
+    const { stdin } = makeHarness({
+      openPalette: async () => {
+        palette += 1;
+      },
+    });
+
+    stdin.feed("a");
+    stdin.feed("/");
+    expect(palette).toBe(0);
+  });
+
+  test("suspend() detaches stdin; resume() re-attaches", () => {
+    const { stdin, handle } = makeHarness();
+
+    stdin.feed("a");
+    expect(handle.getBuffer().getText()).toBe("a");
+
+    handle.suspend();
+    stdin.feed("b"); // ignored while an overlay owns input
+    expect(handle.getBuffer().getText()).toBe("a");
+
+    handle.resume();
+    stdin.feed("c");
+    expect(handle.getBuffer().getText()).toBe("ac");
   });
 });

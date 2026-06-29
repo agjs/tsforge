@@ -6,10 +6,17 @@ import { join } from "node:path";
 import {
   doScript,
   generateToolStubs,
+  SCRIPT_POSITIONAL_ARG,
   type ExecuteFn,
 } from "../src/loop/tools/script-tool";
 import { executeTool } from "../src/loop/tools/execute-tool";
-import { READ_ONLY_TOOL_NAMES, SCRIPT_EXPOSABLE_TOOLS } from "../src/agent";
+import {
+  READ_ONLY_TOOL_NAMES,
+  READ_TOOL,
+  RUN_TOOL,
+  SEARCH_TOOL,
+  SCRIPT_EXPOSABLE_TOOLS,
+} from "../src/agent";
 import type { IToolContext } from "../src/loop/tools/tool-context";
 import type { ILoopEvent } from "../src/loop/loop.types";
 
@@ -87,6 +94,101 @@ test("generateToolStubs emits one async fn per tool plus the __call helper", () 
   expect(src).toContain("x-tsforge-token");
   // No stub for `script` is ever generated (no recursion entry point).
   expect(src).not.toContain("function script(");
+});
+
+test("single-string-arg tools accept a positional string; multi-arg tools don't", () => {
+  const src = generateToolStubs(["read", "run", "search", "create", "edit"]);
+
+  // read/run/search wrap a bare string into their named arg…
+  expect(src).toContain('typeof args === "string" ? { "file": args }');
+  expect(src).toContain('typeof args === "string" ? { "command": args }');
+  expect(src).toContain('typeof args === "string" ? { "pattern": args }');
+  // …but create/edit (multi required arg) stay object-only — no string coercion.
+  expect(src).toContain("export async function create(args = {}) {");
+  expect(src).not.toContain('"content": args');
+  expect(src).not.toContain('"oldString": args');
+});
+
+test("SCRIPT_POSITIONAL_ARG maps only sole-required-string-param tools (drift guard)", () => {
+  // Each mapped param must be the EXACT single required arg of the real schema,
+  // so the map can't silently drift from the tool definitions it shadows.
+  const required = {
+    read: READ_TOOL.function.parameters.required,
+    run: RUN_TOOL.function.parameters.required,
+    search: SEARCH_TOOL.function.parameters.required,
+  };
+
+  for (const [tool, param] of Object.entries(SCRIPT_POSITIONAL_ARG)) {
+    expect(required[tool as keyof typeof required]).toEqual([param]);
+  }
+
+  // Every mapped tool is actually script-exposable.
+  for (const tool of Object.keys(SCRIPT_POSITIONAL_ARG)) {
+    expect(SCRIPT_EXPOSABLE_TOOLS.has(tool)).toBe(true);
+  }
+});
+
+test("a positional read('file') returns content, not a silent rejection", async () => {
+  // Regression: the natural `read("a.ts")` idiom used to be coerced to `{}` by
+  // the RPC server, the tool rejected for a missing `file`, and the rejection
+  // TEXT came back as the read's RESULT (a script then treats it as content).
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-script-pos-"));
+
+  try {
+    await writeFile(
+      join(dir, "svc1.ts"),
+      "// tier: gold\nexport const x = 1;\n"
+    );
+
+    const events: ILoopEvent[] = [];
+    const code = [
+      'import { read } from "./tsforge-tools";',
+      'const content = await read("svc1.ts");',
+      "console.log(content);",
+    ].join("\n");
+
+    const out = await doScript(
+      { code },
+      makeCtx({ cwd: dir, files: ["svc1.ts"] }, events),
+      { execute: executeTool }
+    );
+
+    expect(out).toContain("tier: gold"); // real file content came back
+    expect(out).not.toContain("malformed args"); // NOT the rejection string
+    expect(events.some((e) => e.message === "tool_input_rejected:read")).toBe(
+      false
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a tool call rejected inside a script THROWS with the reason, not silent data", async () => {
+  // Regression: a rejected in-script call used to return its rejection TEXT as a
+  // normal value, so the script carried on treating the reason as data (observed:
+  // a migrate run's 8 edits were all `tool_input_rejected:edit`, the script printed
+  // "Updated …" and exited 0, and the model never saw they failed). Now it throws.
+  const events: ILoopEvent[] = [];
+  const code = [
+    'import { read } from "./tsforge-tools";',
+    "try {",
+    "  await read({});", // no `file` → tool_input_rejected:read
+    '  console.log("NO_THROW");',
+    "} catch (e) {",
+    '  console.log("THREW", e.message);',
+    "}",
+  ].join("\n");
+
+  const out = await doScript({ code }, makeCtx({}, events), {
+    execute: executeTool,
+  });
+
+  expect(out).toContain("THREW");
+  expect(out).toContain("read rejected:"); // surfaced with the real reason
+  expect(out).not.toContain("NO_THROW"); // the call did NOT silently succeed
+  expect(events.some((e) => e.message === "tool_input_rejected:read")).toBe(
+    true
+  );
 });
 
 test("a script collapses N tool calls into ONE turn and returns only stdout", async () => {

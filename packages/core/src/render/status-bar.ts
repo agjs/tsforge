@@ -276,8 +276,9 @@ export function buildInputFrame(
 }
 
 /**
- * The escape sequence that paints a multi-row editor input block ABOVE the input row,
- * cleared and redrawn in place each call. `lines` are the visual rows (wrapped);
+ * The escape sequence that paints a multi-row editor input block anchored ON the input
+ * row (its bottom line rests there; extra lines grow upward), cleared and redrawn in
+ * place each call. `lines` are the visual rows (wrapped);
  * `cursorRow` and `cursorCol` position the cursor within them. `clearRows` is the height
  * of the previous block so a shrinking block erases its old top rows. The block is pinned
  * absolutely, with the cursor left parked at the typing position.
@@ -299,18 +300,17 @@ export function buildEditorFrame(
   void color;
 
   const { inputRow } = computeRegions({ rows });
-  const maxSpan = Math.max(0, inputRow - 1);
+  const maxSpan = inputRow;
 
-  // The block is BOTTOM-anchored: content always occupies the bottom
-  // `lines.length` rows (resting just above the input row), and any cleared
-  // rows from a taller previous frame sit ABOVE it. `clearRows` is the previous
-  // block height, so the span [inputRow - count, inputRow - 1] fully covers
-  // wherever the prior frame painted — a shrinking block can't orphan its old
-  // top rows. (Top-anchoring left ghosts: the start moved down on shrink and
-  // the rows above it were never erased.) Mirrors buildOverlayFrame.
+  // The block is BOTTOM-anchored ONTO the input row: its last visual row rests on
+  // `inputRow` (the cursor's home), and extra rows grow UPWARD from there. Anchoring
+  // ON the input row rather than one row above it is what keeps the cursor and the
+  // typed text on the SAME row — anchoring above put the text one row above the
+  // cursor (the reported desync). `clearRows` (the previous block height) widens the
+  // span so a shrinking block erases its old top rows. Mirrors buildOverlayFrame.
   const count = Math.min(Math.max(lines.length, clearRows), maxSpan);
   const blank = Math.max(0, count - lines.length); // cleared rows above content
-  const spanTop = Math.max(1, inputRow - count);
+  const spanTop = Math.max(1, inputRow - count + 1);
   let out = "";
 
   for (let i = 0; i < count; i += 1) {
@@ -322,8 +322,8 @@ export function buildEditorFrame(
     out += `${ESC}[${row};1H${ESC}[2K${line}`;
   }
 
-  // Park the cursor relative to the bottom-anchored content top.
-  const contentTop = Math.max(1, inputRow - lines.length);
+  // Park the cursor relative to the content top (the bottom line is the input row).
+  const contentTop = Math.max(1, inputRow - lines.length + 1);
   const cursorAbsRow = contentTop + cursorRow;
 
   out += `${ESC}[${cursorAbsRow};${cursorCol + 1}H`;
@@ -380,6 +380,22 @@ export class StatusBar {
   /** Height of the multi-row editor block currently painted above the input row (0 = none),
    *  so the next paint knows how many old rows to erase when the block shrinks. */
   private editorRows = 0;
+  /** True once the multi-row editor block is the active editing surface (editor
+   *  mode). The cursor then lives IN the block, so bar repaints and stream writes
+   *  must NOT re-park it onto the readline input row — doing so was the cursor/text
+   *  desync (cursor on the `›` row, text landing in the block above). Set on the
+   *  first setEditor; a session never reverts from editor to readline. */
+  private editorActive = false;
+  /** Absolute (1-based) cursor position the editor block last parked at, so a bar
+   *  repaint or stream write can restore it without the editor repainting. */
+  private editorCursorAbsRow = 1;
+  private editorCursorAbsCol = 1;
+  /** The last editor frame (visual lines + in-block cursor), so a stream write can
+   *  REPAINT the input block on top of itself — guaranteeing streamed output can
+   *  never leave anything sitting on the input row. */
+  private editorLines: readonly string[] = [];
+  private editorCursorRow = 0;
+  private editorCursorCol = 0;
   /** Damage buffer for the bar-owned rows (border, segments, input row). The bar
    *  frames are flushed through it so a repaint emits only the cells that changed
    *  — no full-row `ESC[2K` rewrites, no flicker. The editor block and `@`-picker
@@ -474,9 +490,9 @@ export class StatusBar {
     const columns = this.out.columns ?? 80;
     const rows = this.out.rows ?? 0;
 
-    if (this.withInput) {
-      // Bar body + input row in one damage-diffed flush, parking on the input row
-      // (the stream-cursor slot is left untouched — it isn't part of this frame).
+    if (this.withInput && !this.editorActive) {
+      // Readline input-row mode: bar body + input row in one damage-diffed flush,
+      // parking on the input row (the stream-cursor slot is left untouched).
       this.flushPinned(
         buildBarBody(info, columns, rows, this.color) +
           buildInputFrame(this.line, this.cursorPos, columns, rows, this.color),
@@ -486,6 +502,25 @@ export class StatusBar {
       return;
     }
 
+    if (this.editorActive) {
+      // Editor mode: repaint the bar body, then restore the cursor to the editor
+      // block via absolute CUP. CRITICAL: do NOT use ESC7/ESC8 here — the terminal
+      // has a single cursor-save slot, and writeStream uses it to remember where the
+      // streamed response continues. A bar repaint (spinner tick) between two
+      // response tokens would otherwise overwrite that save with the editor cursor,
+      // so the next token lands on the INPUT row instead of in the scroll region.
+      const barBody = buildBarBody(info, columns, rows, this.color);
+      const delta =
+        this.screen === undefined ? barBody : this.screen.flush(barBody);
+
+      this.out.write(
+        `${delta}${ESC}[${this.editorCursorAbsRow};${this.editorCursorAbsCol}H`
+      );
+
+      return;
+    }
+
+    // Bar-only (no input row): no stream cursor to protect, so save/restore is fine.
     this.flushPinned(buildBarBody(info, columns, rows, this.color), false);
   }
 
@@ -509,11 +544,42 @@ export class StatusBar {
       return;
     }
 
+    // The editor put the terminal in raw mode (ONLCR off), so a bare "\n" is a
+    // line-feed with NO carriage return — streamed output would staircase to the
+    // right ("text jumps"). Normalize to CRLF so every line restarts at column 1.
+    const normalized = text.replace(/\r?\n/gu, "\r\n");
+
     this.out.write(`${ESC}8`); // restore stream cursor (into the region)
-    this.out.write(text); // scrolls within the region
+    this.out.write(normalized); // scrolls within the region
     this.out.write(`${ESC}7`); // save the advanced stream cursor
     this.out.write(RESET_SGR); // don't bleed mid-stream color into the input row
+
+    if (this.editorActive) {
+      // Repaint the whole input block on top of itself: even if a streamed chunk
+      // ever reached the input row, the editor reclaims it immediately (and the
+      // cursor lands back in the block). The input can never be left overwritten.
+      this.repaintEditorBlock();
+
+      return;
+    }
+
     this.paintInput();
+  }
+
+  /** Re-emit the last editor frame (clears + redraws its rows, parks the cursor in
+   *  the block). Used after a stream write so the input block stays intact on top. */
+  private repaintEditorBlock(): void {
+    this.out.write(
+      buildEditorFrame(
+        this.editorLines,
+        this.editorCursorRow,
+        this.editorCursorCol,
+        this.out.columns ?? 80,
+        this.out.rows ?? 0,
+        this.color,
+        this.editorRows
+      )
+    );
   }
 
   /** Paint the `@`-picker dropdown of `lines` just above the input row, then
@@ -593,19 +659,36 @@ export class StatusBar {
     const columns = this.out.columns ?? 80;
     const rows = this.out.rows ?? 0;
 
-    // Clamp the block height to the available rows above the input row
+    // Clamp the block height to the rows from the input row upward (it may use
+    // the input row itself now).
     const { inputRow } = computeRegions({ rows });
-    const maxRows = Math.max(0, inputRow - 1);
+    const maxRows = inputRow;
     const clamped = lines.slice(0, maxRows);
     const newHeight = clamped.length;
 
-    // If editor height changes, update the scroll region to exclude the new height.
-    // This pins the editor block (and bar + input) so they never scroll.
+    // The block is now the editing surface, so bar repaints/stream writes must
+    // re-park onto the block, not the readline input row.
+    this.editorActive = true;
+
+    // Remember where the block parks the cursor (mirrors buildEditorFrame — the
+    // bottom line rests on the input row), so a bar repaint or stream write can
+    // restore it without the editor repainting.
+    const contentTop = Math.max(1, inputRow - newHeight + 1);
+
+    this.editorCursorAbsRow = contentTop + cursorRow;
+    this.editorCursorAbsCol = cursorCol + 1;
+    this.editorLines = clamped;
+    this.editorCursorRow = cursorRow;
+    this.editorCursorCol = cursorCol;
+
+    // If editor height changes, resize the scroll region to exclude the rows the
+    // block uses ABOVE the input row (newHeight - 1; the input row is already in
+    // `reserved`). This pins the editor block + bar so they never scroll.
     if (newHeight !== this.editorRows) {
       const { regionEnd } = computeRegions({
         rows,
         reserved: this.reserved,
-        editorRows: newHeight,
+        editorRows: Math.max(0, newHeight - 1),
       });
 
       this.out.write(`${ESC}[1;${regionEnd}r`);
@@ -627,6 +710,46 @@ export class StatusBar {
       )
     );
     this.editorRows = newHeight;
+  }
+
+  /** Paint a completion dropdown of `lines` directly ABOVE the editor block (the
+   *  block is anchored on the input row and grows upward; the dropdown sits above
+   *  its top row), then re-park the cursor in the block so typing continues there.
+   *  Pass `[]` (or call clearEditorOverlay) to erase it. Editor mode only. */
+  setEditorOverlay(lines: readonly string[]): void {
+    if (!this.installed || !this.withInput) {
+      return;
+    }
+
+    const rows = this.out.rows ?? 0;
+    const { inputRow } = computeRegions({ rows });
+    // Top row of the editor block: it occupies [inputRow - editorRows + 1, inputRow].
+    const blockTop = Math.max(1, inputRow - Math.max(1, this.editorRows) + 1);
+    const maxSpan = Math.max(0, blockTop - 1);
+    const count = Math.min(Math.max(lines.length, this.overlayRows), maxSpan);
+    const blank = Math.max(0, count - lines.length); // old rows blanked above the list
+    let out = "";
+
+    for (let i = 0; i < count; i += 1) {
+      const row = Math.max(1, blockTop - count + i);
+      const line = i - blank >= 0 ? (lines[i - blank] ?? "") : "";
+
+      out += `${ESC}[${row};1H${ESC}[2K${line}`;
+    }
+
+    this.overlayRows = lines.length;
+    // Re-park in the editor block (where setEditor last placed the cursor).
+    out += `${ESC}[${this.editorCursorAbsRow};${this.editorCursorAbsCol}H`;
+    this.out.write(out);
+  }
+
+  /** Erase the editor-block completion dropdown. Idempotent. */
+  clearEditorOverlay(): void {
+    if (this.overlayRows === 0) {
+      return;
+    }
+
+    this.setEditorOverlay([]);
   }
 
   /** Re-apply the scroll region after a terminal resize, then repaint. */
@@ -652,7 +775,7 @@ export class StatusBar {
     const { regionEnd } = computeRegions({
       rows,
       reserved: this.reserved,
-      editorRows: this.editorRows,
+      editorRows: Math.max(0, this.editorRows - 1),
     });
 
     this.out.write(`${ESC}[1;${regionEnd}r`);

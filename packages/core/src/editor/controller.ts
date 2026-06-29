@@ -16,6 +16,12 @@ export interface IEditorHandle {
    *  dimensions captured when it was created, so after a resize the current
    *  line can be clipped off the (now-shorter) block or wrapped at a stale width. */
   resize(columns: number, rows: number): void;
+  /** Detach from stdin so an overlay (file picker / command palette) can own
+   *  keypress input without the editor consuming the same chunks. Pair with
+   *  resume(). No-op if not open or already suspended. */
+  suspend(): void;
+  /** Re-attach to stdin after an overlay closes. No-op unless suspended. */
+  resume(): void;
   close(): void;
 }
 
@@ -25,6 +31,20 @@ export interface IStdin {
   setRawMode?(mode: boolean): void;
   resume?(): void;
   setEncoding?(encoding: string): void;
+}
+
+/** An `@`-mention completion source, supplied by the host. The editor owns the
+ *  query (text after the `@`) and the selected index; the source filters a file
+ *  list, paints the dropdown ABOVE the editor block, and tears it down. Keeping
+ *  rendering here (not a separate readline overlay) is what stops the picker from
+ *  fighting the editor for the input row. */
+export interface IEditorCompletionSource {
+  /** Filtered, ranked candidate paths for the current query. */
+  items(query: string): readonly string[];
+  /** Paint the dropdown for `items` with `selected` highlighted. */
+  render(items: readonly string[], selected: number): void;
+  /** Tear the dropdown down. */
+  clear(): void;
 }
 
 export interface IStartEditorDeps {
@@ -39,6 +59,7 @@ export interface IStartEditorDeps {
   rows?: number;
   openPalette?: () => Promise<void>;
   openFilePicker?: () => Promise<void>;
+  completion?: IEditorCompletionSource;
 }
 
 type KeyAction = (buffer: EditorBuffer) => void;
@@ -121,6 +142,9 @@ function buildKeyDispatchTable(): Map<string, KeyAction> {
   table.set("ctrl+k", (buf) => {
     buf.deleteToLineEnd();
   }); // kill to line end
+  table.set("escape", (buf) => {
+    buf.clear();
+  }); // wipe the whole input (Ctrl+Z restores it)
 
   // Yank operations
   table.set("ctrl+y", (buf) => {
@@ -148,6 +172,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     renderEditor: renderEditorFn,
     openPalette,
     openFilePicker,
+    completion: completionSource,
   } = deps;
 
   // Mutable so a terminal resize can update them (see the handle's `resize`);
@@ -160,6 +185,9 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   const keyDispatchTable = buildKeyDispatchTable();
 
   let isOpen = true;
+  // True while an overlay (file picker / command palette) owns stdin: the editor
+  // detaches its `data` listener so it doesn't also consume the overlay's keystrokes.
+  let suspended = false;
   const submitCallbacks: ((message: string) => void)[] = [];
   const changeCallbacks: (() => void)[] = [];
   const interruptCallbacks: (() => void)[] = [];
@@ -170,6 +198,13 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   let historyIndex = -1; // -1 = not in history, >= 0 = viewing history item
   let draftText: string | null = null;
   let dataListener: ((chunk: string) => void) | null = null;
+  // Active `@`-completion: the cursor position right AFTER the `@` (the query
+  // anchor) and the highlighted row. null when the dropdown is closed.
+  let completion: {
+    anchorLine: number;
+    anchorCol: number;
+    selected: number;
+  } | null = null;
 
   function repaint(): void {
     if (!isOpen) {
@@ -353,26 +388,182 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     buffer.insert(text);
     repaint();
     notifyChange();
+
+    if (completion !== null) {
+      refreshCompletion();
+    } else {
+      triggerPaletteOrPicker();
+    }
+  }
+
+  /** The query typed after the `@` (anchor → cursor on the anchor line). */
+  function completionQuery(): string {
+    if (completion === null) {
+      return "";
+    }
+
+    const { line, col } = buffer.getCursor();
+
+    if (line !== completion.anchorLine || col < completion.anchorCol) {
+      return "";
+    }
+
+    const lineText = buffer.getText().split("\n")[line] ?? "";
+
+    return graphemes(lineText).slice(completion.anchorCol, col).join("");
+  }
+
+  function closeCompletion(): void {
+    if (completion === null) {
+      return;
+    }
+
+    completion = null;
+    completionSource?.clear();
+  }
+
+  /** Recompute the dropdown for the current query, or close it if the cursor left
+   *  the mention (moved before the `@`, onto another line, or typed whitespace). */
+  function refreshCompletion(): void {
+    if (completion === null || completionSource === undefined) {
+      return;
+    }
+
+    const { line, col } = buffer.getCursor();
+
+    if (line !== completion.anchorLine || col < completion.anchorCol) {
+      closeCompletion();
+
+      return;
+    }
+
+    const query = completionQuery();
+
+    if (/\s/u.test(query)) {
+      closeCompletion(); // a space ends the mention (paths contain none)
+
+      return;
+    }
+
+    const items = completionSource.items(query);
+
+    completion.selected = Math.max(
+      0,
+      Math.min(completion.selected, items.length - 1)
+    );
+    completionSource.render(items, completion.selected);
+  }
+
+  function openCompletion(): void {
+    if (completionSource === undefined) {
+      return;
+    }
+
+    const { line, col } = buffer.getCursor();
+
+    completion = { anchorLine: line, anchorCol: col, selected: 0 };
+    refreshCompletion();
+  }
+
+  function moveCompletion(delta: number): void {
+    if (completion === null) {
+      return;
+    }
+
+    completion.selected = Math.max(0, completion.selected + delta);
+    refreshCompletion();
+  }
+
+  /** Accept the highlighted candidate: replace the typed query with `<path> `
+   *  (the `@` stays — it's part of the at-mention syntax). */
+  function acceptCompletion(): void {
+    if (completion === null || completionSource === undefined) {
+      return;
+    }
+
+    const items = completionSource.items(completionQuery());
+    const pick = items[completion.selected];
+
+    if (pick === undefined) {
+      closeCompletion();
+
+      return;
+    }
+
+    const { col } = buffer.getCursor();
+    const remove = Math.max(0, col - completion.anchorCol);
+
+    for (let i = 0; i < remove; i += 1) {
+      buffer.deleteBackward();
+    }
+
+    buffer.insert(`${pick} `);
+    closeCompletion();
+    repaint();
+    notifyChange();
+  }
+
+  /** While the dropdown is open it owns navigation/accept/cancel keys. Returns
+   *  true if the key was consumed (so normal editing is skipped). */
+  function handleCompletionKey(name: string): boolean {
+    if (completion === null) {
+      return false;
+    }
+
+    if (name === "up") {
+      moveCompletion(-1);
+
+      return true;
+    }
+
+    if (name === "down") {
+      moveCompletion(1);
+
+      return true;
+    }
+
+    if (name === "return" || name === "tab") {
+      acceptCompletion();
+
+      return true;
+    }
+
+    if (name === "escape") {
+      closeCompletion();
+
+      return true;
+    }
+
+    return false;
   }
 
   function triggerPaletteOrPicker(): void {
     const currentText = buffer.getText();
 
-    if (
-      currentText === "/" &&
-      openPalette !== undefined &&
-      typeof openPalette === "function"
-    ) {
+    // `/` as the sole character opens the command palette (a slash command).
+    if (currentText === "/" && typeof openPalette === "function") {
       openPalette().catch(() => {
         // ignore errors
       });
+
+      return;
     }
 
-    if (
-      currentText === "@" &&
-      openFilePicker !== undefined &&
-      typeof openFilePicker === "function"
-    ) {
+    // `@` typed at a word boundary (start of line or after whitespace) opens the
+    // completion dropdown. Reading buffer state means it fires only on the `@`
+    // keypress itself, not when backspace/motion happens to land after an `@`.
+    const { line, col } = buffer.getCursor();
+    const lineText = currentText.split("\n")[line] ?? "";
+    const at = lineText[col - 1];
+    const before = lineText[col - 2];
+
+    if (at !== "@" || !(before === undefined || /\s/u.test(before))) {
+      return;
+    }
+
+    if (completionSource !== undefined) {
+      openCompletion();
+    } else if (typeof openFilePicker === "function") {
       openFilePicker().catch(() => {
         // ignore errors
       });
@@ -387,6 +578,12 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     shift: boolean;
   }): void {
     const { name, text, ctrl, alt, shift } = event;
+
+    // The open dropdown intercepts navigation/accept/cancel; printable chars and
+    // backspace fall through to normal editing, then refreshCompletion() re-queries.
+    if (handleCompletionKey(name)) {
+      return;
+    }
 
     if (name === "return") {
       handleReturnKey(ctrl, alt, shift);
@@ -458,9 +655,12 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       action(buffer);
       repaint();
       notifyChange();
-    }
 
-    triggerPaletteOrPicker();
+      // Backspace/delete change the query; re-query (or close if the `@` is gone).
+      if (completion !== null) {
+        refreshCompletion();
+      }
+    }
   }
 
   function onDataChunk(raw: string | Buffer): void {
@@ -566,6 +766,27 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
         rows = targetRows;
         repaint();
       }
+    },
+
+    suspend(): void {
+      if (!isOpen || suspended) {
+        return;
+      }
+
+      suspended = true;
+
+      if (stdin.removeListener !== undefined) {
+        stdin.removeListener("data", dataListener);
+      }
+    },
+
+    resume(): void {
+      if (!isOpen || !suspended) {
+        return;
+      }
+
+      suspended = false;
+      stdin.on("data", dataListener);
     },
 
     close(): void {
