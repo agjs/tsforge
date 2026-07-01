@@ -54,7 +54,11 @@ import {
 import { makeSpinner, spinnerPhase } from "./render/spinner";
 import { validate } from "./validate";
 import { isPolicyMode } from "./policy";
-import { startEditor, type IEditorHandle } from "./editor";
+import {
+  EDITOR_RESERVED_ROWS,
+  startEditor,
+  type IEditorHandle,
+} from "./editor";
 import { renderEditor } from "./editor/view";
 import { flags } from "./config/flags";
 import {
@@ -1605,6 +1609,21 @@ async function repl(args: ICliArgs): Promise<number> {
       }
     };
 
+    const closeLoop = (): void => {
+      closed = true;
+
+      if (rl !== null) {
+        rl.close();
+      }
+
+      if (editorHandle !== null) {
+        editorHandle.close();
+      }
+
+      statusBar.teardown();
+      maybeFinish();
+    };
+
     // Submit a line of input: check if busy/pending, echo it, handle /exit, or run it.
     const submitLine = (raw: string): void => {
       const line = raw.trim();
@@ -1627,14 +1646,7 @@ async function repl(args: ICliArgs): Promise<number> {
       if (busy) {
         if (line === "/exit" || line === "/quit") {
           active?.abort();
-
-          if (rl !== null) {
-            rl.close();
-          }
-
-          if (editorHandle !== null) {
-            editorHandle.close();
-          }
+          closeLoop();
         } else {
           pending.push(line);
           echo("  ↳ queued (steers the next turn)\n");
@@ -1653,9 +1665,7 @@ async function repl(args: ICliArgs): Promise<number> {
       try {
         if (line.startsWith("/")) {
           if (await command(line)) {
-            if (rl !== null) {
-              rl.close();
-            }
+            closeLoop();
 
             return;
           }
@@ -1702,19 +1712,28 @@ async function repl(args: ICliArgs): Promise<number> {
         },
         {
           columns: process.stdout.columns,
-          maxRows: process.stdout.rows,
+          maxRows: Math.max(1, process.stdout.rows - EDITOR_RESERVED_ROWS),
           color: true,
         }
       );
 
-      statusBar.writeStream(frame.frame);
+      statusBar.setEditor(
+        frame.frame.length > 0 ? frame.frame.split("\n") : [],
+        frame.cursorRow,
+        frame.cursorCol
+      );
     };
 
     // Open the interactive `/` command palette: pick a command from a navigable
     // list, then either run it (no-arg) or prefill the line so the user types the
     // argument. Cancel ⇒ back to a clean prompt. Only meaningful on a TTY.
     const openPalette = async (): Promise<void> => {
+      if (busy || paletteOpen) {
+        return;
+      }
+
       paletteOpen = true;
+      editorHandle?.suspendInput();
 
       try {
         const picked = await pickCommand(process.stdout.isTTY);
@@ -1722,15 +1741,15 @@ async function repl(args: ICliArgs): Promise<number> {
         if (picked !== null) {
           if (editorHandle !== null) {
             editorHandle.getBuffer().setText("");
-            editorHandle.getBuffer().insert(picked.name);
 
             if (takesArg(picked)) {
+              editorHandle.getBuffer().insert(picked.name);
               editorHandle.getBuffer().insert(" ");
+              repaintEditor(editorHandle);
             } else {
+              repaintEditor(editorHandle);
               void runLine(picked.name);
             }
-
-            repaintEditor(editorHandle);
           } else if (rl !== null) {
             rl.write(null, { ctrl: true, name: "u" }); // clear the typed "/"
 
@@ -1742,6 +1761,7 @@ async function repl(args: ICliArgs): Promise<number> {
           }
         }
       } finally {
+        editorHandle?.resumeInput();
         paletteOpen = false;
 
         if (useInputRow) {
@@ -1761,7 +1781,12 @@ async function repl(args: ICliArgs): Promise<number> {
     // buffer — the picker owns input). On select, the full path is appended after
     // the `@`; at send time `@path` expands to the file's contents (see runSend).
     const openFilePicker = async (): Promise<void> => {
+      if (busy || paletteOpen) {
+        return;
+      }
+
       paletteOpen = true;
+      editorHandle?.suspendInput();
 
       const base =
         editorHandle !== null
@@ -1800,6 +1825,7 @@ async function repl(args: ICliArgs): Promise<number> {
           }
         }
       } finally {
+        editorHandle?.resumeInput();
         paletteOpen = false;
 
         if (useInputRow) {
@@ -1901,17 +1927,13 @@ async function repl(args: ICliArgs): Promise<number> {
       editorHandle.onSubmit(submitLine);
       editorHandle.onInterrupt(() => {
         if (active === null) {
-          closed = true;
-          editorHandle?.close();
-          maybeFinish();
+          closeLoop();
         } else {
           active.abort();
         }
       });
       editorHandle.onExit(() => {
-        closed = true;
-        editorHandle?.close();
-        maybeFinish();
+        closeLoop();
       });
     } else if (rl !== null) {
       rl.on("line", submitLine);

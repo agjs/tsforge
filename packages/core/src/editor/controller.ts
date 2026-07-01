@@ -4,6 +4,7 @@ import { decodeKeys } from "./keys";
 import { createPasteScanner } from "./paste";
 import { renderEditor } from "./view";
 import { graphemes } from "./segments";
+import { shouldOpenAtPicker } from "../render/file-menu";
 
 export interface IEditorHandle {
   onSubmit(cb: (message: string) => void): void;
@@ -11,6 +12,8 @@ export interface IEditorHandle {
   onInterrupt(cb: () => void): void;
   onExit(cb: () => void): void;
   getBuffer(): EditorBuffer;
+  suspendInput(): void;
+  resumeInput(): void;
   /** Update the terminal dimensions and repaint. The CLI calls this on a
    *  terminal resize; without it the editor keeps wrapping/windowing at the
    *  dimensions captured when it was created, so after a resize the current
@@ -48,7 +51,7 @@ type KeyAction = (buffer: EditorBuffer) => void;
  *  can actually paint (rows - this), or the cursor line gets clipped off the
  *  bottom when the buffer is taller than the visible area. Mirrors
  *  RESERVED_ROWS (2) + 1 in status-bar.ts. */
-const EDITOR_RESERVED_ROWS = 3;
+export const EDITOR_RESERVED_ROWS = 3;
 
 /** Debug logging helper: append to TSFORGE_EDITOR_DEBUG if set. */
 function debugLog(msg: string): void {
@@ -160,6 +163,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   const keyDispatchTable = buildKeyDispatchTable();
 
   let isOpen = true;
+  let inputSuspended = false;
   const submitCallbacks: ((message: string) => void)[] = [];
   const changeCallbacks: (() => void)[] = [];
   const interruptCallbacks: (() => void)[] = [];
@@ -368,8 +372,11 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       });
     }
 
+    const { line, col } = buffer.getCursor();
+    const currentLine = currentText.split("\n")[line] ?? "";
+
     if (
-      currentText === "@" &&
+      shouldOpenAtPicker(currentLine, col) &&
       openFilePicker !== undefined &&
       typeof openFilePicker === "function"
     ) {
@@ -396,6 +403,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     if (name === "char") {
       handleCharKey(text, ctrl, alt, shift);
+      triggerPaletteOrPicker();
 
       return;
     }
@@ -459,12 +467,10 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       repaint();
       notifyChange();
     }
-
-    triggerPaletteOrPicker();
   }
 
   function onDataChunk(raw: string | Buffer): void {
-    if (!isOpen) {
+    if (!isOpen || inputSuspended) {
       return;
     }
 
@@ -553,6 +559,14 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     getBuffer(): EditorBuffer {
       return buffer;
+    },
+
+    suspendInput(): void {
+      inputSuspended = true;
+    },
+
+    resumeInput(): void {
+      inputSuspended = false;
     },
 
     resize(nextColumns: number, nextRows: number): void {

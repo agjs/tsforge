@@ -24,11 +24,12 @@ export class UndoStack {
     return snapshot ?? null;
   }
 
-  redo(): ISnapshot | null {
+  redo(cur: ISnapshot): ISnapshot | null {
     if (this.redoStack.length === 0) {
       return null;
     }
 
+    this.undoStack.push(structuredClone(cur));
     const snapshot = this.redoStack.pop();
 
     return snapshot ?? null;

@@ -108,6 +108,18 @@ test("undo reverts a word as one unit, redo restores it", () => {
   expect(b.getText()).toBe("hi");
 });
 
+test("redo can be undone again", () => {
+  const b = new EditorBuffer();
+
+  b.insert("hi");
+  b.undo();
+  b.redo();
+  expect(b.getText()).toBe("hi");
+
+  b.undo();
+  expect(b.getText()).toBe("");
+});
+
 test("space then word are separate undo units", () => {
   const b = new EditorBuffer();
 

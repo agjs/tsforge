@@ -218,6 +218,18 @@ describe("EditorController", () => {
     expect(h.getBuffer().getText()).toBe("a");
   });
 
+  test("suspendInput pauses raw editor mutations while an overlay owns input", () => {
+    const { stdin, handle } = makeHarness();
+
+    handle.suspendInput();
+    stdin.feed("x");
+    expect(handle.getBuffer().getText()).toBe("");
+
+    handle.resumeInput();
+    stdin.feed("x");
+    expect(handle.getBuffer().getText()).toBe("x");
+  });
+
   test("multiple chars typed in one feed", () => {
     const { stdin, handle } = makeHarness();
 
@@ -402,5 +414,49 @@ describe("EditorController", () => {
     stdin.feed("more");
     stdin.feed("\r");
     expect(submits).toEqual(["test\nmore"]);
+  });
+
+  test("typing slash on an empty buffer opens the command palette", () => {
+    const stdin = new FakeStdin();
+    let opens = 0;
+
+    const handle = startEditor({
+      stdin,
+      out: () => {},
+      columns: 80,
+      rows: 10,
+      openPalette: async () => {
+        opens += 1;
+      },
+    });
+
+    stdin.feed("/");
+
+    expect(opens).toBe(1);
+    handle.close();
+  });
+
+  test("@ picker opens only for a fresh mention boundary", () => {
+    const stdin = new FakeStdin();
+    let opens = 0;
+
+    const handle = startEditor({
+      stdin,
+      out: () => {},
+      columns: 80,
+      rows: 10,
+      openFilePicker: async () => {
+        opens += 1;
+      },
+    });
+
+    stdin.feed("ag@host");
+    expect(opens).toBe(0);
+
+    handle.getBuffer().setText("");
+    stdin.feed("please @");
+    expect(opens).toBe(1);
+
+    handle.close();
   });
 });

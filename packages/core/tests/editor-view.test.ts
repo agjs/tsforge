@@ -74,13 +74,11 @@ test("single line renders one row", () => {
 // region: Gemini PR #52 regression tests
 
 test("emoji wrap and cursor positioning is grapheme-correct", () => {
-  // Emoji 👍 is 1 grapheme but multiple UTF-16 units
-  // Line: "hello 👍" (7 graphemes) + "world" (5 graphemes)
-  // Wrap at 8 columns: "hello 👍" = 8 graphemes → fits exactly
-  // "world" on next row
+  // Emoji 👍 is 1 grapheme, multiple UTF-16 units, and 2 terminal cells.
+  // "hello 👍" fills 8 cells, so "world" starts on the next row.
   const line = "hello 👍world";
   const r = renderEditor(
-    { lines: [line], cursorLine: 0, cursorCol: 8 }, // cursor at start of "world" (grapheme 8)
+    { lines: [line], cursorLine: 0, cursorCol: 7 }, // cursor at start of "world"
     { columns: 8, maxRows: 6, color: false }
   );
 
@@ -88,4 +86,39 @@ test("emoji wrap and cursor positioning is grapheme-correct", () => {
   expect(r.rows).toBe(2);
   expect(r.cursorRow).toBe(1); // cursor is on second visual row
   expect(r.cursorCol).toBe(0); // at column 0 of the second row
+});
+
+test("CJK wide characters wrap by terminal cells, not grapheme count", () => {
+  const r = renderEditor(
+    { lines: ["abc日本d"], cursorLine: 0, cursorCol: 5 },
+    { columns: 6, maxRows: 6, color: false }
+  );
+
+  expect(r.rows).toBe(2);
+  expect(r.frame.split("\n")[0]).toBe("abc日");
+  expect(r.cursorRow).toBe(1);
+  expect(r.cursorCol).toBe(2);
+});
+
+test("one wrapped logical line taller than the editor is visually clipped", () => {
+  const r = renderEditor(
+    { lines: ["x".repeat(200)], cursorLine: 0, cursorCol: 200 },
+    { columns: 20, maxRows: 7, color: false }
+  );
+
+  expect(r.rows).toBeLessThanOrEqual(7);
+  expect(r.frame.split("\n")).toHaveLength(r.rows);
+  expect(r.cursorRow).toBeGreaterThanOrEqual(0);
+  expect(r.cursorRow).toBeLessThan(r.rows);
+  expect(r.frame).toContain("more");
+});
+
+test("over-tall wrapped line keeps a top cursor in range when clipped below", () => {
+  const r = renderEditor(
+    { lines: ["x".repeat(200)], cursorLine: 0, cursorCol: 0 },
+    { columns: 20, maxRows: 7, color: false }
+  );
+
+  expect(r.cursorRow).toBe(0);
+  expect(r.frame).toContain("more");
 });

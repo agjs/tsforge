@@ -413,7 +413,7 @@ export class EditorBuffer {
   }
 
   redo(): void {
-    const snapshot = this.undoStack.redo();
+    const snapshot = this.undoStack.redo(this.snapshot());
 
     if (snapshot) {
       this.lines = snapshot.lines;

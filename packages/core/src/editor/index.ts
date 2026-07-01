@@ -12,6 +12,7 @@ export {
   type IEditorFrame,
 } from "./view";
 export {
+  EDITOR_RESERVED_ROWS,
   startEditor,
   type IEditorHandle,
   type IStartEditorDeps,

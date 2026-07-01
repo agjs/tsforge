@@ -1,4 +1,4 @@
-import { graphemes } from "./segments";
+import { graphemes, graphemeWidth } from "./segments";
 import { paint, STYLE } from "../render/style";
 
 export interface IEditorInput {
@@ -50,38 +50,43 @@ function wrapLine(
   const graphemeList = graphemes(line);
   const rows: IWrappedRow[] = [];
   let row = "";
-  let rowGraphemeCount = 0;
+  let rowWidth = 0;
   let rowCursorCol: number | undefined;
   let visualRow = 0;
 
+  const pushRow = (): void => {
+    rows.push({
+      text: row,
+      cursorRow: rowCursorCol !== undefined ? visualRow : undefined,
+      cursorCol: rowCursorCol,
+    });
+    row = "";
+    rowWidth = 0;
+    rowCursorCol = undefined;
+    visualRow += 1;
+  };
+
   for (let i = 0; i < graphemeList.length; i += 1) {
     const g = graphemeList[i];
+    const width = Math.max(0, Math.min(columns, graphemeWidth(g ?? "")));
 
-    if (rowGraphemeCount >= columns) {
-      rows.push({
-        text: row,
-        cursorRow: rowCursorCol !== undefined ? visualRow : undefined,
-        cursorCol: rowCursorCol,
-      });
-      row = "";
-      rowGraphemeCount = 0;
-      rowCursorCol = undefined;
-      visualRow += 1;
+    if (rowWidth > 0 && rowWidth + width > columns) {
+      pushRow();
     }
 
     if (i === cursorCol) {
-      rowCursorCol = rowGraphemeCount;
+      rowCursorCol = rowWidth;
     }
 
     if (g !== undefined) {
       row += g;
-      rowGraphemeCount += 1;
+      rowWidth += width;
     }
   }
 
   // Handle cursor at end of line
   if (graphemeList.length === cursorCol) {
-    rowCursorCol = rowGraphemeCount;
+    rowCursorCol = rowWidth;
   }
 
   // Push final row
@@ -92,6 +97,72 @@ function wrapLine(
   });
 
   return rows;
+}
+
+function visualRowsOf(frame: string): string[] {
+  return frame.length === 0 ? [] : frame.split("\n");
+}
+
+function clipFrameToMaxRows(
+  frame: string,
+  cursorRow: number,
+  cursorCol: number,
+  maxRows: number,
+  color: boolean
+): IEditorFrame {
+  const rows = visualRowsOf(frame);
+
+  if (rows.length <= maxRows) {
+    return { frame, rows: rows.length, cursorRow, cursorCol };
+  }
+
+  if (maxRows <= 0) {
+    return { frame: "", rows: 0, cursorRow: 0, cursorCol: 0 };
+  }
+
+  const safeCursorRow = Math.max(0, Math.min(cursorRow, rows.length - 1));
+
+  if (maxRows <= 2) {
+    const start = Math.max(0, Math.min(safeCursorRow, rows.length - maxRows));
+    const clippedRows = rows.slice(start, start + maxRows);
+
+    return {
+      frame: clippedRows.join("\n"),
+      rows: clippedRows.length,
+      cursorRow: safeCursorRow - start,
+      cursorCol,
+    };
+  }
+
+  let clippedAbove = false;
+  let clippedBelow = false;
+  let start = 0;
+  let end = rows.length;
+
+  for (let i = 0; i < 2; i += 1) {
+    const indicatorRows = (clippedAbove ? 1 : 0) + (clippedBelow ? 1 : 0);
+    const bodyRows = Math.max(1, maxRows - indicatorRows);
+
+    start = Math.max(0, Math.min(safeCursorRow, rows.length - bodyRows));
+    end = Math.min(rows.length, start + bodyRows);
+    clippedAbove = start > 0;
+    clippedBelow = end < rows.length;
+  }
+
+  const clippedRows = [
+    ...(clippedAbove ? [paint(`↑ ${start} more`, STYLE.dim, color)] : []),
+    ...rows.slice(start, end),
+    ...(clippedBelow
+      ? [paint(`↓ ${rows.length - end} more`, STYLE.dim, color)]
+      : []),
+  ];
+
+  return {
+    frame: clippedRows.join("\n"),
+    rows: clippedRows.length,
+    cursorRow: (clippedAbove ? 1 : 0) + safeCursorRow - start,
+    cursorCol,
+  };
 }
 
 /**
@@ -361,9 +432,19 @@ export function renderEditor(
     totalRows,
   } = buildFrameString(lines, window, cursorLine, cursorCol, columns, color);
 
+  if (totalRows > maxRows) {
+    return clipFrameToMaxRows(
+      frame,
+      cursorRow,
+      cursorColResult,
+      maxRows,
+      color
+    );
+  }
+
   return {
     frame,
-    rows: Math.min(totalRows, maxRows),
+    rows: totalRows,
     cursorRow,
     cursorCol: cursorColResult,
   };
