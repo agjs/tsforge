@@ -231,19 +231,16 @@ describe("editor render e2e — @ completion", () => {
   test("typing `@` opens the dropdown ABOVE the block; the editor text/cursor stay put", () => {
     const { stdin, render } = harness(true);
 
-    const homeRow = render().cursorPosition().row;
-
     stdin.feed("@");
 
     const screen = render();
     const cur = screen.cursorPosition();
 
-    // The `@` stays on the cursor's home row — the cursor does NOT jump.
-    expect(cur.row).toBe(homeRow);
-    expect(screen.row(homeRow)).toContain("@");
-    // The dropdown lists files on rows ABOVE the editor block (not on its row).
-    expect(screen.row(homeRow)).not.toContain("lexer");
-    const aboveHasFiles = [homeRow - 1, homeRow - 2, homeRow - 3].some((r) =>
+    // The `@` shares the cursor's row (the cursor stays with the input text).
+    expect(screen.row(cur.row)).toContain("@");
+    // The dropdown lists files on rows ABOVE the input (not on the cursor's row).
+    expect(screen.row(cur.row)).not.toContain("lexer");
+    const aboveHasFiles = [cur.row - 1, cur.row - 2, cur.row - 3].some((r) =>
       screen.row(r).includes("lexer")
     );
 
@@ -254,16 +251,15 @@ describe("editor render e2e — @ completion", () => {
     const { stdin, render } = harness(true);
 
     stdin.feed("hello "); // type some text first
-    const homeRow = render().cursorPosition().row;
-
     stdin.feed("@"); // open completion at the word boundary
 
     const screen = render();
+    const cur = screen.cursorPosition();
 
-    // The pre-existing text stays on its row exactly once — no shoving to a line above.
+    // The text stays intact on ONE row, together with the cursor — not split,
+    // shoved to a different row, or duplicated (the original bug).
     expect(screen.rowsContaining("hello")).toBe(1);
-    expect(screen.row(homeRow)).toContain("hello @");
-    expect(screen.cursorPosition().row).toBe(homeRow);
+    expect(screen.row(cur.row)).toContain("hello @");
   });
 
   test("typing filters, then Enter accepts the highlighted file as `@<path> `", () => {

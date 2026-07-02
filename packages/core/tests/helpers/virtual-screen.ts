@@ -225,11 +225,46 @@ export class VirtualScreen {
   }
 
   private eraseDisplay(mode: number): void {
-    // mode 2 (and 3) clear the whole screen; 0/1 partials are unused by the
-    // render layer, so treat any erase-display as a full clear for our needs.
+    // mode 2/3: whole screen.
     if (mode === 2 || mode === 3) {
       for (const line of this.grid) {
         line.fill(" ");
+      }
+
+      return;
+    }
+
+    const row = this.cursor.row;
+    const col = this.cursor.col;
+
+    // mode 0: cursor to end of screen (rest of this line + every line below).
+    // The relative-redraw status bar uses this to clear its live region.
+    if (mode === 0) {
+      const line = this.grid[row - 1];
+
+      if (line !== undefined) {
+        for (let c = col - 1; c < this.cols; c += 1) {
+          line[c] = " ";
+        }
+      }
+
+      for (let r = row; r < this.rows; r += 1) {
+        this.grid[r]?.fill(" ");
+      }
+
+      return;
+    }
+
+    // mode 1: start of screen to cursor.
+    for (let r = 0; r < row - 1; r += 1) {
+      this.grid[r]?.fill(" ");
+    }
+
+    const line = this.grid[row - 1];
+
+    if (line !== undefined) {
+      for (let c = 0; c < col && c < this.cols; c += 1) {
+        line[c] = " ";
       }
     }
   }
