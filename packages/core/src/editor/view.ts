@@ -351,6 +351,37 @@ function buildFrameString(
 }
 
 /**
+ * Clamp the frame's VISUAL rows to `maxRows`, keeping the cursor's row visible.
+ * The logical-line windowing (fitLinesInWindow) can't sub-window WITHIN a single
+ * line, so one long unwrapped line (a pasted URL/path) produces more visual rows
+ * than fit; without this the caller top-slices and the cursor — and the text
+ * being edited — scroll off the bottom (the cursor lands on the status bar).
+ */
+function windowVisualRows(
+  visualRows: string[],
+  cursorRow: number,
+  maxRows: number
+): { rows: string[]; cursorRow: number } {
+  if (maxRows <= 0 || visualRows.length <= maxRows) {
+    return { rows: visualRows, cursorRow };
+  }
+
+  // Center the cursor's row in the window (clamped to the ends), so scrolling a
+  // long line keeps context on both sides instead of pinning the cursor to the
+  // top row and dropping the preceding lines the moment it moves.
+  const maxStart = visualRows.length - maxRows;
+  const start = Math.max(
+    0,
+    Math.min(cursorRow - Math.floor(maxRows / 2), maxStart)
+  );
+
+  return {
+    rows: visualRows.slice(start, start + maxRows),
+    cursorRow: cursorRow - start,
+  };
+}
+
+/**
  * Render the editor buffer as an ANSI-escaped frame positioned at a given
  * terminal row. Returns the frame (escape sequences + text), total rows used,
  * and the on-screen cursor position.
@@ -375,13 +406,16 @@ export function renderEditor(
     frame,
     cursorRow,
     cursorCol: cursorColResult,
-    totalRows,
   } = buildFrameString(lines, window, cursorLine, cursorCol, columns, color);
 
+  // Clamp visual rows so the cursor line is always shown, even when a single
+  // logical line wraps past the window (logical-line windowing can't split it).
+  const windowed = windowVisualRows(frame.split("\n"), cursorRow, maxRows);
+
   return {
-    frame,
-    rows: Math.min(totalRows, maxRows),
-    cursorRow,
+    frame: windowed.rows.join("\n"),
+    rows: windowed.rows.length,
+    cursorRow: windowed.cursorRow,
     cursorCol: cursorColResult,
   };
 }

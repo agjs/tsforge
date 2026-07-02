@@ -80,6 +80,29 @@ describe("decodeKeys", () => {
     }
   });
 
+  test("raw Tab (0x09) decodes as tab, not ctrl+i (regression)", () => {
+    const events = decodeKeys("\t");
+
+    expect(events.length).toBe(1);
+
+    const k = events[0];
+
+    if (k) {
+      expect({ name: k.name, ctrl: k.ctrl, text: k.text }).toEqual({
+        name: "tab",
+        ctrl: false,
+        text: "",
+      });
+    }
+  });
+
+  test("Kitty Tab (CSI 9;1u) also decodes as tab", () => {
+    const events = decodeKeys("\x1b[9;1u");
+
+    expect(events.length).toBe(1);
+    expect(events[0]?.name).toBe("tab");
+  });
+
   test("printable char and arrow", () => {
     const aEvents = decodeKeys("a");
 

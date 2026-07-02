@@ -397,9 +397,10 @@ describe("editor e2e — aggressive interaction probes", () => {
 
     const { row, col } = h.screen().cursorPosition();
 
-    // Single line anchored ON the input row (22) — where the cursor's home is —
-    // so text and cursor share the row (no "text one line above the cursor").
-    expect(row).toBe(22);
+    // Relative-redraw: the region sits right after content (top of an empty test
+    // terminal). Text and cursor share the SAME row (no "text one line above the
+    // cursor"), and the cursor rests just after the 2 graphemes typed.
+    expect(h.screen().row(row)).toContain("hi");
     expect(col).toBe(3); // 1-based: after 2 graphemes
   });
 
@@ -574,10 +575,10 @@ describe("editor e2e — wrapped-line cursor math", () => {
 
     const { row, col } = h.screen().cursorPosition();
 
-    // Block is 2 visual rows, bottom-anchored ON the input row: contentTop =
-    // 22 - 2 + 1 = 21, cursor on visual row 1 (the wrapped tail) → row 22, after
-    // 5 chars → col 6.
-    expect(row).toBe(22);
+    // 2 visual rows; the cursor sits on the wrapped TAIL row (visual row 1), after
+    // the 5 tail chars → col 6. (Relative model: absolute row depends on content,
+    // so assert the cursor's row holds the tail rather than a fixed row number.)
+    expect(h.screen().row(row)).toContain("klmno"); // the wrapped tail (chars 21-25)
     expect(col).toBe(6);
   });
 

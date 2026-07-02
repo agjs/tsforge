@@ -245,6 +245,14 @@ function parseOneKey(chunk: string, idx: number): IParseResult | null {
     return { event: createKeyEvent("backspace"), len: 1 };
   }
 
+  // Tab (raw 0x09 === Ctrl+I). Special-cased BEFORE the control-byte branch, the
+  // same way return (0x0d) and backspace (0x08) are — otherwise 0x09 falls into
+  // the generic ctrl+letter path and decodes as {char:"i", ctrl}, which has no
+  // binding and gets inserted as a literal "i" on any non-Kitty terminal.
+  if (ch === 0x09) {
+    return { event: createKeyEvent("tab"), len: 1 };
+  }
+
   // Control bytes
   if (ch >= 0x01 && ch <= 0x1a) {
     const text = String.fromCharCode(ch + 96);

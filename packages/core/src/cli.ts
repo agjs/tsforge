@@ -1574,10 +1574,19 @@ async function repl(args: ICliArgs): Promise<number> {
   // `() => true` gate still applies to any non-interactive spinner use.
   spinner.setInlineGate(() => false);
 
+  // A drag-resize fires SIGWINCH continuously while the terminal reflows. Painting
+  // the bar into that moving target strands copies of it (the multi-bar / stray-rule
+  // mess a circular corner-drag produced). So we DEBOUNCE: while resizes are still
+  // arriving we suppress ALL bar repaints (spinner ticks included) and repaint once,
+  // cleanly, only after the size settles (~120ms of quiet).
+  const RESIZE_SETTLE_MS = 120;
+  let resizing = false;
+  let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+
   // Repaint the bar on every spinner tick so tok/s and the context meter update
-  // live mid-turn (both read live session state), not just at turn boundaries.
+  // live mid-turn (both read live session state) — but NOT during a resize storm.
   spinner.onTick(() => {
-    if (statusBar.active) {
+    if (statusBar.active && !resizing) {
       statusBar.update(statusInfo());
     }
   });
@@ -1587,10 +1596,22 @@ async function repl(args: ICliArgs): Promise<number> {
   // lifetime). columns/rows are typed `number` here, so no nullish guard is
   // needed; the editor's resize ignores non-positive values regardless.
   const handleResize = (): void => {
-    statusBar.resize(statusInfo());
-    // The editor wraps/windows at the dimensions it was created with; without
-    // this it keeps using the pre-resize size and can clip the current line.
-    resizeEditor?.(process.stdout.columns, process.stdout.rows);
+    resizing = true;
+    statusBar.pauseForResize(); // buffer streamed output; draw nothing mid-storm
+
+    if (resizeTimer !== null) {
+      clearTimeout(resizeTimer);
+    }
+
+    resizeTimer = setTimeout(() => {
+      resizing = false;
+      resizeTimer = null;
+      statusBar.resize(statusInfo());
+      // The editor wraps/windows at the dimensions it was created with; without
+      // this it keeps using the pre-resize size and can clip the current line.
+      resizeEditor?.(process.stdout.columns, process.stdout.rows);
+      statusBar.flushStream(); // replay buffered output into the settled region
+    }, RESIZE_SETTLE_MS);
   };
 
   process.stdout.on("resize", handleResize);
@@ -1758,12 +1779,22 @@ async function repl(args: ICliArgs): Promise<number> {
         },
         {
           columns: process.stdout.columns,
-          maxRows: process.stdout.rows,
+          // Mirror the editor controller's own repaint window (rows minus the bar
+          // block) so wrapping/windowing matches.
+          maxRows: Math.max(1, process.stdout.rows - 3),
           color: true,
         }
       );
 
-      statusBar.writeStream(frame.frame);
+      // Repaint the editor block IN the pinned live region (setEditor), NOT via
+      // writeStream — writeStream treats its argument as conversation content, so
+      // it would strand the editor frame in scrollback (a leftover "/" per palette
+      // open). This mirrors the editor's renderEditor→setEditor callback.
+      statusBar.setEditor(
+        frame.frame.split("\n"),
+        frame.cursorRow,
+        frame.cursorCol
+      );
     };
 
     // Open the interactive `/` command palette: pick a command from a navigable
@@ -1781,15 +1812,18 @@ async function repl(args: ICliArgs): Promise<number> {
         if (picked !== null) {
           if (editorHandle !== null) {
             editorHandle.getBuffer().setText("");
-            editorHandle.getBuffer().insert(picked.name);
 
             if (takesArg(picked)) {
-              editorHandle.getBuffer().insert(" ");
+              // Prefill "<cmd> " so the user types the argument next.
+              editorHandle.getBuffer().insert(`${picked.name} `);
+              repaintEditor(editorHandle);
             } else {
+              // No-arg command: run it and leave the input EMPTY. Inserting the
+              // name would linger in the buffer and reappear on the next keystroke
+              // (the "/clear" ghost after the screen is cleared).
+              repaintEditor(editorHandle);
               void runLine(picked.name);
             }
-
-            repaintEditor(editorHandle);
           } else if (rl !== null) {
             rl.write(null, { ctrl: true, name: "u" }); // clear the typed "/"
 
