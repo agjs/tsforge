@@ -35,6 +35,26 @@ test("wrapped line computes rows and cursor position correctly", () => {
   expect(r.cursorCol).toBe(10);
 });
 
+test("one long line wrapping past maxRows keeps the cursor visible (regression)", () => {
+  // 200 chars at width 20 = 10 visual rows, but only 4 rows of space. The window
+  // must scroll so the cursor (at the tail) stays inside the block — otherwise
+  // the caller top-slices and the cursor lands off the block (on the status bar).
+  const long = "Z".repeat(200);
+  const r = renderEditor(
+    { lines: [long], cursorLine: 0, cursorCol: 200 },
+    { columns: 20, maxRows: 4, color: false }
+  );
+
+  const visualRows = r.frame.split("\n");
+
+  expect(r.rows).toBe(4);
+  expect(visualRows.length).toBe(4);
+  expect(r.cursorRow).toBeGreaterThanOrEqual(0);
+  expect(r.cursorRow).toBeLessThan(r.rows);
+  // The cursor's visual row must actually contain the line's text.
+  expect(visualRows[r.cursorRow]).toContain("Z");
+});
+
 test("empty buffer returns zero rows", () => {
   const r = renderEditor(
     { lines: [], cursorLine: 0, cursorCol: 0 },
