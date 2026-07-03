@@ -142,6 +142,16 @@ function onOff(on: boolean): string {
   return on ? "on" : "off";
 }
 
+/** Clamp a value to one line — a gate command / long scope must never wrap the
+ *  menu (it blows the whole layout out otherwise). */
+const VALUE_MAX = 52;
+
+export function oneLine(value: string): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+
+  return flat.length <= VALUE_MAX ? flat : `${flat.slice(0, VALUE_MAX - 1)}…`;
+}
+
 /** Build the settings hub. Model entries hit disk (loadModelsConfig etc.); the
  *  rest read/write the injected session + env. */
 export function buildSettings(deps: IConfigDeps): ISetting[] {
@@ -317,7 +327,7 @@ function renderMenu(
     const active = i === cursor;
     const gutter = active ? paint("›", STYLE.brand, color) : " ";
     const label = paint(s.label, active ? STYLE.brand : STYLE.bold, color);
-    const value = paint(s.read(), STYLE.brandLight, color);
+    const value = paint(oneLine(s.read()), STYLE.brandLight, color);
 
     rows.push(`${gutter} ${label}  ${paint("·", STYLE.dim, color)} ${value}`);
   });

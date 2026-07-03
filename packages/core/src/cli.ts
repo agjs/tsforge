@@ -938,6 +938,11 @@ async function initReplSession(args: ICliArgs): Promise<{
 
 /** Interactive REPL: a persistent gate-anchored conversation. */
 async function repl(args: ICliArgs): Promise<number> {
+  // Interactive sessions get web tools ON by default (an assistant that can't look
+  // things up is silly). Only a DEFAULT — an explicit TSFORGE_WEB (incl. "0") wins,
+  // and one-shot/headless/eval never run this path, so they stay offline+deterministic.
+  process.env.TSFORGE_WEB ??= "1";
+
   const {
     session: initialSession,
     provider,

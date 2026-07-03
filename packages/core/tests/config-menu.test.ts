@@ -5,6 +5,7 @@ import {
   buildSettings,
   draftToEntry,
   nextModelName,
+  oneLine,
   type IConfigDeps,
   type ISetting,
 } from "../src/cli/config-menu";
@@ -159,4 +160,16 @@ test("TDD toggle is on by default and flips to off", () => {
   void tdd.activate?.();
   expect(tdd.read()).toBe("off");
   expect(deps.getEnv("TSFORGE_TDD")).toBe("0");
+});
+
+test("oneLine truncates long values to one line + collapses whitespace", () => {
+  expect(oneLine("short")).toBe("short");
+  const big = oneLine("x".repeat(200));
+
+  expect(big.length).toBeLessThanOrEqual(52);
+  expect(big.endsWith("\u2026")).toBe(true);
+  // a multi-line gate command must never wrap the menu
+  expect(oneLine("tsc --noEmit\n  && bun test")).toBe(
+    "tsc --noEmit && bun test"
+  );
 });
