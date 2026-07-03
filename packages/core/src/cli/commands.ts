@@ -70,6 +70,10 @@ export const COMMANDS: readonly ICommandSpec[] = [
     summary: "show learned failure→fix lessons (forget to clear)",
   },
   {
+    name: "/config",
+    summary: "settings: switch or add a model",
+  },
+  {
     name: "/setup",
     summary: "infer + write project conventions (the setup wizard)",
   },

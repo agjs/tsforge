@@ -8,6 +8,7 @@ import { emitKeypressEvents } from "node:readline";
 import { formatHelp, takesArg } from "./cli/commands";
 import { resolveInitialPlanMode } from "./cli/plan-default";
 import { modeById, nextMode } from "./cli/modes";
+import { runConfigCommand } from "./cli/config-menu";
 import { pickCommand } from "./render/command-menu";
 import {
   pickFileInline,
@@ -1363,6 +1364,10 @@ async function repl(args: ICliArgs): Promise<number> {
         await runTraceCommand(arg, logFile);
         break;
 
+      case "config":
+        await handleConfig();
+        break;
+
       case "setup": {
         const { runSetup } = await import("./setup/run-setup");
 
@@ -1530,10 +1535,45 @@ async function repl(args: ICliArgs): Promise<number> {
     );
   };
 
+  // `/config` — the in-harness settings menu (switch/add a model). Extracted from
+  // the command dispatcher to keep it under the complexity cap; suspends the
+  // editor's stdin ownership around the wizard, then applies the result live.
+  const handleConfig = async (): Promise<void> => {
+    const result = await runConfigCommand({
+      color: process.stdout.isTTY,
+      activeName,
+      suspend: () => {
+        editorControl?.suspend();
+      },
+      resume: () => {
+        editorControl?.resume();
+      },
+      reconfigure: (entry) => {
+        provider.reconfigure(providerConfig(entry));
+      },
+    });
+
+    if (result === null) {
+      return;
+    }
+
+    activeName = result.activeName;
+
+    if (statusBar.active) {
+      statusBar.update(statusInfo());
+    }
+
+    process.stdout.write(`  ✓ active model: ${activeName}\n`);
+  };
+
   // Set once the multi-line editor is created (it lives in a nested scope); the
   // resize handler below calls it so the editor re-wraps/re-windows at the new
   // size instead of clipping the current line at its pre-resize dimensions.
   let resizeEditor: ((columns: number, rows: number) => void) | null = null;
+  // The live editor handle, exposed to repl-scope closures (e.g. the `/config`
+  // command) so they can suspend/resume its stdin ownership around an overlay
+  // wizard — the editor itself is created inside the loop's nested scope.
+  let editorControl: IEditorHandle | null = null;
 
   // Each agent turn renders as a "▌ <model>" block with its body indented under the
   // label (mirrors the user block). The label is emitted once, on the turn's first
@@ -2076,6 +2116,8 @@ async function repl(args: ICliArgs): Promise<number> {
       resizeEditor = (columns, rows): void => {
         editorHandle?.resize(columns, rows);
       };
+
+      editorControl = editorHandle;
 
       editorHandle.onSubmit(submitLine);
       editorHandle.onInterrupt(() => {
