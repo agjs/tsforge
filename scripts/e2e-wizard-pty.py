@@ -53,7 +53,7 @@ def main():
     ok &= got
 
     os.write(m, b"\x7f\x7f\x7f\x7f")  # erase "seed"
-    os.write(m, b"xy")  # type "xy"
+    os.write(m, b"x y")  # type "x y" — the space MUST land (regression: space→toggle)
     os.write(m, b"\r")  # confirm (review:false) → apply
 
     got, buf = read_until(m, lambda b: "RESULT" in b, 10)
@@ -64,10 +64,10 @@ def main():
     good = (
         got
         and '"status":"apply"' in tail
-        and '"name":"xy"' in tail
+        and '"name":"x y"' in tail  # the space survived
         and '"pick":"alpha"' in tail
     )
-    print(f"  [{'PASS' if good else 'FAIL'}] result: single=alpha, text=xy   {tail[:80]!r}")
+    print(f"  [{'PASS' if good else 'FAIL'}] result: single=alpha, text='x y' (space typed)   {tail[:80]!r}")
     ok &= good
 
     try:

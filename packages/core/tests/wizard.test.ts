@@ -350,3 +350,20 @@ describe("generic wizard: text steps", () => {
     expect(actionFor(undefined, { name: "up" })).toBe("up");
   });
 });
+
+describe("generic wizard: text input edge cases", () => {
+  test("a space is typed into a text field (regression: space→toggle)", () => {
+    const s = driveWizard(
+      [nameStep],
+      [{ char: "a" }, { char: " " }, { char: "b" }]
+    );
+
+    expect(textValue(s, nameStep)).toBe("a b");
+  });
+
+  test("actionFor: DEL/backspace decodes as erase, never a printable char", () => {
+    expect(actionFor("\x7f", { name: "backspace" })).toBe("erase");
+    // A bare DEL byte with no key name is not printable → ignored, not a char.
+    expect(actionFor("\x7f", { name: undefined })).toBeNull();
+  });
+});

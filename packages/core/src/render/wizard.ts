@@ -355,7 +355,7 @@ function multiChoiceRows(
 function hints(step: IWizardStep, color: boolean): string {
   const parts =
     step.kind === "text"
-      ? ["type to edit", "enter continue", "b back", "q cancel"]
+      ? ["type to edit", "← back", "enter continue", "esc cancel"]
       : step.kind === "multi"
         ? ["space toggle", "enter continue", "b back", "q cancel"]
         : ["↑/↓ move", "enter select", "b back", "q cancel"];
@@ -534,10 +534,11 @@ export function actionFor(
       break;
   }
 
-  // Any single printable character is text input (a text step consumes it; other
-  // kinds ignore it in the reducer). The driver maps `b`/`q` to back/cancel for
-  // non-text steps BEFORE this, so those shortcuts still work off a text field.
-  if (str?.length === 1 && str >= " ") {
+  // Any single printable ASCII character (0x20–0x7e) is text input (a text step
+  // consumes it; other kinds ignore it in the reducer). The upper bound excludes
+  // DEL (0x7f), which is backspace and must decode as "erase" above. The driver
+  // maps `b`/`q` to back/cancel for non-text steps, so those still work off a field.
+  if (str?.length === 1 && str >= " " && str <= "~") {
     return { char: str };
   }
 
@@ -645,13 +646,20 @@ export function runWizard(
       try {
         const step = steps[state.stepIndex];
         const isText = step?.kind === "text";
-        // `b`/`q` are back/cancel shortcuts EXCEPT on a text field, where they are
-        // literal characters the user is typing.
         let action = actionFor(str, key);
 
-        if (!isText && str === "b") {
+        if (isText) {
+          // On a text field EVERY printable key is literal input — including
+          // space (which `actionFor` decodes as "toggle" by name), `b`, and `q`.
+          // Back is the ← arrow (unused while editing); Esc still cancels.
+          if (str?.length === 1 && str >= " " && str <= "~") {
+            action = { char: str };
+          } else if (key.name === "left") {
+            action = "back";
+          }
+        } else if (str === "b") {
           action = "back";
-        } else if (!isText && str === "q") {
+        } else if (str === "q") {
           action = "cancel";
         }
 
