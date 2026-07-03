@@ -28,9 +28,6 @@ export interface ICliArgs {
   /** Plan mode: a from-scratch build pauses after the design phase to show its
    *  plan for review/edit before implementing (`--plan`; also toggled by /plan). */
   plan: boolean;
-  /** Opt OUT of the plan-first default for an interactive session (`--no-plan`):
-   *  start autonomous (writes directly) instead of exploring + proposing a plan. */
-  noPlan: boolean;
   /** Keep the auto-gate at the strict TS floor only — do NOT append the
    *  project's discovered tests (`--strict-floor-only`). By default the auto-gate
    *  also runs the project's tests, so "green" means floor + tests pass. */
@@ -96,7 +93,6 @@ const BOOL_FLAGS: Record<
   | "web"
   | "log"
   | "plan"
-  | "noPlan"
   | "strictFloorOnly"
   | "staged"
   | "withGate"
@@ -111,7 +107,6 @@ const BOOL_FLAGS: Record<
   "--web": "web",
   "--log": "log",
   "--plan": "plan",
-  "--no-plan": "noPlan",
   "--strict-floor-only": "strictFloorOnly",
   "--staged": "staged",
   "--with-gate": "withGate",
@@ -149,7 +144,6 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     web: false,
     log: false,
     plan: false,
-    noPlan: false,
     strictFloorOnly: false,
     review: false,
     staged: false,

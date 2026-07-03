@@ -111,11 +111,6 @@ test("--scout parses, and a recipe can turn scout on", () => {
   expect(args.scout).toBe(true);
 });
 
-test("--no-plan parses (opt out of the plan-first default)", () => {
-  expect(parseArgs(["fix it", "--no-plan"]).noPlan).toBe(true);
-  expect(parseArgs(["fix it"]).noPlan).toBe(false);
-});
-
 test("--greenfield parses, and a recipe with mode:greenfield turns it on + routes role models", () => {
   expect(parseArgs(["build an app", "--greenfield"]).greenfield).toBe(true);
   expect(parseArgs(["build an app"]).greenfield).toBe(false);
