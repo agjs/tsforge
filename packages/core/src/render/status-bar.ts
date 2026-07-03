@@ -77,6 +77,12 @@ function statusSegment(status: string): ISegment {
 function barSegments(info: IStatusInfo): ISegment[] {
   const segs: ISegment[] = [{ text: info.model, code: STYLE.brand }];
 
+  // Current interactive mode chip — kept early so it survives when the bar is
+  // truncated on a narrow terminal (segments drop from the right).
+  if (info.mode !== undefined && info.mode.length > 0) {
+    segs.push({ text: `◆ ${info.mode}`, code: STYLE.brandLight });
+  }
+
   // The live "thinking · 12s" spinner rides HERE while a turn runs — it used to
   // animate on the readline input line and erase whatever the user was typing.
   if (info.activity !== undefined && info.activity.length > 0) {

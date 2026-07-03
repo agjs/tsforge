@@ -16,7 +16,7 @@ Most users run `tsforge` and stay in the interactive session.
 | **Interactive** | `tsforge` | default — open-ended tasks, steering, exploration |
 | **One-shot** | `tsforge "task" --accept "gate cmd"` | drive a single task to green and exit |
 | **Web build** | add `--web` | scaffold Vite app + web gate ladder on first message |
-| **Plan mode** | `--plan` or `/plan` | read-only exploration before implementing — see [Plan mode](/cli/plan-mode/) |
+| **Plan mode** | default — **Shift+Tab** or `/plan` to switch | read-only exploration before implementing — see [Plan mode](/cli/plan-mode/) |
 
 ## Flags
 
@@ -28,7 +28,7 @@ Most users run `tsforge` and stay in the interactive session.
 | `--no-gate` | skip auto gate detection |
 | `--web` | pre-scaffold web stack + web gate on first build message |
 | `--browser <html>` | append headless render check to gate |
-| `--plan` | start in plan mode |
+| `--plan` | force plan mode on (already the default for interactive sessions) |
 | `--continue` / `-c` | resume latest saved session for this dir |
 | `--resume <id>` | resume a specific session |
 | `--log` | append JSONL event stream to `~/.tsforge/logs/` |
@@ -40,7 +40,7 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environme
 | Command | Action |
 | --- | --- |
 | `/help` | list commands |
-| `/plan` | toggle plan mode |
+| `/plan` | toggle plan mode (on by default) |
 | `/gate <cmd>` | set gate command (`/gate` alone clears) |
 | `/files <globs>` | set editable scope |
 | `/review [base]` | review your current change (logic, regressions, edge cases) |
@@ -56,15 +56,17 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environme
 
 Anything else is sent to the agent. While it runs, type to **steer** the next turn. Ctrl-C interrupts the current run.
 
+**Shift+Tab** cycles the interactive mode (plan → normal → …); the current mode shows as a `◆` chip in the status bar.
+
 ## Status bar
 
 On a real terminal, a status bar stays **pinned to the bottom** while output scrolls above it — always in view, never scrolled away:
 
 ```
-  ⎯ qwen3.6-27b · ctx ~8k/32k 25% · 2 turns · 12s · 48 tok/s · done · src/**
+  ⎯ qwen3.6-27b · ◆ plan · ctx ~8k/32k 25% · 2 turns · 12s · 48 tok/s · done · src/**
 ```
 
-It shows the active model, real context-window usage, the last turn's count + elapsed, the current generation rate, the last outcome, and the editable scope. It **ticks live while the model works** — tokens/sec and the context meter update mid-turn (the status reads `● working`), settling to `✓ done` / `✗ stuck` when the turn ends — and it survives terminal resizes. When stdout isn't a TTY (piped output, `--log`, a tiny window) the bar is skipped and the same line prints inline above each prompt instead, so logs and pipes stay clean.
+It shows the active model, the current mode chip (`◆ plan` / `◆ normal`), real context-window usage, the last turn's count + elapsed, the current generation rate, the last outcome, and the editable scope. It **ticks live while the model works** — tokens/sec and the context meter update mid-turn (the status reads `● working`), settling to `✓ done` / `✗ stuck` when the turn ends — and it survives terminal resizes. When stdout isn't a TTY (piped output, `--log`, a tiny window) the bar is skipped and the same line prints inline above each prompt instead, so logs and pipes stay clean.
 
 ## Live metrics
 

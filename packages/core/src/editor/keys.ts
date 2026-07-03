@@ -30,6 +30,8 @@ const LEGACY_PATTERN = /^([ABCDHF])/u;
 const DELETE_SEQ = "\x1b[3~";
 const ALT_CR = "\x1b\r";
 const ALT_LF = "\x1b\n";
+/** Shift+Tab — the standard "back-tab" CSI. Used to cycle session modes. */
+const BACKTAB = "\x1b[Z";
 
 interface IModifiers {
   shift: boolean;
@@ -218,6 +220,15 @@ function parseOneKey(chunk: string, idx: number): IParseResult | null {
 
   if (legacy !== null) {
     return legacy;
+  }
+
+  if (remaining.startsWith(BACKTAB)) {
+    const shiftMods: IModifiers = { shift: true, alt: false, ctrl: false };
+
+    return {
+      event: createKeyEvent("backtab", "", shiftMods),
+      len: BACKTAB.length,
+    };
   }
 
   if (remaining.startsWith(DELETE_SEQ)) {

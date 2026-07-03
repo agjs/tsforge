@@ -10,6 +10,9 @@ export interface IEditorHandle {
   onChange(cb: () => void): void;
   onInterrupt(cb: () => void): void;
   onExit(cb: () => void): void;
+  /** Shift+Tab — cycle the session mode (plan/normal/…). The host decides what
+   *  cycling means; the editor just forwards the keypress. */
+  onCycleMode(cb: () => void): void;
   getBuffer(): EditorBuffer;
   /** Update the terminal dimensions and repaint. The CLI calls this on a
    *  terminal resize; without it the editor keeps wrapping/windowing at the
@@ -192,6 +195,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   const changeCallbacks: (() => void)[] = [];
   const interruptCallbacks: (() => void)[] = [];
   const exitCallbacks: (() => void)[] = [];
+  const cycleModeCallbacks: (() => void)[] = [];
 
   // In-session history: submitted messages for up/down navigation
   const history: string[] = [];
@@ -585,6 +589,15 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       return;
     }
 
+    // Shift+Tab cycles the session mode — a global action, not text editing.
+    if (name === "backtab") {
+      cycleModeCallbacks.forEach((cb) => {
+        cb();
+      });
+
+      return;
+    }
+
     if (name === "return") {
       handleReturnKey(ctrl, alt, shift);
 
@@ -749,6 +762,10 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     onExit(cb: () => void) {
       exitCallbacks.push(cb);
+    },
+
+    onCycleMode(cb: () => void) {
+      cycleModeCallbacks.push(cb);
     },
 
     getBuffer(): EditorBuffer {
