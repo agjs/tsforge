@@ -9,6 +9,9 @@ import { formatHelp, takesArg } from "./cli/commands";
 import { resolveInitialPlanMode } from "./cli/plan-default";
 import { modeById, nextMode } from "./cli/modes";
 import { runConfigMenu } from "./cli/config-menu";
+import { runCapabilityMenu } from "./cli/capability-menu";
+import { openScaffoldInRepl } from "./cli/repl-scaffold";
+import { openRecipePicker } from "./cli/repl-recipe";
 import { pickCommand } from "./render/command-menu";
 import {
   pickFileInline,
@@ -1287,6 +1290,9 @@ async function repl(args: ICliArgs): Promise<number> {
     await runSend(line);
   };
 
+  // Placeholder declaration for handleHelp; defined after runLine is available.
+  let handleHelp: () => Promise<void>;
+
   // Slash-command dispatch. Returns true to EXIT the REPL. Kept as a closure so
   // it can rebuild `session` (e.g. /clear) and reach config/persist.
   const command = async (line: string): Promise<boolean> => {
@@ -1298,7 +1304,7 @@ async function repl(args: ICliArgs): Promise<number> {
       case "quit":
         return true;
       case "help":
-        process.stdout.write(`${HELP}\n`);
+        await handleHelp();
         break;
       case "clear":
         // Rebuild the session with the current state (config is not reused;
@@ -1884,6 +1890,93 @@ async function repl(args: ICliArgs): Promise<number> {
       } else {
         prompt();
       }
+    };
+
+    // `/help` — the capability browser. On a TTY, opens an interactive menu; off-TTY,
+    // prints the static help text so pipes/logs are unchanged. Extracted to keep
+    // cognitive complexity in check.
+    const buildHelpDeps = async (): Promise<
+      Parameters<typeof runCapabilityMenu>[0]
+    > => {
+      const suspend = (): void => {
+        editorControl?.suspend();
+        editorControl?.setInputInert(true);
+      };
+
+      const resume = (): void => {
+        editorControl?.setInputInert(false);
+        editorControl?.resume();
+        editorControl?.getBuffer().setText("");
+      };
+
+      const hasRecipes = (await loadRecipes(args.dir)).length > 0;
+
+      return {
+        color: true,
+        hasRecipes,
+        suspend,
+        resume,
+        runCommand: (c) => {
+          void runLine(`/${c}`);
+        },
+        prefill: (c) => {
+          editorControl?.getBuffer().setText(`${c} `);
+        },
+        openWizard: async (opener) =>
+          opener === "scaffold"
+            ? openScaffoldInRepl({
+                suspend,
+                resume,
+                out: (s) => process.stdout.write(s),
+              })
+            : openRecipePicker({
+                cwd: args.dir,
+                color: true,
+                suspend,
+                resume,
+                out: (s) => process.stdout.write(s),
+                runRecipe: (recipe) => {
+                  if (recipe.gate !== undefined) {
+                    session.setGate(recipe.gate);
+                    gateLabel = recipe.gate;
+                  }
+
+                  if (recipe.files !== undefined) {
+                    session.setScope([...recipe.files]);
+                  }
+
+                  if (recipe.task !== undefined) {
+                    void runLine(recipe.task);
+                  }
+                },
+              }),
+        showDetail: async (cap) => {
+          process.stdout.write(
+            `\n${cap.label}\n\n${String(cap.detail)}\n\nPress any key to continue…\n`
+          );
+
+          await new Promise<void>((resolve) => {
+            const onData = (): void => {
+              process.stdin.removeListener("data", onData);
+              resolve();
+            };
+
+            process.stdin.once("data", onData);
+          });
+        },
+      };
+    };
+
+    handleHelp = async (): Promise<void> => {
+      if (!process.stdout.isTTY) {
+        process.stdout.write(`${HELP}\n`);
+
+        return;
+      }
+
+      const deps = await buildHelpDeps();
+
+      await runCapabilityMenu(deps);
     };
 
     // Helper: repaint the editor buffer to the status bar after palette insertion.
