@@ -21,6 +21,8 @@ export interface IOwnedMenuSelectControl {
   readonly pause: () => void;
   /** Resume the input loop after pause. */
   readonly resume: () => void;
+  /** Signal that the menu should exit after the current onSelect completes. */
+  readonly close: () => void;
 }
 
 export interface IOwnedMenuDeps {
@@ -220,6 +222,8 @@ export function runOwnedMenu(deps: IOwnedMenuDeps): Promise<void> {
         return;
       }
 
+      let shouldClose = false;
+
       const control: IOwnedMenuSelectControl = {
         pause: () => {
           stdin.removeListener("keypress", onKey);
@@ -227,12 +231,27 @@ export function runOwnedMenu(deps: IOwnedMenuDeps): Promise<void> {
         resume: () => {
           stdin.on("keypress", onKey);
         },
+        close: () => {
+          shouldClose = true;
+        },
       };
 
-      // Call onSelect and redraw after the Promise resolves.
+      // Call onSelect and redraw after the Promise resolves, unless close() was called.
       void Promise.resolve(deps.onSelect(state.cursor, control))
-        .then(draw)
-        .catch(draw);
+        .then(() => {
+          if (shouldClose) {
+            finish();
+          } else {
+            draw();
+          }
+        })
+        .catch(() => {
+          if (shouldClose) {
+            finish();
+          } else {
+            draw();
+          }
+        });
     };
 
     const onKey = (_str: string | undefined, key: IKeyInfo): void => {
