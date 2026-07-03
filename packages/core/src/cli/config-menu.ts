@@ -1,6 +1,10 @@
-import { emitKeypressEvents } from "node:readline";
 import { STYLE, paint } from "../render/style";
-import { clampIndex } from "../render/command-menu";
+import { runOwnedMenu } from "../render/owned-menu";
+import type {
+  IMenuRow,
+  IOwnedMenuDeps,
+  IOwnedMenuSelectControl,
+} from "../render/owned-menu";
 import {
   loadModelsConfig,
   saveModelsConfig,
@@ -257,25 +261,12 @@ export function buildSettings(deps: IConfigDeps): ISetting[] {
   ];
 }
 
-// ── interactive driver: one owned-stdin menu loop ────────────────────────────
-
-const ESC = String.fromCharCode(27);
-const ENTER_ALT = `${ESC}[?1049h${ESC}[r`;
-const EXIT_ALT = `${ESC}[?1049l`;
-const HIDE_CURSOR = `${ESC}[?25l`;
-const SHOW_CURSOR = `${ESC}[?25h`;
-const CLEAR_HOME = `${ESC}[2J${ESC}[H`;
-const RULE = "─".repeat(52);
+// ── interactive driver: owned-menu + edit sub-loop ──────────────────────────
 
 interface IEditState {
   readonly setting: ISetting;
   readonly fieldIndex: number;
   readonly values: Record<string, string>;
-}
-
-interface IMenuState {
-  cursor: number;
-  edit: IEditState | null;
 }
 
 interface IKeyInfo {
@@ -284,7 +275,6 @@ interface IKeyInfo {
 }
 
 function currentField(edit: IEditState): IField {
-  // fieldIndex is always in range for an active edit (advanced only past valid).
   return edit.setting.fields?.[edit.fieldIndex] ?? { key: "", label: "" };
 }
 
@@ -316,8 +306,6 @@ export function renderMenu(
     const label = paint(s.label, active ? STYLE.brand : STYLE.bold, color);
     const value = paint(oneLine(s.read()), STYLE.brandLight, color);
 
-    // Every setting carries its own one-line description directly beneath it —
-    // the config screen IS the docs; nothing is hidden behind a selection.
     rows.push(`${gutter} ${label}  ${paint("·", STYLE.dim, color)} ${value}`);
     rows.push(`    ${paint(s.describe, STYLE.dim, color)}`);
   });
@@ -325,7 +313,7 @@ export function renderMenu(
   return [
     paint("tsforge config", STYLE.brand, color),
     `${paint("Settings", STYLE.bold, color)} · change anything here`,
-    RULE,
+    "─".repeat(52),
     ...rows,
     "",
     paint("↑/↓ move   enter change   esc done", STYLE.dim, color),
@@ -342,7 +330,7 @@ function renderEdit(edit: IEditState, color: boolean): string {
   return [
     paint("tsforge config", STYLE.brand, color),
     `${paint(edit.setting.label, STYLE.bold, color)} · field ${edit.fieldIndex + 1} of ${total}`,
-    RULE,
+    "─".repeat(52),
     field.label,
     `  ${shown}${paint("▏", STYLE.brand, color)}`,
     ...(error === null ? [] : ["", paint(error, STYLE.yellow, color)]),
@@ -351,23 +339,14 @@ function renderEdit(edit: IEditState, color: boolean): string {
   ].join("\n");
 }
 
-function renderConfig(
-  settings: ISetting[],
-  state: IMenuState,
-  color: boolean
-): string {
-  return state.edit === null
-    ? renderMenu(settings, state.cursor, color)
-    : renderEdit(state.edit, color);
-}
-
 // ── the driver ───────────────────────────────────────────────────────────────
 
+const ESC = String.fromCharCode(27);
+const CLEAR_HOME = `${ESC}[2J${ESC}[H`;
+
 /**
- * Run the settings hub interactively. Owns stdin for its lifetime via a single
- * keypress loop (no raw-mode toggle, no `pause` — the REPL editor already owns
- * raw+flowing stdin and is suspended around this, so touching it would quit the
- * process). Resolves when the user presses Esc from the menu.
+ * Run the settings hub interactively via runOwnedMenu. The edit sub-loop
+ * (for text-field settings) is managed in onSelect by pausing the main loop.
  */
 export function runConfigMenu(deps: IConfigDeps): Promise<void> {
   const stdin = process.stdin;
@@ -377,151 +356,134 @@ export function runConfigMenu(deps: IConfigDeps): Promise<void> {
   }
 
   const settings = buildSettings(deps);
+  let editState: IEditState | null = null;
 
-  return new Promise((resolve) => {
-    const state: IMenuState = { cursor: 0, edit: null };
+  const out = (s: string): void => {
+    process.stdout.write(s);
+  };
 
-    deps.suspend();
-    emitKeypressEvents(stdin);
+  const drawEdit = (): void => {
+    if (editState === null) {
+      return;
+    }
 
-    const saved = stdin.rawListeners("keypress");
+    out(`${CLEAR_HOME}${renderEdit(editState, deps.color)}`);
+  };
 
-    stdin.removeAllListeners("keypress");
+  const handleEditKey = (
+    str: string | undefined,
+    key: IKeyInfo,
+    onEditDone: () => void
+  ): void => {
+    if (editState === null) {
+      return;
+    }
 
-    const out = (s: string): void => {
-      process.stdout.write(s);
-    };
+    const field = currentField(editState);
 
-    const draw = (): void => {
-      out(`${CLEAR_HOME}${renderConfig(settings, state, deps.color)}`);
-    };
+    if (key.name === "return") {
+      const error = fieldError(editState);
 
-    const finish = (): void => {
-      stdin.removeListener("keypress", onKey);
-
-      try {
-        out(`${SHOW_CURSOR}${EXIT_ALT}`);
-      } catch {
-        // stream closed — cleanup below still runs
-      }
-
-      for (const l of saved) {
-        stdin.on("keypress", (...args: unknown[]) => {
-          Reflect.apply(l, stdin, args);
-        });
-      }
-
-      deps.resume();
-      resolve();
-    };
-
-    const enterMenuSelection = (): void => {
-      const setting = settings[state.cursor];
-
-      if (setting === undefined) {
+      if (error !== null) {
         return;
       }
 
-      if (setting.fields !== undefined) {
-        const values: Record<string, string> = {};
+      const fields = editState.setting.fields ?? [];
 
-        for (const f of setting.fields) {
-          values[f.key] = f.default ?? "";
+      if (editState.fieldIndex + 1 < fields.length) {
+        editState = { ...editState, fieldIndex: editState.fieldIndex + 1 };
+        drawEdit();
+      } else {
+        const values = editState.values;
+        const setting = editState.setting;
+
+        editState = null;
+        void Promise.resolve(setting.applyText?.(values))
+          .then(onEditDone)
+          .catch(onEditDone);
+      }
+    } else if (key.name === "escape") {
+      editState = null;
+      onEditDone();
+    } else if (key.name === "backspace") {
+      editState.values[field.key] = (editState.values[field.key] ?? "").slice(
+        0,
+        -1
+      );
+      drawEdit();
+    } else if (str?.length === 1 && str >= " " && str <= "~") {
+      editState.values[field.key] =
+        `${editState.values[field.key] ?? ""}${str}`;
+      drawEdit();
+    }
+  };
+
+  const menuRows = (): readonly IMenuRow[] => {
+    return settings.map((s) => ({
+      group: s.group,
+      label: s.label,
+      describe: s.describe,
+      value: oneLine(s.read()),
+    }));
+  };
+
+  const onSelect = async (
+    index: number,
+    control: IOwnedMenuSelectControl
+  ): Promise<void> => {
+    const setting = settings[index];
+
+    if (setting === undefined) {
+      return;
+    }
+
+    if (setting.fields === undefined) {
+      await Promise.resolve(setting.activate?.());
+
+      return;
+    }
+
+    const values: Record<string, string> = {};
+
+    for (const f of setting.fields) {
+      values[f.key] = f.default ?? "";
+    }
+
+    editState = { setting, fieldIndex: 0, values };
+    control.pause();
+    drawEdit();
+
+    return new Promise((resolveEdit) => {
+      const editHandler = (str: string | undefined, key: IKeyInfo): void => {
+        try {
+          handleEditKey(str, key, () => {
+            editState = null;
+            stdin.off("keypress", editHandler);
+            control.resume();
+            resolveEdit();
+          });
+        } catch {
+          editState = null;
+          stdin.off("keypress", editHandler);
+          control.resume();
+          resolveEdit();
         }
+      };
 
-        state.edit = { setting, fieldIndex: 0, values };
-        draw();
+      stdin.on("keypress", editHandler);
+    });
+  };
 
-        return;
-      }
+  const ownedMenuDeps: IOwnedMenuDeps = {
+    color: deps.color,
+    title: "tsforge config",
+    subtitle: `${paint("Settings", STYLE.bold, deps.color)} · change anything here`,
+    footer: "↑/↓ move   enter change   esc done",
+    suspend: deps.suspend,
+    resume: deps.resume,
+    rows: menuRows,
+    onSelect,
+  };
 
-      // choice/toggle: apply, then redraw the (possibly-async) new value.
-      void Promise.resolve(setting.activate?.()).then(draw).catch(draw);
-    };
-
-    const advanceField = (): void => {
-      const edit = state.edit;
-
-      if (edit === null || fieldError(edit) !== null) {
-        return; // blocked by validation
-      }
-
-      const fields = edit.setting.fields ?? [];
-
-      if (edit.fieldIndex + 1 < fields.length) {
-        state.edit = { ...edit, fieldIndex: edit.fieldIndex + 1 };
-        draw();
-
-        return;
-      }
-
-      // last field → apply, back to the menu.
-      state.edit = null;
-      void Promise.resolve(edit.setting.applyText?.(edit.values))
-        .then(draw)
-        .catch(draw);
-    };
-
-    const editKey = (
-      str: string | undefined,
-      name: string | undefined
-    ): void => {
-      const edit = state.edit;
-
-      if (edit === null) {
-        return;
-      }
-
-      const field = currentField(edit);
-
-      if (name === "backspace") {
-        edit.values[field.key] = (edit.values[field.key] ?? "").slice(0, -1);
-        draw();
-      } else if (str?.length === 1 && str >= " " && str <= "~") {
-        edit.values[field.key] = `${edit.values[field.key] ?? ""}${str}`;
-        draw();
-      }
-    };
-
-    const onKey = (str: string | undefined, key: IKeyInfo): void => {
-      try {
-        if ((key.ctrl === true && key.name === "c") || key.name === "escape") {
-          if (state.edit === null) {
-            finish();
-          } else {
-            state.edit = null; // cancel edit → back to menu
-            draw();
-          }
-
-          return;
-        }
-
-        if (state.edit !== null) {
-          if (key.name === "return") {
-            advanceField();
-          } else {
-            editKey(str, key.name);
-          }
-
-          return;
-        }
-
-        if (key.name === "up") {
-          state.cursor = clampIndex(state.cursor - 1, settings.length);
-          draw();
-        } else if (key.name === "down") {
-          state.cursor = clampIndex(state.cursor + 1, settings.length);
-          draw();
-        } else if (key.name === "return") {
-          enterMenuSelection();
-        }
-      } catch {
-        finish();
-      }
-    };
-
-    stdin.on("keypress", onKey);
-    out(`${ENTER_ALT}${HIDE_CURSOR}`);
-    draw();
-  });
+  return runOwnedMenu(ownedMenuDeps);
 }
