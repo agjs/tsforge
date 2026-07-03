@@ -29,10 +29,6 @@ export const flags = {
    *  on simple tasks; withhold with TSFORGE_NO_SCRIPT (the A/B / kill switch). It
    *  makes no network calls, so default-on keeps eval sweeps deterministic. */
   scriptTool: (): boolean => !isOn(ENV_FLAG.noScriptTool),
-  /** Disable the startup "update available" npm-registry check (default ON, i.e.
-   *  the check runs only in interactive non-CI sessions). Set to "1" for offline
-   *  environments or to silence the notice. */
-  noUpdateCheck: (): boolean => isOn(ENV_FLAG.noUpdateCheck),
   /** Withhold the read-only `git_context` tool on existing-code runs (default ON;
    *  set to "1" to force off, e.g. for eval sweeps or non-git workspaces). */
   noGitTool: (): boolean => isOn(ENV_FLAG.noGitTool),

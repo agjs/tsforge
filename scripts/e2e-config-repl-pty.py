@@ -109,7 +109,7 @@ def main():
         TSFORGE_BASE_URL=f"http://127.0.0.1:{port}/v1",
         TSFORGE_MODEL=MODEL,
         TSFORGE_HOME=home,
-        TSFORGE_NO_UPDATE_CHECK="1",
+        NO_UPDATE_NOTIFIER="1",
     )
     pid, m = pty.fork()
     if pid == 0:
@@ -127,8 +127,8 @@ def main():
     # These strings come straight from buildSettings() describe fields.
     desc_markers = [
         "Cycles through your models.json",  # Model (top)
-        "test sibling for changed logic",  # TDD enforcement (Tools)
-        "Check npm for a newer tsforge",  # Update check (bottom) — proves the whole list rendered
+        "Which files the agent may edit",  # Editable scope (Behavior, middle)
+        "test sibling for changed logic",  # TDD enforcement (Tools, bottom) — proves the whole list rendered
     ]
     have_descs, buf = read_until(
         m, lambda b: all(d in b for d in desc_markers), 6, buf
@@ -189,6 +189,46 @@ def main():
     os.write(m, b"\x1b")  # done
     time.sleep(0.8)
     check("tsforge STILL RUNNING after add-model", alive(pid))
+
+    # 3b) REGRESSION: text typed into a config field must render ONCE, not twice.
+    # The palette launches /config via a fire-and-forget runLine then resume()s the
+    # editor in its finally, which used to re-activate the editor underneath the
+    # overlay so it echoed every key into its input row too (double-typed text).
+    got, _ = open_config(m)
+    os.write(m, b"\x1b[B")  # ↓ to "Add a model"
+    time.sleep(0.3)
+    os.write(m, b"\r")  # enter edit
+    read_until(m, lambda b: "field 1 of 4" in b, 8)
+    mark = "ZZUNIQUEZZ"
+    for ch in mark:
+        os.write(m, ch.encode())
+        time.sleep(0.05)
+    _, frame = read_until(m, lambda _b: False, 1.2, "")  # latest redraw(s)
+    last = frame.split("\x1b[2J")[-1]  # content after the final clear-home
+    single = last.count(mark) == 1
+    check(f"typed text renders ONCE, not doubled (saw {last.count(mark)}x)", single)
+    os.write(m, b"\x1b")  # cancel the edit → back to menu
+    # Wait for the menu (not the edit view) before the next Esc — two \x1b bytes
+    # sent back-to-back get mis-parsed as one escape sequence.
+    read_until(m, lambda b: "esc done" in b, 3)
+    time.sleep(0.4)
+    os.write(m, b"\x1b")  # close config → back to the REPL editor
+    # Config leaves the alt-screen (ESC[?1049l) on close; wait for that.
+    read_until(m, lambda b: "\x1b[?1049l" in b, 3)
+    time.sleep(0.6)
+    check("tsforge STILL RUNNING after double-type check", alive(pid))
+
+    # 3c) after /config closes, the editor must work again (inert cleared) and its
+    # own input must not be doubled either.
+    edmark = "YYEDITYY"
+    for ch in edmark:
+        os.write(m, ch.encode())
+        time.sleep(0.05)
+    _, ebuf = read_until(m, lambda b: edmark in b, 3.0, "")
+    editor_ok = ebuf.count(edmark) == 1
+    check(f"editor input works + single after config (saw {ebuf.count(edmark)}x)", editor_ok)
+    if not editor_ok:
+        print("      DEBUG ebuf tail:", repr(ebuf[-500:]))
 
     persisted = os.path.exists(models_path) and (
         json.load(open(models_path)).get("active") == "repl-model"

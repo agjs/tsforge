@@ -25,6 +25,10 @@ export interface IEditorHandle {
   suspend(): void;
   /** Re-attach to stdin after an overlay closes. No-op unless suspended. */
   resume(): void;
+  /** Gate input independently of suspend/resume: while inert, the editor ignores
+   *  all keystrokes and never repaints, even if resume() runs. Used by self-managed
+   *  overlays (e.g. /config) whose launcher may resume the editor underneath them. */
+  setInputInert(on: boolean): void;
   close(): void;
 }
 
@@ -191,6 +195,11 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   // True while an overlay (file picker / command palette) owns stdin: the editor
   // detaches its `data` listener so it doesn't also consume the overlay's keystrokes.
   let suspended = false;
+  // True while a self-managed overlay (e.g. /config) owns input. Unlike `suspended`
+  // this is NOT cleared by resume(), so the palette's fire-and-forget `runLine` +
+  // `finally { resume() }` can't re-activate the editor underneath the overlay
+  // (which would echo every keystroke into the input row — double-typed text).
+  let inert = false;
   const submitCallbacks: ((message: string) => void)[] = [];
   const changeCallbacks: (() => void)[] = [];
   const interruptCallbacks: (() => void)[] = [];
@@ -677,7 +686,10 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   }
 
   function onDataChunk(raw: string | Buffer): void {
-    if (!isOpen) {
+    // Ignore input while closed, suspended, or gated inert by a self-managed
+    // overlay — otherwise the editor echoes keys into its input row on top of the
+    // overlay's own render (the /config double-typed-text bug).
+    if (!isOpen || suspended || inert) {
       return;
     }
 
@@ -804,6 +816,10 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
       suspended = false;
       stdin.on("data", dataListener);
+    },
+
+    setInputInert(on: boolean): void {
+      inert = on;
     },
 
     close(): void {

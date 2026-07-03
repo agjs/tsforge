@@ -65,7 +65,7 @@ def boot(wid, work):
     booted = lambda s: "plan mode (default)" in s or "· PLAN" in s
     for attempt in range(3):
         time.sleep(1.5)  # let the shell + prompt settle before the first keystrokes
-        send(wid, f"cd {work} && TSFORGE_NO_UPDATE_CHECK=1 bun {CLI} --no-gate")
+        send(wid, f"cd {work} && NO_UPDATE_NOTIFIER=1 bun {CLI} --no-gate")
         got, _ = wait_for(wid, booted, 30, f"PLAN banner (boot attempt {attempt + 1})")
         if got:
             return True

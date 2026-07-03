@@ -188,7 +188,7 @@ def spawn(port, extra_env):
                 "TSFORGE_BASE_URL": f"http://127.0.0.1:{port}/v1",
                 "TSFORGE_MODEL": MODEL,
                 "TSFORGE_HOME": home,
-                "TSFORGE_NO_UPDATE_CHECK": "1",
+                "NO_UPDATE_NOTIFIER": "1",
                 **extra_env,
             }
         )

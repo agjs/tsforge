@@ -40,7 +40,7 @@ def main():
     if pid == 0:
         os.chdir(REPO)
         env = dict(os.environ)
-        env["TSFORGE_NO_UPDATE_CHECK"] = "1"
+        env["NO_UPDATE_NOTIFIER"] = "1"
         os.execvpe(CHILD_CMD[0], CHILD_CMD, env)
         os._exit(127)
 

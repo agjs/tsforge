@@ -14,24 +14,27 @@ there:
 | --- | --- | --- |
 | Web tools | on (interactive) | keyless `web_fetch` + `web_search` (DuckDuckGo); off in one-shot/eval for offline determinism — see [Web access](/integrations/web-tools/) |
 | TDD enforcement | on | test-first guidance + `test-sibling-required` as an error on changed logic files |
-| Script tool | on | [programmatic tool calling](/agent/model-agent/) for multi-file work |
-| Update check | on | check npm for a newer tsforge at startup |
 
 `/config` also sets the model, interactive mode, gate command, and editable scope.
+
+Only genuine human choices live in `/config`. The rest run unconditionally: the
+**update check** always happens in an interactive, non-CI session (it respects the
+cross-tool `NO_UPDATE_NOTIFIER`); [programmatic tool calling](/agent/model-agent/),
+LSP navigation, `git_context`, hashline, TTSR, and write diagnostics are always on.
 
 The variables listed below the fold are **endpoint, tuning, and operational** knobs
 (model endpoint, timeouts, eval/test harness) — not user-facing feature switches.
 
 ### Eval / CI knobs (not in `/config`)
 
-`git_context` and the LSP navigation tools are always on for real work — nobody turns
-them off interactively. They can be withheld via env only for eval sweeps or non-git /
-headless environments:
+The always-on tools can be withheld via env only for eval sweeps or non-git /
+headless environments — never something you'd change interactively:
 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `TSFORGE_NO_LSP_TOOLS` | off | withhold the LSP navigation tools (`=1`) |
 | `TSFORGE_NO_GIT_TOOL` | off | withhold the `git_context` tool (`=1`) |
+| `TSFORGE_NO_SCRIPT` | off | withhold the `script` (programmatic tool calling) tool (`=1`) |
 
 ## Git context
 

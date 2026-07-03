@@ -1559,8 +1559,15 @@ async function repl(args: ICliArgs): Promise<number> {
       color: process.stdout.isTTY,
       suspend: () => {
         editorControl?.suspend();
+        // Gate the editor inert too: the palette launches /config via a
+        // fire-and-forget runLine and then resume()s the editor in its finally,
+        // which would otherwise re-activate it underneath this overlay and echo
+        // every keystroke into the input row (double-typed text). inert survives
+        // that stray resume().
+        editorControl?.setInputInert(true);
       },
       resume: () => {
+        editorControl?.setInputInert(false);
         editorControl?.resume();
         editorControl?.getBuffer().setText(""); // wipe any stray key from the handoff
       },

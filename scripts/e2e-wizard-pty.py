@@ -38,7 +38,7 @@ def main():
     pid, m = pty.fork()
     if pid == 0:
         os.execvpe(
-            "bun", ["bun", HARNESS], dict(os.environ, TSFORGE_NO_UPDATE_CHECK="1")
+            "bun", ["bun", HARNESS], dict(os.environ, NO_UPDATE_NOTIFIER="1")
         )
         os._exit(127)
     fcntl.ioctl(m, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))

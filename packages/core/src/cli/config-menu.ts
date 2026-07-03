@@ -135,8 +135,6 @@ export function nextModelName(cfg: IModelsConfig, current: string): string {
 const ENV = {
   web: "TSFORGE_WEB",
   tdd: "TSFORGE_TDD",
-  noScript: "TSFORGE_NO_SCRIPT",
-  noUpdateCheck: "TSFORGE_NO_UPDATE_CHECK",
 };
 
 function onOff(on: boolean): string {
@@ -254,31 +252,6 @@ export function buildSettings(deps: IConfigDeps): ISetting[] {
         const on = deps.getEnv(ENV.tdd) !== "0";
 
         deps.setEnv(ENV.tdd, on ? "0" : undefined);
-      },
-    },
-    {
-      id: "tools.script",
-      group: "Tools",
-      label: "Script tool",
-      describe: "Programmatic tool calling for multi-file work. On by default.",
-      read: () => onOff(deps.getEnv(ENV.noScript) !== "1"),
-      activate: () => {
-        const on = deps.getEnv(ENV.noScript) !== "1";
-
-        deps.setEnv(ENV.noScript, on ? "1" : undefined);
-      },
-    },
-    {
-      id: "tools.updateCheck",
-      group: "Tools",
-      label: "Update check",
-      describe:
-        "Check npm for a newer tsforge at startup (interactive only). On by default.",
-      read: () => onOff(deps.getEnv(ENV.noUpdateCheck) !== "1"),
-      activate: () => {
-        const on = deps.getEnv(ENV.noUpdateCheck) !== "1";
-
-        deps.setEnv(ENV.noUpdateCheck, on ? "1" : undefined);
       },
     },
   ];

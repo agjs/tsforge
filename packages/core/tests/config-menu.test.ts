@@ -110,7 +110,7 @@ test("every setting has a group, label, and a non-empty description (self-docume
   const { deps } = fakeDeps();
   const settings = buildSettings(deps);
 
-  expect(settings.length).toBeGreaterThanOrEqual(8);
+  expect(settings.length).toBeGreaterThanOrEqual(6);
 
   for (const s of settings) {
     expect(s.group.length).toBeGreaterThan(0);
@@ -163,25 +163,19 @@ test("TDD toggle is on by default and flips to off", () => {
   expect(deps.getEnv("TSFORGE_TDD")).toBe("0");
 });
 
-test("update check toggle: on by default, flip to off", () => {
-  const { deps } = fakeDeps();
-  const setting = byId(buildSettings(deps), "tools.updateCheck");
-
-  expect(setting.read()).toBe("on"); // env unset → check runs
-  void setting.activate?.();
-  expect(setting.read()).toBe("off");
-  expect(deps.getEnv("TSFORGE_NO_UPDATE_CHECK")).toBe("1");
-  void setting.activate?.();
-  expect(setting.read()).toBe("on");
-  expect(deps.getEnv("TSFORGE_NO_UPDATE_CHECK")).toBeUndefined();
-});
-
-test("no nonsensical toggles: code navigation + git context are NOT in /config", () => {
+test("only human choices are in /config — no eval/kill-switch knobs", () => {
   const { deps } = fakeDeps();
   const ids = buildSettings(deps).map((s) => s.id);
 
+  // nobody disables code nav / git context / the script tool interactively, and
+  // the update check always runs — these are env-only (eval/CI), never settings.
   expect(ids).not.toContain("tools.nav");
   expect(ids).not.toContain("tools.git");
+  expect(ids).not.toContain("tools.script");
+  expect(ids).not.toContain("tools.updateCheck");
+  // the genuine human toggles stay.
+  expect(ids).toContain("tools.web");
+  expect(ids).toContain("tools.tdd");
 });
 
 test("renderMenu shows EVERY setting's description (config screen is the docs)", () => {
