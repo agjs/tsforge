@@ -3,8 +3,8 @@
 // TSFORGE_SEED accepts a comma-separated list (e.g. slugify,debounce,rate-limit) — each seed
 // runs the full variant matrix and gets its own report + saved JSON.
 // A/B feature variants:
-//   TSFORGE_FEATURE_VARIANTS=ttsr,hashline (sweep across feature toggles)
-//   Each variant is dim=on|off (e.g. ttsr=on×hashline=off) creating a cartesian product.
+//   TSFORGE_FEATURE_VARIANTS=git,script (sweep across feature toggles)
+//   Each variant is dim=on|off (e.g. git=on×script=off) creating a cartesian product.
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
@@ -39,8 +39,8 @@ const qualityTarget = Number(process.env.TSFORGE_QUALITY_TARGET ?? "5");
 const qualityAttempts = Number(process.env.TSFORGE_QUALITY_ATTEMPTS ?? "2");
 
 /** Feature variants to sweep: a cartesian product of feature dimensions.
- *  Example: `ttsr,hashline` → generates [ttsr=on×hashline=on, ttsr=on×hashline=off,
- *  ttsr=off×hashline=on, ttsr=off×hashline=off]. Each dimension toggles via env var. */
+ *  Example: `git,script` → generates [git=on×script=on, git=on×script=off,
+ *  git=off×script=on, git=off×script=off]. Each dimension toggles via env var. */
 type IFeatureVariant = Record<string, string>;
 
 function parseFeatureVariants(): IFeatureVariant[] {
@@ -76,12 +76,9 @@ function parseFeatureVariants(): IFeatureVariant[] {
   return variants;
 }
 
-/** Feature dim → the TSFORGE_* env var it toggles ("1" on / "0" off). */
+/** Feature dim → the TSFORGE_* env var it toggles ("1" on / "0" off). `git` and
+ *  `script` gate NO_ flags and are inverted below. */
 const DIM_ENV: Record<string, string> = {
-  ttsr: "TSFORGE_TTSR",
-  hashline: "TSFORGE_HASHLINE",
-  lsp_write_feedback: "TSFORGE_LSP_WRITE_FEEDBACK",
-  simplicity: "TSFORGE_SIMPLICITY",
   web: "TSFORGE_WEB",
 };
 
@@ -115,7 +112,7 @@ function variantToEnvVars(variant: IFeatureVariant): Record<string, string> {
   return envVars;
 }
 
-/** Variant label for logging: e.g. "ttsr=on,hashline=off". */
+/** Variant label for logging: e.g. "git=on,script=off". */
 function variantLabel(variant: IFeatureVariant): string {
   const parts = Object.entries(variant)
     .sort(([a], [b]) => a.localeCompare(b))

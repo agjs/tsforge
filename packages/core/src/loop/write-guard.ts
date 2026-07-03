@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { basename, join, relative, isAbsolute } from "node:path";
-import { flags } from "../config";
 import type { TsService, ITsDiagnostic } from "../lsp";
 import type { FileLinter, IFileLintProblem } from "../detect-gate";
 import { formatFile } from "../detect-gate";
@@ -436,7 +435,7 @@ export async function runWriteGuard(
 
   let guard = "";
 
-  if (ctx.tsService !== null && flags.lspWriteFeedback()) {
+  if (ctx.tsService !== null) {
     try {
       guard = await writeGuard(
         {

@@ -121,11 +121,36 @@ def main():
     check("REPL boots", got)
 
     # 1) open /config, cancel with Esc → must stay alive.
-    got, _ = open_config(m)
+    got, buf = open_config(m)
     check("/config opens the settings hub from the palette", got)
+    # Every setting shows its own one-line description (config screen IS the docs).
+    # These strings come straight from buildSettings() describe fields.
+    desc_markers = [
+        "Cycles through your models.json",  # Model (top)
+        "test sibling for changed logic",  # TDD enforcement (Tools)
+        "Check npm for a newer tsforge",  # Update check (bottom) — proves the whole list rendered
+    ]
+    have_descs, buf = read_until(
+        m, lambda b: all(d in b for d in desc_markers), 6, buf
+    )
+    check("every setting renders its own description", have_descs)
+    # Gate shows a concise human LABEL (here "none"), never a raw absolute tsc path.
+    gate_label_ok = "Gate command" in buf and ".bin" not in buf and "/Users/" not in buf
+    check("gate shows a label, not a raw path", gate_label_ok)
     os.write(m, b"\x1b")  # Esc
     time.sleep(1.2)
     check("tsforge STILL RUNNING after cancel", alive(pid))
+
+    # 1b) a Tools toggle flips live: Web tools (settings index 5) off→on.
+    got, _ = open_config(m)
+    os.write(m, b"\x1b[B" * 5)  # ↓×5 to "Web tools"
+    time.sleep(0.3)
+    os.write(m, b"\r")  # toggle
+    web_on, _ = read_until(m, lambda b: "Web tools" in b and "on" in b, 8)
+    check("toggling Web tools flips off→on (live value)", web_on)
+    os.write(m, b"\x1b")  # done
+    time.sleep(0.8)
+    check("tsforge STILL RUNNING after Web toggle", alive(pid))
 
     # 2) reopen, toggle Mode (index 2: Active model, Add a model, Mode) → plan→normal.
     got, _ = open_config(m)

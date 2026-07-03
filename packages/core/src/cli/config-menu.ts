@@ -136,6 +136,7 @@ const ENV = {
   web: "TSFORGE_WEB",
   tdd: "TSFORGE_TDD",
   noScript: "TSFORGE_NO_SCRIPT",
+  noUpdateCheck: "TSFORGE_NO_UPDATE_CHECK",
 };
 
 function onOff(on: boolean): string {
@@ -267,6 +268,19 @@ export function buildSettings(deps: IConfigDeps): ISetting[] {
         deps.setEnv(ENV.noScript, on ? "1" : undefined);
       },
     },
+    {
+      id: "tools.updateCheck",
+      group: "Tools",
+      label: "Update check",
+      describe:
+        "Check npm for a newer tsforge at startup (interactive only). On by default.",
+      read: () => onOff(deps.getEnv(ENV.noUpdateCheck) !== "1"),
+      activate: () => {
+        const on = deps.getEnv(ENV.noUpdateCheck) !== "1";
+
+        deps.setEnv(ENV.noUpdateCheck, on ? "1" : undefined);
+      },
+    },
   ];
 }
 
@@ -310,7 +324,7 @@ function fieldError(edit: IEditState): string | null {
 
 // ── rendering (pure) ─────────────────────────────────────────────────────────
 
-function renderMenu(
+export function renderMenu(
   settings: ISetting[],
   cursor: number,
   color: boolean
@@ -329,21 +343,17 @@ function renderMenu(
     const label = paint(s.label, active ? STYLE.brand : STYLE.bold, color);
     const value = paint(oneLine(s.read()), STYLE.brandLight, color);
 
+    // Every setting carries its own one-line description directly beneath it —
+    // the config screen IS the docs; nothing is hidden behind a selection.
     rows.push(`${gutter} ${label}  ${paint("·", STYLE.dim, color)} ${value}`);
+    rows.push(`    ${paint(s.describe, STYLE.dim, color)}`);
   });
-
-  const selected = settings[cursor];
-  const describe =
-    selected === undefined
-      ? ""
-      : `\n${paint(selected.describe, STYLE.dim, color)}`;
 
   return [
     paint("tsforge config", STYLE.brand, color),
     `${paint("Settings", STYLE.bold, color)} · change anything here`,
     RULE,
     ...rows,
-    describe,
     "",
     paint("↑/↓ move   enter change   esc done", STYLE.dim, color),
   ].join("\n");

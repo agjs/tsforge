@@ -57,10 +57,6 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   // script-tool.ts never imports this module (no cycle), and a nested `script`
   // call is rejected (script is not in SCRIPT_EXPOSABLE_TOOLS).
   [TOOL_NAME.script]: (a, c) => doScript(a, c, { execute: executeTool }),
-  // yield_status is intercepted by the Session BEFORE tool dispatch (it ends the
-  // turn); this handler only fires if one slips through with other calls.
-  [TOOL_NAME.yieldStatus]: () =>
-    "(turn continues — finish the work, then yield alone)",
 };
 
 function isToolName(name: string): name is ToolName {

@@ -1,7 +1,6 @@
 import type { ITask } from "../spec";
 import type { IChatMessage, IModelResponse, IProvider } from "../inference";
 import { validate, type ErrorParser, type IValidateResult } from "../validate";
-import { parseEslintJson } from "../validate";
 import { readFiles, type IFileView } from "../lib/fs";
 import {
   DEFAULT_TEMPERATURE,
@@ -16,7 +15,6 @@ import type {
   ILoopEvent,
 } from "./loop.types";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
-import { flags } from "../config";
 import type { ITsforgeProjectConfig } from "../config";
 import type { IConventions } from "../infer-rules/conventions.types";
 import type { PolicyMode, IPolicyRules } from "../policy";
@@ -109,10 +107,9 @@ function handleTtsrInterrupt(
 
 /**
  * MEMORY post-run hook: mine this run's events for failure→fix lessons and
- * consolidate them into `.tsforge/`. Gated on the TTSR flag (learned rules are
- * recalled via TTSR, so there's nothing to learn for if it's off). Best-effort:
- * a memory failure never affects the run's result. `runId` is unique per run so
- * the same task re-run counts as a distinct session for the recurrence gate.
+ * consolidate them into `.tsforge/`. Best-effort: a memory failure never
+ * affects the run's result. `runId` is unique per run so the same task re-run
+ * counts as a distinct session for the recurrence gate.
  */
 async function consolidateLessons(
   cwd: string,
@@ -120,10 +117,6 @@ async function consolidateLessons(
   runId: string,
   report: Reporter
 ): Promise<void> {
-  if (!flags.ttsr()) {
-    return;
-  }
-
   try {
     const candidates = mineLessons(events);
     const active = await consolidateMemory(cwd, candidates, runId);
@@ -167,12 +160,10 @@ function completionOptionsFor(args: {
   };
 }
 
-/** A/B control for the gate-feedback-fidelity win: TSFORGE_LEGACY_FEEDBACK=1
- *  forces the OLD mis-selected parser (eslint-json on chained tsc&&eslint). */
 function effectiveParserFor(
   parse: ErrorParser | undefined
 ): ErrorParser | undefined {
-  return flags.legacyFeedback() ? parseEslintJson : parse;
+  return parse;
 }
 
 /** Detect the stack and fold in tsforge.config.json pack/rule overrides, plus any

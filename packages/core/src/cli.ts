@@ -35,9 +35,6 @@ import {
   evaluateFeature,
   planFeatures,
   judgeFeature,
-  negotiateContract,
-  writeContract,
-  contractEnabled,
   type IFeature,
   type IGreenfieldDeps,
   type Reporter,
@@ -949,7 +946,7 @@ async function repl(args: ICliArgs): Promise<number> {
     activeName: initialActiveName,
     contextWindow: initialContextWindow,
     id,
-    gateLabel,
+    gateLabel: initialGateLabel,
     logFile,
     resumed,
     files,
@@ -959,6 +956,10 @@ async function repl(args: ICliArgs): Promise<number> {
   let session = initialSession;
   let activeName = initialActiveName;
   let contextWindow = initialContextWindow;
+  // A human label for the gate (e.g. "strict TypeScript / project lint"), shown in
+  // the header + /config instead of the raw multi-line command. Updated when the
+  // user sets a gate via /config.
+  let gateLabel = initialGateLabel;
 
   const persist = async (): Promise<void> => {
     await saveSession({
@@ -1572,9 +1573,12 @@ async function repl(args: ICliArgs): Promise<number> {
       },
       currentMode: () => modeById(currentModeId).label,
       setMode,
-      getGate: () => session.gate,
+      getGate: () => gateLabel,
       setGate: (cmd) => {
-        session.setGate(cmd);
+        const trimmed = cmd.trim();
+
+        session.setGate(trimmed);
+        gateLabel = trimmed.length === 0 ? "none" : trimmed;
       },
       getScope: () => scopeLabel(session.scope),
       setScope: (globs) => {
@@ -2494,33 +2498,6 @@ function greenfieldDeps(
     context: [],
   });
 
-  // Optional pre-build contract negotiation (EXPERIMENTAL, gated by
-  // TSFORGE_CONTRACT). When on, the generator + evaluator agree a contract first
-  // and it anchors the implement prompt.
-  const contractPrefix = async (feature: IFeature): Promise<string> => {
-    if (!contractEnabled()) {
-      return "";
-    }
-
-    const result = await negotiateContract(work, evaluator, feature);
-
-    await writeContract(args.dir, feature, result);
-    report({
-      kind: "fix",
-      task: "greenfield",
-      message: `contract '${feature.id}': ${result.agreed ? "agreed" : "no agreement"} after ${result.rounds} round(s)`,
-    });
-
-    // Don't claim agreement the negotiation didn't reach — an unagreed contract
-    // is the generator's best proposal, labelled honestly so the build prompt
-    // doesn't assert a safety guarantee that isn't there.
-    const heading = result.agreed
-      ? "Agreed build contract"
-      : "Proposed build contract (negotiation did not converge)";
-
-    return `${heading}:\n${result.contract}\n\n`;
-  };
-
   const thinkingTokenBudget =
     args.thinkingBudget > 0
       ? args.thinkingBudget
@@ -2528,22 +2505,16 @@ function greenfieldDeps(
 
   return {
     implement: async (feature) => {
-      const prefix = await contractPrefix(feature);
       const base = featureTask(feature);
 
-      await runTask(
-        { ...base, intent: `${prefix}${base.intent ?? ""}` },
-        args.dir,
-        work,
-        {
-          onEvent: report,
-          // The global gate is often already green between features, so don't
-          // bail RED-first — the model must still build this feature.
-          requireRed: false,
-          ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
-          ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
-        }
-      );
+      await runTask({ ...base, intent: base.intent }, args.dir, work, {
+        onEvent: report,
+        // The global gate is often already green between features, so don't
+        // bail RED-first — the model must still build this feature.
+        requireRed: false,
+        ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+        ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
+      });
     },
     evaluate: (feature) =>
       evaluateFeature(feature, {

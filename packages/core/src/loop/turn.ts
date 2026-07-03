@@ -67,7 +67,7 @@ import { runWriteGuard } from "./write-guard";
 // is existing code to navigate. TSFORGE_NO_LSP_TOOLS=1 forces them off entirely.
 const BASE_TOOLS = [READ_TOOL, RUN_TOOL, EDIT_TOOL, CREATE_TOOL];
 
-const HASHLINE_TOOLS = flags.hashlineEditTool() ? [EDIT_LINES_TOOL] : [];
+const HASHLINE_TOOLS = [EDIT_LINES_TOOL];
 
 // The full advertisable set: base + hashline + LSP nav + the (gated) web tools.
 // Its element union is also the return TYPE of toolsFor — every narrower runtime
@@ -417,10 +417,6 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
     }
   }
 
-  if (flags.noAstgrep()) {
-    return;
-  }
-
   let astFixed = 0;
 
   for (const f of files) {
@@ -455,10 +451,6 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
  */
 async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   const { task, cwd, parse, report } = ctx;
-
-  if (flags.noAstgrep()) {
-    return;
-  }
 
   // Resolve globs so a glob scope is polished too (not silently skipped).
   const files = await resolveScopeFiles(cwd, task.files);

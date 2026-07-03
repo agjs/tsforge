@@ -27,9 +27,9 @@ Offered when tsforge detects real code to explore (existing repo, resumed sessio
 | `move_file` | move/rename a file and rewrite every importer |
 | `organize_imports` | sort and clean imports |
 
-Disable navigation tools: `TSFORGE_NO_LSP_TOOLS=1`. Disable write feedback: `TSFORGE_LSP_WRITE_FEEDBACK=0`.
+Navigation and write feedback (instant per-file type diagnostics after each edit) are always on for real work; navigation can be withheld for eval/headless runs with `TSFORGE_NO_LSP_TOOLS=1`.
 
-On existing repos the model is also offered `git_context` — read-only, structured access to history and diffs (scope a fix to what changed). It is git-backed, not part of the language server, so `TSFORGE_NO_LSP_TOOLS` does not affect it; disable it with `TSFORGE_NO_GIT_TOOL=1`. See [Git context](/reference/flags/#git-context).
+On existing repos the model is also offered `git_context` — read-only, structured access to history and diffs (scope a fix to what changed). It is git-backed, not part of the language server, so `TSFORGE_NO_LSP_TOOLS` does not affect it; withhold it for eval/headless runs with `TSFORGE_NO_GIT_TOOL=1`. See [Git context](/reference/flags/#git-context).
 
 ## Safe auto-fixes
 

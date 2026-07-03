@@ -23,12 +23,6 @@ Alongside the gate rule, the agent is told to work test-first: write the failing
 
 ## Opting out
 
-It's on by default. To turn it off for a run, set:
-
-```bash
-TSFORGE_TDD=0
-```
-
-The test requirement drops back to a non-blocking nudge. Most projects should leave it on. It's the cheapest way to keep an agent honest.
+It's on by default. Turn **TDD enforcement** off in [`/config`](/cli/interactive/) and the test requirement drops back to a non-blocking nudge. Most projects should leave it on. It's the cheapest way to keep an agent honest.
 
 → [The gate](/loop/gate-floor/) · [When the gate fails](/loop/validation/) · [Environment variables](/reference/flags/)

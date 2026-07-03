@@ -20,12 +20,11 @@ One approved task can involve many agent cycles until the gate passes or tsforge
 | Group | Tools | When |
 | --- | --- | --- |
 | Core | `read`, `run`, `edit`, `create` | always |
-| Line edits | `edit_lines` | when hashline is enabled |
+| Line edits | `edit_lines` | always (line-number edits with hash verification) |
 | Navigation | `search`, `symbol_search`, `find_references`, `type_at`, `diagnostics`, `rename_symbol`, `move_file`, `organize_imports` | existing-code repos |
-| Git context | `git_context` | existing-code repos (read-only: diff/log/blame/show to scope a change); `TSFORGE_NO_GIT_TOOL=1` to withhold |
+| Git context | `git_context` | existing-code repos (read-only: diff/log/blame/show to scope a change) |
 | Web | `scaffold_web`, `scaffold_ui`, `scaffold_routes`, `add_dependency` | web builds |
-| Web research | `package_info`, `package_docs`, `web_fetch`, `web_search`, `web_browse` | when `TSFORGE_WEB=1` (no required API keys or paid browser/search service) |
-| Control | `yield_status` | end turn with a summary |
+| Web research | `package_info`, `package_docs`, `web_fetch`, `web_search`, `web_browse` | when **Web tools** is on in `/config` (no required API keys or paid browser/search service) |
 
 On greenfield specs, navigation tools are often withheld so the model focuses on creating files instead of exploring an empty tree. See [TypeScript language server](/lsp/typescript-server/).
 

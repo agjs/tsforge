@@ -31,7 +31,6 @@ export const TOOL_NAME = {
   webSearch: "web_search",
   webBrowse: "web_browse",
   script: "script",
-  yieldStatus: "yield_status",
 } as const;
 
 /** Per-tool capability flags — the single source of truth the plan-mode set and
@@ -42,8 +41,8 @@ export const TOOL_NAME = {
  *    commands — see isReadOnlyCommand in loop/tools/file-ops).
  *  - `scriptExposable`: safe + useful to call from inside a `script` program via
  *    the generated RPC stubs. Excludes the heavy/interactive scaffolds, the
- *    dependency installer, the turn-ending yield, and `script` itself (no
- *    recursion). Mutating tools (edit/create/…) ARE exposable — they still flow
+ *    dependency installer, and `script` itself (no recursion). Mutating tools
+ *    (edit/create/…) ARE exposable — they still flow
  *    back through executeTool's scope + write-guard + gate. */
 export interface IToolSpec {
   readOnly: boolean;
@@ -81,7 +80,6 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   [TOOL_NAME.webBrowse]: { readOnly: true, scriptExposable: true },
   // `script` mutates (it can call edit/create) and must never call itself.
   [TOOL_NAME.script]: { readOnly: false, scriptExposable: false },
-  [TOOL_NAME.yieldStatus]: { readOnly: false, scriptExposable: false },
 };
 
 function toolNamesWhere(
@@ -459,31 +457,6 @@ export const SCRIPT_TOOL = {
  * diagnostics) are unrestricted; the writers (rename_symbol, organize_imports)
  * are scope-enforced in dispatch.
  */
-/** The STOP tool for forced-tools mode (TSFORGE_FORCE_TOOLS): with tool_choice
- *  "required" the model can never end a turn in prose, so this is how it stops —
- *  every turn is grammar-constrained and the malformed-call class is impossible.
- *  The session converts a yield_status call back into a normal "model stopped"
- *  turn (summary becomes the reply; the gate confirms as usual). */
-export const YIELD_STATUS_TOOL = {
-  type: "function",
-  function: {
-    name: TOOL_NAME.yieldStatus,
-    description:
-      "Call this when you are DONE working on the request (or have a final answer/question for the user) — it ends your turn. Put your reply in `summary`. Do not call it together with other tools; finish the work first.",
-    parameters: {
-      type: "object",
-      properties: {
-        summary: {
-          type: "string",
-          description:
-            "your reply to the user: what you did, or your answer/question",
-        },
-      },
-      required: ["summary"],
-    },
-  },
-};
-
 /** Install npm packages with bun — the measured next frontier blocker (builds
  *  dead-ended whenever a feature needed a dep the scaffold didn't ship). Names
  *  are validated handler-side (no flags/shell metacharacters reach the shell). */

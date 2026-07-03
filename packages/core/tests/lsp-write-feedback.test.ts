@@ -275,42 +275,6 @@ const x: string = 42 as string;
     });
   });
 
-  describe("flag control: TSFORGE_LSP_WRITE_FEEDBACK", () => {
-    it("feature can be disabled via TSFORGE_LSP_WRITE_FEEDBACK=0", () => {
-      const oldValue = process.env.TSFORGE_LSP_WRITE_FEEDBACK;
-
-      process.env.TSFORGE_LSP_WRITE_FEEDBACK = "0";
-
-      const featureOn = process.env.TSFORGE_LSP_WRITE_FEEDBACK !== "0";
-
-      expect(featureOn).toBe(false);
-
-      // Restore
-      if (oldValue === undefined) {
-        delete process.env.TSFORGE_LSP_WRITE_FEEDBACK;
-      } else {
-        process.env.TSFORGE_LSP_WRITE_FEEDBACK = oldValue;
-      }
-    });
-
-    it("feature is on when flag is set to non-zero value", () => {
-      const oldValue = process.env.TSFORGE_LSP_WRITE_FEEDBACK;
-
-      // Test when set to non-"0" value
-      process.env.TSFORGE_LSP_WRITE_FEEDBACK = "1";
-      const featureOn = process.env.TSFORGE_LSP_WRITE_FEEDBACK !== "0";
-
-      expect(featureOn).toBe(true);
-
-      // Restore
-      if (oldValue === undefined) {
-        delete process.env.TSFORGE_LSP_WRITE_FEEDBACK;
-      } else {
-        process.env.TSFORGE_LSP_WRITE_FEEDBACK = oldValue;
-      }
-    });
-  });
-
   describe("edge cases", () => {
     it("handles .tsx files with type errors", () => {
       const tsconfigPath = join(tempDir, "tsconfig.json");

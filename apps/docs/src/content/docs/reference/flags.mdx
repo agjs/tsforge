@@ -3,41 +3,48 @@ title: Environment variables
 description: Canonical list of every TSFORGE_* environment variable.
 ---
 
-## Feature flags
+## Behavior & tools — configure in `/config`
 
-| Variable | Default | Toggles |
+Feature toggles are configured **inside the harness**, not through env vars. Run
+[`/config`](/cli/interactive/) in an interactive session: every setting shows a
+one-line description and its live value, and changes apply immediately. Configurable
+there:
+
+| Setting | Default | What it does |
 | --- | --- | --- |
-| `TSFORGE_HASHLINE` | ON (`≠ "0"`) | hashline + `edit_lines` |
-| `TSFORGE_TTSR` | ON (`≠ "0"`) | [stream rules (TTSR)](/uplift/ttsr/) |
-| `TSFORGE_LSP_WRITE_FEEDBACK` | ON (`≠ "0"`) | write diagnostics |
-| `TSFORGE_NO_LSP_TOOLS` | off | withhold LSP nav tools (`=1`) |
-| `TSFORGE_LEGACY_FEEDBACK` | off | legacy gate parser (`=1`) |
-| `TSFORGE_NO_ASTGREP` | off | disable ast-grep rewrite (`=1`) |
-| `TSFORGE_FORCE_TOOLS` | off | force tool_choice required (`=1`) |
-| `TSFORGE_SIMPLICITY` | off | shortest-solution guidance, scratch non-web (`=1`) |
-| `TSFORGE_TDD` | ON (`≠ "0"`) | test-first guidance + `test-sibling-required` is an error on changed logic files (`=0` to opt out) |
-| `TSFORGE_WEB` | off | keyless web/package research tools (`=1`) |
-| `TSFORGE_CONTRACT` | off | experimental per-feature [contract negotiation](/loop/greenfield/) in greenfield builds (`=1`) |
-| `TSFORGE_NO_UPDATE_CHECK` | off | silence the startup "update available" check (`=1`) |
+| Web tools | on (interactive) | keyless `web_fetch` + `web_search` (DuckDuckGo); off in one-shot/eval for offline determinism — see [Web access](/integrations/web-tools/) |
+| TDD enforcement | on | test-first guidance + `test-sibling-required` as an error on changed logic files |
+| Script tool | on | [programmatic tool calling](/agent/model-agent/) for multi-file work |
+| Update check | on | check npm for a newer tsforge at startup |
+
+`/config` also sets the model, interactive mode, gate command, and editable scope.
+
+The variables listed below the fold are **endpoint, tuning, and operational** knobs
+(model endpoint, timeouts, eval/test harness) — not user-facing feature switches.
+
+### Eval / CI knobs (not in `/config`)
+
+`git_context` and the LSP navigation tools are always on for real work — nobody turns
+them off interactively. They can be withheld via env only for eval sweeps or non-git /
+headless environments:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TSFORGE_NO_LSP_TOOLS` | off | withhold the LSP navigation tools (`=1`) |
 | `TSFORGE_NO_GIT_TOOL` | off | withhold the `git_context` tool (`=1`) |
 
 ## Git context
 
 On existing-code runs tsforge offers `git_context` — a read-only tool giving the model structured, token-bounded access to repo state, so it can scope a review or a fix to **what actually changed** instead of shelling out to raw `git`. Ops: `diff`, `changed_files`, `log` (incl. a line range's history), `blame`, and `show`. It wraps the `git` binary via an explicit argv (no shell), validates the `sha`, and rejects shell metacharacters / option injection in `ref`/`path`; output is char-capped (`maxChars` to raise it).
 
-Offered only when there is existing code to inspect (greenfield scratch builds have no history), and it survives `TSFORGE_NO_LSP_TOOLS` since it is not an LSP tool. Being read-only, it is available in [plan mode](/cli/plan-mode/) too.
-
-| Variable | Default | Toggles |
-| --- | --- | --- |
-| `TSFORGE_NO_GIT_TOOL` | off | withhold `git_context` (`=1`) |
+Offered only when there is existing code to inspect (greenfield scratch builds have no history), and it is independent of `TSFORGE_NO_LSP_TOOLS` since it is not an LSP tool. Being read-only, it is available in [plan mode](/cli/plan-mode/) too. For eval/headless runs it can be withheld with `TSFORGE_NO_GIT_TOOL=1`.
 
 ## Web access
 
-Opt-in, free, and no required service keys. `TSFORGE_WEB=1` adds read-only research tools: `package_info`, `package_docs`, `web_fetch`, `web_search`, and `web_browse`. Search defaults to DuckDuckGo's keyless HTML endpoint. SearXNG is not bundled; set `TSFORGE_SEARXNG_URL` only when you already run a SearXNG service. Full guide: [Web access](/integrations/web-tools/).
+Opt-in, free, and no required service keys. Turn on **Web tools** in [`/config`](/cli/interactive/) to add read-only research tools: `package_info`, `package_docs`, `web_fetch`, `web_search`, and `web_browse`. Search defaults to DuckDuckGo's keyless HTML endpoint. SearXNG is not bundled; set `TSFORGE_SEARXNG_URL` only when you already run a SearXNG service. Full guide: [Web access](/integrations/web-tools/).
 
 | Variable | Default | Toggles |
 | --- | --- | --- |
-| `TSFORGE_WEB` | off | enable keyless web/package research tools (`=1`) |
 | `TSFORGE_NPM_REGISTRY` | npm registry | registry used by `package_info` / `package_docs` |
 | `TSFORGE_SEARXNG_URL` | unset | route `web_search` to a SearXNG instance you already run (e.g. `http://localhost:8888`) |
 | `TSFORGE_WEB_SEARCH_BACKEND` | auto | `duckduckgo` or `searxng`; `searxng` fails closed if no SearXNG URL is set |

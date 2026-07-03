@@ -12,7 +12,6 @@ import {
   SCAFFOLD_WEB_TOOL,
   SEARCH_TOOL,
   ADD_DEPENDENCY_TOOL,
-  YIELD_STATUS_TOOL,
   READ_ONLY_TOOL_NAMES,
   TOOL_NAME,
 } from "../agent";
@@ -110,12 +109,6 @@ export interface ISessionConfig {
   /** Offer the `scaffold_web` tool — a fresh INTERACTIVE session where the agent
    *  decides whether to start a web app. Pair with `setSetupWeb`. */
   scaffoldWeb?: boolean;
-  /** FORCED-TOOLS experiment (default: the TSFORGE_FORCE_TOOLS env flag): gated
-   *  build turns always run with tool_choice "required" + the `yield_status`
-   *  stop tool, so every turn is grammar-constrained and the malformed-call
-   *  class is impossible. Conversational (no-gate) and plan-mode turns are
-   *  unaffected (they should stream prose). */
-  forceTools?: boolean;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -480,7 +473,6 @@ export class Session {
     | typeof SCAFFOLD_ROUTES_TOOL
     | typeof SCAFFOLD_WEB_TOOL
     | typeof ADD_DEPENDENCY_TOOL
-    | typeof YIELD_STATUS_TOOL
   )[];
   private hasGate: boolean;
   private readonly ctx: ILoopCtx;
@@ -521,8 +513,6 @@ export class Session {
   private baseMode: PolicyMode = "default";
   /** Attach PLAN_MODE_NOTE to the NEXT send only (not every revision reply). */
   private planIntroPending = false;
-  /** FORCED-TOOLS experiment — see ISessionConfig.forceTools. */
-  private readonly forceTools: boolean;
   /** Mid-session turn-cap override (setMaxTurns) — a web scaffold raises it. */
   private maxTurnsOverride?: number;
   /** TTSR manager (built-in + project + memory-learned rules). Null when TTSR is
@@ -571,11 +561,6 @@ export class Session {
               ADD_DEPENDENCY_TOOL,
             ]
           : toolsFor(false);
-    this.forceTools = cfg.forceTools ?? flags.forceTools();
-
-    if (this.forceTools) {
-      this.tools = [...this.tools, YIELD_STATUS_TOOL];
-    }
 
     this.ctx = ctx;
     // create() already resolved the base mode (CLI > config > default) onto ctx.
@@ -1478,15 +1463,11 @@ export class Session {
     | { kind: "retry" }
   > {
     try {
-      // FORCED-TOOLS experiment: gated, non-plan turns are ALWAYS grammar-
-      // constrained (the model stops via yield_status), so malformed tool text
-      // can't occur. A recovery force additionally disables thinking.
-      const required =
-        forceTool || (this.forceTools && this.hasGate && !this.planMode);
+      // A recovery force disables thinking for a clean call.
       const res = await this.askModel(
         opts.signal,
-        required ? "required" : "auto",
-        forceTool // forced tool turn → also disable thinking for a clean call
+        forceTool ? "required" : "auto",
+        forceTool
       );
 
       return { kind: "ok", res };
@@ -1790,48 +1771,6 @@ export class Session {
     };
   }
 
-  /** FORCED-TOOLS mode: convert `yield_status` calls back into a normal "model
-   *  stopped" turn — ack each call (so no tool_call dangles on the wire), strip
-   *  them from the response, and promote the summary to the reply content. The
-   *  existing no-tool-call paths (gate confirm / responded) then apply unchanged.
-   *  A yield alongside REAL calls is dropped here and answered by its dispatch
-   *  stub ("finish the work, then yield alone") — the work runs, the model
-   *  yields properly next turn. */
-  private resolveYieldCalls(res: IModelResponse): void {
-    const yields = res.toolCalls.filter(
-      (c) => c.name === TOOL_NAME.yieldStatus
-    );
-
-    if (yields.length === 0) {
-      return;
-    }
-
-    const others = res.toolCalls.filter(
-      (c) => c.name !== TOOL_NAME.yieldStatus
-    );
-
-    if (others.length > 0) {
-      return; // mixed turn: let dispatch run everything (stub answers the yield)
-    }
-
-    for (const y of yields) {
-      this.ctx.messages.push({
-        role: "tool",
-        toolCallId: y.id ?? "",
-        content: "(turn ended)",
-      });
-    }
-
-    res.toolCalls = [];
-
-    const summary = yields[0]?.arguments.summary;
-
-    if (res.content.length === 0 && typeof summary === "string") {
-      res.content = summary;
-      this.report({ kind: "message", task: SESSION_ID, message: summary });
-    }
-  }
-
   /** Drive one send to a terminal result, then mine the send's events for
    *  failure→fix lessons (best-effort, never affects the result). The buffer is
    *  reset per send so each maps to one "run". */
@@ -1849,13 +1788,8 @@ export class Session {
     }
   }
 
-  /** Mine the current send's events into the project's learned-rules memory.
-   *  Gated on the TTSR flag (learned rules are recalled via TTSR). */
+  /** Mine the current send's events into the project's learned-rules memory. */
   private async consolidateLessons(): Promise<void> {
-    if (!flags.ttsr()) {
-      return;
-    }
-
     try {
       const candidates = mineLessons(this.sendEvents);
       const runId = `${SESSION_ID}-${Date.now().toString(36)}`;
@@ -2107,9 +2041,6 @@ export class Session {
       if (deg !== null) {
         return deg;
       }
-
-      // FORCED-TOOLS: a lone yield_status call becomes a normal stop.
-      this.resolveYieldCalls(res);
 
       // Still working — run the calls, apply the read-only-spin guard, and keep
       // going (we gate only when it stops). The guard's bookkeeping lives in

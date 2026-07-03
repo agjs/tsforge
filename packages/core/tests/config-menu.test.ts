@@ -6,6 +6,7 @@ import {
   draftToEntry,
   nextModelName,
   oneLine,
+  renderMenu,
   type IConfigDeps,
   type ISetting,
 } from "../src/cli/config-menu";
@@ -160,6 +161,37 @@ test("TDD toggle is on by default and flips to off", () => {
   void tdd.activate?.();
   expect(tdd.read()).toBe("off");
   expect(deps.getEnv("TSFORGE_TDD")).toBe("0");
+});
+
+test("update check toggle: on by default, flip to off", () => {
+  const { deps } = fakeDeps();
+  const setting = byId(buildSettings(deps), "tools.updateCheck");
+
+  expect(setting.read()).toBe("on"); // env unset → check runs
+  void setting.activate?.();
+  expect(setting.read()).toBe("off");
+  expect(deps.getEnv("TSFORGE_NO_UPDATE_CHECK")).toBe("1");
+  void setting.activate?.();
+  expect(setting.read()).toBe("on");
+  expect(deps.getEnv("TSFORGE_NO_UPDATE_CHECK")).toBeUndefined();
+});
+
+test("no nonsensical toggles: code navigation + git context are NOT in /config", () => {
+  const { deps } = fakeDeps();
+  const ids = buildSettings(deps).map((s) => s.id);
+
+  expect(ids).not.toContain("tools.nav");
+  expect(ids).not.toContain("tools.git");
+});
+
+test("renderMenu shows EVERY setting's description (config screen is the docs)", () => {
+  const { deps } = fakeDeps();
+  const settings = buildSettings(deps);
+  const screen = renderMenu(settings, 0, false);
+
+  for (const s of settings) {
+    expect(screen).toContain(s.describe);
+  }
 });
 
 test("oneLine truncates long values to one line + collapses whitespace", () => {

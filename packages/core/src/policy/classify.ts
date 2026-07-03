@@ -5,9 +5,7 @@ import type { ActionKind, IProposedAction } from "./policy.types";
 
 /** Tool name → what it actually does. Tools absent here (or any future/forged
  *  name) classify as `unknown`, which the policy never silently allows. MCP
- *  tools (`mcp__*`) are handled separately. yield_status is a benign turn-ender
- *  (the Session intercepts it pre-dispatch) — mapped to a read so it's allowed
- *  if it ever reaches the dispatcher. */
+ *  tools (`mcp__*`) are handled separately. */
 const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.read]: "read_file",
   [TOOL_NAME.search]: "read_file",
@@ -16,7 +14,6 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.typeAt]: "read_file",
   [TOOL_NAME.diagnostics]: "read_file",
   [TOOL_NAME.gitContext]: "read_file",
-  [TOOL_NAME.yieldStatus]: "read_file",
   [TOOL_NAME.edit]: "edit_file",
   [TOOL_NAME.editLines]: "edit_file",
   [TOOL_NAME.organizeImports]: "edit_file",
