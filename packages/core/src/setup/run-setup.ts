@@ -105,12 +105,11 @@ export async function runSetup(opts: IRunSetupOptions): Promise<number> {
   }
 
   const steps = buildSteps(report);
-  const final = await runWizard(
-    steps,
-    opts.color,
-    (state) =>
-      `${configPreview(selectionsToConventions(state))}\n\n${SAFETY_NOTE}`
-  );
+  const final = await runWizard(steps, opts.color, {
+    title: "tsforge setup",
+    extra: (state) =>
+      `${configPreview(selectionsToConventions(state))}\n\n${SAFETY_NOTE}`,
+  });
 
   if (final.status !== "apply") {
     write("\nSetup cancelled — nothing written.\n");
