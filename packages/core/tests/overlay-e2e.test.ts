@@ -261,9 +261,12 @@ describe("wizard key→action decode (guards the keypress mapping)", () => {
     expect(actionFor(undefined, { name: "down" })).toBe("down");
   });
 
-  test("space (by name or char) toggles a checkbox", () => {
+  test("space toggles by name; a bare printable is text input", () => {
     expect(actionFor(undefined, { name: "space" })).toBe("toggle");
-    expect(actionFor(" ", { name: undefined })).toBe("toggle");
+    // A printable char (incl. a literal space) decodes as text input; on a
+    // non-text step the reducer treats it as a no-op.
+    expect(actionFor(" ", { name: undefined })).toEqual({ char: " " });
+    expect(actionFor(undefined, { name: "backspace" })).toBe("erase");
   });
 
   test("enter/return confirm; escape and ctrl+c cancel", () => {
@@ -273,10 +276,15 @@ describe("wizard key→action decode (guards the keypress mapping)", () => {
     expect(actionFor("c", { name: "c", ctrl: true })).toBe("cancel");
   });
 
-  test("'b' goes back, 'q' cancels, unknown keys are ignored", () => {
-    expect(actionFor("b", { name: "b" })).toBe("back");
-    expect(actionFor("q", { name: "q" })).toBe("cancel");
-    expect(actionFor("z", { name: "z" })).toBeNull();
+  test("printable keys (incl. b/q/z) decode as text input; non-printable keys are ignored", () => {
+    // b/q are no longer back/cancel at the decode layer — they are literal input,
+    // so they can be typed into a text field. The driver maps b/q to back/cancel
+    // only on non-text steps (see runWizard).
+    expect(actionFor("b", { name: "b" })).toEqual({ char: "b" });
+    expect(actionFor("q", { name: "q" })).toEqual({ char: "q" });
+    expect(actionFor("z", { name: "z" })).toEqual({ char: "z" });
+    // A non-printable / unknown key is still ignored.
+    expect(actionFor(undefined, { name: "f5" })).toBeNull();
   });
 
   test("the decoded action actually drives the reducer (down → cursor moves)", () => {
