@@ -13,7 +13,7 @@ Plan mode is a safety rail for ambiguous work. The model can **read** your repo 
 - When the plan looks right, reply **`approve`**, **`go`**, or **`lgtm`** — the model implements it
 - Web builds also accept **`yes`** / **`ok`** at the design checkpoint
 
-There is no disable *flag*: it's a mode you cycle with Shift+Tab. (`tsforge --plan` still forces it on for a one-off launch.)
+There is no disable *flag*: it's a mode you cycle with Shift+Tab. (`tsforge --plan` forces plan mode on for an interactive session even in a repo that configured an autonomous `policy.mode` — one-shot and headless runs are autonomous regardless.)
 
 ## What the model can do in plan mode
 

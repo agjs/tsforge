@@ -21,6 +21,7 @@ One approved task can involve many agent cycles until the gate passes or tsforge
 | --- | --- | --- |
 | Core | `read`, `run`, `edit`, `create` | always |
 | Line edits | `edit_lines` | always (line-number edits with hash verification) |
+| Script | `script` | always (programmatic tool calling — batch multi-step tool use in one program); withhold with `TSFORGE_NO_SCRIPT=1` for eval |
 | Navigation | `search`, `symbol_search`, `find_references`, `type_at`, `diagnostics`, `rename_symbol`, `move_file`, `organize_imports` | existing-code repos |
 | Git context | `git_context` | existing-code repos (read-only: diff/log/blame/show to scope a change) |
 | Web | `scaffold_web`, `scaffold_ui`, `scaffold_routes`, `add_dependency` | web builds |

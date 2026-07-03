@@ -21,6 +21,7 @@ These load without waiting for a dependency match:
 
 | ID | What it covers |
 | --- | --- |
+| `generic-ts` | Core TypeScript safety rules for every project (the bundled ESLint safety config) |
 | `env-access` | Validated env access, no `process.exit` in libraries |
 | `module-boundaries` | Layering, no React in services |
 | `code-flow` | Deterministic time/random, early returns |
@@ -28,7 +29,7 @@ These load without waiting for a dependency match:
 | `security` | Command injection, ReDoS, DOM XSS, silent catch blocks, no tokens in storage |
 | `runtime-boundaries` | Open redirects, SSRF fetches, prototype pollution, webhook verify, upload limits |
 
-`generic-ts` is a detection label only — strict TypeScript comes from `tsc` and the bundled ESLint config.
+`generic-ts` runs on every project alongside `tsc`; stack detection layers framework-specific packs (`react`, `elysia`, `nextjs`, …) on top.
 
 ## Pack list
 

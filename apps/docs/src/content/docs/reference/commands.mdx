@@ -133,7 +133,7 @@ Run from a cloned tsforge repo (not shipped with the `tsforge` npm package):
 
 ```bash
 # A/B sweep — compare feature variants
-TSFORGE_FEATURE_VARIANTS=ttsr,hashline bun run eval:sweep
+TSFORGE_FEATURE_VARIANTS=git,script bun run eval:sweep
 
 # Compare edit mechanisms across run dirs
 bun run eval:benchmark evals/run-a-* evals/run-b-*

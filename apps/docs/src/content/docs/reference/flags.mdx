@@ -59,7 +59,7 @@ Extra gate steps (default off; each skips cleanly when nothing applies). See [Ho
 | Variable | Adds |
 | --- | --- |
 | `TSFORGE_COVERAGE=<pct>` | fail if line/function coverage is below the floor |
-| `TSFORGE_BOOT="<start cmd>"` | boot the server (`TSFORGE_BOOT_URL`, `TSFORGE_BOOT_TIMEOUT`) and require a non-5xx |
+| `TSFORGE_BOOT="<start cmd>"` | boot the server (`TSFORGE_BOOT_URL`, default `http://localhost:3000/`; `TSFORGE_BOOT_TIMEOUT`, default `15000` ms) and require a non-5xx |
 | `TSFORGE_PROPTEST=1` | fuzz exported functions from their types; fail if any throws on valid input |
 
 ## Model / inference

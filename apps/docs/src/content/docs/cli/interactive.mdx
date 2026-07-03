@@ -28,7 +28,7 @@ Most users run `tsforge` and stay in the interactive session.
 | `--no-gate` | skip auto gate detection |
 | `--web` | pre-scaffold web stack + web gate on first build message |
 | `--browser <html>` | append headless render check to gate |
-| `--plan` | force plan mode on (already the default for interactive sessions) |
+| `--plan` | force plan mode on for an interactive session — plan is the default anyway, so this only matters to override a repo that configured an autonomous `policy.mode`; ignored by one-shot/headless |
 | `--continue` / `-c` | resume latest saved session for this dir |
 | `--resume <id>` | resume a specific session |
 | `--log` | append JSONL event stream to `~/.tsforge/logs/` |
