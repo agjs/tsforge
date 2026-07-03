@@ -148,6 +148,30 @@ test("the plan-mode note rides the first send only", async () => {
   });
 });
 
+test("the plan-mode note asks for prioritized clarifying questions and states the greenfield detail principle", async () => {
+  await withDir(async (dir) => {
+    const provider: IProvider = {
+      async complete() {
+        return { content: "ok", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({ provider, cwd: dir });
+
+    session.setPlanMode(true);
+    await session.send("build something new");
+
+    const note = session.messages.find((m) => m.role === "user")?.content ?? "";
+
+    // Smart clarify: a short, prioritized set of questions (not one terse line).
+    expect(note).toContain("CLARIFY");
+    expect(note).toContain("At most 3-4");
+    // Blunt greenfield guidance — verbatim principle the user asked for.
+    expect(note).toContain("the more detail and research");
+    // Still ends in the `## Plan` + approval contract.
+    expect(note).toContain("## Plan");
+  });
+});
+
 test("plan mode blocks a mutating run command but allows a read-only one", async () => {
   await withDir(async (dir) => {
     let calls = 0;

@@ -6,6 +6,7 @@ import { Writable } from "node:stream";
 import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
 import { formatHelp, takesArg } from "./cli/commands";
+import { resolveInitialPlanMode } from "./cli/plan-default";
 import { pickCommand } from "./render/command-menu";
 import {
   pickFileInline,
@@ -1034,18 +1035,29 @@ async function repl(args: ICliArgs): Promise<number> {
   // Explicit `--web` (no Q&A): the FIRST message is the build, so stage it
   // (plan+types → implement). Cleared after, so follow-ups are plain sends.
   let stagedWebPending = args.web && resumed === null;
-  // Plan mode (`--plan` or toggled by /plan). For a staged web build it pauses
-  // after the design phase to review the plan; for EVERYTHING else it is the
-  // general read-only mode: the agent explores, asks clarifying questions, and
-  // proposes a plan — only an explicit approval unlocks tools and implements.
-  // A resumed session restores its saved mode (the read-only guarantee must
-  // survive `--continue`).
-  let planMode = args.plan || (resumed?.planMode ?? false);
+  // Plan mode is the DEFAULT for a fresh interactive session (opt out with
+  // `--no-plan` or an explicit non-plan `--policy-mode`/config `policy.mode`).
+  // For a staged web build it pauses after the design phase to review the plan;
+  // for EVERYTHING else it is the general read-only mode: the agent explores,
+  // asks clarifying questions, and proposes a plan — only an explicit approval
+  // unlocks tools and implements. A resumed session restores its saved mode
+  // (the read-only guarantee must survive `--continue`).
+  let planMode = resolveInitialPlanMode(
+    args,
+    resumed?.planMode,
+    session.basePolicyMode
+  );
   // True once a plan-mode exchange has happened, so a stray "approve" before any
   // discussion is just a message, not an approval.
   let planDiscussed = false;
 
   session.setPlanMode(planMode);
+
+  if (planMode) {
+    process.stdout.write(
+      "  ◆ plan mode (default) — I'll explore and propose a plan; reply 'approve' to build. (/plan to toggle, --no-plan to disable)\n"
+    );
+  }
 
   // While set, the next user line is the plan-review reply ("approve", or edits to
   // fold into phase 2) — the design phase has run and is waiting at the checkpoint.

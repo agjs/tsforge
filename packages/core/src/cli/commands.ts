@@ -26,7 +26,7 @@ export const COMMANDS: readonly ICommandSpec[] = [
   {
     name: "/plan",
     summary:
-      "toggle plan mode (explore → clarify → plan; 'approve' implements)",
+      "toggle plan mode (on by default: explore → clarify → plan; 'approve' implements)",
   },
   {
     name: "/gate",

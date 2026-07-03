@@ -251,21 +251,34 @@ const PLAN_SUMMARY_STEP =
   "4. DECISIONS/ASSUMPTIONS — any modeling choices a reviewer might want to change.\n" +
   "Output ONLY the markdown plan — no preamble, no tool calls, no code.";
 
-/** GENERAL plan mode (the `/plan` toggle, any task — distinct from the staged
- *  web build's PLAN_SUMMARY_STEP): rides the first user message after the mode
- *  flips on. Read-only tools enforce the contract at the execute layer; this
- *  note tells the model the workflow — explore, clarify, propose, wait. */
+/** GENERAL plan mode (the default for a fresh interactive session; also the
+ *  `/plan` toggle — distinct from the staged web build's PLAN_SUMMARY_STEP):
+ *  rides the first user message after the mode flips on. Read-only tools enforce
+ *  the contract at the execute layer; this note tells the model the workflow —
+ *  explore, ask the few clarifying questions that matter, propose a plan, wait. */
 const PLAN_MODE_NOTE =
   "[PLAN MODE — read-only. edit/create and write commands are disabled until " +
-  "the user approves a plan.]\n" +
-  "1. EXPLORE first: read/search the code this request touches.\n" +
-  "2. If the request is ambiguous, ask your clarifying question(s) and STOP — " +
-  "the user will answer.\n" +
-  "3. When you know enough, reply with a concise plan under a `## Plan` " +
-  "heading: each file to change and what to do in it, in order. No code dumps, " +
-  "no tool calls in that reply.\n" +
-  "The user will reply with feedback (revise the plan) or approve it; you " +
-  "implement ONLY after approval.";
+  "you propose a plan and the user approves it.]\n" +
+  "Work in this order:\n" +
+  "1. EXPLORE: read/search the code this request actually touches. Skip this for " +
+  "a self-contained ask that has nothing to do with this repo — just answer it.\n" +
+  "2. CLARIFY — ask only the FEW questions that most change the plan (scope, which " +
+  "file/module to touch, the desired behavior, hard constraints). At most 3-4, as a " +
+  "short numbered list, then STOP and wait for the answers. Do NOT ask what the code " +
+  "or a sensible default already settles — state those as one-line assumptions " +
+  "instead. Never interrogate: skip any question the user can't meaningfully answer.\n" +
+  "3. GREENFIELD (building something new from scratch): say plainly, up front, that " +
+  "the more detail and research the user provides now, the better the result — a " +
+  "sharp spec (goals, who it is for, must-have features, tech/stack constraints, " +
+  "reference examples, and explicit non-goals) yields a far better build than a vague " +
+  "one. Then ask for the specific missing pieces that matter most. If the user would " +
+  "rather not answer, proceed on clearly-stated assumptions — never block.\n" +
+  "4. PLAN — once you know enough, reply with a concise plan under a `## Plan` " +
+  "heading: each file to change and what to do in it, in order. For a small, " +
+  "unambiguous change the plan can be a single line. No code dumps, no tool calls " +
+  "in that reply.\n" +
+  "The user replies with feedback (revise the plan) or approves it; you implement " +
+  "ONLY after approval.";
 
 /** Sent when the user approves a plan-mode plan — the plan itself is already the
  *  latest assistant message, so anchor it instead of re-pasting it. */
@@ -694,6 +707,13 @@ export class Session {
   /** The current gate command (empty when none). */
   get gate(): string {
     return this.ctx.task.accept;
+  }
+
+  /** The policy posture plan mode toggles OFF to — CLI `--policy-mode` ?? config
+   *  `policy.mode` ?? "default". Lets the CLI decide whether a fresh session
+   *  should default to plan mode without re-loading the project config. */
+  get basePolicyMode(): PolicyMode {
+    return this.baseMode;
   }
 
   /** The editable scope globs. */
