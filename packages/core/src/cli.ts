@@ -1059,7 +1059,7 @@ async function repl(args: ICliArgs): Promise<number> {
 
   if (planMode) {
     process.stdout.write(
-      "  ◆ plan mode (default) — I'll explore and propose a plan; reply 'approve' to build. (/plan to toggle, --no-plan to disable)\n"
+      "  ◆ plan mode (default) — I'll explore and propose a plan; reply 'approve' to build.\n"
     );
   }
 
