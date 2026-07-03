@@ -1,10 +1,12 @@
 import { test, expect } from "bun:test";
 import {
   addModel,
-  buildAddModelSteps,
-  buildConfigMenu,
-  buildModelPickStep,
+  addModelFields,
+  buildSettings,
   draftToEntry,
+  nextModelName,
+  type IConfigDeps,
+  type ISetting,
 } from "../src/cli/config-menu";
 import type { IModelsConfig } from "../src/models-config";
 
@@ -13,76 +15,148 @@ const CFG: IModelsConfig = {
   models: {
     a: { baseUrl: "http://a/v1", model: "m-a" },
     b: { baseUrl: "http://b/v1", model: "m-b" },
+    c: { baseUrl: "http://c/v1", model: "m-c" },
   },
 };
 
-test("buildConfigMenu offers switch + add, and names the current model", () => {
-  const menu = buildConfigMenu("qwen-local");
+// ── pure helpers ─────────────────────────────────────────────────────────────
 
-  expect(menu.kind).toBe("single");
-  expect(menu.options.map((o) => o.value)).toEqual([
-    "switch-model",
-    "add-model",
-  ]);
-  expect(menu.options[0]?.outcome).toContain("qwen-local");
+test("addModelFields: name/baseUrl/model required; apiKey masked + optional", () => {
+  const f = Object.fromEntries(addModelFields().map((x) => [x.key, x]));
+
+  expect(Object.keys(f)).toEqual(["name", "baseUrl", "model", "apiKey"]);
+  expect(f.name?.validate?.("")).toBe("Name is required");
+  expect(f.name?.validate?.("x")).toBeNull();
+  expect(f.baseUrl?.default).toBe("http://localhost:8000/v1");
+  expect(f.apiKey?.mask).toBe(true);
+  expect(f.apiKey?.validate).toBeUndefined();
 });
 
-test("buildModelPickStep lists all models and defaults to the active one", () => {
-  const step = buildModelPickStep(CFG);
-
-  expect(step.options.map((o) => o.value)).toEqual(["a", "b"]);
-  expect(step.defaultIndex).toBe(1); // "b" is active
+test("draftToEntry trims and omits an empty apiKey", () => {
+  expect(
+    draftToEntry({ name: " x ", baseUrl: " u ", model: " m ", apiKey: "  " })
+  ).toEqual({ name: "x", entry: { baseUrl: "u", model: "m" } });
+  expect(
+    draftToEntry({ name: "x", baseUrl: "u", model: "m", apiKey: " k " }).entry
+      .apiKey
+  ).toBe("k");
 });
 
-test("buildAddModelSteps: four text fields; name/baseUrl/model required, apiKey masked+optional", () => {
-  const steps = buildAddModelSteps();
+test("addModel adds + activates without mutating the input", () => {
+  const next = addModel(CFG, "d", { baseUrl: "http://d/v1", model: "m-d" });
 
-  expect(steps.map((s) => s.key)).toEqual([
-    "name",
-    "baseUrl",
-    "model",
-    "apiKey",
-  ]);
-  expect(steps.every((s) => s.kind === "text")).toBe(true);
-
-  const byKey = Object.fromEntries(steps.map((s) => [s.key, s]));
-
-  expect(byKey.name?.validate?.("")).toBe("Name is required");
-  expect(byKey.name?.validate?.("x")).toBeNull();
-  expect(byKey.baseUrl?.default).toBe("http://localhost:8000/v1");
-  expect(byKey.apiKey?.mask).toBe(true);
-  expect(byKey.apiKey?.validate).toBeUndefined(); // optional
+  expect(next.active).toBe("d");
+  expect(Object.keys(next.models)).toEqual(["a", "b", "c", "d"]);
+  expect(Object.keys(CFG.models)).toEqual(["a", "b", "c"]); // untouched
 });
 
-test("draftToEntry trims fields and omits an empty apiKey", () => {
-  const open = draftToEntry({
-    name: "  local ",
-    baseUrl: " http://x/v1 ",
-    model: " m ",
-    apiKey: "   ",
-  });
-
-  expect(open).toEqual({
-    name: "local",
-    entry: { baseUrl: "http://x/v1", model: "m" },
-  });
-
-  const keyed = draftToEntry({
-    name: "cloud",
-    baseUrl: "http://y/v1",
-    model: "m2",
-    apiKey: " sk-123 ",
-  });
-
-  expect(keyed.entry.apiKey).toBe("sk-123");
+test("nextModelName cycles and wraps; unknown → first", () => {
+  expect(nextModelName(CFG, "a")).toBe("b");
+  expect(nextModelName(CFG, "c")).toBe("a"); // wrap
+  expect(nextModelName(CFG, "zzz")).toBe("a"); // unknown → first
 });
 
-test("addModel adds the entry and makes it active (pure)", () => {
-  const next = addModel(CFG, "c", { baseUrl: "http://c/v1", model: "m-c" });
+// ── settings list (against fake deps, no disk) ───────────────────────────────
 
-  expect(next.active).toBe("c");
-  expect(Object.keys(next.models)).toEqual(["a", "b", "c"]);
-  // original config is untouched
-  expect(CFG.active).toBe("b");
-  expect(Object.keys(CFG.models)).toEqual(["a", "b"]);
+function fakeDeps(): { deps: IConfigDeps; state: Record<string, string> } {
+  const state: Record<string, string> = {
+    mode: "plan",
+    gate: "",
+    scope: "entire workspace",
+  };
+  const env: Record<string, string | undefined> = {};
+
+  const deps: IConfigDeps = {
+    color: false,
+    suspend: () => undefined,
+    resume: () => undefined,
+    reconfigure: () => undefined,
+    currentModelName: () => "qwen-local",
+    onModelChange: () => undefined,
+    currentMode: () => state.mode ?? "plan",
+    setMode: (id) => {
+      state.mode = id;
+    },
+    getGate: () => state.gate ?? "",
+    setGate: (cmd) => {
+      state.gate = cmd;
+    },
+    getScope: () => state.scope ?? "",
+    setScope: (globs) => {
+      state.scope = globs;
+    },
+    getEnv: (name) => env[name],
+    setEnv: (name, value) => {
+      env[name] = value;
+    },
+  };
+
+  return { deps, state };
+}
+
+function byId(settings: ISetting[], id: string): ISetting {
+  const s = settings.find((x) => x.id === id);
+
+  if (s === undefined) {
+    throw new Error(`no setting ${id}`);
+  }
+
+  return s;
+}
+
+test("every setting has a group, label, and a non-empty description (self-documenting)", () => {
+  const { deps } = fakeDeps();
+  const settings = buildSettings(deps);
+
+  expect(settings.length).toBeGreaterThanOrEqual(8);
+
+  for (const s of settings) {
+    expect(s.group.length).toBeGreaterThan(0);
+    expect(s.label.length).toBeGreaterThan(0);
+    expect(s.describe.length).toBeGreaterThan(0);
+    expect(typeof s.read()).toBe("string");
+  }
+});
+
+test("mode setting reads + toggles plan↔normal", () => {
+  const { deps, state } = fakeDeps();
+  const mode = byId(buildSettings(deps), "mode");
+
+  expect(mode.read()).toBe("plan");
+  void mode.activate?.();
+  expect(state.mode).toBe("normal");
+});
+
+test("gate + scope settings read live and apply typed text", async () => {
+  const { deps, state } = fakeDeps();
+  const settings = buildSettings(deps);
+
+  expect(byId(settings, "gate").read()).toBe("(none)");
+  await byId(settings, "gate").applyText?.({ gate: " bun test " });
+  expect(state.gate).toBe("bun test");
+
+  await byId(settings, "scope").applyText?.({ scope: "src/**" });
+  expect(state.scope).toBe("src/**");
+});
+
+test("web tools toggle flips the env flag on/off", () => {
+  const { deps } = fakeDeps();
+  const web = byId(buildSettings(deps), "tools.web");
+
+  expect(web.read()).toBe("off");
+  void web.activate?.();
+  expect(web.read()).toBe("on");
+  expect(deps.getEnv("TSFORGE_WEB")).toBe("1");
+  void web.activate?.();
+  expect(web.read()).toBe("off");
+});
+
+test("TDD toggle is on by default and flips to off", () => {
+  const { deps } = fakeDeps();
+  const tdd = byId(buildSettings(deps), "tools.tdd");
+
+  expect(tdd.read()).toBe("on"); // default (env unset)
+  void tdd.activate?.();
+  expect(tdd.read()).toBe("off");
+  expect(deps.getEnv("TSFORGE_TDD")).toBe("0");
 });

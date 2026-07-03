@@ -71,7 +71,7 @@ export const COMMANDS: readonly ICommandSpec[] = [
   },
   {
     name: "/config",
-    summary: "settings: switch or add a model",
+    summary: "settings hub: model, mode, gate, tools",
   },
   {
     name: "/setup",

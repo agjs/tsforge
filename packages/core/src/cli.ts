@@ -8,7 +8,7 @@ import { emitKeypressEvents } from "node:readline";
 import { formatHelp, takesArg } from "./cli/commands";
 import { resolveInitialPlanMode } from "./cli/plan-default";
 import { modeById, nextMode } from "./cli/modes";
-import { runConfigCommand } from "./cli/config-menu";
+import { runConfigMenu } from "./cli/config-menu";
 import { pickCommand } from "./render/command-menu";
 import {
   pickFileInline,
@@ -1377,6 +1377,9 @@ async function repl(args: ICliArgs): Promise<number> {
           cwd: args.dir,
           yes: false,
           color: process.stdout.isTTY,
+          // The REPL editor/readline owns stdin — don't let the wizard pause it
+          // on exit (that would quit the whole process).
+          manageInput: false,
         });
         break;
       }
@@ -1535,35 +1538,57 @@ async function repl(args: ICliArgs): Promise<number> {
     );
   };
 
-  // `/config` — the in-harness settings menu (switch/add a model). Extracted from
-  // the command dispatcher to keep it under the complexity cap; suspends the
-  // editor's stdin ownership around the wizard, then applies the result live.
+  // `/config` — the in-harness settings hub. Runs as one owned-stdin menu loop;
+  // extracted from the dispatcher to keep it under the complexity cap.
+  const setEnv = (name: string, value: string | undefined): void => {
+    if (value === undefined) {
+      Reflect.deleteProperty(process.env, name);
+    } else {
+      process.env[name] = value;
+    }
+  };
+
   const handleConfig = async (): Promise<void> => {
-    const result = await runConfigCommand({
+    await runConfigMenu({
       color: process.stdout.isTTY,
-      activeName,
       suspend: () => {
         editorControl?.suspend();
       },
       resume: () => {
         editorControl?.resume();
+        editorControl?.getBuffer().setText(""); // wipe any stray key from the handoff
       },
       reconfigure: (entry) => {
         provider.reconfigure(providerConfig(entry));
       },
+      currentModelName: () => activeName,
+      onModelChange: (name) => {
+        activeName = name;
+      },
+      currentMode: () => modeById(currentModeId).label,
+      setMode,
+      getGate: () => session.gate,
+      setGate: (cmd) => {
+        session.setGate(cmd);
+      },
+      getScope: () => scopeLabel(session.scope),
+      setScope: (globs) => {
+        const parts = globs
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        session.setScope(parts.length > 0 ? parts : WHOLE_REPO);
+      },
+      getEnv: (name) => process.env[name],
+      setEnv,
     });
-
-    if (result === null) {
-      return;
-    }
-
-    activeName = result.activeName;
 
     if (statusBar.active) {
       statusBar.update(statusInfo());
     }
 
-    process.stdout.write(`  ✓ active model: ${activeName}\n`);
+    await persist();
   };
 
   // Set once the multi-line editor is created (it lives in a nested scope); the

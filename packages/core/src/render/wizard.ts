@@ -557,6 +557,10 @@ export interface IRunWizardOpts {
   readonly title?: string;
   /** Show the Review/Apply overview after the last step (default true). */
   readonly review?: boolean;
+  /** Whether the wizard manages raw mode + stdin flow (default true). Pass FALSE
+   *  when launched from the REPL, where the editor/readline already owns stdin —
+   *  otherwise the wizard pauses stdin on exit and the process quits. */
+  readonly manageInput?: boolean;
   /** Extra text appended to the overview (e.g. a config preview). */
   readonly extra?: (state: IWizardState) => string;
   /** Output sink (default process.stdout.write). */
@@ -587,12 +591,17 @@ export function runWizard(
 
     stdin.removeAllListeners("keypress");
 
-    // Raw mode is what turns an arrow key into a decoded `up`/`down` keypress
-    // instead of a raw `^[[A` the terminal echoes. When there were already
-    // keypress listeners (the REPL's readline, for `/setup`), a consumer owns raw
-    // mode — leave it. With none (standalone `tsforge setup`, cooked stdin) the
-    // wizard must enable it itself and restore on exit, or arrows do nothing.
+    // Raw mode turns an arrow key into a decoded `up`/`down` keypress instead of a
+    // raw `^[[A`. The wizard should only manage (toggle + pause on exit) raw mode
+    // when it truly owns stdin — a STANDALONE `tsforge setup` on cooked stdin.
+    // When launched from the REPL a consumer already owns stdin: readline (which
+    // leaves keypress listeners) OR the multiline editor (which owns stdin via a
+    // `data` listener and leaves NO keypress listeners). The listener count can't
+    // tell the editor apart from standalone, so REPL callers pass
+    // `manageInput: false` — otherwise the wizard's `stdin.pause()` on exit empties
+    // the event loop and the whole process quits when you cancel/finish a wizard.
     const ownsRawMode =
+      (opts.manageInput ?? true) &&
       stdin.isTTY &&
       typeof stdin.setRawMode === "function" &&
       saved.length === 0;
