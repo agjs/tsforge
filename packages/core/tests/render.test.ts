@@ -1,5 +1,30 @@
 import { test, expect } from "bun:test";
-import { renderEvent } from "../src/render";
+import { renderEvent, renderStatus, type IStatusInfo } from "../src/render";
+
+function statusInfo(over: Partial<IStatusInfo> = {}): IStatusInfo {
+  return {
+    model: "m",
+    contextTokens: 0,
+    contextWindow: 100,
+    turns: 0,
+    elapsedMs: 0,
+    status: "ready",
+    scope: "entire workspace",
+    ...over,
+  };
+}
+
+test("status line shows the current mode as a ◆ chip", () => {
+  const out = renderStatus(statusInfo({ mode: "plan" }), { color: false });
+
+  expect(out).toContain("◆ plan");
+});
+
+test("status line omits the mode chip when no mode is set", () => {
+  const out = renderStatus(statusInfo(), { color: false });
+
+  expect(out).not.toContain("◆");
+});
 
 test("renders a create as a guttered block with the content", () => {
   const out = renderEvent(

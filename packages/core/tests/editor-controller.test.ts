@@ -114,6 +114,22 @@ describe("EditorController", () => {
     expect(submits).toEqual(["hi"]);
   });
 
+  test("Shift+Tab fires onCycleMode and does not touch the buffer", () => {
+    const { stdin, handle, submits } = makeHarness();
+    let cycles = 0;
+
+    handle.onCycleMode(() => {
+      cycles += 1;
+    });
+
+    stdin.feed("ab");
+    stdin.feed("\x1b[Z"); // Shift+Tab
+    stdin.feed("\x1b[Z");
+    expect(cycles).toBe(2);
+    expect(handle.getBuffer().getText()).toBe("ab"); // unchanged — not inserted
+    expect(submits).toEqual([]);
+  });
+
   test("Shift+Enter inserts a newline, does NOT submit", () => {
     const { stdin, handle, submits } = makeHarness();
 

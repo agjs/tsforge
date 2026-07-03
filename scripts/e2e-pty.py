@@ -175,14 +175,10 @@ def read_until(master, marker, timeout, buf=""):
     return False, buf
 
 
-def main():
-    ok = True
-    srv, port = start_server()
+def spawn(port, extra_env):
+    """Fork tsforge into a real pty pointed at the stub server. Returns (pid, master)."""
     work = tempfile.mkdtemp(prefix="tsforge-pty-")
     home = tempfile.mkdtemp(prefix="tsforge-home-")
-    target = os.path.join(work, "src", "sum.ts")
-    print(f"stub model @ 127.0.0.1:{port}  workdir={work}")
-
     pid, master = pty.fork()
     if pid == 0:  # child: become tsforge in the pty
         os.chdir(work)
@@ -193,15 +189,33 @@ def main():
                 "TSFORGE_MODEL": MODEL,
                 "TSFORGE_HOME": home,
                 "TSFORGE_NO_UPDATE_CHECK": "1",
-                "TSFORGE_BASIC_INPUT": "1",  # readline path; GUI editor is the iTerm2 suite's job
+                **extra_env,
             }
         )
         os.execvpe("bun", ["bun", CLI, "--no-gate"], env)
         os._exit(127)
-
-    # parent: set a real window size, then drive.
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    return pid, master, work
 
+
+def reap(pid, master):
+    try:
+        os.write(master, b"/exit\r")
+        time.sleep(0.3)
+    except OSError:
+        pass
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        pass
+
+
+def scenario_plan_lifecycle(port):
+    """Plan-first lifecycle end to end (readline input; deterministic)."""
+    print("\n# plan-first lifecycle")
+    ok = True
+    pid, master, work = spawn(port, {"TSFORGE_BASIC_INPUT": "1"})
+    target = os.path.join(work, "src", "sum.ts")
     try:
         got, buf = read_until(
             master, lambda b: "plan mode (default)" in b or "PLAN" in b, 60
@@ -244,15 +258,42 @@ def main():
             print(f"  [{'PASS' if good else 'FAIL'}] implemented file contains `function sum`")
             ok &= good
     finally:
-        try:
-            os.write(master, b"/exit\r")
-            time.sleep(0.3)
-        except OSError:
-            pass
-        try:
-            os.kill(pid, 9)
-        except ProcessLookupError:
-            pass
+        reap(pid, master)
+    return ok
+
+
+def scenario_mode_cycle(port):
+    """Shift+Tab cycles the mode in the REAL editor; the status bar chip flips.
+    Fresh buf per wait so we detect the NEW chip, not the one already on screen."""
+    print("\n# Shift+Tab mode cycling (real editor)")
+    ok = True
+    pid, master, _ = spawn(port, {})  # editor mode (no BASIC_INPUT)
+    try:
+        got, _ = read_until(master, lambda b: "◆ plan" in b, 60)
+        print(f"  [{'PASS' if got else 'FAIL'}] status bar shows the ◆ plan chip (default)")
+        ok &= got
+
+        os.write(master, b"\x1b[Z")  # Shift+Tab
+        got, _ = read_until(master, lambda b: "◆ normal" in b, 15)
+        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> ◆ normal")
+        ok &= got
+
+        os.write(master, b"\x1b[Z")  # Shift+Tab again
+        got, _ = read_until(master, lambda b: "◆ plan" in b, 15)
+        print(f"  [{'PASS' if got else 'FAIL'}] Shift+Tab -> ◆ plan (cycles back)")
+        ok &= got
+    finally:
+        reap(pid, master)
+    return ok
+
+
+def main():
+    srv, port = start_server()
+    print(f"stub model @ 127.0.0.1:{port}")
+    try:
+        ok = scenario_plan_lifecycle(port)
+        ok = scenario_mode_cycle(port) and ok
+    finally:
         srv.shutdown()
 
     print("\n==== RESULT:", "ALL PASS" if ok else "FAILURES", "====")

@@ -72,6 +72,10 @@ export function statusSegments(info: IStatusInfo): string[] {
     bits.push(`${info.tokensPerSecond} tok/s`);
   }
 
+  if (info.mode !== undefined && info.mode.length > 0) {
+    bits.push(`◆ ${info.mode}`);
+  }
+
   bits.push(info.status, info.scope);
 
   return bits;

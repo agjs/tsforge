@@ -103,6 +103,22 @@ describe("decodeKeys", () => {
     expect(events[0]?.name).toBe("tab");
   });
 
+  test("Shift+Tab (CSI Z) decodes as backtab+shift", () => {
+    const events = decodeKeys("\x1b[Z");
+
+    expect(events.length).toBe(1);
+
+    const k = events[0];
+
+    if (k) {
+      expect({ name: k.name, shift: k.shift, ctrl: k.ctrl }).toEqual({
+        name: "backtab",
+        shift: true,
+        ctrl: false,
+      });
+    }
+  });
+
   test("printable char and arrow", () => {
     const aEvents = decodeKeys("a");
 

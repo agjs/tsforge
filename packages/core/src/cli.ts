@@ -7,6 +7,7 @@ import { createInterface } from "node:readline/promises";
 import { emitKeypressEvents } from "node:readline";
 import { formatHelp, takesArg } from "./cli/commands";
 import { resolveInitialPlanMode } from "./cli/plan-default";
+import { modeById, nextMode } from "./cli/modes";
 import { pickCommand } from "./render/command-menu";
 import {
   pickFileInline,
@@ -1050,6 +1051,9 @@ async function repl(args: ICliArgs): Promise<number> {
   // True once a plan-mode exchange has happened, so a stray "approve" before any
   // discussion is just a message, not an approval.
   let planDiscussed = false;
+  // The current interactive mode (Shift+Tab cycles it; /plan toggles it). Kept in
+  // sync with `planMode`; shown as a chip in the status bar.
+  let currentModeId = planMode ? "plan" : "normal";
 
   session.setPlanMode(planMode);
 
@@ -1334,15 +1338,7 @@ async function repl(args: ICliArgs): Promise<number> {
       }
 
       case "plan":
-        planMode = !planMode;
-        planDiscussed = false;
-        session.setPlanMode(planMode);
-        process.stdout.write(
-          planMode
-            ? "plan mode ON — read-only: the agent explores, asks, and proposes " +
-                "a plan; type 'approve' to implement\n"
-            : "plan mode OFF\n"
-        );
+        togglePlanMode();
         break;
 
       case "gate":
@@ -1492,7 +1488,8 @@ async function repl(args: ICliArgs): Promise<number> {
     turns: lastTurns,
     elapsedMs: lastElapsedMs,
     status: lastStatus,
-    scope: scopeLabel(session.scope) + (planMode ? " · PLAN" : ""),
+    scope: scopeLabel(session.scope),
+    mode: modeById(currentModeId).label,
     tokensPerSecond: session.metrics.lastTokensPerSecond,
     ...(spinner.frameLabel().length > 0
       ? { activity: spinner.frameLabel() }
@@ -1502,6 +1499,36 @@ async function repl(args: ICliArgs): Promise<number> {
   // Pinned bottom status bar when we're on a real terminal; otherwise the bar is
   // inactive and `prompt()` falls back to the inline status line (pipes, --log).
   const statusBar = new StatusBar(process.stdout, true, true, useInputRow);
+
+  // Switch the interactive mode (via the extensible registry) and reflect it in
+  // the status bar. The single entry point for /plan, Shift+Tab, and startup —
+  // so `planMode`, `currentModeId`, and the bar never drift apart.
+  const setMode = (id: string): void => {
+    const mode = modeById(id);
+
+    mode.apply(session);
+    currentModeId = mode.id;
+    planMode = mode.id === "plan";
+    planDiscussed = false;
+
+    if (statusBar.active) {
+      statusBar.update(statusInfo());
+    }
+  };
+
+  // `/plan` toggles between plan and normal. Extracted so the slash-command
+  // dispatcher stays under the cognitive-complexity cap.
+  const togglePlanMode = (): void => {
+    const turningOn = !planMode;
+
+    setMode(turningOn ? "plan" : "normal");
+    process.stdout.write(
+      turningOn
+        ? "plan mode ON — read-only: the agent explores, asks, and proposes " +
+            "a plan; type 'approve' to implement\n"
+        : "plan mode OFF\n"
+    );
+  };
 
   // Set once the multi-line editor is created (it lives in a nested scope); the
   // resize handler below calls it so the editor re-wraps/re-windows at the new
@@ -2064,6 +2091,10 @@ async function repl(args: ICliArgs): Promise<number> {
         closed = true;
         editorHandle?.close();
         maybeFinish();
+      });
+      // Shift+Tab cycles the interactive mode (plan → normal → …).
+      editorHandle.onCycleMode(() => {
+        setMode(nextMode(currentModeId).id);
       });
     } else if (rl !== null) {
       rl.on("line", submitLine);
