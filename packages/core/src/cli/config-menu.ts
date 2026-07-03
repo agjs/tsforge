@@ -1,10 +1,6 @@
 import { STYLE, paint } from "../render/style";
-import { runOwnedMenu } from "../render/owned-menu";
-import type {
-  IMenuRow,
-  IOwnedMenuDeps,
-  IOwnedMenuSelectControl,
-} from "../render/owned-menu";
+import { runInlineMenu } from "../render/inline-menu";
+import type { IMenuRowData } from "../render/inline-menu";
 import {
   loadModelsConfig,
   saveModelsConfig,
@@ -49,6 +45,15 @@ export interface ISetting {
   applyText?(values: Readonly<Record<string, string>>): void | Promise<void>;
 }
 
+/**
+ * The terminal-facing side of the config menu, supplied by the CLI host.
+ * `render` is called with the complete overlay block; `close` tears it down.
+ */
+export interface IConfigMenuView {
+  render(lines: readonly string[]): void;
+  close(): void;
+}
+
 /** Everything the settings need from the running session/CLI (injected so the
  *  builders stay pure + testable). */
 export interface IConfigDeps {
@@ -73,6 +78,8 @@ export interface IConfigDeps {
    *  effect for subsequent turns this session). */
   readonly getEnv: (name: string) => string | undefined;
   readonly setEnv: (name: string, value: string | undefined) => void;
+  /** The inline menu view (statusBar overlay + close). */
+  readonly view?: IConfigMenuView;
 }
 
 const NON_EMPTY = (label: string) => (v: string) =>
@@ -287,6 +294,24 @@ function fieldError(edit: IEditState): string | null {
 
 // ── rendering (pure) ─────────────────────────────────────────────────────────
 
+/**
+ * Build a flat menu row for each setting (no group headers, cursor index ==
+ * row index). The hint shows the live value; the describe is the full detail.
+ */
+function buildMenuRows(settings: ISetting[]): IMenuRowData[] {
+  return settings.map((s) => ({
+    id: s.id,
+    label: s.label,
+    hint: oneLine(s.read()),
+    describe: s.describe,
+  }));
+}
+
+/**
+ * Legacy renderer for tests that verify the old alt-screen format.
+ * Tests can keep using this for assertion — it's not called by the new inline flow.
+ * @deprecated — use formatMenuRows for new code.
+ */
 export function renderMenu(
   settings: ISetting[],
   cursor: number,
@@ -320,63 +345,52 @@ export function renderMenu(
   ].join("\n");
 }
 
-function renderEdit(edit: IEditState, color: boolean): string {
-  const field = currentField(edit);
-  const raw = edit.values[field.key] ?? "";
-  const shown = field.mask === true ? "•".repeat(raw.length) : raw;
-  const error = fieldError(edit);
-  const total = edit.setting.fields?.length ?? 1;
-
-  return [
-    paint("tsforge config", STYLE.brand, color),
-    `${paint(edit.setting.label, STYLE.bold, color)} · field ${edit.fieldIndex + 1} of ${total}`,
-    "─".repeat(52),
-    field.label,
-    `  ${shown}${paint("▏", STYLE.brand, color)}`,
-    ...(error === null ? [] : ["", paint(error, STYLE.yellow, color)]),
-    "",
-    paint("type   enter next   esc cancel", STYLE.dim, color),
-  ].join("\n");
-}
-
 // ── the driver ───────────────────────────────────────────────────────────────
 
-const ESC = String.fromCharCode(27);
-const CLEAR_HOME = `${ESC}[2J${ESC}[H`;
-
 /**
- * Run the settings hub interactively via runOwnedMenu. The edit sub-loop
- * (for text-field settings) is managed in onSelect by pausing the main loop.
+ * Run the settings hub interactively via inline overlay (above the input row).
+ * The edit sub-loop (for text-field settings) is managed inline with the same
+ * overlay pattern. The host (cli.ts handleConfig) must inject a view object.
  */
 export function runConfigMenu(deps: IConfigDeps): Promise<void> {
   const stdin = process.stdin;
+  const view = deps.view;
 
-  if (!stdin.isTTY) {
+  if (!stdin.isTTY || view === undefined) {
     return Promise.resolve();
   }
 
   const settings = buildSettings(deps);
   let editState: IEditState | null = null;
-
-  const out = (s: string): void => {
-    process.stdout.write(s);
-  };
+  const columns = process.stdout.columns > 0 ? process.stdout.columns : 80;
 
   const drawEdit = (): void => {
     if (editState === null) {
       return;
     }
 
-    out(`${CLEAR_HOME}${renderEdit(editState, deps.color)}`);
+    const field = currentField(editState);
+    const raw = editState.values[field.key] ?? "";
+    const shown = field.mask === true ? "•".repeat(raw.length) : raw;
+    const error = fieldError(editState);
+    const total = editState.setting.fields?.length ?? 1;
+
+    const lines: string[] = [
+      `${paint(editState.setting.label, STYLE.bold, deps.color)} · field ${editState.fieldIndex + 1} of ${total}`,
+      "─".repeat(columns),
+      field.label,
+      `  ${shown}${paint("▏", STYLE.brand, deps.color)}`,
+      ...(error === null ? [] : ["", paint(error, STYLE.yellow, deps.color)]),
+      "",
+      paint("type   enter next   esc cancel", STYLE.dim, deps.color),
+    ];
+
+    view.render(lines);
   };
 
-  const handleEditKey = (
-    str: string | undefined,
-    key: IKeyInfo,
-    onEditDone: () => void
-  ): void => {
+  const handleEditKey = (str: string | undefined, key: IKeyInfo): boolean => {
     if (editState === null) {
-      return;
+      return false;
     }
 
     const field = currentField(editState);
@@ -385,7 +399,7 @@ export function runConfigMenu(deps: IConfigDeps): Promise<void> {
       const error = fieldError(editState);
 
       if (error !== null) {
-        return;
+        return true;
       }
 
       const fields = editState.setting.fields ?? [];
@@ -393,97 +407,120 @@ export function runConfigMenu(deps: IConfigDeps): Promise<void> {
       if (editState.fieldIndex + 1 < fields.length) {
         editState = { ...editState, fieldIndex: editState.fieldIndex + 1 };
         drawEdit();
-      } else {
-        const values = editState.values;
-        const setting = editState.setting;
 
-        editState = null;
-        void Promise.resolve(setting.applyText?.(values))
-          .then(onEditDone)
-          .catch(onEditDone);
+        return true;
       }
-    } else if (key.name === "escape") {
+
+      const values = editState.values;
+      const setting = editState.setting;
+
       editState = null;
-      onEditDone();
-    } else if (key.name === "backspace") {
+      void Promise.resolve(setting.applyText?.(values));
+
+      return false;
+    }
+
+    if (key.name === "escape") {
+      editState = null;
+
+      return false;
+    }
+
+    if (key.name === "backspace") {
       editState.values[field.key] = (editState.values[field.key] ?? "").slice(
         0,
         -1
       );
       drawEdit();
-    } else if (str?.length === 1 && str >= " " && str <= "~") {
+
+      return true;
+    }
+
+    if (str?.length === 1 && str >= " " && str <= "~") {
       editState.values[field.key] =
         `${editState.values[field.key] ?? ""}${str}`;
       drawEdit();
+
+      return true;
     }
+
+    return false;
   };
 
-  const menuRows = (): readonly IMenuRow[] => {
-    return settings.map((s) => ({
-      group: s.group,
-      label: s.label,
-      describe: s.describe,
-      value: oneLine(s.read()),
-    }));
-  };
+  return new Promise((resolveMenu) => {
+    let running = true;
 
-  const onSelect = async (
-    index: number,
-    control: IOwnedMenuSelectControl
-  ): Promise<void> => {
-    const setting = settings[index];
+    const runMenuLoop = (): void => {
+      const rows = buildMenuRows(settings);
 
-    if (setting === undefined) {
-      return;
-    }
+      void runInlineMenu(rows, {
+        render: (lines) => {
+          view.render(lines);
+        },
+        close: () => {
+          view.close();
+        },
+      }).then((selected) => {
+        if (!running) {
+          return;
+        }
 
-    if (setting.fields === undefined) {
-      await Promise.resolve(setting.activate?.());
+        if (selected === null) {
+          // Esc: close and exit.
+          running = false;
+          resolveMenu();
 
-      return;
-    }
+          return;
+        }
 
-    const values: Record<string, string> = {};
+        const setting = settings[selected];
 
-    for (const f of setting.fields) {
-      values[f.key] = f.default ?? "";
-    }
+        if (setting === undefined) {
+          return;
+        }
 
-    editState = { setting, fieldIndex: 0, values };
-    control.pause();
-    drawEdit();
+        if (setting.fields === undefined) {
+          // Toggle/choice setting: activate and reopen the menu.
+          void Promise.resolve(setting.activate?.()).then(() => {
+            runMenuLoop();
+          });
 
-    return new Promise((resolveEdit) => {
-      const editHandler = (str: string | undefined, key: IKeyInfo): void => {
-        try {
-          handleEditKey(str, key, () => {
+          return;
+        }
+
+        // Text-field setting: open the edit sub-loop inline.
+        const values: Record<string, string> = {};
+
+        for (const f of setting.fields) {
+          values[f.key] = f.default ?? "";
+        }
+
+        editState = { setting, fieldIndex: 0, values };
+        drawEdit();
+
+        // Own stdin for the edit sub-loop.
+        const editHandler = (str: string | undefined, key: IKeyInfo): void => {
+          try {
+            const stillEditing = handleEditKey(str, key);
+
+            if (!stillEditing) {
+              // Edit done: close and reopen the menu.
+              editState = null;
+              stdin.off("keypress", editHandler);
+              runMenuLoop();
+            }
+          } catch {
+            // On error, close the edit and return to menu.
             editState = null;
             stdin.off("keypress", editHandler);
-            control.resume();
-            resolveEdit();
-          });
-        } catch {
-          editState = null;
-          stdin.off("keypress", editHandler);
-          control.resume();
-          resolveEdit();
-        }
-      };
+            runMenuLoop();
+          }
+        };
 
-      stdin.on("keypress", editHandler);
-    });
-  };
+        stdin.on("keypress", editHandler);
+      });
+    };
 
-  const ownedMenuDeps: IOwnedMenuDeps = {
-    color: deps.color,
-    title: "tsforge config",
-    subtitle: `${paint("Settings", STYLE.bold, deps.color)} · change anything here`,
-    footer: "↑/↓ move   enter change   esc done",
-    suspend: deps.suspend,
-    resume: deps.resume,
-    rows: menuRows,
-    onSelect,
-  };
-
-  return runOwnedMenu(ownedMenuDeps);
+    runMenuLoop();
+  });
 }

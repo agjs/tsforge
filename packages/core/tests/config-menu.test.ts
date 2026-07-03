@@ -10,6 +10,7 @@ import {
   type IConfigDeps,
   type ISetting,
 } from "../src/cli/config-menu";
+import { formatMenuRows, type IMenuRowData } from "../src/render/inline-menu";
 import type { IModelsConfig } from "../src/models-config";
 
 const CFG: IModelsConfig = {
@@ -186,6 +187,35 @@ test("renderMenu shows EVERY setting's description (config screen is the docs)",
   for (const s of settings) {
     expect(screen).toContain(s.describe);
   }
+});
+
+test("formatMenuRows: 12 rows with cursor at index 9 shows scroll + windowed slice + describe + footer", () => {
+  const rows: IMenuRowData[] = Array.from(
+    { length: 12 },
+    (_, i) => ({
+      id: `row-${i}`,
+      label: `Setting ${i}`,
+      hint: `hint-${i}`,
+      describe: `Description for setting ${i}`,
+    })
+  );
+
+  const lines = formatMenuRows(rows, 9, 80, false);
+  const block = lines.join("\n");
+
+  // Should have scroll indicator for rows above (↑ N more).
+  expect(block).toContain("↑");
+  // Should show the windowed slice around cursor 9 (≤ 8 visible rows).
+  expect(block).toContain("Setting 9");
+  // Should have the selected row's full description.
+  expect(block).toContain("Description for setting 9");
+  // Should have the footer hint.
+  expect(block).toContain("↑/↓ move");
+  // Should have the divider.
+  expect(block).toContain("────");
+  // Rows above the window should not all be shown (if window < 12).
+  const rowCount = lines.filter((l) => l.includes("Setting")).length;
+  expect(rowCount).toBeLessThanOrEqual(8);
 });
 
 test("oneLine truncates long values to one line + collapses whitespace", () => {

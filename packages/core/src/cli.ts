@@ -1561,50 +1561,62 @@ async function repl(args: ICliArgs): Promise<number> {
   };
 
   const handleConfig = async (): Promise<void> => {
-    await runConfigMenu({
-      color: process.stdout.isTTY,
-      suspend: () => {
-        editorControl?.suspend();
-        // Gate the editor inert too: the palette launches /config via a
-        // fire-and-forget runLine and then resume()s the editor in its finally,
-        // which would otherwise re-activate it underneath this overlay and echo
-        // every keystroke into the input row (double-typed text). inert survives
-        // that stray resume().
-        editorControl?.setInputInert(true);
-      },
-      resume: () => {
-        editorControl?.setInputInert(false);
-        editorControl?.resume();
-        editorControl?.getBuffer().setText(""); // wipe any stray key from the handoff
-      },
-      reconfigure: (entry) => {
-        provider.reconfigure(providerConfig(entry));
-      },
-      currentModelName: () => activeName,
-      onModelChange: (name) => {
-        activeName = name;
-      },
-      currentMode: () => modeById(currentModeId).label,
-      setMode,
-      getGate: () => gateLabel,
-      setGate: (cmd) => {
-        const trimmed = cmd.trim();
+    editorControl?.suspend();
+    editorControl?.setInputInert(true);
 
-        session.setGate(trimmed);
-        gateLabel = trimmed.length === 0 ? "none" : trimmed;
-      },
-      getScope: () => scopeLabel(session.scope),
-      setScope: (globs) => {
-        const parts = globs
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
+    try {
+      await runConfigMenu({
+        color: process.stdout.isTTY,
+        suspend: () => {
+          editorControl?.suspend();
+          editorControl?.setInputInert(true);
+        },
+        resume: () => {
+          editorControl?.setInputInert(false);
+          editorControl?.resume();
+          editorControl?.getBuffer().setText("");
+        },
+        reconfigure: (entry) => {
+          provider.reconfigure(providerConfig(entry));
+        },
+        currentModelName: () => activeName,
+        onModelChange: (name) => {
+          activeName = name;
+        },
+        currentMode: () => modeById(currentModeId).label,
+        setMode,
+        getGate: () => gateLabel,
+        setGate: (cmd) => {
+          const trimmed = cmd.trim();
 
-        session.setScope(parts.length > 0 ? parts : WHOLE_REPO);
-      },
-      getEnv: (name) => process.env[name],
-      setEnv,
-    });
+          session.setGate(trimmed);
+          gateLabel = trimmed.length === 0 ? "none" : trimmed;
+        },
+        getScope: () => scopeLabel(session.scope),
+        setScope: (globs) => {
+          const parts = globs
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+          session.setScope(parts.length > 0 ? parts : WHOLE_REPO);
+        },
+        getEnv: (name) => process.env[name],
+        setEnv,
+        view: {
+          render: (lines) => {
+            statusBar.setOverlay(lines, statusInfo());
+          },
+          close: () => {
+            statusBar.clearOverlay(statusInfo());
+          },
+        },
+      });
+    } finally {
+      editorControl?.setInputInert(false);
+      editorControl?.resume();
+      editorControl?.getBuffer().setText("");
+    }
 
     if (statusBar.active) {
       statusBar.update(statusInfo());
