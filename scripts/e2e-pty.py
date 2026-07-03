@@ -231,12 +231,15 @@ def main():
 
         deadline = time.monotonic() + 30
         while not os.path.exists(target) and time.monotonic() < deadline:
-            read_until(master, lambda _b: False, 0.5, buf)
+            # Keep draining the stream (and preserve it in buf for debugging) while
+            # we wait for the write; strings are immutable so we must reassign buf.
+            _, buf = read_until(master, lambda _b: False, 0.5, buf)
         wrote = os.path.exists(target)
         print(f"  [{'PASS' if wrote else 'FAIL'}] file written AFTER approve   file_exists={wrote}")
         ok &= wrote
         if wrote:
-            body = open(target).read()
+            with open(target) as f:
+                body = f.read()
             good = "function sum" in body
             print(f"  [{'PASS' if good else 'FAIL'}] implemented file contains `function sum`")
             ok &= good
