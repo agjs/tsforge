@@ -22,6 +22,7 @@ const RULE = "─".repeat(52);
  *  seeded from defaults. */
 export function initWizard(steps: readonly IWizardStep[]): IWizardState {
   const multi: Record<string, readonly number[]> = {};
+  const text: Record<string, string> = {};
 
   for (const s of steps) {
     if (s.kind === "multi") {
@@ -29,6 +30,8 @@ export function initWizard(steps: readonly IWizardStep[]): IWizardState {
       multi[s.key] = (s.defaultChecked ?? []).filter(
         (i) => i >= 0 && i < s.options.length
       );
+    } else if (s.kind === "text") {
+      text[s.key] = s.default ?? "";
     }
   }
 
@@ -37,8 +40,14 @@ export function initWizard(steps: readonly IWizardStep[]): IWizardState {
     cursor: steps[0]?.defaultIndex ?? 0,
     single: {},
     multi,
+    text,
     status: "active",
   };
+}
+
+/** Options that shape reduction: review screen on/off (default on). */
+export interface IWizardOpts {
+  readonly review?: boolean;
 }
 
 /** Where the cursor should sit when (re)entering a step: the recorded answer if
@@ -79,10 +88,54 @@ function toggleCheck(state: IWizardState, step: IWizardStep): IWizardState {
   };
 }
 
+/** The current value of a text step. */
+export function textValue(state: IWizardState, step: IWizardStep): string {
+  return state.text[step.key] ?? "";
+}
+
+function typeChar(
+  state: IWizardState,
+  step: IWizardStep,
+  ch: string
+): IWizardState {
+  if (step.kind !== "text") {
+    return state;
+  }
+
+  return {
+    ...state,
+    text: { ...state.text, [step.key]: `${state.text[step.key] ?? ""}${ch}` },
+  };
+}
+
+function eraseChar(state: IWizardState, step: IWizardStep): IWizardState {
+  if (step.kind !== "text") {
+    return state;
+  }
+
+  return {
+    ...state,
+    text: {
+      ...state.text,
+      [step.key]: (state.text[step.key] ?? "").slice(0, -1),
+    },
+  };
+}
+
+/** True when a text step has a validator that rejects its current value. */
+function textInvalid(state: IWizardState, step: IWizardStep): boolean {
+  return (
+    step.kind === "text" &&
+    step.validate !== undefined &&
+    step.validate(state.text[step.key] ?? "") !== null
+  );
+}
+
 function confirmStep(
   state: IWizardState,
   step: IWizardStep,
-  steps: readonly IWizardStep[]
+  steps: readonly IWizardStep[],
+  opts: IWizardOpts
 ): IWizardState {
   const single =
     step.kind === "single"
@@ -94,6 +147,12 @@ function confirmStep(
         }
       : state.single;
   const nextIndex = state.stepIndex + 1;
+
+  // Review off + last step → apply immediately, skipping the overview.
+  if (opts.review === false && nextIndex >= steps.length) {
+    return { ...state, single, status: "apply" };
+  }
+
   const next = steps[nextIndex];
 
   return {
@@ -126,8 +185,13 @@ function reduceStep(
   state: IWizardState,
   action: IWizardAction,
   step: IWizardStep,
-  steps: readonly IWizardStep[]
+  steps: readonly IWizardStep[],
+  opts: IWizardOpts
 ): IWizardState {
+  if (typeof action === "object") {
+    return typeChar(state, step, action.char);
+  }
+
   switch (action) {
     case "up":
       return {
@@ -141,8 +205,13 @@ function reduceStep(
       };
     case "toggle":
       return step.kind === "multi" ? toggleCheck(state, step) : state;
+    case "erase":
+      return eraseChar(state, step);
     case "confirm":
-      return confirmStep(state, step, steps);
+      // A text step with an unmet validator blocks advance.
+      return textInvalid(state, step)
+        ? state
+        : confirmStep(state, step, steps, opts);
     case "back":
       return goBack(state, steps);
     default:
@@ -178,7 +247,8 @@ function reduceOverview(
 export function reduceWizard(
   state: IWizardState,
   action: IWizardAction,
-  steps: readonly IWizardStep[]
+  steps: readonly IWizardStep[],
+  opts: IWizardOpts = {}
 ): IWizardState {
   if (state.status !== "active") {
     return state;
@@ -202,16 +272,17 @@ export function reduceWizard(
       : state;
   }
 
-  return reduceStep(state, action, step, steps);
+  return reduceStep(state, action, step, steps, opts);
 }
 
 /** Fold a sequence of actions from the initial state — used by tests. */
 export function driveWizard(
   steps: readonly IWizardStep[],
-  actions: readonly IWizardAction[]
+  actions: readonly IWizardAction[],
+  opts: IWizardOpts = {}
 ): IWizardState {
   return actions.reduce(
-    (state, action) => reduceWizard(state, action, steps),
+    (state, action) => reduceWizard(state, action, steps, opts),
     initWizard(steps)
   );
 }
@@ -283,40 +354,74 @@ function multiChoiceRows(
 
 function hints(step: IWizardStep, color: boolean): string {
   const parts =
-    step.kind === "multi"
-      ? ["space toggle", "enter continue", "b back", "q cancel"]
-      : ["↑/↓ move", "enter select", "b back", "q cancel"];
+    step.kind === "text"
+      ? ["type to edit", "enter continue", "b back", "q cancel"]
+      : step.kind === "multi"
+        ? ["space toggle", "enter continue", "b back", "q cancel"]
+        : ["↑/↓ move", "enter select", "b back", "q cancel"];
 
   return paint(parts.join("   "), STYLE.dim, color);
 }
 
-function renderStep(
+/** The editable field for a text step: value (or placeholder) + caret, masked for
+ *  secrets, with an inline validation error when the validator rejects it. */
+function textFieldRows(
   step: IWizardStep,
   state: IWizardState,
-  color: boolean,
-  total: number
-): string {
-  const rows =
-    step.kind === "multi"
-      ? multiChoiceRows(step, state.cursor, state.multi[step.key] ?? [], color)
-      : singleChoiceRows(step, state.cursor, color);
+  color: boolean
+): string[] {
+  const raw = textValue(state, step);
+  const shown =
+    raw.length === 0
+      ? paint(step.placeholder ?? "", STYLE.dim, color)
+      : step.mask === true
+        ? "•".repeat(raw.length)
+        : raw;
+  const field = `${shown}${paint("▏", STYLE.brand, color)}`;
+  const error = step.validate === undefined ? null : step.validate(raw);
+  const errorLine =
+    error === null ? [] : ["", paint(error, STYLE.yellow, color)];
+
+  return [paint("Value", STYLE.bold, color), `  ${field}`, ...errorLine];
+}
+
+function stepBody(
+  step: IWizardStep,
+  state: IWizardState,
+  color: boolean
+): string[] {
+  if (step.kind === "text") {
+    return textFieldRows(step, state, color);
+  }
 
   const active = step.options[clampIndex(state.cursor, step.options.length)];
   const outcome =
     step.kind === "single" && active?.outcome !== undefined
       ? ["", paint("Outcome", STYLE.bold, color), `  ${active.outcome}`]
       : [];
+  const rows =
+    step.kind === "multi"
+      ? multiChoiceRows(step, state.cursor, state.multi[step.key] ?? [], color)
+      : singleChoiceRows(step, state.cursor, color);
 
+  return [paint("Choices", STYLE.bold, color), ...rows, ...outcome];
+}
+
+function renderStep(
+  step: IWizardStep,
+  state: IWizardState,
+  color: boolean,
+  total: number,
+  title: string
+): string {
   return [
-    paint("tsforge setup", STYLE.brand, color),
+    paint(title, STYLE.brand, color),
     `${paint(`Step ${state.stepIndex + 1} of ${total}`, STYLE.bold, color)} · ${step.title}`,
     RULE,
     step.explanation,
     "",
     ...evidenceBlock(step, color),
-    paint("Choices", STYLE.bold, color),
-    ...rows,
-    ...outcome,
+    ...stepBody(step, state, color),
     "",
     hints(step, color),
   ].join("\n");
@@ -329,27 +434,41 @@ function overviewLines(
   color: boolean
 ): string[] {
   return steps.map((step) => {
-    const checked = checkedValues(state, step).join(", ");
-    const value =
-      step.kind === "single"
-        ? (step.options.find((o) => o.value === state.single[step.key])
-            ?.label ?? "(default)")
-        : checked.length > 0
-          ? checked
-          : "(none)";
+    const value = overviewValue(step, state);
 
     return `  ${paint(step.title, STYLE.bold, color)}: ${value}`;
   });
+}
+
+/** The one-line answer shown for a step on the review screen. */
+function overviewValue(step: IWizardStep, state: IWizardState): string {
+  if (step.kind === "text") {
+    const raw = textValue(state, step);
+
+    return raw.length === 0 ? "(empty)" : step.mask === true ? "••••" : raw;
+  }
+
+  if (step.kind === "single") {
+    return (
+      step.options.find((o) => o.value === state.single[step.key])?.label ??
+      "(default)"
+    );
+  }
+
+  const checked = checkedValues(state, step).join(", ");
+
+  return checked.length > 0 ? checked : "(none)";
 }
 
 function renderOverview(
   steps: readonly IWizardStep[],
   state: IWizardState,
   color: boolean,
-  extra: string
+  extra: string,
+  title: string
 ): string {
   return [
-    paint("tsforge setup", STYLE.brand, color),
+    paint(title, STYLE.brand, color),
     `${paint("Review", STYLE.bold, color)} · nothing is written until you Apply`,
     RULE,
     ...overviewLines(steps, state, color),
@@ -360,20 +479,24 @@ function renderOverview(
 }
 
 /** Render the current frame (a step, or the final overview). `extra` is appended
- *  to the overview (the exact config preview + evidence path). Pure. */
+ *  to the overview (the exact config preview + evidence path). `title` is the
+ *  header shown at the top of every frame. Pure. */
 export function renderFrame(
   state: IWizardState,
   steps: readonly IWizardStep[],
   color: boolean,
-  extra = ""
+  extra = "",
+  title = "tsforge setup"
 ): string {
   if (state.stepIndex >= steps.length) {
-    return renderOverview(steps, state, color, extra);
+    return renderOverview(steps, state, color, extra, title);
   }
 
   const step = steps[state.stepIndex];
 
-  return step === undefined ? "" : renderStep(step, state, color, steps.length);
+  return step === undefined
+    ? ""
+    : renderStep(step, state, color, steps.length, title);
 }
 
 // ──────────────────────────── interactive driver ────────────────────────────
@@ -402,6 +525,8 @@ export function actionFor(
       return "down";
     case "space":
       return "toggle";
+    case "backspace":
+      return "erase";
     case "return":
     case "enter":
       return "confirm";
@@ -409,16 +534,11 @@ export function actionFor(
       break;
   }
 
-  if (str === "b") {
-    return "back";
-  }
-
-  if (str === "q") {
-    return "cancel";
-  }
-
-  if (str === " ") {
-    return "toggle";
+  // Any single printable character is text input (a text step consumes it; other
+  // kinds ignore it in the reducer). The driver maps `b`/`q` to back/cancel for
+  // non-text steps BEFORE this, so those shortcuts still work off a text field.
+  if (str?.length === 1 && str >= " ") {
+    return { char: str };
   }
 
   return null;
@@ -431,13 +551,26 @@ export function actionFor(
  * resolves immediately to a cancelled state — the CLI handles non-TTY separately.
  * `extra(state)` supplies the live config preview for the overview.
  */
+export interface IRunWizardOpts {
+  /** Header shown atop every frame (default "tsforge setup"). */
+  readonly title?: string;
+  /** Show the Review/Apply overview after the last step (default true). */
+  readonly review?: boolean;
+  /** Extra text appended to the overview (e.g. a config preview). */
+  readonly extra?: (state: IWizardState) => string;
+  /** Output sink (default process.stdout.write). */
+  readonly out?: (s: string) => void;
+}
+
 export function runWizard(
   steps: readonly IWizardStep[],
   color: boolean,
-  extra: (state: IWizardState) => string = () => "",
-  out: (s: string) => void = (s) => process.stdout.write(s)
+  opts: IRunWizardOpts = {}
 ): Promise<IWizardState> {
   const stdin = process.stdin;
+  const out = opts.out ?? ((s: string) => process.stdout.write(s));
+  const extra = opts.extra ?? ((): string => "");
+  const title = opts.title ?? "tsforge setup";
   const cancelled: IWizardState = { ...initWizard(steps), status: "cancel" };
 
   if (!stdin.isTTY) {
@@ -469,7 +602,9 @@ export function runWizard(
     }
 
     const draw = (): void => {
-      out(`${CLEAR_HOME}${renderFrame(state, steps, color, extra(state))}`);
+      out(
+        `${CLEAR_HOME}${renderFrame(state, steps, color, extra(state), title)}`
+      );
     };
 
     const finish = (): void => {
@@ -508,13 +643,23 @@ export function runWizard(
 
     const onKey = (str: string | undefined, key: IKeyInfo): void => {
       try {
-        const action = actionFor(str, key);
+        const step = steps[state.stepIndex];
+        const isText = step?.kind === "text";
+        // `b`/`q` are back/cancel shortcuts EXCEPT on a text field, where they are
+        // literal characters the user is typing.
+        let action = actionFor(str, key);
+
+        if (!isText && str === "b") {
+          action = "back";
+        } else if (!isText && str === "q") {
+          action = "cancel";
+        }
 
         if (action === null) {
           return;
         }
 
-        state = reduceWizard(state, action, steps);
+        state = reduceWizard(state, action, steps, { review: opts.review });
 
         if (state.status !== "active") {
           finish();

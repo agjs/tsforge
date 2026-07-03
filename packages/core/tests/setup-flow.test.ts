@@ -42,6 +42,7 @@ describe("wizard flow mapping", () => {
       cursor: 0,
       single: { interfaces: "bare-pascal-case", enums: "allow" },
       multi: {},
+      text: {},
       status: "active" as const,
     };
 
