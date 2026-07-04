@@ -153,31 +153,11 @@ export const BUILD_NUDGE =
   "file (relative path + full contents), ONE file per call, starting with the " +
   "first. Do not paste code into your reply again — emit the create tool call.";
 
-/** The coordinator's per-task working context (immutable inputs). */
-export interface ILoopCtx {
-  task: ITask;
-  cwd: string;
-  tsService: TsService | null;
-  /** Write-time single-file linter (the gate's eslint rules, applied per write so
-   *  moat violations tsc can't see surface inline). Omitted ⇒ type-only guard. */
-  lintFile?: FileLinter;
-  parse: ErrorParser | undefined;
-  report: Reporter;
-  messages: IChatMessage[];
-  /** Detected stack profile — determines which rule packs are enabled. */
-  stackProfile?: IStackProfile;
-  /** Files the agent created/edited this session (cwd-relative, forward slashes).
-   *  Accumulated by `runToolCalls`; change-scoped meta-rules (test-sibling-required)
-   *  enforce on this set, so they cover what the agent wrote regardless of git. */
-  touched?: Set<string>;
-  /** Rule severity overrides from tsforge.config.json (maps rule ID to "error" | "warn" | "off"). */
-  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>;
-  /** When set, the gate's command output is streamed here live (the CLI wires
-   *  this so a slow gate like `vite build` + browser isn't silent dead air).
-   *  Omitted on the eval path, where output is just captured for scoring.
-   *  `flush()` (when present) is called once the gate exits to emit any final
-   *  line the process printed without a trailing newline. */
-  onGateChunk?: ((text: string) => void) & { flush?: () => void };
+/** Tool-EXECUTION options — the fields `toolContextFor` threads into every
+ *  IToolContext (grouped so the spread is `...ctx.tool`, not eight conditional
+ *  spreads). Always-present and mutable: the Session flips these mid-run
+ *  (plan mode, per-send signal, setupWeb wiring). */
+export interface ILoopCtxTool {
   /** Cancellation for the in-flight turn — threaded into tool `run` commands and
    *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
    *  just the model call. Set per-send by the Session. */
@@ -199,6 +179,41 @@ export interface ILoopCtx {
   /** Connected MCP servers (opt-in via tsforge.config.json `mcpServers`). Threaded
    *  into the tool context so `mcp__<server>__<tool>` calls dispatch to them. */
   mcpRegistry?: McpRegistry;
+  /** Files the agent created/edited this session (cwd-relative, forward slashes).
+   *  Accumulated by `runToolCalls`; change-scoped meta-rules (test-sibling-required)
+   *  enforce on this set, so they cover what the agent wrote regardless of git.
+   *  Shared BY REFERENCE with the tool context. */
+  touched?: Set<string>;
+}
+
+/** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */
+export interface ILoopCtxGate {
+  parse: ErrorParser | undefined;
+  /** Write-time single-file linter (the gate's eslint rules, applied per write so
+   *  moat violations tsc can't see surface inline). Omitted ⇒ type-only guard. */
+  lintFile?: FileLinter;
+  /** Detected stack profile — determines which rule packs are enabled. */
+  stackProfile?: IStackProfile;
+  /** Rule severity overrides from tsforge.config.json (maps rule ID to "error" | "warn" | "off"). */
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>;
+  /** When set, the gate's command output is streamed here live (the CLI wires
+   *  this so a slow gate like `vite build` + browser isn't silent dead air).
+   *  Omitted on the eval path, where output is just captured for scoring.
+   *  `flush()` (when present) is called once the gate exits to emit any final
+   *  line the process printed without a trailing newline. */
+  onGateChunk?: ((text: string) => void) & { flush?: () => void };
+}
+
+/** The coordinator's per-task working context: the flat identity/reporting core,
+ *  plus the tool-execution (`tool`) and gate/validation (`gate`) option groups. */
+export interface ILoopCtx {
+  task: ITask;
+  cwd: string;
+  tsService: TsService | null;
+  report: Reporter;
+  messages: IChatMessage[];
+  tool: ILoopCtxTool;
+  gate: ILoopCtxGate;
 }
 
 /** Mutable state threaded across turns (the gradient the loop descends). */
@@ -254,17 +269,20 @@ export function countsAsMutation(file: string, taskFiles: string[]): boolean {
  *  `touched` so a custom loop runner that forgot to seed it self-heals rather than
  *  silently dropping enforcement. */
 function recordTouched(ctx: ILoopCtx, files: readonly string[]): void {
-  ctx.touched ??= new Set<string>();
+  const touched = (ctx.tool.touched ??= new Set<string>());
 
   for (const f of files) {
     const rel = isAbsolute(f) ? relative(ctx.cwd, f) : f;
 
-    ctx.touched.add(rel.replaceAll("\\", "/"));
+    touched.add(rel.replaceAll("\\", "/"));
   }
 }
 
-/** Build the per-call tool context from the loop context. Extracted so the
- *  optional-field spreads don't inflate `runToolCalls`'s cognitive complexity. */
+/** Build the per-call tool context from the loop context. `ctx.tool` groups
+ *  exactly the optional fields IToolContext threads through, so ONE spread
+ *  replaces the old eight per-field conditional spreads. `touched` rides the
+ *  spread BY REFERENCE, so `create` sees files the model authored in PRIOR turns
+ *  (recordTouched mutates this same Set post-write). */
 function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
   return {
     cwd: ctx.cwd,
@@ -272,16 +290,7 @@ function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
     report,
     task: ctx.task.id,
     tsService: ctx.tsService,
-    ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
-    ...(ctx.setupWeb === undefined ? {} : { setupWeb: ctx.setupWeb }),
-    ...(ctx.readOnly === undefined ? {} : { readOnly: ctx.readOnly }),
-    ...(ctx.policyMode === undefined ? {} : { policyMode: ctx.policyMode }),
-    ...(ctx.policyRules === undefined ? {} : { policyRules: ctx.policyRules }),
-    ...(ctx.interactive === undefined ? {} : { interactive: ctx.interactive }),
-    ...(ctx.mcpRegistry === undefined ? {} : { mcpRegistry: ctx.mcpRegistry }),
-    // Share the session change-set BY REFERENCE so `create` can see which files the
-    // model authored in PRIOR turns (recordTouched mutates this same Set post-write).
-    ...(ctx.touched === undefined ? {} : { touched: ctx.touched }),
+    ...ctx.tool,
   };
 }
 
@@ -454,7 +463,8 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
  * the task goes green; a no-op when ast-grep is off or nothing is redundant.
  */
 async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
-  const { task, cwd, parse, report } = ctx;
+  const { task, cwd, report } = ctx;
+  const parse = ctx.gate.parse;
 
   // Resolve globs so a glob scope is polished too (not silently skipped).
   const files = await resolveScopeFiles(cwd, task.files);
@@ -488,7 +498,7 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     await runAccept(
       { ...task, accept: task.fix },
       cwd,
-      ctx.signal === undefined ? {} : { signal: ctx.signal }
+      ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
     );
   }
 
@@ -496,7 +506,7 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     task,
     cwd,
     parse,
-    ctx.signal === undefined ? {} : { signal: ctx.signal }
+    ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
   );
 
   if (recheck.passed) {
@@ -655,7 +665,7 @@ export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
     await runAccept(
       { ...task, accept: task.fix },
       cwd,
-      ctx.signal === undefined ? {} : { signal: ctx.signal }
+      ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
     );
   }
 
@@ -681,9 +691,10 @@ async function runGateStep(
   ctx: ILoopCtx,
   turn: number
 ): Promise<Awaited<ReturnType<typeof validate>>> {
-  const { task, cwd, parse, report } = ctx;
+  const { task, cwd, report } = ctx;
+  const parse = ctx.gate.parse;
 
-  if (ctx.onGateChunk !== undefined) {
+  if (ctx.gate.onGateChunk !== undefined) {
     report({
       kind: "tool",
       task: task.id,
@@ -692,13 +703,15 @@ async function runGateStep(
   }
 
   const gate = await validate(task, cwd, parse, {
-    ...(ctx.onGateChunk === undefined ? {} : { onChunk: ctx.onGateChunk }),
-    ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    ...(ctx.gate.onGateChunk === undefined
+      ? {}
+      : { onChunk: ctx.gate.onGateChunk }),
+    ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
   });
 
   // The gate process has exited — flush any final newline-less line the stream
   // filter is still holding so it reaches the terminal.
-  ctx.onGateChunk?.flush?.();
+  ctx.gate.onGateChunk?.flush?.();
 
   return gate;
 }
@@ -712,14 +725,14 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
     // (test-sibling-required) enforce on. This is the real signal, not git: it
     // works in any directory (including a freshly generated, non-git project) and
     // never blocks on the repo's pre-existing untested code.
-    const changed = [...(ctx.touched ?? [])];
+    const changed = [...(ctx.tool.touched ?? [])];
     const metaContext = buildMetaRuleContext(
       ctx.cwd,
-      ctx.stackProfile?.packs ?? [],
+      ctx.gate.stackProfile?.packs ?? [],
       changed
     );
 
-    return runMetaRules(META_RULES, metaContext, ctx.ruleOverrides);
+    return runMetaRules(META_RULES, metaContext, ctx.gate.ruleOverrides);
   } catch (err) {
     // Degrade silently — meta-rules are supplementary to the gate
     trace("runMetaRules", err);

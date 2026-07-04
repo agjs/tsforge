@@ -31,11 +31,12 @@ function makeCtx(events: ILoopEvent[], cwd = "/tmp"): ILoopCtx {
     task: { id: "t", intent: "test", accept: "true", files: [], context: [] },
     cwd,
     tsService: null,
-    parse: undefined,
     report: (event) => {
       events.push(event);
     },
     messages: [],
+    tool: {},
+    gate: { parse: undefined },
   };
 }
 

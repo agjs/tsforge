@@ -394,12 +394,12 @@ function perWriteMetaFeedback(ctx: ILoopCtx, path: string): string {
     const metaCtx = singleFileMetaContext(
       ctx.cwd,
       path,
-      ctx.stackProfile?.packs ?? []
+      ctx.gate.stackProfile?.packs ?? []
     );
     const violations = runMetaRules(
       PER_WRITE_META_RULES,
       metaCtx,
-      ctx.ruleOverrides
+      ctx.gate.ruleOverrides
     );
 
     if (violations.length === 0) {
@@ -441,7 +441,9 @@ export async function runWriteGuard(
         {
           tsService: ctx.tsService,
           cwd: ctx.cwd,
-          ...(ctx.lintFile === undefined ? {} : { lintFile: ctx.lintFile }),
+          ...(ctx.gate.lintFile === undefined
+            ? {}
+            : { lintFile: ctx.gate.lintFile }),
         },
         path,
         ctx.report,

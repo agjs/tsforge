@@ -392,16 +392,17 @@ export async function runTask(
     task,
     cwd,
     tsService,
-    parse: effectiveParse,
     report,
     messages,
-    stackProfile,
-    touched: new Set<string>(),
-    ruleOverrides:
-      Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
     // Config-driven policy applies to headless runs too (the critical denies
     // already do, mode-independent; this adds `policy.mode`/`rules`).
-    ...policyCtxFields(policy),
+    tool: { touched: new Set<string>(), ...policyCtxFields(policy) },
+    gate: {
+      parse: effectiveParse,
+      stackProfile,
+      ruleOverrides:
+        Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
+    },
   };
   const state: ILoopState = {
     prevGateErrors: red.errors,

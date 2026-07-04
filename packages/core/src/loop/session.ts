@@ -504,7 +504,7 @@ export class Session {
    *  repairing — fast thinking-off creation, convergent thinking-on repair. */
   private repairing = false;
   /** GENERAL plan mode: read-only exploration until the user approves a plan.
-   *  Mirrors into ctx.readOnly (the execute-layer guarantee) and filters the
+   *  Mirrors into ctx.tool.readOnly (the execute-layer guarantee) and filters the
    *  advertised tool list per call — `this.tools` itself is never mutated, so
    *  toggling off restores everything with zero bookkeeping. */
   private planMode = false;
@@ -565,8 +565,8 @@ export class Session {
 
     this.ctx = ctx;
     // create() already resolved the base mode (CLI > config > default) onto ctx.
-    this.baseMode = ctx.policyMode ?? "default";
-    this.ctx.policyMode = this.planMode ? "plan" : this.baseMode;
+    this.baseMode = ctx.tool.policyMode ?? "default";
+    this.ctx.tool.policyMode = this.planMode ? "plan" : this.baseMode;
     // Buffer events off ctx.report (where edit/create/validated flow) so the
     // post-send memory hook can mine them; still forward to the original reporter.
     const rawCtxReport = ctx.report;
@@ -650,15 +650,25 @@ export class Session {
       task,
       cwd: cfg.cwd,
       tsService: await buildTsService(cfg.cwd),
-      ...(cfg.lintFile === undefined ? {} : { lintFile: cfg.lintFile }),
-      parse: cfg.parse,
       report,
-      stackProfile,
-      touched: new Set<string>(),
-      policyMode: baseMode,
-      ...(policyRules === undefined ? {} : { policyRules }),
-      ...(mcpRegistry === null ? {} : { mcpRegistry }),
-      ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
+      tool: {
+        touched: new Set<string>(),
+        policyMode: baseMode,
+        ...(policyRules === undefined ? {} : { policyRules }),
+        ...(mcpRegistry === null ? {} : { mcpRegistry }),
+      },
+      gate: {
+        parse: cfg.parse,
+        stackProfile,
+        ...(cfg.lintFile === undefined ? {} : { lintFile: cfg.lintFile }),
+        ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
+        // Stream the gate's output live (the interactive CLI), so a slow gate
+        // (vite build + chromium) shows progress instead of running silently — but
+        // filtered so the raw eslint JSON blob never floods the terminal.
+        onGateChunk: filterGateStream((text) => {
+          report({ kind: "token", task: SESSION_ID, message: text });
+        }),
+      },
       messages:
         cfg.history !== undefined && cfg.history.length > 0
           ? [...cfg.history]
@@ -672,12 +682,6 @@ export class Session {
                 ),
               },
             ],
-      // Stream the gate's output live (the interactive CLI), so a slow gate
-      // (vite build + chromium) shows progress instead of running silently — but
-      // filtered so the raw eslint JSON blob never floods the terminal.
-      onGateChunk: filterGateStream((text) => {
-        report({ kind: "token", task: SESSION_ID, message: text });
-      }),
     };
 
     const session = new Session(cfg, ctx);
@@ -778,10 +782,10 @@ export class Session {
    *  the read-only set, and the execute layer rejects any mutating call. */
   setPlanMode(on: boolean): void {
     this.planMode = on;
-    this.ctx.readOnly = on; // the hard guarantee at the execute layer
+    this.ctx.tool.readOnly = on; // the hard guarantee at the execute layer
     // Plan forces the read-only policy mode; toggling off restores the base mode
     // (e.g. an explicit --policy-mode ci), not a hard reset to "default".
-    this.ctx.policyMode = on ? "plan" : this.baseMode;
+    this.ctx.tool.policyMode = on ? "plan" : this.baseMode;
     this.planIntroPending = on;
   }
 
@@ -805,7 +809,7 @@ export class Session {
    *  builds wired it), so a whole web app's worth of violations dumped at the gate.
    *  Used at create and when `scaffold_web` flips a session to the web stack. */
   setLintFile(lintFile: FileLinter | undefined): void {
-    this.ctx.lintFile = lintFile;
+    this.ctx.gate.lintFile = lintFile;
   }
 
   /** Rebuild the in-process TS LanguageService. `scaffold_web` creates the
@@ -839,7 +843,7 @@ export class Session {
    *  this session to the web gate/guidance. Late-bound (after create) because the
    *  callback closes over this session to reconfigure it. */
   setSetupWeb(fn: SetupWebFn): void {
-    this.ctx.setupWeb = fn;
+    this.ctx.tool.setupWeb = fn;
   }
 
   /** Append opinionated guidance to the SYSTEM prompt (e.g. after classifying a
@@ -915,7 +919,7 @@ export class Session {
 
     // Thread cancellation to the tool `run` commands and the gate (not just the
     // model call), so Ctrl-C kills in-flight child processes too.
-    ctx.signal = opts.signal;
+    ctx.tool.signal = opts.signal;
     this.activeThinking = opts.enableThinking;
     this.repairing = false; // fresh send starts in (fast, thinking-off) creation mode
 
@@ -978,7 +982,7 @@ export class Session {
 
       return { status: "stuck", turns: 0 };
     } finally {
-      ctx.signal = undefined;
+      ctx.tool.signal = undefined;
       this.activeThinking = undefined;
     }
   }
@@ -1053,8 +1057,8 @@ export class Session {
     const full = await validate(
       fullGateTask,
       this.ctx.cwd,
-      this.ctx.parse,
-      this.ctx.signal === undefined ? {} : { signal: this.ctx.signal }
+      this.ctx.gate.parse,
+      this.ctx.tool.signal === undefined ? {} : { signal: this.ctx.tool.signal }
     );
 
     if (full.passed) {
@@ -1095,7 +1099,9 @@ export class Session {
       [...this.ctx.messages, { role: "user", content: PLAN_SUMMARY_STEP }],
       {
         temperature: 0,
-        ...(this.ctx.signal === undefined ? {} : { signal: this.ctx.signal }),
+        ...(this.ctx.tool.signal === undefined
+          ? {}
+          : { signal: this.ctx.tool.signal }),
       }
     );
 
@@ -1156,8 +1162,8 @@ export class Session {
     const result = await validate(
       task,
       ctx.cwd,
-      ctx.parse,
-      ctx.signal === undefined ? {} : { signal: ctx.signal }
+      ctx.gate.parse,
+      ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
     );
 
     // Drop stub-route-tree phantoms (the build regenerates the tree at the gate) —
@@ -1224,7 +1230,7 @@ export class Session {
       : this.tools;
     // MCP tools are external context sources (not workspace writes), so they ride
     // alongside the built-ins even in plan mode — appended after the filter.
-    const mcpSchemas = this.ctx.mcpRegistry?.toolSchemas() ?? [];
+    const mcpSchemas = this.ctx.tool.mcpRegistry?.toolSchemas() ?? [];
     const offeredTools =
       mcpSchemas.length > 0 ? [...baseTools, ...mcpSchemas] : baseTools;
     const callStart = performance.now();
