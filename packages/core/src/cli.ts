@@ -1164,6 +1164,10 @@ async function repl(args: ICliArgs): Promise<number> {
     } finally {
       spinner.stop();
       active = null;
+      // Seal the agent card's `╰` bottom cap the moment streaming ends, so any
+      // post-turn hint (plan-mode notice, PLAN review, etc.) lands BELOW the card
+      // instead of inside it — which would break the rail. Idempotent.
+      closeAgentTurn();
     }
 
     await persist();
