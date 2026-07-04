@@ -567,6 +567,22 @@ export interface IRunWizardOpts {
   readonly out?: (s: string) => void;
 }
 
+/**
+ * Whether runWizard should toggle raw mode + pause stdin on exit itself. Only when
+ * it TRULY owns stdin: a standalone `tsforge setup` on a cooked TTY with no
+ * pre-existing keypress listeners. REPL callers pass `manageInput: false`, so this
+ * returns false and the wizard never pauses stdin (which would empty the event loop
+ * and quit the process). Pure so the ownership rule is unit-testable.
+ */
+export function wizardOwnsRawMode(
+  manageInput: boolean,
+  isTTY: boolean,
+  hasSetRawMode: boolean,
+  savedKeypressCount: number
+): boolean {
+  return manageInput && isTTY && hasSetRawMode && savedKeypressCount === 0;
+}
+
 export function runWizard(
   steps: readonly IWizardStep[],
   color: boolean,
@@ -600,11 +616,12 @@ export function runWizard(
     // tell the editor apart from standalone, so REPL callers pass
     // `manageInput: false` — otherwise the wizard's `stdin.pause()` on exit empties
     // the event loop and the whole process quits when you cancel/finish a wizard.
-    const ownsRawMode =
-      (opts.manageInput ?? true) &&
-      stdin.isTTY &&
-      typeof stdin.setRawMode === "function" &&
-      saved.length === 0;
+    const ownsRawMode = wizardOwnsRawMode(
+      opts.manageInput ?? true,
+      stdin.isTTY,
+      typeof stdin.setRawMode === "function",
+      saved.length
+    );
 
     if (ownsRawMode) {
       stdin.setRawMode(true);

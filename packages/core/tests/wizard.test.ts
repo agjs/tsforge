@@ -8,6 +8,7 @@ import {
   renderFrame,
   runWizard,
   textValue,
+  wizardOwnsRawMode,
 } from "../src/render/wizard";
 import type { IWizardStep } from "../src/render/wizard.types";
 
@@ -365,5 +366,29 @@ describe("generic wizard: text input edge cases", () => {
     expect(actionFor("\x7f", { name: "backspace" })).toBe("erase");
     // A bare DEL byte with no key name is not printable → ignored, not a char.
     expect(actionFor("\x7f", { name: undefined })).toBeNull();
+  });
+});
+
+describe("wizardOwnsRawMode: raw-mode ownership rule", () => {
+  test("a standalone TTY with no pre-existing keypress listeners owns raw mode", () => {
+    expect(wizardOwnsRawMode(true, true, true, 0)).toBe(true);
+  });
+
+  test("manageInput:false (REPL-launched) NEVER owns raw mode", () => {
+    // The REPL editor already owns stdin; if the wizard toggled raw mode / paused
+    // stdin on exit it would empty the event loop and quit the process.
+    expect(wizardOwnsRawMode(false, true, true, 0)).toBe(false);
+  });
+
+  test("a non-TTY never owns raw mode", () => {
+    expect(wizardOwnsRawMode(true, false, true, 0)).toBe(false);
+  });
+
+  test("pre-existing keypress listeners mean another consumer owns stdin", () => {
+    expect(wizardOwnsRawMode(true, true, true, 1)).toBe(false);
+  });
+
+  test("a stdin without setRawMode never owns raw mode", () => {
+    expect(wizardOwnsRawMode(true, true, false, 0)).toBe(false);
   });
 });
