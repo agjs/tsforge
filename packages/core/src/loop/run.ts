@@ -2,6 +2,7 @@ import type { ITask } from "../spec";
 import type { IChatMessage, IModelResponse, IProvider } from "../inference";
 import { validate, type ErrorParser, type IValidateResult } from "../validate";
 import { readFiles, type IFileView } from "../lib/fs";
+import { trace } from "../lib/trace";
 import {
   DEFAULT_TEMPERATURE,
   RUN_STATUS,
@@ -128,8 +129,9 @@ async function consolidateLessons(
         message: `memory: ${String(active)} learned rule(s) active in .tsforge/learned-rules.json`,
       });
     }
-  } catch {
+  } catch (err) {
     // Memory is supplementary — never let it break a run.
+    trace("run.memory", err);
   }
 }
 

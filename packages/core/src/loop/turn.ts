@@ -10,6 +10,7 @@ import {
   type IErrorItem,
 } from "../validate";
 import { isInScope } from "../lib/scope";
+import { trace } from "../lib/trace";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
@@ -228,8 +229,9 @@ export async function buildTsService(cwd: string): Promise<TsService | null> {
     if (await fileExists(cwd, "tsconfig.json")) {
       return new TsService(cwd);
     }
-  } catch {
+  } catch (err) {
     // degrade silently — the gate runs regardless
+    trace("buildTsService", err);
   }
 
   return null;
@@ -403,8 +405,9 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
           // mechanical cleanup so it never spends a repair turn on import hygiene.
           tsFixed += tsService.organizeImports(f);
         }
-      } catch {
+      } catch (err) {
         // degrade silently — the gate still runs below
+        trace("applyDeterministicFixes.quickFix", err);
       }
     }
 
@@ -427,8 +430,9 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
         // or any path that skipped the write-guard).
         astFixed += await stripLiteralCasts(join(cwd, f));
       }
-    } catch {
+    } catch (err) {
       // degrade silently — gate is the authority
+      trace("applyDeterministicFixes.astGrep", err);
     }
   }
 
@@ -468,8 +472,9 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     if (await fileExists(cwd, f)) {
       try {
         dropped += await dropRedundantAnnotations(join(cwd, f));
-      } catch {
+      } catch (err) {
         // degrade silently — we revalidate and revert below
+        trace("applyDeterministicFixes.dropAnnotations", err);
       }
     }
   }
@@ -521,8 +526,9 @@ async function snapshotMtimes(
   for (const f of await resolveScopeFiles(cwd, files)) {
     try {
       out.set(f, Bun.file(join(cwd, f)).lastModified);
-    } catch {
+    } catch (err) {
       // ignore — a file that can't be stat'd just isn't tracked
+      trace("snapshotMtimes", err);
     }
   }
 
@@ -704,8 +710,9 @@ export async function settleGate(
     );
 
     metaViolations = runMetaRules(META_RULES, metaContext, ctx.ruleOverrides);
-  } catch {
+  } catch (err) {
     // Degrade silently — meta-rules are supplementary to the gate
+    trace("runMetaRules", err);
   }
 
   const metaErrors = metaViolations.filter((v) => v.severity === "error");

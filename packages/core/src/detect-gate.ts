@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { ESLint } from "eslint";
 import { WEB_TEMPLATES, type WebFramework } from "./web-templates";
 import { isRecord } from "./lib/guards";
+import { trace } from "./lib/trace";
 import { runArgvCommand } from "./lib/fs/process";
 import {
   conventionOverrideRules,
@@ -396,7 +397,9 @@ export function makeFileLinter(
           message: m.message,
           ruleId: m.ruleId ?? "?",
         }));
-    } catch {
+    } catch (err) {
+      trace("makeFileLinter", err);
+
       return [];
     }
   };
@@ -915,8 +918,9 @@ export async function discoverTestCommand(cwd: string): Promise<string | null> {
       ) {
         return "bun run test";
       }
-    } catch {
+    } catch (err) {
       // Malformed package.json — fall through to file detection.
+      trace("discoverTestCommand", err);
     }
   }
 

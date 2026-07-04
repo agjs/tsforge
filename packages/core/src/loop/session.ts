@@ -19,6 +19,7 @@ import type { SetupWebFn } from "./tools";
 import type { PolicyMode } from "../policy";
 import { flags } from "../config";
 import { readFiles } from "../lib/fs";
+import { trace } from "../lib/trace";
 import { validate, isEslintJsonLine, type ErrorParser } from "../validate";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
@@ -1802,8 +1803,9 @@ export class Session {
           message: `memory: ${String(active)} learned rule(s) active in .tsforge/learned-rules.json`,
         });
       }
-    } catch {
+    } catch (err) {
       // Memory is supplementary — never let it break a send.
+      trace("session.memory", err);
     }
   }
 
