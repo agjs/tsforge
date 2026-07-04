@@ -72,4 +72,21 @@ describe("PasteScanner", () => {
 
     expect(r.content).toBe("line1\nline2\nline3");
   });
+
+  test("trailing bytes after the end marker are returned as remainder (not dropped)", () => {
+    const s = createPasteScanner();
+    // Paste + trailing keystrokes coalesced into one chunk (TCP/automation).
+    const r = s.feed("\x1b[200~hello\x1b[201~world");
+
+    expect(r.content).toBe("hello");
+    expect(r.remainder).toBe("world"); // must be handed back, not discarded
+    expect(s.isActive()).toBe(false);
+  });
+
+  test("no remainder when nothing follows the end marker", () => {
+    const s = createPasteScanner();
+
+    expect(s.feed("\x1b[200~hi\x1b[201~").remainder).toBe("");
+    expect(s.feed("plain text").remainder).toBe("");
+  });
 });

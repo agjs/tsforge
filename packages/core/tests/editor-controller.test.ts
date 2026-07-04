@@ -534,4 +534,27 @@ describe("EditorController @/ overlay triggers", () => {
     stdin.feed("c");
     expect(handle.getBuffer().getText()).toBe("ac");
   });
+
+  test("setInputInert(true) ignores input under a self-managed overlay; false re-enables", () => {
+    const { stdin, handle } = makeHarness();
+
+    stdin.feed("hi");
+    expect(handle.getBuffer().getText()).toBe("hi");
+
+    handle.setInputInert(true);
+    stdin.feed("X"); // an overlay (e.g. /config) owns input — editor must not echo it
+    expect(handle.getBuffer().getText()).toBe("hi");
+
+    handle.setInputInert(false);
+    stdin.feed("Y");
+    expect(handle.getBuffer().getText()).toBe("hiY");
+  });
+
+  test("a paste with trailing text in ONE chunk inserts both (no dropped input)", () => {
+    const { stdin, handle } = makeHarness();
+
+    // Bracketed paste + coalesced keystrokes (TCP/automation) in a single chunk.
+    stdin.feed("\x1b[200~pasted\x1b[201~typed");
+    expect(handle.getBuffer().getText()).toBe("pastedtyped");
+  });
 });

@@ -699,7 +699,13 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     const chunk = typeof raw === "string" ? raw : raw.toString("utf8");
 
     debugLog(`[input-chunk] raw=${JSON.stringify(chunk)}`);
+    processChunk(chunk);
+  }
 
+  /** Feed one chunk through the paste scanner then the key decoder. A completed
+   *  paste may leave trailing bytes in the SAME chunk (coalesced keystrokes, or a
+   *  second paste) — process that remainder recursively so nothing is dropped. */
+  function processChunk(chunk: string): void {
     const wasActive = pasteScanner.isActive();
     const pasteScan = pasteScanner.feed(chunk);
 
@@ -709,6 +715,10 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       buffer.insertPaste(pasteScan.content);
       repaint();
       notifyChange();
+
+      if (pasteScan.remainder.length > 0) {
+        processChunk(pasteScan.remainder);
+      }
 
       return;
     }
