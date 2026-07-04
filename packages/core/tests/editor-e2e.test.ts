@@ -6,6 +6,7 @@ import {
 } from "../src/editor/controller";
 import {
   StatusBar,
+  PROMPT_COLS,
   type IStatusInfo,
   type IStatusBarTerminal,
 } from "../src/render";
@@ -106,7 +107,9 @@ function buildHarness(rows = 24, columns = 80): IHarness {
     renderEditor: (lines: string[], cursorRow: number, cursorCol: number) => {
       bar.setEditor(lines, cursorRow, cursorCol);
     },
-    columns,
+    // Mirror cli.ts: the editor wraps within the width left after the `› ` prompt
+    // gutter the StatusBar paints in front of every editor row.
+    columns: Math.max(1, columns - PROMPT_COLS),
     rows,
   });
 
@@ -254,7 +257,9 @@ describe("editor e2e — rendered screen (VirtualScreen)", () => {
     h.stdin.feed(long);
 
     const screen = h.screen();
-    const joined = screen.text().replace(/\n/g, "");
+    // Strip newlines AND the per-row prompt/gutter whitespace: a wrapped logical
+    // line hangs under the `› ` gutter, so continuation rows are indented 2 cols.
+    const joined = screen.text().replace(/\s/g, "");
 
     expect(joined).toContain(long); // every character survives across wrapped rows
   });
@@ -401,7 +406,7 @@ describe("editor e2e — aggressive interaction probes", () => {
     // terminal). Text and cursor share the SAME row (no "text one line above the
     // cursor"), and the cursor rests just after the 2 graphemes typed.
     expect(h.screen().row(row)).toContain("hi");
-    expect(col).toBe(3); // 1-based: after 2 graphemes
+    expect(col).toBe(5); // 1-based: 2-col `› ` gutter + 2 graphemes + 1
   });
 
   test("cursor tracks a left-arrow move to mid-line", () => {
@@ -413,7 +418,7 @@ describe("editor e2e — aggressive interaction probes", () => {
 
     const { col } = h.screen().cursorPosition();
 
-    expect(col).toBe(4); // after "hel"
+    expect(col).toBe(6); // 2-col gutter + after "hel"
   });
 
   test("emoji (multi-byte grapheme) renders and does not duplicate", () => {
@@ -570,16 +575,16 @@ describe("editor e2e — wrapped-line cursor math", () => {
   test("cursor lands on the correct visual row/col after a line wraps", () => {
     const h = buildHarness(24, 20); // width 20
 
-    // 25 chars → wraps to 2 visual rows (20 + 5). Cursor rests after char 25.
+    // 25 chars, editor width 18 (20 − 2 gutter) → wraps to 2 visual rows (18 + 7).
     h.stdin.feed("0123456789abcdefghijklmno");
 
     const { row, col } = h.screen().cursorPosition();
 
-    // 2 visual rows; the cursor sits on the wrapped TAIL row (visual row 1), after
-    // the 5 tail chars → col 6. (Relative model: absolute row depends on content,
-    // so assert the cursor's row holds the tail rather than a fixed row number.)
-    expect(h.screen().row(row)).toContain("klmno"); // the wrapped tail (chars 21-25)
-    expect(col).toBe(6);
+    // The cursor sits on the wrapped TAIL row (visual row 1), after the 7 tail
+    // chars, offset by the 2-col gutter → col 10. (Relative model: absolute row
+    // depends on content, so assert the cursor's row holds the tail.)
+    expect(h.screen().row(row)).toContain("ijklmno"); // wrapped tail (chars 19-25)
+    expect(col).toBe(10);
   });
 
   test("editing at the wrap boundary keeps all text and a single render", () => {
@@ -589,7 +594,8 @@ describe("editor e2e — wrapped-line cursor math", () => {
     h.stdin.feed("\x1b[H"); // home → start of logical line
     h.stdin.feed("X"); // insert at very start
 
-    const joined = h.screen().text().replace(/\n/g, "");
+    // Strip the per-row gutter whitespace (wrapped rows hang under the `› ` gutter).
+    const joined = h.screen().text().replace(/\s/g, "");
 
     expect(h.handle.getBuffer().getText()).toBe("X0123456789abcdefghijklmno");
     expect(joined).toContain("X0123456789abcdefghijklmno");

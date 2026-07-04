@@ -87,6 +87,8 @@ import {
   welcomeBanner,
   STYLE,
   RESET,
+  paint,
+  PROMPT_COLS,
   type IStatusInfo,
 } from "./render";
 import type { ITask } from "./spec";
@@ -113,7 +115,6 @@ import {
   loadSession,
   listSessions,
   pruneSessions,
-  persistenceEnabled,
   logsDir,
   type ISessionRecord,
 } from "./session-store";
@@ -592,18 +593,22 @@ export function isPlanApproval(line: string): boolean {
 // the help text and the interactive `/` palette can never drift.
 const HELP = formatHelp();
 
-/** The session status line — distinguishes off / new / resumed. */
-function sessionLine(id: string, resumed: ISessionRecord | null): string {
-  if (!persistenceEnabled()) {
-    return "  session: not saved (TSFORGE_NO_PERSIST)";
-  }
+/** A single compact "how to start" line under the banner — the only guidance the
+ *  landing screen needs. The internals (cwd, scope, gate, session) live in /config. */
+function startupHint(): string {
+  const tip = (key: string, label: string): string =>
+    `${paint(key, STYLE.brand + STYLE.bold, true)} ${paint(label, STYLE.dim, true)}`;
+  const sep = paint("   ·   ", STYLE.dim, true);
 
-  return resumed === null
-    ? `  session: new (${id})`
-    : `  session: resumed ${resumed.messages.length} message(s)`;
+  return `  ${[
+    tip("/help", "commands"),
+    tip("@", "files"),
+    tip("/setup", "guardrails"),
+    tip("/exit", "quit"),
+  ].join(sep)}`;
 }
 
-/** Print the welcome banner, session info, and (when resuming) the prior transcript. */
+/** Print the welcome banner, a compact hint, and (when resuming) the prior transcript. */
 function printHeader(info: {
   dir: string;
   id: string;
@@ -613,7 +618,13 @@ function printHeader(info: {
   model: { model: string; endpoint: string };
   updateNotice?: string | null;
 }): void {
-  const { dir, id, gateLabel, files, resumed, model, updateNotice } = info;
+  const { resumed, model, updateNotice } = info;
+
+  if (process.stdout.isTTY) {
+    // Clean slate: wipe the visible screen AND scrollback so the banner never
+    // lands on top of leftover shell output (env dumps, prior command noise).
+    process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+  }
 
   process.stdout.write(welcomeBanner(model));
 
@@ -621,16 +632,7 @@ function printHeader(info: {
     process.stdout.write(`${updateNotice}\n`);
   }
 
-  process.stdout.write(
-    [
-      `  cwd:   ${dir}`,
-      `  scope: ${scopeLabel(files)}`,
-      `  gate:  ${gateLabel}`,
-      sessionLine(id, resumed),
-      "  /help for commands, /exit to quit",
-      "",
-    ].join("\n")
-  );
+  process.stdout.write(`${startupHint()}\n\n`);
 
   if (resumed === null) {
     return;
@@ -775,9 +777,11 @@ function maybePrintNoConfigHint(
   resumed: ISessionRecord | null
 ): void {
   if (resumed === null && !existsSync(join(dir, "tsforge.config.json"))) {
-    process.stdout.write(
-      "No project config. Run tsforge setup (or /setup) to adapt guardrails to this repo.\n"
-    );
+    const icon = paint("○", STYLE.yellow, true);
+    const run = paint("/setup", STYLE.brand + STYLE.bold, true);
+    const rest = paint("to adapt the guardrails to this repo", STYLE.dim, true);
+
+    process.stdout.write(`  ${icon} no project config — run ${run} ${rest}\n`);
   }
 }
 
@@ -1068,9 +1072,16 @@ async function repl(args: ICliArgs): Promise<number> {
   session.setPlanMode(planMode);
 
   if (planMode) {
-    process.stdout.write(
-      "  ◆ plan mode (default) — I'll explore and propose a plan; reply 'approve' to build.\n"
+    const chip = paint("◆ plan mode (default)", STYLE.brand + STYLE.bold, true);
+    const body = paint(
+      "— I'll explore and propose a plan; reply",
+      STYLE.dim,
+      true
     );
+    const approve = paint("approve", STYLE.green + STYLE.bold, true);
+    const tail = paint("to build", STYLE.dim, true);
+
+    process.stdout.write(`  ${chip} ${body} ${approve} ${tail}\n`);
   }
 
   // While set, the next user line is the plan-review reply ("approve", or edits to
@@ -2279,7 +2290,10 @@ async function repl(args: ICliArgs): Promise<number> {
         ) => {
           statusBar.setEditor(lines, cursorRow, cursorCol);
         },
-        columns: process.stdout.columns,
+        // Reserve the `› ` prompt gutter the StatusBar paints in front of the
+        // editor block, so wrapping matches the visible width and the prompt row
+        // never exceeds `columns`.
+        columns: Math.max(1, process.stdout.columns - PROMPT_COLS),
         rows: process.stdout.rows,
         openPalette,
         openFilePicker,
@@ -2287,7 +2301,7 @@ async function repl(args: ICliArgs): Promise<number> {
       });
 
       resizeEditor = (columns, rows): void => {
-        editorHandle?.resize(columns, rows);
+        editorHandle?.resize(Math.max(1, columns - PROMPT_COLS), rows);
       };
 
       editorControl = editorHandle;
