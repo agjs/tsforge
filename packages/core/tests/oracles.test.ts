@@ -7,7 +7,7 @@ import {
   coverageFloor,
 } from "../scripts/test-coverage-check";
 import { bootConfig, pollUntilReady } from "../scripts/boot-check";
-import { buildGate } from "../src/detect-gate";
+import { buildGate } from "../src/gate";
 import { serveEphemeral } from "../src/lib/serve";
 
 describe("test-coverage oracle", () => {

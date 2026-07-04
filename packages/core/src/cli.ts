@@ -101,13 +101,15 @@ import {
   buildCoreFix,
   buildWebTypeGate,
   buildWebTscCheck,
-  scaffoldWeb,
-  installWebDeps,
-  webGuidance,
   makeFileLinter,
   WEB_PACKS,
   type FileLinter,
-} from "./detect-gate";
+} from "./gate";
+import {
+  scaffoldWeb,
+  installWebDeps,
+  webGuidance,
+} from "./scaffold/web-scaffold";
 import type { WebFramework } from "./web-templates";
 import { isRecord } from "./lib/guards";
 import {

@@ -41,7 +41,7 @@ import {
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
-import type { FileLinter } from "../detect-gate";
+import type { FileLinter } from "../gate";
 import {
   buildMetaRuleContext,
   runMetaRules,

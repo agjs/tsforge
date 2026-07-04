@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildGate } from "../src/detect-gate";
+import { buildGate } from "../src/gate";
 
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const TSC_BIN = join(ROOT, "node_modules", ".bin", "tsc");

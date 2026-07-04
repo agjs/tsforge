@@ -5,7 +5,7 @@ import type {
   ITokenUsage,
 } from "../inference";
 import type { ITask } from "../spec";
-import type { FileLinter } from "../detect-gate";
+import type { FileLinter } from "../gate";
 import {
   SCAFFOLD_UI_TOOL,
   SCAFFOLD_ROUTES_TOOL,

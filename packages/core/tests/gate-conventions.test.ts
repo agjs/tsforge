@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { makeFileLinter, WEB_PACKS } from "../src/detect-gate";
+import { makeFileLinter, WEB_PACKS } from "../src/gate";
 import { resolveConventions } from "../src/infer-rules/conventions";
 
 // Integration test for the REAL gate path: spawn the bundled eslint config the

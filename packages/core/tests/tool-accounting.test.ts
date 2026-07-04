@@ -11,7 +11,7 @@ import {
 } from "../src/loop";
 import { THEME_NAMES, COMPONENT_NAMES } from "../src/web-components";
 import { TsService } from "../src/lsp";
-import { makeFileLinter, WEB_PACKS } from "../src/detect-gate";
+import { makeFileLinter, WEB_PACKS } from "../src/gate";
 import { TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../src/agent";
 
 // The interactive web session was missing the per-write lint moat (only headless

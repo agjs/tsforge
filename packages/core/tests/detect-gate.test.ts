@@ -7,12 +7,12 @@ import {
   buildGate,
   buildWebGate,
   makeFileLinter,
-  scaffoldWeb,
   discoverTestCommand,
   webTestProbe,
   buildCoreFix,
   formatFile,
-} from "../src/detect-gate";
+} from "../src/gate";
+import { scaffoldWeb } from "../src/scaffold/web-scaffold";
 
 /** Run only the find-condition of the web test probe in `cwd`; true when it
  *  detects at least one test file (i.e. `bun test` would run). */

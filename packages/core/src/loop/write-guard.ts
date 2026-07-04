@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { basename, join, relative, isAbsolute } from "node:path";
 import type { TsService, ITsDiagnostic } from "../lsp";
-import type { FileLinter, IFileLintProblem } from "../detect-gate";
-import { formatFile } from "../detect-gate";
+import type { FileLinter, IFileLintProblem } from "../gate";
+import { formatFile } from "../gate";
 import { stripLiteralCasts } from "./astgrep-fix";
 import {
   missingExportHint,

@@ -8,7 +8,7 @@
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSpec } from "../src/spec";
-import { buildGate, buildCoreFix } from "../src/detect-gate";
+import { buildGate, buildCoreFix } from "../src/gate";
 import { runSpec, qualityRepair } from "../src/loop";
 import { modelAgent } from "../src/agent";
 import { OpenAICompatibleProvider } from "../src/inference";

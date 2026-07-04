@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { TsService } from "../src/lsp";
-import { makeFileLinter } from "../src/detect-gate";
+import { makeFileLinter } from "../src/gate";
 
 /**
  * Test the instant per-file type diagnostics on write feature. The write-guard

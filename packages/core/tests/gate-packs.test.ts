@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeFileLinter, buildGate } from "../src/detect-gate";
+import { makeFileLinter, buildGate } from "../src/gate";
 
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const ESLINT_BIN = join(ROOT, "node_modules", ".bin", "eslint");
