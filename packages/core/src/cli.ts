@@ -91,6 +91,7 @@ import {
   PROMPT_COLS,
   type IStatusInfo,
 } from "./render";
+import { displayWidth } from "./render/width";
 import type { ITask } from "./spec";
 import { loadLedger, activeRules, forgetMemory } from "./loop/memory";
 import {
@@ -1682,7 +1683,10 @@ async function repl(args: ICliArgs): Promise<number> {
   };
 
   const railAgentChunk = (text: string): string => {
-    const wrapAt = Math.max(1, process.stdout.columns - PROMPT_COLS);
+    // Wrap at the card's inner width, leaving the last terminal column empty so an
+    // auto-margin terminal never wraps the row itself (which would drop the rail).
+    const cols = process.stdout.columns > 0 ? process.stdout.columns : 80;
+    const wrapAt = Math.max(20, cols - PROMPT_COLS - 1);
     let out = "";
 
     for (const ch of text) {
@@ -1721,7 +1725,7 @@ async function repl(args: ICliArgs): Promise<number> {
       }
 
       out += ch;
-      agentCol += 1;
+      agentCol += displayWidth(ch); // count wide chars (emoji, CJK) as 2 cols
     }
 
     return out;
