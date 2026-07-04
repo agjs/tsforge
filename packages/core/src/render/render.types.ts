@@ -3,6 +3,8 @@ export interface IRenderOptions {
   color?: boolean;
   /** Speaker label for assistant turns (the model name). Default "assistant". */
   speaker?: string;
+  /** Terminal width for sizing the user message bubble. Default 80. */
+  columns?: number;
 }
 
 /** A compact post-turn status line — the "where am I" summary modern CLIs show. */

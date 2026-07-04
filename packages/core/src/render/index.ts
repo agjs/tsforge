@@ -7,6 +7,10 @@ export {
   speakerLabel,
   indentBlock,
   BLOCK_INDENT,
+  userBubble,
+  agentCardTop,
+  agentCardBottom,
+  agentBar,
 } from "./ansi";
 export {
   StatusBar,

@@ -79,14 +79,14 @@ import {
   renderEvent,
   renderMessage,
   renderStatus,
-  speakerLabel,
-  indentBlock,
-  BLOCK_INDENT,
+  userBubble,
+  agentCardTop,
+  agentCardBottom,
+  agentBar,
   StatusBar,
   MIN_ROWS,
   welcomeBanner,
   STYLE,
-  RESET,
   paint,
   PROMPT_COLS,
   type IStatusInfo,
@@ -1645,22 +1645,34 @@ async function repl(args: ICliArgs): Promise<number> {
   // wizard — the editor itself is created inside the loop's nested scope.
   let editorControl: IEditorHandle | null = null;
 
-  // Each agent turn renders as a "▌ <model>" block with its body indented under the
-  // label (mirrors the user block). The label is emitted once, on the turn's first
-  // streamed output; `agentTurnOpen` is reset at the start of every runLine.
+  // Each agent turn renders as a left-accent card: a rounded `╭ <model>` cap, every
+  // body line prefixed with the `│ ` rail, and a `╰` cap when the turn ends. The cap
+  // is emitted once, on the turn's first streamed output; state resets per runLine.
+  const AGENT_RAIL = agentBar(true);
   let agentTurnOpen = false;
   let agentAtLineStart = true;
+  let agentSawContent = false;
 
-  // Indent each streamed line under the agent label. Stateful so indentation is
-  // correct even when a line is split across chunks (tokens). ANSI codes carry no
-  // newlines, so they're treated as ordinary characters and never mis-indented.
-  const indentAgentChunk = (text: string): string => {
+  // Prefix each streamed line with the card rail. Stateful so the rail is correct
+  // even when a line is split across chunks (tokens). Leading blank lines (the
+  // stream separator + any blanks the model emits before its first token) are
+  // swallowed until real content arrives — this is what closes the old gap.
+  const railAgentChunk = (text: string): string => {
     let out = "";
 
     for (const ch of text) {
-      if (agentAtLineStart && ch !== "\n") {
-        out += BLOCK_INDENT;
+      if (agentAtLineStart) {
+        if (ch === "\n") {
+          if (agentSawContent) {
+            out += `${AGENT_RAIL}\n`; // keep the rail on interior blank lines
+          }
+
+          continue; // otherwise swallow the blank line (no gap under the cap)
+        }
+
+        out += AGENT_RAIL;
         agentAtLineStart = false;
+        agentSawContent = true;
       }
 
       out += ch;
@@ -1680,18 +1692,26 @@ async function repl(args: ICliArgs): Promise<number> {
       if (!agentTurnOpen) {
         agentTurnOpen = true;
         agentAtLineStart = true;
-        statusBar.writeStream(
-          `\n${speakerLabel(statusInfo().model, false, true)}\n`
-        );
+        agentSawContent = false;
+        statusBar.writeStream(`\n${agentCardTop(statusInfo().model, true)}\n`);
       }
 
-      statusBar.writeStream(indentAgentChunk(text));
+      statusBar.writeStream(railAgentChunk(text));
     };
   }
 
-  // Start a fresh agent block for each turn (the label re-emits on its first output).
+  // Start a fresh agent card for each turn (the cap re-emits on its first output).
   const beginAgentTurn = (): void => {
     agentTurnOpen = false;
+  };
+
+  // Close the current agent card (rounded bottom cap) once its turn is done. A
+  // no-op for turns that produced no streamed output (e.g. slash commands).
+  const closeAgentTurn = (): void => {
+    if (agentTurnOpen && useInputRow) {
+      statusBar.writeStream(`${agentCardBottom(true)}\n`);
+      agentTurnOpen = false;
+    }
   };
 
   // Mirror readline's buffer onto the input row after each keypress. setImmediate
@@ -1843,10 +1863,7 @@ async function repl(args: ICliArgs): Promise<number> {
       // never echoed to scrollback — record it ourselves so the transcript reads
       // naturally above the (now-cleared) input row.
       if (useInputRow) {
-        echo(
-          `\n${speakerLabel("you", true, true)}\n` +
-            `${STYLE.brand}${indentBlock(line)}${RESET}\n`
-        );
+        echo(`\n${userBubble(line, true, process.stdout.columns)}\n`);
       }
 
       if (busy) {
@@ -1896,6 +1913,7 @@ async function repl(args: ICliArgs): Promise<number> {
         spinner.stop(); // belt-and-suspenders: clear any spinner the failed path left running
         echo(`\n⚠ ${err instanceof Error ? err.message : String(err)}\n`);
       } finally {
+        closeAgentTurn(); // seal the agent card's bottom cap before re-prompting
         busy = false;
       }
 
