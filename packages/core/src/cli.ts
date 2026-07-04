@@ -1936,6 +1936,7 @@ async function repl(args: ICliArgs): Promise<number> {
         openWizard: async (opener) =>
           opener === "scaffold"
             ? openScaffoldInRepl({
+                cwd: args.dir,
                 suspend,
                 resume,
                 out: (s) => process.stdout.write(s),

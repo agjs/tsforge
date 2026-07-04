@@ -9,14 +9,29 @@ import {
   realRunner,
   realPoller,
 } from "../scaffold";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 export interface IReplScaffoldDeps {
+  /** Base directory the new project folder is created UNDER (the REPL's cwd). */
+  readonly cwd: string;
   readonly suspend: () => void;
   readonly resume: () => void;
   readonly out: (s: string) => void;
+}
+
+/** Free-text step: the folder name for the new project (created under cwd). */
+function projectDirStep(): IWizardStep {
+  return {
+    key: "projectDir",
+    kind: "text",
+    title: "Project directory",
+    explanation:
+      "Folder name for the new project (created in the current directory).",
+    evidence: [],
+    options: [],
+    placeholder: "my-app",
+  };
 }
 
 /** Single-select step offering three archetype choices: boringstack, astro, vite. */
@@ -46,6 +61,34 @@ export function archetypeStep(): IWizardStep {
     ],
     defaultIndex: 0,
   };
+}
+
+/** Resolve the scaffold destination from a user-typed folder name: a plain name
+ *  under `cwd`, rejecting empties, path separators, and traversal (no escaping the
+ *  workspace), and refusing to overwrite an existing directory. Pure enough to test
+ *  (only touches the filesystem to check existence). */
+export function resolveScaffoldDest(
+  cwd: string,
+  rawName: string
+): { readonly dest: string } | { readonly error: string } {
+  const name = rawName.trim();
+
+  if (
+    name.length === 0 ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    name.includes("..")
+  ) {
+    return { error: "a plain project directory name is required" };
+  }
+
+  const dest = join(cwd, name);
+
+  if (existsSync(dest)) {
+    return { error: `${dest} already exists — pick another name` };
+  }
+
+  return { dest };
 }
 
 /** Print the handoff block shown after a successful scaffold. */
@@ -130,13 +173,17 @@ export async function openScaffoldInRepl(
       selectedArchetype === "boringstack" ? "boringstack" : "astro";
     const stack = "dev";
 
-    // Step 2: Run configuration steps for the chosen archetype
+    // Step 2: project directory name + the archetype's configuration steps.
     const configSteps = buildScaffoldSteps(manifest, archetype, stack);
-    const configState = await runWizard(configSteps, color, {
-      title: "tsforge scaffold",
-      manageInput: false,
-      out: deps.out,
-    });
+    const configState = await runWizard(
+      [projectDirStep(), ...configSteps],
+      color,
+      {
+        title: "tsforge scaffold",
+        manageInput: false,
+        out: deps.out,
+      }
+    );
 
     if (configState.status !== "apply") {
       deps.out("scaffold: cancelled — nothing was created.\n");
@@ -144,14 +191,25 @@ export async function openScaffoldInRepl(
       return;
     }
 
+    // Resolve the destination folder (under cwd, validated, non-existent).
+    const resolved = resolveScaffoldDest(
+      deps.cwd,
+      configState.text.projectDir ?? ""
+    );
+
+    if ("error" in resolved) {
+      deps.out(`scaffold: ${resolved.error} — nothing was created.\n`);
+
+      return;
+    }
+
+    const { dest } = resolved;
+
     // Step 3: Convert state to answers
     const answers = stateToAnswers(manifest, archetype, stack, configState);
 
-    // Create temp directory for the scaffold
-    const tmpDir = mkdtempSync(join(tmpdir(), "tsforge-scaffold-"));
-
     try {
-      const outcome = await runScaffold(manifest, answers, tmpDir, {
+      const outcome = await runScaffold(manifest, answers, dest, {
         run: realRunner,
         fs: realFs,
         boot: { poll: realPoller },
