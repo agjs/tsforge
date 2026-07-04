@@ -52,6 +52,7 @@ import {
   applyRecipe,
   isOneShot,
   scopeOf,
+  cliUsage,
   WHOLE_REPO,
   type ICliArgs,
 } from "./cli/args";
@@ -2860,6 +2861,21 @@ export async function main(): Promise<number> {
   }
 
   const args = parseArgs(raw);
+
+  // `--version`/`--help` print and exit — before this fix an unknown flag fell
+  // through as a POSITIONAL, so `tsforge --version` booted a session with the
+  // literal task "--version" (and install.sh advertises `tsforge --help`).
+  if (args.version) {
+    process.stdout.write(`tsforge ${currentVersion()}\n`);
+
+    return 0;
+  }
+
+  if (args.help) {
+    process.stdout.write(cliUsage());
+
+    return 0;
+  }
 
   if (args.recipes) {
     return recipesMode(args);

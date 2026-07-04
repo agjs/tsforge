@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, isOneShot, applyRecipe, runNotify } from "../src/cli";
+import { cliUsage } from "../src/cli/args";
 import type { ITaskRecipe } from "../src/config/recipes";
 
 // Regression: runNotify used to spawn `sh -c cmd` with a bare `await proc.exited`
@@ -420,4 +421,33 @@ test("editor input submission while busy queues exactly one message to pending",
   expect(pending[0]).toBe("test message");
 
   handle.close();
+});
+
+// Regression: --version/--help were NOT recognized flags, so they fell through as
+// POSITIONALS — `tsforge --version` booted a session whose task was the literal
+// string "--version" (and install.sh advertises `tsforge --help`). They must parse
+// as print-and-exit flags, never as a task.
+test("--version/-V and --help/-h parse as flags, not as a task", () => {
+  for (const argv of [["--version"], ["-V"]]) {
+    const a = parseArgs(argv);
+
+    expect(a.version).toBe(true);
+    expect(a.task).toBe("");
+  }
+
+  for (const argv of [["--help"], ["-h"]]) {
+    const a = parseArgs(argv);
+
+    expect(a.help).toBe(true);
+    expect(a.task).toBe("");
+  }
+});
+
+test("cliUsage documents the print-and-exit flags it is reached by", () => {
+  const usage = cliUsage();
+
+  expect(usage).toContain("--version");
+  expect(usage).toContain("--help");
+  expect(usage).toContain("--accept");
+  expect(usage).toContain("tsforge review");
 });

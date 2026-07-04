@@ -7,6 +7,10 @@ import type { ITaskRecipe } from "../config/recipes";
  * tests/cli.test.ts) and the CLI entry stays thin.
  */
 export interface ICliArgs {
+  /** Print the package version and exit (`--version` / `-V`). */
+  version: boolean;
+  /** Print CLI usage and exit (`--help` / `-h`) — install.sh advertises this. */
+  help: boolean;
   /** Empty ⇒ interactive REPL; non-empty ⇒ one-shot task. */
   task: string;
   dir: string;
@@ -100,6 +104,8 @@ const BOOL_FLAGS: Record<
   | "scout"
   | "greenfield"
   | "setupYes"
+  | "version"
+  | "help"
 > = {
   "--continue": "continue",
   "-c": "continue",
@@ -114,6 +120,10 @@ const BOOL_FLAGS: Record<
   "--scout": "scout",
   "--greenfield": "greenfield",
   "--yes": "setupYes",
+  "--version": "version",
+  "-V": "version",
+  "--help": "help",
+  "-h": "help",
 };
 
 const VALUE_FLAGS = new Set([
@@ -129,10 +139,46 @@ const VALUE_FLAGS = new Set([
   "--notify",
 ]);
 
+/** The `tsforge --help` usage text — kept next to the flag tables it documents
+ *  so a new flag is added in one file. Pure so it's directly testable. */
+export function cliUsage(): string {
+  return [
+    "tsforge — strict-TypeScript coding agent (gate-driven)",
+    "",
+    "USAGE",
+    "  tsforge                       interactive session (REPL)",
+    '  tsforge "<task>"              one-shot task, driven to a green gate',
+    "  tsforge review [--staged]     functional review of the current diff",
+    "  tsforge map                   structural workspace map",
+    "  tsforge setup [--yes]         infer + write project conventions",
+    "  tsforge recipes | run <id>    list / run saved task recipes",
+    "  tsforge scaffold …            scaffold a project from the manifest",
+    "",
+    "COMMON FLAGS",
+    "  --dir <path>        workspace to operate in (default: cwd)",
+    "  --files <globs>     editable scope, comma-separated",
+    "  --accept <cmd>      the gate command that must exit 0",
+    "  --continue, -c      resume the most recent session for this dir",
+    "  --resume <id>       resume a specific saved session",
+    "  --web               scaffold + gate a web app (vite/react ladder)",
+    "  --plan              pause after the design phase for plan review",
+    "  --log               append the run's event stream to ~/.tsforge/logs/",
+    "  --policy-mode <m>   plan|default|acceptEdits|ci|dontAsk|bypassPermissions",
+    "  --notify <cmd>      run a command when an unattended run finishes",
+    "  --version, -V       print the version and exit",
+    "  --help, -h          this help",
+    "",
+    "In the REPL, /help lists commands; /config is the settings hub.",
+    "",
+  ].join("\n");
+}
+
 /** Parse argv (without the tsforge binary name). Always succeeds — mode is decided in main. */
 export function parseArgs(argv: readonly string[]): ICliArgs {
   const positional: string[] = [];
   const out: ICliArgs = {
+    version: false,
+    help: false,
     task: "",
     dir: ".",
     files: [],
