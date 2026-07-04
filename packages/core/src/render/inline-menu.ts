@@ -1,13 +1,63 @@
 import { emitKeypressEvents } from "node:readline";
 import { STYLE, paint } from "./style";
 import { clampIndex } from "./command-menu";
-import { displayWidth, padToWidth } from "./width";
+import { displayWidth, sliceToWidth } from "./width";
 
 /**
  * Rows shown in the popup at once — a tight dropdown above the prompt, never a
  * whole-tree dump. Matches the @file picker's MAX_VISIBLE.
  */
 const MAX_VISIBLE = 8;
+
+/** Terminal rows the status bar consumes BELOW the overlay (input row + bar
+ *  border + bar + one row of margin). The overlay must fit in what remains, or
+ *  the status bar's relative-redraw can't clear a region taller than the screen
+ *  and the menu stacks as you scroll. */
+const REGION_CHROME_ROWS = 4;
+
+/** Non-row overlay lines: title + divider + describe + footer, plus up to two
+ *  scroll indicators. Budgeted so the whole region fits the terminal height. */
+const OVERLAY_OVERHEAD = 6;
+
+const FOOTER = "↑/↓ move   enter select   esc close";
+
+/** Clip to a display-column budget, grapheme-safe (never splits a wide cell). */
+function clip(text: string, max: number): string {
+  return sliceToWidth(text, max).text;
+}
+
+/** One menu row: `› label            hint`. The SELECTED row is the only styled
+ *  line (brand + bold); every other row is plain default text so it stays fully
+ *  legible. Composed as raw text and fitted to width BEFORE coloring, so clipping
+ *  can never cut an ANSI escape. */
+function formatRow(
+  row: IMenuRowData,
+  active: boolean,
+  columns: number,
+  color: boolean
+): string {
+  const avail = Math.max(0, columns - 2); // "› " / "  " gutter
+  const hint = row.hint ?? "";
+  let body: string;
+
+  if (hint.length > 0) {
+    const shownHint = clip(hint, Math.floor(avail / 2));
+    const labelMax = Math.max(0, avail - displayWidth(shownHint) - 1);
+    const shownLabel = clip(row.label, labelMax);
+    const gap = Math.max(
+      1,
+      avail - displayWidth(shownLabel) - displayWidth(shownHint)
+    );
+
+    body = `${shownLabel}${" ".repeat(gap)}${shownHint}`;
+  } else {
+    body = clip(row.label, avail);
+  }
+
+  const raw = `${active ? "›" : " "} ${body}`;
+
+  return active ? paint(raw, `${STYLE.brand}${STYLE.bold}`, color) : raw;
+}
 
 /** Menu row data — flat list, no groups (cursor index == row index). */
 export interface IMenuRowData {
@@ -46,81 +96,66 @@ export function formatMenuRows(
   rows: readonly IMenuRowData[],
   cursor: number,
   columns: number,
-  color: boolean
+  viewportRows: number,
+  color: boolean,
+  title: string
 ): string[] {
-  if (rows.length === 0) {
-    return [`  ${paint("(no items)", STYLE.dim, color)}`];
-  }
-
+  const width = Math.max(20, columns);
   const lines: string[] = [];
-  const safeColumns = Math.max(20, columns);
 
-  // ── scroll window: keep cursor visible, show ≤MAX_VISIBLE rows at once ───
+  // Title: a crisp bold header at the TOP (default color — NOT blue; only the
+  // selected row is blue).
+  lines.push(paint(clip(title, width), STYLE.bold, color));
 
-  const start = Math.max(0, cursor - Math.floor(MAX_VISIBLE / 2));
-  const end = Math.min(rows.length, start + MAX_VISIBLE);
-  const actualStart = Math.max(0, end - MAX_VISIBLE);
+  if (rows.length === 0) {
+    lines.push(`  ${paint("(no items)", STYLE.dim, color)}`);
+    lines.push(paint(clip(FOOTER, width), STYLE.dim, color));
 
-  // Prepend "↑ N more" if rows exist above the window.
-  if (actualStart > 0) {
-    lines.push(`  ${paint(`↑ ${actualStart} more`, STYLE.dim, color)}`);
+    return lines;
   }
 
-  // Render the windowed slice.
-  for (let i = actualStart; i < end; i += 1) {
+  // Cap visible rows so the WHOLE region (overlay + input + bar) fits the
+  // terminal height — otherwise the status bar can't clear it and it stacks.
+  const budget = viewportRows > 0 ? viewportRows : 24;
+  const visible = Math.max(
+    1,
+    Math.min(MAX_VISIBLE, budget - REGION_CHROME_ROWS - OVERLAY_OVERHEAD)
+  );
+
+  // Scroll window: keep the cursor visible (flat list ⇒ cursor is a direct index).
+  const windowTop = Math.max(0, cursor - Math.floor(visible / 2));
+  const end = Math.min(rows.length, windowTop + visible);
+  const start = Math.max(0, end - visible);
+
+  if (start > 0) {
+    lines.push(`  ${paint(`↑ ${start} more`, STYLE.dim, color)}`);
+  }
+
+  for (let i = start; i < end; i += 1) {
     const row = rows[i];
 
     if (row === undefined) {
       break;
     }
 
-    const active = i === cursor;
-    const gutter = active ? paint("›", STYLE.brand, color) : " ";
-    const label = paint(row.label, active ? STYLE.brand : STYLE.bold, color);
-
-    // Hint (optional) shown right-aligned with spacing — use available space
-    // after label to fit the hint, or skip if too tight.
-    let hint = "";
-
-    if (row.hint !== undefined && row.hint.length > 0) {
-      const hintDim = paint(row.hint, STYLE.dim, color);
-      const labelWidth = displayWidth(row.label);
-      const hintWidth = displayWidth(row.hint);
-      const gutterAndSpace = 2; // "› "
-
-      // If there's room (gutter + space + label + spacing + hint <= columns),
-      // right-align the hint with at least 3 spaces of padding.
-      const availableForHint = safeColumns - gutterAndSpace - labelWidth - 3;
-
-      if (availableForHint >= hintWidth) {
-        const padding = safeColumns - gutterAndSpace - labelWidth - hintWidth;
-
-        hint = `${" ".repeat(Math.max(1, padding))}${hintDim}`;
-      }
-    }
-
-    const line = `${gutter} ${label}${hint}`;
-
-    // Truncate to columns, respecting wide characters (no wrapping).
-    lines.push(padToWidth(line.slice(0, safeColumns), safeColumns));
+    lines.push(formatRow(row, i === cursor, width, color));
   }
 
-  // Append "↓ N more" if rows exist below the window.
   if (end < rows.length) {
     lines.push(`  ${paint(`↓ ${rows.length - end} more`, STYLE.dim, color)}`);
   }
 
-  // ── divider, description, footer ────────────────────────────────────────
+  // Divider + the selected row's full description (default color — legible) at the
+  // BOTTOM, then the footer hint.
+  lines.push(paint("─".repeat(width), STYLE.dim, color));
 
-  const selectedRow = rows[cursor];
+  const selected = rows[cursor];
 
-  lines.push("─".repeat(safeColumns));
-
-  if (selectedRow !== undefined) {
-    lines.push(selectedRow.describe);
+  if (selected !== undefined) {
+    lines.push(clip(selected.describe, width));
   }
 
-  lines.push(paint("↑/↓ move   enter select   esc close", STYLE.dim, color));
+  lines.push(paint(clip(FOOTER, width), STYLE.dim, color));
 
   return lines;
 }
@@ -129,6 +164,8 @@ export function formatMenuRows(
  * Dependencies injected by the host (cli.ts) to run the menu.
  */
 export interface IInlineMenuDeps {
+  /** Bold header shown at the top of the overlay (e.g. "tsforge — what can I do?"). */
+  readonly title: string;
   readonly render: (lines: readonly string[]) => void;
   readonly close: () => void;
 }
@@ -164,7 +201,15 @@ export function runInlineMenu(
 
     const draw = (): void => {
       cursor = clampIndex(cursor, rows.length);
-      const lines = formatMenuRows(rows, cursor, columns, color);
+      const viewportRows = process.stdout.rows > 0 ? process.stdout.rows : 24;
+      const lines = formatMenuRows(
+        rows,
+        cursor,
+        columns,
+        viewportRows,
+        color,
+        deps.title
+      );
 
       deps.render(lines);
     };

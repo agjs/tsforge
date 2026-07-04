@@ -20,7 +20,7 @@ test("formatted menu shows selected row's describe", () => {
   const rows = capabilityRows(caps);
 
   if (rows.length > 0) {
-    const screen = formatMenuRows(rows, 0, 80, false);
+    const screen = formatMenuRows(rows, 0, 80, 44, false, "help");
 
     expect(screen.join("\n")).toContain(rows[0]?.describe ?? "");
   }

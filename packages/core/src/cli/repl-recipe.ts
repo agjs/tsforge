@@ -43,6 +43,7 @@ export async function openRecipePicker(deps: IReplRecipeDeps): Promise<void> {
   const rows = recipeRows(recipes);
 
   const selected = await runInlineMenu(rows, {
+    title: "recipes",
     render: deps.render,
     close: deps.close,
   });

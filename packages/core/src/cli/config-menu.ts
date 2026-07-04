@@ -454,6 +454,7 @@ export function runConfigMenu(deps: IConfigDeps): Promise<void> {
       const rows = buildMenuRows(settings);
 
       void runInlineMenu(rows, {
+        title: "tsforge config",
         render: (lines) => {
           view.render(lines);
         },

@@ -66,6 +66,7 @@ export function runCapabilityMenu(deps: ICapabilityMenuDeps): Promise<void> {
   const rows = capabilityRows(capabilities);
 
   return runInlineMenu(rows, {
+    title: "tsforge — what can I do?",
     render: deps.render,
     close: deps.close,
   }).then((selected) => {

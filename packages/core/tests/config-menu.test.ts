@@ -200,7 +200,7 @@ test("formatMenuRows: 12 rows with cursor at index 9 shows scroll + windowed sli
     })
   );
 
-  const lines = formatMenuRows(rows, 9, 80, false);
+  const lines = formatMenuRows(rows, 9, 80, 44, false, "Config menu");
   const block = lines.join("\n");
 
   // Should have scroll indicator for rows above (↑ N more).
