@@ -1,9 +1,5 @@
 import { loadRecipes, type ITaskRecipe } from "../config/recipes";
-import {
-  runOwnedMenu,
-  type IMenuRow,
-  type IOwnedMenuSelectControl,
-} from "../render/owned-menu";
+import { runInlineMenu, type IMenuRowData } from "../render/inline-menu";
 
 /**
  * In-REPL recipe picker: discovers .tsforge/recipes/*.json files,
@@ -12,20 +8,19 @@ import {
 
 export interface IReplRecipeDeps {
   readonly cwd: string;
-  readonly color: boolean;
-  readonly suspend: () => void;
-  readonly resume: () => void;
+  readonly render: (lines: readonly string[]) => void;
+  readonly close: () => void;
   readonly runRecipe: (recipe: ITaskRecipe) => void;
   readonly out: (s: string) => void;
 }
 
 /**
- * Map recipes to menu rows with id as label and description (or fallback).
+ * Map recipes to inline menu rows with id as label and description (or fallback).
  * describe is never empty — must always have a one-line summary.
  */
-export function recipeRows(recipes: readonly ITaskRecipe[]): IMenuRow[] {
+export function recipeRows(recipes: readonly ITaskRecipe[]): IMenuRowData[] {
   return recipes.map((recipe) => ({
-    group: "Recipes",
+    id: recipe.id,
     label: recipe.id,
     describe: recipe.description ?? "(no description)",
   }));
@@ -33,7 +28,7 @@ export function recipeRows(recipes: readonly ITaskRecipe[]): IMenuRow[] {
 
 /**
  * Open the recipe picker menu. Loads recipes from .tsforge/recipes/*.json,
- * displays them in an owned menu, and runs the selected recipe.
+ * displays them in an inline menu, and runs the selected recipe.
  * If no recipes are found, outputs a note and returns without opening the menu.
  */
 export async function openRecipePicker(deps: IReplRecipeDeps): Promise<void> {
@@ -45,27 +40,18 @@ export async function openRecipePicker(deps: IReplRecipeDeps): Promise<void> {
     return;
   }
 
-  const rows = (): readonly IMenuRow[] => recipeRows(recipes);
+  const rows = recipeRows(recipes);
 
-  const onSelect = (index: number, control: IOwnedMenuSelectControl): void => {
-    const recipe = recipes[index];
+  const selected = await runInlineMenu(rows, {
+    render: deps.render,
+    close: deps.close,
+  });
+
+  if (selected !== null) {
+    const recipe = recipes[selected];
 
     if (recipe !== undefined) {
       deps.runRecipe(recipe);
-      control.close();
     }
-  };
-
-  const menuDeps = {
-    color: deps.color,
-    title: "tsforge recipes",
-    subtitle: "Select a recipe to run",
-    footer: "↑/↓ move   enter run   esc done",
-    suspend: deps.suspend,
-    resume: deps.resume,
-    rows,
-    onSelect,
-  };
-
-  await runOwnedMenu(menuDeps);
+  }
 }

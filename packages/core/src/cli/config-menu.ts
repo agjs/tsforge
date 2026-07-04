@@ -268,7 +268,7 @@ export function buildSettings(deps: IConfigDeps): ISetting[] {
   ];
 }
 
-// ── interactive driver: owned-menu + edit sub-loop ──────────────────────────
+// ── interactive driver: inline menu + edit sub-loop ───────────────────────────
 
 interface IEditState {
   readonly setting: ISetting;

@@ -1941,9 +1941,12 @@ async function repl(args: ICliArgs): Promise<number> {
               })
             : openRecipePicker({
                 cwd: args.dir,
-                color: true,
-                suspend,
-                resume,
+                render: (lines) => {
+                  statusBar.setOverlay(lines, statusInfo());
+                },
+                close: () => {
+                  statusBar.clearOverlay(statusInfo());
+                },
                 out: (s) => process.stdout.write(s),
                 runRecipe: (recipe) => {
                   if (recipe.gate !== undefined) {

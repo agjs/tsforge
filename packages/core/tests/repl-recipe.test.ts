@@ -8,7 +8,7 @@ test("recipeRows renders id as label + description (or a fallback) as describe",
   ]);
 
   expect(rows[0]).toEqual({
-    group: "Recipes",
+    id: "ship-fix",
     label: "ship-fix",
     describe: "fix to green then review",
   });
