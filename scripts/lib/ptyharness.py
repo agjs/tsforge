@@ -250,9 +250,10 @@ class Checker:
     def __init__(self):
         self.results = []
 
-    def check(self, name, cond):
+    def check(self, name, cond, detail=""):
         self.results.append((name, bool(cond)))
-        print(f"  [{'PASS' if cond else 'FAIL'}] {name}")
+        suffix = f"  — {detail}" if detail and not cond else ""
+        print(f"  [{'PASS' if cond else 'FAIL'}] {name}{suffix}")
         return bool(cond)
 
     @property
