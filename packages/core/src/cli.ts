@@ -609,6 +609,22 @@ function startupHint(): string {
   ].join(sep)}`;
 }
 
+/** The post-turn plan-mode footer — a compact styled chip (matches the startup
+ *  plan line) instead of a plain full-width parenthetical. `ready` = the agent has
+ *  proposed a plan (nudge toward approve); otherwise it's still exploring. */
+function planHint(ready: boolean): string {
+  const chip = paint(
+    `◆ plan${ready ? " ready" : ""}`,
+    STYLE.brand + STYLE.bold,
+    true
+  );
+  const reply = paint("reply to refine · type", STYLE.dim, true);
+  const approve = paint("approve", STYLE.green + STYLE.bold, true);
+  const tail = paint(ready ? "to build" : "when ready", STYLE.dim, true);
+
+  return `  ${chip}  ${paint("·", STYLE.dim, true)}  ${reply} ${approve} ${tail}`;
+}
+
 /** Print the welcome banner, a compact hint, and (when resuming) the prior transcript. */
 function printHeader(info: {
   dir: string;
@@ -1291,11 +1307,7 @@ async function repl(args: ICliArgs): Promise<number> {
       const planned =
         last?.role === "assistant" && /^##\s*plan\b/im.test(last.content);
 
-      echo(
-        planned
-          ? "\n  📋 plan ready — reply to refine, or type 'approve' to implement\n"
-          : "\n  (plan mode — reply to refine, or type 'approve' to implement)\n"
-      );
+      echo(`\n${planHint(planned)}\n`);
 
       return;
     }
