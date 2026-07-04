@@ -83,6 +83,7 @@ import {
   agentCardTop,
   agentCardBottom,
   agentBar,
+  makeAgentRail,
   StatusBar,
   MIN_ROWS,
   welcomeBanner,
@@ -91,7 +92,6 @@ import {
   PROMPT_COLS,
   type IStatusInfo,
 } from "./render";
-import { displayWidth } from "./render/width";
 import type { ITask } from "./spec";
 import { loadLedger, activeRules, forgetMemory } from "./loop/memory";
 import {
@@ -1647,89 +1647,16 @@ async function repl(args: ICliArgs): Promise<number> {
   let editorControl: IEditorHandle | null = null;
 
   // Each agent turn renders as a left-accent card: a rounded `╭ <model>` cap, every
-  // body line prefixed with the `│ ` rail, and a `╰` cap when the turn ends. The cap
-  // is emitted once, on the turn's first streamed output; state resets per runLine.
-  const AGENT_RAIL = agentBar(true);
+  // body line prefixed with the `│ ` rail (wrapping inside it), and a `╰` cap when
+  // the turn ends. The cap is emitted once, on the turn's first streamed output.
+  // The card's content budget leaves the rail (2) + 2 spare columns, so no terminal
+  // — however it treats the right margin — ever wraps a row and drops the rail.
+  const railInnerWidth = (): number =>
+    (process.stdout.columns > 0 ? process.stdout.columns : 80) -
+    PROMPT_COLS -
+    2;
   let agentTurnOpen = false;
-  let agentAtLineStart = true;
-  let agentSawContent = false;
-  let agentCol = 0; // visible columns used on the current card line (rail excluded)
-  let agentInEsc = false; // inside an ANSI escape (occupies no columns)
-
-  // Prefix each streamed line with the card rail. Stateful so the rail is correct
-  // even when a line is split across chunks (tokens). Leading blank lines (the
-  // stream separator + any blanks the model emits before its first token) are
-  // swallowed until real content arrives — this is what closes the old gap. Long
-  // lines soft-wrap at the card's inner width so text can never spill past the
-  // rail (ANSI escapes pass through and don't count toward the column budget).
-  // Consume an ANSI escape byte (returns it verbatim; escapes occupy no columns),
-  // or null when `ch` is ordinary text. Split out to keep railAgentChunk simple.
-  const passEsc = (ch: string): string | null => {
-    if (agentInEsc) {
-      if (ch === "m") {
-        agentInEsc = false;
-      }
-
-      return ch;
-    }
-
-    if (ch === "\x1b") {
-      agentInEsc = true;
-
-      return ch;
-    }
-
-    return null;
-  };
-
-  const railAgentChunk = (text: string): string => {
-    // Wrap at the card's inner width, leaving the last terminal column empty so an
-    // auto-margin terminal never wraps the row itself (which would drop the rail).
-    const cols = process.stdout.columns > 0 ? process.stdout.columns : 80;
-    const wrapAt = Math.max(20, cols - PROMPT_COLS - 1);
-    let out = "";
-
-    for (const ch of text) {
-      const esc = passEsc(ch);
-
-      if (esc !== null) {
-        out += esc;
-
-        continue;
-      }
-
-      if (ch === "\n") {
-        if (agentAtLineStart) {
-          if (agentSawContent) {
-            out += `${AGENT_RAIL}\n`; // keep the rail on interior blank lines
-          }
-          // else: swallow the blank line (no gap under the cap)
-        } else {
-          out += "\n";
-          agentAtLineStart = true;
-        }
-
-        agentCol = 0;
-
-        continue;
-      }
-
-      if (agentAtLineStart) {
-        out += AGENT_RAIL;
-        agentAtLineStart = false;
-        agentSawContent = true;
-        agentCol = 0;
-      } else if (agentCol >= wrapAt) {
-        out += `\n${AGENT_RAIL}`; // soft-wrap INSIDE the rail — never spills out
-        agentCol = 0;
-      }
-
-      out += ch;
-      agentCol += displayWidth(ch); // count wide chars (emoji, CJK) as 2 cols
-    }
-
-    return out;
-  };
+  let agentRail = makeAgentRail(agentBar(true), railInnerWidth);
 
   // Route streamed agent output through the bar so it scrolls above the pinned
   // input row; cleared on loop exit so later/headless writes go straight to stdout.
@@ -1737,14 +1664,11 @@ async function repl(args: ICliArgs): Promise<number> {
     interactiveStream = (text): void => {
       if (!agentTurnOpen) {
         agentTurnOpen = true;
-        agentAtLineStart = true;
-        agentSawContent = false;
-        agentCol = 0;
-        agentInEsc = false;
+        agentRail = makeAgentRail(agentBar(true), railInnerWidth); // fresh per turn
         statusBar.writeStream(`\n${agentCardTop(statusInfo().model, true)}\n`);
       }
 
-      statusBar.writeStream(railAgentChunk(text));
+      statusBar.writeStream(agentRail.feed(text));
     };
   }
 
