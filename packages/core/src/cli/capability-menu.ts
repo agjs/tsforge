@@ -5,13 +5,11 @@ import { buildCapabilities } from "./capabilities";
 
 /**
  * Capability browser menu dependencies.
- * Used to dispatch capability selections and manage the editor suspend/resume lifecycle.
+ * Used to dispatch capability selections to run commands, prefill, or open wizards.
  */
 export interface ICapabilityMenuDeps {
   readonly color: boolean;
   readonly hasRecipes: boolean;
-  readonly suspend: () => void;
-  readonly resume: () => void;
   readonly runCommand: (command: string) => void;
   readonly prefill: (command: string) => void;
   readonly openWizard: (opener: "scaffold" | "recipe") => Promise<void>;

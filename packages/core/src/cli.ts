@@ -1926,8 +1926,6 @@ async function repl(args: ICliArgs): Promise<number> {
       return {
         color: process.stdout.isTTY,
         hasRecipes,
-        suspend,
-        resume,
         runCommand: (c) => {
           void runLine(`/${c}`);
         },
