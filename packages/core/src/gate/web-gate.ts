@@ -11,6 +11,7 @@ import {
   TYPE_AWARE_CONFIG,
   BROWSER_CHECK,
   STUB_CHECK,
+  STAGED_GATE,
 } from "./tool-paths";
 import { packEnvPrefix } from "./shell";
 import { ensureWebGateTsconfig, PROJECT_TSCONFIG } from "./tsconfig";
@@ -96,8 +97,6 @@ export function buildWebGate(
         " "
       )
     : null;
-  const lintChain = typeAware === null ? lint : `${lint} && ${typeAware}`;
-
   // Run the project's bun tests when any exist. Test files use `bun:test` (a test
   // runtime, not part of the app build) — they're EXCLUDED from the app's tsconfig
   // so `tsc` doesn't choke on `bun:test`, and run here instead so a broken test
@@ -106,8 +105,27 @@ export function buildWebGate(
   // isn't silently skipped; see `webTestProbe`.
   const tests = webTestProbe();
 
+  // The SAME commands as the old `a && b && …` chain, run sequentially by the
+  // staged-gate runner so a failure names its stage ("✗ typecheck FAILED") instead
+  // of burying it in one opaque wall. Order is identical to the old chain, so the
+  // stop-on-first-failure behaviour is unchanged; the type-aware lint is its own
+  // stage (only when the scaffold has a tsconfig, as before).
+  const stages = [
+    { label: "vite build", command: build },
+    { label: "typecheck", command: tsc },
+    { label: "lint", command: lint },
+    ...(typeAware === null
+      ? []
+      : [{ label: "type-aware lint", command: typeAware }]),
+    { label: "stub check", command: stubs },
+    { label: "format", command: format },
+    { label: "tests", command: tests },
+    { label: "browser smoke", command: render },
+  ];
+  const payload = Buffer.from(JSON.stringify(stages)).toString("base64");
+
   return {
-    command: `${build} && ${tsc} && ${lintChain} && ${stubs} && ${format} && ${tests} && ${render}`,
+    command: `bun "${STAGED_GATE}" ${payload}`,
     label: `${template.label} (build + tests + behaviour smoke)`,
   };
 }

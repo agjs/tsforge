@@ -59,3 +59,4 @@ export const TEST_COVERAGE_CHECK = join(
 );
 export const BOOT_CHECK = join(PKG_ROOT, "scripts", "boot-check.ts");
 export const PROPTEST_CHECK = join(PKG_ROOT, "scripts", "proptest-check.ts");
+export const STAGED_GATE = join(PKG_ROOT, "scripts", "staged-gate.ts");
