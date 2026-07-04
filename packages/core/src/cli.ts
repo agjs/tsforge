@@ -1222,7 +1222,7 @@ async function repl(args: ICliArgs): Promise<number> {
     });
 
     if (plan.length > 0) {
-      process.stdout.write(
+      echo(
         `\n📋 PLAN — review, then type 'approve' to build, or describe changes:\n\n${plan}\n\n`
       );
       awaitingPlanApproval = true;
@@ -1239,7 +1239,7 @@ async function repl(args: ICliArgs): Promise<number> {
       const notes = approved ? "" : line;
 
       if (!approved) {
-        process.stdout.write("  ↳ folding your changes into the build\n");
+        echo("  ↳ folding your changes into the build\n");
       }
 
       await drive((opts) => session.implementBuild(notes, opts));
@@ -1270,7 +1270,7 @@ async function repl(args: ICliArgs): Promise<number> {
       planMode = false;
       planDiscussed = false;
       session.setPlanMode(false);
-      process.stdout.write("  ✓ plan approved — implementing\n");
+      echo("  ✓ plan approved — implementing\n");
       await drive((opts) => session.send(PLAN_APPROVED_NOTE, opts));
 
       return;
@@ -1286,7 +1286,7 @@ async function repl(args: ICliArgs): Promise<number> {
       const planned =
         last?.role === "assistant" && /^##\s*plan\b/im.test(last.content);
 
-      process.stdout.write(
+      echo(
         planned
           ? "\n  📋 plan ready — reply to refine, or type 'approve' to implement\n"
           : "\n  (plan mode — reply to refine, or type 'approve' to implement)\n"
@@ -1652,34 +1652,76 @@ async function repl(args: ICliArgs): Promise<number> {
   let agentTurnOpen = false;
   let agentAtLineStart = true;
   let agentSawContent = false;
+  let agentCol = 0; // visible columns used on the current card line (rail excluded)
+  let agentInEsc = false; // inside an ANSI escape (occupies no columns)
 
   // Prefix each streamed line with the card rail. Stateful so the rail is correct
   // even when a line is split across chunks (tokens). Leading blank lines (the
   // stream separator + any blanks the model emits before its first token) are
-  // swallowed until real content arrives — this is what closes the old gap.
+  // swallowed until real content arrives — this is what closes the old gap. Long
+  // lines soft-wrap at the card's inner width so text can never spill past the
+  // rail (ANSI escapes pass through and don't count toward the column budget).
+  // Consume an ANSI escape byte (returns it verbatim; escapes occupy no columns),
+  // or null when `ch` is ordinary text. Split out to keep railAgentChunk simple.
+  const passEsc = (ch: string): string | null => {
+    if (agentInEsc) {
+      if (ch === "m") {
+        agentInEsc = false;
+      }
+
+      return ch;
+    }
+
+    if (ch === "\x1b") {
+      agentInEsc = true;
+
+      return ch;
+    }
+
+    return null;
+  };
+
   const railAgentChunk = (text: string): string => {
+    const wrapAt = Math.max(1, process.stdout.columns - PROMPT_COLS);
     let out = "";
 
     for (const ch of text) {
-      if (agentAtLineStart) {
-        if (ch === "\n") {
+      const esc = passEsc(ch);
+
+      if (esc !== null) {
+        out += esc;
+
+        continue;
+      }
+
+      if (ch === "\n") {
+        if (agentAtLineStart) {
           if (agentSawContent) {
             out += `${AGENT_RAIL}\n`; // keep the rail on interior blank lines
           }
-
-          continue; // otherwise swallow the blank line (no gap under the cap)
+          // else: swallow the blank line (no gap under the cap)
+        } else {
+          out += "\n";
+          agentAtLineStart = true;
         }
 
+        agentCol = 0;
+
+        continue;
+      }
+
+      if (agentAtLineStart) {
         out += AGENT_RAIL;
         agentAtLineStart = false;
         agentSawContent = true;
+        agentCol = 0;
+      } else if (agentCol >= wrapAt) {
+        out += `\n${AGENT_RAIL}`; // soft-wrap INSIDE the rail — never spills out
+        agentCol = 0;
       }
 
       out += ch;
-
-      if (ch === "\n") {
-        agentAtLineStart = true;
-      }
+      agentCol += 1;
     }
 
     return out;
@@ -1693,6 +1735,8 @@ async function repl(args: ICliArgs): Promise<number> {
         agentTurnOpen = true;
         agentAtLineStart = true;
         agentSawContent = false;
+        agentCol = 0;
+        agentInEsc = false;
         statusBar.writeStream(`\n${agentCardTop(statusInfo().model, true)}\n`);
       }
 
