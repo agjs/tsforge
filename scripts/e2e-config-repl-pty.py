@@ -6,80 +6,24 @@ command palette (the way a user actually does), and exercise the settings hub:
   3. Add a model via the inline text fields; it persists + tsforge stays alive.
   4. Throughout, tsforge keeps running (no stdin-handoff quit, no key leak).
 
-Uses an embedded deterministic model stub so boot succeeds offline."""
-import os
-import pty
-import select
-import struct
-import fcntl
-import termios
-import time
-import tempfile
+Uses the shared deterministic model stub so boot succeeds offline."""
 import json
+import os
 import sys
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import tempfile
+import time
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CLI = os.path.join(REPO, "packages/core/src/cli.ts")
-MODEL = "stub-model"
-
-
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *_a):
-        pass
-
-    def do_GET(self):
-        body = json.dumps(
-            {"object": "list", "data": [{"id": MODEL, "max_model_len": 32768}]}
-        ).encode()
-        self.send_response(200)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self):
-        length = int(self.headers.get("content-length", "0"))
-        if length:
-            self.rfile.read(length)
-        self.send_response(200)
-        self.send_header("content-type", "text/event-stream")
-        self.end_headers()
-        self.wfile.write(b'data: {"choices":[{"index":0,"delta":{"content":"ok"}}]}\n\n')
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
-
-
-def start_server():
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv, srv.server_address[1]
-
-
-def read_until(m, marker, timeout, buf=""):
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        r, _, _ = select.select([m], [], [], 0.3)
-        if m in r:
-            try:
-                d = os.read(m, 65536)
-            except OSError:
-                return False, buf
-            if not d:
-                return False, buf
-            buf += d.decode("utf-8", "replace")
-            if marker(buf):
-                return True, buf
-    return False, buf
-
-
-def alive(pid):
-    try:
-        done, _ = os.waitpid(pid, os.WNOHANG)
-        return done == 0
-    except ChildProcessError:
-        return False
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from ptyharness import (  # noqa: E402
+    Checker,
+    alive,
+    drain,
+    read_until,
+    reap,
+    spawn_tsforge,
+    start_stub_server,
+    wait_for,
+)
 
 
 def open_config(m):
@@ -96,37 +40,25 @@ def open_config(m):
     return read_until(m, lambda b: "Cycles through your models.json" in b, 10)
 
 
-RESULTS = []
-
-
-def check(name, cond):
-    RESULTS.append((name, cond))
-    print(f"  [{'PASS' if cond else 'FAIL'}] {name}")
+def still_running(pid, grace):
+    """True if the process survives `grace` seconds (fails FAST if it dies)."""
+    died = wait_for(lambda: not alive(pid), grace)
+    return not died
 
 
 def main():
-    srv, port = start_server()
+    t = Checker()
+    srv, port = start_stub_server()
     home = tempfile.mkdtemp(prefix="tsforge-cfgrepl-")
     models_path = os.path.join(home, ".tsforge", "models.json")
-    env = dict(
-        os.environ,
-        TSFORGE_BASE_URL=f"http://127.0.0.1:{port}/v1",
-        TSFORGE_MODEL=MODEL,
-        TSFORGE_HOME=home,
-        NO_UPDATE_NOTIFIER="1",
-    )
-    pid, m = pty.fork()
-    if pid == 0:
-        os.execvpe("bun", ["bun", CLI, "--no-gate"], env)
-        os._exit(127)
-    fcntl.ioctl(m, termios.TIOCSWINSZ, struct.pack("HHHH", 44, 120, 0, 0))
+    pid, m = spawn_tsforge(port, home=home, rows=44, cols=120)
 
     got, _ = read_until(m, lambda b: "plan mode" in b or "› " in b, 40)
-    check("REPL boots", got)
+    t.check("REPL boots", got)
 
     # 1) open /config, cancel with Esc → must stay alive.
     got, buf = open_config(m)
-    check("/config opens the settings hub from the palette", got)
+    t.check("/config opens the settings hub from the palette", got)
     # Inline rendering shows ≤8 rows at a time. Check that descriptions render
     # for the visible rows (we can see at least one description per group by
     # scrolling or in the initial view).
@@ -134,42 +66,39 @@ def main():
     have_desc, buf = read_until(
         m, lambda b: "Cycles through your models.json" in b, 6, buf
     )
-    check("every setting renders its own description", have_desc)
+    t.check("every setting renders its own description", have_desc)
     # Gate shows a concise human LABEL (here "none"), never a raw absolute tsc path.
     gate_label_ok = "Gate command" in buf and ".bin" not in buf and "/Users/" not in buf
-    check("gate shows a label, not a raw path", gate_label_ok)
+    t.check("gate shows a label, not a raw path", gate_label_ok)
     os.write(m, b"\x1b")  # Esc
-    time.sleep(1.2)
-    check("tsforge STILL RUNNING after cancel", alive(pid))
+    t.check("tsforge STILL RUNNING after cancel", still_running(pid, 1.2))
 
     # 1b) a Tools toggle flips live: Web tools (settings index 5) off→on.
     got, _ = open_config(m)
     os.write(m, b"\x1b[B" * 5)  # ↓×5 to "Web tools"
-    time.sleep(0.3)
+    drain(m, 0.3)  # selection highlight has no unique text marker; settle the redraw
     os.write(m, b"\r")  # toggle
     web_on, _ = read_until(m, lambda b: "Web tools" in b and "on" in b, 8)
-    check("toggling Web tools flips off→on (live value)", web_on)
+    t.check("toggling Web tools flips off→on (live value)", web_on)
     os.write(m, b"\x1b")  # done
-    time.sleep(0.8)
-    check("tsforge STILL RUNNING after Web toggle", alive(pid))
+    t.check("tsforge STILL RUNNING after Web toggle", still_running(pid, 0.8))
 
     # 2) reopen, toggle Mode (index 2: Active model, Add a model, Mode) → plan→normal.
     got, _ = open_config(m)
     os.write(m, b"\x1b[B\x1b[B")  # ↓↓ to "Mode"
-    time.sleep(0.3)
+    drain(m, 0.3)  # settle the selection redraw (no unique marker)
     os.write(m, b"\r")  # toggle
     changed, _ = read_until(m, lambda b: "Mode" in b and "normal" in b, 8)
-    check("toggling Mode flips plan→normal (live value)", changed)
+    t.check("toggling Mode flips plan→normal (live value)", changed)
     os.write(m, b"\x1b")  # done
-    time.sleep(0.8)
-    check("tsforge STILL RUNNING after toggle", alive(pid))
+    t.check("tsforge STILL RUNNING after toggle", still_running(pid, 0.8))
     # Wait for the overlay to actually close (not just escape pressed).
     read_until(m, lambda b: "› " in b, 2)  # Back to editor input prompt
 
     # 3) reopen, Add a model (index 1) via inline text fields.
     got, _ = open_config(m)
     os.write(m, b"\x1b[B")  # ↓ to "Add a model"
-    time.sleep(0.3)
+    drain(m, 0.3)  # settle the selection redraw (no unique marker)
     os.write(m, b"\r")  # enter edit
     # Use the unambiguous "field N of 4" counter as the marker (the title
     # "Add a model" itself contains "Model"/"Name", which would false-match).
@@ -179,19 +108,20 @@ def main():
         ("field 3 of 4", b"m-repl\r"),  # Model
         ("field 4 of 4", b"\r"),  # API key — optional, empty
     ]
+    # Carry the buffer across fields: each marker is unique per field, so the
+    # wait for "field N+1" only matches NEW output (no drain — a drain here
+    # would consume the next marker's bytes before we look for them).
     reached_all = True
     lastbuf = ""
     for marker, keys in steps:
-        ok, lastbuf = read_until(m, lambda b, mk=marker: mk in b, 8)
+        ok, lastbuf = read_until(m, lambda b, mk=marker: mk in b, 8, lastbuf)
         reached_all = reached_all and ok
         os.write(m, keys)
-        time.sleep(0.3)
-    check("add-model: all four fields render in the real REPL", reached_all)
+    t.check("add-model: all four fields render in the real REPL", reached_all)
     # drain a moment so the async saveModelsConfig flushes, back to menu.
-    _, lastbuf = read_until(m, lambda _b: False, 2.0, lastbuf)
+    lastbuf = drain(m, 2.0, lastbuf)
     os.write(m, b"\x1b")  # done
-    time.sleep(0.8)
-    check("tsforge STILL RUNNING after add-model", alive(pid))
+    t.check("tsforge STILL RUNNING after add-model", still_running(pid, 0.8))
 
     # 3b) REGRESSION: text typed into a config field must render ONCE, not twice.
     # The palette launches /config via a fire-and-forget runLine then resume()s the
@@ -201,59 +131,52 @@ def main():
     # row, and the editor stays suspended while /config runs.
     got, _ = open_config(m)
     os.write(m, b"\x1b[B")  # ↓ to "Add a model"
-    time.sleep(0.3)
+    drain(m, 0.3)  # settle the selection redraw (no unique marker)
     os.write(m, b"\r")  # enter edit
     read_until(m, lambda b: "field 1 of 4" in b, 8)
     mark = "ZZUNIQUEZZ"
     for ch in mark:
         os.write(m, ch.encode())
-        time.sleep(0.05)
-    _, frame = read_until(m, lambda _b: False, 1.2, "")  # latest redraw(s)
+        time.sleep(0.05)  # human-speed keystrokes: each must land as its own event
+    frame = drain(m, 1.2)  # latest redraw(s)
     # In inline mode, there's no clear-home (no alt-screen), so just check the frame.
     single = frame.count(mark) == 1
-    check(f"typed text renders ONCE, not doubled (saw {frame.count(mark)}x)", single)
+    t.check(f"typed text renders ONCE, not doubled (saw {frame.count(mark)}x)", single)
     os.write(m, b"\x1b")  # cancel the edit → back to menu
     # Wait for the menu (not the edit view) before the next Esc.
     read_until(m, lambda b: "Cycles through your models.json" in b, 3)
-    time.sleep(0.4)
+    drain(m, 0.4)  # settle the menu redraw before closing it
     os.write(m, b"\x1b")  # close config → back to the REPL editor
     # Inline rendering doesn't use alt-screen, so no ESC[?1049l to wait for.
     # Just wait for the editor prompt to return.
     read_until(m, lambda b: "› " in b, 3)
-    time.sleep(0.6)
-    check("tsforge STILL RUNNING after double-type check", alive(pid))
+    t.check("tsforge STILL RUNNING after double-type check", still_running(pid, 0.6))
 
     # 3c) after /config closes, the editor must work again (inert cleared) and its
     # own input must not be doubled either.
     edmark = "YYEDITYY"
     for ch in edmark:
         os.write(m, ch.encode())
-        time.sleep(0.05)
+        time.sleep(0.05)  # human-speed keystrokes: each must land as its own event
     _, ebuf = read_until(m, lambda b: edmark in b, 3.0, "")
     editor_ok = ebuf.count(edmark) == 1
-    check(f"editor input works + single after config (saw {ebuf.count(edmark)}x)", editor_ok)
+    t.check(f"editor input works + single after config (saw {ebuf.count(edmark)}x)", editor_ok)
     if not editor_ok:
         print("      DEBUG ebuf tail:", repr(ebuf[-500:]))
 
     persisted = os.path.exists(models_path) and (
         json.load(open(models_path)).get("active") == "repl-model"
     )
-    check("model persisted + active in models.json", persisted)
+    t.check("model persisted + active in models.json", persisted)
     if not persisted:
         tdir = os.path.join(home, ".tsforge")
         print(f"      DEBUG home/.tsforge exists={os.path.isdir(tdir)} "
               f"contents={os.listdir(tdir) if os.path.isdir(tdir) else 'NONE'}")
         print("      DEBUG terminal tail:", repr(lastbuf[-400:]))
 
-    try:
-        os.kill(pid, 9)
-    except ProcessLookupError:
-        pass
+    reap(pid, m, exit_cmd=b"")
     srv.shutdown()
-
-    npass = sum(1 for _, c in RESULTS if c)
-    print(f"\n==== {npass}/{len(RESULTS)} — {'ALL PASS' if npass == len(RESULTS) else 'FAILURES'} ====")
-    sys.exit(0 if npass == len(RESULTS) else 1)
+    sys.exit(t.finish())
 
 
 if __name__ == "__main__":
