@@ -1,26 +1,27 @@
 import { test, expect } from "bun:test";
 import { capabilityRows } from "../src/cli/capability-menu";
 import { buildCapabilities } from "../src/cli/capabilities";
-import { renderMenu } from "../src/render/owned-menu";
+import { formatMenuRows } from "../src/render/inline-menu";
 
-test("capabilityRows preserves group + label + describe for every capability", () => {
+test("capabilityRows preserves label + describe for every capability", () => {
   const caps = buildCapabilities({ hasRecipes: true });
   const rows = capabilityRows(caps);
 
   expect(rows.length).toBe(caps.length);
 
   for (let i = 0; i < caps.length; i++) {
-    expect(rows[i]?.group).toBe(caps[i]?.group);
     expect(rows[i]?.label).toBe(caps[i]?.label);
     expect(rows[i]?.describe).toBe(caps[i]?.describe);
   }
 });
 
-test("rendered browser shows all capability descriptions", () => {
+test("formatted menu shows selected row's describe", () => {
   const caps = buildCapabilities({ hasRecipes: true });
-  const screen = renderMenu(capabilityRows(caps), 0, false);
+  const rows = capabilityRows(caps);
 
-  for (const c of caps) {
-    expect(screen).toContain(c.describe);
+  if (rows.length > 0) {
+    const screen = formatMenuRows(rows, 0, 80, false);
+
+    expect(screen.join("\n")).toContain(rows[0]?.describe ?? "");
   }
 });

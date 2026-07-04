@@ -1,9 +1,5 @@
-import { runOwnedMenu } from "../render/owned-menu";
-import type {
-  IMenuRow,
-  IOwnedMenuDeps,
-  IOwnedMenuSelectControl,
-} from "../render/owned-menu";
+import { runInlineMenu } from "../render/inline-menu";
+import type { IMenuRowData } from "../render/inline-menu";
 import type { ICapability } from "./capabilities";
 import { buildCapabilities } from "./capabilities";
 
@@ -19,28 +15,47 @@ export interface ICapabilityMenuDeps {
   readonly runCommand: (command: string) => void;
   readonly prefill: (command: string) => void;
   readonly openWizard: (opener: "scaffold" | "recipe") => Promise<void>;
-  readonly showDetail: (cap: ICapability) => Promise<void>;
+  readonly render: (lines: readonly string[]) => void;
+  readonly close: () => void;
 }
 
 /**
- * Convert capabilities to menu rows.
- * Each row shows the capability's group, label, and description.
+ * Convert capabilities to inline menu rows.
+ * Each row shows the capability's label, describe, and a hint (slash command or wizard tag).
  */
-export function capabilityRows(caps: readonly ICapability[]): IMenuRow[] {
-  return caps.map((cap) => ({
-    group: cap.group,
-    label: cap.label,
-    describe: cap.describe,
-  }));
+export function capabilityRows(caps: readonly ICapability[]): IMenuRowData[] {
+  return caps.map((cap) => {
+    let hint = "";
+
+    if (cap.kind === "command") {
+      const invoke = cap.invoke;
+
+      if (invoke?.type === "run" || invoke?.type === "prefill") {
+        hint = invoke.command;
+      }
+    } else {
+      const invoke = cap.invoke;
+
+      if (invoke?.type === "wizard") {
+        hint = invoke.opener;
+      }
+    }
+
+    return {
+      id: cap.id,
+      label: cap.label,
+      hint,
+      describe: cap.describe,
+    };
+  });
 }
 
 /**
- * Run the capability browser menu.
- * Displays all capabilities grouped, allows navigation and selection.
+ * Run the capability browser menu via inline dropdown.
+ * Displays all capabilities, allows navigation and selection.
  * - command (run) → runCommand, close
  * - command (prefill) → prefill, close
  * - wizard → openWizard, close
- * - passive → showDetail, stay in menu
  */
 export function runCapabilityMenu(deps: ICapabilityMenuDeps): Promise<void> {
   const stdin = process.stdin;
@@ -50,32 +65,23 @@ export function runCapabilityMenu(deps: ICapabilityMenuDeps): Promise<void> {
   }
 
   const capabilities = buildCapabilities({ hasRecipes: deps.hasRecipes });
+  const rows = capabilityRows(capabilities);
 
-  const menuRows = (): readonly IMenuRow[] => capabilityRows(capabilities);
-
-  const onSelect = async (
-    index: number,
-    control: IOwnedMenuSelectControl
-  ): Promise<void> => {
-    const cap = capabilities[index];
-
-    if (cap === undefined) {
-      return;
+  return runInlineMenu(rows, {
+    render: deps.render,
+    close: deps.close,
+  }).then((selected) => {
+    if (selected === null) {
+      return Promise.resolve();
     }
 
-    if (cap.kind === "passive") {
-      // Show detail and stay in menu
-      control.pause();
+    const cap = capabilities[selected];
 
-      await Promise.resolve(deps.showDetail(cap))
-        .catch(() => {
-          // ignore
-        })
-        .finally(() => {
-          control.resume();
-        });
-    } else if (cap.kind === "command") {
-      // Handle command invocation
+    if (cap === undefined) {
+      return Promise.resolve();
+    }
+
+    if (cap.kind === "command") {
       const invoke = cap.invoke;
 
       if (invoke?.type === "run") {
@@ -84,32 +90,17 @@ export function runCapabilityMenu(deps: ICapabilityMenuDeps): Promise<void> {
         deps.prefill(invoke.command);
       }
 
-      control.close();
-    } else {
-      // Open wizard and close
-      const invoke = cap.invoke;
+      return Promise.resolve();
+    }
 
-      if (invoke?.type !== "wizard") {
-        return;
-      }
+    const invoke = cap.invoke;
 
-      await Promise.resolve(deps.openWizard(invoke.opener)).catch(() => {
+    if (invoke?.type === "wizard") {
+      return Promise.resolve(deps.openWizard(invoke.opener)).catch(() => {
         // ignore
       });
-      control.close();
     }
-  };
 
-  const ownedMenuDeps: IOwnedMenuDeps = {
-    color: deps.color,
-    title: "tsforge — what can I do?",
-    subtitle: "Commands · Tools · Wizards",
-    footer: "↑/↓ move   enter select   esc done",
-    suspend: deps.suspend,
-    resume: deps.resume,
-    rows: menuRows,
-    onSelect,
-  };
-
-  return runOwnedMenu(ownedMenuDeps);
+    return Promise.resolve();
+  });
 }

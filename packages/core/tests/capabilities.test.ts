@@ -1,7 +1,6 @@
 import { test, expect } from "bun:test";
 import { buildCapabilities } from "../src/cli/capabilities";
 import { COMMANDS } from "../src/cli/commands";
-import { TOOL_NAME } from "../src/agent";
 
 const deps = { hasRecipes: true };
 
@@ -10,17 +9,13 @@ test("every capability has group, label, non-empty describe, valid kind", () => 
     expect(c.group.length).toBeGreaterThan(0);
     expect(c.label.length).toBeGreaterThan(0);
     expect(c.describe.length).toBeGreaterThan(0);
-    expect(["command", "wizard", "passive"]).toContain(c.kind);
+    expect(["command", "wizard"]).toContain(c.kind);
   }
 });
 
-test("command/wizard capabilities carry an invoke; passive carry detail", () => {
+test("command/wizard capabilities carry an invoke", () => {
   for (const c of buildCapabilities(deps)) {
-    if (c.kind === "passive") {
-      expect((c.detail ?? "").length).toBeGreaterThan(0);
-    } else {
-      expect(c.invoke).toBeDefined();
-    }
+    expect(c.invoke).toBeDefined();
   }
 });
 
@@ -45,35 +40,6 @@ test("ANTI-DRIFT: every slash command has a discovery home", () => {
     }
 
     expect(covered.has(spec.name)).toBe(true);
-  }
-});
-
-test("ANTI-DRIFT: every model tool has a discovery home", () => {
-  const passiveIds = new Set(
-    buildCapabilities(deps)
-      .filter((c) => c.kind === "passive")
-      .map((c) => c.id)
-  );
-  // Tools surfaced as their own capability id `tool.<name>`. Scaffolders/core
-  // edit tools are represented by the "Build"/"Core" rows, so exempt them.
-  const exempt = new Set([
-    "read",
-    "run",
-    "edit",
-    "create",
-    "edit_lines",
-    "scaffold_web",
-    "scaffold_ui",
-    "scaffold_routes",
-    "add_dependency",
-  ]);
-
-  for (const tool of Object.values(TOOL_NAME)) {
-    if (exempt.has(tool)) {
-      continue;
-    }
-
-    expect(passiveIds.has(`tool.${tool}`)).toBe(true);
   }
 });
 

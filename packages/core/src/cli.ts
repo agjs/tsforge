@@ -1904,9 +1904,9 @@ async function repl(args: ICliArgs): Promise<number> {
       }
     };
 
-    // `/help` — the capability browser. On a TTY, opens an interactive menu; off-TTY,
-    // prints the static help text so pipes/logs are unchanged. Extracted to keep
-    // cognitive complexity in check.
+    // `/help` — the capability browser. On a TTY, opens an inline dropdown menu;
+    // off-TTY, prints the static help text so pipes/logs are unchanged. Extracted
+    // to keep cognitive complexity in check.
     const buildHelpDeps = async (): Promise<
       Parameters<typeof runCapabilityMenu>[0]
     > => {
@@ -1924,7 +1924,7 @@ async function repl(args: ICliArgs): Promise<number> {
       const hasRecipes = (await loadRecipes(args.dir)).length > 0;
 
       return {
-        color: true,
+        color: process.stdout.isTTY,
         hasRecipes,
         suspend,
         resume,
@@ -1962,19 +1962,11 @@ async function repl(args: ICliArgs): Promise<number> {
                   }
                 },
               }),
-        showDetail: async (cap) => {
-          process.stdout.write(
-            `\n${cap.label}\n\n${String(cap.detail)}\n\nPress any key to continue…\n`
-          );
-
-          await new Promise<void>((resolve) => {
-            const onData = (): void => {
-              process.stdin.removeListener("data", onData);
-              resolve();
-            };
-
-            process.stdin.once("data", onData);
-          });
+        render: (lines) => {
+          statusBar.setOverlay(lines, statusInfo());
+        },
+        close: () => {
+          statusBar.clearOverlay(statusInfo());
         },
       };
     };
@@ -1986,9 +1978,22 @@ async function repl(args: ICliArgs): Promise<number> {
         return;
       }
 
-      const deps = await buildHelpDeps();
+      editorControl?.suspend();
+      editorControl?.setInputInert(true);
 
-      await runCapabilityMenu(deps);
+      try {
+        const deps = await buildHelpDeps();
+
+        await runCapabilityMenu(deps);
+      } finally {
+        editorControl?.setInputInert(false);
+        editorControl?.resume();
+        editorControl?.getBuffer().setText("");
+      }
+
+      if (statusBar.active) {
+        statusBar.update(statusInfo());
+      }
     };
 
     // Helper: repaint the editor buffer to the status bar after palette insertion.
