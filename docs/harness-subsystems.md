@@ -65,21 +65,21 @@ Filesystem-state outer loop: a `features.json` checklist drives an implement→e
 →persist cycle per feature until all green or a feature exhausts its attempts.
 
 **Invariants**
-- Feature ids come from the model and become path components (`contracts/<id>.md`),
-  so they're validated kebab (`isFeatureId`) at parse/load AND `basename`-guarded at
-  the write point (defence in depth against `../` traversal).
+- Feature ids come from the model, so they're validated kebab (`isFeatureId`) at
+  parse/load and unsafe ids are dropped (defence against `../` traversal). Greenfield
+  writes only `features.json` / `spec.md` / `progress.md` (no per-feature contract files).
 - State persists after every attempt (resume-first: an interrupted run picks up from
   the last verified feature; a feature loaded at `attempts>=max` is `stuck`, never re-run).
 - The evaluator is layered + short-circuits gate → browser → judge; the gate stays
   the authority, the browser layer is skip-tolerant, the judge is reject-by-default
   and trace-blind (design-rule #2: it sees the built artifact, never the generator trace).
-- Contract negotiation is OFF unless `TSFORGE_CONTRACT` is set.
 
 **Risk areas** an unsafe id slipping past `isFeatureId`; an exhausted feature wedging
 the loop; the judge seeing the generator's trace.
 
 **Checklist** `tests/greenfield.test.ts`, `tests/greenfield-planner.test.ts`
-(unsafe-id drop), `tests/greenfield-contract.test.ts` (path-escape → `feature.md`).
+(unsafe-id drop). (The `TSFORGE_CONTRACT` negotiation feature + `contracts/<id>.md`
+writes were removed — no contract test.)
 
 ## tools — `src/loop/tools/*`
 
@@ -87,7 +87,7 @@ Tool handlers + dispatch. Handlers return a `string` (model feedback); mutations
 reported via `ctx.report(ILoopEvent)`, never the return value.
 
 **Invariants**
-- Mutating tool ⇒ reports a change (or is in `SPECIAL`: `run`, `yield_status`).
+- Mutating tool ⇒ reports a change (or is in `SPECIAL`: `run`, `script`).
 - Mutation events fire ONLY on a real change (empty/no-op ⇒ no event).
 - A failure returns a tool-error string — never throws into the loop.
 - A tool's text must not lie about state (e.g. "deps installed" when install failed).
