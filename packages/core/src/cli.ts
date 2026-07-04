@@ -1927,7 +1927,8 @@ async function repl(args: ICliArgs): Promise<number> {
         color: process.stdout.isTTY,
         hasRecipes,
         runCommand: (c) => {
-          void runLine(`/${c}`);
+          // c already includes the leading slash (registry stores "/sessions").
+          void runLine(c);
         },
         prefill: (c) => {
           editorControl?.getBuffer().setText(`${c} `);

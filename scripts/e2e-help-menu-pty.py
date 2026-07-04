@@ -137,6 +137,24 @@ def main():
     time.sleep(0.8)
     check("tsforge STILL RUNNING after /help closes", alive(pid))
 
+    # Selecting a command must actually RUN it (regression: runCommand prepended a
+    # slash to the already-slashed name → "//sessions" → unknown command). Reopen
+    # /help, pick /plan (rows 0=/compact 1=/clear 2=/plan), confirm it toggled mode.
+    os.write(m, b"/")
+    read_until(m, lambda b: "commands" in b, 8)
+    os.write(m, b"help\r")
+    read_until(m, lambda b: "what can I do?" in b, 8)
+    os.write(m, b"\x1b[B")
+    time.sleep(0.25)
+    os.write(m, b"\x1b[B")
+    time.sleep(0.25)
+    os.write(m, b"\r")  # select /plan
+    ran, selbuf = read_until(m, lambda b: "normal" in b, 6)
+    check(
+        "selecting a /help command RUNS it (no //, mode → normal)",
+        ran and "unknown command" not in selbuf,
+    )
+
     try:
         os.kill(pid, 9)
     except ProcessLookupError:
