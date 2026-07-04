@@ -1,11 +1,7 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  filterCommands,
-  clampIndex,
-  renderMenu,
-} from "../src/render/command-menu";
+import { filterCommands, clampIndex } from "../src/render/command-menu";
 import { COMMANDS, COMMAND_VERBS, formatHelp } from "../src/cli/commands";
 
 test("filterCommands: empty query returns all; leading slash is ignored", () => {
@@ -26,24 +22,6 @@ test("clampIndex wraps and tolerates an empty list", () => {
   expect(clampIndex(3, 3)).toBe(0);
   expect(clampIndex(1, 3)).toBe(1);
   expect(clampIndex(0, 0)).toBe(0);
-});
-
-test("renderMenu marks the selected row and shows summaries; plain when color off", () => {
-  const items = filterCommands(COMMANDS, "");
-  const out = renderMenu(items, 1, "", false);
-  const lines = out.split("\n");
-
-  // header + one row per item
-  expect(lines).toHaveLength(items.length + 1);
-  // selected row (index 1 → line 2) carries the gutter marker
-  expect(lines[2]?.startsWith("›")).toBe(true);
-  expect(out).toContain(items[1]?.summary ?? "");
-  // color=false ⇒ no ANSI escapes
-  expect(out).not.toContain(String.fromCharCode(27));
-});
-
-test("renderMenu: empty result shows a 'no matching command' line", () => {
-  expect(renderMenu([], 0, "zzz", false)).toContain("no matching command");
 });
 
 test("registry ↔ cli.ts switch parity (no command without an executor, or vice versa)", () => {

@@ -1,7 +1,16 @@
 import { emitKeypressEvents } from "node:readline";
 import { STYLE, paint } from "./style";
-import { clampIndex } from "./command-menu";
 import { displayWidth, sliceToWidth } from "./width";
+
+/** Keep `selected` within `[0, count)` (wraps), so ↑/↓ never points off-list.
+ *  Lives here (the menu core); `command-menu` re-exports it for its importers. */
+export function clampIndex(selected: number, count: number): number {
+  if (count <= 0) {
+    return 0;
+  }
+
+  return ((selected % count) + count) % count;
+}
 
 /**
  * Rows shown in the popup at once — a tight dropdown above the prompt, never a

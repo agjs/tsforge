@@ -6,12 +6,9 @@ import {
   renderFrame,
 } from "../src/render/wizard";
 import type { IWizardStep } from "../src/render/wizard.types";
-import {
-  renderMenu,
-  filterCommands,
-  clampIndex,
-} from "../src/render/command-menu";
-import { COMMANDS } from "../src/cli/commands";
+import { filterCommands, clampIndex } from "../src/render/command-menu";
+import { formatMenuRows, type IMenuRowData } from "../src/render/inline-menu";
+import { COMMANDS, type ICommandSpec } from "../src/cli/commands";
 import {
   filterFiles,
   formatCompletionRows,
@@ -162,28 +159,40 @@ describe("wizard e2e — rendered screen at each step", () => {
   });
 });
 
-describe("command palette e2e — rendered menu", () => {
-  test("the menu renders matching commands and marks the selection", () => {
+describe("command palette e2e — rendered menu (inline)", () => {
+  const toRows = (cmds: readonly ICommandSpec[]): IMenuRowData[] =>
+    cmds.map((c) => ({ id: c.name, label: c.name, describe: c.summary }));
+
+  test("the menu renders matching commands and titles with 'commands'", () => {
     const all = filterCommands(COMMANDS, "");
     const screen = new VirtualScreen(24, 80);
 
-    screen.feed("\x1b[2J\x1b[H" + renderMenu(all, 0, "", false));
+    screen.feed(
+      "\x1b[2J\x1b[H" +
+        formatMenuRows(toRows(all), 0, 80, 24, false, "commands").join("\n")
+    );
 
-    // At least one known command is visible (the palette is non-empty).
     expect(screen.text().length).toBeGreaterThan(0);
+    expect(screen.text()).toContain("commands"); // the overlay title
   });
 
-  test("typing a query filters the visible list", () => {
+  test("typing a query filters the visible list; the query rides in the title", () => {
     const all = filterCommands(COMMANDS, "");
     const filtered = filterCommands(COMMANDS, "clear");
     const screen = new VirtualScreen(24, 80);
 
     screen.feed(
       "\x1b[2J\x1b[H" +
-        renderMenu(filtered, clampIndex(0, filtered.length), "clear", false)
+        formatMenuRows(
+          toRows(filtered),
+          clampIndex(0, filtered.length),
+          80,
+          24,
+          false,
+          "/clear"
+        ).join("\n")
     );
 
-    // Filtering narrows the set (or keeps it equal if only matches exist).
     expect(filtered.length).toBeLessThanOrEqual(all.length);
     expect(screen.text().toLowerCase()).toContain("clear");
   });

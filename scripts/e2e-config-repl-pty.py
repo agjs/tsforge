@@ -85,12 +85,14 @@ def alive(pid):
 def open_config(m):
     """Open /config via the palette; return (ok, fresh-buffer-after-menu)."""
     os.write(m, b"/")
-    ok, _ = read_until(m, lambda b: "model, mode, gate" in b, 10)
+    # The inline palette titles itself "commands" (the live query becomes the title
+    # as you type); wait for that, then filter to /config and run it.
+    ok, _ = read_until(m, lambda b: "commands" in b, 10)
     if not ok:
         return False, ""
     os.write(m, b"config\r")
-    # Wait for the inline menu overlay: first setting's description "Cycles through"
-    # is a unique marker that appears once the overlay renders.
+    # Wait for the inline config overlay: first setting's description is a unique
+    # marker that appears once the overlay renders.
     return read_until(m, lambda b: "Cycles through your models.json" in b, 10)
 
 

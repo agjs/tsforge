@@ -12,7 +12,7 @@ import { runConfigMenu } from "./cli/config-menu";
 import { runCapabilityMenu } from "./cli/capability-menu";
 import { openScaffoldInRepl } from "./cli/repl-scaffold";
 import { openRecipePicker } from "./cli/repl-recipe";
-import { pickCommand } from "./render/command-menu";
+import { pickCommand, type IPaletteView } from "./render/command-menu";
 import {
   pickFileInline,
   filterFiles,
@@ -2037,8 +2037,20 @@ async function repl(args: ICliArgs): Promise<number> {
       // input (see openFilePicker). Resumed in finally.
       editorHandle?.suspend();
 
+      // Inline palette: paint the command list as an overlay above the input row
+      // (no alt-screen), same mechanism as the `@` picker and /help. The live
+      // query rides in the overlay title.
+      const view: IPaletteView = {
+        render: (lines) => {
+          statusBar.setOverlay(lines, statusInfo());
+        },
+        close: () => {
+          statusBar.clearOverlay(statusInfo());
+        },
+      };
+
       try {
-        const picked = await pickCommand(process.stdout.isTTY);
+        const picked = await pickCommand(view);
 
         if (picked !== null) {
           if (editorHandle !== null) {
@@ -2064,6 +2076,13 @@ async function repl(args: ICliArgs): Promise<number> {
               void runLine(picked.name);
             }
           }
+        } else if (editorHandle !== null) {
+          // Cancel (Esc / backspace-past-empty): drop the lingering trigger "/"
+          // so it doesn't stay in the input.
+          editorHandle.getBuffer().setText("");
+          repaintEditor(editorHandle);
+        } else if (rl !== null) {
+          rl.write(null, { ctrl: true, name: "u" });
         }
       } finally {
         paletteOpen = false;

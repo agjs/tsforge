@@ -110,9 +110,9 @@ def main():
     got, _ = read_until(m, lambda b: "plan mode" in b or "› " in b, 40)
     check("REPL boots", got)
 
-    # Open /help via the palette.
+    # Open /help via the palette (the inline palette titles itself "commands").
     os.write(m, b"/")
-    read_until(m, lambda b: "reset the conversation" in b or "summarize" in b, 10)
+    read_until(m, lambda b: "commands" in b, 10)
     os.write(m, b"help\r")
     got, _ = read_until(m, lambda b: "what can I do?" in b, 8)
     check("/help opens the capability browser (title renders)", got)
