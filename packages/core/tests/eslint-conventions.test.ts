@@ -56,7 +56,10 @@ describe("naming-convention from conventions", () => {
     expect(entries["@typescript-eslint/naming-convention"]).toBeUndefined();
   });
 
-  test("web surface keeps the Register exemption", () => {
+  test("web surface uses BARE PascalCase — never requires the I-prefix", () => {
+    // React/shadcn/TanStack name interfaces `Props`, not `IProps`; the web surface
+    // drops the I-prefix (and needs no Register filter — bare PascalCase already
+    // permits `Register`). Even an explicit i-prefix convention stays bare on web.
     const entry = conventionRuleEntries(
       resolveConventions({ interfaces: "i-prefix" }),
       "web"
@@ -64,12 +67,19 @@ describe("naming-convention from conventions", () => {
 
     expect(entry).toEqual([
       "error",
-      {
-        selector: "interface",
-        format: ["PascalCase"],
-        prefix: ["I"],
-        filter: { regex: "^(Register)$", match: false },
-      },
+      { selector: "interface", format: ["PascalCase"] },
+    ]);
+  });
+
+  test("core still requires the I-prefix (web change did not leak to core)", () => {
+    const entry = conventionRuleEntries(
+      resolveConventions({ interfaces: "i-prefix" }),
+      "core"
+    )["@typescript-eslint/naming-convention"];
+
+    expect(entry).toEqual([
+      "error",
+      { selector: "interface", format: ["PascalCase"], prefix: ["I"] },
     ]);
   });
 });

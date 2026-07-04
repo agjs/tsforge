@@ -462,7 +462,7 @@ const REACT_GUIDANCE = [
   "        the view, or is big enough to stand alone — otherwise compose primitives",
   "        directly in index.tsx. Do NOT wrap a single primitive in a feature name",
   "        (NO `DealsTable` around <Table> — render <Table> with deal columns instead).",
-  "      – <feature>.types.ts — the feature's interfaces/types (I-prefixed).",
+  "      – <feature>.types.ts — the feature's interfaces/types.",
   "      – <feature>.constants.ts — its `as const` registries/label maps/column specs.",
   "      – <feature>.hooks.ts — custom hooks (data fetching, derived/computed state).",
   "        Hooks live HERE, never in a component body (no-state-in-component-body).",

@@ -1,8 +1,9 @@
 // tsforge's bundled strict config for WEB stacks (React/Vue/Svelte via Vite).
-// Like strict.eslint.config.mjs, it ENFORCES `I`-prefixed interfaces (project
-// house style — `IIssue`, `IButtonProps`), with ONE exemption: library module-
-// augmentation interfaces whose name the library dictates and you cannot rename
-// (e.g. TanStack Router's `interface Register`). Differs from the core config in
+// Unlike strict.eslint.config.mjs, it does NOT require the `I`-prefix on interfaces:
+// the React/shadcn/TanStack ecosystem names interfaces `Props`, not `IProps`, so web
+// interfaces need only be PascalCase (bare `ButtonProps` and `IButtonProps` both pass).
+// Bare PascalCase also permits library-mandated names (e.g. TanStack's `Register`).
+// Differs from the core config in
 // one other way: it allows `as const` (banning only value-changing `as`/`<Foo>`
 // via AST selectors), since `as const` is idiomatic for typed literal registries.
 //
@@ -53,18 +54,16 @@ if (packIds.length > 0) {
   }
 }
 
-// Convention-managed rules — default to the web house style (I-prefix with the
-// TanStack `Register` exemption + enum ban + the value-changing cast bans) so a
-// failed import NEVER drops the cast/enum safety; the builder then rebuilds them
-// from TSFORGE_CONVENTIONS (enum ban split from the ALWAYS-on cast bans).
+// Convention-managed rules — default to the web house style (BARE PascalCase
+// interfaces + enum ban + the value-changing cast bans) so a failed import NEVER
+// drops the cast/enum safety; the builder then rebuilds them from TSFORGE_CONVENTIONS
+// (enum ban split from the ALWAYS-on cast bans).
 let conventionRules = {
   "@typescript-eslint/naming-convention": [
     "error",
     {
       selector: "interface",
       format: ["PascalCase"],
-      prefix: ["I"],
-      filter: { regex: "^(Register)$", match: false },
     },
   ],
   "no-restricted-syntax": [

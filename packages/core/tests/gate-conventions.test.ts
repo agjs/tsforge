@@ -139,6 +139,25 @@ describe("core gate honors TSFORGE_CONVENTIONS", () => {
   });
 });
 
+describe("web gate: bare interface names are allowed (no I-prefix)", () => {
+  const I_PREFIXED = "export interface IUser {\n  id: string;\n}\n";
+
+  test("web default accepts a BARE interface — while core rejects the same file", async () => {
+    // The whole point: React/shadcn/TanStack name interfaces `User`, not `IUser`.
+    expect(await erroredRules(STRICT_WEB_CONFIG, BARE_INTERFACE)).not.toContain(
+      NAMING
+    );
+    // Core still enforces the I-prefix on the identical source (no leak).
+    expect(await erroredRules(STRICT_CONFIG, BARE_INTERFACE)).toContain(NAMING);
+  });
+
+  test("web still accepts an I-prefixed interface (bare PascalCase permits both)", async () => {
+    expect(await erroredRules(STRICT_WEB_CONFIG, I_PREFIXED)).not.toContain(
+      NAMING
+    );
+  });
+});
+
 describe("web gate: enum allowance never removes cast bans", () => {
   test("default: enum banned, cast banned", async () => {
     expect(await erroredRules(STRICT_WEB_CONFIG, ENUM_DECL)).toContain(NRS);
