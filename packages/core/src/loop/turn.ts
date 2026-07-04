@@ -641,14 +641,12 @@ export function persistDetail(e: IErrorItem): string {
  * optional fix command, validate, and return a terminal result (done/stuck) or
  * null to keep going (having fed the failures back into the conversation).
  */
-export async function settleGate(
-  ctx: ILoopCtx,
-  state: ILoopState,
-  turn: number
-): Promise<IRunResult | null> {
-  const { task, cwd, parse, report, messages } = ctx;
-  // Snapshot before the fixers so we can tell the model exactly what they changed
-  // (else it re-fixes already-fixed style and edits now-stale text → rejects).
+/** STEP 1 — deterministic auto-fix: run the janitor fixers (TS quick-fixes,
+ *  ast-grep, the optional `task.fix` command) and return which files they changed,
+ *  so the model is told exactly what moved under it (else it re-fixes already-
+ *  fixed style and edits now-stale text → rejects). Exported for unit tests. */
+export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
+  const { task, cwd, report } = ctx;
   const beforeFix = await snapshotMtimes(cwd, task.files);
 
   await applyDeterministicFixes(ctx);
@@ -674,6 +672,17 @@ export async function settleGate(
     });
   }
 
+  return autoFixed;
+}
+
+/** STEP 2 — run the gate command (tsc/eslint/tests/…): announce it on live
+ *  streams, run `validate`, and flush any final newline-less output line. */
+async function runGateStep(
+  ctx: ILoopCtx,
+  turn: number
+): Promise<Awaited<ReturnType<typeof validate>>> {
+  const { task, cwd, parse, report } = ctx;
+
   if (ctx.onGateChunk !== undefined) {
     report({
       kind: "tool",
@@ -691,12 +700,13 @@ export async function settleGate(
   // filter is still holding so it reaches the terminal.
   ctx.onGateChunk?.flush?.();
 
-  // Run meta-rules against the project — project structure invariants the gate
-  // can't express. Convert error-severity violations to gate failures; warn
-  // violations are surfaced in feedback but don't block. Apply config overrides
-  // from ctx.ruleOverrides (already loaded and normalized in run.ts).
-  let metaViolations: IMetaRuleViolation[] = [];
+  return gate;
+}
 
+/** STEP 3 — meta-rules: project structure invariants the gate command can't
+ *  express (e.g. test-sibling-required), change-scoped to the files the AGENT
+ *  wrote this session. Best-effort: a throwing rule degrades to no violations. */
+function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
   try {
     // The files the AGENT created/edited this session — what change-scoped rules
     // (test-sibling-required) enforce on. This is the real signal, not git: it
@@ -704,16 +714,121 @@ export async function settleGate(
     // never blocks on the repo's pre-existing untested code.
     const changed = [...(ctx.touched ?? [])];
     const metaContext = buildMetaRuleContext(
-      cwd,
+      ctx.cwd,
       ctx.stackProfile?.packs ?? [],
       changed
     );
 
-    metaViolations = runMetaRules(META_RULES, metaContext, ctx.ruleOverrides);
+    return runMetaRules(META_RULES, metaContext, ctx.ruleOverrides);
   } catch (err) {
     // Degrade silently — meta-rules are supplementary to the gate
     trace("runMetaRules", err);
+
+    return [];
   }
+}
+
+/** A terminal STUCK result — shared shape for every convergence guard. */
+function stuckResult(
+  ctx: ILoopCtx,
+  turn: number,
+  detail: string,
+  messagePrefix: string
+): IRunResult {
+  ctx.report({
+    kind: "stuck",
+    task: ctx.task.id,
+    cycles: turn,
+    detail,
+    message: `task ${ctx.task.id}: ${messagePrefix}${detail}`,
+  });
+
+  return {
+    task: ctx.task.id,
+    redConfirmed: true,
+    status: RUN_STATUS.stuck,
+    cycles: turn,
+    reason: STUCK_REASON.stalled,
+    detail,
+  };
+}
+
+/** STEP 4 — the three convergence guards, in escalating coarseness: a single
+ *  (file,rule) persisting `samePersist` cycles; the WHOLE error set unchanged
+ *  `gateStuckRepeats` cycles; and no new error-count low in `noProgressCycles`
+ *  cycles. Returns the terminal STUCK result, or null to keep looping. Exported
+ *  for unit tests (feed crafted states + error sets → stuck vs continue). */
+export function checkStuck(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  gateErrors: IErrorItem[],
+  turn: number
+): IRunResult | null {
+  // PRIMARY no-progress stop: the model keeps failing at the SAME (file,rule)
+  // for `samePersist` cycles running — even if other errors churn. Hand back a
+  // concrete blocker rather than spinning to a raw turn cap.
+  const persisted = trackErrorAges(state, gateErrors);
+
+  if (persisted !== null) {
+    return stuckResult(ctx, turn, persistDetail(persisted), "");
+  }
+
+  // Coarser secondary net: the WHOLE error set unchanged this many cycles.
+  state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
+    ? state.gateNoProgress + 1
+    : 0;
+  state.prevGateErrors = gateErrors;
+
+  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
+    const detail = `gate unchanged ${String(LOOP_LIMITS.gateStuckRepeats)} cycles (${String(gateErrors.length)} error(s) not converging)`;
+
+    return stuckResult(ctx, turn, detail, "stuck — ");
+  }
+
+  // NET-PROGRESS stop (the convergence guard, not a turn count): big apps run as
+  // long as the error count keeps dropping; we stop when it churns without getting
+  // closer to green — the through-12 failure mode that evaded both guards above.
+  if (trackNetProgress(state, gateErrors.length)) {
+    const detail = `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(LOOP_LIMITS.noProgressCycles)} cycles (best ${String(state.bestErrorCount)}) — not converging`;
+
+    return stuckResult(ctx, turn, detail, "stuck — ");
+  }
+
+  return null;
+}
+
+/** STEP 5 — inject the red-gate feedback (rule docs + the auto-fix notice) into
+ *  the conversation as the next user message, so the model fixes in-context. */
+async function injectFeedback(
+  ctx: ILoopCtx,
+  gateErrors: IErrorItem[],
+  metaViolations: IMetaRuleViolation[],
+  autoFixed: string[]
+): Promise<void> {
+  const feedback = await gateFeedback(
+    gateErrors,
+    ctx.task,
+    ctx.cwd,
+    metaViolations
+  );
+  const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
+
+  ctx.messages.push({ role: "user", content: `${notice}${feedback}` });
+}
+
+/** Settle a turn against the gate: auto-fix → gate → meta-rules → (green? done :
+ *  stuck-check → feedback). A thin orchestrator over the exported steps above —
+ *  the signature and `IRunResult | null` contract (null ⇒ keep looping) are the
+ *  same as ever, so both drivers (run.ts / session.ts) are untouched. */
+export async function settleGate(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  turn: number
+): Promise<IRunResult | null> {
+  const { task, report } = ctx;
+  const autoFixed = await autoFixStep(ctx);
+  const gate = await runGateStep(ctx, turn);
+  const metaViolations = runMetaRulesStep(ctx);
 
   const metaErrors = metaViolations.filter((v) => v.severity === "error");
   const gateErrors = gate.errors.concat(
@@ -776,87 +891,13 @@ export async function settleGate(
     };
   }
 
-  // PRIMARY no-progress stop: the model keeps failing at the SAME (file,rule)
-  // for `samePersist` cycles running — even if other errors churn. Hand back a
-  // concrete blocker rather than spinning to a raw turn cap.
-  const persisted = trackErrorAges(state, gateErrors);
+  const stuck = checkStuck(ctx, state, gateErrors, turn);
 
-  if (persisted !== null) {
-    const detail = persistDetail(persisted);
-
-    report({
-      kind: "stuck",
-      task: task.id,
-      cycles: turn,
-      detail,
-      message: `task ${task.id}: ${detail}`,
-    });
-
-    return {
-      task: task.id,
-      redConfirmed: true,
-      status: RUN_STATUS.stuck,
-      cycles: turn,
-      reason: STUCK_REASON.stalled,
-      detail,
-    };
+  if (stuck !== null) {
+    return stuck;
   }
 
-  // Coarser secondary net: the WHOLE error set unchanged this many cycles.
-  state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
-    ? state.gateNoProgress + 1
-    : 0;
-  state.prevGateErrors = gateErrors;
-
-  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
-    const detail = `gate unchanged ${String(LOOP_LIMITS.gateStuckRepeats)} cycles (${String(gateErrors.length)} error(s) not converging)`;
-
-    report({
-      kind: "stuck",
-      task: task.id,
-      cycles: turn,
-      detail,
-      message: `task ${task.id}: stuck — ${detail}`,
-    });
-
-    return {
-      task: task.id,
-      redConfirmed: true,
-      status: RUN_STATUS.stuck,
-      cycles: turn,
-      reason: STUCK_REASON.stalled,
-      detail,
-    };
-  }
-
-  // NET-PROGRESS stop (the convergence guard, not a turn count): big apps run as
-  // long as the error count keeps dropping; we stop when it churns without getting
-  // closer to green — the through-12 failure mode that evaded both guards above.
-  if (trackNetProgress(state, gateErrors.length)) {
-    const detail = `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(LOOP_LIMITS.noProgressCycles)} cycles (best ${String(state.bestErrorCount)}) — not converging`;
-
-    report({
-      kind: "stuck",
-      task: task.id,
-      cycles: turn,
-      detail,
-      message: `task ${task.id}: stuck — ${detail}`,
-    });
-
-    return {
-      task: task.id,
-      redConfirmed: true,
-      status: RUN_STATUS.stuck,
-      cycles: turn,
-      reason: STUCK_REASON.stalled,
-      detail,
-    };
-  }
-
-  const feedback = await gateFeedback(gateErrors, task, cwd, metaViolations);
-  const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
-
-  messages.push({ role: "user", content: `${notice}${feedback}` });
+  await injectFeedback(ctx, gateErrors, metaViolations, autoFixed);
 
   return null;
 }
