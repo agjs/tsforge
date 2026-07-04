@@ -307,44 +307,6 @@ function buildMenuRows(settings: ISetting[]): IMenuRowData[] {
   }));
 }
 
-/**
- * Legacy renderer for tests that verify the old alt-screen format.
- * Tests can keep using this for assertion — it's not called by the new inline flow.
- * @deprecated — use formatMenuRows for new code.
- */
-export function renderMenu(
-  settings: ISetting[],
-  cursor: number,
-  color: boolean
-): string {
-  const rows: string[] = [];
-  let group = "";
-
-  settings.forEach((s, i) => {
-    if (s.group !== group) {
-      group = s.group;
-      rows.push("", paint(group, STYLE.bold, color));
-    }
-
-    const active = i === cursor;
-    const gutter = active ? paint("›", STYLE.brand, color) : " ";
-    const label = paint(s.label, active ? STYLE.brand : STYLE.bold, color);
-    const value = paint(oneLine(s.read()), STYLE.brandLight, color);
-
-    rows.push(`${gutter} ${label}  ${paint("·", STYLE.dim, color)} ${value}`);
-    rows.push(`    ${paint(s.describe, STYLE.dim, color)}`);
-  });
-
-  return [
-    paint("tsforge config", STYLE.brand, color),
-    `${paint("Settings", STYLE.bold, color)} · change anything here`,
-    "─".repeat(52),
-    ...rows,
-    "",
-    paint("↑/↓ move   enter change   esc done", STYLE.dim, color),
-  ].join("\n");
-}
-
 // ── the driver ───────────────────────────────────────────────────────────────
 
 /**

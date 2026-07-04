@@ -6,7 +6,6 @@ import {
   draftToEntry,
   nextModelName,
   oneLine,
-  renderMenu,
   type IConfigDeps,
   type ISetting,
 } from "../src/cli/config-menu";
@@ -179,26 +178,13 @@ test("only human choices are in /config — no eval/kill-switch knobs", () => {
   expect(ids).toContain("tools.tdd");
 });
 
-test("renderMenu shows EVERY setting's description (config screen is the docs)", () => {
-  const { deps } = fakeDeps();
-  const settings = buildSettings(deps);
-  const screen = renderMenu(settings, 0, false);
-
-  for (const s of settings) {
-    expect(screen).toContain(s.describe);
-  }
-});
-
 test("formatMenuRows: 12 rows with cursor at index 9 shows scroll + windowed slice + describe + footer", () => {
-  const rows: IMenuRowData[] = Array.from(
-    { length: 12 },
-    (_, i) => ({
-      id: `row-${i}`,
-      label: `Setting ${i}`,
-      hint: `hint-${i}`,
-      describe: `Description for setting ${i}`,
-    })
-  );
+  const rows: IMenuRowData[] = Array.from({ length: 12 }, (_, i) => ({
+    id: `row-${i}`,
+    label: `Setting ${i}`,
+    hint: `hint-${i}`,
+    describe: `Description for setting ${i}`,
+  }));
 
   const lines = formatMenuRows(rows, 9, 80, 44, false, "Config menu");
   const block = lines.join("\n");
@@ -215,6 +201,7 @@ test("formatMenuRows: 12 rows with cursor at index 9 shows scroll + windowed sli
   expect(block).toContain("────");
   // Rows above the window should not all be shown (if window < 12).
   const rowCount = lines.filter((l) => l.includes("Setting")).length;
+
   expect(rowCount).toBeLessThanOrEqual(8);
 });
 
