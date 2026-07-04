@@ -108,5 +108,590 @@
     "what": "Enforce using type parameter when calling `Array#reduce` instead of using a type assertion.",
     "bad": "[1, 2, 3].reduce((arr, num) => arr.concat(num * 2), [] as number[]);\n\n['a', 'b'].reduce(\n  (accumulator, name) => ({\n    ...accumulator,\n    [name]: true,\n  }),\n  {} as Record<string, boolean>,",
     "good": "[1, 2, 3].reduce<number[]>((arr, num) => arr.concat(num * 2), []);\n\n['a', 'b'].reduce<Record<string, boolean>>(\n  (accumulator, name) => ({\n    ...accumulator,\n    [name]: true,\n  }),\n  {},"
+  },
+  "tsforge/no-api-key-in-client": {
+    "what": "Disallow constructing an AI provider client in a client component — it leaks the API key into the browser bundle. Call the model from a server route/action.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/require-completion-token-limit": {
+    "what": "Require a token limit (maxTokens / max_tokens) on AI completion calls to bound runaway cost and latency.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-user-input-in-system-prompt": {
+    "what": "Warn when a system prompt is built by string interpolation/concatenation — splicing request data into the system role enables prompt injection. Keep the system prompt constant; pass user input as a user message.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/id-param-requires-object-authz": {
+    "what": "Warn when a handler reads `params.id` and queries the database without an authorization check in the same function.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/mutating-route-requires-authz": {
+    "what": "POST/PUT/PATCH/DELETE route handlers must call an authorization helper before mutating state.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/server-action-requires-authz": {
+    "what": "Files with `\"use server\"` that perform database mutations must call an authorization helper in the same function.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/job-name-must-be-constant": {
+    "what": "Disallow string-literal job names in `<queue>.add(name, ...)` calls — use a constant identifier so all consumers share one source of truth.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/job-options-must-set-attempts": {
+    "what": "Every `<queue>.add(...)` must configure `attempts` (per-call or via `defaultJobOptions`); when `attempts > 1`, also require `backoff`.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-blocking-concurrency-zero": {
+    "what": "Disallow `new Worker(name, processor, { concurrency: <numericLiteral ≤ 0> })` — non-positive concurrency blocks job processing.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/queue-options-must-set-removeoncomplete": {
+    "what": "Every `<queue>.add(...)` must configure `removeOnComplete` (per-call or via `defaultJobOptions`) so completed jobs don't accumulate in Redis.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/queue-options-must-set-removeonfail": {
+    "what": "Every `<queue>.add(...)` must configure `removeOnFail` (per-call or via `defaultJobOptions`) so failed jobs don't accumulate in Redis.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/worker-must-implement-close": {
+    "what": "Classes that own a `new Worker(...)` instance must declare a close-equivalent method for graceful shutdown.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/worker-must-listen-failed": {
+    "what": "Every `new Worker(...)` must register listeners for required events (default `failed`) — BullMQ failures are silent unless explicitly subscribed.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-bare-date-now": {
+    "what": "Disallow direct calls to non-deterministic time/random sources (`Date.now()`, `new Date()`, `Date()`, `Math.random()`) outside an allowlisted set of utility paths. Determinism is required for snapshot tests, workflow replays, and time-travel debugging — every consumer should route through a typed util that can be faked in tests.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-template-trim-empty-ternary": {
+    "what": "Disallow inline `<template>.trim() === '' ? fallback : <template>.trim()` patterns. Extract to a named utility.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-throw-literal": {
+    "what": "Disallow throwing primitive literals (strings, numbers) — throw Error instances so error handlers can propagate status and stack traces correctly.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/prefer-early-return": {
+    "what": "Prefer guard clauses (early return) over wrapping the function body in a multi-statement `if` without an `else`.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-historical-comments": {
+    "what": "Disallow comments that frame code relative to what it used to do or to a past incident ('Codex flagged X', 'before the fix', 'after the refactor', 'we used to', 'no longer'). Source comments must describe the current invariant; history belongs in the commit message or PR description, where it doesn't rot when the code changes again.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-narration-comments": {
+    "what": "Disallow narrative comments like 'Here we...', 'Now we...', 'First, we...'. These read as step-by-step prose and add no information a future reader can't get from the code itself. Often a tell that the comment was generated by an agent describing its own changes.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-pr-reference-comments": {
+    "what": "Disallow PR/issue references in comments. They belong in commit messages and PR descriptions — leaving them in source rots when the repo moves, the issue tracker migrates, or the numbering changes.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/account-scoped-tables-require-where": {
+    "what": "Require every Drizzle query against a configured account-scoped table to filter by a scope column (accountId by default).",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-nested-db-transaction": {
+    "what": "Forbid invoking the outer db's `.transaction(...)` method inside a transaction callback — use the callback's `tx` parameter instead to avoid deadlocks.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-raw-sql-outside-allowlist": {
+    "what": "Disallow drizzle-orm `sql` tagged template literals outside an allowlist of files (migrations, raw queries).",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/relations-must-cover-fks": {
+    "what": "Every Drizzle table that declares a foreignKey(...) must be covered by a relations(...) call. Searches sibling `relations.ts` files by default.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/schema-files-must-not-import-driver": {
+    "what": "Disallow imports from database driver packages inside schema files. Schema files must remain driver-agnostic.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/schema-files-must-only-export-schema": {
+    "what": "Restrict schema files to exporting only Drizzle schema artifacts (tables, schemas, relations, indices) and types.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/tables-must-have-timestamps": {
+    "what": "Require Drizzle tables to declare standard timestamp columns (createdAt by default).",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/timestamp-must-specify-mode": {
+    "what": "Require every Drizzle timestamp(...) call to explicitly set `mode: 'date'` or `mode: 'string'`.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/update-delete-account-scoped-must-filter-scope": {
+    "what": "Require Drizzle `.update()` / `.delete()` against account-scoped tables to filter by a scope column in `.where()`.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/update-delete-must-have-where": {
+    "what": "Require every Drizzle `.update()` and `.delete()` call to include a `.where()` clause — unscoped writes affect every row.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/consistent-status-via-set": {
+    "what": "Inside Elysia route handlers, set HTTP status via `set.status = N`, not by returning a `new Response(body, { status: N })`.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-decorate-state-collision": {
+    "what": "Disallow duplicate keys across `.decorate()` / `.state()` / `.derive()` / `.resolve()` calls on a single Elysia instance — duplicates silently overwrite and break plugin composition.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-separate-model-interfaces": {
+    "what": "Disallow TypeScript interfaces that duplicate the shape of a runtime schema with a matching name. Use `typeof Schema.static` (or your project's equivalent) instead.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/prefer-destructured-context": {
+    "what": "Prefer destructured context (`{ body, set, ... }`) over passing the entire dynamic Elysia context object into controllers/services.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/prefer-direct-return": {
+    "what": "Inside Elysia route handlers, return values directly instead of wrapping them in `new Response(...)` or `Response.json(...)` — Elysia handles serialization and content-type automatically.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/prefer-static-services": {
+    "what": "Discourage `new Service()` inside Elysia route handlers when the class is stateless — prefer static methods or a singleton.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/prefer-throw-status": {
+    "what": "Inside Elysia route handlers, prefer `throw status(...)` over try/catch blocks that build their own Response — local catches bypass Elysia's typed onError pipeline.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/require-hooks-before-routes": {
+    "what": "Elysia hooks (onError, onBeforeHandle, etc.) must register before any route methods on the same instance — top-down waterfall semantics mean a hook registered after a route does not apply to it.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/require-elysia-plugin-name": {
+    "what": "Exported Elysia plugin instances must declare `new Elysia({ name: '...' })` so the runtime can deduplicate plugin re-imports.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/error-handler-must-set-status": {
+    "what": "Custom Fastify setErrorHandler callbacks must call reply.code() or reply.status() — automatic status mapping is disabled when a custom handler is registered.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/prefer-return-over-reply-send": {
+    "what": "Inside Fastify route handlers, prefer `return data` over `return reply.send(data)` so fast-json-stringify can serialize responses.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/require-fp-for-shared-plugins": {
+    "what": "Fastify plugins that call fastify.decorate, fastify.addHook, or fastify.register must be wrapped in fastify-plugin (fp) to break encapsulation and share state.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/require-fastify-plugin-name": {
+    "what": "fastify-plugin (fp) wrappers must include a `name` option so Fastify can deduplicate plugin registration.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/require-response-schema": {
+    "what": "Fastify routes should declare schema.response for compiled fast-json-stringify serialization.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/require-route-schema": {
+    "what": "Fastify POST/PUT/PATCH routes must declare schema.body; GET/DELETE routes must declare schema.querystring or schema.params.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/test-inject-must-close-app": {
+    "what": "Test files using fastify.inject must register teardown that calls app.close() to drain connections.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-direct-process-env": {
+    "what": "Disallow direct `process.env` access — force every consumer through a typed, boot-validated singleton.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-process-exit": {
+    "what": "Disallow `process.exit()` outside the centralized shutdown and CLI entrypoints — forces graceful teardown through the error-handlers module.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/static-translation-key-exists": {
+    "what": "Static string passed to `t(\"...\")` or `i18n.t(\"...\")` must exist as a leaf path in the canonical locale JSON.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/auth-cookie-must-be-httponly": {
+    "what": "Auth-cookie writes must set `httpOnly: true` (or spread a trusted cookie-config helper). JS-readable session cookies leak via XSS.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/auth-cookie-must-be-secure-in-prod": {
+    "what": "Auth-cookie writes must set `secure:` to `true` or an env-derived expression (anything non-literal). Cookies leak over HTTP without it.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/auth-cookie-must-set-maxage-or-expires": {
+    "what": "Auth-cookie writes should set `maxAge` or `expires` so session cookies do not live forever by default.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/auth-cookie-must-set-samesite": {
+    "what": "Auth-cookie writes must set `sameSite` (`strict` or `lax`) — missing SameSite allows cross-site cookie delivery.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/bcrypt-rounds-min": {
+    "what": "Disallow `bcrypt.hash` / `bcrypt.hashSync` calls with a numeric-literal rounds value below the configured minimum (default 10).",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/jwt-must-verify-not-decode": {
+    "what": "Disallow `jwt.decode` / `decodeJwt` — decoding without verification accepts forged tokens. Use `jwt.verify` or `jwtVerify` instead.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-import-build-output": {
+    "what": "Disallow importing from build/output directories within the project. Source must import source, not compiled artifacts, to avoid stale-code drift and broken module boundaries.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-import-test-from-source": {
+    "what": "Disallow production/source files from importing test files. Tests may depend on source, never the reverse — test code must not ship in the production graph.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-react-in-services": {
+    "what": "Service and data-fetch modules must not import React — keep business logic decoupled from the view layer.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/await-dynamic-request-apis": {
+    "what": "Require awaiting Next.js dynamic request APIs (cookies, headers, draftMode) in app-router Server Components.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/client-hooks-require-use-client": {
+    "what": "Require the 'use client' directive in app-router page/layout/template files that call client-only hooks. Server Components cannot use state/effect/navigation hooks — doing so crashes at runtime.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/error-boundary-require-use-client": {
+    "what": "Require 'use client' in app-router error.tsx and global-error.tsx — Next.js error boundaries must be Client Components.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/mutation-should-revalidate-cache": {
+    "what": "After database mutations in server actions or route handlers, call `revalidatePath` or `revalidateTag` so cached pages reflect the change.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-html-img-element": {
+    "what": "Prefer next/image over raw <img> elements for optimized responsive images and Core Web Vitals.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-internal-api-fetch": {
+    "what": "Disallow Server Components from fetching the app's own /api routes — import services or ORM modules directly to avoid loopback HTTP overhead.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-next-head-in-app": {
+    "what": "Disallow importing 'next/head' in app-router files. The <Head> component is a no-op under app/ — use the Metadata API (export const metadata / generateMetadata) instead.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-pages-router-data-fetching-in-app": {
+    "what": "Disallow pages-router data-fetching exports (getServerSideProps, getStaticProps, getStaticPaths, getInitialProps) in app-router files. Next.js ignores them under app/, so they are silent dead code — use async Server Components or route handlers instead.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-secret-props-to-client": {
+    "what": "Warn when Server Components pass secret-looking props to JSX — values may cross the client boundary.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-sensitive-next-public-env": {
+    "what": "Disallow NEXT_PUBLIC_* env vars whose names suggest secrets — public build-time vars are visible in the client bundle.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/prefer-lazy-use-state-init": {
+    "what": "Prefer lazy useState initializers when parsing localStorage/sessionStorage — avoids re-parsing on every render.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/server-action-requires-authz-and-validation": {
+    "what": "Server actions (`\"use server\"`) that mutate the database must call authorization helpers and validate input with `.parse()` / `.safeParse()`.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/server-only-modules-import-server-only": {
+    "what": "App-router server modules must import `\"server-only\"` so accidental client bundling fails at build time.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/pkce-required-for-oidc": {
+    "what": "OIDC providers must use PKCE: `buildAuthorizationURL` must call `generateCodeVerifier()` and pass it to `createAuthorizationURL`.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/state-must-be-redis-backed": {
+    "what": "OAuth state must be persisted to Redis and not stuffed into a cookie. Cookie-backed state lets attackers replay forged state across sessions.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/state-ttl-bounded": {
+    "what": "OAuth state writes to Redis must use a short TTL — long-lived state widens the replay window.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/component-file-purity": {
+    "what": "A component .tsx contains only imports and the component itself — types go to <feature>.types.ts, constants to <feature>.constants.ts, helpers to src/lib",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/component-folder-structure": {
+    "what": "A component .tsx must live in src/views/<Feature>/components/ (feature component), src/components/ui/ (shared primitive), or be the view root src/views/<Feature>/index.tsx",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/dangerous-html-requires-sanitize": {
+    "what": "dangerouslySetInnerHTML requires a sanitization library (DOMPurify or equivalent) imported in the same file.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/forwardref-display-name": {
+    "what": "forwardRef components must have displayName set",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/index-must-reexport-default": {
+    "what": "index.ts in component folders must re-export the component default export and types",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/max-hooks-per-file": {
+    "what": "Flag query/hook modules that export more than N hooks. Same-kind modules pass the single-semantic-module rule but still grow into god files; this rule sets a hard ceiling so the split conversation happens early.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-anonymous-useEffect": {
+    "what": "Disallow anonymous arrow functions passed to useEffect — use a named function for debuggable stack traces.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-component-invocation": {
+    "what": "Disallow invoking React components as plain functions — use JSX (`<Header />`) instead of `{Header()}`.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-cross-feature-imports": {
+    "what": "Prevent imports across different features",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-derived-state-in-effect": {
+    "what": "Disallow setting local state inside useEffect when the value can be derived during render (or memoized with useMemo).",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-inline-jsx-functions": {
+    "what": "Disallow inline function expressions in JSX attributes",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-jsx-computation": {
+    "what": "Move complex computations out of JSX into hooks or helper functions",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-loading-text-use-skeleton": {
+    "what": "Loading states must render a <Skeleton/>, not loading text or a spinner",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-nested-component": {
+    "what": "Disallow declaring React components inside another component body — nested components reset state on every parent render.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-react-fc": {
+    "what": "Disallow React.FC / FunctionComponent — type props explicitly on the function parameter instead.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-state-in-component-body": {
+    "what": "State hooks must be in .hooks.ts files, not directly in components",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-prototype-polluting-merge": {
+    "what": "Disallow merging request body/query/params into objects — enables prototype pollution.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-user-controlled-fetch-url": {
+    "what": "Disallow fetch/axios requests to non-literal URLs — dynamic URLs enable SSRF.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-user-controlled-redirect": {
+    "what": "Disallow redirects to non-literal URLs — user-controlled redirects enable open redirects.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/upload-must-set-limits": {
+    "what": "Multipart upload handlers should declare `limits` or `maxFileSize` to bound request size.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/webhook-must-verify-signature-before-parse": {
+    "what": "Webhook handlers must verify signatures before calling `.json()` on the request body.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/catch-must-handle": {
+    "what": "Catch blocks must log, rethrow, or propagate errors — not silently return empty defaults on failure.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-auth-token-in-storage": {
+    "what": "Disallow storing or reading auth tokens from localStorage/sessionStorage — use httpOnly cookies instead.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-child-process-exec": {
+    "what": "Disallow child_process.exec/execSync — they run commands in a shell. Use execFile or spawn without shell instead.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-dynamic-regexp": {
+    "what": "Disallow new RegExp(non-literal) — dynamic patterns enable ReDoS. Use string-literal regexes or a safe engine like re2.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-inner-html-assignment": {
+    "what": "Disallow assigning to innerHTML — use textContent/innerText or sanitize with DOMPurify before injecting HTML.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-spawn-with-shell": {
+    "what": "Disallow child_process.spawn/spawnSync with shell: true — shell execution enables command injection.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/caught-error-log-requires-cause": {
+    "what": "When logging a caught error, include a `cause` field in the structured payload so downstream tools preserve the error chain.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/logger-not-console": {
+    "what": "Service modules should use the structured logger instead of `console.*` — console output is unstructured and hard to search.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/mask-pii-fields": {
+    "what": "Disallow unmasked PII (email, phone, password, token, ...) in structured-logger payloads — the #1 way data leaks quietly.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-error-stringify": {
+    "what": "Disallow stringifying errors with `String(error)` / `${error}` / `error.toString()` — strips the cause chain. Use a configured extractor instead.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/require-event-field": {
+    "what": "Require structured logger calls to include an `event` field in their payload, so log searches in ELK/Datadog/Loki don't fall back to substring match.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/prefix-query-key-must-use-set-queries-data": {
+    "what": "When a hook uses `queryKey: [...prefix, extra]`, do not call `setQueryData(prefix, …)`, `cancelQueries({ queryKey: prefix })`, etc. — those only touch one cache entry. Use `setQueriesData({ queryKey: prefix }, …)` and matcher-style `cancelQueries` / `invalidateQueries` so every variant is covered.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/fake-timers-must-be-restored": {
+    "what": "When a test file calls `useFakeTimers()`, it must also call `useRealTimers()` so later tests are not affected.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-conditional-expect": {
+    "what": "Disallow `expect()` inside conditionals — tests must fail when assertions are skipped.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-focused-tests": {
+    "what": "Disallow focused tests (`test.only`, `it.only`, `fdescribe`, ...) — the canonical 'I forgot to remove this before committing' leak.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-real-network-in-unit-tests": {
+    "what": "Unit tests should not perform real network I/O — mock HTTP clients or move the test to an integration suite.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/test-file-mirrors-source": {
+    "what": "Every test file under `tests/` must mirror a source file under `src/`. Catches orphaned tests left behind after refactors and renames.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/exported-functions-require-return-type": {
+    "what": "Exported functions should declare an explicit return type at module boundaries.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/fetch-must-check-ok": {
+    "what": "HTTP fetch responses must check `.ok` or status before calling `.json()`.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/json-parse-must-validate": {
+    "what": "Disallow bare JSON.parse on untrusted input — validate through a schema library.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-unsafe-boundary-cast": {
+    "what": "Disallow type assertions immediately after parsing untrusted boundary input.",
+    "bad": "",
+    "good": ""
+  },
+  "tsforge/no-self-import": {
+    "what": "Disallow a module importing or re-exporting from itself (a circular self-reference whose binding doesn't exist).",
+    "bad": "",
+    "good": ""
   }
 }
