@@ -67,6 +67,10 @@ export const PROJECT_TSCONFIG = "tsconfig.json";
  *  authority, just amortized. */
 const GATE_TSBUILDINFO_FILE = "gate.tsbuildinfo";
 const INCREMENTAL_FLAGS = `--incremental --tsBuildInfoFile ${GATE_TSCONFIG_DIR}/${GATE_TSBUILDINFO_FILE}`;
+/** The syntactic-lint result cache (`.tsforge/eslint-gate.cache`, see
+ *  core-gate.ts). Git-ignored alongside the tsc buildinfo so a warm gate never
+ *  shows a cache file in `git status`. */
+const GATE_ESLINT_CACHE_FILE = "eslint-gate.cache";
 
 /** The web gate typechecks through this HARNESS-OWNED overlay, NOT the project's
  *  own tsconfig.json. That file is model-editable and tooling (shadcn init, the
@@ -197,7 +201,11 @@ export async function tscPart(cwd: string): Promise<string | null> {
  *  that intentionally tracks rules.json) is never clobbered. */
 async function ignoreGateArtifact(cwd: string): Promise<void> {
   const ignore = join(cwd, GATE_TSCONFIG_DIR, ".gitignore");
-  const entries = [GATE_TSCONFIG_FILE, GATE_TSBUILDINFO_FILE];
+  const entries = [
+    GATE_TSCONFIG_FILE,
+    GATE_TSBUILDINFO_FILE,
+    GATE_ESLINT_CACHE_FILE,
+  ];
   const file = Bun.file(ignore);
 
   if (!(await file.exists())) {
