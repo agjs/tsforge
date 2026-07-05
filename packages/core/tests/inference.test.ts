@@ -34,6 +34,32 @@ test("retries a transient connection blip, then succeeds", async () => {
   expect(r.content).toBe("ok");
 });
 
+test("a non-finite/negative timeoutMs falls back to the default, not a crash", async () => {
+  // A NaN/Infinity/negative timeout reaches AbortSignal.timeout() in transport.ts
+  // and throws a RangeError before the request even starts. The provider must
+  // guard it and use the default instead.
+  let calls = 0;
+  const countingFetch = (async () => {
+    calls += 1;
+
+    return okResponse();
+  }) as unknown as typeof fetch;
+
+  for (const timeoutMs of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+    const p = new OpenAICompatibleProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      timeoutMs,
+      fetch: countingFetch,
+    });
+    const r = await p.complete([{ role: "user", content: "hi" }], {});
+
+    expect(r.content).toBe("ok");
+  }
+
+  expect(calls).toBe(3); // all three reached the (mocked) wire, none crashed
+});
+
 test("captures token usage from a non-streaming response", async () => {
   const fetchWithUsage = (async () =>
     new Response(

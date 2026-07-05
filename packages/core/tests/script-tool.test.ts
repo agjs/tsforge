@@ -355,6 +355,66 @@ test("a runaway script is killed at the wall-clock timeout", async () => {
   expect(out).not.toContain("script exit 0");
 });
 
+test("a child backgrounded inside a script does not survive the timeout kill", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-script-"));
+
+  try {
+    const marker = join(dir, "leaked-marker");
+    // The script backgrounds a grandchild that would touch a marker AFTER the
+    // timeout fires. Killing only the `bun` process (the old bug) leaves the
+    // grandchild alive to touch it; a process-GROUP kill takes it down too.
+    const code = [
+      `Bun.spawn(["sh", "-c", ${JSON.stringify(`sleep 1.5 && touch ${marker}`)}]);`,
+      "while (true) {}",
+    ].join("\n");
+    const events: ILoopEvent[] = [];
+
+    const out = await doScript(
+      { code, timeoutMs: 400 },
+      makeCtx({ cwd: dir }, events),
+      { execute: recordingExecute([]) }
+    );
+
+    expect(out).toContain("killed: exceeded");
+
+    // Wait past when the leaked child WOULD have touched the marker.
+    await new Promise((r) => setTimeout(r, 2000));
+
+    expect(await Bun.file(marker).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 15_000);
+
+test("the output drain is bounded when a backgrounded child holds the pipe open", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-script-"));
+
+  try {
+    // `sh` backgrounds `sleep 5` (which inherits — and holds open — the script's
+    // stdout pipe) then exits immediately, so `bun` exits fast while the orphan
+    // keeps the pipe open. An unbounded drain (`Response(stdout).text()`) would
+    // block the whole 5s waiting for EOF; the shared runner bounds it.
+    const code = [
+      `Bun.spawnSync(["sh", "-c", "sleep 5 &"], { stdout: "inherit" });`,
+      'console.log("SCRIPT_DONE");',
+    ].join("\n");
+    const events: ILoopEvent[] = [];
+
+    const started = Date.now();
+    const out = await doScript(
+      { code, timeoutMs: 30_000 },
+      makeCtx({ cwd: dir }, events),
+      { execute: recordingExecute([]) }
+    );
+    const elapsed = Date.now() - started;
+
+    expect(out).toContain("SCRIPT_DONE");
+    expect(elapsed).toBeLessThan(3000); // bounded ~500ms, not the child's 5s
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 15_000);
+
 test("the RPC server rejects a request with a wrong token", async () => {
   const events: ILoopEvent[] = [];
   const code = [
