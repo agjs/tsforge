@@ -16,11 +16,14 @@ a guard that doesn't guard); **P2** a partial fix, missing test, or hidden failu
 
 ---
 
-## loop / turn — `src/loop/turn.ts`, `src/loop/session.ts`, `src/loop/loop.types.ts`
+## loop / turn — `src/loop/turn.ts`, `src/loop/session.ts`, `src/loop/loop.types.ts`, `src/loop/run.ts`
 
-Drives a turn: dispatch tool calls, account for writes, re-gate, settle.
+Drives a turn: dispatch tool calls, account for writes, re-gate, settle. `run.ts` is the
+headless outer driver (max-turns gating, degeneration/TTSR handling, gate settling) that
+iterates `turn.ts`; `staged-build.ts` and `model-call.ts` (PR #66) compose out of Session.
 
 **Invariants**
+
 - Every workspace mutation re-gates. A tool that writes without the model
   hand-writing it must surface `event.mutated`; an `edit`/`create` surfaces `event.file`.
 - A write is counted ONLY when it actually wrote (no name-based pre-counting — a
@@ -41,6 +44,7 @@ agent edit → re-gate (and for quality, re-judge) → keep only on improvement,
 roll back. The revert is the load-bearing safety property.
 
 **Invariants**
+
 - Snapshot/restore is glob-aware: `task.files` is documented as GLOBS, so anything
   that walks the scope must expand them (`snapshotFiles`, `score`, `scopeCode` all
   go through the shared walker), never read a literal glob path.
@@ -65,6 +69,7 @@ Filesystem-state outer loop: a `features.json` checklist drives an implement→e
 →persist cycle per feature until all green or a feature exhausts its attempts.
 
 **Invariants**
+
 - Feature ids come from the model, so they're validated kebab (`isFeatureId`) at
   parse/load and unsafe ids are dropped (defence against `../` traversal). Greenfield
   writes only `features.json` / `spec.md` / `progress.md` (no per-feature contract files).
@@ -87,6 +92,7 @@ Tool handlers + dispatch. Handlers return a `string` (model feedback); mutations
 reported via `ctx.report(ILoopEvent)`, never the return value.
 
 **Invariants**
+
 - Mutating tool ⇒ reports a change (or is in `SPECIAL`: `run`, `script`).
 - Mutation events fire ONLY on a real change (empty/no-op ⇒ no event).
 - A failure returns a tool-error string — never throws into the loop.
@@ -100,9 +106,13 @@ optimistic success text; arg parsing that accepts a flag/path injection.
 guard); for each mutating tool confirm the `mutated`-only-on-success path; grep
 handlers for `throw` reaching the caller.
 
-## gate / detect-gate — `src/detect-gate.ts`, `src/validate.ts`
+## gate / detect-gate — `src/gate/*`, `src/validate/*`
 
 Composes the gate command (tsc strict + eslint + opt-in oracles) and the fix/auto-format.
+(PR #66 split the old single files: `src/gate/*` = `core-gate.ts`, `web-gate.ts`,
+`linter.ts`, `tsconfig.ts`, `shell.ts`, `test-discovery.ts`, `tool-paths.ts`,
+`types.ts`; `src/validate/*` = `validate.ts`, `accept.ts`, `parse.ts`, `run-tests.ts`,
+`errors.ts`.)
 
 **Invariants** the gate uses tsforge's OWN bundled toolchain (works on any target);
 opt-in oracles only join when their env var is set; a failing gate never reports green.
@@ -115,8 +125,14 @@ opt-in oracles only join when their env var is set; a failing gate never reports
 
 "Does it RUN / render / stay covered" — failure classes tsc/eslint miss.
 
-**Invariants** opt-in (boot/browser/proptest/coverage gated by env); ephemeral ports
-via the shared `serveEphemeral` retry; a browser absence skips, not fails.
+**Invariants** In the CORE gate, boot (`TSFORGE_BOOT`), proptest (`TSFORGE_PROPTEST`),
+and coverage (`TSFORGE_COVERAGE`) are opt-in via env (`appendOptInOracles`); the
+browser render-check is NOT env-gated — it's mandatory in the WEB gate (`web-gate.ts`),
+where only the a11y + screenshots features are env-opt-in. Ephemeral ports via the
+shared `serveEphemeral` retry apply to the port-binding oracles only (`boot-check`,
+`browser-check`); the non-serving oracles (`proptest-check`, `test-coverage-check`)
+spawn via `runArgvCommand`/`Bun.spawn` with a timeout-kill and bind no port. A browser
+absence skips, not fails.
 
 **Risk areas** raw `Bun.serve({port:0})` (EADDRINUSE on old Bun); a server left running.
 
@@ -176,7 +192,7 @@ the ghost-row / non-ASCII / cursor-clip bugs string assertions missed).
 **Checklist** spinner inline gate off in the interactive REPL; teardown on
 `process.on("exit")`; resize handler calls `statusBar.resize` AND `editorHandle.resize`.
 
-## editor — `src/editor/*` (`buffer.ts`, `keys.ts`, `paste.ts`, `view.ts`, `controller.ts`, `segments.ts`)
+## editor — `src/editor/*` (`buffer.ts`, `completion.ts`, `controller.ts`, `index.ts`, `keys.ts`, `kill-ring.ts`, `paste.ts`, `segments.ts`, `undo-stack.ts`, `view.ts`)
 
 The multi-line input editor that replaced readline: a grapheme-correct buffer, a key
 decoder (Kitty CSI-u + modifyOtherKeys + legacy), a bracketed-paste scanner, a
@@ -194,6 +210,35 @@ multi-line insert + undo is atomic; the view windows to the editor's visible cap
 on shrink (top- vs bottom-anchored block); stale dims after resize; a paste path that
 auto-submits. **Tested via the `VirtualScreen` e2e harness** (`tests/editor-e2e.test.ts`)
 — assert the rendered grid, not emitted escape strings.
+
+## policy — `src/policy/*` (`policy.ts`, `classify.ts`, `patterns.ts`, `policy.types.ts`)
+
+The deny-first unified action policy (PR #23): classify every tool call into an action
+kind, then evaluate it against the mode's rules BEFORE any handler runs. The critical
+denials (`isDestructiveShell`, `pipesToShell`, `commandReadsPrivateKey`,
+`isPrivateKeyPath`) win in EVERY mode, `bypassPermissions` included.
+
+**Invariants**
+
+- Deny-first ordering: `executeTool` evaluates the policy before dispatch, so no tool
+  path (forced, salvaged, MCP, `script`/PTC, plan-mode) reaches a handler unpoliced.
+- The critical-deny set holds in every mode, and its shell detectors see through the
+  disguises a naive head-check misses — substitution, subshell, `find -exec`,
+  interpreter `-c`, quote-wrapping, AND shell function / brace-group bodies
+  (`f() { rm -rf /; }`). New shell syntax that hides a destructive head is the standing
+  risk (each escape is a P1: a guard that doesn't guard).
+- Private-key material is denied to BOTH `read` and the `run` shell (the `run` tool must
+  not be a side door around the `read` deny); `.env` is deliberately allowed.
+- MCP/unknown actions are policed (deny-by-default for unclassified), and a malformed
+  policy-rule config drops the bad rule rather than opening a hole.
+
+**Risk areas** a new evasion syntax past `patterns.ts`; deny-first ordering broken by a
+refactor that moves `executeTool`; a tool kind that classifies to an unpoliced action.
+
+**Checklist** `tests/policy-evaluation.test.ts` (destructive-shell + pipe + private-key
+detectors, incl. function/brace-group bodies), `tests/policy-config.test.ts` (rule
+parse/drop), `tests/policy-integration.test.ts` (deny-first at `executeTool`),
+`tests/write-policy-p1.test.ts`.
 
 ## mcp — `src/mcp/*`
 
@@ -222,6 +267,7 @@ conventions are **taste only** and a single source drives BOTH enforcement and
 guidance, so the gate and the prompts can never disagree.
 
 **Invariants**
+
 - The safety floor (no `any`/`as`/`!`, complexity cap, `eqeqeq`, `no-var`,
   `prefer-const`) can NEVER be relaxed through `conventions` OR `TSFORGE_RULE_OVERRIDES`,
   on either bundled surface — enforced by `PROTECTED_BUNDLED_RULES` +
@@ -276,8 +322,9 @@ shell form; an uncapped read; a NEW spawn site that bypasses the runner and so s
 the kill-timeout (the fixed `runNotify` hang).
 
 **Checklist** `tests/process.test.ts` group-kill + bounded drain + missing-binary 127
-+ custom env; `tests/cli.test.ts` `runNotify` is timeout-bounded; content-built
-commands use `runArgvCommand`.
+
+- custom env; `tests/cli.test.ts` `runNotify` is timeout-bounded; content-built
+  commands use `runArgvCommand`.
 
 ---
 

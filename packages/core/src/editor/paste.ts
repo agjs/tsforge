@@ -38,10 +38,17 @@ function normalizeNewlines(s: string): string {
 }
 
 function finalizePasteContent(s: string): string {
-  // Decode tmux CSI-u control sequences: ESC[codepoint;modu → String.fromCharCode(codepoint)
+  // Decode tmux CSI-u control sequences: ESC[codepoint;modu → the Unicode char.
+  // Use fromCodePoint (not fromCharCode) so astral codepoints — emoji, high CJK,
+  // U+1xxxx — round-trip whole; fromCharCode truncates to the low 16 bits (👋
+  // U+1F44B → U+F44B, an unprintable that the control-strip below then drops).
+  // Guard the range: fromCodePoint throws RangeError outside [0, 0x10FFFF], so an
+  // out-of-range capture is dropped rather than crashing the paste path.
   const csiURegex = String.raw`\x1b\[(\d+);\d+u`;
   let decoded = s.replace(new RegExp(csiURegex, "g"), (_match, codepoint) => {
-    return String.fromCharCode(Number(codepoint));
+    const cp = Number(codepoint);
+
+    return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
   });
 
   // Normalize newlines first (CR/CRLF → LF)

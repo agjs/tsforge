@@ -58,12 +58,15 @@ describe("planner: parsePlan / planFeatures", () => {
           { id: "../../../README", desc: "path traversal" },
           { id: "has/slash", desc: "slash" },
           { id: "Has Space", desc: "space" },
+          { id: "trailing-", desc: "trailing hyphen — not kebab" },
+          { id: "-leading", desc: "leading hyphen — not kebab" },
           { id: "good-feature", desc: "fine" },
+          { id: "a", desc: "single char is valid kebab" },
         ],
       })
     );
 
-    expect(plan?.features.map((f) => f.id)).toEqual(["good-feature"]);
+    expect(plan?.features.map((f) => f.id)).toEqual(["good-feature", "a"]);
   });
 
   test("planFeatures tolerates a fenced JSON block", async () => {

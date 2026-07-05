@@ -57,8 +57,16 @@ function commandHead(segment: string): string {
   while (i < tokens.length) {
     const token = tokens[i] ?? "";
 
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token) || COMMAND_WRAPPERS.has(token)) {
-      i += 1; // env-assignment or a wrapper command
+    if (
+      /^[A-Za-z_][A-Za-z0-9_]*=/.test(token) ||
+      COMMAND_WRAPPERS.has(token) ||
+      token === "{"
+    ) {
+      // env-assignment, a wrapper command, or a `{` group/function-body opener.
+      // The `{` skip matters: `f() { rm -rf /; }` splits to a ` { rm -rf /`
+      // segment whose head would read as `{` (harmless) and hide the `rm` —
+      // stepping past the brace surfaces the real destructive head.
+      i += 1;
     } else if (token.startsWith("-")) {
       i += WRAPPER_VALUE_FLAGS.has(token) ? 2 : 1; // a wrapper flag (+ its value)
     } else {
