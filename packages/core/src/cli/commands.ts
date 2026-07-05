@@ -2,7 +2,7 @@
  * The single source of truth for the REPL's slash commands — drives BOTH the
  * `/help` text and the interactive `/` palette, so they can never drift and the
  * user never has to memorize what exists. The executor stays the `command()`
- * switch in cli.ts; `commandVerbs()` lets a test assert the two stay in sync.
+ * switch in cli/repl.ts; `COMMAND_VERBS` lets a test assert the two stay in sync.
  */
 export interface ICommandSpec {
   /** Full token incl. leading slash, e.g. "/gate". */

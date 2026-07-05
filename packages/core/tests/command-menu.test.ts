@@ -24,9 +24,9 @@ test("clampIndex wraps and tolerates an empty list", () => {
   expect(clampIndex(0, 0)).toBe(0);
 });
 
-test("registry ↔ cli.ts switch parity (no command without an executor, or vice versa)", () => {
+test("registry ↔ repl switch parity (no command without an executor, or vice versa)", () => {
   const src = readFileSync(
-    join(import.meta.dir, "..", "src", "cli.ts"),
+    join(import.meta.dir, "..", "src", "cli", "repl.ts"),
     "utf8"
   );
   const cases = new Set(
