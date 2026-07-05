@@ -159,5 +159,7 @@ describe("autoFixStep", () => {
 
     expect(tool).toHaveLength(1);
     expect(tool[0]?.message).toContain("auto-fixed 1 file(s)");
-  });
+    // Generous timeout: the fix command sleeps 1s to move mtime forward, and a
+    // loaded machine can stretch the spawn well past bun's 5s default.
+  }, 30_000);
 });

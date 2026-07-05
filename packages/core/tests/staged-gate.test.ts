@@ -1,7 +1,9 @@
 import { test, expect, describe } from "bun:test";
 import { join } from "node:path";
 
-const STAGED_GATE = join(process.cwd(), "packages/core/scripts/staged-gate.ts");
+// Resolve relative to THIS file, not process.cwd() — the suite must pass no
+// matter which directory bun test is launched from (repo root or packages/core).
+const STAGED_GATE = join(import.meta.dir, "..", "scripts", "staged-gate.ts");
 
 interface IStage {
   label: string;
