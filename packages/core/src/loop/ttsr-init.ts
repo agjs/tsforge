@@ -6,7 +6,12 @@ import type { IChatMessage } from "../inference";
 import { TtsrManager, parseProjectRules, type ITtsrRule } from "./ttsr";
 import { DEFAULT_TTSR_RULES } from "./ttsr-defaults";
 
-const TTSR_INTERRUPT_CAP = 3;
+/** Global backstop across ALL rules. Individual noisy rules are silenced
+ *  per-rule (TtsrManager.recordInterrupt, cap 2) well before this trips; the
+ *  global cap only guards against pathological runs where many DIFFERENT
+ *  rules keep interrupting — that signals a model that can't hold the
+ *  constraints, and more aborts just burn its generation budget. */
+const TTSR_INTERRUPT_CAP = 6;
 
 /**
  * Load a project's TTSR rules: hand-authored `.tsforge/rules.json` AND the
@@ -69,9 +74,11 @@ export async function initTtsrManager(
 
 /**
  * Apply a TTSR interrupt: count it, report it, inject the corrective guidance as
- * a user message, and disable the manager once the per-run cap is hit (so a
- * stubborn pattern can't loop forever). Shared by both loops; the caller decides
- * what to do next (retry the turn). Timing emission stays with the caller.
+ * a user message, and silence the offending RULE once its per-rule cap is hit —
+ * one stubborn pattern must not blind the other rules for the rest of the task.
+ * A raised global cap remains as a backstop so interrupts can't loop forever.
+ * Shared by both loops; the caller decides what to do next (retry the turn).
+ * Timing emission stays with the caller.
  */
 export function applyTtsrInterrupt(
   ttsrFired: { ruleName: string; guidance: string },
@@ -89,11 +96,22 @@ export function applyTtsrInterrupt(
     message: `⚠ TTSR interrupted: ${ttsrFired.ruleName}`,
   });
 
+  const ruleSilenced =
+    ttsrManager?.recordInterrupt(ttsrFired.ruleName) ?? false;
+
+  if (ruleSilenced) {
+    report({
+      kind: "tool",
+      task: taskId,
+      message: `TTSR rule ${ttsrFired.ruleName} silenced after repeated interrupts (other rules stay active)`,
+    });
+  }
+
   if (state.ttsrInterrupts >= TTSR_INTERRUPT_CAP) {
     report({
       kind: "tool",
       task: taskId,
-      message: `TTSR disabled after ${state.ttsrInterrupts} interrupts (hit cap)`,
+      message: `TTSR disabled after ${state.ttsrInterrupts} interrupts (hit global cap)`,
     });
 
     ttsrManager?.disable();
