@@ -875,6 +875,14 @@ export class Session {
     this.activeThinking = opts.enableThinking;
     this.repairing = false; // fresh send starts in (fast, thinking-off) creation mode
 
+    // The TtsrManager persists for the whole session, so per-rule silencing and
+    // the global interrupt cap must reset per user message — otherwise a rule
+    // silenced (or the manager disabled) during one prompt stays off for every
+    // later, unrelated prompt. The headless run.ts path builds a fresh manager
+    // per run and needs neither reset.
+    this.ttsrManager?.resetInterrupts();
+    this.state.ttsrInterrupts = 0;
+
     try {
       // Auto-compact BEFORE adding the new message (so it stays a fresh turn
       // after the summary) when the held context is near the window.

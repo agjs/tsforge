@@ -45,6 +45,11 @@ export class TtsrManager {
     string,
     RegExp[]
   >();
+  private readonly interruptCounts: Map<string, number> = new Map<
+    string,
+    number
+  >();
+  private readonly silencedRules: Set<string> = new Set<string>();
   private buffers: Record<"content" | "tool-args", string> = {
     content: "",
     "tool-args": "",
@@ -96,6 +101,44 @@ export class TtsrManager {
     this.disabled = true;
   }
 
+  /** Per-rule interrupt cap: a rule still firing after this many corrective
+   *  retries isn't teaching the model anything — silence IT, not the manager,
+   *  so the other rules keep watching the stream. */
+  private readonly RULE_INTERRUPT_CAP = 2;
+
+  /**
+   * Record an interrupt attributed to `ruleName`. Once the same rule has
+   * interrupted RULE_INTERRUPT_CAP times it is silenced for the rest of the
+   * task. Returns true when this call silenced the rule.
+   */
+  recordInterrupt(ruleName: string): boolean {
+    const count = (this.interruptCounts.get(ruleName) ?? 0) + 1;
+
+    this.interruptCounts.set(ruleName, count);
+
+    if (count >= this.RULE_INTERRUPT_CAP && !this.silencedRules.has(ruleName)) {
+      this.silencedRules.add(ruleName);
+
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Clear all interrupt counters and silenced rules, and re-enable the manager.
+   * The manager instance is retained for the whole interactive session
+   * (session.ts), so without a per-send reset a rule silenced — or the manager
+   * globally disabled — during one user message would stay off for every later,
+   * unrelated prompt. The headless loop (run.ts) builds a fresh manager per run
+   * and never needs this.
+   */
+  resetInterrupts(): void {
+    this.interruptCounts.clear();
+    this.silencedRules.clear();
+    this.disabled = false;
+  }
+
   checkDelta(text: string, context: IMatchContext): ITtsrRule | null {
     if (this.disabled) {
       return null;
@@ -116,6 +159,10 @@ export class TtsrManager {
 
     // Check all rules; return first match that passes repeat policy and scope gates.
     for (const [ruleName, rule] of this.rules) {
+      if (this.silencedRules.has(ruleName)) {
+        continue;
+      }
+
       if (!this.isScopeActive(rule, context)) {
         continue;
       }
