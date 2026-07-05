@@ -185,6 +185,19 @@ describe("destructive-shell detection", () => {
     expect(isDestructiveShell('"echo" rm')).toBe(false);
     expect(isDestructiveShell("bash -c 'npm run build' --silent")).toBe(false);
   });
+
+  test("sees through shell function / brace-group bodies", () => {
+    // A destructive command as the FIRST token inside `{ … }` (a function body or
+    // a bare group) must not hide behind the `{` reading as the segment head.
+    expect(isDestructiveShell("f() { rm -rf /; }; f")).toBe(true);
+    expect(isDestructiveShell("function f() { rm -rf /; }; f")).toBe(true);
+    expect(isDestructiveShell("g() { dd if=/dev/zero of=/dev/sda; }; g")).toBe(
+      true
+    );
+    expect(isDestructiveShell("{ rm -rf /; }")).toBe(true);
+    // a benign function body stays clean
+    expect(isDestructiveShell("build() { npm run build; }; build")).toBe(false);
+  });
 });
 
 describe("pipe-to-shell detection", () => {

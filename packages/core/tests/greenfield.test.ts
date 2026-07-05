@@ -236,6 +236,54 @@ describe("runGreenfield: outer loop", () => {
     expect(implemented).toEqual(["b"]); // 'a' skipped
   });
 
+  test("persists the bumped attempt count even when implement throws", async () => {
+    const s = state("a");
+    const deps: IGreenfieldDeps = {
+      implement: async () => {
+        throw new Error("model died mid-attempt");
+      },
+      evaluate: async () => ({ passed: true, notes: "" }),
+    };
+
+    // The throw propagates (crash), but the incremented counter must be on disk
+    // so a resume doesn't replay attempt 0 forever.
+    await expect(runGreenfield(dir, s, deps)).rejects.toThrow(
+      "model died mid-attempt"
+    );
+
+    const onDisk = await loadState(dir);
+
+    expect(onDisk?.features[0]?.attempts).toBe(1);
+    expect(onDisk?.features[0]?.passes).toBe(false);
+  });
+
+  test("a repeatedly-crashing feature still reaches `stuck` across resumes", async () => {
+    const deps: IGreenfieldDeps = {
+      implement: async () => {
+        throw new Error("boom");
+      },
+      evaluate: async () => ({ passed: true, notes: "" }),
+    };
+
+    // Each run crashes on its single attempt but persists the bump; resuming from
+    // disk three times exhausts maxAttempts instead of looping on attempt 0.
+    for (let i = 0; i < 3; i += 1) {
+      const resumed = (await loadState(dir)) ?? state("a");
+
+      await expect(
+        runGreenfield(dir, resumed, deps, { maxAttemptsPerFeature: 3 })
+      ).rejects.toThrow("boom");
+    }
+
+    const final = (await loadState(dir)) ?? state("a");
+    const res = await runGreenfield(dir, final, deps, {
+      maxAttemptsPerFeature: 3,
+    });
+
+    expect(res.status).toBe("stuck");
+    expect(res.stuckFeature).toBe("a");
+  });
+
   test("writes progress.md as it goes", async () => {
     const s = state("a");
     const deps: IGreenfieldDeps = {

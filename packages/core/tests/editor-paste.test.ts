@@ -38,6 +38,33 @@ describe("PasteScanner", () => {
     expect(s.isActive()).toBe(false);
   });
 
+  test("decodes astral CSI-u codepoints (emoji) whole, not truncated", () => {
+    const s = createPasteScanner();
+    // 👋 = U+1F44B (128075), 👌 = U+1F44C (128076) re-emitted as tmux CSI-u.
+    // fromCharCode would truncate to U+F44B/U+F44C (unprintable, then stripped);
+    // fromCodePoint round-trips the astral chars.
+    const chunk = "\x1b[200~hi\x1b[128075;0u\x1b[128076;0u\x1b[201~";
+    const r = s.feed(chunk);
+
+    expect(r.content).toBe("hi👋👌");
+    expect(Array.from(r.content ?? "", (c) => c.codePointAt(0))).toEqual([
+      0x68, 0x69, 0x1f44b, 0x1f44c,
+    ]);
+  });
+
+  test("an out-of-range CSI-u codepoint is dropped, not thrown", () => {
+    const s = createPasteScanner();
+    // 0x110000 is one past the max valid codepoint — fromCodePoint would throw
+    // RangeError; the range guard drops it instead of crashing the paste.
+    const chunk = "\x1b[200~a\x1b[1114112;0ub\x1b[201~";
+
+    expect(() => s.feed(chunk)).not.toThrow();
+    // re-feed on a fresh scanner (the throwing feed above consumed state)
+    const s2 = createPasteScanner();
+
+    expect(s2.feed(chunk).content).toBe("ab");
+  });
+
   test("strips non-printable control chars except newline", () => {
     const s = createPasteScanner();
     // Include some control chars: \x00, \x01, \x1f (unit sep), \x7f (DEL)
