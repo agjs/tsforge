@@ -11,6 +11,7 @@ import { makeSpinner, spinnerPhase } from "../render/spinner";
 import { renderEvent } from "../render";
 import { LedgerWriter, ledgerTypeFor, type Reporter } from "../loop";
 import { logsDir } from "../session-store";
+import { trace } from "../lib/trace";
 
 export const spinner = makeSpinner();
 
@@ -102,7 +103,9 @@ export async function newestLogFile(): Promise<string> {
     const latest = names.at(-1);
 
     return latest === undefined ? "" : join(logsDir(), latest);
-  } catch {
+  } catch (err) {
+    trace("cli.newestLogFile", err);
+
     return "";
   }
 }

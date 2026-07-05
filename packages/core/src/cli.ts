@@ -32,6 +32,7 @@ import { resolveActiveModel, resolveModelByName } from "./models-config";
 import type { ITask } from "./spec";
 import { readFiles, runShellCommand } from "./lib/fs";
 import { currentVersion } from "./update-check";
+import { trace } from "./lib/trace";
 import { repl } from "./cli/repl";
 import { runMapCommand, runTraceCommand } from "./cli/repl-commands";
 import { makeProvider, modelForRun, envNumber } from "./cli/model-setup";
@@ -359,8 +360,9 @@ export async function runNotify(
       env: { ...process.env, TSFORGE_STATUS: status },
       onChunk: (text) => process.stdout.write(text),
     });
-  } catch {
+  } catch (err) {
     // A broken notifier must not break the run.
+    trace("cli.notify", err);
   }
 }
 

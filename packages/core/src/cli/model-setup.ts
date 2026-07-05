@@ -17,13 +17,16 @@ import {
   type IModelEntry,
 } from "../models-config";
 import { isRecord } from "../lib/guards";
+import { trace } from "../lib/trace";
 import type { ICliArgs } from "./args";
 
 /** The host:port of an API base URL, for the banner (falls back to the raw url). */
 function hostOf(baseUrl: string): string {
   try {
     return new URL(baseUrl).host;
-  } catch {
+  } catch (err) {
+    trace("cli.hostOf", err);
+
     return baseUrl;
   }
 }
@@ -77,7 +80,9 @@ export async function detectContextWindow(
       match?.max_position_embeddings;
 
     return typeof len === "number" && Number.isFinite(len) ? len : undefined;
-  } catch {
+  } catch (err) {
+    trace("cli.detectContextWindow", err);
+
     return undefined;
   }
 }
@@ -146,7 +151,9 @@ export function warnDefaultModelOnRemote(entry: IModelEntry): void {
 
   try {
     host = new URL(entry.baseUrl).hostname;
-  } catch {
+  } catch (err) {
+    trace("cli.warnDefaultModel", err);
+
     return;
   }
 

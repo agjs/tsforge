@@ -29,6 +29,43 @@ test("runNotify is bounded — a hanging notifier cannot wedge the run", async (
   }
 });
 
+// A silently-degrading path must not be a black hole: with TSFORGE_TRACE set,
+// detectContextWindow's unreachable-endpoint fallback leaves a scoped line in
+// the trace file (B4 wiring) while still returning undefined to the caller.
+test("detectContextWindow degrade is observable via TSFORGE_TRACE", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-ctx-trace-"));
+  const traceFile = join(dir, "trace.log");
+  const saved = process.env.TSFORGE_TRACE;
+
+  process.env.TSFORGE_TRACE = traceFile;
+
+  try {
+    const { detectContextWindow } = await import("../src/cli/model-setup");
+    // Port 1 refuses immediately — the probe's fetch throws, the catch
+    // degrades to undefined (caller falls back) AND records the failure.
+    const window = await detectContextWindow({
+      baseUrl: "http://127.0.0.1:1/v1",
+      model: "nope",
+    });
+
+    expect(window).toBeUndefined();
+
+    const logged = await Bun.file(traceFile)
+      .text()
+      .catch(() => "");
+
+    expect(logged).toContain("[cli.detectContextWindow]");
+  } finally {
+    if (saved === undefined) {
+      Reflect.deleteProperty(process.env, "TSFORGE_TRACE");
+    } else {
+      process.env.TSFORGE_TRACE = saved;
+    }
+
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("parses task + files + accept + dir", () => {
   const a = parseArgs([
     "add",

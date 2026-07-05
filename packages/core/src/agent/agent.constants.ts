@@ -425,7 +425,7 @@ export const PACKAGE_DOCS_TOOL = {
 
 /** Programmatic Tool Calling: the model writes ONE TypeScript program that calls
  *  tools through generated stubs, collapsing a multi-step tool chain into a single
- *  turn. Opt-in (TSFORGE_SCRIPT) and withheld in plan mode (it can write). */
+ *  turn. ON by default (withhold with TSFORGE_NO_SCRIPT) and withheld in plan mode (it can write). */
 export const SCRIPT_TOOL = {
   type: "function",
   function: {

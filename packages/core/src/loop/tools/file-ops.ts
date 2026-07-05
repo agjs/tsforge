@@ -10,6 +10,7 @@ import { condenseToolOutput } from "./condense";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
 import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
 import { SessionSnapshotStore } from "../../files/hashline";
+import { trace } from "../../lib/trace";
 
 /**
  * Read a file for the model. TRUSTED-MODE (by design): `read` and `run` are NOT
@@ -688,7 +689,9 @@ async function currentFileView(
     }
 
     return lines.map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`).join("\n");
-  } catch {
+  } catch (err) {
+    trace("tools.currentFileView", err);
+
     return null;
   }
 }

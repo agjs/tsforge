@@ -4,6 +4,7 @@ import { decodeKeys } from "./keys";
 import { createPasteScanner } from "./paste";
 import { renderEditor } from "./view";
 import { graphemes } from "./segments";
+import { trace } from "../lib/trace";
 import { createCompletion, type IEditorCompletionSource } from "./completion";
 
 // Re-exported: the host-facing completion-source contract moved to
@@ -409,8 +410,8 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     // `/` as the sole character opens the command palette (a slash command).
     if (currentText === "/" && typeof openPalette === "function") {
-      openPalette().catch(() => {
-        // ignore errors
+      openPalette().catch((err: unknown) => {
+        trace("editor.palette", err);
       });
 
       return;
@@ -431,8 +432,8 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     if (completionSource !== undefined) {
       completion.open();
     } else if (typeof openFilePicker === "function") {
-      openFilePicker().catch(() => {
-        // ignore errors
+      openFilePicker().catch((err: unknown) => {
+        trace("editor.picker", err);
       });
     }
   }
