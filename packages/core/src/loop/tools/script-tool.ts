@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { IToolCall } from "../../inference";
 import { isRecord } from "../../lib/guards";
+import { runArgvCommand } from "../../lib/fs";
 import { SCRIPT_EXPOSABLE_TOOLS, TOOL_NAME } from "../../agent";
 import { LOOP_LIMITS } from "../loop.constants";
 import { condenseToolOutput } from "./condense";
@@ -236,51 +237,30 @@ async function runScript(
   budgetMs: number,
   signal: AbortSignal | undefined
 ): Promise<IRunResult> {
-  const proc = Bun.spawn(["bun", "run", scriptPath], {
-    cwd,
+  // Route through the ONE shared runner instead of a bespoke Bun.spawn: it spawns
+  // `detached` and kills the whole process GROUP on timeout/abort, so a
+  // `(sleep …; touch x) &` backgrounded inside the script can't outlive the kill
+  // and mutate the workspace after the tool returns — and its final output drain
+  // is always FLUSH_GRACE_MS-bounded, so an orphan holding the pipe open can't
+  // stall the tool. A bespoke spawn here did neither.
+  const run = await runArgvCommand(cwd, ["bun", "run", scriptPath], {
     env,
-    stdout: "pipe",
-    stderr: "pipe",
+    timeoutMs: budgetMs,
+    ...(signal === undefined ? {} : { signal }),
   });
-  // Holder (not a bare `let`) so the union type survives — a plain variable
-  // assigned only inside the timer/abort closures gets narrowed to `null` by
-  // control-flow analysis, which would dead-flag the `note` comparisons below.
-  const kill: { reason: "timeout" | "abort" | null } = { reason: null };
-  const timer = setTimeout(() => {
-    kill.reason = "timeout";
-    proc.kill("SIGKILL");
-  }, budgetMs);
 
-  const onAbort = (): void => {
-    kill.reason = "abort";
-    proc.kill("SIGKILL");
+  // runArgvCommand only reports `timedOut` for the kill-timeout; an abort kills
+  // without that flag, so distinguish the two from the signal state for the note.
+  const note = run.timedOut
+    ? `\n[script killed: exceeded ${String(budgetMs)}ms timeout]`
+    : signal?.aborted === true
+      ? "\n[script aborted]"
+      : "";
+
+  return {
+    exitCode: run.exitCode,
+    output: `${run.stdout}${run.stderr}${note}`,
   };
-
-  signal?.addEventListener("abort", onAbort, { once: true });
-
-  try {
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-
-    await proc.exited;
-
-    const note =
-      kill.reason === "timeout"
-        ? `\n[script killed: exceeded ${String(budgetMs)}ms timeout]`
-        : kill.reason === "abort"
-          ? "\n[script aborted]"
-          : "";
-
-    return {
-      exitCode: proc.exitCode ?? 1,
-      output: `${stdout}${stderr}${note}`,
-    };
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
-  }
 }
 
 /**

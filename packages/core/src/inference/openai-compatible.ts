@@ -18,6 +18,18 @@ import {
 
 export { salvageToolCalls, salvageFusedToolName } from "./wire";
 
+/** A finite, non-negative number, or the fallback — for timing knobs that flow
+ *  into AbortSignal.timeout() (throws a RangeError outside [0, MAX_SAFE_INTEGER]).
+ *  Undefined/NaN/Infinity/negative all degrade to the fallback. */
+function finiteNonNegative(
+  value: number | undefined,
+  fallback: number
+): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : fallback;
+}
+
 /**
  * Talks to any OpenAI-compatible `/chat/completions` endpoint — which Ollama,
  * vLLM, and llama.cpp all expose for a local Qwen3.6. Supports streaming: pass
@@ -86,9 +98,12 @@ export class OpenAICompatibleProvider implements IProvider {
       chatCompletionsUrl(this.cfg.baseUrl),
       headers,
       body,
-      this.cfg.timeoutMs ?? PROVIDER_LIMITS.requestTimeoutMs,
+      // Guard the timing knobs the same way request.ts guards its numeric params:
+      // a NaN/Infinity/negative value reaches AbortSignal.timeout() downstream and
+      // throws a RangeError, killing the request. Fall back to the default instead.
+      finiteNonNegative(this.cfg.timeoutMs, PROVIDER_LIMITS.requestTimeoutMs),
       effectiveOpts.signal,
-      this.cfg.connectRetryMs ?? PROVIDER_LIMITS.connectRetryMs
+      finiteNonNegative(this.cfg.connectRetryMs, PROVIDER_LIMITS.connectRetryMs)
     );
 
     if (!res.ok) {

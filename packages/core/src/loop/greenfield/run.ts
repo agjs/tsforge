@@ -112,21 +112,25 @@ async function attemptFeature(
   feature.attempts += 1;
   say(`feature '${feature.id}': attempt ${feature.attempts} — ${feature.desc}`);
 
-  await deps.implement(feature, state);
+  // Persist in `finally` so an implement/evaluate THROW still records the bumped
+  // attempt count before it propagates — otherwise a crash on attempt N replays
+  // as attempt N-1 on resume, and a repeatedly-crashing feature never reaches
+  // `stuck`. The persisted state is the source of truth for resume-from-crash.
+  try {
+    await deps.implement(feature, state);
 
-  const verdict = await deps.evaluate(feature, state);
+    const verdict = await deps.evaluate(feature, state);
 
-  if (verdict.passed) {
-    feature.passes = true;
-    say(`feature '${feature.id}': verified ✓`);
-  } else {
-    say(
-      `feature '${feature.id}': failed at ${verdict.stage ?? "?"} — ${verdict.notes}`
-    );
+    if (verdict.passed) {
+      feature.passes = true;
+      say(`feature '${feature.id}': verified ✓`);
+    } else {
+      say(
+        `feature '${feature.id}': failed at ${verdict.stage ?? "?"} — ${verdict.notes}`
+      );
+    }
+  } finally {
+    await saveState(cwd, state);
+    await writeProgress(cwd, state);
   }
-
-  // Persist after every attempt so an interrupted run resumes from the last
-  // verified feature, not from scratch.
-  await saveState(cwd, state);
-  await writeProgress(cwd, state);
 }
