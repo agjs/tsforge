@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import type { IGate } from "./types";
 import {
   ESLINT_BIN,
@@ -13,6 +14,11 @@ import { packEnvPrefix } from "./shell";
 import { tscPart, PROJECT_TSCONFIG } from "./tsconfig";
 import { discoverTestCommand } from "./test-discovery";
 import type { IConventions } from "../infer-rules/conventions.types";
+
+/** tsforge's per-project cache namespace (git-ignored, next to the tsc
+ *  buildinfo). The syntactic-lint result cache lives here. */
+const GATE_CACHE_DIR = ".tsforge";
+const ESLINT_CACHE = `${GATE_CACHE_DIR}/eslint-gate.cache`;
 
 export async function buildGate(
   cwd: string,
@@ -33,6 +39,14 @@ export async function buildGate(
     parts.push(tsc);
     labels.push("tsc --strict");
   }
+
+  // The syntactic lint pass caches per-file results under .tsforge/ (see
+  // lintPart). Create the dir in-process — cross-platform and in the TARGET cwd
+  // — rather than via a shell `mkdir` in the command: a lint-only project skips
+  // tscPart (which otherwise makes the dir), and process.cwd() is not the gate's
+  // cwd, so a builtin here would be both redundant and, if done in-code naively,
+  // wrong-directory.
+  mkdirSync(join(cwd, GATE_CACHE_DIR), { recursive: true });
 
   const lint = lintPart(packs, ruleOverrides, options?.conventions);
 
@@ -122,8 +136,15 @@ function lintPart(
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
   conventions?: IConventions
 ): IGate {
+  // Result caching is sound here because this pass is syntactic-only: a file's
+  // lint result depends on that file alone, and eslint keys cache entries on
+  // file content + resolved config hash. The type-aware pass below must stay
+  // UNCACHED — editing one file can change type errors in an untouched one.
+  // Every repair cycle re-runs the gate, so on all but the first cycle this
+  // skips re-linting the (usually vast) majority of unchanged files. buildGate
+  // creates the .tsforge/ cache dir in-process before this runs.
   return {
-    command: `${packEnvPrefix(packs, ruleOverrides, conventions)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
+    command: `${packEnvPrefix(packs, ruleOverrides, conventions)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --cache --cache-location "${ESLINT_CACHE}" --format json .`,
     label: "strict TypeScript (tsforge)",
   };
 }

@@ -57,6 +57,49 @@ test("buildGate wires incremental tsc + a git-ignored buildinfo", async () => {
   }
 });
 
+test("buildGate caches the syntactic eslint pass, dir made in-process + git-ignored", async () => {
+  const dir = project();
+
+  try {
+    const gate = await buildGate(dir, []);
+
+    // The syntactic strict pass caches results across repair cycles…
+    expect(gate.command).toContain(
+      '--cache --cache-location ".tsforge/eslint-gate.cache"'
+    );
+    // …the type-aware pass must NOT (editing one file changes another's errors).
+    expect(gate.command).not.toContain("type-aware");
+    // No shell `mkdir` in the command — the dir is created in-process (correct
+    // cwd, cross-platform) before the gate runs.
+    expect(gate.command).not.toContain("mkdir");
+    expect(existsSync(join(dir, ".tsforge"))).toBe(true);
+    // The cache file is git-ignored alongside the tsc buildinfo.
+    const ignore = readFileSync(join(dir, ".tsforge", ".gitignore"), "utf8");
+
+    expect(ignore).toContain("eslint-gate.cache");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildGate creates the cache dir even for a lint-only project (no tsconfig)", async () => {
+  // tscPart returns null here, so the dir would otherwise never be made and the
+  // eslint --cache-location write would fail with ENOENT.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "tsforge-lintonly-")));
+
+  try {
+    writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+
+    const gate = await buildGate(dir, []);
+
+    expect(gate.command).not.toContain("tsc");
+    expect(gate.command).toContain("eslint-gate.cache");
+    expect(existsSync(join(dir, ".tsforge"))).toBe(true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // CORRECTNESS: a warm incremental run reusing the buildinfo must STILL fail when a
 // type error is (re)introduced — proving incremental never serves a stale green.
 test("incremental gate still catches a newly-introduced type error (no stale green)", async () => {
