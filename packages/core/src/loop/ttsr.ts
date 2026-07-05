@@ -125,6 +125,20 @@ export class TtsrManager {
     return false;
   }
 
+  /**
+   * Clear all interrupt counters and silenced rules, and re-enable the manager.
+   * The manager instance is retained for the whole interactive session
+   * (session.ts), so without a per-send reset a rule silenced — or the manager
+   * globally disabled — during one user message would stay off for every later,
+   * unrelated prompt. The headless loop (run.ts) builds a fresh manager per run
+   * and never needs this.
+   */
+  resetInterrupts(): void {
+    this.interruptCounts.clear();
+    this.silencedRules.clear();
+    this.disabled = false;
+  }
+
   checkDelta(text: string, context: IMatchContext): ITtsrRule | null {
     if (this.disabled) {
       return null;

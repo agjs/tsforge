@@ -70,3 +70,39 @@ test("manager-wide disable still silences everything (global backstop)", () => {
   ).toBeNull();
   expect(m.checkDelta("// @ts-ignore", { source: "tool-args" })).toBeNull();
 });
+
+test("resetInterrupts re-arms a silenced rule (per-send reset in a persistent session)", () => {
+  const m = manager();
+
+  m.recordInterrupt("no-as-any");
+  m.recordInterrupt("no-as-any");
+  m.resetBuffer();
+
+  // Silenced within the drive…
+  expect(
+    m.checkDelta("const z = w as any;", { source: "tool-args" })
+  ).toBeNull();
+
+  // …but a new user message resets it, so the rule fires again.
+  m.resetInterrupts();
+  m.resetBuffer();
+
+  expect(
+    m.checkDelta("const q = r as any;", { source: "tool-args" })?.name
+  ).toBe("no-as-any");
+
+  // The silencing counter also resets: it takes the full cap again to re-silence.
+  expect(m.recordInterrupt("no-as-any")).toBe(false);
+  expect(m.recordInterrupt("no-as-any")).toBe(true);
+});
+
+test("resetInterrupts re-enables a globally disabled manager", () => {
+  const m = manager();
+
+  m.disable();
+  m.resetInterrupts();
+
+  expect(
+    m.checkDelta("const x = y as any;", { source: "tool-args" })?.name
+  ).toBe("no-as-any");
+});
