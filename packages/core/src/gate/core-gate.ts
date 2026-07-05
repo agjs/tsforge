@@ -122,8 +122,15 @@ function lintPart(
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
   conventions?: IConventions
 ): IGate {
+  // Result caching is sound here because this pass is syntactic-only: a file's
+  // lint result depends on that file alone, and eslint keys cache entries on
+  // file content + resolved config hash. The type-aware pass below must stay
+  // UNCACHED — editing one file can change type errors in an untouched one.
+  // Every repair cycle re-runs the gate, so on all but the first cycle this
+  // skips re-linting the (usually vast) majority of unchanged files. The
+  // mkdir keeps a fresh checkout from failing before .tsforge/ exists.
   return {
-    command: `${packEnvPrefix(packs, ruleOverrides, conventions)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --format json .`,
+    command: `mkdir -p .tsforge && ${packEnvPrefix(packs, ruleOverrides, conventions)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --cache --cache-location ".tsforge/eslint-gate.cache" --format json .`,
     label: "strict TypeScript (tsforge)",
   };
 }
