@@ -7,6 +7,7 @@ import { box, GLYPH } from "./box";
 import { renderMarkdown, highlightCode } from "./markdown";
 import { StreamingMarkdown } from "./stream-markdown";
 import { renderDiff } from "./diff";
+import { makeAgentRail } from "./agent-rail";
 
 /** Split highlighted/plain text into the body-line array a box expects. */
 function bodyLines(text: string): string[] {
@@ -208,14 +209,18 @@ export function agentBar(color: boolean): string {
   return `${paint("│", STYLE.brandLight, color)} `;
 }
 
-/** Prefix each line of a settled agent body with the card's left rail. */
-export function agentCardBody(text: string, color: boolean): string {
-  const bar = agentBar(color);
+/** Rail-prefix AND soft-wrap a settled agent body (the `--continue` replay
+ *  path) with the SAME ANSI-aware, display-width wrapper the live stream uses
+ *  (makeAgentRail) — so a long replayed line can never spill past the rail. */
+export function agentCardBody(
+  text: string,
+  color: boolean,
+  columns?: number
+): string {
+  const cols = columns !== undefined && columns > 0 ? columns : 80;
+  const rail = makeAgentRail(agentBar(color), () => cols - 4);
 
-  return text
-    .split("\n")
-    .map((line) => `${bar}${line}`)
-    .join("\n");
+  return rail.feed(text);
 }
 
 export function renderMessage(
@@ -250,7 +255,7 @@ export function renderMessage(
   // A left-accent card (rounded caps + rail), streaming-friendly.
   return parts.length > 0
     ? `\n${agentCardTop(opts.speaker ?? "assistant", color)}\n` +
-        `${agentCardBody(parts.join("\n"), color)}\n` +
+        `${agentCardBody(parts.join("\n"), color, opts.columns ?? process.stdout.columns)}\n` +
         `${agentCardBottom(color)}\n`
     : "";
 }

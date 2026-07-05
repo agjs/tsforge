@@ -60,3 +60,41 @@ describe("agentCardTop", () => {
     expect(stripAnsi(agentCardTop("qwen3", false))).toBe("╭ qwen3");
   });
 });
+
+describe("agent card replay wrapping (--continue path)", () => {
+  test("a long replayed line wraps INSIDE the rail — every row keeps │ and fits", () => {
+    const columns = 40;
+    const long =
+      "The quick brown fox jumps over the lazy dog again and again and " +
+      "again until the line is far wider than the terminal.";
+    const out = stripAnsi(
+      renderMessage(
+        { role: "assistant", content: long },
+        { color: false, speaker: "m", columns }
+      )
+    );
+    const rows = out.split("\n").filter((r) => r.length > 0);
+    // Drop the top/bottom caps; every BODY row must carry the rail and fit.
+    const body = rows.filter((r) => r.startsWith("│"));
+
+    expect(body.length).toBeGreaterThan(1); // it actually wrapped
+
+    for (const row of body) {
+      expect(displayWidth(row)).toBeLessThanOrEqual(columns);
+    }
+  });
+
+  test("wide chars count as 2 columns when wrapping the replay", () => {
+    const columns = 24;
+    const out = stripAnsi(
+      renderMessage(
+        { role: "assistant", content: "汉字汉字汉字汉字汉字汉字汉字汉字" },
+        { color: false, speaker: "m", columns }
+      )
+    );
+
+    for (const row of out.split("\n").filter((r) => r.startsWith("│"))) {
+      expect(displayWidth(row)).toBeLessThanOrEqual(columns);
+    }
+  });
+});
