@@ -13,6 +13,12 @@ import {
 /** Cap rendered source lines so a large error set can't wall the model. */
 const FEEDBACK_MAX_LINES = 20;
 
+/** Cap rendered instances PER RULE. The 4th repeat of the same rule teaches
+ *  the model nothing the first 3 didn't; without this, one project-wide rule
+ *  sweep (e.g. 30× no-explicit-any) walls the entire feedback budget and the
+ *  model never hears about the OTHER rules it also violated. */
+const FEEDBACK_MAX_PER_RULE = 3;
+
 /**
  * Gate failures the model can act on (its editable files), each rendered WITH
  * its location and the offending source line — so the model fixes the exact
@@ -44,14 +50,12 @@ export async function gateFeedback(
   });
   const readOnly = errors.length - own.length;
 
+  const { shown, skipped } = selectRepresentative(own);
   const list =
     own.length > 0
-      ? await renderErrors(own.slice(0, FEEDBACK_MAX_LINES), cwd)
+      ? await renderErrors(shown, cwd)
       : "(no failures in your editable files)";
-  const capped =
-    own.length > FEEDBACK_MAX_LINES
-      ? `\n… and ${own.length - FEEDBACK_MAX_LINES} more — fix the above first.`
-      : "";
+  const capped = overflowSummary(skipped);
 
   const note =
     readOnly > 0
@@ -94,6 +98,79 @@ export async function gateFeedback(
       : "";
 
   return `The acceptance command still fails:\n${list}${capped}${note}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
+}
+
+/**
+ * Pick the errors worth rendering in full: keep parser emission order (tsc
+ * first — type errors gate everything else), but cap instances per rule so a
+ * single noisy rule can't spend the whole FEEDBACK_MAX_LINES budget. Errors
+ * without a rule id (generic/oracle output) are never capped per-rule — each
+ * one is distinct signal.
+ */
+function selectRepresentative(errors: ErrorSet): {
+  shown: ErrorSet;
+  skipped: ErrorSet;
+} {
+  const shown: ErrorSet = [];
+  const skipped: ErrorSet = [];
+  const perRule = new Map<string, number>();
+
+  for (const e of errors) {
+    const count = e.rule === undefined ? 0 : (perRule.get(e.rule) ?? 0);
+    const ruleCapped = e.rule !== undefined && count >= FEEDBACK_MAX_PER_RULE;
+
+    if (shown.length < FEEDBACK_MAX_LINES && !ruleCapped) {
+      shown.push(e);
+
+      if (e.rule !== undefined) {
+        perRule.set(e.rule, count + 1);
+      }
+    } else {
+      skipped.push(e);
+    }
+  }
+
+  return { shown, skipped };
+}
+
+/**
+ * Summarize the errors we did NOT render, grouped by rule with counts and the
+ * affected files — "12 more [no-explicit-any] in a.ts, b.ts" tells the model
+ * the shown fix applies elsewhere too, at a fraction of the token cost of
+ * rendering every instance.
+ */
+function overflowSummary(skipped: ErrorSet): string {
+  if (skipped.length === 0) {
+    return "";
+  }
+
+  const byRule = new Map<string, { count: number; files: Set<string> }>();
+
+  for (const e of skipped) {
+    const key = e.rule ?? "other";
+    const entry = byRule.get(key) ?? { count: 0, files: new Set<string>() };
+
+    entry.count += 1;
+
+    if (e.file !== undefined) {
+      entry.files.add(basename(e.file));
+    }
+
+    byRule.set(key, entry);
+  }
+
+  const lines = [...byRule.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([rule, { count, files }]) => {
+      const names = [...files];
+      const shownFiles = names.slice(0, 3).join(", ");
+      const extra = names.length > 3 ? ` (+${names.length - 3} files)` : "";
+      const where = names.length > 0 ? ` in ${shownFiles}${extra}` : "";
+
+      return `  - ${count} more [${rule}]${where}`;
+    });
+
+  return `\n… plus ${skipped.length} more not shown — same rules, same fixes apply:\n${lines.join("\n")}`;
 }
 
 /**
