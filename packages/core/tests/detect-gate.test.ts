@@ -500,9 +500,19 @@ test("opt-in oracles join the gate ONLY when their env var is set", async () => 
     expect((await buildGate(dir)).label).toContain("property tests");
     delete process.env.TSFORGE_PROPTEST;
 
-    // An empty value does NOT count as set (guards against `export X=`).
+    // An empty value does NOT count as set (guards against `export X=`) — for
+    // EVERY opt-in oracle, not just coverage.
     process.env.TSFORGE_COVERAGE = "";
     expect((await buildGate(dir)).label).not.toContain("test coverage");
+    delete process.env.TSFORGE_COVERAGE;
+
+    process.env.TSFORGE_BOOT = "";
+    expect((await buildGate(dir)).label).not.toContain("boot smoke");
+    delete process.env.TSFORGE_BOOT;
+
+    process.env.TSFORGE_PROPTEST = "";
+    expect((await buildGate(dir)).label).not.toContain("property tests");
+    delete process.env.TSFORGE_PROPTEST;
   } finally {
     for (const [k, v] of saved) {
       if (v === undefined) {

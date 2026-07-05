@@ -100,24 +100,36 @@ export async function qualityRepair(
       report(event);
     };
 
-    await agent.implement({
-      cwd,
-      task,
-      errors: [
-        {
-          key: "quality",
-          message: `The code is green but a senior reviewer scored it ${best.quality}/5: "${best.notes}". Improve the code to address that critique.${guidance} Do NOT break the tests or the gate.`,
-        },
-      ],
-      cycle: attempts,
-      report: countingReport,
-    });
+    // A throw mid-attempt (agent error, fix-command crash, gate runner failure)
+    // must still roll the workspace back — otherwise a half-applied edit batch is
+    // left on disk over the green baseline. Restore, then rethrow so the caller
+    // still sees the failure (mirrors review-repair.ts).
+    let gate;
 
-    if (task.fix !== undefined && task.fix.length > 0) {
-      await runAccept({ ...task, accept: task.fix }, cwd);
+    try {
+      await agent.implement({
+        cwd,
+        task,
+        errors: [
+          {
+            key: "quality",
+            message: `The code is green but a senior reviewer scored it ${best.quality}/5: "${best.notes}". Improve the code to address that critique.${guidance} Do NOT break the tests or the gate.`,
+          },
+        ],
+        cycle: attempts,
+        report: countingReport,
+      });
+
+      if (task.fix !== undefined && task.fix.length > 0) {
+        await runAccept({ ...task, accept: task.fix }, cwd);
+      }
+
+      gate = await validate(task, cwd, opts.parse);
+    } catch (error) {
+      await restoreFiles(snapshot);
+
+      throw error;
     }
-
-    const gate = await validate(task, cwd, opts.parse);
 
     if (!gate.passed) {
       await restoreFiles(snapshot);

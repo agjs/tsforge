@@ -181,6 +181,42 @@ test("reverts an attempt that breaks the gate", async () => {
   }
 });
 
+// Regression: a THROW mid-attempt (agent error, fix crash, gate runner failure)
+// must roll the workspace back to the green baseline before propagating —
+// otherwise a half-applied edit batch is left on disk over green code. Mirrors
+// review-repair.ts's try/catch-restore-rethrow.
+test("a throw mid-attempt restores the snapshot before rethrowing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-quality-throw-"));
+
+  try {
+    await Bun.write(join(dir, "a.ts"), "baseline");
+
+    const agent: IAgent = {
+      async implement(ctx) {
+        await Bun.write(join(ctx.cwd, "a.ts"), "// HALF-APPLIED");
+
+        throw new Error("agent exploded mid-repair");
+      },
+    };
+
+    await expect(
+      qualityRepair(
+        { id: "1", accept: "true", files: ["a.ts"] },
+        dir,
+        agent,
+        risingJudge([3]), // parseable 3/5 → enters the improvement loop
+        { goal: "g", criteria: "c" },
+        { target: 5, maxAttempts: 1 }
+      )
+    ).rejects.toThrow("agent exploded mid-repair");
+
+    // The half-applied edit must be rolled back, not left on disk.
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe("baseline");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // Regression: an UNPARSEABLE judge response (judge infra failure, not a real 0/5)
 // must NOT enter the improvement loop. Feeding the generator "a reviewer scored you
 // 0/5: 'unparseable judge response'" is a nonsense critique it can't act on — live,
