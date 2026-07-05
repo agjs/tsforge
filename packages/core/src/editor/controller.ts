@@ -4,6 +4,11 @@ import { decodeKeys } from "./keys";
 import { createPasteScanner } from "./paste";
 import { renderEditor } from "./view";
 import { graphemes } from "./segments";
+import { createCompletion, type IEditorCompletionSource } from "./completion";
+
+// Re-exported: the host-facing completion-source contract moved to
+// editor/completion.ts with the state machine; existing importers keep working.
+export type { IEditorCompletionSource } from "./completion";
 
 export interface IEditorHandle {
   onSubmit(cb: (message: string) => void): void;
@@ -38,20 +43,6 @@ export interface IStdin {
   setRawMode?(mode: boolean): void;
   resume?(): void;
   setEncoding?(encoding: string): void;
-}
-
-/** An `@`-mention completion source, supplied by the host. The editor owns the
- *  query (text after the `@`) and the selected index; the source filters a file
- *  list, paints the dropdown ABOVE the editor block, and tears it down. Keeping
- *  rendering here (not a separate readline overlay) is what stops the picker from
- *  fighting the editor for the input row. */
-export interface IEditorCompletionSource {
-  /** Filtered, ranked candidate paths for the current query. */
-  items(query: string): readonly string[];
-  /** Paint the dropdown for `items` with `selected` highlighted. */
-  render(items: readonly string[], selected: number): void;
-  /** Tear the dropdown down. */
-  clear(): void;
 }
 
 export interface IStartEditorDeps {
@@ -211,13 +202,17 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   let historyIndex = -1; // -1 = not in history, >= 0 = viewing history item
   let draftText: string | null = null;
   let dataListener: ((chunk: string) => void) | null = null;
-  // Active `@`-completion: the cursor position right AFTER the `@` (the query
-  // anchor) and the highlighted row. null when the dropdown is closed.
-  let completion: {
-    anchorLine: number;
-    anchorCol: number;
-    selected: number;
-  } | null = null;
+  // The `@`-mention dropdown state machine (see editor/completion.ts).
+  const completion = createCompletion({
+    buffer,
+    source: completionSource,
+    repaint: () => {
+      repaint();
+    },
+    notifyChange: () => {
+      notifyChange();
+    },
+  });
 
   function repaint(): void {
     if (!isOpen) {
@@ -402,152 +397,11 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     repaint();
     notifyChange();
 
-    if (completion !== null) {
-      refreshCompletion();
+    if (completion.isOpen()) {
+      completion.refresh();
     } else {
       triggerPaletteOrPicker();
     }
-  }
-
-  /** The query typed after the `@` (anchor → cursor on the anchor line). */
-  function completionQuery(): string {
-    if (completion === null) {
-      return "";
-    }
-
-    const { line, col } = buffer.getCursor();
-
-    if (line !== completion.anchorLine || col < completion.anchorCol) {
-      return "";
-    }
-
-    const lineText = buffer.getText().split("\n")[line] ?? "";
-
-    return graphemes(lineText).slice(completion.anchorCol, col).join("");
-  }
-
-  function closeCompletion(): void {
-    if (completion === null) {
-      return;
-    }
-
-    completion = null;
-    completionSource?.clear();
-  }
-
-  /** Recompute the dropdown for the current query, or close it if the cursor left
-   *  the mention (moved before the `@`, onto another line, or typed whitespace). */
-  function refreshCompletion(): void {
-    if (completion === null || completionSource === undefined) {
-      return;
-    }
-
-    const { line, col } = buffer.getCursor();
-
-    if (line !== completion.anchorLine || col < completion.anchorCol) {
-      closeCompletion();
-
-      return;
-    }
-
-    const query = completionQuery();
-
-    if (/\s/u.test(query)) {
-      closeCompletion(); // a space ends the mention (paths contain none)
-
-      return;
-    }
-
-    const items = completionSource.items(query);
-
-    completion.selected = Math.max(
-      0,
-      Math.min(completion.selected, items.length - 1)
-    );
-    completionSource.render(items, completion.selected);
-  }
-
-  function openCompletion(): void {
-    if (completionSource === undefined) {
-      return;
-    }
-
-    const { line, col } = buffer.getCursor();
-
-    completion = { anchorLine: line, anchorCol: col, selected: 0 };
-    refreshCompletion();
-  }
-
-  function moveCompletion(delta: number): void {
-    if (completion === null) {
-      return;
-    }
-
-    completion.selected = Math.max(0, completion.selected + delta);
-    refreshCompletion();
-  }
-
-  /** Accept the highlighted candidate: replace the typed query with `<path> `
-   *  (the `@` stays — it's part of the at-mention syntax). */
-  function acceptCompletion(): void {
-    if (completion === null || completionSource === undefined) {
-      return;
-    }
-
-    const items = completionSource.items(completionQuery());
-    const pick = items[completion.selected];
-
-    if (pick === undefined) {
-      closeCompletion();
-
-      return;
-    }
-
-    const { col } = buffer.getCursor();
-    const remove = Math.max(0, col - completion.anchorCol);
-
-    for (let i = 0; i < remove; i += 1) {
-      buffer.deleteBackward();
-    }
-
-    buffer.insert(`${pick} `);
-    closeCompletion();
-    repaint();
-    notifyChange();
-  }
-
-  /** While the dropdown is open it owns navigation/accept/cancel keys. Returns
-   *  true if the key was consumed (so normal editing is skipped). */
-  function handleCompletionKey(name: string): boolean {
-    if (completion === null) {
-      return false;
-    }
-
-    if (name === "up") {
-      moveCompletion(-1);
-
-      return true;
-    }
-
-    if (name === "down") {
-      moveCompletion(1);
-
-      return true;
-    }
-
-    if (name === "return" || name === "tab") {
-      acceptCompletion();
-
-      return true;
-    }
-
-    if (name === "escape") {
-      closeCompletion();
-
-      return true;
-    }
-
-    return false;
   }
 
   function triggerPaletteOrPicker(): void {
@@ -575,7 +429,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     }
 
     if (completionSource !== undefined) {
-      openCompletion();
+      completion.open();
     } else if (typeof openFilePicker === "function") {
       openFilePicker().catch(() => {
         // ignore errors
@@ -594,7 +448,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     // The open dropdown intercepts navigation/accept/cancel; printable chars and
     // backspace fall through to normal editing, then refreshCompletion() re-queries.
-    if (handleCompletionKey(name)) {
+    if (completion.handleKey(name)) {
       return;
     }
 
@@ -679,8 +533,8 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       notifyChange();
 
       // Backspace/delete change the query; re-query (or close if the `@` is gone).
-      if (completion !== null) {
-        refreshCompletion();
+      if (completion.isOpen()) {
+        completion.refresh();
       }
     }
   }
