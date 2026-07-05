@@ -12,13 +12,11 @@ import {
   SCAFFOLD_WEB_TOOL,
   SEARCH_TOOL,
   ADD_DEPENDENCY_TOOL,
-  READ_ONLY_TOOL_NAMES,
   TOOL_NAME,
 } from "../agent";
 import type { SetupWebFn } from "./tools";
 import type { PolicyMode } from "../policy";
 import { flags } from "../config";
-import { readFiles } from "../lib/fs";
 import { trace } from "../lib/trace";
 import { validate, isEslintJsonLine, type ErrorParser } from "../validate";
 import { detectStack } from "../stack-detection";
@@ -34,6 +32,14 @@ import { DEFAULT_TEMPERATURE, LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
 import type { Reporter, ILoopEvent } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
+import { selectThinking, offeredToolsFor } from "./model-call";
+import {
+  buildStaged as buildStagedPhases,
+  designBuild as designBuildPhase,
+  implementBuild as implementBuildPhase,
+  generatePlan as generateBuildPlan,
+  type IStagedBuildHost,
+} from "./staged-build";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import { buildChatSystem, buildTddGuidance, COMPACT_SYSTEM } from "./prompt";
 import { resolveConventions } from "../infer-rules/conventions";
@@ -214,37 +220,6 @@ function assistantMessage(res: IModelResponse): IChatMessage {
 /** Default share of the context window that triggers auto-compaction. */
 const AUTO_COMPACT_AT = 0.8;
 
-/** Staged-build step 1: design the type contract FIRST, gate off. Constraining
- *  the model to types before UI is the community-validated cure for random API
- *  invention on local models (plan → interfaces → implementation). */
-const PLAN_TYPES_STEP =
-  "STEP 1 of 2 — DESIGN FIRST, do not build the UI yet. In ONE short paragraph, " +
-  "name the DOMAINS the app needs and the data each holds. Then lay out the type " +
-  "contract the boringstack way: for each domain create its " +
-  "`src/<domain>/<domain>.types.ts` (its `I`-prefixed interfaces) and, where it has " +
-  "fixed registries/config, `src/<domain>/<domain>.constants.ts` (`as const`). Put " +
-  "types shared across domains in `src/shared/shared.types.ts`. Do NOT create one " +
-  "mega `src/types.ts`. THIS STEP IS TYPES/CONSTANTS ONLY: do NOT create components, " +
-  "routes, services, seeds, or hooks, and do NOT call scaffold_routes or scaffold_ui " +
-  "yet — the NEXT step builds ALL of that. This phase's gate checks ONLY types (no " +
-  "build), so anything else you write now just risks errors and wastes turns. When " +
-  "your `.types.ts`/`.constants.ts` files type-check, STOP.\n" +
-  "SPEED: after the one-paragraph plan, write MANY files per turn — emit SEVERAL " +
-  "`create` tool calls in a SINGLE response (batch all of a domain's type/constant " +
-  "files at once). Do NOT write one file then stop and wait.";
-
-/** Plan mode — emitted AFTER the design phase to surface the model's intent for a
- *  human to review before phase 2 commits. Asks for a concise plan, NOT code. */
-const PLAN_SUMMARY_STEP =
-  "Before building the UI, output your BUILD PLAN as concise markdown so it can be " +
-  "reviewed. Cover, briefly:\n" +
-  "1. ENTITIES — list each, and for each say whether it gets its OWN routes " +
-  "(list/detail/create) or is NESTED/EMBEDDED in another (say where).\n" +
-  "2. ROUTES/PAGES — the routes you will create.\n" +
-  "3. DONE — what you consider a complete app for this spec.\n" +
-  "4. DECISIONS/ASSUMPTIONS — any modeling choices a reviewer might want to change.\n" +
-  "Output ONLY the markdown plan — no preamble, no tool calls, no code.";
-
 /** GENERAL plan mode (the default for a fresh interactive session; also the
  *  `/plan` toggle — distinct from the staged web build's PLAN_SUMMARY_STEP):
  *  rides the first user message after the mode flips on. Read-only tools enforce
@@ -357,29 +332,6 @@ const INTERIM_CHECK_NOTE =
   "Interim type-check (NOT the final gate) — fix these now, while they are few, " +
   "before writing more. IGNORE any `Cannot find module './…'` for files you have " +
   "not created yet; fix the real type errors:";
-
-/** Staged-build step 2: implement against the contract, gate on (drive to green). */
-const IMPLEMENT_STEP =
-  "STEP 2 of 2 — build the app in THIS ORDER, so every file compiles the moment " +
-  "you write it (each step depends only on earlier ones — no forward references):\n" +
-  "1) DATA — each domain's types (<feature>.types.ts) + typed seed/constants " +
-  "(<feature>.constants.ts), e.g. `export const SEED = [...] satisfies readonly " +
-  "IThing[]` (plain literals, no `as`). Need async? Write your OWN hook in " +
-  "<feature>.hooks.ts (react-query/fetch), narrowing the response. Small files; " +
-  "emit them together.\n" +
-  "2) ROUTES — call `scaffold_routes` ONCE with EVERY page the app needs (list, " +
-  "detail with $param like /accounts/$accountId, and create/edit like " +
-  "/deals/create). This writes all route files at once, so from here every " +
-  "<Link to>/navigate target type-checks — NEVER hand-write a route file.\n" +
-  "3) SHELL — the app-shell layout + nav linking those routes.\n" +
-  "4) FILL, FEATURE BY FEATURE — replace each route's placeholder with its real " +
-  "component (import your types + your seed/hook + @/components/ui + <Link> to any " +
-  "route). FINISH one feature before starting the next.\n" +
-  "PACE: write ONE coherent slice per turn — a single feature's few files together " +
-  "(or one file if it's large) — then let the gate check it. Do NOT dump the whole " +
-  "app in one response (it gets cut off and the work is lost); do NOT trickle one " +
-  "trivial file at a time either. The gate builds + browser-verifies; fix exactly " +
-  "what it reports. Don't explain or plan in prose — just emit the tool calls.";
 
 /**
  * Did the model write whole files INTO its chat message instead of calling
@@ -987,151 +939,92 @@ export class Session {
     }
   }
 
-  /**
-   * Build a project from scratch in two STAGES, the way local models stay
-   * reliable: (1) plan + write the type contract (`src/types.ts`) with the gate
-   * OFF — a types-only app can't build yet, so gating here would spuriously fail;
-   * (2) implement against those types with the gate ON, driving to green. This is
-   * the community-validated plan→interfaces→implementation pattern; our gate is
-   * the verification stage. A soft constraint: if the model ignores step 1 and
-   * builds everything, step 2 simply continues — nothing breaks.
-   */
+  /** The narrow seam the staged build drives (see loop/staged-build.ts). One
+   *  host per public call; useDesignTools/useFullTools share its saved-tools
+   *  slot so a designBuild always restores the set it swapped out. */
+  private stagedHost(): IStagedBuildHost {
+    let savedTools: typeof this.tools | null = null;
+    const gateNow = (): string => this.ctx.task.accept;
+
+    return {
+      cwd: this.ctx.cwd,
+      taskId: this.ctx.task.id,
+      get gate(): string {
+        return gateNow();
+      },
+      setGate: (command: string): void => {
+        this.setGate(command);
+      },
+      useDesignTools: (): void => {
+        savedTools = this.tools;
+        this.tools = toolsFor(false);
+      },
+      useFullTools: (): void => {
+        if (savedTools !== null) {
+          this.tools = savedTools;
+          savedTools = null;
+        }
+      },
+      send: (message, opts = {}) => this.send(message, opts),
+      fullGatePasses: async (): Promise<boolean> => {
+        const fullGateTask: ITask = { ...this.ctx.task };
+        const full = await validate(
+          fullGateTask,
+          this.ctx.cwd,
+          this.ctx.gate.parse,
+          this.ctx.tool.signal === undefined
+            ? {}
+            : { signal: this.ctx.tool.signal }
+        );
+
+        return full.passed;
+      },
+      completeOnce: async (prompt: string): Promise<string> => {
+        const res = await this.provider.complete(
+          [...this.ctx.messages, { role: "user", content: prompt }],
+          {
+            temperature: 0,
+            ...(this.ctx.tool.signal === undefined
+              ? {}
+              : { signal: this.ctx.tool.signal }),
+          }
+        );
+
+        return res.content;
+      },
+      report: this.report,
+    };
+  }
+
+  /** Two-stage from-scratch build — see loop/staged-build.ts. */
   async buildStaged(
     request: string,
     opts: ISendOptions = {},
     designGate = ""
   ): Promise<ISendResult> {
-    const planned = await this.designBuild(request, opts, designGate);
-
-    // Don't push on to implementation if the user aborted the design step.
-    if (planned.status === "interrupted") {
-      return planned;
-    }
-
-    return this.implementBuild("", opts);
+    return buildStagedPhases(this.stagedHost(), request, opts, designGate);
   }
 
-  /**
-   * PHASE 1 — design the type contract only. Gates on TYPES (tsc + lint, no build)
-   * when a `designGate` is given, so the contract is driven self-consistent BEFORE
-   * components (catching as-const↔interface errors small, not as a final pile).
-   * Withholds the app-building scaffold tools so the model CANNOT start the UI here
-   * — a prompt-only "types only" was repeatedly ignored. Returns the phase-1 result
-   * and leaves the session ready for `implementBuild`. Split out from `buildStaged`
-   * so plan mode can insert a human review between the phases.
-   */
+  /** Phase 1 (design the type contract) — see loop/staged-build.ts. */
   async designBuild(
     request: string,
     opts: ISendOptions = {},
     designGate = ""
   ): Promise<ISendResult> {
-    const gate = this.ctx.task.accept;
-
-    this.setGate(designGate);
-
-    const phaseTwoTools = this.tools;
-
-    this.tools = toolsFor(false);
-    const planned = await this.send(`${request}\n\n${PLAN_TYPES_STEP}`, opts);
-
-    this.tools = phaseTwoTools;
-    this.setGate(gate);
-
-    return planned;
+    return designBuildPhase(this.stagedHost(), request, opts, designGate);
   }
 
-  /**
-   * PHASE 2 — implement against the designed types, driving to green. If phase 1
-   * already produced a fully-green app (it ignored "types only" and built
-   * everything), this returns done WITHOUT rebuilding — else the model concludes
-   * the prior phase did "only the data layer" and `rm -rf`s its own finished UI to
-   * rebuild (observed: 23-00-52 went green at turn 146, then phase 2 wiped every
-   * file). `planNotes` (human plan-mode edits) are injected into the implement step.
-   */
+  /** Phase 2 (implement against the contract) — see loop/staged-build.ts. */
   async implementBuild(
     planNotes = "",
     opts: ISendOptions = {}
   ): Promise<ISendResult> {
-    const gate = this.ctx.task.accept;
-    const fullGateTask: ITask = { ...this.ctx.task, accept: gate };
-    const full = await validate(
-      fullGateTask,
-      this.ctx.cwd,
-      this.ctx.gate.parse,
-      this.ctx.tool.signal === undefined ? {} : { signal: this.ctx.tool.signal }
-    );
-
-    if (full.passed) {
-      this.report({
-        kind: "tool",
-        task: this.ctx.task.id,
-        message:
-          "phase 1 already produced a fully-green app — skipping phase 2 (no rebuild)",
-      });
-
-      return { status: "done", turns: 0 };
-    }
-
-    // Inject the EXACT type contract the design phase just wrote, fresh, right
-    // before implementation. The 27b's #1 first-pass error is misremembering its
-    // OWN types across many files/turns (a field shape it defined 30 turns ago) —
-    // re-showing the precise current signatures cuts those consistency errors (so
-    // less repair). Both phases run ADAPTIVE thinking (governed by `repairing`).
-    const contract = await this.typeContract();
-    const notes =
-      planNotes.length > 0
-        ? `\n\n## Approved plan — follow these decisions\n${planNotes}\n`
-        : "";
-
-    return this.send(`${contract}${IMPLEMENT_STEP}${notes}`, opts);
+    return implementBuildPhase(this.stagedHost(), planNotes, opts);
   }
 
-  /**
-   * Plan mode — after `designBuild`, ask the model to state its build PLAN as
-   * markdown (entities + whether each is its own route or nested/embedded; the
-   * routes/pages it will create; what it considers DONE; key modeling decisions)
-   * so a human can review/correct it BEFORE phase 2 commits ~100 turns. A single
-   * completion over the live conversation; emits NO tool calls and touches no
-   * files. Returns the plan text (empty string if the model returned nothing).
-   */
+  /** The reviewable build plan after designBuild — see loop/staged-build.ts. */
   async generatePlan(): Promise<string> {
-    const res = await this.provider.complete(
-      [...this.ctx.messages, { role: "user", content: PLAN_SUMMARY_STEP }],
-      {
-        temperature: 0,
-        ...(this.ctx.tool.signal === undefined
-          ? {}
-          : { signal: this.ctx.tool.signal }),
-      }
-    );
-
-    return res.content.trim();
-  }
-
-  /** Read the per-domain `.types.ts`/`.constants.ts` the design phase wrote and
-   *  format them as a precise reference block for the implement phase — so the
-   *  model builds against the EXACT current signatures instead of its (lossy)
-   *  recollection of them. Empty string if none exist yet (nothing to anchor). */
-  private async typeContract(): Promise<string> {
-    const files = await readFiles(this.ctx.cwd, [
-      "src/**/*.types.ts",
-      "src/**/*.constants.ts",
-    ]);
-
-    if (files.length === 0) {
-      return "";
-    }
-
-    const blocks = files
-      .map((f) => `// ${f.path}\n${f.content.trim()}`)
-      .join("\n\n");
-
-    return (
-      "THE TYPE CONTRACT you just designed (use these EXACT names/shapes — do " +
-      "NOT invent or misremember fields; import from these paths):\n\n```ts\n" +
-      `${blocks}\n` +
-      "```\n\n"
-    );
+    return generateBuildPlan(this.stagedHost());
   }
 
   /** Once `editsSinceCheck` reaches the threshold, run the incremental check and
@@ -1212,27 +1105,21 @@ export class Session {
     // ADAPTIVE: think while REPAIRING (errors outstanding) so repair converges;
     // otherwise honour the per-send/cfg setting (off = fast creation). A forced
     // recovery turn always thinks-off (it just needs one clean tool call).
-    const enableThinking = forceNoThinking
-      ? false
-      : this.repairing
-        ? true
-        : (this.activeThinking ?? this.cfg.enableThinking);
+    const enableThinking = selectThinking({
+      forceNoThinking,
+      repairing: this.repairing,
+      activeThinking: this.activeThinking,
+      configured: this.cfg.enableThinking,
+    });
     // PLAN MODE advertises only the read-only tools (+ `run`, whose handler
     // enforces a read-only command allowlist) — the model never sees a write
     // tool. Filtered per call, so `this.tools` is untouched and toggling the
     // mode off restores the full set with zero bookkeeping.
-    const baseTools = this.planMode
-      ? this.tools.filter(
-          (t) =>
-            READ_ONLY_TOOL_NAMES.has(t.function.name) ||
-            t.function.name === TOOL_NAME.run
-        )
-      : this.tools;
-    // MCP tools are external context sources (not workspace writes), so they ride
-    // alongside the built-ins even in plan mode — appended after the filter.
-    const mcpSchemas = this.ctx.tool.mcpRegistry?.toolSchemas() ?? [];
-    const offeredTools =
-      mcpSchemas.length > 0 ? [...baseTools, ...mcpSchemas] : baseTools;
+    const offeredTools = offeredToolsFor(
+      this.tools,
+      this.planMode,
+      this.ctx.tool.mcpRegistry?.toolSchemas() ?? []
+    );
     const callStart = performance.now();
     let firstTokenAt = 0;
 
