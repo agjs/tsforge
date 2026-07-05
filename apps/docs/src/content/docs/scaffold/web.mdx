@@ -73,7 +73,7 @@ Scaffolded apps follow a **views** layout, and the [`react-component-architectur
 src/views/<Feature>/
   index.tsx              the view — the composition root
   components/<X>.tsx      feature components (one per file)
-  <feature>.types.ts     the feature's interfaces (I-prefixed)
+  <feature>.types.ts     the feature's interfaces (bare PascalCase, e.g. `Deal`)
   <feature>.constants.ts  its label maps, column specs, typed seed data
   <feature>.hooks.ts     custom hooks (data fetching, derived state) — if needed
 src/components/ui/         shared, feature-agnostic primitives (scaffold_ui)

@@ -46,6 +46,8 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environme
 | `/files <globs>` | set editable scope |
 | `/review [base]` | review your current change (logic, regressions, edge cases) |
 | `/map [status\|forget]` | build a structural map of the repo to prime the agent |
+| `/trace [logfile]` | summarize a `--log` run (calls, policy decisions, gate verdicts, turns-to-green) |
+| `/setup` | infer + write project conventions (the setup wizard) |
 | `/model [name]` | list models or switch active model |
 | `/sessions` | list saved sessions |
 | `/compact` | summarize conversation to free context |
@@ -53,7 +55,7 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environme
 | `/cost` | rough token estimate |
 | `/metrics` | token totals + generation rate (tok/s) this session |
 | `/memory` | show learned failure→fix lessons (`/memory forget` clears them) |
-| `/exit` | quit |
+| `/exit` | quit (`/quit` is an alias) |
 
 Anything else is sent to the agent. While it runs, type to **steer** the next turn. Ctrl-C interrupts the current run.
 
