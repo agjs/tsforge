@@ -121,3 +121,23 @@ test("gateFeedback summarizes overflow by rule with affected files", async () =>
     expect(fb).toContain("27 more [TS2532] in money.ts");
   });
 });
+
+test("gateFeedback labels rule-less overflow as 'unclassified errors', not [other]", async () => {
+  await withDir(async (dir) => {
+    await Bun.write(join(dir, "money.ts"), "export const x = 1;\n");
+
+    // 22 errors with NO rule id (generic/oracle output): 20 render, 2 overflow
+    // into the summary and must read as prose, not a fictitious rule `[other]`.
+    const errors: ErrorSet = Array.from({ length: 22 }, (_, i) => ({
+      key: `money.ts:${i + 1}:generic`,
+      file: "money.ts",
+      line: 1,
+      message: "command exited non-zero",
+    }));
+
+    const fb = await gateFeedback(errors, TASK, dir);
+
+    expect(fb).toContain("more unclassified errors");
+    expect(fb).not.toContain("[other]");
+  });
+});

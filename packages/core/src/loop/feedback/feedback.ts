@@ -166,8 +166,11 @@ function overflowSummary(skipped: ErrorSet): string {
       const shownFiles = names.slice(0, 3).join(", ");
       const extra = names.length > 3 ? ` (+${names.length - 3} files)` : "";
       const where = names.length > 0 ? ` in ${shownFiles}${extra}` : "";
+      // "other" is the bucket for errors with no rule id (generic/oracle output);
+      // render it as prose so the model doesn't read it as a rule named `other`.
+      const label = rule === "other" ? "unclassified errors" : `[${rule}]`;
 
-      return `  - ${count} more [${rule}]${where}`;
+      return `  - ${count} more ${label}${where}`;
     });
 
   return `\n… plus ${skipped.length} more not shown — same rules, same fixes apply:\n${lines.join("\n")}`;
