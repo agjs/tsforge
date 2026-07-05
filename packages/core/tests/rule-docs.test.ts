@@ -4,6 +4,7 @@ import {
   ruleHelpFromOutput,
   parseRuleMdx,
 } from "../src/loop/feedback/rule-docs";
+import generatedDocs from "../src/loop/feedback/rule-docs.generated.json";
 
 const SAMPLE_MDX = `---
 description: 'Disallow returning a value with type \`any\` from a function.'
@@ -159,4 +160,15 @@ test("ruleHelp: a pack rule with no worked example shows only its description (n
     expect(h).not.toContain("// Example that violates the rule");
     expect(h).not.toContain("✗ \n");
   }
+});
+
+test("generated docs the reader imports include the tsforge pack rules (guards the write→read path)", () => {
+  // The builder must write next to THIS reader. If it drifts to a sibling path,
+  // the imported file reverts to zero tsforge rules and generated feedback goes
+  // dead at runtime (a rule with no curated card would show empty examples).
+  const keys = Object.keys(generatedDocs);
+  const tsforgeKeys = keys.filter((k) => k.startsWith("tsforge/"));
+
+  expect(tsforgeKeys.length).toBeGreaterThan(50);
+  expect(keys).toContain("tsforge/component-folder-structure");
 });

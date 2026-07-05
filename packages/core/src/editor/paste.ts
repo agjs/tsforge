@@ -21,6 +21,10 @@ export interface IPasteScan {
   /** True while a paste is OPEN (start seen, end not yet) — the caller suppresses
    *  readline's line submits until the paste closes and the buffer is filled. */
   active: boolean;
+  /** Bytes AFTER a completed paste's end marker WITHIN the same chunk — trailing
+   *  keystrokes (or even a second paste) that arrived coalesced with the paste.
+   *  "" when none. The caller MUST process these or they are silently lost. */
+  remainder: string;
 }
 
 export interface IPasteScanner {
@@ -66,7 +70,7 @@ export function createPasteScanner(): IPasteScanner {
         const start = rest.indexOf(PASTE_START);
 
         if (start === -1) {
-          return { content: null, active: false };
+          return { content: null, active: false, remainder: "" };
         }
 
         active = true;
@@ -80,7 +84,7 @@ export function createPasteScanner(): IPasteScanner {
         // Paste spans more chunks — keep buffering, keep swallowing submits.
         buf += rest;
 
-        return { content: null, active: true };
+        return { content: null, active: true, remainder: "" };
       }
 
       buf += rest.slice(0, end);
@@ -89,7 +93,13 @@ export function createPasteScanner(): IPasteScanner {
       active = false;
       buf = "";
 
-      return { content, active: false };
+      // Anything after the end marker in THIS chunk is trailing input the caller
+      // must still process (else it's dropped).
+      return {
+        content,
+        active: false,
+        remainder: rest.slice(end + PASTE_END.length),
+      };
     },
     forceEnd(): string | null {
       if (!active) {

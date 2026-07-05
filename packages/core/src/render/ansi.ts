@@ -2,10 +2,12 @@ import type { IRenderOptions, IStatusInfo } from "./render.types";
 import type { ILoopEvent } from "../loop";
 import type { IChatMessage } from "../inference";
 import { STYLE, paint } from "./style";
+import { displayWidth, padToWidth, sliceToWidth } from "./width";
 import { box, GLYPH } from "./box";
 import { renderMarkdown, highlightCode } from "./markdown";
 import { StreamingMarkdown } from "./stream-markdown";
 import { renderDiff } from "./diff";
+import { makeAgentRail } from "./agent-rail";
 
 /** Split highlighted/plain text into the body-line array a box expects. */
 function bodyLines(text: string): string[] {
@@ -126,6 +128,101 @@ export function speakerLabel(
   );
 }
 
+/** Word-wrap `text` to `width` display columns; a word wider than the line is
+ *  hard-broken so no output row ever overflows. */
+export function wrapToWidth(text: string, width: number): string[] {
+  if (width <= 0) {
+    return [text];
+  }
+
+  const out: string[] = [];
+
+  for (const rawLine of text.split("\n")) {
+    let cur = "";
+
+    for (const word of rawLine.split(" ")) {
+      const candidate = cur.length === 0 ? word : `${cur} ${word}`;
+
+      if (displayWidth(candidate) <= width) {
+        cur = candidate;
+        continue;
+      }
+
+      if (cur.length > 0) {
+        out.push(cur);
+      }
+
+      let rest = word;
+
+      while (displayWidth(rest) > width) {
+        const head = sliceToWidth(rest, width);
+
+        out.push(head.text);
+        rest = rest.slice(head.text.length);
+      }
+
+      cur = rest;
+    }
+
+    out.push(cur);
+  }
+
+  return out;
+}
+
+/** A full rounded bubble for a USER message: `╭─ you ─╮ / │ … │ / ╰──╯`, sized to
+ *  its content and capped at the terminal width, painted brand. */
+export function userBubble(
+  content: string,
+  color: boolean,
+  columns: number
+): string {
+  const label = "you";
+  const maxInner = Math.max(label.length + 4, columns - 2);
+  const body = wrapToWidth(content, Math.max(1, maxInner - 2));
+  const widest = body.reduce((m, l) => Math.max(m, displayWidth(l)), 0);
+  const inner = Math.min(maxInner, Math.max(label.length + 4, widest + 2));
+  const fill = "─".repeat(Math.max(0, inner - label.length - 3));
+  const top = paint(`╭─ ${label} ${fill}╮`, STYLE.brand + STYLE.bold, color);
+  const bottom = paint(`╰${"─".repeat(inner)}╯`, STYLE.brand, color);
+  const side = paint("│", STYLE.brand, color);
+  const rows = body.map(
+    (line) =>
+      `${side} ${paint(padToWidth(line, inner - 2), STYLE.brand + STYLE.bold, color)} ${side}`
+  );
+
+  return [top, ...rows, bottom].join("\n");
+}
+
+/** The rounded top cap + model label for an AGENT card (streams below it). */
+export function agentCardTop(model: string, color: boolean): string {
+  return paint(`╭ ${model}`, STYLE.brandLight + STYLE.bold, color);
+}
+
+/** The rounded bottom cap that closes an AGENT card. */
+export function agentCardBottom(color: boolean): string {
+  return paint("╰", STYLE.brandLight, color);
+}
+
+/** The left-rail prefix (`│ `) painted for every row inside an AGENT card. */
+export function agentBar(color: boolean): string {
+  return `${paint("│", STYLE.brandLight, color)} `;
+}
+
+/** Rail-prefix AND soft-wrap a settled agent body (the `--continue` replay
+ *  path) with the SAME ANSI-aware, display-width wrapper the live stream uses
+ *  (makeAgentRail) — so a long replayed line can never spill past the rail. */
+export function agentCardBody(
+  text: string,
+  color: boolean,
+  columns?: number
+): string {
+  const cols = columns !== undefined && columns > 0 ? columns : 80;
+  const rail = makeAgentRail(agentBar(color), () => cols - 4);
+
+  return rail.feed(text);
+}
+
 export function renderMessage(
   message: IChatMessage,
   opts: IRenderOptions = {}
@@ -137,28 +234,29 @@ export function renderMessage(
   }
 
   if (message.role === "user") {
-    // `▌ you` label + brand-colored, indented body so YOUR turns read as a distinct
-    // block against the agent's default-foreground prose.
-    return (
-      `\n${speakerLabel("you", true, color)}\n` +
-      `${paint(indentBlock(message.content), STYLE.brand, color)}\n`
-    );
+    // A full rounded bubble so YOUR turns read as a distinct block.
+    const columns = opts.columns ?? process.stdout.columns;
+
+    return `\n${userBubble(message.content, color, columns)}\n`;
   }
 
   const parts: string[] = [];
 
   if (message.content.length > 0) {
-    parts.push(indentBlock(renderMarkdown(message.content, color)));
+    parts.push(renderMarkdown(message.content, color));
   }
 
   if (message.toolCalls !== undefined && message.toolCalls.length > 0) {
     const names = message.toolCalls.map((c) => c.name).join(", ");
 
-    parts.push(indentBlock(paint(`· used ${names}`, STYLE.dim, color)));
+    parts.push(paint(`· used ${names}`, STYLE.dim, color));
   }
 
+  // A left-accent card (rounded caps + rail), streaming-friendly.
   return parts.length > 0
-    ? `\n${speakerLabel(opts.speaker ?? "assistant", false, color)}\n${parts.join("\n")}\n`
+    ? `\n${agentCardTop(opts.speaker ?? "assistant", color)}\n` +
+        `${agentCardBody(parts.join("\n"), color, opts.columns ?? process.stdout.columns)}\n` +
+        `${agentCardBottom(color)}\n`
     : "";
 }
 

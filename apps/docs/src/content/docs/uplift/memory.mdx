@@ -7,7 +7,7 @@ tsforge **learns from its own runs**. After each run it mines the event stream f
 
 The design principle: **aggregate aggressively and automatically; inject conservatively.** The ledger fills on its own with no curation from you, but almost nothing reaches a new session's prompt — a learned rule is a dormant trigger that costs zero context until the exact pattern shows up again.
 
-Default ON (shares the `TSFORGE_TTSR` switch). Set `TSFORGE_TTSR=0` to disable both stream rules and learning.
+Always on (part of the [TTSR](/uplift/ttsr/) stream-rules system).
 
 ## How it works
 

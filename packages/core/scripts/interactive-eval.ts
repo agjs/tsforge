@@ -26,12 +26,14 @@ import {
   buildWebGate,
   buildWebFix,
   buildWebTscCheck,
+  makeFileLinter,
+  WEB_PACKS,
+} from "../src/gate";
+import {
   scaffoldWeb,
   installWebDeps,
   webGuidance,
-  makeFileLinter,
-  WEB_PACKS,
-} from "../src/detect-gate";
+} from "../src/scaffold/web-scaffold";
 import { resolveActiveModel } from "../src/models-config";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { providerConfig } from "../src/cli";

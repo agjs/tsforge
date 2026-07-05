@@ -43,10 +43,7 @@ test("updateChecksEnabled is true only for an interactive, unflagged env", () =>
   expect(updateChecksEnabled({}, true)).toBe(true);
 });
 
-test("updateChecksEnabled is false when disabled, in CI, opted out, or non-TTY", () => {
-  expect(updateChecksEnabled({ TSFORGE_NO_UPDATE_CHECK: "1" }, true)).toBe(
-    false
-  );
+test("updateChecksEnabled is false only in CI, under NO_UPDATE_NOTIFIER, or non-TTY", () => {
   expect(updateChecksEnabled({ CI: "true" }, true)).toBe(false);
   expect(updateChecksEnabled({ NO_UPDATE_NOTIFIER: "1" }, true)).toBe(false);
   expect(updateChecksEnabled({}, false)).toBe(false);
@@ -184,12 +181,12 @@ test("refreshIfStale does nothing when the cache is fresh", async () => {
   expect(wrote).toBe(false);
 });
 
-test("refreshIfStale does nothing when the update check is disabled", async () => {
+test("refreshIfStale does nothing when the update check is disabled (CI)", async () => {
   let wrote = false;
 
   await refreshIfStale(
     deps({
-      env: { TSFORGE_NO_UPDATE_CHECK: "1" },
+      env: { CI: "1" },
       writeCache: async () => {
         wrote = true;
       },

@@ -10,7 +10,7 @@ import { condenseToolOutput } from "./condense";
 import { parseOrRepair, reject, type IToolContext } from "./tool-context";
 import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
 import { SessionSnapshotStore } from "../../files/hashline";
-import { flags } from "../../config";
+import { trace } from "../../lib/trace";
 
 /**
  * Read a file for the model. TRUSTED-MODE (by design): `read` and `run` are NOT
@@ -59,20 +59,15 @@ export async function readFile(
       `or \`rg <pattern> ${r.file}\`.]`
     : "";
 
-  // Annotate with hashline header if enabled
-  if (flags.hashlineEditTool()) {
-    ctx.snapshotStore ??= new SessionSnapshotStore();
+  ctx.snapshotStore ??= new SessionSnapshotStore();
 
-    const hash = ctx.snapshotStore.record(r.file, content);
-    const header = formatHashHeader(r.file, hash);
-    const annotated = lines
-      .map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`)
-      .join("\n");
+  const hash = ctx.snapshotStore.record(r.file, content);
+  const header = formatHashHeader(r.file, hash);
+  const annotated = lines
+    .map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`)
+    .join("\n");
 
-    return `${header}\n${annotated}${note}`;
-  }
-
-  return `${lines.join("\n")}${note}`;
+  return `${header}\n${annotated}${note}`;
 }
 
 /** Cap on the lines a single `read` renders — a huge file would otherwise wall
@@ -694,7 +689,9 @@ async function currentFileView(
     }
 
     return lines.map((line, i) => `${i + 1}${HL_LINE_SEP}${line}`).join("\n");
-  } catch {
+  } catch (err) {
+    trace("tools.currentFileView", err);
+
     return null;
   }
 }

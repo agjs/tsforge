@@ -111,6 +111,16 @@ If the session scaffolds a new browser app (`scaffold_web` or `tsforge --web`), 
 
 Details: [Web scaffolding](/scaffold/web/).
 
+### Staged gate progress & failures
+
+The web gate runs as **named stages** rather than one opaque `&&` chain. Each stage prints a `━━ <label> ━━` banner and streams its output live; a passing stage prints `✓ <label>`. On the first failure the runner prints
+
+```
+✗ <label> FAILED (exit N)
+```
+
+and **stops** — later stages don't run, and the failing stage's exit code is preserved. So when a build goes red, both you and the agent's feedback loop see *which* stage broke (`vite build`, `typecheck`, `lint`, `type-aware lint`, `stub check`, `format`, `tests`, or `browser smoke`) instead of a wall of interleaved output. The core (non-web) gate is short enough that it stays a plain command chain.
+
 Add a one-off page render check with `--browser path/to/index.html`.
 
 ### Accessibility, screenshots, and a perf budget

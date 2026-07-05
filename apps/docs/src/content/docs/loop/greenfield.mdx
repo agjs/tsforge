@@ -54,10 +54,6 @@ Each role can run on its own model (names from your [models.json](/inference/mod
 tsforge run kanban "build a kanban board"
 ```
 
-## Contract negotiation (experimental)
-
-Set `TSFORGE_CONTRACT=1` to make the generator and evaluator agree a **build contract** for each feature *before* building — the generator proposes "I'll build X, verified by Y" and the evaluator pushes back until it's concrete. The agreed contract then anchors the implementation, and the negotiation is saved to `.tsforge/greenfield/contracts/<feature>.md`. Off by default — it's unproven and adds model calls.
-
 ## Unattended runs & scheduling
 
 Greenfield runs are long and headless-friendly. There's no built-in scheduler — wire one with your OS:

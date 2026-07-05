@@ -7,12 +7,33 @@ import {
   buildGate,
   buildWebGate,
   makeFileLinter,
-  scaffoldWeb,
   discoverTestCommand,
   webTestProbe,
   buildCoreFix,
   formatFile,
-} from "../src/detect-gate";
+} from "../src/gate";
+import { scaffoldWeb } from "../src/scaffold/web-scaffold";
+
+/** buildWebGate emits `bun staged-gate.ts <base64-json>`; decode the payload back
+ *  to the concatenated stage commands so the substring assertions still hold. */
+function stagedCommandText(command: string): string {
+  const payload = command.split(" ").at(-1) ?? "";
+  const parsed: unknown = JSON.parse(
+    Buffer.from(payload, "base64").toString("utf8")
+  );
+
+  if (!Array.isArray(parsed)) {
+    return command;
+  }
+
+  return parsed
+    .map((s: unknown) =>
+      typeof s === "object" && s !== null && "command" in s
+        ? String(s.command)
+        : ""
+    )
+    .join(" ");
+}
 
 /** Run only the find-condition of the web test probe in `cwd`; true when it
  *  detects at least one test file (i.e. `bun test` would run). */
@@ -177,15 +198,16 @@ test("scaffoldWeb(react) lays the full kit; gate builds with Vite + browser", as
     expect(html).toContain("/src/main.tsx");
 
     const gate = buildWebGate("react", undefined, dir);
+    const staged = stagedCommandText(gate.command);
 
-    expect(gate.command).toContain("bun run build"); // vite build FIRST (codegen)
-    expect(gate.command).toContain("--noEmit"); // tsc
-    expect(gate.command).toContain("strict.web.eslint.config.mjs"); // web eslint
-    expect(gate.command).toContain("strict.type-aware.eslint.config.mjs"); // async correctness (scaffold ships a tsconfig)
-    expect(gate.command).toContain("src/components/ui/**"); // vendored exempt
-    expect(gate.command).toContain("*.gen.ts"); // generated exempt
-    expect(gate.command).toContain("dist/index.html"); // render the BUILT app
-    expect(gate.command).toContain("bun test"); // runs the model's tests when present
+    expect(staged).toContain("bun run build"); // vite build FIRST (codegen)
+    expect(staged).toContain("--noEmit"); // tsc
+    expect(staged).toContain("strict.web.eslint.config.mjs"); // web eslint
+    expect(staged).toContain("strict.type-aware.eslint.config.mjs"); // async correctness (scaffold ships a tsconfig)
+    expect(staged).toContain("src/components/ui/**"); // vendored exempt
+    expect(staged).toContain("*.gen.ts"); // generated exempt
+    expect(staged).toContain("dist/index.html"); // render the BUILT app
+    expect(staged).toContain("bun test"); // runs the model's tests when present
     expect(gate.label).toContain("Vite");
 
     // Test files use bun:test (a test runtime) and are EXCLUDED from the app's
@@ -247,7 +269,9 @@ test("buildWebGate omits the type-aware async pass when the dir has no tsconfig"
   try {
     const gate = buildWebGate("react", undefined, dir);
 
-    expect(gate.command).not.toContain("strict.type-aware.eslint.config.mjs");
+    expect(stagedCommandText(gate.command)).not.toContain(
+      "strict.type-aware.eslint.config.mjs"
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -270,15 +294,16 @@ test("scaffoldWeb(vanilla) lays a Vite + TS skeleton; gate has no vendored exemp
     expect(pkg).not.toContain("react");
 
     const gate = buildWebGate("vanilla", undefined, dir);
+    const staged = stagedCommandText(gate.command);
 
-    expect(gate.command).toContain("bun run build");
-    expect(gate.command).toContain("dist/index.html");
+    expect(staged).toContain("bun run build");
+    expect(staged).toContain("dist/index.html");
     // No VENDORED exempts (vanilla has no ui/lib/*.gen.ts). The type-aware lint
     // does ignore test files (they're outside the tsconfig) — that's expected and
     // is the only --ignore-pattern present.
-    expect(gate.command).not.toContain("/ui/");
-    expect(gate.command).not.toContain(".gen.ts");
-    expect(gate.command).toContain('--ignore-pattern "**/*.test.ts"');
+    expect(staged).not.toContain("/ui/");
+    expect(staged).not.toContain(".gen.ts");
+    expect(staged).toContain('--ignore-pattern "**/*.test.ts"');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

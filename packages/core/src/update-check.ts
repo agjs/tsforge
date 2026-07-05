@@ -4,21 +4,20 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isRecord } from "./lib/guards";
 import { STYLE, paint } from "./render";
-import { ENV_FLAG, FLAG_ON } from "./config/config.constants";
 
 /**
  * Startup "update available" check. Compares the running version against the
  * latest on the npm registry and surfaces a one-line notice under the banner.
  *
- * Two halves, both opt-out and offline-safe:
+ * Two halves, both offline-safe:
  *  - getUpdateNotice: reads a small on-disk cache (no network on the hot path)
  *    and returns a styled notice when the cached latest is newer.
  *  - refreshUpdateCacheInBackground: fire-and-forget; refreshes the cache from
  *    the registry when stale, for the next session.
  *
- * Everything is gated to interactive, non-CI, opted-in sessions (see
- * updateChecksEnabled) so eval sweeps and piped runs stay deterministic and
- * never touch the network.
+ * It always runs for interactive sessions; only non-CI, TTY, non-NO_UPDATE_NOTIFIER
+ * gating applies (see updateChecksEnabled) so eval sweeps and piped runs stay
+ * deterministic and never touch the network.
  */
 
 const REGISTRY_URL = "https://registry.npmjs.org/@agjs/tsforge/latest";
@@ -77,16 +76,14 @@ export function isNewer(latest: string, current: string): boolean {
   return a[2] > b[2];
 }
 
-/** Run the update check only for an interactive, opted-in, non-CI session. */
+/** Run the update check for every interactive, non-CI session — it always
+ *  happens, there is no tsforge opt-out. Skipped only when it can't or shouldn't
+ *  run: piped/non-TTY output, CI, or the cross-tool `NO_UPDATE_NOTIFIER`. */
 export function updateChecksEnabled(
   env: Record<string, string | undefined>,
   isTTY: boolean
 ): boolean {
   if (!isTTY) {
-    return false;
-  }
-
-  if (env[ENV_FLAG.noUpdateCheck] === FLAG_ON) {
     return false;
   }
 

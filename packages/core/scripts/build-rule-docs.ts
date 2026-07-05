@@ -111,11 +111,15 @@ for (const pack of Object.values(RULE_PACKS)) {
   }
 }
 
+// Write next to the ONLY reader (src/loop/feedback/rule-docs.ts imports
+// "./rule-docs.generated.json"). Writing to src/loop/ left the reader importing a
+// stale sibling with zero tsforge rules — generated feedback was dead at runtime.
 const path = join(
   import.meta.dir,
   "..",
   "src",
   "loop",
+  "feedback",
   "rule-docs.generated.json"
 );
 

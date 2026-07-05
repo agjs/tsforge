@@ -4,7 +4,7 @@
 //
 // Run:  bun run packages/core/scripts/sweep-report.ts [sweep.json]
 //   (no arg → the newest sweep-*.json under evals/runs)
-//   TSFORGE_BASELINE="ttsr=off,hashline=off temp=0"  # optional baseline label
+//   TSFORGE_BASELINE="git=off,script=off temp=0"  # optional baseline label
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { isRecord } from "../src/lib/guards";

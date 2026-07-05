@@ -24,3 +24,8 @@ export const STYLE = {
 export function paint(text: string, code: string, color: boolean): string {
   return color ? `${code}${text}${RESET}` : text;
 }
+
+/** A 24-bit truecolor foreground SGR code (e.g. for per-character gradients). */
+export function truecolor(r: number, g: number, b: number): string {
+  return `${ESC}[38;2;${r};${g};${b}m`;
+}

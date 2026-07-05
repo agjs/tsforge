@@ -18,6 +18,9 @@ export interface IRunSetupOptions {
   /** Defaults to process.stdin/out TTY detection; injectable for tests. */
   readonly interactive?: boolean;
   readonly out?: (s: string) => void;
+  /** FALSE when launched from the REPL (the editor/readline owns stdin) so the
+   *  wizard doesn't pause stdin on exit and quit the process. Default true. */
+  readonly manageInput?: boolean;
 }
 
 const SAFETY_NOTE =
@@ -105,12 +108,14 @@ export async function runSetup(opts: IRunSetupOptions): Promise<number> {
   }
 
   const steps = buildSteps(report);
-  const final = await runWizard(
-    steps,
-    opts.color,
-    (state) =>
-      `${configPreview(selectionsToConventions(state))}\n\n${SAFETY_NOTE}`
-  );
+  const final = await runWizard(steps, opts.color, {
+    title: "tsforge setup",
+    ...(opts.manageInput === undefined
+      ? {}
+      : { manageInput: opts.manageInput }),
+    extra: (state) =>
+      `${configPreview(selectionsToConventions(state))}\n\n${SAFETY_NOTE}`,
+  });
 
   if (final.status !== "apply") {
     write("\nSetup cancelled — nothing written.\n");

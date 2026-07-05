@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { TsService } from "../src/lsp";
-import { makeFileLinter } from "../src/detect-gate";
+import { makeFileLinter } from "../src/gate";
 
 /**
  * Test the instant per-file type diagnostics on write feature. The write-guard
@@ -272,42 +272,6 @@ const x: string = 42 as string;
           (p) => p.ruleId === "no-as-cast" || p.message.includes("as")
         )
       ).toBe(true);
-    });
-  });
-
-  describe("flag control: TSFORGE_LSP_WRITE_FEEDBACK", () => {
-    it("feature can be disabled via TSFORGE_LSP_WRITE_FEEDBACK=0", () => {
-      const oldValue = process.env.TSFORGE_LSP_WRITE_FEEDBACK;
-
-      process.env.TSFORGE_LSP_WRITE_FEEDBACK = "0";
-
-      const featureOn = process.env.TSFORGE_LSP_WRITE_FEEDBACK !== "0";
-
-      expect(featureOn).toBe(false);
-
-      // Restore
-      if (oldValue === undefined) {
-        delete process.env.TSFORGE_LSP_WRITE_FEEDBACK;
-      } else {
-        process.env.TSFORGE_LSP_WRITE_FEEDBACK = oldValue;
-      }
-    });
-
-    it("feature is on when flag is set to non-zero value", () => {
-      const oldValue = process.env.TSFORGE_LSP_WRITE_FEEDBACK;
-
-      // Test when set to non-"0" value
-      process.env.TSFORGE_LSP_WRITE_FEEDBACK = "1";
-      const featureOn = process.env.TSFORGE_LSP_WRITE_FEEDBACK !== "0";
-
-      expect(featureOn).toBe(true);
-
-      // Restore
-      if (oldValue === undefined) {
-        delete process.env.TSFORGE_LSP_WRITE_FEEDBACK;
-      } else {
-        process.env.TSFORGE_LSP_WRITE_FEEDBACK = oldValue;
-      }
     });
   });
 

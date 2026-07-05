@@ -2,7 +2,28 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildWebGate, buildWebTypeGate } from "../src/detect-gate";
+import { buildWebGate, buildWebTypeGate } from "../src/gate";
+
+/** buildWebGate now emits `bun staged-gate.ts <base64-json>`; decode the payload
+ *  back to the concatenated stage commands so substring assertions still hold. */
+function stagedCommandText(command: string): string {
+  const payload = command.split(" ").at(-1) ?? "";
+  const parsed: unknown = JSON.parse(
+    Buffer.from(payload, "base64").toString("utf8")
+  );
+
+  if (!Array.isArray(parsed)) {
+    return command;
+  }
+
+  return parsed
+    .map((s: unknown) =>
+      typeof s === "object" && s !== null && "command" in s
+        ? String(s.command)
+        : ""
+    )
+    .join(" ");
+}
 
 // Issue: a `bun:test` import in a scaffolded web app reds the gate with TS2307
 // ("Cannot find module 'bun:test'"). Root cause: the web gate ran `tsc -p
@@ -47,16 +68,17 @@ test("web gate tsc stays green on a bun:test sibling even when tsconfig.json dro
 
     // Building the web gate writes the harness-owned overlay into dir/.tsforge.
     const gate = buildWebGate("react", undefined, dir);
+    const staged = stagedCommandText(gate.command);
 
-    expect(gate.command).toContain(".tsforge/tsconfig.web-gate.json");
-    expect(gate.command).not.toContain("-p tsconfig.json");
+    expect(staged).toContain(".tsforge/tsconfig.web-gate.json");
+    expect(staged).not.toContain("-p tsconfig.json");
 
     // The type-aware lint (projectService) must IGNORE test files — they're excluded
     // from the tsconfig, so linting them would throw "not found by the project
     // service" and nudge the model to edit tsconfig (a rabbit hole).
-    expect(gate.command).toContain("strict.type-aware.eslint.config.mjs");
-    expect(gate.command).toContain('--ignore-pattern "**/*.test.ts"');
-    expect(gate.command).toContain('--ignore-pattern "**/*.test.tsx"');
+    expect(staged).toContain("strict.type-aware.eslint.config.mjs");
+    expect(staged).toContain('--ignore-pattern "**/*.test.ts"');
+    expect(staged).toContain('--ignore-pattern "**/*.test.tsx"');
 
     // Run JUST the overlay typecheck (the real gate also builds/lints, which needs
     // installed deps). Exit 0 == the test file was excluded; bun:test never loaded.

@@ -21,12 +21,14 @@ import {
   buildWebGate,
   buildWebTypeGate,
   buildWebTscCheck,
-  installWebDeps,
   makeFileLinter,
+  WEB_PACKS,
+} from "../src/gate";
+import {
+  installWebDeps,
   scaffoldWeb,
   webGuidance,
-  WEB_PACKS,
-} from "../src/detect-gate";
+} from "../src/scaffold/web-scaffold";
 import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { Session, LOOP_LIMITS, type Reporter } from "../src/loop";

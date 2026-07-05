@@ -3,7 +3,7 @@ title: Web research (no API keys)
 description: "Opt-in web_fetch, web_search, package_info, package_docs, and web_browse tools — no paid search/browser API, no required service key."
 ---
 
-Set `TSFORGE_WEB=1` to give the agent read-only internet research tools. They're built for **no required API keys and no paid vendor coupling**: npm metadata comes from the configured registry, search defaults to DuckDuckGo's keyless HTML endpoint, pages are extracted locally, and browser rendering uses local Playwright/Chromium when available. Off by default, so a run without the flag has no network reach beyond your model endpoint.
+Interactive sessions get read-only internet research tools **on by default** (an assistant that can't look things up is silly); toggle them under **Web tools** in [`/config`](/cli/interactive/). They're built for **no required API keys and no paid vendor coupling**: npm metadata comes from the configured registry, search defaults to DuckDuckGo's keyless HTML endpoint, pages are extracted locally, and browser rendering uses local Playwright/Chromium when available. One-shot and eval runs stay **off** unless you set `TSFORGE_WEB=1`, so headless sweeps have no network reach beyond your model endpoint.
 
 ```bash
 TSFORGE_WEB=1 tsforge "update the deprecated API call — check the library's current docs"
@@ -29,13 +29,13 @@ For current TypeScript/library work, ask the agent to search the official host f
 Check the current TanStack Query docs before changing this hook. Use domain-scoped web search if needed.
 ```
 
-## Why opt-in
+## When they're active
 
-The tools are read-only and offline-safe, but web access is still more reach than the agent has by default — so it's a deliberate flag, not an always-on capability. Under a policy mode that denies `network` (e.g. `ci`), the tools are unavailable even with the flag set. See [Permissions & policy](/guardrails/policy/).
+The tools are read-only and offline-safe. Interactive sessions enable them by default, but one-shot and eval runs stay offline unless you opt in — so headless sweeps are deterministic. Under a policy mode that denies `network` (e.g. `ci`), the tools are unavailable even with the flag set. See [Permissions & policy](/guardrails/policy/).
 
 | Env var | Default | Effect |
 | --- | --- | --- |
-| `TSFORGE_WEB` | off | enable keyless research tools (`=1`) |
+| `TSFORGE_WEB` | on interactive, off one-shot/eval | force keyless research tools on (`=1`) or off (`=0`) |
 | `TSFORGE_NPM_REGISTRY` | npm registry | registry used by `package_info` / `package_docs` |
 | `TSFORGE_SEARXNG_URL` | unset | route `web_search` to a SearXNG instance you already run |
 | `TSFORGE_WEB_SEARCH_BACKEND` | auto | `duckduckgo` or `searxng`; `searxng` fails closed if no SearXNG URL is set |

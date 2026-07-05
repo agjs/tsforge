@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, isOneShot, applyRecipe, runNotify } from "../src/cli";
+import { cliUsage } from "../src/cli/args";
 import type { ITaskRecipe } from "../src/config/recipes";
 
 // Regression: runNotify used to spawn `sh -c cmd` with a bare `await proc.exited`
@@ -24,6 +25,43 @@ test("runNotify is bounded — a hanging notifier cannot wedge the run", async (
 
     expect(elapsedMs).toBeLessThan(5000);
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A silently-degrading path must not be a black hole: with TSFORGE_TRACE set,
+// detectContextWindow's unreachable-endpoint fallback leaves a scoped line in
+// the trace file (B4 wiring) while still returning undefined to the caller.
+test("detectContextWindow degrade is observable via TSFORGE_TRACE", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-ctx-trace-"));
+  const traceFile = join(dir, "trace.log");
+  const saved = process.env.TSFORGE_TRACE;
+
+  process.env.TSFORGE_TRACE = traceFile;
+
+  try {
+    const { detectContextWindow } = await import("../src/cli/model-setup");
+    // Port 1 refuses immediately — the probe's fetch throws, the catch
+    // degrades to undefined (caller falls back) AND records the failure.
+    const window = await detectContextWindow({
+      baseUrl: "http://127.0.0.1:1/v1",
+      model: "nope",
+    });
+
+    expect(window).toBeUndefined();
+
+    const logged = await Bun.file(traceFile)
+      .text()
+      .catch(() => "");
+
+    expect(logged).toContain("[cli.detectContextWindow]");
+  } finally {
+    if (saved === undefined) {
+      Reflect.deleteProperty(process.env, "TSFORGE_TRACE");
+    } else {
+      process.env.TSFORGE_TRACE = saved;
+    }
+
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -420,4 +458,33 @@ test("editor input submission while busy queues exactly one message to pending",
   expect(pending[0]).toBe("test message");
 
   handle.close();
+});
+
+// Regression: --version/--help were NOT recognized flags, so they fell through as
+// POSITIONALS — `tsforge --version` booted a session whose task was the literal
+// string "--version" (and install.sh advertises `tsforge --help`). They must parse
+// as print-and-exit flags, never as a task.
+test("--version/-V and --help/-h parse as flags, not as a task", () => {
+  for (const argv of [["--version"], ["-V"]]) {
+    const a = parseArgs(argv);
+
+    expect(a.version).toBe(true);
+    expect(a.task).toBe("");
+  }
+
+  for (const argv of [["--help"], ["-h"]]) {
+    const a = parseArgs(argv);
+
+    expect(a.help).toBe(true);
+    expect(a.task).toBe("");
+  }
+});
+
+test("cliUsage documents the print-and-exit flags it is reached by", () => {
+  const usage = cliUsage();
+
+  expect(usage).toContain("--version");
+  expect(usage).toContain("--help");
+  expect(usage).toContain("--accept");
+  expect(usage).toContain("tsforge review");
 });

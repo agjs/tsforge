@@ -91,13 +91,11 @@ test("analyzes edit vs edit_lines metrics from fixture logs", async () => {
 
   try {
     // Create synthetic run directories
-    const run1Dir = join(tmpDir, "test-hashline-on-t0-20260612-120000-1");
-    const run2Dir = join(tmpDir, "test-hashline-off-t0-20260612-120000-1");
+    const run1Dir = join(tmpDir, "test-hashline-t0-20260612-120000-1");
 
     await mkdir(run1Dir, { recursive: true });
-    await mkdir(run2Dir, { recursive: true });
 
-    // Fixture: hashline on → more edit_lines calls, fewer rejections
+    // Fixture: hashline on (always on now) → more edit_lines calls, fewer rejections
     const log1 = createFixtureLog({
       editCalls: 0,
       editRejects: 0,
@@ -109,30 +107,17 @@ test("analyzes edit vs edit_lines metrics from fixture logs", async () => {
       green: true,
     });
 
-    // Fixture: hashline off → more edit calls, some rejections
-    const log2 = createFixtureLog({
-      editCalls: 3,
-      editRejects: 1,
-      editLinesCalls: 0,
-      editLinesRejects: 0,
-      staleRecoveries: 0,
-      gateFails: 2,
-      turnsToGreen: 4,
-      green: true,
-    });
-
     // Write logs
     await Bun.write(join(run1Dir, "run.log"), log1);
-    await Bun.write(join(run2Dir, "run.log"), log2);
 
     // Write result.json with feature flags
     await Bun.write(
       join(run1Dir, "result.json"),
       JSON.stringify({
         seed: "test",
-        runId: "test-hashline-on-t0-20260612-120000-1",
+        runId: "test-hashline-t0-20260612-120000-1",
         temperature: 0,
-        features: { TSFORGE_HASHLINE: "1" },
+        features: {},
         status: "done",
         cycles: 3,
         ms: 8500,
@@ -140,23 +125,8 @@ test("analyzes edit vs edit_lines metrics from fixture logs", async () => {
       })
     );
 
-    await Bun.write(
-      join(run2Dir, "result.json"),
-      JSON.stringify({
-        seed: "test",
-        runId: "test-hashline-off-t0-20260612-120000-1",
-        temperature: 0,
-        features: { TSFORGE_HASHLINE: "0" },
-        status: "done",
-        cycles: 4,
-        ms: 12000,
-        quality: 3,
-      })
-    );
-
     // Now we'd parse them (inline parsing for test)
     const log1Text = await Bun.file(join(run1Dir, "run.log")).text();
-    const log2Text = await Bun.file(join(run2Dir, "run.log")).text();
 
     // Simple metric extraction (mirrors edit-benchmark.ts logic)
     function extractMetrics(logText: string): {
@@ -180,11 +150,9 @@ test("analyzes edit vs edit_lines metrics from fixture logs", async () => {
     }
 
     const m1 = extractMetrics(log1Text);
-    const m2 = extractMetrics(log2Text);
 
     // Verify metrics were extracted
     expect(m1.editLines).toBeGreaterThan(0);
-    expect(m2.edits).toBeGreaterThan(0);
   } finally {
     // Cleanup
     try {

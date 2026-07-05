@@ -18,55 +18,22 @@ Scenario: the plan-first lifecycle.
 
 Run: python3 scripts/e2e-pty.py
 """
-import fcntl
-import json
 import os
-import pty
-import select
-import struct
 import sys
 import tempfile
-import termios
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CLI = os.path.join(REPO, "packages/core/src/cli.ts")
-MODEL = "stub-model"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from ptyharness import (  # noqa: E402
+    content_chunks,
+    read_until,
+    reap,
+    spawn_tsforge,
+    start_stub_server,
+    toolcall_chunks,
+)
+
 SUM_BODY = "export function sum(a: number, b: number): number {\n  return a + b;\n}\n"
-
-# --- deterministic OpenAI-compatible model server ---------------------------
-
-
-def _sse(obj):
-    return f"data: {json.dumps(obj)}\n\n".encode()
-
-
-def _content_chunks(text):
-    yield _sse({"choices": [{"index": 0, "delta": {"content": text}}]})
-
-
-def _toolcall_chunks(name, args):
-    yield _sse(
-        {
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {
-                        "tool_calls": [
-                            {
-                                "index": 0,
-                                "id": "call_1",
-                                "type": "function",
-                                "function": {"name": name, "arguments": json.dumps(args)},
-                            }
-                        ]
-                    },
-                }
-            ]
-        }
-    )
 
 
 def _decide(messages):
@@ -74,140 +41,26 @@ def _decide(messages):
     last = messages[-1] if messages else {}
     if last.get("role") == "tool":
         # The create already ran; end the drive loop with a plain final answer.
-        return _content_chunks("Done — created src/sum.ts.")
+        return content_chunks("Done — created src/sum.ts.")
 
     joined = " ".join(
         m.get("content") or "" for m in messages if isinstance(m.get("content"), str)
     )
     if "plan is APPROVED" in joined:
-        return _toolcall_chunks("create", {"file": "src/sum.ts", "content": SUM_BODY})
+        return toolcall_chunks("create", {"file": "src/sum.ts", "content": SUM_BODY})
 
-    return _content_chunks(
+    return content_chunks(
         "## Plan\n\n1. Create `src/sum.ts` exporting "
         "`sum(a: number, b: number): number` that returns `a + b`.\n"
     )
 
 
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *_a):  # silence
-        pass
-
-    def do_GET(self):
-        if self.path.rstrip("/").endswith("/models"):
-            body = json.dumps(
-                {
-                    "object": "list",
-                    "data": [
-                        {
-                            "id": MODEL,
-                            "object": "model",
-                            "owned_by": "stub",
-                            "max_model_len": 32768,
-                        }
-                    ],
-                }
-            ).encode()
-            self.send_response(200)
-            self.send_header("content-type", "application/json")
-            self.send_header("content-length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        self.send_response(404)
-        self.end_headers()
-
-    def do_POST(self):
-        length = int(self.headers.get("content-length", "0"))
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            req = json.loads(raw or b"{}")
-        except json.JSONDecodeError:
-            req = {}
-        messages = req.get("messages", [])
-
-        self.send_response(200)
-        self.send_header("content-type", "text/event-stream")
-        self.send_header("cache-control", "no-cache")
-        self.end_headers()
-        for chunk in _decide(messages):
-            self.wfile.write(chunk)
-        self.wfile.write(
-            _sse(
-                {
-                    "choices": [],
-                    "usage": {
-                        "prompt_tokens": 10,
-                        "completion_tokens": 8,
-                        "total_tokens": 18,
-                    },
-                }
-            )
-        )
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
-
-
-def start_server():
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
-    return srv, srv.server_address[1]
-
-
-# --- PTY driver -------------------------------------------------------------
-
-
-def read_until(master, marker, timeout, buf=""):
-    """Accumulate the real byte stream until `marker(buf)` is true or timeout."""
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        r, _, _ = select.select([master], [], [], 0.3)
-        if master in r:
-            try:
-                data = os.read(master, 65536)
-            except OSError:
-                break
-            if not data:
-                break
-            buf += data.decode("utf-8", "replace")
-            if marker(buf):
-                return True, buf
-    return False, buf
-
-
 def spawn(port, extra_env):
-    """Fork tsforge into a real pty pointed at the stub server. Returns (pid, master)."""
+    """Fork tsforge into a real pty pointed at the stub server."""
     work = tempfile.mkdtemp(prefix="tsforge-pty-")
     home = tempfile.mkdtemp(prefix="tsforge-home-")
-    pid, master = pty.fork()
-    if pid == 0:  # child: become tsforge in the pty
-        os.chdir(work)
-        env = dict(os.environ)
-        env.update(
-            {
-                "TSFORGE_BASE_URL": f"http://127.0.0.1:{port}/v1",
-                "TSFORGE_MODEL": MODEL,
-                "TSFORGE_HOME": home,
-                "TSFORGE_NO_UPDATE_CHECK": "1",
-                **extra_env,
-            }
-        )
-        os.execvpe("bun", ["bun", CLI, "--no-gate"], env)
-        os._exit(127)
-    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    pid, master = spawn_tsforge(port, extra_env, cwd=work, home=home)
     return pid, master, work
-
-
-def reap(pid, master):
-    try:
-        os.write(master, b"/exit\r")
-        time.sleep(0.3)
-    except OSError:
-        pass
-    try:
-        os.kill(pid, 9)
-    except ProcessLookupError:
-        pass
 
 
 def scenario_plan_lifecycle(port):
@@ -288,7 +141,7 @@ def scenario_mode_cycle(port):
 
 
 def main():
-    srv, port = start_server()
+    srv, port = start_stub_server(_decide)
     print(f"stub model @ 127.0.0.1:{port}")
     try:
         ok = scenario_plan_lifecycle(port)

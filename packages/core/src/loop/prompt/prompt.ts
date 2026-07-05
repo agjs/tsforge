@@ -1,6 +1,6 @@
 import type { ITask } from "../../spec";
 import type { IFileView } from "../../lib/fs";
-import { PACK_REGISTRY, isWebStack } from "../../stack-detection";
+import { PACK_REGISTRY } from "../../stack-detection";
 import type { IStackProfile } from "../../stack-detection";
 import { flags } from "../../config";
 import { DEFAULT_CONVENTIONS } from "../../infer-rules/conventions";
@@ -74,35 +74,6 @@ export function buildScriptToolGuidance(): string {
   ].join("\n");
 }
 
-/** Appended to SYSTEM for from-scratch, NON-web utility builds when the simplicity
- *  flag is on. Pushes the model toward the shortest correct solution — the axis the
- *  gate is blind to (it checks correctness, never concision). Carve-outs keep it
- *  from fighting the gate's hard rules. NOT for web builds (the views/components
- *  architecture legitimately needs many small files). */
-export function buildScratchSimplicityGuidance(
-  conventions: IConventions
-): string {
-  const naming = interfaceNamingPhrase(conventions);
-  const keepNaming = naming === null ? "" : `keep ${naming}, `;
-
-  return [
-    "SIMPLICITY — write the SHORTEST correct solution that passes the gate:",
-    "  • The task's `files:` are the ceiling — do NOT add modules, classes, or",
-    "    abstractions the task didn't ask for. One focused implementation.",
-    "  • Prefer built-ins and a direct expression over step-by-step temporaries:",
-    "    chain the transforms (`xs.filter(...).map(...)`) instead of naming each",
-    "    intermediate, when it stays readable.",
-    "  • NO narration/step comments ('// Step 1', '// first we…') — the code is the",
-    "    explanation. A comment earns its place only for a non-obvious WHY.",
-    `  • This NEVER overrides the gate: ${keepNaming}no \`as\`/\`any\`/\`!\`,`,
-    "    real validation at trust boundaries, and any test siblings the gate requires.",
-  ].join("\n");
-}
-
-/** Default-conventions simplicity block (back-compat constant). */
-export const SCRATCH_SIMPLICITY_GUIDANCE =
-  buildScratchSimplicityGuidance(DEFAULT_CONVENTIONS);
-
 /** Appended to SYSTEM when TDD mode is on. Drives test-FIRST development: the
  *  model writes a failing test that pins the behavior, runs it to see it fail for
  *  the right reason, THEN implements to green — and adds a test for every logic
@@ -126,15 +97,12 @@ export function buildTddGuidance(conventions: IConventions): string {
 /** Default-conventions TDD block (back-compat constant). */
 export const TDD_GUIDANCE = buildTddGuidance(DEFAULT_CONVENTIONS);
 
-/** SYSTEM + the simplicity block when it applies, else SYSTEM unchanged. Gated on
- *  the `simplicity` flag AND a from-scratch (`!hasExistingCode`) NON-web build —
- *  so it never touches existing-repo edits or web/UI apps. */
+/** SYSTEM + guidance blocks (web tools, script tool, TDD). */
 export function buildSystemPrompt(
-  hasExistingCode: boolean,
-  stack: IStackProfile | undefined,
+  _hasExistingCode: boolean,
+  _stack: IStackProfile | undefined,
   conventions: IConventions = DEFAULT_CONVENTIONS
 ): string {
-  const webish = stack !== undefined && isWebStack(stack);
   const blocks: string[] = [buildSystem(conventions)];
 
   if (flags.webTools()) {
@@ -145,13 +113,6 @@ export function buildSystemPrompt(
     blocks.push(buildScriptToolGuidance());
   }
 
-  // Simplicity: from-scratch, non-web only (an A/B-gated concision push).
-  if (flags.simplicity() && !hasExistingCode && !webish) {
-    blocks.push(buildScratchSimplicityGuidance(conventions));
-  }
-
-  // TDD-first: applies on any stack/mode (write the failing test first), paired
-  // with the gate elevating test-sibling-required to an error.
   if (flags.tdd()) {
     blocks.push(buildTddGuidance(conventions));
   }

@@ -205,6 +205,7 @@ export default defineConfig({
           label: "Reference",
           items: [
             { label: "Commands", link: "/reference/commands/" },
+            { label: "Input editor", link: "/reference/input-editor/" },
             { label: "Rule catalog", link: "/reference/rules-catalog/" },
             { label: "Roadmap", link: "/reference/roadmap/" },
           ],

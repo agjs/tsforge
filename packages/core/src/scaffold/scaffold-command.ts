@@ -60,9 +60,10 @@ export async function runScaffoldCommand(
       ),
     });
 
-    const state = await runWizard(steps, color, (s) =>
-      scaffoldPreview(manifest, answersFor(s))
-    );
+    const state = await runWizard(steps, color, {
+      title: "tsforge scaffold",
+      extra: (s) => scaffoldPreview(manifest, answersFor(s)),
+    });
 
     if (state.status !== "apply") {
       return null;

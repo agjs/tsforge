@@ -196,7 +196,7 @@ describe("StatusBar with multi-row editor", () => {
     return s;
   };
 
-  test("setEditor renders the block lines and no readline `›` prompt", () => {
+  test("setEditor keeps the `›` prompt in front of the editor block", () => {
     const term = new FakeTerm(true, 24, 80);
     const bar = withInput(term);
 
@@ -205,11 +205,11 @@ describe("StatusBar with multi-row editor", () => {
 
     const screen = render(term);
 
-    expect(screen.text()).toContain("first line");
-    expect(screen.text()).toContain("second line");
-    // Editor mode replaces the readline prompt: no stray `›` remains.
-    expect(screen.text().includes("›")).toBe(false);
-    // The parked cursor sits on the editor's cursor line/column.
+    // The prompt persists in editor mode: the first row is `› first line`, and the
+    // continuation row is aligned under it with the same 2-col gutter.
+    expect(screen.text()).toContain("› first line");
+    expect(screen.text()).toContain("  second line");
+    // The parked cursor sits on the editor's cursor line (the second row).
     const cur = screen.cursorPosition();
 
     expect(screen.row(cur.row)).toContain("second line");

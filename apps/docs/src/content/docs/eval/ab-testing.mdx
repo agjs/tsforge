@@ -3,17 +3,17 @@ title: A/B testing
 description: Run feature sweeps, compare edit mechanisms, and land defaults from measured wins.
 ---
 
-Compare [stream rules (TTSR)](/uplift/ttsr/), [hashline](/uplift/hashline/), and [write diagnostics](/uplift/write-diagnostics/) settings across benchmark runs before changing feature defaults. See [Big picture](/big-picture/) for what each feature does.
+Compare feature settings across benchmark runs before changing a default. The sweep harness A/Bs any **tool-availability dimension** — whether the model is offered a given tool — by toggling the env var behind it per run. See [Big picture](/big-picture/) for what each feature does.
 
-## Feature flags
+## Sweepable dimensions
 
-| Variable | Default | Disable |
+| Dimension | On → | Off → |
 | --- | --- | --- |
-| `TSFORGE_TTSR` | ON | `=0` |
-| `TSFORGE_HASHLINE` | ON | `=0` |
-| `TSFORGE_LSP_WRITE_FEEDBACK` | ON | `=0` |
+| `git` | `git_context` available | `TSFORGE_NO_GIT_TOOL=1` |
+| `script` | `script` tool available | `TSFORGE_NO_SCRIPT=1` |
+| `web` | web research tools available (`TSFORGE_WEB=1`) | off |
 
-Full flag reference: [Environment variables](/reference/flags/).
+Core uplifts ([TTSR](/uplift/ttsr/), [hashline](/uplift/hashline/), [write diagnostics](/uplift/write-diagnostics/)) are always on and no longer sweepable — they landed as defaults from earlier sweeps. Full flag reference: [Environment variables](/reference/flags/).
 
 :::note
 Running a sweep drives a real model, so you need an OpenAI-compatible endpoint (the default is local qwen at `http://localhost:8000/v1`; override with `TSFORGE_BASE_URL`/`TSFORGE_MODEL`/`TSFORGE_API_KEY`). The corpus, analysis, and report tooling below ship with the repo and are exercised by the test suite, but the runs themselves need a model.
@@ -42,29 +42,29 @@ A greenfield seed is regenerated from scratch (the sweep deletes the task's file
 
 `bun run eval:sweep` accepts `TSFORGE_FEATURE_VARIANTS` — a comma-separated list of dimensions to sweep (cartesian product).
 
-### Hashline on/off
+### script on/off
 
 ```bash
-TSFORGE_SEED=math \
+TSFORGE_SEED=checkout \
 TSFORGE_TEMPS=0 \
 TSFORGE_REPEATS=2 \
-TSFORGE_FEATURE_VARIANTS=hashline \
+TSFORGE_FEATURE_VARIANTS=script \
 bun run eval:sweep
 ```
 
-Creates four runs: `math-hashline=on-t0-...` and `math-hashline=off-t0-...` (two repeats each).
+Creates four runs: `checkout-script=on-t0-...` and `checkout-script=off-t0-...` (two repeats each).
 
-### TTSR × hashline
+### git × script
 
 ```bash
-TSFORGE_SEED=orders \
+TSFORGE_SEED=fix-regression \
 TSFORGE_TEMPS=0.5 \
 TSFORGE_REPEATS=3 \
-TSFORGE_FEATURE_VARIANTS=ttsr,hashline \
+TSFORGE_FEATURE_VARIANTS=git,script \
 bun run eval:sweep
 ```
 
-Runs `3 repeats × 2 temps × 4 variants = 24` runs with IDs like `orders-ttsr=on,hashline=off-t0.5-...`.
+Runs `3 repeats × 2 temps × 4 variants = 24` runs with IDs like `fix-regression-git=on,script=off-t0.5-...`.
 
 ### git_context on/off
 
@@ -86,7 +86,7 @@ Each run directory contains `run.log` (human transcript) and `result.json` (stru
 
 ```bash
 # newest sweep under evals/runs, comparing every variant to the all-off baseline
-TSFORGE_BASELINE="ttsr=off,hashline=off temp=0" bun run eval:report
+TSFORGE_BASELINE="git=off,script=off temp=0" bun run eval:report
 
 # or point at a specific sweep file
 bun run eval:report evals/runs/sweep-math-20260613-120000.json
@@ -97,8 +97,8 @@ It prints the table and writes it next to the sweep JSON as `…​.report.md`:
 ```
 | Variant | Runs | Pass | 95% CI | Cycles | Ms | Quality | vs baseline |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| ttsr=off,hashline=off temp=0 | 10 | 60% | 31%–83% | 6.1 | 41000 | 3.8 | baseline |
-| ttsr=on,hashline=on temp=0   | 10 | 90% | 60%–98% | 4.7 | 33000 | 4.2 | +30% (z=2.13) * |
+| git=off,script=off temp=0 | 10 | 60% | 31%–83% | 6.1 | 41000 | 3.8 | baseline |
+| git=on,script=on temp=0   | 10 | 90% | 60%–98% | 4.7 | 33000 | 4.2 | +30% (z=2.13) * |
 ```
 
 Wilson intervals (not naive ±) keep the bounds sane at small N, and the z-test tells you whether a pass-rate gap is signal or noise — the bar for "measured wins" before flipping a default.
@@ -109,23 +109,21 @@ Pass rate tells you *how often* a variant failed; the **failure breakdown** tell
 
 ```
 ### Failure breakdown
-- ttsr=off,hashline=off temp=0: type-error×3, no-progress×1
-- ttsr=on,hashline=on temp=0: type-error×1
+- git=off,script=off temp=0: type-error×3, no-progress×1
+- git=on,script=on temp=0: type-error×1
 ```
 
 Each failed run is classified from its event stream into one of: `type-error`, `lint-rule`, `hallucinated-import`, `tool-malformed`, `edit-reject`, `degeneration`, `no-progress`, `build-fail`, `browser-fail`, `route-phantom`, or `timeout`. This turns a sweep from "feature X passes more" into "feature X eliminates the `type-error` failures" — pointing at the next rule, prompt, or fixer to build. The same classifier powers the `failure class` line in [`cli-metrics`](/observability/metrics/) for a single `--log` run.
 
 ## Compare edit mechanisms
 
-After a sweep, use `bun run eval:benchmark` to compare edit tool performance:
+`bun run eval:benchmark` reports edit-tool performance across a set of run directories — useful for spotting how `edit` vs `edit_lines` behave, stale-anchor recovery rates, and token cost across models or seeds:
 
 ```bash
-bun run eval:benchmark \
-  evals/money-hashline=on-t0-* \
-  evals/money-hashline=off-t0-*
+bun run eval:benchmark evals/checkout-*
 ```
 
-Output table compares variants on:
+Output table compares runs on:
 
 | Metric | Meaning |
 | --- | --- |
@@ -141,8 +139,7 @@ Output table compares variants on:
 ```bash
 bun run eval:benchmark \
   --json evals/comparison.json \
-  evals/money-hashline=on-t0-* \
-  evals/money-hashline=off-t0-*
+  evals/checkout-*
 ```
 
 ## Run artifacts
@@ -154,10 +151,10 @@ Each run directory contains:
 
 ```json
 {
-  "seed": "money",
-  "runId": "money-hashline=on-t0-20260612-120000-1",
+  "seed": "checkout",
+  "runId": "checkout-script=on-t0-20260612-120000-1",
   "temperature": 0,
-  "features": { "TSFORGE_HASHLINE": "1" },
+  "features": { "TSFORGE_NO_SCRIPT": "0" },
   "status": "done",
   "cycles": 5,
   "ms": 42000,
@@ -183,11 +180,11 @@ Each run directory contains:
 
 ## How to read results
 
-**Edit success** — if `hashline=on` has higher `edit_lines` success than `hashline=off` `edit` success, hashline is reducing rejections.
+**Edit success** — higher `edit_lines` success rate (vs `edit` rejections) means the hashline mechanism is reducing stale-anchor failures.
 
-**Stale recovery** — non-zero recovery counts on hashline-on runs show 3-way merge is active; correlate with pass rate.
+**Stale recovery** — non-zero recovery counts show the 3-way merge is active; correlate with pass rate.
 
-**Turns to green** — lower on feature-on variants means less loop churn.
+**Turns to green** — lower on a variant means less loop churn.
 
 **Token efficiency** — smaller `mean args (bytes)` at similar success rate is better.
 

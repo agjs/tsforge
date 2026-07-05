@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { startEditor } from "../src/editor/controller";
 import type { IEditorCompletionSource } from "../src/editor/controller";
-import { StatusBar } from "../src/render";
+import { StatusBar, PROMPT_COLS } from "../src/render";
 import type { IStatusInfo } from "../src/render";
 import { filterFiles, formatCompletionRows } from "../src/render/file-menu";
 import { VirtualScreen } from "./helpers/virtual-screen";
@@ -103,7 +103,8 @@ function harness(withCompletion = false) {
     renderEditor: (lines, cursorRow, cursorCol) => {
       bar.setEditor(lines, cursorRow, cursorCol);
     },
-    columns: COLS,
+    // Mirror cli.ts: reserve the `› ` prompt gutter the StatusBar paints.
+    columns: COLS - PROMPT_COLS,
     rows: ROWS,
     completion: withCompletion ? completion : undefined,
   });
@@ -135,8 +136,8 @@ describe("editor render e2e (real controller + StatusBar)", () => {
     // invariant the old tests missed — text must land on the cursor's home row.
     expect(cur.row).toBe(homeRow);
     expect(screen.row(cur.row)).toContain("dsad");
-    // Cursor rests just past the 4 typed chars.
-    expect(cur.col).toBe(5);
+    // Cursor rests just past the 4 typed chars, offset by the 2-col `› ` gutter.
+    expect(cur.col).toBe(7);
     // The text appears exactly once (no ghost copy on another row).
     expect(screen.rowsContaining("dsad")).toBe(1);
   });

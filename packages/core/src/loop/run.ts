@@ -1,8 +1,8 @@
 import type { ITask } from "../spec";
 import type { IChatMessage, IModelResponse, IProvider } from "../inference";
 import { validate, type ErrorParser, type IValidateResult } from "../validate";
-import { parseEslintJson } from "../validate";
 import { readFiles, type IFileView } from "../lib/fs";
+import { trace } from "../lib/trace";
 import {
   DEFAULT_TEMPERATURE,
   RUN_STATUS,
@@ -16,7 +16,6 @@ import type {
   ILoopEvent,
 } from "./loop.types";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
-import { flags } from "../config";
 import type { ITsforgeProjectConfig } from "../config";
 import type { IConventions } from "../infer-rules/conventions.types";
 import type { PolicyMode, IPolicyRules } from "../policy";
@@ -109,10 +108,9 @@ function handleTtsrInterrupt(
 
 /**
  * MEMORY post-run hook: mine this run's events for failure→fix lessons and
- * consolidate them into `.tsforge/`. Gated on the TTSR flag (learned rules are
- * recalled via TTSR, so there's nothing to learn for if it's off). Best-effort:
- * a memory failure never affects the run's result. `runId` is unique per run so
- * the same task re-run counts as a distinct session for the recurrence gate.
+ * consolidate them into `.tsforge/`. Best-effort: a memory failure never
+ * affects the run's result. `runId` is unique per run so the same task re-run
+ * counts as a distinct session for the recurrence gate.
  */
 async function consolidateLessons(
   cwd: string,
@@ -120,10 +118,6 @@ async function consolidateLessons(
   runId: string,
   report: Reporter
 ): Promise<void> {
-  if (!flags.ttsr()) {
-    return;
-  }
-
   try {
     const candidates = mineLessons(events);
     const active = await consolidateMemory(cwd, candidates, runId);
@@ -135,8 +129,9 @@ async function consolidateLessons(
         message: `memory: ${String(active)} learned rule(s) active in .tsforge/learned-rules.json`,
       });
     }
-  } catch {
+  } catch (err) {
     // Memory is supplementary — never let it break a run.
+    trace("run.memory", err);
   }
 }
 
@@ -167,12 +162,10 @@ function completionOptionsFor(args: {
   };
 }
 
-/** A/B control for the gate-feedback-fidelity win: TSFORGE_LEGACY_FEEDBACK=1
- *  forces the OLD mis-selected parser (eslint-json on chained tsc&&eslint). */
 function effectiveParserFor(
   parse: ErrorParser | undefined
 ): ErrorParser | undefined {
-  return flags.legacyFeedback() ? parseEslintJson : parse;
+  return parse;
 }
 
 /** Detect the stack and fold in tsforge.config.json pack/rule overrides, plus any
@@ -399,16 +392,17 @@ export async function runTask(
     task,
     cwd,
     tsService,
-    parse: effectiveParse,
     report,
     messages,
-    stackProfile,
-    touched: new Set<string>(),
-    ruleOverrides:
-      Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
     // Config-driven policy applies to headless runs too (the critical denies
     // already do, mode-independent; this adds `policy.mode`/`rules`).
-    ...policyCtxFields(policy),
+    tool: { touched: new Set<string>(), ...policyCtxFields(policy) },
+    gate: {
+      parse: effectiveParse,
+      stackProfile,
+      ruleOverrides:
+        Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
+    },
   };
   const state: ILoopState = {
     prevGateErrors: red.errors,

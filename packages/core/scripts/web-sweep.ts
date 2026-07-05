@@ -1,6 +1,6 @@
 // A/B sweep over the REAL thing: full web-app builds from the benchmark catalog,
 // not toy logic seeds. Orchestrates headless-build.ts as a subprocess per
-// (feature-variant x repeat), toggling features via env (TSFORGE_TTSR etc.),
+// (feature-variant x repeat), toggling features via env (TSFORGE_WEB etc.),
 // then aggregates pass-rate + turns into the same statistical report the logic
 // sweep uses (Wilson intervals + two-proportion z-test vs a baseline variant).
 //
@@ -10,7 +10,7 @@
 // credits on a cloud flagship.
 //
 // Run (dry-run plan):  TSFORGE_WEB_APP=saas-crm bun run packages/core/scripts/web-sweep.ts
-// Run (for real):      TSFORGE_WEB_APP=saas-crm TSFORGE_FEATURE_VARIANTS=ttsr \
+// Run (for real):      TSFORGE_WEB_APP=saas-crm TSFORGE_FEATURE_VARIANTS=web \
 //                        TSFORGE_WEB_REPEATS=2 TSFORGE_WEB_CONFIRM=1 \
 //                        bun run packages/core/scripts/web-sweep.ts [react|vanilla]
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -30,9 +30,7 @@ type IFeatureVariant = Record<string, string>;
 /** The env var each known feature dimension toggles (mirrors sweep.ts so a web
  *  A/B reads the same flags the logic A/B does). */
 const DIMENSION_ENV: Record<string, string> = {
-  ttsr: "TSFORGE_TTSR",
-  hashline: "TSFORGE_HASHLINE",
-  lsp_write_feedback: "TSFORGE_LSP_WRITE_FEEDBACK",
+  web: "TSFORGE_WEB",
 };
 
 /** Parse `TSFORGE_FEATURE_VARIANTS` ("ttsr,hashline") into the cartesian product
@@ -73,7 +71,7 @@ function variantEnv(variant: IFeatureVariant): Record<string, string> {
   return env;
 }
 
-/** A stable label like "ttsr=on,hashline=off"; "baseline" when no dimensions. */
+/** A stable label like "web=on"; "baseline" when no dimensions. */
 function variantLabel(variant: IFeatureVariant): string {
   const parts = Object.entries(variant)
     .sort(([a], [b]) => a.localeCompare(b))

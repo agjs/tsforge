@@ -1,11 +1,11 @@
 ---
 title: Roadmap
-description: What's shipped through 0.18, the path to 1.0, and candidate work.
+description: What's shipped through 0.27, the path to 1.0, and candidate work.
 ---
 
 TypeScript coding harness for web projects — `packages/core` for the loop and gate, [tsforge.dev](https://tsforge.dev) for docs.
 
-## Shipped through 0.18
+## Shipped through 0.27
 
 **Strictness & the gate**
 - Stack detection → **21 ESLint rule packs (122 rules)** + a **31-rule meta-rule engine** (config, CI, supply chain, container, testing, structure). See [Rule packs](/guardrails/rule-packs/) · [Meta-rules](/guardrails/meta-rules/).
@@ -33,9 +33,9 @@ TypeScript coding harness for web projects — `packages/core` for the loop and 
 
 ## Road to 1.0
 
-- Run sweeps: `TSFORGE_FEATURE_VARIANTS=ttsr,hashline` across benchmark seeds
+- Run sweeps: `TSFORGE_FEATURE_VARIANTS=git,script` across benchmark seeds (TTSR, hashline, and write feedback already graduated to always-on from earlier sweeps)
 - Publish numbers (pass rate, edit success, tokens saved)
-- Tune defaults from data (TTSR rules, hashline on/off, write feedback)
+- Tune the remaining tool-availability defaults from data (`git_context`, `script`, web research)
 - Freeze config and tool surface
 
 ## Candidate work

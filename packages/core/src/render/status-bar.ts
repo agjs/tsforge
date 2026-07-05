@@ -11,9 +11,12 @@ export const MIN_ROWS = 5;
  *  it is never painted in leftover color from mid-stream markdown. */
 const RESET_SGR = `${ESC}[0m`;
 
-/** The editable input prompt and the columns it occupies (`›` + space). */
+/** The editable input prompt and the columns it occupies (`›` + space). The editor
+ *  block reserves the same gutter (see PROMPT_COLS export) so the prompt stays put
+ *  when typing switches the input surface from the placeholder row to the editor. */
 const PROMPT = "› ";
-const PROMPT_COLS = 2;
+
+export const PROMPT_COLS = 2;
 
 /** Cells in the context meter. */
 const METER_CELLS = 9;
@@ -292,9 +295,19 @@ export class StatusBar {
     let cursorCol: number;
 
     if (this.editorActive) {
+      // Paint the `› ` prompt in front of the editor block (continuation rows keep
+      // the same 2-col gutter) so it never vanishes when typing activates the
+      // editor. The editor reserves PROMPT_COLS, so composed rows stay ≤ columns.
+      const gutter = paint(PROMPT, STYLE.dim, this.color);
+      const indent = " ".repeat(PROMPT_COLS);
+
       cursorRow = lines.length + this.editorCursorRow;
-      cursorCol = this.editorCursorCol;
-      lines.push(...this.editorLines);
+      cursorCol = PROMPT_COLS + this.editorCursorCol;
+      lines.push(
+        ...this.editorLines.map((line, i) =>
+          i === 0 ? `${gutter}${line}` : `${indent}${line}`
+        )
+      );
     } else {
       const avail = Math.max(0, columns - PROMPT_COLS);
       const clipped = clipInput(this.line, this.cursorPos, avail);

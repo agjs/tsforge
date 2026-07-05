@@ -1,8 +1,10 @@
-import { STYLE, paint } from "./style";
+import { STYLE, RESET, paint, truecolor } from "./style";
 
 /**
- * Welcome banner for the interactive CLI — solid forge emblem, wordmark,
- * model/endpoint. Centering uses visible (un-painted) length.
+ * Welcome banner for the interactive CLI — a large "tsforge" wordmark rendered
+ * as an ANSI-Shadow figlet with a per-column cyan→indigo→violet gradient, above
+ * a dim tagline and the active model/endpoint. Borderless so the wordmark reads
+ * as the statement.
  */
 export interface IBannerInfo {
   model: string;
@@ -10,104 +12,88 @@ export interface IBannerInfo {
   color?: boolean;
 }
 
-/** Chars between the two vertical borders. */
-const INNER = 58;
-
-interface ISegment {
-  text: string;
-  code?: string;
+interface IRgb {
+  readonly r: number;
+  readonly g: number;
+  readonly b: number;
 }
 
-interface ILine {
-  text?: string;
-  code?: string;
-  segments?: readonly ISegment[];
-}
+/** Gradient stops: cyan → indigo → violet (mirrors the omp-style neon ramp). */
+const CYAN: IRgb = { r: 34, g: 211, b: 238 };
+const INDIGO: IRgb = { r: 99, g: 102, b: 241 };
+const VIOLET: IRgb = { r: 168, g: 85, b: 247 };
 
-const BLANK: ILine = { text: "" };
-
-/** Compact solid anvil — filled blocks, horn + face + base (~9 cols). */
-const EMBLEM: readonly ILine[] = [
-  { text: "· ✦ ✦ ·", code: STYLE.brandLight },
-  { text: "▄▀▀▀▄", code: STYLE.brandLight + STYLE.bold },
-  { text: "███████", code: STYLE.brand + STYLE.bold },
-  { text: "▀▀▀▀▀▀▀▀▀", code: STYLE.brandDark + STYLE.bold },
+/** "tsforge" in figlet ANSI-Shadow (59 columns, 6 rows). */
+const LOGO: readonly string[] = [
+  "████████╗███████╗███████╗ ██████╗ ██████╗  ██████╗ ███████╗",
+  "╚══██╔══╝██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝",
+  "   ██║   ███████╗█████╗  ██║   ██║██████╔╝██║  ███╗█████╗  ",
+  "   ██║   ╚════██║██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  ",
+  "   ██║   ███████║██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗",
+  "   ╚═╝   ╚══════╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝",
 ];
 
-/** Split wordmark under the emblem. */
-const WORDMARK: ILine = {
-  segments: [
-    { text: "ts", code: STYLE.brandLight + STYLE.bold },
-    { text: "forge", code: STYLE.brand + STYLE.bold },
-  ],
-};
+/** Left indent for every banner line. */
+const INDENT = "  ";
+
+function lerp(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t);
+}
+
+/** Interpolate the two-segment cyan→indigo→violet ramp at fraction `t` (0..1). */
+function rampColor(t: number): IRgb {
+  if (t < 0.5) {
+    const u = t / 0.5;
+
+    return {
+      r: lerp(CYAN.r, INDIGO.r, u),
+      g: lerp(CYAN.g, INDIGO.g, u),
+      b: lerp(CYAN.b, INDIGO.b, u),
+    };
+  }
+
+  const u = (t - 0.5) / 0.5;
+
+  return {
+    r: lerp(INDIGO.r, VIOLET.r, u),
+    g: lerp(INDIGO.g, VIOLET.g, u),
+    b: lerp(INDIGO.b, VIOLET.b, u),
+  };
+}
+
+/** Paint each logo row so color advances by column — a smooth left→right gradient
+ *  aligned across every row. */
+function gradientLogo(color: boolean): readonly string[] {
+  if (!color) {
+    return LOGO;
+  }
+
+  return LOGO.map((line) => {
+    const chars = Array.from(line);
+    const span = Math.max(1, chars.length - 1);
+    const painted = chars
+      .map((ch, i) => {
+        const c = rampColor(i / span);
+
+        return `${truecolor(c.r, c.g, c.b)}${ch}`;
+      })
+      .join("");
+
+    return `${painted}${RESET}`;
+  });
+}
 
 export function welcomeBanner(info: IBannerInfo): string {
   const color = info.color ?? true;
+  const logo = gradientLogo(color).map((line) => `${INDENT}${line}`);
+  const tagline = paint(
+    `${INDENT}strict TypeScript · gate-driven`,
+    STYLE.dim,
+    color
+  );
+  const model =
+    `${INDENT}${paint(info.model, STYLE.brand + STYLE.bold, color)}` +
+    paint(`  ·  ${info.endpoint}`, STYLE.dim, color);
 
-  const lines: ILine[] = [
-    BLANK,
-    ...EMBLEM,
-    BLANK,
-    WORDMARK,
-    BLANK,
-    { text: "strict TypeScript, gate-driven", code: STYLE.dim },
-    BLANK,
-    { text: info.model, code: STYLE.brand + STYLE.bold },
-    { text: info.endpoint, code: STYLE.dim },
-    BLANK,
-  ];
-
-  const body = lines.map((line) => boxLine(line, color)).join("\n");
-
-  return `${topBorder(color)}\n${body}\n${bottomBorder()}\n`;
-}
-
-function topBorder(color: boolean): string {
-  const label = "─── tsforge ";
-  const fill = "─".repeat(Math.max(0, INNER - label.length));
-  const frame = `╭${label}${fill}╮`;
-
-  return color
-    ? paint("╭", STYLE.dim, color) +
-        paint(label, STYLE.brandDark, color) +
-        paint(fill + "╮", STYLE.dim, color)
-    : frame;
-}
-
-function bottomBorder(): string {
-  return `╰${"─".repeat(INNER)}╯`;
-}
-
-function visibleText(line: ILine): string {
-  if (line.segments !== undefined) {
-    return line.segments.map((s) => s.text).join("");
-  }
-
-  return line.text ?? "";
-}
-
-function renderContent(line: ILine, color: boolean): string {
-  if (line.segments !== undefined) {
-    return line.segments
-      .map((s) =>
-        s.code === undefined ? s.text : paint(s.text, s.code, color)
-      )
-      .join("");
-  }
-
-  const text = line.text ?? "";
-
-  return line.code === undefined ? text : paint(text, line.code, color);
-}
-
-/** Center `line` within INNER and frame it with the vertical borders. */
-function boxLine(line: ILine, color: boolean): string {
-  const visible = visibleText(line);
-  const pad = Math.max(0, INNER - visible.length);
-  const left = Math.floor(pad / 2);
-  const right = pad - left;
-  const content = renderContent(line, color);
-
-  return `│${" ".repeat(left)}${content}${" ".repeat(right)}│`;
+  return `${["", ...logo, "", tagline, model, ""].join("\n")}\n`;
 }

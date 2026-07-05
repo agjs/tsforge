@@ -27,3 +27,4 @@ models.json
 /vite.config.ts
 /components.json
 /src/
+__pycache__/

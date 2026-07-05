@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatFile } from "../src/detect-gate";
+import { formatFile } from "../src/gate";
 import { applyEdits } from "../src/files/edit";
 
 // e2e: the write-guard auto-formats a file (real eslint --fix + prettier) right

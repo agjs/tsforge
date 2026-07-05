@@ -10,6 +10,7 @@ import {
   type IErrorItem,
 } from "../validate";
 import { isInScope } from "../lib/scope";
+import { trace } from "../lib/trace";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
@@ -40,7 +41,7 @@ import {
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
-import type { FileLinter } from "../detect-gate";
+import type { FileLinter } from "../gate";
 import {
   buildMetaRuleContext,
   runMetaRules,
@@ -67,7 +68,7 @@ import { runWriteGuard } from "./write-guard";
 // is existing code to navigate. TSFORGE_NO_LSP_TOOLS=1 forces them off entirely.
 const BASE_TOOLS = [READ_TOOL, RUN_TOOL, EDIT_TOOL, CREATE_TOOL];
 
-const HASHLINE_TOOLS = flags.hashlineEditTool() ? [EDIT_LINES_TOOL] : [];
+const HASHLINE_TOOLS = [EDIT_LINES_TOOL];
 
 // The full advertisable set: base + hashline + LSP nav + the (gated) web tools.
 // Its element union is also the return TYPE of toolsFor — every narrower runtime
@@ -152,31 +153,11 @@ export const BUILD_NUDGE =
   "file (relative path + full contents), ONE file per call, starting with the " +
   "first. Do not paste code into your reply again — emit the create tool call.";
 
-/** The coordinator's per-task working context (immutable inputs). */
-export interface ILoopCtx {
-  task: ITask;
-  cwd: string;
-  tsService: TsService | null;
-  /** Write-time single-file linter (the gate's eslint rules, applied per write so
-   *  moat violations tsc can't see surface inline). Omitted ⇒ type-only guard. */
-  lintFile?: FileLinter;
-  parse: ErrorParser | undefined;
-  report: Reporter;
-  messages: IChatMessage[];
-  /** Detected stack profile — determines which rule packs are enabled. */
-  stackProfile?: IStackProfile;
-  /** Files the agent created/edited this session (cwd-relative, forward slashes).
-   *  Accumulated by `runToolCalls`; change-scoped meta-rules (test-sibling-required)
-   *  enforce on this set, so they cover what the agent wrote regardless of git. */
-  touched?: Set<string>;
-  /** Rule severity overrides from tsforge.config.json (maps rule ID to "error" | "warn" | "off"). */
-  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>;
-  /** When set, the gate's command output is streamed here live (the CLI wires
-   *  this so a slow gate like `vite build` + browser isn't silent dead air).
-   *  Omitted on the eval path, where output is just captured for scoring.
-   *  `flush()` (when present) is called once the gate exits to emit any final
-   *  line the process printed without a trailing newline. */
-  onGateChunk?: ((text: string) => void) & { flush?: () => void };
+/** Tool-EXECUTION options — the fields `toolContextFor` threads into every
+ *  IToolContext (grouped so the spread is `...ctx.tool`, not eight conditional
+ *  spreads). Always-present and mutable: the Session flips these mid-run
+ *  (plan mode, per-send signal, setupWeb wiring). */
+export interface ILoopCtxTool {
   /** Cancellation for the in-flight turn — threaded into tool `run` commands and
    *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
    *  just the model call. Set per-send by the Session. */
@@ -198,6 +179,41 @@ export interface ILoopCtx {
   /** Connected MCP servers (opt-in via tsforge.config.json `mcpServers`). Threaded
    *  into the tool context so `mcp__<server>__<tool>` calls dispatch to them. */
   mcpRegistry?: McpRegistry;
+  /** Files the agent created/edited this session (cwd-relative, forward slashes).
+   *  Accumulated by `runToolCalls`; change-scoped meta-rules (test-sibling-required)
+   *  enforce on this set, so they cover what the agent wrote regardless of git.
+   *  Shared BY REFERENCE with the tool context. */
+  touched?: Set<string>;
+}
+
+/** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */
+export interface ILoopCtxGate {
+  parse: ErrorParser | undefined;
+  /** Write-time single-file linter (the gate's eslint rules, applied per write so
+   *  moat violations tsc can't see surface inline). Omitted ⇒ type-only guard. */
+  lintFile?: FileLinter;
+  /** Detected stack profile — determines which rule packs are enabled. */
+  stackProfile?: IStackProfile;
+  /** Rule severity overrides from tsforge.config.json (maps rule ID to "error" | "warn" | "off"). */
+  ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>;
+  /** When set, the gate's command output is streamed here live (the CLI wires
+   *  this so a slow gate like `vite build` + browser isn't silent dead air).
+   *  Omitted on the eval path, where output is just captured for scoring.
+   *  `flush()` (when present) is called once the gate exits to emit any final
+   *  line the process printed without a trailing newline. */
+  onGateChunk?: ((text: string) => void) & { flush?: () => void };
+}
+
+/** The coordinator's per-task working context: the flat identity/reporting core,
+ *  plus the tool-execution (`tool`) and gate/validation (`gate`) option groups. */
+export interface ILoopCtx {
+  task: ITask;
+  cwd: string;
+  tsService: TsService | null;
+  report: Reporter;
+  messages: IChatMessage[];
+  tool: ILoopCtxTool;
+  gate: ILoopCtxGate;
 }
 
 /** Mutable state threaded across turns (the gradient the loop descends). */
@@ -228,8 +244,9 @@ export async function buildTsService(cwd: string): Promise<TsService | null> {
     if (await fileExists(cwd, "tsconfig.json")) {
       return new TsService(cwd);
     }
-  } catch {
+  } catch (err) {
     // degrade silently — the gate runs regardless
+    trace("buildTsService", err);
   }
 
   return null;
@@ -252,17 +269,20 @@ export function countsAsMutation(file: string, taskFiles: string[]): boolean {
  *  `touched` so a custom loop runner that forgot to seed it self-heals rather than
  *  silently dropping enforcement. */
 function recordTouched(ctx: ILoopCtx, files: readonly string[]): void {
-  ctx.touched ??= new Set<string>();
+  const touched = (ctx.tool.touched ??= new Set<string>());
 
   for (const f of files) {
     const rel = isAbsolute(f) ? relative(ctx.cwd, f) : f;
 
-    ctx.touched.add(rel.replaceAll("\\", "/"));
+    touched.add(rel.replaceAll("\\", "/"));
   }
 }
 
-/** Build the per-call tool context from the loop context. Extracted so the
- *  optional-field spreads don't inflate `runToolCalls`'s cognitive complexity. */
+/** Build the per-call tool context from the loop context. `ctx.tool` groups
+ *  exactly the optional fields IToolContext threads through, so ONE spread
+ *  replaces the old eight per-field conditional spreads. `touched` rides the
+ *  spread BY REFERENCE, so `create` sees files the model authored in PRIOR turns
+ *  (recordTouched mutates this same Set post-write). */
 function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
   return {
     cwd: ctx.cwd,
@@ -270,16 +290,7 @@ function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
     report,
     task: ctx.task.id,
     tsService: ctx.tsService,
-    ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
-    ...(ctx.setupWeb === undefined ? {} : { setupWeb: ctx.setupWeb }),
-    ...(ctx.readOnly === undefined ? {} : { readOnly: ctx.readOnly }),
-    ...(ctx.policyMode === undefined ? {} : { policyMode: ctx.policyMode }),
-    ...(ctx.policyRules === undefined ? {} : { policyRules: ctx.policyRules }),
-    ...(ctx.interactive === undefined ? {} : { interactive: ctx.interactive }),
-    ...(ctx.mcpRegistry === undefined ? {} : { mcpRegistry: ctx.mcpRegistry }),
-    // Share the session change-set BY REFERENCE so `create` can see which files the
-    // model authored in PRIOR turns (recordTouched mutates this same Set post-write).
-    ...(ctx.touched === undefined ? {} : { touched: ctx.touched }),
+    ...ctx.tool,
   };
 }
 
@@ -403,8 +414,9 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
           // mechanical cleanup so it never spends a repair turn on import hygiene.
           tsFixed += tsService.organizeImports(f);
         }
-      } catch {
+      } catch (err) {
         // degrade silently — the gate still runs below
+        trace("applyDeterministicFixes.quickFix", err);
       }
     }
 
@@ -417,10 +429,6 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
     }
   }
 
-  if (flags.noAstgrep()) {
-    return;
-  }
-
   let astFixed = 0;
 
   for (const f of files) {
@@ -431,8 +439,9 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
         // or any path that skipped the write-guard).
         astFixed += await stripLiteralCasts(join(cwd, f));
       }
-    } catch {
+    } catch (err) {
       // degrade silently — gate is the authority
+      trace("applyDeterministicFixes.astGrep", err);
     }
   }
 
@@ -454,11 +463,8 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
  * the task goes green; a no-op when ast-grep is off or nothing is redundant.
  */
 async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
-  const { task, cwd, parse, report } = ctx;
-
-  if (flags.noAstgrep()) {
-    return;
-  }
+  const { task, cwd, report } = ctx;
+  const parse = ctx.gate.parse;
 
   // Resolve globs so a glob scope is polished too (not silently skipped).
   const files = await resolveScopeFiles(cwd, task.files);
@@ -476,8 +482,9 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     if (await fileExists(cwd, f)) {
       try {
         dropped += await dropRedundantAnnotations(join(cwd, f));
-      } catch {
+      } catch (err) {
         // degrade silently — we revalidate and revert below
+        trace("applyDeterministicFixes.dropAnnotations", err);
       }
     }
   }
@@ -491,7 +498,7 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     await runAccept(
       { ...task, accept: task.fix },
       cwd,
-      ctx.signal === undefined ? {} : { signal: ctx.signal }
+      ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
     );
   }
 
@@ -499,7 +506,7 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     task,
     cwd,
     parse,
-    ctx.signal === undefined ? {} : { signal: ctx.signal }
+    ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
   );
 
   if (recheck.passed) {
@@ -529,8 +536,9 @@ async function snapshotMtimes(
   for (const f of await resolveScopeFiles(cwd, files)) {
     try {
       out.set(f, Bun.file(join(cwd, f)).lastModified);
-    } catch {
+    } catch (err) {
       // ignore — a file that can't be stat'd just isn't tracked
+      trace("snapshotMtimes", err);
     }
   }
 
@@ -643,14 +651,12 @@ export function persistDetail(e: IErrorItem): string {
  * optional fix command, validate, and return a terminal result (done/stuck) or
  * null to keep going (having fed the failures back into the conversation).
  */
-export async function settleGate(
-  ctx: ILoopCtx,
-  state: ILoopState,
-  turn: number
-): Promise<IRunResult | null> {
-  const { task, cwd, parse, report, messages } = ctx;
-  // Snapshot before the fixers so we can tell the model exactly what they changed
-  // (else it re-fixes already-fixed style and edits now-stale text → rejects).
+/** STEP 1 — deterministic auto-fix: run the janitor fixers (TS quick-fixes,
+ *  ast-grep, the optional `task.fix` command) and return which files they changed,
+ *  so the model is told exactly what moved under it (else it re-fixes already-
+ *  fixed style and edits now-stale text → rejects). Exported for unit tests. */
+export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
+  const { task, cwd, report } = ctx;
   const beforeFix = await snapshotMtimes(cwd, task.files);
 
   await applyDeterministicFixes(ctx);
@@ -659,7 +665,7 @@ export async function settleGate(
     await runAccept(
       { ...task, accept: task.fix },
       cwd,
-      ctx.signal === undefined ? {} : { signal: ctx.signal }
+      ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
     );
   }
 
@@ -676,7 +682,19 @@ export async function settleGate(
     });
   }
 
-  if (ctx.onGateChunk !== undefined) {
+  return autoFixed;
+}
+
+/** STEP 2 — run the gate command (tsc/eslint/tests/…): announce it on live
+ *  streams, run `validate`, and flush any final newline-less output line. */
+async function runGateStep(
+  ctx: ILoopCtx,
+  turn: number
+): Promise<Awaited<ReturnType<typeof validate>>> {
+  const { task, cwd, report } = ctx;
+  const parse = ctx.gate.parse;
+
+  if (ctx.gate.onGateChunk !== undefined) {
     report({
       kind: "tool",
       task: task.id,
@@ -685,36 +703,145 @@ export async function settleGate(
   }
 
   const gate = await validate(task, cwd, parse, {
-    ...(ctx.onGateChunk === undefined ? {} : { onChunk: ctx.onGateChunk }),
-    ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    ...(ctx.gate.onGateChunk === undefined
+      ? {}
+      : { onChunk: ctx.gate.onGateChunk }),
+    ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
   });
 
   // The gate process has exited — flush any final newline-less line the stream
   // filter is still holding so it reaches the terminal.
-  ctx.onGateChunk?.flush?.();
+  ctx.gate.onGateChunk?.flush?.();
 
-  // Run meta-rules against the project — project structure invariants the gate
-  // can't express. Convert error-severity violations to gate failures; warn
-  // violations are surfaced in feedback but don't block. Apply config overrides
-  // from ctx.ruleOverrides (already loaded and normalized in run.ts).
-  let metaViolations: IMetaRuleViolation[] = [];
+  return gate;
+}
 
+/** STEP 3 — meta-rules: project structure invariants the gate command can't
+ *  express (e.g. test-sibling-required), change-scoped to the files the AGENT
+ *  wrote this session. Best-effort: a throwing rule degrades to no violations. */
+function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
   try {
     // The files the AGENT created/edited this session — what change-scoped rules
     // (test-sibling-required) enforce on. This is the real signal, not git: it
     // works in any directory (including a freshly generated, non-git project) and
     // never blocks on the repo's pre-existing untested code.
-    const changed = [...(ctx.touched ?? [])];
+    const changed = [...(ctx.tool.touched ?? [])];
     const metaContext = buildMetaRuleContext(
-      cwd,
-      ctx.stackProfile?.packs ?? [],
+      ctx.cwd,
+      ctx.gate.stackProfile?.packs ?? [],
       changed
     );
 
-    metaViolations = runMetaRules(META_RULES, metaContext, ctx.ruleOverrides);
-  } catch {
+    return runMetaRules(META_RULES, metaContext, ctx.gate.ruleOverrides);
+  } catch (err) {
     // Degrade silently — meta-rules are supplementary to the gate
+    trace("runMetaRules", err);
+
+    return [];
   }
+}
+
+/** A terminal STUCK result — shared shape for every convergence guard. */
+function stuckResult(
+  ctx: ILoopCtx,
+  turn: number,
+  detail: string,
+  messagePrefix: string
+): IRunResult {
+  ctx.report({
+    kind: "stuck",
+    task: ctx.task.id,
+    cycles: turn,
+    detail,
+    message: `task ${ctx.task.id}: ${messagePrefix}${detail}`,
+  });
+
+  return {
+    task: ctx.task.id,
+    redConfirmed: true,
+    status: RUN_STATUS.stuck,
+    cycles: turn,
+    reason: STUCK_REASON.stalled,
+    detail,
+  };
+}
+
+/** STEP 4 — the three convergence guards, in escalating coarseness: a single
+ *  (file,rule) persisting `samePersist` cycles; the WHOLE error set unchanged
+ *  `gateStuckRepeats` cycles; and no new error-count low in `noProgressCycles`
+ *  cycles. Returns the terminal STUCK result, or null to keep looping. Exported
+ *  for unit tests (feed crafted states + error sets → stuck vs continue). */
+export function checkStuck(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  gateErrors: IErrorItem[],
+  turn: number
+): IRunResult | null {
+  // PRIMARY no-progress stop: the model keeps failing at the SAME (file,rule)
+  // for `samePersist` cycles running — even if other errors churn. Hand back a
+  // concrete blocker rather than spinning to a raw turn cap.
+  const persisted = trackErrorAges(state, gateErrors);
+
+  if (persisted !== null) {
+    return stuckResult(ctx, turn, persistDetail(persisted), "");
+  }
+
+  // Coarser secondary net: the WHOLE error set unchanged this many cycles.
+  state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
+    ? state.gateNoProgress + 1
+    : 0;
+  state.prevGateErrors = gateErrors;
+
+  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
+    const detail = `gate unchanged ${String(LOOP_LIMITS.gateStuckRepeats)} cycles (${String(gateErrors.length)} error(s) not converging)`;
+
+    return stuckResult(ctx, turn, detail, "stuck — ");
+  }
+
+  // NET-PROGRESS stop (the convergence guard, not a turn count): big apps run as
+  // long as the error count keeps dropping; we stop when it churns without getting
+  // closer to green — the through-12 failure mode that evaded both guards above.
+  if (trackNetProgress(state, gateErrors.length)) {
+    const detail = `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(LOOP_LIMITS.noProgressCycles)} cycles (best ${String(state.bestErrorCount)}) — not converging`;
+
+    return stuckResult(ctx, turn, detail, "stuck — ");
+  }
+
+  return null;
+}
+
+/** STEP 5 — inject the red-gate feedback (rule docs + the auto-fix notice) into
+ *  the conversation as the next user message, so the model fixes in-context. */
+async function injectFeedback(
+  ctx: ILoopCtx,
+  gateErrors: IErrorItem[],
+  metaViolations: IMetaRuleViolation[],
+  autoFixed: string[]
+): Promise<void> {
+  const feedback = await gateFeedback(
+    gateErrors,
+    ctx.task,
+    ctx.cwd,
+    metaViolations
+  );
+  const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
+
+  ctx.messages.push({ role: "user", content: `${notice}${feedback}` });
+}
+
+/** Settle a turn against the gate: auto-fix → gate → meta-rules → (green? done :
+ *  stuck-check → feedback). A thin orchestrator over the exported steps above —
+ *  the signature and `IRunResult | null` contract (null ⇒ keep looping) are the
+ *  same as ever, so both drivers (run.ts / session.ts) are untouched. */
+export async function settleGate(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  turn: number
+): Promise<IRunResult | null> {
+  const { task, report } = ctx;
+  const autoFixed = await autoFixStep(ctx);
+  const gate = await runGateStep(ctx, turn);
+  const metaViolations = runMetaRulesStep(ctx);
 
   const metaErrors = metaViolations.filter((v) => v.severity === "error");
   const gateErrors = gate.errors.concat(
@@ -777,87 +904,13 @@ export async function settleGate(
     };
   }
 
-  // PRIMARY no-progress stop: the model keeps failing at the SAME (file,rule)
-  // for `samePersist` cycles running — even if other errors churn. Hand back a
-  // concrete blocker rather than spinning to a raw turn cap.
-  const persisted = trackErrorAges(state, gateErrors);
+  const stuck = checkStuck(ctx, state, gateErrors, turn);
 
-  if (persisted !== null) {
-    const detail = persistDetail(persisted);
-
-    report({
-      kind: "stuck",
-      task: task.id,
-      cycles: turn,
-      detail,
-      message: `task ${task.id}: ${detail}`,
-    });
-
-    return {
-      task: task.id,
-      redConfirmed: true,
-      status: RUN_STATUS.stuck,
-      cycles: turn,
-      reason: STUCK_REASON.stalled,
-      detail,
-    };
+  if (stuck !== null) {
+    return stuck;
   }
 
-  // Coarser secondary net: the WHOLE error set unchanged this many cycles.
-  state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
-    ? state.gateNoProgress + 1
-    : 0;
-  state.prevGateErrors = gateErrors;
-
-  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
-    const detail = `gate unchanged ${String(LOOP_LIMITS.gateStuckRepeats)} cycles (${String(gateErrors.length)} error(s) not converging)`;
-
-    report({
-      kind: "stuck",
-      task: task.id,
-      cycles: turn,
-      detail,
-      message: `task ${task.id}: stuck — ${detail}`,
-    });
-
-    return {
-      task: task.id,
-      redConfirmed: true,
-      status: RUN_STATUS.stuck,
-      cycles: turn,
-      reason: STUCK_REASON.stalled,
-      detail,
-    };
-  }
-
-  // NET-PROGRESS stop (the convergence guard, not a turn count): big apps run as
-  // long as the error count keeps dropping; we stop when it churns without getting
-  // closer to green — the through-12 failure mode that evaded both guards above.
-  if (trackNetProgress(state, gateErrors.length)) {
-    const detail = `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(LOOP_LIMITS.noProgressCycles)} cycles (best ${String(state.bestErrorCount)}) — not converging`;
-
-    report({
-      kind: "stuck",
-      task: task.id,
-      cycles: turn,
-      detail,
-      message: `task ${task.id}: stuck — ${detail}`,
-    });
-
-    return {
-      task: task.id,
-      redConfirmed: true,
-      status: RUN_STATUS.stuck,
-      cycles: turn,
-      reason: STUCK_REASON.stalled,
-      detail,
-    };
-  }
-
-  const feedback = await gateFeedback(gateErrors, task, cwd, metaViolations);
-  const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
-
-  messages.push({ role: "user", content: `${notice}${feedback}` });
+  await injectFeedback(ctx, gateErrors, metaViolations, autoFixed);
 
   return null;
 }

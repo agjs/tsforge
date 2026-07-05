@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs";
 import { basename, join, relative, isAbsolute } from "node:path";
-import { flags } from "../config";
 import type { TsService, ITsDiagnostic } from "../lsp";
-import type { FileLinter, IFileLintProblem } from "../detect-gate";
-import { formatFile } from "../detect-gate";
+import type { FileLinter, IFileLintProblem } from "../gate";
+import { formatFile } from "../gate";
 import { stripLiteralCasts } from "./astgrep-fix";
 import {
   missingExportHint,
@@ -395,12 +394,12 @@ function perWriteMetaFeedback(ctx: ILoopCtx, path: string): string {
     const metaCtx = singleFileMetaContext(
       ctx.cwd,
       path,
-      ctx.stackProfile?.packs ?? []
+      ctx.gate.stackProfile?.packs ?? []
     );
     const violations = runMetaRules(
       PER_WRITE_META_RULES,
       metaCtx,
-      ctx.ruleOverrides
+      ctx.gate.ruleOverrides
     );
 
     if (violations.length === 0) {
@@ -436,13 +435,15 @@ export async function runWriteGuard(
 
   let guard = "";
 
-  if (ctx.tsService !== null && flags.lspWriteFeedback()) {
+  if (ctx.tsService !== null) {
     try {
       guard = await writeGuard(
         {
           tsService: ctx.tsService,
           cwd: ctx.cwd,
-          ...(ctx.lintFile === undefined ? {} : { lintFile: ctx.lintFile }),
+          ...(ctx.gate.lintFile === undefined
+            ? {}
+            : { lintFile: ctx.gate.lintFile }),
         },
         path,
         ctx.report,

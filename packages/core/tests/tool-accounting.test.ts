@@ -11,7 +11,7 @@ import {
 } from "../src/loop";
 import { THEME_NAMES, COMPONENT_NAMES } from "../src/web-components";
 import { TsService } from "../src/lsp";
-import { makeFileLinter, WEB_PACKS } from "../src/detect-gate";
+import { makeFileLinter, WEB_PACKS } from "../src/gate";
 import { TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../src/agent";
 
 // The interactive web session was missing the per-write lint moat (only headless
@@ -41,10 +41,13 @@ test("per-write lint moat surfaces a web rule violation on the write itself", as
       task: { id: "t", accept: "true", files: ["**/*"] },
       cwd: dir,
       tsService: new TsService(dir),
-      lintFile: makeFileLinter("react", dir, WEB_PACKS),
-      parse: undefined,
       report: () => undefined,
       messages: [],
+      tool: {},
+      gate: {
+        parse: undefined,
+        lintFile: makeFileLinter("react", dir, WEB_PACKS),
+      },
     };
     // An `as` cast trips @typescript-eslint/consistent-type-assertions (the web
     // config bans it) — type-valid so tsc is silent, leaving the eslint violation
@@ -96,9 +99,10 @@ function ctxFor(cwd: string, files: string[]): ILoopCtx {
     task: { id: "t", accept: "true", files },
     cwd,
     tsService: null,
-    parse: undefined,
     report: () => undefined,
     messages: [],
+    tool: {},
+    gate: { parse: undefined },
   };
 }
 
@@ -136,7 +140,10 @@ test("a script that writes several files records ALL of them in touched", async 
   const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-script-"));
 
   try {
-    const ctx: ILoopCtx = { ...ctxFor(dir, ["**/*"]), touched: new Set() };
+    const ctx: ILoopCtx = {
+      ...ctxFor(dir, ["**/*"]),
+      tool: { touched: new Set() },
+    };
     const state = freshState();
     const code = [
       'import { create } from "./tsforge-tools";',
@@ -155,7 +162,11 @@ test("a script that writes several files records ALL of them in touched", async 
     expect(touched).toBe(true);
     // All three writes counted (not just the last), and all three recorded.
     expect(state.edits).toBe(3);
-    expect([...(ctx.touched ?? [])].sort()).toEqual(["a.ts", "b.ts", "c.ts"]);
+    expect([...(ctx.tool.touched ?? [])].sort()).toEqual([
+      "a.ts",
+      "b.ts",
+      "c.ts",
+    ]);
     expect(await Bun.file(join(dir, "a.ts")).exists()).toBe(true);
     expect(await Bun.file(join(dir, "c.ts")).exists()).toBe(true);
     // The per-run temp dir is cleaned up (no `.tsforge-script-*` left behind).
@@ -261,9 +272,10 @@ test("a move_file re-gates even though it is not an edit/create", async () => {
       task: { id: "t", accept: "true", files: ["**/*"] },
       cwd: dir,
       tsService: new TsService(dir),
-      parse: undefined,
       report: () => undefined,
       messages: [],
+      tool: {},
+      gate: { parse: undefined },
     };
     const state = freshState();
     const touched = await runToolCalls(
@@ -284,7 +296,7 @@ test("a move_file re-gates even though it is not an edit/create", async () => {
     // don't feed state.edits, so only the re-gate signal changes.
     expect(touched).toBe(true);
     // The moved file joins the change scope (so test-sibling et al. cover it).
-    expect([...(ctx.touched ?? [])]).toContain("lib/types.ts");
+    expect([...(ctx.tool.touched ?? [])]).toContain("lib/types.ts");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -307,7 +319,7 @@ test("scaffold_routes re-gates the turn despite reporting a tool event", async (
 
     expect(touched).toBe(true);
     // The generated stubs joined the change scope but were NOT write-guarded.
-    expect(ctx.touched?.size ?? 0).toBeGreaterThan(0);
+    expect(ctx.tool.touched?.size ?? 0).toBeGreaterThan(0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -349,9 +361,10 @@ test("a rejected (out-of-scope) move_file does NOT re-gate (no false 'done')", a
       task: { id: "t", accept: "true", files: ["types.ts", "lib/types.ts"] },
       cwd: dir,
       tsService: new TsService(dir),
-      parse: undefined,
       report: () => undefined,
       messages: [],
+      tool: {},
+      gate: { parse: undefined },
     };
     const state = freshState();
     const touched = await runToolCalls(
@@ -369,7 +382,7 @@ test("a rejected (out-of-scope) move_file does NOT re-gate (no false 'done')", a
     // Nothing moved.
     expect(await Bun.file(join(dir, "types.ts")).exists()).toBe(true);
     expect(await Bun.file(join(dir, "lib/types.ts")).exists()).toBe(false);
-    expect(ctx.touched?.size ?? 0).toBe(0);
+    expect(ctx.tool.touched?.size ?? 0).toBe(0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -493,14 +506,10 @@ const MUTATING_TOOLS = new Set<string>([
   TOOL_NAME.addDependency,
 ]);
 // run = the model's raw shell (writes are its own, not scoped harness edits);
-// yield_status = turn control, never touches the workspace; script = runs a
-// program whose tool calls (incl. edit/create) re-enter executeTool and report
-// their OWN mutations, so the script call itself accounts for nothing.
-const SPECIAL_TOOLS = new Set<string>([
-  TOOL_NAME.run,
-  TOOL_NAME.yieldStatus,
-  TOOL_NAME.script,
-]);
+// script = runs a program whose tool calls (incl. edit/create) re-enter
+// executeTool and report their OWN mutations, so the script call itself accounts
+// for nothing.
+const SPECIAL_TOOLS = new Set<string>([TOOL_NAME.run, TOOL_NAME.script]);
 
 test("every registered tool is classified read-only, mutating, or special", () => {
   for (const name of Object.values(TOOL_NAME)) {
@@ -522,7 +531,7 @@ function webCtx(
   cwd: string,
   setup: () => Promise<{ files: readonly string[]; depsInstalled: boolean }>
 ): ILoopCtx {
-  return { ...ctxFor(cwd, ["**/*"]), setupWeb: setup };
+  return { ...ctxFor(cwd, ["**/*"]), tool: { setupWeb: setup } };
 }
 
 test("scaffold_web re-gates the turn and joins the scaffolded files to scope", async () => {
@@ -542,7 +551,7 @@ test("scaffold_web re-gates the turn and joins the scaffolded files to scope", a
     expect(touched).toBe(true);
 
     for (const f of written) {
-      expect([...(ctx.touched ?? [])]).toContain(f);
+      expect([...(ctx.tool.touched ?? [])]).toContain(f);
     }
 
     const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
@@ -586,14 +595,16 @@ test("scaffold_web forwards the turn's abort signal to setupWeb (cancellable ins
     let received: AbortSignal | undefined;
     const ctx: ILoopCtx = {
       ...ctxFor(dir, ["**/*"]),
-      signal: controller.signal,
-      setupWeb: (_fw, options) => {
-        received = options?.signal;
+      tool: {
+        signal: controller.signal,
+        setupWeb: (_fw, options) => {
+          received = options?.signal;
 
-        return Promise.resolve({
-          files: ["src/main.tsx"],
-          depsInstalled: true,
-        });
+          return Promise.resolve({
+            files: ["src/main.tsx"],
+            depsInstalled: true,
+          });
+        },
       },
     };
 
@@ -623,7 +634,7 @@ test("scaffold_web that writes nothing does NOT re-gate (no false 'done')", asyn
     );
 
     expect(touched).toBe(false);
-    expect(ctx.touched?.size ?? 0).toBe(0);
+    expect(ctx.tool.touched?.size ?? 0).toBe(0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -641,11 +652,12 @@ function collectingCtx(
     task: { id: "t", accept: "true", files },
     cwd,
     tsService: null,
-    parse: undefined,
     report: (e) => {
       events.push(e);
     },
     messages: [],
+    tool: {},
+    gate: { parse: undefined },
   };
 
   return { ctx, events };

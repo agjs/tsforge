@@ -9,7 +9,7 @@ import {
   resolveProjectProfile,
   type ITsforgeProjectConfig,
 } from "../src/config/tsforge-config";
-import { makeFileLinter } from "../src/detect-gate";
+import { makeFileLinter } from "../src/gate";
 
 let fixtureDir: string;
 

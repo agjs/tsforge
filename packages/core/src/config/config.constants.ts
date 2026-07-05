@@ -3,14 +3,9 @@ export const FLAG_ON = "1";
 
 export const ENV_FLAG = {
   noLspTools: "TSFORGE_NO_LSP_TOOLS",
-  legacyFeedback: "TSFORGE_LEGACY_FEEDBACK",
-  noAstgrep: "TSFORGE_NO_ASTGREP",
-  forceTools: "TSFORGE_FORCE_TOOLS",
-  simplicity: "TSFORGE_SIMPLICITY",
   tdd: "TSFORGE_TDD",
   webTools: "TSFORGE_WEB",
   noScriptTool: "TSFORGE_NO_SCRIPT",
-  noUpdateCheck: "TSFORGE_NO_UPDATE_CHECK",
   noGitTool: "TSFORGE_NO_GIT_TOOL",
   basicInput: "TSFORGE_BASIC_INPUT",
 } as const;

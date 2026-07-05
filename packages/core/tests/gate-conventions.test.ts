@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { makeFileLinter, WEB_PACKS } from "../src/detect-gate";
+import { makeFileLinter, WEB_PACKS } from "../src/gate";
 import { resolveConventions } from "../src/infer-rules/conventions";
 
 // Integration test for the REAL gate path: spawn the bundled eslint config the
@@ -136,6 +136,25 @@ describe("core gate honors TSFORGE_CONVENTIONS", () => {
     );
 
     expect(errs).not.toContain(NRS);
+  });
+});
+
+describe("web gate: bare interface names are allowed (no I-prefix)", () => {
+  const I_PREFIXED = "export interface IUser {\n  id: string;\n}\n";
+
+  test("web default accepts a BARE interface — while core rejects the same file", async () => {
+    // The whole point: React/shadcn/TanStack name interfaces `User`, not `IUser`.
+    expect(await erroredRules(STRICT_WEB_CONFIG, BARE_INTERFACE)).not.toContain(
+      NAMING
+    );
+    // Core still enforces the I-prefix on the identical source (no leak).
+    expect(await erroredRules(STRICT_CONFIG, BARE_INTERFACE)).toContain(NAMING);
+  });
+
+  test("web still accepts an I-prefixed interface (bare PascalCase permits both)", async () => {
+    expect(await erroredRules(STRICT_WEB_CONFIG, I_PREFIXED)).not.toContain(
+      NAMING
+    );
   });
 });
 

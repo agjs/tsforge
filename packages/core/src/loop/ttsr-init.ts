@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type { Reporter } from "./loop.types";
 import type { ILoopState } from "./turn";
 import type { IChatMessage } from "../inference";
-import { flags } from "../config";
 import { TtsrManager, parseProjectRules, type ITtsrRule } from "./ttsr";
 import { DEFAULT_TTSR_RULES } from "./ttsr-defaults";
 
@@ -43,10 +42,6 @@ export async function initTtsrManager(
   report: Reporter,
   taskId: string
 ): Promise<TtsrManager | null> {
-  if (!flags.ttsr()) {
-    return null;
-  }
-
   const manager = new TtsrManager();
 
   for (const rule of DEFAULT_TTSR_RULES) {

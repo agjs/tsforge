@@ -45,7 +45,12 @@ const CAST_SELECTORS: readonly unknown[] = [
 const ENUM_SELECTOR = { selector: "TSEnumDeclaration", message: ENUM_MESSAGE };
 
 /** Build the `@typescript-eslint/naming-convention` entry, or undefined to omit it
- *  (interface naming "off"). The web surface exempts library-mandated `Register`. */
+ *  (interface naming "off"). The WEB surface always uses BARE PascalCase (React/
+ *  shadcn/TanStack name interfaces `Props`, not `IProps` — requiring the `I`-prefix
+ *  there just makes the model fight its training data every scaffold). Core/library
+ *  code still gets the `I`-prefix when conventions ask for it. Bare PascalCase also
+ *  already permits library-mandated names (e.g. TanStack's `Register`), so the web
+ *  surface needs no name filter. */
 function namingRule(
   conventions: IConventions,
   surface: EslintSurface
@@ -59,12 +64,12 @@ function namingRule(
     format: ["PascalCase"],
   };
 
-  if (conventions.interfaces === "i-prefix") {
-    selector.prefix = ["I"];
+  if (surface === "web") {
+    return ["error", selector];
   }
 
-  if (surface === "web") {
-    selector.filter = { regex: "^(Register)$", match: false };
+  if (conventions.interfaces === "i-prefix") {
+    selector.prefix = ["I"];
   }
 
   return ["error", selector];
