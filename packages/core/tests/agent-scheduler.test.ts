@@ -108,7 +108,7 @@ describe("AgentScheduler.runParallel", () => {
     expect(results.slice(1)).toEqual([null, null, null, null, null]);
   });
 
-  test("emits start→done / start→failed transitions per unit", async () => {
+  test("announces every unit as pending up-front, then start→done/failed", async () => {
     const transitions: [string, UnitStatus][] = [];
 
     await new AgentScheduler({
@@ -119,12 +119,30 @@ describe("AgentScheduler.runParallel", () => {
       unit("b", () => Promise.reject(new Error("x"))),
     ]);
 
+    // All pendings first (stable denominator for progress UIs), then the
+    // per-unit lifecycles in schedule order.
     expect(transitions).toEqual([
+      ["a", "pending"],
+      ["b", "pending"],
       ["a", "start"],
       ["a", "done"],
       ["b", "start"],
       ["b", "failed"],
     ]);
+  });
+
+  test("a unit scheduled under an ALREADY-aborted master sees an aborted signal", async () => {
+    const ctrl = new AbortController();
+
+    ctrl.abort(); // aborted before runParallel is even called
+
+    const results = await new AgentScheduler({
+      concurrency: 2,
+      signal: ctrl.signal,
+    }).runParallel([unit("a", (signal) => Promise.resolve(signal.aborted))]);
+
+    // The worker loop skips pending units under an aborted master entirely.
+    expect(results).toEqual([null]);
   });
 
   test("cap>1 is genuinely faster than sequential on slow units (the mechanical speedup)", async () => {

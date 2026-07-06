@@ -54,7 +54,9 @@ export interface IReviewOptions {
 /** The review's task id in emitted attribution events. */
 const REVIEW_TASK = "review";
 
-/** Map scheduler unit transitions onto agent_spawned/agent_result events. */
+/** Map scheduler unit transitions onto the agent lifecycle events:
+ *  pending → agent_spawned (announced), start → agent_started (running),
+ *  done/failed → agent_result. */
 function unitReporter(
   emit: Reporter | undefined
 ): ((id: string, status: UnitStatus) => void) | undefined {
@@ -70,8 +72,10 @@ function unitReporter(
       parentTask: REVIEW_TASK,
     };
 
-    if (status === "start") {
+    if (status === "pending") {
       emit({ kind: "agent_spawned", ...base });
+    } else if (status === "start") {
+      emit({ kind: "agent_started", ...base });
     } else {
       emit({ kind: "agent_result", ...base, passed: status === "done" });
     }
@@ -300,7 +304,8 @@ async function findInFile(
   system: string,
   file: string,
   diff: string,
-  signal: string
+  signal: string,
+  abort?: AbortSignal
 ): Promise<IRepoFinding[]> {
   if (diff.length === 0) {
     return [];
@@ -319,7 +324,7 @@ async function findInFile(
         content: `File: ${file}\n\nDiff (base → working tree):\n${diff}${callers}`,
       },
     ],
-    { temperature: 0 }
+    { temperature: 0, ...(abort === undefined ? {} : { signal: abort }) }
   );
 
   return parseFindings(res.content, file);
@@ -428,7 +433,8 @@ const VERIFY_SYSTEM = [
 async function verifyFinding(
   provider: IProvider,
   cwd: string,
-  finding: IRepoFinding
+  finding: IRepoFinding,
+  abort?: AbortSignal
 ): Promise<IVerifiedFinding> {
   const window = await codeWindow(cwd, finding.file, finding.line);
   const drop = (verdict: string): IVerifiedFinding => ({
@@ -449,7 +455,7 @@ async function verifyFinding(
         content: `Finding [${finding.lens}] at ${finding.file}:${finding.line}\nClaim: ${finding.claim}\nReason: ${finding.reason}\n\nActual code:\n${window}\n\nIs this a real functional problem?`,
       },
     ],
-    { temperature: 0 }
+    { temperature: 0, ...(abort === undefined ? {} : { signal: abort }) }
   );
 
   let data: unknown;
@@ -480,14 +486,15 @@ async function safeFind(
   cwd: string,
   file: string,
   diff: string,
-  log: (m: string) => void
+  log: (m: string) => void,
+  abort?: AbortSignal
 ): Promise<IRepoFinding[]> {
   try {
     // callerSignal lives INSIDE the try so a LanguageService hiccup on one file
     // degrades that file's review, never aborting the whole run.
     const signal = callerSignal(svc, cwd, file);
 
-    return await findInFile(provider, system, file, diff, signal);
+    return await findInFile(provider, system, file, diff, signal, abort);
   } catch (err) {
     log(`  ${file}: review failed — ${errText(err)}`);
 
@@ -500,10 +507,11 @@ async function safeVerify(
   provider: IProvider,
   cwd: string,
   finding: IRepoFinding,
-  log: (m: string) => void
+  log: (m: string) => void,
+  abort?: AbortSignal
 ): Promise<IVerifiedFinding> {
   try {
-    return await verifyFinding(provider, cwd, finding);
+    return await verifyFinding(provider, cwd, finding, abort);
   } catch (err) {
     log(`  verify failed at ${finding.file}:${finding.line} — ${errText(err)}`);
 
@@ -589,7 +597,8 @@ export async function reviewChange(
           cwd,
           file,
           diff,
-          log
+          log,
+          signal
         );
 
         // Keep only findings ON a changed line — a finding on pre-existing code
@@ -633,15 +642,17 @@ export async function reviewChange(
 
   const doVerify = opts.verify ?? true;
   const verifyOutcomes = await scheduler.runParallel(
-    raw.map((finding) => ({
-      id: `verify:${finding.file}:${finding.line}`,
+    // The index makes ids unique when the reviewer cites the same line twice —
+    // duplicate ids would collapse distinct units in the tracker and ledger.
+    raw.map((finding, index) => ({
+      id: `verify:${finding.file}:${finding.line}#${String(index)}`,
       run: async (signal: AbortSignal): Promise<IVerifiedFinding | null> => {
         if (signal.aborted) {
           return null;
         }
 
         return doVerify
-          ? await safeVerify(makeUnitProvider(), cwd, finding, log)
+          ? await safeVerify(makeUnitProvider(), cwd, finding, log, signal)
           : { ...finding, verified: true, verdict: "(unverified)" };
       },
     }))

@@ -198,9 +198,11 @@ async function reviewMode(args: ICliArgs): Promise<number> {
     ...(rules.length > 0 ? { gateFailingRules: rules } : {}),
     log: (m) => process.stdout.write(`  ↳ ${m}\n`),
     concurrency,
-    providerFactory: () => makeProvider(entry),
+    // Fresh providers + the progress line only matter above cap 1; at 1 the
+    // shared primary provider is the exact pre-fan-out behavior (no overhead).
     ...(concurrency > 1
       ? {
+          providerFactory: () => makeProvider(entry),
           onEvent: makeAgentSummaryTracker((line) =>
             process.stdout.write(`  ↳ ${line}\n`)
           ),

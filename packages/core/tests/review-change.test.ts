@@ -442,7 +442,11 @@ test("fan-out emits attributed agent_spawned/agent_result events per unit", asyn
       concurrency: 2,
       providerFactory: () => stub(FINDINGS, true),
       onEvent: (e) => {
-        if (e.kind === "agent_spawned" || e.kind === "agent_result") {
+        if (
+          e.kind === "agent_spawned" ||
+          e.kind === "agent_started" ||
+          e.kind === "agent_result"
+        ) {
           events.push({
             kind: e.kind,
             ...(e.agentId === undefined ? {} : { agentId: e.agentId }),
@@ -453,10 +457,12 @@ test("fan-out emits attributed agent_spawned/agent_result events per unit", asyn
     });
 
     const spawned = events.filter((e) => e.kind === "agent_spawned");
+    const started = events.filter((e) => e.kind === "agent_started");
     const results = events.filter((e) => e.kind === "agent_result");
 
-    // 3 find units + 3 verify units, each spawned and resolved.
+    // 3 find units + 3 verify units: each announced, started, and resolved.
     expect(spawned).toHaveLength(6);
+    expect(started).toHaveLength(6);
     expect(results).toHaveLength(6);
     expect(
       spawned.filter((e) => e.agentId?.startsWith("review:find:") === true)
@@ -477,4 +483,71 @@ test("concurrency 1 with no factory behaves exactly as before (shared provider)"
 
   expect(report.findings).toHaveLength(1);
   expect(report.rejected).toBe(0);
+});
+
+test("two findings on the SAME line get distinct verify unit ids", async () => {
+  // Duplicate ids would collapse distinct units in the tracker and ledger.
+  const sameLine = JSON.stringify({
+    findings: [
+      {
+        line: 2,
+        severity: "error",
+        lens: "correctness",
+        claim: "first claim",
+        reason: "x",
+      },
+      {
+        line: 2,
+        severity: "warning",
+        lens: "regressions",
+        claim: "second claim",
+        reason: "y",
+      },
+    ],
+  });
+  const verifyIds: string[] = [];
+
+  const report = await reviewChange(stub(sameLine, true), repo, {
+    concurrency: 2,
+    providerFactory: () => stub(sameLine, true),
+    onEvent: (e) => {
+      if (
+        e.kind === "agent_spawned" &&
+        e.agentId?.startsWith("review:verify:") === true
+      ) {
+        verifyIds.push(e.agentId);
+      }
+    },
+  });
+
+  expect(report.findings).toHaveLength(2);
+  expect(verifyIds).toHaveLength(2);
+  expect(new Set(verifyIds).size).toBe(2); // no collision
+});
+
+test("the per-unit AbortSignal reaches the provider (in-flight cancellation)", async () => {
+  let sawSignal = false;
+  const observing = (): IProvider => ({
+    async complete(messages, opts) {
+      if (opts?.signal instanceof AbortSignal) {
+        sawSignal = true;
+      }
+
+      const sys = messages.find((m) => m.role === "system")?.content ?? "";
+
+      return {
+        content: sys.includes("verifying a code-review finding")
+          ? JSON.stringify({ real: true, verdict: "judged" })
+          : FINDINGS,
+        toolCalls: [],
+      };
+    },
+  });
+
+  await reviewChange(observing(), repo, {
+    concurrency: 2,
+    providerFactory: observing,
+  });
+
+  expect(sawSignal).toBe(true);
 });

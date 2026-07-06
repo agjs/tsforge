@@ -14,7 +14,7 @@ export interface IScheduledUnit<T> {
   readonly run: (signal: AbortSignal) => Promise<T>;
 }
 
-export type UnitStatus = "start" | "done" | "failed";
+export type UnitStatus = "pending" | "start" | "done" | "failed";
 
 export interface ISchedulerOptions {
   /** Max units in flight at once. Clamped to an integer ≥ 1; default 1. */
@@ -60,7 +60,14 @@ export class AgentScheduler {
       ctrl.abort();
     };
 
-    this.signal?.addEventListener("abort", onAbort, { once: true });
+    // An already-aborted parent never re-fires "abort" — flag the unit's own
+    // signal directly instead of registering a listener that can't trigger.
+    if (this.signal?.aborted === true) {
+      ctrl.abort();
+    } else {
+      this.signal?.addEventListener("abort", onAbort, { once: true });
+    }
+
     this.onUnit?.(unit.id, "start");
 
     try {
@@ -89,6 +96,12 @@ export class AgentScheduler {
   ): Promise<(T | null)[]> {
     const results: (T | null)[] = new Array<T | null>(units.length).fill(null);
     let next = 0;
+
+    // Announce every unit up-front so progress denominators are stable from
+    // the first update (the tree renders pending rows, not a growing total).
+    for (const unit of units) {
+      this.onUnit?.(unit.id, "pending");
+    }
 
     const worker = async (): Promise<void> => {
       while (next < units.length && this.signal?.aborted !== true) {

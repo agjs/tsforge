@@ -46,30 +46,27 @@ describe("formatAgentSummary", () => {
 });
 
 describe("makeAgentSummaryTracker", () => {
-  test("folds agent events into refreshed summary lines, ignores other kinds", () => {
+  test("stable denominator: pendings announce the total before anything runs", () => {
     const lines: string[] = [];
     const track = makeAgentSummaryTracker((line) => lines.push(line));
 
-    track({
-      kind: "agent_spawned",
-      task: "review",
-      message: "find:a.ts",
-      agentId: "review:find:a.ts",
-      parentTask: "review",
-    });
+    // Two units spawn up-front — the denominator is 2 from the first line.
+    track({ kind: "agent_spawned", task: "review", message: "find:a.ts" });
+    track({ kind: "agent_spawned", task: "review", message: "find:b.ts" });
     track({ kind: "cycle", task: "review", message: "" }); // not an agent event
+    track({ kind: "agent_started", task: "review", message: "find:a.ts" });
     track({
       kind: "agent_result",
       task: "review",
       message: "find:a.ts",
-      agentId: "review:find:a.ts",
-      parentTask: "review",
       passed: true,
     });
 
     expect(lines).toEqual([
-      "agents: 1 running, 0/1 done (find:a.ts)",
-      "agents: 1/1 done",
+      "agents: 0/1 done",
+      "agents: 0/2 done",
+      "agents: 1 running, 0/2 done (find:a.ts)",
+      "agents: 1/2 done",
     ]);
   });
 
@@ -80,12 +77,17 @@ describe("makeAgentSummaryTracker", () => {
     track({
       kind: "agent_spawned",
       task: "review",
-      message: "verify:x.ts:3",
+      message: "verify:x.ts:3#0",
+    });
+    track({
+      kind: "agent_started",
+      task: "review",
+      message: "verify:x.ts:3#0",
     });
     track({
       kind: "agent_result",
       task: "review",
-      message: "verify:x.ts:3",
+      message: "verify:x.ts:3#0",
       passed: false,
     });
 

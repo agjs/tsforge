@@ -32,6 +32,8 @@ export function ledgerTypeFor(event: ILoopEvent): LedgerEventType {
       return "policy_decision";
     case "agent_spawned":
       return "agent_spawned";
+    case "agent_started":
+      return "agent_started";
     case "agent_result":
       return "agent_result";
     case "tool":

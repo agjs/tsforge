@@ -496,9 +496,10 @@ const MAX_AGENT_CONCURRENCY = 16;
 /** Validate the optional `agents` block (warn-and-drop, like the others). */
 function validateAgents(value: unknown): { concurrency?: number } | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    warnConfig(
-      `tsforge.config.json: "agents" must be an object, got ${typeof value}`
-    );
+    const kind =
+      value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+
+    warnConfig(`tsforge.config.json: "agents" must be an object, got ${kind}`);
 
     return undefined;
   }

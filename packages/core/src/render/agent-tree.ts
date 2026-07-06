@@ -57,10 +57,11 @@ export function formatAgentSummary(
 }
 
 /**
- * A Reporter that folds `agent_spawned`/`agent_result` events into a running
- * status map and writes one refreshed summary line per transition. All other
- * event kinds pass through untouched (they belong to whatever reporter the
- * caller composes this with).
+ * A Reporter that folds the agent lifecycle events into a status map and
+ * writes one refreshed summary line per transition. All units spawn up-front
+ * (pending), so the `k/N done` denominator is stable from the first line.
+ * Other event kinds pass through untouched (they belong to whatever reporter
+ * the caller composes this with).
  */
 export function makeAgentSummaryTracker(
   write: (line: string) => void
@@ -69,6 +70,8 @@ export function makeAgentSummaryTracker(
 
   return (event: ILoopEvent): void => {
     if (event.kind === "agent_spawned") {
+      statuses.set(event.message, "pending");
+    } else if (event.kind === "agent_started") {
       statuses.set(event.message, "running");
     } else if (event.kind === "agent_result") {
       statuses.set(event.message, event.passed === true ? "done" : "failed");
