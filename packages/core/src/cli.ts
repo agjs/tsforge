@@ -24,6 +24,7 @@ import {
   isOneShot,
   scopeOf,
   cliUsage,
+  resolveCliProfile,
   type ICliArgs,
 } from "./cli/args";
 import { validate } from "./validate";
@@ -62,7 +63,13 @@ import { resolveGate } from "./cli/gate-setup";
  * Slash commands (/help, /clear, /exit) follow the standard harness UX. Provider
  * via TSFORGE_* env.
  */
-export { parseArgs, applyRecipe, isOneShot, type ICliArgs } from "./cli/args";
+export {
+  parseArgs,
+  applyRecipe,
+  isOneShot,
+  resolveCliProfile,
+  type ICliArgs,
+} from "./cli/args";
 
 export { makeSpinner, spinnerPhase, type ISpinnerOut } from "./render/spinner";
 export { providerConfig } from "./cli/model-setup";
@@ -91,11 +98,13 @@ async function runOnce(args: ICliArgs): Promise<number> {
   const { entry } = await modelForRun(args);
   const provider = makeProvider(entry);
   const report = makeReporter(logFile, "cli");
+  const profile = resolveCliProfile(args.profile);
   const result = await runTask(task, args.dir, provider, {
     onEvent: report,
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
     ...(args.scout ? { scout: true } : {}),
+    ...(profile === undefined ? {} : { profile }),
   });
   const ok = result.status === RUN_STATUS.done;
 

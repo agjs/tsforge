@@ -150,16 +150,44 @@ test("ruleHelp: implicit-any no-unsafe rule shows the validate-the-boundary fix"
   expect(h).toContain("✓");
 });
 
-test("ruleHelp: a pack rule with no worked example shows only its description (no fake ✗/✓)", () => {
-  // component-folder-structure has a generated (empty bad/good) entry, no curated one.
+test("ruleHelp: architecture rule with procedure surfaces fix steps", () => {
   const h = ruleHelp([
     { key: "k", rule: "tsforge/component-folder-structure", message: "" },
   ]);
 
-  if (h.length > 0) {
-    expect(h).not.toContain("// Example that violates the rule");
-    expect(h).not.toContain("✗ \n");
+  expect(h).toContain("tsforge/component-folder-structure");
+  expect(h).toContain("procedure:");
+  expect(h).toContain("Component.hooks.ts");
+});
+
+test("ruleHelp: every multi-step architecture rule carries a fix procedure", () => {
+  // The opinionated-profile rules whose fix is structural (move files, split
+  // modules) — a bad/good pair alone can't teach the choreography.
+  const rules = [
+    "tsforge/component-folder-structure",
+    "tsforge/no-state-in-component-body",
+    "tsforge/no-inline-jsx-functions",
+    "tsforge/index-must-reexport-default",
+    "tsforge/max-hooks-per-file",
+  ];
+
+  for (const rule of rules) {
+    const h = ruleHelp([{ key: "k", rule, message: "" }]);
+
+    expect(h).toContain(rule);
+    expect(h).toContain("procedure:");
   }
+});
+
+test("ruleHelp: a pack rule with no worked example shows only its description (no fake ✗/✓)", () => {
+  // job-name-must-be-constant has a generated (empty bad/good) entry, no curated one.
+  const h = ruleHelp([
+    { key: "k", rule: "tsforge/job-name-must-be-constant", message: "" },
+  ]);
+
+  expect(h).toContain("tsforge/job-name-must-be-constant");
+  expect(h).not.toContain("✗");
+  expect(h).not.toContain("✓");
 });
 
 test("generated docs the reader imports include the tsforge pack rules (guards the write→read path)", () => {

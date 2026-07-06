@@ -17,6 +17,7 @@ import type {
 } from "./loop.types";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import type { ITsforgeProjectConfig } from "../config";
+import type { ProfileId } from "../config/profiles";
 import type { IConventions } from "../infer-rules/conventions.types";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { buildSystemPrompt, seedPrompt } from "./prompt";
@@ -184,7 +185,8 @@ function policyCtxFields(policy: ITsforgeProjectConfig["policy"]): {
 
 async function resolveStackForRun(
   cwd: string,
-  report: (message: string) => void
+  report: (message: string) => void,
+  profile?: ProfileId
 ): Promise<{
   stackProfile: Awaited<ReturnType<typeof detectStack>>;
   ruleOverrides: Readonly<Record<string, "error" | "warn" | "off">>;
@@ -192,11 +194,15 @@ async function resolveStackForRun(
   conventions: IConventions;
 }> {
   const detectedProfile = await detectStack(cwd);
-  const { loadTsforgeConfig, resolveActivePacks, normalizeRuleOverrides } =
-    await import("../config/tsforge-config");
+  const {
+    loadTsforgeConfig,
+    resolveActivePacks,
+    normalizeRuleOverrides,
+    withProfileOverride,
+  } = await import("../config/tsforge-config");
   const { resolveConventions } = await import("../infer-rules/conventions");
   const { loadAndRegisterPlugins } = await import("../config/external-plugins");
-  const cfg = await loadTsforgeConfig(cwd);
+  const cfg = withProfileOverride(await loadTsforgeConfig(cwd), profile);
   const activePacks = resolveActivePacks(detectedProfile.packs, cfg);
   const externalIds =
     cfg.plugins === undefined
@@ -343,9 +349,13 @@ export async function runTask(
 
   // Detect stack once per run, early; tsforge.config.json may adjust it
   const { stackProfile, ruleOverrides, policy, conventions } =
-    await resolveStackForRun(cwd, (message) => {
-      report({ kind: "tool", task: task.id, message });
-    });
+    await resolveStackForRun(
+      cwd,
+      (message) => {
+        report({ kind: "tool", task: task.id, message });
+      },
+      opts.profile
+    );
 
   report({
     kind: "tool",

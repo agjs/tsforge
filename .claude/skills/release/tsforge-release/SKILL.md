@@ -1,14 +1,12 @@
 ---
 name: tsforge-release
-description: >-
-  End-to-end tsforge release: validate, commit all pending work, bump version,
-  signed tag, push, watch npm publish. Use when the user asks to release,
-  publish, ship, tag, or cut a version. Does not require a clean git tree.
+description: End-to-end tsforge release — validate, commit pending work, bump version, signed tag, push, watch npm publish. Use when the user asks to release, publish, ship, tag, or cut a version. Does not require a clean git tree. Manual-only; do not auto-run during unrelated tasks.
+disable-model-invocation: true
 ---
 
 # tsforge release
 
-One command from dirty `main` to npm + GitHub Release. Pushing `v*.*.*` triggers [`.github/workflows/release.yml`](../../.github/workflows/release.yml).
+One command from dirty `main` to npm + GitHub Release. Pushing `v*.*.*` triggers [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 **The script commits everything for you.** Uncommitted work is included in the release commit. You do not need a clean tree first.
 
@@ -77,5 +75,5 @@ Do not manually `npm publish` unless the user explicitly asks to bypass CI.
 
 ## Related docs
 
-- [CONTRIBUTING.md](../../CONTRIBUTING.md)
-- [apps/docs/DEPLOY.md](../../apps/docs/DEPLOY.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [apps/docs/DEPLOY.md](apps/docs/DEPLOY.md)

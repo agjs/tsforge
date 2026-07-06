@@ -109,7 +109,7 @@ Use the release script. It validates, commits all pending work, bumps version, t
 ./scripts/release.sh patch --yes        # later releases
 ```
 
-See [`.cursor/skills/tsforge-release/SKILL.md`](.cursor/skills/tsforge-release/SKILL.md). Requires `NPM_TOKEN` in GitHub repo secrets.
+See [`.claude/skills/release/tsforge-release/SKILL.md`](.claude/skills/release/tsforge-release/SKILL.md). Requires `NPM_TOKEN` in GitHub repo secrets.
 
 ### Docs deploy
 

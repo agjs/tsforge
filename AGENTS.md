@@ -14,7 +14,7 @@ bun run rules:docs                            # regenerate rule-docs.generated.j
 bun run eval:sweep                            # A/B feature sweep (see tsforge.dev/eval/ab-testing/)
 bun run eval:benchmark                        # compare edit mechanisms across runs
 ./scripts/audit-repo-settings.sh             # diff GitHub repo settings vs .github/desired-repo-settings.json
-./scripts/release.sh patch                   # bump, tag, push → npm + GitHub Release (see .cursor/skills/tsforge-release/)
+./scripts/release.sh patch                   # bump, tag, push → npm + GitHub Release (see .claude/skills/release/tsforge-release/)
 ```
 
 ## Layout

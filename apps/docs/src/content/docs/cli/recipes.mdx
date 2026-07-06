@@ -54,10 +54,11 @@ A project recipe **overrides** a global one with the same id. `tsforge recipes` 
 | `withReview` | `--with-review` | after green, run the review and feed verified findings into one repair cycle |
 | `mode` | `--greenfield` | `"greenfield"` selects the [feature-checklist build loop](/loop/greenfield/) |
 | `plannerModel`, `workModel`, `evaluatorModel` | greenfield roles | per-role model names; each falls back to `model`/active |
+| `profile` | `tsforge.config.json` `profile` | `recommended`, `strict`, `security`, `frontend`, `backend`, `opinionated` |
 | `web`, `plan`, `log`, `strictFloorOnly` | the matching flags | booleans |
 
 A recipe is, in effect, a saved set of CLI options: `tsforge run <id>` applies them, and you can also combine `--recipe <id>` with other commands (e.g. `tsforge review --recipe …`). **An explicit CLI flag always wins** over the recipe, so `tsforge run api-endpoint --files lib/**` overrides just the scope.
 
-Fields this version doesn't recognize (a typo, or a not-yet-supported field like `profile`/`tools`) are **reported, not silently ignored** — so a recipe never quietly does less than it says.
+Fields this version doesn't recognize (a typo, or a not-yet-supported field like `tools`) are **reported, not silently ignored** — so a recipe never quietly does less than it says.
 
 → [Commands](/reference/commands/) · [tsforge.config.json](/guardrails/config/) · [Models](/inference/models-json/)

@@ -12,7 +12,8 @@ export const PACK_REGISTRY = {
       "Core TypeScript safety rules for all projects (strict mode, index safety, no casts)",
     category: "language",
     appliesWhen: { always: true },
-    guidance: "Enforce strict TypeScript rules on all projects.",
+    guidance:
+      "Strict TypeScript on every file: narrow with guards (no `as`), prefix interfaces with `I`, keep cognitive complexity ≤ 20. When a type error repeats, fix the boundary (parse/validate at the edge) instead of sprinkling optional chaining.",
   } as const satisfies IRulePackDescriptor,
 
   react: {
@@ -21,7 +22,8 @@ export const PACK_REGISTRY = {
     description: "React component patterns and hooks usage",
     category: "framework",
     appliesWhen: { allDeps: ["react", "react-dom"] },
-    guidance: "Follow React best practices for component composition.",
+    guidance:
+      "React components: stable keys (not array index), hooks only at top level, no state updates during render. Prefer composition over prop drilling; colocate hooks with the component that owns the state they read.",
   } as const satisfies IRulePackDescriptor,
 
   "react-component-architecture": {
@@ -49,7 +51,8 @@ export const PACK_REGISTRY = {
     description: "Database access patterns using Drizzle ORM",
     category: "library",
     appliesWhen: { anyDeps: ["drizzle-orm"] },
-    guidance: "Use Drizzle ORM type-safely for database queries.",
+    guidance:
+      "Drizzle: schema-first queries via the typed `db` client — no raw SQL strings unless wrapped in `sql` tagged templates. Keep table definitions in schema modules; let inferred types flow to callers instead of hand-written row interfaces.",
   } as const satisfies IRulePackDescriptor,
 
   elysia: {

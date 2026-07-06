@@ -1,4 +1,5 @@
 import type { ErrorParser } from "../validate";
+import type { ProfileId } from "../config/profiles";
 import {
   type RUN_STATUS,
   type STUCK_REASON,
@@ -136,6 +137,8 @@ export interface IRunOptions {
    *  the model must still implement the feature, and the per-feature browser/judge
    *  layers decide whether it's done. */
   requireRed?: boolean;
+  /** Rule profile override (from a recipe); defaults to tsforge.config.json. */
+  profile?: ProfileId;
 }
 
 export interface ISpecResult {

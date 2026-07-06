@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isRecord } from "../lib/guards";
 import { isPolicyMode, type PolicyMode } from "../policy";
+import { isProfileId, PROFILE_DEFINITIONS, type ProfileId } from "./profiles";
 
 /**
  * A declarative task recipe — tsforge's adaptation of Codebuff's `AgentDefinition`
@@ -62,6 +63,8 @@ export interface ITaskRecipe {
    *  (`runGreenfield`) instead of the default single-task loop. Omitted ⇒ the
    *  normal brownfield/one-shot run. */
   readonly mode?: "greenfield";
+  /** Rule profile preset (→ `tsforge.config.json` `profile` for this run). */
+  readonly profile?: ProfileId;
 }
 
 function optString(value: unknown): string | undefined {
@@ -118,6 +121,10 @@ function assignScalars(recipe: Mutable, raw: Record<string, unknown>): void {
   if (raw.mode === "greenfield") {
     recipe.mode = raw.mode;
   }
+
+  if (typeof raw.profile === "string" && isProfileId(raw.profile)) {
+    recipe.profile = raw.profile;
+  }
 }
 
 /** Assign the optional boolean flags onto a recipe under construction. */
@@ -135,8 +142,8 @@ function assignFlags(recipe: Mutable, raw: Record<string, unknown>): void {
 type Mutable = { -readonly [K in keyof ITaskRecipe]: ITaskRecipe[K] };
 
 /** Every field a v1 recipe applies. A key outside this set is reported (not
- *  silently dropped) so a typo or not-yet-supported field (e.g. `profile`,
- *  `tools`) is visible rather than mysteriously ignored. */
+ *  silently dropped) so a typo or not-yet-supported field (e.g. `tools`) is
+ *  visible rather than mysteriously ignored. */
 const KNOWN_KEYS = new Set<string>([
   "id",
   "description",
@@ -160,7 +167,18 @@ const KNOWN_KEYS = new Set<string>([
   "withReview",
   "scout",
   "mode",
+  "profile",
 ]);
+
+/** A string `profile` value that isn't a known ProfileId, or undefined.
+ *  Surfaced at load so a typo (`"strictt"`) can't silently run a looser gate. */
+export function invalidProfileValue(value: unknown): string | undefined {
+  if (!isRecord(value) || typeof value.profile !== "string") {
+    return undefined;
+  }
+
+  return isProfileId(value.profile) ? undefined : value.profile;
+}
 
 /** Keys present in the raw recipe that this version doesn't recognize. */
 export function unrecognizedKeys(value: unknown): string[] {
@@ -252,6 +270,14 @@ async function loadDir(
     if (unknown.length > 0) {
       report(
         `recipe '${name}': ignoring unrecognized field(s): ${unknown.join(", ")}`
+      );
+    }
+
+    const badProfile = invalidProfileValue(parsed);
+
+    if (badProfile !== undefined) {
+      report(
+        `recipe '${name}': invalid profile '${badProfile}' — ignored (valid: ${Object.keys(PROFILE_DEFINITIONS).join(", ")})`
       );
     }
 

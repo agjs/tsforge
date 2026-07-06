@@ -8,6 +8,10 @@ export interface IRuleDoc {
   bad: string;
   /** The corrected version that satisfies it. */
   good: string;
+  /** Optional multi-step fix workflow for architecture or meta-rules. */
+  procedure?: string;
+  /** Optional path to deeper guidance (repo-relative markdown). */
+  reference?: string;
 }
 
 /**
@@ -186,11 +190,37 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     what: "State hooks (`useState`, `useEffect`, `useMemo`, …) belong in `Component.hooks.ts`, not in the `.tsx` component body.",
     bad: "export function Button() { const [open, setOpen] = useState(false); return <button />; }",
     good: "export function useButton() { const [open, setOpen] = useState(false); return { open }; }",
+    procedure:
+      "1) Create/open `Component.hooks.ts` next to the component. 2) Move the state/effect hooks into a `useComponent()` custom hook that returns the values and handlers the JSX needs. 3) Call the hook once at the top of the component and destructure. (`useId`/`useTransition`/`useDeferredValue` may stay inline.)",
   },
   "tsforge/no-inline-jsx-functions": {
     what: "No inline arrow/function expressions in JSX attributes — bind handlers in the hook and pass a reference.",
     bad: "<button onClick={() => doThing(id)} />",
     good: "const onClickRow = useCallback(() => doThing(id), [id]); <button onClick={onClickRow} />",
+    procedure:
+      "1) Define the handler in the component's hook file, wrapped in `useCallback` with its dependencies. 2) Return it from the hook and destructure it in the component. 3) Pass the reference (`onClick={onClickRow}`). For per-item handlers in a list, extract a row component that receives the item and binds internally.",
+  },
+  "tsforge/index-must-reexport-default": {
+    what: "A component folder's `index.ts` may only re-export: the component's default plus optional type re-exports — no logic.",
+    bad: "import Button from './Button'; export default Button;  // logic in Button/index.ts",
+    good: "export { default as Button } from './Button'; export * from './Button.types';",
+    procedure:
+      "1) Open the folder's `index.ts`. 2) Replace its body with `export { default as Component } from './Component'`. 3) Keep only type re-exports alongside (`export * from './Component.types'`); move any other code into its own module.",
+  },
+  "tsforge/max-hooks-per-file": {
+    what: "A `*.hooks.ts`/`*.queries.ts`/`*.mutations.ts` module may export at most 4 hooks — split god files by concern before they grow.",
+    bad: "users.queries.ts exporting 7 use* hooks",
+    good: "users.list.queries.ts + users.detail.queries.ts + users.mutations.ts, each ≤ 4 hooks",
+    procedure:
+      "1) Group the file's exported hooks by concern (list vs detail vs mutations). 2) Create one module per group (e.g. `users.list.queries.ts`, `users.mutations.ts`), each ≤ 4 hooks. 3) Move each hook with the imports it needs and update the import sites. 4) Delete the original file once it is empty.",
+  },
+  "tsforge/component-folder-structure": {
+    what: "Each component lives in its own folder with `Component.tsx`, `Component.hooks.ts`, and `index.ts` that re-exports the default.",
+    bad: "src/components/Button.tsx  // lone file, hooks inline",
+    good: "src/components/Button/Button.tsx + Button.hooks.ts + index.ts",
+    procedure:
+      "1) Create `Component/` folder. 2) Move hooks to `Component.hooks.ts`. 3) Add `index.ts` with `export { default } from './Component'`. 4) Update imports to the folder path.",
+    reference: "packages/core/src/rule-packs/react-component-architecture/",
   },
   "tsforge/no-throw-literal": {
     what: "Throw `Error` instances, not string or number literals.",
@@ -460,11 +490,19 @@ export function ruleHelp(errors: ErrorSet): string {
     // "// Example that violates the rule" placeholder is worse than nothing.
     const hasExample = doc.bad.length > 0 && doc.good.length > 0;
 
-    blocks.push(
-      hasExample
-        ? `${e.rule}: ${doc.what}\n  ✗ ${doc.bad}\n  ✓ ${doc.good}`
-        : `${e.rule}: ${doc.what}`
-    );
+    let block = hasExample
+      ? `${e.rule}: ${doc.what}\n  ✗ ${doc.bad}\n  ✓ ${doc.good}`
+      : `${e.rule}: ${doc.what}`;
+
+    if (doc.procedure !== undefined && doc.procedure.length > 0) {
+      block += `\n  procedure: ${doc.procedure}`;
+    }
+
+    if (doc.reference !== undefined && doc.reference.length > 0) {
+      block += `\n  see: ${doc.reference}`;
+    }
+
+    blocks.push(block);
   }
 
   return blocks.join("\n");
