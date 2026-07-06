@@ -76,12 +76,7 @@ import {
   getUpdateNotice,
   refreshUpdateCacheInBackground,
 } from "../update-check";
-import {
-  spinner,
-  setInteractiveStream,
-  makeReporter,
-  resolveLogPath,
-} from "./logging";
+import { spinner, outputRouter, makeReporter, resolveLogPath } from "./logging";
 import {
   modelInfo,
   detectContextWindow,
@@ -1012,7 +1007,7 @@ export async function repl(args: ICliArgs): Promise<number> {
   // Route streamed agent output through the bar so it scrolls above the pinned
   // input row; cleared on loop exit so later/headless writes go straight to stdout.
   if (useInputRow) {
-    setInteractiveStream((text): void => {
+    outputRouter.setParentSink((text): void => {
       if (!agentTurnOpen) {
         agentTurnOpen = true;
         agentRail = makeAgentRail(agentBar(true), railInnerWidth); // fresh per turn
@@ -1689,7 +1684,7 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   statusBar.teardown(); // belt-and-suspenders: restore the terminal on loop exit
   process.stdout.off("resize", handleResize); // don't pin the REPL closure
-  setInteractiveStream(null); // later/headless writes go straight to stdout again
+  outputRouter.setParentSink(null); // later/headless writes go straight to stdout again
 
   return 0;
 }

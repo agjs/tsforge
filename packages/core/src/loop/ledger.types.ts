@@ -21,6 +21,10 @@ export type LedgerEventType =
   | "gate_finished"
   | "resume_started"
   | "resume_finished"
+  /** A subagent started under this run. */
+  | "agent_spawned"
+  /** A subagent finished (payload carries its status and output preview). */
+  | "agent_result"
   /** Catch-all for reporter events without a dedicated ledger type yet. */
   | "log";
 
@@ -31,6 +35,8 @@ export interface IBaseLedgerEvent {
   runId: string;
   /** The interactive session id, when applicable. */
   sessionId?: string;
+  /** The subagent that emitted this event; absent = the parent/main loop. */
+  agentId?: string;
   /** ISO-8601 timestamp. */
   timestamp: string;
   type: LedgerEventType;

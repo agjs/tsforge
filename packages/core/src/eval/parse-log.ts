@@ -23,6 +23,8 @@ const KNOWN_KINDS = new Set<string>([
   "ttsr",
   "reverted",
   "policy",
+  "agent_spawned",
+  "agent_result",
 ]);
 
 function isKind(value: string): value is ILoopEvent["kind"] {
@@ -162,6 +164,28 @@ function assignVerdict(event: ILoopEvent, src: Record<string, unknown>): void {
   }
 }
 
+/** Re-attach agent attribution. `parentTask` rides inside the payload, but the
+ *  ledger writer lifts `agentId` OUT of the payload into a top-level column —
+ *  so read it from the source first (flat/legacy shape) and fall back to the
+ *  outer record (wrapped ledger shape). */
+function assignAgent(
+  event: ILoopEvent,
+  src: Record<string, unknown>,
+  record: unknown
+): void {
+  const outer = isRecord(record) ? optionalString(record.agentId) : undefined;
+  const agentId = optionalString(src.agentId) ?? outer;
+  const parentTask = optionalString(src.parentTask);
+
+  if (agentId !== undefined) {
+    event.agentId = agentId;
+  }
+
+  if (parentTask !== undefined) {
+    event.parentTask = parentTask;
+  }
+}
+
 /** Coerce one parsed JSONL record into an ILoopEvent, or null when it isn't one.
  *  Carries the fields the failure classifier, the metrics, and the trace summary
  *  consume — enough to reconstruct a typed event stream from a `--log` file. */
@@ -187,6 +211,7 @@ function coerceEvent(record: unknown): ILoopEvent | null {
   assignText(event, src);
   assignNumbers(event, src);
   assignVerdict(event, src);
+  assignAgent(event, src, record);
 
   return event;
 }

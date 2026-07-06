@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, spyOn } from "bun:test";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,8 @@ import {
   type ILoopEvent,
   type LedgerEventType,
 } from "../src/loop";
+import { makeReporter } from "../src/cli/logging";
+import { parseEventLog } from "../src/eval";
 
 async function withLog<T>(
   fn: (file: string, read: () => Promise<IBaseLedgerEvent[]>) => Promise<T>
@@ -51,6 +53,8 @@ describe("ledgerTypeFor — kind → typed event", () => {
       ["create", "tool_call_finished"],
       ["run", "tool_call_finished"],
       ["policy", "policy_decision"],
+      ["agent_spawned", "agent_spawned"],
+      ["agent_result", "agent_result"],
       ["timing", "log"],
     ];
 
@@ -138,6 +142,20 @@ describe("LedgerWriter", () => {
     });
   });
 
+  test("records agentId when given and omits it otherwise (round-trip)", async () => {
+    await withLog(async (file, read) => {
+      const w = new LedgerWriter(file, "run-1", "sess-1");
+
+      w.record("agent_spawned", { spec: "explore" }, "run-1:explore");
+      w.record("model_call_started", {}); // parent event — no agentId
+
+      const [spawned, parent] = await read();
+
+      expect(spawned?.agentId).toBe("run-1:explore");
+      expect(parent?.agentId).toBeUndefined();
+    });
+  });
+
   test("omits sessionId when not provided; no-op without a file", async () => {
     await withLog(async (file, read) => {
       new LedgerWriter(file, "r").record("run_started", {});
@@ -149,5 +167,61 @@ describe("LedgerWriter", () => {
     expect(() =>
       new LedgerWriter("", "r").record("run_started", {})
     ).not.toThrow();
+  });
+});
+
+describe("agent attribution write→read round-trip", () => {
+  test("makeReporter --log lines parse back with agentId/parentTask intact", async () => {
+    await withLog(async (file) => {
+      const report = makeReporter(file, "run-1", "sess-1");
+      // Silence terminal rendering; the ledger file is what we assert on.
+      const spy = spyOn(process.stdout, "write").mockImplementation(() => true);
+
+      try {
+        report({
+          kind: "agent_spawned",
+          task: "run-1",
+          message: "explore (qwen3-coder)",
+          agentId: "run-1:explore",
+          parentTask: "run-1",
+        });
+        report({
+          kind: "usage",
+          task: "run-1:explore",
+          message: "",
+          totalTokens: 42,
+          agentId: "run-1:explore",
+        });
+        report({ kind: "usage", task: "run-1", message: "" }); // parent event
+        report({
+          kind: "agent_result",
+          task: "run-1",
+          message: "3 findings",
+          agentId: "run-1:explore",
+          parentTask: "run-1",
+          passed: true,
+        });
+      } finally {
+        spy.mockRestore();
+      }
+
+      const events = parseEventLog(await readFile(file, "utf8"));
+      const spawned = events.find((e) => e.kind === "agent_spawned");
+      const result = events.find((e) => e.kind === "agent_result");
+      const child = events.find(
+        (e) => e.kind === "usage" && e.agentId !== undefined
+      );
+      const parent = events.find(
+        (e) => e.kind === "usage" && e.agentId === undefined
+      );
+
+      expect(spawned?.agentId).toBe("run-1:explore");
+      expect(spawned?.parentTask).toBe("run-1");
+      expect(result?.agentId).toBe("run-1:explore");
+      expect(result?.passed).toBe(true);
+      expect(child?.agentId).toBe("run-1:explore");
+      expect(child?.totalTokens).toBe(42);
+      expect(parent).toBeDefined();
+    });
   });
 });

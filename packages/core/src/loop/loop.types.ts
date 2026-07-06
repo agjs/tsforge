@@ -34,8 +34,21 @@ export interface ILoopEvent {
     | "reverted"
     // A unified-policy verdict for one proposed action (ledger-only; renders to
     // nothing on the terminal — a deny is already surfaced via its `tool` event).
-    | "policy";
+    | "policy"
+    // A subagent started under this task (message: agent id + model). The agent
+    // tree renders a child row from this; the ledger links it via agentId.
+    | "agent_spawned"
+    // A subagent finished; `output` carries its final text/structured payload and
+    // `passed` whether it completed (vs aborted/timed out).
+    | "agent_result";
   task: string;
+  /** Which subagent emitted this event. Absent = the parent/main loop. Set on
+   *  every event a subagent emits (not just agent_* kinds), so interleaved
+   *  parallel streams stay attributable in the ledger and the agent tree. */
+  agentId?: string;
+  /** The spawning task's id for agent_* events, so a renderer can build the
+   *  parent→children tree without parsing hierarchical id strings. */
+  parentTask?: string;
   message: string;
   cycle?: number;
   cycles?: number;

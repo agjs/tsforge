@@ -30,6 +30,10 @@ export function ledgerTypeFor(event: ILoopEvent): LedgerEventType {
       return "edit_reverted";
     case "policy":
       return "policy_decision";
+    case "agent_spawned":
+      return "agent_spawned";
+    case "agent_result":
+      return "agent_result";
     case "tool":
       return event.message.startsWith("tool_rejected")
         ? "tool_call_failed"
@@ -103,7 +107,11 @@ export class LedgerWriter {
     private readonly sessionId?: string
   ) {}
 
-  record(type: LedgerEventType, payload: Record<string, unknown>): void {
+  record(
+    type: LedgerEventType,
+    payload: Record<string, unknown>,
+    agentId?: string
+  ): void {
     if (this.file.length === 0) {
       return;
     }
@@ -112,6 +120,7 @@ export class LedgerWriter {
       eventId: newEventId(),
       runId: this.runId,
       ...(this.sessionId === undefined ? {} : { sessionId: this.sessionId }),
+      ...(agentId === undefined ? {} : { agentId }),
       timestamp: new Date().toISOString(),
       type,
       payload: capPayload(payload),
