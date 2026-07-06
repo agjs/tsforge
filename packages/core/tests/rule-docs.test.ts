@@ -160,6 +160,18 @@ test("ruleHelp: architecture rule with procedure surfaces fix steps", () => {
   expect(h).toContain("Component.hooks.ts");
 });
 
+test("ruleHelp: never emits a `see:` reference line (paths dangle in user projects)", () => {
+  // component-folder-structure carries a `reference` — it's a maintainer note,
+  // not model feedback: the tsforge-repo-relative path doesn't exist in the
+  // user's project, so pointing the model at it wastes a repair turn.
+  const h = ruleHelp([
+    { key: "k", rule: "tsforge/component-folder-structure", message: "" },
+  ]);
+
+  expect(h).not.toContain("see:");
+  expect(h).not.toContain("packages/core/src/rule-packs/");
+});
+
 test("ruleHelp: every multi-step architecture rule carries a fix procedure", () => {
   // The opinionated-profile rules whose fix is structural (move files, split
   // modules) — a bad/good pair alone can't teach the choreography.
