@@ -22,3 +22,9 @@ export {
   findRecipe,
   type ITaskRecipe,
 } from "./recipes";
+export {
+  parseAgentSpec,
+  loadAgentSpecs,
+  findAgentSpec,
+  unrecognizedAgentKeys,
+} from "./agent-specs";
