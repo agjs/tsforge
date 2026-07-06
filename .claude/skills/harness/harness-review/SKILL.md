@@ -30,12 +30,7 @@ traced it to a concrete `file:line`.
 4. **Reproduce.** For any suspected break, write the smallest repro — a throwaway
    `bun` script or a focused test in a temp dir. A repro that fires is a P1/P2; one that
    doesn't clears the hunch (say so). Never report an unreproduced "could be".
-5. **Report.** Return a findings list, highest severity first. Per finding:
-   - **severity** P1/P2/P3 (definitions in the manifest header)
-   - **title** one line
-   - **location** `file:line`
-   - **evidence** the repro or the exact code path (quote the lines)
-   - **fix** a concrete sketch (and the regression test that would lock it)
+5. **Report.** Return a findings list using the output template below.
 
    If the subsystem is clean, say so explicitly and list which invariants you verified
    and how — "clean" with no evidence is not an acceptable result.
@@ -47,6 +42,26 @@ user opted into multi-agent orchestration), each running the single-subsystem
 procedure on its own slice, then collate into one severity-sorted list with a short
 per-subsystem "verified / findings" summary. This is opt-in per run (it spawns many
 agents); don't trigger it automatically.
+
+## Output template
+
+Return findings in this shape (highest severity first):
+
+```markdown
+## Harness review: <subsystem>
+
+### Findings
+
+#### P1 — <title>
+- **location:** `path/to/file.ts:42`
+- **evidence:** <repro steps or quoted code path>
+- **fix:** <concrete sketch + regression test name>
+
+#### P2 — …
+
+### Verified (if clean)
+- <invariant>: checked via <how>
+```
 
 ## Output discipline
 

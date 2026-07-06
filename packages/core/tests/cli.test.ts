@@ -193,6 +193,11 @@ test("applyRecipe fills defaults but an explicit CLI value always wins", () => {
   expect(filled.policyMode).toBe("default");
   expect(filled.web).toBe(true);
 
+  const profiled = parseArgs([]);
+
+  applyRecipe(profiled, { id: "strict", profile: "strict" });
+  expect(profiled.profile).toBe("strict");
+
   // An explicit --files overrides the recipe's scope; the rest still fill.
   const overridden = parseArgs(["--files", "lib/**"]);
 

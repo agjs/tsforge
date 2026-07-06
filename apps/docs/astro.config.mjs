@@ -215,6 +215,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: "Model agent", link: "/agent/model-agent/" },
+            { label: "Skills and the harness", link: "/agent/skills-and-harness/" },
             { label: "File ops", link: "/edit/engine/" },
             { label: "TypeScript language server", link: "/lsp/typescript-server/" },
             { label: "Write diagnostics", link: "/uplift/write-diagnostics/" },

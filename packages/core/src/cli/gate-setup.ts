@@ -87,11 +87,16 @@ async function baseGate(
     resolveActivePacks,
     normalizeRuleOverrides,
     resolveProjectProfile,
+    withProfileOverride,
   } = await import("../config/tsforge-config");
   const { resolveConventions } = await import("../infer-rules/conventions");
+  const { resolveCliProfile } = await import("./args");
 
   const stackProfile = await detectStack(args.dir);
-  const config = await loadTsforgeConfig(args.dir);
+  const config = withProfileOverride(
+    await loadTsforgeConfig(args.dir),
+    resolveCliProfile(args.profile)
+  );
   const activePacks = resolveActivePacks(stackProfile.packs, config);
   const ruleOverrides = normalizeRuleOverrides(config);
   const profile = resolveProjectProfile(config);

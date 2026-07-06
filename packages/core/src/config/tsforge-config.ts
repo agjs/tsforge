@@ -673,3 +673,15 @@ export function resolveProjectProfile(
 ): ProfileId {
   return config.profile ?? DEFAULT_PROFILE;
 }
+
+/** Overlay a recipe/CLI profile onto a loaded config without mutating the file. */
+export function withProfileOverride(
+  config: ITsforgeProjectConfig,
+  profile: ProfileId | undefined
+): ITsforgeProjectConfig {
+  if (profile === undefined) {
+    return config;
+  }
+
+  return { ...config, profile };
+}

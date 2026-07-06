@@ -16,6 +16,7 @@ import {
 } from "../agent";
 import type { SetupWebFn } from "./tools";
 import type { PolicyMode } from "../policy";
+import type { ProfileId } from "../config/profiles";
 import { flags } from "../config";
 import { trace } from "../lib/trace";
 import { validate, isEslintJsonLine, type ErrorParser } from "../validate";
@@ -23,6 +24,7 @@ import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
   loadTsforgeConfig,
+  withProfileOverride,
   normalizeRuleOverrides,
   resolveActivePacks,
 } from "../config/tsforge-config";
@@ -110,6 +112,8 @@ export interface ISessionConfig {
    *  the write-guard reports lint violations — the moat rules tsc can't see (`as`,
    *  `I`-prefix) — inline, so they're fixed in-context not piled up at the gate. */
   lintFile?: FileLinter;
+  /** Rule profile override for this session (from a recipe); defaults to config file. */
+  profile?: ProfileId;
   /** Offer the `scaffold_ui` tool (themed UI primitives). Web builds only — keeps
    *  it off the pure-TS/scratch tool list where it's meaningless noise. */
   scaffoldUi?: boolean;
@@ -556,7 +560,10 @@ export class Session {
     // (resolveStackForRun in run.ts) — interactive users get identical
     // pack selection and rule-severity overrides.
     const detected = await detectStack(cfg.cwd);
-    const projectConfig = await loadTsforgeConfig(cfg.cwd);
+    const projectConfig = withProfileOverride(
+      await loadTsforgeConfig(cfg.cwd),
+      cfg.profile
+    );
     // Base policy mode + rules: CLI (`--policy-mode` via cfg) wins over the
     // config file's `policy.mode`, else `"default"`. Plan mode overrides this
     // base at runtime (setPlanMode).

@@ -1,5 +1,6 @@
 import { join, isAbsolute } from "node:path";
 import type { ITaskRecipe } from "../config/recipes";
+import { isProfileId, type ProfileId } from "../config/profiles";
 
 /**
  * CLI argument parsing + recipe overlay — pure, no I/O, no module state. Extracted
@@ -79,6 +80,8 @@ export interface ICliArgs {
   maxTurns: number;
   /** Reasoning-token cap (from a recipe); 0 = the env/default. */
   thinkingBudget: number;
+  /** Rule profile override (from a recipe); "" = use tsforge.config.json. */
+  profile: string;
   /** Base policy mode (`--policy-mode <plan|default|acceptEdits|ci|dontAsk|
    *  bypassPermissions>`); overrides the config file's policy.mode. */
   policyMode: string;
@@ -210,6 +213,7 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     evaluatorModel: "",
     maxTurns: 0,
     thinkingBudget: 0,
+    profile: "",
     policyMode: "",
     setup: false,
     setupYes: false,
@@ -327,7 +331,18 @@ export function applyRecipe(args: ICliArgs, recipe: ITaskRecipe): void {
     args.thinkingBudget = recipe.thinkingBudget;
   }
 
+  if (args.profile.length === 0 && recipe.profile !== undefined) {
+    args.profile = recipe.profile;
+  }
+
   applyRecipeFlags(args, recipe);
+}
+
+/** Resolve a recipe/CLI profile string to a ProfileId, or undefined when unset. */
+export function resolveCliProfile(profile: string): ProfileId | undefined {
+  const trimmed = profile.trim();
+
+  return trimmed.length > 0 && isProfileId(trimmed) ? trimmed : undefined;
 }
 
 /** Recipe greenfield role models (split out to keep applyRecipe's complexity in

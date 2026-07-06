@@ -31,7 +31,7 @@ import {
   type SetupWebFn,
 } from "../loop";
 import { loadRecipes } from "../config/recipes";
-import { scopeOf, WHOLE_REPO, type ICliArgs } from "./args";
+import { scopeOf, WHOLE_REPO, resolveCliProfile, type ICliArgs } from "./args";
 import { isPolicyMode } from "../policy";
 import { startEditor, type IEditorHandle } from "../editor";
 import { renderEditor } from "../editor/view";
@@ -203,6 +203,7 @@ async function initReplSession(args: ICliArgs): Promise<{
     (await detectContextWindow(provider.config)) ??
     32_768;
   const report = makeReporter(logFile, id, id);
+  const profile = resolveCliProfile(args.profile);
   const config = {
     provider,
     cwd: args.dir,
@@ -235,6 +236,7 @@ async function initReplSession(args: ICliArgs): Promise<{
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
     // `--policy-mode` (validated) overrides the config file's policy.mode.
     ...(isPolicyMode(args.policyMode) ? { policyMode: args.policyMode } : {}),
+    ...(profile === undefined ? {} : { profile }),
     // Thinking OFF for interactive replies so they STREAM immediately instead of
     // stalling on a long hidden chain-of-thought (qwen-local defaults thinking on).
     // The session still flips thinking ON automatically while repairing gate errors.
@@ -662,9 +664,12 @@ export async function repl(args: ICliArgs): Promise<number> {
       case "help":
         await handleHelp();
         break;
-      case "clear":
+
+      case "clear": {
         // Rebuild the session with the current state (config is not reused;
         // repl's /clear creates a fresh Session.create call)
+        const profile = resolveCliProfile(args.profile);
+
         session = await Session.create({
           provider,
           cwd: args.dir,
@@ -673,6 +678,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           contextWindow,
           report: makeReporter(logFile, id, id),
           enableThinking: false,
+          ...(profile === undefined ? {} : { profile }),
         });
         session.setSetupWeb(setupWeb);
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
@@ -681,6 +687,7 @@ export async function repl(args: ICliArgs): Promise<number> {
         clearScreen(); // wipe the visible terminal + scrollback, not just the state
         process.stdout.write("conversation cleared\n");
         break;
+      }
 
       case "compact": {
         // Compaction is a full model round-trip (can take many seconds). Drive the

@@ -7,6 +7,7 @@ import {
   loadRecipes,
   findRecipe,
   unrecognizedKeys,
+  invalidProfileValue,
 } from "../src/config/recipes";
 
 describe("parseRecipe", () => {
@@ -101,11 +102,27 @@ describe("parseRecipe", () => {
   });
 
   test("flags fields it doesn't yet apply (so they don't silently vanish)", () => {
-    // `profile`/`tools` aren't applied in v1 — surface them rather than ignore.
-    expect(
-      unrecognizedKeys({ id: "x", profile: "strict", tools: ["read"] })
-    ).toEqual(["profile", "tools"]);
+    // `tools` isn't applied in v1 — surface it rather than ignore.
+    expect(unrecognizedKeys({ id: "x", tools: ["read"] })).toEqual(["tools"]);
+    expect(unrecognizedKeys({ id: "x", profile: "strict" })).toEqual([]);
     expect(unrecognizedKeys({ id: "x", gate: "g" })).toEqual([]);
+  });
+
+  test("parses a valid profile and drops an invalid one", () => {
+    expect(parseRecipe({ id: "strict-run", profile: "strict" })?.profile).toBe(
+      "strict"
+    );
+    expect(parseRecipe({ id: "x", profile: "yolo" })?.profile).toBeUndefined();
+  });
+
+  test("an invalid profile value is surfaced, a valid or absent one is not", () => {
+    expect(invalidProfileValue({ id: "x", profile: "strictt" })).toBe(
+      "strictt"
+    );
+    expect(invalidProfileValue({ id: "x", profile: "strict" })).toBeUndefined();
+    expect(invalidProfileValue({ id: "x" })).toBeUndefined();
+    // a non-string profile is a shape problem, not a typo'd id — not surfaced here
+    expect(invalidProfileValue({ id: "x", profile: 3 })).toBeUndefined();
   });
 });
 
@@ -144,6 +161,11 @@ describe("loadRecipes", () => {
         JSON.stringify({ id: "not-mismatch", gate: "g" })
       );
       await writeFile(join(cwd, ".tsforge/recipes/broken.json"), "{ not json");
+      // typo'd profile: loads, but must warn instead of silently downgrading
+      await writeFile(
+        join(cwd, ".tsforge/recipes/typo-profile.json"),
+        JSON.stringify({ id: "typo-profile", profile: "strictt" })
+      );
 
       const reports: string[] = [];
       const recipes = await loadRecipes(cwd, (m) => reports.push(m));
@@ -153,6 +175,7 @@ describe("loadRecipes", () => {
         "not-mismatch",
         "proj-only",
         "shared",
+        "typo-profile",
       ]);
       expect(findRecipe(recipes, "shared")?.gate).toBe("project-gate"); // project wins
       expect(reports.some((m) => m.includes("broken.json"))).toBe(true);
@@ -161,6 +184,15 @@ describe("loadRecipes", () => {
           (m) => m.includes("mismatch.json") && m.includes("not-mismatch")
         )
       ).toBe(true);
+      expect(
+        reports.some(
+          (m) => m.includes("invalid profile 'strictt'") && m.includes("valid:")
+        )
+      ).toBe(true);
+      // the valid-profile recipes above must not trigger the warning
+      expect(reports.filter((m) => m.includes("invalid profile")).length).toBe(
+        1
+      );
     } finally {
       if (prev === undefined) {
         delete process.env.TSFORGE_HOME;
