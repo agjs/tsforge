@@ -1,21 +1,22 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, spyOn } from "bun:test";
 import { OutputRouter } from "../src/cli/output-router";
 
-/** Capture stdout writes made during fn, restoring the real writer after. */
+/** Capture stdout writes made during fn. spyOn + mockRestore puts back the
+ *  ORIGINAL method (identity and all) so later tests see an untouched stream. */
 function captureStdout(fn: () => void): string {
   const chunks: string[] = [];
-  const original = process.stdout.write.bind(process.stdout);
+  const spy = spyOn(process.stdout, "write").mockImplementation(
+    (chunk: string | Uint8Array): boolean => {
+      chunks.push(String(chunk));
 
-  process.stdout.write = (chunk: string | Uint8Array): boolean => {
-    chunks.push(String(chunk));
-
-    return true;
-  };
+      return true;
+    }
+  );
 
   try {
     fn();
   } finally {
-    process.stdout.write = original;
+    spy.mockRestore();
   }
 
   return chunks.join("");
