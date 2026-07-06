@@ -10,7 +10,10 @@ export interface IRuleDoc {
   good: string;
   /** Optional multi-step fix workflow for architecture or meta-rules. */
   procedure?: string;
-  /** Optional path to deeper guidance (repo-relative markdown). */
+  /** Optional tsforge-repo-relative pointer to deeper guidance (a rule pack
+   *  dir or markdown). Only resolvable when tsforge runs on its own repo — in
+   *  user projects the path dangles, so keep the actionable steps in
+   *  `procedure`, which is inlined into the feedback everywhere. */
   reference?: string;
 }
 
