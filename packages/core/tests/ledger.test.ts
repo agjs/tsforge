@@ -54,6 +54,7 @@ describe("ledgerTypeFor — kind → typed event", () => {
       ["run", "tool_call_finished"],
       ["policy", "policy_decision"],
       ["agent_spawned", "agent_spawned"],
+      ["agent_started", "agent_started"],
       ["agent_result", "agent_result"],
       ["timing", "log"],
     ];

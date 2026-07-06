@@ -35,11 +35,14 @@ export interface ILoopEvent {
     // A unified-policy verdict for one proposed action (ledger-only; renders to
     // nothing on the terminal — a deny is already surfaced via its `tool` event).
     | "policy"
-    // A subagent started under this task (message: agent id + model). The agent
-    // tree renders a child row from this; the ledger links it via agentId.
+    // A subagent was ANNOUNCED under this task (queued; message: agent id). All
+    // of a fan-out's units spawn up-front so progress denominators are stable
+    // and the agent tree can render pending rows before work begins.
     | "agent_spawned"
+    // A previously spawned subagent began running (its pending row goes live).
+    | "agent_started"
     // A subagent finished; `output` carries its final text/structured payload and
-    // `passed` whether it completed (vs aborted/timed out).
+    // `passed` whether it completed (vs failed/aborted).
     | "agent_result";
   task: string;
   /** Which subagent emitted this event. Absent = the parent/main loop. Set on

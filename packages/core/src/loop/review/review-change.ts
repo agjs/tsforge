@@ -4,6 +4,12 @@ import { isRecord, isArray } from "../../lib/guards";
 import { extractJson } from "../../lib/json";
 import type { IProvider } from "../../inference";
 import type { TsService } from "../../lsp";
+import {
+  AgentScheduler,
+  clampConcurrency,
+  type UnitStatus,
+} from "../../agent/agent-scheduler";
+import type { Reporter } from "../loop.types";
 import { buildTsService } from "../turn";
 import { LENSES, lensRubric } from "./lenses";
 import { callerSignal } from "./signals";
@@ -33,6 +39,47 @@ export interface IReviewOptions {
   gateFailingRules?: readonly string[];
   /** Progress callback (one line per step). */
   log?: (message: string) => void;
+  /** Max find/verify units in flight at once (default 1 — the original strictly
+   *  sequential behavior; results are file-ordered either way). */
+  concurrency?: number;
+  /** Build a FRESH provider per fan-out unit. Providers keep per-instance state
+   *  (the DeepSeek thinking latch), so parallel units must not share one.
+   *  Absent ⇒ every unit reuses the single `provider` (fine at concurrency 1). */
+  providerFactory?: () => IProvider;
+  /** Attribution events (`agent_spawned`/`agent_result` per unit) for the
+   *  ledger and the fan-out progress line. */
+  onEvent?: Reporter;
+}
+
+/** The review's task id in emitted attribution events. */
+const REVIEW_TASK = "review";
+
+/** Map scheduler unit transitions onto the agent lifecycle events:
+ *  pending → agent_spawned (announced), start → agent_started (running),
+ *  done/failed → agent_result. */
+function unitReporter(
+  emit: Reporter | undefined
+): ((id: string, status: UnitStatus) => void) | undefined {
+  if (emit === undefined) {
+    return undefined;
+  }
+
+  return (id, status): void => {
+    const base = {
+      task: REVIEW_TASK,
+      message: id,
+      agentId: `${REVIEW_TASK}:${id}`,
+      parentTask: REVIEW_TASK,
+    };
+
+    if (status === "pending") {
+      emit({ kind: "agent_spawned", ...base });
+    } else if (status === "start") {
+      emit({ kind: "agent_started", ...base });
+    } else {
+      emit({ kind: "agent_result", ...base, passed: status === "done" });
+    }
+  };
 }
 
 /** Run `git` with an explicit argv (no shell); return trimmed stdout, "" on error. */
@@ -257,7 +304,8 @@ async function findInFile(
   system: string,
   file: string,
   diff: string,
-  signal: string
+  signal: string,
+  abort?: AbortSignal
 ): Promise<IRepoFinding[]> {
   if (diff.length === 0) {
     return [];
@@ -276,7 +324,7 @@ async function findInFile(
         content: `File: ${file}\n\nDiff (base → working tree):\n${diff}${callers}`,
       },
     ],
-    { temperature: 0 }
+    { temperature: 0, ...(abort === undefined ? {} : { signal: abort }) }
   );
 
   return parseFindings(res.content, file);
@@ -385,7 +433,8 @@ const VERIFY_SYSTEM = [
 async function verifyFinding(
   provider: IProvider,
   cwd: string,
-  finding: IRepoFinding
+  finding: IRepoFinding,
+  abort?: AbortSignal
 ): Promise<IVerifiedFinding> {
   const window = await codeWindow(cwd, finding.file, finding.line);
   const drop = (verdict: string): IVerifiedFinding => ({
@@ -406,7 +455,7 @@ async function verifyFinding(
         content: `Finding [${finding.lens}] at ${finding.file}:${finding.line}\nClaim: ${finding.claim}\nReason: ${finding.reason}\n\nActual code:\n${window}\n\nIs this a real functional problem?`,
       },
     ],
-    { temperature: 0 }
+    { temperature: 0, ...(abort === undefined ? {} : { signal: abort }) }
   );
 
   let data: unknown;
@@ -437,14 +486,15 @@ async function safeFind(
   cwd: string,
   file: string,
   diff: string,
-  log: (m: string) => void
+  log: (m: string) => void,
+  abort?: AbortSignal
 ): Promise<IRepoFinding[]> {
   try {
     // callerSignal lives INSIDE the try so a LanguageService hiccup on one file
     // degrades that file's review, never aborting the whole run.
     const signal = callerSignal(svc, cwd, file);
 
-    return await findInFile(provider, system, file, diff, signal);
+    return await findInFile(provider, system, file, diff, signal, abort);
   } catch (err) {
     log(`  ${file}: review failed — ${errText(err)}`);
 
@@ -457,10 +507,11 @@ async function safeVerify(
   provider: IProvider,
   cwd: string,
   finding: IRepoFinding,
-  log: (m: string) => void
+  log: (m: string) => void,
+  abort?: AbortSignal
 ): Promise<IVerifiedFinding> {
   try {
-    return await verifyFinding(provider, cwd, finding);
+    return await verifyFinding(provider, cwd, finding, abort);
   } catch (err) {
     log(`  verify failed at ${finding.file}:${finding.line} — ${errText(err)}`);
 
@@ -504,58 +555,115 @@ export async function reviewChange(
   // In-process TS LanguageService (null without a tsconfig) — powers the
   // caller blast-radius signal. Built once; falls back gracefully when absent.
   const svc: TsService | null = await buildTsService(cwd);
+  const makeUnitProvider = opts.providerFactory ?? ((): IProvider => provider);
+  const onUnit = unitReporter(opts.onEvent);
+  // cap=1 (the default) IS the original sequential path — one local-model
+  // server isn't swamped unless the config opts into parallel fan-out. Results
+  // return in file order regardless of completion order, so the report and the
+  // log lines below stay deterministic. Each unit is isolated (safeFind
+  // try/catch + scheduler null-slot degradation): one bad file can't abort the
+  // whole review.
+  const scheduler = new AgentScheduler({
+    concurrency: clampConcurrency(opts.concurrency),
+    ...(onUnit === undefined ? {} : { onUnit }),
+  });
+
+  const findOutcomes = await scheduler.runParallel(
+    files.map((file) => ({
+      id: `find:${file}`,
+      run: async (
+        signal: AbortSignal
+      ): Promise<{
+        file: string;
+        truncated: boolean;
+        found: IRepoFinding[];
+        onChange: IRepoFinding[];
+      } | null> => {
+        if (signal.aborted) {
+          return null;
+        }
+
+        const { diff, truncated, ranges } = await fileDiff(
+          cwd,
+          base,
+          file,
+          staged,
+          untracked.has(file)
+        );
+        const found = await safeFind(
+          makeUnitProvider(),
+          system,
+          svc,
+          cwd,
+          file,
+          diff,
+          log,
+          signal
+        );
+
+        // Keep only findings ON a changed line — a finding on pre-existing code
+        // the change didn't touch is not a regression in THIS change. Skip the
+        // filter when no hunks parsed (can't tell), so we never silently drop
+        // everything.
+        const onChange =
+          ranges.length === 0
+            ? found
+            : found.filter((f) => lineInRanges(f.line, ranges));
+
+        return { file, truncated, found, onChange };
+      },
+    }))
+  );
+
   const raw: IRepoFinding[] = [];
   const truncatedFiles: string[] = [];
   let preexisting = 0;
 
-  // Sequential on purpose: this harness targets a single local-model server, so
-  // we don't fan out concurrent requests that would swamp it. Each file is
-  // isolated in try/catch so one bad file can't abort the whole review.
-  for (const file of files) {
-    const { diff, truncated, ranges } = await fileDiff(
-      cwd,
-      base,
-      file,
-      staged,
-      untracked.has(file)
-    );
-
-    if (truncated) {
-      truncatedFiles.push(file);
+  for (const outcome of findOutcomes) {
+    if (outcome === null) {
+      continue;
     }
 
-    const found = await safeFind(provider, system, svc, cwd, file, diff, log);
+    if (outcome.truncated) {
+      truncatedFiles.push(outcome.file);
+    }
 
-    // Keep only findings ON a changed line — a finding on pre-existing code the
-    // change didn't touch is not a regression in THIS change. Skip the filter
-    // when no hunks parsed (can't tell), so we never silently drop everything.
-    const onChange =
-      ranges.length === 0
-        ? found
-        : found.filter((f) => lineInRanges(f.line, ranges));
-
-    preexisting += found.length - onChange.length;
+    preexisting += outcome.found.length - outcome.onChange.length;
 
     log(
-      `  ${file}: ${onChange.length} candidate finding(s)${
-        found.length !== onChange.length
-          ? ` (${found.length - onChange.length} on pre-existing lines, skipped)`
+      `  ${outcome.file}: ${outcome.onChange.length} candidate finding(s)${
+        outcome.found.length !== outcome.onChange.length
+          ? ` (${outcome.found.length - outcome.onChange.length} on pre-existing lines, skipped)`
           : ""
       }`
     );
-    raw.push(...onChange);
+    raw.push(...outcome.onChange);
   }
 
   const doVerify = opts.verify ?? true;
+  const verifyOutcomes = await scheduler.runParallel(
+    // The index makes ids unique when the reviewer cites the same line twice —
+    // duplicate ids would collapse distinct units in the tracker and ledger.
+    raw.map((finding, index) => ({
+      id: `verify:${finding.file}:${finding.line}#${String(index)}`,
+      run: async (signal: AbortSignal): Promise<IVerifiedFinding | null> => {
+        if (signal.aborted) {
+          return null;
+        }
+
+        return doVerify
+          ? await safeVerify(makeUnitProvider(), cwd, finding, log, signal)
+          : { ...finding, verified: true, verdict: "(unverified)" };
+      },
+    }))
+  );
+
   const verified: IVerifiedFinding[] = [];
   let rejected = 0;
 
-  for (const finding of raw) {
-    const result = doVerify
-      ? await safeVerify(provider, cwd, finding, log)
-      : { ...finding, verified: true, verdict: "(unverified)" };
-
-    if (result.verified) {
+  for (const result of verifyOutcomes) {
+    // A null slot (unit failed/aborted) fails closed, same as a verify error.
+    if (result?.verified === true) {
       verified.push(result);
     } else {
       rejected += 1;

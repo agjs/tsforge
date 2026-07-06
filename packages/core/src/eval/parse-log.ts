@@ -24,6 +24,7 @@ const KNOWN_KINDS = new Set<string>([
   "reverted",
   "policy",
   "agent_spawned",
+  "agent_started",
   "agent_result",
 ]);
 

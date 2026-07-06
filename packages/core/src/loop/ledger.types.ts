@@ -21,8 +21,10 @@ export type LedgerEventType =
   | "gate_finished"
   | "resume_started"
   | "resume_finished"
-  /** A subagent started under this run. */
+  /** A subagent was announced (queued) under this run. */
   | "agent_spawned"
+  /** A previously spawned subagent began running. */
+  | "agent_started"
   /** A subagent finished (payload carries its status and output preview). */
   | "agent_result"
   /** Catch-all for reporter events without a dedicated ledger type yet. */

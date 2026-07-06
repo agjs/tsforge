@@ -341,3 +341,213 @@ test("the senior-review rubric ships with the expected lenses", () => {
     LENSES.every((l) => l.questions.length > 0 && l.example.length > 0)
   ).toBe(true);
 });
+
+/** A three-file repo where every file has an uncommitted change on line 2. */
+function makeTriRepo(): string {
+  const tri = mkdtempSync(join(tmpdir(), "tsforge-review-tri-"));
+  const tgit = (...a: string[]): void =>
+    void execFileSync("git", a, { cwd: tri, stdio: "ignore" });
+
+  tgit("init", "-q");
+  tgit("config", "user.email", "t@t.t");
+  tgit("config", "user.name", "t");
+  tgit("config", "commit.gpgsign", "false");
+
+  for (const name of ["alpha.ts", "beta.ts", "gamma.ts"]) {
+    writeFileSync(
+      join(tri, name),
+      "export function f(a: number, b: number): number {\n  return a - b;\n}\n"
+    );
+  }
+
+  tgit("add", "-A");
+  tgit("commit", "-q", "-m", "init");
+
+  for (const name of ["alpha.ts", "beta.ts", "gamma.ts"]) {
+    writeFileSync(
+      join(tri, name),
+      "export function f(a: number, b: number): number {\n  return b - a;\n}\n"
+    );
+  }
+
+  return tri;
+}
+
+test("parallel fan-out: file-ordered report, fresh provider per unit, primary provider untouched", async () => {
+  const tri = makeTriRepo();
+
+  // Earlier files answer SLOWER, so completion order is the reverse of
+  // submission order — the report must stay file-ordered anyway.
+  const delayFor = (prompt: string): number => {
+    if (prompt.includes("alpha.ts")) {
+      return 60;
+    }
+
+    return prompt.includes("beta.ts") ? 30 : 0;
+  };
+
+  let factoryCalls = 0;
+
+  const factory = (): IProvider => {
+    factoryCalls += 1;
+
+    return {
+      async complete(messages) {
+        const sys = messages.find((m) => m.role === "system")?.content ?? "";
+        const user = messages.find((m) => m.role === "user")?.content ?? "";
+
+        if (sys.includes("verifying a code-review finding")) {
+          return {
+            content: JSON.stringify({ real: true, verdict: "judged" }),
+            toolCalls: [],
+          };
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, delayFor(user)));
+
+        return { content: FINDINGS, toolCalls: [] };
+      },
+    };
+  };
+
+  // The primary provider must never be used once a factory is supplied.
+  const primary: IProvider = {
+    complete: () => Promise.reject(new Error("primary provider was used")),
+  };
+
+  try {
+    const report = await reviewChange(primary, tri, {
+      concurrency: 3,
+      providerFactory: factory,
+    });
+
+    expect(report.findings.map((f) => f.file)).toEqual([
+      "alpha.ts",
+      "beta.ts",
+      "gamma.ts",
+    ]);
+    // One fresh provider per unit: 3 find + 3 verify.
+    expect(factoryCalls).toBe(6);
+  } finally {
+    rmSync(tri, { recursive: true, force: true });
+  }
+});
+
+test("fan-out emits attributed agent_spawned/agent_result events per unit", async () => {
+  const tri = makeTriRepo();
+  const events: { kind: string; agentId?: string; passed?: boolean }[] = [];
+
+  try {
+    await reviewChange(stub(FINDINGS, true), tri, {
+      concurrency: 2,
+      providerFactory: () => stub(FINDINGS, true),
+      onEvent: (e) => {
+        if (
+          e.kind === "agent_spawned" ||
+          e.kind === "agent_started" ||
+          e.kind === "agent_result"
+        ) {
+          events.push({
+            kind: e.kind,
+            ...(e.agentId === undefined ? {} : { agentId: e.agentId }),
+            ...(e.passed === undefined ? {} : { passed: e.passed }),
+          });
+        }
+      },
+    });
+
+    const spawned = events.filter((e) => e.kind === "agent_spawned");
+    const started = events.filter((e) => e.kind === "agent_started");
+    const results = events.filter((e) => e.kind === "agent_result");
+
+    // 3 find units + 3 verify units: each announced, started, and resolved.
+    expect(spawned).toHaveLength(6);
+    expect(started).toHaveLength(6);
+    expect(results).toHaveLength(6);
+    expect(
+      spawned.filter((e) => e.agentId?.startsWith("review:find:") === true)
+    ).toHaveLength(3);
+    expect(
+      spawned.filter((e) => e.agentId?.startsWith("review:verify:") === true)
+    ).toHaveLength(3);
+    expect(results.every((e) => e.passed === true)).toBe(true);
+  } finally {
+    rmSync(tri, { recursive: true, force: true });
+  }
+});
+
+test("concurrency 1 with no factory behaves exactly as before (shared provider)", async () => {
+  const report = await reviewChange(stub(FINDINGS, true), repo, {
+    concurrency: 1,
+  });
+
+  expect(report.findings).toHaveLength(1);
+  expect(report.rejected).toBe(0);
+});
+
+test("two findings on the SAME line get distinct verify unit ids", async () => {
+  // Duplicate ids would collapse distinct units in the tracker and ledger.
+  const sameLine = JSON.stringify({
+    findings: [
+      {
+        line: 2,
+        severity: "error",
+        lens: "correctness",
+        claim: "first claim",
+        reason: "x",
+      },
+      {
+        line: 2,
+        severity: "warning",
+        lens: "regressions",
+        claim: "second claim",
+        reason: "y",
+      },
+    ],
+  });
+  const verifyIds: string[] = [];
+
+  const report = await reviewChange(stub(sameLine, true), repo, {
+    concurrency: 2,
+    providerFactory: () => stub(sameLine, true),
+    onEvent: (e) => {
+      if (
+        e.kind === "agent_spawned" &&
+        e.agentId?.startsWith("review:verify:") === true
+      ) {
+        verifyIds.push(e.agentId);
+      }
+    },
+  });
+
+  expect(report.findings).toHaveLength(2);
+  expect(verifyIds).toHaveLength(2);
+  expect(new Set(verifyIds).size).toBe(2); // no collision
+});
+
+test("the per-unit AbortSignal reaches the provider (in-flight cancellation)", async () => {
+  let sawSignal = false;
+  const observing = (): IProvider => ({
+    async complete(messages, opts) {
+      if (opts?.signal instanceof AbortSignal) {
+        sawSignal = true;
+      }
+
+      const sys = messages.find((m) => m.role === "system")?.content ?? "";
+
+      return {
+        content: sys.includes("verifying a code-review finding")
+          ? JSON.stringify({ real: true, verdict: "judged" })
+          : FINDINGS,
+        toolCalls: [],
+      };
+    },
+  });
+
+  await reviewChange(observing(), repo, {
+    concurrency: 2,
+    providerFactory: observing,
+  });
+
+  expect(sawSignal).toBe(true);
+});

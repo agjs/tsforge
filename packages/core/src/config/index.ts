@@ -5,6 +5,7 @@ export {
   resolveActivePacks,
   normalizeRuleOverrides,
   resolveProjectProfile,
+  resolveAgentConcurrency,
   withProfileOverride,
   type ITsforgeProjectConfig,
 } from "./tsforge-config";
