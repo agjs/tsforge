@@ -46,7 +46,14 @@ import {
   loadTsforgeConfig,
   resolveAgentConcurrency,
 } from "./config/tsforge-config";
-import { makeAgentSummaryTracker } from "./render/agent-tree";
+import {
+  makeAgentSummaryTracker,
+  renderAgentTree,
+  AgentTreeModel,
+  type IRowMeta,
+} from "./render/agent-tree";
+import { LiveRegion } from "./render/live-region";
+import type { UnitStatus } from "./agent/agent-scheduler";
 
 /**
  * The tsforge CLI — the product surface over the same engine the eval harness
@@ -240,6 +247,91 @@ function printAgentResult(
   return result.status === "done";
 }
 
+/** Live progress for a fan-out — the TTY tree or the piped summary line. */
+interface IAgentProgress {
+  onUnit: (id: string, status: UnitStatus) => void;
+  /** Freeze the animation and clear the live region (TTY); no-op otherwise. */
+  stop: () => void;
+}
+
+/** Terminal-row metadata (wall-clock + turns) from a finished unit's result. */
+function metaFromResult(
+  result: IAgentResult | undefined
+): IRowMeta | undefined {
+  return result === undefined
+    ? undefined
+    : { durationMs: result.durationMs, turns: result.turns };
+}
+
+/** Non-TTY path: fold unit transitions into the one-line summary tracker. */
+function summaryProgress(): IAgentProgress {
+  const tracker = makeAgentSummaryTracker(
+    (line) => void process.stdout.write(`  ↳ ${line}\n`)
+  );
+
+  return {
+    onUnit: (id, status): void => {
+      if (status === "pending") {
+        tracker({ kind: "agent_spawned", task: "agents", message: id });
+      } else if (status === "start") {
+        tracker({ kind: "agent_started", task: "agents", message: id });
+      } else {
+        tracker({
+          kind: "agent_result",
+          task: "agents",
+          message: id,
+          passed: status === "done",
+        });
+      }
+    },
+    stop: (): void => undefined,
+  };
+}
+
+/** TTY path: a spinner-animated agent tree pinned to the bottom of the screen,
+ *  repainted on every transition and on a timer so running rows animate. */
+function treeProgress(
+  results: ReadonlyMap<string, IAgentResult>
+): IAgentProgress {
+  const columns = process.stdout.columns > 0 ? process.stdout.columns : 80;
+  const model = new AgentTreeModel();
+  const live = new LiveRegion(process.stdout, true);
+  let frame = 0;
+
+  const repaint = (): void => {
+    live.render(renderAgentTree(model.rows(), { columns, frame, color: true }));
+  };
+
+  const ticker = setInterval(() => {
+    frame += 1;
+    repaint();
+  }, 120);
+
+  return {
+    onUnit: (id, status): void => {
+      const meta =
+        status === "done" || status === "failed"
+          ? metaFromResult(results.get(id))
+          : undefined;
+
+      model.applyUnit(id, status, meta);
+      repaint();
+    },
+    stop: (): void => {
+      clearInterval(ticker);
+      live.clear();
+    },
+  };
+}
+
+/** Pick the live-progress surface for a fan-out: the tree on a real terminal,
+ *  the summary line when piped/redirected. */
+function makeAgentProgress(
+  results: ReadonlyMap<string, IAgentResult>
+): IAgentProgress {
+  return process.stdout.isTTY ? treeProgress(results) : summaryProgress();
+}
+
 /** `tsforge agents` — list discovered agent specs, or fan the named specs out
  *  over a task (read-only, concurrency-capped, project policy enforced). */
 async function agentsMode(args: ICliArgs): Promise<number> {
@@ -298,84 +390,73 @@ async function agentsMode(args: ICliArgs): Promise<number> {
     ? args.policyMode
     : (config.policy?.mode ?? "default");
   const policyRules = config.policy?.rules;
-  const tracker = makeAgentSummaryTracker((line) => {
-    write(`  ↳ ${line}`);
-  });
   const results = new Map<string, IAgentResult>();
+  const progress = makeAgentProgress(results);
   const scheduler = new AgentScheduler({
     concurrency,
-    onUnit: (id, status) => {
-      if (status === "pending") {
-        tracker({ kind: "agent_spawned", task: "agents", message: id });
-      } else if (status === "start") {
-        tracker({ kind: "agent_started", task: "agents", message: id });
-      } else {
-        tracker({
-          kind: "agent_result",
-          task: "agents",
-          message: id,
-          passed: status === "done",
-        });
-      }
-    },
+    onUnit: progress.onUnit,
   });
 
   write(`agents: running ${ids.join(", ")} (cap ${String(concurrency)})`);
 
-  await scheduler.runParallel(
-    ids.map((id) => ({
-      id,
-      run: async (signal: AbortSignal): Promise<IAgentResult | null> => {
-        const spec = findAgentSpec(specs, id);
+  const units = ids.map((id) => ({
+    id,
+    run: async (signal: AbortSignal): Promise<IAgentResult | null> => {
+      const spec = findAgentSpec(specs, id);
 
-        if (spec === undefined) {
-          return null; // unreachable: ids were validated above
+      if (spec === undefined) {
+        return null; // unreachable: ids were validated above
+      }
+
+      try {
+        // Model precedence: the spec's pin wins, else --model/recipe model,
+        // else the active model (resolveModelByName's own fallback).
+        const modelName =
+          spec.model ?? (args.model.length > 0 ? args.model : undefined);
+        const { entry } = await resolveModelByName(modelName);
+        const result = await new AgentRunner(spec).run({
+          provider: makeProvider(entry),
+          cwd: args.dir,
+          parentTaskId: "agents",
+          task: args.task,
+          signal,
+          policyMode,
+          ...(policyRules === undefined ? {} : { policyRules }),
+        });
+
+        results.set(id, result);
+
+        if (result.status !== "done") {
+          // max_turns/aborted/error are all failures: throw so the live
+          // summary marks the unit failed, matching the block + exit code.
+          throw new Error(`${result.status}: ${result.output}`);
         }
 
-        try {
-          // Model precedence: the spec's pin wins, else --model/recipe model,
-          // else the active model (resolveModelByName's own fallback).
-          const modelName =
-            spec.model ?? (args.model.length > 0 ? args.model : undefined);
-          const { entry } = await resolveModelByName(modelName);
-          const result = await new AgentRunner(spec).run({
-            provider: makeProvider(entry),
-            cwd: args.dir,
-            parentTaskId: "agents",
-            task: args.task,
-            signal,
-            policyMode,
-            ...(policyRules === undefined ? {} : { policyRules }),
+        return result;
+      } catch (err) {
+        // Setup failures (bad model, provider construction) would otherwise
+        // vanish into the scheduler's null slot as a bare "did not run" —
+        // record a synthetic error result so the block shows the reason.
+        if (!results.has(id)) {
+          results.set(id, {
+            status: "error",
+            output: err instanceof Error ? err.message : String(err),
+            turns: 0,
+            durationMs: 0,
+            events: [],
           });
-
-          results.set(id, result);
-
-          if (result.status !== "done") {
-            // max_turns/aborted/error are all failures: throw so the live
-            // summary marks the unit failed, matching the block + exit code.
-            throw new Error(`${result.status}: ${result.output}`);
-          }
-
-          return result;
-        } catch (err) {
-          // Setup failures (bad model, provider construction) would otherwise
-          // vanish into the scheduler's null slot as a bare "did not run" —
-          // record a synthetic error result so the block shows the reason.
-          if (!results.has(id)) {
-            results.set(id, {
-              status: "error",
-              output: err instanceof Error ? err.message : String(err),
-              turns: 0,
-              durationMs: 0,
-              events: [],
-            });
-          }
-
-          throw err;
         }
-      },
-    }))
-  );
+
+        throw err;
+      }
+    },
+  }));
+
+  try {
+    await scheduler.runParallel(units);
+  } finally {
+    progress.stop();
+  }
 
   let allDone = true;
 

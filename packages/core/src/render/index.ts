@@ -24,3 +24,15 @@ export { renderMarkdown, formatTables, highlightCode } from "./markdown";
 export { StreamingMarkdown } from "./stream-markdown";
 export { STYLE, RESET, paint } from "./style";
 export { makeAgentRail, type IAgentRail } from "./agent-rail";
+export {
+  formatAgentSummary,
+  makeAgentSummaryTracker,
+  renderAgentTree,
+  AgentTreeModel,
+  type AgentItemStatus,
+  type IAgentSummaryItem,
+  type IAgentRow,
+  type IAgentTreeOptions,
+  type IRowMeta,
+} from "./agent-tree";
+export { LiveRegion, type ILiveRegionOut } from "./live-region";

@@ -47,6 +47,18 @@ By default the per-file find pass and per-finding verify pass run one model call
 
 Review then fans out up to that many calls at once — each with a fresh provider — and prints a live `agents: 2 running, 5/16 done (…)` progress line. Results are identical in structure and order to a sequential run; only the wall-clock changes (≈2× measured at cap 8 on a batching endpoint). Keep the cap a couple below your server's `max_num_seqs` so an interactive session is never starved, and leave it at 1 for endpoints that serialize requests anyway.
 
+## The live agent tree
+
+Any fan-out — `tsforge review` above, or `tsforge agents <ids> "<task>"` — draws a live tree pinned to the bottom of the terminal while it runs, one row per subagent:
+
+```
+● agents · 1 running · 1/2 done
+├─ ✓ explore · 1.2s · 3 turns
+└─ ⠹ verify
+```
+
+Pending rows appear up-front, running rows animate, and each finishes with its wall-clock and turn count. The tree repaints in place (it never scrolls the transcript) and collapses to `… +N more` past a dozen rows. When output is piped or redirected — no TTY — it falls back to the one-line `agents: …` summary instead, so logs and CI stay plain-text.
+
 ## In CI
 
 `tsforge review` exits non-zero if any error-severity finding survives, so you can gate a PR on it. It uses `git` to find what changed, so run it inside a git repository.

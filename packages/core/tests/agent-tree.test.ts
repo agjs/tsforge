@@ -2,7 +2,11 @@ import { test, expect, describe } from "bun:test";
 import {
   formatAgentSummary,
   makeAgentSummaryTracker,
+  renderAgentTree,
+  AgentTreeModel,
+  type IAgentRow,
 } from "../src/render/agent-tree";
+import { displayWidth } from "../src/render/width";
 
 describe("formatAgentSummary", () => {
   test("empty input renders nothing", () => {
@@ -92,5 +96,131 @@ describe("makeAgentSummaryTracker", () => {
     });
 
     expect(lines.at(-1)).toBe("agents: 0/1 done, 1 failed");
+  });
+});
+
+describe("renderAgentTree", () => {
+  const plain = { columns: 60, color: false };
+
+  test("empty input renders nothing", () => {
+    expect(renderAgentTree([], plain)).toEqual([]);
+  });
+
+  test("a single done row shows glyph, label, and meta", () => {
+    const lines = renderAgentTree(
+      [{ id: "explore", status: "done", durationMs: 1200, turns: 3 }],
+      plain
+    );
+
+    expect(lines[0]).toBe("● agents · 1/1 done");
+    expect(lines[1]).toBe("└─ ✓ explore · 1.2s · 3 turns");
+  });
+
+  test("status glyphs: pending ○, running spinner, done ✓, failed ✗", () => {
+    const rows: IAgentRow[] = [
+      { id: "a", status: "pending" },
+      { id: "b", status: "running" },
+      { id: "c", status: "done" },
+      { id: "d", status: "failed" },
+    ];
+    const lines = renderAgentTree(rows, { ...plain, frame: 0 });
+
+    expect(lines[0]).toBe("● agents · 1 running · 1/4 done · 1 failed");
+    expect(lines[1]).toBe("├─ ○ a");
+    expect(lines[2]).toBe("├─ ⠋ b"); // frame 0 spinner
+    expect(lines[3]).toBe("├─ ✓ c");
+    expect(lines[4]).toBe("└─ ✗ d"); // last row → end connector
+  });
+
+  test("running rows animate with the frame index", () => {
+    const row: IAgentRow[] = [{ id: "x", status: "running" }];
+
+    expect(renderAgentTree(row, { ...plain, frame: 1 })[1]).toBe("└─ ⠙ x");
+    expect(renderAgentTree(row, { ...plain, frame: 2 })[1]).toBe("└─ ⠹ x");
+  });
+
+  test("negative/large frame indices stay in range (no crash, valid glyph)", () => {
+    const row: IAgentRow[] = [{ id: "x", status: "running" }];
+
+    expect(renderAgentTree(row, { ...plain, frame: -1 })[1]).toBe("└─ ⠏ x");
+    expect(renderAgentTree(row, { ...plain, frame: 1000 })[1]).toBe("└─ ⠋ x");
+  });
+
+  test("overflow collapses the tail into a `… +N more` row", () => {
+    const rows: IAgentRow[] = Array.from({ length: 10 }, (_, i) => ({
+      id: `agent-${String(i)}`,
+      status: "pending" as const,
+    }));
+    const lines = renderAgentTree(rows, { ...plain, maxRows: 4 });
+
+    // header + (maxRows-1)=3 shown rows + 1 overflow line
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toBe("● agents · 0/10 done"); // denominator = full total
+    expect(lines.at(-1)).toBe("└─ … +7 more");
+  });
+
+  test("labels are clipped with … and no line exceeds columns-1", () => {
+    const rows: IAgentRow[] = [
+      {
+        id: "a-very-long-agent-identifier-that-will-not-fit",
+        status: "running",
+      },
+    ];
+    const lines = renderAgentTree(rows, {
+      columns: 20,
+      color: false,
+      frame: 0,
+    });
+
+    for (const line of lines) {
+      expect(displayWidth(line)).toBeLessThanOrEqual(19);
+    }
+
+    expect(lines[1]).toContain("…");
+  });
+});
+
+describe("AgentTreeModel", () => {
+  test("applyUnit maps start→running and preserves spawn order", () => {
+    const model = new AgentTreeModel();
+
+    model.applyUnit("b", "pending");
+    model.applyUnit("a", "pending");
+    model.applyUnit("a", "start");
+
+    const rows = model.rows();
+
+    expect(rows.map((r) => r.id)).toEqual(["b", "a"]); // insertion order, not status
+    expect(rows[0]?.status).toBe("pending");
+    expect(rows[1]?.status).toBe("running");
+  });
+
+  test("done meta (duration/turns) is retained across later reads", () => {
+    const model = new AgentTreeModel();
+
+    model.applyUnit("x", "pending");
+    model.applyUnit("x", "start");
+    model.applyUnit("x", "done", { durationMs: 900, turns: 2 });
+
+    const row = model.rows()[0];
+
+    expect(row?.status).toBe("done");
+    expect(row?.durationMs).toBe(900);
+    expect(row?.turns).toBe(2);
+  });
+
+  test("applyEvent folds lifecycle events (passed=false → failed)", () => {
+    const model = new AgentTreeModel();
+
+    model.applyEvent({ kind: "agent_spawned", task: "t", message: "one" });
+    model.applyEvent({ kind: "agent_started", task: "t", message: "one" });
+    model.applyEvent({
+      kind: "agent_result",
+      task: "t",
+      message: "one",
+      passed: false,
+    });
+
+    expect(model.rows()[0]?.status).toBe("failed");
   });
 });
