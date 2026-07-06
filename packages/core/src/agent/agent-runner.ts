@@ -11,6 +11,8 @@
  * agentId/parentTask so interleaved streams stay attributable.
  */
 import type { IProvider } from "../inference";
+import type { TsService } from "../lsp";
+import type { PolicyMode, IPolicyRules } from "../policy";
 import type { ILoopEvent, Reporter } from "../loop/loop.types";
 import {
   buildTsService,
@@ -55,11 +57,16 @@ const AGENT_RESULT_TOOL = {
   },
 } as const;
 
-/** Cast-free read-only check against the TOOL_SPECS registry. */
+/** Read-only tool names, computed once from the registry (O(1) lookups,
+ *  no casts). */
+const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set(
+  Object.entries(TOOL_SPECS)
+    .filter(([, spec]) => spec.readOnly)
+    .map(([name]) => name)
+);
+
 function isReadOnlyTool(name: string): boolean {
-  return Object.entries(TOOL_SPECS).some(
-    ([tool, spec]) => tool === name && spec.readOnly
-  );
+  return READ_ONLY_TOOL_NAMES.has(name);
 }
 
 /** The agent's advertised tools: read-only set ∩ optional spec subset. */
@@ -93,6 +100,13 @@ export interface IAgentRunOptions {
   report?: Reporter;
   signal?: AbortSignal;
   temperature?: number;
+  /** Project policy — subagents obey the SAME deny/allow/ask rules as the
+   *  parent session; omitting these must be a caller decision, not a leak. */
+  policyMode?: PolicyMode;
+  policyRules?: IPolicyRules;
+  /** Reuse the parent's TsService — building one per concurrent agent is
+   *  heavy. `null` = workspace has none; undefined = build our own. */
+  tsService?: TsService | null;
 }
 
 /** Pull the structured payload out of an intercepted agent_result call. */
@@ -127,7 +141,12 @@ export class AgentRunner {
       };
 
       events.push(tagged);
-      opts.report?.(tagged);
+
+      try {
+        opts.report?.(tagged);
+      } catch {
+        // A caller's reporter throwing must never kill the agent run.
+      }
     };
 
     const taskText = opts.task ?? spec.task ?? "";
@@ -140,7 +159,10 @@ export class AgentRunner {
       // whole-repo "scope" only matters to write paths executeTool rejects.
       task: { id: agentId, accept: "", files: ["**/*"] },
       cwd: opts.cwd,
-      tsService: await buildTsService(opts.cwd),
+      tsService:
+        opts.tsService !== undefined
+          ? opts.tsService
+          : await buildTsService(opts.cwd),
       report,
       messages: [
         { role: "system", content: spec.systemPrompt ?? DEFAULT_SYSTEM },
@@ -151,6 +173,12 @@ export class AgentRunner {
       tool: {
         touched: new Set<string>(),
         readOnly: true,
+        ...(opts.policyMode === undefined
+          ? {}
+          : { policyMode: opts.policyMode }),
+        ...(opts.policyRules === undefined
+          ? {}
+          : { policyRules: opts.policyRules }),
         ...(opts.signal === undefined ? {} : { signal: opts.signal }),
       },
       gate: { parse: undefined },
@@ -180,6 +208,10 @@ export class AgentRunner {
       events,
     });
 
+    // Shared progress so an abort/error mid-run reports the TRUE turn count
+    // and any partial output, not maxTurns + "".
+    const progress = { turns: 0, lastText: "" };
+
     try {
       return await this.turnLoop(opts, ctx, state, {
         agentId,
@@ -188,15 +220,22 @@ export class AgentRunner {
         maxTurns,
         report,
         finish,
+        progress,
       });
     } catch (err) {
+      // A provider AbortError from a mid-request cancellation is an ABORT,
+      // not an agent failure.
+      if (opts.signal?.aborted === true) {
+        return finish("aborted", progress.lastText, progress.turns);
+      }
+
       report({
         kind: "tool",
         task: agentId,
         message: `agent ${spec.id} failed: ${err instanceof Error ? err.message : String(err)}`,
       });
 
-      return finish("error", "", maxTurns);
+      return finish("error", progress.lastText, progress.turns);
     }
   }
 
@@ -216,9 +255,11 @@ export class AgentRunner {
         output: string,
         turns: number
       ) => IAgentResult;
+      progress: { turns: number; lastText: string };
     }
   ): Promise<IAgentResult> {
-    const { agentId, structured, tools, maxTurns, report, finish } = loop;
+    const { agentId, structured, tools, maxTurns, report, finish, progress } =
+      loop;
     let lastText = "";
 
     {
@@ -226,6 +267,8 @@ export class AgentRunner {
         if (opts.signal?.aborted === true) {
           return finish("aborted", lastText, turn - 1);
         }
+
+        progress.turns = turn;
 
         report({
           kind: "cycle",
@@ -253,6 +296,7 @@ export class AgentRunner {
             : { reasoningContent: res.reasoning }),
         });
         lastText = res.content.length > 0 ? res.content : lastText;
+        progress.lastText = lastText;
 
         const resultCall = res.toolCalls.find(
           (c) => c.name === AGENT_RESULT_TOOL.function.name

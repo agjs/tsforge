@@ -257,3 +257,91 @@ describe("loadAgentSpecs", () => {
     }
   });
 });
+
+describe("review-round regressions", () => {
+  test("project policy rules apply inside the agent (deny read)", async () => {
+    const { provider } = scripted([
+      {
+        content: "",
+        toolCalls: [
+          { id: "1", name: "read", arguments: { file: "package.json" } },
+        ],
+      },
+      { content: "blocked, giving up", toolCalls: [] },
+    ]);
+    const result = await new AgentRunner({ id: "explore" }).run({
+      provider,
+      cwd: REPO,
+      parentTaskId: "r",
+      task: "read the manifest",
+      policyMode: "default",
+      policyRules: { deny: [{ toolName: "read" }] },
+    });
+
+    // The deny rule fired at dispatch: a rejection event, no file content.
+    expect(
+      result.events.some((e) => e.message.startsWith("tool_rejected"))
+    ).toBe(true);
+    expect(result.status).toBe("done");
+  });
+
+  test("mid-request abort reports aborted + the true turn count", async () => {
+    const ctrl = new AbortController();
+    const aborting: IProvider = {
+      complete() {
+        ctrl.abort();
+
+        const err = new Error("The operation was aborted.");
+
+        err.name = "AbortError";
+
+        return Promise.reject(err);
+      },
+    };
+    const result = await new AgentRunner({ id: "explore" }).run({
+      provider: aborting,
+      cwd: REPO,
+      parentTaskId: "r",
+      task: "t",
+      signal: ctrl.signal,
+    });
+
+    expect(result.status).toBe("aborted");
+    expect(result.turns).toBe(1); // not maxTurns
+  });
+
+  test("tools: [] means NO tools, not the full read-only set", async () => {
+    const { parseAgentSpec: parse } = await import("../src/config/agent-specs");
+
+    expect(parse({ id: "x", tools: [] })?.tools).toEqual([]);
+
+    const { provider, seenTools } = scripted([
+      { content: "ok", toolCalls: [] },
+    ]);
+
+    await new AgentRunner({ id: "bare", tools: [] }).run({
+      provider,
+      cwd: REPO,
+      parentTaskId: "r",
+      task: "t",
+    });
+
+    expect(seenTools()).toEqual([]);
+  });
+
+  test("a throwing caller reporter cannot kill the run", async () => {
+    const { provider } = scripted([{ content: "fine", toolCalls: [] }]);
+    const result = await new AgentRunner({ id: "x" }).run({
+      provider,
+      cwd: REPO,
+      parentTaskId: "r",
+      task: "t",
+      report: () => {
+        throw new Error("consumer bug");
+      },
+    });
+
+    expect(result.status).toBe("done");
+    expect(result.output).toBe("fine");
+  });
+});

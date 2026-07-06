@@ -94,7 +94,11 @@ export function parseAgentSpec(value: unknown): IAgentSpec | null {
   spec.model = optString(value.model);
   spec.kind = optKind(value.kind);
   spec.systemPrompt = optString(value.systemPrompt);
-  spec.tools = stringArray(value.tools);
+  // `tools: []` is an explicit "no tools" — preserved, NOT collapsed to
+  // undefined (which would fall back to the full read-only set).
+  spec.tools = Array.isArray(value.tools)
+    ? (stringArray(value.tools) ?? [])
+    : undefined;
   spec.task = optString(value.task);
   spec.maxTurns = optPositive(value.maxTurns);
   spec.outputMode = optOutputMode(value.outputMode);
@@ -116,10 +120,19 @@ async function loadDir(
   }
 
   for (const name of names) {
+    let content: string;
+
+    try {
+      content = await readFile(join(dir, name), "utf8");
+    } catch {
+      report(`agent '${name}': could not be read — skipped`);
+      continue;
+    }
+
     let parsed: unknown;
 
     try {
-      parsed = JSON.parse(await readFile(join(dir, name), "utf8"));
+      parsed = JSON.parse(content);
     } catch {
       report(`agent '${name}': not valid JSON — skipped`);
       continue;
@@ -132,6 +145,12 @@ async function loadDir(
         `agent '${name}': not a valid spec (needs a kebab-case id) — skipped`
       );
       continue;
+    }
+
+    if (spec.id !== name.slice(0, -".json".length)) {
+      report(
+        `agent '${name}': id '${spec.id}' does not match the filename — invoke it as '${spec.id}'`
+      );
     }
 
     const unknown = unrecognizedAgentKeys(parsed);
