@@ -7,6 +7,7 @@ import {
   resolveActivePacks,
   normalizeRuleOverrides,
   resolveProjectProfile,
+  resolveAgentConcurrency,
   type ITsforgeProjectConfig,
 } from "../src/config/tsforge-config";
 import { makeFileLinter } from "../src/gate";
@@ -131,6 +132,49 @@ describe("loadTsforgeConfig", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("agents block + resolveAgentConcurrency", () => {
+  async function loadWith(agents: unknown): Promise<ITsforgeProjectConfig> {
+    const dir = mkdtempSync(join(tmpdir(), "tsforge-agents-"));
+
+    try {
+      writeFileSync(
+        join(dir, "tsforge.config.json"),
+        JSON.stringify({ agents })
+      );
+
+      return await loadTsforgeConfig(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a valid concurrency loads and resolves", async () => {
+    const config = await loadWith({ concurrency: 4 });
+
+    expect(config.agents?.concurrency).toBe(4);
+    expect(resolveAgentConcurrency(config)).toBe(4);
+  });
+
+  test("absent block resolves to 1 (sequential default)", () => {
+    expect(resolveAgentConcurrency({})).toBe(1);
+  });
+
+  test("invalid concurrency values are warn-and-dropped", async () => {
+    for (const bad of [0, 17, 1.5, "3", -2, null]) {
+      const config = await loadWith({ concurrency: bad });
+
+      expect(config.agents).toBeUndefined();
+      expect(resolveAgentConcurrency(config)).toBe(1);
+    }
+  });
+
+  test("a non-object agents block is dropped", async () => {
+    const config = await loadWith("fast");
+
+    expect(config.agents).toBeUndefined();
   });
 });
 

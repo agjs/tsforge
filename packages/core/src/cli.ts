@@ -39,6 +39,11 @@ import { runMapCommand, runTraceCommand } from "./cli/repl-commands";
 import { makeProvider, modelForRun, envNumber } from "./cli/model-setup";
 import { makeReporter, resolveLogPath } from "./cli/logging";
 import { resolveGate } from "./cli/gate-setup";
+import {
+  loadTsforgeConfig,
+  resolveAgentConcurrency,
+} from "./config/tsforge-config";
+import { makeAgentSummaryTracker } from "./render/agent-tree";
 
 /**
  * The tsforge CLI — the product surface over the same engine the eval harness
@@ -176,11 +181,31 @@ async function reviewMode(args: ICliArgs): Promise<number> {
     );
   }
 
+  // Fan-out cap from tsforge.config.json `agents.concurrency` (default 1 =
+  // sequential). Above 1, each unit gets a FRESH provider (per-instance
+  // thinking-latch state) and a live `agents: …` progress line.
+  const concurrency = resolveAgentConcurrency(
+    await loadTsforgeConfig(args.dir)
+  );
+
+  if (concurrency > 1) {
+    process.stdout.write(`agents: fan-out enabled (cap ${concurrency})\n`);
+  }
+
   const report = await reviewChange(makeProvider(entry), args.dir, {
     ...(args.base.length > 0 ? { base: args.base } : {}),
     staged: args.staged,
     ...(rules.length > 0 ? { gateFailingRules: rules } : {}),
     log: (m) => process.stdout.write(`  ↳ ${m}\n`),
+    concurrency,
+    providerFactory: () => makeProvider(entry),
+    ...(concurrency > 1
+      ? {
+          onEvent: makeAgentSummaryTracker((line) =>
+            process.stdout.write(`  ↳ ${line}\n`)
+          ),
+        }
+      : {}),
   });
 
   process.stdout.write(`\n${formatReport(report)}\n`);

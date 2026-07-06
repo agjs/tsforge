@@ -20,6 +20,7 @@ Add **`tsforge.config.json`** at your repo root when you want to override what t
 | `plugins` | object[] | External modules providing extra rule packs (see below) |
 | `mcpServers` | object | External [MCP servers](/integrations/mcp/) whose tools the agent can call |
 | `policy` | object | Permission `mode` + deny/allow/ask `rules` for tool actions — see [Permissions & policy](/guardrails/policy/) |
+| `agents.concurrency` | number | Multiagent fan-out cap, integer 1–16 (default `1` = sequential). Above 1, `tsforge review` runs its per-file find and per-finding verify passes in parallel with a fresh provider per unit and a live `agents:` progress line. Leave at 1 for a local endpoint that serializes requests anyway |
 
 Resolution order: detect from the repo → apply **`profile`** (packs + default severities) → apply `stack` → apply `include` → apply `exclude` → add external plugin packs → dedupe → merge `rules` overrides (user wins).
 

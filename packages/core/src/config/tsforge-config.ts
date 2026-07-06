@@ -78,6 +78,15 @@ export interface ITsforgeProjectConfig {
   };
 
   /**
+   * Multiagent fan-out settings. `concurrency` caps how many subagent work
+   * units run at once (integer 1–16). Opt-in: absent ⇒ 1 (sequential, exactly
+   * the pre-multiagent behavior — the safe default for single local endpoints).
+   */
+  readonly agents?: {
+    readonly concurrency?: number;
+  };
+
+  /**
    * Project conventions inferred by `tsforge setup` — TASTE only (interface
    * naming, enums, test layout, component folders). Each field tunes a stylistic
    * rule; unset fields fall back to tsforge's house defaults. These can NEVER
@@ -480,6 +489,60 @@ function assignConventions(
   }
 }
 
+/** Bounds for `agents.concurrency` — one shared endpoint shouldn't be asked
+ *  for hundreds of parallel completions by a config typo. */
+const MAX_AGENT_CONCURRENCY = 16;
+
+/** Validate the optional `agents` block (warn-and-drop, like the others). */
+function validateAgents(value: unknown): { concurrency?: number } | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    warnConfig(
+      `tsforge.config.json: "agents" must be an object, got ${typeof value}`
+    );
+
+    return undefined;
+  }
+
+  const raw: Record<string, unknown> = { ...value };
+  const agents: { concurrency?: number } = {};
+
+  if (raw.concurrency !== undefined) {
+    const n = raw.concurrency;
+    const valid =
+      typeof n === "number" &&
+      Number.isInteger(n) &&
+      n >= 1 &&
+      n <= MAX_AGENT_CONCURRENCY;
+
+    if (valid) {
+      agents.concurrency = n;
+    } else {
+      warnConfig(
+        `tsforge.config.json: agents.concurrency must be an integer 1–${MAX_AGENT_CONCURRENCY} — ignored`
+      );
+    }
+  }
+
+  return agents.concurrency === undefined ? undefined : agents;
+}
+
+/** Validate + assign the optional `agents` block (kept off `buildConfigFields`
+ *  so its branches don't push it over the complexity cap — mirrors assignPolicy). */
+function assignAgents(
+  parsed: Record<string, unknown>,
+  configFields: { agents?: { concurrency?: number } }
+): void {
+  if (parsed.agents === undefined) {
+    return;
+  }
+
+  const agents = validateAgents(parsed.agents);
+
+  if (agents !== undefined) {
+    configFields.agents = agents;
+  }
+}
+
 function buildConfigFields(
   parsed: Record<string, unknown>
 ): ITsforgeProjectConfig {
@@ -492,6 +555,7 @@ function buildConfigFields(
     plugins?: readonly IExternalPlugin[];
     policy?: { mode?: PolicyMode; rules?: IPolicyRules };
     conventions?: Readonly<Partial<IConventions>>;
+    agents?: { concurrency?: number };
   } = {};
 
   if (parsed.profile !== undefined) {
@@ -544,8 +608,16 @@ function buildConfigFields(
 
   assignPolicy(parsed, configFields);
   assignConventions(parsed, configFields);
+  assignAgents(parsed, configFields);
 
   return configFields;
+}
+
+/** Effective multiagent fan-out cap for this project: `agents.concurrency`
+ *  when set, else 1 (sequential). The flip to a parallel default waits on the
+ *  Phase-A eval sweep, per the eval-first house rule. */
+export function resolveAgentConcurrency(config: ITsforgeProjectConfig): number {
+  return config.agents?.concurrency ?? 1;
 }
 
 /** Load tsforge.config.json from cwd, defaulting to empty config on missing/invalid files. */
