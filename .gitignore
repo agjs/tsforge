@@ -16,7 +16,8 @@ evals/*
 !.claude/skills/
 evals/runs/
 evals/.web-cache-*/
-.tsforge/
+**/.tsforge/*
+!**/.tsforge/agents/
 models.json
 
 # Generated gate artifact + stray scaffold left at the repo root from running

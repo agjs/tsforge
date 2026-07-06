@@ -65,6 +65,10 @@ export interface ITaskRecipe {
   readonly mode?: "greenfield";
   /** Rule profile preset (→ `tsforge.config.json` `profile` for this run). */
   readonly profile?: ProfileId;
+  /** Agent spec ids to fan out over the task (→ `tsforge agents <ids>`).
+   *  Ids resolve at run time against `.tsforge/agents/*.json` (project) and
+   *  `~/.tsforge/agents/*.json` (global); project overrides global. */
+  readonly agents?: readonly string[];
 }
 
 function optString(value: unknown): string | undefined {
@@ -113,6 +117,7 @@ function assignScalars(recipe: Mutable, raw: Record<string, unknown>): void {
   recipe.files = stringArray(raw.files);
   recipe.maxTurns = optPositive(raw.maxTurns);
   recipe.thinkingBudget = optPositive(raw.thinkingBudget);
+  recipe.agents = stringArray(raw.agents);
 
   if (isPolicyMode(raw.policyMode)) {
     recipe.policyMode = raw.policyMode;
@@ -168,6 +173,7 @@ const KNOWN_KEYS = new Set<string>([
   "scout",
   "mode",
   "profile",
+  "agents",
 ]);
 
 /** A string `profile` value that isn't a known ProfileId, or undefined.

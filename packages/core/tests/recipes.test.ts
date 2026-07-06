@@ -223,3 +223,10 @@ describe("loadRecipes", () => {
     }
   });
 });
+
+test("parses the agents field and does not flag it as unrecognized", () => {
+  expect(parseRecipe({ id: "x", agents: ["explore", " ", 7] })?.agents).toEqual(
+    ["explore"]
+  );
+  expect(unrecognizedKeys({ id: "x", agents: ["a"] })).toEqual([]);
+});

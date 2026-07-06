@@ -1,0 +1,5 @@
+{
+  "id": "explore",
+  "description": "Read-only codebase explorer — maps a subsystem and returns conclusions with file:line references",
+  "maxTurns": 10
+}

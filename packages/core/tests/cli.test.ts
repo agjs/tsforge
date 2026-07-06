@@ -493,3 +493,29 @@ test("cliUsage documents the print-and-exit flags it is reached by", () => {
   expect(usage).toContain("--accept");
   expect(usage).toContain("tsforge review");
 });
+
+test("agents subcommand: list mode, ids+task mode, recipe fill", () => {
+  const list = parseArgs(["agents"]);
+
+  expect(list.agents).toBe(true);
+  expect(list.agentIds).toBe("");
+
+  const run = parseArgs(["agents", "explore,verify", "map", "the", "loop"]);
+
+  expect(run.agents).toBe(true);
+  expect(run.agentIds).toBe("explore,verify");
+  expect(run.task).toBe("map the loop");
+
+  // A recipe with `agents` selects fan-out mode and pre-fills ids…
+  const fromRecipe = parseArgs([]);
+
+  applyRecipe(fromRecipe, { id: "sweep", agents: ["explore", "verify"] });
+  expect(fromRecipe.agents).toBe(true);
+  expect(fromRecipe.agentIds).toBe("explore,verify");
+
+  // …but explicit CLI ids always win.
+  const explicit = parseArgs(["agents", "explore", "t"]);
+
+  applyRecipe(explicit, { id: "sweep", agents: ["verify"] });
+  expect(explicit.agentIds).toBe("explore");
+});
