@@ -49,7 +49,7 @@ Review then fans out up to that many calls at once — each with a fresh provide
 
 ## The live agent tree
 
-Any fan-out — `tsforge review` above, or `tsforge agents <ids> "<task>"` — draws a live tree pinned to the bottom of the terminal while it runs, one row per subagent:
+`tsforge agents <ids> "<task>"` — a read-only fan-out over named agent specs — draws a live tree pinned to the bottom of the terminal while it runs, one row per subagent:
 
 ```
 ● agents · 1 running · 1/2 done
@@ -57,7 +57,7 @@ Any fan-out — `tsforge review` above, or `tsforge agents <ids> "<task>"` — d
 └─ ⠹ verify
 ```
 
-Pending rows appear up-front, running rows animate, and each finishes with its wall-clock and turn count. The tree repaints in place (it never scrolls the transcript) and collapses to `… +N more` past a dozen rows. When output is piped or redirected — no TTY — it falls back to the one-line `agents: …` summary instead, so logs and CI stay plain-text.
+Pending rows appear up-front, running rows animate, and each finishes with its wall-clock and turn count. The tree repaints in place (it never scrolls the transcript) and collapses to `… +N more` past a dozen rows. When output is piped or redirected — no TTY — it falls back to the one-line `agents: …` summary instead, so logs and CI stay plain-text. (`tsforge review`'s fan-out uses that compact `agents: …` summary line described above, not the tree.)
 
 ## In CI
 

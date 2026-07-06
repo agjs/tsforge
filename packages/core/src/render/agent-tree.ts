@@ -73,12 +73,17 @@ export function makeAgentSummaryTracker(
   const statuses = new Map<string, AgentItemStatus>();
 
   return (event: ILoopEvent): void => {
+    // Key by the subagent's identity (agentId) when present, else `message` —
+    // the scheduler's synthetic lifecycle events carry the id in `message`,
+    // while a real subagent's `agent_result` puts the payload there, not the id.
+    const id = event.agentId ?? event.message;
+
     if (event.kind === "agent_spawned") {
-      statuses.set(event.message, "pending");
+      statuses.set(id, "pending");
     } else if (event.kind === "agent_started") {
-      statuses.set(event.message, "running");
+      statuses.set(id, "running");
     } else if (event.kind === "agent_result") {
-      statuses.set(event.message, event.passed === true ? "done" : "failed");
+      statuses.set(id, event.passed === true ? "done" : "failed");
     } else {
       return;
     }
@@ -186,7 +191,10 @@ function fitLabel(label: string, avail: number): string {
   return `${sliceToWidth(label, avail - 1).text}…`;
 }
 
-/** Render one child row: connector + status glyph + clipped label + meta. */
+/** Render one child row: connector + status glyph + clipped label + meta. The
+ *  label and meta share the width budget; meta is dropped wholesale (never
+ *  half-printed) when it can't fit, so the assembled line never exceeds
+ *  `columns - 1` (which the terminal would self-wrap, breaking the repaint). */
 function rowLine(
   row: IAgentRow,
   isLast: boolean,
@@ -196,17 +204,19 @@ function rowLine(
 ): string {
   const connector = isLast ? CONNECT_END : CONNECT_MID;
   const glyph = statusGlyph(row.status, frame);
+  // connector + glyph + the single space before the label.
+  const prefixWidth = displayWidth(connector) + displayWidth(glyph.text) + 1;
+  const budget = Math.max(0, columns - 1 - prefixWidth);
   const meta = rowMeta(row);
-  const label = row.label ?? row.id;
-  const fixed =
-    displayWidth(connector) + displayWidth(glyph.text) + 1 + displayWidth(meta);
-  const avail = Math.max(0, columns - 1 - fixed);
+  const showMeta = meta.length > 0 && displayWidth(meta) <= budget;
+  const labelBudget = showMeta ? budget - displayWidth(meta) : budget;
+  const label = fitLabel(row.label ?? row.id, labelBudget);
 
   return (
     paint(connector, STYLE.dim, color) +
     paint(glyph.text, glyph.code, color) +
-    ` ${fitLabel(label, avail)}` +
-    paint(meta, STYLE.dim, color)
+    ` ${label}` +
+    (showMeta ? paint(meta, STYLE.dim, color) : "")
   );
 }
 
@@ -239,7 +249,9 @@ function headerLine(
 /**
  * Render the live agent tree as an ordered array of terminal lines (header +
  * one row per child, tail-collapsed past `maxRows`). Every line is kept
- * ≤ `columns - 1` so a terminal never self-wraps one. Empty input → `[]`.
+ * ≤ `columns - 1` so a terminal never self-wraps one (labels clip, meta drops).
+ * The real terminal width is honored — no upward clamp that could draw wider
+ * than the screen. A non-positive width falls back to 80. Empty input → `[]`.
  */
 export function renderAgentTree(
   rows: readonly IAgentRow[],
@@ -249,7 +261,7 @@ export function renderAgentTree(
     return [];
   }
 
-  const columns = Math.max(20, opts.columns);
+  const columns = opts.columns > 0 ? opts.columns : 80;
   const color = opts.color ?? true;
   const frame = opts.frame ?? 0;
   const maxRows = Math.max(1, opts.maxRows ?? DEFAULT_MAX_ROWS);
@@ -325,14 +337,24 @@ export class AgentTreeModel {
     this.set(id, unitToItem(status), meta);
   }
 
-  /** Fold an `agent_spawned`/`agent_started`/`agent_result` lifecycle event. */
+  /** Fold an `agent_spawned`/`agent_started`/`agent_result` lifecycle event.
+   *  Rows are keyed by `agentId` (the subagent's identity) when present, falling
+   *  back to `message` for the scheduler's synthetic events (which put the id in
+   *  `message`). Without this, an `agent_result` whose `message` carries the
+   *  final payload — not the id — would spawn a bogus row instead of completing
+   *  the running one. On spawn, `message` becomes the row label when `agentId`
+   *  already identifies the row. */
   applyEvent(event: ILoopEvent): void {
+    const id = event.agentId ?? event.message;
+
     if (event.kind === "agent_spawned") {
-      this.set(event.message, "pending");
+      const label = event.agentId === undefined ? undefined : event.message;
+
+      this.set(id, "pending", label === undefined ? undefined : { label });
     } else if (event.kind === "agent_started") {
-      this.set(event.message, "running");
+      this.set(id, "running");
     } else if (event.kind === "agent_result") {
-      this.set(event.message, event.passed === true ? "done" : "failed");
+      this.set(id, event.passed === true ? "done" : "failed");
     }
   }
 

@@ -178,6 +178,29 @@ describe("renderAgentTree", () => {
 
     expect(lines[1]).toContain("…");
   });
+
+  test("a done row's meta drops (not half-prints) rather than overflow", () => {
+    const rows: IAgentRow[] = [
+      { id: "x", status: "done", durationMs: 1200, turns: 3 },
+    ];
+    const lines = renderAgentTree(rows, { columns: 12, color: false });
+
+    for (const line of lines) {
+      expect(displayWidth(line)).toBeLessThanOrEqual(11);
+    }
+
+    // The meta couldn't fit, so it's gone entirely — no ` · 1.2` fragment.
+    expect(lines[1]).not.toContain("1.2");
+  });
+
+  test("honors the real width — no upward clamp that draws wider than the screen", () => {
+    const rows: IAgentRow[] = [{ id: "explore", status: "pending" }];
+
+    // A 10-col terminal must not produce a 19-col line (the old 20-clamp bug).
+    for (const line of renderAgentTree(rows, { columns: 10, color: false })) {
+      expect(displayWidth(line)).toBeLessThanOrEqual(9);
+    }
+  });
 });
 
 describe("AgentTreeModel", () => {
@@ -222,5 +245,36 @@ describe("AgentTreeModel", () => {
     });
 
     expect(model.rows()[0]?.status).toBe("failed");
+  });
+
+  test("keys rows by agentId; agent_result payload in message doesn't spawn a row", () => {
+    const model = new AgentTreeModel();
+
+    model.applyEvent({
+      kind: "agent_spawned",
+      task: "t",
+      agentId: "run-1:explore",
+      message: "explore",
+    });
+    model.applyEvent({
+      kind: "agent_started",
+      task: "t",
+      agentId: "run-1:explore",
+      message: "explore",
+    });
+    // agent_result: message carries the final payload, NOT the id.
+    model.applyEvent({
+      kind: "agent_result",
+      task: "t",
+      agentId: "run-1:explore",
+      message: "3 findings",
+      passed: true,
+    });
+
+    const rows = model.rows();
+
+    expect(rows).toHaveLength(1); // completed the running row, no bogus "3 findings"
+    expect(rows[0]?.status).toBe("done");
+    expect(rows[0]?.label).toBe("explore"); // spawn message kept as the label
   });
 });
