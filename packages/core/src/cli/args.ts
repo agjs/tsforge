@@ -67,6 +67,12 @@ export interface ICliArgs {
   recipe: string;
   /** List discovered recipes (`tsforge recipes`). */
   recipes: boolean;
+  /** The `agents` subcommand (`tsforge agents [ids] "task"`): run named agent
+   *  specs against a task, or list discovered specs when no ids are given. */
+  agents: boolean;
+  /** Comma-separated agent spec ids to fan out (subcommand arg or a recipe's
+   *  `agents` field); "" = list mode. */
+  agentIds: string;
   /** The `run` subcommand was used (`tsforge run <id>`) — tracked so a missing id
    *  is an explicit error, not a silent fall-through to the interactive REPL. */
   run: boolean;
@@ -206,6 +212,8 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     trace: false,
     recipe: "",
     recipes: false,
+    agents: false,
+    agentIds: "",
     run: false,
     model: "",
     plannerModel: "",
@@ -253,6 +261,12 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
     out.task = positional.slice(1).join(" ").trim();
   } else if (positional[0] === "recipes") {
     out.recipes = true;
+  } else if (positional[0] === "agents") {
+    // `tsforge agents` lists specs; `tsforge agents explore,verify "task"`
+    // fans the named specs out over the task.
+    out.agents = true;
+    out.agentIds = positional[1] ?? "";
+    out.task = positional.slice(2).join(" ").trim();
   } else if (positional[0] === "setup") {
     out.setup = true;
   } else if (positional[0] === "run") {
@@ -333,6 +347,13 @@ export function applyRecipe(args: ICliArgs, recipe: ITaskRecipe): void {
 
   if (args.profile.length === 0 && recipe.profile !== undefined) {
     args.profile = recipe.profile;
+  }
+
+  // A recipe with `agents` IS a fan-out run: pre-fill the ids and select the
+  // agents mode (an explicit `tsforge agents <ids>` still wins on ids).
+  if (args.agentIds.length === 0 && recipe.agents !== undefined) {
+    args.agentIds = recipe.agents.join(",");
+    args.agents = true;
   }
 
   applyRecipeFlags(args, recipe);

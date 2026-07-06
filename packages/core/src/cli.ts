@@ -16,7 +16,10 @@ import {
   type IGreenfieldDeps,
   type Reporter,
 } from "./loop";
-import { modelAgent } from "./agent";
+import { modelAgent, AgentRunner, type IAgentResult } from "./agent";
+import { AgentScheduler } from "./agent/agent-scheduler";
+import { loadAgentSpecs, findAgentSpec } from "./config/agent-specs";
+import { isPolicyMode } from "./policy";
 import { loadRecipes, findRecipe } from "./config/recipes";
 import {
   parseArgs,
@@ -214,6 +217,153 @@ async function reviewMode(args: ICliArgs): Promise<number> {
 
   // Exit non-zero when there are error-severity findings, so it's CI-usable.
   return report.findings.some((f) => f.severity === "error") ? 1 : 0;
+}
+
+/** Print one agent's outcome block to the transcript. */
+function printAgentResult(
+  id: string,
+  result: IAgentResult | undefined,
+  write: (m: string) => void
+): boolean {
+  if (result === undefined) {
+    write(`\n=== ${id}: did not run ===`);
+
+    return false;
+  }
+
+  const seconds = (result.durationMs / 1000).toFixed(1);
+  const turns = `${String(result.turns)} turn${result.turns === 1 ? "" : "s"}`;
+
+  write(`\n=== ${id}: ${result.status} (${seconds}s, ${turns}) ===`);
+  write(result.output);
+
+  return result.status === "done";
+}
+
+/** `tsforge agents` — list discovered agent specs, or fan the named specs out
+ *  over a task (read-only, concurrency-capped, project policy enforced). */
+async function agentsMode(args: ICliArgs): Promise<number> {
+  const write = (m: string): void => void process.stdout.write(`${m}\n`);
+  const specs = await loadAgentSpecs(args.dir, (m) => {
+    write(`  ↳ ${m}`);
+  });
+
+  if (args.agentIds.length === 0) {
+    if (specs.length === 0) {
+      write(
+        "No agent specs found. Add .tsforge/agents/<id>.json to define one."
+      );
+    } else {
+      write("Available agents:");
+
+      for (const s of specs) {
+        write(
+          `  ${s.id}${s.description === undefined ? "" : ` — ${s.description}`}`
+        );
+      }
+
+      write('\nRun them: tsforge agents <id,id> "task"');
+    }
+
+    return 0;
+  }
+
+  if (args.task.length === 0) {
+    write('agents: a task is required — tsforge agents <ids> "task"');
+
+    return 1;
+  }
+
+  const ids = args.agentIds
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  const missing = ids.filter((id) => findAgentSpec(specs, id) === undefined);
+
+  if (missing.length > 0) {
+    const available = specs.map((s) => s.id).join(", ");
+
+    write(
+      `agents: unknown spec(s): ${missing.join(", ")} (available: ${available.length > 0 ? available : "none"})`
+    );
+
+    return 1;
+  }
+
+  const config = await loadTsforgeConfig(args.dir);
+  const concurrency = resolveAgentConcurrency(config);
+  // Subagents obey the SAME policy as a session would: --policy-mode wins,
+  // else the config file's policy.mode, else default (PR #75 P1 lesson).
+  const policyMode = isPolicyMode(args.policyMode)
+    ? args.policyMode
+    : (config.policy?.mode ?? "default");
+  const policyRules = config.policy?.rules;
+  const tracker = makeAgentSummaryTracker((line) => {
+    write(`  ↳ ${line}`);
+  });
+  const results = new Map<string, IAgentResult>();
+  const scheduler = new AgentScheduler({
+    concurrency,
+    onUnit: (id, status) => {
+      if (status === "pending") {
+        tracker({ kind: "agent_spawned", task: "agents", message: id });
+      } else if (status === "start") {
+        tracker({ kind: "agent_started", task: "agents", message: id });
+      } else {
+        tracker({
+          kind: "agent_result",
+          task: "agents",
+          message: id,
+          passed: status === "done",
+        });
+      }
+    },
+  });
+
+  write(`agents: running ${ids.join(", ")} (cap ${String(concurrency)})`);
+
+  await scheduler.runParallel(
+    ids.map((id) => ({
+      id,
+      run: async (signal: AbortSignal): Promise<IAgentResult | null> => {
+        const spec = findAgentSpec(specs, id);
+
+        if (spec === undefined) {
+          return null; // unreachable: ids were validated above
+        }
+
+        const { entry } = await resolveModelByName(spec.model);
+        const result = await new AgentRunner(spec).run({
+          provider: makeProvider(entry),
+          cwd: args.dir,
+          parentTaskId: "agents",
+          task: args.task,
+          signal,
+          policyMode,
+          ...(policyRules === undefined ? {} : { policyRules }),
+        });
+
+        results.set(id, result);
+
+        if (result.status === "error") {
+          // Let the scheduler mark the unit failed; the block still prints.
+          throw new Error(result.output);
+        }
+
+        return result;
+      },
+    }))
+  );
+
+  let allDone = true;
+
+  for (const id of ids) {
+    if (!printAgentResult(id, results.get(id), write)) {
+      allDone = false;
+    }
+  }
+
+  return allDone ? 0 : 1;
 }
 
 async function mapMode(args: ICliArgs): Promise<number> {
@@ -559,6 +709,10 @@ export async function main(): Promise<number> {
 
   if (args.review) {
     return reviewMode(args);
+  }
+
+  if (args.agents) {
+    return agentsMode(args);
   }
 
   if (args.map) {
