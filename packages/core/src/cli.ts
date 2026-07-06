@@ -332,25 +332,47 @@ async function agentsMode(args: ICliArgs): Promise<number> {
           return null; // unreachable: ids were validated above
         }
 
-        const { entry } = await resolveModelByName(spec.model);
-        const result = await new AgentRunner(spec).run({
-          provider: makeProvider(entry),
-          cwd: args.dir,
-          parentTaskId: "agents",
-          task: args.task,
-          signal,
-          policyMode,
-          ...(policyRules === undefined ? {} : { policyRules }),
-        });
+        try {
+          // Model precedence: the spec's pin wins, else --model/recipe model,
+          // else the active model (resolveModelByName's own fallback).
+          const modelName =
+            spec.model ?? (args.model.length > 0 ? args.model : undefined);
+          const { entry } = await resolveModelByName(modelName);
+          const result = await new AgentRunner(spec).run({
+            provider: makeProvider(entry),
+            cwd: args.dir,
+            parentTaskId: "agents",
+            task: args.task,
+            signal,
+            policyMode,
+            ...(policyRules === undefined ? {} : { policyRules }),
+          });
 
-        results.set(id, result);
+          results.set(id, result);
 
-        if (result.status === "error") {
-          // Let the scheduler mark the unit failed; the block still prints.
-          throw new Error(result.output);
+          if (result.status !== "done") {
+            // max_turns/aborted/error are all failures: throw so the live
+            // summary marks the unit failed, matching the block + exit code.
+            throw new Error(`${result.status}: ${result.output}`);
+          }
+
+          return result;
+        } catch (err) {
+          // Setup failures (bad model, provider construction) would otherwise
+          // vanish into the scheduler's null slot as a bare "did not run" —
+          // record a synthetic error result so the block shows the reason.
+          if (!results.has(id)) {
+            results.set(id, {
+              status: "error",
+              output: err instanceof Error ? err.message : String(err),
+              turns: 0,
+              durationMs: 0,
+              events: [],
+            });
+          }
+
+          throw err;
         }
-
-        return result;
       },
     }))
   );

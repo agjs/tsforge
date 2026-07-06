@@ -66,7 +66,8 @@ export interface ITaskRecipe {
   /** Rule profile preset (→ `tsforge.config.json` `profile` for this run). */
   readonly profile?: ProfileId;
   /** Agent spec ids to fan out over the task (→ `tsforge agents <ids>`).
-   *  Ids resolve against `.tsforge/agents/*.json` at run time. */
+   *  Ids resolve at run time against `.tsforge/agents/*.json` (project) and
+   *  `~/.tsforge/agents/*.json` (global); project overrides global. */
   readonly agents?: readonly string[];
 }
 
