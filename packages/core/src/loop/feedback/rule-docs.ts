@@ -10,10 +10,10 @@ export interface IRuleDoc {
   good: string;
   /** Optional multi-step fix workflow for architecture or meta-rules. */
   procedure?: string;
-  /** Optional tsforge-repo-relative pointer to deeper guidance (a rule pack
-   *  dir or markdown). Only resolvable when tsforge runs on its own repo — in
-   *  user projects the path dangles, so keep the actionable steps in
-   *  `procedure`, which is inlined into the feedback everywhere. */
+  /** Maintainer-only pointer to the rule's implementation or deeper guidance
+   *  (tsforge-repo-relative). NEVER emitted into runtime feedback — the model
+   *  runs in the user's project where the path dangles. Anything the model
+   *  needs at repair time belongs in `procedure`, which is always inlined. */
   reference?: string;
 }
 
@@ -501,9 +501,9 @@ export function ruleHelp(errors: ErrorSet): string {
       block += `\n  procedure: ${doc.procedure}`;
     }
 
-    if (doc.reference !== undefined && doc.reference.length > 0) {
-      block += `\n  see: ${doc.reference}`;
-    }
+    // `reference` is deliberately NOT emitted: its paths are tsforge-repo-relative,
+    // and the model runs in the USER'S project where they dangle. Everything the
+    // model needs must be inline (what/bad/good/procedure).
 
     blocks.push(block);
   }
