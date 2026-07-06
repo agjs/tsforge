@@ -32,8 +32,14 @@ export class LiveRegion {
 
   /** Move the cursor from the bottom of the current block to its top and erase
    *  it. Assumes the cursor is parked at the end of the last drawn line (where
-   *  the previous render left it). No-op prefix when nothing is drawn yet. */
+   *  the previous render left it). When nothing is drawn yet (`rows === 0`) this
+   *  is empty: there is no block of ours to erase, and emitting `\r ESC[0J`
+   *  would clobber whatever the caller just printed on the current line. */
   private eraseCurrent(): string {
+    if (this.rows === 0) {
+      return "";
+    }
+
     if (this.rows > 1) {
       return `${ESC}[${String(this.rows - 1)}A\r${ESC}[0J`;
     }

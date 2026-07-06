@@ -293,17 +293,20 @@ function summaryProgress(): IAgentProgress {
 function treeProgress(
   results: ReadonlyMap<string, IAgentResult>
 ): IAgentProgress {
-  const columns = process.stdout.columns > 0 ? process.stdout.columns : 80;
-  // Cap the tree to the viewport height so the pinned block never scrolls off
-  // the top — the relative-redraw (cursor-climb + erase) is only correct while
-  // the whole block stays on screen; a taller block would ghost on repaint.
-  const rows = process.stdout.rows > 0 ? process.stdout.rows : 24;
-  const maxRows = Math.max(3, rows - 3);
   const model = new AgentTreeModel();
   const live = new LiveRegion(process.stdout, true);
   let frame = 0;
 
   const repaint = (): void => {
+    // Read the live terminal size on every repaint so a mid-run resize adapts:
+    // a stale width would break line-clipping (wrapped rows → ghosting), and a
+    // stale height would let the block scroll off. Cap the tree to the viewport
+    // so the pinned block never scrolls — the cursor-climb redraw is only
+    // correct while the whole block stays on screen.
+    const columns = process.stdout.columns > 0 ? process.stdout.columns : 80;
+    const rows = process.stdout.rows > 0 ? process.stdout.rows : 24;
+    const maxRows = Math.max(3, rows - 3);
+
     live.render(
       renderAgentTree(model.rows(), { columns, maxRows, frame, color: true })
     );

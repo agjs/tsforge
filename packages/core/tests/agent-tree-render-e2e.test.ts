@@ -107,6 +107,17 @@ describe("LiveRegion + agent tree — the real rendered screen", () => {
     expect(screen.text()).toContain("=== explore: done ===");
   });
 
+  test("first render (rows=0) emits no erase — it can't clobber prior output", () => {
+    const term = captureTerm();
+    const live = new LiveRegion(term.out, true);
+
+    live.render(["a", "b"]);
+
+    // No leading cursor-up / erase-display before the first line: the block has
+    // nothing of its own to erase yet, so it must not touch the current line.
+    expect(term.bytes().startsWith("a\r\nb")).toBe(true);
+  });
+
   test("non-TTY sink is a no-op (piped runs never emit escape sequences)", () => {
     const chunks: string[] = [];
     const live = new LiveRegion(
