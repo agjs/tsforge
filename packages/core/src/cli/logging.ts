@@ -1,8 +1,9 @@
 /**
  * CLI-side reporting plumbing: the shared spinner, the terminal Reporter, the
- * `--log` JSONL ledger reporter, and run-log path helpers. The REPL routes
- * streamed output through the StatusBar via setInteractiveStream(); everywhere
- * else the reporter writes straight to stdout.
+ * `--log` JSONL ledger reporter, and run-log path helpers. Rendered output is
+ * routed through the OutputRouter: the REPL installs a StatusBar-aware parent
+ * sink (so text scrolls above the pinned input row); subagents get their own
+ * sinks from Phase B on; everywhere else writes go straight to stdout.
  */
 import { join, isAbsolute } from "node:path";
 import { mkdirSync } from "node:fs";
@@ -12,20 +13,13 @@ import { renderEvent } from "../render";
 import { LedgerWriter, ledgerTypeFor, type Reporter } from "../loop";
 import { logsDir } from "../session-store";
 import { trace } from "../lib/trace";
+import { OutputRouter } from "./output-router";
 
 export const spinner = makeSpinner();
 
-/** When the interactive REPL pins an editable input row, streamed output must be
- *  written THROUGH the StatusBar (so it scrolls in the region above the row and
- *  the cursor stays parked on the row). Null elsewhere ⇒ a plain stdout write. */
-let interactiveStream: ((text: string) => void) | null = null;
-
-/** Install (or clear, with null) the REPL's streamed-output sink. */
-export function setInteractiveStream(
-  sink: ((text: string) => void) | null
-): void {
-  interactiveStream = sink;
-}
+/** The process-wide router for the one terminal. The REPL installs its parent
+ *  sink at boot and clears it on exit; agent sinks come and go per subagent. */
+export const outputRouter = new OutputRouter();
 
 const render: Reporter = (event) => {
   const phase = spinnerPhase(event);
@@ -38,12 +32,7 @@ const render: Reporter = (event) => {
 
   if (out.length > 0) {
     spinner.clear();
-
-    if (interactiveStream !== null) {
-      interactiveStream(out);
-    } else {
-      process.stdout.write(out);
-    }
+    outputRouter.route(out, event.agentId);
   }
 };
 
@@ -67,9 +56,9 @@ export function makeReporter(
   return (event) => {
     render(event);
 
-    const { kind, ...rest } = event;
+    const { kind, agentId, ...rest } = event;
 
-    ledger.record(ledgerTypeFor(event), { kind, ...rest });
+    ledger.record(ledgerTypeFor(event), { kind, ...rest }, agentId);
   };
 }
 

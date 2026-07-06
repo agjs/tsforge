@@ -51,6 +51,8 @@ describe("ledgerTypeFor — kind → typed event", () => {
       ["create", "tool_call_finished"],
       ["run", "tool_call_finished"],
       ["policy", "policy_decision"],
+      ["agent_spawned", "agent_spawned"],
+      ["agent_result", "agent_result"],
       ["timing", "log"],
     ];
 
@@ -135,6 +137,20 @@ describe("LedgerWriter", () => {
 
       expect(output.length).toBeLessThan(10_000);
       expect(output).toContain("chars]");
+    });
+  });
+
+  test("records agentId when given and omits it otherwise (round-trip)", async () => {
+    await withLog(async (file, read) => {
+      const w = new LedgerWriter(file, "run-1", "sess-1");
+
+      w.record("agent_spawned", { spec: "explore" }, "run-1:explore");
+      w.record("model_call_started", {}); // parent event — no agentId
+
+      const [spawned, parent] = await read();
+
+      expect(spawned?.agentId).toBe("run-1:explore");
+      expect(parent?.agentId).toBeUndefined();
     });
   });
 
