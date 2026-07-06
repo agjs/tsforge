@@ -37,6 +37,16 @@ The usual failure of AI review is confident nonsense. tsforge runs an adversaria
 
 When a `tsconfig.json` is present, it also feeds the reviewer the callers of each changed export, computed from the type graph, so the regression check looks at concrete call sites instead of guessing.
 
+## Parallel review
+
+By default the per-file find pass and per-finding verify pass run one model call at a time. If your endpoint genuinely batches concurrent requests (e.g. vllm with `max_num_seqs` headroom), set [`agents.concurrency`](/guardrails/config/) in `tsforge.config.json`:
+
+```json
+{ "agents": { "concurrency": 4 } }
+```
+
+Review then fans out up to that many calls at once — each with a fresh provider — and prints a live `agents: 2 running, 5/16 done (…)` progress line. Results are identical in structure and order to a sequential run; only the wall-clock changes (≈2× measured at cap 8 on a batching endpoint). Keep the cap a couple below your server's `max_num_seqs` so an interactive session is never starved, and leave it at 1 for endpoints that serialize requests anyway.
+
 ## In CI
 
 `tsforge review` exits non-zero if any error-severity finding survives, so you can gate a PR on it. It uses `git` to find what changed, so run it inside a git repository.
