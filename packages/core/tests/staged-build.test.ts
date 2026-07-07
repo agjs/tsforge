@@ -8,6 +8,8 @@ import {
   implementBuild,
   generatePlan,
   formatTypeContract,
+  hasImplementation,
+  isImplementationFile,
   type IStagedBuildHost,
 } from "../src/loop/staged-build";
 import type { ISendResult } from "../src/loop/session";
@@ -117,15 +119,70 @@ describe("buildStaged", () => {
 
     await buildStaged(host, "build it");
 
-    expect(host.calls).toContain("fullGatePasses");
+    // Types-only phase 1 (empty cwd) → implement runs. The gate probe is now
+    // skipped in this case (no implementation to protect from a rebuild), so the
+    // proof that phase 2 ran is the second send carrying STEP 2 — not a gate call.
+    expect(host.calls).not.toContain("fullGatePasses");
     expect(host.sent).toHaveLength(2);
     expect(host.sent[1]?.message).toContain("STEP 2 of 2");
   });
 });
 
+describe("isImplementationFile / hasImplementation", () => {
+  test("type/constant/generated/test files and scaffold are NOT implementation", () => {
+    for (const p of [
+      "src/game/game.types.ts",
+      "src/game/game.constants.ts",
+      "src/vite-env.d.ts",
+      "src/routeTree.gen.ts",
+      "src/lib/format.test.ts",
+      "src/components/ui/button.tsx",
+      "src/main.ts",
+      "src/main.tsx",
+    ]) {
+      expect(isImplementationFile(p)).toBe(false);
+    }
+  });
+
+  test("views/components/store/hooks ARE implementation", () => {
+    for (const p of [
+      "src/views/Home/index.tsx",
+      "src/store/store.ts",
+      "src/views/Home/home.hooks.ts",
+      "src/game/game.ts",
+    ]) {
+      expect(isImplementationFile(p)).toBe(true);
+    }
+  });
+
+  test("the hollow platformer file set has NO implementation; a real app does", () => {
+    expect(
+      hasImplementation([
+        "src/main.ts",
+        "src/vite-env.d.ts",
+        "src/game/game.types.ts",
+        "src/game/game.constants.ts",
+        "src/physics/physics.types.ts",
+      ])
+    ).toBe(false);
+    expect(
+      hasImplementation(["src/main.tsx", "src/views/Home/index.tsx"])
+    ).toBe(true);
+  });
+});
+
 describe("implementBuild", () => {
-  test("skips phase 2 when the full gate is already green (no rebuild)", async () => {
-    const host = makeHost({ gatePasses: true });
+  test("skips phase 2 when phase 1 BUILT a real app and it is green (no rebuild)", async () => {
+    // Phase 1 over-delivered: a real implementation file exists (not just types).
+    const dir = mkdtempSync(join(tmpdir(), "staged-built-"));
+
+    mkdirSync(join(dir, "src", "views", "Home"), { recursive: true });
+    writeFileSync(
+      join(dir, "src", "views", "Home", "index.tsx"),
+      "export function Home() { return null; }\n"
+    );
+
+    const host = makeHost({ cwd: dir, gatePasses: true });
 
     const result = await implementBuild(host);
 
@@ -134,6 +191,35 @@ describe("implementBuild", () => {
     expect(
       host.events.some((e) => e.message.includes("skipping phase 2"))
     ).toBe(true);
+  });
+
+  test("does NOT skip when phase 1 wrote ONLY types/constants, even if green (the hollow-app bug)", async () => {
+    // The regression: a types-only phase 1 leaves the empty scaffold, which
+    // passes the gate — but the app was never built. Phase 2 MUST run.
+    const dir = mkdtempSync(join(tmpdir(), "staged-typesonly-"));
+
+    mkdirSync(join(dir, "src", "game"), { recursive: true });
+    writeFileSync(
+      join(dir, "src", "game", "game.types.ts"),
+      "export interface GameState { score: number }\n"
+    );
+    writeFileSync(
+      join(dir, "src", "game", "game.constants.ts"),
+      "export const GRAVITY = 0.6;\n"
+    );
+    // The untouched scaffold entry point — must NOT count as implementation.
+    writeFileSync(join(dir, "src", "main.ts"), 'document.title = "app";\n');
+
+    const host = makeHost({ cwd: dir, gatePasses: true });
+
+    const result = await implementBuild(host);
+
+    // Phase 2 ran (send called), NOT skipped.
+    expect(host.calls).toContain("send");
+    expect(
+      host.events.some((e) => e.message.includes("skipping phase 2"))
+    ).toBe(false);
+    expect(result.turns).not.toBe(0);
   });
 
   test("injects human plan notes under the approved-plan heading", async () => {

@@ -86,6 +86,33 @@ export const CONTRACT_GLOBS: readonly string[] = [
   "src/**/*.constants.ts",
 ];
 
+/** All source files, scanned to decide whether phase 1 already BUILT the app. */
+const IMPLEMENTATION_GLOBS: readonly string[] = ["src/**/*.ts", "src/**/*.tsx"];
+
+/** True when `path` is real app IMPLEMENTATION — NOT a type/constant declaration,
+ *  a generated/test file, a scaffolded UI primitive, or the entry point. This is
+ *  what distinguishes "phase 1 over-delivered and built the whole app" (skip the
+ *  rebuild) from "phase 1 wrote only the type contract" — the NORMAL case, where
+ *  the empty scaffold still compiles, so the gate is green yet nothing is built. */
+export function isImplementationFile(path: string): boolean {
+  const base = path.split("/").pop() ?? "";
+
+  if (/\.(types|constants|d|gen|test)\.tsx?$/u.test(base)) {
+    return false;
+  }
+
+  if (path.includes("/components/ui/")) {
+    return false; // scaffolded theme primitives, not app code
+  }
+
+  return base !== "main.ts" && base !== "main.tsx";
+}
+
+/** Whether any of `paths` is real app implementation (see isImplementationFile). */
+export function hasImplementation(paths: readonly string[]): boolean {
+  return paths.some(isImplementationFile);
+}
+
 /** Format the designed `.types.ts`/`.constants.ts` files as a precise reference
  *  block for the implement phase — so the model builds against the EXACT current
  *  signatures instead of its (lossy) recollection of them. Empty string when
@@ -164,23 +191,35 @@ export async function designBuild(
 
 /**
  * PHASE 2 — implement against the designed types, driving to green. If phase 1
- * already produced a fully-green app (it ignored "types only" and built
- * everything), this returns done WITHOUT rebuilding — else the model concludes
- * the prior phase did "only the data layer" and `rm -rf`s its own finished UI to
+ * already BUILT the app (it ignored "types only" and built everything) AND it is
+ * green, this returns done WITHOUT rebuilding — else the model concludes the
+ * prior phase did "only the data layer" and `rm -rf`s its own finished UI to
  * rebuild (observed: 23-00-52 went green at turn 146, then phase 2 wiped every
- * file). `planNotes` (human plan-mode edits) are injected into the implement step.
+ * file). CRUCIAL: the skip demands REAL implementation files, not just a green
+ * gate — a types-only phase 1 leaves the empty scaffold, which trivially passes
+ * typecheck+lint+build, so skipping on green ALONE shipped a hollow app (all
+ * `*.types.ts`, no code; the model announced "Ready for STEP 2" and got cut off).
+ * `planNotes` (human plan-mode edits) are injected into the implement step.
  */
 export async function implementBuild(
   host: IStagedBuildHost,
   planNotes = "",
   opts: ISendOptions = {}
 ): Promise<ISendResult> {
-  if (await host.fullGatePasses()) {
+  // Cheap check first: did phase 1 write any real implementation? In the normal
+  // types-only flow it did not, so we skip the (expensive) gate probe and go
+  // straight to building. Only when the model over-delivered do we confirm green
+  // and skip the rebuild.
+  const built = hasImplementation(
+    (await readFiles(host.cwd, IMPLEMENTATION_GLOBS)).map((f) => f.path)
+  );
+
+  if (built && (await host.fullGatePasses())) {
     host.report({
       kind: "tool",
       task: host.taskId,
       message:
-        "phase 1 already produced a fully-green app — skipping phase 2 (no rebuild)",
+        "phase 1 already built a fully-green app — skipping phase 2 (no rebuild)",
     });
 
     return { status: "done", turns: 0 };
