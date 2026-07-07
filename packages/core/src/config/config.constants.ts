@@ -8,4 +8,5 @@ export const ENV_FLAG = {
   noScriptTool: "TSFORGE_NO_SCRIPT",
   noGitTool: "TSFORGE_NO_GIT_TOOL",
   basicInput: "TSFORGE_BASIC_INPUT",
+  noDelegation: "TSFORGE_NO_DELEGATION",
 } as const;

@@ -66,6 +66,10 @@ export interface ISpawnRunnerOptions {
    *  building its own — read lazily (a getter, not a value) so it tracks the
    *  current session across `/clear`. Absent ⇒ the child builds its own. */
   readonly getTsService?: () => TsService | null;
+  /** The model's context window (tokens). Threaded to each AgentRunner so it
+   *  auto-compacts before a request would overflow — a long investigation never
+   *  fails on length. Omitted ⇒ no compaction. */
+  readonly contextWindow?: number;
 }
 
 export function makeSpawnAgentFn(opts: ISpawnRunnerOptions): SpawnAgentFn {
@@ -122,6 +126,9 @@ export function makeSpawnAgentFn(opts: ISpawnRunnerOptions): SpawnAgentFn {
           ...(opts.getTsService === undefined
             ? {}
             : { tsService: opts.getTsService() }),
+          ...(opts.contextWindow === undefined
+            ? {}
+            : { contextWindow: opts.contextWindow }),
         });
 
         lifecycle("agent_result", result.status === "done");

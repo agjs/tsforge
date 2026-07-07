@@ -35,4 +35,8 @@ export const flags = {
   /** Fall back to basic readline input (no multiline editor) in interactive mode.
    *  Default OFF — the editor is on. Set to "1" to disable the editor. */
   basicInput: (): boolean => isOn(ENV_FLAG.basicInput),
+  /** Withhold model-driven delegation (the `spawn_agent` tool + specialists).
+   *  Default OFF — delegation is on. Set to "1" for the A/B control arm (measure
+   *  the harness WITHOUT subagents) or to force a pure single-stream run. */
+  noDelegation: (): boolean => isOn(ENV_FLAG.noDelegation),
 };

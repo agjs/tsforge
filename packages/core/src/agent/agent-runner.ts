@@ -22,13 +22,165 @@ import {
   type ILoopState,
 } from "../loop/turn";
 import { DEFAULT_TEMPERATURE } from "../loop/loop.constants";
+import { PROVIDER_LIMITS } from "../inference";
+import { COMPACT_SYSTEM } from "../loop/prompt";
+import { isRecord } from "../lib/guards";
 import { TOOL_SPECS } from "./agent.constants";
 import type { IAgentSpec } from "./agent-spec";
 
 export const AGENT_LIMITS = {
   /** Default turn cap for a subagent — exploration, not an open-ended session. */
   maxTurns: 12,
+  /** Compact the conversation once the server-reported prompt tokens reach this
+   *  fraction of the context window — mirrors the main loop's auto-compaction
+   *  (session.ts). Without it a subagent's history grows unbounded (every re-read
+   *  re-appends the whole file) until the request overflows the window and the
+   *  endpoint 400s — so exploration could FAIL for no reason other than length. */
+  autoCompactAt: 0.8,
 } as const;
+
+/** Best-effort human-readable message from an unknown throw. Handles the common
+ *  provider shapes without casts: an Error, or a plain object carrying `message`
+ *  (or a nested `error.message`, as some HTTP clients surface API errors). */
+function errorText(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+
+  if (isRecord(err)) {
+    if (typeof err.message === "string") {
+      return err.message;
+    }
+
+    if (isRecord(err.error) && typeof err.error.message === "string") {
+      return err.error.message;
+    }
+  }
+
+  return String(err);
+}
+
+/** A vLLM/OpenAI-style context-overflow rejection ("This model's maximum context
+ *  length is N tokens. However, you requested M…"). Matched so it can be RECOVERED
+ *  (compact + retry) instead of failing the agent. Exported for unit tests. */
+export function isContextOverflow(err: unknown): boolean {
+  return /maximum context length|context length|context window|too many tokens|reduce the length|too long/iu.test(
+    errorText(err)
+  );
+}
+
+/** Chars reserved for the elision marker + join separators, so the assembled
+ *  transcript stays within `maxChars` even after they're added. */
+const TRANSCRIPT_MARKER_RESERVE = 64;
+
+/** Conservative summarizer-input bound (chars ≈ 4/token → ~12k tokens) used when
+ *  the context window is UNKNOWN (window ≤ 0). Small enough to fit any real
+ *  model's window + output reserve, so a reactive-recovery compaction can't
+ *  itself overflow. */
+const FALLBACK_COMPACT_CHARS = 48_000;
+
+/** Join the conversation (system excluded) into a summarizer prompt bounded to
+ *  `maxChars` so the compaction request itself can never overflow the window.
+ *  Fills from the MOST RECENT message backward (recent context matters most and
+ *  is the reason for the overflow) and ALWAYS includes at least the newest
+ *  message — head-truncating it if it alone exceeds the budget — then walks back
+ *  through older turns while they fit, eliding the rest. maxChars ≤ 0 ⇒ unbounded.
+ *  Exported for unit tests. */
+export function buildBoundedTranscript(
+  conversation: readonly { role: string; content?: string }[],
+  maxChars: number
+): string {
+  const line = (m: { role: string; content?: string }): string =>
+    `[${m.role}] ${m.content ?? ""}`;
+
+  if (maxChars <= 0 || conversation.length === 0) {
+    return conversation.map(line).join("\n\n");
+  }
+
+  // No single message may exceed the budget — truncate an oversized one so it
+  // can still be included (the newest is often a giant tool result).
+  const budget = Math.max(1, maxChars - TRANSCRIPT_MARKER_RESERVE);
+
+  const capped = (m: { role: string; content?: string }): string => {
+    const text = line(m);
+
+    return text.length <= budget
+      ? text
+      : `${text.slice(0, Math.max(1, budget - 15))} …[truncated]`;
+  };
+
+  // Each joined part also costs a "\n\n" separator — count it, or many short
+  // messages slip past `budget` in aggregate.
+  const SEP = "\n\n".length;
+  const picked: string[] = [];
+  let used = 0;
+  let firstIdx = conversation.length;
+
+  for (let i = conversation.length - 1; i >= 0; i -= 1) {
+    const msg = conversation[i];
+
+    if (msg === undefined) {
+      continue;
+    }
+
+    const text = capped(msg);
+
+    // Always keep at least the newest (picked is empty on the first iteration).
+    if (picked.length > 0 && used + text.length + SEP > budget) {
+      break;
+    }
+
+    picked.unshift(text);
+    used += text.length + SEP;
+    firstIdx = i;
+  }
+
+  const marker =
+    firstIdx > 0 ? [`… (${String(firstIdx)} earlier message(s) elided) …`] : [];
+
+  return [...marker, ...picked].join("\n\n");
+}
+
+/** Summarize the conversation and REPLACE it with [system, summary] — the same
+ *  shape the main loop's Session.compact uses — freeing context while preserving
+ *  the task, findings, and decisions. The summarizer input is bounded to a safe
+ *  fraction of the window so this call itself can't overflow. */
+async function compactAgentMessages(
+  ctx: ILoopCtx,
+  provider: IProvider,
+  window: number,
+  signal?: AbortSignal
+): Promise<boolean> {
+  const conversation = ctx.messages.filter((m) => m.role !== "system");
+
+  if (conversation.length === 0) {
+    return false;
+  }
+
+  // ~4 chars/token; give the summarizer at most half the window of input so
+  // system+transcript+its own output always fit. When the window is UNKNOWN
+  // (reactive recovery with no contextWindow), fall back to a conservative fixed
+  // bound so the compaction call itself can't overflow — never unbounded.
+  const maxChars = window > 0 ? window * 2 : FALLBACK_COMPACT_CHARS;
+  const transcript = buildBoundedTranscript(conversation, maxChars);
+  const res = await provider.complete(
+    [
+      { role: "system", content: COMPACT_SYSTEM },
+      { role: "user", content: transcript },
+    ],
+    { temperature: 0, ...(signal === undefined ? {} : { signal }) }
+  );
+
+  const system = ctx.messages[0];
+  const summary = {
+    role: "user" as const,
+    content: `[Summary of the investigation so far]\n${res.content}`,
+  };
+
+  ctx.messages = system?.role === "system" ? [system, summary] : [summary];
+
+  return true;
+}
 
 const DEFAULT_SYSTEM = [
   "You are a focused read-only investigator inside a coding harness.",
@@ -42,22 +194,53 @@ const DEFAULT_SYSTEM = [
 ].join(" ");
 
 /** The structured-output control tool: intercepted by the runner itself (never
- *  dispatched to executeTool), so the parent gets a parseable final payload. */
+ *  dispatched to executeTool), so the parent gets a PARSEABLE final payload —
+ *  a headline `summary` plus a list of concrete `findings`, each carrying its
+ *  own `source` (`file:line` for code, a URL for external docs). Forcing this
+ *  shape both keeps output consistent for the orchestrator and pushes the model
+ *  to attach evidence to every point instead of emitting uncited prose. */
 const AGENT_RESULT_TOOL = {
   type: "function",
   function: {
     name: "agent_result",
     description:
-      "Return your final result and finish. Call exactly once, when done.",
+      "Return your final result and finish. Call exactly once, when done. Put the " +
+      "headline conclusion (or verdict) in `summary`, and each concrete point in " +
+      "`findings` — every code point MUST carry the `file:line` you saw in `source`.",
     parameters: {
       type: "object",
       properties: {
-        result: {
+        summary: {
           type: "string",
-          description: "Your complete findings/answer.",
+          description: "1–3 sentence headline conclusion or verdict.",
+        },
+        findings: {
+          type: "array",
+          description:
+            "The concrete points; empty only if there is genuinely none.",
+          items: {
+            type: "object",
+            properties: {
+              detail: {
+                type: "string",
+                description: "One specific observation, issue, or fact.",
+              },
+              source: {
+                type: "string",
+                description:
+                  "Where you saw it: `path/to/file.ts:123` for code, or a URL for external docs.",
+              },
+              confidence: {
+                type: "string",
+                enum: ["high", "medium", "low"],
+                description: "How sure you are of this point.",
+              },
+            },
+            required: ["detail"],
+          },
         },
       },
-      required: ["result"],
+      required: ["summary", "findings"],
     },
   },
 } as const;
@@ -115,11 +298,42 @@ export interface IAgentRunOptions {
   /** Reuse the parent's TsService — building one per concurrent agent is
    *  heavy. `null` = workspace has none; undefined = build our own. */
   tsService?: TsService | null;
+  /** The model's context window (tokens). When set, the runner auto-compacts its
+   *  conversation before a request would overflow it — so a long investigation
+   *  (many/large reads) never fails on length. Omitted ⇒ no compaction. */
+  contextWindow?: number;
 }
 
-/** Pull the structured payload out of an intercepted agent_result call. */
+/** Render one structured finding as `- detail (source) [confidence]`. */
+function formatFinding(f: unknown): string | null {
+  if (!isRecord(f) || typeof f.detail !== "string" || f.detail.length === 0) {
+    return null;
+  }
+
+  const source =
+    typeof f.source === "string" && f.source.length > 0 ? ` (${f.source})` : "";
+  const confidence =
+    typeof f.confidence === "string" ? ` [${f.confidence}]` : "";
+
+  return `- ${f.detail}${source}${confidence}`;
+}
+
+/** Flatten an intercepted `agent_result` call into the text the orchestrator
+ *  reads: the `summary` followed by cited `findings`. Falls back to the legacy
+ *  `{ result }` string or raw JSON if the structured shape is absent, so an
+ *  older spec or a malformed call still yields something usable. */
 function resultPayload(args: Record<string, unknown>): string {
-  return typeof args.result === "string" ? args.result : JSON.stringify(args);
+  const summary = typeof args.summary === "string" ? args.summary : "";
+  const findings = Array.isArray(args.findings) ? args.findings : [];
+  const lines = findings
+    .map(formatFinding)
+    .filter((l): l is string => l !== null);
+
+  if (summary.length === 0 && lines.length === 0) {
+    return typeof args.result === "string" ? args.result : JSON.stringify(args);
+  }
+
+  return [summary, ...lines].filter((s) => s.length > 0).join("\n");
 }
 
 /** Force the first move (`"required"`) while real tools exist and nothing has
@@ -302,6 +516,9 @@ export class AgentRunner {
     // switch to "auto" so it can produce its final answer.
     let hasInvestigated = false;
     const hasRealTools = tools.length > (structured ? 1 : 0);
+    // Server-reported prompt tokens from the previous turn — the trigger for
+    // proactive compaction (mirrors the main loop, which reads its lastUsage).
+    const budget = { lastPromptTokens: 0 };
 
     {
       for (let turn = 1; turn <= maxTurns; turn += 1) {
@@ -318,23 +535,29 @@ export class AgentRunner {
           message: `agent ${this.spec.id} · turn ${turn}`,
         });
 
-        const res = await opts.provider.complete(ctx.messages, {
-          tools,
-          toolChoice: nextToolChoice(
-            hasRealTools,
-            hasInvestigated,
-            turn,
-            maxTurns
-          ),
-          // Match the main loop's default (0.2), NOT greedy: temperature 0 makes
-          // this model early-stop into empty/one-line answers on a long
-          // tool-result context. A caller can still override.
-          temperature: opts.temperature ?? DEFAULT_TEMPERATURE,
-          ...(opts.signal === undefined ? {} : { signal: opts.signal }),
-          onToken: (text) => {
-            report({ kind: "token", task: agentId, message: text });
+        const res = await this.completeWithCompaction(
+          ctx,
+          opts,
+          {
+            tools,
+            toolChoice: nextToolChoice(
+              hasRealTools,
+              hasInvestigated,
+              turn,
+              maxTurns
+            ),
+            // Match the main loop's default (0.2), NOT greedy: temperature 0 makes
+            // this model early-stop into empty/one-line answers on a long
+            // tool-result context. A caller can still override.
+            temperature: opts.temperature ?? DEFAULT_TEMPERATURE,
+            ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+            onToken: (text) => {
+              report({ kind: "token", task: agentId, message: text });
+            },
           },
-        });
+          budget,
+          report
+        );
 
         pushAssistant(ctx, res);
         lastText = res.content.length > 0 ? res.content : lastText;
@@ -426,5 +649,81 @@ export class AgentRunner {
     }
 
     return done();
+  }
+
+  /** Run one model turn with context management around it:
+   *  - PROACTIVE: compact before the request when the previous turn's prompt
+   *    tokens crossed the auto-compact fraction of the window.
+   *  - REACTIVE: if the request still overflows (e.g. one giant tool result
+   *    jumped past the threshold in a single turn), compact and retry ONCE —
+   *    so a read-only investigation never hard-fails on length.
+   *  Updates `budget.lastPromptTokens` from the server's usage. */
+  private async completeWithCompaction(
+    ctx: ILoopCtx,
+    opts: IAgentRunOptions,
+    callOpts: Parameters<IProvider["complete"]>[1],
+    budget: { lastPromptTokens: number },
+    report: Reporter
+  ): Promise<IModelResponse> {
+    const window = opts.contextWindow ?? 0;
+    const provider = opts.provider;
+    // vLLM counts prompt + reserved OUTPUT tokens against the window, so the
+    // real ceiling for the PROMPT is `window - maxTokens`. Trigger compaction
+    // against that effective budget — otherwise a request can 400 while the
+    // prompt alone is still under `window` (observed: 114689 prompt + 16384 out
+    // = 131073 > 131072). The reserve is CAPPED at half the window so a small
+    // model (window ≤ maxTokens) can't collapse the effective budget to ~0 and
+    // compact on every single turn. The reactive path below is the backstop for
+    // a single read that jumps past the threshold in one turn.
+    const reserve = Math.min(
+      PROVIDER_LIMITS.maxTokens,
+      Math.floor(window * 0.5)
+    );
+    const effectiveWindow = Math.max(1, window - reserve);
+    const at = AGENT_LIMITS.autoCompactAt;
+
+    const compact = async (reason: string): Promise<void> => {
+      const did = await compactAgentMessages(
+        ctx,
+        provider,
+        window,
+        opts.signal
+      );
+
+      if (did) {
+        budget.lastPromptTokens = 0;
+        report({
+          kind: "tool",
+          task: `${opts.parentTaskId}:${this.spec.id}`,
+          message: `↯ compacted context (${reason})`,
+        });
+      }
+    };
+
+    if (window > 0 && budget.lastPromptTokens / effectiveWindow >= at) {
+      await compact(`near ${String(window)}-token window`);
+    }
+
+    let res: IModelResponse;
+
+    try {
+      res = await provider.complete(ctx.messages, callOpts);
+    } catch (err) {
+      if (
+        opts.signal?.aborted === true ||
+        !isContextOverflow(err) ||
+        ctx.messages.length <= 2
+      ) {
+        throw err;
+      }
+
+      await compact("recovering from a context-overflow");
+      res = await provider.complete(ctx.messages, callOpts);
+    }
+
+    budget.lastPromptTokens =
+      res.usage?.promptTokens ?? budget.lastPromptTokens;
+
+    return res;
   }
 }

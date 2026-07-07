@@ -18,9 +18,11 @@ const READONLY_MANDATE =
   "You are read-only: you cannot edit files or run mutating commands. " +
   "You MUST investigate with the tools before answering — never answer from " +
   "memory or guess. Open the actual files the task names, follow the references, " +
-  "and back every claim with a `file:line` you saw. A final answer with no " +
-  "`file:line` citations means you did not investigate and is wrong. Return ONE " +
-  "final message: concise, concrete conclusions — not a raw dump of what you read.";
+  "and back every claim with a `file:line` you saw. When done, call `agent_result` " +
+  "with a short `summary` and a `findings` list — one concrete point each, every " +
+  "code point carrying its `file:line` in `source`. A finding with no `source` " +
+  "means you did not investigate and is wrong. Be concise — conclusions, not a " +
+  "raw dump of what you read.";
 
 export const BUILTIN_SPECS: readonly IAgentSpec[] = [
   {
@@ -28,6 +30,7 @@ export const BUILTIN_SPECS: readonly IAgentSpec[] = [
     description:
       "Maps a subsystem or traces how something works, and reports conclusions with file:line references.",
     kind: "chat",
+    outputMode: "structured",
     tools: [
       TOOL_NAME.read,
       TOOL_NAME.search,
@@ -52,6 +55,7 @@ export const BUILTIN_SPECS: readonly IAgentSpec[] = [
     description:
       "Researches external docs, package APIs, and the web; reports findings with source URLs.",
     kind: "chat",
+    outputMode: "structured",
     tools: [
       TOOL_NAME.webSearch,
       TOOL_NAME.webFetch,
@@ -68,13 +72,15 @@ export const BUILTIN_SPECS: readonly IAgentSpec[] = [
       "`package_info` for installed or npm packages and `web_search`→`web_fetch` " +
       "for everything else. Cite the source URL or the local docs path for every " +
       "claim; when versions differ, say which version you checked. Never invent an " +
-      "API — verify it. Return ONE final message: the concrete answer plus sources.",
+      "API — verify it. When done, call `agent_result`: the answer in `summary`, " +
+      "each fact a `finding` with its source URL (or local docs path) in `source`.",
   },
   {
     id: "verify",
     description:
       "Adversarially checks a specific claim or finding against the real code and reports a verdict.",
     kind: "chat",
+    outputMode: "structured",
     tools: [
       TOOL_NAME.read,
       TOOL_NAME.search,
@@ -90,14 +96,15 @@ export const BUILTIN_SPECS: readonly IAgentSpec[] = [
       "wrong until the code proves it. Open the exact lines involved and check the " +
       "control/data flow. " +
       READONLY_MANDATE +
-      " End with an explicit verdict: CONFIRMED or REFUTED, and the `file:line` " +
-      "evidence that decided it.",
+      " Put the verdict — CONFIRMED or REFUTED — in `summary`, with the deciding " +
+      "`file:line` evidence in `findings`.",
   },
   {
     id: "review-lens",
     description:
       "Reviews a change for correctness/regressions from a senior-engineer lens; reports issues with file:line.",
     kind: "chat",
+    outputMode: "structured",
     tools: [
       TOOL_NAME.read,
       TOOL_NAME.search,

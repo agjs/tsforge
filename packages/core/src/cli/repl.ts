@@ -503,6 +503,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     specs: agentSpecs,
     cwd: args.dir,
     concurrency: delegationCap,
+    // Subagents auto-compact against the same window as the main loop, so a
+    // long read-only investigation never overflows and 400s.
+    contextWindow,
     policyMode: isPolicyMode(args.policyMode)
       ? args.policyMode
       : (delegationConfig.policy?.mode ?? "default"),
@@ -515,8 +518,15 @@ export async function repl(args: ICliArgs): Promise<number> {
     getTsService: () => session.tsService,
   });
 
-  // Re-applied after `/clear` rebuilds the session (like setSetupWeb).
+  // Re-applied after `/clear` rebuilds the session (like setSetupWeb). Skipped
+  // entirely under TSFORGE_NO_DELEGATION — the A/B control arm / pure single-stream.
+  const delegationOff = flags.noDelegation();
+
   const wireDelegation = (): void => {
+    if (delegationOff) {
+      return;
+    }
+
     session.setDelegation(agentSpecs, spawnAgentFn);
   };
 
@@ -524,7 +534,9 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   // Make the delegation setup visible so the concurrency cap is never a mystery
   // (cap 1 ⇒ subagents run serially; raise agents.concurrency to overlap them).
-  if (agentSpecs.length > 0) {
+  if (delegationOff) {
+    process.stdout.write("  ↳ delegation: OFF (TSFORGE_NO_DELEGATION)\n");
+  } else if (agentSpecs.length > 0) {
     const names = agentSpecs.map((s) => s.id).join(", ");
 
     process.stdout.write(
@@ -1921,6 +1933,18 @@ export async function repl(args: ICliArgs): Promise<number> {
       // Shift+Tab cycles the interactive mode (plan → normal → …).
       editorHandle.onCycleMode(() => {
         setMode(nextMode(currentModeId).id);
+      });
+      // ↑/↓ on an empty input row navigate the live agent tree (parity with the
+      // readline path at the keypress handler above). Consumed only while a tree
+      // is active; otherwise the editor keeps the arrows for history/cursor.
+      editorHandle.onNavigateTree((delta) => {
+        if (!treeActive) {
+          return false;
+        }
+
+        moveTreeFocus(delta);
+
+        return true;
       });
     } else if (rl !== null) {
       rl.on("line", submitLine);

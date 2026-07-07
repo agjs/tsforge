@@ -130,6 +130,58 @@ describe("EditorController", () => {
     expect(submits).toEqual([]);
   });
 
+  test("↑/↓ on an empty buffer route to onNavigateTree (agent-tree nav)", () => {
+    const { stdin, handle } = makeHarness();
+    const deltas: number[] = [];
+
+    handle.onNavigateTree((delta) => {
+      deltas.push(delta);
+
+      return true; // consume — a tree is live
+    });
+
+    stdin.feed("\x1b[A"); // up
+    stdin.feed("\x1b[B"); // down
+    stdin.feed("\x1b[A"); // up
+    expect(deltas).toEqual([-1, 1, -1]);
+    expect(handle.getBuffer().getText()).toBe(""); // buffer untouched
+  });
+
+  test("onNavigateTree is NOT consulted while the user is composing (buffer non-empty)", () => {
+    const { stdin, handle } = makeHarness();
+    let calls = 0;
+
+    handle.onNavigateTree(() => {
+      calls += 1;
+
+      return true;
+    });
+
+    stdin.feed("a");
+    stdin.feed("\x1b[13;2u"); // Shift+Enter → newline, not submit
+    stdin.feed("b"); // two-line draft; cursor on the last line
+    stdin.feed("\x1b[A"); // up → moves the cursor within the draft, not the tree
+    expect(calls).toBe(0);
+    expect(handle.getBuffer().getText()).toBe("a\nb"); // draft preserved
+  });
+
+  test("a declined onNavigateTree (no live tree) falls through to history nav", () => {
+    const { stdin, handle, submits } = makeHarness();
+
+    handle.onNavigateTree(() => false); // no tree active — decline every key
+
+    stdin.feed("first");
+    stdin.feed("\r");
+    stdin.feed("second");
+    stdin.feed("\r");
+    expect(submits).toEqual(["first", "second"]);
+
+    stdin.feed("\x1b[A"); // up on empty buffer → previous history item
+    expect(handle.getBuffer().getText()).toBe("second");
+    stdin.feed("\x1b[A");
+    expect(handle.getBuffer().getText()).toBe("first");
+  });
+
   test("Shift+Enter inserts a newline, does NOT submit", () => {
     const { stdin, handle, submits } = makeHarness();
 
