@@ -36,6 +36,12 @@ export function observeEvents(fn: ((event: ILoopEvent) => void) | null): void {
   eventObserver = fn;
 }
 
+const LIFECYCLE_KINDS: ReadonlySet<string> = new Set([
+  "agent_spawned",
+  "agent_started",
+  "agent_result",
+]);
+
 const render: Reporter = (event) => {
   // The observer (the REPL's agent-tree feeder) must never take down rendering:
   // a throw here would propagate out of the reporter and crash the turn/session.
@@ -43,6 +49,16 @@ const render: Reporter = (event) => {
     eventObserver?.(event);
   } catch (err) {
     trace("cli.eventObserver", err);
+  }
+
+  // Subagent lifecycle events are STRUCTURAL — they drive the live tree, not the
+  // transcript. When a tree observer is attached it renders them (a row + the
+  // `↳ label` detail header); routing their text too would divert the agent's
+  // own description into its detail buffer and print the label two more times
+  // under the tree. So skip rendering here once the observer has been notified.
+  // Headless/one-shot has no observer, so they still render as linear-log lines.
+  if (eventObserver !== null && LIFECYCLE_KINDS.has(event.kind)) {
+    return;
   }
 
   const phase = spinnerPhase(event);
