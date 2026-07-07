@@ -29,6 +29,7 @@ import { OpenAICompatibleProvider } from "../src/inference";
 import { resolveActiveModel } from "../src/models-config";
 import { detectContextWindow, providerConfig } from "../src/cli/model-setup";
 import { makeLimiter } from "../src/cli/spawn-runner";
+import { COMPACT_SYSTEM } from "../src/loop/prompt";
 import type { ILoopEvent, Reporter } from "../src/loop";
 
 // One exploration task per subsystem — mirrors the real screenshot fan-out.
@@ -62,13 +63,16 @@ interface IAgentStat {
   durationMs: number;
   peakPromptTokens: number;
   completionTokens: number;
+  compactions: number;
   failure: string | null;
 }
 
-/** Wraps a provider to tally real token usage and capture the exact failure. */
+/** Wraps a provider to tally real token usage, count auto-compaction calls (a
+ *  request whose system prompt is COMPACT_SYSTEM), and capture the exact failure. */
 class CountingProvider implements IProvider {
   peakPromptTokens = 0;
   completionTokens = 0;
+  compactions = 0;
   failure: string | null = null;
 
   constructor(private readonly inner: IProvider) {}
@@ -77,6 +81,10 @@ class CountingProvider implements IProvider {
     messages: IChatMessage[],
     opts?: ICompleteOptions
   ): Promise<IModelResponse> {
+    if (messages[0]?.content === COMPACT_SYSTEM) {
+      this.compactions += 1;
+    }
+
     try {
       const res = await this.inner.complete(messages, opts);
 
@@ -138,6 +146,7 @@ async function runOneCap(
           durationMs: performance.now() - agentStart,
           peakPromptTokens: counter.peakPromptTokens,
           completionTokens: counter.completionTokens,
+          compactions: counter.compactions,
           failure: counter.failure,
         };
       })
@@ -176,7 +185,7 @@ function reportCap(
       s.failure === null ? "" : `\n        FAIL: ${s.failure.slice(0, 300)}`;
 
     process.stdout.write(
-      `    ${flag} ${s.label.padEnd(12)} turns=${s.turns} ${(s.durationMs / 1000).toFixed(1)}s peakPrompt=${s.peakPromptTokens} completion=${s.completionTokens}${fail}\n`
+      `    ${flag} ${s.label.padEnd(12)} turns=${s.turns} ${(s.durationMs / 1000).toFixed(1)}s peakPrompt=${s.peakPromptTokens} completion=${s.completionTokens} compactions=${s.compactions}${fail}\n`
     );
   }
 
