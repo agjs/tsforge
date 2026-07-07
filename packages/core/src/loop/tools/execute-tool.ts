@@ -13,6 +13,7 @@ import { doWebSearch } from "./web-search";
 import { doWebBrowse } from "./web-browse";
 import { doPackageInfo, doPackageDocs } from "./package-info";
 import { doScript } from "./script-tool";
+import { doSpawnAgent } from "./spawn-agent";
 import { reject, type IToolContext } from "./tool-context";
 import {
   classifyAction,
@@ -57,6 +58,7 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   // script-tool.ts never imports this module (no cycle), and a nested `script`
   // call is rejected (script is not in SCRIPT_EXPOSABLE_TOOLS).
   [TOOL_NAME.script]: (a, c) => doScript(a, c, { execute: executeTool }),
+  [TOOL_NAME.spawnAgent]: doSpawnAgent,
 };
 
 function isToolName(name: string): name is ToolName {

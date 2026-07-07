@@ -1,4 +1,5 @@
 import type { ToolName } from "./agent.types";
+import type { IAgentSpec } from "./agent-spec";
 
 /**
  * The canonical tool names. Schemas, dispatch, and any name comparison reference
@@ -31,6 +32,7 @@ export const TOOL_NAME = {
   webSearch: "web_search",
   webBrowse: "web_browse",
   script: "script",
+  spawnAgent: "spawn_agent",
 } as const;
 
 /** Per-tool capability flags — the single source of truth the plan-mode set and
@@ -80,6 +82,11 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   [TOOL_NAME.webBrowse]: { readOnly: true, scriptExposable: true },
   // `script` mutates (it can call edit/create) and must never call itself.
   [TOOL_NAME.script]: { readOnly: false, scriptExposable: false },
+  // Delegation is itself read-only (the orchestrator only receives findings;
+  // spawned agents cannot mutate), so it survives plan mode. NOT script-exposable
+  // (no spawning from a program) and — by construction — never offered to a
+  // spawned agent, which caps recursion depth at 1 (see agent-runner agentTools).
+  [TOOL_NAME.spawnAgent]: { readOnly: true, scriptExposable: false },
 };
 
 function toolNamesWhere(
@@ -649,3 +656,59 @@ export const GIT_CONTEXT_TOOL = {
     },
   },
 };
+
+/**
+ * The model-invoked delegation tool (like Claude Code's Task tool). The
+ * orchestrator calls it — the user never names an agent — to hand a focused,
+ * self-contained, read-only investigation to a specialist and get its findings
+ * back. Multiple calls in one turn run in parallel (see runToolCalls). The
+ * `subagent_type` enum is built from the loaded specs so the model sees exactly
+ * which specialists exist. Returns null when no specs are available (nothing to
+ * delegate to), so the caller offers the tool only when it's useful.
+ */
+export function buildSpawnAgentTool(specs: readonly IAgentSpec[]): {
+  type: "function";
+  function: { name: string } & Record<string, unknown>;
+} | null {
+  if (specs.length === 0) {
+    return null;
+  }
+
+  const ids = specs.map((s) => s.id);
+  const roster = specs
+    .map((s) =>
+      s.description === undefined ? s.id : `${s.id} (${s.description})`
+    )
+    .join("; ");
+
+  return {
+    type: "function",
+    function: {
+      name: TOOL_NAME.spawnAgent,
+      description:
+        "Delegate a focused, READ-ONLY investigation to a specialist subagent and get its findings back as the tool result. Spawn one per independent line of inquiry — several in the same turn run in PARALLEL, each with its own fresh context, and only YOU (the orchestrator) edit files. Use it to explore an unfamiliar subsystem, research external docs/APIs, or verify a claim, without spending your own context on the digging. The subagent does NOT see this conversation, so put everything it needs in `prompt`. " +
+        `Available specialists: ${roster}.`,
+      parameters: {
+        type: "object",
+        properties: {
+          subagent_type: {
+            type: "string",
+            enum: ids,
+            description: "which specialist to delegate to",
+          },
+          description: {
+            type: "string",
+            description:
+              "a 3-5 word label for this subtask, shown in the live agent tree (e.g. 'trace auth flow')",
+          },
+          prompt: {
+            type: "string",
+            description:
+              "the complete, self-contained task for the subagent — it cannot see this conversation, so include the goal and any file paths or context it needs",
+          },
+        },
+        required: ["subagent_type", "description", "prompt"],
+      },
+    },
+  };
+}

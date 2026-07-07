@@ -9,6 +9,7 @@ import {
   type ErrorSet,
   type IErrorItem,
 } from "../validate";
+import { TOOL_NAME } from "../agent/agent.constants";
 import { isInScope } from "../lib/scope";
 import { trace } from "../lib/trace";
 import type { PolicyMode, IPolicyRules } from "../policy";
@@ -18,7 +19,12 @@ import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
-import { executeTool, type SetupWebFn, type IToolContext } from "./tools";
+import {
+  executeTool,
+  type SetupWebFn,
+  type SpawnAgentFn,
+  type IToolContext,
+} from "./tools";
 import {
   astGrepFix,
   dropRedundantAnnotations,
@@ -184,6 +190,9 @@ export interface ILoopCtxTool {
    *  enforce on this set, so they cover what the agent wrote regardless of git.
    *  Shared BY REFERENCE with the tool context. */
   touched?: Set<string>;
+  /** Wired by the interactive CLI: run one read-only specialist subagent (the
+   *  `spawn_agent` tool). Threaded into the tool context. */
+  spawnAgent?: SpawnAgentFn;
 }
 
 /** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */
@@ -294,10 +303,47 @@ function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
   };
 }
 
+/** Stable per-call key, matching the `toolCallId` the loop emits below. */
+function callKey(call: IToolCall, index: number): string {
+  return call.id ?? `call_${index}`;
+}
+
+/**
+ * Delegation runs concurrently. `spawn_agent` calls never write the workspace,
+ * so — unlike every other tool — several in one turn can run in PARALLEL up
+ * front (the CLI-wired callback enforces the concurrency cap and emits the tree
+ * lifecycle events). Their results are cached by call key; the sequential loop
+ * below then emits each tool reply in submission order, so message ordering is
+ * unchanged while the agents actually overlapped. Non-spawn turns → empty map.
+ */
+async function precomputeSpawns(
+  toolCalls: readonly IToolCall[],
+  ctx: ILoopCtx
+): Promise<Map<string, string>> {
+  const spawns = toolCalls
+    .map((call, index) => ({ call, index }))
+    .filter(({ call }) => call.name === TOOL_NAME.spawnAgent);
+
+  if (spawns.length === 0) {
+    return new Map();
+  }
+
+  const entries = await Promise.all(
+    spawns.map(async ({ call, index }) => {
+      const out = await executeTool(call, toolContextFor(ctx, ctx.report));
+
+      return [callKey(call, index), out] as const;
+    })
+  );
+
+  return new Map(entries);
+}
+
 /**
  * Run the model's tool calls: execute each, feed the result back, and report
  * whether any touched an editable file (which means we should re-gate). Mutates
  * `state.edits`. The semantic WRITE tools (rename/organize) also touch disk.
+ * `spawn_agent` calls are run concurrently up front (see precomputeSpawns).
  */
 export async function runToolCalls(
   toolCalls: readonly IToolCall[],
@@ -305,6 +351,7 @@ export async function runToolCalls(
   state: ILoopState
 ): Promise<boolean> {
   let touchedEditable = false;
+  const spawnResults = await precomputeSpawns(toolCalls, ctx);
 
   for (let i = 0; i < toolCalls.length; i += 1) {
     const call = toolCalls[i];
@@ -349,7 +396,11 @@ export async function runToolCalls(
       ctx.report(event);
     };
 
-    const result = await executeTool(call, toolContextFor(ctx, report));
+    // Spawns already ran concurrently up front — reuse the cached result so we
+    // don't run the delegation twice; every other tool executes here in order.
+    const cached = spawnResults.get(callKey(call, i));
+    const result =
+      cached ?? (await executeTool(call, toolContextFor(ctx, report)));
 
     let feedback = "";
 

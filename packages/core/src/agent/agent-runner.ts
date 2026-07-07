@@ -74,7 +74,10 @@ function isReadOnlyTool(name: string): boolean {
   return READ_ONLY_TOOL_NAMES.has(name);
 }
 
-/** The agent's advertised tools: read-only set ∩ optional spec subset. */
+/** The agent's advertised tools: read-only set ∩ optional spec subset.
+ *  `spawn_agent` is NOT among them — it is never part of `toolsFor()` (the CLI
+ *  adds it only to the orchestrator's list), so a subagent structurally cannot
+ *  delegate and recursion depth is capped at 1. */
 function agentTools(subset: readonly string[] | undefined): unknown[] {
   return toolsFor(true).filter((tool) => {
     const name = tool.function.name;

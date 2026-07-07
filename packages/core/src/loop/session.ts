@@ -13,8 +13,10 @@ import {
   SEARCH_TOOL,
   ADD_DEPENDENCY_TOOL,
   TOOL_NAME,
+  buildSpawnAgentTool,
 } from "../agent";
-import type { SetupWebFn } from "./tools";
+import type { IAgentSpec } from "../agent/agent-spec";
+import type { SetupWebFn, SpawnAgentFn } from "./tools";
 import type { PolicyMode } from "../policy";
 import type { ProfileId } from "../config/profiles";
 import { flags } from "../config";
@@ -420,6 +422,23 @@ function systemPrompt(
   return `${buildChatSystem(conventions)}\n\n${tdd}${prefix}${lines.join("\n")}`;
 }
 
+/** The system-prompt block that tells the orchestrator delegation exists and
+ *  names the specialists, so it picks the right one without the user ever naming
+ *  an agent. Appended (not baked into buildChatSystem) because the roster is
+ *  known only after specs load. */
+function delegationGuidance(specs: readonly IAgentSpec[]): string {
+  const roster = specs
+    .map((s) =>
+      s.description === undefined ? `- ${s.id}` : `- ${s.id}: ${s.description}`
+    )
+    .join("\n");
+
+  return [
+    "DELEGATION: you can hand focused, read-only investigation to specialist subagents with the `spawn_agent` tool — exploring an unfamiliar part of the codebase, researching an external API/library, or verifying a claim — instead of spending your own turns and context on it. Spawn several in one turn for independent lines of inquiry; they run in parallel, each with its own context, and only YOU edit files. The user thinks in tasks and features, never in subagents — it is YOUR call when delegation helps.",
+    `Specialists available:\n${roster}`,
+  ].join("\n\n");
+}
+
 export class Session {
   private readonly provider: IProvider;
   private readonly cfg: ISessionConfig;
@@ -430,6 +449,7 @@ export class Session {
     | typeof SCAFFOLD_ROUTES_TOOL
     | typeof SCAFFOLD_WEB_TOOL
     | typeof ADD_DEPENDENCY_TOOL
+    | NonNullable<ReturnType<typeof buildSpawnAgentTool>>
   )[];
   private hasGate: boolean;
   private readonly ctx: ILoopCtx;
@@ -803,6 +823,23 @@ export class Session {
    *  callback closes over this session to reconfigure it. */
   setSetupWeb(fn: SetupWebFn): void {
     this.ctx.tool.setupWeb = fn;
+  }
+
+  /** Enable model-driven delegation: offer the `spawn_agent` tool (its
+   *  `subagent_type` enum built from the available specialists), wire the runner
+   *  callback, and tell the model it can delegate. Late-bound (after create)
+   *  because the callback is built by the CLI, which owns model resolution and
+   *  the concurrency limiter. No specs ⇒ no-op (nothing to delegate to). */
+  setDelegation(specs: readonly IAgentSpec[], fn: SpawnAgentFn): void {
+    const tool = buildSpawnAgentTool(specs);
+
+    if (tool === null) {
+      return;
+    }
+
+    this.ctx.tool.spawnAgent = fn;
+    this.tools = [...this.tools, tool];
+    this.guide(delegationGuidance(specs));
   }
 
   /** Append opinionated guidance to the SYSTEM prompt (e.g. after classifying a

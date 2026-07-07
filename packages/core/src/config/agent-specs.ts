@@ -8,6 +8,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isRecord } from "../lib/guards";
+import { BUILTIN_SPECS } from "../agent/builtin-specs";
 import type {
   AgentKind,
   AgentOutputMode,
@@ -176,6 +177,12 @@ export async function loadAgentSpecs(
   report: (message: string) => void = () => undefined
 ): Promise<IAgentSpec[]> {
   const byId = new Map<string, IAgentSpec>();
+
+  // Built-in specialists first (lowest precedence) so delegation works out of the
+  // box; a global then project `.tsforge/agents/<id>.json` overrides by id.
+  for (const spec of BUILTIN_SPECS) {
+    byId.set(spec.id, spec);
+  }
 
   await loadDir(join(homeBase(), ".tsforge", "agents"), byId, report);
   await loadDir(join(cwd, ".tsforge", "agents"), byId, report);

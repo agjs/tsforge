@@ -14,6 +14,24 @@ export type SetupWebFn = (
   options?: { signal?: AbortSignal }
 ) => Promise<{ files: readonly string[]; depsInstalled: boolean }>;
 
+/** One model-invoked delegation to a read-only specialist subagent (the
+ *  `spawn_agent` tool). Wired by the CLI/session, which owns model resolution,
+ *  the built-in + user specs, and the concurrency limiter; absent ⇒ delegation
+ *  isn't available here (headless one-shot) and the tool says so. Emits
+ *  `agent_spawned`/`agent_started`/`agent_result` via `report` so the live tree
+ *  renders, tagging a UNIQUE `agentId` derived from `parentTaskId` (so two
+ *  spawns of the same specialist don't collide). Resolves with the subagent's
+ *  final findings as text — the tool result the orchestrator reads. */
+export type SpawnAgentFn = (
+  req: {
+    readonly subagentType: string;
+    readonly description: string;
+    readonly prompt: string;
+    readonly parentTaskId: string;
+  },
+  opts: { signal?: AbortSignal; report: Reporter }
+) => Promise<string>;
+
 export interface IToolContext {
   cwd: string;
   /** Editable scope — `edit`/`create` outside it are rejected. */
@@ -62,6 +80,9 @@ export interface IToolContext {
    *  here. These are external context/tool sources — they never touch the editable
    *  scope or the deterministic gate. Absent ⇒ no MCP configured. */
   mcpRegistry?: McpRegistry;
+  /** Run one read-only specialist subagent for the `spawn_agent` tool. Wired by
+   *  the interactive CLI (headless one-shot leaves it absent). See {@link SpawnAgentFn}. */
+  spawnAgent?: SpawnAgentFn;
 }
 
 /** A required string arg, or "" if missing/wrong-type. */

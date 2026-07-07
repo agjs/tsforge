@@ -240,9 +240,14 @@ describe("loadAgentSpecs", () => {
 
       const reports: string[] = [];
       const specs = await loadAgentSpecs(cwd, (m) => reports.push(m));
+      const ids = specs.map((s) => s.id);
 
-      expect(specs.map((s) => s.id)).toEqual(["explore"]);
-      expect(specs[0]?.model).toBe("project-model");
+      // The user's project `explore.json` overrides BOTH the global one and the
+      // built-in of the same id (project wins; built-in < global < project).
+      expect(ids).toContain("explore");
+      expect(specs.find((s) => s.id === "explore")?.model).toBe("project-model");
+      // Built-in specialists are always present (delegation works out of the box).
+      expect(ids).toContain("research");
       expect(reports.some((m) => m.includes("broken.json"))).toBe(true);
       expect(reports.some((m) => m.includes("bogus"))).toBe(true);
     } finally {

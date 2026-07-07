@@ -31,6 +31,12 @@ import {
   type SetupWebFn,
 } from "../loop";
 import { loadRecipes } from "../config/recipes";
+import { loadAgentSpecs } from "../config/agent-specs";
+import {
+  loadTsforgeConfig,
+  resolveAgentConcurrency,
+} from "../config/tsforge-config";
+import { makeSpawnAgentFn } from "./spawn-runner";
 import { scopeOf, WHOLE_REPO, resolveCliProfile, type ICliArgs } from "./args";
 import { isPolicyMode } from "../policy";
 import { startEditor, type IEditorHandle } from "../editor";
@@ -466,6 +472,34 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   session.setSetupWeb(setupWeb);
 
+  // Model-driven delegation: the orchestrator can spawn read-only specialist
+  // subagents via the `spawn_agent` tool — the user never names an agent.
+  // Specialists ship built-in (explore/research/verify/review-lens); a
+  // project/global `.tsforge/agents/*.json` extends or overrides them.
+  const agentSpecs = await loadAgentSpecs(args.dir, (m) =>
+    process.stdout.write(`  ↳ ${m}\n`)
+  );
+  const delegationConfig = await loadTsforgeConfig(args.dir);
+  const spawnAgentFn = makeSpawnAgentFn({
+    specs: agentSpecs,
+    cwd: args.dir,
+    concurrency: resolveAgentConcurrency(delegationConfig),
+    policyMode: isPolicyMode(args.policyMode)
+      ? args.policyMode
+      : (delegationConfig.policy?.mode ?? "default"),
+    ...(delegationConfig.policy?.rules === undefined
+      ? {}
+      : { policyRules: delegationConfig.policy.rules }),
+    ...(args.model.length > 0 ? { defaultModel: args.model } : {}),
+  });
+
+  // Re-applied after `/clear` rebuilds the session (like setSetupWeb).
+  const wireDelegation = (): void => {
+    session.setDelegation(agentSpecs, spawnAgentFn);
+  };
+
+  wireDelegation();
+
   // Last-turn summary, surfaced in the status line shown before each prompt.
   let lastTurns = 0;
   // Turns the last GREEN run took (the loop-efficiency signal shown in /metrics).
@@ -676,6 +710,7 @@ export async function repl(args: ICliArgs): Promise<number> {
           ...(profile === undefined ? {} : { profile }),
         });
         session.setSetupWeb(setupWeb);
+        wireDelegation(); // re-offer spawn_agent on the rebuilt session
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
         planDiscussed = false;
         await persist();
