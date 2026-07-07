@@ -73,6 +73,12 @@ export function isContextOverflow(err: unknown): boolean {
  *  transcript stays within `maxChars` even after they're added. */
 const TRANSCRIPT_MARKER_RESERVE = 64;
 
+/** Conservative summarizer-input bound (chars ≈ 4/token → ~12k tokens) used when
+ *  the context window is UNKNOWN (window ≤ 0). Small enough to fit any real
+ *  model's window + output reserve, so a reactive-recovery compaction can't
+ *  itself overflow. */
+const FALLBACK_COMPACT_CHARS = 48_000;
+
 /** Join the conversation (system excluded) into a summarizer prompt bounded to
  *  `maxChars` so the compaction request itself can never overflow the window.
  *  Fills from the MOST RECENT message backward (recent context matters most and
@@ -103,6 +109,9 @@ export function buildBoundedTranscript(
       : `${text.slice(0, Math.max(1, budget - 15))} …[truncated]`;
   };
 
+  // Each joined part also costs a "\n\n" separator — count it, or many short
+  // messages slip past `budget` in aggregate.
+  const SEP = "\n\n".length;
   const picked: string[] = [];
   let used = 0;
   let firstIdx = conversation.length;
@@ -117,12 +126,12 @@ export function buildBoundedTranscript(
     const text = capped(msg);
 
     // Always keep at least the newest (picked is empty on the first iteration).
-    if (picked.length > 0 && used + text.length > budget) {
+    if (picked.length > 0 && used + text.length + SEP > budget) {
       break;
     }
 
     picked.unshift(text);
-    used += text.length;
+    used += text.length + SEP;
     firstIdx = i;
   }
 
@@ -149,8 +158,10 @@ async function compactAgentMessages(
   }
 
   // ~4 chars/token; give the summarizer at most half the window of input so
-  // system+transcript+its own output always fit.
-  const maxChars = window > 0 ? window * 2 : 0;
+  // system+transcript+its own output always fit. When the window is UNKNOWN
+  // (reactive recovery with no contextWindow), fall back to a conservative fixed
+  // bound so the compaction call itself can't overflow — never unbounded.
+  const maxChars = window > 0 ? window * 2 : FALLBACK_COMPACT_CHARS;
   const transcript = buildBoundedTranscript(conversation, maxChars);
   const res = await provider.complete(
     [

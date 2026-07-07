@@ -143,6 +143,30 @@ describe("AgentRunner auto-compaction", () => {
     expect(output).toBe("recovered answer");
   });
 
+  test("REACTIVE recovery works even when the context window is UNKNOWN (bounded fallback)", async () => {
+    // No contextWindow → the reactive path must still bound the summarizer input
+    // (fixed fallback), not build an unbounded transcript that overflows again.
+    const provider = new ScriptedProvider([
+      answer("", 50), // turn 1: nudge, history grows past 2 messages
+      new Error("model request failed: 400 maximum context length exceeded"), // turn 2: overflow
+      answer("recovered", 60), // retry after bounded compaction
+    ]);
+
+    const result = await new AgentRunner(SPEC).run({
+      provider,
+      cwd: process.cwd(),
+      parentTaskId: "t",
+      task: "explore",
+      tsService: null,
+      policyMode: "bypassPermissions",
+      // contextWindow deliberately omitted (window = 0)
+    });
+
+    expect(provider.compactionCalls).toBe(1);
+    expect(result.status).toBe("done");
+    expect(result.output).toBe("recovered");
+  });
+
   test("a non-overflow provider error is NOT swallowed (still an error)", async () => {
     const provider = new ScriptedProvider([
       new Error("model request failed: 500 internal server error"),
@@ -231,6 +255,18 @@ describe("buildBoundedTranscript", () => {
     expect(out).toContain("earlier message(s) elided");
     expect(out.length).toBeLessThanOrEqual(400);
     expect(out).toContain("finding 19"); // newest kept
+  });
+
+  test("MANY short messages stay within budget (join separators counted)", () => {
+    // 200 tiny messages: without counting the "\n\n" separators, the aggregate
+    // would blow past a small maxChars even though each message is trivial.
+    const conversation = Array.from({ length: 200 }, (_v, i) =>
+      msg("user", `m${i}`)
+    );
+    const out = buildBoundedTranscript(conversation, 300);
+
+    expect(out.length).toBeLessThanOrEqual(300);
+    expect(out).toContain("m199"); // newest kept
   });
 
   test("maxChars ≤ 0 means unbounded (returns the full transcript)", () => {
