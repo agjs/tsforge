@@ -503,6 +503,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     specs: agentSpecs,
     cwd: args.dir,
     concurrency: delegationCap,
+    // Subagents auto-compact against the same window as the main loop, so a
+    // long read-only investigation never overflows and 400s.
+    contextWindow,
     policyMode: isPolicyMode(args.policyMode)
       ? args.policyMode
       : (delegationConfig.policy?.mode ?? "default"),
