@@ -9,6 +9,7 @@ import {
   type ErrorSet,
   type IErrorItem,
 } from "../validate";
+import { TOOL_NAME } from "../agent/agent.constants";
 import { isInScope } from "../lib/scope";
 import { trace } from "../lib/trace";
 import type { PolicyMode, IPolicyRules } from "../policy";
@@ -18,7 +19,12 @@ import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
-import { executeTool, type SetupWebFn, type IToolContext } from "./tools";
+import {
+  executeTool,
+  type SetupWebFn,
+  type SpawnAgentFn,
+  type IToolContext,
+} from "./tools";
 import {
   astGrepFix,
   dropRedundantAnnotations,
@@ -184,6 +190,9 @@ export interface ILoopCtxTool {
    *  enforce on this set, so they cover what the agent wrote regardless of git.
    *  Shared BY REFERENCE with the tool context. */
   touched?: Set<string>;
+  /** Wired by the interactive CLI: run one read-only specialist subagent (the
+   *  `spawn_agent` tool). Threaded into the tool context. */
+  spawnAgent?: SpawnAgentFn;
 }
 
 /** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */
@@ -294,10 +303,127 @@ function toolContextFor(ctx: ILoopCtx, report: Reporter): IToolContext {
   };
 }
 
+/** Stable per-call key, matching the `toolCallId` the loop emits below. */
+function callKey(call: IToolCall, index: number): string {
+  return call.id ?? `call_${index}`;
+}
+
+/** One position in the tool-call list, kept with its original index so the tool
+ *  reply carries the right `toolCallId` even after we group spawns. */
+interface IIndexedCall {
+  readonly call: IToolCall;
+  readonly index: number;
+}
+
 /**
- * Run the model's tool calls: execute each, feed the result back, and report
- * whether any touched an editable file (which means we should re-gate). Mutates
- * `state.edits`. The semantic WRITE tools (rename/organize) also touch disk.
+ * Run ONE non-spawn tool call: execute it, apply the write-guard + mutation
+ * accounting, and push its tool reply. Returns whether it touched an editable
+ * file (⇒ the caller re-gates). `state.edits` is bumped per in-scope write.
+ */
+async function runOneToolCall(
+  call: IToolCall,
+  index: number,
+  ctx: ILoopCtx,
+  state: ILoopState
+): Promise<boolean> {
+  let touchedEditable = false;
+  // EVERY in-scope file written during this tool call — a Set, not a single
+  // path, because ONE call can write MANY files (a `script` program's edit/create
+  // stubs each report through this callback). We read the path from the handler's
+  // `edit`/`create` event (already normalized), not the raw arg, so a write the
+  // handler normalized into scope still counts. Fires only on a successful write.
+  const wrote = new Set<string>();
+  // Files mutated by a tool the model did NOT hand-write (semantic ops, scaffolds):
+  // they re-gate and join the change scope but skip the per-write guard.
+  const mutated: string[] = [];
+
+  const report: Reporter = (event) => {
+    if (
+      (event.kind === "edit" || event.kind === "create") &&
+      event.file !== undefined &&
+      isInScope(event.file, ctx.task.files)
+    ) {
+      wrote.add(event.file);
+    }
+
+    if (event.mutated !== undefined) {
+      for (const f of event.mutated) {
+        if (countsAsMutation(f, ctx.task.files)) {
+          mutated.push(f);
+        }
+      }
+    }
+
+    ctx.report(event);
+  };
+
+  const result = await executeTool(call, toolContextFor(ctx, report));
+  let feedback = "";
+
+  if (wrote.size > 0) {
+    touchedEditable = true;
+    state.edits += wrote.size;
+    const written = [...wrote];
+
+    recordTouched(ctx, written);
+
+    for (const path of written) {
+      feedback += await runWriteGuard(ctx, path);
+    }
+  }
+
+  if (mutated.length > 0) {
+    touchedEditable = true;
+    recordTouched(ctx, mutated);
+  }
+
+  ctx.messages.push({
+    role: "tool",
+    content: `${result}${feedback}`,
+    toolCallId: callKey(call, index),
+  });
+
+  return touchedEditable;
+}
+
+/**
+ * Run a CONSECUTIVE run of read-only `spawn_agent` calls concurrently — they
+ * never write, so ordering among them is irrelevant and overlapping them is the
+ * whole point (the CLI callback caps real concurrency + emits tree events). A
+ * failure is isolated to its own tool reply (never rejects the batch), and
+ * replies are pushed in submission order. Non-spawn tools are NOT part of a batch
+ * (the caller treats them as ordering barriers), so an `edit` before a spawn is
+ * applied first and the subagent reads post-edit state.
+ */
+async function runSpawnBatch(
+  group: readonly IIndexedCall[],
+  ctx: ILoopCtx
+): Promise<void> {
+  const results = await Promise.all(
+    group.map(async ({ call }) => {
+      try {
+        return await executeTool(call, toolContextFor(ctx, ctx.report));
+      } catch (err) {
+        return `spawn_agent failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    })
+  );
+
+  group.forEach(({ call, index }, k) => {
+    ctx.messages.push({
+      role: "tool",
+      content: results[k] ?? "",
+      toolCallId: callKey(call, index),
+    });
+  });
+}
+
+/**
+ * Run the model's tool calls in order, reporting whether any touched an editable
+ * file (⇒ re-gate). A maximal run of consecutive `spawn_agent` calls executes
+ * concurrently as one batch; every other tool runs sequentially and acts as an
+ * ordering barrier, so tool effects (edits/mutations) never get reordered around
+ * delegation.
  */
 export async function runToolCalls(
   toolCalls: readonly IToolCall[],
@@ -305,85 +431,39 @@ export async function runToolCalls(
   state: ILoopState
 ): Promise<boolean> {
   let touchedEditable = false;
+  let i = 0;
 
-  for (let i = 0; i < toolCalls.length; i += 1) {
+  while (i < toolCalls.length) {
     const call = toolCalls[i];
 
     if (call === undefined) {
+      i += 1;
       continue;
     }
 
-    // Count an edit/create ONLY when it actually wrote an in-scope file. We read
-    // this from the handler's `edit`/`create` event — which carries the path it
-    // ACTUALLY wrote, already normalized (absolute / repeated-root / backslash
-    // paths resolved). Scope-checking the raw tool arg here instead would miss a
-    // write the handler normalized into scope, skipping the gate. The event fires
-    // only on a successful write, so failures/rejects never count. See P1/P2.
-    // EVERY in-scope file written during this tool call — a Set, not a single
-    // path, because ONE call can write MANY files: the `script` tool runs a
-    // program whose edit/create stubs each report a write through this same
-    // callback. Tracking only the last path would skip the write-guard + touched
-    // (and thus change-scoped rules like test-sibling-required) for the rest.
-    const wrote = new Set<string>();
-    // Files mutated by a tool the model did NOT hand-write (semantic ops,
-    // scaffolds). These re-gate and join the change scope but skip the write-guard.
-    const mutated: string[] = [];
+    if (call.name === TOOL_NAME.spawnAgent) {
+      const group: IIndexedCall[] = [];
 
-    const report: Reporter = (event) => {
-      if (
-        (event.kind === "edit" || event.kind === "create") &&
-        event.file !== undefined &&
-        isInScope(event.file, ctx.task.files)
+      while (
+        i < toolCalls.length &&
+        toolCalls[i]?.name === TOOL_NAME.spawnAgent
       ) {
-        wrote.add(event.file);
-      }
+        const c = toolCalls[i];
 
-      if (event.mutated !== undefined) {
-        for (const f of event.mutated) {
-          if (countsAsMutation(f, ctx.task.files)) {
-            mutated.push(f);
-          }
+        if (c !== undefined) {
+          group.push({ call: c, index: i });
         }
+
+        i += 1;
       }
 
-      ctx.report(event);
-    };
-
-    const result = await executeTool(call, toolContextFor(ctx, report));
-
-    let feedback = "";
-
-    if (wrote.size > 0) {
-      touchedEditable = true;
-      state.edits += wrote.size;
-      const written = [...wrote];
-
-      // Record EVERY file written so change-scoped gate rules (test-sibling-
-      // required) enforce on all of them, then write-guard each.
-      recordTouched(ctx, written);
-
-      for (const path of written) {
-        feedback += await runWriteGuard(ctx, path);
-      }
+      await runSpawnBatch(group, ctx);
+      continue;
     }
 
-    // A tool that mutated files without the model hand-writing them (a successful
-    // semantic op or scaffold) must re-gate so the change is verified — the signal
-    // comes from the handler's `mutated` event, emitted ONLY on a real change.
-    // Keying off the tool NAME (the old approach) miscounted a rejected/no-op op
-    // as a mutation, letting a green gate claim "done" though nothing happened, and
-    // missed scaffolds entirely, letting them skip the gate. These paths join the
-    // change scope but are NOT write-guarded — generated shells aren't re-checked.
-    if (mutated.length > 0) {
-      touchedEditable = true;
-      recordTouched(ctx, mutated);
-    }
-
-    ctx.messages.push({
-      role: "tool",
-      content: `${result}${feedback}`,
-      toolCallId: call.id ?? `call_${i}`,
-    });
+    touchedEditable =
+      (await runOneToolCall(call, i, ctx, state)) || touchedEditable;
+    i += 1;
   }
 
   return touchedEditable;

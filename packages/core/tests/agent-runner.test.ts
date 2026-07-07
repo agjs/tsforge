@@ -177,17 +177,29 @@ describe("AgentRunner (read-only loop against this repo)", () => {
     expect(AGENT_LIMITS.maxTurns).toBeGreaterThan(0);
   });
 
-  test("structured mode: prose gets nudged, agent_result delivers the payload", async () => {
+  test("structured mode: agent_result before investigating is rejected, accepted after a real tool call", async () => {
     const { provider, seenTools } = scripted([
-      { content: "here is my answer in prose", toolCalls: [] },
+      // Turn 1: tries to answer immediately. `agent_result` alone satisfies
+      // toolChoice:"required", but with real tools available and no investigation
+      // yet it MUST be rejected (else a structured agent answers from memory).
       {
         content: "",
         toolCalls: [
-          {
-            id: "1",
-            name: "agent_result",
-            arguments: { result: "structured-answer" },
-          },
+          { id: "1", name: "agent_result", arguments: { result: "premature" } },
+        ],
+      },
+      // Turn 2: forced to actually investigate.
+      {
+        content: "",
+        toolCalls: [
+          { id: "2", name: "read", arguments: { file: "package.json" } },
+        ],
+      },
+      // Turn 3: now the result is accepted.
+      {
+        content: "",
+        toolCalls: [
+          { id: "3", name: "agent_result", arguments: { result: "grounded" } },
         ],
       },
     ]);
@@ -198,8 +210,32 @@ describe("AgentRunner (read-only loop against this repo)", () => {
 
     expect(seenTools()).toContain("agent_result");
     expect(result.status).toBe("done");
-    expect(result.output).toBe("structured-answer");
-    expect(result.turns).toBe(2);
+    // The premature turn-1 answer was NOT accepted; the grounded one (after a
+    // real read) was.
+    expect(result.output).toBe("grounded");
+    expect(result.turns).toBe(3);
+  });
+
+  test("structured agent with NO real tools accepts agent_result immediately", async () => {
+    const { provider } = scripted([
+      {
+        content: "",
+        toolCalls: [
+          { id: "1", name: "agent_result", arguments: { result: "answer" } },
+        ],
+      },
+    ]);
+    // `tools: []` ⇒ the only advertised tool is agent_result, so there's nothing
+    // to investigate WITH — the investigation gate must not deadlock it.
+    const result = await new AgentRunner({
+      id: "structured",
+      outputMode: "structured",
+      tools: [],
+    }).run({ provider, cwd: REPO, parentTaskId: "r", task: "t" });
+
+    expect(result.status).toBe("done");
+    expect(result.output).toBe("answer");
+    expect(result.turns).toBe(1);
   });
 
   test("generate kind is rejected until Phase D", async () => {
@@ -240,9 +276,16 @@ describe("loadAgentSpecs", () => {
 
       const reports: string[] = [];
       const specs = await loadAgentSpecs(cwd, (m) => reports.push(m));
+      const ids = specs.map((s) => s.id);
 
-      expect(specs.map((s) => s.id)).toEqual(["explore"]);
-      expect(specs[0]?.model).toBe("project-model");
+      // The user's project `explore.json` overrides BOTH the global one and the
+      // built-in of the same id (project wins; built-in < global < project).
+      expect(ids).toContain("explore");
+      expect(specs.find((s) => s.id === "explore")?.model).toBe(
+        "project-model"
+      );
+      // Built-in specialists are always present (delegation works out of the box).
+      expect(ids).toContain("research");
       expect(reports.some((m) => m.includes("broken.json"))).toBe(true);
       expect(reports.some((m) => m.includes("bogus"))).toBe(true);
     } finally {

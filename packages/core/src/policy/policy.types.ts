@@ -29,6 +29,10 @@ export type ActionKind =
   | "network"
   | "mcp_tool"
   | "plugin_tool"
+  /** Delegating a read-only investigation to a subagent (`spawn_agent`). The
+   *  spawn itself mutates nothing; the child is read-only-enforced separately.
+   *  Its own action class so a repo can deny/ask delegation specifically. */
+  | "spawn_agent"
   | "unknown";
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";

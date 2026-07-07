@@ -10,7 +10,12 @@ import { mkdirSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { makeSpinner, spinnerPhase } from "../render/spinner";
 import { renderEvent } from "../render";
-import { LedgerWriter, ledgerTypeFor, type Reporter } from "../loop";
+import {
+  LedgerWriter,
+  ledgerTypeFor,
+  type Reporter,
+  type ILoopEvent,
+} from "../loop";
 import { logsDir } from "../session-store";
 import { trace } from "../lib/trace";
 import { OutputRouter } from "./output-router";
@@ -21,7 +26,25 @@ export const spinner = makeSpinner();
  *  sink at boot and clears it on exit; agent sinks come and go per subagent. */
 export const outputRouter = new OutputRouter();
 
+/** A live observer of EVERY rendered event — the REPL registers one to drive the
+ *  agent tree (folding `agent_*` lifecycle events and diverting subagent output).
+ *  Module-level because `render` is the one choke point all events pass through;
+ *  null when no REPL is attached (headless/one-shot). */
+let eventObserver: ((event: ILoopEvent) => void) | null = null;
+
+export function observeEvents(fn: ((event: ILoopEvent) => void) | null): void {
+  eventObserver = fn;
+}
+
 const render: Reporter = (event) => {
+  // The observer (the REPL's agent-tree feeder) must never take down rendering:
+  // a throw here would propagate out of the reporter and crash the turn/session.
+  try {
+    eventObserver?.(event);
+  } catch (err) {
+    trace("cli.eventObserver", err);
+  }
+
   const phase = spinnerPhase(event);
 
   if (phase !== null) {

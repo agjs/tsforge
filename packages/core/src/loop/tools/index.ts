@@ -1,2 +1,2 @@
 export { executeTool } from "./execute-tool";
-export type { IToolContext, SetupWebFn } from "./tool-context";
+export type { IToolContext, SetupWebFn, SpawnAgentFn } from "./tool-context";

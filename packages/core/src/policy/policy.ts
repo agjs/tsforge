@@ -41,6 +41,7 @@ export const ACTION_KINDS: readonly ActionKind[] = [
   "network",
   "mcp_tool",
   "plugin_tool",
+  "spawn_agent",
   "unknown",
 ];
 
@@ -84,6 +85,7 @@ const MODE_MATRIX: Readonly<
     network: "allow",
     mcp_tool: "allow",
     plugin_tool: "allow",
+    spawn_agent: "allow",
     unknown: "ask",
   },
   plan: {
@@ -97,6 +99,7 @@ const MODE_MATRIX: Readonly<
     network: "allow",
     mcp_tool: "deny",
     plugin_tool: "deny",
+    spawn_agent: "allow",
     unknown: "deny",
   },
   acceptEdits: {
@@ -108,6 +111,7 @@ const MODE_MATRIX: Readonly<
     network: "deny",
     mcp_tool: "allow",
     plugin_tool: "allow",
+    spawn_agent: "allow",
     unknown: "deny",
   },
   ci: {
@@ -119,6 +123,7 @@ const MODE_MATRIX: Readonly<
     network: "deny",
     mcp_tool: "allow",
     plugin_tool: "allow",
+    spawn_agent: "allow",
     unknown: "deny",
   },
   dontAsk: {
@@ -130,6 +135,7 @@ const MODE_MATRIX: Readonly<
     network: "deny",
     mcp_tool: "allow",
     plugin_tool: "allow",
+    spawn_agent: "allow",
     unknown: "deny",
   },
   bypassPermissions: {
@@ -141,6 +147,7 @@ const MODE_MATRIX: Readonly<
     network: "allow",
     mcp_tool: "allow",
     plugin_tool: "allow",
+    spawn_agent: "allow",
     unknown: "allow",
   },
 };
