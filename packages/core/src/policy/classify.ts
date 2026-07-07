@@ -28,6 +28,9 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   // `script` runs a program that can call other tools — classify as shell so the
   // policy treats it like `run` (its stub calls are each re-classified on dispatch).
   [TOOL_NAME.script]: "shell",
+  // Delegating to a read-only subagent — its own class so a repo can deny/ask it
+  // specifically; the child's tool calls are re-classified as they dispatch.
+  [TOOL_NAME.spawnAgent]: "spawn_agent",
   [TOOL_NAME.packageInfo]: "network",
   [TOOL_NAME.packageDocs]: "network",
   [TOOL_NAME.webFetch]: "network",

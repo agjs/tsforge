@@ -53,10 +53,34 @@ describe("classifyAction", () => {
       ["web_fetch", "network"],
       ["web_search", "network"],
       ["web_browse", "network"],
+      ["spawn_agent", "spawn_agent"],
     ];
 
     for (const [name, kind] of cases) {
       expect(classifyAction({ name, arguments: {} }, CWD).kind).toBe(kind);
+    }
+  });
+
+  test("spawn_agent is allowed in every mode (read-only delegation, not unknown)", () => {
+    const action = classifyAction(
+      {
+        name: "spawn_agent",
+        arguments: { subagent_type: "explore", description: "x", prompt: "y" },
+      },
+      CWD
+    );
+
+    // Regression: before its own action class it fell to `unknown` and was
+    // DENIED in plan/ci/dontAsk — which silently killed delegation.
+    for (const mode of ["default", "plan", "ci", "dontAsk"] as const) {
+      expect(
+        evaluatePolicy(action, {
+          mode,
+          cwd: CWD,
+          files: [],
+          interactive: false,
+        }).decision
+      ).toBe("allow");
     }
   });
 

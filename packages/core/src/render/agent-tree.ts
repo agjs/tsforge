@@ -131,6 +131,9 @@ export interface IAgentTreeOptions {
   /** Max rows before overflow collapses; ≥1. */
   readonly maxRows?: number;
   readonly color?: boolean;
+  /** Id of the currently-selected row (bold + `▸` marker) when the tree is being
+   *  navigated. Absent ⇒ no selection highlight. */
+  readonly selectedId?: string;
 }
 
 interface ISegment {
@@ -200,22 +203,27 @@ function rowLine(
   isLast: boolean,
   frame: number,
   columns: number,
-  color: boolean
+  color: boolean,
+  selected: boolean
 ): string {
   const connector = isLast ? CONNECT_END : CONNECT_MID;
   const glyph = statusGlyph(row.status, frame);
-  // connector + glyph + the single space before the label.
+  // connector + glyph + the single space before the label (+ a `▸` when selected).
+  const marker = selected ? "▸" : " ";
   const prefixWidth = displayWidth(connector) + displayWidth(glyph.text) + 1;
   const budget = Math.max(0, columns - 1 - prefixWidth);
   const meta = rowMeta(row);
   const showMeta = meta.length > 0 && displayWidth(meta) <= budget;
   const labelBudget = showMeta ? budget - displayWidth(meta) : budget;
   const label = fitLabel(row.label ?? row.id, labelBudget);
+  const painted = selected
+    ? paint(label, `${STYLE.bold}${STYLE.brand}`, color)
+    : label;
 
   return (
     paint(connector, STYLE.dim, color) +
     paint(glyph.text, glyph.code, color) +
-    ` ${label}` +
+    `${marker}${painted}` +
     (showMeta ? paint(meta, STYLE.dim, color) : "")
   );
 }
@@ -272,7 +280,9 @@ export function renderAgentTree(
   shown.forEach((row, i) => {
     const isLast = !overflow && i === shown.length - 1;
 
-    lines.push(rowLine(row, isLast, frame, columns, color));
+    lines.push(
+      rowLine(row, isLast, frame, columns, color, row.id === opts.selectedId)
+    );
   });
 
   if (overflow) {

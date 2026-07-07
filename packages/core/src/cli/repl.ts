@@ -29,6 +29,7 @@ import {
   PLAN_APPROVED_NOTE,
   type Reporter,
   type SetupWebFn,
+  type ILoopEvent,
 } from "../loop";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
@@ -56,7 +57,10 @@ import {
   STYLE,
   paint,
   PROMPT_COLS,
+  renderAgentTree,
+  AgentTreeModel,
   type IStatusInfo,
+  type IAgentRow,
 } from "../render";
 import { loadLedger, activeRules, forgetMemory } from "../loop/memory";
 import {
@@ -82,7 +86,13 @@ import {
   getUpdateNotice,
   refreshUpdateCacheInBackground,
 } from "../update-check";
-import { spinner, outputRouter, makeReporter, resolveLogPath } from "./logging";
+import {
+  spinner,
+  outputRouter,
+  makeReporter,
+  resolveLogPath,
+  observeEvents,
+} from "./logging";
 import {
   modelInfo,
   detectContextWindow,
@@ -308,6 +318,15 @@ export async function repl(args: ICliArgs): Promise<number> {
     activeModelEntry,
   } = await initReplSession(args);
 
+  // Load delegation inputs HERE — before readline is created below. Any `await`
+  // between `createInterface` and the `rl.on("line")` listener would yield the
+  // event loop with readline live but unlistened, dropping the first typed line
+  // (a real pty regression the e2e caught). All boot IO must finish up front.
+  const agentSpecs = await loadAgentSpecs(args.dir, (m) =>
+    process.stdout.write(`  ↳ ${m}\n`)
+  );
+  const delegationConfig = await loadTsforgeConfig(args.dir);
+
   let session = initialSession;
   let activeName = initialActiveName;
   let contextWindow = initialContextWindow;
@@ -476,10 +495,9 @@ export async function repl(args: ICliArgs): Promise<number> {
   // subagents via the `spawn_agent` tool — the user never names an agent.
   // Specialists ship built-in (explore/research/verify/review-lens); a
   // project/global `.tsforge/agents/*.json` extends or overrides them.
-  const agentSpecs = await loadAgentSpecs(args.dir, (m) =>
-    process.stdout.write(`  ↳ ${m}\n`)
-  );
-  const delegationConfig = await loadTsforgeConfig(args.dir);
+  // Build the delegation runner from the specs/config loaded up front (sync — no
+  // await here, so readline's line listener attaches in the same tick as the
+  // rest of the interactive setup; see the load site above).
   const spawnAgentFn = makeSpawnAgentFn({
     specs: agentSpecs,
     cwd: args.dir,
@@ -543,6 +561,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       // post-turn hint (plan-mode notice, PLAN review, etc.) lands BELOW the card
       // instead of inside it — which would break the rail. Idempotent.
       closeAgentTurn();
+      resetTree(); // clear the live agent tree once the turn's delegation is done
     }
 
     await persist();
@@ -913,6 +932,154 @@ export async function repl(args: ICliArgs): Promise<number> {
   // inactive and `prompt()` falls back to the inline status line (pipes, --log).
   const statusBar = new StatusBar(process.stdout, true, true, useInputRow);
 
+  // --- live agent tree ------------------------------------------------------
+  // When the orchestrator delegates (`spawn_agent`), its subagents render as a
+  // live tree pinned above the input row, with the focused agent's streaming
+  // output beneath it — so a run is never a black box. Each subagent's output is
+  // diverted to a per-agent buffer (via the OutputRouter) instead of interleaving
+  // into the transcript; only the orchestrator writes the transcript.
+  let agentTree = new AgentTreeModel();
+  const agentOutput = new Map<string, string[]>();
+  let treeFrame = 0;
+  let treeActive = false;
+  // The detail pane auto-follows the newest running agent; ↑/↓ overrides it.
+  let focusedAgentId: string | null = null;
+  let userPickedFocus = false;
+  const AGENT_DETAIL_LINES = 8;
+  // Strip SGR color codes from captured subagent output. Built via fromCharCode
+  // so the literal carries no control byte (no-control-regex).
+  const SGR_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "gu");
+
+  const treeCols = (): number =>
+    process.stdout.columns > 0 ? process.stdout.columns : 80;
+
+  const detailPane = (rows: readonly IAgentRow[]): string[] => {
+    const id = focusedAgentId ?? rows.at(-1)?.id;
+
+    if (id === undefined) {
+      return [];
+    }
+
+    const label = rows.find((r) => r.id === id)?.label ?? id;
+    const buf = agentOutput.get(id) ?? [];
+    const width = Math.max(10, treeCols() - 5);
+    const body =
+      buf.length === 0
+        ? [paint("    (working…)", STYLE.dim, true)]
+        : buf.slice(-AGENT_DETAIL_LINES).map((l) => `    ${l.slice(0, width)}`);
+
+    return [paint(`  ↳ ${label}`, STYLE.dim, true), ...body];
+  };
+
+  const repaintTree = (): void => {
+    if (!statusBar.active) {
+      return;
+    }
+
+    const rows = agentTree.rows();
+
+    if (rows.length === 0) {
+      statusBar.setAgentTree([]);
+
+      return;
+    }
+
+    const viewportRows = process.stdout.rows > 0 ? process.stdout.rows : 24;
+    const tree = renderAgentTree(rows, {
+      columns: treeCols(),
+      frame: treeFrame,
+      maxRows: Math.max(3, viewportRows - AGENT_DETAIL_LINES - 4),
+      ...(focusedAgentId === null ? {} : { selectedId: focusedAgentId }),
+    });
+
+    statusBar.setAgentTree([...tree, ...detailPane(rows)]);
+  };
+
+  const pushAgentOutput = (agentId: string, text: string): void => {
+    const buf = agentOutput.get(agentId) ?? [];
+
+    for (const raw of text.split(/\r?\n/u)) {
+      const line = raw.replace(SGR_RE, "").replace(/\s+$/u, "");
+
+      if (line.length > 0) {
+        buf.push(line);
+      }
+    }
+
+    agentOutput.set(agentId, buf.slice(-200));
+
+    if (agentId === focusedAgentId) {
+      repaintTree();
+    }
+  };
+
+  const feedTree = (event: ILoopEvent): void => {
+    const id = event.agentId;
+
+    if (id !== undefined && event.kind === "agent_spawned") {
+      outputRouter.setAgentSink(id, (t) => {
+        pushAgentOutput(id, t);
+      });
+      treeActive = true;
+    }
+
+    if (
+      id !== undefined &&
+      event.kind === "agent_started" &&
+      !userPickedFocus
+    ) {
+      focusedAgentId = id; // auto-follow the newest running agent
+    }
+
+    if (
+      event.kind === "agent_spawned" ||
+      event.kind === "agent_started" ||
+      event.kind === "agent_result"
+    ) {
+      agentTree.applyEvent(event);
+      repaintTree();
+    }
+  };
+
+  // Move the detail-pane focus between rows (↑/↓ while agents run).
+  const moveTreeFocus = (delta: number): void => {
+    const rows = agentTree.rows();
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    const current = rows.findIndex((r) => r.id === focusedAgentId);
+    const next = Math.min(
+      rows.length - 1,
+      Math.max(0, (current < 0 ? 0 : current) + delta)
+    );
+
+    focusedAgentId = rows[next]?.id ?? null;
+    userPickedFocus = true;
+    repaintTree();
+  };
+
+  // Fresh tree next turn; drop the per-agent sinks so output routes normally.
+  const resetTree = (): void => {
+    if (!treeActive) {
+      return;
+    }
+
+    for (const id of agentOutput.keys()) {
+      outputRouter.clearAgentSink(id);
+    }
+
+    agentOutput.clear();
+    agentTree = new AgentTreeModel();
+    focusedAgentId = null;
+    userPickedFocus = false;
+    treeActive = false;
+    statusBar.clearAgentTree();
+  };
+
+  observeEvents(feedTree);
+
   // Switch the interactive mode (via the extensible registry) and reflect it in
   // the status bar. The single entry point for /plan, Shift+Tab, and startup —
   // so `planMode`, `currentModeId`, and the bar never drift apart.
@@ -1110,6 +1277,12 @@ export async function repl(args: ICliArgs): Promise<number> {
   spinner.onTick(() => {
     if (statusBar.active && !resizing) {
       statusBar.update(statusInfo());
+
+      // Advance the tree's spinner so running agent rows animate in step.
+      if (treeActive) {
+        treeFrame += 1;
+        repaintTree();
+      }
     }
   });
 
@@ -1565,34 +1738,46 @@ export async function repl(args: ICliArgs): Promise<number> {
     if (process.stdin.isTTY && !useEditor && !flags.basicInput()) {
       // Only set up keypress detection for readline mode (not editor mode).
       emitKeypressEvents(process.stdin);
-      process.stdin.on("keypress", (str: string | undefined) => {
-        syncInput(); // keep the pinned input row in sync as the user types
+      process.stdin.on(
+        "keypress",
+        (str: string | undefined, key: { name?: string } | undefined) => {
+          // Navigate the live agent tree while subagents run — checked BEFORE the
+          // busy guard, because a turn is exactly when the tree is active. ↑/↓
+          // move the detail-pane focus between agents.
+          if (treeActive && (key?.name === "up" || key?.name === "down")) {
+            moveTreeFocus(key.name === "up" ? -1 : 1);
 
-        if (busy || paletteOpen) {
-          return;
-        }
+            return;
+          }
 
-        if (str === "/" && rl !== null) {
-          setImmediate(() => {
-            if (!busy && !paletteOpen && rl.line === "/") {
-              void openPalette();
-            }
-          });
-        } else if (str === "@" && useInputRow && rl !== null) {
-          // The inline dropdown renders above the input row, so it needs that row
-          // (a tall-enough TTY). Without it we skip the picker — `@path` typed by
-          // hand still expands at send time (composeMessage), just no live popup.
-          setImmediate(() => {
-            if (
-              !busy &&
-              !paletteOpen &&
-              shouldOpenAtPicker(rl.line, rl.cursor)
-            ) {
-              void openFilePicker();
-            }
-          });
+          syncInput(); // keep the pinned input row in sync as the user types
+
+          if (busy || paletteOpen) {
+            return;
+          }
+
+          if (str === "/" && rl !== null) {
+            setImmediate(() => {
+              if (!busy && !paletteOpen && rl.line === "/") {
+                void openPalette();
+              }
+            });
+          } else if (str === "@" && useInputRow && rl !== null) {
+            // The inline dropdown renders above the input row, so it needs that row
+            // (a tall-enough TTY). Without it we skip the picker — `@path` typed by
+            // hand still expands at send time (composeMessage), just no live popup.
+            setImmediate(() => {
+              if (
+                !busy &&
+                !paletteOpen &&
+                shouldOpenAtPicker(rl.line, rl.cursor)
+              ) {
+                void openFilePicker();
+              }
+            });
+          }
         }
-      });
+      );
     }
 
     // Event-driven (not for-await) so stdin is read DURING a run: a line typed
@@ -1704,6 +1889,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       closed = true;
       editorHandle?.close();
       statusBar.teardown();
+      observeEvents(null); // stop feeding the agent tree once the REPL is gone
       maybeFinish();
     });
 

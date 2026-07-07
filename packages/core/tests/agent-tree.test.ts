@@ -201,6 +201,26 @@ describe("renderAgentTree", () => {
       expect(displayWidth(line)).toBeLessThanOrEqual(9);
     }
   });
+
+  test("selectedId marks exactly one row with the ▸ caret", () => {
+    const rows: IAgentRow[] = [
+      { id: "a", label: "explore", status: "running" },
+      { id: "b", label: "verify", status: "running" },
+    ];
+    const lines = renderAgentTree(rows, {
+      columns: 60,
+      color: false,
+      frame: 0,
+      selectedId: "b",
+    });
+
+    // The unselected row keeps the plain space; the selected row gets `▸`
+    // (which replaces the label's leading space, so column alignment holds).
+    expect(lines[1]?.includes("▸")).toBe(false);
+    expect(lines[2]?.includes("▸verify")).toBe(true);
+    // Exactly one caret across the whole tree.
+    expect(lines.filter((l) => l.includes("▸"))).toHaveLength(1);
+  });
 });
 
 describe("AgentTreeModel", () => {

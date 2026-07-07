@@ -245,7 +245,9 @@ describe("loadAgentSpecs", () => {
       // The user's project `explore.json` overrides BOTH the global one and the
       // built-in of the same id (project wins; built-in < global < project).
       expect(ids).toContain("explore");
-      expect(specs.find((s) => s.id === "explore")?.model).toBe("project-model");
+      expect(specs.find((s) => s.id === "explore")?.model).toBe(
+        "project-model"
+      );
       // Built-in specialists are always present (delegation works out of the box).
       expect(ids).toContain("research");
       expect(reports.some((m) => m.includes("broken.json"))).toBe(true);

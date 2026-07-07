@@ -249,6 +249,10 @@ export class StatusBar {
   private editorCursorCol = 0;
   /** Extra lines shown ABOVE the input surface (the `@`-picker / command palette). */
   private overlayLines: readonly string[] = [];
+  /** The live agent tree (+ optional detail pane), pinned at the TOP of the live
+   *  region — above the overlay and input — while subagents run. Its own slot so
+   *  it composes with the `@`-picker/palette overlay instead of fighting it. */
+  private agentTreeLines: readonly string[] = [];
   /** While a drag-resize storm is in flight, ALL painting is suspended and streamed
    *  output is buffered; flushed once the size settles (so the region isn't churned
    *  against a reflowing terminal). */
@@ -290,7 +294,7 @@ export class StatusBar {
   } {
     const columns = this.out.columns ?? 80;
     const info = this.lastInfo;
-    const lines: string[] = [...this.overlayLines];
+    const lines: string[] = [...this.agentTreeLines, ...this.overlayLines];
     let cursorRow: number;
     let cursorCol: number;
 
@@ -502,6 +506,30 @@ export class StatusBar {
     }
   }
 
+  /** Show/replace the live agent tree above the input row, then repaint. `[]`
+   *  clears it. Repainted through the same relative-redraw as everything else,
+   *  so it composes with a streaming transcript and the input surface. */
+  setAgentTree(lines: readonly string[]): void {
+    this.agentTreeLines = lines;
+
+    if (this.installed && this.withInput) {
+      this.renderRegion();
+    }
+  }
+
+  /** Erase the agent tree and repaint. Idempotent. */
+  clearAgentTree(): void {
+    if (this.agentTreeLines.length === 0) {
+      return;
+    }
+
+    this.agentTreeLines = [];
+
+    if (this.installed && this.withInput) {
+      this.renderRegion();
+    }
+  }
+
   /** Erase the `@`-picker dropdown and repaint. Idempotent. */
   clearOverlay(info: IStatusInfo): void {
     this.lastInfo = info;
@@ -602,6 +630,7 @@ export class StatusBar {
     this.liveCursorRow = 0;
     this.editorActive = false;
     this.overlayLines = [];
+    this.agentTreeLines = [];
     this.paused = false;
     this.pendingStream = "";
   }
