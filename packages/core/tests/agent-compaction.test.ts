@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { AgentRunner } from "../src/agent";
+import {
+  buildBoundedTranscript,
+  isContextOverflow,
+} from "../src/agent/agent-runner";
 import type { IAgentSpec } from "../src/agent/agent-spec";
 import type {
   IProvider,
@@ -148,5 +152,93 @@ describe("AgentRunner auto-compaction", () => {
 
     expect(provider.compactionCalls).toBe(0);
     expect(status).toBe("error");
+  });
+
+  // A small model (window ≤ the output reserve) must not collapse the effective
+  // budget to ~0 and compact on every turn (the reviewer's infinite-loop case).
+  test("a small context window does NOT trigger compaction every turn", async () => {
+    const result = await new AgentRunner(SPEC).run({
+      provider: new ScriptedProvider([
+        answer("", 2000), // ~25% of an 8k window — well under any sane threshold
+        answer("final answer", 2000),
+      ]),
+      cwd: process.cwd(),
+      parentTaskId: "t",
+      task: "explore",
+      contextWindow: 8000, // < the 16384 output reserve
+      tsService: null,
+      policyMode: "bypassPermissions",
+    });
+
+    expect(result.status).toBe("done");
+    expect(compacted(result.events).length).toBe(0);
+  });
+});
+
+describe("isContextOverflow", () => {
+  test("matches vLLM/OpenAI context-overflow messages", () => {
+    expect(
+      isContextOverflow(
+        new Error(
+          "400 This model's maximum context length is 131072 tokens. However, you requested 131073."
+        )
+      )
+    ).toBe(true);
+    expect(
+      isContextOverflow(new Error("reduce the length of the messages"))
+    ).toBe(true);
+  });
+
+  test("extracts the message from a non-Error object (nested error.message)", () => {
+    expect(
+      isContextOverflow({
+        error: { message: "maximum context length exceeded" },
+      })
+    ).toBe(true);
+    expect(isContextOverflow({ message: "context window is full" })).toBe(true);
+  });
+
+  test("is false for unrelated errors", () => {
+    expect(isContextOverflow(new Error("500 internal server error"))).toBe(
+      false
+    );
+    expect(isContextOverflow(null)).toBe(false);
+    expect(isContextOverflow("timed out")).toBe(false);
+  });
+});
+
+describe("buildBoundedTranscript", () => {
+  const msg = (role: string, content: string) => ({ role, content });
+
+  test("always includes the newest message, truncating it if it alone exceeds the budget", () => {
+    const huge = "Z".repeat(5000);
+    const out = buildBoundedTranscript(
+      [msg("user", "task"), msg("assistant", "a"), msg("tool", huge)],
+      500
+    );
+
+    expect(out).toContain("[tool]"); // the newest message is present…
+    expect(out).toContain("…[truncated]"); // …truncated to fit
+    expect(out.length).toBeLessThanOrEqual(500); // bound respected
+  });
+
+  test("elides older messages with a marker and stays within the budget", () => {
+    const conversation = Array.from({ length: 20 }, (_v, i) =>
+      msg("tool", `finding ${i} `.repeat(20))
+    );
+    const out = buildBoundedTranscript(conversation, 400);
+
+    expect(out).toContain("earlier message(s) elided");
+    expect(out.length).toBeLessThanOrEqual(400);
+    expect(out).toContain("finding 19"); // newest kept
+  });
+
+  test("maxChars ≤ 0 means unbounded (returns the full transcript)", () => {
+    const out = buildBoundedTranscript(
+      [msg("user", "one"), msg("assistant", "two")],
+      0
+    );
+
+    expect(out).toBe("[user] one\n\n[assistant] two");
   });
 });

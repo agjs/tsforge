@@ -108,7 +108,8 @@ class CountingProvider implements IProvider {
 async function runOneCap(
   cap: number,
   entry: Parameters<typeof providerConfig>[0],
-  cwd: string
+  cwd: string,
+  contextWindow: number
 ): Promise<{ cap: number; wallMs: number; stats: IAgentStat[] }> {
   const limit = makeLimiter(cap);
   const explore = BUILTIN_SPECS.find((s) => s.id === "explore");
@@ -137,6 +138,9 @@ async function runOneCap(
           task: task.prompt,
           report: silent,
           policyMode: "bypassPermissions",
+          // Without this, auto-compaction is OFF and the eval can't exercise the
+          // very behavior it measures (compactions would stay 0).
+          contextWindow,
         });
 
         return {
@@ -216,7 +220,8 @@ async function main(): Promise<number> {
       const { wallMs, stats } = await runOneCap(
         cap,
         active.entry,
-        process.cwd()
+        process.cwd(),
+        window
       );
       const runLabel = repeats > 1 ? ` (run ${r + 1})` : "";
 

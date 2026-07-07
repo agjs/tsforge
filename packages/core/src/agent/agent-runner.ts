@@ -24,6 +24,7 @@ import {
 import { DEFAULT_TEMPERATURE } from "../loop/loop.constants";
 import { PROVIDER_LIMITS } from "../inference";
 import { COMPACT_SYSTEM } from "../loop/prompt";
+import { isRecord } from "../lib/guards";
 import { TOOL_SPECS } from "./agent.constants";
 import type { IAgentSpec } from "./agent-spec";
 
@@ -38,22 +39,48 @@ export const AGENT_LIMITS = {
   autoCompactAt: 0.8,
 } as const;
 
+/** Best-effort human-readable message from an unknown throw. Handles the common
+ *  provider shapes without casts: an Error, or a plain object carrying `message`
+ *  (or a nested `error.message`, as some HTTP clients surface API errors). */
+function errorText(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+
+  if (isRecord(err)) {
+    if (typeof err.message === "string") {
+      return err.message;
+    }
+
+    if (isRecord(err.error) && typeof err.error.message === "string") {
+      return err.error.message;
+    }
+  }
+
+  return String(err);
+}
+
 /** A vLLM/OpenAI-style context-overflow rejection ("This model's maximum context
  *  length is N tokens. However, you requested M…"). Matched so it can be RECOVERED
- *  (compact + retry) instead of failing the agent. */
-function isContextOverflow(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-
+ *  (compact + retry) instead of failing the agent. Exported for unit tests. */
+export function isContextOverflow(err: unknown): boolean {
   return /maximum context length|context length|context window|too many tokens|reduce the length|too long/iu.test(
-    msg
+    errorText(err)
   );
 }
 
-/** Join the conversation (system excluded) into a summarizer prompt, but bounded
- *  to `maxChars` so the compaction request itself can never overflow the window:
- *  always keep the first message (the task) and as many of the MOST RECENT
- *  messages as fit, eliding the middle. maxChars ≤ 0 ⇒ unbounded. */
-function buildBoundedTranscript(
+/** Chars reserved for the elision marker + join separators, so the assembled
+ *  transcript stays within `maxChars` even after they're added. */
+const TRANSCRIPT_MARKER_RESERVE = 64;
+
+/** Join the conversation (system excluded) into a summarizer prompt bounded to
+ *  `maxChars` so the compaction request itself can never overflow the window.
+ *  Fills from the MOST RECENT message backward (recent context matters most and
+ *  is the reason for the overflow) and ALWAYS includes at least the newest
+ *  message — head-truncating it if it alone exceeds the budget — then walks back
+ *  through older turns while they fit, eliding the rest. maxChars ≤ 0 ⇒ unbounded.
+ *  Exported for unit tests. */
+export function buildBoundedTranscript(
   conversation: readonly { role: string; content?: string }[],
   maxChars: number
 ): string {
@@ -64,32 +91,45 @@ function buildBoundedTranscript(
     return conversation.map(line).join("\n\n");
   }
 
-  const head = conversation[0] === undefined ? "" : line(conversation[0]);
-  const tail: string[] = [];
-  let used = head.length;
+  // No single message may exceed the budget — truncate an oversized one so it
+  // can still be included (the newest is often a giant tool result).
+  const budget = Math.max(1, maxChars - TRANSCRIPT_MARKER_RESERVE);
 
-  for (let i = conversation.length - 1; i >= 1; i -= 1) {
+  const capped = (m: { role: string; content?: string }): string => {
+    const text = line(m);
+
+    return text.length <= budget
+      ? text
+      : `${text.slice(0, Math.max(1, budget - 15))} …[truncated]`;
+  };
+
+  const picked: string[] = [];
+  let used = 0;
+  let firstIdx = conversation.length;
+
+  for (let i = conversation.length - 1; i >= 0; i -= 1) {
     const msg = conversation[i];
 
     if (msg === undefined) {
       continue;
     }
 
-    const text = line(msg);
+    const text = capped(msg);
 
-    if (used + text.length > maxChars) {
+    // Always keep at least the newest (picked is empty on the first iteration).
+    if (picked.length > 0 && used + text.length > budget) {
       break;
     }
 
-    tail.unshift(text);
+    picked.unshift(text);
     used += text.length;
+    firstIdx = i;
   }
 
-  const elided = conversation.length - 1 - tail.length;
   const marker =
-    elided > 0 ? [`… (${String(elided)} earlier message(s) elided) …`] : [];
+    firstIdx > 0 ? [`… (${String(firstIdx)} earlier message(s) elided) …`] : [];
 
-  return [head, ...marker, ...tail].join("\n\n");
+  return [...marker, ...picked].join("\n\n");
 }
 
 /** Summarize the conversation and REPLACE it with [system, summary] — the same
@@ -562,9 +602,15 @@ export class AgentRunner {
     // real ceiling for the PROMPT is `window - maxTokens`. Trigger compaction
     // against that effective budget — otherwise a request can 400 while the
     // prompt alone is still under `window` (observed: 114689 prompt + 16384 out
-    // = 131073 > 131072). The reactive path below is the backstop for a single
-    // read that jumps past the threshold in one turn.
-    const effectiveWindow = Math.max(1, window - PROVIDER_LIMITS.maxTokens);
+    // = 131073 > 131072). The reserve is CAPPED at half the window so a small
+    // model (window ≤ maxTokens) can't collapse the effective budget to ~0 and
+    // compact on every single turn. The reactive path below is the backstop for
+    // a single read that jumps past the threshold in one turn.
+    const reserve = Math.min(
+      PROVIDER_LIMITS.maxTokens,
+      Math.floor(window * 0.5)
+    );
+    const effectiveWindow = Math.max(1, window - reserve);
     const at = AGENT_LIMITS.autoCompactAt;
 
     const compact = async (reason: string): Promise<void> => {
