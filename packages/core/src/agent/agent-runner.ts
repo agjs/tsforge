@@ -183,22 +183,53 @@ const DEFAULT_SYSTEM = [
 ].join(" ");
 
 /** The structured-output control tool: intercepted by the runner itself (never
- *  dispatched to executeTool), so the parent gets a parseable final payload. */
+ *  dispatched to executeTool), so the parent gets a PARSEABLE final payload —
+ *  a headline `summary` plus a list of concrete `findings`, each carrying its
+ *  own `source` (`file:line` for code, a URL for external docs). Forcing this
+ *  shape both keeps output consistent for the orchestrator and pushes the model
+ *  to attach evidence to every point instead of emitting uncited prose. */
 const AGENT_RESULT_TOOL = {
   type: "function",
   function: {
     name: "agent_result",
     description:
-      "Return your final result and finish. Call exactly once, when done.",
+      "Return your final result and finish. Call exactly once, when done. Put the " +
+      "headline conclusion (or verdict) in `summary`, and each concrete point in " +
+      "`findings` — every code point MUST carry the `file:line` you saw in `source`.",
     parameters: {
       type: "object",
       properties: {
-        result: {
+        summary: {
           type: "string",
-          description: "Your complete findings/answer.",
+          description: "1–3 sentence headline conclusion or verdict.",
+        },
+        findings: {
+          type: "array",
+          description:
+            "The concrete points; empty only if there is genuinely none.",
+          items: {
+            type: "object",
+            properties: {
+              detail: {
+                type: "string",
+                description: "One specific observation, issue, or fact.",
+              },
+              source: {
+                type: "string",
+                description:
+                  "Where you saw it: `path/to/file.ts:123` for code, or a URL for external docs.",
+              },
+              confidence: {
+                type: "string",
+                enum: ["high", "medium", "low"],
+                description: "How sure you are of this point.",
+              },
+            },
+            required: ["detail"],
+          },
         },
       },
-      required: ["result"],
+      required: ["summary", "findings"],
     },
   },
 } as const;
@@ -262,9 +293,36 @@ export interface IAgentRunOptions {
   contextWindow?: number;
 }
 
-/** Pull the structured payload out of an intercepted agent_result call. */
+/** Render one structured finding as `- detail (source) [confidence]`. */
+function formatFinding(f: unknown): string | null {
+  if (!isRecord(f) || typeof f.detail !== "string" || f.detail.length === 0) {
+    return null;
+  }
+
+  const source =
+    typeof f.source === "string" && f.source.length > 0 ? ` (${f.source})` : "";
+  const confidence =
+    typeof f.confidence === "string" ? ` [${f.confidence}]` : "";
+
+  return `- ${f.detail}${source}${confidence}`;
+}
+
+/** Flatten an intercepted `agent_result` call into the text the orchestrator
+ *  reads: the `summary` followed by cited `findings`. Falls back to the legacy
+ *  `{ result }` string or raw JSON if the structured shape is absent, so an
+ *  older spec or a malformed call still yields something usable. */
 function resultPayload(args: Record<string, unknown>): string {
-  return typeof args.result === "string" ? args.result : JSON.stringify(args);
+  const summary = typeof args.summary === "string" ? args.summary : "";
+  const findings = Array.isArray(args.findings) ? args.findings : [];
+  const lines = findings
+    .map(formatFinding)
+    .filter((l): l is string => l !== null);
+
+  if (summary.length === 0 && lines.length === 0) {
+    return typeof args.result === "string" ? args.result : JSON.stringify(args);
+  }
+
+  return [summary, ...lines].filter((s) => s.length > 0).join("\n");
 }
 
 /** Force the first move (`"required"`) while real tools exist and nothing has

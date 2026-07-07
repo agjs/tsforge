@@ -109,6 +109,43 @@ def search_call():
     )
 
 
+def agent_result_call():
+    """A subagent's structured final answer (built-in specs are outputMode:structured)."""
+    yield sse(
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_r",
+                                "type": "function",
+                                "function": {
+                                    "name": "agent_result",
+                                    "arguments": json.dumps(
+                                        {
+                                            "summary": "AgentScheduler caps concurrency; no abort race.",
+                                            "findings": [
+                                                {
+                                                    "detail": "cap honored via the limiter",
+                                                    "source": "agent-scheduler.ts:60",
+                                                    "confidence": "high",
+                                                }
+                                            ],
+                                        }
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+    )
+
+
 def _decide(messages):
     system = ""
     if messages and messages[0].get("role") == "system":
@@ -129,10 +166,11 @@ def _decide(messages):
             )
         return two_spawns()
 
-    # A subagent (built-in explore/verify). The runner forces a tool call first,
-    # so search, then answer once the tool result is back.
+    # A subagent (built-in explore/verify — outputMode:structured). The runner
+    # forces a tool call first, so search, then finish with a STRUCTURED
+    # agent_result once the tool result is back (plain text would be nudged).
     if last.get("role") == "tool":
-        return content_chunks("Confirmed at agent-scheduler.ts:60 — cap honored.")
+        return agent_result_call()
     return search_call()
 
 
