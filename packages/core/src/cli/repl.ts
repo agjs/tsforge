@@ -1922,6 +1922,18 @@ export async function repl(args: ICliArgs): Promise<number> {
       editorHandle.onCycleMode(() => {
         setMode(nextMode(currentModeId).id);
       });
+      // ↑/↓ on an empty input row navigate the live agent tree (parity with the
+      // readline path at the keypress handler above). Consumed only while a tree
+      // is active; otherwise the editor keeps the arrows for history/cursor.
+      editorHandle.onNavigateTree((delta) => {
+        if (!treeActive) {
+          return false;
+        }
+
+        moveTreeFocus(delta);
+
+        return true;
+      });
     } else if (rl !== null) {
       rl.on("line", submitLine);
     }

@@ -19,6 +19,12 @@ export interface IEditorHandle {
   /** Shift+Tab — cycle the session mode (plan/normal/…). The host decides what
    *  cycling means; the editor just forwards the keypress. */
   onCycleMode(cb: () => void): void;
+  /** ↑/↓ while the input buffer is EMPTY — offer the keypress to the host so it
+   *  can navigate an out-of-band overlay (the live agent tree). `delta` is -1 for
+   *  up, +1 for down; the callback returns `true` to consume the key, `false` to
+   *  let the editor handle it as cursor/history movement. Only consulted on an
+   *  empty buffer so it never hijacks arrows while the user is composing. */
+  onNavigateTree(cb: (delta: number) => boolean): void;
   getBuffer(): EditorBuffer;
   /** Update the terminal dimensions and repaint. The CLI calls this on a
    *  terminal resize; without it the editor keeps wrapping/windowing at the
@@ -197,6 +203,13 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   const interruptCallbacks: (() => void)[] = [];
   const exitCallbacks: (() => void)[] = [];
   const cycleModeCallbacks: (() => void)[] = [];
+  const navigateTreeCallbacks: ((delta: number) => boolean)[] = [];
+
+  // Offer an empty-buffer ↑/↓ to the host (live agent tree). Returns true if a
+  // callback consumed it, so the editor should skip its own cursor/history move.
+  const dispatchNavigateTree = (delta: number): boolean =>
+    buffer.getText().length === 0 &&
+    navigateTreeCallbacks.some((cb) => cb(delta));
 
   // In-session history: submitted messages for up/down navigation
   const history: string[] = [];
@@ -476,6 +489,11 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     // History navigation: up/down at buffer edges
     if (name === "up") {
+      // Empty buffer: let the host navigate the agent tree (if one is live).
+      if (dispatchNavigateTree(-1)) {
+        return;
+      }
+
       const { line } = buffer.getCursor();
 
       if (line === 0) {
@@ -492,6 +510,10 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     }
 
     if (name === "down") {
+      if (dispatchNavigateTree(1)) {
+        return;
+      }
+
       const { line } = buffer.getCursor();
       const lines = buffer.getText().split("\n");
       const lastLine = lines.length - 1;
@@ -643,6 +665,10 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     onCycleMode(cb: () => void) {
       cycleModeCallbacks.push(cb);
+    },
+
+    onNavigateTree(cb: (delta: number) => boolean) {
+      navigateTreeCallbacks.push(cb);
     },
 
     getBuffer(): EditorBuffer {

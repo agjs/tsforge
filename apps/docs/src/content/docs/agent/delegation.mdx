@@ -49,7 +49,9 @@ While subagents run, they render as a live tree pinned above the input row — s
 └─ ⠹ verify
 ```
 
-Rows appear the moment they're spawned, animate a spinner while running, and finish with their wall-clock and turn count. Beneath the tree, a detail pane streams the **focused** agent's live output (the files it reads, what it finds) — it follows the active agent automatically. The tree repaints in place (it never scrolls your transcript) and collapses to `… +N more` past a dozen rows. Ctrl-C cancels the turn and all its subagents.
+Rows appear the moment they're spawned, animate a spinner while running, and finish with their wall-clock and turn count. Beneath the tree, a detail pane streams the **focused** agent's live output (the files it reads, what it finds) — it follows the newest running agent automatically. The tree repaints in place (it never scrolls your transcript) and collapses to `… +N more` past a dozen rows. Ctrl-C cancels the turn and all its subagents.
+
+**Watch any agent.** Press **↑/↓** while subagents are running to move the detail pane between them — pick one and watch what it's doing, instead of only seeing the newest. This works in both input modes (the default multi-line editor and the basic input row); in the editor it's only bound while the input is empty, so the arrows still edit a message you're composing mid-run. Auto-follow resumes on a fresh turn.
 
 ## Concurrency
 
