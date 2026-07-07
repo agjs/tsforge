@@ -10,7 +10,7 @@
  * (scheduler unitReporter); the runner only tags its inner events with
  * agentId/parentTask so interleaved streams stay attributable.
  */
-import type { IProvider } from "../inference";
+import type { IProvider, IModelResponse } from "../inference";
 import type { TsService } from "../lsp";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import type { ILoopEvent, Reporter } from "../loop/loop.types";
@@ -21,6 +21,7 @@ import {
   type ILoopCtx,
   type ILoopState,
 } from "../loop/turn";
+import { DEFAULT_TEMPERATURE } from "../loop/loop.constants";
 import { TOOL_SPECS } from "./agent.constants";
 import type { IAgentSpec } from "./agent-spec";
 
@@ -31,8 +32,12 @@ export const AGENT_LIMITS = {
 
 const DEFAULT_SYSTEM = [
   "You are a focused read-only investigator inside a coding harness.",
-  "Explore the workspace with the provided tools, then answer the task in ONE",
-  "final message: state conclusions with file:line references, not raw dumps.",
+  "You do NOT know the codebase — you MUST investigate before answering.",
+  "Use the tools (search/read/symbol_search/…) to open the actual files the",
+  "task is about; NEVER answer from memory or guess. Read real code first,",
+  "then answer in ONE final message: concrete conclusions, each backed by a",
+  "`file:line` reference you actually saw. An answer with no file:line",
+  "citations means you did not investigate and is wrong.",
   "You cannot edit files — do not propose tool calls that write.",
 ].join(" ");
 
@@ -112,6 +117,32 @@ export interface IAgentRunOptions {
 /** Pull the structured payload out of an intercepted agent_result call. */
 function resultPayload(args: Record<string, unknown>): string {
   return typeof args.result === "string" ? args.result : JSON.stringify(args);
+}
+
+/** Force the first move (`"required"`) while real tools exist and nothing has
+ *  been investigated yet — this is what stops a local model from answering from
+ *  memory in one turn. Once it has read something, or on the last turn (where a
+ *  forced call it can't act on is useless), fall back to `"auto"`. */
+function nextToolChoice(
+  hasRealTools: boolean,
+  hasInvestigated: boolean,
+  turn: number,
+  maxTurns: number
+): "required" | "auto" {
+  const mustInvestigate = hasRealTools && !hasInvestigated && turn < maxTurns;
+
+  return mustInvestigate ? "required" : "auto";
+}
+
+/** Append the model's turn (content + tool calls, replaying reasoning for the
+ *  deepseek style) to the conversation. */
+function pushAssistant(ctx: ILoopCtx, res: IModelResponse): void {
+  ctx.messages.push({
+    role: "assistant",
+    content: res.content,
+    toolCalls: res.toolCalls,
+    ...(res.reasoning === undefined ? {} : { reasoningContent: res.reasoning }),
+  });
 }
 
 export class AgentRunner {
@@ -261,6 +292,13 @@ export class AgentRunner {
     const { agentId, structured, tools, maxTurns, report, finish, progress } =
       loop;
     let lastText = "";
+    // Whether the agent has called ANY investigative tool yet. Until it has, we
+    // force a tool call (toolChoice "required") instead of letting the model
+    // answer from memory in one turn — the adoption failure that made read-only
+    // agents return uncited, empty prose. Once it has actually read something,
+    // switch to "auto" so it can produce its final answer.
+    let hasInvestigated = false;
+    const hasRealTools = tools.length > (structured ? 1 : 0);
 
     {
       for (let turn = 1; turn <= maxTurns; turn += 1) {
@@ -279,22 +317,23 @@ export class AgentRunner {
 
         const res = await opts.provider.complete(ctx.messages, {
           tools,
-          toolChoice: "auto",
-          temperature: opts.temperature ?? 0,
+          toolChoice: nextToolChoice(
+            hasRealTools,
+            hasInvestigated,
+            turn,
+            maxTurns
+          ),
+          // Match the main loop's default (0.2), NOT greedy: temperature 0 makes
+          // this model early-stop into empty/one-line answers on a long
+          // tool-result context. A caller can still override.
+          temperature: opts.temperature ?? DEFAULT_TEMPERATURE,
           ...(opts.signal === undefined ? {} : { signal: opts.signal }),
           onToken: (text) => {
             report({ kind: "token", task: agentId, message: text });
           },
         });
 
-        ctx.messages.push({
-          role: "assistant",
-          content: res.content,
-          toolCalls: res.toolCalls,
-          ...(res.reasoning === undefined
-            ? {}
-            : { reasoningContent: res.reasoning }),
-        });
+        pushAssistant(ctx, res);
         lastText = res.content.length > 0 ? res.content : lastText;
         progress.lastText = lastText;
 
@@ -306,19 +345,28 @@ export class AgentRunner {
           return finish("done", resultPayload(resultCall.arguments), turn);
         }
 
+        const investigativeCalls = res.toolCalls.filter(
+          (c) => c.name !== AGENT_RESULT_TOOL.function.name
+        );
+
+        if (investigativeCalls.length > 0) {
+          hasInvestigated = true;
+        }
+
         if (res.toolCalls.length === 0) {
-          // A structured agent that just stops talking has NOT delivered its
-          // payload — nudge once per remaining turn rather than accept prose.
-          if (structured) {
-            ctx.messages.push({
-              role: "user",
-              content:
-                "Call the agent_result tool with your final result to finish.",
-            });
-            continue;
+          const done = this.finalizeOrNudge(
+            res.content,
+            structured,
+            hasInvestigated,
+            ctx,
+            () => finish("done", res.content, turn)
+          );
+
+          if (done !== null) {
+            return done;
           }
 
-          return finish("done", res.content, turn);
+          continue;
         }
 
         await runToolCalls(res.toolCalls, ctx, state);
@@ -326,5 +374,38 @@ export class AgentRunner {
 
       return finish("max_turns", lastText, maxTurns);
     }
+  }
+
+  /** Decide what to do with a no-tool-call response: return a `done` result, or
+   *  `null` after pushing a follow-up nudge so the loop takes another turn. A
+   *  structured agent must still call `agent_result`; an empty answer with no
+   *  investigation is not accepted. */
+  private finalizeOrNudge(
+    content: string,
+    structured: boolean,
+    hasInvestigated: boolean,
+    ctx: ILoopCtx,
+    done: () => IAgentResult
+  ): IAgentResult | null {
+    if (structured) {
+      ctx.messages.push({
+        role: "user",
+        content: "Call the agent_result tool with your final result to finish.",
+      });
+
+      return null;
+    }
+
+    if (content.trim().length === 0 && !hasInvestigated) {
+      ctx.messages.push({
+        role: "user",
+        content:
+          "You haven't investigated yet. Use the tools to read the relevant files, then answer with file:line citations.",
+      });
+
+      return null;
+    }
+
+    return done();
   }
 }
