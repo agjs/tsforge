@@ -518,8 +518,15 @@ export async function repl(args: ICliArgs): Promise<number> {
     getTsService: () => session.tsService,
   });
 
-  // Re-applied after `/clear` rebuilds the session (like setSetupWeb).
+  // Re-applied after `/clear` rebuilds the session (like setSetupWeb). Skipped
+  // entirely under TSFORGE_NO_DELEGATION — the A/B control arm / pure single-stream.
+  const delegationOff = flags.noDelegation();
+
   const wireDelegation = (): void => {
+    if (delegationOff) {
+      return;
+    }
+
     session.setDelegation(agentSpecs, spawnAgentFn);
   };
 
@@ -527,7 +534,9 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   // Make the delegation setup visible so the concurrency cap is never a mystery
   // (cap 1 ⇒ subagents run serially; raise agents.concurrency to overlap them).
-  if (agentSpecs.length > 0) {
+  if (delegationOff) {
+    process.stdout.write("  ↳ delegation: OFF (TSFORGE_NO_DELEGATION)\n");
+  } else if (agentSpecs.length > 0) {
     const names = agentSpecs.map((s) => s.id).join(", ");
 
     process.stdout.write(
