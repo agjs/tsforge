@@ -422,10 +422,14 @@ function systemPrompt(
   return `${buildChatSystem(conventions)}\n\n${tdd}${prefix}${lines.join("\n")}`;
 }
 
+/** Stable prefix of the delegation block — the sentinel `setDelegation` checks to
+ *  stay idempotent across resumed/rebuilt sessions (so the prompt can't grow). */
+const DELEGATION_MARKER = "DELEGATION:";
+
 /** The system-prompt block that tells the orchestrator delegation exists and
  *  names the specialists, so it picks the right one without the user ever naming
  *  an agent. Appended (not baked into buildChatSystem) because the roster is
- *  known only after specs load. */
+ *  known only after specs load. Starts with {@link DELEGATION_MARKER}. */
 function delegationGuidance(specs: readonly IAgentSpec[]): string {
   const roster = specs
     .map((s) =>
@@ -434,7 +438,7 @@ function delegationGuidance(specs: readonly IAgentSpec[]): string {
     .join("\n");
 
   return [
-    "DELEGATION: you can hand focused, read-only investigation to specialist subagents with the `spawn_agent` tool — exploring an unfamiliar part of the codebase, researching an external API/library, or verifying a claim — instead of spending your own turns and context on it. Spawn several in one turn for independent lines of inquiry; they run in parallel, each with its own context, and only YOU edit files. The user thinks in tasks and features, never in subagents — it is YOUR call when delegation helps.",
+    `${DELEGATION_MARKER} you can hand focused, read-only investigation to specialist subagents with the \`spawn_agent\` tool — exploring an unfamiliar part of the codebase, researching an external API/library, or verifying a claim — instead of spending your own turns and context on it. Spawn several in one turn for independent lines of inquiry; they run in parallel, each with its own context, and only YOU edit files. The user thinks in tasks and features, never in subagents — it is YOUR call when delegation helps.`,
     `Specialists available:\n${roster}`,
   ].join("\n\n");
 }
@@ -838,8 +842,23 @@ export class Session {
     }
 
     this.ctx.tool.spawnAgent = fn;
-    this.tools = [...this.tools, tool];
-    this.guide(delegationGuidance(specs));
+
+    // Idempotent: setDelegation runs on EVERY REPL launch, and a resumed
+    // (`--continue`) session reuses persisted history whose system message
+    // already carries the guidance. Re-adding the tool or re-appending the block
+    // would duplicate them (the prompt would grow each launch). Guard on the
+    // tool name and the guidance marker so a rebuilt/fresh session gets them once.
+    if (!this.tools.some((t) => t.function.name === tool.function.name)) {
+      this.tools = [...this.tools, tool];
+    }
+
+    const system = this.ctx.messages[0];
+
+    if (
+      !(system?.role === "system" && system.content.includes(DELEGATION_MARKER))
+    ) {
+      this.guide(delegationGuidance(specs));
+    }
   }
 
   /** Append opinionated guidance to the SYSTEM prompt (e.g. after classifying a

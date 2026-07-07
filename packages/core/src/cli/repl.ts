@@ -961,12 +961,18 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
 
     const label = rows.find((r) => r.id === id)?.label ?? id;
-    const buf = agentOutput.get(id) ?? [];
     const width = Math.max(10, treeCols() - 5);
+    // Show the last N non-blank lines (the reassembled stream may end on an empty
+    // in-progress line; blanks would waste rows in the small pane).
+    const lines = (agentOutput.get(id) ?? [])
+      .map((l) => l.replace(/\s+$/u, ""))
+      .filter((l) => l.length > 0);
     const body =
-      buf.length === 0
+      lines.length === 0
         ? [paint("    (working…)", STYLE.dim, true)]
-        : buf.slice(-AGENT_DETAIL_LINES).map((l) => `    ${l.slice(0, width)}`);
+        : lines
+            .slice(-AGENT_DETAIL_LINES)
+            .map((l) => `    ${l.slice(0, width)}`);
 
     return [paint(`  ↳ ${label}`, STYLE.dim, true), ...body];
   };
@@ -996,14 +1002,17 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   const pushAgentOutput = (agentId: string, text: string): void => {
-    const buf = agentOutput.get(agentId) ?? [];
+    const buf = agentOutput.get(agentId) ?? [""];
+    // Streaming chunks are small and often newline-free (mid-word), so we can't
+    // treat each chunk as a whole line. The LAST buffered entry is the line still
+    // in progress: the chunk's first segment continues it, and each embedded
+    // newline starts a new line. This reassembles fragments into coherent lines.
+    const segments = text.replace(SGR_RE, "").split(/\r?\n/u);
 
-    for (const raw of text.split(/\r?\n/u)) {
-      const line = raw.replace(SGR_RE, "").replace(/\s+$/u, "");
+    buf[buf.length - 1] = `${buf[buf.length - 1] ?? ""}${segments[0] ?? ""}`;
 
-      if (line.length > 0) {
-        buf.push(line);
-      }
+    for (let k = 1; k < segments.length; k += 1) {
+      buf.push(segments[k] ?? "");
     }
 
     agentOutput.set(agentId, buf.slice(-200));
@@ -1017,9 +1026,16 @@ export async function repl(args: ICliArgs): Promise<number> {
     const id = event.agentId;
 
     if (id !== undefined && event.kind === "agent_spawned") {
-      outputRouter.setAgentSink(id, (t) => {
-        pushAgentOutput(id, t);
-      });
+      // Only DIVERT a subagent's output to the (invisible) detail buffer when the
+      // tree can actually render it. With the bar inactive (non-TTY / tiny
+      // terminal) we leave the sink unset so output routes to the parent/stdout
+      // and stays visible instead of being swallowed.
+      if (statusBar.active) {
+        outputRouter.setAgentSink(id, (t) => {
+          pushAgentOutput(id, t);
+        });
+      }
+
       treeActive = true;
     }
 
@@ -1049,11 +1065,13 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    const current = rows.findIndex((r) => r.id === focusedAgentId);
-    const next = Math.min(
-      rows.length - 1,
-      Math.max(0, (current < 0 ? 0 : current) + delta)
-    );
+    // Start from the CURRENTLY-shown row: when nothing is explicitly picked yet
+    // the pane auto-follows the last row, so resolve that same id first — else the
+    // first ↑/↓ would jump to row 0 instead of stepping from what's on screen.
+    const activeId = focusedAgentId ?? rows.at(-1)?.id;
+    const current = rows.findIndex((r) => r.id === activeId);
+    const base = current < 0 ? rows.length - 1 : current;
+    const next = Math.min(rows.length - 1, Math.max(0, base + delta));
 
     focusedAgentId = rows[next]?.id ?? null;
     userPickedFocus = true;

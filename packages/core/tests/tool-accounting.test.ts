@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, mkdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -837,6 +838,73 @@ test("a generated *.gen.ts file is editable (the vendored block is gone)", async
     expect(await Bun.file(join(dir, "src/routeTree.gen.ts")).exists()).toBe(
       true
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Codex P2a + Gemini G4: `spawn_agent` calls used to be pre-run in one batch
+// BEFORE the sequential loop, so an `edit`→`spawn` turn made the subagent read
+// the PRE-edit workspace. Now a non-spawn tool is an ordering barrier: the edit
+// applies first. Consecutive spawns still batch, and one failing spawn is
+// isolated to its own reply (never sinks its sibling).
+test("a preceding edit applies BEFORE a spawn (barrier); a failing spawn is isolated", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-spawn-order-"));
+
+  try {
+    const seen = { markerAtSpawn: false, ids: [] as string[] };
+    const ctx = ctxFor(dir, ["**/*"]);
+
+    ctx.tool.spawnAgent = (req) => {
+      // The `create` below precedes the spawns — with the barrier it has already
+      // written marker.ts by the time any subagent runs.
+      seen.markerAtSpawn =
+        seen.markerAtSpawn || existsSync(join(dir, "marker.ts"));
+      seen.ids.push(req.subagentType);
+
+      if (req.subagentType === "boom") {
+        throw new Error("kaboom");
+      }
+
+      return Promise.resolve(`[${req.subagentType}] ok`);
+    };
+
+    const ctxMessages = ctx.messages;
+
+    await runToolCalls(
+      [
+        {
+          name: "create",
+          arguments: { file: "marker.ts", content: "export const m = 1;\n" },
+        },
+        {
+          name: "spawn_agent",
+          arguments: {
+            subagent_type: "explore",
+            description: "d",
+            prompt: "p",
+          },
+        },
+        {
+          name: "spawn_agent",
+          arguments: { subagent_type: "boom", description: "d", prompt: "p" },
+        },
+      ],
+      ctx,
+      freshState()
+    );
+
+    // Barrier: the edit ran first, so the subagent saw the created file.
+    expect(seen.markerAtSpawn).toBe(true);
+    // Both consecutive spawns ran (batched), in order.
+    expect(seen.ids).toEqual(["explore", "boom"]);
+    // Three tool replies (create + two spawns); the failing spawn is isolated.
+    const toolReplies = ctxMessages.filter((m) => m.role === "tool");
+
+    expect(toolReplies).toHaveLength(3);
+    expect(toolReplies[1]?.content).toContain("[explore] ok");
+    // The sibling failure is surfaced in ITS OWN reply (isolated) with the reason.
+    expect(toolReplies[2]?.content).toContain("kaboom");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
