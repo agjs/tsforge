@@ -32,6 +32,13 @@ import {
 import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { Session, LOOP_LIMITS, type Reporter } from "../src/loop";
+import { detectContextWindow } from "../src/cli/model-setup";
+import { loadAgentSpecs } from "../src/config/agent-specs";
+import {
+  loadTsforgeConfig,
+  resolveAgentConcurrency,
+} from "../src/config/tsforge-config";
+import { makeSpawnAgentFn } from "../src/cli/spawn-runner";
 import { renderEvent } from "../src/render";
 import { logsDir } from "../src/session-store";
 import type { WebFramework } from "../src/web-templates";
@@ -177,9 +184,14 @@ async function main(): Promise<void> {
   const { entry } = await resolveActiveModel();
   const model = entry.model;
   const envWindow = Number(process.env.TSFORGE_CONTEXT_WINDOW);
+  // Prefer an explicit entry/env window; otherwise PROBE the server for the real
+  // max_model_len (like the REPL does) instead of assuming 262144 — a mismatch
+  // mis-calibrates auto-compaction and the build can overflow the real window.
   const contextWindow =
     entry.contextWindow ??
-    (Number.isFinite(envWindow) && envWindow > 0 ? envWindow : 262_144);
+    (Number.isFinite(envWindow) && envWindow > 0
+      ? envWindow
+      : ((await detectContextWindow(entry)) ?? 262_144));
 
   // EACH RUN GETS ITS OWN DIRECTORY: evals/runs/<timestamp>-<label>/ — so you
   // always know exactly where this build's code is, and prior runs are never
@@ -280,6 +292,26 @@ async function main(): Promise<void> {
     maxTurns: LOOP_LIMITS.webMaxTurns,
     report,
   });
+
+  // Model-driven delegation: let the orchestrator spawn read-only specialist
+  // subagents (explore/research/verify/review-lens) DURING the build, so this
+  // harness exercises the multiagent path end-to-end — not just the main loop.
+  const agentSpecs = await loadAgentSpecs(dir, (m) =>
+    process.stdout.write(`  ↳ ${m}\n`)
+  );
+  const delegationConfig = await loadTsforgeConfig(dir);
+
+  session.setDelegation(
+    agentSpecs,
+    makeSpawnAgentFn({
+      specs: agentSpecs,
+      cwd: dir,
+      concurrency: resolveAgentConcurrency(delegationConfig),
+      policyMode: "bypassPermissions",
+      contextWindow,
+      getTsService: () => session.tsService,
+    })
+  );
 
   const result = planMode
     ? await runPlanned(session, prompt, framework, dir)
