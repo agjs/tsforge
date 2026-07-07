@@ -343,17 +343,37 @@ export class AgentRunner {
         const resultCall = res.toolCalls.find(
           (c) => c.name === AGENT_RESULT_TOOL.function.name
         );
-
-        if (resultCall !== undefined) {
-          return finish("done", resultPayload(resultCall.arguments), turn);
-        }
-
         const investigativeCalls = res.toolCalls.filter(
           (c) => c.name !== AGENT_RESULT_TOOL.function.name
         );
 
+        // Run any REAL tool calls first — that is what counts as investigation,
+        // and it must happen before we'd accept a result emitted in the same turn.
         if (investigativeCalls.length > 0) {
           hasInvestigated = true;
+          await runToolCalls(investigativeCalls, ctx, state);
+        }
+
+        // Accept a structured result ONLY after real investigation (or when the
+        // agent has no real tools to investigate with, e.g. `tools: []`).
+        // Otherwise `agent_result` on its own satisfies toolChoice:"required",
+        // letting a structured agent answer from memory on turn 1 — reject it and
+        // force a real tool call next.
+        if (resultCall !== undefined) {
+          if (hasInvestigated || !hasRealTools) {
+            return finish("done", resultPayload(resultCall.arguments), turn);
+          }
+
+          ctx.messages.push({
+            role: "tool",
+            toolCallId: resultCall.id ?? AGENT_RESULT_TOOL.function.name,
+            content:
+              "Investigate FIRST: use the tools to read the relevant files, then " +
+              "call agent_result with findings backed by file:line. Don't answer " +
+              "before looking.",
+          });
+
+          continue;
         }
 
         if (res.toolCalls.length === 0) {
@@ -368,11 +388,7 @@ export class AgentRunner {
           if (done !== null) {
             return done;
           }
-
-          continue;
         }
-
-        await runToolCalls(res.toolCalls, ctx, state);
       }
 
       return finish("max_turns", lastText, maxTurns);

@@ -509,6 +509,9 @@ export async function repl(args: ICliArgs): Promise<number> {
       ? {}
       : { policyRules: delegationConfig.policy.rules }),
     ...(args.model.length > 0 ? { defaultModel: args.model } : {}),
+    // Reuse the session's TS LanguageService across subagents (read lazily so it
+    // tracks the current session after /clear) instead of building one per child.
+    getTsService: () => session.tsService,
   });
 
   // Re-applied after `/clear` rebuilds the session (like setSetupWeb).

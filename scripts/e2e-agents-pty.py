@@ -20,6 +20,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from ptyharness import (  # noqa: E402
     Checker,
+    content_chunks,
     read_until,
     reap,
     spawn_tsforge,
@@ -35,11 +36,15 @@ def strip(text):
     return ANSI.sub("", text)
 
 
-def _decide(_messages):
-    """Every agent turn: return the structured result tool call → 1-turn 'done'."""
-    return toolcall_chunks(
-        "agent_result", {"result": "Explored the workspace; nothing to report."}
-    )
+def _decide(messages):
+    """A read-only (text) subagent, realistically: the runner forces a tool call
+    first (no answering from memory), so investigate (search) then answer once the
+    tool result is back. (These specs are text-mode — `agent_result` isn't offered
+    to them, so we must NOT fake it.)"""
+    last = messages[-1] if messages else {}
+    if last.get("role") == "tool":
+        return content_chunks("Explored the workspace — mapped the entry points.")
+    return toolcall_chunks("search", {"pattern": "export"})
 
 
 def _write_spec(agents_dir, spec_id, description):

@@ -48,6 +48,7 @@ import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import { buildChatSystem, buildTddGuidance, COMPACT_SYSTEM } from "./prompt";
 import { resolveConventions } from "../infer-rules/conventions";
 import type { IConventions } from "../infer-rules/conventions.types";
+import type { TsService } from "../lsp";
 import {
   buildTsService,
   BUILD_NUDGE,
@@ -692,6 +693,13 @@ export class Session {
   /** The editable scope globs. */
   get scope(): string[] {
     return this.ctx.task.files;
+  }
+
+  /** The session's TS LanguageService (null when the workspace has no tsconfig),
+   *  exposed so spawned subagents can reuse it instead of each building their own
+   *  (expensive, and it would negate the concurrency win). */
+  get tsService(): TsService | null {
+    return this.ctx.tsService;
   }
 
   /** Real token usage of the most recent model call (undefined until the first

@@ -852,7 +852,10 @@ test("a preceding edit applies BEFORE a spawn (barrier); a failing spawn is isol
   const dir = await mkdtemp(join(tmpdir(), "tsforge-spawn-order-"));
 
   try {
-    const seen = { markerAtSpawn: false, ids: [] as string[] };
+    const seen: { markerAtSpawn: boolean; ids: string[] } = {
+      markerAtSpawn: false,
+      ids: [],
+    };
     const ctx = ctxFor(dir, ["**/*"]);
 
     ctx.tool.spawnAgent = (req) => {

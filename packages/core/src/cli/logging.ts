@@ -37,7 +37,13 @@ export function observeEvents(fn: ((event: ILoopEvent) => void) | null): void {
 }
 
 const render: Reporter = (event) => {
-  eventObserver?.(event);
+  // The observer (the REPL's agent-tree feeder) must never take down rendering:
+  // a throw here would propagate out of the reporter and crash the turn/session.
+  try {
+    eventObserver?.(event);
+  } catch (err) {
+    trace("cli.eventObserver", err);
+  }
 
   const phase = spinnerPhase(event);
 

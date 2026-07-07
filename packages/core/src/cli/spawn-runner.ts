@@ -59,8 +59,10 @@ export interface ISpawnRunnerOptions {
   /** Model for agents whose spec doesn't pin one; undefined ⇒ the active model
    *  (so every agent uses the session's model unless a spec overrides it). */
   readonly defaultModel?: string;
-  /** Reuse the session's TsService rather than building one per child. */
-  readonly tsService?: TsService | null;
+  /** Returns the session's TsService (or null) so each child REUSES it instead of
+   *  building its own — read lazily (a getter, not a value) so it tracks the
+   *  current session across `/clear`. Absent ⇒ the child builds its own. */
+  readonly getTsService?: () => TsService | null;
 }
 
 export function makeSpawnAgentFn(opts: ISpawnRunnerOptions): SpawnAgentFn {
@@ -114,9 +116,9 @@ export function makeSpawnAgentFn(opts: ISpawnRunnerOptions): SpawnAgentFn {
           ...(opts.policyRules === undefined
             ? {}
             : { policyRules: opts.policyRules }),
-          ...(opts.tsService === undefined
+          ...(opts.getTsService === undefined
             ? {}
-            : { tsService: opts.tsService }),
+            : { tsService: opts.getTsService() }),
         });
 
         lifecycle("agent_result", result.status === "done");
