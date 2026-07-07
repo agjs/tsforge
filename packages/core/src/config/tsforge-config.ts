@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { isRecord } from "../lib/guards";
 import { PACK_REGISTRY } from "../stack-detection";
 import { parseMcpServers, type IMcpServerConfig } from "../mcp";
@@ -622,17 +622,41 @@ export function resolveAgentConcurrency(config: ITsforgeProjectConfig): number {
 }
 
 /** Load tsforge.config.json from cwd, defaulting to empty config on missing/invalid files. */
+/** Find the nearest `tsforge.config.json` walking UP from `startDir` to the
+ *  filesystem root (git/eslint/tsconfig-style discovery). Returns null if none.
+ *  This is why running from a subdirectory (e.g. the CLI's `--cwd packages/core`)
+ *  still picks up the project's config — otherwise `agents.concurrency`, the
+ *  profile, and policy would all silently fall back to defaults. */
+async function findConfigUp(startDir: string): Promise<string | null> {
+  let dir = startDir;
+
+  for (;;) {
+    const candidate = join(dir, "tsforge.config.json");
+
+    if (await Bun.file(candidate).exists()) {
+      return candidate;
+    }
+
+    const parent = dirname(dir);
+
+    if (parent === dir) {
+      return null; // reached the filesystem root
+    }
+
+    dir = parent;
+  }
+}
+
 export async function loadTsforgeConfig(
   cwd: string
 ): Promise<ITsforgeProjectConfig> {
-  const configPath = join(cwd, "tsforge.config.json");
-  const file = Bun.file(configPath);
+  const configPath = await findConfigUp(cwd);
 
-  const exists = await file.exists();
-
-  if (!exists) {
+  if (configPath === null) {
     return {};
   }
+
+  const file = Bun.file(configPath);
 
   try {
     const text = await file.text();

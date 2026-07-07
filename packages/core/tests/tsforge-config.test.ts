@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -39,6 +39,29 @@ describe("loadTsforgeConfig", () => {
       expect(config).toEqual({});
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("walks UP to find the nearest config (running from a subdirectory)", async () => {
+    // The CLI runs with cwd = packages/core (its own dir has no config), so the
+    // loader must climb to the project root — otherwise agents.concurrency (and
+    // profile/policy) silently fall back to defaults. Regression for cap-1 spawns.
+    const root = mkdtempSync(join(tmpdir(), "tsforge-root-"));
+
+    try {
+      writeFileSync(
+        join(root, "tsforge.config.json"),
+        JSON.stringify({ agents: { concurrency: 4 } })
+      );
+      const nested = join(root, "packages", "core");
+
+      mkdirSync(nested, { recursive: true });
+
+      const config = await loadTsforgeConfig(nested);
+
+      expect(config.agents?.concurrency).toBe(4);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

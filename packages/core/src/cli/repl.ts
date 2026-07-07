@@ -498,10 +498,11 @@ export async function repl(args: ICliArgs): Promise<number> {
   // Build the delegation runner from the specs/config loaded up front (sync — no
   // await here, so readline's line listener attaches in the same tick as the
   // rest of the interactive setup; see the load site above).
+  const delegationCap = resolveAgentConcurrency(delegationConfig);
   const spawnAgentFn = makeSpawnAgentFn({
     specs: agentSpecs,
     cwd: args.dir,
-    concurrency: resolveAgentConcurrency(delegationConfig),
+    concurrency: delegationCap,
     policyMode: isPolicyMode(args.policyMode)
       ? args.policyMode
       : (delegationConfig.policy?.mode ?? "default"),
@@ -520,6 +521,16 @@ export async function repl(args: ICliArgs): Promise<number> {
   };
 
   wireDelegation();
+
+  // Make the delegation setup visible so the concurrency cap is never a mystery
+  // (cap 1 ⇒ subagents run serially; raise agents.concurrency to overlap them).
+  if (agentSpecs.length > 0) {
+    const names = agentSpecs.map((s) => s.id).join(", ");
+
+    process.stdout.write(
+      `  ↳ delegation: ${String(agentSpecs.length)} specialists (${names}) · cap ${String(delegationCap)}\n`
+    );
+  }
 
   // Last-turn summary, surfaced in the status line shown before each prompt.
   let lastTurns = 0;
@@ -943,6 +954,11 @@ export async function repl(args: ICliArgs): Promise<number> {
   // into the transcript; only the orchestrator writes the transcript.
   let agentTree = new AgentTreeModel();
   const agentOutput = new Map<string, string[]>();
+  // Every agentId we installed an OutputRouter sink for — tracked separately from
+  // agentOutput because a subagent that produces no routed output never gets an
+  // agentOutput entry, yet its sink still needs clearing (else it leaks + keeps
+  // diverting that id's future chunks away from the transcript).
+  const agentSinkIds = new Set<string>();
   let treeFrame = 0;
   let treeActive = false;
   // The detail pane auto-follows the newest running agent; ↑/↓ overrides it.
@@ -1037,6 +1053,7 @@ export async function repl(args: ICliArgs): Promise<number> {
         outputRouter.setAgentSink(id, (t) => {
           pushAgentOutput(id, t);
         });
+        agentSinkIds.add(id);
       }
 
       treeActive = true;
@@ -1087,10 +1104,13 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    for (const id of agentOutput.keys()) {
+    // Clear EVERY sink we installed (not just ids with buffered output — an agent
+    // that streamed nothing still has a live sink that would otherwise leak).
+    for (const id of agentSinkIds) {
       outputRouter.clearAgentSink(id);
     }
 
+    agentSinkIds.clear();
     agentOutput.clear();
     agentTree = new AgentTreeModel();
     focusedAgentId = null;

@@ -16,8 +16,11 @@ import { makeProvider } from "./model-setup";
 
 /** A minimal async semaphore: at most `max` `run()` bodies execute at once; the
  *  rest queue. Caps concurrent subagents so a burst of `spawn_agent` calls in
- *  one turn honors `agents.concurrency` instead of hammering the endpoint. */
-function makeLimiter(max: number): <T>(fn: () => Promise<T>) => Promise<T> {
+ *  one turn honors `agents.concurrency` instead of hammering the endpoint.
+ *  Exported for a direct concurrency-cap test. */
+export function makeLimiter(
+  max: number
+): <T>(fn: () => Promise<T>) => Promise<T> {
   const limit = Math.max(1, Math.floor(max));
   let active = 0;
   const queue: (() => void)[] = [];
