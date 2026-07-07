@@ -173,6 +173,7 @@ export default defineConfig({
             { label: "Drive a change to green", link: "/workflows/fix-to-green/" },
             { label: "Build a whole app", link: "/loop/greenfield/" },
             { label: "Review your changes", link: "/cli/review/" },
+            { label: "Delegate to subagents", link: "/agent/delegation/" },
             { label: "Recipes", link: "/cli/recipes/" },
             { label: "Pre-edit scout", link: "/loop/scout/" },
             { label: "Map the repo", link: "/cli/map/" },
