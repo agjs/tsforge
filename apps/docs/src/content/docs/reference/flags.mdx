@@ -58,6 +58,19 @@ Opt-in, free, and no required service keys. Turn on **Web tools** in [`/config`]
 | `TSFORGE_SEARXNG_URL` | unset | route `web_search` to a SearXNG instance you already run (e.g. `http://localhost:8888`) |
 | `TSFORGE_WEB_SEARCH_BACKEND` | auto | `duckduckgo` or `searxng`; `searxng` fails closed if no SearXNG URL is set |
 
+## Image capabilities (vision, generation)
+
+When the chat model is text-only, route **reading** and **generating** images to a separate backend — configured in [`models.json` `capabilities`](/inference/models-json/#extra-capabilities-vision-image-generation) or the env vars below. Each capability is off unless configured; when on, it enables the `read_image` / `generate_image` tools and the drag / paste / `@` attachment UX ([interactive](/cli/interactive/)). The env trio is an ad-hoc backend without editing the file; a `_MODEL` alone (no `_BASE_URL`) names an existing registry entry.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TSFORGE_VISION_BASE_URL` / `TSFORGE_VISION_MODEL` / `TSFORGE_VISION_API_KEY` | unset | ad-hoc vision (image-reading) backend |
+| `TSFORGE_IMAGE_BASE_URL` / `TSFORGE_IMAGE_MODEL` / `TSFORGE_IMAGE_API_KEY` | unset | ad-hoc image-generation backend |
+| `TSFORGE_IMAGE_API` | `chat-modalities` | image-gen wire shape: `chat-modalities` or `images-generations` |
+| `TSFORGE_IMAGE_PROTOCOL` | auto | inline preview of generated images: `iterm2` to force, `off`/`none` to disable (auto-detects iTerm2, disabled under tmux) |
+
+Generated images are saved under `.tsforge/images/`. Pasting an image is **Ctrl+V** (a terminal app can't receive Cmd+V); identical images are described once (no duplicate cost). Model IDs + costs: OpenRouter runs everything through `/chat/completions` (no `/images` endpoint) — e.g. `google/gemini-2.5-flash-lite` (read) and `google/gemini-3.1-flash-lite-image` (generate).
+
 ## Opt-in gate oracles
 
 Extra gate steps (default off; each skips cleanly when nothing applies). See [How tsforge builds the gate](/loop/gate-floor/).

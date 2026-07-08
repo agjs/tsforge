@@ -37,6 +37,7 @@ The entry **key** (`"deepseek"`) is just a local label. The field that's sent to
 | `maxTokens` | no | Output-token cap (default 16384). |
 | `extraBody` | no | Arbitrary JSON merged into the request body (overrides built-ins) — the escape hatch for any provider param. |
 | `extraHeaders` | no | Arbitrary request headers; `${VAR}` values are interpolated from the environment. |
+| `imageApi` | no | For an `imageGen` capability entry only: wire shape — `chat-modalities` (default; `/chat/completions` with `modalities:["image","text"]`, e.g. OpenRouter/Gemini) or `images-generations` (OpenAI `/images/generations`). |
 
 ## Reasoning dialects
 
@@ -82,6 +83,33 @@ tsforge **auto-detects** the `deepseek` dialect when `baseUrl`/`model` contains 
   "reasoningEffort": "medium"
 }
 ```
+
+## Extra capabilities (vision, image generation)
+
+The primary chat model is often text-only (e.g. a local DeepSeek). When it can't read or generate images, route **just those capabilities** to a separate backend with a top-level `capabilities` block — a sibling of `active`/`models`, **not** inside `models`. Each value names a `models` entry, so the vision/image backend reuses the same endpoint config (key resolution, headers) as any chat model. Absent → the capability (and its `read_image` / `generate_image` tool + the drag/paste/`@` attachment UX) stays off.
+
+```jsonc
+{
+  "active": "deepseek-v4-flash",          // local chat, unchanged
+  "capabilities": {
+    "vision": "openrouter-vision",        // reads images (drag / paste / @ / read_image)
+    "imageGen": "openrouter-image"        // generate_image → .tsforge/images/
+  },
+  "models": {
+    "deepseek-v4-flash": { "baseUrl": "http://localhost:8000/v1", "model": "deepseek-ai/DeepSeek-V4-Flash", "thinking": false },
+    "openrouter-vision":  { "baseUrl": "https://openrouter.ai/api/v1", "model": "google/gemini-2.5-flash-lite", "apiKey": "sk-or-..." },
+    "openrouter-image":   { "baseUrl": "https://openrouter.ai/api/v1", "model": "google/gemini-3.1-flash-lite-image", "apiKey": "sk-or-...", "imageApi": "chat-modalities" }
+  }
+}
+```
+
+How it works: an attached image is sent to the `vision` backend and only its **text** description enters the conversation (the chat model stays text-only). `generate_image` calls the `imageGen` backend, saves the result under `.tsforge/images/`, and previews it inline in iTerm2. When local hardware arrives, point `capabilities.vision`/`imageGen` at a local entry — no code change.
+
+Env overrides (an ad-hoc backend without editing the file): `TSFORGE_VISION_BASE_URL` / `TSFORGE_VISION_MODEL` / `TSFORGE_VISION_API_KEY` and the `TSFORGE_IMAGE_*` equivalents (+ `TSFORGE_IMAGE_API`). See the [attachment UX](/cli/interactive/) and the [flags reference](/reference/flags/).
+
+:::caution
+`apiKeyEnv` is the **name of an environment variable**, not the key. Putting a literal `sk-...` as its value makes tsforge look up an env var named `sk-...` → no auth. Use `apiKey` for an inline key.
+:::
 
 ### Any other provider — `extraBody` / `extraHeaders`
 
