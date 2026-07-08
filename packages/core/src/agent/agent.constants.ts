@@ -33,6 +33,8 @@ export const TOOL_NAME = {
   webBrowse: "web_browse",
   script: "script",
   spawnAgent: "spawn_agent",
+  readImage: "read_image",
+  generateImage: "generate_image",
 } as const;
 
 /** Per-tool capability flags — the single source of truth the plan-mode set and
@@ -87,6 +89,12 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   // (no spawning from a program) and — by construction — never offered to a
   // spawned agent, which caps recursion depth at 1 (see agent-runner agentTools).
   [TOOL_NAME.spawnAgent]: { readOnly: true, scriptExposable: false },
+  // Vision reading is a read-only network call (no workspace mutation) → usable
+  // while planning. Image GENERATION writes a file to disk, so it is not read-only
+  // and is withheld in plan mode. Both are gated on a configured capability
+  // backend (see toolsFor). Not script-exposable initially (network + I/O heavy).
+  [TOOL_NAME.readImage]: { readOnly: true, scriptExposable: false },
+  [TOOL_NAME.generateImage]: { readOnly: false, scriptExposable: false },
 };
 
 function toolNamesWhere(
@@ -653,6 +661,62 @@ export const GIT_CONTEXT_TOOL = {
         },
       },
       required: ["op"],
+    },
+  },
+};
+
+/** Vision (image reading) — offered only when a `vision` capability backend is
+ *  configured (`~/.tsforge/models.json` `capabilities.vision` or a
+ *  `TSFORGE_VISION_*` env). The primary chat model is text-only, so this delegates
+ *  to that backend and returns a text description the model can act on. */
+export const READ_IMAGE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.readImage,
+    description:
+      "Look at an image file in the workspace and get back a text description/answer. Use it to understand a screenshot, mockup, diagram, or photo — pass the path and, optionally, a specific question (e.g. 'what error does this show?'). Routes to the configured vision model; returns text only.",
+    parameters: {
+      type: "object",
+      properties: {
+        file: {
+          type: "string",
+          description:
+            "path to the image file (png/jpeg/webp/gif), relative to the working directory",
+        },
+        question: {
+          type: "string",
+          description:
+            "optional specific question about the image; omit for a general description",
+        },
+      },
+      required: ["file"],
+    },
+  },
+};
+
+/** Image generation — offered only when an `imageGen` capability backend is
+ *  configured. Saves the result under `.tsforge/images/` and returns the path (and
+ *  previews it inline in a supporting terminal). */
+export const GENERATE_IMAGE_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.generateImage,
+    description:
+      "Generate an image from a text prompt and save it to .tsforge/images/. Use it when the user asks for an image/asset/illustration. Returns the saved file path; the image is previewed inline in terminals that support it. Routes to the configured image model.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "a detailed description of the image to generate",
+        },
+        size: {
+          type: "string",
+          description:
+            "optional WxH hint, e.g. '1024x1024' (honored by some backends)",
+        },
+      },
+      required: ["prompt"],
     },
   },
 };

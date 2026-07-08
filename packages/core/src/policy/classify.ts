@@ -36,6 +36,10 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.webFetch]: "network",
   [TOOL_NAME.webSearch]: "network",
   [TOOL_NAME.webBrowse]: "network",
+  // Both call an external capability endpoint → network egress is the salient
+  // risk (so a repo/mode can deny/ask them like the web tools).
+  [TOOL_NAME.readImage]: "network",
+  [TOOL_NAME.generateImage]: "network",
 };
 
 /** Extra path-bearing arg keys beyond the file aliases (move's source/target). */

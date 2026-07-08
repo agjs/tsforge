@@ -29,6 +29,7 @@ import {
   loadProjectTtsrRules,
   applyTtsrInterrupt,
 } from "./ttsr-init";
+import { resolveImageCapabilityFlags } from "./tools/image-tools";
 import {
   type ILoopCtx,
   type ILoopState,
@@ -387,7 +388,8 @@ export async function runTask(
     },
   ];
 
-  const tools = toolsFor(hasExistingCode);
+  const caps = await resolveImageCapabilityFlags();
+  const tools = toolsFor(hasExistingCode, caps);
 
   // Mode-aware reasoning cap: scratch tasks over-think unbounded, so default
   // them to the measured knee; existing-code runs stay uncapped (the cap hurts

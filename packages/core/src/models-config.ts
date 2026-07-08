@@ -45,12 +45,28 @@ export interface IModelEntry {
   /** Arbitrary request headers (e.g. a non-Bearer auth scheme); `${VAR}` values
    *  are interpolated from the environment. */
   extraHeaders?: Record<string, string>;
+  /** For an `imageGen` capability entry: which wire shape the endpoint speaks.
+   *  `chat-modalities` (default) posts `/chat/completions` with
+   *  `modalities:["image","text"]` (OpenRouter-style); `images-generations`
+   *  posts the OpenAI `/images/generations` shape. Ignored for chat/vision. */
+  imageApi?: ImageApi;
 }
+
+/** How an image-generation endpoint is called on the wire. */
+export type ImageApi = "chat-modalities" | "images-generations";
+
+/** The extra capabilities the harness can borrow from a separate backend when
+ *  the primary chat model can't do them. Each value NAMES an entry in `models`,
+ *  so a capability reuses the same endpoint config (key resolution, headers) as
+ *  any chat model. Absent → the capability (and its tool/UX) stays off. */
+export type CapabilityName = "vision" | "imageGen";
 
 export interface IModelsConfig {
   /** Name of the active entry — always a key of `models`. */
   active: string;
   models: Record<string, IModelEntry>;
+  /** Optional capability→entry-name routing. e.g. `{ vision: "openrouter-vlm" }`. */
+  capabilities?: Partial<Record<CapabilityName, string>>;
 }
 
 /** The built-in local-qwen entry — matches PROVIDER_DEFAULTS so an absent
@@ -137,7 +153,47 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
     );
   }
 
-  return { active: raw.active, models };
+  const capabilities = parseCapabilities(raw.capabilities, models);
+
+  return capabilities === undefined
+    ? { active: raw.active, models }
+    : { active: raw.active, models, capabilities };
+}
+
+/** Validate the optional `capabilities` block: known keys only, each pointing at
+ *  a real model entry. Fail loud (this file's contract) so a typo'd capability
+ *  name or a dangling entry reference is caught at load, not at first image use. */
+function parseCapabilities(
+  raw: unknown,
+  models: Record<string, IModelEntry>
+): Partial<Record<CapabilityName, string>> | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(raw)) {
+    throw new Error("models.json: capabilities must be an object");
+  }
+
+  const out: Partial<Record<CapabilityName, string>> = {};
+
+  for (const [cap, target] of Object.entries(raw)) {
+    if (cap !== "vision" && cap !== "imageGen") {
+      throw new Error(
+        `models.json: unknown capability "${cap}" — expected vision, imageGen`
+      );
+    }
+
+    if (typeof target !== "string" || models[target] === undefined) {
+      throw new Error(
+        `models.json: capability "${cap}" must name a model: ${Object.keys(models).join(", ")}`
+      );
+    }
+
+    out[cap] = target;
+  }
+
+  return out;
 }
 
 /** Read the registry (read-only). Missing file → the built-in default (no write);
@@ -263,4 +319,68 @@ export async function resolveModelByName(
   return entry === undefined
     ? { name: cfg.active, entry: cfg.models[cfg.active] ?? QWEN_LOCAL }
     : { name, entry };
+}
+
+/** Resolve the backend for an extra capability (`vision`/`imageGen`), or `null`
+ *  when none is configured (the capability's tool/UX then stays off — the
+ *  primary chat model is never asked to do what it can't). Resolution order,
+ *  most-specific first, so a one-off run needs no `models.json` edit:
+ *    1. `TSFORGE_{VISION,IMAGE}_BASE_URL` (+ `_MODEL`, `_API_KEY`, `_API`) →
+ *       a fully self-contained ad-hoc entry.
+ *    2. `TSFORGE_{VISION,IMAGE}_MODEL` (without a base url) → names a registry
+ *       entry to reuse.
+ *    3. `models.json` `capabilities.{vision,imageGen}` → names a registry entry.
+ *  This mirrors the env-wins-over-registry contract of resolveActiveModel. */
+export async function resolveCapabilityModel(
+  cap: CapabilityName
+): Promise<{ name: string; entry: IModelEntry } | null> {
+  const prefix = cap === "vision" ? "TSFORGE_VISION" : "TSFORGE_IMAGE";
+  const envBase = process.env[`${prefix}_BASE_URL`];
+  const envModel = process.env[`${prefix}_MODEL`];
+
+  if (envBase !== undefined && envBase.length > 0) {
+    if (envModel === undefined || envModel.length === 0) {
+      throw new Error(
+        `${prefix}_BASE_URL is set but ${prefix}_MODEL is missing`
+      );
+    }
+
+    const entry: IModelEntry = {
+      baseUrl: envBase,
+      model: envModel,
+      apiKey: process.env[`${prefix}_API_KEY`],
+    };
+
+    if (cap === "imageGen") {
+      const api = process.env[`${prefix}_API`];
+
+      if (api === "chat-modalities" || api === "images-generations") {
+        entry.imageApi = api;
+      }
+    }
+
+    return { name: `env:${cap}`, entry };
+  }
+
+  const cfg = await loadModelsConfig();
+
+  if (envModel !== undefined && envModel.length > 0) {
+    const entry = cfg.models[envModel];
+
+    if (entry === undefined) {
+      throw new Error(
+        `${prefix}_MODEL "${envModel}" is not a configured model: ${Object.keys(cfg.models).join(", ")}`
+      );
+    }
+
+    return { name: envModel, entry };
+  }
+
+  const target = cfg.capabilities?.[cap];
+
+  if (target !== undefined && cfg.models[target] !== undefined) {
+    return { name: target, entry: cfg.models[target] };
+  }
+
+  return null;
 }

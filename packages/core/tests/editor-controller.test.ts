@@ -70,6 +70,7 @@ class FakeStdin {
 function makeHarness(deps?: {
   openFilePicker?: () => Promise<void>;
   openPalette?: () => Promise<void>;
+  pasteFromClipboard?: () => Promise<string | null>;
 }) {
   const stdin = new FakeStdin();
   const outputs: string[] = [];
@@ -84,6 +85,7 @@ function makeHarness(deps?: {
     rows: 10,
     openFilePicker: deps?.openFilePicker,
     openPalette: deps?.openPalette,
+    pasteFromClipboard: deps?.pasteFromClipboard,
   });
 
   handle.onSubmit((message: string) => {
@@ -608,5 +610,41 @@ describe("EditorController @/ overlay triggers", () => {
     // Bracketed paste + coalesced keystrokes (TCP/automation) in a single chunk.
     stdin.feed("\x1b[200~pasted\x1b[201~typed");
     expect(handle.getBuffer().getText()).toBe("pastedtyped");
+  });
+
+  test("Ctrl+V calls pasteFromClipboard and inserts the returned chip (image)", async () => {
+    let calls = 0;
+    const { stdin, handle } = makeHarness({
+      pasteFromClipboard: async () => {
+        calls += 1;
+
+        return "[image #1]";
+      },
+    });
+
+    stdin.feed("\x16"); // Ctrl+V
+    // The handler is async (clipboard read shells out); insert lands on resolve.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(calls).toBe(1);
+    expect(handle.getBuffer().getText()).toBe("[image #1]");
+  });
+
+  test("Ctrl+V with no clipboard content inserts nothing (no literal 'v')", async () => {
+    const { stdin, handle } = makeHarness({
+      pasteFromClipboard: async () => null,
+    });
+
+    stdin.feed("\x16");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(handle.getBuffer().getText()).toBe("");
+  });
+
+  test("Ctrl+V without a handler is swallowed (no literal 'v' inserted)", () => {
+    const { stdin, handle } = makeHarness();
+
+    stdin.feed("\x16");
+    expect(handle.getBuffer().getText()).toBe("");
   });
 });

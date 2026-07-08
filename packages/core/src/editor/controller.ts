@@ -65,6 +65,12 @@ export interface IStartEditorDeps {
   openPalette?: () => Promise<void>;
   openFilePicker?: () => Promise<void>;
   completion?: IEditorCompletionSource;
+  /** Ctrl+V handler: read the system clipboard and return the text to insert at
+   *  the cursor (an image capture returns a `[image #N]` chip and registers the
+   *  attachment as a side effect; otherwise the clipboard text), or null to insert
+   *  nothing. Async because reading the clipboard shells out. Absent ⇒ Ctrl+V is a
+   *  no-op (the terminal's own Cmd+V bracketed paste still handles text). */
+  pasteFromClipboard?: () => Promise<string | null>;
 }
 
 type KeyAction = (buffer: EditorBuffer) => void;
@@ -178,6 +184,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     openPalette,
     openFilePicker,
     completion: completionSource,
+    pasteFromClipboard,
   } = deps;
 
   // Mutable so a terminal resize can update them (see the handle's `resize`);
@@ -374,6 +381,27 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       exitCallbacks.forEach((cb) => {
         cb();
       });
+
+      return;
+    }
+
+    // Ctrl-V: paste from the system clipboard (image → [image #N] chip + attachment,
+    // else clipboard text). Async — insert on resolve, like openPalette. Without a
+    // handler, swallow the key (don't insert a literal "v").
+    if (ctrl && text === "v") {
+      if (pasteFromClipboard !== undefined) {
+        pasteFromClipboard()
+          .then((insert) => {
+            if (insert !== null && insert.length > 0) {
+              buffer.insert(insert);
+              repaint();
+              notifyChange();
+            }
+          })
+          .catch((err: unknown) => {
+            trace("editor.paste", err);
+          });
+      }
 
       return;
     }

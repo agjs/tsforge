@@ -14,9 +14,11 @@ import {
   ADD_DEPENDENCY_TOOL,
   TOOL_NAME,
   buildSpawnAgentTool,
+  READ_IMAGE_TOOL,
+  GENERATE_IMAGE_TOOL,
 } from "../agent";
 import type { IAgentSpec } from "../agent/agent-spec";
-import type { SetupWebFn, SpawnAgentFn } from "./tools";
+import type { SetupWebFn, SpawnAgentFn, IToolContext } from "./tools";
 import type { PolicyMode } from "../policy";
 import type { ProfileId } from "../config/profiles";
 import { flags } from "../config";
@@ -867,6 +869,30 @@ export class Session {
     ) {
       this.guide(delegationGuidance(specs));
     }
+  }
+
+  /** Offer the image tools when their capability backends are configured. Called
+   *  on REPL launch after capabilities are resolved; idempotent (a resumed session
+   *  re-runs it) — mirrors setDelegation's guard so the tool list can't grow on
+   *  each launch. `read_image` needs vision, `generate_image` needs imageGen. */
+  setImageCapabilities(caps: { vision: boolean; imageGen: boolean }): void {
+    const add = [
+      ...(caps.vision ? [READ_IMAGE_TOOL] : []),
+      ...(caps.imageGen ? [GENERATE_IMAGE_TOOL] : []),
+    ];
+
+    for (const tool of add) {
+      if (!this.tools.some((t) => t.function.name === tool.function.name)) {
+        this.tools = [...this.tools, tool];
+      }
+    }
+  }
+
+  /** Wire the inline-image preview callback the `generate_image` tool fires after
+   *  saving (the CLI emits the terminal's inline-image escape). Absent ⇒ the tool
+   *  just reports the saved path. */
+  setPreviewImage(fn: IToolContext["previewImage"]): void {
+    this.ctx.tool.previewImage = fn;
   }
 
   /** Append opinionated guidance to the SYSTEM prompt (e.g. after classifying a

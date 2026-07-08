@@ -509,8 +509,13 @@ const MUTATING_TOOLS = new Set<string>([
 // run = the model's raw shell (writes are its own, not scoped harness edits);
 // script = runs a program whose tool calls (incl. edit/create) re-enter
 // executeTool and report their OWN mutations, so the script call itself accounts
-// for nothing.
-const SPECIAL_TOOLS = new Set<string>([TOOL_NAME.run, TOOL_NAME.script]);
+// for nothing; generate_image writes ONLY to the .tsforge/images artifact dir
+// (not gated source) and reports no mutation, so it triggers no re-gate.
+const SPECIAL_TOOLS = new Set<string>([
+  TOOL_NAME.run,
+  TOOL_NAME.script,
+  TOOL_NAME.generateImage,
+]);
 
 test("every registered tool is classified read-only, mutating, or special", () => {
   for (const name of Object.values(TOOL_NAME)) {
