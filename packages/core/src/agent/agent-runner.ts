@@ -137,8 +137,18 @@ export function buildBoundedTranscript(
 
   const marker =
     firstIdx > 0 ? [`… (${String(firstIdx)} earlier message(s) elided) …`] : [];
+  const assembled = [...marker, ...picked].join("\n\n");
 
-  return [...marker, ...picked].join("\n\n");
+  if (assembled.length <= maxChars) {
+    return assembled;
+  }
+
+  // Only reachable when maxChars < the marker reserve (never in production, where
+  // maxChars is window*2). Drop the marker, then hard-cap, so the ≤ maxChars
+  // contract holds for ALL inputs.
+  const bare = picked.join("\n\n");
+
+  return bare.length <= maxChars ? bare : bare.slice(0, maxChars);
 }
 
 /** Summarize the conversation and REPLACE it with [system, summary] — the same
@@ -322,7 +332,11 @@ function formatFinding(f: unknown): string | null {
  *  reads: the `summary` followed by cited `findings`. Falls back to the legacy
  *  `{ result }` string or raw JSON if the structured shape is absent, so an
  *  older spec or a malformed call still yields something usable. */
-function resultPayload(args: Record<string, unknown>): string {
+export function resultPayload(args: unknown): string {
+  if (!isRecord(args)) {
+    return typeof args === "string" ? args : JSON.stringify(args ?? {});
+  }
+
   const summary = typeof args.summary === "string" ? args.summary : "";
   const findings = Array.isArray(args.findings) ? args.findings : [];
   const lines = findings

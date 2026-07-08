@@ -240,6 +240,51 @@ detectors, incl. function/brace-group bodies), `tests/policy-config.test.ts` (ru
 parse/drop), `tests/policy-integration.test.ts` (deny-first at `executeTool`),
 `tests/write-policy-p1.test.ts`.
 
+## agent / subagents — `src/agent/*` (`agent-runner.ts`, `agent-scheduler.ts`, `builtin-specs.ts`, `agent-spec.ts`, `agent.constants.ts`), `src/cli/spawn-runner.ts`, `src/loop/tools/spawn-agent.ts`, `src/config/agent-specs.ts`, `src/render/agent-tree.ts`
+
+Model-driven delegation (PRs #73–79): the orchestrator hands focused, READ-ONLY
+investigation to specialist subagents via the `spawn_agent` tool. `AgentRunner` composes
+the turn primitives directly (no gate); `makeLimiter` caps concurrency; subagents return a
+structured `agent_result` and auto-compact so a long investigation never overflows; the run
+renders as a live navigable tree above the input row.
+
+**Invariants**
+
+- Read-only is STRUCTURAL (3 layers): advertised tools = read-only set ∩ spec subset;
+  `ctx.tool.readOnly=true` hard-rejects mutation at dispatch; the policy layer evaluates
+  first. `spawn_agent` is NEVER offered to a subagent → recursion depth capped at 1.
+- Never overflows: proactive compaction fires before a request crosses the EFFECTIVE
+  window (`window − reserve`, reserve capped at ½ window so a small model can't loop); a
+  context-overflow 400 is caught, compacted (bounded transcript; fixed fallback when the
+  window is unknown), and retried once; a non-overflow error still surfaces.
+  `buildBoundedTranscript` output is ALWAYS ≤ `maxChars` (marker + separators counted).
+- Structured output: `agent_result` = `{summary, findings:[{detail, source, confidence}]}`;
+  malformed/legacy `{result}` args fall back without crashing; a finding with no `detail`
+  is dropped (no bare bullet).
+- Concurrency: `makeLimiter` honors the cap and RELEASES the slot even when a body throws
+  (no deadlock); one failing subagent doesn't sink siblings; consecutive spawns run
+  concurrently but a non-spawn tool (edit) is an ordering barrier; tool replies keep
+  submission order.
+- Live tree: every emitted line ≤ `columns − 1` (renders nothing below the minimum usable
+  width, so a terminal never self-wraps a line); no OutputRouter sink leak (every installed
+  sink is cleared on turn end, incl. an agent that streamed nothing); lifecycle events drive
+  the tree, not the transcript.
+- Spec precedence built-in < global < project (same id overrides); malformed specs skipped,
+  not fatal. `TSFORGE_NO_DELEGATION=1` withholds delegation entirely (single-stream).
+
+**Risk areas** a mutation or `spawn_agent` slipping past the read-only filter (recursion); a
+compaction path that overflows or infinite-loops; a limiter slot leaked on throw (deadlock);
+a sink leak mis-routing a later turn's output; the turn-loop spawn-batch reordering edits
+after a spawn.
+
+**Checklist** `tests/agent-runner.test.ts`, `tests/agent-compaction.test.ts`,
+`tests/agent-structured-output.test.ts`, `tests/agent-scheduler.test.ts`,
+`tests/spawn-concurrency.test.ts`, `tests/spawn-ordering-invariant.test.ts`,
+`tests/agent-tree.test.ts`, `tests/agent-tree-render-e2e.test.ts`,
+`tests/policy-evaluation.test.ts` (spawn_agent class), `tests/logging-lifecycle.test.ts`,
+`tests/output-router.test.ts`; PTY: `scripts/e2e-spawn-agent-pty.py`,
+`scripts/e2e-agents-pty.py`.
+
 ## mcp — `src/mcp/*`
 
 Hand-rolled JSON-RPC 2.0 client/server, tool registry.

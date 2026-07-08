@@ -277,4 +277,17 @@ describe("buildBoundedTranscript", () => {
 
     expect(out).toBe("[user] one\n\n[assistant] two");
   });
+
+  test("output NEVER exceeds maxChars for ANY maxChars 1..400 (incl. below the marker reserve)", () => {
+    const convo = [
+      msg("user", "a".repeat(500)),
+      msg("assistant", "b".repeat(500)),
+      msg("tool", "c".repeat(50)),
+      msg("user", "short"),
+    ];
+
+    for (let mc = 1; mc <= 400; mc += 1) {
+      expect(buildBoundedTranscript(convo, mc).length).toBeLessThanOrEqual(mc);
+    }
+  });
 });

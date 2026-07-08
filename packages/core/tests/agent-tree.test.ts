@@ -193,6 +193,36 @@ describe("renderAgentTree", () => {
     expect(lines[1]).not.toContain("1.2");
   });
 
+  test("every line stays ≤ columns-1 across ALL widths (no self-wrap, incl. very narrow)", () => {
+    const rows: IAgentRow[] = [
+      { id: "a", label: "explore loop subsystem", status: "running" },
+      { id: "b", label: "verify", status: "done", durationMs: 900, turns: 2 },
+    ];
+
+    for (let cols = 1; cols <= 40; cols += 1) {
+      const lines = renderAgentTree(rows, { columns: cols, color: false });
+
+      for (const line of lines) {
+        expect(displayWidth(line)).toBeLessThanOrEqual(cols - 1);
+      }
+    }
+  });
+
+  test("below the minimum usable width, renders nothing (rather than a wrapping line)", () => {
+    const rows: IAgentRow[] = [{ id: "a", label: "x", status: "running" }];
+
+    for (const cols of [1, 2, 3, 5, 7]) {
+      expect(renderAgentTree(rows, { columns: cols, color: false })).toEqual(
+        []
+      );
+    }
+
+    // At a usable width it renders again.
+    expect(
+      renderAgentTree(rows, { columns: 20, color: false }).length
+    ).toBeGreaterThan(0);
+  });
+
   test("honors the real width — no upward clamp that draws wider than the screen", () => {
     const rows: IAgentRow[] = [{ id: "explore", status: "pending" }];
 

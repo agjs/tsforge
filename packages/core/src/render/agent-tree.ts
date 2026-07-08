@@ -123,6 +123,13 @@ const CONNECT_END = "└─ ";
  *  big fan-out can't push the prompt off a short terminal. */
 const DEFAULT_MAX_ROWS = 12;
 
+/** Below this width a row's fixed prefix (connector + glyph + marker) alone
+ *  exceeds `columns - 1`, so no line can be kept within the no-self-wrap budget.
+ *  Render nothing rather than emit a line the terminal would wrap (which breaks
+ *  the in-place repaint). A real terminal is never this narrow; the guard just
+ *  keeps the ≤ columns-1 invariant total. */
+const MIN_TREE_COLUMNS = 8;
+
 export interface IAgentTreeOptions {
   /** Terminal width; lines are kept ≤ `columns - 1` so none self-wraps. */
   readonly columns: number;
@@ -270,6 +277,11 @@ export function renderAgentTree(
   }
 
   const columns = opts.columns > 0 ? opts.columns : 80;
+
+  if (columns < MIN_TREE_COLUMNS) {
+    return [];
+  }
+
   const color = opts.color ?? true;
   const frame = opts.frame ?? 0;
   const maxRows = Math.max(1, opts.maxRows ?? DEFAULT_MAX_ROWS);

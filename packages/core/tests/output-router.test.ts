@@ -76,6 +76,25 @@ describe("OutputRouter", () => {
     expect(parent).toEqual(["orphan-child"]);
   });
 
+  test("a sink is cleared even if the agent produced NO output (no leak)", () => {
+    // resetTree clears every installed sink via agentSinkIds — including an agent
+    // that streamed nothing (no agentOutput entry). Model that: install a sink,
+    // never write to it, clear it, then a later write for that id must fall back
+    // to the parent (else the stale sink would keep diverting future chunks).
+    const router = new OutputRouter();
+    const parent: string[] = [];
+    const agent: string[] = [];
+
+    router.setParentSink((text) => parent.push(text));
+    router.setAgentSink("run:silent", (text) => agent.push(text));
+    router.clearAgentSink("run:silent"); // agent produced nothing
+
+    router.route("post-turn chunk", "run:silent");
+
+    expect(agent).toEqual([]); // never leaked to the dead sink
+    expect(parent).toEqual(["post-turn chunk"]); // fell back to parent
+  });
+
   test("clearAgentSink removes the route; later writes fall back", () => {
     const router = new OutputRouter();
     const parent: string[] = [];
