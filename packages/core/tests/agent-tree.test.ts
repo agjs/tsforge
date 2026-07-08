@@ -193,6 +193,57 @@ describe("renderAgentTree", () => {
     expect(lines[1]).not.toContain("1.2");
   });
 
+  test("every line stays ≤ columns-1 across ALL widths (no self-wrap, incl. very narrow)", () => {
+    const rows: IAgentRow[] = [
+      { id: "a", label: "explore loop subsystem", status: "running" },
+      { id: "b", label: "verify", status: "done", durationMs: 900, turns: 2 },
+    ];
+
+    for (let cols = 1; cols <= 40; cols += 1) {
+      const lines = renderAgentTree(rows, { columns: cols, color: false });
+
+      for (const line of lines) {
+        expect(displayWidth(line)).toBeLessThanOrEqual(cols - 1);
+      }
+    }
+  });
+
+  test("the overflow tail (`… +N more`) also stays ≤ columns-1 at narrow widths", () => {
+    // Enough rows to overflow maxRows, at widths where the tree still renders —
+    // the tail line must be clipped too, not just the agent rows.
+    const rows: IAgentRow[] = Array.from({ length: 20 }, (_v, i) => ({
+      id: `agent-${String(i)}`,
+      status: "pending" as const,
+    }));
+
+    for (let cols = 8; cols <= 30; cols += 1) {
+      const lines = renderAgentTree(rows, {
+        columns: cols,
+        color: false,
+        maxRows: 4,
+      });
+
+      for (const line of lines) {
+        expect(displayWidth(line)).toBeLessThanOrEqual(cols - 1);
+      }
+    }
+  });
+
+  test("below the minimum usable width, renders nothing (rather than a wrapping line)", () => {
+    const rows: IAgentRow[] = [{ id: "a", label: "x", status: "running" }];
+
+    for (const cols of [1, 2, 3, 5, 7]) {
+      expect(renderAgentTree(rows, { columns: cols, color: false })).toEqual(
+        []
+      );
+    }
+
+    // At a usable width it renders again.
+    expect(
+      renderAgentTree(rows, { columns: 20, color: false }).length
+    ).toBeGreaterThan(0);
+  });
+
   test("honors the real width — no upward clamp that draws wider than the screen", () => {
     const rows: IAgentRow[] = [{ id: "explore", status: "pending" }];
 

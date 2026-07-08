@@ -137,8 +137,30 @@ export function buildBoundedTranscript(
 
   const marker =
     firstIdx > 0 ? [`… (${String(firstIdx)} earlier message(s) elided) …`] : [];
+  const assembled = [...marker, ...picked].join("\n\n");
 
-  return [...marker, ...picked].join("\n\n");
+  if (assembled.length <= maxChars) {
+    return assembled;
+  }
+
+  // Only reachable when maxChars < the marker reserve (never in production, where
+  // maxChars is window*2). Drop the marker, then hard-cap, so the ≤ maxChars
+  // contract holds for ALL inputs.
+  const bare = picked.join("\n\n");
+
+  if (bare.length <= maxChars) {
+    return bare;
+  }
+
+  // Safe slice: .slice() could split a UTF-16 surrogate pair (e.g., emoji).
+  // Check if the last char is a high surrogate (0xD800–0xDBFF) and drop it
+  // to avoid emitting a malformed character.
+  const sliced = bare.slice(0, maxChars);
+  const lastCharCode = sliced.charCodeAt(sliced.length - 1);
+
+  return lastCharCode >= 0xd800 && lastCharCode <= 0xdbff
+    ? sliced.slice(0, -1)
+    : sliced;
 }
 
 /** Summarize the conversation and REPLACE it with [system, summary] — the same
@@ -319,10 +341,16 @@ function formatFinding(f: unknown): string | null {
 }
 
 /** Flatten an intercepted `agent_result` call into the text the orchestrator
- *  reads: the `summary` followed by cited `findings`. Falls back to the legacy
- *  `{ result }` string or raw JSON if the structured shape is absent, so an
- *  older spec or a malformed call still yields something usable. */
-function resultPayload(args: Record<string, unknown>): string {
+ *  reads: the `summary` followed by cited `findings`. Guards against undefined/
+ *  null/non-object arguments (provider should validate, but we don't crash on
+ *  malformed calls). Falls back to legacy `{ result }` string or raw JSON when
+ *  the structured shape is absent, so an older spec still yields something usable. */
+export function resultPayload(args: unknown): string {
+  // Guard before property access — malformed tool args can't cause TypeError.
+  if (!isRecord(args)) {
+    return typeof args === "string" ? args : JSON.stringify(args ?? {});
+  }
+
   const summary = typeof args.summary === "string" ? args.summary : "";
   const findings = Array.isArray(args.findings) ? args.findings : [];
   const lines = findings

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AgentRunner } from "../src/agent";
+import { resultPayload } from "../src/agent/agent-runner";
 import { BUILTIN_SPECS } from "../src/agent/builtin-specs";
 import type { IAgentSpec } from "../src/agent/agent-spec";
 import type { IProvider, IChatMessage, IModelResponse } from "../src/inference";
@@ -84,5 +85,22 @@ describe("structured agent_result output", () => {
     for (const s of BUILTIN_SPECS) {
       expect(s.outputMode).toBe("structured");
     }
+  });
+});
+
+describe("resultPayload robustness", () => {
+  test("does not throw on non-object args (malformed tool call)", () => {
+    expect(resultPayload(undefined)).toBe("{}");
+    expect(resultPayload(null)).toBe("{}");
+    expect(resultPayload("already a string")).toBe("already a string");
+    expect(() => resultPayload(42)).not.toThrow();
+  });
+
+  test("empty object → legacy JSON fallback, not a crash or garbage bullets", () => {
+    expect(resultPayload({})).toBe("{}");
+  });
+
+  test("legacy { result } string still works", () => {
+    expect(resultPayload({ result: "legacy answer" })).toBe("legacy answer");
   });
 });

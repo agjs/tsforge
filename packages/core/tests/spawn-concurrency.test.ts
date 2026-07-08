@@ -1,5 +1,7 @@
 import { test, expect } from "bun:test";
-import { makeLimiter } from "../src/cli/spawn-runner";
+import { makeLimiter, makeSpawnAgentFn } from "../src/cli/spawn-runner";
+import { BUILTIN_SPECS } from "../src/agent/builtin-specs";
+import type { ILoopEvent } from "../src/loop";
 
 /** Resolve after a macrotask so overlapping tasks actually interleave. */
 function tick(ms = 5): Promise<void> {
@@ -66,4 +68,47 @@ test("makeLimiter clamps a bad cap to at least 1 (never deadlocks)", async () =>
 
     expect(out).toBe("ok");
   }
+});
+
+test("makeLimiter releases the slot even when a body throws (no deadlock)", async () => {
+  const limit = makeLimiter(1);
+
+  await expect(limit(() => Promise.reject(new Error("boom")))).rejects.toThrow(
+    "boom"
+  );
+
+  // If the throwing body leaked its slot, this second task would hang forever.
+  expect(await limit(() => Promise.resolve("ok"))).toBe("ok");
+});
+
+test("an aborted signal returns an aborted result WITHOUT running the agent", async () => {
+  const kinds: string[] = [];
+  const fn = makeSpawnAgentFn({
+    specs: BUILTIN_SPECS,
+    cwd: process.cwd(),
+    concurrency: 2,
+    policyMode: "bypassPermissions",
+  });
+  const ac = new AbortController();
+
+  ac.abort();
+
+  const out = await fn(
+    {
+      subagentType: "explore",
+      description: "d",
+      prompt: "p",
+      parentTaskId: "t",
+    },
+    {
+      signal: ac.signal,
+      report: (e: ILoopEvent) => {
+        kinds.push(e.kind);
+      },
+    }
+  );
+
+  expect(out).toContain("aborted");
+  // Only lifecycle events — the model was never resolved or called.
+  expect(kinds).toEqual(["agent_spawned", "agent_result"]);
 });

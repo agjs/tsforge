@@ -132,9 +132,11 @@ describe("AgentRunner (read-only loop against this repo)", () => {
       task: "try to write",
     });
 
-    // Layer 1: create/edit/run never advertised.
+    // Layer 1: create/edit/run never advertised — nor spawn_agent, so a subagent
+    // structurally cannot delegate (recursion depth capped at 1).
     expect(seenTools()).not.toContain("create");
     expect(seenTools()).not.toContain("edit_lines");
+    expect(seenTools()).not.toContain("spawn_agent");
     expect(seenTools()).toContain("read");
     // Layer 2: the forced call was rejected at dispatch — nothing on disk.
     expect(existsSync(target)).toBe(false);
