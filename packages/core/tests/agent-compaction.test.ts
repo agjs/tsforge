@@ -306,8 +306,7 @@ describe("buildBoundedTranscript", () => {
 
     // Check that we didn't emit a high surrogate as the last character
     const lastCharCode = result.charCodeAt(result.length - 1);
-    const isBrokenSurrogate =
-      lastCharCode >= 0xd800 && lastCharCode <= 0xdbff;
+    const isBrokenSurrogate = lastCharCode >= 0xd800 && lastCharCode <= 0xdbff;
 
     expect(isBrokenSurrogate).toBe(false);
   });
