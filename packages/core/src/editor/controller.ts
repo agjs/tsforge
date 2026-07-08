@@ -65,6 +65,12 @@ export interface IStartEditorDeps {
   openPalette?: () => Promise<void>;
   openFilePicker?: () => Promise<void>;
   completion?: IEditorCompletionSource;
+  /** Ctrl+V handler: read the system clipboard and return the text to insert at
+   *  the cursor (an image capture returns a `[image #N]` chip and registers the
+   *  attachment as a side effect; otherwise the clipboard text), or null to insert
+   *  nothing. Async because reading the clipboard shells out. Absent ⇒ Ctrl+V is a
+   *  no-op (the terminal's own Cmd+V bracketed paste still handles text). */
+  pasteFromClipboard?: () => Promise<string | null>;
 }
 
 type KeyAction = (buffer: EditorBuffer) => void;
@@ -178,6 +184,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
     openPalette,
     openFilePicker,
     completion: completionSource,
+    pasteFromClipboard,
   } = deps;
 
   // Mutable so a terminal resize can update them (see the handle's `resize`);
@@ -190,6 +197,9 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   const keyDispatchTable = buildKeyDispatchTable();
 
   let isOpen = true;
+  // True while an async clipboard paste (Ctrl+V) is in flight — drops repeats so a
+  // slow (osascript) read can't be triggered concurrently and double-insert.
+  let pasting = false;
   // True while an overlay (file picker / command palette) owns stdin: the editor
   // detaches its `data` listener so it doesn't also consume the overlay's keystrokes.
   let suspended = false;
@@ -374,6 +384,37 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
       exitCallbacks.forEach((cb) => {
         cb();
       });
+
+      return;
+    }
+
+    // Ctrl-V: paste from the system clipboard (image → [image #N] chip + attachment,
+    // else clipboard text). Async — insert on resolve, like openPalette. Without a
+    // handler, swallow the key (don't insert a literal "v"). The `pasting` latch
+    // drops repeat Ctrl+V while a read is in flight: the clipboard read can take
+    // ~1s (osascript), so key-repeat/spam would otherwise fire concurrent reads and
+    // double-insert.
+    if (ctrl && text === "v") {
+      if (pasteFromClipboard !== undefined && !pasting) {
+        pasting = true;
+        pasteFromClipboard()
+          .then((insert) => {
+            // The read is async (~1s); the editor may have been closed meanwhile.
+            // Mutating/repainting after close() (raw mode + bracketed paste already
+            // torn down) would corrupt output — drop the result if we're gone.
+            if (isOpen && insert !== null && insert.length > 0) {
+              buffer.insert(insert);
+              repaint();
+              notifyChange();
+            }
+          })
+          .catch((err: unknown) => {
+            trace("editor.paste", err);
+          })
+          .finally(() => {
+            pasting = false;
+          });
+      }
 
       return;
     }

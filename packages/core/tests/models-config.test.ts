@@ -11,9 +11,23 @@ import {
   envModelEntry,
   resolveActiveModel,
   resolveModelByName,
+  resolveCapabilityModel,
   modelsConfigPath,
   defaultModelsConfig,
 } from "../src/models-config";
+
+// Capability env overrides — cleared before each test and restored after, so the
+// registry (not ambient env) is what's under test unless a test sets them.
+const CAP_ENV = [
+  "TSFORGE_VISION_BASE_URL",
+  "TSFORGE_VISION_MODEL",
+  "TSFORGE_VISION_API_KEY",
+  "TSFORGE_IMAGE_BASE_URL",
+  "TSFORGE_IMAGE_MODEL",
+  "TSFORGE_IMAGE_API_KEY",
+  "TSFORGE_IMAGE_API",
+] as const;
+const savedCap = new Map(CAP_ENV.map((k) => [k, process.env[k]] as const));
 
 // Sandbox the registry under a temp $TSFORGE_HOME, and clear the TSFORGE_* env
 // overrides so the registry (not the ambient env) is what's under test.
@@ -31,6 +45,10 @@ beforeEach(async () => {
   delete process.env.TSFORGE_BASE_URL;
   delete process.env.TSFORGE_MODEL;
   delete process.env.TSFORGE_API_KEY;
+
+  for (const k of CAP_ENV) {
+    Reflect.deleteProperty(process.env, k);
+  }
 });
 
 afterEach(async () => {
@@ -39,6 +57,10 @@ afterEach(async () => {
   restore("TSFORGE_BASE_URL", saved.base);
   restore("TSFORGE_MODEL", saved.model);
   restore("TSFORGE_API_KEY", saved.key);
+
+  for (const [k, v] of savedCap) {
+    restore(k, v);
+  }
 });
 
 function restore(name: string, value: string | undefined): void {
@@ -174,6 +196,28 @@ test("setActiveModel switches + persists; unknown name throws with the options",
   );
 });
 
+test("setActiveModel preserves the capabilities block (does not drop it)", async () => {
+  await saveModelsConfig({
+    active: "qwen-local",
+    models: {
+      "qwen-local": { baseUrl: "http://x/v1", model: "qwen3.6-27b" },
+      deepseek: {
+        baseUrl: "https://api.deepseek.com/v1",
+        model: "deepseek-reasoner",
+      },
+      "or-vlm": { baseUrl: "https://openrouter.ai/api/v1", model: "vlm" },
+    },
+    capabilities: { vision: "or-vlm" },
+  });
+
+  const next = await setActiveModel("deepseek");
+
+  expect(next.active).toBe("deepseek");
+  // capabilities must survive a model switch (P1: was silently dropped)
+  expect(next.capabilities?.vision).toBe("or-vlm");
+  expect((await loadModelsConfig()).capabilities?.vision).toBe("or-vlm");
+});
+
 test("resolveApiKey: inline wins, else apiKeyEnv, else undefined", () => {
   expect(resolveApiKey({ baseUrl: "u", model: "m", apiKey: "inline" })).toBe(
     "inline"
@@ -205,4 +249,124 @@ test("explicit TSFORGE_* env overrides the registry's active model", async () =>
   expect(active.name).toBe("env");
   expect(active.entry.model).toBe("deepseek-reasoner");
   expect(active.entry.baseUrl).toBe("https://api.deepseek.com/v1");
+});
+
+test("capabilities: parse validates known keys + real entry targets, round-trips", async () => {
+  await saveModelsConfig({
+    active: "qwen-local",
+    models: {
+      "qwen-local": { baseUrl: "http://x/v1", model: "qwen3.6-27b" },
+      "or-vlm": { baseUrl: "https://openrouter.ai/api/v1", model: "vlm" },
+    },
+    capabilities: { vision: "or-vlm" },
+  });
+
+  const cfg = await loadModelsConfig();
+
+  expect(cfg.capabilities?.vision).toBe("or-vlm");
+
+  // unknown capability key rejected
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m" } },
+      capabilities: { audio: "a" },
+    })
+  ).toThrow(/unknown capability "audio"/);
+
+  // dangling entry reference rejected
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m" } },
+      capabilities: { vision: "ghost" },
+    })
+  ).toThrow(/capability "vision" must name a model/);
+});
+
+test("parseModelsConfig rejects a bad imageApi (fails loud, no silent fallback)", () => {
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m", imageApi: "chat-modality" } },
+    })
+  ).toThrow(/imageApi must be/);
+
+  // valid values still parse
+  expect(
+    parseModelsConfig({
+      active: "a",
+      models: {
+        a: { baseUrl: "u", model: "m", imageApi: "images-generations" },
+      },
+    }).models.a?.imageApi
+  ).toBe("images-generations");
+});
+
+test("resolveCapabilityModel: null when unconfigured, else the registry entry", async () => {
+  await saveModelsConfig({
+    active: "qwen-local",
+    models: {
+      "qwen-local": { baseUrl: "http://x/v1", model: "qwen3.6-27b" },
+      "or-vlm": { baseUrl: "https://openrouter.ai/api/v1", model: "vlm" },
+    },
+    capabilities: { vision: "or-vlm" },
+  });
+
+  const vision = await resolveCapabilityModel("vision");
+
+  expect(vision?.name).toBe("or-vlm");
+  expect(vision?.entry.model).toBe("vlm");
+  // imageGen isn't configured → off
+  expect(await resolveCapabilityModel("imageGen")).toBeNull();
+});
+
+test("resolveCapabilityModel: ad-hoc env entry wins and needs no models.json", async () => {
+  process.env.TSFORGE_VISION_BASE_URL = "https://vlm.example/v1";
+  process.env.TSFORGE_VISION_MODEL = "some-vlm";
+  process.env.TSFORGE_VISION_API_KEY = "sk-test";
+
+  const vision = await resolveCapabilityModel("vision");
+
+  expect(vision?.name).toBe("env:vision");
+  expect(vision?.entry.baseUrl).toBe("https://vlm.example/v1");
+  expect(vision?.entry.model).toBe("some-vlm");
+  expect(vision?.entry.apiKey).toBe("sk-test");
+
+  // base url without a model is an actionable error, not a silent bad entry
+  delete process.env.TSFORGE_VISION_MODEL;
+  await expect(resolveCapabilityModel("vision")).rejects.toThrow(
+    /TSFORGE_VISION_MODEL is missing/
+  );
+});
+
+test("resolveCapabilityModel: env names a registry entry; imageApi override parses", async () => {
+  await saveModelsConfig({
+    active: "qwen-local",
+    models: {
+      "qwen-local": { baseUrl: "http://x/v1", model: "qwen3.6-27b" },
+      "or-img": {
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "flux",
+        imageApi: "chat-modalities",
+      },
+    },
+  });
+
+  // env names an entry (no base url set) → reuse that registry entry
+  process.env.TSFORGE_IMAGE_MODEL = "or-img";
+  const img = await resolveCapabilityModel("imageGen");
+
+  expect(img?.name).toBe("or-img");
+  expect(img?.entry.imageApi).toBe("chat-modalities");
+
+  // ad-hoc env with an imageApi override
+  delete process.env.TSFORGE_IMAGE_MODEL;
+  process.env.TSFORGE_IMAGE_BASE_URL = "https://img.example/v1";
+  process.env.TSFORGE_IMAGE_MODEL = "dalle";
+  process.env.TSFORGE_IMAGE_API = "images-generations";
+
+  const adhoc = await resolveCapabilityModel("imageGen");
+
+  expect(adhoc?.entry.imageApi).toBe("images-generations");
 });

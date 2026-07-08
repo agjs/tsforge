@@ -24,6 +24,18 @@ import {
 } from "../render/file-menu";
 import { listWorkspaceFiles } from "../lib/fs";
 import { composeMessage } from "../loop/prompt";
+import { resolveImageInput } from "./image-input";
+import { resolveImageCapabilityFlags } from "../loop/tools/image-tools";
+import {
+  captureClipboardImageToFile,
+  readClipboardText,
+  discardClipboardImages,
+} from "../lib/clipboard/clipboard-image";
+import {
+  detectImageProtocol,
+  renderInlineImage,
+  makeImageBudget,
+} from "../render/terminal-image";
 import {
   Session,
   PLAN_APPROVED_NOTE,
@@ -326,6 +338,10 @@ export async function repl(args: ICliArgs): Promise<number> {
     process.stdout.write(`  ↳ ${m}\n`)
   );
   const delegationConfig = await loadTsforgeConfig(args.dir);
+  // Which image capabilities are configured — decides whether read_image /
+  // generate_image are offered and whether attached images get described.
+  // Resolved up front (a boot IO), so the wiring below stays synchronous.
+  const imageCaps = await resolveImageCapabilityFlags();
 
   let session = initialSession;
   let activeName = initialActiveName;
@@ -532,6 +548,93 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   wireDelegation();
 
+  // Image capabilities: offer read_image/generate_image when their backends are
+  // configured, and wire the inline preview for generated images. The preview
+  // emits the terminal's inline-image escape (iTerm2 today) via the StatusBar
+  // stream so the pinned bar re-anchors below it; unsupported terminal → no-op
+  // (the tool still reports the saved path).
+  // A small budget stops a runaway loop from flooding the scrollback. Re-applied
+  // after /clear (like setSetupWeb/wireDelegation) since /clear rebuilds session.
+  const imageProtocol = detectImageProtocol();
+  const imageBudget = makeImageBudget();
+  // Absolute temp-file paths captured from the clipboard (Ctrl+V of image bytes),
+  // consumed (described + cleared) on the next send by resolveImageInput.
+  const pendingImages: string[] = [];
+
+  // Ctrl+V in the editor: a clipboard IMAGE becomes a `[image #N]` chip + a pending
+  // attachment (described on send); otherwise fall back to pasting clipboard text.
+  // (Cmd+V is swallowed by the terminal — for text it arrives as a bracketed paste;
+  // an image on the clipboard never reaches an in-terminal app, hence Ctrl+V.)
+  const pasteFromClipboard = async (): Promise<string | null> => {
+    // Reading the clipboard shells out (osascript can take ~1s), so show a
+    // transient hint above the input so the pause reads as "working", not hung.
+    // (Install `pngpaste` to make it instant — the reader prefers it.)
+    const hinting = statusBar.active;
+
+    if (hinting) {
+      statusBar.setEditorOverlay(["📋 reading clipboard…"]);
+    }
+
+    try {
+      const captured = await captureClipboardImageToFile();
+
+      if (captured !== null) {
+        pendingImages.push(captured);
+
+        return `[image #${String(pendingImages.length)}]`;
+      }
+
+      // Nothing to paste (empty clipboard, or only whitespace/newline — which
+      // otherwise injected a blank line). Insert only when there's real content.
+      const text = await readClipboardText();
+
+      return text.trim().length > 0 ? text : null;
+    } finally {
+      if (hinting) {
+        statusBar.clearEditorOverlay();
+      }
+    }
+  };
+
+  const previewGeneratedImage: NonNullable<
+    Parameters<typeof session.setPreviewImage>[0]
+  > = ({ path, base64 }) => {
+    if (imageProtocol === "none" || !imageBudget.take()) {
+      return;
+    }
+
+    // `name` is a human-readable filename (base64-encoded into the OSC-1337
+    // params), so use the saved file's basename — not the mime type. Split on
+    // both separators so a Windows path resolves too.
+    const name = path.split(/[\\/]/u).pop() ?? "image";
+    const escape = renderInlineImage(base64, imageProtocol, { name });
+
+    if (escape !== null) {
+      // Route through the StatusBar stream channel (NOT raw stdout): it commits the
+      // content to scrollback and re-anchors the pinned bar/input row at the cursor
+      // the terminal left below the image. A raw write left the bar's cursor
+      // tracking stale, so it painted over the image (overlapping text). Bracket
+      // with newlines so the image sits on its own committed lines.
+      statusBar.writeStream(`\n${escape}\n`);
+    }
+  };
+
+  const wireImages = (): void => {
+    session.setImageCapabilities(imageCaps);
+    session.setPreviewImage(previewGeneratedImage);
+  };
+
+  wireImages();
+
+  if (imageCaps.vision || imageCaps.imageGen) {
+    const on = [
+      ...(imageCaps.vision ? ["read"] : []),
+      ...(imageCaps.imageGen ? ["generate"] : []),
+    ].join(" + ");
+
+    process.stdout.write(`  ↳ image: ${on} (drag/@ to attach)\n`);
+  }
+
   // Make the delegation setup visible so the concurrency cap is never a mystery
   // (cap 1 ⇒ subagents run serially; raise agents.concurrency to overlap them).
   if (delegationOff) {
@@ -598,9 +701,42 @@ export async function repl(args: ICliArgs): Promise<number> {
   // plan-approval / staged-build sends call session.send directly and are not
   // touched, so only ordinary messages get mention expansion.
   const runSend = (line: string): Promise<void> =>
-    drive(async (opts) =>
-      session.send(await composeMessage(args.dir, line), opts)
-    );
+    drive(async (opts) => {
+      // Images the user attached (dragged/quoted paths or @-mentioned image files
+      // in the line, plus any clipboard captures) are sent to the vision backend
+      // and their descriptions prepended as text — the primary model is text-only.
+      // The image tokens are stripped from the line before @-file expansion.
+      //
+      // Only keep clipboard captures whose `[image #N]` chip SURVIVES in the line
+      // (paste is `pendingImages[i]` ↔ chip `#${i+1}`) — a deleted chip / cleared
+      // buffer must not smuggle a hidden image into a later send. Consumed and
+      // dropped temp files are unlinked so tmpdir doesn't accumulate.
+      const captures = pendingImages.map((path, i) => ({
+        path,
+        chip: `[image #${String(i + 1)}]`,
+      }));
+
+      pendingImages.length = 0;
+      const kept = captures
+        .filter((c) => line.includes(c.chip))
+        .map((c) => c.path);
+      const dropped = captures
+        .filter((c) => !line.includes(c.chip))
+        .map((c) => c.path);
+
+      await discardClipboardImages(dropped);
+
+      const { cleanedLine, contextBlock } = await resolveImageInput(
+        line,
+        args.dir,
+        { extraPaths: kept, signal: opts.signal }
+      );
+
+      await discardClipboardImages(kept);
+      const composed = await composeMessage(args.dir, cleanedLine);
+
+      return session.send(`${contextBlock}${composed}`, opts);
+    });
 
   // A from-scratch web build: stage it (plan + types, then implement) so the
   // model designs the type contract before writing UI — far less API invention.
@@ -756,6 +892,10 @@ export async function repl(args: ICliArgs): Promise<number> {
         });
         session.setSetupWeb(setupWeb);
         wireDelegation(); // re-offer spawn_agent on the rebuilt session
+        wireImages(); // re-offer read_image/generate_image + preview on the rebuild
+        // Drop any un-sent clipboard captures — /clear wipes the buffer (and its
+        // chips), so their temp files are now orphaned.
+        void discardClipboardImages(pendingImages.splice(0));
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
         planDiscussed = false;
         await persist();
@@ -1907,6 +2047,7 @@ export async function repl(args: ICliArgs): Promise<number> {
         openPalette,
         openFilePicker,
         completion: editorCompletion,
+        pasteFromClipboard,
       });
 
       resizeEditor = (columns, rows): void => {

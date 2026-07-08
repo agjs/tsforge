@@ -44,6 +44,8 @@ import {
   PACKAGE_DOCS_TOOL,
   SCRIPT_TOOL,
   GIT_CONTEXT_TOOL,
+  READ_IMAGE_TOOL,
+  GENERATE_IMAGE_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
@@ -92,7 +94,17 @@ type AdvertisedTool =
   | typeof PACKAGE_INFO_TOOL
   | typeof PACKAGE_DOCS_TOOL
   | typeof SCRIPT_TOOL
-  | typeof GIT_CONTEXT_TOOL;
+  | typeof GIT_CONTEXT_TOOL
+  | typeof READ_IMAGE_TOOL
+  | typeof GENERATE_IMAGE_TOOL;
+
+/** Which extra capability backends are configured this run — decides whether the
+ *  image tools are advertised. Resolved once by the driver (run.ts) so
+ *  advertisement stays synchronous here. Both default off. */
+export interface ICapabilityFlags {
+  vision?: boolean;
+  imageGen?: boolean;
+}
 
 /** Free, local web tools (fetch + search) — advertised only under TSFORGE_WEB so
  *  eval sweeps stay deterministic and offline by default. Available on both
@@ -123,13 +135,34 @@ function scriptTools(): AdvertisedTool[] {
   return flags.scriptTool() ? [SCRIPT_TOOL] : [];
 }
 
-export function toolsFor(hasExistingCode: boolean): AdvertisedTool[] {
+/** Image capability tools — each advertised only when its backend is configured
+ *  (caps resolved by the driver). read_image (vision) and generate_image are
+ *  independent, so a vision-only or gen-only setup offers just the one. */
+function imageTools(caps: ICapabilityFlags): AdvertisedTool[] {
+  return [
+    ...(caps.vision === true ? [READ_IMAGE_TOOL] : []),
+    ...(caps.imageGen === true ? [GENERATE_IMAGE_TOOL] : []),
+  ];
+}
+
+export function toolsFor(
+  hasExistingCode: boolean,
+  caps: ICapabilityFlags = {}
+): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
   const script = scriptTools();
+  const image = imageTools(caps);
 
   if (flags.noLspTools() || !hasExistingCode) {
-    return [...BASE_TOOLS, ...HASHLINE_TOOLS, ...web, ...git, ...script];
+    return [
+      ...BASE_TOOLS,
+      ...HASHLINE_TOOLS,
+      ...web,
+      ...git,
+      ...script,
+      ...image,
+    ];
   }
 
   // existing-code: base + LSP nav + (gated) web + (gated) git + (gated) script.
@@ -140,6 +173,7 @@ export function toolsFor(hasExistingCode: boolean): AdvertisedTool[] {
     ...web,
     ...git,
     ...script,
+    ...image,
   ];
 }
 
@@ -193,6 +227,9 @@ export interface ILoopCtxTool {
   /** Wired by the interactive CLI: run one read-only specialist subagent (the
    *  `spawn_agent` tool). Threaded into the tool context. */
   spawnAgent?: SpawnAgentFn;
+  /** Wired by the interactive CLI: preview a just-generated image inline (the
+   *  `generate_image` tool calls it). Threaded into the tool context. */
+  previewImage?: IToolContext["previewImage"];
 }
 
 /** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */

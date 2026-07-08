@@ -14,6 +14,7 @@ import { doWebBrowse } from "./web-browse";
 import { doPackageInfo, doPackageDocs } from "./package-info";
 import { doScript } from "./script-tool";
 import { doSpawnAgent } from "./spawn-agent";
+import { doReadImage, doGenerateImage } from "./image-tools";
 import { reject, type IToolContext } from "./tool-context";
 import {
   classifyAction,
@@ -59,6 +60,8 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   // call is rejected (script is not in SCRIPT_EXPOSABLE_TOOLS).
   [TOOL_NAME.script]: (a, c) => doScript(a, c, { execute: executeTool }),
   [TOOL_NAME.spawnAgent]: doSpawnAgent,
+  [TOOL_NAME.readImage]: doReadImage,
+  [TOOL_NAME.generateImage]: doGenerateImage,
 };
 
 function isToolName(name: string): name is ToolName {

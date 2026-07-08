@@ -83,6 +83,15 @@ export interface IToolContext {
   /** Run one read-only specialist subagent for the `spawn_agent` tool. Wired by
    *  the interactive CLI (headless one-shot leaves it absent). See {@link SpawnAgentFn}. */
   spawnAgent?: SpawnAgentFn;
+  /** Render a just-generated image inline (the `generate_image` tool calls it).
+   *  Wired by the interactive CLI to emit the terminal's inline-image escape above
+   *  the input row; absent (headless / unsupported terminal) ⇒ the tool just
+   *  reports the saved path. */
+  previewImage?: (image: {
+    path: string;
+    base64: string;
+    mimeType: string;
+  }) => void;
 }
 
 /** A required string arg, or "" if missing/wrong-type. */

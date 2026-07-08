@@ -54,9 +54,21 @@ When your cursor is at the **top** of the buffer (line 0, any column), press **�
 
 ## Multi-line paste
 
-Paste a block of text with Ctrl+V (or ⌘V on macOS). The pasted content lands in the buffer as-is and may span multiple lines. You can edit it like any buffer text. When you press Enter, the entire buffer (including pasted lines) is submitted as a single message.
+Paste a block of text with your terminal's paste (⌘V on macOS / Ctrl+Shift+V on Linux) — the terminal delivers it as a bracketed paste. The pasted content lands in the buffer as-is and may span multiple lines; edit it like any buffer text. When you press Enter, the entire buffer (including pasted lines) is submitted as a single message.
 
 Very large pastes are displayed as `[paste #N +M lines]` in the UI and expand to their full content when sent.
+
+## Attaching images
+
+Requires a [`vision` capability](/inference/models-json/#extra-capabilities-vision-image-generation) configured. Three ways to attach an image; each is sent to the vision backend and its text description is folded into your message (the chat model stays text-only):
+
+| Method | Action |
+| --- | --- |
+| **Ctrl+V** | Paste an image from the clipboard. A `📋 reading clipboard…` hint shows during the read, then an `[image #N]` chip lands in the buffer. (Falls back to pasting clipboard text if there's no image.) |
+| **Drag & drop** | Drag an image file onto the terminal — it drops the path, which is attached on send. |
+| **`@` mention** | `@path/to/image.png` — the picker lists image files too. |
+
+**Why Ctrl+V, not ⌘V:** the terminal emulator intercepts ⌘V and, for an image, hands the app nothing — a terminal program can only receive Ctrl+V (a real control byte). Identical images attached more than once are described **once** (no duplicate cost). See also [generating images](/reference/flags/#image-capabilities-vision-generation).
 
 ## Command palette and file picker
 
