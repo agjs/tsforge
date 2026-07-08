@@ -564,17 +564,32 @@ export async function repl(args: ICliArgs): Promise<number> {
   // (Cmd+V is swallowed by the terminal — for text it arrives as a bracketed paste;
   // an image on the clipboard never reaches an in-terminal app, hence Ctrl+V.)
   const pasteFromClipboard = async (): Promise<string | null> => {
-    const captured = await captureClipboardImageToFile();
+    // Reading the clipboard shells out (osascript can take ~1s), so show a
+    // transient hint above the input so the pause reads as "working", not hung.
+    // (Install `pngpaste` to make it instant — the reader prefers it.)
+    const hinting = statusBar.active;
 
-    if (captured !== null) {
-      pendingImages.push(captured);
-
-      return `[image #${String(pendingImages.length)}]`;
+    if (hinting) {
+      statusBar.setEditorOverlay(["📋 reading clipboard…"]);
     }
 
-    const text = await readClipboardText();
+    try {
+      const captured = await captureClipboardImageToFile();
 
-    return text.length > 0 ? text : null;
+      if (captured !== null) {
+        pendingImages.push(captured);
+
+        return `[image #${String(pendingImages.length)}]`;
+      }
+
+      const text = await readClipboardText();
+
+      return text.length > 0 ? text : null;
+    } finally {
+      if (hinting) {
+        statusBar.clearEditorOverlay();
+      }
+    }
   };
 
   const previewGeneratedImage: NonNullable<
