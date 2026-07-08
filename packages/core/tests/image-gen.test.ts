@@ -166,6 +166,22 @@ test("generateImage throws on non-2xx and on an image-less response", async () =
   await expect(
     generateImage(CFG, { prompt: "x" }, { fetch: declineFetch })
   ).rejects.toThrow(/declined: .*copyrighted characters/s);
+
+  // The real Gemini shape: finish_reason content_filter, everything else null →
+  // a concrete "content filter" cause, not a vague "no image".
+  const filterFetch = (async () =>
+    jsonResponse({
+      choices: [
+        {
+          finish_reason: "content_filter",
+          message: { content: null, refusal: null },
+        },
+      ],
+    })) as unknown as typeof fetch;
+
+  await expect(
+    generateImage(CFG, { prompt: "homer" }, { fetch: filterFetch })
+  ).rejects.toThrow(/content filter/);
 });
 
 test("saveGeneratedImages writes files and returns paths", async () => {

@@ -96,17 +96,12 @@ export async function generateImage(
       : imageRefsFromChat(payload);
 
   if (refs.length === 0) {
-    // No image in a 2xx response usually means the model DECLINED (content
-    // policy — e.g. a copyrighted character) and replied with text instead.
-    // Surface that text so the caller can relay the real reason rather than a
-    // misleading "backend unavailable".
-    const refusal = api === "images-generations" ? "" : chatText(payload);
-
-    throw new Error(
-      refusal.length > 0
-        ? `image model declined: ${refusal.slice(0, 300)}`
-        : "image model returned no image"
-    );
+    // A 2xx with no image is almost always a content-policy DECLINE, not a
+    // backend failure. Gemini signals it with `finish_reason: "content_filter"`
+    // (often with content/refusal/reasoning all null), so key off that and any
+    // text the provider did give — a concrete cause the caller can relay instead
+    // of hallucinating "backend unavailable".
+    throw new Error(`image model ${noImageReason(payload)}`);
   }
 
   return Promise.all(refs.map((ref) => resolveRef(ref, doFetch, opts.signal)));
@@ -214,27 +209,63 @@ function imageRefsFromChat(payload: unknown): ImageRef[] {
   return urls.map(refFromUrl);
 }
 
-/** The assistant's TEXT from a chat response — the model's explanation when it
- *  returned no image (typically a content-policy decline). */
-function chatText(payload: unknown): string {
-  if (!isRecord(payload) || !Array.isArray(payload.choices)) {
+/** Why a chat response carried no image — a concrete, relayable cause. Keys off
+ *  `finish_reason` (Gemini uses `content_filter` for a policy block, usually with
+ *  no text) and falls back to any text the model did return. */
+function noImageReason(payload: unknown): string {
+  const choice: unknown =
+    isRecord(payload) && Array.isArray(payload.choices)
+      ? payload.choices[0]
+      : undefined;
+  const finish: unknown = isRecord(choice)
+    ? (choice.finish_reason ?? choice.native_finish_reason)
+    : undefined;
+  const text = messageText(isRecord(choice) ? choice.message : undefined);
+
+  if (
+    typeof finish === "string" &&
+    /content_filter|safety|blocked|prohibited/i.test(finish)
+  ) {
+    return text.length > 0
+      ? `declined this prompt (content filter): ${text.slice(0, 200)}`
+      : "declined this prompt (content filter — often a copyrighted or restricted subject)";
+  }
+
+  return text.length > 0
+    ? `declined: ${text.slice(0, 200)}`
+    : "returned no image";
+}
+
+/** Any human-readable text on an assistant message: content, else refusal, else
+ *  reasoning (providers put a decline in different fields). */
+function messageText(message: unknown): string {
+  if (!isRecord(message)) {
     return "";
   }
 
-  const message: unknown = isRecord(payload.choices[0])
-    ? payload.choices[0].message
-    : undefined;
-  const content: unknown = isRecord(message) ? message.content : undefined;
+  const content = message.content;
 
-  if (typeof content === "string") {
+  if (typeof content === "string" && content.trim().length > 0) {
     return content.trim();
   }
 
   if (Array.isArray(content)) {
-    return content
+    const joined = content
       .map((p) => (isRecord(p) && typeof p.text === "string" ? p.text : ""))
       .join("")
       .trim();
+
+    if (joined.length > 0) {
+      return joined;
+    }
+  }
+
+  for (const field of ["refusal", "reasoning"]) {
+    const value = message[field];
+
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
   }
 
   return "";
