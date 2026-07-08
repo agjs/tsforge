@@ -130,6 +130,28 @@ test("generate_image: saves under .tsforge/images and previews inline", async ()
   }
 });
 
+test("generate_image: a model decline returns a clear reason, not a crash", async () => {
+  const out = await doGenerateImage(
+    { prompt: "homer simpson playing guitar" },
+    ctx("/tmp"),
+    deps({
+      resolveCap: async () => ({ name: "gen", entry: IMAGE_ENTRY }),
+      generate: async () => {
+        throw new Error(
+          "image model declined: I can't create copyrighted characters."
+        );
+      },
+    })
+  );
+
+  // terse + factual: the real reason, no crash framing, no meta-instructions the
+  // model would parrot back to the user
+  expect(out).toContain("image not generated");
+  expect(out).toContain("copyrighted characters");
+  expect(out).not.toContain("FAILED");
+  expect(out).not.toContain("backend");
+});
+
 test("generate_image: not-configured + empty-prompt rejections", async () => {
   const notConfigured = await doGenerateImage(
     { prompt: "x" },

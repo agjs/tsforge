@@ -150,14 +150,22 @@ test("generateImage throws on non-2xx and on an image-less response", async () =
     generateImage(CFG, { prompt: "x" }, { fetch: errFetch })
   ).rejects.toThrow(/image-gen request failed \(400\).*bad model/s);
 
-  const emptyFetch = (async () =>
+  // A 2xx with a text reply and no image = a content-policy DECLINE — surface the
+  // model's actual words so the caller relays the real reason, not "no image".
+  const declineFetch = (async () =>
     jsonResponse({
-      choices: [{ message: { content: "no image here" } }],
+      choices: [
+        {
+          message: {
+            content: "I can't create images of copyrighted characters.",
+          },
+        },
+      ],
     })) as unknown as typeof fetch;
 
   await expect(
-    generateImage(CFG, { prompt: "x" }, { fetch: emptyFetch })
-  ).rejects.toThrow(/no image content/);
+    generateImage(CFG, { prompt: "x" }, { fetch: declineFetch })
+  ).rejects.toThrow(/declined: .*copyrighted characters/s);
 });
 
 test("saveGeneratedImages writes files and returns paths", async () => {

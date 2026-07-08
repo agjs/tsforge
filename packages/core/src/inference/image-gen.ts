@@ -96,7 +96,17 @@ export async function generateImage(
       : imageRefsFromChat(payload);
 
   if (refs.length === 0) {
-    throw new Error("image-gen response: no image content");
+    // No image in a 2xx response usually means the model DECLINED (content
+    // policy — e.g. a copyrighted character) and replied with text instead.
+    // Surface that text so the caller can relay the real reason rather than a
+    // misleading "backend unavailable".
+    const refusal = api === "images-generations" ? "" : chatText(payload);
+
+    throw new Error(
+      refusal.length > 0
+        ? `image model declined: ${refusal.slice(0, 300)}`
+        : "image model returned no image"
+    );
   }
 
   return Promise.all(refs.map((ref) => resolveRef(ref, doFetch, opts.signal)));
@@ -202,6 +212,32 @@ function imageRefsFromChat(payload: unknown): ImageRef[] {
   }
 
   return urls.map(refFromUrl);
+}
+
+/** The assistant's TEXT from a chat response — the model's explanation when it
+ *  returned no image (typically a content-policy decline). */
+function chatText(payload: unknown): string {
+  if (!isRecord(payload) || !Array.isArray(payload.choices)) {
+    return "";
+  }
+
+  const message: unknown = isRecord(payload.choices[0])
+    ? payload.choices[0].message
+    : undefined;
+  const content: unknown = isRecord(message) ? message.content : undefined;
+
+  if (typeof content === "string") {
+    return content.trim();
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((p) => (isRecord(p) && typeof p.text === "string" ? p.text : ""))
+      .join("")
+      .trim();
+  }
+
+  return "";
 }
 
 /** OpenAI `/images/generations`: `data[]` with `b64_json` or `url`. */

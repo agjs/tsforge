@@ -234,15 +234,26 @@ export async function doGenerateImage(
     message: `↳ generate_image → ${cap.name}`,
   });
 
-  const images = await deps.generate(
-    entryConfig(cap.entry),
-    {
-      prompt,
-      api: cap.entry.imageApi,
-      ...(size.length > 0 ? { size } : {}),
-    },
-    { signal: ctx.signal }
-  );
+  let images;
+
+  try {
+    images = await deps.generate(
+      entryConfig(cap.entry),
+      {
+        prompt,
+        api: cap.entry.imageApi,
+        ...(size.length > 0 ? { size } : {}),
+      },
+      { signal: ctx.signal }
+    );
+  } catch (err) {
+    // A decline (content policy) or per-request error — a terse, factual result.
+    // Do NOT pack model-steering instructions in here: the model echoes the tool
+    // result, so guidance text leaks into the user-facing reply.
+    const reason = err instanceof Error ? err.message : String(err);
+
+    return reject(ctx, "generate_image", `image not generated — ${reason}`);
+  }
 
   const outDir = join(ctx.cwd, IMAGE_OUTPUT_DIR);
   const baseName = `image-${randomUUID().slice(0, 8)}`;
