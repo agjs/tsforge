@@ -30,6 +30,11 @@ const BARE = new RegExp(
   "giu"
 );
 
+// The inline markers this module substitutes for attachments: `[image: name]`
+// (extracted path) and `[image #N]` (clipboard chip). Stripped when deriving the
+// vision prompt so an image-only send isn't "described" against marker text.
+const ATTACHMENT_MARKER = /\[image(?::[^\]]*|\s*#\d+)\]/gu;
+
 export interface IExtractedImages {
   /** The line with image tokens replaced by an inline `[image: name]` marker. */
   cleanedLine: string;
@@ -134,8 +139,13 @@ export async function resolveImageInput(
     };
   }
 
-  const prompt =
-    cleanedLine.trim().length > 0 ? cleanedLine.trim() : DEFAULT_VISION_PROMPT;
+  // The vision prompt is the user's REAL text. cleanedLine still contains the
+  // attachment markers (`[image: a.png]`, `[image #1]`) we substituted for the
+  // paths/chips — an image-only send is nothing BUT markers, so strip them before
+  // deciding: markers-only → fall back to the default describe/transcribe prompt
+  // (otherwise the model was asked to answer about the literal marker text).
+  const userText = cleanedLine.replace(ATTACHMENT_MARKER, "").trim();
+  const prompt = userText.length > 0 ? userText : DEFAULT_VISION_PROMPT;
   const blocks: string[] = [];
   // Describe each DISTINCT image once. Pasting the same screenshot three times (or
   // @-mentioning the same file twice) would otherwise fire that many identical —

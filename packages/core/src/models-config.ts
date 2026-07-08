@@ -240,7 +240,10 @@ export async function setActiveModel(name: string): Promise<IModelsConfig> {
     );
   }
 
-  const next: IModelsConfig = { active: name, models: cfg.models };
+  // Preserve everything else (notably the top-level `capabilities` block) — only
+  // `active` changes. Spreading cfg avoids silently dropping vision/imageGen
+  // routing on a `/model` switch.
+  const next: IModelsConfig = { ...cfg, active: name };
 
   await saveModelsConfig(next);
 

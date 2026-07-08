@@ -197,6 +197,9 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
   const keyDispatchTable = buildKeyDispatchTable();
 
   let isOpen = true;
+  // True while an async clipboard paste (Ctrl+V) is in flight — drops repeats so a
+  // slow (osascript) read can't be triggered concurrently and double-insert.
+  let pasting = false;
   // True while an overlay (file picker / command palette) owns stdin: the editor
   // detaches its `data` listener so it doesn't also consume the overlay's keystrokes.
   let suspended = false;
@@ -387,9 +390,13 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
     // Ctrl-V: paste from the system clipboard (image → [image #N] chip + attachment,
     // else clipboard text). Async — insert on resolve, like openPalette. Without a
-    // handler, swallow the key (don't insert a literal "v").
+    // handler, swallow the key (don't insert a literal "v"). The `pasting` latch
+    // drops repeat Ctrl+V while a read is in flight: the clipboard read can take
+    // ~1s (osascript), so key-repeat/spam would otherwise fire concurrent reads and
+    // double-insert.
     if (ctrl && text === "v") {
-      if (pasteFromClipboard !== undefined) {
+      if (pasteFromClipboard !== undefined && !pasting) {
+        pasting = true;
         pasteFromClipboard()
           .then((insert) => {
             if (insert !== null && insert.length > 0) {
@@ -400,6 +407,9 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
           })
           .catch((err: unknown) => {
             trace("editor.paste", err);
+          })
+          .finally(() => {
+            pasting = false;
           });
       }
 

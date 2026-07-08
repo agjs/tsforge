@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 import {
   readClipboardImage,
   readClipboardText,
+  captureClipboardImageToFile,
   type IClipboardDeps,
 } from "../src/lib/clipboard/clipboard-image";
 
@@ -92,6 +93,31 @@ test("readClipboardText: returns pbpaste stdout on macOS, '' elsewhere", async (
   });
 
   expect(linux).toBe("");
+});
+
+test("captureClipboardImageToFile: keeps the written temp path, no re-encode", async () => {
+  // pngpaste 'writes' the file (faked) and readFileBytes confirms non-empty →
+  // returns that path directly (no read-back + base64 + rewrite).
+  const path = await captureClipboardImageToFile(
+    deps({
+      run: async (argv) => (argv[0] === "pngpaste" ? 0 : 1),
+      readFileBytes: async () => PNG,
+    })
+  );
+
+  expect(path).toMatch(/tsforge-paste-.*\.png$/);
+
+  // no image on clipboard → null
+  expect(
+    await captureClipboardImageToFile(
+      deps({ run: async () => 0, readFileBytes: async () => null })
+    )
+  ).toBeNull();
+
+  // non-macOS → null
+  expect(
+    await captureClipboardImageToFile(deps({ platform: "linux" }))
+  ).toBeNull();
 });
 
 test("readClipboardText: non-zero exit → empty string", async () => {

@@ -36,6 +36,10 @@ const IMAGE_MIME: Readonly<Record<string, string>> = {
 /** Cap on the vision model's returned text fed back into the conversation. */
 const MAX_DESCRIPTION_CHARS = 8_000;
 
+/** Largest image we'll read/base64-encode (bytes). Bounds memory, and anything
+ *  bigger is rejected by the vision backends anyway. */
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
 /** Where generated images are written (under the workspace, git-ignorable). */
 export const IMAGE_OUTPUT_DIR = join(".tsforge", "images");
 
@@ -68,7 +72,11 @@ export async function loadImageFile(
 
   const file = Bun.file(absPath);
 
-  if (!(await file.exists())) {
+  if (
+    !(await file.exists()) ||
+    file.size === 0 ||
+    file.size > MAX_IMAGE_BYTES
+  ) {
     return null;
   }
 
@@ -173,7 +181,7 @@ export async function doReadImage(
     return reject(
       ctx,
       "read_image",
-      `cannot read image (missing or unsupported type — png/jpeg/webp/gif): ${file}`
+      `cannot read image "${file}" — it must exist, be a supported type (png/jpeg/webp/gif), and be ≤ 20 MB`
     );
   }
 

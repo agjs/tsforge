@@ -248,6 +248,21 @@ async function resolveRef(
     };
   }
 
+  // The provider hands back a URL we then fetch — untrusted, so restrict to
+  // http(s). Reject file:/data:/gopher:/etc. so a malicious/compromised endpoint
+  // can't point us at localhost, cloud-metadata IPs, or a local file.
+  let scheme: string;
+
+  try {
+    scheme = new URL(ref.url).protocol;
+  } catch {
+    throw new Error(`image-gen: refusing to fetch a malformed image url`);
+  }
+
+  if (scheme !== "http:" && scheme !== "https:") {
+    throw new Error(`image-gen: refusing non-http(s) image url (${scheme})`);
+  }
+
   const res = await doFetch(ref.url, { signal });
 
   if (!res.ok) {

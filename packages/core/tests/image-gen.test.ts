@@ -129,6 +129,19 @@ test("generateImage fetches a remote url when the response is not inline", async
   ]);
 });
 
+test("generateImage refuses a non-http(s) image url (SSRF guard)", async () => {
+  const fakeFetch = (async () =>
+    jsonResponse({
+      choices: [
+        { message: { images: [{ image_url: { url: "file:///etc/passwd" } }] } },
+      ],
+    })) as unknown as typeof fetch;
+
+  await expect(
+    generateImage(CFG, { prompt: "x" }, { fetch: fakeFetch })
+  ).rejects.toThrow(/non-http\(s\)/);
+});
+
 test("generateImage throws on non-2xx and on an image-less response", async () => {
   const errFetch = (async () =>
     new Response("bad model", { status: 400 })) as unknown as typeof fetch;

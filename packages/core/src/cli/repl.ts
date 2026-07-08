@@ -549,8 +549,9 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   // Image capabilities: offer read_image/generate_image when their backends are
   // configured, and wire the inline preview for generated images. The preview
-  // emits the terminal's inline-image escape (iTerm2 today) directly to stdout;
-  // on an unsupported terminal it's a no-op and the tool just reports the path.
+  // emits the terminal's inline-image escape (iTerm2 today) via the StatusBar
+  // stream so the pinned bar re-anchors below it; unsupported terminal → no-op
+  // (the tool still reports the saved path).
   // A small budget stops a runaway loop from flooding the scrollback. Re-applied
   // after /clear (like setSetupWeb/wireDelegation) since /clear rebuilds session.
   const imageProtocol = detectImageProtocol();
@@ -596,15 +597,23 @@ export async function repl(args: ICliArgs): Promise<number> {
 
   const previewGeneratedImage: NonNullable<
     Parameters<typeof session.setPreviewImage>[0]
-  > = ({ base64, mimeType }) => {
+  > = ({ path, base64 }) => {
     if (imageProtocol === "none" || !imageBudget.take()) {
       return;
     }
 
-    const escape = renderInlineImage(base64, imageProtocol, { name: mimeType });
+    // `name` is a human-readable filename (base64-encoded into the OSC-1337
+    // params), so use the saved file's basename — not the mime type.
+    const name = path.split("/").pop() ?? "image";
+    const escape = renderInlineImage(base64, imageProtocol, { name });
 
     if (escape !== null) {
-      process.stdout.write(`${escape}\n`);
+      // Route through the StatusBar stream channel (NOT raw stdout): it commits the
+      // content to scrollback and re-anchors the pinned bar/input row at the cursor
+      // the terminal left below the image. A raw write left the bar's cursor
+      // tracking stale, so it painted over the image (overlapping text). Bracket
+      // with newlines so the image sits on its own committed lines.
+      statusBar.writeStream(`\n${escape}\n`);
     }
   };
 

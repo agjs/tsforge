@@ -5,7 +5,11 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveCapabilityModel, resolveApiKey } from "../packages/core/src/models-config";
+import {
+  resolveCapabilityModel,
+  resolveApiKey,
+  type IModelEntry,
+} from "../packages/core/src/models-config";
 import { describeImage } from "../packages/core/src/inference/vision";
 import { generateImage, saveGeneratedImages } from "../packages/core/src/inference/image-gen";
 import type { IOpenAICompatibleConfig } from "../packages/core/src/inference";
@@ -14,12 +18,14 @@ import type { IOpenAICompatibleConfig } from "../packages/core/src/inference";
 const RED_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-function cfgOf(entry: { baseUrl: string; model: string } & Record<string, unknown>): IOpenAICompatibleConfig {
+function cfgOf(entry: IModelEntry): IOpenAICompatibleConfig {
   return {
     baseUrl: entry.baseUrl,
     model: entry.model,
-    apiKey: resolveApiKey(entry as never),
-    ...(entry.extraHeaders === undefined ? {} : { extraHeaders: entry.extraHeaders as Record<string, string> }),
+    apiKey: resolveApiKey(entry),
+    ...(entry.extraHeaders === undefined
+      ? {}
+      : { extraHeaders: entry.extraHeaders }),
   };
 }
 
@@ -48,7 +54,7 @@ console.log("  ← reply:", JSON.stringify(desc.slice(0, 200)));
 console.log("\n[2/2] image-gen: generating 'a small red circle on a white background'…");
 const imgs = await generateImage(cfgOf(image.entry), {
   prompt: "a small red circle on a white background, minimal, flat",
-  api: (image.entry.imageApi as "chat-modalities" | "images-generations" | undefined) ?? "chat-modalities",
+  api: image.entry.imageApi ?? "chat-modalities",
 });
 const dir = await mkdtemp(join(tmpdir(), "tsforge-live-"));
 const paths = await saveGeneratedImages(imgs, dir, "smoke");

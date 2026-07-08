@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { unlink, writeFile } from "node:fs/promises";
+import { unlink } from "node:fs/promises";
 import { runArgvCommand } from "../fs/process";
 
 /**
@@ -96,15 +96,26 @@ export async function readClipboardImage(
 export async function captureClipboardImageToFile(
   deps: IClipboardDeps = DEFAULT_DEPS
 ): Promise<string | null> {
-  const image = await readClipboardImage(deps);
-
-  if (image === null) {
+  if (deps.platform !== "darwin") {
     return null;
   }
 
+  // `pngpaste`/`osascript` write the PNG straight to `path`, so keep that file as
+  // the result instead of reading it back + re-encoding + re-writing (which the
+  // old readClipboardImage round-trip did). `tryCommand` returning bytes just
+  // confirms a non-empty write.
   const path = join(tmpdir(), `tsforge-paste-${randomUUID()}.png`);
+  const wrote =
+    (await tryCommand(deps, ["pngpaste", path], path)) ??
+    (await tryCommand(deps, osascriptArgs(path), path));
 
-  await writeFile(path, Buffer.from(image.base64, "base64"));
+  if (wrote === null) {
+    await unlink(path).catch(() => {
+      /* nothing was written */
+    });
+
+    return null;
+  }
 
   return path;
 }

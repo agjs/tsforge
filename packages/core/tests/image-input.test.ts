@@ -89,6 +89,56 @@ test("resolveImageInput: identical images are described ONCE (no duplicate cost)
   expect(out.contextBlock).toContain("same as above"); // dupes reference the first
 });
 
+test("resolveImageInput: image-only send uses the default vision prompt (not the marker)", async () => {
+  let seenPrompt = "";
+
+  // an @-mention with no other text → cleanedLine is just "[image: a.png]"
+  await resolveImageInput("@a.png", "/work", {
+    deps: deps({
+      describe: async (_cfg, input) => {
+        seenPrompt = input.prompt;
+
+        return "desc";
+      },
+    }),
+  });
+
+  expect(seenPrompt).not.toContain("[image:");
+  expect(seenPrompt).toContain("software engineer"); // DEFAULT_VISION_PROMPT
+
+  // clipboard chip only → also falls back to the default
+  let chipPrompt = "";
+
+  await resolveImageInput("[image #1]", "/work", {
+    extraPaths: ["/tmp/clip.png"],
+    deps: deps({
+      describe: async (_cfg, input) => {
+        chipPrompt = input.prompt;
+
+        return "desc";
+      },
+    }),
+  });
+
+  expect(chipPrompt).toContain("software engineer");
+
+  // but a REAL question alongside the image is used verbatim
+  let qPrompt = "";
+
+  await resolveImageInput("what error is @shot.png showing?", "/work", {
+    deps: deps({
+      describe: async (_cfg, input) => {
+        qPrompt = input.prompt;
+
+        return "desc";
+      },
+    }),
+  });
+
+  expect(qPrompt).toContain("what error");
+  expect(qPrompt).not.toContain("[image:");
+});
+
 test("resolveImageInput: includes extraPaths (e.g. clipboard temp files)", async () => {
   const out = await resolveImageInput("here", "/work", {
     extraPaths: ["/tmp/clip.png"],

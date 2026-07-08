@@ -196,6 +196,28 @@ test("setActiveModel switches + persists; unknown name throws with the options",
   );
 });
 
+test("setActiveModel preserves the capabilities block (does not drop it)", async () => {
+  await saveModelsConfig({
+    active: "qwen-local",
+    models: {
+      "qwen-local": { baseUrl: "http://x/v1", model: "qwen3.6-27b" },
+      deepseek: {
+        baseUrl: "https://api.deepseek.com/v1",
+        model: "deepseek-reasoner",
+      },
+      "or-vlm": { baseUrl: "https://openrouter.ai/api/v1", model: "vlm" },
+    },
+    capabilities: { vision: "or-vlm" },
+  });
+
+  const next = await setActiveModel("deepseek");
+
+  expect(next.active).toBe("deepseek");
+  // capabilities must survive a model switch (P1: was silently dropped)
+  expect(next.capabilities?.vision).toBe("or-vlm");
+  expect((await loadModelsConfig()).capabilities?.vision).toBe("or-vlm");
+});
+
 test("resolveApiKey: inline wins, else apiKeyEnv, else undefined", () => {
   expect(resolveApiKey({ baseUrl: "u", model: "m", apiKey: "inline" })).toBe(
     "inline"
