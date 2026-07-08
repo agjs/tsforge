@@ -44,6 +44,16 @@ test("extractImagePaths: backslash-escaped spaces in a dragged path", () => {
   expect(r.paths).toEqual(["/Users/ag/My Shots/a b.png"]);
 });
 
+test("extractImagePaths: a filename containing ']' doesn't corrupt the residual prompt", () => {
+  const r = extractImagePaths("what is @weird].png showing", "/work");
+
+  expect(r.paths).toEqual(["/work/weird].png"]);
+  // residual (the vision-prompt basis) has NO stray marker/filename fragments
+  expect(r.residualText).toBe("what is showing");
+  expect(r.residualText).not.toContain("].png");
+  expect(r.residualText).not.toContain("[image");
+});
+
 test("extractImagePaths: leaves non-image @mentions and prose alone", () => {
   const r = extractImagePaths("read @src/index.ts and explain", "/work");
 

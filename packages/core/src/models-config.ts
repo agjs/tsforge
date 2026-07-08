@@ -121,6 +121,24 @@ function assertNumericFields(name: string, entry: unknown): void {
   }
 }
 
+/** A hand-edited `imageApi` typo (e.g. "chat-modality") would otherwise pass the
+ *  baseUrl/model-only guard and silently fall back to the chat-modalities wire
+ *  path in image-gen — fail loud with the valid options instead. */
+function assertImageApi(name: string, entry: unknown): void {
+  if (!isRecord(entry) || entry.imageApi === undefined) {
+    return;
+  }
+
+  if (
+    entry.imageApi !== "chat-modalities" &&
+    entry.imageApi !== "images-generations"
+  ) {
+    throw new Error(
+      `models.json: model "${name}" imageApi must be "chat-modalities" or "images-generations"`
+    );
+  }
+}
+
 /** Validate a parsed object into a registry, with actionable errors — the file is
  *  hand-edited, so a clear message beats a silent fallback. */
 export function parseModelsConfig(raw: unknown): IModelsConfig {
@@ -144,6 +162,7 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
     }
 
     assertNumericFields(name, entry);
+    assertImageApi(name, entry);
     models[name] = entry;
   }
 

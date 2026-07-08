@@ -1,5 +1,6 @@
 import { join, resolve, relative, isAbsolute, extname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import {
   resolveCapabilityModel,
   resolveApiKey,
@@ -148,6 +149,25 @@ function resolveInCwd(cwd: string, file: string): string | null {
   return rel.startsWith("..") || isAbsolute(rel) ? null : abs;
 }
 
+/** Re-check containment AFTER resolving symlinks — a lexical check passes a
+ *  workspace symlink that points OUT of the tree, which the model could use to
+ *  exfiltrate an arbitrary file to the vision backend. A missing target resolves
+ *  to `true` here (the read then fails cleanly with "cannot read image"). */
+async function realpathWithinCwd(cwd: string, abs: string): Promise<boolean> {
+  const [realAbs, realCwd] = await Promise.all([
+    realpath(abs).catch(() => null),
+    realpath(cwd).catch(() => cwd),
+  ]);
+
+  if (realAbs === null) {
+    return true;
+  }
+
+  const rel = relative(realCwd, realAbs);
+
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
 export async function doReadImage(
   args: Record<string, unknown>,
   ctx: IToolContext,
@@ -167,7 +187,7 @@ export async function doReadImage(
   const file = str(args, "file");
   const abs = file.length === 0 ? null : resolveInCwd(ctx.cwd, file);
 
-  if (abs === null) {
+  if (abs === null || !(await realpathWithinCwd(ctx.cwd, abs))) {
     return reject(
       ctx,
       "read_image",

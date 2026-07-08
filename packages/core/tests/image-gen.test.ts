@@ -120,7 +120,7 @@ test("generateImage fetches a remote url when the response is not inline", async
   const images = await generateImage(
     CFG,
     { prompt: "x" },
-    { fetch: fakeFetch }
+    { fetch: fakeFetch, resolve: async () => ["93.184.216.34"] }
   );
 
   expect(images).toHaveLength(1);
@@ -129,17 +129,90 @@ test("generateImage fetches a remote url when the response is not inline", async
   ]);
 });
 
-test("generateImage refuses a non-http(s) image url (SSRF guard)", async () => {
-  const fakeFetch = (async () =>
-    jsonResponse({
-      choices: [
-        { message: { images: [{ image_url: { url: "file:///etc/passwd" } }] } },
-      ],
-    })) as unknown as typeof fetch;
+test("generateImage SSRF: refuses non-http(s), private-host, and redirect-to-private image urls", async () => {
+  const chatWith = (url: string) =>
+    (async (target: string) => {
+      if (target.endsWith("/chat/completions")) {
+        return jsonResponse({
+          choices: [{ message: { images: [{ image_url: { url } }] } }],
+        });
+      }
+
+      // a 302 → private host (only reached by the redirect case)
+      return new Response(null, {
+        status: 302,
+        headers: { location: "http://169.254.169.254/latest/meta-data" },
+      });
+    }) as unknown as typeof fetch;
+
+  // non-http(s) scheme
+  await expect(
+    generateImage(
+      CFG,
+      { prompt: "x" },
+      { fetch: chatWith("file:///etc/passwd") }
+    )
+  ).rejects.toThrow(/non-public image url/);
+
+  // literal private/loopback + metadata IP
+  await expect(
+    generateImage(
+      CFG,
+      { prompt: "x" },
+      { fetch: chatWith("http://127.0.0.1/admin") }
+    )
+  ).rejects.toThrow(/non-public image url/);
+  await expect(
+    generateImage(
+      CFG,
+      { prompt: "x" },
+      { fetch: chatWith("http://169.254.169.254/") }
+    )
+  ).rejects.toThrow(/non-public image url/);
+
+  // public URL that 302-redirects to a private host → blocked at the next hop
+  await expect(
+    generateImage(
+      CFG,
+      { prompt: "x" },
+      {
+        fetch: chatWith("https://cdn.example/x.png"),
+        resolve: async () => ["93.184.216.34"],
+      }
+    )
+  ).rejects.toThrow(/non-public image url/);
+});
+
+test("generateImage caps an oversized provider image (content-length)", async () => {
+  const fakeFetch = (async (target: string) => {
+    if (target.endsWith("/chat/completions")) {
+      return jsonResponse({
+        choices: [
+          {
+            message: {
+              images: [{ image_url: { url: "https://cdn.example/big.png" } }],
+            },
+          },
+        ],
+      });
+    }
+
+    return new Response(Buffer.from(PNG_B64, "base64"), {
+      status: 200,
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(999 * 1024 * 1024),
+      },
+    });
+  }) as unknown as typeof fetch;
 
   await expect(
-    generateImage(CFG, { prompt: "x" }, { fetch: fakeFetch })
-  ).rejects.toThrow(/non-http\(s\)/);
+    generateImage(
+      CFG,
+      { prompt: "x" },
+      { fetch: fakeFetch, resolve: async () => ["93.184.216.34"] }
+    )
+  ).rejects.toThrow(/size limit/);
 });
 
 test("generateImage throws on non-2xx and on an image-less response", async () => {

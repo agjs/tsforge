@@ -29,6 +29,7 @@ import { resolveImageCapabilityFlags } from "../loop/tools/image-tools";
 import {
   captureClipboardImageToFile,
   readClipboardText,
+  discardClipboardImages,
 } from "../lib/clipboard/clipboard-image";
 import {
   detectImageProtocol,
@@ -603,8 +604,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     }
 
     // `name` is a human-readable filename (base64-encoded into the OSC-1337
-    // params), so use the saved file's basename — not the mime type.
-    const name = path.split("/").pop() ?? "image";
+    // params), so use the saved file's basename — not the mime type. Split on
+    // both separators so a Windows path resolves too.
+    const name = path.split(/[\\/]/u).pop() ?? "image";
     const escape = renderInlineImage(base64, imageProtocol, { name });
 
     if (escape !== null) {
@@ -704,13 +706,33 @@ export async function repl(args: ICliArgs): Promise<number> {
       // in the line, plus any clipboard captures) are sent to the vision backend
       // and their descriptions prepended as text — the primary model is text-only.
       // The image tokens are stripped from the line before @-file expansion.
+      //
+      // Only keep clipboard captures whose `[image #N]` chip SURVIVES in the line
+      // (paste is `pendingImages[i]` ↔ chip `#${i+1}`) — a deleted chip / cleared
+      // buffer must not smuggle a hidden image into a later send. Consumed and
+      // dropped temp files are unlinked so tmpdir doesn't accumulate.
+      const captures = pendingImages.map((path, i) => ({
+        path,
+        chip: `[image #${String(i + 1)}]`,
+      }));
+
+      pendingImages.length = 0;
+      const kept = captures
+        .filter((c) => line.includes(c.chip))
+        .map((c) => c.path);
+      const dropped = captures
+        .filter((c) => !line.includes(c.chip))
+        .map((c) => c.path);
+
+      await discardClipboardImages(dropped);
+
       const { cleanedLine, contextBlock } = await resolveImageInput(
         line,
         args.dir,
-        { extraPaths: pendingImages }
+        { extraPaths: kept, signal: opts.signal }
       );
 
-      pendingImages.length = 0;
+      await discardClipboardImages(kept);
       const composed = await composeMessage(args.dir, cleanedLine);
 
       return session.send(`${contextBlock}${composed}`, opts);
@@ -871,6 +893,9 @@ export async function repl(args: ICliArgs): Promise<number> {
         session.setSetupWeb(setupWeb);
         wireDelegation(); // re-offer spawn_agent on the rebuilt session
         wireImages(); // re-offer read_image/generate_image + preview on the rebuild
+        // Drop any un-sent clipboard captures — /clear wipes the buffer (and its
+        // chips), so their temp files are now orphaned.
+        void discardClipboardImages(pendingImages.splice(0));
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
         planDiscussed = false;
         await persist();

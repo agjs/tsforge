@@ -6,6 +6,18 @@ import { PROVIDER_LIMITS } from "./inference.constants";
 import { buildRequestHeaders, chatCompletionsUrl } from "./request";
 import { fetchWithRetry } from "./transport";
 import { isRecord } from "../lib/guards";
+import {
+  validateFetchUrl,
+  assertPublicResolution,
+  realResolve,
+  type ResolveHost,
+} from "../lib/net/ssrf";
+
+/** Cap on a provider image (bytes) — matches read_image; bounds memory when a
+ *  hostile/compromised provider returns a huge or unbounded response. */
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+/** Redirect hops allowed when fetching a provider image URL. */
+const MAX_IMAGE_REDIRECTS = 3;
 
 /**
  * Image generation as a side-channel capability (mirrors `vision.ts`): the
@@ -38,6 +50,9 @@ export interface IGenerateImageInput {
 export interface IGenerateImageOptions {
   signal?: AbortSignal;
   fetch?: typeof fetch;
+  /** DNS resolver for the SSRF guard on a provider-returned image URL; injected
+   *  so tests stay offline. Defaults to a real node lookup. */
+  resolve?: ResolveHost;
 }
 
 const MIME_EXT: Readonly<Record<string, string>> = {
@@ -104,7 +119,11 @@ export async function generateImage(
     throw new Error(`image model ${noImageReason(payload)}`);
   }
 
-  return Promise.all(refs.map((ref) => resolveRef(ref, doFetch, opts.signal)));
+  return Promise.all(
+    refs.map((ref) =>
+      resolveRef(ref, doFetch, opts.signal, opts.resolve ?? realResolve)
+    )
+  );
 }
 
 /** Write generated images to `dir` (created if needed) as `<baseName>-<i>.<ext>`;
@@ -306,40 +325,82 @@ function refFromUrl(url: string): ImageRef {
 async function resolveRef(
   ref: ImageRef,
   doFetch: typeof fetch,
-  signal?: AbortSignal
+  signal: AbortSignal | undefined,
+  resolve: ResolveHost
 ): Promise<IGeneratedImage> {
   if (ref.kind === "data") {
+    const bytes = new Uint8Array(Buffer.from(ref.base64, "base64"));
+
+    if (bytes.length > MAX_IMAGE_BYTES) {
+      throw new Error("image-gen: inline image exceeds the size limit");
+    }
+
+    return { bytes, mimeType: ref.mimeType };
+  }
+
+  return fetchGuardedImage(ref.url, doFetch, signal, resolve);
+}
+
+/**
+ * Fetch a provider-returned image URL with the SAME SSRF protection web_fetch
+ * uses — the URL is untrusted (a compromised/hostile provider, or a redirect
+ * chain, could point at localhost, RFC-1918, or a cloud-metadata endpoint). Each
+ * hop is validated (public http(s) host) AND DNS-resolved + re-classified; the
+ * download is size-capped so a huge/unbounded body can't exhaust memory.
+ */
+async function fetchGuardedImage(
+  start: string,
+  doFetch: typeof fetch,
+  signal: AbortSignal | undefined,
+  resolve: ResolveHost
+): Promise<IGeneratedImage> {
+  let current = start;
+
+  for (let hop = 0; hop <= MAX_IMAGE_REDIRECTS; hop += 1) {
+    const url = validateFetchUrl(current);
+
+    if (url === null) {
+      throw new Error(`image-gen: refusing non-public image url (${current})`);
+    }
+
+    await assertPublicResolution(url, resolve);
+
+    const res = await doFetch(current, { signal, redirect: "manual" });
+
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+
+      if (location === null || location.length === 0) {
+        break;
+      }
+
+      current = new URL(location, current).href;
+      continue;
+    }
+
+    if (!res.ok) {
+      throw new Error(
+        `image-gen: fetching image url failed (${String(res.status)})`
+      );
+    }
+
+    const declared = Number(res.headers.get("content-length"));
+
+    if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES) {
+      throw new Error("image-gen: image exceeds the size limit");
+    }
+
+    const bytes = new Uint8Array(await res.arrayBuffer());
+
+    if (bytes.length > MAX_IMAGE_BYTES) {
+      throw new Error("image-gen: image exceeds the size limit");
+    }
+
     return {
-      bytes: new Uint8Array(Buffer.from(ref.base64, "base64")),
-      mimeType: ref.mimeType,
+      bytes,
+      mimeType: res.headers.get("content-type") ?? "image/png",
     };
   }
 
-  // The provider hands back a URL we then fetch — untrusted, so restrict to
-  // http(s). Reject file:/data:/gopher:/etc. so a malicious/compromised endpoint
-  // can't point us at localhost, cloud-metadata IPs, or a local file.
-  let scheme: string;
-
-  try {
-    scheme = new URL(ref.url).protocol;
-  } catch {
-    throw new Error(`image-gen: refusing to fetch a malformed image url`);
-  }
-
-  if (scheme !== "http:" && scheme !== "https:") {
-    throw new Error(`image-gen: refusing non-http(s) image url (${scheme})`);
-  }
-
-  const res = await doFetch(ref.url, { signal });
-
-  if (!res.ok) {
-    throw new Error(
-      `image-gen: fetching image url failed (${String(res.status)})`
-    );
-  }
-
-  return {
-    bytes: new Uint8Array(await res.arrayBuffer()),
-    mimeType: res.headers.get("content-type") ?? "image/png",
-  };
+  throw new Error("image-gen: too many redirects fetching the image");
 }

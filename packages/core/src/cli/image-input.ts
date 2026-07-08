@@ -30,14 +30,13 @@ const BARE = new RegExp(
   "giu"
 );
 
-// The inline markers this module substitutes for attachments: `[image: name]`
-// (extracted path) and `[image #N]` (clipboard chip). Stripped when deriving the
-// vision prompt so an image-only send isn't "described" against marker text.
-const ATTACHMENT_MARKER = /\[image(?::[^\]]*|\s*#\d+)\]/gu;
-
 export interface IExtractedImages {
   /** The line with image tokens replaced by an inline `[image: name]` marker. */
   cleanedLine: string;
+  /** The user's own text with image tokens REMOVED entirely (not markered) — the
+   *  basis for the vision prompt, so a filename containing `]` can't leak into it
+   *  (which stripping the bracketed markers back out would). */
+  residualText: string;
   /** Absolute paths of the referenced images, in first-seen order. */
   paths: string[];
 }
@@ -86,7 +85,19 @@ export function extractImagePaths(line: string, cwd: string): IExtractedImages {
       (_whole, pre: string, path: string) => `${pre}${marker(path)}`
     );
 
-  return { cleanedLine: cleaned, paths };
+  // Residual = the line with image tokens REMOVED (not markered). Derived by the
+  // same two passes, so a filename with special chars (incl. `]`) never lands in
+  // the prompt — unlike regex-stripping the `[image: …]` markers back out. Also
+  // drop clipboard chips `[image #N]` (digits only — filename-independent, so no
+  // `]` hazard) that the editor inserts literally on Ctrl+V.
+  const residualText = line
+    .replace(QUOTED, "")
+    .replace(BARE, (_whole, pre: string) => pre)
+    .replace(/\[image #\d+\]/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+
+  return { cleanedLine: cleaned, residualText, paths };
 }
 
 export interface IResolveImageInputDeps {
@@ -119,10 +130,14 @@ export interface IResolvedImageInput {
 export async function resolveImageInput(
   rawLine: string,
   cwd: string,
-  opts: { extraPaths?: string[]; deps?: IResolveImageInputDeps } = {}
+  opts: {
+    extraPaths?: string[];
+    deps?: IResolveImageInputDeps;
+    signal?: AbortSignal;
+  } = {}
 ): Promise<IResolvedImageInput> {
   const deps = opts.deps ?? DEFAULT_DEPS;
-  const { cleanedLine, paths } = extractImagePaths(rawLine, cwd);
+  const { cleanedLine, residualText, paths } = extractImagePaths(rawLine, cwd);
   const all = [...paths, ...(opts.extraPaths ?? [])];
 
   if (all.length === 0) {
@@ -139,13 +154,10 @@ export async function resolveImageInput(
     };
   }
 
-  // The vision prompt is the user's REAL text. cleanedLine still contains the
-  // attachment markers (`[image: a.png]`, `[image #1]`) we substituted for the
-  // paths/chips — an image-only send is nothing BUT markers, so strip them before
-  // deciding: markers-only → fall back to the default describe/transcribe prompt
-  // (otherwise the model was asked to answer about the literal marker text).
-  const userText = cleanedLine.replace(ATTACHMENT_MARKER, "").trim();
-  const prompt = userText.length > 0 ? userText : DEFAULT_VISION_PROMPT;
+  // The vision prompt is the user's REAL text (image tokens already removed in
+  // extraction → residualText). Image-only send → no residual → the default
+  // describe/transcribe prompt, never the literal marker/filename text.
+  const prompt = residualText.length > 0 ? residualText : DEFAULT_VISION_PROMPT;
   const blocks: string[] = [];
   // Describe each DISTINCT image once. Pasting the same screenshot three times (or
   // @-mentioning the same file twice) would otherwise fire that many identical —
@@ -169,7 +181,11 @@ export async function resolveImageInput(
     }
 
     try {
-      const text = await deps.describe(vision, { prompt, images: [image] });
+      const text = await deps.describe(
+        vision,
+        { prompt, images: [image] },
+        { signal: opts.signal }
+      );
 
       described += 1;
       describedByContent.set(image.base64, "same as above");

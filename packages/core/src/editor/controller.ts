@@ -399,7 +399,10 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
         pasting = true;
         pasteFromClipboard()
           .then((insert) => {
-            if (insert !== null && insert.length > 0) {
+            // The read is async (~1s); the editor may have been closed meanwhile.
+            // Mutating/repainting after close() (raw mode + bracketed paste already
+            // torn down) would corrupt output — drop the result if we're gone.
+            if (isOpen && insert !== null && insert.length > 0) {
               buffer.insert(insert);
               repaint();
               notifyChange();

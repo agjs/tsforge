@@ -120,6 +120,19 @@ export async function captureClipboardImageToFile(
   return path;
 }
 
+/** Best-effort delete of clipboard temp files (from captureClipboardImageToFile)
+ *  once they've been consumed on send, or abandoned (chip deleted / buffer
+ *  cleared) — so they don't accumulate in tmpdir. Never throws. */
+export async function discardClipboardImages(paths: string[]): Promise<void> {
+  await Promise.all(
+    paths.map((path) =>
+      unlink(path).catch(() => {
+        /* already gone / not ours */
+      })
+    )
+  );
+}
+
 export interface IClipboardTextDeps {
   platform: NodeJS.Platform;
   run: (argv: string[]) => Promise<{ exitCode: number; stdout: string }>;

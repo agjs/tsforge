@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -84,6 +84,36 @@ test("read_image: rejects an out-of-scope path", async () => {
   );
 
   expect(out).toContain("out-of-scope");
+});
+
+test("read_image: rejects a symlink that escapes the workspace (real fs)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tsforge-sym-"));
+  const { mkdir } = await import("node:fs/promises");
+
+  try {
+    const work = join(root, "work");
+    const secret = join(root, "secret");
+
+    await mkdir(work, { recursive: true });
+    await mkdir(secret, { recursive: true });
+    await writeFile(join(secret, "secret.png"), Buffer.from([137, 80, 78, 71]));
+    // a workspace symlink pointing OUT of the tree
+    await symlink(join(secret, "secret.png"), join(work, "link.png"));
+
+    const out = await doReadImage(
+      { file: "link.png" },
+      ctx(work),
+      deps({
+        resolveCap: async () => ({ name: "vlm", entry: VISION_ENTRY }),
+        // load would succeed — the symlink escape must be rejected BEFORE that
+        readImageFile: async () => ({ base64: "AAAA", mimeType: "image/png" }),
+      })
+    );
+
+    expect(out).toContain("out-of-scope");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("read_image: rejects an unsupported/missing file", async () => {

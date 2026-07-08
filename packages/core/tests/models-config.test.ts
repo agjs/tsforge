@@ -284,6 +284,25 @@ test("capabilities: parse validates known keys + real entry targets, round-trips
   ).toThrow(/capability "vision" must name a model/);
 });
 
+test("parseModelsConfig rejects a bad imageApi (fails loud, no silent fallback)", () => {
+  expect(() =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m", imageApi: "chat-modality" } },
+    })
+  ).toThrow(/imageApi must be/);
+
+  // valid values still parse
+  expect(
+    parseModelsConfig({
+      active: "a",
+      models: {
+        a: { baseUrl: "u", model: "m", imageApi: "images-generations" },
+      },
+    }).models.a?.imageApi
+  ).toBe("images-generations");
+});
+
 test("resolveCapabilityModel: null when unconfigured, else the registry entry", async () => {
   await saveModelsConfig({
     active: "qwen-local",

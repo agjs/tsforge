@@ -1,59 +1,19 @@
 import { reject, str, type IToolContext } from "./tool-context";
+import {
+  isPrivateHost,
+  validateFetchUrl,
+  assertPublicResolution,
+  realResolve,
+  type ResolveHost,
+} from "../../lib/net/ssrf";
+
+export { isPrivateHost, validateFetchUrl, type ResolveHost };
 
 /** Default cap on returned content. Whole pages blow the context budget; the
  *  model can re-fetch with a higher `maxChars` when it genuinely needs more. */
 export const WEB_FETCH_MAX_CHARS = 8000;
 
 const MAX_ALLOWED_CHARS = WEB_FETCH_MAX_CHARS * 8;
-
-/** Loopback / link-local / RFC-1918 IPv4 (+ localhost) — blocked so a model-issued
- *  URL can't reach the host's cloud-metadata endpoint or poke internal services.
- *  Applied to BOTH literal URL hosts and DNS-resolved IPs (same classifier). */
-const PRIVATE_HOST_RE =
-  /^(?:localhost|0\.0\.0\.0|127\.|10\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/i;
-
-function isPrivateHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/gu, "").toLowerCase();
-
-  if (host === "::1" || host === "::" || PRIVATE_HOST_RE.test(host)) {
-    return true;
-  }
-
-  // IPv4-mapped IPv6 (::ffff:…) — blocked wholesale. The URL parser canonicalizes
-  // the embedded v4 to hex (::ffff:127.0.0.1 → ::ffff:7f00:1), so matching dotted
-  // decimal is unreliable; mapped addresses have no legitimate web_fetch use and
-  // are a known SSRF evasion, so reject the whole prefix.
-  if (host.startsWith("::ffff:")) {
-    return true;
-  }
-
-  // IPv6 unique-local (fc00::/7 → fc.. / fd..) and link-local (fe80::/10).
-  return (
-    /^f[cd][0-9a-f]{0,2}:/u.test(host) || /^fe[89ab][0-9a-f]?:/u.test(host)
-  );
-}
-
-/** Parse + vet a fetch target: absolute http(s) only, public host only. Returns
- *  the URL or null (never throws) so the handler can reject cleanly. */
-export function validateFetchUrl(raw: string): URL | null {
-  let url: URL;
-
-  try {
-    url = new URL(raw);
-  } catch {
-    return null;
-  }
-
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return null;
-  }
-
-  if (isPrivateHost(url.hostname)) {
-    return null;
-  }
-
-  return url;
-}
 
 export interface IFetchResponse {
   ok: boolean;
@@ -166,51 +126,6 @@ export type RawFetch = (
   url: string,
   init: { redirect: "manual"; headers: Record<string, string> }
 ) => Promise<IRawResponse>;
-
-/** Resolve a hostname to its IP addresses. Injected so tests stay offline. */
-export type ResolveHost = (hostname: string) => Promise<readonly string[]>;
-
-const realResolve: ResolveHost = async (hostname) => {
-  const { lookup } = await import("node:dns/promises");
-  const records = await lookup(hostname, { all: true });
-
-  return records.map((r) => r.address);
-};
-
-/**
- * Reject a host that RESOLVES to a private/loopback/link-local IP, even when the
- * hostname string looks public. Wildcard-DNS services (`127-0-0-1.sslip.io`,
- * `foo.127.0.0.1.nip.io`) defeat a string-only check; this resolves the name and
- * re-runs the SAME IP classifier on every returned address.
- *
- * Residual: DNS rebinding (TOCTOU between this lookup and undici's own connect)
- * is not fully closed without pinning the IP and connecting to it with a Host
- * header — out of scope here; this closes the wildcard-DNS / public-name class.
- */
-async function assertPublicResolution(
-  url: URL,
-  resolve: ResolveHost
-): Promise<void> {
-  let addresses: readonly string[];
-
-  try {
-    addresses = await resolve(url.hostname);
-  } catch {
-    throw new Error(`could not resolve host (${url.hostname})`);
-  }
-
-  if (addresses.length === 0) {
-    throw new Error(`host did not resolve (${url.hostname})`);
-  }
-
-  const priv = addresses.find((ip) => isPrivateHost(ip));
-
-  if (priv !== undefined) {
-    throw new Error(
-      `blocked a host resolving to a private address (${url.hostname} → ${priv})`
-    );
-  }
-}
 
 /**
  * Follow redirects MANUALLY, re-validating EVERY hop's host. `redirect: "follow"`
