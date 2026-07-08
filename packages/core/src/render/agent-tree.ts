@@ -299,8 +299,14 @@ export function renderAgentTree(
 
   if (overflow) {
     const hidden = rows.length - shown.length;
+    // Clip like every other line — the tail must also stay ≤ columns-1, else it
+    // self-wraps at narrow widths (columns 8–14) where overflow can still occur.
+    const tail = fitLabel(
+      `… +${String(hidden)} more`,
+      Math.max(0, columns - 4)
+    );
 
-    lines.push(paint(`└─ … +${String(hidden)} more`, STYLE.dim, color));
+    lines.push(paint(`└─ ${tail}`, STYLE.dim, color));
   }
 
   return lines;

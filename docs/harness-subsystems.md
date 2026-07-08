@@ -279,8 +279,8 @@ after a spawn.
 
 **Checklist** `tests/agent-runner.test.ts`, `tests/agent-compaction.test.ts`,
 `tests/agent-structured-output.test.ts`, `tests/agent-scheduler.test.ts`,
-`tests/spawn-concurrency.test.ts`, `tests/spawn-ordering-invariant.test.ts`,
-`tests/agent-tree.test.ts`, `tests/agent-tree-render-e2e.test.ts`,
+`tests/spawn-concurrency.test.ts`, `tests/tool-accounting.test.ts` (spawn batch +
+edit-before-spawn ordering), `tests/agent-tree.test.ts`, `tests/agent-tree-render-e2e.test.ts`,
 `tests/policy-evaluation.test.ts` (spawn_agent class), `tests/logging-lifecycle.test.ts`,
 `tests/output-router.test.ts`; PTY: `scripts/e2e-spawn-agent-pty.py`,
 `scripts/e2e-agents-pty.py`.
