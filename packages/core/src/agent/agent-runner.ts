@@ -329,10 +329,12 @@ function formatFinding(f: unknown): string | null {
 }
 
 /** Flatten an intercepted `agent_result` call into the text the orchestrator
- *  reads: the `summary` followed by cited `findings`. Falls back to the legacy
- *  `{ result }` string or raw JSON if the structured shape is absent, so an
- *  older spec or a malformed call still yields something usable. */
+ *  reads: the `summary` followed by cited `findings`. Guards against undefined/
+ *  null/non-object arguments (provider should validate, but we don't crash on
+ *  malformed calls). Falls back to legacy `{ result }` string or raw JSON when
+ *  the structured shape is absent, so an older spec still yields something usable. */
 export function resultPayload(args: unknown): string {
+  // Guard before property access — malformed tool args can't cause TypeError.
   if (!isRecord(args)) {
     return typeof args === "string" ? args : JSON.stringify(args ?? {});
   }
