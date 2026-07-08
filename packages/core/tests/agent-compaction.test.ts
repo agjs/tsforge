@@ -290,4 +290,25 @@ describe("buildBoundedTranscript", () => {
       expect(buildBoundedTranscript(convo, mc).length).toBeLessThanOrEqual(mc);
     }
   });
+
+  test("UTF-16 surrogate pairs are never split at maxChars boundary", () => {
+    // Emoji like 😀 use 2 UTF-16 code units. If we slice at the exact boundary,
+    // we'd split the pair and emit garbage. The safe-slice logic checks if the
+    // last char is a high surrogate (0xD800–0xDBFF) and drops it.
+    const text = "text with emoji " + "😀".repeat(10); // Construct so slice could hit mid-pair
+    const convo = [msg("user", text)];
+
+    // Slice at a position that might land in the middle of an emoji surrogate pair
+    const result = buildBoundedTranscript(convo, 25); // Short maxChars forces hard-cap
+
+    // Result must: (1) not exceed maxChars, (2) not have orphaned high surrogate at the end
+    expect(result.length).toBeLessThanOrEqual(25);
+
+    // Check that we didn't emit a high surrogate as the last character
+    const lastCharCode = result.charCodeAt(result.length - 1);
+    const isBrokenSurrogate =
+      lastCharCode >= 0xd800 && lastCharCode <= 0xdbff;
+
+    expect(isBrokenSurrogate).toBe(false);
+  });
 });

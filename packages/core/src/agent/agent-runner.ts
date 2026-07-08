@@ -148,7 +148,19 @@ export function buildBoundedTranscript(
   // contract holds for ALL inputs.
   const bare = picked.join("\n\n");
 
-  return bare.length <= maxChars ? bare : bare.slice(0, maxChars);
+  if (bare.length <= maxChars) {
+    return bare;
+  }
+
+  // Safe slice: .slice() could split a UTF-16 surrogate pair (e.g., emoji).
+  // Check if the last char is a high surrogate (0xD800–0xDBFF) and drop it
+  // to avoid emitting a malformed character.
+  const sliced = bare.slice(0, maxChars);
+  const lastCharCode = sliced.charCodeAt(sliced.length - 1);
+
+  return lastCharCode >= 0xd800 && lastCharCode <= 0xdbff
+    ? sliced.slice(0, -1)
+    : sliced;
 }
 
 /** Summarize the conversation and REPLACE it with [system, summary] — the same
