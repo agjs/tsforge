@@ -582,9 +582,11 @@ export async function repl(args: ICliArgs): Promise<number> {
         return `[image #${String(pendingImages.length)}]`;
       }
 
+      // Nothing to paste (empty clipboard, or only whitespace/newline — which
+      // otherwise injected a blank line). Insert only when there's real content.
       const text = await readClipboardText();
 
-      return text.length > 0 ? text : null;
+      return text.trim().length > 0 ? text : null;
     } finally {
       if (hinting) {
         statusBar.clearEditorOverlay();

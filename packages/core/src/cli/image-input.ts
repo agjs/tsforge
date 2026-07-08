@@ -137,6 +137,11 @@ export async function resolveImageInput(
   const prompt =
     cleanedLine.trim().length > 0 ? cleanedLine.trim() : DEFAULT_VISION_PROMPT;
   const blocks: string[] = [];
+  // Describe each DISTINCT image once. Pasting the same screenshot three times (or
+  // @-mentioning the same file twice) would otherwise fire that many identical —
+  // and identically-billed — vision calls. Dedupe by content (base64 of the bytes).
+  const describedByContent = new Map<string, string>();
+  let described = 0;
 
   for (const abs of all) {
     const image = await deps.load(abs);
@@ -146,9 +151,18 @@ export async function resolveImageInput(
       continue;
     }
 
+    const cached = describedByContent.get(image.base64);
+
+    if (cached !== undefined) {
+      blocks.push(`[Attached image "${basename(abs)}": ${cached}]`);
+      continue;
+    }
+
     try {
       const text = await deps.describe(vision, { prompt, images: [image] });
 
+      described += 1;
+      describedByContent.set(image.base64, "same as above");
       blocks.push(`[Attached image "${basename(abs)}":\n${text}\n]`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -162,7 +176,8 @@ export async function resolveImageInput(
   return {
     cleanedLine,
     contextBlock: `${blocks.join("\n\n")}\n\n`,
-    imageCount: all.length,
+    // Unique images actually described (= billed vision calls), not raw attach count.
+    imageCount: described,
   };
 }
 

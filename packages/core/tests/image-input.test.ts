@@ -69,6 +69,26 @@ test("resolveImageInput: describes each image and prepends a context block", asy
   expect(seen).toHaveLength(1);
 });
 
+test("resolveImageInput: identical images are described ONCE (no duplicate cost)", async () => {
+  let calls = 0;
+  const out = await resolveImageInput("look at these", "/work", {
+    // three paths, but the default load() returns the same bytes for each
+    extraPaths: ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"],
+    deps: deps({
+      describe: async () => {
+        calls += 1;
+
+        return "a Homer Simpson image";
+      },
+    }),
+  });
+
+  expect(calls).toBe(1); // one vision call, not three
+  expect(out.imageCount).toBe(1); // one unique image billed
+  expect(out.contextBlock).toContain("a Homer Simpson image");
+  expect(out.contextBlock).toContain("same as above"); // dupes reference the first
+});
+
 test("resolveImageInput: includes extraPaths (e.g. clipboard temp files)", async () => {
   const out = await resolveImageInput("here", "/work", {
     extraPaths: ["/tmp/clip.png"],
