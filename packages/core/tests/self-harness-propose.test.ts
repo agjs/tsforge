@@ -5,11 +5,7 @@ import type {
   IEvidenceBundle,
   IFailurePattern,
 } from "../src/self-harness/self-harness.types";
-import type {
-  IChatMessage,
-  IModelResponse,
-  IProvider,
-} from "../src/inference";
+import type { IChatMessage, IModelResponse, IProvider } from "../src/inference";
 
 function pattern(partial: Partial<IFailurePattern>): IFailurePattern {
   return {

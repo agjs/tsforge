@@ -132,6 +132,7 @@ async function runTaskOnce(
   const gated = await gateSpec(runDir, spec);
   const logFile = Bun.file(join(runDir, "run.log")).writer();
   const events: ILoopEvent[] = [];
+
   const onEvent = (e: ILoopEvent): void => {
     events.push(e);
     void logFile.write(renderEvent(e, { color: false }));
@@ -161,9 +162,7 @@ async function runTaskOnce(
     const firstTask = spec.tasks[0];
 
     if (opts.judgeProvider !== undefined && firstTask !== undefined) {
-      const specText = await Bun.file(
-        join(runDir, `${taskId}.spec.md`)
-      ).text();
+      const specText = await Bun.file(join(runDir, `${taskId}.spec.md`)).text();
       const code = (
         await Promise.all(
           firstTask.files.map((f) => Bun.file(join(runDir, f)).text())

@@ -15,7 +15,9 @@ import type { ILoopEvent } from "../src/loop/loop.types";
 
 const CORPUS = join(import.meta.dir, "..", "..", "..", "evals", "corpus");
 
-function ev(partial: Partial<ILoopEvent> & { kind: ILoopEvent["kind"] }): ILoopEvent {
+function ev(
+  partial: Partial<ILoopEvent> & { kind: ILoopEvent["kind"] }
+): ILoopEvent {
   return { task: "t", message: "", ...partial };
 }
 
@@ -179,9 +181,9 @@ describe("resolveSplits", () => {
   });
 
   test("explicit lists are validated: unknown id and overlap both throw", async () => {
-    await expect(resolveSplits(CORPUS, ["nonexistent"], ["math"])).rejects.toThrow(
-      /unknown corpus task/
-    );
+    await expect(
+      resolveSplits(CORPUS, ["nonexistent"], ["math"])
+    ).rejects.toThrow(/unknown corpus task/);
     await expect(resolveSplits(CORPUS, ["math"], ["math"])).rejects.toThrow(
       /disjoint/
     );

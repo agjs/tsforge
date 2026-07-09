@@ -21,7 +21,8 @@
     "eval:sweep": "bun packages/core/scripts/sweep.ts",
     "eval:spec": "bun packages/core/scripts/eval-spec.ts",
     "eval:benchmark": "bun packages/core/scripts/edit-benchmark.ts",
-    "eval:report": "bun packages/core/scripts/sweep-report.ts"
+    "eval:report": "bun packages/core/scripts/sweep-report.ts",
+    "eval:self-harness": "bun packages/core/scripts/self-harness.ts"
   },
   "workspaces": [
     "apps/*",

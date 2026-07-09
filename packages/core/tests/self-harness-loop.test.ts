@@ -19,11 +19,7 @@ import type {
   ISplits,
 } from "../src/self-harness/self-harness.types";
 import type { IMinedRun } from "../src/self-harness/mine";
-import type {
-  IChatMessage,
-  IModelResponse,
-  IProvider,
-} from "../src/inference";
+import type { IChatMessage, IModelResponse, IProvider } from "../src/inference";
 import type { ILoopEvent } from "../src/loop/loop.types";
 
 function score(partial: Partial<ISplitScore>): ISplitScore {
@@ -48,7 +44,10 @@ describe("acceptanceDecision — the paper's rule, exactly", () => {
   const baseline = evalOf({ passed: 4 }, { passed: 2 });
 
   test("accepts strict gain on one split with no regression on the other", () => {
-    const d = acceptanceDecision(baseline, evalOf({ passed: 5 }, { passed: 2 }));
+    const d = acceptanceDecision(
+      baseline,
+      evalOf({ passed: 5 }, { passed: 2 })
+    );
 
     expect(d.accepted).toBe(true);
     expect(d.deltaIn).toBe(1);
@@ -56,7 +55,10 @@ describe("acceptanceDecision — the paper's rule, exactly", () => {
   });
 
   test("rejects Δin=0 ∧ Δho=0 (no strict gain)", () => {
-    const d = acceptanceDecision(baseline, evalOf({ passed: 4 }, { passed: 2 }));
+    const d = acceptanceDecision(
+      baseline,
+      evalOf({ passed: 4 }, { passed: 2 })
+    );
 
     expect(d.accepted).toBe(false);
     expect(d.reason).toContain("no strict gain");
@@ -64,7 +66,10 @@ describe("acceptanceDecision — the paper's rule, exactly", () => {
 
   test("rejects any regression, even when the total improves", () => {
     // +3 held-in, -1 held-out: total is up, but the rule is conservative
-    const d = acceptanceDecision(baseline, evalOf({ passed: 7 }, { passed: 1 }));
+    const d = acceptanceDecision(
+      baseline,
+      evalOf({ passed: 7 }, { passed: 1 })
+    );
 
     expect(d.accepted).toBe(false);
     expect(d.reason).toContain("held-out");
@@ -129,6 +134,7 @@ const SPLITS: ISplits = { heldIn: ["math", "slugify"], heldOut: ["auth"] };
 describe("validateCandidate", () => {
   test("rejects an empty patch without ever calling the evaluator", async () => {
     let called = 0;
+
     const evaluator: HarnessEvaluator = () => {
       called += 1;
 
@@ -137,6 +143,7 @@ describe("validateCandidate", () => {
         heldInRuns: [],
       });
     };
+
     const result = await validateCandidate(
       { ...CANDIDATE, patch: {} },
       emptyOverlay(),
@@ -168,7 +175,9 @@ describe("validateCandidate", () => {
 
 /** A failed held-in run with enough signal to mine (edit rejections). */
 function failedRun(taskId: string): IMinedRun {
-  const ev = (partial: Partial<ILoopEvent> & { kind: ILoopEvent["kind"] }): ILoopEvent => ({
+  const ev = (
+    partial: Partial<ILoopEvent> & { kind: ILoopEvent["kind"] }
+  ): ILoopEvent => ({
     task: taskId,
     message: "",
     ...partial,
@@ -257,16 +266,16 @@ describe("runSelfHarness — Algorithm 1 end-to-end (deterministic)", () => {
 
     // Round 0: mined, proposed, accepted, merged.
     expect(lineage.rounds[0]?.acceptedIds).toContain("r0-c1");
-    expect(
-      lineage.finalOverlay.promptBlocks.execution?.text
-    ).toContain("re-read the target");
+    expect(lineage.finalOverlay.promptBlocks.execution?.text).toContain(
+      "re-read the target"
+    );
 
     // Round 1: h_1 is fully green held-in → early stop (not 3 full rounds).
     expect(lineage.rounds).toHaveLength(2);
     expect(lineage.rounds[1]?.candidates).toEqual([]);
-    expect(
-      lineage.notes.some((n) => n.includes("no held-in failures"))
-    ).toBe(true);
+    expect(lineage.notes.some((n) => n.includes("no held-in failures"))).toBe(
+      true
+    );
   });
 
   test("a regressive candidate is rejected and h_{t+1} = h_t", async () => {
@@ -358,7 +367,9 @@ describe("runSelfHarness — Algorithm 1 end-to-end (deterministic)", () => {
     expect(report.markdown).toContain("✅ ACCEPTED");
     expect(report.markdown).toContain("Δin=1");
     expect(report.markdown).toContain("never shown to the proposer");
-    expect(report.markdown).toContain("self-harness/acme-test-model/overlay.json");
+    expect(report.markdown).toContain(
+      "self-harness/acme-test-model/overlay.json"
+    );
     expect(report.overlayJson).toContain("re-read the target");
     // rejected-vs-accepted accounting shows in the header
     expect(report.markdown).toContain("accepted: 1");

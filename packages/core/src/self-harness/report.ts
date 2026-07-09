@@ -102,7 +102,11 @@ export function emitReport(lineage: ILineage): IReport {
         ].join("\n"),
     "",
     ...(lineage.notes.length > 0
-      ? ["## Notes (dropped/skipped/truncated — nothing is silent)", "", ...lineage.notes.map((n) => `- ${n}`)]
+      ? [
+          "## Notes (dropped/skipped/truncated — nothing is silent)",
+          "",
+          ...lineage.notes.map((n) => `- ${n}`),
+        ]
       : []),
     "",
   ].join("\n");

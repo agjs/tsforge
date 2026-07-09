@@ -154,7 +154,9 @@ export function mineWeaknesses(runs: readonly IMinedRun[]): IEvidenceBundle {
       }
 
       // Keep the bundle bounded: at most 4 snippets per cluster.
-      existing.snippets.push(...snippets.slice(0, 4 - existing.snippets.length));
+      existing.snippets.push(
+        ...snippets.slice(0, 4 - existing.snippets.length)
+      );
     }
   }
 
@@ -170,8 +172,10 @@ export function mineWeaknesses(runs: readonly IMinedRun[]): IEvidenceBundle {
       traceSnippets: draft.snippets,
       mechanism: MECHANISMS[draft.signal] ?? MECHANISMS.none ?? "",
     }))
-    .sort(
-      (a, b) => b.support - a.support || a.signature.localeCompare(b.signature)
+    .sort((a, b) =>
+      a.support === b.support
+        ? a.signature.localeCompare(b.signature)
+        : b.support - a.support
     );
 
   return { totalRuns: runs.length, failedRuns, patterns };

@@ -9,9 +9,18 @@ export {
   parseOverlay,
   resetOverlayCache,
 } from "./overlay";
-export { resolveSplits, listCorpusTasks, DEFAULT_HELD_IN, DEFAULT_HELD_OUT } from "./split";
+export {
+  resolveSplits,
+  listCorpusTasks,
+  DEFAULT_HELD_IN,
+  DEFAULT_HELD_OUT,
+} from "./split";
 export { mineWeaknesses, dominantSignal, type IMinedRun } from "./mine";
-export { evaluateHarness, type IEvaluateOptions, type IEvaluateOutcome } from "./evaluate";
+export {
+  evaluateHarness,
+  type IEvaluateOptions,
+  type IEvaluateOutcome,
+} from "./evaluate";
 export { propose, type IProposeOptions } from "./propose";
 export {
   acceptanceDecision,

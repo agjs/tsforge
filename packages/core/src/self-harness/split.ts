@@ -64,7 +64,9 @@ export async function resolveSplits(
   heldOut?: readonly string[]
 ): Promise<ISplits> {
   const available = new Set(await listCorpusTasks(corpusDir));
-  const inIds = [...(heldIn ?? DEFAULT_HELD_IN.filter((t) => available.has(t)))];
+  const inIds = [
+    ...(heldIn ?? DEFAULT_HELD_IN.filter((t) => available.has(t))),
+  ];
   const outIds = [
     ...(heldOut ?? DEFAULT_HELD_OUT.filter((t) => available.has(t))),
   ];

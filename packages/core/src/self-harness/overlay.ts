@@ -68,8 +68,10 @@ function parseAgentOverride(value: unknown): IAgentSpecOverride | null {
   return override;
 }
 
+const BLOCK_NAMES: ReadonlySet<string> = new Set(PROMPT_BLOCK_NAMES);
+
 function isBlockName(value: string): value is PromptBlockName {
-  return (PROMPT_BLOCK_NAMES as readonly string[]).includes(value);
+  return BLOCK_NAMES.has(value);
 }
 
 function parseBlockEdit(value: unknown): IPromptBlockEdit | null {
@@ -112,8 +114,12 @@ function parseCardEdit(value: unknown): IProcedureCardEdit | null {
     return null;
   }
 
-  const card: { what?: string; bad?: string; good?: string; procedure?: string } =
-    {};
+  const card: {
+    what?: string;
+    bad?: string;
+    good?: string;
+    procedure?: string;
+  } = {};
 
   for (const field of CARD_FIELDS) {
     const raw = value[field];
@@ -126,7 +132,9 @@ function parseCardEdit(value: unknown): IProcedureCardEdit | null {
   return Object.keys(card).length > 0 ? card : null;
 }
 
-function parseProcedureCards(value: unknown): Record<string, IProcedureCardEdit> {
+function parseProcedureCards(
+  value: unknown
+): Record<string, IProcedureCardEdit> {
   const cards: Record<string, IProcedureCardEdit> = {};
 
   if (!isRecord(value)) {
@@ -203,7 +211,7 @@ export function mergeOverlay(
   const promptBlocks = { ...base.promptBlocks };
 
   for (const [name, edit] of Object.entries(patch.promptBlocks ?? {})) {
-    if (isBlockName(name) && edit !== undefined) {
+    if (isBlockName(name)) {
       promptBlocks[name] = composeBlockEdit(promptBlocks[name], edit);
     }
   }
@@ -238,12 +246,12 @@ export function isEmptyPatch(patch: IOverlayPatch): boolean {
 /** Filesystem-safe slug of a model id ("deepseek-ai/DeepSeek-V4-Flash" →
  *  "deepseek-ai-deepseek-v4-flash"). */
 export function modelSlug(modelId: string): string {
-  return (
-    modelId
-      .toLowerCase()
-      .replaceAll(/[^a-z0-9]+/gu, "-")
-      .replaceAll(/^-+|-+$/gu, "") || "model"
-  );
+  const slug = modelId
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/gu, "-")
+    .replaceAll(/^-+|-+$/gu, "");
+
+  return slug.length === 0 ? "model" : slug;
 }
 
 function homeBase(): string {

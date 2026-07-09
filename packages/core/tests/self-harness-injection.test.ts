@@ -17,21 +17,21 @@ import { DEFAULT_CONVENTIONS } from "../src/infer-rules/conventions";
 import type { IHarnessOverlay } from "../src/self-harness/self-harness.types";
 
 let dir: string;
-const SAVED_VARS = [
-  "TSFORGE_SELF_HARNESS_OVERLAY",
-  "TSFORGE_MODEL",
-  "TSFORGE_HOME",
-] as const;
-const savedEnv = new Map<string, string | undefined>();
+const savedEnv = {
+  overlay: process.env.TSFORGE_SELF_HARNESS_OVERLAY,
+  model: process.env.TSFORGE_MODEL,
+  home: process.env.TSFORGE_HOME,
+};
+
+function clearEnv(): void {
+  delete process.env.TSFORGE_SELF_HARNESS_OVERLAY;
+  delete process.env.TSFORGE_MODEL;
+  delete process.env.TSFORGE_HOME;
+}
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "sh-inject-"));
-
-  for (const name of SAVED_VARS) {
-    savedEnv.set(name, process.env[name]);
-    delete process.env[name];
-  }
-
+  clearEnv();
   // Hermetic: the registry-fallback path must look in the tmp dir, never the
   // developer's real ~/.tsforge (which may hold a promoted overlay).
   process.env.TSFORGE_HOME = dir;
@@ -40,21 +40,26 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
+  clearEnv();
 
-  for (const name of SAVED_VARS) {
-    const value = savedEnv.get(name);
+  if (savedEnv.overlay !== undefined) {
+    process.env.TSFORGE_SELF_HARNESS_OVERLAY = savedEnv.overlay;
+  }
 
-    if (value === undefined) {
-      delete process.env[name];
-    } else {
-      process.env[name] = value;
-    }
+  if (savedEnv.model !== undefined) {
+    process.env.TSFORGE_MODEL = savedEnv.model;
+  }
+
+  if (savedEnv.home !== undefined) {
+    process.env.TSFORGE_HOME = savedEnv.home;
   }
 
   resetOverlayCache();
 });
 
-async function activateOverlay(overlay: Partial<IHarnessOverlay>): Promise<void> {
+async function activateOverlay(
+  overlay: Partial<IHarnessOverlay>
+): Promise<void> {
   const path = join(dir, "overlay.json");
 
   await writeFile(path, JSON.stringify(overlay));

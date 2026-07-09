@@ -20,21 +20,27 @@ const SAVED_ENV = {
   model: process.env.TSFORGE_MODEL,
 };
 
-function restoreEnv(): void {
-  for (const [key, envVar] of [
-    ["overlay", "TSFORGE_SELF_HARNESS_OVERLAY"],
-    ["home", "TSFORGE_HOME"],
-    ["model", "TSFORGE_MODEL"],
-  ] as const) {
-    const value = SAVED_ENV[key];
+function restoreVar(name: "overlay" | "home" | "model"): void {
+  const value = SAVED_ENV[name];
 
-    if (value === undefined) {
-      delete process.env[envVar];
+  if (value !== undefined) {
+    if (name === "overlay") {
+      process.env.TSFORGE_SELF_HARNESS_OVERLAY = value;
+    } else if (name === "home") {
+      process.env.TSFORGE_HOME = value;
     } else {
-      process.env[envVar] = value;
+      process.env.TSFORGE_MODEL = value;
     }
   }
+}
 
+function restoreEnv(): void {
+  delete process.env.TSFORGE_SELF_HARNESS_OVERLAY;
+  delete process.env.TSFORGE_HOME;
+  delete process.env.TSFORGE_MODEL;
+  restoreVar("overlay");
+  restoreVar("home");
+  restoreVar("model");
   resetOverlayCache();
 }
 
@@ -176,9 +182,9 @@ describe("isEmptyPatch", () => {
   test("true only when no surface is touched", () => {
     expect(isEmptyPatch({})).toBe(true);
     expect(isEmptyPatch({ ttsrRules: [], promptBlocks: {} })).toBe(true);
-    expect(
-      isEmptyPatch({ procedureCards: { TS2307: { what: "x" } } })
-    ).toBe(false);
+    expect(isEmptyPatch({ procedureCards: { TS2307: { what: "x" } } })).toBe(
+      false
+    );
   });
 });
 
