@@ -22,7 +22,9 @@ import {
   resolveSplits,
   runSelfHarness,
   emptyOverlay,
+  parseOverlay,
   type HarnessEvaluator,
+  type IHarnessOverlay,
   type ISplits,
 } from "../src/self-harness";
 import type { IProvider } from "../src/inference";
@@ -59,6 +61,34 @@ const width = Number(argValue("width") ?? "3");
 const repeats = Number(argValue("repeats") ?? "1");
 const dryRun = hasFlag("dry-run");
 const useJudge = !hasFlag("no-judge");
+const initialOverlayPath = argValue("initial-overlay");
+
+/** Continue a lineage: start from a previous session's accepted overlay so
+ *  improvements COMPOUND across sessions. Fails loudly on a bad path/file —
+ *  silently starting from the empty overlay would discard the lineage. */
+async function loadInitialOverlay(
+  path: string | undefined
+): Promise<IHarnessOverlay | undefined> {
+  if (path === undefined) {
+    return undefined;
+  }
+
+  const file = Bun.file(path);
+
+  if (!(await file.exists())) {
+    throw new Error(`--initial-overlay: no file at ${path}`);
+  }
+
+  const overlay = parseOverlay(JSON.parse(await file.text()));
+
+  if (overlay === null) {
+    throw new Error(`--initial-overlay: ${path} is not a valid overlay`);
+  }
+
+  return overlay;
+}
+
+const initialOverlay = await loadInitialOverlay(initialOverlayPath);
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
 const corpusDir = join(evalsRoot, "corpus");
@@ -108,6 +138,11 @@ say(`  held-out: ${splits.heldOut.join(", ")}`);
 say(
   `  rounds=${String(rounds)} width=${String(width)} repeats=${String(repeats)} judge=${useJudge ? "on" : "off"}${dryRun ? " DRY-RUN" : ""}`
 );
+
+if (initialOverlayPath !== undefined) {
+  say(`  continuing lineage from: ${initialOverlayPath}`);
+}
+
 say(`  out: ${outDir}`);
 
 let evaluations = 0;
@@ -162,7 +197,7 @@ if (dryRun) {
     runsDir: join(outDir, "runs", "dry-run", "held-in"),
     provider,
     repeats,
-    overlay: null,
+    overlay: initialOverlay ?? null,
     log: say,
   });
   const bundle = mineWeaknesses(heldIn.runs);
@@ -181,7 +216,7 @@ if (dryRun) {
   const candidates = await propose(bundle, {
     provider,
     width,
-    current: emptyOverlay(),
+    current: initialOverlay ?? emptyOverlay(),
     idPrefix: "dry",
     notes,
   });
@@ -213,6 +248,7 @@ const lineage = await runSelfHarness({
   splits,
   provider,
   evaluator,
+  ...(initialOverlay === undefined ? {} : { initialOverlay }),
   log: say,
 });
 
