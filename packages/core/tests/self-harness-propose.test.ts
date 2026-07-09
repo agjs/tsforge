@@ -47,7 +47,7 @@ function scriptedProvider(responses: string[]): {
 
         i += 1;
 
-        return Promise.resolve({ content });
+        return Promise.resolve({ content, toolCalls: [] });
       },
     },
   };
