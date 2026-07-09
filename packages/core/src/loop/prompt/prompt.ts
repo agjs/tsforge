@@ -10,6 +10,22 @@ import {
   testLayoutPhrase,
 } from "../../infer-rules/guidance";
 import { renderFileSection } from "./project-map";
+import { activeOverlay } from "../../self-harness/overlay";
+import type { PromptBlockName } from "../../self-harness/self-harness.types";
+
+/** Apply the active self-harness overlay's edit (if any) to a NAMED editable
+ *  prompt block. With no overlay this returns `base` untouched, so the base
+ *  harness stays byte-identical. Only the named blocks route through here —
+ *  identity, tools, and the gate-rules sentence are not editable surfaces. */
+function overlayBlock(base: string, name: PromptBlockName): string {
+  const edit = activeOverlay()?.promptBlocks[name];
+
+  if (edit === undefined) {
+    return base;
+  }
+
+  return edit.mode === "replace" ? edit.text : `${base}\n${edit.text}`;
+}
 
 /** The strict-TS house-rules line, with the interface-naming clause tuned to the
  *  project's convention (omitted entirely when naming is "off"). The safety rules
@@ -28,10 +44,19 @@ export function buildSystem(conventions: IConventions): string {
   return [
     "You are an expert TypeScript engineer working inside tsforge, a harness specialized for STRICT TypeScript. Implement the task by editing code until the gate passes.",
     "Tools: `read` (inspect a file), `edit` (replace an exact, unique snippet), `create` (a new file), `run` (execute any shell command and see its output).",
-    "Lead with action: start writing code right away (one `create`/`edit`) — do NOT deliberate at length before writing any code. (In TDD mode the test comes first; see the test-first guidance below.)",
-    "After every edit the harness AUTOMATICALLY runs the gate and gives you the result (the errors + fix guidance for the failing rules). You do NOT need to run the acceptance command yourself — read that result and fix exactly what it reports, then edit again. Keep going until it reports green; the harness ends the task at that point.",
+    overlayBlock(
+      "Lead with action: start writing code right away (one `create`/`edit`) — do NOT deliberate at length before writing any code. (In TDD mode the test comes first; see the test-first guidance below.)",
+      "bootstrap"
+    ),
+    overlayBlock(
+      "After every edit the harness AUTOMATICALLY runs the gate and gives you the result (the errors + fix guidance for the failing rules). You do NOT need to run the acceptance command yourself — read that result and fix exactly what it reports, then edit again. Keep going until it reports green; the harness ends the task at that point.",
+      "execution"
+    ),
     "The harness also AUTO-FIXES mechanical formatting on every file you write — blank lines, braces, quotes, semicolons, import order, `prefer-template`. NEVER hand-fix or chase those, and do NOT run `tsc`/`eslint`/the gate yourself to look for them. Fix only what the gate explicitly hands back (`as`/`any`/`!`, real type errors), then stop.",
-    "Test hypotheses by RUNNING them, never by reasoning them out. Unsure about an edge case, rounding, or ordering (`Math.floor(100/3)`, largest-remainder ties)? `run` a quick `bun -e '…console.log(…)'`, or write a throwaway `scratch/check.ts` importing your impl and `run` it. `scratch/` is yours — the gate ignores it.",
+    overlayBlock(
+      "Test hypotheses by RUNNING them, never by reasoning them out. Unsure about an edge case, rounding, or ordering (`Math.floor(100/3)`, largest-remainder ties)? `run` a quick `bun -e '…console.log(…)'`, or write a throwaway `scratch/check.ts` importing your impl and `run` it. `scratch/` is yours — the gate ignores it.",
+      "verification"
+    ),
     gateRulesSentence(conventions),
     "Keep functions small: the gate caps cognitive complexity at 20 and nesting depth at 4. If a function grows long or deeply nested, extract named helpers instead of one sprawling block. Always `await` promises (or `void` them deliberately) — a floating promise is a gate error.",
   ].join("\n");
@@ -115,6 +140,14 @@ export function buildSystemPrompt(
 
   if (flags.tdd()) {
     blocks.push(buildTddGuidance(conventions));
+  }
+
+  // The self-harness `extra` block: a free append slot AFTER all built-in
+  // guidance (it has no base text, so append and replace are equivalent).
+  const extra = activeOverlay()?.promptBlocks.extra;
+
+  if (extra !== undefined) {
+    blocks.push(extra.text);
   }
 
   return blocks.join("\n\n");

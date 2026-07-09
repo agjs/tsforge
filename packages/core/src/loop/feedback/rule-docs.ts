@@ -1,5 +1,6 @@
 import type { ErrorSet } from "../../validate";
 import generatedJson from "./rule-docs.generated.json";
+import { activeOverlay } from "../../self-harness/overlay";
 
 export interface IRuleDoc {
   /** One-line statement of what the rule requires. */
@@ -464,6 +465,35 @@ export function ruleHelpFromOutput(output: string): string {
   return ruleHelp(errors);
 }
 
+/** Merge the active self-harness overlay's procedure-card edit (if any) for a
+ *  rule over its base doc. Returns the base doc unchanged when no edit exists,
+ *  and undefined when neither yields a renderable doc (no `what`). */
+function applyCardOverlay(
+  rule: string,
+  doc: IRuleDoc | undefined
+): IRuleDoc | undefined {
+  const edit = activeOverlay()?.procedureCards[rule];
+
+  if (edit === undefined) {
+    return doc;
+  }
+
+  const what = edit.what ?? doc?.what;
+
+  if (what === undefined || what.length === 0) {
+    return doc;
+  }
+
+  const merged: IRuleDoc = {
+    what,
+    bad: edit.bad ?? doc?.bad ?? "",
+    good: edit.good ?? doc?.good ?? "",
+  };
+  const procedure = edit.procedure ?? doc?.procedure;
+
+  return procedure === undefined ? merged : { ...merged, procedure };
+}
+
 /** Format the rule docs for whichever rules appear in the current error set. */
 export function ruleHelp(errors: ErrorSet): string {
   const seen = new Set<string>();
@@ -481,6 +511,11 @@ export function ruleHelp(errors: ErrorSet): string {
       // For tsforge pack rules, look up in generated docs
       doc = GENERATED[e.rule];
     }
+
+    // A self-harness procedure-card edit merges over the base doc field-wise;
+    // with no overlay the base doc passes through untouched. An edit with no
+    // base doc still needs a `what` to render a coherent block.
+    doc = applyCardOverlay(e.rule, doc);
 
     if (doc === undefined) {
       continue;

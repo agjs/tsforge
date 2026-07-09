@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isRecord } from "../lib/guards";
 import { BUILTIN_SPECS } from "../agent/builtin-specs";
+import { activeOverlay } from "../self-harness/overlay";
 import type {
   AgentKind,
   AgentOutputMode,
@@ -186,6 +187,17 @@ export async function loadAgentSpecs(
 
   await loadDir(join(homeBase(), ".tsforge", "agents"), byId, report);
   await loadDir(join(cwd, ".tsforge", "agents"), byId, report);
+
+  // Self-harness overlay overrides: bounded (prompt/task/maxTurns only — the
+  // override type has no tools/model, so an edit can't grant capabilities) and
+  // only onto EXISTING specs; an override can never introduce a new agent.
+  for (const override of activeOverlay()?.agentSpecOverrides ?? []) {
+    const existing = byId.get(override.id);
+
+    if (existing !== undefined) {
+      byId.set(override.id, { ...existing, ...override });
+    }
+  }
 
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
