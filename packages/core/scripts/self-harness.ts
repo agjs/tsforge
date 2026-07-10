@@ -25,7 +25,9 @@ import {
   emptyOverlay,
   parseOverlay,
   type HarnessEvaluator,
+  type IEvaluateOutcome,
   type IHarnessOverlay,
+  type ISplitScore,
   type ISplits,
 } from "../src/self-harness";
 import type { IProvider } from "../src/inference";
@@ -151,8 +153,102 @@ say(`  out: ${outDir}`);
 
 let evaluations = 0;
 
-/** The real corpus evaluator: one directory per (label, split); sequential —
- *  the primary endpoint is single-connection. */
+/** Per-task attempts before an errored task is given up (its errored count
+ *  then propagates so upstream logic reacts honestly). */
+const TASK_ATTEMPTS = 3;
+
+function meanOfSignaled(values: readonly number[]): number {
+  const signaled = values.filter((v) => v > 0);
+
+  return signaled.length === 0
+    ? 0
+    : signaled.reduce((a, b) => a + b, 0) / signaled.length;
+}
+
+/** Merge single-task outcomes into one split outcome. Counts sum; the
+ *  quality/concision means recompute over tasks that carry a signal —
+ *  identical semantics to evaluateHarness's own aggregation. */
+function mergeOutcomes(
+  outcomes: readonly IEvaluateOutcome[]
+): IEvaluateOutcome {
+  const records = outcomes.flatMap((o) => [...o.records]);
+  const runs = outcomes.flatMap((o) => [...o.runs]);
+  const perTask: ISplitScore["perTask"] = {};
+
+  for (const outcome of outcomes) {
+    for (const [task, summary] of Object.entries(outcome.score.perTask)) {
+      perTask[task] = summary;
+    }
+  }
+
+  return {
+    records,
+    runs,
+    score: {
+      passed: outcomes.reduce((a, o) => a + o.score.passed, 0),
+      runs: outcomes.reduce((a, o) => a + o.score.runs, 0),
+      errored: outcomes.reduce((a, o) => a + o.score.errored, 0),
+      avgQuality: meanOfSignaled(outcomes.map((o) => o.score.avgQuality)),
+      avgLoc: meanOfSignaled(outcomes.map((o) => o.score.avgLoc)),
+      perTask,
+    },
+  };
+}
+
+/** Evaluate one split TASK BY TASK: an errored task (endpoint outage) waits
+ *  out the weather and retries, so one flap costs one task's re-run — not the
+ *  whole evaluation. This is what lets a multi-hour session survive an
+ *  endpoint that drops every ~45–90 min. */
+async function evaluateSplitResilient(
+  taskIds: readonly string[],
+  runsDirBase: string,
+  overlay: Parameters<HarnessEvaluator>[0]
+): Promise<IEvaluateOutcome> {
+  const outcomes: IEvaluateOutcome[] = [];
+
+  for (const taskId of taskIds) {
+    let outcome: IEvaluateOutcome | undefined;
+
+    for (let attempt = 1; attempt <= TASK_ATTEMPTS; attempt += 1) {
+      outcome = await evaluateHarness([taskId], {
+        corpusDir,
+        runsDir: join(
+          runsDirBase,
+          attempt === 1 ? "." : `retry-${String(attempt)}`
+        ),
+        provider,
+        repeats,
+        overlay,
+        ...(judgeProvider === undefined ? {} : { judgeProvider }),
+        log: say,
+      });
+
+      if (outcome.score.errored === 0) {
+        break;
+      }
+
+      if (attempt < TASK_ATTEMPTS) {
+        say(
+          `  ${taskId}: errored (attempt ${String(attempt)}/${String(TASK_ATTEMPTS)}) — waiting for endpoint recovery, then retrying`
+        );
+        await waitHealthy();
+      } else {
+        say(
+          `  ${taskId}: still erroring after ${String(TASK_ATTEMPTS)} attempts — recorded as errored`
+        );
+      }
+    }
+
+    if (outcome !== undefined) {
+      outcomes.push(outcome);
+    }
+  }
+
+  return mergeOutcomes(outcomes);
+}
+
+/** The real corpus evaluator: one directory per (label, split, task);
+ *  sequential — the primary endpoint is single-connection. */
 const evaluator: HarnessEvaluator = async (overlay, s, label) => {
   evaluations += 1;
 
@@ -160,29 +256,21 @@ const evaluator: HarnessEvaluator = async (overlay, s, label) => {
     `  [eval ${String(evaluations)}] ${label}: held-in (${String(s.heldIn.length)} task(s) × ${String(repeats)})`
   );
 
-  const heldIn = await evaluateHarness(s.heldIn, {
-    corpusDir,
-    runsDir: join(outDir, "runs", label, "held-in"),
-    provider,
-    repeats,
-    overlay,
-    ...(judgeProvider === undefined ? {} : { judgeProvider }),
-    log: say,
-  });
+  const heldIn = await evaluateSplitResilient(
+    s.heldIn,
+    join(outDir, "runs", label, "held-in"),
+    overlay
+  );
 
   say(
     `  [eval ${String(evaluations)}] ${label}: held-out (${String(s.heldOut.length)} task(s) × ${String(repeats)})`
   );
 
-  const heldOut = await evaluateHarness(s.heldOut, {
-    corpusDir,
-    runsDir: join(outDir, "runs", label, "held-out"),
-    provider,
-    repeats,
-    overlay,
-    ...(judgeProvider === undefined ? {} : { judgeProvider }),
-    log: say,
-  });
+  const heldOut = await evaluateSplitResilient(
+    s.heldOut,
+    join(outDir, "runs", label, "held-out"),
+    overlay
+  );
 
   return {
     evaluation: { heldIn: heldIn.score, heldOut: heldOut.score },
