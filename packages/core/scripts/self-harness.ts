@@ -245,6 +245,45 @@ if (dryRun) {
   process.exit(0);
 }
 
+/** Endpoint-recovery wait for baseline retries: 3 consecutive small
+ *  completions, 60s apart — mirrors the campaign driver's health gate. */
+async function waitHealthy(): Promise<void> {
+  let ok = 0;
+
+  while (ok < 3) {
+    let healthy = false;
+
+    try {
+      const key = resolveApiKey(entry);
+      const res = await fetch(`${entry.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(key === undefined ? {} : { Authorization: `Bearer ${key}` }),
+        },
+        body: JSON.stringify({
+          model: entry.model,
+          messages: [{ role: "user", content: "ok?" }],
+          max_tokens: 3,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+
+      healthy = res.ok;
+    } catch {
+      healthy = false;
+    }
+
+    ok = healthy ? ok + 1 : 0;
+
+    if (ok < 3) {
+      await Bun.sleep(60_000);
+    }
+  }
+
+  say("endpoint recovered (3 consecutive probes)");
+}
+
 const lineage = await runSelfHarness({
   model: entry.model,
   rounds,
@@ -253,6 +292,7 @@ const lineage = await runSelfHarness({
   provider,
   evaluator,
   ...(initialOverlay === undefined ? {} : { initialOverlay }),
+  waitHealthy,
   log: say,
 });
 

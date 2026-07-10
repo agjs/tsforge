@@ -36,6 +36,10 @@ export interface ISelfHarnessOptions {
   readonly evaluator: HarnessEvaluator;
   /** Start from an already-promoted overlay to continue a lineage. */
   readonly initialOverlay?: IHarnessOverlay;
+  /** Await endpoint recovery before retrying an errored baseline — without
+   *  this the retry fires straight into the same outage and the session
+   *  aborts for weather it could have waited out. */
+  readonly waitHealthy?: () => Promise<void>;
   readonly log?: (line: string) => void;
 }
 
@@ -78,6 +82,7 @@ export async function runSelfHarness(
         `round ${String(t)}: baseline had ${String(baselineErrored(base))} infrastructure-errored run(s) — retrying once`
       );
       log(`round ${String(t)}: baseline hit infrastructure errors — retrying…`);
+      await opts.waitHealthy?.();
       base = await opts.evaluator(
         isEmptyPatch(overlay) ? null : overlay,
         opts.splits,
