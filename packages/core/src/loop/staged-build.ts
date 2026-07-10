@@ -105,6 +105,18 @@ export function isImplementationFile(path: string): boolean {
     return false; // scaffolded theme primitives, not app code
   }
 
+  // The web scaffold itself lays down __root.tsx + the placeholder index
+  // route in EVERY build — counting them made this check always-true, so a
+  // types-only phase 1 with a trivially-green scaffold gate could skip
+  // phase 2 and ship a hollow "done". A REAL app always has other route/view
+  // files, so excluding these two loses nothing.
+  if (
+    path.endsWith("src/routes/__root.tsx") ||
+    path.endsWith("src/routes/index.tsx")
+  ) {
+    return false;
+  }
+
   return base !== "main.ts" && base !== "main.tsx";
 }
 

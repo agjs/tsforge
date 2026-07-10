@@ -29,6 +29,8 @@ import {
   evaluateHarness,
   parseOverlay,
   isEmptyPatch,
+  mergeOverlay,
+  emptyOverlay,
   type IHarnessOverlay,
 } from "../src/self-harness";
 import type { IRunRecord } from "../src/eval";
@@ -67,6 +69,12 @@ const maxSessions = Number(argValue("max-sessions") ?? "1000");
 const proofEvery = Number(argValue("proof-every") ?? "3");
 const rounds = argValue("rounds") ?? "3";
 const width = argValue("width") ?? "3";
+// Concurrent mining sessions per batch. The endpoint batches up to 10 seqs on
+// recipe-stock config; 2 leaves headroom for the human user's own coding.
+const parallel = Math.max(
+  1,
+  Math.min(Number(argValue("parallel") ?? "2"), ROTATIONS.length)
+);
 
 const evalsRoot = join(import.meta.dir, "..", "..", "..", "evals");
 const corpusDir = join(evalsRoot, "corpus");
@@ -312,6 +320,7 @@ interface ISessionOutcome {
   readonly accepted: number;
   readonly rejected: number;
   readonly note: string;
+  readonly outDir: string;
 }
 
 /** Accepted/rejected tallies from a session's lineage.json (guard-parsed —
@@ -372,11 +381,13 @@ async function runSession(index: number): Promise<ISessionOutcome> {
   }
 
   say(`session ${String(index + 1)}: ${rotation.heldIn} / ${rotation.heldOut}`);
+  await mkdir(outDir, { recursive: true });
 
+  // Per-session log file — parallel sessions must not interleave on stdout.
   const proc = Bun.spawn(args, {
     env: { ...process.env },
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: Bun.file(join(outDir, "session.log")),
+    stderr: Bun.file(join(outDir, "session.err.log")),
   });
   const exitCode = await proc.exited;
 
@@ -385,28 +396,90 @@ async function runSession(index: number): Promise<ISessionOutcome> {
       accepted: 0,
       rejected: 0,
       note: `session process exited ${String(exitCode)}`,
+      outDir,
     };
   }
 
   const lineagePath = join(outDir, "lineage.json");
 
   if (!existsSync(lineagePath)) {
-    return { accepted: 0, rejected: 0, note: "no lineage written" };
+    return { accepted: 0, rejected: 0, note: "no lineage written", outDir };
   }
 
   const lineage: unknown = JSON.parse(await Bun.file(lineagePath).text());
   const { accepted, rejected } = lineageCounts(lineage);
 
-  // Chain the lineage: the session's final overlay becomes the next session's
-  // starting harness (h_{t+1} across sessions, not just rounds).
-  if (accepted > 0) {
-    await Bun.write(overlayPath, Bun.file(join(outDir, "overlay.json")));
-    say(
-      `session ${String(index + 1)}: ${String(accepted)} edit(s) accepted → overlay chained`
-    );
+  return { accepted, rejected, note: "ok", outDir };
+}
+
+/**
+ * Chain a batch's ACCEPTED candidate patches onto the shared overlay, in
+ * session order. Parallel sessions each validated against the batch's shared
+ * starting overlay; merging their accepted edits without cross-re-validation
+ * is the paper's own MergeAccepted semantics for same-round candidates — the
+ * next proof measurement gates the combination regardless.
+ */
+/** All ACCEPTED, validated, non-empty candidate patches in a lineage. */
+function acceptedPatches(lineage: unknown): IHarnessOverlay[] {
+  if (!isRecord(lineage) || !Array.isArray(lineage.rounds)) {
+    return [];
   }
 
-  return { accepted, rejected, note: "ok" };
+  const patches: IHarnessOverlay[] = [];
+
+  for (const round of lineage.rounds) {
+    const candidates =
+      isRecord(round) && Array.isArray(round.candidates)
+        ? round.candidates
+        : [];
+
+    for (const result of candidates) {
+      if (
+        !isRecord(result) ||
+        result.accepted !== true ||
+        !isRecord(result.candidate)
+      ) {
+        continue;
+      }
+
+      const patch = parseOverlay(result.candidate.patch);
+
+      if (patch !== null && !isEmptyPatch(patch)) {
+        patches.push(patch);
+      }
+    }
+  }
+
+  return patches;
+}
+
+async function chainAcceptedPatches(
+  outcomes: readonly ISessionOutcome[]
+): Promise<number> {
+  let current = (await loadCurrentOverlay()) ?? emptyOverlay();
+  let merged = 0;
+
+  for (const outcome of outcomes) {
+    const lineagePath = join(outcome.outDir, "lineage.json");
+
+    if (!existsSync(lineagePath)) {
+      continue;
+    }
+
+    const lineage: unknown = JSON.parse(await Bun.file(lineagePath).text());
+
+    for (const patch of acceptedPatches(lineage)) {
+      current = mergeOverlay(current, patch);
+      merged += 1;
+    }
+  }
+
+  if (merged > 0) {
+    await Bun.write(overlayPath, `${JSON.stringify(current, null, 2)}\n`);
+    say(`chained ${String(merged)} accepted edit(s) → ${overlayPath}`);
+  }
+
+  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -424,14 +497,35 @@ while (sessions < maxSessions && !existsSync(stopFile)) {
     break;
   }
 
-  const outcome = await runSession(sessions);
+  // A batch = `parallel` concurrent sessions on DISJOINT rotations. Each is
+  // its own subprocess (own overlay env, own run dirs), so there is no
+  // cross-contamination; the server batches the concurrent streams.
+  const batchSize = Math.min(parallel, maxSessions - sessions);
+  const indices = Array.from({ length: batchSize }, (_, j) => sessions + j);
 
-  sessions += 1;
-  await appendLog(
-    `| ${String(sessions)} | ${now()} | ${ROTATIONS[(sessions - 1) % ROTATIONS.length]?.heldIn ?? "?"} / ${ROTATIONS[(sessions - 1) % ROTATIONS.length]?.heldOut ?? "?"} | ${String(outcome.accepted)} | ${String(outcome.rejected)} | ${outcome.note} |`
+  say(
+    `launching ${String(batchSize)} parallel session(s): ${indices.map((i) => String(i + 1)).join(", ")}`
   );
 
-  if (sessions % proofEvery === 0) {
+  const outcomes = await Promise.all(indices.map((i) => runSession(i)));
+
+  sessions += batchSize;
+
+  for (const [j, outcome] of outcomes.entries()) {
+    const index = indices[j] ?? 0;
+    const rotation = ROTATIONS[index % ROTATIONS.length];
+
+    await appendLog(
+      `| ${String(index + 1)} | ${now()} | ${rotation?.heldIn ?? "?"} / ${rotation?.heldOut ?? "?"} | ${String(outcome.accepted)} | ${String(outcome.rejected)} | ${outcome.note} |`
+    );
+  }
+
+  await chainAcceptedPatches(outcomes);
+
+  const proofsBefore = Math.floor((sessions - batchSize) / proofEvery);
+  const proofsAfter = Math.floor(sessions / proofEvery);
+
+  if (proofsAfter > proofsBefore) {
     try {
       await writeProof(baseline, sessions);
     } catch (err) {
