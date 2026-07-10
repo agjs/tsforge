@@ -166,29 +166,59 @@ async function loadCurrentOverlay(): Promise<IHarnessOverlay | null> {
   return parsed !== null && !isEmptyPatch(parsed) ? parsed : null;
 }
 
-/** Evaluate a harness variant on the proof split at repeats=2, relabelled for
- *  the sweep report. */
+/** Per-task retry cap for infrastructure-errored measurements. */
+const TASK_MEASURE_ATTEMPTS = 3;
+
+/**
+ * Evaluate a harness variant on the proof split at repeats=2, relabelled for
+ * the sweep report. Measured TASK BY TASK so an endpoint flap mid-measurement
+ * discards (and retries) only the affected task's runs, never the whole ~1.5h
+ * measurement. Honest by construction: an errored run is a NON-result — a
+ * verdict-carrying run (pass or fail) is never re-rolled.
+ */
 async function measureProof(
   overlay: IHarnessOverlay | null,
   label: string,
   runsDir: string
 ): Promise<IRunRecord[]> {
-  const outcome = await evaluateHarness([...PROOF_SPLIT], {
-    corpusDir,
-    runsDir,
-    provider,
-    repeats: 2,
-    overlay,
-    log: say,
-  });
+  const all: IRunRecord[] = [];
 
-  if (outcome.score.errored > 0) {
-    throw new Error(
-      `proof measurement hit ${String(outcome.score.errored)} infrastructure-errored run(s) — measurement discarded, not recorded`
-    );
+  for (const taskId of PROOF_SPLIT) {
+    let done = false;
+
+    for (let attempt = 1; attempt <= TASK_MEASURE_ATTEMPTS; attempt += 1) {
+      const outcome = await evaluateHarness([taskId], {
+        corpusDir,
+        runsDir: join(
+          runsDir,
+          attempt === 1 ? "." : `retry-${String(attempt)}`
+        ),
+        provider,
+        repeats: 2,
+        overlay,
+        log: say,
+      });
+
+      if (outcome.score.errored === 0) {
+        all.push(...outcome.records.map((r) => ({ ...r, label })));
+        done = true;
+        break;
+      }
+
+      say(
+        `${taskId}: ${String(outcome.score.errored)} errored run(s) on attempt ${String(attempt)} — waiting for a healthy endpoint, then retrying the task`
+      );
+      await waitForHealthyEndpoint();
+    }
+
+    if (!done) {
+      throw new Error(
+        `${taskId}: still erroring after ${String(TASK_MEASURE_ATTEMPTS)} attempts — measurement discarded, not recorded`
+      );
+    }
   }
 
-  return outcome.records.map((r) => ({ ...r, label }));
+  return all;
 }
 
 async function loadBaseline(): Promise<IRunRecord[]> {
