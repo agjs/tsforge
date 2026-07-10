@@ -20,6 +20,7 @@ import { classifyRun, countTaskLoc, judge, summarize } from "../eval";
 import type { IRunRecord } from "../eval";
 import { renderEvent } from "../render";
 import { resetOverlayCache } from "./overlay";
+import { runWebTaskOnce } from "./evaluate-web";
 import type { IHarnessOverlay, ISplitScore } from "./self-harness.types";
 import type { IMinedRun } from "./mine";
 
@@ -40,6 +41,8 @@ export interface IEvaluateOptions {
    *  efficiency signal). Default {@link SPEC_SLOW_THRESHOLD}; web builds pass
    *  a much higher value. */
   readonly slowThreshold?: number;
+  /** Hard wall-clock cap per `web:` task build (forwarded to evaluate-web). */
+  readonly webTimeoutMs?: number;
   readonly log?: (line: string) => void;
 }
 
@@ -262,46 +265,110 @@ function meanOfSignaled(values: readonly number[]): number {
     : signaled.reduce((a, b) => a + b, 0) / signaled.length;
 }
 
+interface IRunSink {
+  readonly records: IRunRecord[];
+  readonly runs: IMinedRun[];
+  readonly log: (line: string) => void;
+  erroredCount: number;
+}
+
+function verdictLine(taskId: string, attempt: number, r: IRunRecord): string {
+  return `    ${taskId} #${String(attempt)}: ${r.passed ? "green" : `red[${r.failureClass ?? "unknown"}]`} (${String(r.cycles)} cyc)`;
+}
+
+/** One `web:<slug>` run via the headless-build subprocess — the real web gate
+ *  + entity coverage decide pass/fail; the overlay under test rides the
+ *  inherited env. */
+async function runOneWeb(
+  taskId: string,
+  attempt: number,
+  runDir: string,
+  opts: IEvaluateOptions,
+  sink: IRunSink
+): Promise<void> {
+  const outcome = await runWebTaskOnce(taskId.slice(4), runDir, {
+    runsDir: opts.runsDir,
+    repeats: 1,
+    ...(opts.webTimeoutMs === undefined
+      ? {}
+      : { timeoutMs: opts.webTimeoutMs }),
+    log: sink.log,
+  });
+
+  sink.records.push(outcome.record);
+
+  if (outcome.errored) {
+    sink.erroredCount += 1;
+    sink.log(`    ${taskId} #${String(attempt)}: ERRORED (endpoint unhealthy)`);
+
+    return;
+  }
+
+  if (outcome.run !== undefined) {
+    sink.runs.push(outcome.run);
+  }
+
+  sink.log(verdictLine(taskId, attempt, outcome.record));
+}
+
+/** One spec-corpus run. A crash (endpoint timeout, connection failure) must
+ *  not abort the evaluation — but it is NOT a task failure either: it counts
+ *  as `errored` so the acceptance rule can refuse to blame/credit the edit
+ *  for infrastructure weather. */
+async function runOneSpec(
+  taskId: string,
+  attempt: number,
+  runDir: string,
+  opts: IEvaluateOptions,
+  sink: IRunSink
+): Promise<void> {
+  try {
+    const { record, run } = await runTaskOnce(taskId, runDir, opts);
+
+    sink.records.push(record);
+    sink.runs.push(run);
+    sink.log(verdictLine(taskId, attempt, record));
+  } catch (err) {
+    sink.erroredCount += 1;
+    sink.records.push({ label: taskId, passed: false, cycles: 0, ms: 0 });
+    sink.log(
+      `    ${taskId} #${String(attempt)}: ERRORED (${err instanceof Error ? err.message : String(err)})`
+    );
+  }
+}
+
 /**
- * Evaluate one harness variant on a task list. Sequential by design: the
- * primary endpoint is a single-connection local server, and sequential runs
- * keep per-run wall-clock comparable across candidates.
+ * Evaluate one harness variant on a task list (spec ids and `web:<slug>` ids
+ * dispatch to their runners). Sequential by design: the primary endpoint is a
+ * single-connection local server, and sequential runs keep per-run wall-clock
+ * comparable across candidates.
  */
 export async function evaluateHarness(
   taskIds: readonly string[],
   opts: IEvaluateOptions
 ): Promise<IEvaluateOutcome> {
   return withOverlayEnv(opts.overlay, opts.runsDir, async () => {
-    const records: IRunRecord[] = [];
-    const runs: IMinedRun[] = [];
-    const log = opts.log ?? ((): void => undefined);
-    let errored = 0;
+    const sink: IRunSink = {
+      records: [],
+      runs: [],
+      log: opts.log ?? ((): void => undefined),
+      erroredCount: 0,
+    };
 
     for (const taskId of taskIds) {
       for (let i = 0; i < opts.repeats; i += 1) {
-        const runDir = join(opts.runsDir, `${taskId}-${i + 1}`);
+        const runDir = join(
+          opts.runsDir,
+          `${taskId.replace(":", "-")}-${i + 1}`
+        );
 
-        // One run's crash (endpoint timeout, connection failure) must not
-        // abort the evaluation — but it is NOT a task failure either. It is
-        // counted separately (`errored`) so the acceptance rule can refuse to
-        // blame/credit the edit for infrastructure weather.
-        try {
-          const { record, run } = await runTaskOnce(taskId, runDir, opts);
-
-          records.push(record);
-          runs.push(run);
-          log(
-            `    ${taskId} #${i + 1}: ${record.passed ? "green" : `red[${record.failureClass ?? "unknown"}]`} (${record.cycles} cyc)`
-          );
-        } catch (err) {
-          errored += 1;
-          records.push({ label: taskId, passed: false, cycles: 0, ms: 0 });
-          log(
-            `    ${taskId} #${i + 1}: ERRORED (${err instanceof Error ? err.message : String(err)})`
-          );
-        }
+        await (taskId.startsWith("web:")
+          ? runOneWeb(taskId, i + 1, runDir, opts, sink)
+          : runOneSpec(taskId, i + 1, runDir, opts, sink));
       }
     }
+
+    const { records, runs, erroredCount: errored } = sink;
 
     const summaries = summarize(records);
     const perTask: Record<string, (typeof summaries)[number]> = {};

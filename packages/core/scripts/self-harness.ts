@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { providerConfig } from "../src/cli";
+import { BENCHMARK_CATALOG } from "./benchmark-catalog";
 import {
   emitReport,
   evaluateHarness,
@@ -117,7 +118,10 @@ const judgeProvider: IProvider | undefined = useJudge
 const splits: ISplits = await resolveSplits(
   corpusDir,
   csv(argValue("held-in")),
-  csv(argValue("held-out"))
+  csv(argValue("held-out")),
+  // `web:<slug>` tasks resolve against the benchmark catalog (script-side
+  // import; src/ never imports from scripts/).
+  BENCHMARK_CATALOG.map((a) => a.slug)
 );
 
 const outDir = join(

@@ -53,17 +53,24 @@ export async function listCorpusTasks(corpusDir: string): Promise<string[]> {
 }
 
 /**
- * Resolve the splits: explicit lists win (validated against the corpus),
- * otherwise the fixed defaults filtered to tasks that exist. Throws on an
- * unknown task id, an overlapping assignment, or an empty split — a silent
- * misassignment would invalidate every acceptance decision downstream.
+ * Resolve the splits: explicit lists win (validated against the corpus and,
+ * for `web:<slug>` ids, against the provided catalog slugs), otherwise the
+ * fixed defaults filtered to tasks that exist. Throws on an unknown task id,
+ * an overlapping assignment, or an empty split — a silent misassignment would
+ * invalidate every acceptance decision downstream.
+ *
+ * `webSlugs` is injected by the CLI (which may import the benchmark catalog);
+ * src/ deliberately never imports from scripts/. No slugs provided = no
+ * `web:` tasks allowed.
  */
 export async function resolveSplits(
   corpusDir: string,
   heldIn?: readonly string[],
-  heldOut?: readonly string[]
+  heldOut?: readonly string[],
+  webSlugs?: readonly string[]
 ): Promise<ISplits> {
   const available = new Set(await listCorpusTasks(corpusDir));
+  const webAvailable = new Set((webSlugs ?? []).map((s) => `web:${s}`));
   const inIds = [
     ...(heldIn ?? DEFAULT_HELD_IN.filter((t) => available.has(t))),
   ];
@@ -72,6 +79,18 @@ export async function resolveSplits(
   ];
 
   for (const id of [...inIds, ...outIds]) {
+    if (id.startsWith("web:")) {
+      if (!webAvailable.has(id)) {
+        const listed = [...webAvailable].join(", ");
+
+        throw new Error(
+          `unknown web task "${id}" — available: ${listed.length > 0 ? listed : "(none — pass catalog slugs)"}`
+        );
+      }
+
+      continue;
+    }
+
     if (!available.has(id)) {
       throw new Error(
         `unknown corpus task "${id}" — available: ${[...available].join(", ")}`
