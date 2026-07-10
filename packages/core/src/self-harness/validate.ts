@@ -143,6 +143,23 @@ export async function validateCandidate(
     };
   }
 
+  // Runs that crashed on infrastructure (endpoint timeout/unreachable) make
+  // the deltas meaningless — reject on the honest ground that no valid result
+  // was obtained, never as a phantom "regression" blamed on the edit.
+  const erroredRuns =
+    output.evaluation.heldIn.errored + output.evaluation.heldOut.errored;
+
+  if (erroredRuns > 0) {
+    return {
+      candidate,
+      accepted: false,
+      reason: `no valid evaluation result — ${String(erroredRuns)} run(s) hit infrastructure errors (endpoint timeout/unreachable)`,
+      deltaIn: 0,
+      deltaOut: 0,
+      candidateEval: output.evaluation,
+    };
+  }
+
   const decision = acceptanceDecision(baseline, output.evaluation);
 
   return { candidate, ...decision, candidateEval: output.evaluation };

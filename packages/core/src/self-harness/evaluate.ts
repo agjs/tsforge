@@ -250,14 +250,16 @@ export async function evaluateHarness(
     const records: IRunRecord[] = [];
     const runs: IMinedRun[] = [];
     const log = opts.log ?? ((): void => undefined);
+    let errored = 0;
 
     for (const taskId of taskIds) {
       for (let i = 0; i < opts.repeats; i += 1) {
         const runDir = join(opts.runsDir, `${taskId}-${i + 1}`);
 
-        // One run's crash (endpoint timeout, spawn failure) records as a
-        // failed run and the evaluation carries on — same resilience stance
-        // as the sweep. Its events are empty, so mining skips it gracefully.
+        // One run's crash (endpoint timeout, connection failure) must not
+        // abort the evaluation — but it is NOT a task failure either. It is
+        // counted separately (`errored`) so the acceptance rule can refuse to
+        // blame/credit the edit for infrastructure weather.
         try {
           const { record, run } = await runTaskOnce(taskId, runDir, opts);
 
@@ -267,8 +269,8 @@ export async function evaluateHarness(
             `    ${taskId} #${i + 1}: ${record.passed ? "green" : `red[${record.failureClass ?? "unknown"}]`} (${record.cycles} cyc)`
           );
         } catch (err) {
+          errored += 1;
           records.push({ label: taskId, passed: false, cycles: 0, ms: 0 });
-          runs.push({ taskId, passed: false, events: [] });
           log(
             `    ${taskId} #${i + 1}: ERRORED (${err instanceof Error ? err.message : String(err)})`
           );
@@ -286,6 +288,7 @@ export async function evaluateHarness(
     const score: ISplitScore = {
       passed: records.filter((r) => r.passed).length,
       runs: records.length,
+      errored,
       avgQuality: meanOfSignaled(summaries.map((s) => s.avgQuality)),
       avgLoc: meanOfSignaled(summaries.map((s) => s.avgLoc)),
       perTask,

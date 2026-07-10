@@ -39,6 +39,12 @@ export interface ISelfHarnessOptions {
   readonly log?: (line: string) => void;
 }
 
+function baselineErrored(output: {
+  evaluation: { heldIn: { errored: number }; heldOut: { errored: number } };
+}): number {
+  return output.evaluation.heldIn.errored + output.evaluation.heldOut.errored;
+}
+
 function attemptSummary(result: IValidationResult): string {
   const { candidate } = result;
 
@@ -57,11 +63,35 @@ export async function runSelfHarness(
   for (let t = 0; t < opts.rounds; t += 1) {
     log(`round ${String(t)}: evaluating h_${String(t)} on both splits…`);
 
-    const base = await opts.evaluator(
+    let base = await opts.evaluator(
       isEmptyPatch(overlay) ? null : overlay,
       opts.splits,
       `r${String(t)}-baseline`
     );
+
+    // An errored BASELINE would corrupt every delta this round (an endpoint
+    // flake could make a bogus candidate look like an improvement). Retry the
+    // baseline once; if the infrastructure is still failing, stop the loop —
+    // no verdict is trustworthy without a clean baseline.
+    if (baselineErrored(base) > 0) {
+      notes.push(
+        `round ${String(t)}: baseline had ${String(baselineErrored(base))} infrastructure-errored run(s) — retrying once`
+      );
+      log(`round ${String(t)}: baseline hit infrastructure errors — retrying…`);
+      base = await opts.evaluator(
+        isEmptyPatch(overlay) ? null : overlay,
+        opts.splits,
+        `r${String(t)}-baseline-retry`
+      );
+
+      if (baselineErrored(base) > 0) {
+        notes.push(
+          `round ${String(t)}: baseline retry ALSO errored — endpoint unhealthy, loop stopped (no verdict is trustworthy without a clean baseline)`
+        );
+        log(`round ${String(t)}: endpoint unhealthy — stopping the loop`);
+        break;
+      }
+    }
 
     log(
       `round ${String(t)}: baseline pass held-in ${String(base.evaluation.heldIn.passed)}/${String(base.evaluation.heldIn.runs)}, held-out ${String(base.evaluation.heldOut.passed)}/${String(base.evaluation.heldOut.runs)}`

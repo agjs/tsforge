@@ -26,6 +26,7 @@ function score(partial: Partial<ISplitScore>): ISplitScore {
   return {
     passed: 0,
     runs: 8,
+    errored: 0,
     avgQuality: 0,
     avgLoc: 0,
     perTask: {},
@@ -170,6 +171,27 @@ describe("validateCandidate", () => {
 
     expect(result.accepted).toBe(false);
     expect(result.reason).toContain("endpoint down");
+  });
+
+  test("infrastructure-errored runs reject with an infra reason, never a phantom regression", async () => {
+    // The candidate eval "lost" 3 held-in passes — but they ERRORED, they
+    // didn't fail. The verdict must say so instead of blaming the edit.
+    const evaluator: HarnessEvaluator = () =>
+      Promise.resolve({
+        evaluation: evalOf({ passed: 1, errored: 3 }, { passed: 2 }),
+        heldInRuns: [],
+      });
+    const result = await validateCandidate(
+      CANDIDATE,
+      emptyOverlay(),
+      evalOf({ passed: 4 }, { passed: 2 }),
+      SPLITS,
+      evaluator
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toContain("infrastructure errors");
+    expect(result.reason).not.toContain("regresses");
   });
 });
 
@@ -342,6 +364,36 @@ describe("runSelfHarness — Algorithm 1 end-to-end (deterministic)", () => {
 
     expect(round1User).toContain("Previously attempted edits");
     expect(round1User).toContain("r0-c1 (rejected)");
+  });
+
+  test("an errored baseline retries once, then stops the loop — no verdict without a clean baseline", async () => {
+    let calls = 0;
+
+    const evaluator: HarnessEvaluator = () => {
+      calls += 1;
+
+      return Promise.resolve({
+        evaluation: evalOf({ passed: 1, errored: 2, runs: 2 }, { passed: 1 }),
+        heldInRuns: [passedRun("math"), failedRun("slugify")],
+      });
+    };
+
+    const lineage = await runSelfHarness({
+      model: "acme/test-model",
+      rounds: 3,
+      width: 2,
+      splits: SPLITS,
+      provider: proposerOf([PROPOSAL]),
+      evaluator,
+    });
+
+    // baseline + one retry, then stop — no proposals, no further rounds
+    expect(calls).toBe(2);
+    expect(lineage.rounds).toEqual([]);
+    expect(lineage.notes.some((n) => n.includes("retrying once"))).toBe(true);
+    expect(lineage.notes.some((n) => n.includes("endpoint unhealthy"))).toBe(
+      true
+    );
   });
 
   test("the report renders the lineage with verdicts, deltas, and install path", async () => {

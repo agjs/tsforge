@@ -120,6 +120,11 @@ export interface ISplitScore {
   /** Total passed runs across all tasks × repeats. */
   readonly passed: number;
   readonly runs: number;
+  /** Runs that crashed before producing a valid result (endpoint timeout /
+   *  connection failure) — counted as not-passed but flagged so a verdict is
+   *  never blamed on the edit when the infrastructure failed (paper §3.4:
+   *  "fail execution before a valid evaluation result"). */
+  readonly errored: number;
   /** Mean of per-task avgQuality over tasks that recorded one (0 if none). */
   readonly avgQuality: number;
   /** Mean of per-task avgLoc over tasks that recorded one (0 if none). */

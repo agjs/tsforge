@@ -144,11 +144,21 @@ function parseCandidate(
     return { reason: "patch is not an object" };
   }
 
+  // Only the surfaces the edit actually touches — empty arrays/objects in the
+  // patch would read as "this edit touches everything" in the report diff.
   const patch: IOverlayPatch = {
-    ttsrRules: validated.ttsrRules,
-    agentSpecOverrides: validated.agentSpecOverrides,
-    promptBlocks: validated.promptBlocks,
-    procedureCards: validated.procedureCards,
+    ...(validated.ttsrRules.length > 0
+      ? { ttsrRules: validated.ttsrRules }
+      : {}),
+    ...(validated.agentSpecOverrides.length > 0
+      ? { agentSpecOverrides: validated.agentSpecOverrides }
+      : {}),
+    ...(Object.keys(validated.promptBlocks).length > 0
+      ? { promptBlocks: validated.promptBlocks }
+      : {}),
+    ...(Object.keys(validated.procedureCards).length > 0
+      ? { procedureCards: validated.procedureCards }
+      : {}),
   };
 
   if (isEmptyPatch(patch)) {
