@@ -8,6 +8,12 @@ set -e
 git init -q
 git config user.email "eval@tsforge.local"
 git config user.name "tsforge-eval"
+# Never inherit the developer's signing setup: a global commit.gpgsign=true with
+# a locked/unavailable signer (e.g. 1Password overnight) would abort this script
+# mid-way and leave the working tree GREEN — the seed then reads "already green"
+# instead of the RED brownfield state, silently invalidating the eval.
+git config commit.gpgsign false
+git config tag.gpgsign false
 
 # Stash the buggy working version (the seed's slug.ts — what the model must fix).
 cp slug.ts .slug.buggy

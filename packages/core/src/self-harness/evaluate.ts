@@ -74,17 +74,29 @@ async function startRed(
 }
 
 /** Run a seed's optional setup.sh (brownfield git history). Trusted: the
- *  corpus is our own code — same stance as the eval sweep. */
+ *  corpus is our own code — same stance as the eval sweep. A FAILED setup
+ *  throws: it leaves the seed in the wrong starting state (e.g. green instead
+ *  of the brownfield RED), which would silently invalidate the run's verdict —
+ *  the caller records it as an errored run, never a task result. */
 async function runSeedSetup(dir: string): Promise<void> {
   if (!(await Bun.file(join(dir, "setup.sh")).exists())) {
     return;
   }
 
-  await Bun.spawn(["sh", "setup.sh"], {
+  const proc = Bun.spawn(["sh", "setup.sh"], {
     cwd: dir,
     stdout: "ignore",
-    stderr: "ignore",
-  }).exited;
+    stderr: "pipe",
+  });
+  const exitCode = await proc.exited;
+
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+
+    throw new Error(
+      `seed setup.sh exited ${String(exitCode)}: ${stderr.slice(0, 200)}`
+    );
+  }
 }
 
 /** Gate every task and the whole-spec verify behind tsforge's strict floor —
