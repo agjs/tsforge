@@ -251,10 +251,48 @@ export async function propose(
       continue;
     }
 
-    const { candidate, reason } = parseCandidate(content, id);
+    let { candidate, reason } = parseCandidate(content, id);
+
+    // One salvage re-ask on a malformed proposal: show the model exactly why
+    // its response was unusable and demand a corrected JSON object. Wasting a
+    // full validation slot on a JSON formatting slip starves the loop of
+    // measured attempts (observed: 2 of 3 proposals dropped unparsed).
+    if (candidate === undefined) {
+      try {
+        const retry = await opts.provider.complete(
+          [
+            { role: "system", content: PROPOSER_SYSTEM },
+            {
+              role: "user",
+              content: renderContext(
+                bundle,
+                opts.current,
+                opts.priorAttempts ?? [],
+                candidates,
+                notes
+              ),
+            },
+            { role: "assistant", content },
+            {
+              role: "user",
+              content: `Your response was unusable: ${reason ?? "invalid"}. Reply again with ONLY the corrected JSON object — same schema, no prose, no code fences.`,
+            },
+          ],
+          { temperature: 0 }
+        );
+
+        ({ candidate, reason } = parseCandidate(retry.content, id));
+      } catch (err) {
+        notes.push(
+          `propose ${id}: salvage re-ask failed (${err instanceof Error ? err.message : String(err)})`
+        );
+      }
+    }
 
     if (candidate === undefined) {
-      notes.push(`propose ${id}: dropped — ${reason ?? "invalid"}`);
+      notes.push(
+        `propose ${id}: dropped after salvage re-ask — ${reason ?? "invalid"}`
+      );
       continue;
     }
 

@@ -89,7 +89,32 @@ describe("propose", () => {
     expect(notes).toEqual([]);
   });
 
-  test("drops garbage, empty patches, and oversize patches with notes — never throws", async () => {
+  test("a malformed proposal is salvaged by one re-ask showing the parse error", async () => {
+    const { provider, prompts } = scriptedProvider([
+      "not json at all", // first attempt: garbage
+      VALID_RESPONSE, // salvage re-ask: corrected
+    ]);
+    const notes: string[] = [];
+    const candidates = await propose(bundle([pattern({})]), {
+      provider,
+      width: 1,
+      current: emptyOverlay(),
+      notes,
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(notes).toEqual([]);
+
+    // the re-ask shows the model its own reply + the reason it was unusable
+    const salvage = prompts[1] ?? [];
+
+    expect(salvage.some((m) => m.role === "assistant")).toBe(true);
+    expect(
+      salvage.some((m) => m.role === "user" && m.content.includes("unusable"))
+    ).toBe(true);
+  });
+
+  test("persistently malformed proposals drop with a salvage note — never throw", async () => {
     const oversize = JSON.stringify({
       targetPattern: "x",
       surface: "promptBlocks",
@@ -106,23 +131,23 @@ describe("propose", () => {
     });
     const { provider } = scriptedProvider([
       "not json at all",
-      JSON.stringify({ targetPattern: "x", patch: { ttsrRules: [] } }),
+      "still not json", // salvage also fails
       oversize,
-      VALID_RESPONSE,
+      oversize, // salvage repeats the oversize patch
     ]);
     const notes: string[] = [];
     const candidates = await propose(bundle([pattern({})]), {
       provider,
-      width: 4,
+      width: 2,
       current: emptyOverlay(),
       notes,
     });
 
-    expect(candidates).toHaveLength(1);
-    expect(notes).toHaveLength(3);
+    expect(candidates).toHaveLength(0);
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toContain("after salvage re-ask");
     expect(notes[0]).toContain("unparseable");
-    expect(notes[1]).toContain("no editable surface");
-    expect(notes[2]).toContain("minimality cap");
+    expect(notes[1]).toContain("minimality cap");
   });
 
   test("an invalid patch entry drops at validation, not at runtime", async () => {
@@ -136,7 +161,7 @@ describe("propose", () => {
         ttsrRules: [{ name: "bad-rule", condition: ["x"] }],
       },
     });
-    const { provider } = scriptedProvider([sneaky]);
+    const { provider } = scriptedProvider([sneaky, sneaky]);
     const notes: string[] = [];
     const candidates = await propose(bundle([pattern({})]), {
       provider,
