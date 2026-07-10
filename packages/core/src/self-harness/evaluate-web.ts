@@ -9,7 +9,7 @@
  * Subprocess isolation is a feature: each build gets a fresh provider and
  * session, and a driver crash is an *errored* run, never a fake verdict.
  */
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { parseEventLog } from "../eval";
 import type { IRunRecord } from "../eval";
@@ -111,6 +111,11 @@ export async function runWebTaskOnce(
   await mkdir(runDir, { recursive: true });
 
   const logFile = join(runDir, "events.jsonl");
+
+  // headless-build APPENDS to the log; a reused run dir (campaign restart)
+  // would mix the old run's events into this run's stream — inflating cycle
+  // counts past the turn cap and mis-classifying failures. Start clean.
+  await rm(logFile, { force: true });
   const proc = Bun.spawn(
     [
       "bun",
