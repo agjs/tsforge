@@ -52,7 +52,7 @@ const HEADLESS_BUILD = join(
   "headless-build.ts"
 );
 
-async function defaultProbe(): Promise<boolean> {
+async function probeAttempt(): Promise<boolean> {
   const { entry } = await resolveActiveModel();
 
   try {
@@ -75,6 +75,22 @@ async function defaultProbe(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** A single probe right after a 500K-context build request is unreliable (the
+ *  server may still be draining); one flaky probe must not reclassify a REAL
+ *  task failure as infrastructure noise — that discards minable signal. Three
+ *  attempts, 10s apart; any success = healthy. */
+async function defaultProbe(): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await probeAttempt()) {
+      return true;
+    }
+
+    await Bun.sleep(10_000);
+  }
+
+  return false;
 }
 
 async function readEvents(logFile: string): Promise<ILoopEvent[]> {

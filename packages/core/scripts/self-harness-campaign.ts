@@ -206,19 +206,34 @@ async function loadBaseline(): Promise<IRunRecord[]> {
     }
   }
 
-  say("baseline: freezing h_0 on the proof split (repeats=2)…");
-  await waitForHealthyEndpoint();
+  // A discarded measurement (errored runs) must not kill the campaign — the
+  // whole point of the driver is to outlive endpoint weather. Retry until a
+  // CLEAN baseline exists or STOP is requested.
+  for (let attempt = 1; !existsSync(stopFile); attempt += 1) {
+    say(
+      `baseline: freezing h_0 on the proof split (repeats=2, attempt ${String(attempt)})…`
+    );
+    await waitForHealthyEndpoint();
 
-  const records = await measureProof(
-    null,
-    "baseline",
-    join(campaignDir, "runs", "baseline")
-  );
+    try {
+      const records = await measureProof(
+        null,
+        "baseline",
+        join(campaignDir, "runs", `baseline-a${String(attempt)}`)
+      );
 
-  await Bun.write(baselinePath, JSON.stringify(records, null, 2));
-  say(`baseline: frozen → ${baselinePath}`);
+      await Bun.write(baselinePath, JSON.stringify(records, null, 2));
+      say(`baseline: frozen → ${baselinePath}`);
 
-  return records;
+      return records;
+    } catch (err) {
+      say(
+        `baseline attempt ${String(attempt)} discarded: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  throw new Error("STOP requested before a clean baseline was frozen");
 }
 
 async function writeProof(
