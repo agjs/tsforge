@@ -127,6 +127,50 @@ interface IClusterDraft {
   slowGreen: boolean;
 }
 
+interface IMinableRun {
+  readonly signature: string;
+  readonly failureClass: string;
+  readonly signal: string;
+  readonly detail?: string;
+  readonly snippets: string[];
+  readonly slowGreen: boolean;
+}
+
+/** Classify one run for mining, or null when it isn't minable (green and not
+ *  over its slow-green threshold). classifyRun tallies behavioral signals
+ *  BEFORE the green early-return, so a slow-green run still exposes its
+ *  friction (edit-rejects, salvages, repair churn). */
+function minableRun(run: IMinedRun): IMinableRun | null {
+  const cycles = run.passed ? cycleCount(run.events) : 0;
+  const slowGreen =
+    run.passed &&
+    run.slowThreshold !== undefined &&
+    cycles >= run.slowThreshold;
+
+  if (run.passed && !slowGreen) {
+    return null;
+  }
+
+  const summary = classifyRun(run.events);
+  const signal = dominantSignal(summary.signals);
+  const failureClass = slowGreen ? "slow-green" : summary.failureClass;
+  const snippets = slowGreen
+    ? [
+        `slow-green: ${run.taskId} reached green in ${String(cycles)} cycles (threshold ${String(run.slowThreshold)})`,
+        ...traceSnippets(run.events).slice(0, 2),
+      ]
+    : traceSnippets(run.events);
+
+  return {
+    signature: `${failureClass}|${signal}|${summary.detail ?? "-"}`,
+    failureClass,
+    signal,
+    ...(summary.detail === undefined ? {} : { detail: summary.detail }),
+    snippets,
+    slowGreen,
+  };
+}
+
 /** Cluster failed held-in runs by exact signature agreement and rank by
  *  support (paper: recurring mechanisms first — they most plausibly map to a
  *  high-value harness modification). Ties break lexicographically so the
@@ -137,48 +181,29 @@ export function mineWeaknesses(runs: readonly IMinedRun[]): IEvidenceBundle {
   let slowGreenRuns = 0;
 
   for (const run of runs) {
-    // A green run is minable ONLY as an efficiency pattern: it must carry a
-    // slow-green threshold and have crossed it. Everything else green skips.
-    const cycles = run.passed ? cycleCount(run.events) : 0;
-    const slowGreen =
-      run.passed &&
-      run.slowThreshold !== undefined &&
-      cycles >= run.slowThreshold;
+    const minable = minableRun(run);
 
-    if (run.passed && !slowGreen) {
+    if (minable === null) {
       continue;
     }
 
-    if (slowGreen) {
+    if (minable.slowGreen) {
       slowGreenRuns += 1;
     } else {
       failedRuns += 1;
     }
 
-    // classifyRun tallies behavioral signals BEFORE the green early-return, so
-    // a slow-green run still exposes its friction (edit-rejects, salvages,
-    // repair churn) — the mechanism the proposer needs to target.
-    const summary = classifyRun(run.events);
-    const signal = dominantSignal(summary.signals);
-    const failureClass = slowGreen ? "slow-green" : summary.failureClass;
-    const signature = `${failureClass}|${signal}|${summary.detail ?? "-"}`;
-    const existing = clusters.get(signature);
-    const snippets = slowGreen
-      ? [
-          `slow-green: ${run.taskId} reached green in ${String(cycles)} cycles (threshold ${String(run.slowThreshold)})`,
-          ...traceSnippets(run.events).slice(0, 2),
-        ]
-      : traceSnippets(run.events);
+    const existing = clusters.get(minable.signature);
 
     if (existing === undefined) {
-      clusters.set(signature, {
-        failureClass,
-        signal,
-        ...(summary.detail === undefined ? {} : { detail: summary.detail }),
+      clusters.set(minable.signature, {
+        failureClass: minable.failureClass,
+        signal: minable.signal,
+        ...(minable.detail === undefined ? {} : { detail: minable.detail }),
         taskIds: [run.taskId],
         evidence: new Set(verifierEvidence(run.events)),
-        snippets,
-        slowGreen,
+        snippets: minable.snippets,
+        slowGreen: minable.slowGreen,
       });
     } else {
       existing.taskIds.push(run.taskId);
@@ -189,7 +214,7 @@ export function mineWeaknesses(runs: readonly IMinedRun[]): IEvidenceBundle {
 
       // Keep the bundle bounded: at most 4 snippets per cluster.
       existing.snippets.push(
-        ...snippets.slice(0, 4 - existing.snippets.length)
+        ...minable.snippets.slice(0, 4 - existing.snippets.length)
       );
     }
   }
