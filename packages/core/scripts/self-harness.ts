@@ -124,11 +124,11 @@ const splits: ISplits = await resolveSplits(
   BENCHMARK_CATALOG.map((a) => a.slug)
 );
 
-const outDir = join(
-  evalsRoot,
-  "self-harness",
-  `${modelSlug(entry.model)}-${stamp()}`
-);
+// `--out-dir <path>`: caller-chosen output location (the campaign driver's
+// contract for finding this session's lineage/overlay deterministically).
+const outDir =
+  argValue("out-dir") ??
+  join(evalsRoot, "self-harness", `${modelSlug(entry.model)}-${stamp()}`);
 
 await mkdir(outDir, { recursive: true });
 

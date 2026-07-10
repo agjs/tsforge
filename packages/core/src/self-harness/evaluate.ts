@@ -55,6 +55,10 @@ export interface IEvaluateOutcome {
   /** Per-run event streams, for weakness mining (held-in only is mined, but
    *  returning them is cheap and keeps evaluate split-agnostic). */
   readonly runs: readonly IMinedRun[];
+  /** Raw per-run records (labelled by task id) — the substrate for the proof
+   *  protocol's Wilson-CI/z-test comparison (relabel per variant, then
+   *  buildSweepReport). */
+  readonly records: readonly IRunRecord[];
 }
 
 /** Copy the seed's files into a fresh run dir. */
@@ -386,6 +390,6 @@ export async function evaluateHarness(
       perTask,
     };
 
-    return { score, runs };
+    return { score, runs, records };
   });
 }
