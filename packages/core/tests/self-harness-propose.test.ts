@@ -22,7 +22,12 @@ function pattern(partial: Partial<IFailurePattern>): IFailurePattern {
 }
 
 function bundle(patterns: IFailurePattern[]): IEvidenceBundle {
-  return { totalRuns: 8, failedRuns: patterns.length, patterns };
+  return {
+    totalRuns: 8,
+    failedRuns: patterns.length,
+    slowGreenRuns: 0,
+    patterns,
+  };
 }
 
 /** A provider that replays canned responses and records what it was asked. */

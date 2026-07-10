@@ -15,6 +15,16 @@ export interface IMinedRun {
   readonly taskId: string;
   readonly passed: boolean;
   readonly events: readonly ILoopEvent[];
+  /** When set, a PASSED run with at least this many cycles is still mined —
+   *  as a `slow-green` pattern (efficiency signal). The threshold travels with
+   *  the run so the evaluator can scale it per task kind (spec vs web build);
+   *  absent = green runs are never mined. */
+  readonly slowThreshold?: number;
+}
+
+/** Model turns a run consumed (one `cycle` event per loop iteration). */
+export function cycleCount(events: readonly ILoopEvent[]): number {
+  return events.filter((e) => e.kind === "cycle").length;
 }
 
 /** Precedence-ordered detection of the dominant AGENT-side behavior in a
@@ -114,6 +124,7 @@ interface IClusterDraft {
   taskIds: string[];
   evidence: Set<string>;
   snippets: string[];
+  slowGreen: boolean;
 }
 
 /** Cluster failed held-in runs by exact signature agreement and rank by
@@ -123,28 +134,51 @@ interface IClusterDraft {
 export function mineWeaknesses(runs: readonly IMinedRun[]): IEvidenceBundle {
   const clusters = new Map<string, IClusterDraft>();
   let failedRuns = 0;
+  let slowGreenRuns = 0;
 
   for (const run of runs) {
-    if (run.passed) {
+    // A green run is minable ONLY as an efficiency pattern: it must carry a
+    // slow-green threshold and have crossed it. Everything else green skips.
+    const cycles = run.passed ? cycleCount(run.events) : 0;
+    const slowGreen =
+      run.passed &&
+      run.slowThreshold !== undefined &&
+      cycles >= run.slowThreshold;
+
+    if (run.passed && !slowGreen) {
       continue;
     }
 
-    failedRuns += 1;
+    if (slowGreen) {
+      slowGreenRuns += 1;
+    } else {
+      failedRuns += 1;
+    }
 
+    // classifyRun tallies behavioral signals BEFORE the green early-return, so
+    // a slow-green run still exposes its friction (edit-rejects, salvages,
+    // repair churn) — the mechanism the proposer needs to target.
     const summary = classifyRun(run.events);
     const signal = dominantSignal(summary.signals);
-    const signature = `${summary.failureClass}|${signal}|${summary.detail ?? "-"}`;
+    const failureClass = slowGreen ? "slow-green" : summary.failureClass;
+    const signature = `${failureClass}|${signal}|${summary.detail ?? "-"}`;
     const existing = clusters.get(signature);
-    const snippets = traceSnippets(run.events);
+    const snippets = slowGreen
+      ? [
+          `slow-green: ${run.taskId} reached green in ${String(cycles)} cycles (threshold ${String(run.slowThreshold)})`,
+          ...traceSnippets(run.events).slice(0, 2),
+        ]
+      : traceSnippets(run.events);
 
     if (existing === undefined) {
       clusters.set(signature, {
-        failureClass: summary.failureClass,
+        failureClass,
         signal,
         ...(summary.detail === undefined ? {} : { detail: summary.detail }),
         taskIds: [run.taskId],
         evidence: new Set(verifierEvidence(run.events)),
         snippets,
+        slowGreen,
       });
     } else {
       existing.taskIds.push(run.taskId);
@@ -170,7 +204,9 @@ export function mineWeaknesses(runs: readonly IMinedRun[]): IEvidenceBundle {
       taskIds: draft.taskIds,
       verifierEvidence: [...draft.evidence].sort((a, b) => a.localeCompare(b)),
       traceSnippets: draft.snippets,
-      mechanism: MECHANISMS[draft.signal] ?? MECHANISMS.none ?? "",
+      mechanism: draft.slowGreen
+        ? `Reaches green but burns an outsized cycle budget — recurring friction: ${MECHANISMS[draft.signal] ?? MECHANISMS.none ?? ""}`
+        : (MECHANISMS[draft.signal] ?? MECHANISMS.none ?? ""),
     }))
     .sort((a, b) =>
       a.support === b.support
@@ -178,5 +214,5 @@ export function mineWeaknesses(runs: readonly IMinedRun[]): IEvidenceBundle {
         : b.support - a.support
     );
 
-  return { totalRuns: runs.length, failedRuns, patterns };
+  return { totalRuns: runs.length, failedRuns, slowGreenRuns, patterns };
 }

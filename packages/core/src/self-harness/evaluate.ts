@@ -36,8 +36,16 @@ export interface IEvaluateOptions {
    *  is skipped for evals produced without it. */
   readonly judgeProvider?: IProvider;
   readonly temperature?: number;
+  /** Cycle count at which a PASSED run still mines as `slow-green` (the
+   *  efficiency signal). Default {@link SPEC_SLOW_THRESHOLD}; web builds pass
+   *  a much higher value. */
+  readonly slowThreshold?: number;
   readonly log?: (line: string) => void;
 }
+
+/** Healthy spec-corpus runs green in 1–7 cycles; ≥8 is friction worth mining
+ *  (query's measured 15–17-cycle crawls are the motivating case). */
+export const SPEC_SLOW_THRESHOLD = 8;
 
 export interface IEvaluateOutcome {
   readonly score: ISplitScore;
@@ -202,7 +210,12 @@ async function runTaskOnce(
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
     },
-    run: { taskId, passed, events },
+    run: {
+      taskId,
+      passed,
+      events,
+      slowThreshold: opts.slowThreshold ?? SPEC_SLOW_THRESHOLD,
+    },
   };
 }
 

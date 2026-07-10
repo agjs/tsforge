@@ -91,6 +91,9 @@ export interface IFailurePattern {
 export interface IEvidenceBundle {
   readonly totalRuns: number;
   readonly failedRuns: number;
+  /** Passed runs that crossed their slow-green threshold — green, but at a
+   *  cycle cost worth improving (the efficiency signal the pass bit hides). */
+  readonly slowGreenRuns: number;
   /** Ranked by support, descending. */
   readonly patterns: readonly IFailurePattern[];
 }

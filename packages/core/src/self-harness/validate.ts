@@ -14,6 +14,7 @@ import type {
   ICandidate,
   IHarnessEval,
   IHarnessOverlay,
+  ISplitScore,
   ISplits,
   IValidationResult,
 } from "./self-harness.types";
@@ -23,6 +24,13 @@ const QUALITY_TOLERANCE = 0.5;
 /** Held-out solutions may grow at most this factor before the edit reads as
  *  buying passes with slop. */
 const LOC_TOLERANCE_FACTOR = 1.25;
+/** Efficiency tie-break (pass counts identical on BOTH splits): held-in
+ *  commonly-green cycles must improve by at least this fraction AND this many
+ *  absolute cycles (noise floor at repeats=1)… */
+const EFFICIENCY_MIN_REL = 0.2;
+const EFFICIENCY_MIN_ABS = 2;
+/** …while held-out commonly-green cycles may grow at most this fraction. */
+const EFFICIENCY_HO_TOLERANCE = 0.1;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop
@@ -45,32 +53,41 @@ export interface IAcceptanceDecision {
   readonly deltaOut: number;
 }
 
-/** The pure acceptance rule over a baseline and a candidate evaluation. */
-export function acceptanceDecision(
+/** Summed avgTurnsToGreen over tasks green in BOTH evaluations of one split —
+ *  the only apples-to-apples efficiency comparison (a task green on one side
+ *  only would smuggle a pass delta into a cycle delta). */
+function commonGreenCycles(
+  base: ISplitScore,
+  cand: ISplitScore
+): { base: number; cand: number; tasks: number } {
+  let baseSum = 0;
+  let candSum = 0;
+  let tasks = 0;
+
+  for (const [task, summary] of Object.entries(base.perTask)) {
+    const candTurns = cand.perTask[task]?.avgTurnsToGreen;
+
+    if (
+      summary.avgTurnsToGreen !== null &&
+      candTurns !== null &&
+      candTurns !== undefined
+    ) {
+      baseSum += summary.avgTurnsToGreen;
+      candSum += candTurns;
+      tasks += 1;
+    }
+  }
+
+  return { base: baseSum, cand: candSum, tasks };
+}
+
+/** Held-out quality + concision guards; null = no objection. */
+function heldOutGuards(
   baseline: IHarnessEval,
-  candidate: IHarnessEval
-): IAcceptanceDecision {
-  const deltaIn = candidate.heldIn.passed - baseline.heldIn.passed;
-  const deltaOut = candidate.heldOut.passed - baseline.heldOut.passed;
-
-  if (deltaIn < 0 || deltaOut < 0) {
-    return {
-      accepted: false,
-      deltaIn,
-      deltaOut,
-      reason: `regresses ${deltaIn < 0 ? "held-in" : "held-out"} pass count (Δin=${String(deltaIn)}, Δho=${String(deltaOut)})`,
-    };
-  }
-
-  if (deltaIn === 0 && deltaOut === 0) {
-    return {
-      accepted: false,
-      deltaIn,
-      deltaOut,
-      reason: "no strict gain on either split (Δin=0, Δho=0)",
-    };
-  }
-
+  candidate: IHarnessEval,
+  deltaIn: number,
+  deltaOut: number
+): IAcceptanceDecision | null {
   // Quality guard: only when BOTH sides carry a judge signal.
   const bq = baseline.heldOut.avgQuality;
   const cq = candidate.heldOut.avgQuality;
@@ -95,6 +112,90 @@ export function acceptanceDecision(
       deltaOut,
       reason: `held-out solutions grew past the concision guard (${cl.toFixed(0)} loc > ${bl.toFixed(0)} × ${String(LOC_TOLERANCE_FACTOR)})`,
     };
+  }
+
+  return null;
+}
+
+/** The efficiency tie-break, reached ONLY at Δin=0 ∧ Δho=0: equal pass counts
+ *  may still promote an edit that makes the harness materially FASTER to green
+ *  — the signal the paper's pass-only metric can't see. Pass regression never
+ *  reaches here; nothing about the pass rule is loosened. */
+function efficiencyDecision(
+  baseline: IHarnessEval,
+  candidate: IHarnessEval,
+  guard: IAcceptanceDecision | null
+): IAcceptanceDecision {
+  const heldIn = commonGreenCycles(baseline.heldIn, candidate.heldIn);
+  const heldOut = commonGreenCycles(baseline.heldOut, candidate.heldOut);
+  const gain = heldIn.base - heldIn.cand;
+  const material =
+    heldIn.tasks > 0 &&
+    heldIn.base > 0 &&
+    gain >= EFFICIENCY_MIN_ABS &&
+    gain / heldIn.base >= EFFICIENCY_MIN_REL;
+
+  if (!material) {
+    return {
+      accepted: false,
+      deltaIn: 0,
+      deltaOut: 0,
+      reason:
+        "no strict gain on either split (Δin=0, Δho=0) and no material efficiency gain",
+    };
+  }
+
+  if (
+    heldOut.tasks > 0 &&
+    heldOut.cand > heldOut.base * (1 + EFFICIENCY_HO_TOLERANCE)
+  ) {
+    return {
+      accepted: false,
+      deltaIn: 0,
+      deltaOut: 0,
+      reason: `held-out efficiency regressed (${heldOut.cand.toFixed(1)} > ${heldOut.base.toFixed(1)} cycles × ${String(1 + EFFICIENCY_HO_TOLERANCE)})`,
+    };
+  }
+
+  if (guard !== null) {
+    return guard;
+  }
+
+  const rel = Math.round((gain / heldIn.base) * 100);
+
+  return {
+    accepted: true,
+    deltaIn: 0,
+    deltaOut: 0,
+    reason: `efficiency gain: held-in ${heldIn.base.toFixed(1)}→${heldIn.cand.toFixed(1)} cycles (−${String(rel)}%), held-out ${heldOut.base.toFixed(1)}→${heldOut.cand.toFixed(1)}`,
+  };
+}
+
+/** The pure acceptance rule over a baseline and a candidate evaluation. */
+export function acceptanceDecision(
+  baseline: IHarnessEval,
+  candidate: IHarnessEval
+): IAcceptanceDecision {
+  const deltaIn = candidate.heldIn.passed - baseline.heldIn.passed;
+  const deltaOut = candidate.heldOut.passed - baseline.heldOut.passed;
+
+  if (deltaIn < 0 || deltaOut < 0) {
+    return {
+      accepted: false,
+      deltaIn,
+      deltaOut,
+      reason: `regresses ${deltaIn < 0 ? "held-in" : "held-out"} pass count (Δin=${String(deltaIn)}, Δho=${String(deltaOut)})`,
+    };
+  }
+
+  const guard = heldOutGuards(baseline, candidate, deltaIn, deltaOut);
+
+  if (deltaIn === 0 && deltaOut === 0) {
+    return efficiencyDecision(baseline, candidate, guard);
+  }
+
+  if (guard !== null) {
+    return guard;
   }
 
   return {

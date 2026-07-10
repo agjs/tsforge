@@ -84,7 +84,7 @@ function renderContext(
 ): string {
   const parts = [
     SURFACE_CATALOG,
-    `## Failure patterns (held-in split, ${String(bundle.failedRuns)}/${String(bundle.totalRuns)} runs failed)\n${renderBundle(bundle, notes)}`,
+    `## Failure patterns (held-in split, ${String(bundle.failedRuns)}/${String(bundle.totalRuns)} runs failed${bundle.slowGreenRuns > 0 ? `, ${String(bundle.slowGreenRuns)} passed but pathologically slow` : ""})\n${renderBundle(bundle, notes)}`,
     `## Current overlay (already-promoted edits — preserve their behavior)\n${JSON.stringify(current, null, 2)}`,
   ];
 

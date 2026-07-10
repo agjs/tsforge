@@ -19,6 +19,7 @@ import type {
   ISplits,
 } from "../src/self-harness/self-harness.types";
 import type { IMinedRun } from "../src/self-harness/mine";
+import type { IVariantSummary } from "../src/eval/eval.types";
 import type { IChatMessage, IModelResponse, IProvider } from "../src/inference";
 import type { ILoopEvent } from "../src/loop/loop.types";
 
@@ -112,6 +113,139 @@ describe("acceptanceDecision — the paper's rule, exactly", () => {
 
     expect(d.accepted).toBe(false);
     expect(d.reason).toContain("concision guard");
+  });
+});
+
+/** Per-task summary carrying only what the efficiency comparison reads. */
+function taskSummary(turnsToGreen: number | null): IVariantSummary {
+  return {
+    label: "t",
+    runs: 1,
+    passed: turnsToGreen === null ? 0 : 1,
+    passRate: turnsToGreen === null ? 0 : 1,
+    avgCycles: turnsToGreen ?? 0,
+    avgTurnsToGreen: turnsToGreen,
+    avgMs: 0,
+    avgQuality: 0,
+    avgLoc: 0,
+    failureClasses: {},
+  };
+}
+
+function withTurns(
+  base: IHarnessEval,
+  heldIn: Record<string, number | null>,
+  heldOut: Record<string, number | null>
+): IHarnessEval {
+  const toPerTask = (
+    turns: Record<string, number | null>
+  ): Record<string, IVariantSummary> =>
+    Object.fromEntries(
+      Object.entries(turns).map(([task, t]) => [task, taskSummary(t)])
+    );
+
+  return {
+    heldIn: { ...base.heldIn, perTask: toPerTask(heldIn) },
+    heldOut: { ...base.heldOut, perTask: toPerTask(heldOut) },
+  };
+}
+
+describe("acceptanceDecision — efficiency tie-break (Δin=0 ∧ Δho=0)", () => {
+  const passes = { in: { passed: 4 }, out: { passed: 2 } };
+  const baseline = withTurns(
+    evalOf(passes.in, passes.out),
+    { query: 15, math: 2, slugify: 1 },
+    { auth: 4, checkout: 2 }
+  );
+
+  test("material held-in cycle gain with stable held-out is accepted with an efficiency reason", () => {
+    const candidate = withTurns(
+      evalOf(passes.in, passes.out),
+      { query: 8, math: 2, slugify: 1 },
+      { auth: 4, checkout: 2 }
+    );
+    const d = acceptanceDecision(baseline, candidate);
+
+    expect(d.accepted).toBe(true);
+    expect(d.reason).toContain("efficiency gain");
+    expect(d.reason).toContain("18.0→11.0");
+  });
+
+  test("a below-floor gain still rejects (noise is not signal)", () => {
+    // 18→17 total: above neither the 20% relative nor... below 2-cycle floor
+    const candidate = withTurns(
+      evalOf(passes.in, passes.out),
+      { query: 14, math: 2, slugify: 1 },
+      { auth: 4, checkout: 2 }
+    );
+    const d = acceptanceDecision(baseline, candidate);
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("no material efficiency gain");
+  });
+
+  test("held-in gain bought with a held-out cycle blowup is rejected", () => {
+    const candidate = withTurns(
+      evalOf(passes.in, passes.out),
+      { query: 8, math: 2, slugify: 1 },
+      { auth: 7, checkout: 2 } // 6 → 9 cycles: +50%
+    );
+    const d = acceptanceDecision(baseline, candidate);
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("held-out efficiency regressed");
+  });
+
+  test("pass regression rejects before any efficiency math (pass rule dominates)", () => {
+    const candidate = withTurns(
+      evalOf({ passed: 4 }, { passed: 1 }),
+      { query: 4, math: 1, slugify: 1 },
+      { auth: 1, checkout: 1 }
+    );
+    const d = acceptanceDecision(baseline, candidate);
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("regresses held-out");
+  });
+
+  test("tasks green on only one side are excluded from the comparison", () => {
+    // query green only in candidate — its 3 cycles must not count as a gain;
+    // remaining common tasks are unchanged → no material gain → reject.
+    const lopsidedBaseline = withTurns(
+      evalOf(passes.in, passes.out),
+      { query: null, math: 2, slugify: 1 },
+      { auth: 4 }
+    );
+    const candidate = withTurns(
+      evalOf(passes.in, passes.out),
+      { query: 3, math: 2, slugify: 1 },
+      { auth: 4 }
+    );
+    const d = acceptanceDecision(lopsidedBaseline, candidate);
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("no material efficiency gain");
+  });
+
+  test("efficiency acceptance still honors the quality guard", () => {
+    const withQuality = (e: IHarnessEval, q: number): IHarnessEval => ({
+      ...e,
+      heldOut: { ...e.heldOut, avgQuality: q },
+    });
+    const d = acceptanceDecision(
+      withQuality(baseline, 4.0),
+      withQuality(
+        withTurns(
+          evalOf(passes.in, passes.out),
+          { query: 8, math: 2, slugify: 1 },
+          { auth: 4, checkout: 2 }
+        ),
+        3.0
+      )
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("quality regressed");
   });
 });
 

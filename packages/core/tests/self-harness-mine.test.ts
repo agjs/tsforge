@@ -147,6 +147,66 @@ describe("mineWeaknesses", () => {
     );
   });
 
+  test("slow-green: a passed run at/over its threshold mines as an efficiency pattern", () => {
+    const cycles = Array.from({ length: 15 }, (_, i) =>
+      ev({ kind: "cycle", message: `cycle ${String(i + 1)}` })
+    );
+    const slowRun: IMinedRun = {
+      taskId: "query",
+      passed: true,
+      slowThreshold: 8,
+      events: [
+        ev({ kind: "start" }),
+        ...cycles,
+        ev({
+          kind: "validated",
+          passed: false,
+          rules: ["no-non-null-assertion"],
+          message: "task query · turn 9: red (2 error(s))",
+        }),
+        ev({ kind: "validated", passed: true, message: "GREEN" }),
+        ev({ kind: "done", message: "done" }),
+      ],
+    };
+    const bundle = mineWeaknesses([slowRun, passedRun("math")]);
+
+    expect(bundle.slowGreenRuns).toBe(1);
+    expect(bundle.failedRuns).toBe(0);
+    expect(bundle.patterns).toHaveLength(1);
+
+    const pattern = bundle.patterns[0];
+
+    expect(pattern?.signature.startsWith("slow-green|")).toBe(true);
+    expect(pattern?.mechanism).toContain("Reaches green but burns");
+    // mid-run red-gate rules become the verifier evidence
+    expect(pattern?.verifierEvidence).toContain("no-non-null-assertion");
+    expect(pattern?.traceSnippets.some((s) => s.includes("15 cycles"))).toBe(
+      true
+    );
+  });
+
+  test("slow-green: below-threshold and threshold-less green runs never mine", () => {
+    const fastRun: IMinedRun = {
+      taskId: "math",
+      passed: true,
+      slowThreshold: 8,
+      events: [
+        ev({ kind: "cycle", message: "1" }),
+        ev({ kind: "validated", passed: true, message: "GREEN" }),
+        ev({ kind: "done", message: "done" }),
+      ],
+    };
+    const noThreshold: IMinedRun = {
+      taskId: "slugify",
+      passed: true,
+      events: Array.from({ length: 30 }, () => ev({ kind: "cycle" })),
+    };
+    const bundle = mineWeaknesses([fastRun, noThreshold]);
+
+    expect(bundle.slowGreenRuns).toBe(0);
+    expect(bundle.patterns).toEqual([]);
+  });
+
   test("trace snippets carry the failing gate line, truncated", () => {
     const bundle = mineWeaknesses([failedGateRun("slugify", ["TS2532"])]);
     const snippets = bundle.patterns[0]?.traceSnippets ?? [];

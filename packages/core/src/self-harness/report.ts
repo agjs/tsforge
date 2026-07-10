@@ -44,7 +44,7 @@ function renderRound(round: IRoundRecord): string {
     "|---|---|---|---|---|",
     passLine(`h_${String(round.round)}`, round.baseline),
     "",
-    `**Mined patterns (${String(round.evidence.failedRuns)}/${String(round.evidence.totalRuns)} held-in runs failed):**`,
+    `**Mined patterns (${String(round.evidence.failedRuns)}/${String(round.evidence.totalRuns)} held-in runs failed${round.evidence.slowGreenRuns > 0 ? `, ${String(round.evidence.slowGreenRuns)} slow-green` : ""}):**`,
     ...round.evidence.patterns.map(
       (p) =>
         `- \`${p.signature}\` ×${String(p.support)} (${p.taskIds.join(", ")}) — ${p.mechanism}`
