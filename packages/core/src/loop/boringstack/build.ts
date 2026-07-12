@@ -243,12 +243,18 @@ export function boringstackDeps(opts: {
           }
 
           if (novel.length > 0) {
+            // Only mention baseline suppression when there's actually something
+            // hidden — a green baseline shouldn't print "0 baseline failures hidden".
+            const hidden =
+              baseline.size > 0
+                ? ` (${String(baseline.size)} pre-existing baseline failure(s) hidden)`
+                : "";
+
             return {
               passed: false,
               output:
-                `NEW failures introduced by this feature ` +
-                `(${String(novel.length)}; ${String(baseline.size)} baseline ` +
-                `failure(s) hidden):\n${novel.join("\n")}`,
+                `NEW failures introduced by this feature` +
+                `${hidden}:\n${novel.join("\n")}`,
             };
           }
 
