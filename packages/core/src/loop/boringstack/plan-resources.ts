@@ -29,6 +29,47 @@ function toResource(value: unknown): IFeature | null {
   return { id, desc, passes: false, attempts: 0 };
 }
 
+/** Layer suffixes the planner sometimes bolts onto an entity, splitting one
+ *  resource into two. BoringStack's `new:resource` builds ALL layers (table +
+ *  routes + service + schemas + types + UI) from a single entity, so a
+ *  `<Entity>Service`/`<Entity>Api`/… is never a separate resource. */
+const LAYER_SUFFIXES = [
+  "Service",
+  "Api",
+  "Routes",
+  "Controller",
+  "Model",
+  "Repository",
+  "Handler",
+] as const;
+
+/**
+ * Drop a resource whose id is another resource's id + a layer suffix (e.g.
+ * `BookmarkService` when `Bookmark` is also present). The planner occasionally
+ * over-splits one entity into entity + service/api/routes; since BoringStack
+ * builds every layer from ONE `new:resource`, those duplicates are the same
+ * feature and would each cost a full generation cycle. Pure — unit-tested.
+ */
+export function dedupeLayerVariants(features: IFeature[]): IFeature[] {
+  const ids = new Set(features.map((f) => f.id));
+
+  return features.filter((f) => {
+    for (const suffix of LAYER_SUFFIXES) {
+      if (!f.id.endsWith(suffix)) {
+        continue;
+      }
+
+      const base = f.id.slice(0, -suffix.length);
+
+      if (base.length > 0 && ids.has(base)) {
+        return false; // the base entity already covers this layer
+      }
+    }
+
+    return true;
+  });
+}
+
 /**
  * Parse the resource planner's raw JSON into a feature list, or null when it
  * isn't usable (no valid resources). Pure — split out so it can be unit-tested
@@ -55,7 +96,7 @@ export function parseResources(raw: string): IFeature[] | null {
     return null;
   }
 
-  return resources;
+  return dedupeLayerVariants(resources);
 }
 
 /**
@@ -64,10 +105,15 @@ export function parseResources(raw: string): IFeature[] | null {
  * built. Each resource becomes a feature in the checklist.
  */
 const RESOURCE_SYSTEM =
-  "You are a domain planner. Given a one-line build goal, identify the key " +
-  "domain resources (entities, services, API endpoints) that must exist. " +
-  "Respond with ONLY a JSON object: " +
-  '{"resources":[{"id":"<PascalCase>","desc":"<one line>"}]}.';
+  "You are a domain planner for a BoringStack app. Given a one-line build goal, " +
+  "identify the distinct domain ENTITIES it stores — the nouns (e.g. Bookmark, " +
+  "Invoice, Customer). Each entity becomes exactly ONE resource: BoringStack's " +
+  "generator builds its database table, API routes, service, schemas, types, AND " +
+  "UI together from that single entity. Do NOT split an entity's layers into " +
+  "separate resources — there is no separate 'XService', 'XApi', or 'XRoutes' " +
+  "resource; the service and endpoints are part of the entity. List the SMALLEST " +
+  "set of distinct entities that covers the goal. Respond with ONLY a JSON object: " +
+  '{"resources":[{"id":"<PascalCase entity>","desc":"<one line>"}]}.';
 
 /**
  * Ask the model to plan resources for a one-line goal. Returns an empty array
