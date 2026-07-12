@@ -25,11 +25,18 @@ import type { Reporter } from "../loop.types";
 import { planResources } from "./plan-resources";
 import { toCamelCase } from "./case";
 
-/** Run BoringStack's pinned formatter over both apps (best-effort — a missing
- *  script or non-zero exit is ignored; the gate remains the source of truth). */
-async function formatApps(cwd: string, exec: Exec): Promise<void> {
+/** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
+ *  `format` (prettier, canonical formatting) then `lint:fix` (eslint --fix for the
+ *  auto-fixable lint rules prettier can't touch — padding-line, import order, etc.).
+ *  Neither changes logic, so neither should ever cost the model a gate attempt — a
+ *  dev gets both on save. Best-effort: a missing script or non-zero exit is ignored;
+ *  the gate stays the source of truth. */
+async function autofixApps(cwd: string, exec: Exec): Promise<void> {
   for (const app of ["apps/api", "apps/ui"]) {
-    await exec(["bun", "run", "format"], { cwd: join(cwd, app) });
+    const appCwd = join(cwd, app);
+
+    await exec(["bun", "run", "format"], { cwd: appCwd });
+    await exec(["bun", "run", "lint:fix"], { cwd: appCwd });
   }
 }
 
@@ -167,14 +174,11 @@ export function boringstackDeps(opts: {
 
       await host.send(prompt);
 
-      // Auto-format the model's edits with BoringStack's pinned prettier BEFORE the
-      // gate runs. Prettier violations are deterministic and 100% auto-fixable, so
-      // they should never cost the model a gate attempt (a dev gets format-on-save;
-      // the model should too). Uses `bun run format` — never bunx-latest — so the
-      // output matches exactly what the gate's format check expects. Best-effort:
-      // a non-zero exit just leaves the code as-is and the gate reports it, same as
-      // before — it never blocks the build.
-      await formatApps(cwd, exec);
+      // Apply BoringStack's deterministic auto-fixes (prettier + eslint --fix) to
+      // the model's edits BEFORE the gate. These classes are 100% auto-fixable and
+      // shouldn't cost the model an attempt — a dev gets them on save. Only genuine
+      // (non-auto-fixable) violations reach the gate as feedback.
+      await autofixApps(cwd, exec);
     },
 
     async evaluate(feature: IFeature, _state: IGreenfieldState) {
