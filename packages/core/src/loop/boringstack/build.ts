@@ -211,14 +211,14 @@ export function boringstackDeps(opts: {
       await autofixApps(cwd, exec);
     },
 
-    async evaluate(feature: IFeature, _state: IGreenfieldState) {
+    async evaluate(feature: IFeature) {
       const evaluateDeps: IEvaluateDeps = {
         // Task 3: Run the deterministic gate — DIFFERENTIAL against the baseline.
         // A truly-green gate passes outright. A red gate passes ONLY if every
         // failure is a pre-existing baseline failure (the feature added nothing
         // broken); otherwise it fails with ONLY the new failures as feedback, so
         // the model never chases base-suite defects it's frozen out of.
-        async gate(_f: IFeature): Promise<IGateOutcome> {
+        async gate(): Promise<IGateOutcome> {
           const result = await runBoringstackGate(cwd, exec);
 
           if (result.passed) {
@@ -262,7 +262,7 @@ export function boringstackDeps(opts: {
         },
 
         // Skip browser check (playwright not available in BoringStack)
-        async browser(_f: IFeature) {
+        async browser() {
           return Promise.resolve({
             ok: true,
             errors: [],
@@ -271,7 +271,7 @@ export function boringstackDeps(opts: {
         },
 
         // Task 4: Judge the implementation quality
-        async judge(_f: IFeature): Promise<IJudgeOutcome> {
+        async judge(): Promise<IJudgeOutcome> {
           const code = await readResourceCode(cwd, feature.id);
 
           return await judgeFeature(evaluator, {

@@ -33,7 +33,7 @@ function createHost() {
 }
 
 function createExec(gateCode = 0): Exec {
-  return async (_argv, _opts) => ({
+  return async () => ({
     code: gateCode,
     stdout: gateCode === 0 ? "build passed" : "",
     stderr: gateCode === 0 ? "" : "build failed",

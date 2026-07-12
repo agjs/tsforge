@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 const recorder = () => {
   const calls: string[][] = [];
 
-  const exec = async (argv: readonly string[], _opts: { cwd: string }) => {
+  const exec = async (argv: readonly string[]) => {
     calls.push([...argv]);
 
     return { code: 0, stdout: "", stderr: "" };
@@ -146,7 +146,7 @@ describe("generateFeature", () => {
   });
 
   test("throws when a feature command fails", async () => {
-    const exec = async (_argv: readonly string[], _opts: { cwd: string }) => ({
+    const exec = async () => ({
       code: 1,
       stdout: "",
       stderr: "feature gen failed",
