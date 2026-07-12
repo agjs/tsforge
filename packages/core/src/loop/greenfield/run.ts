@@ -123,8 +123,12 @@ async function attemptFeature(
 
     if (verdict.passed) {
       feature.passes = true;
+      delete feature.lastError;
       say(`feature '${feature.id}': verified ✓`);
     } else {
+      // Carry the failing output into the NEXT attempt (implement reads it) so the
+      // model fixes the actual errors instead of rebuilding blind.
+      feature.lastError = verdict.detail ?? verdict.notes;
       say(
         `feature '${feature.id}': failed at ${verdict.stage ?? "?"} — ${verdict.notes}`
       );

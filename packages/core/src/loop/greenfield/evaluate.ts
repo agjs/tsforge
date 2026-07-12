@@ -37,6 +37,14 @@ function firstLine(text: string): string {
   );
 }
 
+/** Cap the fuller failing output fed into the next attempt — enough to see the
+ *  real errors, bounded so it can't blow the model's context. */
+function capped(text: string): string {
+  const CAP = 6000;
+
+  return text.length > CAP ? `${text.slice(0, CAP)}\n…[truncated]` : text;
+}
+
 /**
  * Evaluate one feature through the layered stack and short-circuit on the first
  * failure: deterministic gate → browser oracle → LLM judge. The gate stays the
@@ -52,7 +60,12 @@ export async function evaluateFeature(
   const gate = await deps.gate(feature);
 
   if (!gate.passed) {
-    return { passed: false, stage: "gate", notes: firstLine(gate.output) };
+    return {
+      passed: false,
+      stage: "gate",
+      notes: firstLine(gate.output),
+      detail: capped(gate.output),
+    };
   }
 
   const browser = await deps.browser(feature);
@@ -64,13 +77,19 @@ export async function evaluateFeature(
       passed: false,
       stage: "browser",
       notes: browser.errors.join("; "),
+      detail: capped(browser.errors.join("\n")),
     };
   }
 
   const judged = await deps.judge(feature);
 
   if (!judged.ok) {
-    return { passed: false, stage: "judge", notes: judged.notes };
+    return {
+      passed: false,
+      stage: "judge",
+      notes: firstLine(judged.notes),
+      detail: capped(judged.notes),
+    };
   }
 
   return { passed: true, notes: "gate + browser + judge all green" };

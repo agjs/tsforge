@@ -1,12 +1,5 @@
 import type { IFeature } from "../greenfield/greenfield.types";
-
-/**
- * Convert a PascalCase name to camelCase.
- * Example: "Invoice" → "invoice", "PaymentMethod" → "paymentMethod"
- */
-function toCamelCase(pascalName: string): string {
-  return pascalName.charAt(0).toLowerCase() + pascalName.slice(1);
-}
+import { toCamelCase } from "./case";
 
 /**
  * Generate the refine prompt that tells the model which files to fill in
@@ -22,9 +15,16 @@ function toCamelCase(pascalName: string): string {
 export function refinePrompt(feature: IFeature): string {
   const camel = toCamelCase(feature.id);
 
+  // On a retry, lead with the ACTUAL gate/judge errors from the last attempt so the
+  // model fixes those specific failures instead of rebuilding blind.
+  const priorFailure =
+    feature.lastError === undefined || feature.lastError.trim().length === 0
+      ? ""
+      : `\n\n## ⚠️ Your PREVIOUS attempt FAILED the gate — FIX THESE ERRORS FIRST\n\nThe build gate (typecheck / lint / tests / OpenAPI drift) reported:\n\n\`\`\`\n${feature.lastError}\n\`\`\`\n\nAddress every error above before anything else. The same gate must pass this time.\n\n---`;
+
   return `You are implementing the **${feature.id}** resource.
 
-**Behavior**: ${feature.desc}
+**Behavior**: ${feature.desc}${priorFailure}
 
 ---
 

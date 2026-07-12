@@ -16,6 +16,32 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("Invoice");
   });
 
+  it("leads with the prior gate errors on a retry (lastError)", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 1,
+      lastError: "project.routes.ts:12 error TS2304: Cannot find name 'foo'",
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("PREVIOUS attempt FAILED");
+    expect(prompt).toContain("TS2304: Cannot find name 'foo'");
+  });
+
+  it("omits the failure block on a first attempt (no lastError)", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    expect(refinePrompt(feature)).not.toContain("PREVIOUS attempt FAILED");
+  });
+
   it("contains the resource description", () => {
     const feature: IFeature = {
       id: "Invoice",

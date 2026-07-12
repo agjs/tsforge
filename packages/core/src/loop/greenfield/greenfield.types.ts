@@ -20,6 +20,10 @@ export interface IFeature {
   /** Browser interaction steps that PROVE the feature works (clicked through the
    *  rendered app), proposed alongside the feature. Empty ⇒ a render smoke only. */
   steps?: IStep[];
+  /** The last failing attempt's evaluator feedback (capped gate/judge output), fed
+   *  into the NEXT attempt's implement prompt so the model fixes the actual errors
+   *  instead of rebuilding blind. Cleared on a pass. */
+  lastError?: string;
 }
 
 /** A greenfield build's whole state: the one-line goal + the feature checklist. */
@@ -36,6 +40,9 @@ export interface IFeatureVerdict {
   notes: string;
   /** Which layer decided it (for progress.md). Omitted on a pass. */
   stage?: "gate" | "browser" | "judge";
+  /** Fuller (capped) failing output — the actual gate/judge errors — for feeding
+   *  the next attempt so the model fixes real errors, not the one-line summary. */
+  detail?: string;
 }
 
 export interface IGreenfieldResult {
