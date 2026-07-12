@@ -18,6 +18,7 @@ import type { IProvider } from "../../inference";
 import type { Exec } from "./exec";
 import { generateResource, generateFeature } from "./generate";
 import { runBoringstackGate } from "./gate";
+import { extractFailures, novelFailures } from "./extract-failures";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield, prepareState } from "../greenfield/run";
 import type { Reporter } from "../loop.types";
@@ -134,12 +135,18 @@ export function boringstackDeps(opts: {
   cwd: string;
   exec: Exec;
   evaluator: IProvider;
+  /** Failure signatures present on the PRISTINE scaffold (before any model work).
+   *  The gate is differential against this: a feature passes when it introduces no
+   *  NEW failures, so pre-existing base-suite/scaffold defects the model is frozen
+   *  out of can't wedge every feature. Empty = a clean baseline (the ideal). */
+  baseline?: ReadonlySet<string>;
   generate?: (cwd: string, name: string, exec: Exec) => Promise<void>;
   generateUi?: (cwd: string, name: string, exec: Exec) => Promise<void>;
 }): IGreenfieldDeps {
   const { host, cwd, exec, evaluator, generate: generateFn, generateUi } = opts;
   const generate = generateFn ?? generateResource;
   const genUi = generateUi ?? generateFeature;
+  const baseline = opts.baseline ?? new Set<string>();
 
   return {
     async implement(
@@ -172,11 +179,46 @@ export function boringstackDeps(opts: {
 
     async evaluate(feature: IFeature, _state: IGreenfieldState) {
       const evaluateDeps: IEvaluateDeps = {
-        // Task 3: Run the deterministic gate
+        // Task 3: Run the deterministic gate — DIFFERENTIAL against the baseline.
+        // A truly-green gate passes outright. A red gate passes ONLY if every
+        // failure is a pre-existing baseline failure (the feature added nothing
+        // broken); otherwise it fails with ONLY the new failures as feedback, so
+        // the model never chases base-suite defects it's frozen out of.
         async gate(_f: IFeature): Promise<IGateOutcome> {
           const result = await runBoringstackGate(cwd, exec);
 
-          return { passed: result.passed, output: result.output };
+          if (result.passed) {
+            return { passed: true, output: result.output };
+          }
+
+          const current = extractFailures(result.output, cwd);
+          const novel = novelFailures(current, baseline);
+
+          // Pass-despite-red ONLY when we PARSED failures and every one is a
+          // baseline failure. An empty parse on a non-zero exit means we can't
+          // prove the redness is baseline-only (unrecognized output / a
+          // build-step crash) — stay failed and hand back the raw output.
+          if (current.size > 0 && novel.length === 0) {
+            return {
+              passed: true,
+              output:
+                `gate exit non-zero, but every failure is a pre-existing baseline ` +
+                `failure (${String(baseline.size)}) the feature cannot touch — no ` +
+                `new failures introduced.`,
+            };
+          }
+
+          if (novel.length > 0) {
+            return {
+              passed: false,
+              output:
+                `NEW failures introduced by this feature ` +
+                `(${String(novel.length)}; ${String(baseline.size)} baseline ` +
+                `failure(s) hidden):\n${novel.join("\n")}`,
+            };
+          }
+
+          return { passed: false, output: result.output };
         },
 
         // Skip browser check (playwright not available in BoringStack)
@@ -229,6 +271,33 @@ export async function runBoringstackBuild(opts: {
     return { status: "done", features: [] };
   }
 
+  // Capture the BASELINE gate on the pristine scaffold (before any resource is
+  // generated) so feature grading is differential — the model is judged only on
+  // failures IT introduces, never on pre-existing base-suite/scaffold defects it's
+  // frozen out of. A red baseline is surfaced LOUDLY (not silently tolerated): it
+  // means the scaffold itself doesn't pass its own gate and should be fixed.
+  onEvent?.({
+    kind: "tool",
+    task: "boringstack",
+    message: "capturing baseline gate on the pristine scaffold…",
+  });
+
+  const baseRun = await runBoringstackGate(cwd, exec);
+  const baseline = baseRun.passed
+    ? new Set<string>()
+    : extractFailures(baseRun.output, cwd);
+
+  onEvent?.({
+    kind: baseline.size > 0 ? "stuck" : "tool",
+    task: "boringstack",
+    message:
+      baseline.size > 0
+        ? `⚠ baseline scaffold is RED: ${String(baseline.size)} pre-existing gate ` +
+          `failure(s) EXCLUDED from feature grading (differential gate). The app ` +
+          `won't be fully green until the scaffold baseline is fixed.`
+        : "baseline scaffold is GREEN — features graded against a clean gate.",
+  });
+
   // Run the greenfield loop with BoringStack-specific dependencies
   const optsGreenfield: IGreenfieldOptions = {};
 
@@ -239,7 +308,7 @@ export async function runBoringstackBuild(opts: {
   return runGreenfield(
     cwd,
     state,
-    boringstackDeps({ host, cwd, exec, evaluator }),
+    boringstackDeps({ host, cwd, exec, evaluator, baseline }),
     optsGreenfield
   );
 }

@@ -172,4 +172,56 @@ describe("boringstackDeps.evaluate", () => {
     expect(verdict.passed).toBe(false);
     expect(verdict.stage).toBe("gate");
   });
+
+  test("differential gate PASSES when a red gate has only baseline failures", async () => {
+    const host = createHost();
+    // Gate exits non-zero but the only failure is a pre-existing baseline one.
+    const exec: Exec = async () => ({
+      code: 1,
+      stdout: "(fail) validateEnv > rejects placeholder domain\n 1 fail\n",
+      stderr: "",
+    });
+
+    const deps = boringstackDeps({
+      host,
+      cwd: "/repo",
+      exec,
+      evaluator: createEvaluator(),
+      generate: async () => undefined,
+      baseline: new Set(["(fail) validateEnv > rejects placeholder domain"]),
+    });
+
+    const verdict = await deps.evaluate(feature("Invoice"), state());
+
+    expect(verdict.passed).toBe(true);
+  });
+
+  test("differential gate FAILS when the feature introduces a NEW failure", async () => {
+    const host = createHost();
+    const exec: Exec = async () => ({
+      code: 1,
+      stdout:
+        "(fail) validateEnv > rejects placeholder domain\n" +
+        "(fail) invoice service > creates an invoice\n 2 fail\n",
+      stderr: "",
+    });
+
+    const deps = boringstackDeps({
+      host,
+      cwd: "/repo",
+      exec,
+      evaluator: createEvaluator(),
+      generate: async () => undefined,
+      baseline: new Set(["(fail) validateEnv > rejects placeholder domain"]),
+    });
+
+    const verdict = await deps.evaluate(feature("Invoice"), state());
+
+    expect(verdict.passed).toBe(false);
+    expect(verdict.stage).toBe("gate");
+    // The full novel-failure list is in `detail` (fed to the model's next attempt);
+    // the baseline failure must NOT appear — the model can't touch it.
+    expect(verdict.detail ?? "").toContain("invoice service");
+    expect(verdict.detail ?? "").not.toContain("validateEnv");
+  });
 });
