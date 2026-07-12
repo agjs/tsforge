@@ -15,7 +15,7 @@ Most users run `tsforge` and stay in the interactive session.
 | --- | --- | --- |
 | **Interactive** | `tsforge` | default — open-ended tasks, steering, exploration |
 | **One-shot** | `tsforge "task" --accept "gate cmd"` | drive a single task to green and exit |
-| **Web build** | add `--web` | scaffold Vite app + web gate ladder on first message |
+| **New app** | `tsforge scaffold` | stand up a full-stack [BoringStack](/scaffold/boringstack/) project, then build it with the [greenfield loop](/loop/greenfield/) |
 | **Plan mode** | default — **Shift+Tab** or `/plan` to switch | read-only exploration before implementing — see [Plan mode](/cli/plan-mode/) |
 
 ## Flags
@@ -26,7 +26,6 @@ Most users run `tsforge` and stay in the interactive session.
 | `--files <globs>` | narrow editable scope (comma-separated); default is whole repo (vendored/generated files are [always excluded](/edit/engine/#vendored--read-only-scope)) |
 | `--accept` / `--gate <cmd>` | gate command for one-shot mode |
 | `--no-gate` | skip auto gate detection |
-| `--web` | pre-scaffold web stack + web gate on first build message |
 | `--browser <html>` | append headless render check to gate |
 | `--plan` | force plan mode on for an interactive session — plan is the default anyway, so this only matters to override a repo that configured an autonomous `policy.mode`; ignored by one-shot/headless |
 | `--continue` / `-c` | resume latest saved session for this dir |

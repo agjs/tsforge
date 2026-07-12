@@ -20,7 +20,7 @@ a guard that doesn't guard); **P2** a partial fix, missing test, or hidden failu
 
 Drives a turn: dispatch tool calls, account for writes, re-gate, settle. `run.ts` is the
 headless outer driver (max-turns gating, degeneration/TTSR handling, gate settling) that
-iterates `turn.ts`; `staged-build.ts` and `model-call.ts` (PR #66) compose out of Session.
+iterates `turn.ts`; `model-call.ts` (PR #66) composes out of Session.
 
 **Invariants**
 
@@ -99,7 +99,7 @@ reported via `ctx.report(ILoopEvent)`, never the return value.
 - A tool's text must not lie about state (e.g. "deps installed" when install failed).
 - Plan mode: every mutating tool is rejected at dispatch (a salvaged/forced call too).
 
-**Risk areas** silent mutation (the fixed scaffold_web bug); a handler that throws;
+**Risk areas** silent mutation (a generator/wiring step that writes without reporting); a handler that throws;
 optimistic success text; arg parsing that accepts a flag/path injection.
 
 **Checklist** run `tests/tool-accounting.test.ts` (the classification table is the
@@ -126,11 +126,11 @@ opt-in oracles only join when their env var is set; a failing gate never reports
 "Does it RUN / render / stay covered" — failure classes tsc/eslint miss.
 
 **Invariants** In the CORE gate, boot (`TSFORGE_BOOT`), proptest (`TSFORGE_PROPTEST`),
-and coverage (`TSFORGE_COVERAGE`) are opt-in via env (`appendOptInOracles`); the
-browser render-check is NOT env-gated — it's mandatory in the WEB gate (`web-gate.ts`),
-where only the a11y + screenshots features are env-opt-in. Ephemeral ports via the
-shared `serveEphemeral` retry apply to the port-binding oracles only (`boot-check`,
-`browser-check`); the non-serving oracles (`proptest-check`, `test-coverage-check`)
+and coverage (`TSFORGE_COVERAGE`) are opt-in via env (`appendOptInOracles`); the browser
+render-check runs only as the greenfield evaluator's optional browser layer (the
+Playwright oracle), skip-tolerant when Playwright is absent so it never blocks. Ephemeral
+ports via the shared `serveEphemeral` retry apply to the port-binding oracles only
+(`boot-check`, `browser` oracle); the non-serving oracles (`proptest-check`, `test-coverage-check`)
 spawn via `runArgvCommand`/`Bun.spawn` with a timeout-kill and bind no port. A browser
 absence skips, not fails.
 
@@ -292,17 +292,22 @@ Hand-rolled JSON-RPC 2.0 client/server, tool registry.
 **Invariants** MCP tools bypass the editable scope + the deterministic gate (external
 context, never workspace mutations); a dead server degrades, not crashes.
 
-## web-scaffold — `src/web-templates.ts`, `src/loop/tools/scaffold-*.ts`
+## boringstack build — `src/scaffold/*`, `src/loop/boringstack/*`
 
-Vite/React/vanilla templates, the vendored guard, the web gate.
+Web apps are built on a real BoringStack clone, not a tsforge-invented stack (the old
+UI-only Vite/React `scaffold_web`/`scaffold_ui`/`scaffold_routes` subsystem was removed).
+Two phases: (1) **scaffold** (`src/scaffold/`) clones + configures BoringStack from its
+own manifest; (2) **build** (`src/loop/boringstack/`) drives the [greenfield engine](loop)
+one resource per feature — `generate.ts` runs BoringStack's generators, `wire-resource.ts`
+does the deterministic wiring (routes/app/swagger + `tests/helpers/db` re-export),
+`build.ts` auto-fixes (prettier + `eslint --fix`) then runs `gate.ts` **baseline-aware
+and differential** via `extract-failures.ts`, and the model fills the domain scoped to
+that resource's files, frozen on green.
 
-**Invariants** only `*.gen.ts`/vendored shells are write-guard-exempt; a scaffold
-reports its writes (re-gate). Destructiveness is per-tool, by design: `scaffold_web`
-and `scaffold_routes` are non-destructive (write only MISSING files — never clobber a
-user file), while `scaffold_ui` deliberately OVERWRITES its `src/components/ui/*`
-primitives (re-theming is idempotent; the model is told never to hand-edit them, so
-they're effectively vendored). A "scaffold only writes missing files" blanket
-invariant is WRONG for `scaffold_ui` — check the per-tool contract, not the umbrella.
+**Invariants** the harness owns generators + wiring, the model owns domain; the gate is
+BoringStack's OWN `validate` (never relaxed); a feature passes only when it introduces
+NO new failures beyond the pristine baseline; wiring edits are idempotent (a retry
+re-runs safely). "Done" = BoringStack's composed gate green on the model's slice.
 
 ## setup / conventions — `src/infer-rules/*`, `src/setup/*`, `src/render/wizard.ts`, the bundled `.mjs` configs
 
@@ -332,10 +337,10 @@ guidance, so the gate and the prompts can never disagree.
   by MAX_FILES/MAX_BYTES.
 
 **Scope note (deliberate, documented)** Conventions govern the CORE/brownfield path
-(auto gate + `buildSystemPrompt`/chat/TDD + write-time linter). The `--web` SCAFFOLD
-path (`buildWebGate`/`configureWeb` + `REACT_GUIDANCE`/`webGuidance`/`BUILD_PREAMBLE`)
-intentionally uses tsforge's house style — it's greenfield, and its gate + guidance are
-consistent with each other. The eval-sweep agent (`src/agent/model-agent.ts`) also still
+(auto gate + `buildSystemPrompt`/chat/TDD + write-time linter). The boringstack BUILD
+path (`src/loop/boringstack/*`) instead defers entirely to BoringStack's OWN gate and
+conventions (the `pull_conventions` library + refine prompt) — tsforge holds no stack
+style of its own there. The eval-sweep agent (`src/agent/model-agent.ts`) also still
 carries house-style guidance (eval-only path). Both are tracked follow-ups, not bugs.
 
 **Risk areas** an override key slipping past the protected set; a `.mjs` rebuild that

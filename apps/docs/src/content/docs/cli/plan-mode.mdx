@@ -11,7 +11,6 @@ Plan mode is a safety rail for ambiguous work. The model can **read** your repo 
 
 - Press **Shift+Tab** to cycle the mode (plan → normal → …), or type **`/plan`** to toggle it
 - When the plan looks right, reply **`approve`**, **`go`**, or **`lgtm`** — the model implements it
-- Web builds also accept **`yes`** / **`ok`** at the design checkpoint
 
 There is no disable *flag*: it's a mode you cycle with Shift+Tab. (`tsforge --plan` forces plan mode on for an interactive session even in a repo that configured an autonomous `policy.mode` — one-shot and headless runs are autonomous regardless.)
 
@@ -31,27 +30,18 @@ Good for: "explore this repo and tell me how you'd refactor auth" or "what files
 
 After approval, tsforge switches to the normal implement loop with full write tools.
 
-## Staged web builds
+## Whole-app builds
 
-For new apps (`--web` or `scaffold_web`), plan mode splits work into two phases:
-
-```mermaid
-flowchart LR
-  scaffold[scaffold_web] --> design[Design phase]
-  design --> checkpoint[You approve]
-  checkpoint --> implement[Implement phase]
-  implement --> gate[Full web gate]
-```
-
-1. **Design phase**: types, services, route list. Lighter gate (types + lint, no Vite build yet).
-2. **Checkpoint**: model shows the plan; you approve.
-3. **Implement phase**: routes and UI get filled in. Full web gate runs.
-
-This catches contract mistakes before UI work piles up.
+Plan mode is for **exploring and approving a change** in a repo. Building a *new*
+app from scratch is a different flow: [`tsforge scaffold`](/scaffold/boringstack/)
+stands up BoringStack, then the [greenfield loop](/loop/greenfield/) drives the app
+to green one resource at a time — the harness runs the generators + wiring and the
+model fills the domain, each feature verified and frozen before the next. That loop
+plans and checkpoints per feature on its own, so it doesn't need plan mode.
 
 ## Leaving plan mode
 
 - **Shift+Tab** (or `/plan`) drops to normal mode for hands-on edits in a repo you know
 - One-shot runs (`tsforge "task" --accept …`) and headless/eval runs are autonomous already — plan mode is interactive-only, since it needs a human to approve
 
-→ [Web scaffolding](/scaffold/web/) · [Interactive CLI](/cli/interactive/)
+→ [Greenfield scaffolding](/scaffold/boringstack/) · [Interactive CLI](/cli/interactive/)

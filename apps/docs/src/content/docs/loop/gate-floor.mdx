@@ -105,40 +105,30 @@ Two extra gate steps prove the work is real, not just well-formed. Both default 
 
 Coverage checks **function** coverage as well as lines, so a one-line export that's never exercised can't hide behind a "line executed at declaration" count.
 
-## Web apps get a longer gate
+## Full-stack (BoringStack) builds use the project's own gate
 
-If the session scaffolds a new browser app (`scaffold_web` or `tsforge --web`), the gate grows. "Done" then roughly means: Vite build passes, types pass, lint passes, route stubs are filled in, formatting is clean, and a headless browser smoke test passes.
-
-Details: [Web scaffolding](/scaffold/web/).
-
-### Staged gate progress & failures
-
-The web gate runs as **named stages** rather than one opaque `&&` chain. Each stage prints a `━━ <label> ━━` banner and streams its output live; a passing stage prints `✓ <label>`. On the first failure the runner prints
+A web app built via [`tsforge scaffold`](/scaffold/boringstack/) doesn't get a
+tsforge-invented gate — "done" is **BoringStack's own** composed gate, run exactly as
+a developer runs it:
 
 ```
-✗ <label> FAILED (exit N)
+(cd apps/api && bun run validate) && (cd apps/ui && bun run validate) && bun run check
 ```
 
-and **stops** — later stages don't run, and the failing stage's exit code is preserved. So when a build goes red, both you and the agent's feedback loop see *which* stage broke (`vite build`, `typecheck`, `lint`, `type-aware lint`, `stub check`, `format`, `tests`, or `browser smoke`) instead of a wall of interleaved output. The core (non-web) gate is short enough that it stays a plain command chain.
+Two things make this honest rather than brittle in the [greenfield loop](/loop/greenfield/):
 
-Add a one-off page render check with `--browser path/to/index.html`.
-
-### Accessibility, screenshots, and a perf budget
-
-The browser smoke can do more than check that a page renders. These extra oracles are **opt-in** (the default smoke is unchanged):
-
-| Env var | Adds |
-| --- | --- |
-| `TSFORGE_A11Y=1` | [axe](https://github.com/dequelabs/axe-core) accessibility checks on every route — **serious/critical** violations (including colour contrast) fail the gate |
-| `TSFORGE_SCREENSHOTS=1` | a desktop + mobile screenshot per route, written for review (never a pass/fail signal) |
-
-Running the check directly (outside a build) exposes the same flags, plus a basic perf budget:
-
-```bash
-bun browser-check.ts dist/index.html --smoke --a11y --screenshots --perf
-```
-
-`--perf` is a tripwire (DOM node count + mount time), not a full Lighthouse audit. All of these skip cleanly when Chromium / `@axe-core/playwright` aren't installed.
+- **Auto-fix before the gate.** After the model writes, the harness runs the project's
+  own `bun run format` (prettier) then `bun run lint:fix` (eslint `--fix`) over both
+  apps. Those classes are deterministic and 100% auto-fixable, so they never cost the
+  model a gate attempt — a developer gets them on save; the model should too. Only
+  genuine, non-auto-fixable violations reach the gate as feedback.
+- **Baseline-aware differential gate.** The gate is captured once on the *pristine*
+  scaffold before any model work. A feature then passes when it introduces **no new
+  failures** — a pre-existing base-suite/scaffold defect the model is frozen out of
+  can never wedge the build, and the model's feedback shows only the failures *it*
+  caused. A red baseline is surfaced loudly (the scaffold itself should be fixed); it
+  is not silently tolerated. This is not a gate relaxation — the full gate still runs
+  on everything the model touches or newly breaks.
 
 ## Two kinds of checking
 
