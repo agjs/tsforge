@@ -112,6 +112,11 @@ describe("generateFeature", () => {
     expect(joined.findIndex((c) => c.includes("new:feature"))).toBeLessThan(
       joined.findIndex((c) => c.includes("generate:api"))
     );
+    // Waits for the API to be serving its reloaded spec BEFORE generate:api fetches it.
+    expect(joined.some((c) => c.includes("curl"))).toBe(true);
+    expect(joined.findIndex((c) => c.includes("curl"))).toBeLessThan(
+      joined.findIndex((c) => c.includes("generate:api"))
+    );
   });
 
   test("throws when a feature command fails", async () => {
