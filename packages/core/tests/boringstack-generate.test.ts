@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 const recorder = () => {
   const calls: string[][] = [];
 
-  const exec = async (argv: readonly string[]) => {
+  const exec = async (argv: readonly string[], _opts: { cwd: string }) => {
     calls.push([...argv]);
 
     return { code: 0, stdout: "", stderr: "" };
@@ -72,6 +72,7 @@ describe("generateResource", () => {
       expect(joined.findIndex((c) => c.includes("db:push"))).toBeGreaterThan(
         joined.findIndex((c) => c.includes("new:resource"))
       );
+      expect(joined.some((c) => c.includes("prettier"))).toBe(true);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -81,7 +82,10 @@ describe("generateResource", () => {
     const tmpDir = await createTestEnv();
 
     try {
-      const exec = async () => ({ code: 1, stdout: "", stderr: "boom" });
+      const exec = async (
+        _argv: readonly string[],
+        _opts: { cwd: string }
+      ) => ({ code: 1, stdout: "", stderr: "boom" });
 
       await expect(generateResource(tmpDir, "Invoice", exec)).rejects.toThrow(
         /boom/
@@ -109,7 +113,7 @@ describe("generateFeature", () => {
   });
 
   test("throws when a feature command fails", async () => {
-    const exec = async () => ({
+    const exec = async (_argv: readonly string[], _opts: { cwd: string }) => ({
       code: 1,
       stdout: "",
       stderr: "feature gen failed",
