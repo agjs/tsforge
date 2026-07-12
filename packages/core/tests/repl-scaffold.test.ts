@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { archetypeStep, resolveScaffoldDest } from "../src/cli/repl-scaffold";
 
-test("archetype step offers boringstack, astro, vite", () => {
+test("archetype step offers boringstack, astro", () => {
   const step = archetypeStep();
 
   expect(step.kind).toBe("single");
 
   const values = step.options.map((o) => o.value);
 
-  expect(values).toEqual(["boringstack", "astro", "vite"]);
+  expect(values).toEqual(["boringstack", "astro"]);
 });
 
 test("resolveScaffoldDest: a plain name resolves under cwd (NOT a throwaway temp)", () => {

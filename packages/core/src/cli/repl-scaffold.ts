@@ -34,7 +34,7 @@ function projectDirStep(): IWizardStep {
   };
 }
 
-/** Single-select step offering three archetype choices: boringstack, astro, vite. */
+/** Single-select step offering archetype choices: boringstack, astro. */
 export function archetypeStep(): IWizardStep {
   return {
     key: "archetype",
@@ -52,11 +52,6 @@ export function archetypeStep(): IWizardStep {
         label: "Astro",
         value: "astro",
         note: "Static site generator",
-      },
-      {
-        label: "Vite",
-        value: "vite",
-        note: "Lightweight frontend project",
       },
     ],
     defaultIndex: 0,
@@ -120,18 +115,6 @@ function printHandoff(
   );
 }
 
-/** Print the vite handoff message and return. */
-function handoffVite(out: (s: string) => void): void {
-  out(
-    [
-      "",
-      "To scaffold a Vite project, run:",
-      `  tsforge --web "<your first feature>"`,
-      "",
-    ].join("\n")
-  );
-}
-
 /**
  * Launch the in-REPL scaffold wizard: pick an archetype (boringstack/astro/vite),
  * then run the full flow for boringstack/astro or handoff to --web for vite.
@@ -160,13 +143,6 @@ export async function openScaffoldInRepl(
     }
 
     const selectedArchetype = archetypeState.single.archetype;
-
-    // Vite: print handoff and return
-    if (selectedArchetype === "vite") {
-      handoffVite(deps.out);
-
-      return;
-    }
 
     // Boringstack/Astro: run the full flow
     const archetype =

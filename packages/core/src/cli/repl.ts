@@ -40,7 +40,6 @@ import {
   Session,
   PLAN_APPROVED_NOTE,
   type Reporter,
-  type SetupWebFn,
   type ILoopEvent,
 } from "../loop";
 import { loadRecipes } from "../config/recipes";
@@ -75,17 +74,7 @@ import {
   type IAgentRow,
 } from "../render";
 import { loadLedger, activeRules, forgetMemory } from "../loop/memory";
-import {
-  buildWebGate,
-  buildWebFix,
-  buildCoreFix,
-  buildWebTypeGate,
-  buildWebTscCheck,
-  makeFileLinter,
-  WEB_PACKS,
-} from "../gate";
-import { webGuidance } from "../scaffold/web-scaffold";
-import type { WebFramework } from "../web-templates";
+import { buildCoreFix } from "../gate";
 import {
   saveSession,
   latestSession,
@@ -121,7 +110,6 @@ import {
   printHeader,
   maybePrintNoConfigHint,
 } from "./banner";
-import { setUpWebProject, frameworkLabel } from "./web-setup";
 import { resolveGate } from "./gate-setup";
 import {
   printSessions,
@@ -191,11 +179,6 @@ async function initReplSession(args: ICliArgs): Promise<{
     process.stdout.write("(no matching saved session — starting fresh)\n");
   }
 
-  // --web: lay down the opinionated skeleton before resolving the gate.
-  if (args.web && resumed === null) {
-    await setUpWebProject(args.dir, "react");
-  }
-
   const id = resumed?.id ?? newSessionId();
   const { accept, gateLabel, lintFile } = await resolveGate(args, resumed);
   const files = resumed !== null ? resumed.files : scopeOf(args);
@@ -238,23 +221,8 @@ async function initReplSession(args: ICliArgs): Promise<{
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
     ...(resumed === null ? {} : { history: resumed.messages }),
-    // --web pre-scaffolds the project above, so it gets the web gate/guidance
-    // directly. EVERY OTHER interactive session offers `scaffold_web` (+ the
-    // ui/routes tools that ride along) so the AGENT can decide mid-conversation
-    // that a request is a from-scratch web app — this flag is what puts the tool
-    // in the model's list; setSetupWeb() below only wires its callback.
-    ...(args.web
-      ? {
-          // --web pre-scaffolds the app, so scaffold_web isn't needed — but the
-          // build still needs scaffold_ui + scaffold_routes (+ add_dependency),
-          // which `scaffoldUi: true` registers. Without this the web guidance
-          // tells the model to call tools that aren't in its list and it deadlocks.
-          scaffoldUi: true,
-          guidance: webGuidance("react"),
-          fix: buildWebFix("react"),
-          incrementalCheck: buildWebTscCheck(args.dir),
-        }
-      : { scaffoldWeb: true, fix: buildCoreFix() }),
+    scaffoldWeb: true,
+    fix: buildCoreFix(),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
     // `--policy-mode` (validated) overrides the config file's policy.mode.
@@ -430,9 +398,6 @@ export async function repl(args: ICliArgs): Promise<number> {
     });
   }
 
-  // Explicit `--web` (no Q&A): the FIRST message is the build, so stage it
-  // (plan+types → implement). Cleared after, so follow-ups are plain sends.
-  let stagedWebPending = args.web && resumed === null;
   // Plan mode is the DEFAULT for a fresh interactive session (opt out with
   // `--no-plan` or an explicit non-plan `--policy-mode`/config `policy.mode`).
   // For a staged web build it pauses after the design phase to review the plan;
@@ -466,46 +431,6 @@ export async function repl(args: ICliArgs): Promise<number> {
 
     process.stdout.write(`  ${chip} ${body} ${approve} ${tail}\n`);
   }
-
-  // While set, the next user line is the plan-review reply ("approve", or edits to
-  // fold into phase 2) — the design phase has run and is waiting at the checkpoint.
-  let awaitingPlanApproval = false;
-
-  const configureWeb = async (
-    framework: WebFramework,
-    options: { signal?: AbortSignal } = {}
-  ): Promise<{ files: readonly string[]; depsInstalled: boolean }> => {
-    process.stdout.write(
-      `\n  ↳ scaffolding a ${frameworkLabel(framework)} project\n`
-    );
-
-    const setup = await setUpWebProject(args.dir, framework, options);
-
-    session.setGate(buildWebGate(framework, undefined, args.dir).command);
-    session.setFix(buildWebFix(framework));
-    session.setIncrementalCheck(buildWebTscCheck(args.dir));
-    // The project only now has a tsconfig + node_modules — rebuild the TS service
-    // so the per-write guard actually runs (it's skipped on a null service), and
-    // switch the lint moat to the web rules so component-architecture /
-    // no-jsx-computation / cast violations surface per file, not at the gate.
-    await session.refreshTsService();
-    session.setLintFile(makeFileLinter(framework, args.dir, WEB_PACKS));
-    session.guide(webGuidance(framework));
-    // A from-scratch web build legitimately needs many turns. Don't pin a low
-    // ceiling here — the interactive session already rides the high runaway
-    // backstop (interactiveBackstopTurns) and stops on the progress guards, so a
-    // long, converging build is never cut off mid-write.
-
-    return setup;
-  };
-
-  // The `scaffold_web` tool invokes this when the AGENT decides to build a web app
-  // (the framework string is validated tool-side). `configureWeb` closes over the
-  // mutable `session`, so this stays correct across `/clear`; re-applied below.
-  const setupWeb: SetupWebFn = (framework, options) =>
-    configureWeb(framework === "vanilla" ? "vanilla" : "react", options);
-
-  session.setSetupWeb(setupWeb);
 
   // Model-driven delegation: the orchestrator can spawn read-only specialist
   // subagents via the `spawn_agent` tool — the user never names an agent.
@@ -738,92 +663,7 @@ export async function repl(args: ICliArgs): Promise<number> {
       return session.send(`${contextBlock}${composed}`, opts);
     });
 
-  // A from-scratch web build: stage it (plan + types, then implement) so the
-  // model designs the type contract before writing UI — far less API invention.
-  // The design phase gates on TYPES only (tsc + lint) so contract errors surface
-  // early and small, not as a final avalanche. `withPlan` is the web flow's OWN
-  // checkpoint (design writes types, so general read-only plan mode must be off).
-  const runStagedBuild = (
-    line: string,
-    framework: WebFramework,
-    withPlan: boolean
-  ): Promise<void> =>
-    withPlan
-      ? runPlanned(line, framework)
-      : drive((opts) =>
-          session.buildStaged(
-            line,
-            opts,
-            buildWebTypeGate(framework, undefined, args.dir).command
-          )
-        );
-
-  // Plan mode: run the design phase, then show the model's plan and PAUSE — the
-  // next user line approves it (or edits it, folded into phase 2). The design runs
-  // inside drive() (signal/steer/persist); the quick plan summary is captured for
-  // the prompt that follows.
-  const runPlanned = async (
-    line: string,
-    framework: WebFramework
-  ): Promise<void> => {
-    let plan = "";
-
-    await drive(async (opts) => {
-      const designed = await session.designBuild(
-        line,
-        opts,
-        buildWebTypeGate(framework, undefined, args.dir).command
-      );
-
-      if (designed.status !== "interrupted") {
-        plan = await session.generatePlan();
-      }
-
-      return designed;
-    });
-
-    if (plan.length > 0) {
-      echo(
-        `\n📋 PLAN — review, then type 'approve' to build, or describe changes:\n\n${plan}\n\n`
-      );
-      awaitingPlanApproval = true;
-    }
-  };
-
   const dispatch = async (line: string): Promise<void> => {
-    // A reply to the plan checkpoint: "approve" (build as-planned) or any other
-    // text = corrections folded into the implement phase. Either way phase 2 runs.
-    if (awaitingPlanApproval) {
-      awaitingPlanApproval = false;
-
-      const approved = isApproval(line);
-      const notes = approved ? "" : line;
-
-      if (!approved) {
-        echo("  ↳ folding your changes into the build\n");
-      }
-
-      await drive((opts) => session.implementBuild(notes, opts));
-
-      return;
-    }
-
-    // Explicit --web: the first message is a from-scratch build — stage it. The
-    // staged flow has its OWN plan checkpoint (its design phase writes types),
-    // so general read-only plan mode hands over to it here.
-    if (stagedWebPending) {
-      stagedWebPending = false;
-
-      const withPlan = planMode;
-
-      planMode = false;
-      planDiscussed = false;
-      session.setPlanMode(false);
-      await runStagedBuild(line, "react", withPlan);
-
-      return;
-    }
-
     // GENERAL plan mode, approval: unlock the tools and implement the plan that
     // is already the latest assistant message. Only an explicit approval word
     // counts ("yes" may be answering one of the model's clarifying questions).
@@ -890,7 +730,6 @@ export async function repl(args: ICliArgs): Promise<number> {
           enableThinking: false,
           ...(profile === undefined ? {} : { profile }),
         });
-        session.setSetupWeb(setupWeb);
         wireDelegation(); // re-offer spawn_agent on the rebuilt session
         wireImages(); // re-offer read_image/generate_image + preview on the rebuild
         // Drop any un-sent clipboard captures — /clear wipes the buffer (and its
