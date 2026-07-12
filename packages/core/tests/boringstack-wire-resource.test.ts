@@ -3,6 +3,7 @@ import {
   wireRoutesFile,
   wireAppFile,
   wireSwaggerFile,
+  wireTestHelperFile,
 } from "../src/loop/boringstack/wire-resource";
 
 describe("wireRoutesFile", () => {
@@ -41,5 +42,42 @@ describe("wireSwaggerFile", () => {
       '{ name: "Invoice", description: "Invoice resource" }'
     );
     expect(out).toContain('{ name: "Health", description: "probes" }');
+  });
+});
+
+describe("wireTestHelperFile", () => {
+  const helper = `export { and, eq } from "drizzle-orm";
+export {
+  accounts,
+  users,
+} from "../../src/clients/postgres/schema";
+export type { IUser } from "../../src/api/users/users.types";
+`;
+
+  test("adds the new table to the schema re-export block", () => {
+    const out = wireTestHelperFile(helper, "Invoice");
+
+    expect(out).toContain("  invoice,");
+    // still inside the schema block (before its closing `from` line)
+    const blockEnd = out.indexOf('} from "../../src/clients/postgres/schema";');
+
+    expect(out.slice(0, blockEnd)).toContain("  invoice,");
+    // existing exports untouched
+    expect(out).toContain("  accounts,");
+    expect(out).toContain("  users,");
+  });
+
+  test("is idempotent — a table already listed is not added twice", () => {
+    const once = wireTestHelperFile(helper, "Invoice");
+    const twice = wireTestHelperFile(once, "Invoice");
+
+    expect(twice).toBe(once);
+    expect(twice.match(/ {2}invoice,/g)).toHaveLength(1);
+  });
+
+  test("throws when the schema re-export anchor is missing", () => {
+    expect(() =>
+      wireTestHelperFile("export {} from 'elsewhere';", "X")
+    ).toThrow("Anchor not found");
   });
 });

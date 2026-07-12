@@ -85,6 +85,35 @@ describe("boringstackDeps.implement", () => {
     expect(host.sent[0]).toContain("Invoice");
   });
 
+  test("auto-formats both apps with pinned prettier after the model writes", async () => {
+    const host = createHost();
+    const execCalls: { argv: string[]; cwd: string }[] = [];
+
+    const exec: Exec = async (argv, opts) => {
+      execCalls.push({ argv: [...argv], cwd: opts.cwd });
+
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    const deps = boringstackDeps({
+      host,
+      cwd: "/repo",
+      exec,
+      evaluator: createEvaluator(),
+      generate: async () => undefined,
+      generateUi: async () => undefined,
+    });
+
+    await deps.implement(feature("Invoice"), state());
+
+    const formats = execCalls
+      .filter((c) => c.argv.join(" ") === "bun run format")
+      .map((c) => c.cwd)
+      .sort();
+
+    expect(formats).toEqual(["/repo/apps/api", "/repo/apps/ui"]);
+  });
+
   test("uses default generateResource when generate not injected", async () => {
     const host = createHost();
     const exec = createExec();

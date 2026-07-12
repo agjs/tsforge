@@ -24,6 +24,14 @@ import type { Reporter } from "../loop.types";
 import { planResources } from "./plan-resources";
 import { toCamelCase } from "./case";
 
+/** Run BoringStack's pinned formatter over both apps (best-effort — a missing
+ *  script or non-zero exit is ignored; the gate remains the source of truth). */
+async function formatApps(cwd: string, exec: Exec): Promise<void> {
+  for (const app of ["apps/api", "apps/ui"]) {
+    await exec(["bun", "run", "format"], { cwd: join(cwd, app) });
+  }
+}
+
 /**
  * Generate the scope globs for a resource: the files the model is allowed to edit
  * for this feature.
@@ -151,6 +159,15 @@ export function boringstackDeps(opts: {
       const prompt = refinePrompt(feature);
 
       await host.send(prompt);
+
+      // Auto-format the model's edits with BoringStack's pinned prettier BEFORE the
+      // gate runs. Prettier violations are deterministic and 100% auto-fixable, so
+      // they should never cost the model a gate attempt (a dev gets format-on-save;
+      // the model should too). Uses `bun run format` — never bunx-latest — so the
+      // output matches exactly what the gate's format check expects. Best-effort:
+      // a non-zero exit just leaves the code as-is and the gate reports it, same as
+      // before — it never blocks the build.
+      await formatApps(cwd, exec);
     },
 
     async evaluate(feature: IFeature, _state: IGreenfieldState) {
