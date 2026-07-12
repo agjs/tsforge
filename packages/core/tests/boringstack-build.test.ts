@@ -233,3 +233,28 @@ describe("boringstackDeps.evaluate", () => {
     expect(verdict.detail ?? "").not.toContain("validateEnv");
   });
 });
+
+describe("boringstackDeps.rescue", () => {
+  test("is a no-op (false) when expert rescue is not enabled", async () => {
+    // TSFORGE_EXPERT_RESCUE unset → resolveExpertAsk returns null → rescue can't run,
+    // so the feature parks exactly as before (fully backward compatible).
+    delete process.env.TSFORGE_EXPERT_RESCUE;
+
+    const deps = boringstackDeps({
+      host: createHost(),
+      cwd: "/repo",
+      exec: createExec(1),
+      evaluator: createEvaluator(),
+      generate: async () => undefined,
+    });
+
+    const f = {
+      ...feature("Invoice"),
+      lastError:
+        "apps/api/src/api/invoice/invoice.service.ts(3,1): error TS2304",
+    };
+
+    expect(typeof deps.rescue).toBe("function");
+    expect(await deps.rescue?.(f, state())).toBe(false);
+  });
+});

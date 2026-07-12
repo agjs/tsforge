@@ -83,6 +83,33 @@ export async function runGreenfield(
     }
 
     if (feature.attempts >= maxAttempts) {
+      // Last-resort escalation before parking: if the deps provide a `rescue`
+      // (e.g. an expert-model handoff), try it ONCE and give the result a final
+      // evaluation. A rescue that lands green ticks the feature and the loop moves
+      // on; anything else parks as `stuck` — exactly as before when no rescue is
+      // wired. One shot only, so a non-converging feature can't loop forever.
+      if (deps.rescue !== undefined) {
+        const rescued = await deps.rescue(feature, state).catch(() => false);
+
+        if (rescued) {
+          say(`feature '${feature.id}': rescue applied a fix — re-evaluating`);
+
+          const verdict = await deps.evaluate(feature, state);
+
+          await saveState(cwd, state);
+          await writeProgress(cwd, state);
+
+          if (verdict.passed) {
+            feature.passes = true;
+            delete feature.lastError;
+            say(`feature '${feature.id}': verified ✓ (after expert rescue)`);
+            continue;
+          }
+
+          feature.lastError = verdict.detail ?? verdict.notes;
+        }
+      }
+
       report({
         kind: "stuck",
         task: "greenfield",

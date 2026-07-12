@@ -19,6 +19,11 @@ import type { Exec } from "./exec";
 import { generateResource, generateFeature } from "./generate";
 import { runBoringstackGate } from "./gate";
 import { extractFailures, novelFailures } from "./extract-failures";
+import {
+  resolveExpertAsk,
+  resolveStuckFile,
+  runExpertHandoff,
+} from "../expert-handoff";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield, prepareState } from "../greenfield/run";
 import type { Reporter } from "../loop.types";
@@ -246,6 +251,56 @@ export function boringstackDeps(opts: {
       };
 
       return evaluateFeature(feature, evaluateDeps);
+    },
+
+    // Expert rescue: the rung above the per-attempt feedback loop. Before a stuck
+    // feature parks, hand its failing file + exact errors to the configured
+    // `capabilities.expert` model (a stronger model — the automated version of "a
+    // human steps in"). Opt-in via TSFORGE_EXPERT_RESCUE (the expert is typically a
+    // paid API); when off or unconfigured, `resolveExpertAsk` returns null and this
+    // is a no-op → the feature parks exactly as before.
+    async rescue(feature: IFeature): Promise<boolean> {
+      const ask = await resolveExpertAsk();
+
+      if (ask === null) {
+        return false;
+      }
+
+      const lastError = feature.lastError ?? "";
+
+      if (lastError.trim().length === 0) {
+        return false;
+      }
+
+      const file = await resolveStuckFile(cwd, [{ message: lastError }]);
+
+      if (file === null) {
+        return false;
+      }
+
+      const content = await Bun.file(join(cwd, file))
+        .text()
+        .catch(() => null);
+
+      if (content === null) {
+        return false;
+      }
+
+      const outcome = await runExpertHandoff(
+        cwd,
+        { file, content, error: lastError, goal: feature.desc },
+        ask
+      );
+
+      if (!outcome.applied) {
+        return false;
+      }
+
+      // Re-apply the deterministic auto-fixes over the expert's file before the
+      // final re-evaluation, same as an ordinary attempt.
+      await autofixApps(cwd, exec);
+
+      return true;
     },
   };
 }

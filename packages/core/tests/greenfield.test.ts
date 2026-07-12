@@ -207,6 +207,65 @@ describe("runGreenfield: outer loop", () => {
     expect(s.features[1]?.passes).toBe(false); // 'b' never attempted
   });
 
+  test("rescue that lands green before parking ticks the feature (not stuck)", async () => {
+    const s = state("a");
+    let rescueCalls = 0;
+    const deps: IGreenfieldDeps = {
+      implement: async () => undefined,
+      // Fails every normal attempt; passes only after rescue has run.
+      evaluate: async () => ({ passed: rescueCalls > 0, notes: "" }),
+      rescue: async () => {
+        rescueCalls += 1;
+
+        return true;
+      },
+    };
+
+    const res = await runGreenfield(dir, s, deps, { maxAttemptsPerFeature: 3 });
+
+    expect(res.status).toBe("done");
+    expect(rescueCalls).toBe(1); // one shot, right before parking
+    expect(s.features[0]?.passes).toBe(true);
+  });
+
+  test("rescue is attempted once, then parks stuck if it can't help", async () => {
+    const s = state("a");
+    let rescueCalls = 0;
+    const deps: IGreenfieldDeps = {
+      implement: async () => undefined,
+      evaluate: async () => ({ passed: false, notes: "" }),
+      rescue: async () => {
+        rescueCalls += 1;
+
+        return false; // expert unavailable / no fix
+      },
+    };
+
+    const res = await runGreenfield(dir, s, deps, { maxAttemptsPerFeature: 3 });
+
+    expect(res.status).toBe("stuck");
+    expect(rescueCalls).toBe(1);
+  });
+
+  test("rescue that applies a fix but still fails re-eval parks stuck (no loop)", async () => {
+    const s = state("a");
+    let rescueCalls = 0;
+    const deps: IGreenfieldDeps = {
+      implement: async () => undefined,
+      evaluate: async () => ({ passed: false, notes: "" }),
+      rescue: async () => {
+        rescueCalls += 1;
+
+        return true; // applied a change, but re-eval still red
+      },
+    };
+
+    const res = await runGreenfield(dir, s, deps, { maxAttemptsPerFeature: 3 });
+
+    expect(res.status).toBe("stuck");
+    expect(rescueCalls).toBe(1); // exactly once — never loops
+  });
+
   test("a feature that passes on its 2nd attempt is not counted stuck", async () => {
     const s = state("a");
     let calls = 0;

@@ -63,6 +63,12 @@ export interface IGreenfieldDeps {
     feature: IFeature,
     state: IGreenfieldState
   ): Promise<IFeatureVerdict>;
+  /** OPTIONAL last-resort escalation, tried ONCE before a feature parks as `stuck`:
+   *  hand the failing file + its exact errors to a stronger "expert" model (the rung
+   *  above the per-attempt feedback loop). Returns true when it applied a fix worth
+   *  a final re-evaluation. Unset = no escalation — the generic path parks as before,
+   *  so this is fully backward compatible. */
+  rescue?(feature: IFeature, state: IGreenfieldState): Promise<boolean>;
 }
 
 export interface IGreenfieldOptions {
