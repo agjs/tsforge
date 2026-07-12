@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { makeFileLinter, WEB_PACKS } from "../src/gate";
+import { makeFileLinter } from "../src/gate";
 import { resolveConventions } from "../src/infer-rules/conventions";
 
 // Integration test for the REAL gate path: spawn the bundled eslint config the
@@ -11,16 +11,9 @@ import { resolveConventions } from "../src/infer-rules/conventions";
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const ESLINT_BIN = join(ROOT, "node_modules", ".bin", "eslint");
 const STRICT_CONFIG = join(import.meta.dir, "..", "strict.eslint.config.mjs");
-const STRICT_WEB_CONFIG = join(
-  import.meta.dir,
-  "..",
-  "strict.web.eslint.config.mjs"
-);
 
 const BARE_INTERFACE = "export interface User {\n  id: string;\n}\n";
 const ENUM_DECL = "export enum Color {\n  Red,\n  Blue,\n}\n";
-const AS_CAST =
-  "const n: number = 1;\nexport const s = n as unknown as string;\n";
 
 let dir: string;
 
@@ -139,50 +132,6 @@ describe("core gate honors TSFORGE_CONVENTIONS", () => {
   });
 });
 
-describe("web gate: bare interface names are allowed (no I-prefix)", () => {
-  const I_PREFIXED = "export interface IUser {\n  id: string;\n}\n";
-
-  test("web default accepts a BARE interface — while core rejects the same file", async () => {
-    // The whole point: React/shadcn/TanStack name interfaces `User`, not `IUser`.
-    expect(await erroredRules(STRICT_WEB_CONFIG, BARE_INTERFACE)).not.toContain(
-      NAMING
-    );
-    // Core still enforces the I-prefix on the identical source (no leak).
-    expect(await erroredRules(STRICT_CONFIG, BARE_INTERFACE)).toContain(NAMING);
-  });
-
-  test("web still accepts an I-prefixed interface (bare PascalCase permits both)", async () => {
-    expect(await erroredRules(STRICT_WEB_CONFIG, I_PREFIXED)).not.toContain(
-      NAMING
-    );
-  });
-});
-
-describe("web gate: enum allowance never removes cast bans", () => {
-  test("default: enum banned, cast banned", async () => {
-    expect(await erroredRules(STRICT_WEB_CONFIG, ENUM_DECL)).toContain(NRS);
-    expect(await erroredRules(STRICT_WEB_CONFIG, AS_CAST)).toContain(NRS);
-  });
-
-  test("SAFETY: enums allow → enum ok BUT cast STILL banned", async () => {
-    const enumErrs = await erroredRules(
-      STRICT_WEB_CONFIG,
-      ENUM_DECL,
-      '{"enums":"allow"}'
-    );
-    const castErrs = await erroredRules(
-      STRICT_WEB_CONFIG,
-      AS_CAST,
-      '{"enums":"allow"}'
-    );
-
-    // Enum is now allowed...
-    expect(enumErrs).not.toContain(NRS);
-    // ...but the value-changing cast ban is still enforced.
-    expect(castErrs).toContain(NRS);
-  });
-});
-
 describe("write-time linter honors conventions (overrideConfig path)", () => {
   test("default flags a bare interface; bare-pascal-case does not", async () => {
     const f = join(dir, "wl.ts");
@@ -200,35 +149,5 @@ describe("write-time linter honors conventions (overrideConfig path)", () => {
 
     expect(def.some((m) => m.ruleId === NAMING)).toBe(true);
     expect(bare.some((m) => m.ruleId === NAMING)).toBe(false);
-  });
-
-  // Finding 9: write-time lint must enforce the SAME packs as the gate. The
-  // headless/eval path called makeFileLinter without WEB_PACKS, so the
-  // react-component-architecture moat was inert at write time and only fired at the
-  // gate as an avalanche. Guard: with WEB_PACKS the inline helper is flagged; the
-  // pack must actually be wired into write-time feedback.
-  test("WEB_PACKS makes the component-architecture moat fire at write time", async () => {
-    const f = join(dir, "index.tsx");
-
-    writeFileSync(
-      f,
-      "export function fmt(n: number): string { return n.toFixed(2); }\n" +
-        "export const View = (): JSX.Element => <div>{fmt(1)}</div>;\n"
-    );
-
-    const isArch = (m: { message?: string }): boolean =>
-      /inline helper|Extract this computation|inline types|inline constants/iu.test(
-        m.message ?? ""
-      );
-
-    const withPacks = await makeFileLinter(
-      "react",
-      f.replace(/[^/]+$/u, ""),
-      WEB_PACKS
-    )(f);
-    const noPacks = await makeFileLinter("react", f.replace(/[^/]+$/u, ""))(f);
-
-    expect(withPacks.some(isArch)).toBe(true);
-    expect(noPacks.some(isArch)).toBe(false);
   });
 });

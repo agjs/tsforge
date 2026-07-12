@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { TSC_BIN } from "./tool-paths";
 
 // The strict tsconfig tsforge brings to a greenfield project — strict + the
@@ -71,70 +70,6 @@ const INCREMENTAL_FLAGS = `--incremental --tsBuildInfoFile ${GATE_TSCONFIG_DIR}/
  *  core-gate.ts). Git-ignored alongside the tsc buildinfo so a warm gate never
  *  shows a cache file in `git status`. */
 const GATE_ESLINT_CACHE_FILE = "eslint-gate.cache";
-
-/** The web gate typechecks through this HARNESS-OWNED overlay, NOT the project's
- *  own tsconfig.json. That file is model-editable and tooling (shadcn init, the
- *  model fixing a path) routinely rewrites it and drops the test-file exclude.
- *  When the exclude is gone, tsc pulls the model's co-located test files into the
- *  program and their `import … from "bun:test"` becomes a gate-failing TS2307 —
- *  `bun:test` is a Bun runtime module that `bun test` resolves natively but tsc
- *  can't (it needs the exclude OR @types/bun, and neither is guaranteed to survive
- *  an install flake / a rewrite). The overlay extends the project config (so paths/
- *  jsx/lib still resolve) but FORCES the exclude, so test files are run by `bun test`
- *  and never typechecked — robust to any rewrite of tsconfig.json. (Mirrors the core
- *  gate's `.tsforge/tsconfig.gate.json` overlay.) */
-const WEB_GATE_TSCONFIG_FILE = "tsconfig.web-gate.json";
-const STRICT_WEB_TSCONFIG_OVERLAY = `{
-  "extends": "../tsconfig.json",
-  "compilerOptions": { "noEmit": true, "skipLibCheck": true },
-  "include": ["../**/*.ts", "../**/*.tsx"],
-  "exclude": ["../node_modules", "../dist", "../build", "../.tsforge", "../**/*.test.ts", "../**/*.test.tsx"]
-}
-`;
-
-/** Write the web-gate tsconfig overlay under `.tsforge/` and return the `tsc -p`
- *  target for it. Falls back to the project tsconfig when none exists yet (called
- *  before scaffolding) — the gate is rebuilt once the project is laid down. Sync +
- *  idempotent so the synchronous gate builders can call it without a signature
- *  change. */
-export function ensureWebGateTsconfig(cwd: string): string {
-  if (!existsSync(join(cwd, PROJECT_TSCONFIG))) {
-    return PROJECT_TSCONFIG;
-  }
-
-  const dir = join(cwd, GATE_TSCONFIG_DIR);
-
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, WEB_GATE_TSCONFIG_FILE), STRICT_WEB_TSCONFIG_OVERLAY);
-  ensureGateIgnore(dir);
-
-  return `${GATE_TSCONFIG_DIR}/${WEB_GATE_TSCONFIG_FILE}`;
-}
-
-/** Keep tsforge's `.tsforge/` cache artifacts out of git WITHOUT clobbering a
- *  pre-existing `.tsforge/.gitignore` (a previous core-gate run, or one the user
- *  authored): create it if absent, otherwise APPEND only the entries it's missing
- *  so the web-gate overlay never shows up in `git status`. */
-function ensureGateIgnore(dir: string): void {
-  const ignore = join(dir, ".gitignore");
-  const entries = [
-    WEB_GATE_TSCONFIG_FILE,
-    GATE_TSCONFIG_FILE,
-    GATE_TSBUILDINFO_FILE,
-  ];
-
-  if (!existsSync(ignore)) {
-    writeFileSync(ignore, `${entries.join("\n")}\n`);
-
-    return;
-  }
-
-  const next = gitignoreWithEntries(readFileSync(ignore, "utf8"), entries);
-
-  if (next !== null) {
-    writeFileSync(ignore, next);
-  }
-}
 
 /** Compute new `.gitignore` content with any missing `entries` appended, PRESERVING
  *  the file's EOL style (a CRLF file stays all-CRLF — appending `\n` after CRLF

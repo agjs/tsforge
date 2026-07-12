@@ -10,65 +10,8 @@ import {
   type ILoopState,
   type ILoopEvent,
 } from "../src/loop";
-import { THEME_NAMES, COMPONENT_NAMES } from "../src/web-components";
 import { TsService } from "../src/lsp";
-import { makeFileLinter, WEB_PACKS } from "../src/gate";
 import { TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../src/agent";
-
-// The interactive web session was missing the per-write lint moat (only headless
-// wired `lintFile`), so eslint/architecture violations piled up at the end-of-turn
-// gate instead of surfacing as each file was written. With `lintFile` wired, the
-// write-guard must return the violation in the tool result for the writing turn.
-test("per-write lint moat surfaces a web rule violation on the write itself", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-moat-"));
-
-  try {
-    await Bun.write(
-      join(dir, "tsconfig.json"),
-      JSON.stringify({
-        compilerOptions: {
-          target: "ES2022",
-          module: "ESNext",
-          moduleResolution: "bundler",
-          jsx: "react-jsx",
-          strict: true,
-          skipLibCheck: true,
-        },
-        include: ["**/*.tsx", "**/*.ts"],
-      })
-    );
-
-    const ctx: ILoopCtx = {
-      task: { id: "t", accept: "true", files: ["**/*"] },
-      cwd: dir,
-      tsService: new TsService(dir),
-      report: () => undefined,
-      messages: [],
-      tool: {},
-      gate: {
-        parse: undefined,
-        lintFile: makeFileLinter("react", dir, WEB_PACKS),
-      },
-    };
-    // An `as` cast trips @typescript-eslint/consistent-type-assertions (the web
-    // config bans it) — type-valid so tsc is silent, leaving the eslint violation
-    // to surface cleanly. The per-write moat must catch it on the write itself.
-    const Bad = "export const v: string = 1 as unknown as string;\n";
-
-    await runToolCalls(
-      [{ name: "create", arguments: { file: "bad.ts", content: Bad } }],
-      ctx,
-      freshState()
-    );
-
-    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
-
-    // The web config bans `as` via no-restricted-syntax ("No `as` type casts").
-    expect(toolMsg).toContain("No `as` type casts");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
 
 // P1 (review): add_dependency rewrites package.json even in a narrow-scoped task
 // where it isn't in the editable globs. That sanctioned manifest change MUST still

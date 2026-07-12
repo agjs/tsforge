@@ -4,37 +4,16 @@
 import type { ICliArgs } from "./args";
 import type { ISessionRecord } from "../session-store";
 import { buildGate, makeFileLinter, type FileLinter } from "../gate";
-import { BROWSER_CHECK } from "../gate/tool-paths";
-
-function browserCheckCommand(htmlFile: string): string {
-  return `bun "${BROWSER_CHECK}" "${htmlFile}"`;
-}
 
 /**
- * Resolve the session's gate + label. Starts from the base gate (resumed /
- * explicit / auto strict-TS), then appends a `--browser` render check when asked
- * — so a web build is verified to actually RUN, not just type-check.
+ * Resolve the session's gate + label. Returns the base gate (resumed /
+ * explicit / auto strict-TS).
  */
 export async function resolveGate(
   args: ICliArgs,
   resumed: ISessionRecord | null
 ): Promise<{ accept: string; gateLabel: string; lintFile?: FileLinter }> {
-  const base = await baseGate(args, resumed);
-
-  if (args.browser.length === 0) {
-    return base;
-  }
-
-  const browser = browserCheckCommand(args.browser);
-
-  return {
-    accept: base.accept.length > 0 ? `${base.accept} && ${browser}` : browser,
-    gateLabel:
-      base.accept.length > 0
-        ? `${base.gateLabel} + browser render`
-        : "browser render",
-    ...(base.lintFile === undefined ? {} : { lintFile: base.lintFile }),
-  };
+  return baseGate(args, resumed);
 }
 
 /** The base gate: a resumed session's gate wins, then explicit `--accept`, then
