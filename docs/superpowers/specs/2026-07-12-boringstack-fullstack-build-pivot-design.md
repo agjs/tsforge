@@ -115,6 +115,26 @@ A new driver (sibling to the deleted `runWebGreenfield`, reusing the greenfield 
 **Done = C:** a live run builds ≥1 real full-stack feature (real API + migration + UI)
 that passes BoringStack's own gate, one frozen slice at a time.
 
+## Hard requirement — per-project port isolation (multi-project)
+
+BoringStack's compose **hard-codes host ports** (`5432`/`6379`/`7330`/`7331` + observability
+`9090`/`9093`/`3010`/`8025`/`1025`/`7332`). Compose *project-name* isolation exists
+(`dev.sh` uses `-p boringstack-smoke`) but only namespaces containers/networks/volumes —
+NOT host ports. So scaffolding/booting a **second** project collides and forces the user
+to "kill everything else." Unacceptable for a harness whose purpose is many projects.
+
+**Fix (joint, first-class for Phase C):**
+1. **BoringStack:** env-parameterize compose host ports (`${POSTGRES_PORT:-5432}`, `${API_PORT:-7330}`, …).
+2. **tsforge:** on scaffold, allocate a **unique free port block per project** (scan for free
+   ports / deterministic offset from project name) and write it into that project's `.env`
+   (extends the manifest-driven `.env` writing) + boot under a per-project `-p <name>`.
+3. Model the port fields in the scaffold-manifest so tsforge stays stack-agnostic.
+
+Build-loop alternative (either/or): boot with NO published host ports and have the harness
+discover the mapped port via `docker compose -p <proj> port api 7330` for `generate:api` +
+browser smoke. Until this lands, the harness must boot **one project at a time** and either
+reuse or tear down between builds (and `log()` that it did).
+
 ## Risks
 
 - **Docker boot weight** for the eval loop — mitigate via minimal service set.
