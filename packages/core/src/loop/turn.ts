@@ -19,6 +19,18 @@ import type { IRunResult, Reporter } from "./loop.types";
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
+import { unseenGuidesForErrors } from "./conventions";
+import {
+  buildSteerMessage,
+  essentialMessages,
+  STEER_LADDER_MAX,
+} from "./feedback/steer";
+import {
+  runExpertHandoff,
+  resolveExpertAsk,
+  resolveStuckFile,
+  type ExpertAsk,
+} from "./expert-handoff";
 import {
   executeTool,
   type SetupWebFn,
@@ -42,6 +54,7 @@ import {
   WEB_BROWSE_TOOL,
   PACKAGE_INFO_TOOL,
   PACKAGE_DOCS_TOOL,
+  PULL_CONVENTIONS_TOOL,
   SCRIPT_TOOL,
   GIT_CONTEXT_TOOL,
   READ_IMAGE_TOOL,
@@ -93,6 +106,7 @@ type AdvertisedTool =
   | typeof WEB_BROWSE_TOOL
   | typeof PACKAGE_INFO_TOOL
   | typeof PACKAGE_DOCS_TOOL
+  | typeof PULL_CONVENTIONS_TOOL
   | typeof SCRIPT_TOOL
   | typeof GIT_CONTEXT_TOOL
   | typeof READ_IMAGE_TOOL
@@ -154,10 +168,20 @@ export function toolsFor(
   const script = scriptTools();
   const image = imageTools(caps);
 
+  // pull_conventions — a read-only knowledge tool the model calls to fetch the
+  // boringstack how-to BEFORE writing that kind of code (the PULL complement to the
+  // harness PUSHing guides on first violation). Web-gated: the guides are React/web
+  // conventions, so it belongs to web runs only — advertising it on every scratch/
+  // logic task would dilute the deliberately minimal base tool set (tools-gating).
+  const conventions: AdvertisedTool[] = flags.webTools()
+    ? [PULL_CONVENTIONS_TOOL]
+    : [];
+
   if (flags.noLspTools() || !hasExistingCode) {
     return [
       ...BASE_TOOLS,
       ...HASHLINE_TOOLS,
+      ...conventions,
       ...web,
       ...git,
       ...script,
@@ -169,6 +193,7 @@ export function toolsFor(
   return [
     ...BASE_TOOLS,
     ...HASHLINE_TOOLS,
+    ...conventions,
     ...LSP_TOOLS,
     ...web,
     ...git,
@@ -281,6 +306,33 @@ export interface ILoopState {
   regressions: number;
   /** Count of TTSR rule interrupts this task. Hard cap at 3 to prevent loops. */
   ttsrInterrupts: number;
+  /** Steering ladder: how many times a convergence guard has tripped and escalated
+   *  a steer this run (0 = never stalled). Each escalation resets the guards so the
+   *  model gets fresh cycles at a more directive steer; a run only parks once this
+   *  exceeds the ladder (see checkStuck). */
+  steerLevel: number;
+  /** The steer message to inject on the NEXT feedback push (set when a guard trips,
+   *  cleared once injected). Undefined when no steer is pending. */
+  pendingSteer?: string;
+  /** How many times the EXPERT handoff (the rung above the ladder) has fired this
+   *  run. Capped so a strong-model rescue is a few-shot escape, not a loop. */
+  expertUses?: number;
+  /** Set at the top steer rung: the NEXT feedback push first PRUNES the flailing
+   *  conversation to its essentials (system + original task), so the model's new
+   *  strategy isn't anchored to the dead-end transcript. Cleared once applied. */
+  resetContext?: boolean;
+  /** Convention topics already PUSHED this run (dedupe): the boringstack how-to for
+   *  a rule is attached the FIRST time it's tripped, once per topic — see
+   *  `unseenGuidesForErrors`. */
+  pushedGuides?: Set<string>;
+  /** PLATEAU backstop (oscillation detector): consecutive gate cycles since the error
+   *  count last hit a new ALL-TIME low. Unlike the fine guards it does NOT reset on an
+   *  error-set rotation or a non-improving re-visit — only genuine progress (a new low)
+   *  clears it — so an oscillating model can't hide from it. See `LOOP_LIMITS.plateauGates`. */
+  redGates?: number;
+  /** Lowest gate-error count seen this run, NEVER reset on escalation (unlike
+   *  `bestErrorCount`) — the stable baseline the plateau backstop measures against. */
+  plateauBest?: number;
 }
 
 /** Build the in-process TS LanguageService if the project has a tsconfig. Guarded
@@ -883,54 +935,238 @@ function stuckResult(
   };
 }
 
+/** Cap on expert-handoff attempts per run — the expert is a strong-model call, not
+ *  free; a couple of rescues is plenty before a genuine park. */
+const EXPERT_MAX_USES = 2;
+
+/** Before accepting a stalled PARK, try the expert handoff (the rung ABOVE the
+ *  steering ladder): hand the single most-blocking failing FILE to the configured
+ *  `capabilities.expert` model, apply its fix, and let the primary model continue.
+ *  Returns true when a fix was applied (→ keep looping). No expert configured, no
+ *  failing file, the cap reached, or the expert declining all fall through to false
+ *  (→ park as before). Never throws — a handoff hiccup must not crash the run. */
+export async function tryExpertRescue(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  gateErrors: IErrorItem[],
+  resolveAsk: () => Promise<ExpertAsk | null> = resolveExpertAsk
+): Promise<boolean> {
+  // Every bail is REPORTED — a silent skip here is what hid, for a whole run, WHY
+  // the expert never fired (it turned out to be one of these branches). Now the log
+  // always says why we parked instead of calling the expert.
+  const skip = (why: string): false => {
+    ctx.report({
+      kind: "tool",
+      task: ctx.task.id,
+      message: `expert handoff skipped — ${why}; parking`,
+    });
+
+    return false;
+  };
+
+  if ((state.expertUses ?? 0) >= EXPERT_MAX_USES) {
+    return skip(`already used ${String(EXPERT_MAX_USES)}× this run`);
+  }
+
+  // Resolve the file to repair: prefer a populated `.file`, else parse it from the
+  // error MESSAGE (type-aware-lint names the file in text but doesn't set `.file` —
+  // which skipped the expert on a whole live run). See resolveStuckFile.
+  const targetFile = await resolveStuckFile(ctx.cwd, gateErrors);
+
+  if (targetFile === null) {
+    return skip("no file could be resolved from the failing error(s)");
+  }
+
+  const ask = await resolveAsk();
+
+  if (ask === null) {
+    return skip(
+      "no expert model configured (set capabilities.expert in models.json)"
+    );
+  }
+
+  const content = await Bun.file(join(ctx.cwd, targetFile))
+    .text()
+    .catch(() => "");
+  // All error messages: file-less errors (type-aware-lint) can't be filtered by
+  // file, and the extra context doesn't hurt the expert's single-file fix.
+  const errorText = gateErrors.map((e) => e.message).join("\n");
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task.id,
+    message: `🆘 expert handoff: ${targetFile}`,
+  });
+
+  const outcome = await runExpertHandoff(
+    ctx.cwd,
+    { file: targetFile, content, error: errorText, goal: ctx.task.id },
+    ask
+  );
+
+  ctx.report({ kind: "tool", task: ctx.task.id, message: outcome.note });
+
+  if (!outcome.applied) {
+    return false;
+  }
+
+  // The expert fixed it — give the primary model a fresh run at the ladder to
+  // verify and finish (reset guards + steer level; count the rescue against the cap).
+  state.expertUses = (state.expertUses ?? 0) + 1;
+  state.steerLevel = 0;
+  resetConvergenceGuards(state, gateErrors.length);
+  // Rebase the plateau backstop too (fresh baseline after the expert's fix). This is
+  // ONE of only two places it resets (here + a new all-time low) — deliberately NOT in
+  // resetConvergenceGuards, or a steer escalation would reset the oscillation detector.
+  state.redGates = 0;
+  state.plateauBest = gateErrors.length;
+  ctx.messages.push({
+    role: "user",
+    content: `An expert engineer just repaired \`${targetFile}\` for you. Run the gate to verify, then finish the remaining work.`,
+  });
+
+  return true;
+}
+
+/** Reset the convergence guards so the model gets fresh cycles after a steer
+ *  escalation — else a guard that just tripped would trip again next cycle and
+ *  race up the ladder in a few turns. Ages clear, the whole-set counter zeroes,
+ *  and the net-progress watermark rebases to the current count (so any real drop
+ *  from here counts as progress). */
+function resetConvergenceGuards(state: ILoopState, errorCount: number): void {
+  state.errorAge = new Map();
+  state.gateNoProgress = 0;
+  state.noNewLow = 0;
+  state.bestErrorCount = errorCount;
+}
+
 /** STEP 4 — the three convergence guards, in escalating coarseness: a single
  *  (file,rule) persisting `samePersist` cycles; the WHOLE error set unchanged
  *  `gateStuckRepeats` cycles; and no new error-count low in `noProgressCycles`
- *  cycles. Returns the terminal STUCK result, or null to keep looping. Exported
- *  for unit tests (feed crafted states + error sets → stuck vs continue). */
+ *  cycles. When one trips, the model has STALLED — but instead of killing the run
+ *  (the old behaviour, which discarded hours of work on a wall it could climb with
+ *  a nudge), we ESCALATE A STEER: a more directive message telling it to stop
+ *  flailing and HOW to fix the rule it keeps failing. Only once the steer ladder is
+ *  exhausted (`STEER_LADDER_MAX`) does the run park. Returns the terminal (park)
+ *  result, or null to keep looping — with `state.pendingSteer` set when a steer
+ *  should be injected this cycle. Exported for unit tests. */
 export function checkStuck(
   ctx: ILoopCtx,
   state: ILoopState,
   gateErrors: IErrorItem[],
   turn: number
 ): IRunResult | null {
-  // PRIMARY no-progress stop: the model keeps failing at the SAME (file,rule)
-  // for `samePersist` cycles running — even if other errors churn. Hand back a
-  // concrete blocker rather than spinning to a raw turn cap.
+  // Advance ALL three trackers every cycle (they mutate state), then decide which,
+  // if any, tripped — the coarsest-first order preserves the old diagnosis text.
   const persisted = trackErrorAges(state, gateErrors);
 
-  if (persisted !== null) {
-    return stuckResult(ctx, turn, persistDetail(persisted), "");
-  }
-
-  // Coarser secondary net: the WHOLE error set unchanged this many cycles.
   state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
     ? state.gateNoProgress + 1
     : 0;
   state.prevGateErrors = gateErrors;
 
-  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
-    const detail = `gate unchanged ${String(LOOP_LIMITS.gateStuckRepeats)} cycles (${String(gateErrors.length)} error(s) not converging)`;
+  // Update the net-progress watermark (mutates noNewLow / bestErrorCount).
+  trackNetProgress(state, gateErrors.length);
 
-    return stuckResult(ctx, turn, detail, "stuck — ");
+  // PLATEAU tracker: count gate cycles since the last ALL-TIME-low error count. A new
+  // low is genuine progress (reset); anything else — an error-set rotation, or a return
+  // to a count already seen — is oscillation (climb). `plateauBest` is NEVER rebased on
+  // escalation (unlike the fine guards' `bestErrorCount`), so re-reaching a count the
+  // model already hit doesn't look like progress — which is exactly how a flailing model
+  // evades the fine guards and crawls the ladder over 150+ turns. `redGates` DOES reset
+  // on each escalation (below) so escalations stay spaced, but it climbs right back under
+  // oscillation because no new all-time low arrives — driving the ladder to the expert in
+  // a handful of gates instead of ~150 turns (observed live: v8 still L2 at turn 153).
+  if (gateErrors.length < (state.plateauBest ?? Number.POSITIVE_INFINITY)) {
+    state.plateauBest = gateErrors.length;
+    state.redGates = 0;
+  } else {
+    state.redGates = (state.redGates ?? 0) + 1;
   }
 
-  // NET-PROGRESS stop (the convergence guard, not a turn count): big apps run as
-  // long as the error count keeps dropping; we stop when it churns without getting
-  // closer to green — the through-12 failure mode that evaded both guards above.
-  if (trackNetProgress(state, gateErrors.length)) {
-    const detail = `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(LOOP_LIMITS.noProgressCycles)} cycles (best ${String(state.bestErrorCount)}) — not converging`;
+  // Once steering has begun, the two coarse guards re-trip on a MUCH smaller window
+  // (`steerRetrigger`) so the ladder actually climbs L1→L2→L3 within a few gates —
+  // otherwise, over sparse forced-gates, the useful rungs (esp. the L2 playbook)
+  // never arrive (observed live: only L1 by turn 105). The finer per-error guard
+  // keeps its own threshold (it resets fully each escalation).
+  const stalling = state.steerLevel > 0;
+  const setCap = stalling
+    ? LOOP_LIMITS.steerRetrigger
+    : LOOP_LIMITS.gateStuckRepeats;
+  const progressCap = stalling
+    ? LOOP_LIMITS.steerRetrigger
+    : LOOP_LIMITS.noProgressCycles;
+  const wholeSetStuck = state.gateNoProgress >= setCap;
+  const noNetProgress = state.noNewLow >= progressCap;
+  // The plateau: no NEW ALL-TIME low for `plateauGates` gate cycles. This is the guard
+  // the others miss — it drives escalation under oscillation (rotating error sets + a
+  // count that bounces but never actually improves), so the ladder reaches the expert
+  // fast instead of crawling. Checked LAST so the finer diagnoses win when they apply.
+  const plateaued = (state.redGates ?? 0) >= LOOP_LIMITS.plateauGates;
 
-    return stuckResult(ctx, turn, detail, "stuck — ");
+  const reason =
+    persisted !== null
+      ? persistDetail(persisted)
+      : wholeSetStuck
+        ? `gate unchanged ${String(setCap)} cycles (${String(gateErrors.length)} error(s) not converging)`
+        : noNetProgress
+          ? `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(progressCap)} cycles (best ${String(state.bestErrorCount)})`
+          : plateaued
+            ? `oscillating: ${String(gateErrors.length)} error(s) open, no NEW low in ${String(state.redGates ?? 0)} gate cycles (best ever ${String(state.plateauBest ?? 0)})`
+            : null;
+
+  if (reason === null) {
+    return null; // still converging — keep looping normally
   }
 
-  return null;
+  // Stalled. Escalate a steer and give the model fresh cycles at the new level. Reset the
+  // plateau COUNTER too (spacing — one escalation per plateau window) but NOT plateauBest,
+  // so oscillation keeps re-tripping it and the ladder climbs to the expert.
+  state.steerLevel += 1;
+  state.redGates = 0;
+  resetConvergenceGuards(state, gateErrors.length);
+
+  if (state.steerLevel > STEER_LADDER_MAX) {
+    // Ladder exhausted — the run parks (an expert-model handoff slots in here).
+    return stuckResult(
+      ctx,
+      turn,
+      `${reason} — steering exhausted after ${String(STEER_LADDER_MAX)} escalations`,
+      "parked — "
+    );
+  }
+
+  state.pendingSteer = buildSteerMessage(
+    state.steerLevel,
+    gateErrors,
+    reason,
+    flags.webTools()
+  );
+
+  // At the TOP rung (change-strategy), also RESET the conversation: the flailing
+  // history anchors the model to the dead-end approach it's been repeating. Pruning
+  // to the essentials + a fresh directive breaks that "context poisoning" so the new
+  // strategy isn't fighting the old transcript. injectFeedback does the actual prune.
+  if (state.steerLevel >= STEER_LADDER_MAX) {
+    state.resetContext = true;
+  }
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task.id,
+    message: `⤴ steer L${String(state.steerLevel)}/${String(STEER_LADDER_MAX)}: ${reason}`,
+  });
+
+  return null; // keep looping, with the steer injected this cycle
 }
 
 /** STEP 5 — inject the red-gate feedback (rule docs + the auto-fix notice) into
- *  the conversation as the next user message, so the model fixes in-context. */
-async function injectFeedback(
+ *  the conversation as the next user message, so the model fixes in-context.
+ *  Exported for unit testing (like checkStuck/autoFixStep) — the convention PUSH
+ *  delivery is a seam we need to assert actually reaches the model's messages. */
+export async function injectFeedback(
   ctx: ILoopCtx,
+  state: ILoopState,
   gateErrors: IErrorItem[],
   metaViolations: IMetaRuleViolation[],
   autoFixed: string[]
@@ -942,8 +1178,59 @@ async function injectFeedback(
     metaViolations
   );
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
+  // A pending steer (the model stalled) leads the feedback so it can't be missed,
+  // then is cleared — it's a one-shot escalation for THIS cycle.
+  const steer =
+    state.pendingSteer !== undefined ? `${state.pendingSteer}\n\n` : "";
 
-  ctx.messages.push({ role: "user", content: `${notice}${feedback}` });
+  state.pendingSteer = undefined;
+
+  // Context reset (top steer rung): prune the poisoned transcript to its essentials
+  // IN PLACE (keep the array reference the loop holds), so the fresh directive lands
+  // on a clean slate instead of after dozens of dead-end turns.
+  if (state.resetContext === true) {
+    const before = ctx.messages.length;
+
+    ctx.messages.splice(
+      0,
+      ctx.messages.length,
+      ...essentialMessages(ctx.messages)
+    );
+    state.resetContext = false;
+    // Observable (the reset used to be silent — the same blindness that hid the
+    // expert bug): log that the poisoned transcript was pruned.
+    ctx.report({
+      kind: "tool",
+      task: ctx.task.id,
+      message: `↺ context reset — pruned ${String(before)} messages to ${String(ctx.messages.length)} (fresh start for the change-strategy rung)`,
+    });
+  }
+
+  // PUSH the boringstack HOW-TO the first time a gate error maps to a convention —
+  // right beside the error, not after the steering ladder escalates. Deduped per
+  // run (once per topic), so it teaches without becoming a wall.
+  state.pushedGuides ??= new Set<string>();
+  const guides = unseenGuidesForErrors(gateErrors, state.pushedGuides);
+  const how =
+    guides.length > 0
+      ? `\n\nHOW TO WRITE THIS RIGHT (boringstack):\n${guides.join("\n\n")}`
+      : "";
+
+  // Observable (was silent — the same blindness that hid the expert bug and made it
+  // impossible to tell from a build log whether the model was ever taught a
+  // convention). Log which topics were pushed this cycle so adoption is measurable.
+  if (guides.length > 0) {
+    ctx.report({
+      kind: "tool",
+      task: ctx.task.id,
+      message: `📐 pushed ${String(guides.length)} convention guide(s) beside the gate errors`,
+    });
+  }
+
+  ctx.messages.push({
+    role: "user",
+    content: `${steer}${notice}${feedback}${how}`,
+  });
 }
 
 /** Settle a turn against the gate: auto-fix → gate → meta-rules → (green? done :
@@ -1024,10 +1311,21 @@ export async function settleGate(
   const stuck = checkStuck(ctx, state, gateErrors, turn);
 
   if (stuck !== null) {
+    // A stalled park is the rung where the EXPERT handoff gets a shot before we give
+    // up: if a stronger model repairs the blocking file, keep looping instead of
+    // parking. No expert configured → this is a no-op and the run parks as before.
+    if (
+      stuck.status === RUN_STATUS.stuck &&
+      stuck.reason === STUCK_REASON.stalled &&
+      (await tryExpertRescue(ctx, state, gateErrors))
+    ) {
+      return null;
+    }
+
     return stuck;
   }
 
-  await injectFeedback(ctx, gateErrors, metaViolations, autoFixed);
+  await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixed);
 
   return null;
 }

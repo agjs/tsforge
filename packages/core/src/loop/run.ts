@@ -426,6 +426,7 @@ export async function runTask(
     edits: 0,
     regressions: 0,
     ttsrInterrupts: 0,
+    steerLevel: 0,
   };
   const taskStart = performance.now();
 

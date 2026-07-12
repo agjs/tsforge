@@ -139,6 +139,10 @@ describe("isImplementationFile / hasImplementation", () => {
       "src/components/ui/button.tsx",
       "src/main.ts",
       "src/main.tsx",
+      // laid down by scaffoldWeb in EVERY build — counting them made the
+      // phase-2 skip check always-true (hollow-app bug)
+      "src/routes/__root.tsx",
+      "src/routes/index.tsx",
     ]) {
       expect(isImplementationFile(p)).toBe(false);
     }
@@ -150,6 +154,9 @@ describe("isImplementationFile / hasImplementation", () => {
       "src/store/store.ts",
       "src/views/Home/home.hooks.ts",
       "src/game/game.ts",
+      // real route files beyond the scaffold pair still count
+      "src/routes/projects.tsx",
+      "src/routes/projects.$projectId.tsx",
     ]) {
       expect(isImplementationFile(p)).toBe(true);
     }

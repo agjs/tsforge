@@ -39,4 +39,11 @@ export const flags = {
    *  Default OFF — delegation is on. Set to "1" for the A/B control arm (measure
    *  the harness WITHOUT subagents) or to force a pure single-stream run. */
   noDelegation: (): boolean => isOn(ENV_FLAG.noDelegation),
+  /** Enable the EXPERT HANDOFF: when a build stalls after the full steering ladder,
+   *  hand the blocking file to the configured `capabilities.expert` model. Opt-in
+   *  (default OFF) because it makes a live, paid, non-deterministic API call — so
+   *  unit tests and eval sweeps that drive a run to a stall never hit it unless they
+   *  explicitly ask. Real autonomous builders (the headless web builder, interactive
+   *  sessions) turn it on. Without it, a stall parks with all work kept, as before. */
+  expertRescue: (): boolean => isOn(ENV_FLAG.expertRescue),
 };

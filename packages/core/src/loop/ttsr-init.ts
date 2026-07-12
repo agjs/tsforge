@@ -5,6 +5,7 @@ import type { ILoopState } from "./turn";
 import type { IChatMessage } from "../inference";
 import { TtsrManager, parseProjectRules, type ITtsrRule } from "./ttsr";
 import { DEFAULT_TTSR_RULES } from "./ttsr-defaults";
+import { activeOverlay } from "../self-harness/overlay";
 
 /** Global backstop across ALL rules. Individual noisy rules are silenced
  *  per-rule (TtsrManager.recordInterrupt, cap 2) well before this trips; the
@@ -66,6 +67,25 @@ export async function initTtsrManager(
       kind: "ttsr",
       task: taskId,
       message: `loaded ${added} project/learned TTSR rule(s) from .tsforge/`,
+    });
+  }
+
+  // Self-harness overlay rules (already schema-validated by parseOverlay) —
+  // last so an overlay rule never displaces a same-named built-in/project rule
+  // silently; addRule's first-wins dedup keeps the base harness authoritative.
+  let overlayAdded = 0;
+
+  for (const rule of activeOverlay()?.ttsrRules ?? []) {
+    if (manager.addRule(rule)) {
+      overlayAdded += 1;
+    }
+  }
+
+  if (overlayAdded > 0) {
+    report({
+      kind: "ttsr",
+      task: taskId,
+      message: `loaded ${overlayAdded} self-harness overlay TTSR rule(s)`,
     });
   }
 

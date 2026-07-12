@@ -1,0 +1,41 @@
+export * from "./self-harness.types";
+export {
+  activeOverlay,
+  emptyOverlay,
+  isEmptyPatch,
+  mergeOverlay,
+  modelSlug,
+  overlayPathFor,
+  parseOverlay,
+  resetOverlayCache,
+} from "./overlay";
+export {
+  resolveSplits,
+  listCorpusTasks,
+  DEFAULT_HELD_IN,
+  DEFAULT_HELD_OUT,
+} from "./split";
+export { mineWeaknesses, dominantSignal, type IMinedRun } from "./mine";
+export {
+  evaluateHarness,
+  SPEC_SLOW_THRESHOLD,
+  type IEvaluateOptions,
+  type IEvaluateOutcome,
+} from "./evaluate";
+export {
+  runWebTaskOnce,
+  WEB_SLOW_THRESHOLD,
+  WEB_RUN_TIMEOUT_MS,
+  type IWebEvaluateOptions,
+  type IWebRunOutcome,
+} from "./evaluate-web";
+export { propose, type IProposeOptions } from "./propose";
+export {
+  acceptanceDecision,
+  validateCandidate,
+  type HarnessEvaluator,
+  type IEvaluationOutput,
+  type IAcceptanceDecision,
+} from "./validate";
+export { runSelfHarness, type ISelfHarnessOptions } from "./loop";
+export { emitReport, type IReport } from "./report";

@@ -48,7 +48,9 @@ test("a created .ts logic file WITHOUT a test stays red in a non-git project", a
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-});
+  // Steering keeps a stalled run alive through the ladder before parking (~4× the
+  // old cycle count), so allow more wall-clock than the 5s default.
+}, 20000);
 
 test("adding the test makes the same non-git project go green", async () => {
   const dir = project();

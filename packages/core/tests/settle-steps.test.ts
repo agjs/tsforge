@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { checkStuck, autoFixStep, type ILoopCtx } from "../src/loop/turn";
 import type { ILoopState, ILoopEvent } from "../src/loop";
 import { LOOP_LIMITS, RUN_STATUS } from "../src/loop";
+import { STEER_LADDER_MAX } from "../src/loop/feedback/steer";
 import type { IErrorItem } from "../src/validate";
 
 /** The settleGate steps extracted for unit testing (review item 4): checkStuck
@@ -23,6 +24,7 @@ function freshState(): ILoopState {
     edits: 0,
     regressions: 0,
     ttsrInterrupts: 0,
+    steerLevel: 0,
   };
 }
 
@@ -56,50 +58,57 @@ describe("checkStuck (the composed convergence guards)", () => {
     expect(events.filter((e) => e.kind === "stuck")).toHaveLength(0);
   });
 
-  test("persistent single error → STUCK with the samePersist detail", () => {
+  test("a persisting error ESCALATES steers, then parks once the ladder is exhausted", () => {
     const events: ILoopEvent[] = [];
     const ctx = makeCtx(events);
     const state = freshState();
-    let result: ReturnType<typeof checkStuck> = null;
 
-    // The same (file,rule) key every cycle, with a churn error so ONLY the
-    // primary per-error guard can fire (the whole-set guard sees a new set).
-    for (let i = 0; i < LOOP_LIMITS.samePersist; i += 1) {
-      result = checkStuck(
-        ctx,
-        state,
-        [err("src/a.ts:any"), err(`churn:${String(i)}`, `rule-${String(i)}`)],
-        i + 1
-      );
+    // The same (file,rule) every cycle: the first stall is detected patiently
+    // (samePersist), then steering ESCALATES fast (steerRetrigger) up the ladder.
+    // Drive cycles until the FIRST terminal, then assert the whole ladder was climbed
+    // exactly once — robust to the precise cadence (a generous bound can't loop).
+    let result: ReturnType<typeof checkStuck> = null;
+    const bound =
+      LOOP_LIMITS.samePersist +
+      LOOP_LIMITS.steerRetrigger * (STEER_LADDER_MAX + 2);
+
+    for (let i = 0; i < bound && result === null; i += 1) {
+      result = checkStuck(ctx, state, [err("src/a.ts:any")], i + 1);
     }
 
+    // It parked at the top of the ladder (not an instant kill).
     expect(result?.status).toBe(RUN_STATUS.stuck);
-    // The stuck event was reported exactly once, with a concrete detail.
-    const stuckEvents = events.filter((e) => e.kind === "stuck");
+    expect(result?.detail).toContain("steering exhausted");
+    expect(state.steerLevel).toBe(STEER_LADDER_MAX + 1);
 
-    expect(stuckEvents).toHaveLength(1);
+    // MAX steers were injected (L1..LMAX) before the single park event.
+    const steers = events.filter(
+      (e) => e.kind === "tool" && e.message.includes("steer")
+    );
+
+    expect(steers).toHaveLength(STEER_LADDER_MAX);
+    expect(events.filter((e) => e.kind === "stuck")).toHaveLength(1);
   });
 
-  test("identical whole error set repeating → STUCK via the set guard", () => {
+  test("an unchanging error set steers, then parks (never loops forever)", () => {
     const events: ILoopEvent[] = [];
     const ctx = makeCtx(events);
     const state = freshState();
     let result: ReturnType<typeof checkStuck> = null;
 
-    // Two errors, identical every cycle. The per-error guard is primary and has
-    // the tighter threshold, so a stuck verdict from EITHER guard is fine — what
-    // this pins is that an unchanging set terminates instead of looping forever.
-    const cycles = Math.max(
-      LOOP_LIMITS.gateStuckRepeats,
-      LOOP_LIMITS.samePersist
-    );
+    // Two errors, identical every cycle. Steering keeps the run alive through the
+    // ladder, but an unchanging set must EVENTUALLY park — never loop forever. Give
+    // it well past the ladder's height and assert it lands on a terminal park.
+    const cap =
+      LOOP_LIMITS.samePersist * (STEER_LADDER_MAX + 1) +
+      LOOP_LIMITS.gateStuckRepeats;
 
-    for (let i = 0; i < cycles && result === null; i += 1) {
+    for (let i = 0; i < cap && result?.status !== RUN_STATUS.stuck; i += 1) {
       result = checkStuck(ctx, state, [err("a:1"), err("b:2")], i + 1);
     }
 
     expect(result?.status).toBe(RUN_STATUS.stuck);
-    expect(result?.detail).toBeDefined();
+    expect(result?.detail).toContain("steering exhausted");
   });
 
   test("a shrinking error count never trips any guard (converging run)", () => {
@@ -115,6 +124,47 @@ describe("checkStuck (the composed convergence guards)", () => {
 
       expect(checkStuck(ctx, state, set, 6 - n)).toBeNull();
     }
+  });
+
+  test("the plateau ESCALATES the ladder even when no fine guard trips (fixes the slow climb)", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    // Fresh state (all fine-guard counters at 0, so none can trip on a single call), but
+    // one gate short of the plateau, with the all-time low (1) already hit. THIS gate is
+    // pure oscillation. If it escalates, the PLATEAU is the only possible trigger — this
+    // is the guard v6/v8 lacked, which let them crawl 150+ turns without reaching L3.
+    const state: ILoopState = {
+      ...freshState(),
+      redGates: LOOP_LIMITS.plateauGates - 1,
+      plateauBest: 1,
+    };
+
+    const result = checkStuck(ctx, state, [err("x:1")], 5);
+
+    expect(result).toBeNull(); // escalated + keep looping (not parked, not ignored)
+    expect(state.steerLevel).toBe(1); // climbed a rung on the plateau alone
+    expect(
+      events.some((e) => e.kind === "tool" && e.message.includes("oscillating"))
+    ).toBe(true);
+  });
+
+  test("sustained oscillation climbs the WHOLE ladder to the expert-park FAST (not 150 turns)", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+    let result: ReturnType<typeof checkStuck> = null;
+
+    // Every cycle: a DIFFERENT error key (set rotates → the whole-set/persist guards keep
+    // resetting) but the count never drops below the all-time low → only the plateau sees
+    // it. It must reach the terminal park within a tight bound — the whole point of the fix.
+    const bound = LOOP_LIMITS.plateauGates * (STEER_LADDER_MAX + 1) + 5;
+
+    for (let i = 0; i < bound && result?.status !== RUN_STATUS.stuck; i += 1) {
+      result = checkStuck(ctx, state, [err(`k${String(i)}:1`)], i + 1);
+    }
+
+    expect(result?.status).toBe(RUN_STATUS.stuck); // reached the expert-park
+    expect(result?.detail).toContain("steering exhausted");
   });
 });
 

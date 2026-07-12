@@ -28,6 +28,7 @@ export const TOOL_NAME = {
   addDependency: "add_dependency",
   packageInfo: "package_info",
   packageDocs: "package_docs",
+  pullConventions: "pull_conventions",
   webFetch: "web_fetch",
   webSearch: "web_search",
   webBrowse: "web_browse",
@@ -76,6 +77,7 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   [TOOL_NAME.addDependency]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.packageInfo]: { readOnly: true, scriptExposable: true },
   [TOOL_NAME.packageDocs]: { readOnly: true, scriptExposable: true },
+  [TOOL_NAME.pullConventions]: { readOnly: true, scriptExposable: true },
   // Web tools are read-only (no workspace mutation), so they're usable in plan
   // mode too — research while planning. Network egress here is structured and
   // opt-in (TSFORGE_WEB), unlike the raw `run` curl path plan mode blocks.
@@ -407,6 +409,35 @@ export const PACKAGE_INFO_TOOL = {
     },
   },
 };
+
+export const PULL_CONVENTIONS_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.pullConventions,
+    description:
+      "Pull the boringstack HOW-TO guide for a topic BEFORE you write that kind of code — so you write it right the first time instead of getting a gate error. Call it when you're about to create a component, write JSX, place state, add a route/form, or hit a rule you're unsure how to satisfy. Returns the exact pattern the gate enforces.",
+    parameters: {
+      type: "object",
+      properties: {
+        topic: {
+          type: "string",
+          enum: [
+            "component-anatomy",
+            "file-layout",
+            "jsx",
+            "state",
+            "no-casts",
+            "routing",
+            "forms",
+          ],
+          description:
+            "which guide: component-anatomy (where a component lives + one-per-file), file-layout (no inline types/constants/helpers), jsx (no computation in markup), state (hooks, not component body), no-casts (type guards instead of `as`/`!`), routing (thin route files), forms.",
+        },
+      },
+      required: ["topic"],
+    },
+  },
+} as const;
 
 export const PACKAGE_DOCS_TOOL = {
   type: "function",

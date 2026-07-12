@@ -62,6 +62,7 @@ import {
   runToolCalls,
   settleGate,
   toolsFor,
+  tryExpertRescue,
 } from "./turn";
 
 /**
@@ -569,6 +570,7 @@ export class Session {
       edits: 0,
       regressions: 0,
       ttsrInterrupts: 0,
+      steerLevel: 0,
     };
   }
 
@@ -1326,8 +1328,18 @@ export class Session {
     // scaffold_web emitted as text). The retry is a FORCED tool call, which is
     // grammar-constrained — so it always parses.
     const leaked = this.hasGate && leaksToolMarkup(content);
+    // An EMPTY no-tool reply mid-gated-build is never a valid conclusion — it
+    // is the signature of a degenerate/failed provider response (captured
+    // live: a 675ms "reply" during an endpoint flap ended a 180-turn build as
+    // "responded" with only the scaffold on disk). Nudge-with-cap, like the
+    // other mid-build non-answers.
+    const emptyMidBuild = this.hasGate && content.trim().length === 0;
 
-    if (!leaked && (!this.hasGate || !looksLikeCodeDump(content))) {
+    if (
+      !leaked &&
+      !emptyMidBuild &&
+      (!this.hasGate || !looksLikeCodeDump(content))
+    ) {
       return { result: { status: "responded", turns: turn } };
     }
 
@@ -1338,8 +1350,11 @@ export class Session {
         message: leaked
           ? "⚠ model kept emitting malformed tool-call text instead of real " +
             "calls — stopped. See malformed-toolcall-format (server parser)."
-          : "⚠ model kept writing files as chat messages instead of creating " +
-            "them — stopped. Try a smaller step (e.g. one file at a time).",
+          : emptyMidBuild
+            ? "⚠ model kept returning empty replies mid-build — stopped " +
+              "(endpoint likely degraded; the run is incomplete, not done)."
+            : "⚠ model kept writing files as chat messages instead of creating " +
+              "them — stopped. Try a smaller step (e.g. one file at a time).",
       });
 
       return { result: { status: "stuck", turns: turn } };
@@ -1350,7 +1365,9 @@ export class Session {
       task: SESSION_ID,
       message: leaked
         ? "↳ malformed tool-call text (no tool ran) — forcing a real call"
-        : "↳ no files written — nudging the model to build with tools",
+        : emptyMidBuild
+          ? "↳ empty reply during a gated build — asking the model to continue"
+          : "↳ no files written — nudging the model to build with tools",
     });
     this.ctx.messages.push({
       role: "user",
@@ -1568,7 +1585,7 @@ export class Session {
     }
 
     const readonlyStreak = carry.readonlyStreak + 1;
-    const spin = this.readonlySpinStop(
+    const spin = await this.readonlySpinStop(
       readonlyStreak,
       carry.readonlyRecoveries,
       turn
@@ -1878,12 +1895,18 @@ export class Session {
       return "";
     }
 
+    // Show EVERY outstanding gate error — the model can't finish work it can't
+    // see. The ceiling is only a runaway backstop for a degenerate cascade, not
+    // a feedback limit (was 5, which hid most errors and caused whack-a-mole).
+    const MAX_GATE_ERRORS_SHOWN = 200;
     const lines = errs
-      .slice(0, 5)
+      .slice(0, MAX_GATE_ERRORS_SHOWN)
       .map((e) => `  - ${e.message}`)
       .join("\n");
     const more =
-      errs.length > 5 ? `\n  …and ${String(errs.length - 5)} more` : "";
+      errs.length > MAX_GATE_ERRORS_SHOWN
+        ? `\n  …and ${String(errs.length - MAX_GATE_ERRORS_SHOWN)} more`
+        : "";
 
     return (
       `\n\nA passing \`bun run build\` is NOT the gate. The gate is still RED — ` +
@@ -1891,16 +1914,28 @@ export class Session {
     );
   }
 
-  private readonlySpinStop(
+  private async readonlySpinStop(
     streak: number,
     recoveries: number,
     turn: number
-  ): ISendResult | "retry" | null {
+  ): Promise<ISendResult | "retry" | null> {
     if (streak < READONLY_STREAK_LIMIT) {
       return null;
     }
 
     if (recoveries >= MAX_READONLY_RECOVERIES) {
+      // This is a "stuck" exit too, so the EXPERT handoff gets its shot HERE before
+      // we give up — build v3 died on exactly this path (256 turns of read-only
+      // spinning) without ever reaching the expert, because the rescue was only
+      // wired to settleGate's stalled-park. If a stronger model repairs the blocking
+      // file, keep looping instead of stopping.
+      if (
+        this.hasGate &&
+        (await tryExpertRescue(this.ctx, this.state, this.state.prevGateErrors))
+      ) {
+        return "retry";
+      }
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,

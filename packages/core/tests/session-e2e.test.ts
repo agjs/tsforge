@@ -44,6 +44,33 @@ describe("session e2e — full agent loop via a scripted model", () => {
     expect(creates[0]?.file).toContain("hello.ts");
   });
 
+  test("an EMPTY no-tool reply mid-gated-build nudges and continues, never ends as 'responded'", async () => {
+    // Captured live (pm-platform, 2026-07-10): a degenerate 675ms empty reply
+    // during an endpoint flap ended a 180-turn build as "responded". The fix
+    // routes empty mid-build replies through the nudge-with-cap path.
+    const s = await runScriptedSession({
+      task: "build the thing",
+      accept: 'node -e "process.exit(0)"',
+      turns: [
+        { content: "" }, // degenerate empty reply (provider glitch)
+        {
+          toolCalls: [
+            call("create", { file: "b.ts", content: "export const b = 1;\n" }),
+          ],
+        },
+        { content: "done" },
+      ],
+    });
+
+    expect(s.fileExists("b.ts")).toBe(true);
+    expect(s.status).toBe("done");
+    expect(
+      s
+        .eventsOfKind("tool")
+        .some((e) => e.message.includes("empty reply during a gated build"))
+    ).toBe(true);
+  });
+
   test("a passing gate (accept) confirms the change as done", async () => {
     const s = await runScriptedSession({
       task: "create a file then finish",

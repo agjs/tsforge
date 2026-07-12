@@ -40,6 +40,7 @@ import {
 } from "../src/config/tsforge-config";
 import { makeSpawnAgentFn } from "../src/cli/spawn-runner";
 import { renderEvent } from "../src/render";
+import { activeOverlay } from "../src/self-harness";
 import { logsDir } from "../src/session-store";
 import type { WebFramework } from "../src/web-templates";
 import {
@@ -165,6 +166,20 @@ async function main(): Promise<void> {
     process.argv = process.argv.filter((a) => a !== "--plan");
   }
 
+  // `--log-file <path>`: write the JSONL event log to a CALLER-CHOSEN path
+  // instead of the stamped default under ~/.tsforge/logs — the contract that
+  // lets a driver (self-harness evaluate-web) find this run's events
+  // deterministically. Stripped before positional-arg logic, like --plan.
+  let logFileOverride: string | undefined;
+  const logFlagAt = process.argv.indexOf("--log-file");
+
+  if (logFlagAt >= 0) {
+    logFileOverride = process.argv[logFlagAt + 1];
+    process.argv = process.argv.filter(
+      (_, i) => i !== logFlagAt && i !== logFlagAt + 1
+    );
+  }
+
   const request = resolveRequest();
 
   if (request === undefined) {
@@ -215,7 +230,7 @@ async function main(): Promise<void> {
   }
 
   const agentLog = join(dir, "agent.log");
-  const logFile = join(logsDir(), `${stamp}-headless.jsonl`);
+  const logFile = logFileOverride ?? join(logsDir(), `${stamp}-headless.jsonl`);
 
   mkdirSync(logsDir(), { recursive: true });
 
@@ -273,7 +288,15 @@ async function main(): Promise<void> {
     // Offer the themed-UI-primitives tool so the model generates button/card/input/
     // etc. (tested, theme-coherent) instead of re-authoring them every build.
     scaffoldUi: framework === "react",
-    guidance: webGuidance(framework),
+    // Self-harness overlay: the `extra` prompt block (append-only, byte-identical
+    // when no overlay is active) rides the web guidance — script-level injection
+    // so scaffold/ never imports self-harness/ (module-boundaries). The named
+    // implement-path blocks deliberately do NOT apply here: they'd contradict
+    // the web-specific build guidance.
+    guidance:
+      activeOverlay()?.promptBlocks.extra === undefined
+        ? webGuidance(framework)
+        : `${webGuidance(framework)}\n\n${activeOverlay()?.promptBlocks.extra?.text ?? ""}`,
     contextWindow,
     // ADAPTIVE THINKING (measured ~80% of build time is REPAIR): default thinking
     // OFF for fast creation; the Session flips it ON automatically while errors are

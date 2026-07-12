@@ -1221,29 +1221,46 @@ test("a never-yielding edit loop is bounded: a gate is FORCED and the guards sto
 
   try {
     const gateLog = join(dir, "gate-runs.log");
-    // The model NEVER yields — it overwrites one file it authored, with new content,
-    // every single turn (the index.css churn pathology). Before the fix the full
-    // gate only ran on yield, so it never ran → the no-progress guards never ticked
-    // → it churned to the maxTurns backstop. Now a gate is FORCED after
+    // The model NEVER yields — it churns one file it authored every single turn
+    // (creates it once, then EDITs it with new content forever). Before the fix the
+    // full gate only ran on yield, so it never ran → the no-progress guards never
+    // ticked → it churned to the maxTurns backstop. Now a gate is FORCED after
     // FULL_GATE_EVERY edits, surfacing the failure AND advancing the guards.
+    // (The churn is via `edit`, not create-overwrite — `create` no longer overwrites
+    // an existing file; that whole-file-rewrite escape hatch was removed.)
     let n = 0;
     const provider: IProvider = {
       async complete() {
         n += 1;
 
-        return {
-          content: "",
-          toolCalls: [
-            {
-              id: String(n),
-              name: "create",
-              arguments: {
-                file: "churn.ts",
-                content: `export const x = ${n};\n`,
-              },
-            },
-          ],
-        };
+        return n === 1
+          ? {
+              content: "",
+              toolCalls: [
+                {
+                  id: "1",
+                  name: "create",
+                  arguments: {
+                    file: "churn.ts",
+                    content: "export const x = 0;\n",
+                  },
+                },
+              ],
+            }
+          : {
+              content: "",
+              toolCalls: [
+                {
+                  id: String(n),
+                  name: "edit",
+                  arguments: {
+                    file: "churn.ts",
+                    oldString: `export const x = ${n - 2};`,
+                    newString: `export const x = ${n - 1};`,
+                  },
+                },
+              ],
+            };
       },
     };
     const session = await Session.create({
@@ -1260,8 +1277,11 @@ test("a never-yielding edit loop is bounded: a gate is FORCED and the guards sto
       : 0;
 
     expect(ran).toBeGreaterThan(0); // a gate was forced despite the model never yielding
-    expect(result.status).toBe("stuck"); // the no-progress guards stopped it
-    expect(result.turns).toBeLessThan(120); // before the runaway backstop
+    expect(result.status).toBe("stuck"); // the run terminated (steered, then stopped)
+    // Steering keeps a stalled run alive with escalating nudges, so a genuinely
+    // hopeless churn rides the ladder and may use the full turn budget — but it is
+    // STILL bounded (never an infinite loop); maxTurns is the ultimate backstop.
+    expect(result.turns).toBeLessThanOrEqual(120);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

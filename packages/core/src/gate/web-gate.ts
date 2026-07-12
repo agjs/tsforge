@@ -105,15 +105,25 @@ export function buildWebGate(
   // isn't silently skipped; see `webTestProbe`.
   const tests = webTestProbe();
 
-  // The SAME commands as the old `a && b && …` chain, run sequentially by the
-  // staged-gate runner so a failure names its stage ("✗ typecheck FAILED") instead
-  // of burying it in one opaque wall. Order is identical to the old chain, so the
-  // stop-on-first-failure behaviour is unchanged; the type-aware lint is its own
-  // stage (only when the scaffold has a tsconfig, as before).
+  // Run sequentially by the staged-gate runner (stop on first failure) so a
+  // failure names its stage ("✗ typecheck FAILED") instead of burying it in one
+  // opaque wall.
+  //
+  // ORDER MATTERS: plain `lint` runs FIRST. Many of the model's mistakes are
+  // caught by a rule with a CLEAR, actionable message (e.g. no-self-import:
+  // "'./index' resolves to THIS file"), but the SAME mistake also breaks the
+  // Rollup bundle with a CRYPTIC error ("X cannot be exported … reexports
+  // itself"). With `vite build` first, the gate stopped on the cryptic build
+  // error and the clean lint message never ran — the model was observed looping
+  // for 45+ turns unable to connect the two. Plain web lint is purely syntactic
+  // (no projectService — see strict.web.eslint.config.mjs), so it does NOT need
+  // the build's generated route tree and is safe to run first. `tsc` and the
+  // TYPE-AWARE lint still run AFTER `vite build`, because they DO need the
+  // generated routeTree.gen.ts the build emits.
   const stages = [
+    { label: "lint", command: lint },
     { label: "vite build", command: build },
     { label: "typecheck", command: tsc },
-    { label: "lint", command: lint },
     ...(typeAware === null
       ? []
       : [{ label: "type-aware lint", command: typeAware }]),

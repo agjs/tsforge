@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask, LOOP_LIMITS } from "../src/loop";
+import { STEER_LADDER_MAX } from "../src/loop/feedback/steer";
 import { scripted, runStep, STOP } from "./stub-provider";
 
 async function tmp(): Promise<string> {
@@ -74,9 +75,12 @@ test("stuck when it claims done but the gate stays red, unchanged", async () => 
   const dir = await tmp();
 
   try {
-    // Always stops without fixing → gate red with the SAME error every time, so
-    // the per-(file,rule) persistence guard trips at `samePersist` cycles (the
-    // primary no-progress stop), well before any raw turn cap.
+    // Always stops without fixing → gate red with the SAME error every time. The
+    // per-(file,rule) guard trips every `samePersist` cycles, but instead of an
+    // instant kill the loop now ESCALATES a steer each time and resets — so it only
+    // PARKS after the ladder is exhausted, at `samePersist × (STEER_LADDER_MAX + 1)`
+    // cycles. Still bounded, well before any raw turn cap; the model just gets more
+    // (escalating) chances first.
     const r = await runTask(
       { id: "1", accept: "test -f never.txt", files: [] },
       dir,
@@ -85,7 +89,14 @@ test("stuck when it claims done but the gate stays red, unchanged", async () => 
 
     expect(r.status).toBe("stuck");
     expect(r.reason).toBe("stalled");
-    expect(r.cycles).toBe(LOOP_LIMITS.samePersist);
+    // Parked at the top of the ladder: the first stall is detected patiently
+    // (samePersist), then steering escalates fast (steerRetrigger) to the park — so
+    // it stops in a handful of cycles, well before any raw turn cap.
+    expect(r.cycles).toBeGreaterThanOrEqual(LOOP_LIMITS.samePersist);
+    expect(r.cycles).toBeLessThanOrEqual(
+      LOOP_LIMITS.samePersist +
+        LOOP_LIMITS.steerRetrigger * (STEER_LADDER_MAX + 1)
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

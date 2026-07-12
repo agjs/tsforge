@@ -58,6 +58,30 @@ export const LOOP_LIMITS = {
    */
   noProgressCycles: 12,
   /**
+   * Once STEERING has begun (a stall was detected and the first steer fired),
+   * escalate FAST: climb to the next, more directive rung after only this many
+   * non-improving gate cycles, instead of waiting another full `noProgressCycles`/
+   * `gateStuckRepeats` window. A live run reached only L1 by turn 105 because the
+   * coarse windows re-tripped too slowly over sparse forced-gates, so the L2 rule
+   * PLAYBOOK — the rung that actually hands the fix recipe — never arrived. Small,
+   * so L1→L2→L3→(expert/park) happens in a handful of gates once it's clear the
+   * model is stuck, not dozens.
+   */
+  steerRetrigger: 2,
+  /**
+   * PLATEAU (oscillation) backstop. The fine guards above reset on every intermittent
+   * success AND every error-SET rotation, so a model that OSCILLATES — fixes the stub
+   * stage, breaks lint; fixes lint, re-breaks a stub; never reaching green — crawls up
+   * the ladder over 150+ turns and the expert handoff at the top is effectively
+   * unreachable (observed live: 166 turns, only 3 escalations, expert fired 0×). This
+   * counts gate cycles since the last ALL-TIME-LOW error count (genuine convergence
+   * resets it; oscillation does not). Once the full ladder has deployed (L3 + context
+   * reset already tried) and this many further gate cycles pass with no new low, hand
+   * off to the expert NOW instead of waiting for the glacial natural escalation. This
+   * changes only WHEN the escape hatch opens — it relaxes no gate rule.
+   */
+  plateauGates: 4,
+  /**
    * Above this many chars of combined file content, the seed prompt sends a
    * navigable project MAP instead of full dumps. Below it, full dumps.
    */
