@@ -53,6 +53,36 @@ Without these test files, the build will fail.
 
 ---
 
+## BoringStack API conventions — write it RIGHT the first time
+
+**Route tests** (\`${camel}.routes.test.ts\`): test THROUGH the app — NEVER call route handlers directly (that triggers unsatisfiable Elysia handler generic types, a common failure). Use this exact shape:
+\`\`\`ts
+import { beforeEach, describe, expect, test } from "bun:test";
+import { createApp } from "../../../src/config/app";
+import { cleanDatabase, requireDb } from "../../helpers/db";
+
+describe("${camel} routes", () => {
+  beforeEach(async () => {
+    if (await requireDb()) await cleanDatabase();
+  });
+  test("GET /api/v1/${camel} requires auth", async () => {
+    const res = await createApp().handle(
+      new Request("http://localhost/api/v1/${camel}")
+    );
+    expect(res.status).toBe(401);
+  });
+});
+\`\`\`
+Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` or the schema in a test.
+
+**Routes** (\`${camel}.routes.ts\`): a schema on EVERY route; NO per-handler try/catch (Elysia \`.onError\` handles errors centrally); NEVER \`throw new Error\` — throw \`ApiErrors.notFound(...)\` / \`.validation(...)\` / \`.unauthorized(...)\`.
+
+**Service** (\`${camel}.service.ts\`): Drizzle + logic; throw \`ApiErrors.*\`; \`catch (err: unknown)\` → \`getErrorMessage(err)\`; singleton export.
+
+**TypeScript (strict-type-checked, all enforced):** no \`any\`, no \`as\` (only \`as const\`), no non-null \`!\`; \`I\`-prefixed interfaces; explicit return types on exported functions; UPPER_CASE top-level constants; no magic string literals in \`===\`/\`switch\` (reference a typed constants object); no inline \`eslint-disable\`.
+
+---
+
 ## Domain-Fill Instructions
 
 - **Use real fields**: Populate schemas and types with meaningful fields that match the resource's behavior (${feature.desc}). Avoid placeholder names like \`field1\`, \`data\`, or \`value\`.
