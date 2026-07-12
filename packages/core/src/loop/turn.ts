@@ -320,6 +320,11 @@ export interface ILoopState {
    *  a rule is attached the FIRST time it's tripped, once per topic — see
    *  `unseenGuidesForErrors`. */
   pushedGuides?: Set<string>;
+  /** The backend ships a convention library, so the loop may PUSH its how-to guides
+   *  beside gate errors. Set from `ISessionConfig.pullConventions` — the SAME signal
+   *  that offers the `pull_conventions` tool, so push + pull activate together. A
+   *  plain build (no convention backend) leaves it off and gets neither. */
+  conventionsEnabled?: boolean;
   /** PLATEAU backstop (oscillation detector): consecutive gate cycles since the error
    *  count last hit a new ALL-TIME low. Unlike the fine guards it does NOT reset on an
    *  error-set rotation or a non-improving re-visit — only genuine progress (a new low)
@@ -1203,9 +1208,14 @@ export async function injectFeedback(
 
   // PUSH the boringstack HOW-TO the first time a gate error maps to a convention —
   // right beside the error, not after the steering ladder escalates. Deduped per
-  // run (once per topic), so it teaches without becoming a wall.
+  // run (once per topic), so it teaches without becoming a wall. Gated on the
+  // backend's convention library (symmetric with the pull_conventions tool): a
+  // plain build never gets boringstack-flavored guidance injected.
   state.pushedGuides ??= new Set<string>();
-  const guides = unseenGuidesForErrors(gateErrors, state.pushedGuides);
+  const guides =
+    state.conventionsEnabled === true
+      ? unseenGuidesForErrors(gateErrors, state.pushedGuides)
+      : [];
   const how =
     guides.length > 0
       ? `\n\nHOW TO WRITE THIS RIGHT (boringstack):\n${guides.join("\n\n")}`

@@ -116,6 +116,9 @@ describe("convention PUSH delivery (the guide actually reaches the model + is ob
       regressions: 0,
       ttsrInterrupts: 0,
       steerLevel: 0,
+      // These tests cover the boringstack convention PUSH — the backend that ships
+      // the library turns it on. A plain build (conventionsEnabled unset) never pushes.
+      conventionsEnabled: true,
     };
   }
 
@@ -160,5 +163,23 @@ describe("convention PUSH delivery (the guide actually reaches the model + is ob
     expect(ctx.messages.at(-1)?.content ?? "").not.toContain(
       "HOW TO WRITE THIS RIGHT"
     );
+  });
+
+  test("a plain build (conventionsEnabled off) is NEVER pushed boringstack how-to", async () => {
+    // Decoupling guarantee: a backend without a convention library gets the gate
+    // error + rule docs, but no boringstack-flavored guide injected. Symmetric with
+    // pull_conventions being withheld unless the backend opts in.
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = { ...freshState(), conventionsEnabled: false };
+
+    await injectFeedback(ctx, state, [asCastError], [], []);
+
+    expect(ctx.messages.at(-1)?.content ?? "").not.toContain(
+      "HOW TO WRITE THIS RIGHT"
+    );
+    expect(
+      events.some((e) => e.kind === "tool" && e.message.includes("📐 pushed"))
+    ).toBe(false);
   });
 });

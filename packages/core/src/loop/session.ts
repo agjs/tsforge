@@ -532,6 +532,8 @@ export class Session {
       regressions: 0,
       ttsrInterrupts: 0,
       steerLevel: 0,
+      // Same signal as the pull_conventions tool: push + pull activate together.
+      conventionsEnabled: cfg.pullConventions === true,
     };
   }
 
