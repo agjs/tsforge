@@ -58,6 +58,44 @@ export function archetypeStep(): IWizardStep {
   };
 }
 
+/** Free-text step: the initial superuser (admin) login email. boringstack only —
+ *  seeded when the stack first boots. Blank = skip (no superuser seeded). */
+function superuserEmailStep(): IWizardStep {
+  return {
+    key: "superuserEmail",
+    kind: "text",
+    title: "Admin email (optional)",
+    explanation:
+      "Email for the initial admin account, seeded when the stack first boots. Leave blank to skip and sign up in-app instead.",
+    evidence: [],
+    options: [],
+    placeholder: "admin@example.com",
+    validate: (v) =>
+      v.length === 0 || /^[^@\s]+@[^@\s]+\.[^@\s]+$/u.test(v)
+        ? null
+        : "Enter a valid email address, or leave blank to skip.",
+  };
+}
+
+/** Masked free-text step: the initial superuser password (boringstack only). */
+function superuserPasswordStep(): IWizardStep {
+  return {
+    key: "superuserPassword",
+    kind: "text",
+    mask: true,
+    title: "Admin password (optional)",
+    explanation:
+      "Password for the initial admin account (min 12 characters). Leave blank to skip.",
+    evidence: [],
+    options: [],
+    placeholder: "••••••••••••",
+    validate: (v) =>
+      v.length === 0 || v.length >= 12
+        ? null
+        : "Use at least 12 characters, or leave blank to skip.",
+  };
+}
+
 /** Resolve the scaffold destination from a user-typed folder name: a plain name
  *  under `cwd`, rejecting empties, path separators, and traversal (no escaping the
  *  workspace), and refusing to overwrite an existing directory. Pure enough to test
@@ -149,10 +187,15 @@ export async function openScaffoldInRepl(
       selectedArchetype === "boringstack" ? "boringstack" : "astro";
     const stack = "dev";
 
-    // Step 2: project directory name + the archetype's configuration steps.
+    // Step 2: project directory name, an optional initial admin login (boringstack
+    // only — it has an auth/users layer), then the archetype's configuration steps.
     const configSteps = buildScaffoldSteps(manifest, archetype, stack);
+    const superuserSteps =
+      archetype === "boringstack"
+        ? [superuserEmailStep(), superuserPasswordStep()]
+        : [];
     const configState = await runWizard(
-      [projectDirStep(), ...configSteps],
+      [projectDirStep(), ...superuserSteps, ...configSteps],
       color,
       {
         title: "tsforge scaffold",
@@ -181,8 +224,15 @@ export async function openScaffoldInRepl(
 
     const { dest } = resolved;
 
-    // Step 3: Convert state to answers
-    const answers = stateToAnswers(manifest, archetype, stack, configState);
+    // Step 3: Convert state to answers, folding in the optional superuser (only when
+    // BOTH email + password were given — the seed needs a complete credential pair).
+    const base = stateToAnswers(manifest, archetype, stack, configState);
+    const suEmail = configState.text.superuserEmail ?? "";
+    const suPassword = configState.text.superuserPassword ?? "";
+    const answers =
+      suEmail.length > 0 && suPassword.length > 0
+        ? { ...base, superuser: { email: suEmail, password: suPassword } }
+        : base;
 
     try {
       const outcome = await runScaffold(manifest, answers, dest, {

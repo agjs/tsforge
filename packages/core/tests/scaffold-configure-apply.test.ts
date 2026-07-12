@@ -164,3 +164,60 @@ describe("applyScaffold — astro archetype", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("applyScaffold — initial superuser", () => {
+  test("an initial superuser is written to compose/.env (password redacted in summary)", async () => {
+    const plan = answersToPlan(MANIFEST, {
+      archetype: "boringstack",
+      stack: "dev",
+      values: { project: "acme", ghcrOwner: "acme-corp", domain: "acme.com" },
+      superuser: { email: "admin@acme.com", password: "hunter2-hunter2" },
+    });
+    const { run } = recorder();
+    const { fs, store } = memFs({
+      [`${DIR}/infra/compose/compose/.env.example`]: "STACK=dev\n",
+    });
+
+    let port = 40000;
+    const result = await applyScaffold(DIR, MANIFEST, plan, {
+      run,
+      fs,
+      allocatePort: () => Promise.resolve(port++),
+    });
+
+    const compose = store.get(`${DIR}/infra/compose/compose/.env`) ?? "";
+
+    expect(compose).toContain("SUPERUSER_EMAIL=admin@acme.com");
+    expect(compose).toContain("SUPERUSER_PASSWORD=hunter2-hunter2");
+    // The password must NEVER appear in the (logged) summary — only the key.
+    expect(result.summary.join("\n")).toContain(
+      "SUPERUSER_EMAIL=admin@acme.com"
+    );
+    expect(result.summary.join("\n")).not.toContain("hunter2-hunter2");
+  });
+
+  test("no superuser fields are written when none was provided", async () => {
+    const plan = answersToPlan(MANIFEST, {
+      archetype: "boringstack",
+      stack: "dev",
+      values: { project: "acme", ghcrOwner: "acme-corp", domain: "acme.com" },
+    });
+    const { run } = recorder();
+    const { fs, store } = memFs({
+      [`${DIR}/infra/compose/compose/.env.example`]: "STACK=dev\n",
+    });
+
+    let port = 41000;
+
+    await applyScaffold(DIR, MANIFEST, plan, {
+      run,
+      fs,
+      allocatePort: () => Promise.resolve(port++),
+    });
+
+    const compose = store.get(`${DIR}/infra/compose/compose/.env`) ?? "";
+
+    expect(compose).not.toContain("SUPERUSER_EMAIL");
+    expect(compose).not.toContain("SUPERUSER_PASSWORD");
+  });
+});

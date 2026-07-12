@@ -211,20 +211,39 @@ export async function applyScaffold(
   // files default to the upstream ports when these are unset, so a repo tsforge did
   // NOT configure is unchanged.
   const allocated = await allocateHostPorts(deps.allocatePort);
-  const portWrites: IEnvWrite[] = allocated.map(({ key, port }) => ({
+  const composeWrites: IEnvWrite[] = allocated.map(({ key, port }) => ({
     key,
     value: String(port),
     secret: false,
   }));
+
+  // Initial superuser (from the wizard) — seeded on first boot by the migrate
+  // task's db:seed, which reads SUPERUSER_EMAIL/SUPERUSER_PASSWORD from this file.
+  // Written BEFORE boot (this runs before maybeBoot), so the seed picks it up. The
+  // password is a secret: on disk, never echoed to the summary.
+  if (plan.superuser !== undefined) {
+    composeWrites.push(
+      { key: "SUPERUSER_EMAIL", value: plan.superuser.email, secret: false },
+      {
+        key: "SUPERUSER_PASSWORD",
+        value: plan.superuser.password,
+        secret: true,
+      }
+    );
+  }
+
   const composeEnvFile = "infra/compose/compose/.env";
   const composeEnvPath = `${dir}/${composeEnvFile}`;
   const composeEnvBase = await readOrSeed(fs, composeEnvPath);
 
-  await fs.writeText(composeEnvPath, applyEnvEdits(composeEnvBase, portWrites));
+  await fs.writeText(
+    composeEnvPath,
+    applyEnvEdits(composeEnvBase, composeWrites)
+  );
   filesWritten.push(composeEnvFile);
   summary.push(
-    `# ${composeEnvFile} (host ports)`,
-    ...summarizeEnvEdits(portWrites)
+    `# ${composeEnvFile} (host ports${plan.superuser === undefined ? "" : " + superuser"})`,
+    ...summarizeEnvEdits(composeWrites)
   );
 
   const ports = Object.fromEntries(
