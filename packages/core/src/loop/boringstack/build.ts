@@ -1,3 +1,5 @@
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   IGreenfieldDeps,
   IFeature,
@@ -20,11 +22,7 @@ import { refinePrompt } from "./refine-prompt";
 import { runGreenfield, prepareState } from "../greenfield/run";
 import type { Reporter } from "../loop.types";
 import { planResources } from "./plan-resources";
-
-/** Convert PascalCase resource name to camelCase (first char lowercased). */
-function toCamelCase(pascalName: string): string {
-  return pascalName.charAt(0).toLowerCase() + pascalName.slice(1);
-}
+import { toCamelCase } from "./case";
 
 /**
  * Generate the scope globs for a resource: the files the model is allowed to edit
@@ -38,6 +36,75 @@ export function scopeFor(name: string): string[] {
     `apps/api/tests/api/${camel}/**`,
     `apps/ui/src/features/${camel}/**`,
   ];
+}
+
+/**
+ * Read the generated resource code from the filesystem.
+ * Concatenates TypeScript files from both the API resource and UI feature directories,
+ * capped at ~16000 characters. Returns empty string if directories don't exist.
+ */
+async function readResourceCode(cwd: string, name: string): Promise<string> {
+  const camel = toCamelCase(name);
+  const blocks: string[] = [];
+  const maxChars = 16000;
+  let totalLen = 0;
+
+  // Read API resource files (apps/api/src/api/<camel>/)
+  const apiDir = join(cwd, "apps/api/src/api", camel);
+
+  try {
+    const apiFiles = await readdir(apiDir, { recursive: false });
+    const tsFiles = apiFiles.filter(
+      (f): f is string => typeof f === "string" && f.endsWith(".ts")
+    );
+
+    for (const file of tsFiles) {
+      const relPath = `apps/api/src/api/${camel}/${file}`;
+      const content = await readFile(join(apiDir, file), "utf-8");
+      const block = `// ${relPath}\n${content}\n`;
+
+      if (totalLen + block.length > maxChars) {
+        blocks.push(`\n…[truncated]`);
+        break;
+      }
+
+      blocks.push(block);
+      totalLen += block.length;
+    }
+  } catch {
+    // Directory doesn't exist, skip
+  }
+
+  // Read UI feature files (apps/ui/src/features/<camel>/, recursively)
+  if (totalLen < maxChars) {
+    const uiDir = join(cwd, "apps/ui/src/features", camel);
+
+    try {
+      const uiFiles = await readdir(uiDir, { recursive: true });
+      const tsFiles = uiFiles.filter(
+        (f): f is string => typeof f === "string" && f.endsWith(".ts")
+      );
+
+      for (const file of tsFiles) {
+        const relPath = `apps/ui/src/features/${camel}/${file}`;
+        const fullPath = join(uiDir, file);
+        const content = await readFile(fullPath, "utf-8");
+        const block = `// ${relPath}\n${content}\n`;
+
+        if (totalLen + block.length > maxChars) {
+          blocks.push(`\n…[truncated]`);
+          break;
+        }
+
+        blocks.push(block);
+        totalLen += block.length;
+      }
+    } catch {
+      // Directory doesn't exist, skip
+    }
+  }
+
+  return blocks.join("");
 }
 
 /**
@@ -106,13 +173,11 @@ export function boringstackDeps(opts: {
 
         // Task 4: Judge the implementation quality
         async judge(_f: IFeature): Promise<IJudgeOutcome> {
-          // Extract a code window for the feature (a simple approach: use the description)
-          // In a real scenario, we'd read the actual generated files
-          const codeWindow = `Feature: ${feature.desc}\n\n(code will be extracted from generated files)`;
+          const code = await readResourceCode(cwd, feature.id);
 
           return await judgeFeature(evaluator, {
             feature: feature.desc,
-            code: codeWindow,
+            code,
           });
         },
       };

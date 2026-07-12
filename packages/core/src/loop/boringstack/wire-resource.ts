@@ -1,9 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-
-function toCamelCase(pascalName: string): string {
-  return pascalName.charAt(0).toLowerCase() + pascalName.slice(1);
-}
+import { toCamelCase } from "./case";
 
 function insertBeforeLast(
   src: string,
