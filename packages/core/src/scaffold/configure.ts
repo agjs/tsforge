@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { IScaffoldFs, IScaffoldRunner } from "./io";
+import { allocateHostPorts } from "./ports";
 import type {
   IConfigField,
   IEnvEdit,
@@ -95,6 +96,9 @@ export interface IConfigureDeps {
   readonly fs: IScaffoldFs;
   /** Secret generator (default uses crypto). Tests can stub for determinism. */
   readonly randSecret?: (spec: string) => string;
+  /** Free-host-port allocator (default binds a real socket). Tests stub for
+   *  determinism; drives per-project port isolation written to `compose/.env`. */
+  readonly allocatePort?: () => Promise<number>;
 }
 
 /** What configure did, for the handoff/summary (no secret values). */
@@ -102,6 +106,10 @@ export interface IConfigureResult {
   readonly commands: readonly string[];
   readonly filesWritten: readonly string[];
   readonly summary: readonly string[];
+  /** The host ports assigned to this project (compose `.env` keys → port), so the
+   *  handoff can report where the stack listens once booted. Empty for archetypes
+   *  without a compose stack (e.g. astro). */
+  readonly ports: Readonly<Record<string, number>>;
 }
 
 /**
@@ -119,7 +127,7 @@ export async function applyScaffold(
   deps: IConfigureDeps
 ): Promise<IConfigureResult> {
   if (plan.archetype !== "boringstack") {
-    return { commands: [], filesWritten: [], summary: [] };
+    return { commands: [], filesWritten: [], summary: [], ports: {} };
   }
 
   const { run, fs } = deps;
@@ -197,7 +205,33 @@ export async function applyScaffold(
     summary.push(`# ${file}`, ...summarizeEnvEdits(writes));
   }
 
-  return { commands, filesWritten, summary };
+  // Per-project host-port isolation: assign a free host port to every parameterized
+  // compose binding and write them to compose/.env, so a booted scaffold doesn't
+  // collide with the dev stack (or another project) on 5432/7330/7331/… The compose
+  // files default to the upstream ports when these are unset, so a repo tsforge did
+  // NOT configure is unchanged.
+  const allocated = await allocateHostPorts(deps.allocatePort);
+  const portWrites: IEnvWrite[] = allocated.map(({ key, port }) => ({
+    key,
+    value: String(port),
+    secret: false,
+  }));
+  const composeEnvFile = "infra/compose/compose/.env";
+  const composeEnvPath = `${dir}/${composeEnvFile}`;
+  const composeEnvBase = await readOrSeed(fs, composeEnvPath);
+
+  await fs.writeText(composeEnvPath, applyEnvEdits(composeEnvBase, portWrites));
+  filesWritten.push(composeEnvFile);
+  summary.push(
+    `# ${composeEnvFile} (host ports)`,
+    ...summarizeEnvEdits(portWrites)
+  );
+
+  const ports = Object.fromEntries(
+    allocated.map(({ key, port }) => [key, port])
+  );
+
+  return { commands, filesWritten, summary, ports };
 }
 
 /** Read a file, or seed it from a sibling `.example` (the quickstart's `cp`), or

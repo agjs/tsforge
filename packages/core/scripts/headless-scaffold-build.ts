@@ -58,6 +58,13 @@ async function main(): Promise<number> {
       `gate (cd ${outcome.gateCwd})`,
       `          ${outcome.gateCommand}`,
       "",
+      ...(Object.keys(outcome.ports).length > 0
+        ? [
+            "host ports (isolated — safe alongside the dev stack):",
+            `  api  ${String(outcome.ports.API_HOST_PORT)}   ui  ${String(outcome.ports.UI_HOST_PORT)}   postgres  ${String(outcome.ports.POSTGRES_HOST_PORT)}`,
+            "",
+          ]
+        : []),
       "configured .env:",
       ...outcome.summary.map((l) => `  ${l}`),
       "",

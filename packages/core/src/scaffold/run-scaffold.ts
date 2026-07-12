@@ -75,6 +75,9 @@ export interface IScaffoldOutcome {
   readonly booted: boolean;
   readonly bootError?: string;
   readonly summary: readonly string[];
+  /** Host ports assigned for per-project isolation (compose `.env` key → port).
+   *  Empty for archetypes without a compose stack. */
+  readonly ports: Readonly<Record<string, number>>;
 }
 
 /**
@@ -129,6 +132,7 @@ export async function runScaffold(
     booted: boot.booted,
     ...(boot.error === undefined ? {} : { bootError: boot.error }),
     summary: configured.summary,
+    ports: configured.ports,
   };
 }
 
