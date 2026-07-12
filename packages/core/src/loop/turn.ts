@@ -31,12 +31,7 @@ import {
   resolveStuckFile,
   type ExpertAsk,
 } from "./expert-handoff";
-import {
-  executeTool,
-  type SetupWebFn,
-  type SpawnAgentFn,
-  type IToolContext,
-} from "./tools";
+import { executeTool, type SpawnAgentFn, type IToolContext } from "./tools";
 import {
   astGrepFix,
   dropRedundantAnnotations,
@@ -227,9 +222,6 @@ export interface ILoopCtxTool {
    *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
    *  just the model call. Set per-send by the Session. */
   signal?: AbortSignal;
-  /** Wired by the interactive CLI: turn this workspace into a web project (the
-   *  `scaffold_web` tool calls it). Threaded into the tool context. */
-  setupWeb?: SetupWebFn;
   /** PLAN MODE (set via Session.setPlanMode): threaded into the tool context so
    *  mutating tools are rejected at dispatch — the model only plans. */
   readOnly?: boolean;

@@ -5,15 +5,6 @@ import type { SessionSnapshotStore } from "../../files/hashline";
 import type { McpRegistry } from "../../mcp";
 import type { PolicyMode, IPolicyRules } from "../../policy";
 
-/** Turn a workspace into a web project. Resolves with the files actually written
- *  (mutation accounting / re-gate) and whether dependency install succeeded. The
- *  optional `signal` lets the caller cancel the (potentially slow) dependency
- *  install when the turn is aborted (Ctrl-C), not just on the kill-timeout. */
-export type SetupWebFn = (
-  framework: string,
-  options?: { signal?: AbortSignal }
-) => Promise<{ files: readonly string[]; depsInstalled: boolean }>;
-
 /** One model-invoked delegation to a read-only specialist subagent (the
  *  `spawn_agent` tool). Wired by the CLI/session, which owns model resolution,
  *  the built-in + user specs, and the concurrency limiter; absent ⇒ delegation
@@ -45,15 +36,6 @@ export interface IToolContext {
   /** Cancellation for the in-flight turn — passed to the `run` tool (and search)
    *  so a model-issued command is killed on Ctrl-C, not left running. */
   signal?: AbortSignal;
-  /** Turn this workspace into a web project: scaffold the stack + deps and switch
-   *  the session to the web gate/guidance. Wired by the interactive CLI so the
-   *  AGENT decides whether to scaffold (via the `scaffold_web` tool) instead of a
-   *  brittle up-front classifier. Absent where unsupported (headless already
-   *  scaffolds up front), in which case the tool reports it's unavailable.
-   *  Resolves with the files it actually wrote (for mutation accounting / re-gate)
-   *  and whether dependency install succeeded (so the tool can tell the model the
-   *  truth instead of always claiming "deps installed"). */
-  setupWeb?: SetupWebFn;
   /** PLAN MODE: mutating tools are rejected at dispatch and `run` only accepts
    *  read-only commands — the hard guarantee behind the filtered tool list (a
    *  salvaged/forced call could otherwise still write). */

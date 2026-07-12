@@ -7,18 +7,14 @@ import type {
 import type { ITask } from "../spec";
 import type { FileLinter } from "../gate";
 import {
-  SCAFFOLD_UI_TOOL,
-  SCAFFOLD_ROUTES_TOOL,
-  SCAFFOLD_WEB_TOOL,
-  SEARCH_TOOL,
-  ADD_DEPENDENCY_TOOL,
+  type ADD_DEPENDENCY_TOOL,
   TOOL_NAME,
   buildSpawnAgentTool,
   READ_IMAGE_TOOL,
   GENERATE_IMAGE_TOOL,
 } from "../agent";
 import type { IAgentSpec } from "../agent/agent-spec";
-import type { SetupWebFn, SpawnAgentFn, IToolContext } from "./tools";
+import type { SpawnAgentFn, IToolContext } from "./tools";
 import type { PolicyMode } from "../policy";
 import type { ProfileId } from "../config/profiles";
 import { flags } from "../config";
@@ -39,13 +35,6 @@ import type { Reporter, ILoopEvent } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
 import { selectThinking, offeredToolsFor } from "./model-call";
-import {
-  buildStaged as buildStagedPhases,
-  designBuild as designBuildPhase,
-  implementBuild as implementBuildPhase,
-  generatePlan as generateBuildPlan,
-  type IStagedBuildHost,
-} from "./staged-build";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import { buildChatSystem, buildTddGuidance, COMPACT_SYSTEM } from "./prompt";
 import { resolveConventions } from "../infer-rules/conventions";
@@ -120,12 +109,6 @@ export interface ISessionConfig {
   lintFile?: FileLinter;
   /** Rule profile override for this session (from a recipe); defaults to config file. */
   profile?: ProfileId;
-  /** Offer the `scaffold_ui` tool (themed UI primitives). Web builds only — keeps
-   *  it off the pure-TS/scratch tool list where it's meaningless noise. */
-  scaffoldUi?: boolean;
-  /** Offer the `scaffold_web` tool — a fresh INTERACTIVE session where the agent
-   *  decides whether to start a web app. Pair with `setSetupWeb`. */
-  scaffoldWeb?: boolean;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -453,9 +436,6 @@ export class Session {
   private readonly report: Reporter;
   private tools: (
     | ReturnType<typeof toolsFor>[number]
-    | typeof SCAFFOLD_UI_TOOL
-    | typeof SCAFFOLD_ROUTES_TOOL
-    | typeof SCAFFOLD_WEB_TOOL
     | typeof ADD_DEPENDENCY_TOOL
     | NonNullable<ReturnType<typeof buildSpawnAgentTool>>
   )[];
@@ -518,34 +498,11 @@ export class Session {
     // emits unparseable formats the server leaves in content) — see
     // malformed-toolcall-format. The base tools are enough to work a repo; the
     // LSP nav set can become an opt-in once we confirm it parses cleanly here.
-    // WEB builds add ONE coarse tool — `scaffold_ui` — so the model generates
-    // tested themed primitives instead of re-authoring a button/card every build.
-    // Interactive sessions (scaffoldWeb) also offer `scaffold_web` so the AGENT
-    // can choose to start a web app — the UI/routes tools ride along so they're
-    // ready once it scaffolds. Headless web builds (scaffoldUi) scaffold up front,
-    // so they skip scaffold_web.
     // Interactive sessions also get `search` (ripgrep): it's read-only, needs
     // no tsconfig, and is the plan-mode explorer's main tool besides `read`.
     // Headless/eval sessions keep the measured base set (see
     // lsp-tools-regress-scratch: nav tools hurt from-scratch builds).
-    this.tools =
-      cfg.scaffoldWeb === true
-        ? [
-            ...toolsFor(false),
-            SEARCH_TOOL,
-            SCAFFOLD_WEB_TOOL,
-            SCAFFOLD_UI_TOOL,
-            SCAFFOLD_ROUTES_TOOL,
-            ADD_DEPENDENCY_TOOL,
-          ]
-        : cfg.scaffoldUi === true
-          ? [
-              ...toolsFor(false),
-              SCAFFOLD_UI_TOOL,
-              SCAFFOLD_ROUTES_TOOL,
-              ADD_DEPENDENCY_TOOL,
-            ]
-          : toolsFor(false);
+    this.tools = toolsFor(false);
 
     this.ctx = ctx;
     // create() already resolved the base mode (CLI > config > default) onto ctx.
@@ -833,14 +790,6 @@ export class Session {
     this.cfg.contextWindow = window;
   }
 
-  /** Wire the web-setup callback the `scaffold_web` tool invokes when the AGENT
-   *  decides the task is a from-scratch web app — scaffolds the stack and flips
-   *  this session to the web gate/guidance. Late-bound (after create) because the
-   *  callback closes over this session to reconfigure it. */
-  setSetupWeb(fn: SetupWebFn): void {
-    this.ctx.tool.setupWeb = fn;
-  }
-
   /** Enable model-driven delegation: offer the `spawn_agent` tool (its
    *  `subagent_type` enum built from the available specialists), wire the runner
    *  callback, and tell the model it can delegate. Late-bound (after create)
@@ -1044,94 +993,6 @@ export class Session {
       ctx.tool.signal = undefined;
       this.activeThinking = undefined;
     }
-  }
-
-  /** The narrow seam the staged build drives (see loop/staged-build.ts). One
-   *  host per public call; useDesignTools/useFullTools share its saved-tools
-   *  slot so a designBuild always restores the set it swapped out. */
-  private stagedHost(): IStagedBuildHost {
-    let savedTools: typeof this.tools | null = null;
-    const gateNow = (): string => this.ctx.task.accept;
-
-    return {
-      cwd: this.ctx.cwd,
-      taskId: this.ctx.task.id,
-      get gate(): string {
-        return gateNow();
-      },
-      setGate: (command: string): void => {
-        this.setGate(command);
-      },
-      useDesignTools: (): void => {
-        savedTools = this.tools;
-        this.tools = toolsFor(false);
-      },
-      useFullTools: (): void => {
-        if (savedTools !== null) {
-          this.tools = savedTools;
-          savedTools = null;
-        }
-      },
-      send: (message, opts = {}) => this.send(message, opts),
-      fullGatePasses: async (): Promise<boolean> => {
-        const fullGateTask: ITask = { ...this.ctx.task };
-        const full = await validate(
-          fullGateTask,
-          this.ctx.cwd,
-          this.ctx.gate.parse,
-          this.ctx.tool.signal === undefined
-            ? {}
-            : { signal: this.ctx.tool.signal }
-        );
-
-        return full.passed;
-      },
-      completeOnce: async (prompt: string): Promise<string> => {
-        const res = await this.provider.complete(
-          [...this.ctx.messages, { role: "user", content: prompt }],
-          {
-            temperature: 0,
-            ...(this.ctx.tool.signal === undefined
-              ? {}
-              : { signal: this.ctx.tool.signal }),
-          }
-        );
-
-        return res.content;
-      },
-      report: this.report,
-    };
-  }
-
-  /** Two-stage from-scratch build — see loop/staged-build.ts. */
-  async buildStaged(
-    request: string,
-    opts: ISendOptions = {},
-    designGate = ""
-  ): Promise<ISendResult> {
-    return buildStagedPhases(this.stagedHost(), request, opts, designGate);
-  }
-
-  /** Phase 1 (design the type contract) — see loop/staged-build.ts. */
-  async designBuild(
-    request: string,
-    opts: ISendOptions = {},
-    designGate = ""
-  ): Promise<ISendResult> {
-    return designBuildPhase(this.stagedHost(), request, opts, designGate);
-  }
-
-  /** Phase 2 (implement against the contract) — see loop/staged-build.ts. */
-  async implementBuild(
-    planNotes = "",
-    opts: ISendOptions = {}
-  ): Promise<ISendResult> {
-    return implementBuildPhase(this.stagedHost(), planNotes, opts);
-  }
-
-  /** The reviewable build plan after designBuild — see loop/staged-build.ts. */
-  async generatePlan(): Promise<string> {
-    return generateBuildPlan(this.stagedHost());
   }
 
   /** Once `editsSinceCheck` reaches the threshold, run the incremental check and

@@ -22,9 +22,6 @@ export const TOOL_NAME = {
   moveFile: "move_file",
   organizeImports: "organize_imports",
   gitContext: "git_context",
-  scaffoldUi: "scaffold_ui",
-  scaffoldRoutes: "scaffold_routes",
-  scaffoldWeb: "scaffold_web",
   addDependency: "add_dependency",
   packageInfo: "package_info",
   packageDocs: "package_docs",
@@ -71,9 +68,6 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   // git_context only inspects history/diffs — no workspace mutation — so it is a
   // plan-mode tool too (scope a review/fix while planning, before any edit).
   [TOOL_NAME.gitContext]: { readOnly: true, scriptExposable: true },
-  [TOOL_NAME.scaffoldUi]: { readOnly: false, scriptExposable: false },
-  [TOOL_NAME.scaffoldRoutes]: { readOnly: false, scriptExposable: false },
-  [TOOL_NAME.scaffoldWeb]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.addDependency]: { readOnly: false, scriptExposable: false },
   [TOOL_NAME.packageInfo]: { readOnly: true, scriptExposable: true },
   [TOOL_NAME.packageDocs]: { readOnly: true, scriptExposable: true },
@@ -123,32 +117,6 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = toolNamesWhere(
 export const SCRIPT_EXPOSABLE_TOOLS: ReadonlySet<string> = toolNamesWhere(
   (spec) => spec.scriptExposable
 );
-
-/** The model's own decision to start a from-scratch WEB app: scaffolds the stack
- *  (Vite + the chosen framework + deps) and switches the session to the web gate.
- *  Offered on a fresh interactive session so the AGENT decides whether to scaffold
- *  — NOT a brittle classifier. Call it ONLY for "build a web app/UI"; for a
- *  question, a CLI script, or editing code, just do the work directly. */
-export const SCAFFOLD_WEB_TOOL = {
-  type: "function",
-  function: {
-    name: TOOL_NAME.scaffoldWeb,
-    description:
-      "Start a NEW web application from scratch: scaffolds a Vite project (React full kit — shadcn/ui + TanStack Router + Query — or vanilla TS) with dependencies installed, and switches the build to the web gate (tsc + eslint + vite build + browser render). Call this ONCE, FIRST, ONLY when the user wants you to BUILD a browser app or UI. Do NOT call it for: answering a question, writing a CLI/Node script, printing output (e.g. 'render a table in the CLI'), or editing an existing project — just do those directly. After it returns, write your type contract, then implement the routes/features.",
-    parameters: {
-      type: "object",
-      properties: {
-        framework: {
-          type: "string",
-          enum: ["react", "vanilla"],
-          description:
-            "react = full kit (shadcn/ui + TanStack Router + Query); vanilla = Vite + TypeScript + Tailwind. Default react.",
-        },
-      },
-      required: ["framework"],
-    },
-  },
-};
 
 /** The two file-mutation tools the model is always offered. */
 export const EDIT_TOOL = {
@@ -201,76 +169,6 @@ export const EDIT_LINES_TOOL = {
         input: { type: "string", description: "hashline edit operations" },
       },
       required: ["file", "input"],
-    },
-  },
-};
-
-/** Materialize tested, THEMED UI primitives (button/card/input/…) into
- *  src/components/ui/ so you never hand-write a base component. Web builds only. */
-export const SCAFFOLD_UI_TOOL = {
-  type: "function",
-  function: {
-    name: TOOL_NAME.scaffoldUi,
-    description:
-      "Generate tested, accessible UI building blocks into src/components/ui/, styled to a chosen vibe — so you NEVER hand-write base components or view chrome. Two tiers: PRIMITIVES (button, card, input, label, textarea, select, badge, separator, table) and COMPOSITION BLOCKS (app-shell = sidebar+nav layout, page-header, field = label+control+error, form-actions, toolbar, empty-state). Call this ONCE near the start with everything the app needs, then import and COMPOSE: e.g. build a list view from page-header + toolbar + table, a form from field + form-actions, the layout from app-shell. NEVER hand-roll these; it wastes time and breaks theme coherence. Also writes the matching design tokens into src/index.css.",
-    parameters: {
-      type: "object",
-      properties: {
-        theme: {
-          type: "string",
-          enum: ["minimal", "warm", "futuristic"],
-          description: "The visual vibe, derived from the user's request.",
-        },
-        components: {
-          type: "array",
-          items: {
-            type: "string",
-            enum: [
-              "button",
-              "card",
-              "input",
-              "label",
-              "textarea",
-              "select",
-              "badge",
-              "separator",
-              "table",
-              "app-shell",
-              "page-header",
-              "field",
-              "form-actions",
-              "toolbar",
-              "empty-state",
-            ],
-          },
-          description: "Which building blocks to generate.",
-        },
-      },
-      required: ["theme", "components"],
-    },
-  },
-};
-
-/** Materialize ALL of an app's routes as working file-based stubs in one call,
- *  from a model-declared list of paths — so the route union is complete up front
- *  and no `<Link>` can forward-reference a missing route. Web builds only. */
-export const SCAFFOLD_ROUTES_TOOL = {
-  type: "function",
-  function: {
-    name: TOOL_NAME.scaffoldRoutes,
-    description:
-      "Create ALL the app's pages as TanStack file-based route STUBS in one call — you give the list of route paths your app needs (from the user's request); the harness writes each src/routes/*.tsx with a correct createFileRoute() and a placeholder component, and regenerates the route tree. Call this ONCE, right after your types + data services, with EVERY page the app needs — list pages, detail pages (use $param, e.g. /accounts/$accountId), and create/edit pages (e.g. /deals/create). After this, every route exists, the app navigates, and every <Link to>/navigate target type-checks — so you can build components in any order without 'not assignable to route' errors. Then FILL each route's component (replace the placeholder) one feature at a time. Do NOT hand-write route files or call this per-route.",
-    parameters: {
-      type: "object",
-      properties: {
-        routes: {
-          type: "array",
-          items: { type: "string" },
-          description:
-            'Every page path the app needs, e.g. ["/", "/accounts", "/accounts/$accountId", "/accounts/create", "/settings/profile"].',
-        },
-      },
-      required: ["routes"],
     },
   },
 };

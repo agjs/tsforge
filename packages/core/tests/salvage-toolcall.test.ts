@@ -172,28 +172,6 @@ test("pipe form: ignores unknown tool names", () => {
 
 // The exact malformed output captured live 2026-06-12 from qwen3.6-27b in the
 // interactive CLI: a `<parameters>` (plural) wrapper with bare `<key>` tags and
-// the value on the next line — the scaffold_web call that stranded a todo build.
-const PARAMS_BLOCK_SOUP = `I'll build a todo web app. Let me start by scaffolding a React project.
-
-<scaffold_web>
-<parameters>
-<framework>
-react
-</parameters>
-</function>`;
-
-test("salvages the <parameters>-block variant (live scaffold_web capture)", () => {
-  const calls = salvageToolCalls(PARAMS_BLOCK_SOUP);
-
-  expect(calls).toEqual([
-    {
-      id: undefined,
-      name: "scaffold_web",
-      arguments: { framework: "react" },
-    },
-  ]);
-});
-
 test("<parameters>-block variant with several keys and closing tags", () => {
   const calls = salvageToolCalls(
     "<read>\n<parameters>\n<file>src/a.ts</file>\n</parameters>\n</function>"

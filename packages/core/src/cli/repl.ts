@@ -221,7 +221,6 @@ async function initReplSession(args: ICliArgs): Promise<{
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
     ...(resumed === null ? {} : { history: resumed.messages }),
-    scaffoldWeb: true,
     fix: buildCoreFix(),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
