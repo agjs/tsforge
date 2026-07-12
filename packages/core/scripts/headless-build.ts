@@ -32,6 +32,8 @@ import {
 import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { Session, LOOP_LIMITS, type Reporter } from "../src/loop";
+import { runBoringstackBuild } from "../src/loop/boringstack/build";
+import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
 import { loadAgentSpecs } from "../src/config/agent-specs";
 import {
@@ -156,6 +158,95 @@ async function runPlanned(
   return session.implementBuild("", {});
 }
 
+/** A real command runner (Bun.spawn) for BoringStack's generators + gate. */
+const boringstackExec: Exec = async (argv, opts) => {
+  const proc = Bun.spawn([...argv], {
+    cwd: opts.cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const code = await proc.exited;
+
+  return { code, stdout, stderr };
+};
+
+/** BORINGSTACK full-stack build (opt-in TSFORGE_BORINGSTACK=1). Unlike the web
+ *  path this does NOT scaffold — `dir` must already be a booted BoringStack clone
+ *  (from `tsforge scaffold --archetype boringstack`). The Session is only the build
+ *  HOST (setScope + send); the driver runs BoringStack's own generators + gate. */
+async function runBoringstackBranch(
+  dir: string,
+  prompt: string,
+  entry: Awaited<ReturnType<typeof resolveActiveModel>>["entry"],
+  contextWindow: number,
+  logFileOverride: string | undefined,
+  stamp: string
+): Promise<void> {
+  if (!existsSync(join(dir, "apps", "api"))) {
+    process.stderr.write(
+      `TSFORGE_BORINGSTACK=1 expects <dir> to be a scaffolded BoringStack clone ` +
+        `(apps/api not found in ${dir}). Scaffold it first:\n` +
+        `  tsforge scaffold --archetype boringstack --dest ${dir}\n`
+    );
+    process.exit(2);
+  }
+
+  const provider = new OpenAICompatibleProvider({
+    baseUrl: entry.baseUrl,
+    model: entry.model,
+    apiKey: resolveApiKey(entry),
+    maxTokens: entry.maxTokens ?? PROVIDER_LIMITS.maxTokens,
+    connectRetryMs: 180_000,
+  });
+  const agentLog = join(dir, "agent.log");
+  const logFile = logFileOverride ?? join(logsDir(), `${stamp}-headless.jsonl`);
+
+  mkdirSync(logsDir(), { recursive: true });
+
+  const report = makeReporter(logFile, agentLog);
+
+  process.stdout.write(
+    `\n📁 BUILD DIR (boringstack clone): ${dir}\n` +
+      `   follow it:  tail -f ${agentLog}\n\n`
+  );
+
+  const host = await Session.create({
+    provider,
+    cwd: dir,
+    files: ["**/*"],
+    contextWindow,
+    maxTurns: LOOP_LIMITS.webMaxTurns,
+    guidance:
+      "You are filling in ONE BoringStack resource at a time. The API resource " +
+      "files (schemas/service/types) and its UI feature are already generated and " +
+      "wired; edit ONLY the files named in the task, add real domain fields + logic " +
+      "(never an `as` cast), and write the required test siblings. Everything else " +
+      "is locked.",
+    report,
+  });
+
+  const result = await runBoringstackBuild({
+    cwd: dir,
+    goal: prompt,
+    host,
+    evaluator: provider,
+    exec: boringstackExec,
+    onEvent: report,
+  });
+
+  const done = result.features.filter((f) => f.passes).length;
+
+  process.stdout.write(
+    `\n[boringstack ${result.status} · ${String(done)}/${String(result.features.length)} resource(s) verified]\n` +
+      `📁 code: ${dir}\n`
+  );
+  process.exit(result.status === "done" ? 0 : 1);
+}
+
 async function main(): Promise<void> {
   // `--plan` (plan mode): after the design phase, write the model's build plan to
   // plan.md and proceed (headless never blocks for approval). Strip it before any
@@ -219,6 +310,21 @@ async function main(): Promise<void> {
     .replace(/\..+$/, "");
   const dir =
     process.argv[tailStart + 1] ?? join(evalsRoot, "runs", `${stamp}-${label}`);
+
+  // BORINGSTACK full-stack path (opt-in): drive the boringstack build loop against
+  // a pre-scaffolded clone and exit — skips the UI-only web scaffold entirely.
+  if (process.env.TSFORGE_BORINGSTACK === "1") {
+    await runBoringstackBranch(
+      dir,
+      prompt,
+      entry,
+      contextWindow,
+      logFileOverride,
+      stamp
+    );
+
+    return;
+  }
 
   mkdirSync(dir, { recursive: true });
   await scaffoldWeb(dir, framework);

@@ -18,6 +18,7 @@ import { generateResource } from "./generate";
 import { runBoringstackGate } from "./gate";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield, prepareState } from "../greenfield/run";
+import type { Reporter } from "../loop.types";
 import { planResources } from "./plan-resources";
 
 /** Convert PascalCase resource name to camelCase (first char lowercased). */
@@ -126,12 +127,7 @@ export async function runBoringstackBuild(opts: {
   evaluator: IProvider;
   exec: Exec;
   host: IBoringstackHost;
-  onEvent?: (event: {
-    kind: string;
-    task: string;
-    message: string;
-    detail?: string;
-  }) => void;
+  onEvent?: Reporter;
 }): Promise<IGreenfieldResult> {
   const { cwd, goal, evaluator, exec, host, onEvent } = opts;
 
