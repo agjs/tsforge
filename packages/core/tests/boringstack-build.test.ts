@@ -52,9 +52,14 @@ describe("boringstackDeps.implement", () => {
     const exec = createExec();
     const evaluator = createEvaluator();
     const generateCalls: { cwd: string; name: string }[] = [];
+    const uiCalls: { cwd: string; name: string }[] = [];
 
     const generate = async (cwd: string, name: string) => {
       generateCalls.push({ cwd, name });
+    };
+
+    const generateUi = async (cwd: string, name: string) => {
+      uiCalls.push({ cwd, name });
     };
 
     const deps = boringstackDeps({
@@ -63,13 +68,17 @@ describe("boringstackDeps.implement", () => {
       exec,
       evaluator,
       generate,
+      generateUi,
     });
 
     await deps.implement(feature("Invoice"), state());
 
+    // Full vertical slice: API resource THEN UI feature (which syncs generate:api).
     expect(generateCalls.length).toBe(1);
     expect(generateCalls[0]?.name).toBe("Invoice");
     expect(generateCalls[0]?.cwd).toBe("/repo");
+    expect(uiCalls.length).toBe(1);
+    expect(uiCalls[0]?.name).toBe("Invoice");
     expect(host.scopes.length).toBe(1);
     expect(host.scopes[0]).toContain("apps/api/src/api/invoice/**");
     expect(host.sent.length).toBe(1);

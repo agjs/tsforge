@@ -14,7 +14,7 @@ import type {
 import { judgeFeature } from "../greenfield/judge";
 import type { IProvider } from "../../inference";
 import type { Exec } from "./exec";
-import { generateResource } from "./generate";
+import { generateResource, generateFeature } from "./generate";
 import { runBoringstackGate } from "./gate";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield, prepareState } from "../greenfield/run";
@@ -60,17 +60,22 @@ export function boringstackDeps(opts: {
   exec: Exec;
   evaluator: IProvider;
   generate?: (cwd: string, name: string, exec: Exec) => Promise<void>;
+  generateUi?: (cwd: string, name: string, exec: Exec) => Promise<void>;
 }): IGreenfieldDeps {
-  const { host, cwd, exec, evaluator, generate: generateFn } = opts;
+  const { host, cwd, exec, evaluator, generate: generateFn, generateUi } = opts;
   const generate = generateFn ?? generateResource;
+  const genUi = generateUi ?? generateFeature;
 
   return {
     async implement(
       feature: IFeature,
       _state: IGreenfieldState
     ): Promise<void> {
-      // Task 2: Generate the resource scaffolding
+      // Generate the FULL vertical slice: API resource (Drizzle+Elysia) then the
+      // UI feature. generateFeature runs `generate:api`, syncing the UI's typed
+      // OpenAPI client — without this the root drift check ("OpenAPI drift") fails.
       await generate(cwd, feature.id, exec);
+      await genUi(cwd, feature.id, exec);
 
       // Freeze the scope to this resource's files
       host.setScope(scopeFor(feature.id));
