@@ -46,6 +46,31 @@ async function autofixApps(cwd: string, exec: Exec): Promise<void> {
 }
 
 /**
+ * The single file to hand the expert when a feature is stuck. A GATE failure names
+ * a file in its errors (`resolveStuckFile` parses it). A JUDGE failure is a prose
+ * critique with no file path — so fall back to the resource's SERVICE file, where
+ * the domain logic the judge flags (missing fields, absent state transitions) lives.
+ * Null only when neither resolves. Exported for unit testing.
+ */
+export async function rescueFileFor(
+  cwd: string,
+  feature: IFeature
+): Promise<string | null> {
+  const fromError = await resolveStuckFile(cwd, [
+    { message: feature.lastError ?? "" },
+  ]);
+
+  if (fromError !== null) {
+    return fromError;
+  }
+
+  const camel = toCamelCase(feature.id);
+  const service = `apps/api/src/api/${camel}/${camel}.service.ts`;
+
+  return (await Bun.file(join(cwd, service)).exists()) ? service : null;
+}
+
+/**
  * Generate the scope globs for a resource: the files the model is allowed to edit
  * for this feature.
  */
@@ -272,7 +297,8 @@ export function boringstackDeps(opts: {
         return false;
       }
 
-      const file = await resolveStuckFile(cwd, [{ message: lastError }]);
+      // Gate stuck → the file named in the errors; judge stuck → the service file.
+      const file = await rescueFileFor(cwd, feature);
 
       if (file === null) {
         return false;

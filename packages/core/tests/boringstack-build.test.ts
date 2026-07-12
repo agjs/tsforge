@@ -1,6 +1,9 @@
 import { test, expect, describe } from "bun:test";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Exec } from "../src/loop/boringstack/exec";
-import { boringstackDeps } from "../src/loop/boringstack/build";
+import { boringstackDeps, rescueFileFor } from "../src/loop/boringstack/build";
 import type { IProvider } from "../src/inference";
 
 function feature(id: string) {
@@ -256,5 +259,83 @@ describe("boringstackDeps.rescue", () => {
 
     expect(typeof deps.rescue).toBe("function");
     expect(await deps.rescue?.(f, state())).toBe(false);
+  });
+});
+
+describe("rescueFileFor", () => {
+  let dir: string;
+
+  const write = async (rel: string, body: string): Promise<void> => {
+    await mkdir(join(dir, rel, ".."), { recursive: true });
+    await writeFile(join(dir, rel), body);
+  };
+
+  test("gate stuck → the file named in the errors", async () => {
+    dir = await mkdtemp(join(tmpdir(), "tsforge-rescue-"));
+
+    try {
+      await write(
+        "apps/api/src/api/ticket/ticket.routes.ts",
+        "export const x = 1;\n"
+      );
+      const f = {
+        id: "Ticket",
+        desc: "d",
+        passes: false,
+        attempts: 3,
+        lastError:
+          "apps/api/src/api/ticket/ticket.routes.ts(2,1): error TS2304: nope",
+      };
+
+      expect(await rescueFileFor(dir, f)).toBe(
+        "apps/api/src/api/ticket/ticket.routes.ts"
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("judge stuck (prose, no file path) → falls back to the service file", async () => {
+    dir = await mkdtemp(join(tmpdir(), "tsforge-rescue-"));
+
+    try {
+      await write(
+        "apps/api/src/api/ticket/ticket.service.ts",
+        "export const svc = {};\n"
+      );
+      const f = {
+        id: "Ticket",
+        desc: "d",
+        passes: false,
+        attempts: 3,
+        lastError:
+          "The create method ignores the description and priority fields, " +
+          "and close does not update status to 'closed'.",
+      };
+
+      expect(await rescueFileFor(dir, f)).toBe(
+        "apps/api/src/api/ticket/ticket.service.ts"
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns null when no file resolves", async () => {
+    dir = await mkdtemp(join(tmpdir(), "tsforge-rescue-"));
+
+    try {
+      const f = {
+        id: "Ticket",
+        desc: "d",
+        passes: false,
+        attempts: 3,
+        lastError: "a vague prose critique with no path and no service file",
+      };
+
+      expect(await rescueFileFor(dir, f)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
