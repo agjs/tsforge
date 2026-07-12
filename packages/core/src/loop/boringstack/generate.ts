@@ -1,4 +1,7 @@
+import { existsSync } from "node:fs";
+
 import { wireResource } from "./wire-resource";
+import { toCamelCase } from "./case";
 import type { Exec } from "./exec";
 
 function makeErrorWithStderr(stderr: string): Error {
@@ -23,10 +26,18 @@ export async function generateResource(
   exec: Exec
 ): Promise<void> {
   const apiCwd = `${cwd}/apps/api`;
+  const camel = toCamelCase(name);
 
-  await execOrThrow(exec, ["bun", "run", "new:resource", "--", name], apiCwd);
+  // IDEMPOTENT on retry: `new:resource` refuses to overwrite an existing resource
+  // dir, so on a second attempt (the model is fixing gate failures) we must NOT
+  // regenerate — that would crash AND clobber the model's in-progress fixes. Only
+  // scaffold + wire when the resource doesn't exist yet; always re-run the
+  // downstream sync (format + db:push) so a schema/format tweak is reflected.
+  if (!existsSync(`${apiCwd}/src/api/${camel}`)) {
+    await execOrThrow(exec, ["bun", "run", "new:resource", "--", name], apiCwd);
 
-  await wireResource(cwd, name);
+    await wireResource(cwd, name);
+  }
 
   // Format with BoringStack's OWN pinned prettier (its `format` script), NEVER
   // `bunx prettier` — bunx pulls the latest prettier, which formats differently
@@ -61,8 +72,13 @@ export async function generateFeature(
   exec: Exec
 ): Promise<void> {
   const uiCwd = `${cwd}/apps/ui`;
+  const camel = toCamelCase(name);
 
-  await execOrThrow(exec, ["bun", "run", "new:feature", name], uiCwd);
+  // IDEMPOTENT on retry (same reason as generateResource): don't re-scaffold an
+  // existing UI feature — preserve the model's fixes; always re-sync generate:api.
+  if (!existsSync(`${uiCwd}/src/features/${camel}`)) {
+    await execOrThrow(exec, ["bun", "run", "new:feature", name], uiCwd);
+  }
 
   // The API must be serving its (reloaded) OpenAPI spec before generate:api fetches it.
   await waitForApiReady(exec, cwd);

@@ -98,6 +98,32 @@ describe("generateResource", () => {
   });
 });
 
+describe("generateResource idempotency (retry-safe)", () => {
+  test("skips new:resource + wiring when the resource already exists, still re-syncs", async () => {
+    const tmpDir = await createTestEnv();
+
+    try {
+      // Simulate a prior attempt: the resource dir already exists on disk.
+      await mkdir(join(tmpDir, "apps/api/src/api/project"), {
+        recursive: true,
+      });
+
+      const { calls, exec } = recorder();
+
+      await generateResource(tmpDir, "Project", exec);
+      const joined = calls.map((c) => c.join(" "));
+
+      // new:resource would CRASH on an existing dir — it must be skipped on retry…
+      expect(joined.some((c) => c.includes("new:resource"))).toBe(false);
+      // …but the downstream sync still runs so a fix is reflected.
+      expect(joined.some((c) => c.includes("run format"))).toBe(true);
+      expect(joined.some((c) => c.includes("db:push"))).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("generateFeature", () => {
   test("runs new:feature then generate:api in apps/ui", async () => {
     const { calls, exec } = recorder();
