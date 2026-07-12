@@ -20,11 +20,13 @@ describe("runBoringstackGate", () => {
     expect(r.output).toContain("typecheck");
   });
 
-  test("runs with the whole repo mounted at the working root", async () => {
-    let seen: string[] = [];
+  test("runs the composed gate on disk in the clone (not in a container)", async () => {
+    let seen: readonly string[] = [];
+    let seenCwd = "";
 
-    const exec = async (argv: readonly string[]) => {
+    const exec = async (argv: readonly string[], opts: { cwd: string }) => {
       seen = [...argv];
+      seenCwd = opts.cwd;
 
       return { code: 0, stdout: "", stderr: "" };
     };
@@ -32,7 +34,14 @@ describe("runBoringstackGate", () => {
     await runBoringstackGate("/repo", exec);
     const j = seen.join(" ");
 
+    // Host shell, not `docker run` — deps live on disk after install.
+    expect(seen[0]).toBe("bash");
+    expect(j).not.toContain("docker");
+    // The composed gate spans both apps + the repo-root check.
     expect(j).toContain("apps/api && bun run validate");
-    expect(j).toContain("/repo");
+    expect(j).toContain("apps/ui && bun run validate");
+    expect(j).toContain("bun run check");
+    // Runs with the clone as cwd (repo root visible to meta-rules).
+    expect(seenCwd).toBe("/repo");
   });
 });

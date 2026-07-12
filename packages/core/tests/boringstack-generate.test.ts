@@ -72,7 +72,9 @@ describe("generateResource", () => {
       expect(joined.findIndex((c) => c.includes("db:push"))).toBeGreaterThan(
         joined.findIndex((c) => c.includes("new:resource"))
       );
-      expect(joined.some((c) => c.includes("prettier"))).toBe(true);
+      // Formats via BoringStack's pinned `bun run format` (NOT bunx-latest prettier).
+      expect(joined.some((c) => c.includes("run format"))).toBe(true);
+      expect(joined.some((c) => c.includes("bunx"))).toBe(false);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

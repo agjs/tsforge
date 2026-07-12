@@ -28,11 +28,11 @@ export async function generateResource(
 
   await wireResource(cwd, name);
 
-  await execOrThrow(
-    exec,
-    ["bunx", "prettier", "--write", "src", "tests"],
-    apiCwd
-  );
+  // Format with BoringStack's OWN pinned prettier (its `format` script), NEVER
+  // `bunx prettier` — bunx pulls the latest prettier, which formats differently
+  // (e.g. union types) than the pinned version the gate checks against, so the
+  // just-formatted output would then FAIL the gate's format check.
+  await execOrThrow(exec, ["bun", "run", "format"], apiCwd);
 
   await execOrThrow(exec, ["bun", "run", "db:push"], apiCwd);
 }

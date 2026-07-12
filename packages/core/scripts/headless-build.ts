@@ -158,10 +158,18 @@ async function runPlanned(
   return session.implementBuild("", {});
 }
 
-/** A real command runner (Bun.spawn) for BoringStack's generators + gate. */
+/** A real command runner (Bun.spawn) for BoringStack's generators + gate. Runs on
+ *  the host, with DATABASE_URL pointed at the stack's PUBLISHED localhost Postgres
+ *  (the in-repo .env targets the compose service name, unreachable from the host). */
 const boringstackExec: Exec = async (argv, opts) => {
   const proc = Bun.spawn([...argv], {
     cwd: opts.cwd,
+    env: {
+      ...process.env,
+      DATABASE_URL:
+        process.env.TSFORGE_BORINGSTACK_DATABASE_URL ??
+        "postgresql://app:app_dev_password@localhost:5432/app",
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -213,6 +221,28 @@ async function runBoringstackBranch(
     `\n📁 BUILD DIR (boringstack clone): ${dir}\n` +
       `   follow it:  tail -f ${agentLog}\n\n`
   );
+
+  // Run the gate the way a developer does: on disk with deps installed. The
+  // scaffold installs deps into the dev-container volumes only, so the host clone
+  // needs its own install (idempotent — fast once present). No monorepo workspaces,
+  // so install per app + root.
+  for (const sub of [".", "apps/api", "apps/ui"]) {
+    report({
+      kind: "tool",
+      task: "boringstack",
+      message: `bun install (${sub})`,
+    });
+    const installed = await boringstackExec(["bun", "install"], {
+      cwd: join(dir, sub),
+    });
+
+    if (installed.code !== 0) {
+      process.stderr.write(
+        `bun install failed in ${sub}:\n${installed.stderr}\n`
+      );
+      process.exit(1);
+    }
+  }
 
   const host = await Session.create({
     provider,
