@@ -156,7 +156,8 @@ function imageTools(caps: ICapabilityFlags): AdvertisedTool[] {
 
 export function toolsFor(
   hasExistingCode: boolean,
-  caps: ICapabilityFlags = {}
+  caps: ICapabilityFlags = {},
+  offerConventions = false
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
@@ -164,11 +165,13 @@ export function toolsFor(
   const image = imageTools(caps);
 
   // pull_conventions — a read-only knowledge tool the model calls to fetch the
-  // boringstack how-to BEFORE writing that kind of code (the PULL complement to the
-  // harness PUSHing guides on first violation). Web-gated: the guides are React/web
-  // conventions, so it belongs to web runs only — advertising it on every scratch/
-  // logic task would dilute the deliberately minimal base tool set (tools-gating).
-  const conventions: AdvertisedTool[] = flags.webTools()
+  // BoringStack how-to BEFORE writing that kind of code (the PULL complement to the
+  // harness PUSHing guides on first violation). Offered per BUILD BACKEND, not per
+  // flag: a backend with a convention library (boringstack) opts in via the session
+  // config; a plain scratch/logic task leaves it off so the base tool set stays
+  // minimal (tools-gating). Decoupled from the web flag on purpose — the conventions
+  // are the stack's, not "web".
+  const conventions: AdvertisedTool[] = offerConventions
     ? [PULL_CONVENTIONS_TOOL]
     : [];
 

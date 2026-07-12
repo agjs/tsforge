@@ -109,6 +109,10 @@ export interface ISessionConfig {
   lintFile?: FileLinter;
   /** Rule profile override for this session (from a recipe); defaults to config file. */
   profile?: ProfileId;
+  /** Offer the read-only `pull_conventions` tool — set by a build BACKEND that ships
+   *  a convention library (e.g. boringstack) so the model can fetch its how-to
+   *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
+  pullConventions?: boolean;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -502,7 +506,7 @@ export class Session {
     // no tsconfig, and is the plan-mode explorer's main tool besides `read`.
     // Headless/eval sessions keep the measured base set (see
     // lsp-tools-regress-scratch: nav tools hurt from-scratch builds).
-    this.tools = toolsFor(false);
+    this.tools = toolsFor(false, {}, cfg.pullConventions === true);
 
     this.ctx = ctx;
     // create() already resolved the base mode (CLI > config > default) onto ctx.

@@ -124,6 +124,9 @@ async function driveBuild(
       "wired; edit ONLY the files named in the task, add real domain fields + logic " +
       "(never an `as` cast), and write the required test siblings. Everything else " +
       "is locked.",
+    // BoringStack ships a convention library — offer pull_conventions so the model
+    // can fetch its how-to patterns on demand (decoupled from any flag).
+    pullConventions: true,
     report,
   });
 

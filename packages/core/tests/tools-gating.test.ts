@@ -96,6 +96,18 @@ test("web tools are available on scratch tasks too when enabled", () => {
   expect(n).toContain("package_docs");
 });
 
+test("pull_conventions is offered per build BACKEND, not per flag", () => {
+  // Decoupled from TSFORGE_WEB on purpose: a boringstack build sets
+  // offerConventions=true regardless of the web flag; a plain session leaves
+  // it off. Web being on must NOT drag the conventions tool in.
+  process.env.TSFORGE_WEB = "1";
+  expect(names(toolsFor(false))).not.toContain("pull_conventions");
+  expect(names(toolsFor(true))).not.toContain("pull_conventions");
+
+  expect(names(toolsFor(false, {}, true))).toContain("pull_conventions");
+  expect(names(toolsFor(true, {}, true))).toContain("pull_conventions");
+});
+
 test("the script tool is on by default for scratch and existing code", () => {
   expect(names(toolsFor(true))).toContain("script");
   expect(names(toolsFor(false))).toContain("script");
