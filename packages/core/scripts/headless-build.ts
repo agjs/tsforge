@@ -112,6 +112,26 @@ async function driveBuild(
     }
   }
 
+  // Normalize the freshly-scaffolded clone before the build. BoringStack's own
+  // rename step rewrites identifiers across the repo, which leaves it needing the
+  // documented post-rename steps — `regen` (resync the OpenAPI client, ACL, and doc
+  // catalogs) and `format` (re-prettier lines whose width the rewrite changed).
+  // Without these the PRISTINE scaffold fails its OWN gate (OpenAPI drift + format),
+  // so the baseline is red through no fault of the model. Run them here, with deps
+  // installed, so the captured baseline is GREEN. Best-effort: a non-zero exit just
+  // leaves that defect for the differential gate to exclude, never aborts the build.
+  report({
+    kind: "tool",
+    task: "boringstack",
+    message: "regen (post-rename sync)",
+  });
+  await boringstackExec(["bun", "run", "regen"], { cwd: dir });
+
+  for (const app of ["apps/api", "apps/ui"]) {
+    report({ kind: "tool", task: "boringstack", message: `format (${app})` });
+    await boringstackExec(["bun", "run", "format"], { cwd: join(dir, app) });
+  }
+
   const host = await Session.create({
     provider,
     cwd: dir,
