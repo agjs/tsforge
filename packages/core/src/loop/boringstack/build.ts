@@ -58,8 +58,10 @@ export function boringstackDeps(opts: {
   cwd: string;
   exec: Exec;
   evaluator: IProvider;
+  generate?: (cwd: string, name: string, exec: Exec) => Promise<void>;
 }): IGreenfieldDeps {
-  const { host, cwd, exec, evaluator } = opts;
+  const { host, cwd, exec, evaluator, generate: generateFn } = opts;
+  const generate = generateFn ?? generateResource;
 
   return {
     async implement(
@@ -67,7 +69,7 @@ export function boringstackDeps(opts: {
       _state: IGreenfieldState
     ): Promise<void> {
       // Task 2: Generate the resource scaffolding
-      await generateResource(cwd, feature.id, exec);
+      await generate(cwd, feature.id, exec);
 
       // Freeze the scope to this resource's files
       host.setScope(scopeFor(feature.id));
@@ -81,14 +83,14 @@ export function boringstackDeps(opts: {
     async evaluate(feature: IFeature, _state: IGreenfieldState) {
       const evaluateDeps: IEvaluateDeps = {
         // Task 3: Run the deterministic gate
-        async gate(): Promise<IGateOutcome> {
+        async gate(_f: IFeature): Promise<IGateOutcome> {
           const result = await runBoringstackGate(cwd, exec);
 
           return { passed: result.passed, output: result.output };
         },
 
         // Skip browser check (playwright not available in BoringStack)
-        browser() {
+        async browser(_f: IFeature) {
           return Promise.resolve({
             ok: true,
             errors: [],
@@ -97,7 +99,7 @@ export function boringstackDeps(opts: {
         },
 
         // Task 4: Judge the implementation quality
-        async judge(): Promise<IJudgeOutcome> {
+        async judge(_f: IFeature): Promise<IJudgeOutcome> {
           // Extract a code window for the feature (a simple approach: use the description)
           // In a real scenario, we'd read the actual generated files
           const codeWindow = `Feature: ${feature.desc}\n\n(code will be extracted from generated files)`;
