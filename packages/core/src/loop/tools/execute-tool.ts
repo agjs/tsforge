@@ -1,6 +1,7 @@
 import type { IToolCall } from "../../inference";
 import { TOOL_NAME, READ_ONLY_TOOL_NAMES, type ToolName } from "../../agent";
 import { readFile, runShell, doEdit, doCreate } from "./file-ops";
+import { doPullConventions } from "./pull-conventions";
 import { doHashlineEdit } from "./edit-hashline";
 import { doSearch, doLsp } from "./lsp-ops";
 import { doGit } from "./git-ops";
@@ -52,6 +53,7 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.addDependency]: doAddDependency,
   [TOOL_NAME.packageInfo]: doPackageInfo,
   [TOOL_NAME.packageDocs]: doPackageDocs,
+  [TOOL_NAME.pullConventions]: doPullConventions,
   [TOOL_NAME.webFetch]: doWebFetch,
   [TOOL_NAME.webSearch]: doWebSearch,
   [TOOL_NAME.webBrowse]: doWebBrowse,

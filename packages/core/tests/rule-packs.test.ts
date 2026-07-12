@@ -3933,4 +3933,21 @@ describe("typescript-core: no-self-import", () => {
 
     expect(messages.map((m) => m.messageId)).not.toContain("selfImport");
   });
+
+  // The exact shape that stalled the hospital-scheduling web build: a barrel
+  // `index.ts` re-exporting from "./index" — which resolves to the barrel ITSELF
+  // (the real component sat beside it in `index.tsx`). tsc resolves `./index` to
+  // the .tsx and typechecks fine, but Rollup resolves it to the .ts and fails
+  // with a cryptic "reexports itself" — a contradiction the model couldn't fix.
+  // Lint must catch it up front with the actionable message.
+  test("FLAGS a barrel index.ts re-exporting from './index' (self)", () => {
+    const messages = lint(
+      "typescript-core",
+      "no-self-import",
+      'export { AppointmentsList } from "./index";\n',
+      "src/views/Appointments/index.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("selfImport");
+  });
 });

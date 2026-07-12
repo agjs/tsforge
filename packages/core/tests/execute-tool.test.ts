@@ -46,24 +46,52 @@ test("scratch/ files are writable even when not in scope — for experiments", a
   }
 });
 
-test("rejects an oversized edit — forces surgical changes, not whole-function rewrites", async () => {
+test("rejects an oversized REWRITE — big span replaced by ANOTHER big span", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
   try {
     const big = Array.from({ length: 60 }, (_, i) => `line${i}`).join("\n");
+    const bigNew = Array.from({ length: 60 }, (_, i) => `new${i}`).join("\n");
 
     await Bun.write(join(dir, "impl.ts"), big);
 
     const r = await executeTool(
       {
         name: "edit",
-        arguments: { file: "impl.ts", oldString: big, newString: "tiny" },
+        // big → big = a lazy whole-function rewrite → still rejected.
+        arguments: { file: "impl.ts", oldString: big, newString: bigNew },
       },
       ctx(dir, ["impl.ts"])
     );
 
-    expect(r).toContain("too large");
+    expect(r).toContain("rewrites a large span");
     expect(await Bun.file(join(dir, "impl.ts")).text()).toBe(big); // unchanged
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("ALLOWS deleting a large broken span (big old → empty new) — the cleanup escape", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    // The exact trap from the live run: 60 orphaned lines the model must DELETE.
+    const orphaned = Array.from({ length: 60 }, (_, i) => `orphan${i}`).join(
+      "\n"
+    );
+
+    await Bun.write(join(dir, "impl.ts"), orphaned);
+
+    const r = await executeTool(
+      {
+        name: "edit",
+        arguments: { file: "impl.ts", oldString: orphaned, newString: "" },
+      },
+      ctx(dir, ["impl.ts"])
+    );
+
+    expect(r).not.toContain("REJECTED");
+    expect(await Bun.file(join(dir, "impl.ts")).text()).toBe(""); // deleted
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -112,6 +140,7 @@ test("the size cap is per-replacement — a huge single replacement is still rej
 
   try {
     const big = Array.from({ length: 60 }, (_, i) => `line${i}`).join("\n");
+    const bigNew = Array.from({ length: 60 }, (_, i) => `new${i}`).join("\n");
 
     await Bun.write(join(dir, "impl.ts"), big);
 
@@ -120,13 +149,13 @@ test("the size cap is per-replacement — a huge single replacement is still rej
         name: "edit",
         arguments: {
           file: "impl.ts",
-          edits: [{ oldString: big, newString: "tiny" }],
+          edits: [{ oldString: big, newString: bigNew }],
         },
       },
       ctx(dir, ["impl.ts"])
     );
 
-    expect(r).toContain("too large");
+    expect(r).toContain("rewrites a large span");
     expect(await Bun.file(join(dir, "impl.ts")).text()).toBe(big); // unchanged
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -156,17 +185,21 @@ test("edit on an EXISTING file with an unmatched oldString says the file exists 
 
     expect(r).toContain("REJECTED");
     expect(r).toContain("EXISTS");
-    expect(r).toContain("Do NOT use `create`");
-    expect(r).toContain("read");
+    // Steer to a targeted edit on the current content — NOT to recreate/rewrite.
+    expect(r).toContain("Do NOT recreate or rewrite");
+    expect(r).toContain("targeted `edit`");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("create OVERWRITES a file the model authored this session (in `touched`)", async () => {
-  // The whole-file-rewrite escape hatch: a file the model created earlier (so it's
-  // in the session change-set) can be fully rewritten via `create`, instead of
-  // thrashing edit(too-large)↔create(exists) on its own seed-data file.
+test("create does NOT overwrite an existing file that PARSES — even one the model authored", async () => {
+  // The whole-file-rewrite escape hatch is GONE for WORKING files. Rewriting a file
+  // the model authored re-introduced errors it had already fixed (runs looped 45+
+  // turns undoing their own progress). `create` rejects an existing PARSEABLE file
+  // and steers to a surgical `edit` (a syntactically-BROKEN file is the exception —
+  // see the next test); the file's current content is left untouched. `1 as any`
+  // parses fine (it's a type error, not a syntax error), so this stays protected.
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
   try {
@@ -187,8 +220,37 @@ test("create OVERWRITES a file the model authored this session (in `touched`)", 
       }
     );
 
-    expect(r).toContain("overwrote");
+    expect(r).toContain("REJECTED");
+    expect(r).toContain("edit");
+    // Untouched — no whole-file rewrite happened.
     expect(await Bun.file(join(dir, "store.ts")).text()).toBe(
+      "export const x = 1 as any;\n"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("create OVERWRITES a syntactically-BROKEN file (the deadlock escape)", async () => {
+  // A file that won't parse can't be surgically edited (line anchors are meaningless),
+  // so create MUST be allowed to rewrite it — else the model deadlocks between "edit
+  // too large" / "already exists" / "needs a hash anchor" (observed live, 27 turns).
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
+
+  try {
+    await Bun.write(join(dir, "broken.ts"), "export const x = ;\nfunction (\n");
+
+    const r = await executeTool(
+      {
+        name: "create",
+        arguments: { file: "broken.ts", content: "export const x = 1;\n" },
+      },
+      ctx(dir, ["broken.ts"])
+    );
+
+    expect(r).not.toContain("REJECTED");
+    expect(r).toContain("rewrote");
+    expect(await Bun.file(join(dir, "broken.ts")).text()).toBe(
       "export const x = 1;\n"
     );
   } finally {
@@ -650,11 +712,11 @@ test("package and browser research tools are permitted in plan mode", async () =
   expect(`${info}\n${docs}\n${browse}`).not.toContain("plan mode");
 });
 
-test("edit not-found on a file the model AUTHORED offers the create-rewrite escape hatch", async () => {
-  // F24: the model painted its own service file into a corner (stale anchors +
-  // too-large edits) and thrashed ~20 turns because the not-found message said
-  // "Do NOT use create". For a file it authored this session, create-overwrite IS
-  // the clean full-rewrite path — so the message must offer it.
+test("edit not-found steers to a surgical edit on current content, never a rewrite", async () => {
+  // The old escape hatch (offer create-rewrite for an authored file) is gone: a
+  // full rewrite re-introduces already-fixed errors. On a stale anchor the message
+  // re-feeds the file's CURRENT content and asks for a targeted edit — even for a
+  // file the model authored this session.
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
   try {
@@ -679,8 +741,11 @@ test("edit not-found on a file the model AUTHORED offers the create-rewrite esca
     );
 
     expect(r).toContain("REJECTED");
-    expect(r).toMatch(/you may also `create` it again|fully rewrite/u);
-    expect(r).not.toContain("Do NOT use `create`"); // authored → not steered away
+    expect(r).toContain("Do NOT recreate or rewrite");
+    expect(r).toContain("targeted `edit`");
+    // The current content is re-fed so it can re-anchor without a `read`.
+    expect(r).toContain("CURRENT content");
+    expect(r).not.toMatch(/you may also `create`|fully rewrite/u);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

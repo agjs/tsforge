@@ -85,8 +85,14 @@ function isTransientDiag(d: { code: number; message: string }): boolean {
   return TRANSIENT_DIAG_CODES.has(d.code) || isPhantomRouteError(d.message);
 }
 
-/** Max diagnostics surfaced per write — keep the in-band feedback tight. */
-const MAX_WRITE_GUARD_DIAGS = 5;
+/** Upper bound on diagnostics surfaced per write. This is a RUNAWAY BACKSTOP,
+ *  not a feedback-shaping limit: the model must see EVERY real error so it can
+ *  fix them all in one pass. Capping this low (it was 5) caused whack-a-mole —
+ *  a file with 14 violations showed 5 + "…and 9 more", so the model fixed 5,
+ *  the hidden 9 resurfaced next turn, and it never converged. Set high enough
+ *  that a normal file shows all of its errors; the cap only trims a degenerate
+ *  cascade (one syntax error fanning out to hundreds) from blowing the context. */
+const MAX_WRITE_GUARD_DIAGS = 200;
 
 /** Render the per-issue lines (type errors + lint problems), capped + ordered. */
 function writeGuardLines(
@@ -105,8 +111,8 @@ function writeGuardLines(
 
   const lineOf = (offset: number): number =>
     text.slice(0, offset).split("\n").length;
-  // Slice to the cap BEFORE mapping: lineOf does O(offset) string work per diag,
-  // so mapping every error in a large file (then discarding all but 5) is wasteful.
+  // Slice to the backstop BEFORE mapping: lineOf does O(offset) string work per
+  // diag, so mapping past the ceiling in a degenerate cascade would be wasteful.
   // Output is identical to map-all-then-slice (type errors fill the budget first).
   const total = typeErrors.length + lintProblems.length;
   const capped = typeErrors.slice(0, MAX_WRITE_GUARD_DIAGS);

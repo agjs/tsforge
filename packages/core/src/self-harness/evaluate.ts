@@ -366,6 +366,15 @@ export async function evaluateHarness(
           `${taskId.replace(":", "-")}-${i + 1}`
         );
 
+        // Every run starts from an empty directory. Run dir names are
+        // deterministic (taskId-repeat) and get reused across campaign
+        // launches and baseline retries, so without this a fresh run would
+        // write ON TOP of the previous run's artifacts — leaving a mix of new
+        // and stale files (logs from two different attempts in one dir, a
+        // half-overwritten build) that is impossible to read honestly. Wipe
+        // first so what's on disk is always exactly one run.
+        await rm(runDir, { recursive: true, force: true });
+
         await (taskId.startsWith("web:")
           ? runOneWeb(taskId, i + 1, runDir, opts, sink)
           : runOneSpec(taskId, i + 1, runDir, opts, sink));

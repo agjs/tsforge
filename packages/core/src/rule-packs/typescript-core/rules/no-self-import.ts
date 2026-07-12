@@ -33,7 +33,7 @@ export const noSelfImportRule = createRule<[], MessageIds>({
     schema: [],
     messages: {
       selfImport:
-        "'{{source}}' resolves to THIS file — a module cannot import from itself. Define the binding here instead of importing it from the same file.",
+        "'{{source}}' resolves to THIS file — a module cannot import or re-export from itself (it bundles to a circular self-reference that breaks the build). Fix: define/keep the binding directly in this file. If this is a barrel `index.ts` sitting beside an `index.tsx` of the same folder, DELETE this file — the `.tsx` component is already the module entry (import it via the folder path, e.g. `@/views/Foo`).",
     },
   },
   defaultOptions: [],

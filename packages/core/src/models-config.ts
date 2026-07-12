@@ -59,7 +59,7 @@ export type ImageApi = "chat-modalities" | "images-generations";
  *  the primary chat model can't do them. Each value NAMES an entry in `models`,
  *  so a capability reuses the same endpoint config (key resolution, headers) as
  *  any chat model. Absent → the capability (and its tool/UX) stays off. */
-export type CapabilityName = "vision" | "imageGen";
+export type CapabilityName = "vision" | "imageGen" | "expert";
 
 export interface IModelsConfig {
   /** Name of the active entry — always a key of `models`. */
@@ -197,9 +197,9 @@ function parseCapabilities(
   const out: Partial<Record<CapabilityName, string>> = {};
 
   for (const [cap, target] of Object.entries(raw)) {
-    if (cap !== "vision" && cap !== "imageGen") {
+    if (cap !== "vision" && cap !== "imageGen" && cap !== "expert") {
       throw new Error(
-        `models.json: unknown capability "${cap}" — expected vision, imageGen`
+        `models.json: unknown capability "${cap}" — expected vision, imageGen, expert`
       );
     }
 
@@ -356,7 +356,12 @@ export async function resolveModelByName(
 export async function resolveCapabilityModel(
   cap: CapabilityName
 ): Promise<{ name: string; entry: IModelEntry } | null> {
-  const prefix = cap === "vision" ? "TSFORGE_VISION" : "TSFORGE_IMAGE";
+  const prefixByCap: Record<CapabilityName, string> = {
+    vision: "TSFORGE_VISION",
+    imageGen: "TSFORGE_IMAGE",
+    expert: "TSFORGE_EXPERT",
+  };
+  const prefix = prefixByCap[cap];
   const envBase = process.env[`${prefix}_BASE_URL`];
   const envModel = process.env[`${prefix}_MODEL`];
 

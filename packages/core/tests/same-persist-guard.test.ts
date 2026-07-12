@@ -20,6 +20,7 @@ function freshState(): ILoopState {
     edits: 0,
     regressions: 0,
     ttsrInterrupts: 0,
+    steerLevel: 0,
   };
 }
 

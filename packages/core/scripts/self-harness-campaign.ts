@@ -18,7 +18,7 @@
 // Run:  bun packages/core/scripts/self-harness-campaign.ts
 //         [--max-sessions N] [--proof-every 3] [--rounds 3] [--width 3]
 // Stop: touch evals/self-harness/campaign/STOP  (in-flight session finishes)
-import { mkdir } from "node:fs/promises";
+import { mkdir, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { OpenAICompatibleProvider } from "../src/inference";
@@ -37,24 +37,27 @@ import type { IRunRecord } from "../src/eval";
 import { buildSweepReport, renderSweepReportMarkdown } from "../src/eval";
 import { isRecord } from "../src/lib/guards";
 
-/** The exam: never shown to a mining session. Spec + web mix. */
-const PROOF_SPLIT = [
-  "math",
-  "handlers",
-  "slugify",
-  "web:pm-platform",
-  "web:billing-console",
-] as const;
+/** The exam: never shown to a mining session. WEB BUILDS ONLY — the simple spec
+ *  tasks (math/handlers/slugify) were dropped: they pass in 1–3 cycles every
+ *  time, so they can't show improvement OR regression and only burned wall-clock.
+ *  A web build exercises types, lint, components AND routing, so it subsumes the
+ *  basics — this is a STRICTER regression floor, not a weaker one. Kept as
+ *  pm-platform + billing-console so results stay comparable to the buggy-signal
+ *  baseline archived at baseline.buggy-5cap.json (same tasks, only the fix differs). */
+const PROOF_SPLIT = ["web:pm-platform", "web:billing-console"] as const;
 
-/** Mining rotations — draw only from non-proof tasks; alternate per session. */
+/** Mining rotations — WEB BUILDS ONLY, drawn from the 9 non-proof catalog apps
+ *  (disjoint from the proof split). These are the complex tasks the model
+ *  actually fails, i.e. where there are real weaknesses to mine and real
+ *  headroom for an overlay edit to prove itself. Alternate per session. */
 const ROTATIONS = [
   {
-    heldIn: "query,migrate,checkout,web:saas-crm",
-    heldOut: "validators,fix-regression,web:udemy",
+    heldIn: "web:saas-crm,web:udemy",
+    heldOut: "web:airline-ops,web:portfolio-manager",
   },
   {
-    heldIn: "auth,fixtures,rate-limit,web:hospital-scheduling",
-    heldOut: "debounce,query,web:warehouse-inventory",
+    heldIn: "web:hospital-scheduling,web:warehouse-inventory",
+    heldOut: "web:procurement,web:incident-management",
   },
 ] as const;
 
@@ -94,6 +97,25 @@ const { entry } = await resolveActiveModel();
 const provider: IProvider = new OpenAICompatibleProvider(providerConfig(entry));
 
 await mkdir(campaignDir, { recursive: true });
+
+// Never overwrite a previous campaign's artifacts. Each launch moves any
+// existing runs/ + sessions/ into archive/<launch-timestamp>/ before starting,
+// so relaunching gives a clean slate AND keeps the prior run intact for
+// comparison. (Per-task dirs are also wiped individually at run time; this is
+// the campaign-level guard against cross-launch mixing.)
+const launchStamp = new Date().toISOString().replace(/[:.]/gu, "-");
+
+for (const sub of ["runs", "sessions"]) {
+  const src = join(campaignDir, sub);
+
+  if (existsSync(src)) {
+    const dest = join(campaignDir, "archive", launchStamp, sub);
+
+    await mkdir(join(campaignDir, "archive", launchStamp), { recursive: true });
+    await rename(src, dest);
+    say(`archived previous ${sub}/ → archive/${launchStamp}/${sub}`);
+  }
+}
 
 if (!existsSync(campaignLog)) {
   await Bun.write(

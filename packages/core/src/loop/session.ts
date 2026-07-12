@@ -62,6 +62,7 @@ import {
   runToolCalls,
   settleGate,
   toolsFor,
+  tryExpertRescue,
 } from "./turn";
 
 /**
@@ -569,6 +570,7 @@ export class Session {
       edits: 0,
       regressions: 0,
       ttsrInterrupts: 0,
+      steerLevel: 0,
     };
   }
 
@@ -1583,7 +1585,7 @@ export class Session {
     }
 
     const readonlyStreak = carry.readonlyStreak + 1;
-    const spin = this.readonlySpinStop(
+    const spin = await this.readonlySpinStop(
       readonlyStreak,
       carry.readonlyRecoveries,
       turn
@@ -1893,12 +1895,18 @@ export class Session {
       return "";
     }
 
+    // Show EVERY outstanding gate error — the model can't finish work it can't
+    // see. The ceiling is only a runaway backstop for a degenerate cascade, not
+    // a feedback limit (was 5, which hid most errors and caused whack-a-mole).
+    const MAX_GATE_ERRORS_SHOWN = 200;
     const lines = errs
-      .slice(0, 5)
+      .slice(0, MAX_GATE_ERRORS_SHOWN)
       .map((e) => `  - ${e.message}`)
       .join("\n");
     const more =
-      errs.length > 5 ? `\n  …and ${String(errs.length - 5)} more` : "";
+      errs.length > MAX_GATE_ERRORS_SHOWN
+        ? `\n  …and ${String(errs.length - MAX_GATE_ERRORS_SHOWN)} more`
+        : "";
 
     return (
       `\n\nA passing \`bun run build\` is NOT the gate. The gate is still RED — ` +
@@ -1906,16 +1914,28 @@ export class Session {
     );
   }
 
-  private readonlySpinStop(
+  private async readonlySpinStop(
     streak: number,
     recoveries: number,
     turn: number
-  ): ISendResult | "retry" | null {
+  ): Promise<ISendResult | "retry" | null> {
     if (streak < READONLY_STREAK_LIMIT) {
       return null;
     }
 
     if (recoveries >= MAX_READONLY_RECOVERIES) {
+      // This is a "stuck" exit too, so the EXPERT handoff gets its shot HERE before
+      // we give up — build v3 died on exactly this path (256 turns of read-only
+      // spinning) without ever reaching the expert, because the rescue was only
+      // wired to settleGate's stalled-park. If a stronger model repairs the blocking
+      // file, keep looping instead of stopping.
+      if (
+        this.hasGate &&
+        (await tryExpertRescue(this.ctx, this.state, this.state.prevGateErrors))
+      ) {
+        return "retry";
+      }
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,

@@ -1,0 +1,122 @@
+import { test, expect, describe } from "bun:test";
+import {
+  buildSteerMessage,
+  essentialMessages,
+  playbookFor,
+  STEER_LADDER_MAX,
+  type ISteerError,
+} from "../src/loop/feedback/steer";
+
+const err = (rule: string): ISteerError => ({
+  rule,
+  file: "src/views/Foo/index.tsx",
+  message: `${rule} violated`,
+});
+
+describe("playbookFor", () => {
+  test("resolves a bare rule name to its recipe", () => {
+    expect(playbookFor("no-jsx-computation")).toContain("src/lib");
+  });
+
+  test("resolves a plugin-prefixed rule to the same recipe", () => {
+    expect(playbookFor("tsforge/no-jsx-computation")).toBe(
+      playbookFor("no-jsx-computation")
+    );
+  });
+
+  test("the as-cast playbook teaches a type guard, never a cast", () => {
+    const play = playbookFor("no-restricted-syntax");
+
+    expect(play).toContain("TYPE GUARD");
+    expect(play).toContain("v is Status");
+  });
+
+  test("unknown / undefined rules have no playbook", () => {
+    expect(playbookFor("some-unknown-rule")).toBeNull();
+    expect(playbookFor(undefined)).toBeNull();
+  });
+});
+
+describe("buildSteerMessage escalation", () => {
+  const errors = [
+    err("tsforge/no-jsx-computation"),
+    err("no-restricted-syntax"),
+  ];
+
+  test("level 1 makes the model STEP BACK and diagnose its own loop", () => {
+    const msg = buildSteerMessage(1, errors, "same error 5×");
+
+    expect(msg).toContain("escalation 1");
+    expect(msg).toContain("STEP BACK");
+    expect(msg).toContain("DIFFERENT approach"); // reflect, don't feed a rule
+    expect(msg.toLowerCase()).toContain("whole-file");
+  });
+
+  test("level 2 tells the model to INVESTIGATE with tools (+ pattern for known rules)", () => {
+    const msg = buildSteerMessage(2, errors, "same error", true);
+
+    expect(msg).toContain("INVESTIGATE");
+    expect(msg).toContain("search the codebase");
+    // The known-good pattern is still offered as a reference when it fits.
+    expect(msg).toContain("no-jsx-computation");
+    expect(msg).toContain("TYPE GUARD");
+  });
+
+  test("web_search is suggested ONLY when web tools are enabled", () => {
+    expect(buildSteerMessage(2, errors, "s", true)).toContain("web_search");
+    expect(buildSteerMessage(2, errors, "s", false)).not.toContain(
+      "web_search"
+    );
+  });
+
+  test("level 2 with no known-rule errors still says INVESTIGATE (no static rule)", () => {
+    const msg = buildSteerMessage(2, [err("some-unknown-rule")], "stuck");
+
+    expect(msg).toContain("INVESTIGATE");
+    expect(msg).toContain("search the codebase");
+  });
+
+  test("level 3 changes strategy: invert, one error one file, then expert", () => {
+    const msg = buildSteerMessage(3, errors, "not converging");
+
+    expect(msg).toContain("SINGLE");
+    expect(msg).toContain("OPPOSITE");
+    expect(msg).toContain("already pass");
+    expect(msg).toContain("expert"); // the last resort is the stronger model
+  });
+
+  test("every level names the escalation out of the ladder max", () => {
+    for (let lvl = 1; lvl <= STEER_LADDER_MAX; lvl += 1) {
+      expect(buildSteerMessage(lvl, errors, "r")).toContain(
+        `/${String(STEER_LADDER_MAX)}`
+      );
+    }
+  });
+});
+
+describe("essentialMessages (context reset)", () => {
+  const msgs = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "build the app" },
+    { role: "assistant", content: "attempt 1" },
+    { role: "user", content: "error: X" },
+    { role: "assistant", content: "attempt 2 (dead end)" },
+    { role: "user", content: "error: X still" },
+  ];
+
+  test("keeps ONLY the system prompt + the original task (drops the flailing middle)", () => {
+    const head = essentialMessages(msgs);
+
+    expect(head).toEqual([
+      { role: "system", content: "sys" },
+      { role: "user", content: "build the app" },
+    ]);
+  });
+
+  test("preserves order and omits a missing system/user cleanly", () => {
+    expect(essentialMessages([{ role: "user", content: "task" }])).toEqual([
+      { role: "user", content: "task" },
+    ]);
+    expect(essentialMessages([])).toEqual([]);
+  });
+});

@@ -469,6 +469,7 @@ export class AgentRunner {
       edits: 0,
       regressions: 0,
       ttsrInterrupts: 0,
+      steerLevel: 0,
     };
     const maxTurns = spec.maxTurns ?? AGENT_LIMITS.maxTurns;
     const start = performance.now();
