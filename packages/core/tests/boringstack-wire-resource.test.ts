@@ -14,6 +14,7 @@ describe("wireRoutesFile", () => {
       'import invoiceRoutes from "../../api/invoice/invoice.routes";'
     );
     expect(out).toContain("invoice: invoiceRoutes,");
+    expect(out).toContain("health: healthRoutes,");
   });
 });
 
@@ -21,9 +22,12 @@ describe("wireAppFile", () => {
   test("inserts the group mount", () => {
     const src = `  return (\n    app\n      .use(routes.health)\n  );\n`;
 
-    expect(wireAppFile(src, "Invoice")).toContain(
+    const out = wireAppFile(src, "Invoice");
+
+    expect(out).toContain(
       '.group("/api/v1/invoice", (group) => group.use(routes.invoice))'
     );
+    expect(out).toContain(".use(routes.health)");
   });
 });
 
@@ -31,8 +35,11 @@ describe("wireSwaggerFile", () => {
   test("adds a tag", () => {
     const src = `    tags: [\n      { name: "Health", description: "probes" },\n    ],\n`;
 
-    expect(wireSwaggerFile(src, "Invoice")).toContain(
+    const out = wireSwaggerFile(src, "Invoice");
+
+    expect(out).toContain(
       '{ name: "Invoice", description: "Invoice resource" }'
     );
+    expect(out).toContain('{ name: "Health", description: "probes" }');
   });
 });
