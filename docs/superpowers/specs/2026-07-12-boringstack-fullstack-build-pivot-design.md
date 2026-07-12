@@ -115,7 +115,21 @@ A new driver (sibling to the deleted `runWebGreenfield`, reusing the greenfield 
 **Done = C:** a live run builds ≥1 real full-stack feature (real API + migration + UI)
 that passes BoringStack's own gate, one frozen slice at a time.
 
-## Hard requirement — per-project port isolation (multi-project)
+## Hard requirement — per-project ISOLATION (naming + ports) (multi-project)
+
+**Compose PROJECT NAME must be dynamic.** Today everything lands under the fixed
+project `boringstack-infra` (containers `boringstack-infra-api-dev`, `-ui-dev`, …). A
+second scaffolded project would merge into / collide with the same project. The whole
+namespace must derive from the user's project name (`<project>-infra-*`). This governs
+container names, image names, AND the gate runner's image reference (Task 4's
+`GATE_IMAGE` constant is an MVP placeholder — it becomes `<project>-…` under this work).
+- `rename:project` takes a `project` param (manifest `renameParams`), but in Phase B the
+  scaffold was run WITHOUT a project name, so it stayed `boringstack`/`boringstack-infra`.
+  Fix has two parts: (a) tsforge ALWAYS passes a unique per-project name at scaffold time
+  (derive from goal/dest); (b) confirm `rename:project` (or `COMPOSE_PROJECT_NAME`) actually
+  renames the compose project + image tags, not just source strings.
+
+### Host ports (sub-part of the same isolation work)
 
 BoringStack's compose **hard-codes host ports** (`5432`/`6379`/`7330`/`7331` + observability
 `9090`/`9093`/`3010`/`8025`/`1025`/`7332`). Compose *project-name* isolation exists

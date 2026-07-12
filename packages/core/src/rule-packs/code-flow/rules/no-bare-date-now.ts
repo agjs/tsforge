@@ -5,10 +5,7 @@ import { createRule } from "../../create-rule";
 export const RULE_NAME = "no-bare-date-now";
 
 type MessageIds =
-  | "bareDateNow"
-  | "bareNewDate"
-  | "bareMathRandom"
-  | "bareDateConstructor";
+  "bareDateNow" | "bareNewDate" | "bareMathRandom" | "bareDateConstructor";
 
 export interface INoBareDateNowOptions {
   readonly allowedPaths?: readonly string[];

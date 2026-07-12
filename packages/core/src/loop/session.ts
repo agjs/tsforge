@@ -866,9 +866,9 @@ export class Session {
 
     const system = this.ctx.messages[0];
 
-    if (
-      !(system?.role === "system" && system.content.includes(DELEGATION_MARKER))
-    ) {
+    if (!(
+      system?.role === "system" && system.content.includes(DELEGATION_MARKER)
+    )) {
       this.guide(delegationGuidance(specs));
     }
   }
@@ -1826,8 +1826,7 @@ export class Session {
 
   /** The `ttsrManager` completion option, or nothing when TTSR is off. */
   private ttsrCallOption():
-    | { ttsrManager: TtsrManager }
-    | Record<string, never> {
+    { ttsrManager: TtsrManager } | Record<string, never> {
     return this.ttsrManager === null ? {} : { ttsrManager: this.ttsrManager };
   }
 

@@ -319,6 +319,37 @@ describe("boringstackDeps.implement", () => {
 
 ---
 
+### Task 8: Remove the legacy UI-only web scaffold
+
+Only safe AFTER Task 7 (the boringstack loop is the live web-build path). The UI-only
+scaffold that oscillated for two days is now dead weight, but it is still wired into
+several consumers — so removal is a real, careful change, not a `git rm`.
+
+**Files (remove / retarget):**
+- Remove: `src/web-templates.ts`, `src/scaffold/web-scaffold.ts`, `src/web-routes.ts`,
+  `src/web-components.ts`, `src/loop/tools/scaffold-web.ts`, `scaffold-ui.ts`,
+  `scaffold-routes.ts`, `src/gate/web-gate.ts`, `src/loop/staged-build.ts` (web path),
+  the `vite`/`--web` archetype in `cli/repl-scaffold.ts` + `cli/web-setup.ts`, and every
+  test that exercises only those (`web-routes.test.ts`, `staged-build.test.ts`,
+  `scaffold-routes-idempotent.test.ts`, `web-gate-tsconfig.test.ts`, etc.).
+- Retarget or remove the tool registry entries (`agent.constants.ts`), `policy/classify.ts`,
+  `conventions.ts` refs, and `loop/turn.ts` web-gating that reference the above.
+
+**The one decision this task forces (ASK the human):** `self-harness/evaluate-web.ts`
+builds its measurement corpus via `headless-build` → `scaffoldWeb`+`buildWebGate`. It must
+either (a) RETARGET to boringstack builds (`runBoringstackBuild`), or (b) be REMOVED with
+its web corpus. Do not guess — surface both to the human before deleting.
+
+- [ ] **Step 1:** Enumerate the real consumer graph (`grep -rl` the removed symbols) and
+  confirm nothing outside the list imports them.
+- [ ] **Step 2:** Resolve the self-harness decision with the human (retarget vs remove).
+- [ ] **Step 3:** Remove/retarget in dependency order; delete dead tests; keep the tool
+  registry + policy coherent.
+- [ ] **Step 4:** `bun run validate` green (read real N pass/M fail).
+- [ ] **Step 5: Commit** — `git commit -m "refactor(boringstack): remove dead UI-only web scaffold"`.
+
+---
+
 ## Deferred to follow-on plans (Scope Check decomposition)
 
 - **C1 — BoringStack generator auto-wiring:** make `new:resource`/`new:feature` self-wire (routes/app/swagger) + emit passing test-sibling stubs, so Task 2's harness-side wiring becomes unnecessary and the generated slice is complete. (Also fixes the `createAuthMiddleware`→`requireAuth` class of drift at the source; that specific bug is already fixed uncommitted in the user's boringstack repo.)
