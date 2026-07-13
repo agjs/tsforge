@@ -14,6 +14,7 @@ import {
   resolveCapabilityModel,
   modelsConfigPath,
   defaultModelsConfig,
+  CAPABILITY_NAMES,
 } from "../src/models-config";
 
 // Capability env overrides — cleared before each test and restored after, so the
@@ -369,4 +370,8 @@ test("resolveCapabilityModel: env names a registry entry; imageApi override pars
   const adhoc = await resolveCapabilityModel("imageGen");
 
   expect(adhoc?.entry.imageApi).toBe("images-generations");
+});
+
+test("planner is a routable capability role", () => {
+  expect(CAPABILITY_NAMES).toContain("planner");
 });

@@ -59,7 +59,13 @@ export type ImageApi = "chat-modalities" | "images-generations";
  *  the primary chat model can't do them. Each value NAMES an entry in `models`,
  *  so a capability reuses the same endpoint config (key resolution, headers) as
  *  any chat model. Absent → the capability (and its tool/UX) stays off. */
-export type CapabilityName = "vision" | "imageGen" | "expert";
+export const CAPABILITY_NAMES = [
+  "vision",
+  "imageGen",
+  "expert",
+  "planner",
+] as const;
+export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 
 export interface IModelsConfig {
   /** Name of the active entry — always a key of `models`. */
@@ -360,6 +366,7 @@ export async function resolveCapabilityModel(
     vision: "TSFORGE_VISION",
     imageGen: "TSFORGE_IMAGE",
     expert: "TSFORGE_EXPERT",
+    planner: "TSFORGE_PLANNER",
   };
   const prefix = prefixByCap[cap];
   const envBase = process.env[`${prefix}_BASE_URL`];
