@@ -357,3 +357,23 @@ export async function readPlan(
     return null;
   }
 }
+
+/**
+ * Load an approved plan from ${cwd}/.specs/next.md.
+ * Returns the plan only when status === "approved", else null.
+ */
+export async function loadApprovedPlan(
+  cwd: string
+): Promise<IProductPlan | null> {
+  const result = await readPlan(cwd);
+
+  if (result === null) {
+    return null;
+  }
+
+  if (result.status === "approved") {
+    return result.plan;
+  }
+
+  return null;
+}

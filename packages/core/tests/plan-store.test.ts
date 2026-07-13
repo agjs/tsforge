@@ -4,9 +4,12 @@ import {
   parsePlan,
   writePlan,
   readPlan,
+  loadApprovedPlan,
 } from "../src/loop/planning/plan-store";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
-import { mkdtemp } from "fs/promises";
+import { mkdtemp, rm } from "fs/promises";
+import { join } from "path";
+import { tmpdir } from "os";
 
 const PLAN: IProductPlan = {
   product: "A team bookmarking app.",
@@ -349,4 +352,17 @@ status: draft
 \`\`\``;
 
   expect(parsePlan(malformed)).toBeNull();
+});
+
+test("loadApprovedPlan returns null for a draft, the plan when approved", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "plan-"));
+
+  try {
+    await writePlan(dir, PLAN, "draft");
+    expect(await loadApprovedPlan(dir)).toBeNull();
+    await writePlan(dir, PLAN, "approved");
+    expect((await loadApprovedPlan(dir))?.slices.length).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
