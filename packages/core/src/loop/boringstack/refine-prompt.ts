@@ -1,5 +1,67 @@
 import type { IFeature } from "../greenfield/greenfield.types";
+import type { ISlice } from "../planning/plan-types";
 import { toCamelCase } from "./case";
+
+function productContextSection(slice: ISlice): string {
+  const fieldsList = slice.entity.fields
+    .map((f) => {
+      const optionalMarker = f.optional === true ? " [optional]" : "";
+
+      return `- \`${f.name}\` (${f.type})${optionalMarker}`;
+    })
+    .join("\n");
+
+  const relationshipsList = slice.entity.relationships
+    .map((r) => `- ${r}`)
+    .join("\n");
+
+  const rulesList = slice.entity.rules.map((r) => `- ${r}`).join("\n");
+
+  const screensList = slice.ui.screens.join(", ");
+
+  const showsList = slice.ui.shows.join(", ");
+
+  const mustRemainList = slice.verification.mustRemainTrue
+    .map((m) => `- ${m}`)
+    .join("\n");
+
+  const mustNotList = slice.verification.mustNotHappen
+    .map((m) => `- ${m}`)
+    .join("\n");
+
+  return `## Product Context
+
+### Entity: ${slice.entity.id}
+
+**Fields**:
+${fieldsList}
+
+**Relationships**:
+${relationshipsList}
+
+**Rules**:
+${rulesList}
+
+### UI Intent
+
+**Screens**: ${screensList}
+
+**Primary action**: ${slice.ui.action}
+
+**Display**: ${showsList}
+
+**Navigation**: ${slice.ui.nav}
+
+### Verification Contract
+
+**Must remain true**:
+${mustRemainList}
+
+**Must not happen**:
+${mustNotList}
+
+**Acceptance check**: ${slice.verification.acceptanceCheck}`;
+}
 
 /**
  * Generate the refine prompt that tells the model which files to fill in
@@ -7,12 +69,13 @@ import { toCamelCase } from "./case";
  *
  * The prompt:
  * - Names the resource and its behaviour
+ * - When a slice is provided, includes product context (entity fields, relationships, rules, UI intent, verification contract)
  * - Lists the exact generated files the model must fill
  * - Requires test siblings to be written
  * - Includes domain-fill instructions (real fields, real logic, no `as` casts)
  * - States the FREEZE: only this resource's files are editable
  */
-export function refinePrompt(feature: IFeature): string {
+export function refinePrompt(feature: IFeature, slice?: ISlice): string {
   const camel = toCamelCase(feature.id);
 
   // On a retry, lead with the ACTUAL gate/judge errors from the last attempt so the
@@ -22,9 +85,11 @@ export function refinePrompt(feature: IFeature): string {
       ? ""
       : `\n\n## ⚠️ Your PREVIOUS attempt FAILED the gate — FIX THESE ERRORS FIRST\n\nThe build gate (typecheck / lint / tests / OpenAPI drift) reported:\n\n\`\`\`\n${feature.lastError}\n\`\`\`\n\nAddress every error above before anything else. The same gate must pass this time.\n\n---`;
 
+  const productContext = slice ? `\n\n${productContextSection(slice)}\n` : "";
+
   return `You are implementing the **${feature.id}** resource.
 
-**Behavior**: ${feature.desc}${priorFailure}
+**Behavior**: ${feature.desc}${priorFailure}${productContext}
 
 ---
 

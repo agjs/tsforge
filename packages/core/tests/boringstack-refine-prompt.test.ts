@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
+import type { ISlice } from "../src/loop/planning/plan-types";
 import { refinePrompt } from "../src/loop/boringstack/refine-prompt";
 
 describe("refinePrompt", () => {
@@ -178,5 +179,51 @@ describe("refinePrompt", () => {
 
     expect(prompt).toContain("paymentMethod");
     expect(prompt).toContain("apps/api/src/api/paymentMethod/paymentMethod");
+  });
+
+  it("refinePrompt injects the slice's fields, UI intent, and contract when given a plan slice", () => {
+    const feature: IFeature = {
+      id: "Bookmark",
+      desc: "a link",
+      passes: false,
+      attempts: 0,
+    };
+    const slice: ISlice = {
+      entity: {
+        id: "Bookmark",
+        desc: "a link",
+        fields: [{ name: "description", type: "string", optional: true }],
+        relationships: ["belongsTo User"],
+        rules: ["url required"],
+      },
+      ui: {
+        screens: ["list", "form"],
+        action: "save → list",
+        shows: ["url", "description"],
+        nav: "Bookmarks",
+      },
+      verification: {
+        mustRemainTrue: ["auth"],
+        mustNotHappen: ["no url"],
+        acceptanceCheck: "bun test",
+      },
+    };
+    const p = refinePrompt(feature, slice);
+
+    expect(p).toContain("description"); // the field it kept dropping
+    expect(p).toContain("belongsTo User");
+    expect(p).toContain("save → list"); // UI intent
+    expect(p).toContain("url required"); // rule
+  });
+
+  it("refinePrompt without a slice is unchanged (contains id + desc)", () => {
+    const p = refinePrompt({
+      id: "Bookmark",
+      desc: "a link",
+      passes: false,
+      attempts: 0,
+    });
+
+    expect(p).toContain("Bookmark");
   });
 });
