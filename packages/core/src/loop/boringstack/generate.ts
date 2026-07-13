@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 
-import { wireResource } from "./wire-resource";
+import { wireResource, wireUiFeature } from "./wire-resource";
 import { toCamelCase } from "./case";
 import type { Exec } from "./exec";
 
@@ -87,6 +87,11 @@ export async function generateFeature(
   if (!existsSync(`${uiCwd}/src/features/${camel}`)) {
     await execOrThrow(exec, ["bun", "run", "new:feature", name], uiCwd);
   }
+
+  // Register the feature's page in the SPA router — boringstack's new:feature
+  // leaves routing manual, so without this the page is gate-green but UNREACHABLE
+  // (no URL/nav). Deterministic + idempotent, so it's safe on the retry path too.
+  await wireUiFeature(cwd, name);
 
   // The API must be serving its (reloaded) OpenAPI spec before generate:api fetches
   // it. If it never comes ready, that is almost always the model's OWN in-progress

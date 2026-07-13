@@ -4,7 +4,74 @@ import {
   wireAppFile,
   wireSwaggerFile,
   wireTestHelperFile,
+  wireUiRouteFile,
 } from "../src/loop/boringstack/wire-resource";
+
+/** A minimal stand-in for boringstack's SPA router, carrying the anchors the
+ *  injector keys off (the lazy-import block + the createBrowserRouter array with
+ *  the ProtectedRoute/AppShell/Suspense/Fallback wrapper). */
+const ROUTER_SRC = `import { type FC, Suspense, lazy } from "react";
+import { createBrowserRouter } from "react-router-dom";
+import { AppShell } from "@/components/core/AppShell";
+import { ProtectedRoute } from "./ProtectedRoute";
+
+const Fallback: FC = () => null;
+
+const DashboardPage = lazy(() =>
+  import("@/features/dashboard/components/DashboardPage").then((m) => ({
+    default: m.DashboardPage
+  }))
+);
+
+const router = createBrowserRouter([
+  {
+    path: "/dashboard",
+    element: (
+      <ProtectedRoute>
+        <AppShell>
+          <Suspense fallback={<Fallback />}>
+            <DashboardPage />
+          </Suspense>
+        </AppShell>
+      </ProtectedRoute>
+    )
+  }
+]);
+`;
+
+describe("wireUiRouteFile", () => {
+  test("adds a lazy import + an authenticated route for the feature page", () => {
+    const out = wireUiRouteFile(ROUTER_SRC, "Bookmark");
+
+    expect(out).toContain(
+      'import("@/features/bookmark/components/BookmarkPage/BookmarkPage")'
+    );
+    expect(out).toContain("default: m.BookmarkPage");
+    expect(out).toContain('path: "/bookmark"');
+    expect(out).toContain("<BookmarkPage />");
+    // Wraps in the same ProtectedRoute/AppShell as the other authed routes.
+    expect(out).toContain("<ProtectedRoute>");
+    // Did not disturb the existing route.
+    expect(out).toContain('path: "/dashboard"');
+    // The result still parses as TSX.
+    expect(() =>
+      new Bun.Transpiler({ loader: "tsx" }).transformSync(out)
+    ).not.toThrow();
+  });
+
+  test("is idempotent — re-wiring the same feature is a no-op", () => {
+    const once = wireUiRouteFile(ROUTER_SRC, "Bookmark");
+    const twice = wireUiRouteFile(once, "Bookmark");
+
+    expect(twice).toBe(once);
+  });
+
+  test("throws when the router anchor is missing", () => {
+    expect(() => wireUiRouteFile("export const x = 1;\n", "Bookmark")).toThrow(
+      /Anchor not found/u
+    );
+  });
+});
 
 describe("wireRoutesFile", () => {
   test("adds import + object entry", () => {

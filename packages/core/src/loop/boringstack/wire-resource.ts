@@ -90,6 +90,72 @@ export function wireTestHelperFile(src: string, name: string): string {
   return insertBeforeLast(src, SCHEMA_REEXPORT_ANCHOR, entry);
 }
 
+/**
+ * Register a generated UI feature's page in the SPA router (`app/router/routes.tsx`).
+ * boringstack's `new:feature` deliberately leaves routing manual ("Next: register
+ * the route in src/app/router/routes.tsx"), so without this the page is built and
+ * gate-green but UNREACHABLE — no URL, no nav (observed live: a verified Bookmark
+ * feature had no route). This is the UI analog of `wireRoutesFile`. It adds a lazy
+ * import + an authenticated route object (same ProtectedRoute/AppShell/Suspense
+ * wrapper the other feature routes use) at path `/<camel>`. Idempotent: if the
+ * page is already imported, the source is returned unchanged. Pure — unit-tested.
+ */
+export function wireUiRouteFile(src: string, name: string): string {
+  const camel = toCamelCase(name);
+  const Name = camel.charAt(0).toUpperCase() + camel.slice(1);
+  const importPath = `@/features/${camel}/components/${Name}Page/${Name}Page`;
+
+  // Idempotent (retry-safe): already wired.
+  if (src.includes(importPath)) {
+    return src;
+  }
+
+  const anchor = "createBrowserRouter([";
+  const anchorIndex = src.indexOf(anchor);
+
+  if (anchorIndex === -1) {
+    throw new Error(`Anchor not found: ${anchor}`);
+  }
+
+  const lazyConst =
+    `const ${Name}Page = lazy(() =>\n` +
+    `  import("${importPath}").then((m) => ({\n` +
+    `    default: m.${Name}Page\n` +
+    `  }))\n` +
+    `);\n\n`;
+
+  const routeObject =
+    `\n  {\n` +
+    `    path: "/${camel}",\n` +
+    `    element: (\n` +
+    `      <ProtectedRoute>\n` +
+    `        <AppShell>\n` +
+    `          <Suspense fallback={<Fallback />}>\n` +
+    `            <${Name}Page />\n` +
+    `          </Suspense>\n` +
+    `        </AppShell>\n` +
+    `      </ProtectedRoute>\n` +
+    `    )\n` +
+    `  },`;
+
+  // Insert the route object as the first entry of the router array (a distinct
+  // path — order is irrelevant and it never disturbs a trailing catch-all).
+  const afterAnchor = anchorIndex + anchor.length;
+  const withRoute =
+    src.slice(0, afterAnchor) + routeObject + src.slice(afterAnchor);
+
+  // Declare the lazy page const on the line just before the router statement
+  // (all the other lazy consts sit there too).
+  const routerLineStart =
+    withRoute.lastIndexOf("\n", withRoute.indexOf(anchor)) + 1;
+
+  return (
+    withRoute.slice(0, routerLineStart) +
+    lazyConst +
+    withRoute.slice(routerLineStart)
+  );
+}
+
 export async function wireResource(cwd: string, name: string): Promise<void> {
   const routesPath = join(cwd, "apps/api/src/config/routes/routes.ts");
   const appPath = join(cwd, "apps/api/src/config/app/app.ts");
@@ -122,4 +188,22 @@ export async function wireResource(cwd: string, name: string): Promise<void> {
       "utf-8"
     );
   }
+}
+
+/**
+ * Register a generated UI feature in the SPA router so it is actually reachable.
+ * Guarded by existence: a boringstack variant without this exact router file simply
+ * skips (the page still builds; it just isn't auto-routed) rather than crashing the
+ * generate step. Idempotent via `wireUiRouteFile`.
+ */
+export async function wireUiFeature(cwd: string, name: string): Promise<void> {
+  const routesPath = join(cwd, "apps/ui/src/app/router/routes.tsx");
+
+  if (!existsSync(routesPath)) {
+    return;
+  }
+
+  const src = await readFile(routesPath, "utf-8");
+
+  await writeFile(routesPath, wireUiRouteFile(src, name), "utf-8");
 }
