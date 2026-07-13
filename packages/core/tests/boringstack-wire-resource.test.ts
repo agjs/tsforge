@@ -5,6 +5,7 @@ import {
   wireSwaggerFile,
   wireTestHelperFile,
   wireUiRouteFile,
+  addFeatureI18nKeys,
 } from "../src/loop/boringstack/wire-resource";
 
 /** A minimal stand-in for boringstack's SPA router, carrying the anchors the
@@ -72,6 +73,50 @@ describe("wireUiRouteFile", () => {
     );
   });
 });
+
+describe("addFeatureI18nKeys", () => {
+  test("adds features.<lower>.{title,empty} so the page renders text, not raw keys", () => {
+    const src = JSON.stringify({ dashboard: { title: "Dashboard" } }, null, 2);
+    const out = addFeatureI18nKeys(src, "Bookmark");
+    const parsed: unknown = JSON.parse(out);
+
+    expect(isRecordLike(parsed)).toBe(true);
+    const features = getRecord(parsed, "features");
+    const bookmark = getRecord(features, "bookmark");
+
+    expect(bookmark.title).toBe("Bookmark");
+    expect(typeof bookmark.empty).toBe("string");
+    // Existing namespaces are preserved.
+    expect(getRecord(parsed, "dashboard").title).toBe("Dashboard");
+  });
+
+  test("is idempotent — existing (possibly human-refined) copy is left alone", () => {
+    const src = JSON.stringify(
+      { features: { bookmark: { title: "My Links", empty: "None" } } },
+      null,
+      2
+    );
+
+    expect(addFeatureI18nKeys(src, "Bookmark")).toBe(src);
+  });
+
+  test("returns the source unchanged when it isn't parseable JSON", () => {
+    expect(addFeatureI18nKeys("not json", "Bookmark")).toBe("not json");
+  });
+});
+
+/** Minimal record helpers for asserting on parsed JSON without `as`. */
+function isRecordLike(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function getRecord(v: unknown, key: string): Record<string, unknown> {
+  if (isRecordLike(v) && isRecordLike(v[key])) {
+    return v[key];
+  }
+
+  throw new Error(`expected a record at "${key}"`);
+}
 
 describe("wireRoutesFile", () => {
   test("adds import + object entry", () => {

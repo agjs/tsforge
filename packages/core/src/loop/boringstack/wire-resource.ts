@@ -1,7 +1,8 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { toCamelCase } from "./case";
+import { isRecord } from "../../lib/guards";
 
 /** The `export { … } from "…/schema"` block in `tests/helpers/db.ts` closes with
  *  this line. A new resource's table must be added to that block or a test can't
@@ -199,11 +200,81 @@ export async function wireResource(cwd: string, name: string): Promise<void> {
 export async function wireUiFeature(cwd: string, name: string): Promise<void> {
   const routesPath = join(cwd, "apps/ui/src/app/router/routes.tsx");
 
-  if (!existsSync(routesPath)) {
+  if (existsSync(routesPath)) {
+    const src = await readFile(routesPath, "utf-8");
+
+    await writeFile(routesPath, wireUiRouteFile(src, name), "utf-8");
+  }
+
+  await wireI18nKeys(cwd, name);
+}
+
+/**
+ * Seed the i18n keys the generated feature page renders (`features.<lower>.title`
+ * and `.empty`) into every locale's `common.json`. new:feature emits the page using
+ * those keys but adds no translations, and the i18n lint rule only flags UNUSED
+ * keys (not missing ones), and the page references them via a constant the eslint
+ * i18n-keys plugin can't trace — so without this the page shows raw keys like
+ * "features.bookmark.title" at runtime (found live). Deterministic default copy
+ * (the entity name + a generic empty state); the model/user can refine wording.
+ * Pure `addFeatureI18nKeys` is unit-tested; this walks the locale dirs.
+ */
+export async function wireI18nKeys(cwd: string, name: string): Promise<void> {
+  const localesDir = join(cwd, "apps/ui/src/lib/i18n/locales");
+
+  if (!existsSync(localesDir)) {
     return;
   }
 
-  const src = await readFile(routesPath, "utf-8");
+  const langs = await readdir(localesDir);
 
-  await writeFile(routesPath, wireUiRouteFile(src, name), "utf-8");
+  for (const lang of langs) {
+    const file = join(localesDir, lang, "common.json");
+
+    if (!existsSync(file)) {
+      continue;
+    }
+
+    const src = await readFile(file, "utf-8");
+    const out = addFeatureI18nKeys(src, name);
+
+    if (out !== src) {
+      await writeFile(file, out, "utf-8");
+    }
+  }
+}
+
+/**
+ * Add `features.<lower>.{title,empty}` to a locale `common.json` string with
+ * default copy. Idempotent (returns the source unchanged when the key already
+ * exists) and defensive (returns it unchanged when the JSON can't be parsed or
+ * isn't an object). Pure — unit-tested.
+ */
+export function addFeatureI18nKeys(jsonSrc: string, name: string): string {
+  const camel = toCamelCase(name);
+  const lower = camel.toLowerCase();
+  const Title = camel.charAt(0).toUpperCase() + camel.slice(1);
+
+  let data: unknown;
+
+  try {
+    data = JSON.parse(jsonSrc);
+  } catch {
+    return jsonSrc;
+  }
+
+  if (!isRecord(data)) {
+    return jsonSrc;
+  }
+
+  const features = isRecord(data.features) ? { ...data.features } : {};
+
+  // Idempotent: leave existing copy (possibly human-refined) untouched.
+  if (isRecord(features[lower])) {
+    return jsonSrc;
+  }
+
+  features[lower] = { title: Title, empty: "Nothing here yet." };
+
+  return `${JSON.stringify({ ...data, features }, null, 2)}\n`;
 }
