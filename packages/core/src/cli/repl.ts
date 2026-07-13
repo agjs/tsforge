@@ -737,9 +737,26 @@ export async function repl(args: ICliArgs): Promise<number> {
               `\nApprove this plan? (approve/revise/cancel)\n`
           );
 
-          // Auto-approve to keep the REPL flow smooth;
-          // full interactive review would gather user input here
-          return { action: "approve" };
+          if (rl === null) {
+            echo(
+              "(editor mode: plan review not interactive — run planning again with --plan)\n"
+            );
+
+            return { action: "cancel" };
+          }
+
+          const response = await rl.question("> ");
+          const trimmed = response.trim().toLowerCase();
+
+          if (trimmed === "approve" || trimmed === "a" || trimmed === "y") {
+            return { action: "approve" };
+          }
+
+          if (trimmed === "cancel" || trimmed === "c" || trimmed === "n") {
+            return { action: "cancel" };
+          }
+
+          return { action: "revise", note: response };
         },
         out: echo,
       });

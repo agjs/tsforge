@@ -18,13 +18,46 @@ import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
 import { renderEvent } from "../src/render";
 import { logsDir } from "../src/session-store";
-import { loadApprovedPlan } from "../src/loop/planning/plan-store";
+import { loadApprovedPlan, parsePlan } from "../src/loop/planning/plan-store";
 
 export interface IHeadlessArgs {
   prompt?: string;
   dir?: string;
   logFile?: string;
   planPath?: string;
+}
+
+/**
+ * Validate and install a plan file from planPath to dir/.specs/next.md.
+ * Returns null on success, error message string on failure.
+ */
+async function installPlanFile(
+  planPath: string,
+  dir: string
+): Promise<string | null> {
+  try {
+    const planContent = await Bun.file(planPath).text();
+    const parsed = parsePlan(planContent);
+
+    if (parsed === null) {
+      return `plan file is malformed or missing required fields: ${planPath}`;
+    }
+
+    if (parsed.status !== "approved") {
+      return `plan must have status "approved", but has status "${parsed.status}": ${planPath}`;
+    }
+
+    mkdirSync(join(dir, ".specs"), { recursive: true });
+    const destPath = join(dir, ".specs", "next.md");
+
+    await Bun.write(destPath, planContent);
+
+    return null;
+  } catch (err: unknown) {
+    return `failed to process plan from ${planPath}: ${
+      err instanceof Error ? err.message : String(err)
+    }`;
+  }
 }
 
 /**
@@ -249,21 +282,12 @@ async function main(): Promise<void> {
       process.exit(2);
     }
 
-    // If --plan supplied, load and copy it into the clone's .specs/next.md as approved
+    // If --plan supplied, validate and install it into the clone's .specs/next.md
     if (args.planPath !== undefined) {
-      try {
-        const planContent = await Bun.file(args.planPath).text();
+      const error = await installPlanFile(args.planPath, dir);
 
-        mkdirSync(join(dir, ".specs"), { recursive: true });
-        const destPath = join(dir, ".specs", "next.md");
-
-        await Bun.write(destPath, planContent);
-      } catch (err: unknown) {
-        process.stderr.write(
-          `headless-build: failed to copy plan from ${args.planPath}: ${
-            err instanceof Error ? err.message : String(err)
-          }\n`
-        );
+      if (error !== null) {
+        process.stderr.write(`headless-build: ${error}\n`);
         process.exit(2);
       }
     }
