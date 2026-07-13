@@ -1,5 +1,10 @@
 import { test, expect } from "bun:test";
-import { proposePlan, parsePlanJson } from "../src/loop/planning/propose-plan";
+import {
+  proposePlan,
+  parsePlanJson,
+  PLANNER_EXAMPLE,
+} from "../src/loop/planning/propose-plan";
+import { isProductPlan } from "../src/loop/planning/plan-store";
 import type { IProvider } from "../src/inference";
 
 const mockPlan = {
@@ -142,4 +147,13 @@ test("parsePlanJson rejects invalid plan shape", () => {
   const result = parsePlanJson(invalid);
 
   expect(result).toBeNull();
+});
+
+test("PLANNER_EXAMPLE (the shape shown to the model) is itself a valid plan", () => {
+  // The prompt teaches the model by example. If a future edit breaks the
+  // example's shape, the contract we advertise diverges from what the parser
+  // accepts — and the live model dutifully copies the broken shape. Guard it:
+  // the worked example must round-trip through the same strict guard.
+  expect(isProductPlan(PLANNER_EXAMPLE)).toBe(true);
+  expect(parsePlanJson(JSON.stringify(PLANNER_EXAMPLE))).not.toBeNull();
 });
