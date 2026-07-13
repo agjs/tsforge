@@ -144,9 +144,8 @@ export function buildSteerMessage(
     return (
       `${header}\nSTEP BACK before you touch anything. In 1–2 sentences answer: ` +
       `(a) what have you been repeatedly trying, (b) WHY does it keep failing, ` +
-      `(c) what fundamentally DIFFERENT approach will you take now? Then make ONE ` +
-      `small, targeted edit for that — no whole-file rewrites (they re-introduce ` +
-      `errors you already fixed).`
+      `(c) what fundamentally DIFFERENT approach will you take now? Then make the ` +
+      `change for that — surgical edit or full rewrite, whichever actually fixes it.`
     );
   }
 

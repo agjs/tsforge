@@ -29,12 +29,6 @@ export const LOOP_LIMITS = {
   /** Max chars of a tool's output fed back to the model (keeps context bounded). */
   maxToolOutputChars: 4000,
   /**
-   * Reject an edit replacement spanning more than this many lines — a push
-   * toward surgical changes over lazy whole-file rewrites. 50 admits real
-   * functions, still rejects ~80-line rewrites; the gate re-validates anyway.
-   */
-  maxEditLines: 50,
-  /**
    * Give up after the gate shows the EXACT same error SET this many edits in a
    * row (genuine spinning) — the coarse net. The finer `samePersist` guard
    * (below) usually trips first; this catches a stable-but-shuffling set.

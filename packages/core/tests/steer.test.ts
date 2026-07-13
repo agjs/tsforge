@@ -49,7 +49,9 @@ describe("buildSteerMessage escalation", () => {
     expect(msg).toContain("escalation 1");
     expect(msg).toContain("STEP BACK");
     expect(msg).toContain("DIFFERENT approach"); // reflect, don't feed a rule
-    expect(msg.toLowerCase()).toContain("whole-file");
+    // The fix is whatever works — surgical OR full rewrite; we no longer forbid
+    // whole-file rewrites (forcing surgical edits traps the model).
+    expect(msg.toLowerCase()).toContain("full rewrite");
   });
 
   test("level 2 tells the model to INVESTIGATE with tools (+ pattern for known rules)", () => {
