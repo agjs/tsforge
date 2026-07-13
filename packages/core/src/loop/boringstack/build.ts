@@ -25,10 +25,12 @@ import {
   runExpertHandoff,
 } from "../expert-handoff";
 import { refinePrompt } from "./refine-prompt";
-import { runGreenfield, prepareState } from "../greenfield/run";
+import { runGreenfield } from "../greenfield/run";
 import type { Reporter } from "../loop.types";
-import { planResources } from "./plan-resources";
+import { slicesToFeatures } from "./plan-resources";
 import { toCamelCase } from "./case";
+import { loadApprovedPlan } from "../planning/plan-store";
+import type { ISlice } from "../planning/plan-types";
 
 /** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
  *  `format` (prettier, canonical formatting) then `lint:fix` (eslint --fix for the
@@ -179,8 +181,19 @@ export function boringstackDeps(opts: {
   baseline?: ReadonlySet<string>;
   generate?: (cwd: string, name: string, exec: Exec) => Promise<void>;
   generateUi?: (cwd: string, name: string, exec: Exec) => Promise<void>;
+  /** Look up the plan slice for a feature by its id. Supplied by runBoringstackBuild
+   *  when building from an approved plan; undefined when planning ad-hoc. */
+  sliceFor?: (id: string) => ISlice | undefined;
 }): IGreenfieldDeps {
-  const { host, cwd, exec, evaluator, generate: generateFn, generateUi } = opts;
+  const {
+    host,
+    cwd,
+    exec,
+    evaluator,
+    generate: generateFn,
+    generateUi,
+    sliceFor,
+  } = opts;
   const generate = generateFn ?? generateResource;
   const genUi = generateUi ?? generateFeature;
   const baseline = opts.baseline ?? new Set<string>();
@@ -200,7 +213,9 @@ export function boringstackDeps(opts: {
       host.setScope(scopeFor(feature.id));
 
       // Task 5: Send the refined prompt to the model
-      const prompt = refinePrompt(feature);
+      // If building from a plan, include the plan slice for rich context
+      const slice = sliceFor?.(feature.id);
+      const prompt = refinePrompt(feature, slice);
 
       await host.send(prompt);
 
@@ -338,8 +353,9 @@ export function boringstackDeps(opts: {
 }
 
 /**
- * Run the BoringStack build driver: plan resources and drive them through the
- * greenfield loop (implement → evaluate → persist).
+ * Run the BoringStack build driver: require an approved plan, derive features
+ * from its slices, and drive them through the greenfield loop
+ * (implement → evaluate → persist).
  */
 export async function runBoringstackBuild(opts: {
   cwd: string;
@@ -348,19 +364,30 @@ export async function runBoringstackBuild(opts: {
   exec: Exec;
   host: IBoringstackHost;
   onEvent?: Reporter;
+  generate?: (cwd: string, name: string, exec: Exec) => Promise<void>;
+  generateUi?: (cwd: string, name: string, exec: Exec) => Promise<void>;
 }): Promise<IGreenfieldResult> {
-  const { cwd, goal, evaluator, exec, host, onEvent } = opts;
+  const { cwd, goal, evaluator, exec, host, onEvent, generate, generateUi } =
+    opts;
 
-  // Task 1: Plan resources from the goal
-  const state = await prepareState(cwd, goal, (g: string) =>
-    planResources(evaluator, g).then((features) =>
-      features.length > 0 ? { spec: goal, features } : null
-    )
-  );
+  // Require an approved plan before building
+  const approved = await loadApprovedPlan(cwd);
 
-  if (state === null) {
+  if (approved === null) {
+    return { status: "needs-plan", features: [] };
+  }
+
+  // Derive features from the plan's slices
+  const features = slicesToFeatures(approved.slices);
+
+  if (features.length === 0) {
     return { status: "done", features: [] };
   }
+
+  const state: IGreenfieldState = {
+    goal,
+    features,
+  };
 
   // Capture the BASELINE gate on the pristine scaffold (before any resource is
   // generated) so feature grading is differential — the model is judged only on
@@ -389,6 +416,10 @@ export async function runBoringstackBuild(opts: {
         : "baseline scaffold is GREEN — features graded against a clean gate.",
   });
 
+  // Create a lookup function that maps feature ids to their plan slices
+  const sliceFor = (id: string): ISlice | undefined =>
+    approved.slices.find((slice) => slice.entity.id === id);
+
   // Run the greenfield loop with BoringStack-specific dependencies
   const optsGreenfield: IGreenfieldOptions = {};
 
@@ -399,7 +430,16 @@ export async function runBoringstackBuild(opts: {
   return runGreenfield(
     cwd,
     state,
-    boringstackDeps({ host, cwd, exec, evaluator, baseline }),
+    boringstackDeps({
+      host,
+      cwd,
+      exec,
+      evaluator,
+      baseline,
+      sliceFor,
+      generate,
+      generateUi,
+    }),
     optsGreenfield
   );
 }

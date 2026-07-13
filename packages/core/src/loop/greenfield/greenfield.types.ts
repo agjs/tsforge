@@ -46,7 +46,7 @@ export interface IFeatureVerdict {
 }
 
 export interface IGreenfieldResult {
-  status: "done" | "stuck";
+  status: "done" | "stuck" | "needs-plan";
   features: IFeature[];
   /** When stuck: the feature that exhausted its attempts. */
   stuckFeature?: string;

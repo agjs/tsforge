@@ -2,6 +2,7 @@ import type { IProvider } from "../../inference";
 import { isRecord } from "../../lib/guards";
 import { extractJson } from "../../lib/json";
 import type { IFeature } from "../greenfield/greenfield.types";
+import type { ISlice } from "../planning/plan-types";
 
 /**
  * Validator for resource IDs: PascalCase (e.g., Invoice, Customer).
@@ -151,4 +152,17 @@ export async function planResources(
   const parsed2 = parseResources(res2.content);
 
   return parsed2 ?? [];
+}
+
+/**
+ * Convert a list of plan slices into a feature checklist.
+ * Each slice's entity becomes a feature with id and description.
+ */
+export function slicesToFeatures(slices: readonly ISlice[]): IFeature[] {
+  return slices.map((slice) => ({
+    id: slice.entity.id,
+    desc: slice.entity.desc,
+    passes: false,
+    attempts: 0,
+  }));
 }

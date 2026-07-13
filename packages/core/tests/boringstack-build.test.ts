@@ -3,8 +3,14 @@ import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Exec } from "../src/loop/boringstack/exec";
-import { boringstackDeps, rescueFileFor } from "../src/loop/boringstack/build";
+import {
+  boringstackDeps,
+  rescueFileFor,
+  runBoringstackBuild,
+} from "../src/loop/boringstack/build";
 import type { IProvider } from "../src/inference";
+import { writePlan } from "../src/loop/planning/plan-store";
+import type { IProductPlan } from "../src/loop/planning/plan-types";
 
 function feature(id: string) {
   return { id, desc: `Build ${id} resource`, passes: false, attempts: 0 };
@@ -334,6 +340,84 @@ describe("rescueFileFor", () => {
       };
 
       expect(await rescueFileFor(dir, f)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runBoringstackBuild", () => {
+  test("refuses (needs-plan) when no approved plan exists", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bs-"));
+
+    try {
+      const res = await runBoringstackBuild({
+        cwd: dir,
+        goal: "x",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec: createExec(),
+      });
+
+      expect(res.status).toBe("needs-plan");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("derives features from plan slices and passes slice to refinePrompt", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bs-"));
+
+    try {
+      // Write an approved plan
+      const plan: IProductPlan = {
+        product: "A simple app",
+        slices: [
+          {
+            entity: {
+              id: "Invoice",
+              desc: "A billable unit",
+              fields: [{ name: "amount", type: "number" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list", "detail"],
+              action: "create and view invoices",
+              shows: ["amount", "date"],
+              nav: "Invoices",
+            },
+            verification: {
+              mustRemainTrue: ["auth required"],
+              mustNotHappen: ["unauthenticated access"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      const host = createHost();
+      const res = await runBoringstackBuild({
+        cwd: dir,
+        goal: "simple app",
+        host,
+        evaluator: createEvaluator(),
+        exec: createExec(),
+        // Provide mock generators to avoid actual file I/O
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      // Should NOT return needs-plan since an approved plan exists
+      expect(res.status).not.toBe("needs-plan");
+      // Should have derived the feature from the slice
+      expect(res.features.length).toBeGreaterThan(0);
+      expect(res.features[0]?.id).toBe("Invoice");
+      // Check that the refine prompt contains the slice's entity description
+      expect(host.sent[0]).toContain("Invoice");
+      expect(host.sent[0]).toContain("A billable unit");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
