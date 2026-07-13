@@ -55,19 +55,23 @@ export async function generateResource(
 /** Poll the running API's OpenAPI spec until it responds. After `new:resource` +
  *  `db:push` the dev server hot-reloads; `generate:api` then fetches that spec, so
  *  without a readiness wait it races the reload and dies with "fetch failed". Uses
- *  OPENAPI_URL when set (else BoringStack's dev default :7330). */
-async function waitForApiReady(exec: Exec, cwd: string): Promise<void> {
+ *  OPENAPI_URL when set (else BoringStack's dev default :7330). Returns whether the
+ *  API came ready (does NOT throw) — a persistently-down API is almost always the
+ *  model's own in-progress code crashing the dev server, and the caller must NOT
+ *  dead-end the build on it. */
+async function apiIsReady(exec: Exec, cwd: string): Promise<boolean> {
   const url = process.env.OPENAPI_URL ?? "http://localhost:7330/swagger/json";
 
-  await execOrThrow(
-    exec,
+  const res = await exec(
     [
       "bash",
       "-lc",
-      `for i in $(seq 1 45); do curl -sf -o /dev/null "${url}" && exit 0; sleep 2; done; echo "api not ready at ${url} after 90s" >&2; exit 1`,
+      `for i in $(seq 1 45); do curl -sf -o /dev/null "${url}" && exit 0; sleep 2; done; exit 1`,
     ],
-    cwd
+    { cwd }
   );
+
+  return res.code === 0;
 }
 
 export async function generateFeature(
@@ -84,8 +88,16 @@ export async function generateFeature(
     await execOrThrow(exec, ["bun", "run", "new:feature", name], uiCwd);
   }
 
-  // The API must be serving its (reloaded) OpenAPI spec before generate:api fetches it.
-  await waitForApiReady(exec, cwd);
+  // The API must be serving its (reloaded) OpenAPI spec before generate:api fetches
+  // it. If it never comes ready, that is almost always the model's OWN in-progress
+  // code crashing the dev server (e.g. a Drizzle column type used without importing
+  // it → ReferenceError on boot). Do NOT abort the build here — skip the client sync
+  // and let the GATE surface the real, actionable compiler error (which the model can
+  // fix), instead of dead-ending every later attempt at "api not ready". The next
+  // attempt, once the model fixes the schema, re-runs generate:api against a healthy API.
+  if (!(await apiIsReady(exec, cwd))) {
+    return;
+  }
 
   await execOrThrow(exec, ["bun", "run", "generate:api"], uiCwd);
 }

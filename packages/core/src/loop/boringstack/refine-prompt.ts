@@ -99,6 +99,7 @@ You MUST fill in these generated files for the **${feature.id}** resource:
 
 ### Persistence (apps/api/src/clients/postgres/schema/app.schema.ts)
 - The \`${camel}\` Drizzle table is generated with only stub columns (\`id\`, \`userId\`, \`name\`, timestamps). **Add the real domain columns to it** — one column per field listed under Product Context above (choose the right Drizzle type: \`varchar\`/\`text\` for strings, \`boolean().notNull().default(false)\` for booleans, \`integer\`/\`numeric\` for numbers, \`timestamp\` for dates; make \`[optional]\` fields nullable). These columns are what actually persists — the service and types must read/write REAL columns, never in-memory-only fields.
+- **Import every column builder you use.** If you add a \`boolean\`/\`text\`/\`integer\`/\`numeric\`/\`jsonb\` column, that identifier MUST be added to the existing \`import { ... } from "drizzle-orm/pg-core"\` line at the top of the file. A missing import is a \`ReferenceError\` that crashes the API on boot — the #1 cause of a failed build here.
 - Edit ONLY the \`${camel}\` table. Do NOT touch any other table in this file.
 
 ### API Layer (apps/api/src/api/${camel}/)

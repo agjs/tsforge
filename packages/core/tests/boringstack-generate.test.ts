@@ -156,4 +156,31 @@ describe("generateFeature", () => {
       /feature gen failed/
     );
   });
+
+  test("does NOT throw and SKIPS generate:api when the API never comes ready", async () => {
+    // A persistently-down API (curl readiness loop → exit 1) is almost always the
+    // model's own in-progress schema/code crashing the dev server. generateFeature
+    // must NOT abort the build — it skips the client sync so the GATE surfaces the
+    // real compiler error, instead of every later attempt dead-ending at readiness.
+    const calls: string[][] = [];
+
+    const exec = async (argv: readonly string[]) => {
+      calls.push([...argv]);
+      const cmd = argv.join(" ");
+
+      // new:feature succeeds; the curl readiness probe never succeeds.
+      return cmd.includes("curl")
+        ? { code: 1, stdout: "", stderr: "" }
+        : { code: 0, stdout: "", stderr: "" };
+    };
+
+    // Must resolve, not reject.
+    await generateFeature("/repo", "Dashboard", exec);
+
+    const joined = calls.map((c) => c.join(" "));
+
+    expect(joined.some((c) => c.includes("curl"))).toBe(true);
+    // generate:api is skipped because the API isn't serving.
+    expect(joined.some((c) => c.includes("generate:api"))).toBe(false);
+  });
 });
