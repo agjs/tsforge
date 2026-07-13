@@ -68,7 +68,5 @@ export async function proposePlan(
     { temperature: 0.7 }
   );
 
-  const parsed2 = parsePlanJson(res2.content);
-
-  return parsed2 ?? null;
+  return parsePlanJson(res2.content);
 }

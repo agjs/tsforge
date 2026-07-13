@@ -29,14 +29,9 @@ export async function runPlanning(
 
     if (plan === null) {
       deps.out("Failed to propose a plan. Please try again.");
-
-      if (revisionCount < maxRevisions) {
-        currentInput = await deps.describe();
-        revisionCount++;
-        continue;
-      }
-
-      return "cancelled";
+      currentInput = await deps.describe();
+      revisionCount++;
+      continue;
     }
 
     const decision = await deps.review(plan);

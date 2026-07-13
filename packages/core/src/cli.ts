@@ -733,9 +733,7 @@ async function greenfieldMode(args: ICliArgs): Promise<number> {
         ? "⚠ build requires an approved plan"
         : `✗ stuck on '${result.stuckFeature ?? "?"}'`;
 
-  process.stdout.write(
-    `\n${statusMsg} (${done}/${result.features.length})\n`
-  );
+  process.stdout.write(`\n${statusMsg} (${done}/${result.features.length})\n`);
 
   await runNotify(
     args.dir,
