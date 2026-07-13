@@ -249,7 +249,15 @@ export async function openScaffoldInRepl(
         outcome.bootError,
         outcome.summary
       );
-    } catch (err) {
+
+      // For boringstack, planning will be triggered by the REPL interception when the
+      // user tries to build for the first time. No need to run it here during scaffold.
+      if (archetype === "boringstack") {
+        deps.out(
+          "\n✓ scaffold complete — run planning when you submit your first build request\n"
+        );
+      }
+    } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
 
       deps.out(`scaffold failed: ${message}\n`);

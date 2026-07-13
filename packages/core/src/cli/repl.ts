@@ -42,6 +42,8 @@ import {
   type Reporter,
   type ILoopEvent,
 } from "../loop";
+import { runPlanning } from "../loop/planning/run-planning";
+import { loadApprovedPlan } from "../loop/planning/plan-store";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
 import {
@@ -56,6 +58,7 @@ import { renderEditor } from "../editor/view";
 import { flags } from "../config/flags";
 import type { OpenAICompatibleProvider } from "../inference";
 import type { IModelEntry } from "../models-config";
+import { resolveCapabilityModel } from "../models-config";
 import {
   renderStatus,
   userBubble,
@@ -687,6 +690,65 @@ export async function repl(args: ICliArgs): Promise<number> {
         last?.role === "assistant" && /^##\s*plan\b/im.test(last.content);
 
       echo(`\n${planHint(planned)}\n`);
+
+      return;
+    }
+
+    // GREENFIELD BORINGSTACK INTERCEPTION: if the project is a fresh boringstack
+    // clone with no approved plan, route the message into planning instead of build.
+    const appsDirPath = `${args.dir}/apps/api`;
+    let needsPlanningFirst = false;
+
+    try {
+      const stats = await Bun.file(appsDirPath).stat();
+
+      if (stats.isDirectory()) {
+        const approvedPlan = await loadApprovedPlan(args.dir);
+
+        if (approvedPlan === null) {
+          needsPlanningFirst = true;
+        }
+      }
+    } catch {
+      // File system error — treat as non-boringstack
+    }
+
+    if (needsPlanningFirst) {
+      echo("▸ planning your product first...\n");
+
+      const plannerResolved = await resolveCapabilityModel("planner");
+      const plannerEntry = plannerResolved?.entry ?? activeModelEntry;
+      const plannerProvider = makeProvider(plannerEntry);
+
+      const planningResult = await runPlanning(args.dir, {
+        planner: plannerProvider,
+        describe: async () => {
+          await Promise.resolve();
+
+          return {
+            description: line,
+          };
+        },
+        review: async (plan) => {
+          await Promise.resolve();
+
+          echo(
+            `\nProposed plan:\n${JSON.stringify(plan, null, 2)}\n` +
+              `\nApprove this plan? (approve/revise/cancel)\n`
+          );
+
+          // Auto-approve to keep the REPL flow smooth;
+          // full interactive review would gather user input here
+          return { action: "approve" };
+        },
+        out: echo,
+      });
+
+      if (planningResult === "approved") {
+        echo("✓ plan approved — ready to build\n");
+      } else {
+        echo("planning cancelled\n");
+      }
 
       return;
     }

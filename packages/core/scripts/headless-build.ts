@@ -4,7 +4,7 @@
 // pre-scaffolded + booted BoringStack clone (from `tsforge scaffold --archetype
 // boringstack`):
 //
-//   bun run packages/core/scripts/headless-build.ts "<build goal>" <clone-dir> [--log-file <path>]
+//   bun run packages/core/scripts/headless-build.ts "<build goal>" <clone-dir> [--log-file <path>] [--plan <file>]
 //
 // The driver plans resources, runs BoringStack's generators + wiring per resource,
 // the model fills the domain, and BoringStack's own `validate`/`check` is the gate.
@@ -18,6 +18,52 @@ import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
 import { renderEvent } from "../src/render";
 import { logsDir } from "../src/session-store";
+import { loadApprovedPlan } from "../src/loop/planning/plan-store";
+
+export interface IHeadlessArgs {
+  prompt?: string;
+  dir?: string;
+  logFile?: string;
+  planPath?: string;
+}
+
+/**
+ * Parse headless-build command-line arguments into typed fields.
+ * Flags (--log-file, --plan) and positionals (prompt, dir) can appear in any order.
+ * Returns an object with undefined fields for missing args.
+ */
+export function parseHeadlessArgs(argv: string[]): IHeadlessArgs {
+  const args = [...argv];
+  let logFile: string | undefined;
+  let planPath: string | undefined;
+
+  // Extract --log-file flag
+  const logFlagAt = args.indexOf("--log-file");
+
+  if (logFlagAt >= 0) {
+    logFile = args[logFlagAt + 1];
+    args.splice(logFlagAt, 2);
+  }
+
+  // Extract --plan flag
+  const planFlagAt = args.indexOf("--plan");
+
+  if (planFlagAt >= 0) {
+    planPath = args[planFlagAt + 1];
+    args.splice(planFlagAt, 2);
+  }
+
+  // After flag extraction, the remaining positional args are: [prompt, dir, ...]
+  const prompt = args[0];
+  const dir = args[1];
+
+  return {
+    prompt,
+    dir,
+    logFile,
+    planPath,
+  };
+}
 
 /** Tee progress to the terminal, a human-readable agent.log IN THE CLONE (so you
  *  can `tail -f <clone>/agent.log` next to the code), and a JSONL log for scoring. */
@@ -169,21 +215,12 @@ async function driveBuild(
 }
 
 async function main(): Promise<void> {
-  // `--log-file <path>`: write the JSONL event log to a CALLER-CHOSEN path (so a
-  // driver can find this run's events deterministically). Stripped before the
-  // positional-arg logic.
-  let logFileOverride: string | undefined;
-  const logFlagAt = process.argv.indexOf("--log-file");
+  // Parse argv: extract flags (--log-file, --plan) and positionals (prompt, dir)
+  // in any order.
+  const args = parseHeadlessArgs(process.argv.slice(2));
 
-  if (logFlagAt >= 0) {
-    logFileOverride = process.argv[logFlagAt + 1];
-    process.argv = process.argv.filter(
-      (_, i) => i !== logFlagAt && i !== logFlagAt + 1
-    );
-  }
-
-  const prompt = process.argv[2];
-  const dir = process.argv[3];
+  const prompt = args.prompt;
+  const dir = args.dir;
 
   if (
     prompt === undefined ||
@@ -192,9 +229,44 @@ async function main(): Promise<void> {
     dir.length === 0
   ) {
     process.stderr.write(
-      'usage: headless-build.ts "<build goal>" <boringstack-clone-dir> [--log-file <path>]\n'
+      'usage: headless-build.ts "<build goal>" <boringstack-clone-dir> [--log-file <path>] [--plan <file>]\n'
     );
     process.exit(2);
+  }
+
+  // For a greenfield boringstack clone (has apps/api directory), enforce that an
+  // approved plan is either already in place or supplied via --plan.
+  if (existsSync(join(dir, "apps", "api"))) {
+    const approvedPlan = await loadApprovedPlan(dir);
+
+    if (approvedPlan === null && args.planPath === undefined) {
+      process.stderr.write(
+        `headless-build: greenfield boringstack clone requires an approved plan\n` +
+          `  no approved plan found at ${dir}/.specs/next.md\n` +
+          `  and no --plan <file> supplied\n` +
+          `run planning first or pass --plan <file>\n`
+      );
+      process.exit(2);
+    }
+
+    // If --plan supplied, load and copy it into the clone's .specs/next.md as approved
+    if (args.planPath !== undefined) {
+      try {
+        const planContent = await Bun.file(args.planPath).text();
+
+        mkdirSync(join(dir, ".specs"), { recursive: true });
+        const destPath = join(dir, ".specs", "next.md");
+
+        await Bun.write(destPath, planContent);
+      } catch (err: unknown) {
+        process.stderr.write(
+          `headless-build: failed to copy plan from ${args.planPath}: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
+        );
+        process.exit(2);
+      }
+    }
   }
 
   // The model comes from the registry (~/.tsforge/models.json) unless TSFORGE_*
@@ -212,7 +284,15 @@ async function main(): Promise<void> {
     .replace(/[:T]/g, "-")
     .replace(/\..+$/, "");
 
-  await driveBuild(dir, prompt, entry, contextWindow, logFileOverride, stamp);
+  await driveBuild(dir, prompt, entry, contextWindow, args.logFile, stamp);
 }
 
-void main();
+// Only run main() when actually invoked as a script (not imported for tests)
+if (import.meta.main) {
+  void main().catch((err: unknown) => {
+    process.stderr.write(
+      `${err instanceof Error ? err.message : String(err)}\n`
+    );
+    process.exit(1);
+  });
+}
