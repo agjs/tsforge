@@ -19,6 +19,7 @@ import { detectContextWindow } from "../src/cli/model-setup";
 import { renderEvent } from "../src/render";
 import { logsDir } from "../src/session-store";
 import { loadApprovedPlan, parsePlan } from "../src/loop/planning/plan-store";
+import { readHostPorts, hostPortOr } from "../src/scaffold";
 
 export interface IHeadlessArgs {
   prompt?: string;
@@ -291,6 +292,23 @@ async function main(): Promise<void> {
         process.exit(2);
       }
     }
+
+    // Per-project isolation: the clone published its stack on the host ports
+    // tsforge allocated (in infra/compose/compose/.env), NOT the upstream
+    // defaults. Point the build loop's DB + OpenAPI URLs at those ports so
+    // db:push, the tests, and generate:api reach THIS project's stack — without
+    // this, an isolated clone builds against localhost:5432/7330 and fails.
+    // An explicit env override always wins (set below only when unset).
+    const ports = readHostPorts(dir);
+    const pgPort = hostPortOr(ports, "POSTGRES_HOST_PORT");
+    const apiPort = hostPortOr(ports, "API_HOST_PORT");
+
+    process.env.TSFORGE_BORINGSTACK_DATABASE_URL ??= `postgresql://app:app_dev_password@localhost:${String(pgPort)}/app`;
+    process.env.OPENAPI_URL ??= `http://localhost:${String(apiPort)}/swagger/json`;
+
+    process.stdout.write(
+      `isolated ports → postgres ${String(pgPort)} · api ${String(apiPort)}\n`
+    );
   }
 
   // The model comes from the registry (~/.tsforge/models.json) unless TSFORGE_*

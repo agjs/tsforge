@@ -62,6 +62,30 @@ describe("bootStack", () => {
     ]);
   });
 
+  test("remaps health URLs to the project's allocated host ports", async () => {
+    const seen: string[] = [];
+
+    const poll: IReadyPoller = (url) => {
+      seen.push(url);
+
+      return Promise.resolve(200);
+    };
+
+    const result = await bootStack(DIR, MANIFEST, {
+      run: shell(0),
+      poll,
+      // An isolated project publishes its stack on these host ports, not 7330/7331.
+      hostPorts: { API_HOST_PORT: 52002, UI_HOST_PORT: 52003 },
+    });
+
+    expect(result.booted).toBe(true);
+    // The health check must hit the ALLOCATED ports, else it false-fails.
+    expect(seen).toEqual([
+      "http://localhost:52003/",
+      "http://localhost:52002/swagger/json",
+    ]);
+  });
+
   test("not booted when a health URL never answers", async () => {
     const poll: IReadyPoller = (url) =>
       Promise.resolve(url.includes("7330") ? null : 200);

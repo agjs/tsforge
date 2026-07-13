@@ -45,7 +45,11 @@ export async function generateResource(
   // just-formatted output would then FAIL the gate's format check.
   await execOrThrow(exec, ["bun", "run", "format"], apiCwd);
 
-  await execOrThrow(exec, ["bun", "run", "db:push"], apiCwd);
+  // `--force` auto-approves drizzle-kit's data-loss statements so `db:push` never
+  // blocks on its interactive confirmation prompt (which hangs forever in the
+  // harness's non-TTY exec). Safe here: the build DB holds no real data, and when
+  // the model iterates on a schema the drop/recreate MUST proceed unattended.
+  await execOrThrow(exec, ["bun", "run", "db:push", "--", "--force"], apiCwd);
 }
 
 /** Poll the running API's OpenAPI spec until it responds. After `new:resource` +
