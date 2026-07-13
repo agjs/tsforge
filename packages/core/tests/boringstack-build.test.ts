@@ -7,6 +7,8 @@ import {
   boringstackDeps,
   rescueFileFor,
   runBoringstackBuild,
+  scopeFor,
+  APP_SCHEMA_FILE,
 } from "../src/loop/boringstack/build";
 import type { IProvider } from "../src/inference";
 import { writePlan } from "../src/loop/planning/plan-store";
@@ -129,6 +131,28 @@ describe("boringstackDeps.implement", () => {
       "/repo/apps/api",
       "/repo/apps/ui",
     ]);
+    // After the model's edits, the DB is re-synced so any domain columns the model
+    // added to its table actually persist before the gate runs.
+    expect(forCmd("bun run db:push -- --force")).toContain("/repo/apps/api");
+  });
+
+  test("freezes the entity's Drizzle schema INTO scope so the model can add real columns", async () => {
+    const host = createHost();
+
+    const deps = boringstackDeps({
+      host,
+      cwd: "/repo",
+      exec: createExec(),
+      evaluator: createEvaluator(),
+      generate: async () => undefined,
+      generateUi: async () => undefined,
+    });
+
+    await deps.implement(feature("Invoice"), state());
+
+    // The shared app schema (where the entity's columns live) MUST be editable —
+    // otherwise the model can only fake persistence in memory.
+    expect(host.scopes[0]).toContain(APP_SCHEMA_FILE);
   });
 
   test("uses default generateResource when generate not injected", async () => {
@@ -145,6 +169,17 @@ describe("boringstackDeps.implement", () => {
 
     // Just verify it has the implement method and correct signature
     expect(typeof deps.implement).toBe("function");
+  });
+});
+
+describe("scopeFor", () => {
+  test("includes the resource dir, tests, UI feature, AND the app schema file", () => {
+    const scope = scopeFor("Invoice");
+
+    expect(scope).toContain("apps/api/src/api/invoice/**");
+    expect(scope).toContain("apps/api/tests/api/invoice/**");
+    expect(scope).toContain("apps/ui/src/features/invoice/**");
+    expect(scope).toContain(APP_SCHEMA_FILE);
   });
 });
 

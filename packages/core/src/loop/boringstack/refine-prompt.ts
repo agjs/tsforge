@@ -97,6 +97,10 @@ export function refinePrompt(feature: IFeature, slice?: ISlice): string {
 
 You MUST fill in these generated files for the **${feature.id}** resource:
 
+### Persistence (apps/api/src/clients/postgres/schema/app.schema.ts)
+- The \`${camel}\` Drizzle table is generated with only stub columns (\`id\`, \`userId\`, \`name\`, timestamps). **Add the real domain columns to it** — one column per field listed under Product Context above (choose the right Drizzle type: \`varchar\`/\`text\` for strings, \`boolean().notNull().default(false)\` for booleans, \`integer\`/\`numeric\` for numbers, \`timestamp\` for dates; make \`[optional]\` fields nullable). These columns are what actually persists — the service and types must read/write REAL columns, never in-memory-only fields.
+- Edit ONLY the \`${camel}\` table. Do NOT touch any other table in this file.
+
 ### API Layer (apps/api/src/api/${camel}/)
 - \`apps/api/src/api/${camel}/${camel}.schemas.ts\` — Zod schemas for request/response validation
 - \`apps/api/src/api/${camel}/${camel}.types.ts\` — TypeScript types for domain entities and DTO objects
@@ -150,6 +154,7 @@ Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` o
 
 ## Domain-Fill Instructions
 
+- **Persist for real**: every domain field must be a real column on the \`${camel}\` table (see Persistence above) that the service inserts/selects/updates via Drizzle. NEVER hold a field only in memory to satisfy a test — that stores nothing and is a failed implementation.
 - **Use real fields**: Populate schemas and types with meaningful fields that match the resource's behavior (${feature.desc}). Avoid placeholder names like \`field1\`, \`data\`, or \`value\`.
 - **Implement real logic**: Write actual service methods that perform the described behaviour. No stubs, no empty functions.
 - **No \`as\` type casts**: Use proper types and inference. Cast-free code is a house rule.
@@ -160,8 +165,8 @@ Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` o
 
 ## Freeze
 
-⚠️ **FREEZE**: Only the files above for the **${feature.id}** resource are editable. All other files in the repository are locked. Do not modify:
-- Database schemas or migrations
+⚠️ **FREEZE**: Only the files above for the **${feature.id}** resource are editable — that includes adding your entity's columns to the \`${camel}\` table in the app schema. All other files are locked. Do not modify:
+- Any table OTHER than \`${camel}\` in the app schema; no migrations
 - Root configuration files
 - Routes wiring (already done for this resource)
 - Other resources' files

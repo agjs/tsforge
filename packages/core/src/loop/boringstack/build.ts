@@ -76,6 +76,14 @@ export async function rescueFileFor(
  * Generate the scope globs for a resource: the files the model is allowed to edit
  * for this feature.
  */
+/** The shared Drizzle schema file that holds every app-domain table (including the
+ *  one `new:resource` generates for a feature). The model MUST be able to add its
+ *  entity's domain columns here — otherwise it can only fake persistence in memory,
+ *  which passes the mocked tests but stores nothing. It's instructed (refinePrompt)
+ *  to touch ONLY its own table. */
+export const APP_SCHEMA_FILE =
+  "apps/api/src/clients/postgres/schema/app.schema.ts";
+
 export function scopeFor(name: string): string[] {
   const camel = toCamelCase(name);
 
@@ -83,6 +91,9 @@ export function scopeFor(name: string): string[] {
     `apps/api/src/api/${camel}/**`,
     `apps/api/tests/api/${camel}/**`,
     `apps/ui/src/features/${camel}/**`,
+    // The entity's table + columns live in the shared app schema (not the resource
+    // dir), so a greenfield build must let the model add its domain columns there.
+    APP_SCHEMA_FILE,
   ];
 }
 
@@ -224,6 +235,15 @@ export function boringstackDeps(opts: {
       // shouldn't cost the model an attempt — a dev gets them on save. Only genuine
       // (non-auto-fixable) violations reach the gate as feedback.
       await autofixApps(cwd, exec);
+
+      // The model may have just added domain columns to its table. Sync them to the
+      // DB so the gate — and the running API the gate's OpenAPI check hits — see the
+      // real schema. (`generate` only db:pushes the STUB schema, before these edits.)
+      // Best-effort: a broken schema edit surfaces as a typecheck failure at the
+      // gate, so a non-zero db:push here must not abort the attempt.
+      await exec(["bun", "run", "db:push", "--", "--force"], {
+        cwd: join(cwd, "apps/api"),
+      });
     },
 
     async evaluate(feature: IFeature) {

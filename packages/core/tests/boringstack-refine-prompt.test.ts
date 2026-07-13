@@ -71,6 +71,26 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("apps/api/src/api/invoice/invoice.schemas.ts");
   });
 
+  it("instructs adding real domain columns to the entity's Drizzle table", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // The model must be told to add columns to the shared schema, and to touch
+    // ONLY its own table — this is what makes persistence real, not in-memory.
+    expect(prompt).toContain(
+      "apps/api/src/clients/postgres/schema/app.schema.ts"
+    );
+    expect(prompt).toContain("invoice");
+    expect(prompt.toLowerCase()).toContain("persist");
+    expect(prompt).toMatch(/do not touch any other table/iu);
+  });
+
   it("contains the API service file path", () => {
     const feature: IFeature = {
       id: "Invoice",
