@@ -212,7 +212,7 @@ function isSlice(value: unknown): value is ISlice {
 /**
  * Guard: validate a product plan shape.
  */
-function isProductPlan(value: unknown): value is IProductPlan {
+export function isProductPlan(value: unknown): value is IProductPlan {
   if (!isRecord(value)) {
     return false;
   }
