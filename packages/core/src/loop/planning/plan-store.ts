@@ -119,7 +119,11 @@ function isUiIntent(value: unknown): value is IUiIntent {
 
   const validScreens = ["list", "detail", "form", "dashboard"];
 
-  if (!value.screens.every((s) => validScreens.includes(String(s)))) {
+  if (
+    !value.screens.every(
+      (s) => typeof s === "string" && validScreens.includes(s)
+    )
+  ) {
     return false;
   }
 

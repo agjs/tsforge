@@ -165,3 +165,368 @@ status: draft
 
   expect(parsePlan(malformed)).toBeNull();
 });
+
+test("parsePlan rejects verification with empty mustNotHappen array", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "Bookmark",
+        "desc": "a saved link",
+        "fields": [
+          { "name": "url", "type": "string" }
+        ],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": ["list"],
+        "action": "test",
+        "shows": ["url"],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": [],
+        "acceptanceCheck": "test"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
+
+test("parsePlan rejects ui.screens with invalid string value", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "Bookmark",
+        "desc": "a saved link",
+        "fields": [
+          { "name": "url", "type": "string" }
+        ],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": ["list", "invalid"],
+        "action": "test",
+        "shows": ["url"],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": ["test"],
+        "acceptanceCheck": "test"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
+
+test("parsePlan rejects ui.screens with non-string value", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "Bookmark",
+        "desc": "a saved link",
+        "fields": [
+          { "name": "url", "type": "string" }
+        ],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": ["list", 5],
+        "action": "test",
+        "shows": ["url"],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": ["test"],
+        "acceptanceCheck": "test"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
+
+test("parsePlan rejects entity with empty id", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "",
+        "desc": "a saved link",
+        "fields": [
+          { "name": "url", "type": "string" }
+        ],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": ["list"],
+        "action": "test",
+        "shows": ["url"],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": ["test"],
+        "acceptanceCheck": "test"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
+
+test("parsePlan rejects field with empty name", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "Bookmark",
+        "desc": "a saved link",
+        "fields": [
+          { "name": "", "type": "string" }
+        ],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": ["list"],
+        "action": "test",
+        "shows": ["url"],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": ["test"],
+        "acceptanceCheck": "test"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
+
+test("parsePlan rejects verification with empty mustNotHappen array", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "Test",
+        "desc": "test",
+        "fields": [],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": ["list"],
+        "action": "test action",
+        "shows": [],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": [],
+        "acceptanceCheck": "test check"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
+
+test("parsePlan rejects ui.screens with invalid screen string", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "Test",
+        "desc": "test",
+        "fields": [],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": ["invalid"],
+        "action": "test action",
+        "shows": [],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": ["test"],
+        "acceptanceCheck": "test check"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
+
+test("parsePlan rejects ui.screens with non-string value", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "Test",
+        "desc": "test",
+        "fields": [],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": [5],
+        "action": "test action",
+        "shows": [],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": ["test"],
+        "acceptanceCheck": "test check"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
+
+test("parsePlan rejects entity with empty id", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "",
+        "desc": "test",
+        "fields": [],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": ["list"],
+        "action": "test action",
+        "shows": [],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": ["test"],
+        "acceptanceCheck": "test check"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
+
+test("parsePlan rejects field with empty name", () => {
+  const malformed = `---
+status: draft
+---
+\`\`\`json
+{
+  "product": "test",
+  "slices": [
+    {
+      "entity": {
+        "id": "Test",
+        "desc": "test",
+        "fields": [
+          {
+            "name": "",
+            "type": "string"
+          }
+        ],
+        "relationships": [],
+        "rules": []
+      },
+      "ui": {
+        "screens": ["list"],
+        "action": "test action",
+        "shows": [],
+        "nav": "Test"
+      },
+      "verification": {
+        "mustRemainTrue": [],
+        "mustNotHappen": ["test"],
+        "acceptanceCheck": "test check"
+      }
+    }
+  ]
+}
+\`\`\``;
+
+  expect(parsePlan(malformed)).toBeNull();
+});
