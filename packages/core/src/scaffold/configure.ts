@@ -217,6 +217,21 @@ export async function applyScaffold(
     secret: false,
   }));
 
+  // The API builds browser-facing links (email verification, billing redirects)
+  // from FRONTEND_URL, which the dev api reads via `API_DEV_FRONTEND_URL` (compose
+  // default http://localhost:7331). With isolation the UI is on a DYNAMIC host port,
+  // so point FRONTEND_URL at THAT port — otherwise the verification link a user
+  // clicks 404s on :7331 instead of the project's real UI (found live).
+  const uiPort = allocated.find((a) => a.key === "UI_HOST_PORT")?.port;
+
+  if (uiPort !== undefined) {
+    composeWrites.push({
+      key: "API_DEV_FRONTEND_URL",
+      value: `http://localhost:${String(uiPort)}`,
+      secret: false,
+    });
+  }
+
   // Initial superuser (from the wizard) — seeded on first boot by the migrate
   // task's db:seed, which reads SUPERUSER_EMAIL/SUPERUSER_PASSWORD from this file.
   // Written BEFORE boot (this runs before maybeBoot), so the seed picks it up. The

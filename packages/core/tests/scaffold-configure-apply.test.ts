@@ -189,6 +189,11 @@ describe("applyScaffold — initial superuser", () => {
 
     expect(compose).toContain("SUPERUSER_EMAIL=admin@acme.com");
     expect(compose).toContain("SUPERUSER_PASSWORD=hunter2-hunter2");
+    // Browser-facing links (email verification) must target the project's DYNAMIC
+    // UI port, not the hardcoded default 7331. Ports allocate in PORT_ENV_KEYS order
+    // from 40000, so UI_HOST_PORT (4th) is 40003.
+    expect(compose).toContain("UI_HOST_PORT=40003");
+    expect(compose).toContain("API_DEV_FRONTEND_URL=http://localhost:40003");
     // The password must NEVER appear in the (logged) summary — only the key.
     expect(result.summary.join("\n")).toContain(
       "SUPERUSER_EMAIL=admin@acme.com"
