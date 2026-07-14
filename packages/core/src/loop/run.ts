@@ -698,6 +698,11 @@ async function runMainLoop(args: {
     const temperature = override?.temperature ?? args.temperature;
     const reasoningEffort = override?.reasoningEffort;
 
+    // Clear the pending override immediately after reading it into locals, BEFORE
+    // the provider call. If complete() throws, this ensures the override won't leak
+    // into the next successful call (exception-safe one-shot semantics).
+    args.state.pendingModelOverride = null;
+
     const res = await args.provider.complete(
       args.messages,
       completionOptionsFor({
@@ -711,9 +716,6 @@ async function runMainLoop(args: {
         taskId: args.taskId,
       })
     );
-
-    // Clear the pending model override after this call completes (one-shot, next turn only).
-    args.state.pendingModelOverride = null;
 
     args.messages.push({
       role: "assistant",

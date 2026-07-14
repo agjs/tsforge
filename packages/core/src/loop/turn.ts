@@ -28,6 +28,7 @@ import { unseenGuidesForErrors } from "./conventions";
 import {
   buildSteerMessage,
   essentialMessages,
+  isTrivialDiagnosis,
   STEER_LADDER_MAX,
 } from "./feedback/steer";
 import {
@@ -928,43 +929,6 @@ export function fingerprintFor(
 
   // No stall active.
   return "";
-}
-
-/** Detect whether a diagnosis is too trivial to count as a distinct lever (R1).
- *  Trivial = short text (< 80 chars) or the diagnosis only restates the errors
- *  without new insight. */
-export function isTrivialDiagnosis(
-  content: string,
-  errors: IErrorItem[]
-): boolean {
-  const trimmed = content.trim();
-
-  // Short output is trivial.
-  if (trimmed.length < 80) {
-    return true;
-  }
-
-  // Normalize: lowercase, remove punctuation/whitespace for comparison.
-  const normalized = trimmed
-    .toLowerCase()
-    .replace(/[^\w\s:.-]/g, " ")
-    .replace(/\s+/g, " ");
-
-  // Check if normalized diagnosis is a superset of error messages
-  // (only restates the errors, no new hypothesis).
-  for (const err of errors) {
-    const errNorm = err.message
-      .toLowerCase()
-      .replace(/[^\w\s:.-]/g, " ")
-      .replace(/\s+/g, " ");
-
-    if (!normalized.includes(errNorm)) {
-      return false;
-    }
-  }
-
-  // All error messages are substrings of the diagnosis.
-  return true;
 }
 
 /** The blocker diagnosis surfaced when a single error persists too long — names

@@ -177,4 +177,47 @@ describe("buildSteerMessage: R1 diagnosis-only variant", () => {
     // We verify this by checking the variant is meaningfully different
     expect(msg.length > 0).toBe(true);
   });
+
+  test("R1 Phase A (diagnosis-only) vs Phase B (action) messages are different", () => {
+    const phaseA = buildSteerMessage(1, errors, "same error", false, true);
+    const phaseB = buildSteerMessage(1, errors, "same error", false, false);
+
+    expect(phaseA).toContain("DIAGNOSE");
+    expect(phaseB).toContain("DIFFERENT approach");
+    // The two phases have distinct guidance
+    expect(phaseA).not.toBe(phaseB);
+  });
+});
+
+describe("R1 two-phase decision logic", () => {
+  const errors = [err("no-jsx-computation")];
+
+  test("trivial diagnosis triggers escalation (Phase A → R2), non-trivial triggers Phase B", () => {
+    // A diagnosis that just restates the error is trivial
+    const trivialDiagnosis = "no-jsx-computation violated";
+
+    expect(isTrivialDiagnosis(trivialDiagnosis, errors)).toBe(true);
+
+    // A diagnosis with novel insight is not trivial
+    // The key is it must NOT contain all the error messages as substrings
+    const nonTrivialDiagnosis =
+      "The root cause is that I've been computing JSX inline instead of extracting " +
+      "it into a helper function. I should refactor to use useMemo or extract to a separate module. " +
+      "This architectural change will fix the underlying issue.";
+
+    expect(isTrivialDiagnosis(nonTrivialDiagnosis, errors)).toBe(false);
+  });
+
+  test("diagnosis exactly at 80 chars is not trivial (boundary check)", () => {
+    const diagnosis80 = "x".repeat(80);
+
+    expect(isTrivialDiagnosis(diagnosis80, errors)).toBe(false);
+  });
+
+  test("diagnosis under 80 chars is trivial regardless of content", () => {
+    const shortButNovel = "New insight about the problem structure";
+
+    expect(shortButNovel.length < 80).toBe(true);
+    expect(isTrivialDiagnosis(shortButNovel, errors)).toBe(true);
+  });
 });

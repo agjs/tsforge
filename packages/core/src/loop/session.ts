@@ -1125,6 +1125,11 @@ export class Session {
       override?.temperature ?? this.cfg.temperature ?? DEFAULT_TEMPERATURE;
     const reasoningEffort = override?.reasoningEffort;
 
+    // Clear the pending override immediately after reading it into locals, BEFORE
+    // the provider call. If complete() throws, this ensures the override won't leak
+    // into the next successful call (exception-safe one-shot semantics).
+    this.state.pendingModelOverride = null;
+
     const res = await this.provider.complete(ctx.messages, {
       tools: offeredTools,
       temperature,
@@ -1192,9 +1197,6 @@ export class Session {
     if (res.content.length > 0) {
       report({ kind: "message", task: SESSION_ID, message: res.content });
     }
-
-    // Clear the pending model override after this call completes (one-shot, next turn only).
-    this.state.pendingModelOverride = null;
 
     return res;
   }

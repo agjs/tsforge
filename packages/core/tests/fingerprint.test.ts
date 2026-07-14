@@ -1,11 +1,8 @@
 import { test, expect, describe } from "bun:test";
-import {
-  fingerprintFor,
-  isTrivialDiagnosis,
-  trackErrorAges,
-} from "../src/loop/turn";
+import { fingerprintFor, trackErrorAges } from "../src/loop/turn";
 import type { ILoopState } from "../src/loop/turn";
 import type { IErrorItem } from "../src/validate";
+import { isTrivialDiagnosis } from "../src/loop/feedback/steer";
 
 const err = (key: string, message = key): IErrorItem => ({ key, message });
 
