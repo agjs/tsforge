@@ -65,8 +65,7 @@ binary file while still emitting `reverted`; a created dir left behind (cosmetic
 
 ## loop / greenfield — `src/loop/greenfield/*`
 
-Filesystem-state outer loop: a `features.json` checklist drives an implement→evaluate
-→persist cycle per feature until all green or a feature exhausts its attempts.
+Filesystem-state outer loop: a `features.json` checklist drives a unified loop (shared `settleGate`→`checkStuck`→escalation-ladder in `loop/turn.ts`) per feature until all green or a feature exhausts its attempts. The loop's gate is an injected composable `IGate` object (command → differential → reachability → judge stages) that runs INSIDE the loop, so the escalation ladder sees real lint/judge failures for every mode.
 
 **Invariants**
 
