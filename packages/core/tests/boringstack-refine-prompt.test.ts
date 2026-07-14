@@ -91,6 +91,22 @@ describe("refinePrompt", () => {
     expect(prompt).toMatch(/do not touch any other table/iu);
   });
 
+  it("instructs adding i18n keys for every UI string to the locale files", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("i18n");
+    expect(prompt).toContain("locales");
+    expect(prompt).toContain("features.invoice");
+    expect(prompt.toLowerCase()).toContain("parity");
+  });
+
   it("contains the API service file path", () => {
     const feature: IFeature = {
       id: "Invoice",

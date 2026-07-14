@@ -9,6 +9,7 @@ import {
   runBoringstackBuild,
   scopeFor,
   APP_SCHEMA_FILE,
+  LOCALE_GLOB,
 } from "../src/loop/boringstack/build";
 import type { IProvider } from "../src/inference";
 import { writePlan } from "../src/loop/planning/plan-store";
@@ -173,13 +174,16 @@ describe("boringstackDeps.implement", () => {
 });
 
 describe("scopeFor", () => {
-  test("includes the resource dir, tests, UI feature, AND the app schema file", () => {
+  test("includes the resource dir, tests, UI feature, app schema, AND locale files", () => {
     const scope = scopeFor("Invoice");
 
     expect(scope).toContain("apps/api/src/api/invoice/**");
     expect(scope).toContain("apps/api/tests/api/invoice/**");
     expect(scope).toContain("apps/ui/src/features/invoice/**");
+    // Shared files the model must add to (else it's trapped): the Drizzle schema
+    // (columns) and the i18n locales (every UI string is a key that must exist).
     expect(scope).toContain(APP_SCHEMA_FILE);
+    expect(scope).toContain(LOCALE_GLOB);
   });
 });
 

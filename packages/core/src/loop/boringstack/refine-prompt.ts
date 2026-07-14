@@ -156,6 +156,7 @@ Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` o
 ## Domain-Fill Instructions
 
 - **Persist for real**: every domain field must be a real column on the \`${camel}\` table (see Persistence above) that the service inserts/selects/updates via Drizzle. NEVER hold a field only in memory to satisfy a test — that stores nothing and is a failed implementation.
+- **i18n every UI string**: the gate forbids literal UI text, so every visible string is a \`t("features.${camel}.<key>")\` call. EVERY key you reference MUST exist in the locale files \`apps/ui/src/lib/i18n/locales/<lang>/common.json\` under \`features.${camel}\` — add it to EVERY \`<lang>\` directory (they must stay in parity), or \`i18n-keys/static-translation-key-exists\` fails. Add ONLY keys under \`features.${camel}\`; never edit another feature's keys or other namespaces.
 - **Use real fields**: Populate schemas and types with meaningful fields that match the resource's behavior (${feature.desc}). Avoid placeholder names like \`field1\`, \`data\`, or \`value\`.
 - **Implement real logic**: Write actual service methods that perform the described behaviour. No stubs, no empty functions.
 - **No \`as\` type casts**: Use proper types and inference. Cast-free code is a house rule.

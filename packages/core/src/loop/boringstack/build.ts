@@ -85,6 +85,14 @@ export async function rescueFileFor(
 export const APP_SCHEMA_FILE =
   "apps/api/src/clients/postgres/schema/app.schema.ts";
 
+/** The i18n locale files. The gate forbids literal UI strings, so a real feature UI
+ *  MUST reference i18n keys — and `i18n-keys/static-translation-key-exists` fails any
+ *  key that isn't defined here. The keys live in shared per-locale files (not the
+ *  feature dir), so the model has to be able to ADD its keys here or it's trapped
+ *  (observed live: 8 static-translation-key-exists failures it couldn't fix). It's
+ *  instructed (refinePrompt) to only ADD its feature's keys, never touch others'. */
+export const LOCALE_GLOB = "apps/ui/src/lib/i18n/locales/**";
+
 export function scopeFor(name: string): string[] {
   const camel = toCamelCase(name);
 
@@ -95,6 +103,9 @@ export function scopeFor(name: string): string[] {
     // The entity's table + columns live in the shared app schema (not the resource
     // dir), so a greenfield build must let the model add its domain columns there.
     APP_SCHEMA_FILE,
+    // Same story for i18n: any UI string is a locale key, and the keys live in
+    // shared locale files — the model must be able to add the keys it references.
+    LOCALE_GLOB,
   ];
 }
 
