@@ -8,6 +8,7 @@ import type {
   IGreenfieldOptions,
 } from "../greenfield/greenfield.types";
 import type { IProvider } from "../../inference";
+import type { IGate } from "../../gate/gate-runner";
 import type { Exec } from "./exec";
 import { generateResource, generateFeature } from "./generate";
 import { runBoringstackGate } from "./gate";
@@ -176,7 +177,7 @@ export async function readResourceCode(
  */
 interface IBoringstackHost {
   setScope(globs: string[]): void;
-  setGate(gate: import("../../gate/gate-runner").IGate): void;
+  setGate(gate: IGate): void;
   send(
     message: string
   ): Promise<{ status: string; turns: number; handoff?: IHandoff }>;

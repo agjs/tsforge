@@ -1,5 +1,5 @@
 import type { IStep } from "../../browser";
-import type { Reporter, IHandoff } from "../loop.types";
+import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 
 /**
  * One feature in a greenfield build's checklist. The unit the outer loop drives:
@@ -63,7 +63,7 @@ export interface IGreenfieldDeps {
   implement(
     feature: IFeature,
     state: IGreenfieldState,
-    seed?: { triedLevers: Array<import("../loop.types").EscalationRung> }
+    seed?: { triedLevers: EscalationRung[] }
   ): Promise<{ done: boolean; handoff?: IHandoff }>;
 }
 
