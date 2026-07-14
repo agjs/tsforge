@@ -9,6 +9,7 @@ import {
 import { injectFeedback, type ILoopCtx } from "../src/loop/turn";
 import type { ILoopState, ILoopEvent } from "../src/loop";
 import type { IErrorItem } from "../src/validate";
+import { commandGate } from "../src/gate/gate-runner";
 
 describe("convention registry", () => {
   test("every topic has a non-empty guide", () => {
@@ -100,7 +101,19 @@ describe("convention PUSH delivery (the guide actually reaches the model + is ob
       },
       messages: [],
       tool: {},
-      gate: { parse: undefined },
+      gate: {
+        parse: undefined,
+        runner: commandGate(
+          {
+            id: "t",
+            intent: "build",
+            accept: "true",
+            files: [],
+            context: [],
+          },
+          undefined
+        ),
+      },
     };
   }
 

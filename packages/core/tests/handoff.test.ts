@@ -7,6 +7,7 @@ import {
 } from "../src/loop/turn";
 import { STUCK_REASON, RUN_STATUS } from "../src/loop/loop.constants";
 import type { IErrorItem } from "../src/validate";
+import { commandGate } from "../src/gate/gate-runner";
 
 describe("buildHandoffAsk", () => {
   it("derives a non-empty ask from a steer and error set", () => {
@@ -64,15 +65,19 @@ describe("checkStuck — integration: ladder exhaustion → handoff", () => {
   // Minimal ILoopCtx factory for testing
   function mockCtx(): ILoopCtx {
     const events: any[] = [];
+    const task = { id: "test-task", files: ["src/**/*.ts"], accept: "" };
 
     return {
-      task: { id: "test-task", files: ["src/**/*.ts"], accept: "" },
+      task,
       cwd: "/test",
       tsService: null,
       report: (event) => events.push(event),
       messages: [],
       tool: {},
-      gate: { parse: undefined },
+      gate: {
+        parse: undefined,
+        runner: commandGate(task, undefined),
+      },
     };
   }
 

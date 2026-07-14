@@ -7,6 +7,7 @@ import type { ILoopState, ILoopEvent } from "../src/loop";
 import { LOOP_LIMITS, RUN_STATUS } from "../src/loop";
 import { STEER_LADDER_MAX } from "../src/loop/feedback/steer";
 import type { IErrorItem } from "../src/validate";
+import { commandGate } from "../src/gate/gate-runner";
 
 /** The settleGate steps extracted for unit testing (review item 4): checkStuck
  *  composes the three convergence guards; autoFixStep reports what the janitor
@@ -38,7 +39,13 @@ function makeCtx(events: ILoopEvent[], cwd = "/tmp"): ILoopCtx {
     },
     messages: [],
     tool: {},
-    gate: { parse: undefined },
+    gate: {
+      parse: undefined,
+      runner: commandGate(
+        { id: "t", intent: "test", accept: "true", files: [], context: [] },
+        undefined
+      ),
+    },
   };
 }
 

@@ -11,6 +11,7 @@ import type { ILoopState, ILoopEvent, IRunResult } from "../src/loop";
 import { RUN_STATUS, STUCK_REASON } from "../src/loop";
 import type { IErrorItem } from "../src/validate";
 import type { ExpertAsk } from "../src/loop/expert-handoff";
+import { commandGate } from "../src/gate/gate-runner";
 
 function freshState(): ILoopState {
   return {
@@ -37,7 +38,13 @@ function makeCtx(events: ILoopEvent[], cwd: string): ILoopCtx {
     },
     messages: [],
     tool: {},
-    gate: { parse: undefined },
+    gate: {
+      parse: undefined,
+      runner: commandGate(
+        { id: "t", intent: "test", accept: "true", files: [], context: [] },
+        undefined
+      ),
+    },
   };
 }
 
