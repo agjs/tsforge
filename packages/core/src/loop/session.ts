@@ -6,7 +6,7 @@ import type {
 } from "../inference";
 import type { ITask } from "../spec";
 import type { FileLinter } from "../gate";
-import { commandGate } from "../gate/gate-runner";
+import { commandGate, type IGate } from "../gate/gate-runner";
 import {
   type ADD_DEPENDENCY_TOOL,
   TOOL_NAME,
@@ -125,6 +125,9 @@ export interface ISessionConfig {
    *  a convention library (e.g. boringstack) so the model can fetch its how-to
    *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
   pullConventions?: boolean;
+  /** Composed gate the session's loop checks each cycle. Defaults to a command
+   *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
+  gate?: IGate;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -518,7 +521,9 @@ export class Session {
     this.provider = cfg.provider;
     this.cfg = cfg;
     this.report = cfg.report ?? ((): void => undefined);
-    this.hasGate = cfg.accept !== undefined && cfg.accept.length > 0;
+    this.hasGate =
+      cfg.gate !== undefined ||
+      (cfg.accept !== undefined && cfg.accept.length > 0);
     this.incrementalCheck = cfg.incrementalCheck ?? "";
     // Start with the 4 BASE tools (read/run/edit/create). Measured: the bigger
     // 11-tool list pushes this model onto a malformed-tool-call boundary (it
@@ -642,7 +647,7 @@ export class Session {
         onGateChunk: filterGateStream((text) => {
           report({ kind: "token", task: SESSION_ID, message: text });
         }),
-        runner: commandGate(task, cfg.parse),
+        runner: cfg.gate ?? commandGate(task, cfg.parse),
       },
       messages:
         cfg.history !== undefined && cfg.history.length > 0
@@ -746,10 +751,17 @@ export class Session {
     return fraction >= threshold ? Math.round(fraction * 100) : undefined;
   }
 
-  /** Set (or clear, with "") the gate command mid-session. */
-  setGate(command: string): void {
-    this.ctx.task.accept = command;
-    this.hasGate = command.length > 0;
+  /** Set (or clear, with "") the gate command mid-session, or swap the composed
+   *  gate mid-build (one per unit/feature). For a gate runner, flips hasGate on so
+   *  the loop actually runs it and the escalation ladder sees its failures. */
+  setGate(arg: string | IGate): void {
+    if (typeof arg === "string") {
+      this.ctx.task.accept = arg;
+      this.hasGate = arg.length > 0;
+    } else {
+      this.ctx.gate.runner = arg;
+      this.hasGate = true;
+    }
   }
 
   /** Raise/lower the per-send turn cap mid-session — `scaffold_web` flips a chat
