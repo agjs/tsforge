@@ -127,8 +127,22 @@ forever (expert resets guards at `turn.ts:1013`). Add to `ILoopState` (in `turn.
 - **Synthetic fingerprints for non-gate exits** — some terminal exits (timeout,
   degeneration, malformed tool call, read-only spin) have **no gate error set**, so
   `fingerprintFor` can't derive from errors. Define synthetic keys so these blocks are
-  still identity-tracked and can climb/record: `timeout:<normalized error>`,
-  `degeneration:<task>`, `malformed-tool-call`, `readonly-spin:<lastGateBlock|no-gate>`.
+  still identity-tracked: `timeout:<normalized error>`, `degeneration:<task>`,
+  `malformed-tool-call`, `readonly-spin:<lastGateBlock|no-gate>`. **Normalization:**
+  strip variable parts (timestamps, PIDs, line/col numbers, durations) and keep the
+  stable identity (the error class + file/rule where present), so the same underlying
+  block yields the same key across turns; namespace-prefix (`timeout:` etc.) guarantees
+  no collision with real `${file}:${ruleId}` keys.
+  - **Synthetic↔real boundary rule (prevents the orphaning bug):** synthetic and real
+    fingerprints are **separate, independent namespaces**. A synthetic exit records
+    ONLY against its own synthetic key and runs its own recovery-budget→R5 policy; it
+    **NEVER touches, clears, or resets `triedLeversByBlock` entries keyed by a real
+    gate fingerprint.** So a timeout interrupting gate-block B does not wipe B's ladder
+    progress (B's record persists, keyed by B's real fingerprint) and B's record is
+    never mistaken for the timeout's. The pending-rung recording rule only fires when
+    `pendingBlockFingerprint` and the recomputed fingerprint are **both of the same
+    kind** (both real, or both the same synthetic key) — a real↔synthetic transition
+    clears the pending pair WITHOUT recording (the block changed kind = it moved).
 
 - **`pendingDiagnosisSteer: string | null`** — **R1 is two-phase and must NOT be
   recorded on its diagnosis cycle.** The generic "record `pendingRung` if next gate
@@ -154,6 +168,30 @@ steer-injected cycle runs and the next gate is evaluated, if the recomputed
 `blockFingerprint` is unchanged, add the rung just applied to
 `triedLeversByBlock[fingerprint]`. If it changed, the new fingerprint has no entry
 and the ladder restarts naturally. This is the single place "tried" is written.
+
+### Types & concrete values (pin these — do not leave to the implementer)
+
+- **`Rung`** = string-literal union `"R0" | "R1" | "R2" | "R3" | "R4" | "R5"` (NOT the
+  numeric `steerLevel`). Mapping from today: L1→R1, L2→R2, L3→R3, expert→R4, park→R5.
+- **`runawayBackstopTurns` = 1000** (headless + interactive + web all share it). Far
+  above any real task (the old caps were 40/250/400); it exists ONLY to kill a
+  zero-progress/zero-tool bug, and crossing it logs an anomaly. A user-supplied
+  `maxTurns` overrides this value (its NEW meaning) — not a task cap.
+- **`checkpointIntervalTurns` = 40** (reuse the old headless `maxTurns` number as the
+  heartbeat cadence: persist a checkpoint + emit a progress event every 40 turns).
+- **`recentGateFingerprints` ring-buffer length = `noProgressCycles` (12)** — wide
+  enough to see a full oscillation window; the plateau branch reads recurring rule
+  keys across it. Cleared (reset to empty) whenever the block fingerprint genuinely
+  moves (progress).
+- **R1 diagnosis triviality threshold**: diagnosis is "trivial" (→ mark R1 tried,
+  skip Phase B) if `res.content.trim().length < 80` OR its normalized text is a
+  substring-superset of the current error messages (i.e. it only restates the errors).
+  Ship this as the pure, tested `isTrivialDiagnosis(content, errors)` helper — don't
+  inline a magic check.
+- **`IFeature.status`**: keep `passes: boolean` as-is; `status` is DERIVED, not a
+  parallel truth — `status = passes ? "passing" : parked ? "parked" : "open"`, where
+  `parked` is a new boolean flag set on ladder-exhaustion. (No migration risk: absent
+  `status`/`parked` on old persisted state defaults to open/false.)
 
 ---
 
@@ -232,7 +270,11 @@ lower-level `gateFeedback` construction** (the filter must reach the actual feed
 string handed to the model, not just the top-level inject). Critically, `gateFeedback`
 renders regular `errors` and `metaViolations` **separately**
 (`feedback/feedback.ts:35/77`), so `focusError` must filter **BOTH arrays** — using a
-meta key `${file}:${ruleId}` for `IMetaRuleViolation` — or a persistent meta-rule
+meta key `${file}:${ruleId}` for `IMetaRuleViolation`. **Timing (critical):** the
+`blockFingerprint` and all progress guards are computed from the UNFILTERED gate error
+set; `focusError` filters ONLY the feedback string rendered to the model. Never let
+the focus filter feed back into fingerprint/progress computation, or a focused view
+would distort block identity. Otherwise a persistent meta-rule
 can't be focused and the model still gets the full project-structure wall. This
 shrinks the surface the model must reason about when a broad error list is thrashing.
 
