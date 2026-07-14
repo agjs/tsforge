@@ -115,6 +115,12 @@ fingerprint is unchanged on the next stall, do **not** re-climb from R1 — expe
 already recorded for that block, so the next unfilled rung (or R5) is next. If the
 fingerprint changed, start fresh.
 
+**Recording hook (explicit):** the record happens in `settleGate` — after a
+steer-injected cycle runs and the next gate is evaluated, if the recomputed
+`blockFingerprint` is unchanged, add the rung just applied to
+`triedLeversByBlock[fingerprint]`. If it changed, the new fingerprint has no entry
+and the ladder restarts naturally. This is the single place "tried" is written.
+
 ---
 
 ## Steering is DYNAMIC, not just static content (the backbone)
@@ -162,8 +168,9 @@ measure against the block signature, escalate only if the block didn't move):
 
 1. On the first stall at a block, inject the R1 steer (existing `buildSteerMessage(1)`
    framing: "diagnose your loop; different approach").
-2. **Capture the assistant's diagnosis text** from that turn (the reasoning/first
-   message after the R1 steer).
+2. **Capture the assistant's diagnosis text** — specifically the **first assistant
+   message that follows the R1-injected user steer in that same turn, before any
+   tool calls or the next steer.** That message is the diagnosis.
 3. On the NEXT cycle, set `pendingSteer` to a block that quotes it: *"Your own
    diagnosis last cycle: «…». Act on that different approach now — do not repeat what
    you already tried."* So the model's own words become the steering.
@@ -174,10 +181,11 @@ measure against the block signature, escalate only if the block didn't move):
 ### R3 "narrow" mechanic — concrete
 
 Not just stronger wording. For the R3 cycle, **filter the gate feedback shown to the
-model** (`injectFeedback`) down to the single most-persistent error (the `samePersist`
-key), and set a `focusError` in turn context so tool/feedback framing centers that one
-error. Restore full feedback once the block moves. This shrinks the surface the model
-must reason about when a broad error list is causing thrash.
+model** down to the single most-persistent error (the `samePersist` key). `focusError`
+**lives in `ILoopState`** (a single key string, or null): set on R3 entry, **cleared
+the moment the block fingerprint moves**, and **consumed by `injectFeedback` + the
+feedback builders** (they render only the focused error when it's set). This shrinks
+the surface the model must reason about when a broad error list is causing thrash.
 
 ---
 
@@ -219,13 +227,20 @@ by `handoff !== undefined`. Add `STUCK_REASON.handoff` alongside `.stalled`/`.ca
 rich event and rendered in CLI output; it lists **which levers were tried** for the
 final block (observability for post-mortems).
 
+The `ask` string is populated by a small **pure helper `buildHandoffAsk(finalSteer,
+persistingErrors)`** that derives the "what a human / stronger model / more context is
+needed for" text from the last steer message + the surviving error set — so `ask` has
+a clear owner and is unit-testable, not free-form.
+
 ---
 
 ## Concrete changes (by file) — safety-first order
 
 1. **Fingerprint state + tests** — `turn.ts`: `ILoopState.blockFingerprint` +
-   `triedLeversByBlock`, the `fingerprintFor` helper, and the escalation state-machine.
-   Tests prove oscillation ≠ novel block. Nothing below is safe first.
+   `triedLeversByBlock`, the `fingerprintFor` helper (implement it **next to
+   `trackErrorAges`/`checkStuck` in `turn.ts` and unit-test it in isolation** — it's
+   the highest-risk piece), and the escalation state-machine. Tests prove oscillation
+   ≠ novel block. Nothing below is safe first.
 2. **Headless read-only-spin guard** — `run.ts`: port the interactive
    `readonlySpinStop` so read-only turns can't burn the (about-to-be-raised) backstop.
 3. **Structured handoff — types, persistence, all exits** — `loop.types.ts` (`handoff`
@@ -249,21 +264,29 @@ final block (observability for post-mortems).
      carry `handoff`. Round-trip `lastError` + handoff in `state.ts`.
    - `greenfield/run.ts`: `implement` must **read the inner `IRunResult`** and detect
      ladder exhaustion (today it ignores it and uses its own `attempts`); delete
-     `maxAttemptsPerFeature`; on exhaustion **park + skip + revisit at end** (retry a
-     parked feature when a new lever — e.g. expert — becomes available), so a wedged
-     feature never blocks the rest and the build only reports fully-stuck when ALL
-     remaining features are parked.
+     `maxAttemptsPerFeature`; on exhaustion **park the feature and skip it**, so a
+     wedged feature never blocks the rest. **Revisit is a simple two-pass:** after the
+     main pass over all open features completes, do **one** second pass over the
+     parked features; the build reports fully-stuck only if features remain parked
+     after that pass. (Simpler than "revisit when a new lever appears" and achieves
+     the same non-blocking goal.)
+   - When parking, **copy the inner run's final `triedLeversByBlock` entry** (for the
+     feature's surviving block) into the feature's `handoff`, so the second-pass
+     revisit doesn't immediately re-fire the same levers on the same block.
    - **Wire the result through** `cli.ts:594` (it currently ignores `runTask`'s result)
      so greenfield truly inherits R0–R5; update progress reporting.
 
 ### Checkpoint payload (concrete)
 
-A checkpoint (heartbeat, and pre-handoff) writes enough to resume: **compacted
-messages, `ILoopState` (incl. `steerLevel` + `triedLeversByBlock`), rung history, the
-gate command + last gate output, the editable scope, and the current
-`blockFingerprint`.** For non-greenfield tasks this is new (headless has event logs
-but no resumable loop state today; interactive persists only after a `send`,
-`repl.ts:600/623`). Resume reads this back.
+The heartbeat (and pre-handoff) writes a **compact snapshot** under
+`.tsforge/checkpoints/`: **compacted messages, full `ILoopState` (incl. `steerLevel`,
+`triedLeversByBlock`, `blockFingerprint`, `focusError`), rung history, the gate
+command + last gate output, and the editable scope.** For non-greenfield tasks this
+snapshot is new (headless has event logs but no resumable loop state today;
+interactive only persists via the session's post-send persistence). **Phasing:** ship
+the snapshot write + a clean handoff report first; **full conversation resume can be
+phased in later** — the immediate win is that the run never idle-fails and the handoff
+is actionable, not that every run is instantly re-runnable.
 
 ---
 
