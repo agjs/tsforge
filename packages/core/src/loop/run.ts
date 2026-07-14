@@ -5,7 +5,12 @@ import type {
   IProvider,
   IToolCall,
 } from "../inference";
-import { validate, type ErrorParser, type IValidateResult } from "../validate";
+import {
+  validate,
+  type ErrorParser,
+  type IValidateResult,
+  type IErrorItem,
+} from "../validate";
 import { readFiles, type IFileView } from "../lib/fs";
 import { trace } from "../lib/trace";
 import {
@@ -21,6 +26,7 @@ import type {
   IRunOptions,
   Reporter,
   ILoopEvent,
+  IHandoff,
 } from "./loop.types";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
 import type { ITsforgeProjectConfig } from "../config";
@@ -72,6 +78,16 @@ function handleDegeneration(
     return null;
   }
 
+  const errorMessages = state.prevGateErrors.map((e) => e.message);
+  const handoff: IHandoff = {
+    block: "degeneration",
+    rungHistory: [],
+    errors: errorMessages.slice(0, 3),
+    ask: "model fell into a repetition loop and needs a different approach",
+    resumable: true,
+    resume: { triedLevers: [] },
+  };
+
   report({
     kind: "stuck",
     task: id,
@@ -86,7 +102,9 @@ function handleDegeneration(
     redConfirmed: true,
     status: RUN_STATUS.stuck,
     cycles: at.turn,
-    reason: STUCK_REASON.stalled,
+    reason: STUCK_REASON.handoff,
+    detail: "degeneration",
+    handoff,
     edits: state.edits,
     regressions: state.regressions,
   };
@@ -237,7 +255,17 @@ function handleExhaustedRecoveries(args: {
   taskId: string;
   turnStart: number;
   taskStart: number;
+  gateErrors: IErrorItem[];
 }): { action: IRunResult; readonlyRecoveries: number } {
+  const handoff: IHandoff = {
+    block: "readonly-spin",
+    rungHistory: [],
+    errors: args.gateErrors.map((e) => e.message).slice(0, 3),
+    ask: "model called only read-only tools without making progress toward the goal",
+    resumable: true,
+    resume: { triedLevers: [] },
+  };
+
   args.report({
     kind: "stuck",
     task: args.taskId,
@@ -260,7 +288,9 @@ function handleExhaustedRecoveries(args: {
       redConfirmed: true,
       status: RUN_STATUS.stuck,
       cycles: args.turn,
-      reason: STUCK_REASON.readonlySpin,
+      reason: STUCK_REASON.handoff,
+      detail: "readonly-spin",
+      handoff,
       edits: 0,
       regressions: 0,
     },
@@ -307,6 +337,7 @@ function readonlySpinStop(args: {
   turnStart: number;
   taskStart: number;
   messages: IChatMessage[];
+  gateErrors: IErrorItem[];
 }): {
   action: IRunResult | "retry" | null;
   readonlyRecoveries: number;
@@ -323,6 +354,7 @@ function readonlySpinStop(args: {
       taskId: args.taskId,
       turnStart: args.turnStart,
       taskStart: args.taskStart,
+      gateErrors: args.gateErrors,
     });
   }
 
@@ -376,6 +408,7 @@ async function processToolCallTurn(args: {
     turnStart: args.turnStart,
     taskStart: args.taskStart,
     messages: args.ctx.messages,
+    gateErrors: args.state.prevGateErrors,
   });
 
   if (spin.action === "retry") {

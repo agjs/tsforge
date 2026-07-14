@@ -90,7 +90,8 @@ describe("greenfield state", () => {
   test("saveState → loadState round-trips lastError when present", async () => {
     const s = state("a");
 
-    s.features[0]!.lastError = "Gate errors: TS2322 type mismatch in src/index.ts:15";
+    s.features[0]!.lastError =
+      "Gate errors: TS2322 type mismatch in src/index.ts:15";
     await saveState(dir, s);
 
     const loaded = await loadState(dir);

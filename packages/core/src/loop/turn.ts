@@ -15,7 +15,12 @@ import { trace } from "../lib/trace";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
-import type { IRunResult, Reporter, EscalationRung, IHandoff } from "./loop.types";
+import type {
+  IRunResult,
+  Reporter,
+  EscalationRung,
+  IHandoff,
+} from "./loop.types";
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
@@ -846,10 +851,6 @@ export function trackErrorAges(
   return stuck;
 }
 
-/** Escalation rungs of the relentless ladder. R0 is the plain refine (no steer);
- *  R5 is the terminal handoff. Only R1–R4 are "tried" in triedLeversByBlock. */
-export type EscalationRung = "R1" | "R2" | "R3" | "R4";
-
 /** Derive a guard-specific, stable block identity from loop state + current gate errors.
  *  Returns an empty string when no stall is active. Mirrors checkStuck's guard logic
  *  (samePersist → gateStuckRepeats → plateau) but returns a fingerprint string.
@@ -1094,19 +1095,41 @@ export function buildHandoffAsk(
   return `${trimmedSteer.replace(/\.$/, "")}. ${errorSummary}`;
 }
 
-/** A terminal STUCK result — shared shape for every convergence guard. */
+/** A terminal STUCK result — shared shape for every convergence guard. When the
+ *  ladder is exhausted, builds a handoff to a stronger model. The `block` is
+ *  captured before guard reset so it includes the current error context. */
 function stuckResult(
   ctx: ILoopCtx,
+  state: ILoopState,
+  gateErrors: IErrorItem[],
   turn: number,
   detail: string,
-  messagePrefix: string
+  messagePrefix: string,
+  finalSteer: string,
+  block: string
 ): IRunResult {
+  const rungHistory = Array.from(
+    state.triedLeversByBlock?.get(block) ?? []
+  ).sort();
+  const errorKeys = gateErrors.map((e) => e.message);
+  const ask = buildHandoffAsk(finalSteer, errorKeys);
+
+  const handoff: IHandoff = {
+    block,
+    rungHistory,
+    errors: errorKeys,
+    ask,
+    resumable: true,
+    resume: { triedLevers: rungHistory },
+  };
+
   ctx.report({
     kind: "stuck",
     task: ctx.task.id,
     cycles: turn,
     detail,
     message: `task ${ctx.task.id}: ${messagePrefix}${detail}`,
+    handoff,
   });
 
   return {
@@ -1114,8 +1137,9 @@ function stuckResult(
     redConfirmed: true,
     status: RUN_STATUS.stuck,
     cycles: turn,
-    reason: STUCK_REASON.stalled,
+    reason: STUCK_REASON.handoff,
     detail,
+    handoff,
   };
 }
 
@@ -1303,7 +1327,12 @@ export function checkStuck(
     return null; // still converging — keep looping normally
   }
 
-  // Stalled. Escalate a steer and give the model fresh cycles at the new level. Reset the
+  // Stalled. Capture the block fingerprint BEFORE resetting the guards (so fingerprintFor
+  // can read the current errorAge), then escalate and reset for the next window.
+  // For simplicity, use the guard-fired reason to build a synthetic block when persisted is null
+  const block = persisted?.key ?? `escalation-${String(state.steerLevel + 1)}`;
+
+  // Escalate a steer and give the model fresh cycles at the new level. Reset the
   // plateau COUNTER too (spacing — one escalation per plateau window) but NOT plateauBest,
   // so oscillation keeps re-tripping it and the ladder climbs to the expert.
   state.steerLevel += 1;
@@ -1312,11 +1341,19 @@ export function checkStuck(
 
   if (state.steerLevel > STEER_LADDER_MAX) {
     // Ladder exhausted — the run parks (an expert-model handoff slots in here).
+    const finalSteer =
+      state.pendingSteer ??
+      buildSteerMessage(state.steerLevel, gateErrors, reason, flags.webTools());
+
     return stuckResult(
       ctx,
+      state,
+      gateErrors,
       turn,
       `${reason} — steering exhausted after ${String(STEER_LADDER_MAX)} escalations`,
-      "parked — "
+      "parked — ",
+      finalSteer,
+      block
     );
   }
 

@@ -37,7 +37,7 @@ import {
   READONLY_STREAK_LIMIT,
   MAX_READONLY_RECOVERIES,
 } from "./loop.constants";
-import type { Reporter, ILoopEvent } from "./loop.types";
+import type { Reporter, ILoopEvent, IHandoff } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
 import { selectThinking, offeredToolsFor } from "./model-call";
@@ -49,6 +49,7 @@ import type { TsService } from "../lsp";
 import {
   buildTsService,
   BUILD_NUDGE,
+  buildHandoffAsk,
   emitTiming,
   type ILoopCtx,
   type ILoopState,
@@ -127,7 +128,7 @@ export interface ISendResult {
   status: "responded" | "done" | "stuck" | "interrupted";
   turns: number;
   /** When stuck with a handoff: the structured, resumable handoff details. */
-  handoff?: import("./loop.types").IHandoff;
+  handoff?: IHandoff;
 }
 
 /** Cumulative model-call metrics for a session — the basis for `/metrics`. */
@@ -429,6 +430,26 @@ function delegationGuidance(specs: readonly IAgentSpec[]): string {
     `${DELEGATION_MARKER} you can hand focused, read-only investigation to specialist subagents with the \`spawn_agent\` tool — exploring an unfamiliar part of the codebase, researching an external API/library, or verifying a claim — instead of spending your own turns and context on it. Spawn several in one turn for independent lines of inquiry; they run in parallel, each with its own context, and only YOU edit files. The user thinks in tasks and features, never in subagents — it is YOUR call when delegation helps.`,
     `Specialists available:\n${roster}`,
   ].join("\n\n");
+}
+
+/** Build a synthetic handoff for terminal exits (build-nudge, degeneration,
+ *  timeout, readonly-spin, etc.) — a minimal, resumable handoff describing what
+ *  a stronger model or human intervention is needed for. */
+function buildSyntheticHandoff(
+  block: string,
+  errors: string[],
+  diagnosticNote: string
+): IHandoff {
+  const ask = buildHandoffAsk(diagnosticNote, errors.slice(0, 3));
+
+  return {
+    block,
+    rungHistory: [],
+    errors: errors.slice(0, 3),
+    ask,
+    resumable: true,
+    resume: { triedLevers: [] },
+  };
 }
 
 export class Session {
@@ -1208,6 +1229,18 @@ export class Session {
     }
 
     if (buildNudges >= LOOP_LIMITS.maxBuildNudges) {
+      const errorMessages = this.state.prevGateErrors.map((e) => e.message);
+      const diagnosticNote = leaked
+        ? "malformed tool-call format"
+        : emptyMidBuild
+          ? "repeated empty replies"
+          : "model narrating instead of creating files";
+      const handoff = buildSyntheticHandoff(
+        "build-nudge",
+        errorMessages,
+        diagnosticNote
+      );
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,
@@ -1221,7 +1254,7 @@ export class Session {
               "them — stopped. Try a smaller step (e.g. one file at a time).",
       });
 
-      return { result: { status: "stuck", turns: turn } };
+      return { result: { status: "stuck", turns: turn, handoff } };
     }
 
     this.report({
@@ -1249,6 +1282,13 @@ export class Session {
     turn: number
   ): ISendResult | null {
     if (degenerations >= MAX_DEGENERATION_RECOVERIES) {
+      const errorMessages = this.state.prevGateErrors.map((e) => e.message);
+      const handoff = buildSyntheticHandoff(
+        "degeneration-budget",
+        errorMessages,
+        "model fell into a repetition loop"
+      );
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,
@@ -1256,7 +1296,7 @@ export class Session {
           "⚠ repetition loop persisted after recovery attempts — stopped. Try a smaller step.",
       });
 
-      return { status: "stuck", turns: turn };
+      return { status: "stuck", turns: turn, handoff };
     }
 
     this.report({
@@ -1295,13 +1335,21 @@ export class Session {
       err instanceof Error ? `${err.name}: ${err.message}` : String(err);
 
     if (timeouts >= MAX_TIMEOUT_RECOVERIES) {
+      const errorMessages = this.state.prevGateErrors.map((e) => e.message);
+      const errorType = detail.split(":")[0] ?? "unknown";
+      const handoff = buildSyntheticHandoff(
+        `timeout:${errorType}`,
+        errorMessages,
+        `model request timed out: ${detail}`
+      );
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,
         message: `⚠ model request timed out repeatedly (${detail}) — stopped. The server may be wedged or the task too large for one turn.`,
       });
 
-      return { status: "stuck", turns: turn };
+      return { status: "stuck", turns: turn, handoff };
     }
 
     this.report({
@@ -1799,6 +1847,13 @@ export class Session {
         return "retry";
       }
 
+      const errorMessages = this.state.prevGateErrors.map((e) => e.message);
+      const handoff = buildSyntheticHandoff(
+        "readonly-spin",
+        errorMessages,
+        "model called only read-only tools without making progress"
+      );
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,
@@ -1807,7 +1862,7 @@ export class Session {
           "re-steering — stopped. Narrow the task or steer toward a concrete step.",
       });
 
-      return { status: "stuck", turns: turn };
+      return { status: "stuck", turns: turn, handoff };
     }
 
     const gateNote = this.hasGate ? this.outstandingGateNote() : "";
