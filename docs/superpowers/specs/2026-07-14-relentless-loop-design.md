@@ -55,8 +55,10 @@ The ladder is ~70% built and general:
   already reversible. Just capped at 2 uses.
 - **`settleGate`** is the main gate-stall path both `run.ts` and `Session` route
   through — but NOT the only terminal exit (see the exit table below).
-- Error keys are `${file}:${ruleId}` (`turn.ts:1258`); `IErrorItem` carries the key;
-  `trackErrorAges`/`samePersist` operate per-key.
+- Error keys are `${file}:${ruleId}` on the meta-rule path (`turn.ts:1258`); regular
+  parsers may include a line (`file:line:rule`). `fingerprintFor` uses whatever keys
+  actually exist in `IErrorItem`, so the exact format is not a correctness concern —
+  `trackErrorAges`/`samePersist` already operate per-key.
 
 So this is **completing + un-capping + making handoff first-class**, not a rewrite.
 
@@ -107,7 +109,9 @@ forever (expert resets guards at `turn.ts:1013`). Add to `ILoopState` (in `turn.
   → `triedLeversByBlock` has no entry → the ladder naturally restarts at R1.
 
 **State-machine semantics (replaces the scalar-only `steerLevel`):** keep
-`steerLevel` as the *display/order* index, but gate escalation on
+`steerLevel` as a **purely cosmetic** display/order index only — once
+`blockFingerprint` + `triedLeversByBlock` exist they are the **single source of
+truth** for what to escalate; no logic may branch on `steerLevel`. Gate escalation on
 `triedLeversByBlock[fingerprint]`. On a stall: pick the **lowest rung not yet tried
 for this fingerprint**; apply it; record it. When all rungs (through expert) are in
 the set for the current fingerprint → **R5 handoff**. After an expert fix, if the
@@ -183,9 +187,10 @@ measure against the block signature, escalate only if the block didn't move):
 Not just stronger wording. For the R3 cycle, **filter the gate feedback shown to the
 model** down to the single most-persistent error (the `samePersist` key). `focusError`
 **lives in `ILoopState`** (a single key string, or null): set on R3 entry, **cleared
-the moment the block fingerprint moves**, and **consumed by `injectFeedback` + the
-feedback builders** (they render only the focused error when it's set). This shrinks
-the surface the model must reason about when a broad error list is causing thrash.
+the moment the block fingerprint moves**, and **consumed by `injectFeedback` AND the
+lower-level `gateFeedback` construction** (the filter must reach the actual feedback
+string handed to the model, not just the top-level inject). This shrinks the surface
+the model must reason about when a broad error list is causing thrash.
 
 ---
 
@@ -244,8 +249,10 @@ a clear owner and is unit-testable, not free-form.
 2. **Headless read-only-spin guard** — `run.ts`: port the interactive
    `readonlySpinStop` so read-only turns can't burn the (about-to-be-raised) backstop.
 3. **Structured handoff — types, persistence, all exits** — `loop.types.ts` (`handoff`
-   field + `STUCK_REASON.handoff`); convert the bypass exits per the table; fix
-   `greenfield/state.ts:45` `toFeature` **dropping `lastError`** on load.
+   field + `STUCK_REASON.handoff`); the pure **`buildHandoffAsk(finalSteer,
+   persistingErrors)`** helper (unit-tested) that populates `handoff.ask`; convert the
+   bypass exits per the table; fix `greenfield/state.ts:45` `toFeature` **dropping
+   `lastError`** on load.
 4. **Expert re-enters on novel block** — `turn.ts:940/967`: replace `EXPERT_MAX_USES`
    with the `triedLeversByBlock` novelty gate.
 5. **Dynamic levers** — R1 feed-forward (capture assistant diagnosis → `pendingSteer`);
