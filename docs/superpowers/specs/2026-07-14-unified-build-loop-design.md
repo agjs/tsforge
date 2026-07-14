@@ -81,27 +81,67 @@ IPlanner { plan(goal, cwd): Promise<IBuildUnit[]> }
 ### Seam 2 — Gate: a composed, staged check that runs INSIDE the loop
 
 The core-loop change that makes this possible: **generalize the loop's gate from an
-`accept` shell string to an injected `IGate`.**
+`accept` shell string to an injected gate object.**
 
 ```
 IGate { run(cwd): Promise<{ passed: boolean; errors: IErrorItem[]; output: string }> }
 ```
 
+> **Naming (collision resolved):** `gate/types.ts` already exports `IGate = {command,
+> label}` — a *descriptor* (banner label + shell command), not a runner. Rename that
+> existing type to `IGateSpec` (it is only a command+label pair, few call sites) and give
+> the new runner the name `IGate`. The runner is the seam; the spec is just data one
+> stage consumes.
+
 `settleGate` calls `gate.run()` instead of only shelling `ctx.task.accept`. Default
 `IGate` = run the accept command + parse (today's behavior — brownfield unchanged).
-Modes compose richer gates from **stages**, each of which contributes `IErrorItem`s:
+Modes compose richer gates from **stages**.
 
-- **command stage** — run tsc/lint/tests (the boringstack `validate && check`).
-- **differential stage** — wrap another stage; suppress pre-existing baseline failures,
-  surface only NEW ones (today's boringstack differential logic, as a wrapper).
-- **judge stage** — the reject-by-default model judge → its rejection becomes gate
-  errors the loop can see and escalate on.
-- **browser stage** — render/interaction smoke (when a render target exists), errors → gate.
+**A gate is an ordered list of stages, run in series with short-circuit** (review risk
+#1 — judge/browser must NOT run every turn). Each stage:
+
+```
+IStage { run(cwd): Promise<{ passed: boolean; errors: IErrorItem[]; output: string }> }
+```
+
+The composed gate runs stages cheapest-first and **stops at the first failure**, returning
+that stage's errors. So the expensive stages (judge = a model call, browser = Playwright)
+run ONLY when every cheaper stage is already green — exactly today's `gate → browser →
+judge` short-circuit order, now expressed as composition. A stalled unit that can't get
+past the command stage never pays for a judge call.
+
+Stages (cheapest → most expensive):
+
+- **command stage** — run tsc/lint/tests (the boringstack `validate && check`). Parses its
+  own output → `IErrorItem[]` (today's `validate` parser moves inside this stage).
+- **differential stage** — a **wrapper** around another stage (not a peer): it runs the
+  inner stage, then suppresses pre-existing baseline failures, surfacing only NEW ones.
+  **Baseline lives in the stage's closure** (review risk #2): the driver captures the
+  baseline failure-set ONCE at build start and constructs the differential stage closed
+  over it — baseline is NOT threaded through `IBuildUnit`/`ILoopCtx`/`ITask`. The gate is
+  an object; it carries its own state. This is the boringstack differential logic intact.
+- **judge stage** — the reject-by-default model judge. Its prose rejection is adapted into
+  a gate error (review risk #4): one `IErrorItem` with `rule: "judge"`, `file` = the
+  unit's primary file (so expert-rescue can resolve a file and the fingerprint is stable
+  across repeated judge rejections on the same unit), `message` = the critique.
+- **browser stage** — render/interaction smoke (when a render target exists); a failure →
+  `IErrorItem` with `rule: "browser"`, `file` = the failing route's view.
 - **reachability stage** — route/API/i18n wired (boringstack "usable" check).
 
 Because every stage's failures become `IErrorItem`s the loop sees, `checkStuck` detects
 stalls on ANY of them (lint, judge, browser, …) and the escalation ladder fires
 uniformly — the exact thing that was impossible when the judge/lint lived outside the loop.
+
+**`requireRed` dissolves (review risk #3).** Today greenfield sets `requireRed: false`
+because "the global gate is often already green between features" — the shell gate can't
+tell that a *feature* is still an unimplemented generic stub, so a green gate at turn 0 is
+a false pass. With the composed gate, the **judge/reachability stages make the gate RED
+until the feature is actually built** — a generic stub is rejected. So a greenfield unit no
+longer starts green, RED-first holds naturally, and the progress guards (tuned for RED
+starts) work without special-casing. `requireRed` becomes uniformly true and the
+`requireRed: false` crutch is deleted. (If a unit's gate genuinely IS green at turn 0 — all
+stages pass — the unit is already done: skip it, no loop needed. The driver's
+`if unit.passes: continue` handles that.)
 
 ### The shared core loop (unchanged in spirit, now universal)
 
@@ -137,6 +177,8 @@ from the core loop's R5**, not a bolted-on greenfield mechanism.
 - Greenfield's ad-hoc stall/backstop (`EVAL_STALL_BACKSTOP`, unchanged-rejection park) —
   the core progress guards + R5 handoff replace them.
 - The bespoke greenfield `rescue` wiring — expert is R4 in the core ladder.
+- The `requireRed: false` crutch — the composed gate (judge/reachability stages) is RED
+  until the feature is real, so RED-first holds for every mode with no per-mode flag.
 
 ---
 
@@ -155,15 +197,22 @@ must be byte-identical — reshape it into a clean 1-unit plan if that's cleaner
   `IGate.run()`. The CLI constructs a default command-gate from `--accept`. This is the
   one intrusive core change; do it first (it's a clean refactor, not a compat layer).
 - **Judge/browser as gate stages** run model/Playwright calls inside the gate — they're
-  slower than a shell gate; run them as the FINAL stages (only when the cheaper stages
-  are green) to avoid paying for them every cycle. Preserve today's short-circuit order
-  (gate → browser → judge).
-- **Differential-vs-baseline** must survive as a stage wrapper (it's what stops the model
-  chasing pristine-scaffold defects — do NOT drop it, the reason a naive "give the
-  Session the raw gate" fix is wrong).
+  slower than a shell gate. The staged short-circuit composition (Seam 2) handles this:
+  stages run cheapest-first and stop at the first failure, so judge/browser only run when
+  the command stage is already green. Preserve today's order (command → differential →
+  browser → judge).
+- **Differential-vs-baseline** survives as a stage WRAPPER closed over the build-start
+  baseline (Seam 2, risk #2) — it's what stops the model chasing pristine-scaffold
+  defects. Do NOT drop it; that's the reason a naive "give the Session the raw gate" fix
+  is wrong. Baseline is captured once by the driver and lives in the stage's closure.
+- **Session-level optimizations stay put (risk #5).** The interactive Session's
+  incremental-TS check and `FULL_GATE_EVERY` (force a full gate after N edits) are speed
+  heuristics for per-edit feedback, orthogonal to the gate object. They remain
+  Session-level; `FULL_GATE_EVERY` simply points its full-gate call at `gate.run()`
+  instead of shelling `accept`. Do not move them onto `IBuildUnit`.
 - **DB/env for the gate** (boringstack needs `DATABASE_URL` → isolated Postgres): the
   injected gate carries its own runner/env (the boringstack `Exec`), so this is a
-  property of the composed gate, not global.
+  property of the composed gate, not global — same closure mechanism as the baseline.
 - **Checkpoint/handoff already unified** (this session) — they ride the core loop, so
   every mode gets them once it flows through `runTask`.
 
