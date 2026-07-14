@@ -30,7 +30,13 @@ import {
 } from "../config/tsforge-config";
 import { connectMcpServers } from "../mcp";
 import { loadAndRegisterPlugins } from "../config/external-plugins";
-import { DEFAULT_TEMPERATURE, LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
+import {
+  DEFAULT_TEMPERATURE,
+  LOOP_LIMITS,
+  RUN_STATUS,
+  READONLY_STREAK_LIMIT,
+  MAX_READONLY_RECOVERIES,
+} from "./loop.constants";
 import type { Reporter, ILoopEvent } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
@@ -298,17 +304,6 @@ const REPETITION_RESTEER =
   "You started repeating yourself. STOP — do not re-explain or re-decide. Emit " +
   "the SINGLE next tool call that makes concrete progress (create or edit ONE " +
   "file). No prose.";
-
-/** Consecutive turns of tool calls that touch NO editable file before we treat the
- *  model as spinning. The gate progress guards (samePersist/gateStuckRepeats) only
- *  evaluate after a write, so a model that reads/searches forever without ever
- *  editing slips past them all the way to the turn backstop — this is their
- *  cross-turn analogue. Set well above genuine multi-file exploration (each turn may
- *  read several files) so real work never trips it; a scaffold/edit resets it. */
-const READONLY_STREAK_LIMIT = 12;
-
-/** How many times we re-steer a read-only spin before giving up. */
-const MAX_READONLY_RECOVERIES = 2;
 
 /** Pushed on a read-only spin in a BUILD (gated) session — demand a concrete edit. */
 const READONLY_RESTEER_BUILD =

@@ -8,6 +8,8 @@ import {
   RUN_STATUS,
   STUCK_REASON,
   LOOP_LIMITS,
+  READONLY_STREAK_LIMIT,
+  MAX_READONLY_RECOVERIES,
 } from "./loop.constants";
 import type {
   IRunResult,
@@ -428,6 +430,9 @@ export async function runTask(
     ttsrInterrupts: 0,
     steerLevel: 0,
   };
+
+  let readonlyStreak = 0;
+  let readonlyRecoveries = 0;
   const taskStart = performance.now();
 
   for (let turn = 1; turn <= maxTurns; turn += 1) {
@@ -502,6 +507,53 @@ export async function runTask(
       res.toolCalls.length === 0
         ? false
         : await runToolCalls(res.toolCalls, ctx, state);
+
+    // Read-only-spin guard: consecutive read-only turns without edits.
+    if (touchedEditable) {
+      readonlyStreak = 0;
+    } else if ((readonlyStreak += 1) >= READONLY_STREAK_LIMIT) {
+      const exhaustedRecoveries = readonlyRecoveries >= MAX_READONLY_RECOVERIES;
+
+      if (exhaustedRecoveries) {
+        report({
+          kind: "stuck",
+          task: task.id,
+          cycles: turn,
+          message:
+            "⚠ model kept calling read-only tools without making progress after re-steering — stopped. Narrow the task or steer toward a concrete step.",
+        });
+
+        emitTiming(report, task.id, turn, turnStart, taskStart);
+
+        return finish({
+          task: task.id,
+          redConfirmed: true,
+          status: RUN_STATUS.stuck,
+          cycles: turn,
+          reason: STUCK_REASON.readonlySpin,
+          edits: state.edits,
+          regressions: state.regressions,
+        });
+      }
+
+      report({
+        kind: "tool",
+        task: task.id,
+        message: "⚠ only reading, no edits — steering toward a concrete change",
+      });
+
+      messages.push({
+        role: "user",
+        content:
+          "You have made many tool calls in a row WITHOUT writing any file — only reading " +
+          "or searching. STOP exploring. Emit the SINGLE next change now: create or edit " +
+          "ONE file to make concrete progress. No more reads. No prose.",
+      });
+
+      readonlyRecoveries += 1;
+      readonlyStreak = 0;
+      continue;
+    }
 
     // Settle the gate whenever the model stopped OR changed an editable file.
     // (A read-only turn neither finishes nor mutates — just loop again.)

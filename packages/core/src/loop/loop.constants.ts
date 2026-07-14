@@ -9,6 +9,7 @@ export const RUN_STATUS = {
 export const STUCK_REASON = {
   stalled: "stalled",
   cap: "cap",
+  readonlySpin: "readonly-spin",
 } as const;
 
 /** Whole-spec outcome — compare against these, never the bare string. */
@@ -20,6 +21,15 @@ export const SPEC_STATUS = {
 /** Default sampling temperature for main agent turns (Session, runTask, modelAgent).
  *  Auxiliary one-shot calls (compaction, plan summary, judge) stay at 0. */
 export const DEFAULT_TEMPERATURE = 0.2;
+
+/**
+ * Read-only-spin guard thresholds: consecutive tool calls that touch NO editable
+ * file before the model is re-steered to produce concrete work, then parked if
+ * the re-steering exhausts all recoveries. Shared by interactive (session.ts)
+ * and headless (run.ts) drivers. Mirrored in each if sharing requires deep refactors.
+ */
+export const READONLY_STREAK_LIMIT = 12;
+export const MAX_READONLY_RECOVERIES = 2;
 
 /**
  * Loop tuning — kept with the loop domain (not a global bucket). Each value's
