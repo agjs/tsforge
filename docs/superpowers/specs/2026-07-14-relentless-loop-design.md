@@ -42,15 +42,21 @@ The escalation ladder is ~70% built and general, in `turn.ts`/`steer.ts`/
 
 - **Progress guards** (`loop.constants.ts`): `samePersist` (a single error surviving
   N cycles), `gateStuckRepeats` (identical error SET N cycles), `noProgressCycles`
-  (no new low-water error count for N cycles). Convergence, not turn counts.
+  (no new low-water count), plus `plateauGates` + `steerRetrigger` (drive the ladder
+  faster under oscillation). Convergence, not turn counts.
 - **Steer ladder** (`steer.ts`, `buildSteerMessage(level)` L1 step-back → L2
-  investigate → L3 rule-playbook via `PLAYBOOKS` keyed by lint rule). A guard trip
-  escalates a rung and resets the guards so the model gets fresh cycles at a more
-  directive steer (turn.ts:304-306).
-- **Expert handoff, already reversible** (turn.ts:942-945): before a stalled park,
-  hand the stuck file + errors to `capabilities.expert`, apply its fix, and **let
-  the primary (local) model continue**. This is exactly the "expert unblocks, then
-  switch back to local" rung — it just has a flat 2-use cap on top.
+  investigate + `PLAYBOOKS` → L3 change-strategy). A guard trip escalates `steerLevel`,
+  injects `pendingSteer`, and resets the FINE guards but deliberately NOT
+  `plateauBest`. Context reset via `essentialMessages` already fires at the top rung
+  (`turn.ts:1146`).
+- **Expert handoff, already reversible** (`turn.ts:942-945`, invoked from
+  `settleGate` right after `checkStuck` at `turn.ts:1320-1327`, and from the
+  readonly-spin recovery in `session.ts`): hand the stuck file (`resolveStuckFile`
+  surfaces it from type-aware lint) + errors to `capabilities.expert`, apply the fix,
+  reset `steerLevel`+guards, and **let the local model continue**. Exactly the
+  "expert unblocks → back to local" rung — just with a flat 2-use cap on top.
+- **`settleGate` is the single choke point** both `run.ts` and `Session` route
+  through — the right central place to make these changes once.
 
 So this is **completing and un-capping an existing ladder**, not a rewrite.
 
@@ -143,12 +149,31 @@ reasoning) + the block-fingerprint state + handoff types + greenfield parked sta
 | R4 | **Expert unblock → return to local** — apply expert fix, resume local; re-enterable only for a *novel* block (via fingerprint) | `resolveExpertAsk` **exists**; replace flat `EXPERT_MAX_USES` with fingerprint gate |
 | R5 | **Handoff** — checkpoint + structured "stuck on X, tried R1–R4, need …," resumable; the only terminal, never a discard | **NEW plumbing** — result/event types + persistence don't carry this yet |
 
-### Progress signal (what "still moving" means)
+### Old → new naming (for implementers)
 
-Reuse the existing definition so it can't be gamed: progress = the **stuck error
-set changed** (errors resolved or genuinely different), not merely a lower raw
-count (deleting code lowers the count without progress). `samePersist`/
-`gateStuckRepeats` already encode "the same set persists" — invert that for "moved."
+The code today has `steerLevel` L1/L2/L3 + expert; the spec names R0–R5. Map:
+
+| Spec | Today | Change |
+|---|---|---|
+| R0 | (no steer) refine w/ errors | none |
+| R1 | L1 step-back | extend: feed the model's own diagnosis forward |
+| R2 | L2 investigate + `PLAYBOOKS` | add per-call temp/reasoning override |
+| R3 | (part of L3) change-strategy | add "narrow to one error" (main loop) + park-and-revisit (greenfield driver — see below) |
+| R4 | expert handoff | swap flat cap → fingerprint gate |
+| R5 | `stuckResult` / park | make it a structured resumable handoff |
+
+**R3 is split deliberately:** "narrow to the single most-persistent error" is a
+main-loop steer rung; "park a whole feature and revisit later" is **greenfield
+driver behavior** (change #7), not a main-loop rung. Don't conflate them.
+
+### Progress signal / block signature (what "still moving" means)
+
+Reuse the existing `sameErrorSet` logic so it can't be gamed: progress = the **set
+of persisting error keys changed** (resolved or genuinely different), not merely a
+lower raw count (deleting code lowers the count without progress). That same set of
+persisting error keys **IS** the `blockFingerprint` — introduce it once, use it for
+both expert-novelty gating and the handoff report. `samePersist`/`gateStuckRepeats`
+already encode "the same set persists" — invert for "moved."
 
 ---
 
@@ -232,10 +257,22 @@ Ordered so nothing is uncapped before the state that makes uncapping safe exists
 
 ---
 
-## Open decisions (small; most answered by direction)
+## Decisions (was open; resolved from two expert reviews)
 
-1. **R3 "narrow to one error"** — worth building, or go R2→expert directly? (Adds
-   value on multi-error stalls; small.)
-2. **Heartbeat interval value** for checkpoint/report — start at the current
-   `maxTurns`/`webMaxTurns` numbers repurposed as intervals? (No behavioral cost;
-   just cadence of persistence + progress events.)
+1. **R3 split — DECIDED.** "Narrow to one error" is a main-loop steer rung;
+   "park-and-revisit a whole feature" is greenfield-driver behavior (change #7). Not
+   the same thing, not conflated.
+2. **Heartbeat vs backstop — three constants today, handle each:**
+   - `maxTurns: 40` (headless) is the literal "turn 40" that limits tasks — it is
+     **too low to be a crash-guard.** It becomes `checkpointIntervalTurns` (heartbeat
+     cadence, ~40 is fine), and headless gains a NEW high `runawayBackstopTurns`
+     (it has no high bound today — 40 is its only one).
+   - `interactiveBackstopTurns: 250` and `webMaxTurns: 400` are already high →
+     **repurpose as `runawayBackstopTurns`** (the crash-guard).
+   - Never overload one number for heartbeat + backstop.
+3. **Turn-cap change is a loop-CONDITION change, not a doc change** (both reviewers
+   flagged): `driveInner`'s `for (turn <= maxTurns)` and `run.ts:433` must gain an
+   explicit "ladder exhausted for this block AND a stall guard still firing" exit on
+   the yield path; the `for`-bound stays only as the runaway crash-guard emitting the
+   `cap` anomaly. This + per-turn model-param overrides are the two highest-risk
+   mechanical changes — sequence them first and test them hardest.
