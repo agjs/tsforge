@@ -29,7 +29,7 @@
     "reading-time": "1.5.0",
     "remark-gfm": "4.0.1",
     "sharp": "0.34.5",
-    "tailwindcss": "4.3.0"
+    "tailwindcss": "4.3.2"
   },
   "devDependencies": {
     "wrangler": "4.95.0"
