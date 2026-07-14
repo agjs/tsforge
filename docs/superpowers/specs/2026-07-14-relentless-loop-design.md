@@ -1,16 +1,17 @@
 # Relentless Loop: Persistence Over Arbitrary Stoppers — Design
 
 **Goal:** Make the harness relentless. It keeps doing useful work and treats
-failure as the **absolute last** action — reached only after every distinct
-lever is exhausted — never an early, arbitrary one. The acceptance bar is the
-overnight test: you leave a task running, and in the morning it is either still
-productively working or it climbed the entire escalation ladder and handed off
-with a precise report. It must **never** be idle-failed at 00:10 with the
-hardware sitting cold.
+failure as the **absolute last** action — reached only after every distinct lever
+is exhausted — never an early, arbitrary one. Remove the arbitrary numeric stoppers
+(`maxTurns`, `EXPERT_MAX_USES`, `maxAttemptsPerFeature`) and replace them with a
+progress-gated escalation ladder whose only terminal state is a structured,
+resumable **R5 handoff**. Success bar = the overnight test: you leave a task running
+and in the morning it is either still productively working or it climbed the entire
+ladder and handed off cleanly — never idle-failed at 00:10 with the hardware cold.
 
-**Scope note:** tsforge is a **general brownfield coding agent** — the dominant
-use is `tsforge "<task>" --accept "<gate>"` against an existing repo. This design
-lives in the **main loop** (`session.ts`/`turn.ts`), codebase-agnostic. Greenfield/
+**Scope:** tsforge is a **general brownfield coding agent** — the dominant use is
+`tsforge "<task>" --accept "<gate>"` against an existing repo. This design lives in
+the **main loop** (`session.ts`/`turn.ts`/`run.ts`), codebase-agnostic. Greenfield/
 BoringStack is one consumer, not the frame.
 
 ---
@@ -19,301 +20,333 @@ BoringStack is one consumer, not the frame.
 
 Arbitrary numeric stoppers terminate runs that are still making progress:
 
-- **Turn counts** (`maxTurns: 40`, `webMaxTurns: 400`) are a meaningless unit — a
-  Facebook clone might be 15 days, a todo app 50 lines. "Turn 40" measures nothing
-  about the work, yet it bounds the `drive(maxTurns)` loop (session.ts:920, 973).
-- **Expert cap** (`EXPERT_MAX_USES = 2`, turn.ts:940) parks a run after two expert
-  rescues even if each unblocked real progress and the model was still converging.
-- **Per-feature count** (`maxAttemptsPerFeature: 3`, greenfield/run.ts) drops a
-  feature after 3 evaluate cycles regardless of progress — and bypasses the good
-  ladder entirely.
-- **Park = terminal fail**, not a resumable handoff — a hard task dies instead of
-  checkpointing and surfacing "here's where I'm stuck, here's what I tried."
+- **Turn counts** — `maxTurns: 40` (headless), `interactiveBackstopTurns: 250`,
+  `webMaxTurns: 400`. "Turn 40" measures nothing about the work (a Facebook clone is
+  15 days; a todo app is 50 lines), yet it bounds the `for (turn <= maxTurns)` loops
+  in `session.ts:driveInner` and `run.ts:433` and emits `STUCK_REASON.cap`.
+- **Expert cap** — `EXPERT_MAX_USES = 2` (`turn.ts:940`) parks a run after two expert
+  rescues even if each unblocked real progress.
+- **Per-feature count** — `maxAttemptsPerFeature: 3` (`greenfield/run.ts`) drops a
+  feature after 3 evaluate cycles regardless of progress, bypassing the good ladder.
+- **Park = terminal fail**, not a resumable handoff.
 
 Same disease as the removed edit-size cap and forced-surgical-edits: an arbitrary
 heuristic overriding the real signal, which is **progress**.
 
 ---
 
-## What already exists (the good news)
+## What already exists (grounded)
 
-The escalation ladder is ~70% built and general, in `turn.ts`/`steer.ts`/
-`expert-handoff.ts`:
+The ladder is ~70% built and general:
 
-- **Progress guards** (`loop.constants.ts`): `samePersist` (a single error surviving
-  N cycles), `gateStuckRepeats` (identical error SET N cycles), `noProgressCycles`
-  (no new low-water count), plus `plateauGates` + `steerRetrigger` (drive the ladder
-  faster under oscillation). Convergence, not turn counts.
-- **Steer ladder** (`steer.ts`, `buildSteerMessage(level)` L1 step-back → L2
-  investigate + `PLAYBOOKS` → L3 change-strategy). A guard trip escalates `steerLevel`,
-  injects `pendingSteer`, and resets the FINE guards but deliberately NOT
-  `plateauBest`. Context reset via `essentialMessages` already fires at the top rung
+- **Progress guards** (`loop.constants.ts`, applied in `turn.ts:checkStuck`):
+  `samePersist` (a single error key surviving N cycles), `gateStuckRepeats`
+  (identical error SET N cycles), `noProgressCycles` (no new low-water count),
+  `plateauGates` + `steerRetrigger` (drive the ladder faster under oscillation).
+- **Steer ladder** (`steer.ts` `buildSteerMessage(level)`): L1 step-back → L2
+  investigate + `PLAYBOOKS` → L3 change-strategy. `checkStuck` does
+  `state.steerLevel += 1`, injects `pendingSteer`, resets the FINE guards but NOT
+  `plateauBest`. Context reset via `essentialMessages` fires at the top rung
   (`turn.ts:1146`).
-- **Expert handoff, already reversible** (`turn.ts:942-945`, invoked from
-  `settleGate` right after `checkStuck` at `turn.ts:1320-1327`, and from the
-  readonly-spin recovery in `session.ts`): hand the stuck file (`resolveStuckFile`
-  surfaces it from type-aware lint) + errors to `capabilities.expert`, apply the fix,
-  reset `steerLevel`+guards, and **let the local model continue**. Exactly the
-  "expert unblocks → back to local" rung — just with a flat 2-use cap on top.
-- **`settleGate` is the main GATE-STALL path** (both `run.ts` and `Session` route
-  gate-failure stalls through it) — but it is **NOT the only terminal stuck exit.**
-  Several terminal fails BYPASS it and must ALSO be converted to R5 handoff, or
-  they stay old dead-ends: build-nudge exhaustion (`session.ts:1213`), degeneration
-  (`session.ts:1254`), repeated timeout (`session.ts:1300`), read-only spin
-  (`session.ts:1792`), headless degeneration/cap (`run.ts:491`). R5 handoff is the
-  single *terminal treatment*, applied at EVERY one of these exits — not just at
-  `stuckResult`.
+- **Expert handoff** (`tryExpertRescue`, `turn.ts:942`): invoked from `settleGate`
+  right after `checkStuck` returns a stalled result when `steerLevel > STEER_LADDER_MAX`
+  (`turn.ts:1320-1327`), and from the read-only-spin recovery in `session.ts`. Applies
+  the expert's fix, resets `steerLevel = 0` + guards, and the local model continues —
+  already reversible. Just capped at 2 uses.
+- **`settleGate`** is the main gate-stall path both `run.ts` and `Session` route
+  through — but NOT the only terminal exit (see the exit table below).
+- Error keys are `${file}:${ruleId}` (`turn.ts:1258`); `IErrorItem` carries the key;
+  `trackErrorAges`/`samePersist` operate per-key.
 
-So this is **completing and un-capping an existing ladder**, not a rewrite.
+So this is **completing + un-capping + making handoff first-class**, not a rewrite.
 
 ---
 
-## Design: the one termination model
+## Termination model
 
-**Keep going while making progress. On a stall, escalate a rung. Fail only when
-the ladder is fully exhausted AND still stalled — and "fail" is a resumable
-handoff, never a silent quit.**
+**Keep going while making progress. On a stall, escalate a rung. The only task
+terminal is R5 handoff, reached when the ladder is exhausted for the current block
+AND the block has not moved. A high crash-guard remains, separate from task logic.**
 
-### The single *task* stop condition — plus a separate crash-guard
+- **No arbitrary task ceiling:** no per-attempt count, no flat expert cap, no
+  "turn 40 = fail."
+- **Runaway crash-guard KEPT:** a high `runawayBackstopTurns` terminates a genuinely
+  broken agent (never-yielding / zero-tool-call). Existing tests depend on this. It
+  fires as an **anomaly** (logged as such), not a normal fail.
+- **Heartbeat, separate:** `checkpointIntervalTurns` persists a checkpoint + emits a
+  progress event on a cadence; it does NOT terminate.
 
-A run reaches **handoff** iff **every rung has been tried at the current block AND
-the block has not moved** (`gateStuckRepeats`/`samePersist` still tripping after the
-top rung). No **arbitrary task-limiting** ceiling: no per-attempt count, no flat
-expert cap, no "turn 40 = fail."
+---
 
-**But a hard runaway backstop STAYS** — it is a crash-guard, not a task limiter, and
-removing it is unsafe. The interactive loop bounds at `session.ts:1877` and returns
-`stuck` at `session.ts:2002`; headless `runTask` hard-stops at `run.ts:433` /
-`STUCK_REASON.cap` at `run.ts:532`; **existing tests depend on this** for
-never-yielding / read-only / zero-tool-call loops (a genuinely broken agent that
-makes no progress and never even calls a tool must still terminate). So:
+## State the loop must track (new — build FIRST)
 
-- Keep a **`runawayBackstopTurns`** — set VERY high (far above any real task), the
-  crash-guard. Crossing it is an **anomaly**, logged as such, not a normal fail.
-- Add a **separate `checkpointIntervalTurns`** — the repurposed `maxTurns`/
-  `webMaxTurns` cadence: at each interval, persist state + emit a progress event, and
-  keep going. This is a heartbeat, NOT a terminator.
+Uncapping a lever without knowing *which block already got it* re-triggers it
+forever (expert resets guards at `turn.ts:1013`). Add to `ILoopState` (in `turn.ts`):
 
-The task ends on the ladder-exhaustion condition (→ handoff) or the human interrupt.
-The backstop only fires on a true no-progress-no-tools bug.
+- **`blockFingerprint: string`** — canonical identity of the current stuck block,
+  **guard-specific** (NOT the raw error set — `sameErrorSet`, `validate/errors.ts:26`,
+  treats a lateral rotation as "moved", but `plateauGates` exists because rotation is
+  often non-progress). Derived from the guard that fired:
 
-### State the loop must track (new — required before uncapping anything)
+  ```
+  fingerprintFor(state): string
+    if samePersist fired      → the single persisted key from trackErrorAges
+                                  (e.g. "src/x.ts:no-unsafe-argument")
+    else if gateStuckRepeats  → sorted-join of the current error keys
+    else if plateau/no-new-low→ `${lowWaterCount}|${sorted recurring rule keys
+                                  over the oscillation window}`  (NOT the momentary set)
+    else                      → "" (no active block)
+  ```
+  Must be a stable string usable as a `Map` key. Ship as a pure, unit-tested helper.
 
-Uncapping expert/rungs is unsafe without knowing *which block already got which
-lever*, or the same unchanged error set re-triggers a lever forever (expert resets
-the guards at `turn.ts:1013`, so a flat-cap removal loops). Add to `ILoopState`:
+- **`triedLeversByBlock: Map<fingerprint, Set<Rung>>`** — which rungs have been
+  applied to that exact block. Semantics: a lever counts as "tried for this block"
+  once its escalation turn **completes and the next gate shows the block unmoved**
+  (entering isn't enough — it must have failed to move it). A lever (expert included)
+  is re-applied **only for a novel fingerprint**. Genuine progress → new fingerprint
+  → `triedLeversByBlock` has no entry → the ladder naturally restarts at R1.
 
-- **`blockFingerprint`** — canonical identity of the current stuck block. It must be
-  **GUARD-SPECIFIC, not the raw full error set**, because `sameErrorSet`
-  (`errors.ts:26`) treats any lateral set change as "moving" — but `plateauGates`
-  exists precisely because a *rotating* error set is often non-progress. If the
-  fingerprint were the full set, an oscillating block would look novel every cycle
-  and re-trigger expert forever. So derive it from the guard that fired:
-  - `samePersist` → the single persisted error key,
-  - `gateStuckRepeats` → the sorted full set,
-  - plateau / no-new-low oscillation → a stable "blocker" signature (e.g. the
-    low-water error count + the recurring rule set), NOT the momentary set.
-- **`triedLeversByBlock`** — map: fingerprint → levers already applied to that exact
-  block. A lever (expert included) is re-enterable **only for a novel block**;
-  genuine progress = a new fingerprint = the ladder resets naturally.
+**State-machine semantics (replaces the scalar-only `steerLevel`):** keep
+`steerLevel` as the *display/order* index, but gate escalation on
+`triedLeversByBlock[fingerprint]`. On a stall: pick the **lowest rung not yet tried
+for this fingerprint**; apply it; record it. When all rungs (through expert) are in
+the set for the current fingerprint → **R5 handoff**. After an expert fix, if the
+fingerprint is unchanged on the next stall, do **not** re-climb from R1 — expert is
+already recorded for that block, so the next unfilled rung (or R5) is next. If the
+fingerprint changed, start fresh.
 
-### Steering is DYNAMIC, not just static content (the backbone)
+---
 
-We cannot pre-author a playbook for every issue on earth — static injection covers
-only a handful of *known* patterns and is useless on the long tail (novel logic
-bugs, domain-specific stalls). So the ladder's backbone is **dynamic levers that
-need no pre-authored content**, applied and then measured against the progress
-signal (escalate further only if the block didn't move — they are progress-gated,
-not treated as guaranteed unblockers):
+## Steering is DYNAMIC, not just static content (the backbone)
 
-- **Reason more** — raise reasoning effort / extended thinking on the stalled step.
-  **NEW plumbing AND provider-capability-aware:** reasoning is provider *config*
-  today (`request.ts:71`), and — critically for our LOCAL model — **DeepSeek pins
-  thinking mode for the whole conversation** (`openai-compatible.ts:40`), so a
-  per-turn flip may not be honored without a conversation restart. R2 is therefore
-  **best-effort by provider**: where a per-call reasoning override is supported,
-  thread it from rung state into `askModel`; where it isn't (DeepSeek), this lever
-  **no-ops cleanly** and the ladder leans on the other rungs. Test the no-op path.
-- **Self-diagnose** — a dedicated reflection turn: the model states what it tried,
-  WHY it keeps failing, and a genuinely different hypothesis; **its own output
-  becomes the next steer.** Extends the existing `buildSteerMessage(1)` (which only
-  injects a fixed string). Content-free and provider-agnostic — so this is the
-  **most reliable dynamic lever on DeepSeek**, where reason-more may no-op.
-- **Perturb sampling** — raise temperature to escape a local minimum. Also
-  provider-aware: OpenAI-style requests **omit temperature entirely**
-  (`request.ts:181`), and the main loop captures temp ONCE (`session.ts:1104`,
-  `run.ts:310`). Per-call temp override is **NEW plumbing**, same seam as reasoning,
-  and no-ops where unsupported.
-- **Reset context** — a stuck model is often poisoned by its own failed trail; clear
-  the accumulated attempts and re-read fresh. **Already exists** at the top rung
-  (`turn.ts:1146`) — reuse, just make it a named rung.
-- **Escalate capability** — hand to the expert model (below), gated by fingerprint.
+We cannot pre-author a playbook for every issue — static injection covers only known
+patterns. The backbone is dynamic, content-free levers, each **progress-gated** (apply,
+measure against the block signature, escalate only if the block didn't move):
 
-Static rule-`PLAYBOOKS` are demoted to a cheap *shortcut* for known rules, not the
-mechanism.
+- **Self-diagnose (R1)** — a reflection turn: the model states what it tried, WHY it
+  keeps failing, a genuinely different hypothesis; **its own output becomes the next
+  steer.** Content-free, provider-agnostic → the **most reliable dynamic lever on the
+  local DeepSeek model** (see reason-more caveat). Extends `buildSteerMessage(1)`.
+- **Reason more (R2)** — raise reasoning effort/thinking. **Provider-capability-aware
+  + NEW plumbing:** reasoning is provider *config* today (`request.ts:71`) and
+  **DeepSeek pins thinking mode per-conversation** (`openai-compatible.ts:40`), so a
+  per-turn flip may not be honored without a conversation restart → on DeepSeek this
+  **no-ops cleanly** and the ladder leans on R1/R3. Best-effort by provider.
+- **Perturb sampling (R2)** — raise temperature. Provider-aware: OpenAI-style requests
+  **omit temperature** (`request.ts:181`); the main loop captures temp ONCE
+  (`session.ts` askModel path, `run.ts:310`). Per-call override is NEW plumbing.
+- **Investigate + playbook (R2)** — read neighbors / grep the established pattern;
+  inject the rule `PLAYBOOK` IF one matches (a cheap shortcut for known rules, NOT the
+  mechanism).
+- **Reset + narrow (R3)** — context reset already exists (`turn.ts:1146`); "narrow"
+  is new (below).
+- **Expert (R4)** — hand to the expert model, apply fix, resume local; gated on a
+  novel fingerprint.
 
-### The rungs (ascending; each entered only after the one below stalls)
+---
 
-Most of the ladder ALREADY EXISTS — `steer.ts:142` maps L1→self-diagnose,
-L2→investigate/playbook, L3→change-strategy, and context reset already runs at the
-top rung (`turn.ts:1146`). So R1–R3 are **reframe/extend**, not build-from-scratch.
-The **genuinely new** work is the two dynamic *call-level* overrides (temperature,
-reasoning) + the block-fingerprint state + handoff types + greenfield parked state.
+## The rungs
 
-| Rung | Action | Status in repo |
+| Rung | Action | Status |
 |---|---|---|
 | R0 | Refine with the exact gate errors | exists (default) |
-| R1 | **Self-diagnose** — reflection turn; model authors its own next steer | **exists** — `buildSteerMessage(1)`, `steer.ts:142`; extend so the model's output feeds forward |
-| R2 | **Reason more + perturb** — raise reasoning effort/thinking + temperature; investigate codebase; playbook if a rule matches | steer/playbook **exist**; the temp/reasoning *per-call override* is **NEW** (see below) |
-| R3 | **Reset + change direction** — clear the poisoned trail (reset **exists** at `turn.ts:1146`), narrow to the single most-persistent error | reset exists; "narrow" is **new (small)** |
-| R4 | **Expert unblock → return to local** — apply expert fix, resume local; re-enterable only for a *novel* block (via fingerprint) | `resolveExpertAsk` **exists**; replace flat `EXPERT_MAX_USES` with fingerprint gate |
-| R5 | **Handoff** — checkpoint + structured "stuck on X, tried R1–R4, need …," resumable; the only terminal, never a discard | **NEW plumbing** — result/event types + persistence don't carry this yet |
+| R1 | **Self-diagnose** — model authors its own next steer | extend `buildSteerMessage(1)` — feed output forward (see mechanics) |
+| R2 | **Reason-more + perturb + investigate/playbook** — best-effort per-call reasoning/temp override; steer + `PLAYBOOKS` | steer/playbook exist; per-call override is **NEW** |
+| R3 | **Reset + narrow** — reset the poisoned trail (`turn.ts:1146`), then narrow to the single most-persistent error | reset exists; "narrow" is **new (small)** |
+| R4 | **Expert unblock → return to local** — apply fix, resume local; novel-fingerprint gated | `tryExpertRescue` exists; replace flat `EXPERT_MAX_USES` |
+| R5 | **Handoff** — structured, resumable "stuck on X, tried R1–R4, need …"; the ONLY terminal, never a discard | **NEW** types + persistence |
 
-### Old → new naming (for implementers)
+**Old → new mapping:** today `steerLevel` L1/L2/L3 + expert → R1/R2/R3 + R4; `stuckResult`/park → R5.
 
-The code today has `steerLevel` L1/L2/L3 + expert; the spec names R0–R5. Map:
+### R1 mechanic (self-diagnose feeds forward) — concrete
 
-| Spec | Today | Change |
-|---|---|---|
-| R0 | (no steer) refine w/ errors | none |
-| R1 | L1 step-back | extend: feed the model's own diagnosis forward |
-| R2 | L2 investigate + `PLAYBOOKS` | add per-call temp/reasoning override |
-| R3 | (part of L3) change-strategy | add "narrow to one error" (main loop) + park-and-revisit (greenfield driver — see below) |
-| R4 | expert handoff | swap flat cap → fingerprint gate |
-| R5 | `stuckResult` / park | make it a structured resumable handoff |
+1. On the first stall at a block, inject the R1 steer (existing `buildSteerMessage(1)`
+   framing: "diagnose your loop; different approach").
+2. **Capture the assistant's diagnosis text** from that turn (the reasoning/first
+   message after the R1 steer).
+3. On the NEXT cycle, set `pendingSteer` to a block that quotes it: *"Your own
+   diagnosis last cycle: «…». Act on that different approach now — do not repeat what
+   you already tried."* So the model's own words become the steering.
+4. **Failure mode** (weak/empty/circular diagnosis): if the captured text is trivial
+   (< N chars, or restates the error) or the block doesn't move, treat R1 as tried and
+   escalate to R2 — don't loop R1.
 
-**R3 is split deliberately:** "narrow to the single most-persistent error" is a
-main-loop steer rung; "park a whole feature and revisit later" is **greenfield
-driver behavior** (change #7), not a main-loop rung. Don't conflate them.
+### R3 "narrow" mechanic — concrete
 
-### Progress signal / block signature (what "still moving" means)
-
-Progress = genuine movement, not a lower raw count (deleting code lowers the count
-without progress) and NOT a mere lateral set rotation (which `sameErrorSet` would
-call "moved" but `plateauGates` correctly flags as oscillation). The
-`blockFingerprint` is therefore **guard-specific** (see "State the loop must track"
-above) — it must survive oscillation, or expert re-triggers forever. One concept,
-derived per firing guard, used for both expert-novelty gating and the handoff report.
+Not just stronger wording. For the R3 cycle, **filter the gate feedback shown to the
+model** (`injectFeedback`) down to the single most-persistent error (the `samePersist`
+key), and set a `focusError` in turn context so tool/feedback framing centers that one
+error. Restore full feedback once the block moves. This shrinks the surface the model
+must reason about when a broad error list is causing thrash.
 
 ---
 
-## Concrete changes (by file)
+## Terminal-exit classification (every stuck exit, decided)
 
-**Implementation order (from two reviews — safety-first, each step independently
-testable and green before the next):**
+R5 handoff must replace old terminal fails at EVERY exit, not just `stuckResult`.
 
-1. **Fingerprint semantics + tests FIRST** (`turn.ts` `ILoopState`): add the
-   guard-specific `blockFingerprint` + `triedLeversByBlock` (see "State the loop must
-   track"). Prove with tests that oscillation does NOT read as a novel block. Nothing
-   below is safe without this.
-2. **Headless read-only-spin guard** (`run.ts`): interactive `Session` has
-   `readonlySpinStop`; headless `runTask` does NOT — read-only tool turns neither
-   settle the gate nor trip progress guards, they just loop to the `for` cap
-   (`run.ts:501/529`). Port the guard to headless **before** any cap change, or a
-   read-only spin will burn the new high backstop doing nothing.
-3. **Structured handoff across ALL terminal exits** (do before extending run length):
-   - `loop.types.ts:119` `IRunResult` gains a structured `handoff` (rung history,
-     surviving `blockFingerprint`, the "ask") — today it's status/reason/detail only.
-   - Apply R5 handoff at EVERY terminal stuck exit, not just `stuckResult`:
-     `settleGate`, plus the bypass exits `session.ts:1213/1254/1300/1792` and
-     `run.ts:491`.
-   - `greenfield/state.ts:45` `toFeature` **drops `lastError` on load** — fix the
-     round-trip so a resumed/parked feature carries its surviving block.
-4. **Expert re-enters on a NOVEL block, not a count** (`turn.ts:940/967`): replace
-   the flat `EXPERT_MAX_USES` with "has this `blockFingerprint` already been
-   experted?" Keep the post-fix reset (1013); it now advances the fingerprint.
-5. **Dynamic levers** (the escalation content): extend R1 (feed the model's own
-   diagnosis forward), add R2 per-call temp/reasoning overrides **best-effort by
-   provider** (`session.ts:1104`, `request.ts:71/181`, `openai-compatible.ts:40` —
-   no-op cleanly where unsupported, e.g. DeepSeek thinking), add R3 "narrow to one
-   error" (reset already exists at 1146).
-6. **Heartbeat + backstop split** (`loop.constants.ts`, `session.ts`, `run.ts`): this
-   is a loop-CONDITION change, not a doc change. Add `checkpointIntervalTurns`
-   (heartbeat) + a **defined checkpoint payload** (below); split `maxTurns:40`
-   (headless) → heartbeat + a NEW high `runawayBackstopTurns`; repurpose
-   `interactiveBackstopTurns:250` / `webMaxTurns:400` as the backstop. The `for`-bound
-   stays ONLY as the runaway crash-guard; the normal terminal is ladder-exhaustion.
-7. **Greenfield parked STATE, not cap-deletion** (`greenfield/run.ts:72/85`): the
-   loop picks the first non-passing feature forever, so deleting `maxAttemptsPerFeature`
-   without a `parked` status makes a permanently-failing feature loop forever and
-   block the rest. Add a `parked` status: on ladder-exhaustion the feature parks
-   (resumable, carries `lastError`), the driver skips it to build the others, then
-   revisits parked features at the end (retry if a new lever is now available). Also
-   **wire the result through** `cli.ts:594` (it ignores the `runTask` result today).
+| Exit | Location | New behavior |
+|---|---|---|
+| Gate stall (via `checkStuck`) | `settleGate`, `turn.ts:1320` | **Escalate** the ladder; R5 handoff only at exhaustion |
+| Build-nudge exhaustion | `session.ts:1213` | **R5 handoff** (was terminal) |
+| Degeneration budget | `session.ts:1254` | **R5 handoff** |
+| Repeated timeout | `session.ts:1300` | **R5 handoff** (network/tooling — surface, resumable) |
+| Read-only spin | `session.ts:1792` | **Escalate** (feed "you keep reading, act") then R5; keep guard |
+| Interactive final backstop | `session.ts:1877/2002` | **Anomaly** — keep as `runawayBackstopTurns` crash-guard |
+| Headless degeneration/cap | `run.ts:491/544` | Degeneration → **R5 handoff**; cap → **anomaly** backstop |
+| Headless read-only spin | `run.ts:501/529` (NO guard today) | **ADD** the interactive read-only guard, then escalate/R5 |
 
-### Checkpoint payload (P2 — must be concrete, not "persist state")
+---
 
-Interactive persists only after a `send` finishes (`repl.ts:600/623`); headless has
-event logs but **no resumable loop state**. If heartbeat persistence is part of the
-acceptance bar, define exactly what a checkpoint writes so a run is resumable:
-**messages (compacted), `ILoopState` (incl. rung + `triedLeversByBlock`), rung
-history, the gate command + last output, the editable scope, and the current
-`blockFingerprint`.** Resume reads this back; without a defined payload "checkpoint"
-is hand-waving.
+## `IRunResult` + handoff shape
+
+`IRunResult` (`loop.types.ts:119`) today has `task/redConfirmed/status/cycles/reason/
+detail/edits/regressions`. Add:
+
+```ts
+handoff?: {
+  block: string;              // the surviving blockFingerprint
+  rungHistory: Rung[];        // ordered levers tried on the final block
+  errors: string[];          // the persisting error keys/messages
+  ask: string;               // what a human / stronger model / more context is needed for
+  resumable: true;
+}
+```
+
+Keep `status: "stuck"` (a handoff is a kind of stuck), but a handoff is distinguished
+by `handoff !== undefined`. Add `STUCK_REASON.handoff` alongside `.stalled`/`.cap`
+(`.cap` stays for the anomaly backstop only). The final handoff report is emitted as a
+rich event and rendered in CLI output; it lists **which levers were tried** for the
+final block (observability for post-mortems).
+
+---
+
+## Concrete changes (by file) — safety-first order
+
+1. **Fingerprint state + tests** — `turn.ts`: `ILoopState.blockFingerprint` +
+   `triedLeversByBlock`, the `fingerprintFor` helper, and the escalation state-machine.
+   Tests prove oscillation ≠ novel block. Nothing below is safe first.
+2. **Headless read-only-spin guard** — `run.ts`: port the interactive
+   `readonlySpinStop` so read-only turns can't burn the (about-to-be-raised) backstop.
+3. **Structured handoff — types, persistence, all exits** — `loop.types.ts` (`handoff`
+   field + `STUCK_REASON.handoff`); convert the bypass exits per the table; fix
+   `greenfield/state.ts:45` `toFeature` **dropping `lastError`** on load.
+4. **Expert re-enters on novel block** — `turn.ts:940/967`: replace `EXPERT_MAX_USES`
+   with the `triedLeversByBlock` novelty gate.
+5. **Dynamic levers** — R1 feed-forward (capture assistant diagnosis → `pendingSteer`);
+   R2 per-call `temperature`/`reasoning` overrides threaded through `askModel`
+   (`session.ts:1070`) → `acquireResponse` (`session.ts:1336`) and the `run.ts:310`
+   capture, **best-effort per provider, no-op where unsupported**, and **auxiliary
+   calls (planning, judge, compaction, expert) stay on defaults**; R3 narrow
+   (`injectFeedback` filter + `focusError`).
+6. **Heartbeat + backstop split** — `loop.constants.ts`: `maxTurns:40` →
+   `checkpointIntervalTurns` + a NEW high `runawayBackstopTurns` for headless;
+   repurpose `interactiveBackstopTurns:250`/`webMaxTurns:400` as the backstop. Loop
+   CONDITION change in `driveInner`/`run.ts:433`: normal terminal is ladder-exhaustion;
+   the `for`-bound remains only as the crash-guard. Add checkpoint emission.
+7. **Greenfield parked state (bigger than a constant deletion)** — `greenfield/`:
+   - `IFeature`: add `status: "open" | "passing" | "parked"` (or a `parked` flag) +
+     carry `handoff`. Round-trip `lastError` + handoff in `state.ts`.
+   - `greenfield/run.ts`: `implement` must **read the inner `IRunResult`** and detect
+     ladder exhaustion (today it ignores it and uses its own `attempts`); delete
+     `maxAttemptsPerFeature`; on exhaustion **park + skip + revisit at end** (retry a
+     parked feature when a new lever — e.g. expert — becomes available), so a wedged
+     feature never blocks the rest and the build only reports fully-stuck when ALL
+     remaining features are parked.
+   - **Wire the result through** `cli.ts:594` (it currently ignores `runTask`'s result)
+     so greenfield truly inherits R0–R5; update progress reporting.
+
+### Checkpoint payload (concrete)
+
+A checkpoint (heartbeat, and pre-handoff) writes enough to resume: **compacted
+messages, `ILoopState` (incl. `steerLevel` + `triedLeversByBlock`), rung history, the
+gate command + last gate output, the editable scope, and the current
+`blockFingerprint`.** For non-greenfield tasks this is new (headless has event logs
+but no resumable loop state today; interactive persists only after a `send`,
+`repl.ts:600/623`). Resume reads this back.
 
 ---
 
 ## Edge cases / safety
 
-- **Is this an infinite loop?** No. The ladder is finite; the stop condition is
-  "top rung reached AND block unmoved." A zero-progress run climbs R1→R5 and hands
-  off — bounded by the number of rungs, not by a turn count.
-- **Genuinely impossible task** (gate needs a capability no available model has):
-  the ladder exhausts (including expert) and hands off with the specific blocker —
-  which is the correct outcome, surfaced, not hidden in a spin.
-- **Runaway safety backstop (KEPT, not deleted):** `runawayBackstopTurns` stays as a
-  hard crash-guard against a true bug (agent looping with zero tool calls / never
-  yielding) — existing tests depend on this terminating. Set very high, far above any
-  real task; crossing it is logged as an anomaly, not a normal fail. It is separate
-  from `checkpointIntervalTurns` (the heartbeat) and from the ladder (the task logic).
-- **User interrupt** stays first-class (Ctrl-C) — relentlessness is not
-  un-interruptible.
+- **Infinite loop?** No — the ladder is finite; the terminal is "all rungs tried for
+  this fingerprint AND unmoved" → R5. Bounded by rungs, not turns.
+- **Impossible task** (needs a capability no model has): ladder exhausts (incl.
+  expert), R5 hands off with the specific blocker — surfaced, not hidden.
+- **Runaway crash-guard KEPT** — `runawayBackstopTurns`, high, anomaly-logged; guards
+  zero-tool / never-yield bugs; tests depend on it terminating.
+- **User interrupt** (Ctrl-C) stays first-class — relentless ≠ un-interruptible.
+- **Cost/observability** — long relentless runs stress context compaction + cost; the
+  heartbeat + rich handoff report mitigate; every final handoff logs the levers tried.
 
 ---
 
 ## Testing
 
-- Unit: progress-detection (moved vs stalled set); **oscillation does NOT read as a
-  novel block** (rotating error set → same fingerprint → expert not re-triggered);
-  rung-advance-on-stall; expert-re-enters-only-on-new-block; **every terminal exit
-  produces an R5 handoff** (settleGate + the 5 bypass exits); **provider without
-  per-call temp/reasoning no-ops cleanly**; **headless read-only spin terminates**
-  (guard fires, doesn't burn the backstop); park→handoff shape; greenfield
-  park-and-return.
-- Loop-level (ScriptedModel / VirtualScreen harness): a scripted model that stalls
-  then recovers at rung N proves the loop escalates rather than quits; a model that
-  never recovers proves it climbs the full ladder and hands off (does not fail early,
-  does not spin forever).
-- Definition of done: full `bun run validate` green; a scripted "stall-forever" run
-  ends in a bounded handoff (not a turn-count fail, not an infinite loop).
+**Existing tests to expect to touch / keep green:** `settle-steps`, `repair-loop`,
+`expert-rescue`, `greenfield.test`, `session.test`, `session-e2e-hunt` (focused suite:
+74 pass today — the baseline). The `EXPERT_MAX_USES`, `maxAttemptsPerFeature`, and
+turn-cap assertions will change; the never-yielding-loop / runaway-backstop coverage
+MUST stay.
+
+**New tests required:**
+- `fingerprintFor` stability: rotating/oscillating error set → **same fingerprint**
+  (not novel); genuine resolution → new fingerprint.
+- lever-not-reapplied-to-same-block (esp. expert): unchanged fingerprint → expert
+  fires at most once, then next rung / R5.
+- full ladder climb on a permanent stall (ScriptedModel) → ends in **bounded R5
+  handoff**, not a turn-cap fail and not an infinite loop.
+- every terminal exit yields a structured `handoff` (table above).
+- provider without per-call temp/reasoning → override **no-ops cleanly**.
+- headless read-only spin → guard fires (doesn't reach the backstop).
+- greenfield park-and-revisit: a permanently-failing feature parks, others build, it's
+  revisited; build reports fully-stuck only when all remaining are parked.
+- handoff shape + `lastError` round-trip through persistence.
+
+**Definition of done:** full `bun run validate` green; a scripted "stall-forever" run
+ends in a bounded R5 handoff.
+
+---
+
+## Implementation notes / risks
+
+Two changes carry almost all the risk — sequence them first, test them hardest:
+
+1. **Fingerprint state machine.** Getting "novel block" wrong in either direction is
+   bad: too loose (full error set) → oscillation re-triggers expert forever; too tight
+   → genuine progress reads as the same block and the ladder never restarts. The
+   guard-specific derivation + the "tried = completed-turn-then-unmoved" semantics are
+   subtle. Build + unit-test this in isolation before anything consumes it.
+2. **Per-call model overrides (temp/reasoning).** New plumbing through
+   `askModel`/`acquireResponse` and both run drivers, and it must be **provider-aware**
+   (DeepSeek pins thinking; OpenAI omits temperature) and must NOT leak into auxiliary
+   calls (planning/judge/compaction/expert). A wrong default here silently changes
+   model behavior everywhere. Thread it explicitly; test the no-op and the
+   auxiliary-stays-default paths.
+
+Lower-risk but non-trivial: greenfield parked-state (a driver + state-machine change,
+not a constant deletion) and converting all bypass exits to R5.
+
+---
+
+## Prioritized implementation order
+
+1. Fingerprint semantics + `fingerprintFor` helper + state machine + tests.
+2. Headless read-only-spin guard (before any cap change).
+3. Structured handoff: `IRunResult.handoff` + `STUCK_REASON.handoff` + convert all
+   bypass exits + fix `lastError` persistence.
+4. Expert uncap → novel-fingerprint gate.
+5. Dynamic levers: R1 feed-forward, R2 per-call overrides (provider-aware, no-op
+   tested), R3 narrow.
+6. Heartbeat + backstop split (loop-condition change) + checkpoint payload/emission.
+7. Greenfield parked state + revisit + `cli.ts:594` wiring + reporting.
+
+Full `bun run validate` green between each; each step independently testable.
 
 ---
 
 ## Out of scope (separate passes)
 
-- The runtime e2e smoke tier (`TSFORGE_SMOKE`) — orthogonal.
-- Any BoringStack-specific wiring — this is general-loop only.
-- Model-capability improvements (better first-shot prompting) — complementary but
-  separate.
-
----
-
-## Decisions (was open; resolved from two expert reviews)
-
-1. **R3 split — DECIDED.** "Narrow to one error" is a main-loop steer rung;
-   "park-and-revisit a whole feature" is greenfield-driver behavior (change #7). Not
-   the same thing, not conflated.
-2. **Heartbeat vs backstop — three constants today, handle each:**
-   - `maxTurns: 40` (headless) is the literal "turn 40" that limits tasks — it is
-     **too low to be a crash-guard.** It becomes `checkpointIntervalTurns` (heartbeat
-     cadence, ~40 is fine), and headless gains a NEW high `runawayBackstopTurns`
-     (it has no high bound today — 40 is its only one).
-   - `interactiveBackstopTurns: 250` and `webMaxTurns: 400` are already high →
-     **repurpose as `runawayBackstopTurns`** (the crash-guard).
-   - Never overload one number for heartbeat + backstop.
-3. **Turn-cap change is a loop-CONDITION change, not a doc change** (both reviewers
-   flagged): `driveInner`'s `for (turn <= maxTurns)` and `run.ts:433` must gain an
-   explicit "ladder exhausted for this block AND a stall guard still firing" exit on
-   the yield path; the `for`-bound stays only as the runaway crash-guard emitting the
-   `cap` anomaly. This + per-turn model-param overrides are the two highest-risk
-   mechanical changes — sequence them first and test them hardest.
+- Runtime e2e smoke tier (`TSFORGE_SMOKE`).
+- BoringStack-specific wiring.
+- Model-capability / first-shot prompting improvements (complementary, separate).
