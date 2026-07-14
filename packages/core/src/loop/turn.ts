@@ -1683,6 +1683,77 @@ export async function settleGate(
   return null;
 }
 
+/** Handle a non-gate exit (timeout, degeneration, readonly-spin, malformed-tool-call)
+ *  with a small recovery budget per synthetic block. Once budget spent → R5 handoff.
+ *  Synthetic fingerprints are SEPARATE namespace from real gate fingerprints.
+ *  Returns a terminal result or null to continue. */
+export function settleSyntheticBlock(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  syntheticFingerprint: string,
+  exitKind: string,
+  turn = 1
+): IRunResult | null {
+  const { task, report } = ctx;
+
+  // Synthetic blocks have a small fixed recovery budget (not full escalation ladder)
+  const budgetPerExitKind: Record<string, number> = {
+    "readonly-spin": 1, // one nudge to act
+    timeout: 1, // one retry
+    degeneration: 0, // no retry, go straight to R5
+    "malformed-tool-call": 0,
+  };
+
+  const recoveryBudget = budgetPerExitKind[exitKind] ?? 0;
+
+  // Initialize the synthetic block's tried-lever tracking (separate namespace)
+  state.triedLeversByBlock ??= new Map();
+  const tried = state.triedLeversByBlock.get(syntheticFingerprint) ?? new Set();
+
+  // Count how many times this synthetic block has been visited (recovery attempts)
+  const recoveryAttempts = tried.size;
+
+  // If we've exhausted the budget, hand off
+  if (recoveryAttempts >= recoveryBudget) {
+    const message = `synthetic block "${exitKind}" exhausted recovery budget`;
+
+    report({
+      kind: "stuck",
+      task: task.id,
+      message,
+    });
+
+    // Synthetic blocks don't use real escalation rungs, so handoff reports empty rungHistory
+    const rungHistory: EscalationRung[] = [];
+
+    const handoff: IHandoff = {
+      block: syntheticFingerprint,
+      rungHistory,
+      errors: [exitKind],
+      ask: `${exitKind}: recovery attempts exhausted; needs manual intervention or a different approach`,
+      resumable: true,
+      resume: { triedLevers: rungHistory },
+    };
+
+    return {
+      task: task.id,
+      redConfirmed: false,
+      status: RUN_STATUS.stuck,
+      reason: STUCK_REASON.handoff,
+      handoff,
+      detail: message,
+      cycles: turn,
+    };
+  }
+
+  // Record this recovery attempt using sentinel rungs (synthetic blocks use markers, not the full R1-R4 ladder)
+  tried.add("R1");
+  state.triedLeversByBlock.set(syntheticFingerprint, tried);
+
+  // Continue — the caller will apply a small nudge/retry before looping again
+  return null;
+}
+
 /** Report how long a turn took (and cumulative). */
 export function emitTiming(
   report: Reporter,

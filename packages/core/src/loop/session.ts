@@ -87,8 +87,12 @@ export interface ISessionConfig {
   temperature?: number;
   enableThinking?: boolean;
   thinkingTokenBudget?: number;
-  /** Per-`send` turn cap (default LOOP_LIMITS.maxTurns). */
+  /** Runaway crash-guard on turns per send (default LOOP_LIMITS.runawayBackstopTurns).
+   *  The PRIMARY terminal is ladder-exhaustion (R5 handoff), not this turn cap. */
   maxTurns?: number;
+  /** Heartbeat cadence: emit checkpoint progress event every N turns without
+   *  terminating (default LOOP_LIMITS.checkpointIntervalTurns). */
+  checkpointIntervalTurns?: number;
   /** Base policy mode (from `--policy-mode`/config). Plan mode overrides it with
    *  `"plan"`; absent ⇒ `"default"`. */
   policyMode?: PolicyMode;
@@ -932,13 +936,15 @@ export class Session {
    */
   async send(text: string, opts: ISendOptions = {}): Promise<ISendResult> {
     const { ctx, report } = this;
-    // Interactive ceiling is a RUNAWAY backstop, not the primary stop — the
-    // progress guards (samePersist / gateNoProgress) pull the agent out the moment
-    // it stops converging. Set high so normal long back-and-forth never trips it.
+    // Runaway crash-guard (not the primary stop — the progress guards pull out when
+    // converging stops). The PRIMARY terminal is ladder-exhaustion (R5 handoff).
     const maxTurns =
       this.maxTurnsOverride ??
       this.cfg.maxTurns ??
-      LOOP_LIMITS.interactiveBackstopTurns;
+      LOOP_LIMITS.runawayBackstopTurns;
+
+    const checkpointIntervalTurns =
+      this.cfg.checkpointIntervalTurns ?? LOOP_LIMITS.checkpointIntervalTurns;
     const sendStart = performance.now();
 
     // Thread cancellation to the tool `run` commands and the gate (not just the
@@ -988,7 +994,12 @@ export class Session {
         ctx.messages.push({ role: "user", content: text });
       }
 
-      return await this.drive(maxTurns, sendStart, opts);
+      return await this.drive(
+        maxTurns,
+        checkpointIntervalTurns,
+        sendStart,
+        opts
+      );
     } catch (err) {
       if (opts.signal?.aborted === true) {
         report({
@@ -1718,13 +1729,19 @@ export class Session {
    *  reset per send so each maps to one "run". */
   private async drive(
     maxTurns: number,
+    checkpointIntervalTurns: number,
     sendStart: number,
     opts: ISendOptions
   ): Promise<ISendResult> {
     this.sendEvents.length = 0;
 
     try {
-      return await this.driveInner(maxTurns, sendStart, opts);
+      return await this.driveInner(
+        maxTurns,
+        checkpointIntervalTurns,
+        sendStart,
+        opts
+      );
     } finally {
       await this.consolidateLessons();
     }
@@ -1900,6 +1917,7 @@ export class Session {
 
   private async driveInner(
     maxTurns: number,
+    checkpointIntervalTurns: number,
     sendStart: number,
     opts: ISendOptions
   ): Promise<ISendResult> {
@@ -1942,6 +1960,10 @@ export class Session {
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       const turnStart = performance.now();
+
+      // Heartbeat: emit a checkpoint progress event every checkpointIntervalTurns
+      // without terminating — allows checkpoint persistence + monitoring.
+      emitCheckpoint(report, SESSION_ID, turn, checkpointIntervalTurns);
 
       // Inject any messages the user typed while the run was in flight, so they
       // steer the next model turn instead of waiting for the run to finish.
@@ -2069,9 +2091,29 @@ export class Session {
       kind: "stuck",
       task: SESSION_ID,
       cycles: maxTurns,
-      message: `stuck (hit the ${maxTurns}-turn runaway backstop — progress guards never tripped, which is unusual; re-steer or narrow the task)`,
+      message: `stuck (hit the ${maxTurns}-turn runaway crash-guard — progress guards never tripped, which is anomalous; re-steer or narrow the task)`,
     });
 
-    return { status: "stuck", turns: maxTurns };
+    return {
+      status: "stuck",
+      turns: maxTurns,
+    };
+  }
+}
+
+/** Emit a checkpoint heartbeat event on cadence. */
+function emitCheckpoint(
+  report: Reporter,
+  taskId: string,
+  turn: number,
+  interval: number
+): void {
+  if (turn > 1 && turn % interval === 0) {
+    report({
+      kind: "checkpoint",
+      task: taskId,
+      cycle: turn,
+      message: `checkpoint: turn ${turn}`,
+    });
   }
 }

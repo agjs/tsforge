@@ -658,6 +658,7 @@ async function handleModelResponse(args: {
  *  under cognitive-complexity 20. */
 async function runMainLoop(args: {
   maxTurns: number;
+  checkpointIntervalTurns: number;
   provider: IProvider;
   messages: IChatMessage[];
   tools: unknown[];
@@ -677,6 +678,28 @@ async function runMainLoop(args: {
 
   for (let turn = 1; turn <= args.maxTurns; turn += 1) {
     const turnStart = performance.now();
+
+    // Heartbeat: emit a checkpoint progress event every checkpointIntervalTurns
+    // without terminating — allows checkpoint persistence + monitoring.
+    if (turn > 1 && turn % args.checkpointIntervalTurns === 0) {
+      args.report({
+        kind: "checkpoint",
+        task: args.taskId,
+        cycle: turn,
+        message: `checkpoint: turn ${turn}`,
+      });
+    }
+
+    // Heartbeat: emit a checkpoint progress event every checkpointIntervalTurns
+    // without terminating — allows checkpoint persistence + monitoring.
+    if (turn > 1 && turn % args.checkpointIntervalTurns === 0) {
+      args.report({
+        kind: "checkpoint",
+        task: args.taskId,
+        cycle: turn,
+        message: `checkpoint: task ${args.taskId} · turn ${turn}`,
+      });
+    }
 
     args.report({
       kind: "cycle",
@@ -759,7 +782,7 @@ async function runMainLoop(args: {
     kind: "stuck",
     task: args.taskId,
     cycles: args.maxTurns,
-    message: `task ${args.taskId}: stuck (hit ${args.maxTurns}-turn cap)`,
+    message: `task ${args.taskId}: stuck (hit ${args.maxTurns}-turn runaway crash-guard — progress guards never tripped, which is anomalous)`,
   });
 
   return args.finish({
@@ -859,7 +882,9 @@ export async function runTask(
   const { parse, enableThinking, thinkingTokenBudget } = opts;
   const effectiveParse = effectiveParserFor(parse);
   const temperature = opts.temperature ?? DEFAULT_TEMPERATURE;
-  const maxTurns = opts.maxTurns ?? LOOP_LIMITS.maxTurns;
+  const maxTurns = opts.maxTurns ?? LOOP_LIMITS.runawayBackstopTurns;
+  const checkpointIntervalTurns =
+    opts.checkpointIntervalTurns ?? LOOP_LIMITS.checkpointIntervalTurns;
   // Buffer every event so the post-run memory hook can mine the run for
   // failure→fix lessons, while still forwarding live to the real reporter.
   const base: Reporter = opts.onEvent ?? (() => undefined);
@@ -982,6 +1007,7 @@ export async function runTask(
 
   return await runMainLoop({
     maxTurns,
+    checkpointIntervalTurns,
     provider,
     messages,
     tools,

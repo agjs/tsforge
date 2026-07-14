@@ -32,6 +32,7 @@ export interface ILoopEvent {
     | "start"
     | "red"
     | "cycle"
+    | "checkpoint"
     | "token"
     | "message"
     | "fix"
@@ -165,8 +166,13 @@ export interface IRunOptions {
   enableThinking?: boolean;
   /** Cap reasoning tokens per model call (vLLM `thinking_token_budget`). */
   thinkingTokenBudget?: number;
-  /** Hard backstop on model turns (default LOOP_LIMITS.maxTurns). */
+  /** Runaway crash-guard on model turns (default LOOP_LIMITS.runawayBackstopTurns).
+   *  Crossing it logs an anomaly and returns STUCK_REASON.cap with no handoff.
+   *  The PRIMARY terminal is ladder-exhaustion (R5 handoff), not this turn cap. */
   maxTurns?: number;
+  /** Heartbeat cadence: emit a checkpoint progress event every N turns without
+   *  terminating (default LOOP_LIMITS.checkpointIntervalTurns = 40). */
+  checkpointIntervalTurns?: number;
   /** Seed the run with a deterministic pre-edit scout bundle (caller blast-radius
    *  of the editable files). Opt-in; only fires on brownfield (existing-code) runs. */
   scout?: boolean;
