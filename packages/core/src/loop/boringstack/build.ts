@@ -19,6 +19,7 @@ import type { Exec } from "./exec";
 import { generateResource, generateFeature } from "./generate";
 import { runBoringstackGate } from "./gate";
 import { extractFailures, novelFailures } from "./extract-failures";
+import { verifyFeatureReachable } from "./reachability";
 import {
   resolveExpertAsk,
   resolveStuckFile,
@@ -254,10 +255,33 @@ export function boringstackDeps(opts: {
         // broken); otherwise it fails with ONLY the new failures as feedback, so
         // the model never chases base-suite defects it's frozen out of.
         async gate(): Promise<IGateOutcome> {
+          // A feature isn't "done" just because it COMPILES — it must be reachable
+          // and usable. After the build gate is green, require the static
+          // reachability check (route wired, API mounted, i18n keys present) too;
+          // otherwise a gate-green feature can still be a dead page (the class of
+          // bugs found live: unreachable route, raw i18n keys, unmounted API).
+          const passReachable = async (
+            output: string
+          ): Promise<IGateOutcome> => {
+            const reach = await verifyFeatureReachable(cwd, feature.id);
+
+            if (reach.ok) {
+              return { passed: true, output };
+            }
+
+            return {
+              passed: false,
+              output:
+                `The build gate is green, but "${feature.id}" is NOT reachable or ` +
+                `usable — a user could not get to it or it renders raw keys:\n- ` +
+                reach.problems.join("\n- "),
+            };
+          };
+
           const result = await runBoringstackGate(cwd, exec);
 
           if (result.passed) {
-            return { passed: true, output: result.output };
+            return await passReachable(result.output);
           }
 
           const current = extractFailures(result.output, cwd);
@@ -268,13 +292,11 @@ export function boringstackDeps(opts: {
           // prove the redness is baseline-only (unrecognized output / a
           // build-step crash) — stay failed and hand back the raw output.
           if (current.size > 0 && novel.length === 0) {
-            return {
-              passed: true,
-              output:
-                `gate exit non-zero, but every failure is a pre-existing baseline ` +
+            return await passReachable(
+              `gate exit non-zero, but every failure is a pre-existing baseline ` +
                 `failure (${String(baseline.size)}) the feature cannot touch — no ` +
-                `new failures introduced.`,
-            };
+                `new failures introduced.`
+            );
           }
 
           if (novel.length > 0) {
