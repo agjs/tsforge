@@ -25,12 +25,20 @@ const FEEDBACK_MAX_PER_RULE = 3;
  * spot instead of reading the file and hand-counting to find it (which it did
  * for 3 turns on `money` when feedback was message-only). Plus the rules' fix
  * examples. Async because it reads the source lines from disk.
+ *
+ * `focusError` (R3 narrow): when set, filters the feedback to show ONLY the
+ * single most-persistent error. The key format:
+ *  - regular errors: "file:line:rule"
+ *  - metaViolations: "file:ruleId"
+ * CRITICAL: focusError filters ONLY the rendered feedback; the unfiltered error
+ * set remains for fingerprinting/progress guards (compute those BEFORE filtering).
  */
 export async function gateFeedback(
   errors: ErrorSet,
   task: ITask,
   cwd: string,
-  metaViolations: readonly IMetaRuleViolation[] = []
+  metaViolations: readonly IMetaRuleViolation[] = [],
+  focusError: string | null = null
 ): Promise<string> {
   const own = errors.filter((e) => {
     if (e.file === undefined) {
@@ -50,11 +58,24 @@ export async function gateFeedback(
   });
   const readOnly = errors.length - own.length;
 
-  const { shown, skipped } = selectRepresentative(own);
+  // R3 narrow: filter to focused error only (if set). CRITICAL: this filters ONLY
+  // the rendered feedback; the fingerprint/progress guards use the UNFILTERED set.
+  const renderedErrors =
+    focusError !== null
+      ? own.filter((e) => {
+          const key = [e.file, e.line, e.rule].join(":");
+
+          return key === focusError;
+        })
+      : own;
+
+  const { shown, skipped } = selectRepresentative(renderedErrors);
   const list =
-    own.length > 0
+    renderedErrors.length > 0
       ? await renderErrors(shown, cwd)
-      : "(no failures in your editable files)";
+      : focusError !== null
+        ? "(no errors matching the focused error key)"
+        : "(no failures in your editable files)";
   const capped = overflowSummary(skipped);
 
   const note =
@@ -74,15 +95,27 @@ export async function gateFeedback(
   const idiomBlock =
     idioms.length > 0 ? `\n\nWatch for these strict-TS idioms:\n${idioms}` : "";
 
+  // R3 narrow: filter metaViolations to focused error only (if set).
+  const renderedMetaViolations =
+    focusError !== null
+      ? metaViolations.filter((v) => {
+          const key = `${v.file}:${v.ruleId}`;
+
+          return key === focusError;
+        })
+      : metaViolations;
+
   // Render meta-rule violations (project structure violations)
   const metaViolationsList =
-    metaViolations.length > 0 ? renderMetaViolations(metaViolations) : "";
+    renderedMetaViolations.length > 0
+      ? renderMetaViolations(renderedMetaViolations)
+      : "";
   const metaBlock =
     metaViolationsList.length > 0
       ? `\n\n## Project structure\n${metaViolationsList}`
       : "";
 
-  const metaHelp = metaRuleHelp(metaViolations);
+  const metaHelp = metaRuleHelp(renderedMetaViolations);
   const metaHelpBlock = metaHelp.length > 0 ? `\n${metaHelp}` : "";
 
   // Tool-use lapse guard: if an editable file doesn't exist, the model likely

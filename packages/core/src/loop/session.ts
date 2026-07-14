@@ -1117,10 +1117,19 @@ export class Session {
 
     this.ttsrManager?.resetBuffer();
 
+    // R2 per-call model overrides (temperature, reasoning effort) — applied to
+    // the NEXT main-loop turn only, then cleared. Auxiliary calls (planning,
+    // judge, expert) stay on config defaults. Applied by R2 (reason-more) rung.
+    const override = this.state.pendingModelOverride;
+    const temperature =
+      override?.temperature ?? this.cfg.temperature ?? DEFAULT_TEMPERATURE;
+    const reasoningEffort = override?.reasoningEffort;
+
     const res = await this.provider.complete(ctx.messages, {
       tools: offeredTools,
-      temperature: this.cfg.temperature ?? DEFAULT_TEMPERATURE,
+      temperature,
       toolChoice,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       ...(enableThinking === undefined ? {} : { enableThinking }),
       ...(this.cfg.thinkingTokenBudget === undefined
         ? {}
@@ -1183,6 +1192,9 @@ export class Session {
     if (res.content.length > 0) {
       report({ kind: "message", task: SESSION_ID, message: res.content });
     }
+
+    // Clear the pending model override after this call completes (one-shot, next turn only).
+    this.state.pendingModelOverride = null;
 
     return res;
   }

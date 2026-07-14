@@ -372,7 +372,7 @@ export interface ILoopState {
    *  judge, compaction, expert) stay on defaults. */
   pendingModelOverride?: {
     temperature?: number;
-    reasoningEffort?: string;
+    reasoningEffort?: "low" | "medium" | "high";
     enableThinking?: boolean;
     thinkingTokenBudget?: number;
   } | null;
@@ -1266,6 +1266,77 @@ function resetConvergenceGuards(state: ILoopState, errorCount: number): void {
  *  exhausted (`STEER_LADDER_MAX`) does the run park. Returns the terminal (park)
  *  result, or null to keep looping — with `state.pendingSteer` set when a steer
  *  should be injected this cycle. Exported for unit tests. */
+/** Set up rung-specific logic for escalation rungs. R1 uses diagnosis-only call,
+ *  R2 sets per-call model overrides, R3 narrows to focused error. */
+function applyRungLogic(
+  state: ILoopState,
+  rungLevel: number,
+  gateErrors: readonly IErrorItem[],
+  reason: string
+): void {
+  const webEnabled = flags.webTools();
+
+  if (rungLevel === 1) {
+    // R1 Phase A (self-diagnose): diagnosis-only, no writes, no tools
+    state.pendingDiagnosisSteer = buildSteerMessage(
+      rungLevel,
+      gateErrors,
+      reason,
+      webEnabled,
+      true // diagnosisOnly
+    );
+    // Phase A does NOT set pendingRung — it's recorded tried only after Phase B
+
+    return;
+  }
+
+  if (rungLevel === 2) {
+    // R2: set per-call model overrides (temperature + reasoning effort)
+    state.pendingModelOverride = {
+      temperature: 1.2, // perturb sampling: raise temperature
+      reasoningEffort: "high", // reason-more
+    };
+  }
+
+  // R2, R3, and higher levels set pendingSteer (R1 returns early above)
+  state.pendingSteer = buildSteerMessage(
+    rungLevel,
+    gateErrors,
+    reason,
+    webEnabled
+  );
+}
+
+/** Determine the stall reason from guard states. Returns null if not stalled. */
+function getStuckReason(
+  persisted: IErrorItem | null,
+  wholeSetStuck: boolean,
+  noNetProgress: boolean,
+  plateaued: boolean,
+  setCap: number,
+  progressCap: number,
+  gateErrors: IErrorItem[],
+  state: ILoopState
+): string | null {
+  if (persisted !== null) {
+    return persistDetail(persisted);
+  }
+
+  if (wholeSetStuck) {
+    return `gate unchanged ${String(setCap)} cycles (${String(gateErrors.length)} error(s) not converging)`;
+  }
+
+  if (noNetProgress) {
+    return `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(progressCap)} cycles (best ${String(state.bestErrorCount)})`;
+  }
+
+  if (plateaued) {
+    return `oscillating: ${String(gateErrors.length)} error(s) open, no NEW low in ${String(state.redGates ?? 0)} gate cycles (best ever ${String(state.plateauBest ?? 0)})`;
+  }
+
+  return null;
+}
+
 export function checkStuck(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -1283,6 +1354,19 @@ export function checkStuck(
 
   // Update the net-progress watermark (mutates noNewLow / bestErrorCount).
   trackNetProgress(state, gateErrors.length);
+
+  // R3 narrow: clear focusError if the block has moved (genuine progress).
+  // The block moves when a new blockFingerprint is computed that differs from
+  // the current one. We'll check this after computing the new fingerprint below.
+  const newFingerprint = fingerprintFor(state, gateErrors);
+
+  if (
+    newFingerprint !== "" &&
+    newFingerprint !== (state.blockFingerprint ?? "")
+  ) {
+    // Block has moved — clear focusError
+    state.focusError = null;
+  }
 
   // PLATEAU tracker: count gate cycles since the last ALL-TIME-low error count. A new
   // low is genuine progress (reset); anything else — an error-set rotation, or a return
@@ -1320,25 +1404,31 @@ export function checkStuck(
   // fast instead of crawling. Checked LAST so the finer diagnoses win when they apply.
   const plateaued = (state.redGates ?? 0) >= LOOP_LIMITS.plateauGates;
 
-  const reason =
-    persisted !== null
-      ? persistDetail(persisted)
-      : wholeSetStuck
-        ? `gate unchanged ${String(setCap)} cycles (${String(gateErrors.length)} error(s) not converging)`
-        : noNetProgress
-          ? `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(progressCap)} cycles (best ${String(state.bestErrorCount)})`
-          : plateaued
-            ? `oscillating: ${String(gateErrors.length)} error(s) open, no NEW low in ${String(state.redGates ?? 0)} gate cycles (best ever ${String(state.plateauBest ?? 0)})`
-            : null;
+  const reason = getStuckReason(
+    persisted,
+    wholeSetStuck,
+    noNetProgress,
+    plateaued,
+    setCap,
+    progressCap,
+    gateErrors,
+    state
+  );
 
   if (reason === null) {
-    return null; // still converging — keep looping normally
+    return null;
   }
 
   // Stalled. Capture the block fingerprint BEFORE resetting the guards (so fingerprintFor
   // can read the current errorAge), then escalate and reset for the next window.
   // For simplicity, use the guard-fired reason to build a synthetic block when persisted is null
   const block = persisted?.key ?? `escalation-${String(state.steerLevel + 1)}`;
+
+  // R3 narrow: capture the single most-persistent error key for focusError filtering
+  // (only when samePersist is the guard that fired).
+  if (persisted !== null) {
+    state.focusError = persisted.key;
+  }
 
   // Escalate a steer and give the model fresh cycles at the new level. Reset the
   // plateau COUNTER too (spacing — one escalation per plateau window) but NOT plateauBest,
@@ -1365,12 +1455,8 @@ export function checkStuck(
     );
   }
 
-  state.pendingSteer = buildSteerMessage(
-    state.steerLevel,
-    gateErrors,
-    reason,
-    flags.webTools()
-  );
+  // Set up rung-specific logic: R1 diagnosis-only, R2 model overrides, R3 narrow
+  applyRungLogic(state, state.steerLevel, gateErrors, reason);
 
   // At the TOP rung (change-strategy), also RESET the conversation: the flailing
   // history anchors the model to the dead-end approach it's been repeating. Pruning
@@ -1386,7 +1472,71 @@ export function checkStuck(
     message: `⤴ steer L${String(state.steerLevel)}/${String(STEER_LADDER_MAX)}: ${reason}`,
   });
 
+  // Update blockFingerprint for the next cycle (used for focusError clearing check).
+  state.blockFingerprint = newFingerprint;
+
   return null; // keep looping, with the steer injected this cycle
+}
+
+/** R1 Phase B (feed-forward): after Phase A's diagnosis-only call, check if the
+ *  diagnosis is trivial. If trivial (too short or just restates errors), mark R1
+ *  tried and escalate to R2 immediately. If not trivial, save it as the next steer
+ *  with pendingRung = R1 so the model acts on its own diagnosis (Phase B).
+ *  Returns true if escalation occurred (continue with next turn), false if Phase B
+ *  proceeds normally. */
+export function handleR1Diagnosis(
+  state: ILoopState,
+  diagnosis: string,
+  gateErrors: IErrorItem[]
+): boolean {
+  if (state.pendingDiagnosisSteer === null) {
+    return false; // Not in R1 Phase A
+  }
+
+  // Check if the diagnosis is trivial
+  if (isTrivialDiagnosis(diagnosis, gateErrors)) {
+    // Trivial diagnosis: mark R1 tried and escalate directly to R2
+    const block = state.blockFingerprint ?? "unknown";
+
+    state.triedLeversByBlock ??= new Map();
+
+    const tried = state.triedLeversByBlock.get(block) ?? new Set();
+
+    tried.add("R1");
+    state.triedLeversByBlock.set(block, tried);
+
+    // Clear Phase A marker and escalate
+    state.pendingDiagnosisSteer = null;
+    state.steerLevel += 1;
+
+    // Set up R2 overrides
+    if (state.steerLevel === 2) {
+      state.pendingModelOverride = {
+        temperature: 1.2,
+        reasoningEffort: "high",
+      };
+    }
+
+    state.pendingSteer = buildSteerMessage(
+      state.steerLevel,
+      gateErrors,
+      "diagnosis was trivial — escalating",
+      flags.webTools()
+    );
+
+    return true; // Skip normal flow, use escalated steer
+  }
+
+  // Non-trivial diagnosis: Phase B (act on diagnosis)
+  state.pendingDiagnosisSteer = null;
+  state.pendingRung = "R1";
+  state.pendingBlockFingerprint = state.blockFingerprint ?? null;
+
+  state.pendingSteer =
+    `Your own diagnosis last cycle:\n«${diagnosis}»\n\n` +
+    `Act on that different approach now. Don't repeat what you tried before.`;
+
+  return false; // Continue normally with Phase B steer set
 }
 
 /** STEP 5 — inject the red-gate feedback (rule docs + the auto-fix notice) into
@@ -1404,7 +1554,8 @@ export async function injectFeedback(
     gateErrors,
     ctx.task,
     ctx.cwd,
-    metaViolations
+    metaViolations,
+    state.focusError ?? null
   );
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
   // A pending steer (the model stalled) leads the feedback so it can't be missed,
@@ -1525,6 +1676,10 @@ export async function settleGate(
   });
 
   if (gatePassed) {
+    // Gate passed — clear block tracking
+    state.blockFingerprint = "";
+    state.focusError = null;
+
     await polishOnGreen(ctx);
 
     report({

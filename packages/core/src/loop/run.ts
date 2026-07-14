@@ -168,6 +168,7 @@ function completionOptionsFor(args: {
   temperature: number;
   enableThinking: boolean | undefined;
   thinkingTokenBudget: number | undefined;
+  reasoningEffort: "low" | "medium" | "high" | undefined;
   ttsrManager: TtsrManager | null;
   report: Reporter;
   taskId: string;
@@ -182,6 +183,9 @@ function completionOptionsFor(args: {
     ...(args.thinkingTokenBudget === undefined
       ? {}
       : { thinkingTokenBudget: args.thinkingTokenBudget }),
+    ...(args.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: args.reasoningEffort }),
     ...(args.ttsrManager === null ? {} : { ttsrManager: args.ttsrManager }),
     onToken: (text) => {
       args.report({ kind: "token", task: args.taskId, message: text });
@@ -493,6 +497,53 @@ async function handleModelResponse(args: {
 
   // No tool calls: settle gate or nudge
   if (args.res.toolCalls.length === 0) {
+    // R1 Phase A: if pendingDiagnosisSteer is set, this response contains the diagnosis.
+    // Capture it, check if trivial, and decide whether to proceed to Phase B or escalate.
+    if (args.state.pendingDiagnosisSteer !== undefined) {
+      const { isTrivialDiagnosis } = await import("./feedback/steer");
+      const diagnosis = args.res.content;
+      const trivial = isTrivialDiagnosis(
+        diagnosis,
+        args.state.prevGateErrors.map((e) => ({
+          message: e.message,
+        }))
+      );
+
+      if (trivial) {
+        // Phase A returned trivial diagnosis — escalate to R2 directly
+        args.state.pendingDiagnosisSteer = undefined;
+
+        // Mark R1 as tried and escalate immediately (handled in next checkStuck)
+        if (args.state.blockFingerprint !== undefined) {
+          args.state.triedLeversByBlock ??= new Map();
+          const tried =
+            args.state.triedLeversByBlock.get(args.state.blockFingerprint) ??
+            new Set();
+
+          tried.add("R1");
+          args.state.triedLeversByBlock.set(args.state.blockFingerprint, tried);
+        }
+
+        // Escalate: increment steerLevel to R2
+        args.state.steerLevel += 1;
+        args.report({
+          kind: "tool",
+          task: args.taskId,
+          message: `R1 diagnosis was trivial — escalating to R2 (reason-more)`,
+        });
+      } else {
+        // Phase B: save diagnosis in pendingSteer with framing, set pendingRung = R1
+        args.state.pendingSteer =
+          `Your own diagnosis last cycle: «${diagnosis}». ` +
+          `Act on that different approach now; don't repeat what you tried. ` +
+          `Make the strategic change and fix the underlying issue.`;
+        args.state.pendingRung = "R1";
+        args.state.pendingBlockFingerprint =
+          args.state.blockFingerprint ?? null;
+        args.state.pendingDiagnosisSteer = undefined;
+      }
+    }
+
     const settled = await settleGate(args.ctx, args.state, args.turn);
 
     emitTiming(
@@ -636,18 +687,33 @@ async function runMainLoop(args: {
 
     args.ttsrManager?.resetBuffer();
 
+    // R1 Phase A: when pendingDiagnosisSteer is set, advertise NO tools (empty array)
+    // so the model can only produce text (the diagnosis), not tool calls.
+    const callTools =
+      args.state.pendingDiagnosisSteer !== undefined ? [] : args.tools;
+
+    // R2 per-call model overrides (temperature, reasoning effort) — applied to the
+    // NEXT main-loop turn only, then cleared. Auxiliary calls stay on defaults.
+    const override = args.state.pendingModelOverride;
+    const temperature = override?.temperature ?? args.temperature;
+    const reasoningEffort = override?.reasoningEffort;
+
     const res = await args.provider.complete(
       args.messages,
       completionOptionsFor({
-        tools: args.tools,
-        temperature: args.temperature,
+        tools: callTools,
+        temperature,
         enableThinking: args.enableThinking,
         thinkingTokenBudget: args.thinkingTokenBudget,
+        reasoningEffort,
         ttsrManager: args.ttsrManager,
         report: args.report,
         taskId: args.taskId,
       })
     );
+
+    // Clear the pending model override after this call completes (one-shot, next turn only).
+    args.state.pendingModelOverride = null;
 
     args.messages.push({
       role: "assistant",

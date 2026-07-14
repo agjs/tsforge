@@ -68,6 +68,9 @@ export interface ICompleteOptions {
   /** Cap reasoning tokens before the model must answer (vLLM
    *  `thinking_token_budget`). Omitted = unbounded. The lever for turn *time*. */
   thinkingTokenBudget?: number;
+  /** Reasoning effort level (DeepSeek/OpenAI `reasoning_effort`: "low"|"medium"|"high").
+   *  Per-call override, applied by R2 (reason-more) rung. Omitted = use config default. */
+  reasoningEffort?: "low" | "medium" | "high";
   /** When set, the request streams and each token is delivered here as it
    *  arrives, tagged by channel: `reasoning` (the model's thinking) vs `content`
    *  (its actual answer). Lets a UI dim the thinking and format the answer. */

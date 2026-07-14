@@ -43,11 +43,15 @@ function style(cfg: IOpenAICompatibleConfig): ReasoningStyle {
   return "qwen";
 }
 
-/** Provider-specific reasoning/thinking fields for the request body. */
+/** Provider-specific reasoning/thinking fields for the request body. Per-call
+ *  overrides (opts) take precedence over config defaults (cfg).reasoningEffort. */
 function reasoningFields(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
 ): Record<string, unknown> {
+  // Per-call reasoning effort overrides config when set.
+  const reasoningEffort = opts.reasoningEffort ?? cfg.reasoningEffort;
+
   switch (style(cfg)) {
     case "qwen":
       return {
@@ -68,14 +72,14 @@ function reasoningFields(
                 type: opts.enableThinking ? "enabled" : "disabled",
               },
             }),
-        ...(cfg.reasoningEffort === undefined
+        ...(reasoningEffort === undefined
           ? {}
-          : { reasoning_effort: cfg.reasoningEffort }),
+          : { reasoning_effort: reasoningEffort }),
       };
     case "openai":
-      return cfg.reasoningEffort === undefined
+      return reasoningEffort === undefined
         ? {}
-        : { reasoning_effort: cfg.reasoningEffort };
+        : { reasoning_effort: reasoningEffort };
     case "none":
       return {};
   }

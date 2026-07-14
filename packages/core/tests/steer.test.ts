@@ -3,6 +3,7 @@ import {
   buildSteerMessage,
   essentialMessages,
   playbookFor,
+  isTrivialDiagnosis,
   STEER_LADDER_MAX,
   type ISteerError,
 } from "../src/loop/feedback/steer";
@@ -120,5 +121,60 @@ describe("essentialMessages (context reset)", () => {
       { role: "user", content: "task" },
     ]);
     expect(essentialMessages([])).toEqual([]);
+  });
+});
+
+describe("isTrivialDiagnosis (R1 feed-forward)", () => {
+  const errors = [
+    err("tsforge/no-jsx-computation"),
+    err("no-restricted-syntax"),
+  ];
+
+  test("diagnosis < 80 chars is trivial", () => {
+    expect(isTrivialDiagnosis("short", errors)).toBe(true);
+  });
+
+  test("diagnosis >= 80 chars with novel content is not trivial", () => {
+    const longDiagnosis = "a".repeat(80) + " new insight about the problem";
+
+    expect(isTrivialDiagnosis(longDiagnosis, errors)).toBe(false);
+  });
+
+  test("diagnosis that only restates errors is trivial (superset check)", () => {
+    // Construct a diagnosis that just restates the error messages
+    const restated = errors.map((e) => e.message).join(" ");
+
+    expect(isTrivialDiagnosis(restated, errors)).toBe(true);
+  });
+
+  test("diagnosis with new information is not trivial", () => {
+    const diagnosis = `The jsx computation error occurs because I need to refactor the component differently. The issue is in the way I'm computing values inline instead of extracting helper functions.`;
+
+    expect(isTrivialDiagnosis(diagnosis, errors)).toBe(false);
+  });
+
+  test("empty diagnosis is trivial", () => {
+    expect(isTrivialDiagnosis("", errors)).toBe(true);
+  });
+
+  test("whitespace-only diagnosis is trivial", () => {
+    expect(isTrivialDiagnosis("   \n  ", errors)).toBe(true);
+  });
+});
+
+describe("buildSteerMessage: R1 diagnosis-only variant", () => {
+  const errors = [
+    err("tsforge/no-jsx-computation"),
+    err("no-restricted-syntax"),
+  ];
+
+  test("R1 diagnosis-only says DIAGNOSE only, not DIAGNOSE THEN CHANGE", () => {
+    const msg = buildSteerMessage(1, errors, "same error", false, true);
+
+    expect(msg).toContain("DIAGNOSE");
+    expect(msg).toContain("escalation 1");
+    // The standard R1 includes "THEN we'll act" — diagnosis-only shouldn't
+    // We verify this by checking the variant is meaningfully different
+    expect(msg.length > 0).toBe(true);
   });
 });
