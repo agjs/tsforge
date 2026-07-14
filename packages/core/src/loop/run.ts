@@ -1,5 +1,10 @@
 import type { ITask } from "../spec";
-import type { IChatMessage, IModelResponse, IProvider } from "../inference";
+import type {
+  IChatMessage,
+  IModelResponse,
+  IProvider,
+  IToolCall,
+} from "../inference";
 import { validate, type ErrorParser, type IValidateResult } from "../validate";
 import { readFiles, type IFileView } from "../lib/fs";
 import { trace } from "../lib/trace";
@@ -224,6 +229,450 @@ async function resolveStackForRun(
   };
 }
 
+/** Helper for readonly-spin limit reached: report the stuck state and return terminal result. */
+function handleExhaustedRecoveries(args: {
+  readonlyRecoveries: number;
+  turn: number;
+  report: Reporter;
+  taskId: string;
+  turnStart: number;
+  taskStart: number;
+}): { action: IRunResult; readonlyRecoveries: number } {
+  args.report({
+    kind: "stuck",
+    task: args.taskId,
+    cycles: args.turn,
+    message:
+      "⚠ model kept calling read-only tools without making progress after re-steering — stopped. Narrow the task or steer toward a concrete step.",
+  });
+
+  emitTiming(
+    args.report,
+    args.taskId,
+    args.turn,
+    args.turnStart,
+    args.taskStart
+  );
+
+  return {
+    action: {
+      task: args.taskId,
+      redConfirmed: true,
+      status: RUN_STATUS.stuck,
+      cycles: args.turn,
+      reason: STUCK_REASON.readonlySpin,
+      edits: 0,
+      regressions: 0,
+    },
+    readonlyRecoveries: args.readonlyRecoveries,
+  };
+}
+
+/** Helper for readonly-spin retry case: push steering message and return retry. */
+function handleReadonlyRetry(args: {
+  report: Reporter;
+  taskId: string;
+  messages: IChatMessage[];
+  readonlyRecoveries: number;
+}): { action: "retry"; readonlyRecoveries: number } {
+  args.report({
+    kind: "tool",
+    task: args.taskId,
+    message: "⚠ only reading, no edits — steering toward a concrete change",
+  });
+
+  args.messages.push({
+    role: "user",
+    content:
+      "You have made many tool calls in a row WITHOUT writing any file — only reading " +
+      "or searching. STOP exploring. Emit the SINGLE next change now: create or edit " +
+      "ONE file to make concrete progress. No more reads. No prose.",
+  });
+
+  return {
+    action: "retry",
+    readonlyRecoveries: args.readonlyRecoveries + 1,
+  };
+}
+
+/** Determine the action for readonly-spin guard: null to keep looping, "retry" to
+ *  re-steer and continue with incremented recoveries, or an IRunResult to stop.
+ *  Extracted to keep runTask under cognitive-complexity 20. */
+function readonlySpinStop(args: {
+  readonlyStreak: number;
+  readonlyRecoveries: number;
+  turn: number;
+  report: Reporter;
+  taskId: string;
+  turnStart: number;
+  taskStart: number;
+  messages: IChatMessage[];
+}): {
+  action: IRunResult | "retry" | null;
+  readonlyRecoveries: number;
+} {
+  if (args.readonlyStreak < READONLY_STREAK_LIMIT) {
+    return { action: null, readonlyRecoveries: args.readonlyRecoveries };
+  }
+
+  if (args.readonlyRecoveries >= MAX_READONLY_RECOVERIES) {
+    return handleExhaustedRecoveries({
+      readonlyRecoveries: args.readonlyRecoveries,
+      turn: args.turn,
+      report: args.report,
+      taskId: args.taskId,
+      turnStart: args.turnStart,
+      taskStart: args.taskStart,
+    });
+  }
+
+  return handleReadonlyRetry({
+    report: args.report,
+    taskId: args.taskId,
+    messages: args.messages,
+    readonlyRecoveries: args.readonlyRecoveries,
+  });
+}
+
+/** Process a tool-call turn: run the calls and apply read-only-spin guard. Returns
+ *  the action to take (continue/retry/stop) and updated streak/recovery counters.
+ *  Extracted to keep runTask under cognitive-complexity 20. */
+async function processToolCallTurn(args: {
+  toolCalls: readonly IToolCall[];
+  ctx: ILoopCtx;
+  state: ILoopState;
+  readonlyStreak: number;
+  readonlyRecoveries: number;
+  turn: number;
+  turnStart: number;
+  taskStart: number;
+}): Promise<{
+  action: "continue" | "retry" | "check-gate" | IRunResult;
+  readonlyStreak: number;
+  readonlyRecoveries: number;
+}> {
+  const touchedEditable = await runToolCalls(
+    args.toolCalls,
+    args.ctx,
+    args.state
+  );
+
+  // Read-only-spin guard: consecutive read-only turns without edits.
+  if (touchedEditable) {
+    return {
+      action: "check-gate",
+      readonlyStreak: 0,
+      readonlyRecoveries: args.readonlyRecoveries,
+    };
+  }
+
+  const updatedStreak = args.readonlyStreak + 1;
+  const spin = readonlySpinStop({
+    readonlyStreak: updatedStreak,
+    readonlyRecoveries: args.readonlyRecoveries,
+    turn: args.turn,
+    report: args.ctx.report,
+    taskId: args.ctx.task.id,
+    turnStart: args.turnStart,
+    taskStart: args.taskStart,
+    messages: args.ctx.messages,
+  });
+
+  if (spin.action === "retry") {
+    return {
+      action: "retry",
+      readonlyStreak: 0,
+      readonlyRecoveries: spin.readonlyRecoveries,
+    };
+  }
+
+  if (spin.action !== null) {
+    return {
+      action: spin.action,
+      readonlyStreak: updatedStreak,
+      readonlyRecoveries: spin.readonlyRecoveries,
+    };
+  }
+
+  return {
+    action: "continue",
+    readonlyStreak: updatedStreak,
+    readonlyRecoveries: args.readonlyRecoveries,
+  };
+}
+
+/** Handle a model response: check TTSR/degeneration, run tools or settle gate.
+ *  Returns the action to take (continue loop / stop with result) plus updated state.
+ *  Extracted to reduce runMainLoop complexity. */
+async function handleModelResponse(args: {
+  res: IModelResponse;
+  ctx: ILoopCtx;
+  state: ILoopState;
+  messages: IChatMessage[];
+  readonlyStreak: number;
+  readonlyRecoveries: number;
+  turn: number;
+  turnStart: number;
+  taskStart: number;
+  report: Reporter;
+  taskId: string;
+  ttsrManager: Awaited<ReturnType<typeof initTtsrManager>> | null;
+  finish: (result: IRunResult) => Promise<IRunResult>;
+}): Promise<{
+  action: "continue" | IRunResult;
+  readonlyStreak: number;
+  readonlyRecoveries: number;
+}> {
+  // TTSR interrupt: continue without settling gate
+  if (args.res.ttsrFired !== undefined) {
+    handleTtsrInterrupt(
+      args.res.ttsrFired,
+      args.state,
+      args.messages,
+      args.report,
+      args.taskId,
+      args.turn,
+      args.turnStart,
+      args.taskStart,
+      args.ttsrManager
+    );
+
+    return {
+      action: "continue",
+      readonlyStreak: args.readonlyStreak,
+      readonlyRecoveries: args.readonlyRecoveries,
+    };
+  }
+
+  // Degeneration check: terminal stuck
+  const looped = handleDegeneration(args.res, args.ctx, args.state, {
+    turn: args.turn,
+    turnStart: args.turnStart,
+    taskStart: args.taskStart,
+  });
+
+  if (looped !== null) {
+    return {
+      action: looped,
+      readonlyStreak: args.readonlyStreak,
+      readonlyRecoveries: args.readonlyRecoveries,
+    };
+  }
+
+  // No tool calls: settle gate or nudge
+  if (args.res.toolCalls.length === 0) {
+    const settled = await settleGate(args.ctx, args.state, args.turn);
+
+    emitTiming(
+      args.report,
+      args.taskId,
+      args.turn,
+      args.turnStart,
+      args.taskStart
+    );
+
+    if (settled !== null) {
+      return {
+        action: settled,
+        readonlyStreak: args.readonlyStreak,
+        readonlyRecoveries: args.readonlyRecoveries,
+      };
+    }
+
+    // Stopped with no tool call while still red → nudge it to act, not narrate.
+    args.messages.push({ role: "user", content: NO_TOOL_CALL_NUDGE });
+
+    return {
+      action: "continue",
+      readonlyStreak: args.readonlyStreak,
+      readonlyRecoveries: args.readonlyRecoveries,
+    };
+  }
+
+  // Tool calls: process with read-only-spin guard and possibly settle gate
+  const tool = await processToolCallTurn({
+    toolCalls: args.res.toolCalls,
+    ctx: args.ctx,
+    state: args.state,
+    readonlyStreak: args.readonlyStreak,
+    readonlyRecoveries: args.readonlyRecoveries,
+    turn: args.turn,
+    turnStart: args.turnStart,
+    taskStart: args.taskStart,
+  });
+
+  // Re-steering: continue without gate
+  if (tool.action === "retry") {
+    return {
+      action: "continue",
+      readonlyStreak: tool.readonlyStreak,
+      readonlyRecoveries: tool.readonlyRecoveries,
+    };
+  }
+
+  // Terminal readonly-spin stop
+  if (tool.action instanceof Object && "status" in tool.action) {
+    return {
+      action: {
+        ...tool.action,
+        edits: args.state.edits,
+        regressions: args.state.regressions,
+      },
+      readonlyStreak: tool.readonlyStreak,
+      readonlyRecoveries: tool.readonlyRecoveries,
+    };
+  }
+
+  // Tool without edit: continue without gate
+  if (tool.action === "continue") {
+    emitTiming(
+      args.report,
+      args.taskId,
+      args.turn,
+      args.turnStart,
+      args.taskStart
+    );
+
+    return {
+      action: "continue",
+      readonlyStreak: tool.readonlyStreak,
+      readonlyRecoveries: tool.readonlyRecoveries,
+    };
+  }
+
+  // Edited file: settle the gate
+  const settled = await settleGate(args.ctx, args.state, args.turn);
+
+  emitTiming(
+    args.report,
+    args.taskId,
+    args.turn,
+    args.turnStart,
+    args.taskStart
+  );
+
+  if (settled !== null) {
+    return {
+      action: {
+        ...settled,
+        edits: args.state.edits,
+        regressions: args.state.regressions,
+      },
+      readonlyStreak: tool.readonlyStreak,
+      readonlyRecoveries: tool.readonlyRecoveries,
+    };
+  }
+
+  return {
+    action: "continue",
+    readonlyStreak: tool.readonlyStreak,
+    readonlyRecoveries: tool.readonlyRecoveries,
+  };
+}
+
+/** The main turn loop: call the model repeatedly, handle responses with guard checks,
+ *  and settle the gate. Returns the final run result. Extracted to keep runTask
+ *  under cognitive-complexity 20. */
+async function runMainLoop(args: {
+  maxTurns: number;
+  provider: IProvider;
+  messages: IChatMessage[];
+  tools: unknown[];
+  temperature: number;
+  enableThinking: boolean | undefined;
+  thinkingTokenBudget: number | undefined;
+  ttsrManager: Awaited<ReturnType<typeof initTtsrManager>> | null;
+  report: Reporter;
+  taskId: string;
+  ctx: ILoopCtx;
+  state: ILoopState;
+  finish: (result: IRunResult) => Promise<IRunResult>;
+}): Promise<IRunResult> {
+  let readonlyStreak = 0;
+  let readonlyRecoveries = 0;
+  const taskStart = performance.now();
+
+  for (let turn = 1; turn <= args.maxTurns; turn += 1) {
+    const turnStart = performance.now();
+
+    args.report({
+      kind: "cycle",
+      task: args.taskId,
+      cycle: turn,
+      message: `task ${args.taskId} · turn ${turn}: asking model`,
+    });
+
+    args.ttsrManager?.resetBuffer();
+
+    const res = await args.provider.complete(
+      args.messages,
+      completionOptionsFor({
+        tools: args.tools,
+        temperature: args.temperature,
+        enableThinking: args.enableThinking,
+        thinkingTokenBudget: args.thinkingTokenBudget,
+        ttsrManager: args.ttsrManager,
+        report: args.report,
+        taskId: args.taskId,
+      })
+    );
+
+    args.messages.push({
+      role: "assistant",
+      content: res.content,
+      toolCalls: res.toolCalls,
+      ...(res.reasoning === undefined
+        ? {}
+        : { reasoningContent: res.reasoning }),
+    });
+
+    // Every model call advances cooldown accounting — including interrupted
+    // ones, otherwise repeatGap rules mis-count after a TTSR retry.
+    args.ttsrManager?.incrementTurnCount();
+
+    // Handle the response (guard checks, tools, gate settle).
+    const handled = await handleModelResponse({
+      res,
+      ctx: args.ctx,
+      state: args.state,
+      messages: args.messages,
+      readonlyStreak,
+      readonlyRecoveries,
+      turn,
+      turnStart,
+      taskStart,
+      report: args.report,
+      taskId: args.taskId,
+      ttsrManager: args.ttsrManager,
+      finish: args.finish,
+    });
+
+    readonlyStreak = handled.readonlyStreak;
+    readonlyRecoveries = handled.readonlyRecoveries;
+
+    if (handled.action !== "continue") {
+      return args.finish(handled.action);
+    }
+  }
+
+  args.report({
+    kind: "stuck",
+    task: args.taskId,
+    cycles: args.maxTurns,
+    message: `task ${args.taskId}: stuck (hit ${args.maxTurns}-turn cap)`,
+  });
+
+  return args.finish({
+    task: args.taskId,
+    redConfirmed: true,
+    status: RUN_STATUS.stuck,
+    cycles: args.maxTurns,
+    reason: STUCK_REASON.cap,
+    edits: args.state.edits,
+    regressions: args.state.regressions,
+  });
+}
+
 /**
  * The implement loop as a persistent, tool-using conversation. The model drives
  * — it can `read`, `run` (tests/tsc/eslint), `edit`, `create` — and the whole
@@ -431,170 +880,19 @@ export async function runTask(
     steerLevel: 0,
   };
 
-  let readonlyStreak = 0;
-  let readonlyRecoveries = 0;
-  const taskStart = performance.now();
-
-  for (let turn = 1; turn <= maxTurns; turn += 1) {
-    const turnStart = performance.now();
-
-    report({
-      kind: "cycle",
-      task: task.id,
-      cycle: turn,
-      message: `task ${task.id} · turn ${turn}: asking model`,
-    });
-
-    ttsrManager?.resetBuffer();
-
-    const res = await provider.complete(
-      messages,
-      completionOptionsFor({
-        tools,
-        temperature,
-        enableThinking,
-        thinkingTokenBudget: effectiveThinkingBudget,
-        ttsrManager,
-        report,
-        taskId: task.id,
-      })
-    );
-
-    messages.push({
-      role: "assistant",
-      content: res.content,
-      toolCalls: res.toolCalls,
-      ...(res.reasoning === undefined
-        ? {}
-        : { reasoningContent: res.reasoning }),
-    });
-
-    // Every model call advances cooldown accounting — including interrupted
-    // ones, otherwise repeatGap rules mis-count after a TTSR retry.
-    ttsrManager?.incrementTurnCount();
-
-    // TTSR interrupts are checked BEFORE degeneration so corrective guidance
-    // lands at the earliest point. If the TTSR retry itself degenerates, the
-    // next iteration's degeneration check catches it.
-    if (res.ttsrFired !== undefined) {
-      handleTtsrInterrupt(
-        res.ttsrFired,
-        state,
-        messages,
-        report,
-        task.id,
-        turn,
-        turnStart,
-        taskStart,
-        ttsrManager
-      );
-
-      // Continue to next turn without settling the gate
-      continue;
-    }
-
-    const looped = handleDegeneration(res, ctx, state, {
-      turn,
-      turnStart,
-      taskStart,
-    });
-
-    if (looped !== null) {
-      return finish(looped);
-    }
-
-    const touchedEditable =
-      res.toolCalls.length === 0
-        ? false
-        : await runToolCalls(res.toolCalls, ctx, state);
-
-    // Read-only-spin guard: consecutive read-only turns without edits.
-    if (touchedEditable) {
-      readonlyStreak = 0;
-    } else if ((readonlyStreak += 1) >= READONLY_STREAK_LIMIT) {
-      const exhaustedRecoveries = readonlyRecoveries >= MAX_READONLY_RECOVERIES;
-
-      if (exhaustedRecoveries) {
-        report({
-          kind: "stuck",
-          task: task.id,
-          cycles: turn,
-          message:
-            "⚠ model kept calling read-only tools without making progress after re-steering — stopped. Narrow the task or steer toward a concrete step.",
-        });
-
-        emitTiming(report, task.id, turn, turnStart, taskStart);
-
-        return finish({
-          task: task.id,
-          redConfirmed: true,
-          status: RUN_STATUS.stuck,
-          cycles: turn,
-          reason: STUCK_REASON.readonlySpin,
-          edits: state.edits,
-          regressions: state.regressions,
-        });
-      }
-
-      report({
-        kind: "tool",
-        task: task.id,
-        message: "⚠ only reading, no edits — steering toward a concrete change",
-      });
-
-      messages.push({
-        role: "user",
-        content:
-          "You have made many tool calls in a row WITHOUT writing any file — only reading " +
-          "or searching. STOP exploring. Emit the SINGLE next change now: create or edit " +
-          "ONE file to make concrete progress. No more reads. No prose.",
-      });
-
-      readonlyRecoveries += 1;
-      readonlyStreak = 0;
-      continue;
-    }
-
-    // Settle the gate whenever the model stopped OR changed an editable file.
-    // (A read-only turn neither finishes nor mutates — just loop again.)
-    if (res.toolCalls.length === 0 || touchedEditable) {
-      const settled = await settleGate(ctx, state, turn);
-
-      emitTiming(report, task.id, turn, turnStart, taskStart);
-
-      if (settled !== null) {
-        return finish({
-          ...settled,
-          edits: state.edits,
-          regressions: state.regressions,
-        });
-      }
-
-      // Stopped with no tool call while still red → nudge it to act, not narrate.
-      if (res.toolCalls.length === 0) {
-        messages.push({ role: "user", content: NO_TOOL_CALL_NUDGE });
-      }
-
-      continue;
-    }
-
-    emitTiming(report, task.id, turn, turnStart, taskStart);
-  }
-
-  report({
-    kind: "stuck",
-    task: task.id,
-    cycles: maxTurns,
-    message: `task ${task.id}: stuck (hit ${maxTurns}-turn cap)`,
-  });
-
-  return finish({
-    task: task.id,
-    redConfirmed: true,
-    status: RUN_STATUS.stuck,
-    cycles: maxTurns,
-    reason: STUCK_REASON.cap,
-    edits: state.edits,
-    regressions: state.regressions,
+  return await runMainLoop({
+    maxTurns,
+    provider,
+    messages,
+    tools,
+    temperature,
+    enableThinking,
+    thinkingTokenBudget: effectiveThinkingBudget,
+    ttsrManager,
+    report,
+    taskId: task.id,
+    ctx,
+    state,
+    finish,
   });
 }

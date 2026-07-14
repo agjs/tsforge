@@ -204,16 +204,6 @@ export default tseslint.config(
     },
   },
   {
-    // The headless loop driver (runTask) orchestrates multiple cross-cutting guards
-    // (degeneration, TTSR, gate settle, read-only-spin) with complex nesting that
-    // can't be decomposed further without extracting the entire loop body. Raise CC
-    // limit specifically for this file.
-    files: ["packages/core/src/loop/run.ts"],
-    rules: {
-      "sonarjs/cognitive-complexity": ["error", 30],
-    },
-  },
-  {
     // Rule implementations and utilities in packages/core/src/rule-packs/
     // legitimately need AST-node property access that would trigger the strict
     // type-safety rules. ESLint rule implementations require direct access to
