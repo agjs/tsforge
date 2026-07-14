@@ -150,6 +150,12 @@ export async function runGreenfield(
 
 /** One implement→evaluate→persist cycle for a single feature (mutates it).
  *  Optionally seeds the implement with prior tried-lever state (for a revisit). */
+/** Safety backstop for evaluator-only stalls: a feature whose judge/browser keeps
+ *  rejecting (with drifting wording, so the unchanged-rejection check never trips) is
+ *  parked once its attempts reach this. Generous — the primary stop is the unchanged-
+ *  rejection progress gate; this only catches a judge that never repeats itself. */
+const EVAL_STALL_BACKSTOP = 12;
+
 async function attemptFeature(
   cwd: string,
   state: IGreenfieldState,
@@ -190,12 +196,41 @@ async function attemptFeature(
       delete feature.handoff;
       say(`feature '${feature.id}': verified ✓`);
     } else {
-      // Carry the failing output into the NEXT attempt (implement reads it) so the
-      // model fixes the actual errors instead of rebuilding blind.
-      feature.lastError = verdict.detail ?? verdict.notes;
-      say(
-        `feature '${feature.id}': failed at ${verdict.stage ?? "?"} — ${verdict.notes}`
-      );
+      const newError = verdict.detail ?? verdict.notes;
+      // Evaluator-only failures (implement returns NO handoff — the gate is green — but
+      // the browser/judge rejects) have no inner ladder, so without a stop the main pass
+      // would re-pick this feature forever. Progress-gate it: an UNCHANGED rejection
+      // (same as last attempt → the judge isn't converging) parks the feature; a CHANGED
+      // rejection is progress, so keep trying. A generous attempts backstop is the final
+      // safety net for a judge whose wording drifts but never passes. Parking (not
+      // failing) lets the revisit pass + "still parked → stuck" terminate cleanly.
+      const notConverging = newError === feature.lastError;
+      const hitBackstop = feature.attempts >= EVAL_STALL_BACKSTOP;
+
+      feature.lastError = newError;
+
+      if (notConverging || hitBackstop) {
+        feature.parked = true;
+        feature.handoff = {
+          block: `evaluator:${feature.id}`,
+          rungHistory: [],
+          errors: [newError],
+          ask:
+            "the evaluator (browser/judge) keeps rejecting this feature without " +
+            "converging — needs a human or a different approach",
+          resumable: true,
+          resume: { triedLevers: [] },
+        };
+        say(
+          `feature '${feature.id}': evaluator not converging — parked (revisit later)`
+        );
+      } else {
+        // Carry the failing output into the NEXT attempt (implement reads it) so the
+        // model fixes the actual errors instead of rebuilding blind.
+        say(
+          `feature '${feature.id}': failed at ${verdict.stage ?? "?"} — ${verdict.notes}`
+        );
+      }
     }
   } finally {
     await saveState(cwd, state);

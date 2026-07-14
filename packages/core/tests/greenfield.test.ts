@@ -250,6 +250,35 @@ describe("runGreenfield: outer loop", () => {
     expect(res.stuckFeature).toBe("a");
   });
 
+  test("evaluator-only failure (no handoff, unchanging rejection) PARKS instead of looping forever", async () => {
+    // P1 regression: with maxAttemptsPerFeature removed, a feature whose implement
+    // returns NO handoff (gate green) but whose evaluate keeps rejecting with the SAME
+    // detail would be re-picked by the main pass forever. It must park on the unchanged
+    // rejection and the run must TERMINATE (stuck), not hang.
+    const s = state("a");
+    let calls = 0;
+    const deps: IGreenfieldDeps = {
+      implement: async () => {
+        calls += 1;
+
+        return { handoff: undefined };
+      },
+      // Always fails with the SAME detail → not converging → park.
+      evaluate: async () => ({
+        passed: false,
+        notes: "judge rejects",
+        detail: "same-rejection-every-time",
+      }),
+    };
+
+    const res = await runGreenfield(dir, s, deps);
+
+    expect(res.status).toBe("stuck");
+    expect(s.features[0]?.parked).toBe(true);
+    // Bounded, not infinite: a couple of main-pass attempts + one revisit.
+    expect(calls).toBeLessThanOrEqual(4);
+  });
+
   test("a feature that passes on its 2nd attempt is not counted stuck", async () => {
     const s = state("a");
     let calls = 0;

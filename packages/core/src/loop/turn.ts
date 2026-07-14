@@ -1279,6 +1279,12 @@ function applyRungLogic(
 ): void {
   const webEnabled = flags.webTools();
 
+  // Escalating past R1 clears any stale diagnosis marker so it can't linger and be
+  // re-injected forever (matters on paths without the headless capture, e.g. interactive).
+  if (rungLevel !== 1) {
+    state.pendingDiagnosisSteer = undefined;
+  }
+
   if (rungLevel === 1) {
     // R1 Phase A (self-diagnose): diagnosis-only, no writes, no tools
     state.pendingDiagnosisSteer = buildSteerMessage(
@@ -1616,10 +1622,14 @@ export async function injectFeedback(
     state.focusError ?? null
   );
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
-  // A pending steer (the model stalled) leads the feedback so it can't be missed,
-  // then is cleared — it's a one-shot escalation for THIS cycle.
-  const steer =
-    state.pendingSteer !== undefined ? `${state.pendingSteer}\n\n` : "";
+  // A pending steer (the model stalled) leads the feedback so it can't be missed.
+  // R1 Phase A's diagnosis-only instruction takes precedence when set, and is NOT
+  // cleared here: the next (no-tools) call reads `pendingDiagnosisSteer` to hide tools
+  // and capture the diagnosis, and the capture clears it (headless). Without injecting
+  // it the model got a tool-less turn with NO instruction to diagnose. The normal
+  // pendingSteer stays one-shot (cleared after injecting).
+  const steerText = state.pendingDiagnosisSteer ?? state.pendingSteer;
+  const steer = steerText !== undefined ? `${steerText}\n\n` : "";
 
   state.pendingSteer = undefined;
 
@@ -1761,9 +1771,13 @@ export async function settleGate(
     // A stalled park is the rung where the EXPERT handoff gets a shot before we give
     // up: if a stronger model repairs the blocking file, keep looping instead of
     // parking. No expert configured → this is a no-op and the run parks as before.
+    // The ladder-exhaustion terminal now carries reason `handoff` (was `stalled`), so
+    // the expert (R4) rung must trigger on THAT — otherwise tryExpertRescue is
+    // unreachable and R5 handoff happens without ever consulting the stronger model.
+    // The novelty gate inside tryExpertRescue prevents re-firing on the same block.
     if (
       stuck.status === RUN_STATUS.stuck &&
-      stuck.reason === STUCK_REASON.stalled &&
+      stuck.reason === STUCK_REASON.handoff &&
       (await tryExpertRescue(ctx, state, gateErrors))
     ) {
       return null;

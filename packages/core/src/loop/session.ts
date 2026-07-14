@@ -1718,9 +1718,13 @@ export class Session {
       return null;
     }
 
+    // Thread the structured handoff up so BoringStack/interactive callers can park &
+    // revisit on ladder exhaustion (host.send reads .handoff). Dropping it here made
+    // gate-ladder exhaustion silently un-parkable.
     return {
       status: settled.status === RUN_STATUS.done ? "done" : "stuck",
       turns: turn,
+      ...(settled.handoff !== undefined ? { handoff: settled.handoff } : {}),
     };
   }
 

@@ -110,7 +110,11 @@ function toolsBlock(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
 ): Record<string, unknown> {
-  if (opts.tools === undefined) {
+  // No tools advertised → OMIT the `tools` field entirely (and with it `tool_choice`).
+  // An EMPTY array is treated the same as undefined: vLLM/DeepSeek 400 on `tools: []`
+  // ("`tools` must not be an empty array … omit the field entirely"), and the R1 Phase A
+  // no-tools diagnosis call deliberately passes `[]` to force a genuinely tool-less turn.
+  if (opts.tools === undefined || opts.tools.length === 0) {
     return {};
   }
 

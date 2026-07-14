@@ -92,12 +92,14 @@ describe("buildRequestBody: no-tools call mode", () => {
     expect(b.tool_choice).toBeUndefined();
   });
 
-  test("empty tools array is sent as advertised (not omitted)", () => {
-    const b = body({}, { tools: [] });
+  test("empty tools array is OMITTED entirely (vLLM/DeepSeek 400 on `tools: []`)", () => {
+    // Live regression: the real endpoint rejects `tools: []` ("must not be an empty
+    // array … omit the field entirely"). The R1 no-tools diagnosis call passes [] to
+    // force a tool-less turn — it must OMIT both `tools` and `tool_choice`, not send [].
+    const b = body({}, { tools: [], toolChoice: "none" });
 
-    expect(b.tools).toBeDefined();
-    expect(Array.isArray(b.tools)).toBe(true);
-    expect((b.tools as unknown[]).length).toBe(0);
+    expect(b.tools).toBeUndefined();
+    expect(b.tool_choice).toBeUndefined();
   });
 });
 
