@@ -33,3 +33,12 @@ export { runScaffold, gateCommand } from "./run-scaffold";
 export type { IScaffoldDeps, IScaffoldOutcome } from "./run-scaffold";
 export { realRunner, realFs, realPoller } from "./io";
 export type { IScaffoldRunner, IScaffoldFs, IReadyPoller } from "./io";
+export {
+  PORT_ENV_KEYS,
+  DEFAULT_HOST_PORTS,
+  parseHostPortsEnv,
+  readHostPorts,
+  hostPortOr,
+  remapUrlToHostPorts,
+} from "./ports";
+export type { PortEnvKey, HostPorts } from "./ports";

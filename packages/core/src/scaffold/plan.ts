@@ -46,6 +46,9 @@ export function answersToPlan(
     services: [...services].sort(),
     requiredSecrets: isFull ? secrets.required : [],
     violations: isFull ? computeViolations(manifest, whenActive, services) : [],
+    ...(answers.superuser === undefined
+      ? {}
+      : { superuser: answers.superuser }),
   };
 }
 

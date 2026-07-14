@@ -73,7 +73,7 @@ When the `react-component-architecture` pack is enabled (React in `package.json`
 | `component-folder-structure` | A component `.tsx` must live in `src/views/<Feature>/components/`, be the view root `src/views/<Feature>/index.tsx`, or a shared primitive in `src/components/ui/` |
 | `no-cross-feature-imports` | Cross-feature runtime imports |
 
-`component-file-purity` and `component-folder-structure` enforce the **views layout** that scaffolded web apps use — see [Web scaffolding → Project layout](/scaffold/web/#project-layout-views). On a **scaffolded web build** these run at **error** (they are part of the bundled web gate). When tsforge edits an **existing** repo, the architecture rules follow your [profile](/guardrails/config/#profiles): off in `recommended`, on in `opinionated` (or turn individual rules on in `rules`).
+`component-file-purity` and `component-folder-structure` enforce a **views layout** for React code. On a [BoringStack build](/scaffold/boringstack/) they run at **error** as part of the project's own gate. When tsforge edits an **existing** repo, the architecture rules follow your [profile](/guardrails/config/#profiles): off in `recommended`, on in `opinionated` (or turn individual rules on in `rules`).
 
 ### No computation inside JSX
 

@@ -20,6 +20,10 @@ export interface IFeature {
   /** Browser interaction steps that PROVE the feature works (clicked through the
    *  rendered app), proposed alongside the feature. Empty ⇒ a render smoke only. */
   steps?: IStep[];
+  /** The last failing attempt's evaluator feedback (capped gate/judge output), fed
+   *  into the NEXT attempt's implement prompt so the model fixes the actual errors
+   *  instead of rebuilding blind. Cleared on a pass. */
+  lastError?: string;
 }
 
 /** A greenfield build's whole state: the one-line goal + the feature checklist. */
@@ -36,10 +40,13 @@ export interface IFeatureVerdict {
   notes: string;
   /** Which layer decided it (for progress.md). Omitted on a pass. */
   stage?: "gate" | "browser" | "judge";
+  /** Fuller (capped) failing output — the actual gate/judge errors — for feeding
+   *  the next attempt so the model fixes real errors, not the one-line summary. */
+  detail?: string;
 }
 
 export interface IGreenfieldResult {
-  status: "done" | "stuck";
+  status: "done" | "stuck" | "needs-plan";
   features: IFeature[];
   /** When stuck: the feature that exhausted its attempts. */
   stuckFeature?: string;
@@ -56,6 +63,12 @@ export interface IGreenfieldDeps {
     feature: IFeature,
     state: IGreenfieldState
   ): Promise<IFeatureVerdict>;
+  /** OPTIONAL last-resort escalation, tried ONCE before a feature parks as `stuck`:
+   *  hand the failing file + its exact errors to a stronger "expert" model (the rung
+   *  above the per-attempt feedback loop). Returns true when it applied a fix worth
+   *  a final re-evaluation. Unset = no escalation — the generic path parks as before,
+   *  so this is fully backward compatible. */
+  rescue?(feature: IFeature, state: IGreenfieldState): Promise<boolean>;
 }
 
 export interface IGreenfieldOptions {

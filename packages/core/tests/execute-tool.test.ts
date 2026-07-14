@@ -46,7 +46,7 @@ test("scratch/ files are writable even when not in scope — for experiments", a
   }
 });
 
-test("rejects an oversized REWRITE — big span replaced by ANOTHER big span", async () => {
+test("ALLOWS a large rewrite — no edit-size cap (forcing surgical edits traps the model)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
   try {
@@ -58,14 +58,14 @@ test("rejects an oversized REWRITE — big span replaced by ANOTHER big span", a
     const r = await executeTool(
       {
         name: "edit",
-        // big → big = a lazy whole-function rewrite → still rejected.
+        // big → big is a large rewrite; the model chooses edit size, not the harness.
         arguments: { file: "impl.ts", oldString: big, newString: bigNew },
       },
       ctx(dir, ["impl.ts"])
     );
 
-    expect(r).toContain("rewrites a large span");
-    expect(await Bun.file(join(dir, "impl.ts")).text()).toBe(big); // unchanged
+    expect(r).not.toContain("REJECTED");
+    expect(await Bun.file(join(dir, "impl.ts")).text()).toBe(bigNew); // applied
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -135,7 +135,7 @@ test("edit applies a multi-site batch in one call (per-site, not whole-file)", a
   }
 });
 
-test("the size cap is per-replacement — a huge single replacement is still rejected", async () => {
+test("a huge single-entry replacement is applied (no size cap on the edits[] form)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
 
   try {
@@ -155,8 +155,8 @@ test("the size cap is per-replacement — a huge single replacement is still rej
       ctx(dir, ["impl.ts"])
     );
 
-    expect(r).toContain("rewrites a large span");
-    expect(await Bun.file(join(dir, "impl.ts")).text()).toBe(big); // unchanged
+    expect(r).not.toContain("REJECTED");
+    expect(await Bun.file(join(dir, "impl.ts")).text()).toBe(bigNew); // applied
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -380,62 +380,6 @@ test("edit on a MISSING file tells the model to use create", async () => {
     expect(r).toContain("REJECTED");
     expect(r).toContain("does not exist");
     expect(r).toContain("`create`");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("scaffold_ui materializes themed primitives into src/components/ui", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
-
-  try {
-    const r = await executeTool(
-      {
-        name: "scaffold_ui",
-        arguments: { theme: "futuristic", components: ["card", "button"] },
-      },
-      ctx(dir, ["**/*"])
-    );
-
-    expect(r).toContain("futuristic");
-    expect(await Bun.file(join(dir, "src/index.css")).exists()).toBe(true);
-    expect(
-      await Bun.file(join(dir, "src/components/ui/card.tsx")).exists()
-    ).toBe(true);
-
-    // theme is applied (futuristic card delta) + structure is intact
-    const card = await Bun.file(join(dir, "src/components/ui/card.tsx")).text();
-
-    expect(card).toContain("export function Card");
-    expect(card).toContain("backdrop-blur-sm");
-    expect(await Bun.file(join(dir, "src/index.css")).text()).toContain(
-      "--radius: 0rem"
-    );
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("scaffold_ui rejects an unknown theme or empty component list", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-exec-"));
-
-  try {
-    const badTheme = await executeTool(
-      {
-        name: "scaffold_ui",
-        arguments: { theme: "neon", components: ["card"] },
-      },
-      ctx(dir, ["**/*"])
-    );
-
-    expect(badTheme).toContain("REJECTED");
-
-    const noComps = await executeTool(
-      { name: "scaffold_ui", arguments: { theme: "minimal", components: [] } },
-      ctx(dir, ["**/*"])
-    );
-
-    expect(noComps).toContain("REJECTED");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

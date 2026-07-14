@@ -57,7 +57,7 @@ export function formatTables(text: string, color: boolean): string {
   const lines = text.split("\n");
   const out: string[] = [];
 
-  for (let i = 0; i < lines.length; ) {
+  for (let i = 0; i < lines.length;) {
     const header = lines[i];
 
     if (

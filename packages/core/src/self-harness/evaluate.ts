@@ -20,7 +20,6 @@ import { classifyRun, countTaskLoc, judge, summarize } from "../eval";
 import type { IRunRecord } from "../eval";
 import { renderEvent } from "../render";
 import { resetOverlayCache } from "./overlay";
-import { runWebTaskOnce } from "./evaluate-web";
 import type { IHarnessOverlay, ISplitScore } from "./self-harness.types";
 import type { IMinedRun } from "./mine";
 
@@ -38,11 +37,8 @@ export interface IEvaluateOptions {
   readonly judgeProvider?: IProvider;
   readonly temperature?: number;
   /** Cycle count at which a PASSED run still mines as `slow-green` (the
-   *  efficiency signal). Default {@link SPEC_SLOW_THRESHOLD}; web builds pass
-   *  a much higher value. */
+   *  efficiency signal). Default {@link SPEC_SLOW_THRESHOLD}. */
   readonly slowThreshold?: number;
-  /** Hard wall-clock cap per `web:` task build (forwarded to evaluate-web). */
-  readonly webTimeoutMs?: number;
   readonly log?: (line: string) => void;
 }
 
@@ -280,41 +276,6 @@ function verdictLine(taskId: string, attempt: number, r: IRunRecord): string {
   return `    ${taskId} #${String(attempt)}: ${r.passed ? "green" : `red[${r.failureClass ?? "unknown"}]`} (${String(r.cycles)} cyc)`;
 }
 
-/** One `web:<slug>` run via the headless-build subprocess — the real web gate
- *  + entity coverage decide pass/fail; the overlay under test rides the
- *  inherited env. */
-async function runOneWeb(
-  taskId: string,
-  attempt: number,
-  runDir: string,
-  opts: IEvaluateOptions,
-  sink: IRunSink
-): Promise<void> {
-  const outcome = await runWebTaskOnce(taskId.slice(4), runDir, {
-    runsDir: opts.runsDir,
-    repeats: 1,
-    ...(opts.webTimeoutMs === undefined
-      ? {}
-      : { timeoutMs: opts.webTimeoutMs }),
-    log: sink.log,
-  });
-
-  sink.records.push(outcome.record);
-
-  if (outcome.errored) {
-    sink.erroredCount += 1;
-    sink.log(`    ${taskId} #${String(attempt)}: ERRORED (endpoint unhealthy)`);
-
-    return;
-  }
-
-  if (outcome.run !== undefined) {
-    sink.runs.push(outcome.run);
-  }
-
-  sink.log(verdictLine(taskId, attempt, outcome.record));
-}
-
 /** One spec-corpus run. A crash (endpoint timeout, connection failure) must
  *  not abort the evaluation — but it is NOT a task failure either: it counts
  *  as `errored` so the acceptance rule can refuse to blame/credit the edit
@@ -342,10 +303,10 @@ async function runOneSpec(
 }
 
 /**
- * Evaluate one harness variant on a task list (spec ids and `web:<slug>` ids
- * dispatch to their runners). Sequential by design: the primary endpoint is a
- * single-connection local server, and sequential runs keep per-run wall-clock
- * comparable across candidates.
+ * Evaluate one harness variant on a task list (spec corpus tasks).
+ * Sequential by design: the primary endpoint is a single-connection local
+ * server, and sequential runs keep per-run wall-clock comparable across
+ * candidates.
  */
 export async function evaluateHarness(
   taskIds: readonly string[],
@@ -375,9 +336,7 @@ export async function evaluateHarness(
         // first so what's on disk is always exactly one run.
         await rm(runDir, { recursive: true, force: true });
 
-        await (taskId.startsWith("web:")
-          ? runOneWeb(taskId, i + 1, runDir, opts, sink)
-          : runOneSpec(taskId, i + 1, runDir, opts, sink));
+        await runOneSpec(taskId, i + 1, runDir, opts, sink);
       }
     }
 

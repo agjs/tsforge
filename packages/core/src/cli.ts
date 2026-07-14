@@ -726,9 +726,14 @@ async function greenfieldMode(args: ICliArgs): Promise<number> {
 
   const done = result.features.filter((f) => f.passes).length;
 
-  process.stdout.write(
-    `\n${result.status === "done" ? "✓ all features verified" : `✗ stuck on '${result.stuckFeature ?? "?"}'`} (${done}/${result.features.length})\n`
-  );
+  const statusMsg =
+    result.status === "done"
+      ? "✓ all features verified"
+      : result.status === "needs-plan"
+        ? "⚠ build requires an approved plan"
+        : `✗ stuck on '${result.stuckFeature ?? "?"}'`;
+
+  process.stdout.write(`\n${statusMsg} (${done}/${result.features.length})\n`);
 
   await runNotify(
     args.dir,

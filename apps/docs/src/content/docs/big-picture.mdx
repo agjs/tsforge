@@ -61,7 +61,7 @@ tsforge is opinionated about TypeScript because the language gives you machine-c
 - **The language server** (same engine as VS Code's TypeScript support) runs in-process for symbol search, rename, and diagnostics on every write. See [TypeScript language server](/lsp/typescript-server/).
 - **ESLint packs** encode patterns `tsc` cannot catch (component file layout, no `console.log`, Drizzle query shape, etc.). See [Rule packs](/guardrails/rule-packs/).
 
-For greenfield web apps, the harness can scaffold Vite + React and switch the gate to a build + browser smoke ladder. See [Web scaffolding](/scaffold/web/).
+For greenfield web apps, the harness stands up the full BoringStack stack (Bun + Elysia + Drizzle API and a Vite/React UI) and builds it resource-by-resource against BoringStack's own gate. See [Greenfield scaffolding](/scaffold/boringstack/).
 
 ## Models and deployment
 
@@ -78,7 +78,7 @@ The default `http://localhost:8000/v1` is a convenience for local inference serv
 | [How the gate is built](/loop/gate-floor/) | What acceptance check tsforge runs and how it picks tsc + ESLint |
 | [When the gate fails](/loop/validation/) | Repair loop, stop conditions, error feedback to the model |
 | [TypeScript language server](/lsp/typescript-server/) | Navigation tools and write-time diagnostics |
-| [Web scaffolding](/scaffold/web/) | Bootstrapping a Vite app inside the loop |
+| [Greenfield scaffolding](/scaffold/boringstack/) | Standing up a new BoringStack full-stack app |
 | [Stack detection](/guardrails/stack-detection/) | Which ESLint packs turn on for your dependencies |
 | [Rule packs](/guardrails/rule-packs/) | What each pack enforces |
 | [Fix bad tool calls](/uplift/repair-ladder/) | Malformed tool JSON fixed before re-asking the model |

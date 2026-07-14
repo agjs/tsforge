@@ -31,12 +31,7 @@ import {
   resolveStuckFile,
   type ExpertAsk,
 } from "./expert-handoff";
-import {
-  executeTool,
-  type SetupWebFn,
-  type SpawnAgentFn,
-  type IToolContext,
-} from "./tools";
+import { executeTool, type SpawnAgentFn, type IToolContext } from "./tools";
 import {
   astGrepFix,
   dropRedundantAnnotations,
@@ -161,7 +156,8 @@ function imageTools(caps: ICapabilityFlags): AdvertisedTool[] {
 
 export function toolsFor(
   hasExistingCode: boolean,
-  caps: ICapabilityFlags = {}
+  caps: ICapabilityFlags = {},
+  offerConventions = false
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
@@ -169,11 +165,13 @@ export function toolsFor(
   const image = imageTools(caps);
 
   // pull_conventions — a read-only knowledge tool the model calls to fetch the
-  // boringstack how-to BEFORE writing that kind of code (the PULL complement to the
-  // harness PUSHing guides on first violation). Web-gated: the guides are React/web
-  // conventions, so it belongs to web runs only — advertising it on every scratch/
-  // logic task would dilute the deliberately minimal base tool set (tools-gating).
-  const conventions: AdvertisedTool[] = flags.webTools()
+  // BoringStack how-to BEFORE writing that kind of code (the PULL complement to the
+  // harness PUSHing guides on first violation). Offered per BUILD BACKEND, not per
+  // flag: a backend with a convention library (boringstack) opts in via the session
+  // config; a plain scratch/logic task leaves it off so the base tool set stays
+  // minimal (tools-gating). Decoupled from the web flag on purpose — the conventions
+  // are the stack's, not "web".
+  const conventions: AdvertisedTool[] = offerConventions
     ? [PULL_CONVENTIONS_TOOL]
     : [];
 
@@ -227,9 +225,6 @@ export interface ILoopCtxTool {
    *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
    *  just the model call. Set per-send by the Session. */
   signal?: AbortSignal;
-  /** Wired by the interactive CLI: turn this workspace into a web project (the
-   *  `scaffold_web` tool calls it). Threaded into the tool context. */
-  setupWeb?: SetupWebFn;
   /** PLAN MODE (set via Session.setPlanMode): threaded into the tool context so
    *  mutating tools are rejected at dispatch — the model only plans. */
   readOnly?: boolean;
@@ -325,6 +320,11 @@ export interface ILoopState {
    *  a rule is attached the FIRST time it's tripped, once per topic — see
    *  `unseenGuidesForErrors`. */
   pushedGuides?: Set<string>;
+  /** The backend ships a convention library, so the loop may PUSH its how-to guides
+   *  beside gate errors. Set from `ISessionConfig.pullConventions` — the SAME signal
+   *  that offers the `pull_conventions` tool, so push + pull activate together. A
+   *  plain build (no convention backend) leaves it off and gets neither. */
+  conventionsEnabled?: boolean;
   /** PLATEAU backstop (oscillation detector): consecutive gate cycles since the error
    *  count last hit a new ALL-TIME low. Unlike the fine guards it does NOT reset on an
    *  error-set rotation or a non-improving re-visit — only genuine progress (a new low)
@@ -1208,9 +1208,14 @@ export async function injectFeedback(
 
   // PUSH the boringstack HOW-TO the first time a gate error maps to a convention —
   // right beside the error, not after the steering ladder escalates. Deduped per
-  // run (once per topic), so it teaches without becoming a wall.
+  // run (once per topic), so it teaches without becoming a wall. Gated on the
+  // backend's convention library (symmetric with the pull_conventions tool): a
+  // plain build never gets boringstack-flavored guidance injected.
   state.pushedGuides ??= new Set<string>();
-  const guides = unseenGuidesForErrors(gateErrors, state.pushedGuides);
+  const guides =
+    state.conventionsEnabled === true
+      ? unseenGuidesForErrors(gateErrors, state.pushedGuides)
+      : [];
   const how =
     guides.length > 0
       ? `\n\nHOW TO WRITE THIS RIGHT (boringstack):\n${guides.join("\n\n")}`

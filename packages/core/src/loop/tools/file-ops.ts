@@ -572,15 +572,13 @@ export async function runShell(
 }
 
 /**
- * True when `content` has a SYNTAX/parse error — it won't parse at all. Such a file
- * CANNOT be surgically line-edited (line numbers / anchors are meaningless on broken
- * syntax), so the guardrails that force targeted edits — the edit-size cap and
- * `create`'s no-overwrite — must yield for it: rewriting an unparseable file loses
- * nothing (it's already garbage) and is the only clean way to fix it. Without this
- * the model deadlocks (observed live: 27 turns bouncing between "edit too large",
- * "already exists", and "needs a hash anchor" on one broken file). Uses Bun's
- * transpiler, which throws on a parse error but NOT on type errors — so this only
- * frees genuinely-unparseable files, never a merely type-wrong one. Empty = fine.
+ * True when `content` has a SYNTAX/parse error — it won't parse at all. Used ONLY
+ * to decide whether `create` may overwrite an existing file: a parseable file is
+ * protected (a wholesale `create` over the SHARED app schema would wipe other
+ * resources' tables — unrecoverable), so the model rewrites it via the now-uncapped
+ * `edit`; an unparseable file has nothing worth protecting and `create` may replace
+ * it wholesale. Bun's transpiler throws on parse errors but NOT type errors, so a
+ * merely type-wrong file stays protected. Empty = fine (not broken).
  */
 function isSyntacticallyBroken(content: string, file: string): boolean {
   if (content.trim().length === 0) {
@@ -602,40 +600,6 @@ function isSyntacticallyBroken(content: string, file: string): boolean {
   } catch {
     return true;
   }
-}
-
-/** The edit-size guard: find the first replacement that rewrites a big span with
- *  another big span (a lazy whole-function rewrite — the thing the cap exists to
- *  block). Returns null when the batch is fine, OR when `brokenTarget` is true — a
- *  syntactically-broken file legitimately needs a wholesale fix. */
-function oversizedEdit(
-  edits: readonly {
-    readonly oldString?: string;
-    readonly newString?: string;
-  }[],
-  brokenTarget: boolean
-): {
-  readonly index: number;
-  readonly oldSpan: number;
-  readonly newSpan: number;
-} | null {
-  if (brokenTarget) {
-    return null;
-  }
-
-  for (let i = 0; i < edits.length; i += 1) {
-    const oldSpan = (edits[i]?.oldString ?? "").split("\n").length;
-    const newSpan = (edits[i]?.newString ?? "").split("\n").length;
-
-    if (
-      oldSpan > LOOP_LIMITS.maxEditLines &&
-      newSpan > LOOP_LIMITS.maxEditLines
-    ) {
-      return { index: i + 1, oldSpan, newSpan };
-    }
-  }
-
-  return null;
 }
 
 export async function doEdit(
@@ -662,31 +626,13 @@ export async function doEdit(
     );
   }
 
-  // The size cap targets lazy whole-function REWRITES — a big old span replaced by
-  // a big new span. A big old span → an EMPTY/small new span is a DELETION or a
-  // shrink (clearing broken/orphaned code), which is exactly what we want to allow:
-  // blocking it traps the model into shell-`mv` gymnastics and read-only spinning
-  // (observed live — a run died at 256 turns unable to delete 60 orphaned lines).
-  // So reject only when BOTH sides are large. A batch may carry many pieces.
-  // EXCEPTION: if the file on disk currently has a SYNTAX error it can't be surgically
-  // edited (line anchors are meaningless), so a large rewrite is the legitimate fix —
-  // skip the cap. Otherwise the model deadlocks (can't edit big, can't recreate).
-  const currentContent = await Bun.file(join(ctx.cwd, edit.file))
-    .text()
-    .catch(() => "");
-  const oversized = oversizedEdit(
-    edit.edits,
-    isSyntacticallyBroken(currentContent, edit.file)
-  );
-
-  if (oversized !== null) {
-    return reject(
-      ctx,
-      "edit",
-      `edit ${edit.file} REJECTED: replacement #${String(oversized.index)} rewrites a large span (${String(oversized.oldSpan)}→${String(oversized.newSpan)} lines). Change ONLY the broken lines — make small, targeted replacements (the gate names the exact lines); pass several as separate entries in \`edits\`. (DELETING or shrinking a broken span IS allowed. And if the file has a SYNTAX error so it can't be surgically edited, use \`create\` to rewrite it wholesale — that's allowed for a broken file.)`
-    );
-  }
-
+  // No edit-size policing. Forcing "small, targeted" edits is a documented
+  // dead-end: when the fix genuinely needs a large replacement the model thrashes
+  // — failing edits, trying `create`, reaching for `rm`/redirect — instead of just
+  // making the change (observed live, ~30 min on one resource). The only hard rule
+  // is that each `oldString` matches a UNIQUE region, which `applyEdits` enforces;
+  // edit SIZE is the model's call, guided softly by the tool description (like pi's
+  // edit/write split). The gate is the sole arbiter of correctness.
   const result = await applyEdits(ctx.cwd, edit.file, edit.edits);
 
   if (result.ok) {
@@ -833,13 +779,13 @@ export async function doCreate(
     );
   }
 
-  // `create` normally NEVER overwrites an existing file — rewriting WORKING code
-  // re-introduces the very errors just fixed (runs looped 45+ turns undoing their own
-  // progress). The ONE exception: a file that currently has a SYNTAX error can't be
-  // surgically edited at all (line anchors are meaningless), so forbidding overwrite
-  // there DEADLOCKS the model between "edit too large" / "already exists" / "needs a
-  // hash anchor" (observed live, 27 turns). So allow overwrite IFF the existing file
-  // is unparseable — rewriting garbage loses nothing and is the only clean fix.
+  // `create` refuses to overwrite an existing file that still PARSES. This is NOT
+  // an edit-size trap (that cap is gone — `edit` now takes any-size replacements,
+  // so a full rewrite goes through `edit`): it protects SHARED working files. The
+  // model is scoped to the shared app schema (all resources' tables); a wholesale
+  // `create` there would silently wipe every OTHER resource's table — unrecoverable.
+  // The ONE exception: a file that no longer parses can't be surgically anchored, so
+  // overwrite is the only clean fix and loses nothing (it's already garbage).
   const createPath = join(ctx.cwd, create.file);
   const exists = await Bun.file(createPath).exists();
 
@@ -852,7 +798,7 @@ export async function doCreate(
       return reject(
         ctx,
         "create:exists",
-        `create ${create.file} REJECTED: it already EXISTS and parses fine. Do NOT rewrite a working file — a full rewrite re-introduces errors you already fixed. Use \`edit\`/\`edit_lines\` to change ONLY the specific lines the gate flagged.`
+        `create ${create.file} REJECTED: it already exists and parses. Use \`edit\` to change it — \`edit\` now accepts a replacement of ANY size (there is no line cap), so pass the whole file as one edit if you want to rewrite it. \`create\`-overwrite is blocked only to stop a wholesale write from wiping OTHER code that shares this file.`
       );
     }
   }

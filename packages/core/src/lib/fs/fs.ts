@@ -126,8 +126,7 @@ export interface IWriteFile {
 
 /** Result of a batch write: the paths written on success, or the failure reason. */
 export type IBatchWriteResult =
-  | { ok: true; written: string[] }
-  | { ok: false; reason: string };
+  { ok: true; written: string[] } | { ok: false; reason: string };
 
 /** A file touched by the batch, with the bytes to restore it to on rollback
  *  (`null` = it didn't exist before, so rollback removes it). */

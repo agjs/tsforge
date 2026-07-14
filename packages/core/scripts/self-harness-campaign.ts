@@ -37,27 +37,26 @@ import type { IRunRecord } from "../src/eval";
 import { buildSweepReport, renderSweepReportMarkdown } from "../src/eval";
 import { isRecord } from "../src/lib/guards";
 
-/** The exam: never shown to a mining session. WEB BUILDS ONLY — the simple spec
- *  tasks (math/handlers/slugify) were dropped: they pass in 1–3 cycles every
- *  time, so they can't show improvement OR regression and only burned wall-clock.
- *  A web build exercises types, lint, components AND routing, so it subsumes the
- *  basics — this is a STRICTER regression floor, not a weaker one. Kept as
- *  pm-platform + billing-console so results stay comparable to the buggy-signal
- *  baseline archived at baseline.buggy-5cap.json (same tasks, only the fix differs). */
-const PROOF_SPLIT = ["web:pm-platform", "web:billing-console"] as const;
+/** The exam: never shown to a mining session. Retargeted to the SPEC corpus
+ *  (`evals/corpus/*`) after the UI-only web build corpus was removed — use the
+ *  two hardest held-out tasks (a multi-file greenfield `auth` + the brownfield
+ *  `fix-regression`) so a promoted overlay must generalize across task shapes with
+ *  real headroom, not the trivially-green single-module tasks.
+ *  FUTURE: once a BoringStack full-stack corpus exists, point this at it — that is
+ *  the successor to the removed web corpus and the strictest regression floor. */
+const PROOF_SPLIT = ["auth", "fix-regression"] as const;
 
-/** Mining rotations — WEB BUILDS ONLY, drawn from the 9 non-proof catalog apps
- *  (disjoint from the proof split). These are the complex tasks the model
- *  actually fails, i.e. where there are real weaknesses to mine and real
- *  headroom for an overlay edit to prove itself. Alternate per session. */
+/** Mining rotations over the SPEC corpus (disjoint from the proof split), the
+ *  tasks with real weaknesses to mine and headroom for an overlay to prove itself.
+ *  Alternate per session. (Also succeeded by a BoringStack corpus in future.) */
 const ROTATIONS = [
   {
-    heldIn: "web:saas-crm,web:udemy",
-    heldOut: "web:airline-ops,web:portfolio-manager",
+    heldIn: "checkout,debounce,validators,handlers",
+    heldOut: "query,rate-limit",
   },
   {
-    heldIn: "web:hospital-scheduling,web:warehouse-inventory",
-    heldOut: "web:procurement,web:incident-management",
+    heldIn: "slugify,math,fixtures,migrate",
+    heldOut: "query,rate-limit",
   },
 ] as const;
 

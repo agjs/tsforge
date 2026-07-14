@@ -1,46 +1,19 @@
 /** Gate resolution for a CLI session: a resumed session's gate wins, then an
- *  explicit --accept, then --web / --no-gate, else tsforge's auto strict-TS gate
+ *  explicit --accept, then --no-gate, else tsforge's auto strict-TS gate
  *  (with the per-write lint moat). */
 import type { ICliArgs } from "./args";
 import type { ISessionRecord } from "../session-store";
-import {
-  buildGate,
-  buildWebGate,
-  makeFileLinter,
-  WEB_PACKS,
-  type FileLinter,
-} from "../gate";
-import { BROWSER_CHECK } from "../gate/tool-paths";
-
-function browserCheckCommand(htmlFile: string): string {
-  return `bun "${BROWSER_CHECK}" "${htmlFile}"`;
-}
+import { buildGate, makeFileLinter, type FileLinter } from "../gate";
 
 /**
- * Resolve the session's gate + label. Starts from the base gate (resumed /
- * explicit / auto strict-TS), then appends a `--browser` render check when asked
- * — so a web build is verified to actually RUN, not just type-check.
+ * Resolve the session's gate + label. Returns the base gate (resumed /
+ * explicit / auto strict-TS).
  */
 export async function resolveGate(
   args: ICliArgs,
   resumed: ISessionRecord | null
 ): Promise<{ accept: string; gateLabel: string; lintFile?: FileLinter }> {
-  const base = await baseGate(args, resumed);
-
-  if (args.browser.length === 0) {
-    return base;
-  }
-
-  const browser = browserCheckCommand(args.browser);
-
-  return {
-    accept: base.accept.length > 0 ? `${base.accept} && ${browser}` : browser,
-    gateLabel:
-      base.accept.length > 0
-        ? `${base.gateLabel} + browser render`
-        : "browser render",
-    ...(base.lintFile === undefined ? {} : { lintFile: base.lintFile }),
-  };
+  return baseGate(args, resumed);
 }
 
 /** The base gate: a resumed session's gate wins, then explicit `--accept`, then
@@ -57,24 +30,6 @@ async function baseGate(
 
   if (args.accept.length > 0) {
     return { accept: args.accept, gateLabel: args.accept };
-  }
-
-  if (args.web) {
-    // The --web SCAFFOLD path is greenfield: tsforge writes the skeleton in its
-    // own house style, so the web gate + web guidance deliberately stay on the
-    // defaults and do NOT thread project `conventions` (which govern the core
-    // brownfield path). Keeping both on house style avoids a gate/guidance
-    // contradiction. See docs/harness-subsystems.md "setup / conventions".
-    const web = buildWebGate("react", undefined, args.dir);
-
-    // PER-WRITE lint moat: the web gate's eslint rules applied to each file as the
-    // model writes it, so architecture/cast violations surface immediately instead
-    // of as an end-of-turn pile-up.
-    return {
-      accept: web.command,
-      gateLabel: web.label,
-      lintFile: makeFileLinter("react", args.dir, WEB_PACKS),
-    };
   }
 
   if (args.noGate) {

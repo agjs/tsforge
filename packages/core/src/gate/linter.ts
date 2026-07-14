@@ -1,16 +1,10 @@
 import { join } from "node:path";
 import { ESLint } from "eslint";
-import { WEB_TEMPLATES, type WebFramework } from "../web-templates";
 import { runArgvCommand } from "../lib/fs/process";
 import { conventionOverrideRules } from "../infer-rules/eslint-conventions";
 import type { IConventions } from "../infer-rules/conventions.types";
 import { trace } from "../lib/trace";
-import {
-  ESLINT_BIN,
-  PRETTIER_BIN,
-  STRICT_CONFIG,
-  STRICT_WEB_CONFIG,
-} from "./tool-paths";
+import { ESLINT_BIN, PRETTIER_BIN, STRICT_CONFIG } from "./tool-paths";
 import type { FileLinter } from "./types";
 
 /** Hard ceiling for the per-write formatters (eslint --fix / prettier --write) so a
@@ -39,16 +33,14 @@ const FORMAT_TIMEOUT_MS = 30_000;
  * tune severities or silence rules ("off").
  */
 export function makeFileLinter(
-  framework: WebFramework | "core",
+  _framework: "core",
   cwd: string,
   packIds?: readonly string[],
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
   conventions?: IConventions
 ): FileLinter {
-  const overrideConfigFile =
-    framework === "core" ? STRICT_CONFIG : STRICT_WEB_CONFIG;
-  const ignores =
-    framework === "core" ? [] : WEB_TEMPLATES[framework].eslintIgnore;
+  const overrideConfigFile = STRICT_CONFIG;
+  const ignores: string[] = [];
   let engine: ESLint | null = null;
 
   return async (absPath) => {
@@ -77,10 +69,7 @@ export function makeFileLinter(
         if (conventions !== undefined) {
           const convConfig: Record<string, unknown> = {
             files: ["**/*.ts", "**/*.tsx"],
-            rules: conventionOverrideRules(
-              conventions,
-              framework === "core" ? "core" : "web"
-            ),
+            rules: conventionOverrideRules(conventions, "core"),
           };
 
           eOpts.overrideConfig =

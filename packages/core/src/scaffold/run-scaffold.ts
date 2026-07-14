@@ -75,6 +75,9 @@ export interface IScaffoldOutcome {
   readonly booted: boolean;
   readonly bootError?: string;
   readonly summary: readonly string[];
+  /** Host ports assigned for per-project isolation (compose `.env` key → port).
+   *  Empty for archetypes without a compose stack. */
+  readonly ports: Readonly<Record<string, number>>;
 }
 
 /**
@@ -119,7 +122,7 @@ export async function runScaffold(
   const gateCwd =
     profile.subPath === undefined ? dest : `${dest}/${profile.subPath}`;
 
-  const boot = await maybeBoot(dest, manifest, answers, deps);
+  const boot = await maybeBoot(dest, manifest, answers, deps, configured.ports);
 
   return {
     dir: dest,
@@ -129,6 +132,7 @@ export async function runScaffold(
     booted: boot.booted,
     ...(boot.error === undefined ? {} : { bootError: boot.error }),
     summary: configured.summary,
+    ports: configured.ports,
   };
 }
 
@@ -136,7 +140,8 @@ async function maybeBoot(
   dest: string,
   manifest: IScaffoldManifest,
   answers: IScaffoldAnswers,
-  deps: IScaffoldDeps
+  deps: IScaffoldDeps,
+  hostPorts: Readonly<Record<string, number>>
 ): Promise<{ booted: boolean; error?: string }> {
   // Boot is full-stack only and opt-out-able; Astro is a static build, no stack.
   if (answers.archetype !== "boringstack" || deps.skipBoot === true) {
@@ -146,6 +151,9 @@ async function maybeBoot(
   return bootStack(dest, manifest, {
     run: deps.run,
     poll: deps.boot.poll,
+    // The health URLs must target the ports THIS project published, not the
+    // upstream defaults — otherwise an isolated boot false-fails its health check.
+    hostPorts,
     ...(deps.boot.timeoutMs === undefined
       ? {}
       : { timeoutMs: deps.boot.timeoutMs }),

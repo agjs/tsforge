@@ -26,16 +26,21 @@ describe("buildScaffoldSteps", () => {
     expect(buildScaffoldSteps(MANIFEST, "astro", "dev")).toEqual([]);
   });
 
-  test("boringstack emits one select step per toggle/one-of/multi field (secrets excluded)", () => {
+  test("boringstack emits one select step per toggle/one-of/multi field (secrets + STACK excluded)", () => {
     const steps = buildScaffoldSteps(MANIFEST, "boringstack", "dev");
+    // STACK is driven by the top-level `stack` answer, not asked in the wizard.
     const selectable = MANIFEST.fields.filter(
-      (f) => f.kind === "toggle" || f.kind === "one-of" || f.kind === "multi"
+      (f) =>
+        f.key !== "STACK" &&
+        (f.kind === "toggle" || f.kind === "one-of" || f.kind === "multi")
     );
 
     expect(steps).toHaveLength(selectable.length);
     expect(steps.map((s) => s.key)).toEqual(selectable.map((f) => f.key));
     // No secret/text field leaks into the interactive flow.
     expect(steps.some((s) => s.key === "JWT_SECRET")).toBe(false);
+    // STACK mode (dev/prod/smoke) is NOT a wizard question.
+    expect(steps.some((s) => s.key === "STACK")).toBe(false);
   });
 
   test("a toggle becomes a 2-option single step, default reflecting the stack", () => {

@@ -21,6 +21,15 @@ const ON_VALUES = new Set(["1", "true"]);
  *  the minimal-hardcoding path: every dependent consequence falls out of the
  *  planner, not branching wizard logic. */
 function isSelectable(field: IConfigField): boolean {
+  // STACK (dev/prod/smoke) is NOT a wizard question: you always scaffold to
+  // develop, and prod/smoke are deploy/CI concerns. Its value comes from the
+  // top-level `stack` answer (default "dev", overridable via `--stack`), so the
+  // wizard never asks it — and stateToAnswers, which shares this predicate,
+  // correctly skips it too (STACK is emitted from `answers.stack` in plan.ts).
+  if (field.key === "STACK") {
+    return false;
+  }
+
   return (
     field.kind === "toggle" || field.kind === "one-of" || field.kind === "multi"
   );

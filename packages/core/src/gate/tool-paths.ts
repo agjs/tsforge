@@ -49,8 +49,6 @@ export const TYPE_AWARE_CONFIG = join(
   PKG_ROOT,
   "strict.type-aware.eslint.config.mjs"
 );
-export const STRICT_WEB_CONFIG = join(PKG_ROOT, "strict.web.eslint.config.mjs");
-export const BROWSER_CHECK = join(PKG_ROOT, "scripts", "browser-check.ts");
 export const STUB_CHECK = join(PKG_ROOT, "scripts", "stub-check.ts");
 export const TEST_COVERAGE_CHECK = join(
   PKG_ROOT,
@@ -59,4 +57,3 @@ export const TEST_COVERAGE_CHECK = join(
 );
 export const BOOT_CHECK = join(PKG_ROOT, "scripts", "boot-check.ts");
 export const PROPTEST_CHECK = join(PKG_ROOT, "scripts", "proptest-check.ts");
-export const STAGED_GATE = join(PKG_ROOT, "scripts", "staged-gate.ts");

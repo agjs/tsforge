@@ -10,65 +10,8 @@ import {
   type ILoopState,
   type ILoopEvent,
 } from "../src/loop";
-import { THEME_NAMES, COMPONENT_NAMES } from "../src/web-components";
 import { TsService } from "../src/lsp";
-import { makeFileLinter, WEB_PACKS } from "../src/gate";
 import { TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../src/agent";
-
-// The interactive web session was missing the per-write lint moat (only headless
-// wired `lintFile`), so eslint/architecture violations piled up at the end-of-turn
-// gate instead of surfacing as each file was written. With `lintFile` wired, the
-// write-guard must return the violation in the tool result for the writing turn.
-test("per-write lint moat surfaces a web rule violation on the write itself", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-moat-"));
-
-  try {
-    await Bun.write(
-      join(dir, "tsconfig.json"),
-      JSON.stringify({
-        compilerOptions: {
-          target: "ES2022",
-          module: "ESNext",
-          moduleResolution: "bundler",
-          jsx: "react-jsx",
-          strict: true,
-          skipLibCheck: true,
-        },
-        include: ["**/*.tsx", "**/*.ts"],
-      })
-    );
-
-    const ctx: ILoopCtx = {
-      task: { id: "t", accept: "true", files: ["**/*"] },
-      cwd: dir,
-      tsService: new TsService(dir),
-      report: () => undefined,
-      messages: [],
-      tool: {},
-      gate: {
-        parse: undefined,
-        lintFile: makeFileLinter("react", dir, WEB_PACKS),
-      },
-    };
-    // An `as` cast trips @typescript-eslint/consistent-type-assertions (the web
-    // config bans it) — type-valid so tsc is silent, leaving the eslint violation
-    // to surface cleanly. The per-write moat must catch it on the write itself.
-    const Bad = "export const v: string = 1 as unknown as string;\n";
-
-    await runToolCalls(
-      [{ name: "create", arguments: { file: "bad.ts", content: Bad } }],
-      ctx,
-      freshState()
-    );
-
-    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
-
-    // The web config bans `as` via no-restricted-syntax ("No `as` type casts").
-    expect(toolMsg).toContain("No `as` type casts");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
 
 // P1 (review): add_dependency rewrites package.json even in a narrow-scoped task
 // where it isn't in the editable globs. That sanctioned manifest change MUST still
@@ -304,29 +247,6 @@ test("a move_file re-gates even though it is not an edit/create", async () => {
   }
 });
 
-// P1: scaffold_routes writes route stub files but reports `kind:"tool"`, so the
-// old event-only accounting left `touched:false` — a turn could write stubs and
-// skip the gate (which fails while a stub is unfilled). It now emits `mutated`.
-test("scaffold_routes re-gates the turn despite reporting a tool event", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-routes-"));
-
-  try {
-    const ctx = ctxFor(dir, ["**/*"]);
-    const state = freshState();
-    const touched = await runToolCalls(
-      [{ name: "scaffold_routes", arguments: { routes: ["/", "/about"] } }],
-      ctx,
-      state
-    );
-
-    expect(touched).toBe(true);
-    // The generated stubs joined the change scope but were NOT write-guarded.
-    expect(ctx.tool.touched?.size ?? 0).toBeGreaterThan(0);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 // P1: a rejected (out-of-scope) move_file must NOT re-gate — the old name-based
 // branch set touched:true by tool NAME, so a rejected op could let a green gate
 // claim "done" though nothing moved. Now the signal is the `mutated` event, which
@@ -502,9 +422,6 @@ const MUTATING_TOOLS = new Set<string>([
   TOOL_NAME.renameSymbol,
   TOOL_NAME.moveFile,
   TOOL_NAME.organizeImports,
-  TOOL_NAME.scaffoldUi,
-  TOOL_NAME.scaffoldRoutes,
-  TOOL_NAME.scaffoldWeb,
   TOOL_NAME.addDependency,
 ]);
 // run = the model's raw shell (writes are its own, not scoped harness edits);
@@ -527,123 +444,6 @@ test("every registered tool is classified read-only, mutating, or special", () =
     ].filter(Boolean).length;
 
     expect({ name, buckets }).toEqual({ name, buckets: 1 });
-  }
-});
-
-// P1 (review): scaffold_web mutates the workspace via ctx.setupWeb but emitted NO
-// `mutated` event, so the loop never re-gated — a whole Vite app could be scaffolded
-// and the gate never run. With setupWeb returning the written files, scaffold_web
-// now reports them and the turn re-gates (and the files join the change scope).
-function webCtx(
-  cwd: string,
-  setup: () => Promise<{ files: readonly string[]; depsInstalled: boolean }>
-): ILoopCtx {
-  return { ...ctxFor(cwd, ["**/*"]), tool: { setupWeb: setup } };
-}
-
-test("scaffold_web re-gates the turn and joins the scaffolded files to scope", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-"));
-
-  try {
-    const written = ["src/main.tsx", "index.html"];
-    const ctx = webCtx(dir, () =>
-      Promise.resolve({ files: written, depsInstalled: true })
-    );
-    const touched = await runToolCalls(
-      [{ name: "scaffold_web", arguments: { framework: "react" } }],
-      ctx,
-      freshState()
-    );
-
-    expect(touched).toBe(true);
-
-    for (const f of written) {
-      expect([...(ctx.tool.touched ?? [])]).toContain(f);
-    }
-
-    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
-
-    expect(toolMsg).toContain("deps installed");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("scaffold_web tells the model the truth (and still re-gates) when install failed", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-fail-"));
-
-  try {
-    const ctx = webCtx(dir, () =>
-      Promise.resolve({ files: ["src/main.tsx"], depsInstalled: false })
-    );
-    const touched = await runToolCalls(
-      [{ name: "scaffold_web", arguments: { framework: "react" } }],
-      ctx,
-      freshState()
-    );
-
-    expect(touched).toBe(true);
-
-    const toolMsg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
-
-    // Must NOT claim a clean install; must tell the model to run `bun install`.
-    expect(toolMsg).not.toContain("deps installed");
-    expect(toolMsg).toContain("bun install");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("scaffold_web forwards the turn's abort signal to setupWeb (cancellable install)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-sig-"));
-
-  try {
-    const controller = new AbortController();
-    let received: AbortSignal | undefined;
-    const ctx: ILoopCtx = {
-      ...ctxFor(dir, ["**/*"]),
-      tool: {
-        signal: controller.signal,
-        setupWeb: (_fw, options) => {
-          received = options?.signal;
-
-          return Promise.resolve({
-            files: ["src/main.tsx"],
-            depsInstalled: true,
-          });
-        },
-      },
-    };
-
-    await runToolCalls(
-      [{ name: "scaffold_web", arguments: { framework: "react" } }],
-      ctx,
-      freshState()
-    );
-
-    expect(received).toBe(controller.signal);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("scaffold_web that writes nothing does NOT re-gate (no false 'done')", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-web-noop-"));
-
-  try {
-    const ctx = webCtx(dir, () =>
-      Promise.resolve({ files: [], depsInstalled: true })
-    );
-    const touched = await runToolCalls(
-      [{ name: "scaffold_web", arguments: { framework: "react" } }],
-      ctx,
-      freshState()
-    );
-
-    expect(touched).toBe(false);
-    expect(ctx.tool.touched?.size ?? 0).toBe(0);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -717,76 +517,6 @@ test("a throwing create is caught (no crash), reported FAILED, and not counted",
     expect(await Bun.file(join(dir, "ro/x.ts")).exists()).toBe(false);
   } finally {
     await chmod(join(dir, "ro"), 0o755).catch(() => undefined);
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-// P1: scaffold_ui writes are ATOMIC — when a write fails the batch rolls back, so a
-// pre-existing file is left untouched, nothing is counted, and NO `mutated` event
-// fires (a half-written set must never re-gate as if it succeeded).
-test("scaffold_ui rolls back on a write failure: disk unchanged, no mutated event", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-"));
-
-  try {
-    await mkdir(join(dir, "src"), { recursive: true });
-    await Bun.write(join(dir, "src/index.css"), "MARKER");
-    await chmod(join(dir, "src"), 0o555);
-
-    if (!(await permsEnforced(join(dir, "src")))) {
-      return;
-    }
-
-    const { ctx, events } = collectingCtx(dir, ["**/*"]);
-    const touched = await runToolCalls(
-      [
-        {
-          name: "scaffold_ui",
-          arguments: {
-            theme: THEME_NAMES[0],
-            components: [COMPONENT_NAMES[0]],
-          },
-        },
-      ],
-      ctx,
-      freshState()
-    );
-
-    expect(touched).toBe(false);
-    expect(events.some((e) => e.mutated !== undefined)).toBe(false);
-    expect(await Bun.file(join(dir, "src/index.css")).text()).toBe("MARKER");
-  } finally {
-    await chmod(join(dir, "src"), 0o755).catch(() => undefined);
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-// P2: scaffold_ui with nothing in the editable scope must REJECT honestly — never
-// emit the success copy that tells the model to import primitives never written.
-test("scaffold_ui out of scope rejects without the import advice", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-acct-"));
-
-  try {
-    const { ctx } = collectingCtx(dir, ["src/lib/**"]);
-    const touched = await runToolCalls(
-      [
-        {
-          name: "scaffold_ui",
-          arguments: {
-            theme: THEME_NAMES[0],
-            components: [COMPONENT_NAMES[0]],
-          },
-        },
-      ],
-      ctx,
-      freshState()
-    );
-
-    expect(touched).toBe(false);
-    const msg = ctx.messages.find((m) => m.role === "tool")?.content ?? "";
-
-    expect(msg).not.toContain("Import these from @/components/ui");
-    expect(msg.toLowerCase()).toContain("scope");
-  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

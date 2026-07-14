@@ -127,6 +127,15 @@ export interface IScaffoldAnswers {
   readonly archetype: IArchetype;
   readonly stack: "dev" | "prod" | "smoke";
   readonly values: Readonly<Record<string, string | readonly string[]>>;
+  /** Optional initial superuser seeded when the stack first boots (db:seed reads
+   *  SUPERUSER_EMAIL/SUPERUSER_PASSWORD). Both must be set, or neither. */
+  readonly superuser?: ISuperuser;
+}
+
+/** The initial admin login for a scaffolded project (boringstack only). */
+export interface ISuperuser {
+  readonly email: string;
+  readonly password: string;
 }
 
 /** A single `.env` edit the plan will apply. */
@@ -154,4 +163,6 @@ export interface IScaffoldPlan {
   readonly requiredSecrets: readonly string[];
   /** Cross-rule violations (non-empty = the plan is invalid and must not Apply). */
   readonly violations: readonly string[];
+  /** Initial superuser to seed on first boot (carried through from the answers). */
+  readonly superuser?: ISuperuser;
 }

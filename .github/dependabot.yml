@@ -1,0 +1,27 @@
+# Keep tsforge's dependencies — especially the shared tooling it must keep on par
+# with BoringStack (prettier / eslint / typescript-eslint) — current, so a version
+# drift never silently breaks a BoringStack build the harness gates.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directories:
+      - "/"
+      - "/packages/core"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      # Bump the lint/format/type toolchain together so it moves as one unit
+      # (mismatched patch versions are exactly what caused a formatting drift).
+      dev-toolchain:
+        patterns:
+          - "prettier"
+          - "eslint"
+          - "eslint-*"
+          - "@typescript-eslint/*"
+          - "typescript-eslint"
+          - "typescript"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

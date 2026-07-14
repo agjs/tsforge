@@ -22,8 +22,7 @@ export interface IScriptedTurn {
 }
 
 export type ScriptedTurn =
-  | IScriptedTurn
-  | ((messages: readonly IChatMessage[]) => IScriptedTurn);
+  IScriptedTurn | ((messages: readonly IChatMessage[]) => IScriptedTurn);
 
 export interface IScriptedModel extends IProvider {
   /** How many times the loop has called the model. */

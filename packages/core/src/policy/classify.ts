@@ -20,9 +20,6 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   [TOOL_NAME.renameSymbol]: "edit_file",
   [TOOL_NAME.create]: "write_file",
   [TOOL_NAME.moveFile]: "write_file",
-  [TOOL_NAME.scaffoldUi]: "write_file",
-  [TOOL_NAME.scaffoldRoutes]: "write_file",
-  [TOOL_NAME.scaffoldWeb]: "write_file",
   [TOOL_NAME.run]: "shell",
   [TOOL_NAME.addDependency]: "shell",
   // `script` runs a program that can call other tools — classify as shell so the

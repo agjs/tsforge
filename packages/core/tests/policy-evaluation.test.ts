@@ -45,7 +45,6 @@ describe("classifyAction", () => {
       ["organize_imports", "edit_file"],
       ["create", "write_file"],
       ["move_file", "write_file"],
-      ["scaffold_ui", "write_file"],
       ["run", "shell"],
       ["add_dependency", "shell"],
       ["package_info", "network"],

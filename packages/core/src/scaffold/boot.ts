@@ -1,5 +1,6 @@
 import type { IReadyPoller, IScaffoldRunner } from "./io";
 import type { IScaffoldManifest } from "./scaffold.types";
+import { remapUrlToHostPorts, type HostPorts } from "./ports";
 
 /** Default per-URL readiness budget — a cold `docker compose up --build` pulling
  *  images + running migrations is slow on first boot. */
@@ -10,6 +11,11 @@ export interface IBootDeps {
   readonly poll: IReadyPoller;
   /** Per-health-URL readiness timeout (ms). */
   readonly timeoutMs?: number;
+  /** The project's allocated host ports. When present, the manifest health URLs
+   *  (written against the upstream defaults, e.g. :7330) are remapped to these, so
+   *  an isolated boot polls the ports the stack actually published — without this
+   *  the health check hits the default ports and falsely reports a boot failure. */
+  readonly hostPorts?: HostPorts;
 }
 
 export interface IBootResult {
@@ -55,7 +61,10 @@ export async function bootStack(
   }
 
   const timeoutMs = deps.timeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
-  const urls = profile.healthUrls ?? [];
+  const hostPorts = deps.hostPorts ?? {};
+  const urls = (profile.healthUrls ?? []).map((u) =>
+    remapUrlToHostPorts(u, hostPorts)
+  );
   const statuses: { url: string; status: number | null }[] = [];
 
   for (const url of urls) {

@@ -12,12 +12,7 @@ export type PolicyDecision = "allow" | "ask" | "deny";
 /** Enforcement strength. `plan` is the read-only explore mode; `default` is the
  *  autonomous drive-to-green default; the rest tighten or loosen from there. */
 export type PolicyMode =
-  | "plan"
-  | "default"
-  | "acceptEdits"
-  | "ci"
-  | "dontAsk"
-  | "bypassPermissions";
+  "plan" | "default" | "acceptEdits" | "ci" | "dontAsk" | "bypassPermissions";
 
 /** What a tool call actually does, independent of the tool's name. */
 export type ActionKind =

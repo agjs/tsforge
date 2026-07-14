@@ -29,11 +29,26 @@ Because `features.json` is the source of truth, re-running the same command **re
 
 Each feature passes only if all three layers agree, checked cheapest-first and short-circuiting on the first failure:
 
-1. **Gate** — the deterministic build gate (`--accept`: tsc / eslint / tests, and the browser smoke that the web gate already runs). The authority for "done".
+1. **Gate** — the deterministic build gate (`--accept`: tsc / eslint / tests). The authority for "done".
 2. **Browser** — optional per-feature interaction steps via the Playwright oracle (skipped gracefully when Playwright isn't installed, so it never blocks).
 3. **Judge** — a harsh, reject-by-default quality review that sees **only the built code**, never how it was produced.
 
 That last point is a deliberate rule: the evaluator never sees the generator's reasoning or tool trace, so it judges the result, not the persuasion behind it.
+
+## Full-stack builds (BoringStack)
+
+A web app scaffolded with [`tsforge scaffold`](/scaffold/boringstack/) rides this same
+loop, with one resource (entity) per feature and a clear division of labor:
+
+- **The harness runs the generators + wiring** — `bun run new:resource` / `new:feature`,
+  the deterministic edits that wire the resource into the route tree, app, swagger, and
+  the test-helper's schema re-export, then `db:push` to sync the schema.
+- **The model fills the domain** — real fields, service logic, and the required test
+  siblings, scoped to just that resource's files and frozen once it passes.
+
+The gate is BoringStack's own `validate`, run **baseline-aware and differential** with a
+prettier + `eslint --fix` auto-fix pass first — see
+[How tsforge builds the gate](/loop/gate-floor/#full-stack-boringstack-builds-use-the-projects-own-gate).
 
 ## Role-based model routing
 
