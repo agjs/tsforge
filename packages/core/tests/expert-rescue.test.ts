@@ -2,8 +2,13 @@ import { test, expect, describe } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tryExpertRescue, type ILoopCtx } from "../src/loop/turn";
-import type { ILoopState, ILoopEvent } from "../src/loop";
+import {
+  tryExpertRescue,
+  shouldTryExpertRescue,
+  type ILoopCtx,
+} from "../src/loop/turn";
+import type { ILoopState, ILoopEvent, IRunResult } from "../src/loop";
+import { RUN_STATUS, STUCK_REASON } from "../src/loop";
 import type { IErrorItem } from "../src/validate";
 import type { ExpertAsk } from "../src/loop/expert-handoff";
 
@@ -45,6 +50,41 @@ const fileErr = (file: string): IErrorItem => ({
 
 const toolMsgs = (events: ILoopEvent[]): string[] =>
   events.filter((e) => e.kind === "tool").map((e) => e.message);
+
+describe("shouldTryExpertRescue (settleGate's R4 trigger — P1 regression)", () => {
+  const result = (
+    status: IRunResult["status"],
+    reason?: IRunResult["reason"]
+  ): IRunResult => ({
+    task: "t",
+    redConfirmed: true,
+    status,
+    cycles: 1,
+    ...(reason !== undefined ? { reason } : {}),
+  });
+
+  test("fires on ladder-exhaustion (reason 'handoff')", () => {
+    expect(
+      shouldTryExpertRescue(result(RUN_STATUS.stuck, STUCK_REASON.handoff))
+    ).toBe(true);
+  });
+
+  test("does NOT fire on the runaway-backstop anomaly ('cap')", () => {
+    expect(
+      shouldTryExpertRescue(result(RUN_STATUS.stuck, STUCK_REASON.cap))
+    ).toBe(false);
+  });
+
+  test("does NOT fire on 'stalled' (the stale check that made the expert unreachable)", () => {
+    expect(
+      shouldTryExpertRescue(result(RUN_STATUS.stuck, STUCK_REASON.stalled))
+    ).toBe(false);
+  });
+
+  test("does NOT fire on a done result", () => {
+    expect(shouldTryExpertRescue(result(RUN_STATUS.done))).toBe(false);
+  });
+});
 
 describe("tryExpertRescue", () => {
   test("HAPPY PATH: expert returns a fix → file overwritten, run continues", async () => {

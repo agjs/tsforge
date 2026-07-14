@@ -1143,6 +1143,17 @@ function stuckResult(
  *  failing file, R4 already tried for this block, or the expert declining all fall
  *  through to false (→ park as before). Never throws — a handoff hiccup must not
  *  crash the run. Expert re-enters only on a NOVEL block fingerprint (novelty gate). */
+/** Whether `settleGate` should attempt the expert (R4) for this terminal result.
+ *  The ladder-exhaustion terminal carries `STUCK_REASON.handoff` (NOT `.stalled`, which
+ *  it used to — a stale check there made the expert UNREACHABLE), and the runaway-backstop
+ *  anomaly (`.cap`) must NEVER consult the expert. Pure + exported so the exact trigger
+ *  condition is unit-locked (this is the class of seam that silently regressed once). */
+export function shouldTryExpertRescue(stuck: IRunResult): boolean {
+  return (
+    stuck.status === RUN_STATUS.stuck && stuck.reason === STUCK_REASON.handoff
+  );
+}
+
 export async function tryExpertRescue(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -1768,16 +1779,11 @@ export async function settleGate(
   const stuck = checkStuck(ctx, state, gateErrors, turn);
 
   if (stuck !== null) {
-    // A stalled park is the rung where the EXPERT handoff gets a shot before we give
-    // up: if a stronger model repairs the blocking file, keep looping instead of
-    // parking. No expert configured → this is a no-op and the run parks as before.
-    // The ladder-exhaustion terminal now carries reason `handoff` (was `stalled`), so
-    // the expert (R4) rung must trigger on THAT — otherwise tryExpertRescue is
-    // unreachable and R5 handoff happens without ever consulting the stronger model.
+    // Ladder exhaustion is the rung where the EXPERT (R4) gets a shot before R5: if a
+    // stronger model repairs the blocking file, keep looping instead of handing off.
     // The novelty gate inside tryExpertRescue prevents re-firing on the same block.
     if (
-      stuck.status === RUN_STATUS.stuck &&
-      stuck.reason === STUCK_REASON.handoff &&
+      shouldTryExpertRescue(stuck) &&
       (await tryExpertRescue(ctx, state, gateErrors))
     ) {
       return null;
