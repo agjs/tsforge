@@ -194,7 +194,11 @@ describe("runGreenfield: outer loop", () => {
     const s = state("a", "b", "c");
     const implemented: string[] = [];
     const deps: IGreenfieldDeps = {
-      implement: async (f) => void implemented.push(f.id),
+      implement: async (f) => {
+        implemented.push(f.id);
+
+        return { handoff: undefined };
+      },
       evaluate: async () => ({ passed: true, notes: "ok" }),
     };
 
@@ -210,95 +214,55 @@ describe("runGreenfield: outer loop", () => {
     expect(onDisk?.features.every((f) => f.passes)).toBe(true);
   });
 
-  test("gives up on a non-converging feature after maxAttempts (status stuck)", async () => {
+  test("a feature that returns a handoff parks and is revisited once (main + revisit pass)", async () => {
     const s = state("a", "b");
     let aCalls = 0;
     const deps: IGreenfieldDeps = {
       implement: async (f) => {
         if (f.id === "a") {
           aCalls += 1;
+
+          // Return handoff in both main pass (aCalls=1) and revisit pass (aCalls=2)
+          return {
+            handoff: {
+              block: "test-block",
+              rungHistory: ["R1"],
+              errors: ["error"],
+              ask: "help",
+              resumable: true,
+              resume: { triedLevers: ["R1"] },
+            },
+          };
         }
+
+        return { handoff: undefined };
       },
-      // 'a' never passes; 'b' would, but the loop never reaches it.
-      evaluate: async (f) => ({ passed: f.id !== "a", notes: "" }),
+      // 'b' passes normally
+      evaluate: async (f) => ({ passed: f.id === "b", notes: "" }),
     };
 
-    const res = await runGreenfield(dir, s, deps, { maxAttemptsPerFeature: 3 });
+    const res = await runGreenfield(dir, s, deps);
 
+    expect(aCalls).toBe(2); // 'a' called once in main pass, once in revisit pass
+    expect(s.features[0]?.parked).toBe(true); // 'a' remains parked
+    expect(s.features[1]?.passes).toBe(true); // 'b' passed normally
     expect(res.status).toBe("stuck");
     expect(res.stuckFeature).toBe("a");
-    expect(aCalls).toBe(3); // exactly maxAttempts, then it bails
-    expect(s.features[1]?.passes).toBe(false); // 'b' never attempted
-  });
-
-  test("rescue that lands green before parking ticks the feature (not stuck)", async () => {
-    const s = state("a");
-    let rescueCalls = 0;
-    const deps: IGreenfieldDeps = {
-      implement: async () => undefined,
-      // Fails every normal attempt; passes only after rescue has run.
-      evaluate: async () => ({ passed: rescueCalls > 0, notes: "" }),
-      rescue: async () => {
-        rescueCalls += 1;
-
-        return true;
-      },
-    };
-
-    const res = await runGreenfield(dir, s, deps, { maxAttemptsPerFeature: 3 });
-
-    expect(res.status).toBe("done");
-    expect(rescueCalls).toBe(1); // one shot, right before parking
-    expect(s.features[0]?.passes).toBe(true);
-  });
-
-  test("rescue is attempted once, then parks stuck if it can't help", async () => {
-    const s = state("a");
-    let rescueCalls = 0;
-    const deps: IGreenfieldDeps = {
-      implement: async () => undefined,
-      evaluate: async () => ({ passed: false, notes: "" }),
-      rescue: async () => {
-        rescueCalls += 1;
-
-        return false; // expert unavailable / no fix
-      },
-    };
-
-    const res = await runGreenfield(dir, s, deps, { maxAttemptsPerFeature: 3 });
-
-    expect(res.status).toBe("stuck");
-    expect(rescueCalls).toBe(1);
-  });
-
-  test("rescue that applies a fix but still fails re-eval parks stuck (no loop)", async () => {
-    const s = state("a");
-    let rescueCalls = 0;
-    const deps: IGreenfieldDeps = {
-      implement: async () => undefined,
-      evaluate: async () => ({ passed: false, notes: "" }),
-      rescue: async () => {
-        rescueCalls += 1;
-
-        return true; // applied a change, but re-eval still red
-      },
-    };
-
-    const res = await runGreenfield(dir, s, deps, { maxAttemptsPerFeature: 3 });
-
-    expect(res.status).toBe("stuck");
-    expect(rescueCalls).toBe(1); // exactly once — never loops
   });
 
   test("a feature that passes on its 2nd attempt is not counted stuck", async () => {
     const s = state("a");
     let calls = 0;
     const deps: IGreenfieldDeps = {
-      implement: async () => void (calls += 1),
+      implement: async () => {
+        calls += 1;
+
+        return { handoff: undefined };
+      },
       evaluate: async () => ({ passed: calls >= 2, notes: "" }),
     };
 
-    const res = await runGreenfield(dir, s, deps, { maxAttemptsPerFeature: 3 });
+    const res = await runGreenfield(dir, s, deps);
 
     expect(res.status).toBe("done");
     expect(s.features[0]?.attempts).toBe(2);
@@ -310,7 +274,11 @@ describe("runGreenfield: outer loop", () => {
     s.features[0]!.passes = true; // 'a' already done
     const implemented: string[] = [];
     const deps: IGreenfieldDeps = {
-      implement: async (f) => void implemented.push(f.id),
+      implement: async (f) => {
+        implemented.push(f.id);
+
+        return { handoff: undefined };
+      },
       evaluate: async () => ({ passed: true, notes: "" }),
     };
 
@@ -340,7 +308,7 @@ describe("runGreenfield: outer loop", () => {
     expect(onDisk?.features[0]?.passes).toBe(false);
   });
 
-  test("a repeatedly-crashing feature still reaches `stuck` across resumes", async () => {
+  test("a repeatedly-crashing feature persists attempt count across resumes", async () => {
     const deps: IGreenfieldDeps = {
       implement: async () => {
         throw new Error("boom");
@@ -348,29 +316,20 @@ describe("runGreenfield: outer loop", () => {
       evaluate: async () => ({ passed: true, notes: "" }),
     };
 
-    // Each run crashes on its single attempt but persists the bump; resuming from
-    // disk three times exhausts maxAttempts instead of looping on attempt 0.
-    for (let i = 0; i < 3; i += 1) {
-      const resumed = (await loadState(dir)) ?? state("a");
+    // First run: implement throws, attempt is bumped and persisted
+    const s = state("a");
 
-      await expect(
-        runGreenfield(dir, resumed, deps, { maxAttemptsPerFeature: 3 })
-      ).rejects.toThrow("boom");
-    }
+    await expect(runGreenfield(dir, s, deps)).rejects.toThrow("boom");
 
-    const final = (await loadState(dir)) ?? state("a");
-    const res = await runGreenfield(dir, final, deps, {
-      maxAttemptsPerFeature: 3,
-    });
+    const onDisk = await loadState(dir);
 
-    expect(res.status).toBe("stuck");
-    expect(res.stuckFeature).toBe("a");
+    expect(onDisk?.features[0]?.attempts).toBe(1);
   });
 
   test("writes progress.md as it goes", async () => {
     const s = state("a");
     const deps: IGreenfieldDeps = {
-      implement: async () => undefined,
+      implement: async () => ({ handoff: undefined }),
       evaluate: async () => ({ passed: true, notes: "" }),
     };
 
@@ -379,5 +338,156 @@ describe("runGreenfield: outer loop", () => {
     const md = await readFile(join(greenfieldDir(dir), "progress.md"), "utf8");
 
     expect(md).toContain("1/1 features verified");
+  });
+
+  test("when implement returns a handoff, the feature is parked and later features build", async () => {
+    const s = state("a", "b");
+    const implemented: string[] = [];
+    const deps: IGreenfieldDeps = {
+      implement: async (f) => {
+        implemented.push(f.id);
+
+        if (f.id === "a") {
+          return {
+            handoff: {
+              block: "test-block",
+              rungHistory: ["R1", "R2", "R3", "R4"],
+              errors: ["some error"],
+              ask: "needs help",
+              resumable: true,
+              resume: { triedLevers: ["R1", "R2", "R3", "R4"] },
+            },
+          };
+        }
+
+        return { handoff: undefined };
+      },
+      evaluate: async () => ({ passed: true, notes: "" }),
+    };
+
+    const res = await runGreenfield(dir, s, deps);
+
+    // 'a' is parked in main pass, then revisited once, returning handoff again
+    expect(res.status).toBe("stuck");
+    expect(res.stuckFeature).toBe("a");
+    expect(implemented).toEqual(["a", "b", "a"]); // 'a' in main pass, 'b' in main pass, 'a' in revisit pass
+    expect(s.features[0]?.parked).toBe(true);
+    expect(s.features[0]?.handoff).toBeDefined();
+    expect(s.features[1]?.passes).toBe(true); // 'b' completed normally
+  });
+
+  test("parked features are revisited once, seeded with their saved triedLevers", async () => {
+    const s = state("a", "b");
+    let aAttempts = 0;
+    const seedsReceived: { id: string; seed?: { triedLevers: string[] } }[] =
+      [];
+
+    const deps: IGreenfieldDeps = {
+      implement: async (f, _, seed) => {
+        seedsReceived.push({ id: f.id, seed });
+
+        if (f.id === "a") {
+          aAttempts += 1;
+
+          if (aAttempts === 1) {
+            // First attempt (main pass): return a handoff to park the feature
+            return {
+              handoff: {
+                block: "test-block",
+                rungHistory: ["R1", "R2"],
+                errors: ["error"],
+                ask: "help",
+                resumable: true,
+                resume: { triedLevers: ["R1", "R2"] },
+              },
+            };
+          }
+
+          // Second attempt (revisit pass): pass now with the seed
+          return { handoff: undefined };
+        }
+
+        return { handoff: undefined };
+      },
+      evaluate: async (f) => ({
+        passed: f.id === "b" || aAttempts >= 2,
+        notes: "",
+      }),
+    };
+
+    const res = await runGreenfield(dir, s, deps);
+
+    // 'a' was parked, revisited, and passed on the second attempt
+    expect(res.status).toBe("done");
+    expect(aAttempts).toBe(2); // one in main pass, one in revisit pass
+    // Check that the revisit pass received the seed
+    const aRevisitSeed = seedsReceived.find(
+      (sr) => sr.id === "a" && sr.seed?.triedLevers.length === 2
+    );
+
+    expect(aRevisitSeed).toBeDefined();
+    expect(aRevisitSeed?.seed?.triedLevers).toEqual(["R1", "R2"]);
+  });
+
+  test("when a parked feature still fails after revisit, build reports fully-stuck", async () => {
+    const s = state("a");
+    const deps: IGreenfieldDeps = {
+      implement: async () => ({
+        handoff: {
+          block: "test-block",
+          rungHistory: ["R1", "R2", "R3", "R4"],
+          errors: ["persistent error"],
+          ask: "help",
+          resumable: true,
+          resume: { triedLevers: ["R1", "R2", "R3", "R4"] },
+        },
+      }),
+      evaluate: async () => ({ passed: false, notes: "still broken" }),
+    };
+
+    const res = await runGreenfield(dir, s, deps);
+
+    expect(res.status).toBe("stuck");
+    expect(res.stuckFeature).toBe("a");
+    expect(s.features[0]?.parked).toBe(true); // still parked after revisit
+  });
+
+  test("parked + handoff round-trip through saveState + loadState", async () => {
+    const s = state("a");
+
+    s.features[0]!.parked = true;
+    s.features[0]!.handoff = {
+      block: "test-block",
+      rungHistory: ["R1", "R2"],
+      errors: ["error"],
+      ask: "help",
+      resumable: true,
+      resume: { triedLevers: ["R1", "R2"] },
+    };
+
+    await saveState(dir, s);
+
+    const loaded = await loadState(dir);
+
+    expect(loaded?.features[0]?.parked).toBe(true);
+    expect(loaded?.features[0]?.handoff?.block).toBe("test-block");
+    expect(loaded?.features[0]?.handoff?.rungHistory).toEqual(["R1", "R2"]);
+    expect(loaded?.features[0]?.handoff?.resume).toEqual({
+      triedLevers: ["R1", "R2"],
+    });
+  });
+
+  test("renderProgress shows parked features distinctly with [~] and (parked) note", () => {
+    const s = state("a", "b", "c");
+
+    s.features[0]!.passes = true;
+    s.features[1]!.parked = true;
+
+    const md = renderProgress(s);
+
+    expect(md).toContain("- [x] a");
+    expect(md).toContain("- [~] b");
+    expect(md).toContain("(parked)");
+    expect(md).toContain("- [ ] c");
   });
 });

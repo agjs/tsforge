@@ -27,7 +27,7 @@ import {
 } from "../expert-handoff";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield } from "../greenfield/run";
-import type { Reporter } from "../loop.types";
+import type { Reporter, IHandoff } from "../loop.types";
 import { slicesToFeatures } from "./plan-resources";
 import { toCamelCase } from "./case";
 import { loadApprovedPlan } from "../planning/plan-store";
@@ -184,7 +184,9 @@ async function readResourceCode(cwd: string, name: string): Promise<string> {
  */
 interface IBoringstackHost {
   setScope(globs: string[]): void;
-  send(message: string): Promise<{ status: string; turns: number }>;
+  send(
+    message: string
+  ): Promise<{ status: string; turns: number; handoff?: IHandoff }>;
 }
 
 /**
@@ -225,7 +227,7 @@ export function boringstackDeps(opts: {
     async implement(
       feature: IFeature,
       _state: IGreenfieldState
-    ): Promise<void> {
+    ): Promise<{ handoff?: IHandoff }> {
       // Generate the FULL vertical slice: API resource (Drizzle+Elysia) then the
       // UI feature. generateFeature runs `generate:api`, syncing the UI's typed
       // OpenAPI client — without this the root drift check ("OpenAPI drift") fails.
@@ -240,7 +242,7 @@ export function boringstackDeps(opts: {
       const slice = sliceFor?.(feature.id);
       const prompt = refinePrompt(feature, slice);
 
-      await host.send(prompt);
+      const sendResult = await host.send(prompt);
 
       // Apply BoringStack's deterministic auto-fixes (prettier + eslint --fix) to
       // the model's edits BEFORE the gate. These classes are 100% auto-fixable and
@@ -256,6 +258,8 @@ export function boringstackDeps(opts: {
       await exec(["bun", "run", "db:push", "--", "--force"], {
         cwd: join(cwd, "apps/api"),
       });
+
+      return { handoff: sendResult.handoff };
     },
 
     async evaluate(feature: IFeature) {

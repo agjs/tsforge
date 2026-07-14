@@ -591,14 +591,21 @@ function greenfieldDeps(
     implement: async (feature) => {
       const base = featureTask(feature);
 
-      await runTask({ ...base, intent: base.intent }, args.dir, work, {
-        onEvent: report,
-        // The global gate is often already green between features, so don't
-        // bail RED-first — the model must still build this feature.
-        requireRed: false,
-        ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
-        ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
-      });
+      const result = await runTask(
+        { ...base, intent: base.intent },
+        args.dir,
+        work,
+        {
+          onEvent: report,
+          // The global gate is often already green between features, so don't
+          // bail RED-first — the model must still build this feature.
+          requireRed: false,
+          ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+          ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
+        }
+      );
+
+      return { handoff: result.handoff };
     },
     evaluate: (feature) =>
       evaluateFeature(feature, {

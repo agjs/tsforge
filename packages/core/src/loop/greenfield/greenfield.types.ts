@@ -1,5 +1,5 @@
 import type { IStep } from "../../browser";
-import type { Reporter } from "../loop.types";
+import type { Reporter, IHandoff } from "../loop.types";
 
 /**
  * One feature in a greenfield build's checklist. The unit the outer loop drives:
@@ -24,6 +24,14 @@ export interface IFeature {
    *  into the NEXT attempt's implement prompt so the model fixes the actual errors
    *  instead of rebuilding blind. Cleared on a pass. */
   lastError?: string;
+  /** True when all escalation rungs have been exhausted on this feature and the
+   *  driver parked it for a later revisit pass. Transient during the build,
+   *  persisted for resumption. */
+  parked?: boolean;
+  /** The structured handoff from the escalation ladder (ladder exhaustion).
+   *  Includes the tried-lever history for seeding a revisit. Persisted with the
+   *  feature so a second pass can retry without repeating the same levers. */
+  handoff?: IHandoff;
 }
 
 /** A greenfield build's whole state: the one-line goal + the feature checklist. */
@@ -58,7 +66,15 @@ export interface IGreenfieldResult {
  * `evaluate` runs the layered evaluator (gate → browser → judge) for it.
  */
 export interface IGreenfieldDeps {
-  implement(feature: IFeature, state: IGreenfieldState): Promise<void>;
+  /** Implement one feature. Returns the inner handoff when the escalation ladder
+   *  is exhausted (feature parked), or undefined when proceeding normally or passing.
+   *  Optionally accepts seeded tried-lever state (from a prior handoff.resume) to
+   *  skip levers already tried in a revisit. */
+  implement(
+    feature: IFeature,
+    state: IGreenfieldState,
+    seed?: { triedLevers: string[] }
+  ): Promise<{ handoff?: IHandoff }>;
   evaluate(
     feature: IFeature,
     state: IGreenfieldState
@@ -72,7 +88,5 @@ export interface IGreenfieldDeps {
 }
 
 export interface IGreenfieldOptions {
-  /** Give up on a feature after this many implement→evaluate cycles (default 3). */
-  maxAttemptsPerFeature?: number;
   onEvent?: Reporter;
 }

@@ -42,16 +42,15 @@ export async function prepareState(
   return state;
 }
 
-const DEFAULT_MAX_ATTEMPTS = 3;
-
 /**
  * The greenfield outer loop: drive a feature checklist to all-green, one feature
  * at a time, persisting state to disk after every step so a long run survives
  * being interrupted and resumed. Picks the first unfinished feature, asks the
- * model to implement it, runs the layered evaluator, ticks it on success — and
- * gives up on a single feature (status `stuck`) once it exhausts its attempts,
- * so a non-converging feature can't wedge the whole build. Filesystem state, not
- * context, is the source of truth (the workshop's long-run pattern).
+ * model to implement it, runs the layered evaluator, ticks it on success. When
+ * `implement` returns a handoff (escalation ladder exhausted), the feature parks
+ * and the loop continues to the next. After the main pass, a single revisit pass
+ * retries parked features seeded with their saved tried-lever state.
+ * Filesystem state, not context, is the source of truth (the workshop's long-run pattern).
  */
 export async function runGreenfield(
   cwd: string,
@@ -59,7 +58,6 @@ export async function runGreenfield(
   deps: IGreenfieldDeps,
   opts: IGreenfieldOptions = {}
 ): Promise<IGreenfieldResult> {
-  const maxAttempts = opts.maxAttemptsPerFeature ?? DEFAULT_MAX_ATTEMPTS;
   const report: Reporter = opts.onEvent ?? ((): void => undefined);
 
   const say = (message: string): void => {
@@ -69,88 +67,127 @@ export async function runGreenfield(
   await saveState(cwd, state);
   await writeProgress(cwd, state);
 
+  // Main pass: drive all unpassed, unparked features.
   for (;;) {
-    const feature = state.features.find((f) => !f.passes);
+    const feature = state.features.find(
+      (f) => !f.passes && !(f.parked ?? false)
+    );
 
     if (feature === undefined) {
-      report({
-        kind: "done",
-        task: "greenfield",
-        message: `all ${state.features.length} feature(s) verified`,
-      });
-
-      return { status: "done", features: state.features };
-    }
-
-    if (feature.attempts >= maxAttempts) {
-      // Last-resort escalation before parking: if the deps provide a `rescue`
-      // (e.g. an expert-model handoff), try it ONCE and give the result a final
-      // evaluation. A rescue that lands green ticks the feature and the loop moves
-      // on; anything else parks as `stuck` — exactly as before when no rescue is
-      // wired. One shot only, so a non-converging feature can't loop forever.
-      if (deps.rescue !== undefined) {
-        const rescued = await deps.rescue(feature, state).catch(() => false);
-
-        if (rescued) {
-          say(`feature '${feature.id}': rescue applied a fix — re-evaluating`);
-
-          const verdict = await deps.evaluate(feature, state);
-
-          await saveState(cwd, state);
-          await writeProgress(cwd, state);
-
-          if (verdict.passed) {
-            feature.passes = true;
-            delete feature.lastError;
-            say(`feature '${feature.id}': verified ✓ (after expert rescue)`);
-            continue;
-          }
-
-          feature.lastError = verdict.detail ?? verdict.notes;
-        }
-      }
-
-      report({
-        kind: "stuck",
-        task: "greenfield",
-        message: `feature '${feature.id}' stuck after ${feature.attempts} attempt(s)`,
-        detail: feature.desc,
-      });
-
-      return {
-        status: "stuck",
-        features: state.features,
-        stuckFeature: feature.id,
-      };
+      break;
     }
 
     await attemptFeature(cwd, state, feature, deps, say);
   }
+
+  // Revisit pass: retry parked features once, seeding with their saved tried-lever state.
+  const parkedFeatures = state.features.filter(
+    (f) => (f.parked ?? false) && !f.passes
+  );
+
+  if (parkedFeatures.length > 0) {
+    say(`${parkedFeatures.length} parked feature(s) to revisit`);
+
+    for (const feature of parkedFeatures) {
+      feature.parked = false;
+
+      const seed = feature.handoff?.resume
+        ? "triedLevers" in feature.handoff.resume
+          ? { triedLevers: feature.handoff.resume.triedLevers }
+          : undefined
+        : undefined;
+
+      await attemptFeature(cwd, state, feature, deps, say, seed);
+    }
+  }
+
+  // Final verdict
+  const allPassing = state.features.every((f) => f.passes);
+
+  if (allPassing) {
+    report({
+      kind: "done",
+      task: "greenfield",
+      message: `all ${state.features.length} feature(s) verified`,
+    });
+
+    return { status: "done", features: state.features };
+  }
+
+  const stillParked = state.features.filter((f) => f.parked ?? false);
+
+  if (stillParked.length > 0) {
+    report({
+      kind: "stuck",
+      task: "greenfield",
+      message: `${stillParked.length} feature(s) remain parked after revisit`,
+      detail: stillParked.map((f) => f.id).join(", "),
+    });
+
+    return {
+      status: "stuck",
+      features: state.features,
+      stuckFeature: stillParked[0]?.id,
+    };
+  }
+
+  // Unreachable: if no feature is passing and none are parked, the main pass would
+  // have looped forever. But defensive: report the first non-passing feature.
+  const nonPassing = state.features.find((f) => !f.passes);
+
+  report({
+    kind: "stuck",
+    task: "greenfield",
+    message: `feature '${nonPassing?.id ?? "unknown"}' did not reach verdict`,
+  });
+
+  return {
+    status: "stuck",
+    features: state.features,
+    stuckFeature: nonPassing?.id,
+  };
 }
 
-/** One implement→evaluate→persist cycle for a single feature (mutates it). */
+/** One implement→evaluate→persist cycle for a single feature (mutates it).
+ *  Optionally seeds the implement with prior tried-lever state (for a revisit). */
 async function attemptFeature(
   cwd: string,
   state: IGreenfieldState,
   feature: IFeature,
   deps: IGreenfieldDeps,
-  say: (message: string) => void
+  say: (message: string) => void,
+  seed?: { triedLevers: string[] }
 ): Promise<void> {
   feature.attempts += 1;
-  say(`feature '${feature.id}': attempt ${feature.attempts} — ${feature.desc}`);
+  const seedNote = seed ? " (revisit, seeded with tried-levers)" : "";
+
+  say(
+    `feature '${feature.id}': attempt ${feature.attempts} — ${feature.desc}${seedNote}`
+  );
 
   // Persist in `finally` so an implement/evaluate THROW still records the bumped
   // attempt count before it propagates — otherwise a crash on attempt N replays
   // as attempt N-1 on resume, and a repeatedly-crashing feature never reaches
   // `stuck`. The persisted state is the source of truth for resume-from-crash.
   try {
-    await deps.implement(feature, state);
+    const result = await deps.implement(feature, state, seed);
+
+    // Check if the ladder is exhausted (handoff returned).
+    if (result.handoff) {
+      feature.parked = true;
+      feature.handoff = result.handoff;
+      say(`feature '${feature.id}': ladder exhausted, parked — revisit later`);
+
+      return;
+    }
 
     const verdict = await deps.evaluate(feature, state);
 
     if (verdict.passed) {
       feature.passes = true;
       delete feature.lastError;
+      delete feature.parked;
+      delete feature.handoff;
       say(`feature '${feature.id}': verified ✓`);
     } else {
       // Carry the failing output into the NEXT attempt (implement reads it) so the
