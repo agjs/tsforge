@@ -333,6 +333,47 @@ export interface ILoopState {
   /** Lowest gate-error count seen this run, NEVER reset on escalation (unlike
    *  `bestErrorCount`) — the stable baseline the plateau backstop measures against. */
   plateauBest?: number;
+  /** Guard-specific identity of the current stuck block (canonical, not the raw error
+   *  set). Derived from the guard that fired: samePersist → single error key,
+   *  gateStuckRepeats → sorted-join of current keys, plateau → normalized count|keys
+   *  over the oscillation window. Empty string when no stall is active. */
+  blockFingerprint?: string;
+  /** Ring buffer (length = LOOP_LIMITS.noProgressCycles = 12) of sorted error key-sets,
+   *  one per gate cycle. The plateau branch of fingerprintFor reads "recurring keys"
+   *  (present in ≥2 window entries) over this window to detect stable oscillation blocks
+   *  that don't improve. Pushed each gate, cleared when the block fingerprint moves. */
+  recentGateFingerprints?: string[];
+  /** Which escalation rungs have been tried for each block fingerprint. A rung is
+   *  recorded tried only when: (1) it was applied on a previous cycle, (2) the next
+   *  gate shows the block fingerprint unchanged, and (3) the pending pair is recorded
+   *  here. Per-rung state so the ladder doesn't re-fire a rung for the same block. */
+  triedLeversByBlock?: Map<string, Set<EscalationRung>>;
+  /** The rung applied on the previous cycle, paired with its block fingerprint at
+   *  application time. On the NEXT gate, if the recomputed fingerprint equals
+   *  pendingBlockFingerprint, the rung is recorded into triedLeversByBlock (block
+   *  unmoved → lever failed); either way both are cleared. */
+  pendingRung?: EscalationRung | null;
+  /** Fingerprint of the block when pendingRung was applied. */
+  pendingBlockFingerprint?: string | null;
+  /** R1 (self-diagnose) is two-phase: Phase A diagnosis-only (no writes, sets this),
+   *  Phase B act-on-diagnosis (sets pendingRung = R1). Only recorded tried after Phase B.
+   *  Cleared once Phase B runs or escalation fires. */
+  pendingDiagnosisSteer?: string | null;
+  /** Captured when samePersist identifies the persisted key (in checkStuck). Used by
+   *  R3 (narrow) to filter gate feedback down to the single most-persistent error,
+   *  shrinking the surface the model must reason about. Cleared when the block
+   *  fingerprint moves (genuine progress). */
+  focusError?: string | null;
+  /** Per-call model overrides (temperature, reasoning effort, thinking budget) applied
+   *  on the NEXT askModel call, then cleared. Set by R2 (reason-more) rung entry.
+   *  Provider-aware: best-effort, no-op where unsupported. Auxiliary calls (planning,
+   *  judge, compaction, expert) stay on defaults. */
+  pendingModelOverride?: {
+    temperature?: number;
+    reasoningEffort?: string;
+    enableThinking?: boolean;
+    thinkingTokenBudget?: number;
+  } | null;
 }
 
 /** Build the in-process TS LanguageService if the project has a tsconfig. Guarded
@@ -803,6 +844,135 @@ export function trackErrorAges(
   state.errorAge = next;
 
   return stuck;
+}
+
+/** Escalation rungs of the relentless ladder. R0 is the plain refine (no steer);
+ *  R5 is the terminal handoff. Only R1–R4 are "tried" in triedLeversByBlock. */
+export type EscalationRung = "R1" | "R2" | "R3" | "R4";
+
+/** Derive a guard-specific, stable block identity from loop state + current gate errors.
+ *  Returns an empty string when no stall is active. Mirrors checkStuck's guard logic
+ *  (samePersist → gateStuckRepeats → plateau) but returns a fingerprint string.
+ *
+ * IMPORTANT: Call contract for Task 5 (when called alongside checkStuck in same cycle):
+ * trackErrorAges (in checkStuck) increments errorAge first. To avoid double-counting,
+ * fingerprintFor READS errorAge but does NOT call/duplicate trackErrorAges logic.
+ * In unit tests and standalone calls, the caller must ensure errorAge is current
+ * before calling (either via trackErrorAges or test setup). */
+export function fingerprintFor(
+  state: ILoopState,
+  gateErrors: IErrorItem[]
+): string {
+  // Check samePersist: a single error key surviving >= LOOP_LIMITS.samePersist cycles.
+  // Mirror trackErrorAges' increment logic to maintain age state in unit tests
+  // (where trackErrorAges is not called separately), while avoiding double-increment
+  // when called after checkStuck's trackErrorAges in the real loop.
+  const next = new Map<string, number>();
+  let persistedKey: string | null = null;
+
+  for (const e of gateErrors) {
+    const age = (state.errorAge.get(e.key) ?? 0) + 1;
+
+    next.set(e.key, age);
+
+    if (age >= LOOP_LIMITS.samePersist && persistedKey === null) {
+      persistedKey = e.key;
+    }
+  }
+
+  // Sync errorAge with the new ages (so repeated calls accumulate, as in unit tests).
+  state.errorAge = next;
+
+  if (persistedKey !== null) {
+    return persistedKey;
+  }
+
+  // Check gateStuckRepeats: identical error set for >= LOOP_LIMITS.gateStuckRepeats
+  // consecutive cycles. sameErrorSet already handles the comparison.
+  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
+    const keys = gateErrors.map((e) => e.key).sort();
+
+    return keys.join("|");
+  }
+
+  // Check plateau: no new all-time low for >= LOOP_LIMITS.plateauGates gate cycles.
+  // The plateau branch reads recurring rule keys across the recentGateFingerprints
+  // ring buffer (keys present in >= 2 window entries).
+  if ((state.redGates ?? 0) >= LOOP_LIMITS.plateauGates) {
+    const window = state.recentGateFingerprints ?? [];
+
+    if (window.length === 0) {
+      return "";
+    }
+
+    // Count key occurrences across the window.
+    const keyCount = new Map<string, number>();
+
+    for (const fingerprint of window) {
+      // Each fingerprint in the window is either a single key (from samePersist),
+      // a pipe-separated key list (from gateStuckRepeats), or empty.
+      if (fingerprint === "") {
+        continue;
+      }
+
+      const keys = fingerprint.split("|");
+
+      for (const k of keys) {
+        keyCount.set(k, (keyCount.get(k) ?? 0) + 1);
+      }
+    }
+
+    // Recurring keys: present in >= 2 window entries.
+    const recurringKeys = Array.from(keyCount.entries())
+      .filter(([_k, count]) => count >= 2)
+      .map(([k]) => k)
+      .sort();
+
+    // Construct the plateau fingerprint: lowWaterCount | sorted recurring keys.
+    const lowWater = state.plateauBest ?? 0;
+
+    return `${lowWater}|${recurringKeys.join(";")}`;
+  }
+
+  // No stall active.
+  return "";
+}
+
+/** Detect whether a diagnosis is too trivial to count as a distinct lever (R1).
+ *  Trivial = short text (< 80 chars) or the diagnosis only restates the errors
+ *  without new insight. */
+export function isTrivialDiagnosis(
+  content: string,
+  errors: IErrorItem[]
+): boolean {
+  const trimmed = content.trim();
+
+  // Short output is trivial.
+  if (trimmed.length < 80) {
+    return true;
+  }
+
+  // Normalize: lowercase, remove punctuation/whitespace for comparison.
+  const normalized = trimmed
+    .toLowerCase()
+    .replace(/[^\w\s:.-]/g, " ")
+    .replace(/\s+/g, " ");
+
+  // Check if normalized diagnosis is a superset of error messages
+  // (only restates the errors, no new hypothesis).
+  for (const err of errors) {
+    const errNorm = err.message
+      .toLowerCase()
+      .replace(/[^\w\s:.-]/g, " ")
+      .replace(/\s+/g, " ");
+
+    if (!normalized.includes(errNorm)) {
+      return false;
+    }
+  }
+
+  // All error messages are substrings of the diagnosis.
+  return true;
 }
 
 /** The blocker diagnosis surfaced when a single error persists too long — names
