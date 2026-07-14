@@ -166,6 +166,41 @@ describe("checkStuck (the composed convergence guards)", () => {
     expect(result?.status).toBe(RUN_STATUS.stuck); // reached the expert-park
     expect(result?.detail).toContain("steering exhausted");
   });
+
+  test("plateau-only exhaustion hands off with a NON-EMPTY rungHistory keyed on the stable fingerprint", () => {
+    // Regression: the block fingerprint depends on redGates, which the plateau tracker
+    // mutates mid-cycle. When the fingerprint was computed twice per cycle (once before
+    // and once after that mutation), rungs were recorded under one key but the handoff
+    // looked them up under another → EMPTY rungHistory (broke the "seed what was tried"
+    // contract). This drives the plateau-ONLY path (rotating keys, so no fine guard fires
+    // and no single key recurs → the plateau fingerprint stays stable as `${low}|`) to
+    // ladder exhaustion and asserts the handoff carries the rungs that were actually
+    // applied, keyed on the same stable fingerprint (never empty, never "escalation-N").
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+    let result: ReturnType<typeof checkStuck> = null;
+
+    const bound = LOOP_LIMITS.plateauGates * (STEER_LADDER_MAX + 1) + 5;
+
+    for (let i = 0; i < bound && result?.status !== RUN_STATUS.stuck; i += 1) {
+      result = checkStuck(ctx, state, [err(`k${String(i)}:1`)], i + 1);
+    }
+
+    expect(result?.status).toBe(RUN_STATUS.stuck);
+    expect(result?.handoff).toBeDefined();
+    // The rungs actually climbed on this block must appear in the handoff.
+    expect((result?.handoff?.rungHistory ?? []).length).toBeGreaterThan(0);
+    // Keyed on the real (stable) fingerprint, not the old synthetic escalation-N value.
+    expect(result?.handoff?.block ?? "").not.toBe("");
+    expect(result?.handoff?.block ?? "").not.toContain("escalation-");
+    // resume seeds the SAME tried-levers a greenfield revisit relies on.
+    const resume = result?.handoff?.resume;
+    const resumeLevers =
+      resume !== undefined && "triedLevers" in resume ? resume.triedLevers : [];
+
+    expect(resumeLevers.length).toBeGreaterThan(0);
+  });
 });
 
 describe("autoFixStep", () => {
@@ -215,33 +250,41 @@ describe("autoFixStep", () => {
 });
 
 describe("relentless-loop escalation-ladder centerpiece (fixes A/B/C)", () => {
-  test("A: progress restarts the ladder (genuine block move → steerLevel reset to 0)", () => {
+  test("A: a NEW ALL-TIME LOW restarts the ladder; an equal-count error swap does NOT (oscillation-proof)", () => {
     const events: ILoopEvent[] = [];
     const ctx = makeCtx(events);
-    const state = freshState();
 
-    // Set up state at steerLevel=2 on block "a:1"
-    state.steerLevel = 2;
-    state.blockFingerprint = "a:1";
-    state.errorAge.set("a:1", LOOP_LIMITS.samePersist + 1);
-    state.triedLeversByBlock = new Map([["a:1", new Set(["R1"])]]);
+    // Progress is the OSCILLATION-PROOF signal: a new all-time-low error count — NOT a
+    // change in the fingerprint string. An equal-count error swap (fix a:1, break b:2)
+    // is oscillation; treating it as progress would let a flailing model reset the
+    // ladder every cycle and dodge escalation forever (the "150-turn" disease).
 
-    // Change to error "b:2" with persisted age, so new block is "b:2"
-    state.errorAge.set("b:2", LOOP_LIMITS.samePersist + 1);
+    // (1) Equal-count swap under an established plateau → HELD (not progress).
+    const osc = freshState();
 
-    // Call checkStuck: detects block moved, resets steerLevel to 0, then stall fires
-    checkStuck(ctx, state, [err("b:2")], 100);
+    osc.steerLevel = 2;
+    osc.blockFingerprint = "a:1";
+    osc.plateauBest = 1; // best-ever is already 1 error
+    osc.errorAge.set("b:2", LOOP_LIMITS.samePersist + 1);
+    checkStuck(ctx, osc, [err("b:2")], 100); // still ONE error → no new low
 
-    // Block moved to "b:2"
-    expect(state.blockFingerprint).toBe("b:2");
+    expect(osc.blockFingerprint).toBe("a:1"); // identity HELD — not a move
+    expect(osc.steerLevel).toBeGreaterThan(0); // ladder NOT reset to 0
 
-    // Ladder reset on block move, then stall incremented: steerLevel=0 then 1
-    expect(state.steerLevel).toBe(1);
+    // (2) A genuine new all-time low (fewer errors than ever seen) → ladder RESTARTS.
+    const prog = freshState();
 
-    // pendingRung and pendingBlockFingerprint cleared when block moved (before R1 re-set them)
-    // (We don't check pendingDiagnosisSteer or focusError as they're re-set by R1 logic)
-    expect(state.pendingRung).toBeNull();
-    expect(state.pendingBlockFingerprint).toBeNull();
+    prog.steerLevel = 2;
+    prog.blockFingerprint = "a:1";
+    prog.plateauBest = 3; // best-ever was 3 errors …
+    prog.pendingRung = "R2";
+    prog.pendingBlockFingerprint = "a:1";
+    checkStuck(ctx, prog, [err("x:1")], 101); // … now only 1 error → NEW LOW = progress
+
+    expect(prog.blockFingerprint).toBe(""); // block cleared on progress
+    expect(prog.steerLevel).toBe(0); // ladder restarted
+    expect(prog.pendingRung).toBeNull();
+    expect(prog.pendingBlockFingerprint).toBeNull();
   });
 
   test("B: R2 and R3 set pendingRung; recorded on next-gate unmoved", () => {
@@ -253,9 +296,12 @@ describe("relentless-loop escalation-ladder centerpiece (fixes A/B/C)", () => {
     // pendingRung, it's recorded into triedLeversByBlock when the next gate shows
     // the block unchanged.
 
-    // Set up state as if R2 was just applied on block "a:1"
+    // Set up state as if R2 was just applied on block "a:1". plateauBest=1 (== the open
+    // error count) so this cycle is NOT a new all-time low — i.e. the block is UNMOVED,
+    // which is exactly the "record the pending rung" case.
     state.steerLevel = 2;
     state.blockFingerprint = "a:1";
+    state.plateauBest = 1;
     state.pendingRung = "R2";
     state.pendingBlockFingerprint = "a:1";
     state.errorAge.set("a:1", LOOP_LIMITS.samePersist + 1); // persistent block
@@ -278,9 +324,12 @@ describe("relentless-loop escalation-ladder centerpiece (fixes A/B/C)", () => {
     const state = freshState();
 
     // Set up state at steerLevel=STEER_LADDER_MAX on a samePersist block "a:1"
-    // (when stall fires, steerLevel increments to STEER_LADDER_MAX+1 → terminal)
+    // (when stall fires, steerLevel increments to STEER_LADDER_MAX+1 → terminal).
+    // plateauBest=1 (== open error count) so this cycle is NOT a new low — the block is
+    // unmoved and the sticky identity "a:1" is held into the handoff.
     state.steerLevel = STEER_LADDER_MAX;
     state.blockFingerprint = "a:1";
+    state.plateauBest = 1;
     state.errorAge.set("a:1", LOOP_LIMITS.samePersist + 1); // will fire samePersist
     state.triedLeversByBlock = new Map([["a:1", new Set(["R1", "R2", "R3"])]]);
 

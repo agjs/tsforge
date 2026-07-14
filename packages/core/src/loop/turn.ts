@@ -888,10 +888,17 @@ export function fingerprintFor(
     return keys.join("|");
   }
 
-  // Check plateau: no new all-time low for >= LOOP_LIMITS.plateauGates gate cycles.
-  // The plateau branch reads recurring rule keys across the recentGateFingerprints
-  // ring buffer (keys present in >= 2 window entries).
-  if ((state.redGates ?? 0) >= LOOP_LIMITS.plateauGates) {
+  // Plateau / oscillation identity — the FALLBACK block identity for a run that is
+  // stuck without a single persisted key or a frozen set. It must fire for ANY active
+  // no-new-low streak (`redGates >= 1`), NOT only once `plateauGates` is crossed:
+  // once steering begins, escalations re-trip on the faster `steerRetrigger` cadence
+  // (which resets `redGates` before it reaches `plateauGates`), so gating on the higher
+  // threshold left the identity empty at the exact cycles rungs are applied — rungs then
+  // recorded under "" and never accumulated. `redGates` is 0 (and the window cleared)
+  // ONLY on genuine progress (a new all-time low), so this correctly returns "" when
+  // converging and a STABLE identity while stuck. The window gives recurring keys across
+  // the streak (keys present in >= 2 entries) so an A<->B oscillation resolves stably.
+  if ((state.redGates ?? 0) >= 1) {
     const window = state.recentGateFingerprints ?? [];
 
     if (window.length === 0) {
@@ -929,6 +936,31 @@ export function fingerprintFor(
 
   // No stall active.
   return "";
+}
+
+/** Push this cycle's sorted error-key set into the oscillation ring buffer that the
+ *  plateau branch of `fingerprintFor` reads. Without this the window is always empty
+ *  and the plateau branch returns "" — so an OSCILLATING block (rotating error sets,
+ *  the 150-turn-thrash case) would have no stable identity and never record rungs.
+ *  Capped at `noProgressCycles`; the window is what lets an A<->B oscillation resolve
+ *  to a STABLE plateau fingerprint (`${lowWater}|${recurring keys}`). */
+function pushGateFingerprint(
+  state: ILoopState,
+  gateErrors: IErrorItem[]
+): void {
+  const entry = gateErrors
+    .map((e) => e.key)
+    .sort()
+    .join("|");
+  const window = state.recentGateFingerprints ?? [];
+
+  window.push(entry);
+
+  if (window.length > LOOP_LIMITS.noProgressCycles) {
+    window.shift();
+  }
+
+  state.recentGateFingerprints = window;
 }
 
 /** The blocker diagnosis surfaced when a single error persists too long — names
@@ -1130,10 +1162,15 @@ export async function tryExpertRescue(
     return false;
   };
 
-  // Novelty gate: compute the current block fingerprint and check if R4 is already
-  // recorded for this block. If so, the expert has already tried and failed on this
-  // exact block; escalate to R5 instead.
-  const block = fingerprintFor(state, gateErrors);
+  // Novelty gate: prefer the STICKY block identity (the same key checkStuck records rungs
+  // under) so the R4 gate is consistent with recording; fall back to a momentary
+  // derivation only when no sticky identity exists (nothing has been recorded then, so
+  // there's no inconsistency). If R4 is already recorded for this block, the expert has
+  // already tried and failed on this exact block; escalate to R5 instead.
+  const block =
+    (state.blockFingerprint ?? "") !== ""
+      ? (state.blockFingerprint ?? "")
+      : fingerprintFor(state, gateErrors);
 
   if (block === "") {
     return skip("no block fingerprint computed");
@@ -1340,48 +1377,64 @@ export function checkStuck(
   // on each escalation (below) so escalations stay spaced, but it climbs right back under
   // oscillation because no new all-time low arrives — driving the ladder to the expert in
   // a handful of gates instead of ~150 turns (observed live: v8 still L2 at turn 153).
-  if (gateErrors.length < (state.plateauBest ?? Number.POSITIVE_INFINITY)) {
+  // Genuine progress this cycle = a new ALL-TIME low error count. This — NOT a change in
+  // the momentary fingerprint string — is the only signal that the block truly moved.
+  const madeNewLow =
+    gateErrors.length < (state.plateauBest ?? Number.POSITIVE_INFINITY);
+
+  if (madeNewLow) {
     state.plateauBest = gateErrors.length;
     state.redGates = 0;
+    // Genuine progress — the oscillation history is stale; clear the window so the
+    // plateau fingerprint reflects only the CURRENT stuck streak.
+    state.recentGateFingerprints = [];
   } else {
     state.redGates = (state.redGates ?? 0) + 1;
+    // No new low — feed the oscillation window so the plateau branch of fingerprintFor
+    // (computed just below) has a populated history to derive a stable block identity.
+    pushGateFingerprint(state, gateErrors);
   }
 
-  // CANONICAL FINGERPRINT: compute once per cycle, after all trackers settle.
-  // This is the same key used in triedLeversByBlock, so escalation records rungs on
-  // the correct block and handoff.rungHistory reflects what was actually tried.
-  const blockFp = fingerprintFor(state, gateErrors);
+  // Momentary derivation of the block identity from the guards. Its DERIVATION matures
+  // over a streak (plateau -> gateStuckRepeats -> samePersist), so we do NOT use it
+  // directly as the block key — see the sticky identity below.
+  const momentaryFp = fingerprintFor(state, gateErrors);
 
-  // PENDING RUNG RECORDING: at the start of each cycle, if a rung was applied on the
-  // previous cycle and the recomputed fingerprint is unchanged, record the rung as tried.
-  // If the block moved (progress), don't record — a new block naturally has no tried
-  // rungs and the ladder restarts at R1. Either way clear the pending pair.
-  if (state.pendingRung !== null && state.pendingRung !== undefined) {
-    if (blockFp !== "" && blockFp === state.pendingBlockFingerprint) {
-      // Block unmoved: lever failed — record the rung as tried for this block
-      state.triedLeversByBlock ??= new Map();
-      const tried = state.triedLeversByBlock.get(blockFp) ?? new Set();
-
-      tried.add(state.pendingRung);
-      state.triedLeversByBlock.set(blockFp, tried);
-    }
-
-    // Either way, clear the pending pair
-    state.pendingRung = null;
-    state.pendingBlockFingerprint = null;
-  }
-
-  // R3 narrow: clear focusError if the block has moved (genuine progress).
-  // The block moves when a new blockFingerprint is computed that differs from
-  // the current one. PROGRESS RESTARTS THE LADDER: when genuine block progress,
-  // reset steerLevel and all pending state so the next stall starts fresh at R1.
-  if (blockFp !== "" && blockFp !== (state.blockFingerprint ?? "")) {
-    // Block has moved — genuine progress. Reset the escalation ladder for the new block.
+  // STICKY BLOCK IDENTITY: a stuck streak keeps ONE identity for its whole life, even as
+  // the guard that derives the fingerprint changes. Only genuine progress (`madeNewLow`)
+  // moves the block; a derivation change must NOT read as progress or the ladder would
+  // reset mid-climb and never reach exhaustion (and rungs would record under a shifting
+  // key). This is the single key used for recording, the R4 novelty gate, and the handoff.
+  if (madeNewLow) {
+    // Block moved (or resolved) — reset the ladder so the next stall starts fresh at R1.
+    state.blockFingerprint = "";
     state.focusError = null;
     state.steerLevel = 0;
     state.pendingRung = null;
     state.pendingBlockFingerprint = null;
     state.pendingDiagnosisSteer = null;
+  } else if ((state.blockFingerprint ?? "") === "" && momentaryFp !== "") {
+    // Start of a stuck streak — adopt the first non-empty identity and HOLD it.
+    state.blockFingerprint = momentaryFp;
+  }
+
+  const block = state.blockFingerprint ?? "";
+
+  // PENDING RUNG RECORDING: if a rung was applied last cycle and the block is UNMOVED
+  // (same sticky identity), record it as tried — the lever failed. On progress the
+  // pending pair was already cleared above. Either way clear the pending pair.
+  if (state.pendingRung !== null && state.pendingRung !== undefined) {
+    if (block !== "" && block === state.pendingBlockFingerprint) {
+      state.triedLeversByBlock ??= new Map();
+
+      const tried = state.triedLeversByBlock.get(block) ?? new Set();
+
+      tried.add(state.pendingRung);
+      state.triedLeversByBlock.set(block, tried);
+    }
+
+    state.pendingRung = null;
+    state.pendingBlockFingerprint = null;
   }
 
   // Once steering has begun, the two coarse guards re-trip on a MUCH smaller window
@@ -1419,9 +1472,14 @@ export function checkStuck(
     return null;
   }
 
-  // Stalled. Use the canonical fingerprint (settled after all tracker updates) as the block key.
-  const block =
-    blockFp !== "" ? blockFp : `escalation-${String(state.steerLevel + 1)}`;
+  // Stalled. Ensure the sticky identity is set — adopt a stable fallback ONCE if the
+  // guards produced no fingerprint yet (held for the streak, so recording + handoff use
+  // one consistent key). `blockKey` is what rungs record under and the handoff reports.
+  if ((state.blockFingerprint ?? "") === "") {
+    state.blockFingerprint = `escalation-${String(state.steerLevel + 1)}`;
+  }
+
+  const blockKey = state.blockFingerprint ?? "";
 
   // R3 narrow: capture the single most-persistent error key for focusError filtering
   // (only when samePersist is the guard that fired).
@@ -1450,12 +1508,14 @@ export function checkStuck(
       `${reason} — steering exhausted after ${String(STEER_LADDER_MAX)} escalations`,
       "parked — ",
       finalSteer,
-      block
+      blockKey
     );
   }
 
-  // Set up rung-specific logic: R1 diagnosis-only, R2 model overrides, R3 narrow
-  applyRungLogic(state, state.steerLevel, gateErrors, reason, blockFp);
+  // Set up rung-specific logic: R1 diagnosis-only, R2 model overrides, R3 narrow.
+  // Pass the sticky block key so a rung's pendingBlockFingerprint matches what the
+  // recording hook will compare against next cycle.
+  applyRungLogic(state, state.steerLevel, gateErrors, reason, blockKey);
 
   // At the TOP rung (change-strategy), also RESET the conversation: the flailing
   // history anchors the model to the dead-end approach it's been repeating. Pruning
@@ -1471,9 +1531,8 @@ export function checkStuck(
     message: `⤴ steer L${String(state.steerLevel)}/${String(STEER_LADDER_MAX)}: ${reason}`,
   });
 
-  // Update blockFingerprint for the next cycle (used for focusError clearing check).
-  state.blockFingerprint = blockFp;
-
+  // blockFingerprint is the STICKY identity, already set above and held for the whole
+  // streak — do NOT overwrite it here with a momentary value.
   return null; // keep looping, with the steer injected this cycle
 }
 
