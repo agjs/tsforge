@@ -127,6 +127,14 @@ forever (expert resets guards at `turn.ts:1013`). Add to `ILoopState` (in `turn.
   still identity-tracked and can climb/record: `timeout:<normalized error>`,
   `degeneration:<task>`, `malformed-tool-call`, `readonly-spin:<lastGateBlock|no-gate>`.
 
+- **`pendingDiagnosisSteer: string | null`** — **R1 is two-phase and must NOT be
+  recorded on its diagnosis cycle.** The generic "record `pendingRung` if next gate
+  unmoved" rule would wrongly mark R1 tried after the diagnosis-only cycle (before the
+  model acts on its own diagnosis). So R1's first cycle is a diagnosis capture that
+  sets `pendingDiagnosisSteer` and does NOT set `pendingRung`; only the SECOND cycle
+  (act-on-diagnosis) sets `pendingRung = R1`, so R1 is recorded tried only if the
+  block is still unmoved after the model acted. See the R1 mechanic.
+
 **State-machine semantics (replaces the scalar-only `steerLevel`):** keep
 `steerLevel` as a **purely cosmetic** display/order index only — once
 `blockFingerprint` + `triedLeversByBlock` exist they are the **single source of
@@ -189,18 +197,21 @@ measure against the block signature, escalate only if the block didn't move):
 
 ### R1 mechanic (self-diagnose feeds forward) — concrete
 
-1. On the first stall at a block, inject the R1 steer (existing `buildSteerMessage(1)`
-   framing: "diagnose your loop; different approach").
-2. **Capture the assistant's diagnosis text** — a model response is atomic
-   (`IModelResponse` has `content` + `toolCalls` together, `inference.types.ts:33`),
-   so capture **`res.content` from the turn that follows the R1 steer.** If it is
-   non-trivial, feed it forward (step 3); if trivial/empty, mark R1 tried and escalate.
-3. On the NEXT cycle, set `pendingSteer` to a block that quotes it: *"Your own
-   diagnosis last cycle: «…». Act on that different approach now — do not repeat what
-   you already tried."* So the model's own words become the steering.
-4. **Failure mode** (weak/empty/circular diagnosis): if the captured text is trivial
-   (< N chars, or restates the error) or the block doesn't move, treat R1 as tried and
-   escalate to R2 — don't loop R1.
+R1 is **two-phase** and must NOT be recorded as tried on its diagnosis cycle (or it's
+marked failed before the model ever acts on its own diagnosis):
+
+1. **Phase A (diagnose):** on the first stall at a block, inject the R1 steer
+   (`buildSteerMessage(1)`: "diagnose your loop; different approach"). Set
+   `pendingDiagnosisSteer`; **do NOT set `pendingRung`** — this cycle is not recorded.
+2. **Capture the diagnosis** — a model response is atomic (`IModelResponse` has
+   `content` + `toolCalls`, `inference.types.ts:33`), so capture **`res.content` from
+   the turn that follows the R1 steer.** Trivial/empty (< N chars, or restates the
+   error) → mark R1 tried and escalate to R2 (skip Phase B).
+3. **Phase B (act):** next cycle, set `pendingSteer` to a block quoting it — *"Your
+   own diagnosis last cycle: «…». Act on that different approach now; don't repeat
+   what you tried."* — AND now set `pendingRung = R1`. So R1 is recorded tried only if
+   the block is still unmoved after the model *acted* on its diagnosis.
+4. Clear `pendingDiagnosisSteer` once Phase B runs (or on escalate).
 
 ### R3 "narrow" mechanic — concrete
 
@@ -209,8 +220,12 @@ model** down to the single most-persistent error (the `samePersist` key). `focus
 **lives in `ILoopState`** (a single key string, or null): set on R3 entry, **cleared
 the moment the block fingerprint moves**, and **consumed by `injectFeedback` AND the
 lower-level `gateFeedback` construction** (the filter must reach the actual feedback
-string handed to the model, not just the top-level inject). This shrinks the surface
-the model must reason about when a broad error list is causing thrash.
+string handed to the model, not just the top-level inject). Critically, `gateFeedback`
+renders regular `errors` and `metaViolations` **separately**
+(`feedback/feedback.ts:35/77`), so `focusError` must filter **BOTH arrays** — using a
+meta key `${file}:${ruleId}` for `IMetaRuleViolation` — or a persistent meta-rule
+can't be focused and the model still gets the full project-structure wall. This
+shrinks the surface the model must reason about when a broad error list is thrashing.
 
 ---
 
@@ -229,6 +244,15 @@ R5 handoff must replace old terminal fails at EVERY exit, not just `stuckResult`
 | Headless degeneration/cap | `run.ts:491/544` | Degeneration → **R5 handoff**; cap → **anomaly** backstop |
 | Headless read-only spin | `run.ts:501/529` (NO guard today) | **ADD** the interactive read-only guard, then escalate/R5 |
 
+**Non-gate exits need their own settle/record path.** The generic "record `pendingRung`
+in `settleGate` when the next gate is unmoved" rule assumes a next gate — but timeout,
+degeneration, malformed-tool-call, and read-only spin **do not necessarily reach one**,
+so `pendingRung` would never be recorded and the block couldn't climb or hand off.
+Add a shared **`settleSyntheticBlock(state, syntheticFingerprint)`** that mirrors
+`settleGate`'s record-and-escalate for these exits: compute the synthetic fingerprint,
+record the tried lever if unchanged, pick the next rung or R5. Every exit above routes
+through either `settleGate` (has errors) or `settleSyntheticBlock` (no errors).
+
 ---
 
 ## `IRunResult` + handoff shape
@@ -243,8 +267,17 @@ handoff?: {
   errors: string[];          // the persisting error keys/messages
   ask: string;               // what a human / stronger model / more context is needed for
   resumable: true;
+  // Machine state to resume WITHOUT re-firing the same levers. `rungHistory` is for
+  // humans; this is for the loop. Either the serialized tried-levers for the final
+  // block, or a ref to the checkpoint that holds full ILoopState.
+  resume: { triedLevers: Rung[] } | { checkpointRef: string };
 }
 ```
+
+The `resume` field is what closes the greenfield revisit loop — `rungHistory`/`errors`
+are human-facing; **`resume` is the machine state a second pass seeds** so it doesn't
+re-run the same levers from scratch. Without it, `IHandoff` can't fulfill the
+greenfield "seed saved `triedLeversByBlock`" promise.
 
 Keep `status: "stuck"` (a handoff is a kind of stuck), but a handoff is distinguished
 by `handoff !== undefined`. Add `STUCK_REASON.handoff` alongside `.stalled`/`.cap`
@@ -286,6 +319,13 @@ a clear owner and is unit-testable, not free-form.
    repurpose `interactiveBackstopTurns:250`/`webMaxTurns:400` as the backstop. Loop
    CONDITION change in `driveInner`/`run.ts:433`: normal terminal is ladder-exhaustion;
    the `for`-bound remains only as the crash-guard. Add checkpoint emission.
+   **Public-surface compatibility (decide explicitly):** `maxTurns` is exposed on the
+   CLI (`cli/args.ts:85`, forwarded `cli.ts:117`), the recipe schema
+   (`config/recipes.ts:37`), and run options (`loop.types.ts:144`) — where it behaves
+   as a hard task cap today. **Decision: a user-supplied `maxTurns` maps to
+   `runawayBackstopTurns` (the crash-guard), NOT a task cap**, so old recipes stop
+   silently limiting tasks; document the semantics change and keep the name (alias) to
+   avoid breaking configs. `checkpointIntervalTurns` is a separate new option.
 7. **Greenfield parked state (an API change, not a constant deletion)** — `greenfield/`:
    - **`IGreenfieldDeps.implement` must change signature** — it returns
      `Promise<void>` today (`greenfield/run.ts`), so the driver CANNOT see the inner
@@ -392,6 +432,12 @@ Beyond `blockFingerprint` + `triedLeversByBlock`, the mechanics above need:
 
 - **`pendingRung` + `pendingBlockFingerprint`** — cross-gate memory of the lever just
   tested, so "record after next gate unchanged" is implementable.
+- **`pendingDiagnosisSteer`** — R1's two-phase marker; R1 is recorded tried only after
+  the act-on-diagnosis cycle, never the diagnosis-only cycle.
+- **`settleSyntheticBlock(...)`** — the record-and-escalate path for non-gate exits
+  (they never reach a next gate, so `settleGate`'s recording can't fire for them).
+- **`IHandoff.resume`** — serialized tried-levers / checkpoint ref, so a greenfield
+  revisit seeds machine state instead of re-running fresh.
 - **`recentGateFingerprints`** (oscillation-window ring buffer) — the plateau branch
   of `fingerprintFor` can't be computed without it.
 - **Synthetic terminal fingerprints** — `timeout:…`, `degeneration:…`,
@@ -421,5 +467,7 @@ Full `bun run validate` green between each; each step independently testable.
 ## Out of scope (separate passes)
 
 - Runtime e2e smoke tier (`TSFORGE_SMOKE`).
-- BoringStack-specific wiring.
+- BoringStack **domain behavior** (its generators/gate). NOTE: the structural
+  `host.send` signature change (so the driver sees the inner handoff, `build.ts:243`)
+  IS in scope — step 7 requires it; only domain logic is out.
 - Model-capability / first-shot prompting improvements (complementary, separate).
