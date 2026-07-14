@@ -171,8 +171,13 @@ and the ladder restarts naturally. This is the single place "tried" is written.
 
 ### Types & concrete values (pin these — do not leave to the implementer)
 
-- **`Rung`** = string-literal union `"R0" | "R1" | "R2" | "R3" | "R4" | "R5"` (NOT the
-  numeric `steerLevel`). Mapping from today: L1→R1, L2→R2, L3→R3, expert→R4, park→R5.
+- **Two distinct types** (NOT the numeric `steerLevel`): **`EscalationRung = "R1" |
+  "R2" | "R3" | "R4"`** — the levers, and the ONLY thing stored in `triedLeversByBlock`
+  and `rungHistory` / `pendingRung`. **R0** (plain refine, no steer) and **R5**
+  (terminal handoff) are NOT escalation rungs: R0 is the default no-lever state; R5 is
+  a terminal `status`, never "tried" or "picked." "Pick the lowest rung not yet tried"
+  ranges over `EscalationRung` only; when all four are tried → R5. Mapping from today:
+  L1→R1, L2→R2, L3→R3, expert→R4.
 - **`runawayBackstopTurns` = 1000** (headless + interactive + web all share it). Far
   above any real task (the old caps were 40/250/400); it exists ONLY to kill a
   zero-progress/zero-tool bug, and crossing it logs an anomaly. A user-supplied
@@ -242,11 +247,14 @@ R1 is **two-phase** and must NOT be recorded as tried on its diagnosis cycle (or
 marked failed before the model ever acts on its own diagnosis):
 
 1. **Phase A (diagnose — NO WRITES):** on the first stall, inject a diagnosis-only
-   steer AND set the model call to **`toolChoice: "none"`** (`inference.types.ts:64`)
-   so the model *cannot edit or call tools* on this cycle — it can only produce text.
-   (The current `buildSteerMessage(1)` says "diagnose THEN change"; Phase A uses a
-   diagnosis-only variant so no edit happens on the unrecorded cycle.) Set
-   `pendingDiagnosisSteer`; **do NOT set `pendingRung`** — this cycle is not recorded.
+   steer and make the call genuinely tool-less. **`toolChoice: "none"` alone is NOT
+   enough** — request building still sends the `tools` block (`request.ts:109`) and for
+   DeepSeek it suppresses `tool_choice` (`request.ts:113`), so the model could still
+   call a tool. Phase A needs a **no-tools call mode** that passes `tools: []`/
+   `undefined` (advertise no tools at all) in addition to `toolChoice: "none"`, so the
+   model can only produce text. (The current `buildSteerMessage(1)` says "diagnose THEN
+   change"; Phase A uses a diagnosis-only variant.) Set `pendingDiagnosisSteer`; **do
+   NOT set `pendingRung`** — this cycle is not recorded.
 2. **Capture the diagnosis** — a model response is atomic (`IModelResponse` has
    `content` + `toolCalls`, `inference.types.ts:33`), so capture **`res.content` from
    the turn that follows the R1 steer.** Trivial/empty (< N chars, or restates the
@@ -374,11 +382,13 @@ a clear owner and is unit-testable, not free-form.
    capture, **best-effort per provider, no-op where unsupported**, and **auxiliary
    calls (planning, judge, compaction, expert) stay on defaults**; R3 narrow
    (`injectFeedback` filter + `focusError`).
-6. **Heartbeat + backstop split** — `loop.constants.ts`: `maxTurns:40` →
-   `checkpointIntervalTurns` + a NEW high `runawayBackstopTurns` for headless;
-   repurpose `interactiveBackstopTurns:250`/`webMaxTurns:400` as the backstop. Loop
-   CONDITION change in `driveInner`/`run.ts:433`: normal terminal is ladder-exhaustion;
-   the `for`-bound remains only as the crash-guard. Add checkpoint emission.
+6. **Heartbeat + backstop split** — `loop.constants.ts`: introduce ONE shared
+   `runawayBackstopTurns = 1000` crash-guard for all paths, and `checkpointIntervalTurns
+   = 40` heartbeat. The three old caps collapse: `maxTurns:40` / `interactiveBackstopTurns:250`
+   / `webMaxTurns:400` are all REPLACED by the single `runawayBackstopTurns` (no more
+   three-way split — one number, clearly a crash-guard). Loop CONDITION change in
+   `driveInner`/`run.ts:433`: normal terminal is ladder-exhaustion; the `for`-bound
+   remains only as the crash-guard at `runawayBackstopTurns`. Add checkpoint emission.
    **Public-surface compatibility (decide explicitly):** `maxTurns` is exposed on the
    CLI (`cli/args.ts:85`, forwarded `cli.ts:117`), the recipe schema
    (`config/recipes.ts:37`), and run options (`loop.types.ts:144`) — where it behaves
@@ -395,8 +405,10 @@ a clear owner and is unit-testable, not free-form.
      re-running fresh). Both consumers ignore the inner result today and must be
      updated: CLI `greenfieldDeps.implement` → `runTask` (`cli.ts:594`) and
      BoringStack → `host.send` (`build.ts:243`).
-   - `IFeature`: add `status: "open" | "passing" | "parked"` + carry `handoff`.
-     Round-trip `lastError` + handoff in `state.ts`.
+   - `IFeature`: add `parked?: boolean` + `handoff?: IHandoff` (NOT a stored `status`
+     field — keep `passes` as truth; **derive** `open|passing|parked` in render/result
+     code from `passes`+`parked`). Round-trip `lastError`, `parked`, `handoff` in
+     `state.ts` (absent on old state → open/false, no migration).
    - `greenfield/run.ts`: consume the returned handoff to detect ladder exhaustion;
      delete `maxAttemptsPerFeature`; on exhaustion **park + skip**, so a wedged
      feature never blocks the rest. **Revisit = a simple two-pass:** after the main
@@ -498,15 +510,18 @@ Beyond `blockFingerprint` + `triedLeversByBlock`, the mechanics above need:
   (they never reach a next gate, so `settleGate`'s recording can't fire for them).
 - **`IHandoff.resume`** — serialized tried-levers / checkpoint ref, so a greenfield
   revisit seeds machine state instead of re-running fresh.
-- **`pendingModelOverride: { temperature?; reasoningEffort? } | null`** — R2's rung is
-  decided in `settleGate` but the provider call happens LATER; nowhere to stash "next
-  call only: hotter / reason-more" without this. Set on R2 entry, applied by the next
-  `askModel`/`runTask` call, cleared after that one call. Needed for BOTH Session and
-  headless. **Plumbing note:** `temperature` + `enableThinking` are ALREADY per-call
-  in `ICompleteOptions`; **`reasoningEffort` is NOT** — it lives only in
-  `IOpenAICompatibleConfig` (`inference.types.ts:146`). So "reason more" per-call
-  requires ADDING `reasoningEffort?` to `ICompleteOptions` and threading it through
-  `buildRequestBody` (`request.ts:71` currently reads only `cfg.reasoningEffort`).
+- **`pendingModelOverride: { temperature?; reasoningEffort?; enableThinking?;
+  thinkingTokenBudget? } | null`** — R2's rung is decided in `settleGate` but the
+  provider call happens LATER; nowhere to stash "next call only: hotter / reason-more"
+  without this. Set on R2 entry, applied by the next `askModel`/`runTask` call, cleared
+  after that one call. **Provider-aware "reason more" (both dialects):** Qwen-style
+  reasoning uses `enableThinking` + `thinkingTokenBudget` (already per-call in
+  `ICompleteOptions`); DeepSeek/OpenAI-style uses `reasoningEffort` which is config-only
+  today (`inference.types.ts:146`) → must be ADDED to `ICompleteOptions` + threaded
+  through `buildRequestBody` (`request.ts:71` reads only `cfg.reasoningEffort`).
+  `temperature` is already per-call. NOTE: on the LOCAL DeepSeek model, thinking is
+  pinned per-conversation, so reason-more largely no-ops there — self-diagnose (R1)
+  remains the reliable lever; reason-more is the bonus where the provider honors it.
 - **Handoff must PROPAGATE, not just exist on `IRunResult`** — `Session.send` returns
   `ISendResult` (`session.ts:120`) with only `{status, turns}`, and `settleTurn`
   (`session.ts:1651`) strips the richer result to those two; BoringStack's
