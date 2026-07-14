@@ -854,34 +854,28 @@ export type EscalationRung = "R1" | "R2" | "R3" | "R4";
  *  Returns an empty string when no stall is active. Mirrors checkStuck's guard logic
  *  (samePersist → gateStuckRepeats → plateau) but returns a fingerprint string.
  *
- * IMPORTANT: Call contract for Task 5 (when called alongside checkStuck in same cycle):
- * trackErrorAges (in checkStuck) increments errorAge first. To avoid double-counting,
- * fingerprintFor READS errorAge but does NOT call/duplicate trackErrorAges logic.
- * In unit tests and standalone calls, the caller must ensure errorAge is current
- * before calling (either via trackErrorAges or test setup). */
+ * PURE HELPER: reads state.errorAge but does NOT mutate it. The call contract
+ * is: checkStuck calls trackErrorAges (which increments ages) on the SAME cycle,
+ * THEN fingerprintFor reads those incremented ages. This avoids double-increment.
+ * In unit tests, seed state.errorAge directly or call trackErrorAges before
+ * fingerprintFor so ages are current. Fingerprint string is deterministic: given
+ * the same state and errors, always returns the same result. */
 export function fingerprintFor(
   state: ILoopState,
   gateErrors: IErrorItem[]
 ): string {
   // Check samePersist: a single error key surviving >= LOOP_LIMITS.samePersist cycles.
-  // Mirror trackErrorAges' increment logic to maintain age state in unit tests
-  // (where trackErrorAges is not called separately), while avoiding double-increment
-  // when called after checkStuck's trackErrorAges in the real loop.
-  const next = new Map<string, number>();
+  // READ the already-computed age (set by trackErrorAges this cycle) without re-incrementing.
+  // Mirrors checkStuck's logic: return the first error with age >= samePersist.
   let persistedKey: string | null = null;
 
   for (const e of gateErrors) {
-    const age = (state.errorAge.get(e.key) ?? 0) + 1;
-
-    next.set(e.key, age);
+    const age = state.errorAge.get(e.key) ?? 0;
 
     if (age >= LOOP_LIMITS.samePersist && persistedKey === null) {
       persistedKey = e.key;
     }
   }
-
-  // Sync errorAge with the new ages (so repeated calls accumulate, as in unit tests).
-  state.errorAge = next;
 
   if (persistedKey !== null) {
     return persistedKey;

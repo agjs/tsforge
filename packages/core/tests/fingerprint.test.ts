@@ -1,5 +1,9 @@
 import { test, expect, describe } from "bun:test";
-import { fingerprintFor, isTrivialDiagnosis } from "../src/loop/turn";
+import {
+  fingerprintFor,
+  isTrivialDiagnosis,
+  trackErrorAges,
+} from "../src/loop/turn";
 import type { ILoopState } from "../src/loop/turn";
 import type { IErrorItem } from "../src/validate";
 
@@ -50,16 +54,12 @@ describe("fingerprintFor", () => {
   });
 
   test("a single persisted key (samePersist) fingerprints to that key", () => {
-    const s = state();
+    const key = "src/x.ts:no-unsafe-argument";
+    const s = state({
+      errorAge: new Map([[key, 5]]), // Seed age directly: age 5 = threshold for samePersist
+    });
 
-    // drive errorAge so the key has survived samePersist cycles
-    for (let i = 0; i < 5; i += 1) {
-      fingerprintFor(s, [err("src/x.ts:no-unsafe-argument")]);
-    }
-
-    expect(fingerprintFor(s, [err("src/x.ts:no-unsafe-argument")])).toBe(
-      "src/x.ts:no-unsafe-argument"
-    );
+    expect(fingerprintFor(s, [err(key)])).toBe(key);
   });
 
   test("no active stall → empty string", () => {
@@ -78,6 +78,56 @@ describe("fingerprintFor", () => {
     const resolved = fingerprintFor(state({ bestErrorCount: 0 }), []);
 
     expect(resolved).not.toBe(stalled);
+  });
+
+  test("fingerprintFor is pure: calling twice with same inputs yields same result and no mutation", () => {
+    const key = "src/x.ts:rule-a";
+    const s = state({
+      errorAge: new Map([[key, 5]]),
+    });
+    const snapshot = new Map(s.errorAge); // Capture before
+
+    const fp1 = fingerprintFor(s, [err(key)]);
+    const fp2 = fingerprintFor(s, [err(key)]); // Call again with same inputs
+
+    // Same fingerprint both times
+    expect(fp1).toBe(fp2);
+    expect(fp1).toBe(key);
+
+    // errorAge unchanged (no mutation)
+    expect(s.errorAge).toEqual(snapshot);
+  });
+
+  test("trackErrorAges followed by fingerprintFor reads the incremented age without double-advancing", () => {
+    const key = "src/x.ts:rule-b";
+    const s = state();
+
+    // Seed initial age = 4 (one short of persistence threshold)
+    s.errorAge.set(key, 4);
+
+    // trackErrorAges increments age to 5
+    trackErrorAges(s, [err(key)]);
+
+    // fingerprintFor reads the age without incrementing further
+    const fp = fingerprintFor(s, [err(key)]);
+
+    // Fingerprint is the key (age 5 = threshold)
+    expect(fp).toBe(key);
+
+    // Age stays 5, not double-incremented to 6
+    expect(s.errorAge.get(key)).toBe(5);
+  });
+
+  test("samePersist below threshold does not yield a fingerprint", () => {
+    const key = "src/x.ts:rule-c";
+    const s = state({
+      errorAge: new Map([[key, 4]]), // Below threshold (5)
+    });
+
+    const fp = fingerprintFor(s, [err(key)]);
+
+    // No samePersist stall yet
+    expect(fp).toBe("");
   });
 });
 
