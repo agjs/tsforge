@@ -16,72 +16,82 @@ that's the bug — not a thing to patch per-mode.
 
 ## The problem (grounded)
 
-Today the loop is **fragmented across modes**, and the fragmentation caused every
-failure we hit this session:
+**The escalation ladder is NOT duplicated.** Both loop drivers — `runTask`
+(`loop/run.ts`, used by brownfield + greenfield) and `Session` (`loop/session.ts`,
+used by BoringStack) — call the SAME `settleGate` → `checkStuck` → `tryExpertRescue`
+primitives in `loop/turn.ts`. R1–R4 + R5 handoff live in exactly one place and both
+drivers funnel through it. So the fragmentation is NOT "two loops, one has the ladder."
 
-- **Brownfield `--accept`** (`cli.ts` `runOnce` → `runTask`): the gate is INSIDE the
-  loop. `settleGate` → `checkStuck` → escalate → expert → handoff all work. ✓
-- **Greenfield / BoringStack** (`loop/greenfield/run.ts`, `loop/boringstack/build.ts`):
-  the loop is SPLIT into two decoupled steps —
-  - `implement(feature)` runs the model, but for BoringStack the Session is created
-    with **no gate** (`headless-build.ts` `Session.create` has no `accept`), so
-    `checkStuck`/the escalation ladder **never run during the model's work**;
-  - `evaluate(feature)` runs the REAL gate (differential validate + judge + browser +
-    reachability) **separately, outside the loop**.
-  Because the real gate is outside the loop, the core loop is **blind** — it cannot see
-  the errors the model is stuck on, so escalation/handoff/recovery cannot fire. The
-  greenfield outer loop then retries `implement` **identically** until a crude backstop,
-  with no strategy change and (until a just-shipped stopgap) no expert.
+The fragmentation is narrower and more precise: **the REAL gate is decoupled from the
+loop.**
+
+- **Brownfield `--accept`** (`cli.ts` `runOnce` → `runTask`): the real gate (the
+  `--accept` command) IS the loop's gate. `settleGate` runs it every cycle, `checkStuck`
+  sees the errors, the ladder fires. ✓
+- **Greenfield / BoringStack** split the work into `implement(feature)` + a SEPARATE
+  `evaluate(feature)`:
+  - `implement` runs the model against a **gateless (or TS-only) gate** — BoringStack's
+    `Session` is created with `accept: ""` (`headless-build.ts`). An empty gate shells
+    `""` → exit 0 → `settleGate` sees "green" → **`checkStuck` has nothing to escalate
+    on.** The ladder is present in the loop but **blind**.
+  - `evaluate` then runs the AUTHORITATIVE gate (differential validate + judge +
+    reachability) **outside any loop**, as a one-shot verdict.
+  The greenfield outer loop retries `implement` **identically** on a fail, with the real
+  errors never reaching `checkStuck`. The escalation had to be faked at the greenfield
+  level (`escalateGuidance`, a bespoke `rescue`) — duplicating what the shared ladder
+  already does, but disconnected from it.
 
 **Consequences observed live:**
 - The BoringStack notes-app build ground on `sonarjs/no-duplicate-string` (13×) with
-  **zero escalations** — the ladder never saw lint errors (only a TS-only interim check
-  is inside the send; lint/meta/judge live in the outside gate).
+  **zero escalations** — the loop's gate was gateless/TS-only, so the ladder never saw
+  the lint errors (they lived in the outside `evaluate`).
 - A regression (Task 7 rewrite dropped `deps.rescue`) meant features parked **without
-  ever consulting the expert**.
-- Each fix so far has been a **per-mode band-aid** (e.g. `escalateGuidance` duplicating
-  the steer ladder at the greenfield level) — the opposite of unification.
+  ever consulting the expert** — because the expert (R4) lives in the shared ladder the
+  gateless loop never reached, and the greenfield-level copy had a hole.
+- Each fix so far has been a **per-mode band-aid** — the opposite of unification.
 
-Future scaffolds would inherit this fragmentation.
+**The fix, therefore, is not to merge the two drivers** (that would be a large, risky
+refactor and would lose Session's long-run features — auto-compaction, per-write lint,
+incremental check, adaptive thinking). The fix is to **feed the REAL gate into the ONE
+seam both drivers already share (`settleGate`)** so the ladder sees the real errors for
+every mode. Future scaffolds then inherit escalation for free.
 
 ---
 
 ## The unified architecture
 
-A **build unit** is the universal atom. Every mode produces units; every unit runs
-through the same core loop.
+**One seam, shared by both drivers: the composed gate, injected at `settleGate`.** The
+escalation ladder is already shared (both `runTask` and `Session` call `settleGate` →
+`checkStuck`). Make the gate `settleGate` runs an **injected, composable object** rather
+than a hardcoded `--accept` shell string, and give every mode its real composed gate.
+Both drivers inherit escalation on the real errors — automatically, in one change.
 
-```
-IBuildUnit {
-  id: string;
-  desc: string;
-  scope: string[];        // editable globs (freeze = drop from later units' scope)
-  gate: IGate;            // the composed "done" check for THIS unit (see below)
-  context?: string;       // planning/domain context injected into the prompt
-  seed?: { triedLevers: EscalationRung[] };  // for a revisit (resume, don't re-fire)
-}
-```
+What stays (deliberately — no gratuitous rewrite):
 
-Two — and only two — pluggable seams. Everything else is the shared loop.
+- **Both drivers stay.** `runTask` for brownfield/greenfield; `Session` for BoringStack
+  (it needs the long-run features). We do NOT merge them.
+- **The existing feature-checklist stays.** `IFeature[]` + `IGreenfieldDeps` +
+  `runGreenfield` already are the "list of units + per-unit driver" abstraction, and
+  BoringStack already reuses them. No new `IBuildUnit` type migration — the checklist IS
+  the unit list. A future scaffold produces the same checklist shape.
+- **Freeze-on-green and park-and-revisit stay** — they already work in `runGreenfield`.
 
-### Seam 1 — Planner: goal → units
+What changes:
 
-```
-IPlanner { plan(goal, cwd): Promise<IBuildUnit[]> }
-```
+- **The gate seam (the linchpin, below):** `settleGate`/`runGateStep` run an injected
+  `IGate`, defaulting to today's `--accept` command gate (brownfield unchanged).
+- **`implement` becomes a pre-step, `evaluate` dissolves into the gate.** The
+  deterministic scaffold work (BoringStack generators + wiring + first `db:push`) runs
+  ONCE before the model send, as a pre-step. The authoritative check that used to live
+  in `evaluate` (differential command + reachability + judge) becomes the **composed gate
+  injected into the send**, so it runs INSIDE the loop every cycle and the ladder sees it.
+- **The band-aids are deleted:** `escalateGuidance`, `EVAL_STALL_BACKSTOP`, and the
+  bespoke greenfield/boringstack `rescue` — the shared ladder (R1–R4 + R5 handoff) now
+  does all of it because the live gate is finally inside the loop.
 
-- **Brownfield:** ONE unit — scope = `--files`/repo, gate = the `--accept` command,
-  desc = the task. (This is literally today's `runOnce`, expressed as a 1-unit plan.)
-- **Greenfield:** N units, one per feature from the checklist planner.
-- **BoringStack:** N units, one per resource from the approved `IProductPlan` slices;
-  the deterministic generators + wiring run as a **pre-step** of the unit's build (not a
-  separate phase), then the model fills the domain within the loop.
-- **Future scaffold:** implements `IPlanner`. Nothing else.
+### The gate seam (the linchpin)
 
-### Seam 2 — Gate: a composed, staged check that runs INSIDE the loop
-
-The core-loop change that makes this possible: **generalize the loop's gate from an
-`accept` shell string to an injected gate object.**
+**Generalize the loop's gate from an `accept` shell string to an injected gate object.**
 
 ```
 IGate { run(cwd): Promise<{ passed: boolean; errors: IErrorItem[]; output: string }> }
@@ -143,40 +153,40 @@ starts) work without special-casing. `requireRed` becomes uniformly true and the
 stages pass — the unit is already done: skip it, no loop needed. The driver's
 `if unit.passes: continue` handles that.)
 
-### The shared core loop (unchanged in spirit, now universal)
+### How each mode injects its gate (the whole change, per mode)
 
-For each unit: `runTask(task = { scope: unit.scope, gate: unit.gate, context }, opts)`.
-Inside, the existing machinery runs for every mode:
-`turn → settleGate(gate.run) → checkStuck (fingerprint + progress guards) →
-escalate R1→R2→R3 → expert R4 → R5 structured handoff → checkpoint`, plus the
-read-only-spin guard and the runaway backstop.
+The shared machinery is untouched: `turn → settleGate(gate.run) → checkStuck
+(fingerprint + progress guards) → escalate R1→R3 → expert R4 → R5 handoff → checkpoint`,
+plus the read-only-spin guard and runaway backstop. Only the gate handed in differs.
 
-### The thin outer driver (across units) — replaces greenfield/boringstack run loops
+- **Brownfield** (`runTask`): default `IGate` = the `--accept` command gate. Unchanged
+  behavior — this is the regression anchor.
+- **Greenfield** (`runTask` via `greenfieldDeps.implement`): pass the composed gate
+  (command + browser + judge) as `opts.gate`; drop `requireRed: false`; delete the
+  separate `evaluate` call — the gate now runs inside the send.
+- **BoringStack** (`Session` via `boringstackDeps.implement`): create the Session WITH
+  the composed gate (command+differential + reachability + judge) instead of gateless;
+  `implement` keeps only its deterministic pre-step (generators + wiring + first
+  `db:push`), then the send; delete the separate `evaluate`. The per-cycle autofix +
+  `db:push` move INTO the command stage (what a dev's save+gate does).
 
-```
-for each unit (planner order):
-  if unit.passes: continue
-  result = runTask(unit)                    // the CORE loop — escalation/handoff inside
-  if result.done: freeze(unit.scope); continue
-  if result.handoff: park(unit, result.handoff)   // handoff comes FROM the core loop
-one revisit pass over parked units, seeded with handoff.resume
-report done / stuck(parked)
-```
-
-Freeze-on-green and park-and-revisit stay (they're good), but **park/handoff now come
-from the core loop's R5**, not a bolted-on greenfield mechanism.
+`runGreenfield`'s outer loop (checklist, freeze-on-green, park-on-handoff, revisit)
+stays as-is — it already does the right thing. The only change there is deleting the
+band-aids: `implement` returns the ladder's handoff (as it already can), and a
+non-passing feature parks on that handoff. **Park/handoff now come entirely from the
+shared ladder's R5** — `evaluate`, `escalateGuidance`, and `EVAL_STALL_BACKSTOP` are gone.
 
 ---
 
 ## What this DELETES (fragmentation removed)
 
-- `escalateGuidance` (greenfield band-aid) — the core steer ladder replaces it.
-- The gateless BoringStack `Session` — the Session gets the composed `IGate`.
-- The separate `evaluate` step and `IGreenfieldDeps.implement/evaluate` split — folded
-  into one `runTask(unit)` whose gate is the composed gate.
+- `escalateGuidance` (greenfield band-aid) — the shared steer ladder replaces it.
+- The gateless BoringStack `Session` creation — the Session gets the composed gate.
+- The separate `evaluate` step — its checks become the composed gate's stages, run inside
+  the loop. `IGreenfieldDeps.evaluate` is removed; `implement` keeps only its pre-step.
 - Greenfield's ad-hoc stall/backstop (`EVAL_STALL_BACKSTOP`, unchanged-rejection park) —
-  the core progress guards + R5 handoff replace them.
-- The bespoke greenfield `rescue` wiring — expert is R4 in the core ladder.
+  the shared progress guards + R5 handoff replace them.
+- The bespoke greenfield/boringstack `rescue` wiring — expert is R4 in the shared ladder.
 - The `requireRed: false` crutch — the composed gate (judge/reachability stages) is RED
   until the feature is real, so RED-first holds for every mode with no per-mode flag.
 
@@ -186,10 +196,11 @@ from the core loop's R5**, not a bolted-on greenfield mechanism.
 
 The harness is in heavy development and **not yet in real use** — so there is **no
 backwards-compatibility obligation**. Make the clean, best design and **delete superseded
-code freely** (the old greenfield/boringstack split, `escalateGuidance`, the gateless
-Session, bespoke backstops). Do NOT add compat shims or preserve old shapes for their own
-sake. "Simple runs keep working" means the brownfield path still *functions*, not that it
-must be byte-identical — reshape it into a clean 1-unit plan if that's cleaner.
+code freely** (the `implement`/`evaluate` split, `escalateGuidance`, the gateless Session
+creation, bespoke backstops). Do NOT add compat shims or preserve old shapes for their own
+sake. The one thing that MUST stay behavior-identical is the brownfield `--accept` path
+(the default command gate) — it is the regression anchor that proves the gate seam didn't
+change existing behavior. Everything else is free to be reshaped for the clean design.
 
 ## Migration & risks
 
