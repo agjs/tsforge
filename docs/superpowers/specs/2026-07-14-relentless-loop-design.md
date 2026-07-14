@@ -172,9 +172,10 @@ measure against the block signature, escalate only if the block didn't move):
 
 1. On the first stall at a block, inject the R1 steer (existing `buildSteerMessage(1)`
    framing: "diagnose your loop; different approach").
-2. **Capture the assistant's diagnosis text** — specifically the **first assistant
-   message that follows the R1-injected user steer in that same turn, before any
-   tool calls or the next steer.** That message is the diagnosis.
+2. **Capture the assistant's diagnosis text** — specifically the **assistant response
+   produced on the model turn that follows the R1-injected user steer** (the first
+   assistant message of that next turn, before it makes any tool calls). That message
+   is the diagnosis.
 3. On the NEXT cycle, set `pendingSteer` to a block that quotes it: *"Your own
    diagnosis last cycle: «…». Act on that different approach now — do not repeat what
    you already tried."* So the model's own words become the steering.
