@@ -14,7 +14,7 @@ import type {
   IGreenfieldDeps,
   IFeature,
 } from "../src/loop/greenfield";
-import type { EscalationRung } from "../src/loop/loop.types";
+import type { IHandoff } from "../src/loop/loop.types";
 
 function feature(id: string, passes = false): IFeature {
   return { id, desc: `do ${id}`, passes, attempts: 0 };
@@ -126,13 +126,13 @@ describe("runGreenfield: outer loop", () => {
   test("implement returns handoff → feature parks, then revisit", async () => {
     const s = state("a");
     let calls = 0;
-    const handoff = {
+    const handoff: IHandoff = {
       block: "a",
-      rungHistory: [] as EscalationRung[],
+      rungHistory: [],
       errors: ["stuck"],
       ask: "help",
-      resumable: true as const,
-      resume: { triedLevers: [] as EscalationRung[] },
+      resumable: true,
+      resume: { triedLevers: [] },
     };
     const deps: IGreenfieldDeps = {
       implement: async () => {
@@ -172,10 +172,10 @@ describe("runGreenfield: outer loop", () => {
 
   test("a parked feature gets revisited with seeded tried-levers", async () => {
     const s = state("a");
-    const seedsReceived: Array<{
+    const seedsReceived: {
       id: string;
       seed?: { triedLevers: string[] };
-    }> = [];
+    }[] = [];
 
     const deps: IGreenfieldDeps = {
       implement: async (f, _, seed) => {

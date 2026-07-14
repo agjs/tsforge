@@ -98,6 +98,9 @@ describe("boringstackDeps.implement", () => {
     expect(uiCalls[0]?.name).toBe("Invoice");
     expect(host.scopes.length).toBe(1);
     expect(host.scopes[0]).toContain("apps/api/src/api/invoice/**");
+    // The composed per-feature gate is injected into the session BEFORE the send —
+    // this is the whole unification: the real gate now runs INSIDE the loop.
+    expect(host.gates.length).toBe(1);
     expect(host.sent.length).toBe(1);
     expect(host.sent[0]).toContain("Invoice");
   });
@@ -182,7 +185,6 @@ describe("scopeFor", () => {
     expect(scope).toContain(LOCALE_GLOB);
   });
 });
-
 
 describe("rescueFileFor", () => {
   let dir: string;

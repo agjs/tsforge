@@ -93,10 +93,7 @@ export async function runGreenfield(
 
       const seed = feature.handoff?.resume
         ? "triedLevers" in feature.handoff.resume
-          ? {
-              triedLevers: feature.handoff.resume
-                .triedLevers as EscalationRung[],
-            }
+          ? { triedLevers: feature.handoff.resume.triedLevers }
           : undefined
         : undefined;
 
