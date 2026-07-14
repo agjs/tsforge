@@ -86,9 +86,12 @@ Uncapping a lever without knowing *which block already got it* re-triggers it
 forever (expert resets guards at `turn.ts:1013`). Add to `ILoopState` (in `turn.ts`):
 
 - **`blockFingerprint: string`** — canonical identity of the current stuck block,
-  **guard-specific** (NOT the raw error set — `sameErrorSet`, `validate/errors.ts:26`,
-  treats a lateral rotation as "moved", but `plateauGates` exists because rotation is
-  often non-progress). Derived from the guard that fired:
+  **guard-specific** (NOT the raw error set). `sameErrorSet` (`validate/errors.ts:26`)
+  returns true only for an *identical* key set (order-insensitive) — so an A↔B
+  oscillation (the set alternating between two different key sets) reads as "moved"
+  every cycle even though it's not progress; that's exactly why `plateauGates` exists.
+  A raw-set fingerprint would therefore look novel during oscillation. Derive it from
+  the guard that fired:
 
   ```
   fingerprintFor(state): string
@@ -200,8 +203,11 @@ measure against the block signature, escalate only if the block didn't move):
 R1 is **two-phase** and must NOT be recorded as tried on its diagnosis cycle (or it's
 marked failed before the model ever acts on its own diagnosis):
 
-1. **Phase A (diagnose):** on the first stall at a block, inject the R1 steer
-   (`buildSteerMessage(1)`: "diagnose your loop; different approach"). Set
+1. **Phase A (diagnose — NO WRITES):** on the first stall, inject a diagnosis-only
+   steer AND set the model call to **`toolChoice: "none"`** (`inference.types.ts:64`)
+   so the model *cannot edit or call tools* on this cycle — it can only produce text.
+   (The current `buildSteerMessage(1)` says "diagnose THEN change"; Phase A uses a
+   diagnosis-only variant so no edit happens on the unrecorded cycle.) Set
    `pendingDiagnosisSteer`; **do NOT set `pendingRung`** — this cycle is not recorded.
 2. **Capture the diagnosis** — a model response is atomic (`IModelResponse` has
    `content` + `toolCalls`, `inference.types.ts:33`), so capture **`res.content` from
@@ -217,8 +223,11 @@ marked failed before the model ever acts on its own diagnosis):
 
 Not just stronger wording. For the R3 cycle, **filter the gate feedback shown to the
 model** down to the single most-persistent error (the `samePersist` key). `focusError`
-**lives in `ILoopState`** (a single key string, or null): set on R3 entry, **cleared
-the moment the block fingerprint moves**, and **consumed by `injectFeedback` AND the
+**lives in `ILoopState`** (a single key string, or null): it must be **captured when
+`samePersist` identifies the persisted key in `checkStuck` (turn.ts:1053-1100) and
+stored ALONGSIDE the fingerprint — NOT derived from it** (a plateau/gateStuckRepeats
+fingerprint doesn't contain a single key). Set on R3 entry, **cleared the moment the
+block fingerprint moves**, and **consumed by `injectFeedback` AND the
 lower-level `gateFeedback` construction** (the filter must reach the actual feedback
 string handed to the model, not just the top-level inject). Critically, `gateFeedback`
 renders regular `errors` and `metaViolations` **separately**
@@ -248,10 +257,17 @@ R5 handoff must replace old terminal fails at EVERY exit, not just `stuckResult`
 in `settleGate` when the next gate is unmoved" rule assumes a next gate — but timeout,
 degeneration, malformed-tool-call, and read-only spin **do not necessarily reach one**,
 so `pendingRung` would never be recorded and the block couldn't climb or hand off.
-Add a shared **`settleSyntheticBlock(state, syntheticFingerprint)`** that mirrors
-`settleGate`'s record-and-escalate for these exits: compute the synthetic fingerprint,
-record the tried lever if unchanged, pick the next rung or R5. Every exit above routes
-through either `settleGate` (has errors) or `settleSyntheticBlock` (no errors).
+Add a shared **`settleSyntheticBlock(ctx, state, syntheticFingerprint, exitKind): IRunResult | null`**
+(same shape/return contract as `settleGate` — it needs `ctx` to emit events + push a
+steer into messages, and returns a terminal `IRunResult` or `null` to continue). It is
+NOT state-only. **Policy (decided):** synthetic blocks do NOT climb the full R1–R4
+ladder — those levers assume a fixable gate error set, which a timeout/degeneration
+doesn't have. Instead each synthetic exit has a **small built-in recovery budget**
+(e.g. read-only-spin: one "you keep reading — act now" nudge; timeout: one retry);
+`settleSyntheticBlock` records the synthetic block, spends a recovery, and once the
+budget is spent for that fingerprint → **direct R5 handoff.** Every exit routes through
+either `settleGate` (has errors → full ladder) or `settleSyntheticBlock` (no errors →
+recovery-budget-then-R5).
 
 ---
 
@@ -261,7 +277,8 @@ through either `settleGate` (has errors) or `settleSyntheticBlock` (no errors).
 detail/edits/regressions`. Add:
 
 ```ts
-handoff?: {
+// Named interface (I* convention), referenced as IHandoff elsewhere in this doc:
+interface IHandoff {
   block: string;              // the surviving blockFingerprint
   rungHistory: Rung[];        // ordered levers tried on the final block
   errors: string[];          // the persisting error keys/messages
@@ -272,6 +289,7 @@ handoff?: {
   // block, or a ref to the checkpoint that holds full ILoopState.
   resume: { triedLevers: Rung[] } | { checkpointRef: string };
 }
+// IRunResult gains:  handoff?: IHandoff
 ```
 
 The `resume` field is what closes the greenfield revisit loop — `rungHistory`/`errors`
@@ -438,6 +456,22 @@ Beyond `blockFingerprint` + `triedLeversByBlock`, the mechanics above need:
   (they never reach a next gate, so `settleGate`'s recording can't fire for them).
 - **`IHandoff.resume`** — serialized tried-levers / checkpoint ref, so a greenfield
   revisit seeds machine state instead of re-running fresh.
+- **`pendingModelOverride: { temperature?; reasoningEffort? } | null`** — R2's rung is
+  decided in `settleGate` but the provider call happens LATER; nowhere to stash "next
+  call only: hotter / reason-more" without this. Set on R2 entry, applied by the next
+  `askModel`/`runTask` call, cleared after that one call. Needed for BOTH Session and
+  headless. **Plumbing note:** `temperature` + `enableThinking` are ALREADY per-call
+  in `ICompleteOptions`; **`reasoningEffort` is NOT** — it lives only in
+  `IOpenAICompatibleConfig` (`inference.types.ts:146`). So "reason more" per-call
+  requires ADDING `reasoningEffort?` to `ICompleteOptions` and threading it through
+  `buildRequestBody` (`request.ts:71` currently reads only `cfg.reasoningEffort`).
+- **Handoff must PROPAGATE, not just exist on `IRunResult`** — `Session.send` returns
+  `ISendResult` (`session.ts:120`) with only `{status, turns}`, and `settleTurn`
+  (`session.ts:1651`) strips the richer result to those two; BoringStack's
+  `IBoringstackHost.send` (`build.ts:185`) also returns only `{status, turns}`. So
+  `handoff` must be ADDED to `ISendResult`, threaded through `settleTurn`, added to
+  `IBoringstackHost.send`, and (for the typed "rich event") added to `ILoopEvent`
+  (`loop.types.ts:10`) — otherwise step 7 still can't see the inner handoff.
 - **`recentGateFingerprints`** (oscillation-window ring buffer) — the plateau branch
   of `fingerprintFor` can't be computed without it.
 - **Synthetic terminal fingerprints** — `timeout:…`, `degeneration:…`,
