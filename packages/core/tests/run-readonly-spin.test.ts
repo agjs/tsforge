@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask, LOOP_LIMITS } from "../src/loop";
 import { STUCK_REASON } from "../src/loop/loop.constants";
+import type { ILoopEvent } from "../src/loop/loop.types";
 import { scripted, runStep, createStep, STOP } from "./stub-provider";
 
 async function tmp(): Promise<string> {
@@ -72,6 +73,45 @@ test("read-only-spin: resets streak when a tool call touches an editable file", 
     // Instead, it either hits the backstop or the normal stalled guard.
     expect(r.status).toBe("stuck");
     expect(r.reason).not.toBe(STUCK_REASON.readonlySpin);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("heartbeat: emits EXACTLY ONE checkpoint event per interval (no duplicate)", async () => {
+  const dir = await tmp();
+
+  try {
+    // Read-only turns with a small checkpointIntervalTurns=3: the heartbeat must
+    // fire ONCE per interval (turns 3, 6, 9, …) until a stall guard ends the run.
+    // The bug this guards is a DUPLICATE emission — two identical blocks firing the
+    // same checkpoint twice per interval (e.g. [3, 3, 6, 6]). We assert the emitted
+    // turns are all on-cadence and contain NO repeats, independent of exactly when
+    // the run stops.
+    const steps = Array.from({ length: 7 }, () => runStep("cat /dev/null"));
+    const events: ILoopEvent[] = [];
+    const provider = scripted([...steps, STOP]);
+
+    await runTask(
+      { id: "1", accept: "test -f never.txt", files: ["**/*"] },
+      dir,
+      provider,
+      { checkpointIntervalTurns: 3, onEvent: (e) => events.push(e) }
+    );
+
+    const checkpointTurns = events
+      .filter((e) => e.kind === "checkpoint")
+      .map((e) => e.cycle);
+
+    // At least one interval elapsed.
+    expect(checkpointTurns.length).toBeGreaterThan(0);
+    // No duplicates — a double-emission would repeat a turn value.
+    expect(new Set(checkpointTurns).size).toBe(checkpointTurns.length);
+
+    // Every checkpoint lands exactly on the interval cadence.
+    for (const turn of checkpointTurns) {
+      expect(turn === undefined ? -1 : turn % 3).toBe(0);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

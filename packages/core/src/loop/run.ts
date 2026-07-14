@@ -686,17 +686,6 @@ async function runMainLoop(args: {
         kind: "checkpoint",
         task: args.taskId,
         cycle: turn,
-        message: `checkpoint: turn ${turn}`,
-      });
-    }
-
-    // Heartbeat: emit a checkpoint progress event every checkpointIntervalTurns
-    // without terminating — allows checkpoint persistence + monitoring.
-    if (turn > 1 && turn % args.checkpointIntervalTurns === 0) {
-      args.report({
-        kind: "checkpoint",
-        task: args.taskId,
-        cycle: turn,
         message: `checkpoint: task ${args.taskId} · turn ${turn}`,
       });
     }
