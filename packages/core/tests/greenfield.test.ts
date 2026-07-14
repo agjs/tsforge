@@ -2,10 +2,8 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { escalateGuidance } from "../src/loop/greenfield/run";
 import {
   runGreenfield,
-  evaluateFeature,
   loadState,
   saveState,
   renderProgress,
@@ -14,9 +12,9 @@ import {
 import type {
   IGreenfieldState,
   IGreenfieldDeps,
-  IEvaluateDeps,
   IFeature,
 } from "../src/loop/greenfield";
+import type { EscalationRung } from "../src/loop/loop.types";
 
 function feature(id: string, passes = false): IFeature {
   return { id, desc: `do ${id}`, passes, attempts: 0 };
@@ -113,100 +111,57 @@ describe("greenfield state", () => {
   });
 });
 
-describe("evaluateFeature: layered, short-circuiting", () => {
-  const ok = { ok: true, errors: [] };
-
-  function deps(over: Partial<IEvaluateDeps>): IEvaluateDeps {
-    return {
-      gate: async () => ({ passed: true, output: "" }),
-      browser: async () => ok,
-      judge: async () => ({ ok: true, notes: "good" }),
-      ...over,
-    };
-  }
-
-  test("gate failure short-circuits before browser/judge", async () => {
-    let browserCalled = false;
-    const v = await evaluateFeature(
-      feature("a"),
-      deps({
-        gate: async () => ({
-          passed: false,
-          output: "TS2322 type error\nmore",
-        }),
-        browser: async () => {
-          browserCalled = true;
-
-          return ok;
-        },
-      })
-    );
-
-    expect(v.passed).toBe(false);
-    expect(v.stage).toBe("gate");
-    expect(v.notes).toBe("TS2322 type error");
-    expect(browserCalled).toBe(false);
-  });
-
-  test("a skipped render-check does NOT block (playwright absent)", async () => {
-    const v = await evaluateFeature(
-      feature("a"),
-      deps({
-        browser: async () => ({ ok: false, errors: ["x"], skipped: true }),
-      })
-    );
-
-    expect(v.passed).toBe(true);
-  });
-
-  test("a real browser failure blocks at the browser stage", async () => {
-    const v = await evaluateFeature(
-      feature("a"),
-      deps({
-        browser: async () => ({ ok: false, errors: ["console error: boom"] }),
-      })
-    );
-
-    expect(v.passed).toBe(false);
-    expect(v.stage).toBe("browser");
-    expect(v.notes).toContain("boom");
-  });
-
-  test("judge is the last gate and can still fail a green build", async () => {
-    const v = await evaluateFeature(
-      feature("a"),
-      deps({ judge: async () => ({ ok: false, notes: "ugly state mgmt" }) })
-    );
-
-    expect(v.passed).toBe(false);
-    expect(v.stage).toBe("judge");
-  });
-
-  test("all green → passed", async () => {
-    const v = await evaluateFeature(feature("a"), deps({}));
-
-    expect(v.passed).toBe(true);
-    expect(v.stage).toBeUndefined();
-  });
-});
-
 describe("runGreenfield: outer loop", () => {
-  test("drives every feature to green, in order, ticking the checklist", async () => {
+  test("implement returns done → feature ticks passing", async () => {
+    const s = state("a");
+    const deps: IGreenfieldDeps = {
+      implement: async () => ({ done: true }),
+    };
+    const result = await runGreenfield(dir, s, deps);
+
+    expect(result.status).toBe("done");
+    expect(s.features[0]?.passes).toBe(true);
+  });
+
+  test("implement returns handoff → feature parks, then revisit", async () => {
+    const s = state("a");
+    let calls = 0;
+    const handoff = {
+      block: "a",
+      rungHistory: [] as EscalationRung[],
+      errors: ["stuck"],
+      ask: "help",
+      resumable: true as const,
+      resume: { triedLevers: [] as EscalationRung[] },
+    };
+    const deps: IGreenfieldDeps = {
+      implement: async () => {
+        calls += 1;
+
+        return calls === 1 ? { done: false, handoff } : { done: true };
+      },
+    };
+    const result = await runGreenfield(dir, s, deps);
+
+    expect(calls).toBe(2); // main pass parks, revisit pass retries seeded
+    expect(result.status).toBe("done");
+  });
+
+  test("multiple features drive to green in order, ticking the checklist", async () => {
     const s = state("a", "b", "c");
     const implemented: string[] = [];
     const deps: IGreenfieldDeps = {
       implement: async (f) => {
         implemented.push(f.id);
 
-        return { handoff: undefined };
+        return { done: true };
       },
-      evaluate: async () => ({ passed: true, notes: "ok" }),
     };
 
     const res = await runGreenfield(dir, s, deps);
 
     expect(res.status).toBe("done");
-    expect(implemented).toEqual(["a", "b", "c"]); // first-unfinished order
+    expect(implemented).toEqual(["a", "b", "c"]);
     expect(res.features.every((f) => f.passes)).toBe(true);
 
     // features.json on disk reflects the all-green end state
@@ -215,152 +170,40 @@ describe("runGreenfield: outer loop", () => {
     expect(onDisk?.features.every((f) => f.passes)).toBe(true);
   });
 
-  test("a feature that returns a handoff parks and is revisited once (main + revisit pass)", async () => {
-    const s = state("a", "b");
-    let aCalls = 0;
-    const deps: IGreenfieldDeps = {
-      implement: async (f) => {
-        if (f.id === "a") {
-          aCalls += 1;
+  test("a parked feature gets revisited with seeded tried-levers", async () => {
+    const s = state("a");
+    const seedsReceived: Array<{
+      id: string;
+      seed?: { triedLevers: string[] };
+    }> = [];
 
-          // Return handoff in both main pass (aCalls=1) and revisit pass (aCalls=2)
+    const deps: IGreenfieldDeps = {
+      implement: async (f, _, seed) => {
+        seedsReceived.push({ id: f.id, seed });
+
+        if (f.attempts === 1) {
           return {
+            done: false,
             handoff: {
-              block: "test-block",
-              rungHistory: ["R1"],
+              block: "test",
+              rungHistory: ["R1", "R2"],
               errors: ["error"],
               ask: "help",
               resumable: true,
-              resume: { triedLevers: ["R1"] },
+              resume: { triedLevers: ["R1", "R2"] },
             },
           };
         }
 
-        return { handoff: undefined };
+        // Second attempt (revisit) should receive the seed
+        return { done: true };
       },
-      // 'b' passes normally
-      evaluate: async (f) => ({ passed: f.id === "b", notes: "" }),
-    };
-
-    const res = await runGreenfield(dir, s, deps);
-
-    expect(aCalls).toBe(2); // 'a' called once in main pass, once in revisit pass
-    expect(s.features[0]?.parked).toBe(true); // 'a' remains parked
-    expect(s.features[1]?.passes).toBe(true); // 'b' passed normally
-    expect(res.status).toBe("stuck");
-    expect(res.stuckFeature).toBe("a");
-  });
-
-  test("evaluator-only failure (no handoff, unchanging rejection) PARKS instead of looping forever", async () => {
-    // P1 regression: with maxAttemptsPerFeature removed, a feature whose implement
-    // returns NO handoff (gate green) but whose evaluate keeps rejecting with the SAME
-    // detail would be re-picked by the main pass forever. It must park on the unchanged
-    // rejection and the run must TERMINATE (stuck), not hang.
-    const s = state("a");
-    let calls = 0;
-    const deps: IGreenfieldDeps = {
-      implement: async () => {
-        calls += 1;
-
-        return { handoff: undefined };
-      },
-      // Always fails with the SAME detail → not converging → park.
-      evaluate: async () => ({
-        passed: false,
-        notes: "judge rejects",
-        detail: "same-rejection-every-time",
-      }),
-    };
-
-    const res = await runGreenfield(dir, s, deps);
-
-    expect(res.status).toBe("stuck");
-    expect(s.features[0]?.parked).toBe(true);
-    // Bounded, not infinite: a couple of main-pass attempts + one revisit.
-    expect(calls).toBeLessThanOrEqual(4);
-  });
-
-  test("escalateGuidance escalates the directive as attempts climb", () => {
-    const errs = "TS2322: type mismatch";
-
-    expect(escalateGuidance(1, errs)).toBe(errs); // early: raw errors
-    expect(escalateGuidance(2, errs)).toBe(errs);
-    expect(escalateGuidance(3, errs)).toContain("step back"); // mid: change tack
-    expect(escalateGuidance(3, errs)).toContain(errs);
-    expect(escalateGuidance(6, errs)).toContain("single most-blocking"); // late: narrow
-  });
-
-  test("consults the EXPERT before parking a non-converging feature (regression)", async () => {
-    // A prior rewrite dropped the expert-before-park call; this locks it back in.
-    const s = state("a");
-    let rescueCalls = 0;
-    let parkedWhenRescued = false;
-    const deps: IGreenfieldDeps = {
-      implement: async () => ({ handoff: undefined }),
-      evaluate: async () => ({
-        passed: false,
-        notes: "reject",
-        detail: "same-rejection",
-      }),
-      rescue: async (f) => {
-        rescueCalls += 1;
-
-        if (f.parked === true) {
-          parkedWhenRescued = true;
-        }
-
-        return false; // expert can't fix it → feature parks
-      },
-    };
-
-    const res = await runGreenfield(dir, s, deps);
-
-    expect(rescueCalls).toBeGreaterThan(0); // expert WAS consulted
-    expect(parkedWhenRescued).toBe(false); // …BEFORE parking
-    expect(s.features[0]?.parked).toBe(true); // parked only after expert failed
-    expect(res.status).toBe("stuck");
-  });
-
-  test("an expert rescue that lands green ticks the feature instead of parking", async () => {
-    const s = state("a");
-    let rescued = false;
-    const deps: IGreenfieldDeps = {
-      implement: async () => ({ handoff: undefined }),
-      evaluate: async () => ({
-        passed: rescued, // fails until the expert rescue runs, then passes
-        notes: "",
-        detail: "same-rejection",
-      }),
-      rescue: async () => {
-        rescued = true;
-
-        return true;
-      },
-    };
-
-    const res = await runGreenfield(dir, s, deps);
-
-    expect(s.features[0]?.passes).toBe(true);
-    expect(s.features[0]?.parked ?? false).toBe(false);
-    expect(res.status).toBe("done");
-  });
-
-  test("a feature that passes on its 2nd attempt is not counted stuck", async () => {
-    const s = state("a");
-    let calls = 0;
-    const deps: IGreenfieldDeps = {
-      implement: async () => {
-        calls += 1;
-
-        return { handoff: undefined };
-      },
-      evaluate: async () => ({ passed: calls >= 2, notes: "" }),
     };
 
     const res = await runGreenfield(dir, s, deps);
 
     expect(res.status).toBe("done");
-    expect(s.features[0]?.attempts).toBe(2);
+    expect(seedsReceived[1]?.seed?.triedLevers).toEqual(["R1", "R2"]);
   });
 
   test("resumes from persisted state (already-passing features are skipped)", async () => {
@@ -372,9 +215,8 @@ describe("runGreenfield: outer loop", () => {
       implement: async (f) => {
         implemented.push(f.id);
 
-        return { handoff: undefined };
+        return { done: true };
       },
-      evaluate: async () => ({ passed: true, notes: "" }),
     };
 
     await runGreenfield(dir, s, deps);
@@ -388,7 +230,6 @@ describe("runGreenfield: outer loop", () => {
       implement: async () => {
         throw new Error("model died mid-attempt");
       },
-      evaluate: async () => ({ passed: true, notes: "" }),
     };
 
     // The throw propagates (crash), but the incremented counter must be on disk
@@ -408,7 +249,6 @@ describe("runGreenfield: outer loop", () => {
       implement: async () => {
         throw new Error("boom");
       },
-      evaluate: async () => ({ passed: true, notes: "" }),
     };
 
     // First run: implement throws, attempt is bumped and persisted
@@ -424,8 +264,7 @@ describe("runGreenfield: outer loop", () => {
   test("writes progress.md as it goes", async () => {
     const s = state("a");
     const deps: IGreenfieldDeps = {
-      implement: async () => ({ handoff: undefined }),
-      evaluate: async () => ({ passed: true, notes: "" }),
+      implement: async () => ({ done: true }),
     };
 
     await runGreenfield(dir, s, deps);
@@ -435,7 +274,7 @@ describe("runGreenfield: outer loop", () => {
     expect(md).toContain("1/1 features verified");
   });
 
-  test("when implement returns a handoff, the feature is parked and later features build", async () => {
+  test("when implement returns done:false with handoff, the feature is parked and later features build", async () => {
     const s = state("a", "b");
     const implemented: string[] = [];
     const deps: IGreenfieldDeps = {
@@ -444,6 +283,7 @@ describe("runGreenfield: outer loop", () => {
 
         if (f.id === "a") {
           return {
+            done: false,
             handoff: {
               block: "test-block",
               rungHistory: ["R1", "R2", "R3", "R4"],
@@ -455,9 +295,8 @@ describe("runGreenfield: outer loop", () => {
           };
         }
 
-        return { handoff: undefined };
+        return { done: true };
       },
-      evaluate: async () => ({ passed: true, notes: "" }),
     };
 
     const res = await runGreenfield(dir, s, deps);
@@ -471,63 +310,11 @@ describe("runGreenfield: outer loop", () => {
     expect(s.features[1]?.passes).toBe(true); // 'b' completed normally
   });
 
-  test("parked features are revisited once, seeded with their saved triedLevers", async () => {
-    const s = state("a", "b");
-    let aAttempts = 0;
-    const seedsReceived: { id: string; seed?: { triedLevers: string[] } }[] =
-      [];
-
-    const deps: IGreenfieldDeps = {
-      implement: async (f, _, seed) => {
-        seedsReceived.push({ id: f.id, seed });
-
-        if (f.id === "a") {
-          aAttempts += 1;
-
-          if (aAttempts === 1) {
-            // First attempt (main pass): return a handoff to park the feature
-            return {
-              handoff: {
-                block: "test-block",
-                rungHistory: ["R1", "R2"],
-                errors: ["error"],
-                ask: "help",
-                resumable: true,
-                resume: { triedLevers: ["R1", "R2"] },
-              },
-            };
-          }
-
-          // Second attempt (revisit pass): pass now with the seed
-          return { handoff: undefined };
-        }
-
-        return { handoff: undefined };
-      },
-      evaluate: async (f) => ({
-        passed: f.id === "b" || aAttempts >= 2,
-        notes: "",
-      }),
-    };
-
-    const res = await runGreenfield(dir, s, deps);
-
-    // 'a' was parked, revisited, and passed on the second attempt
-    expect(res.status).toBe("done");
-    expect(aAttempts).toBe(2); // one in main pass, one in revisit pass
-    // Check that the revisit pass received the seed
-    const aRevisitSeed = seedsReceived.find(
-      (sr) => sr.id === "a" && sr.seed?.triedLevers.length === 2
-    );
-
-    expect(aRevisitSeed).toBeDefined();
-    expect(aRevisitSeed?.seed?.triedLevers).toEqual(["R1", "R2"]);
-  });
-
   test("when a parked feature still fails after revisit, build reports fully-stuck", async () => {
     const s = state("a");
     const deps: IGreenfieldDeps = {
       implement: async () => ({
+        done: false,
         handoff: {
           block: "test-block",
           rungHistory: ["R1", "R2", "R3", "R4"],
@@ -537,7 +324,6 @@ describe("runGreenfield: outer loop", () => {
           resume: { triedLevers: ["R1", "R2", "R3", "R4"] },
         },
       }),
-      evaluate: async () => ({ passed: false, notes: "still broken" }),
     };
 
     const res = await runGreenfield(dir, s, deps);

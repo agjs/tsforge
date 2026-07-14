@@ -1,7 +1,19 @@
 import type { IProvider } from "../../inference";
 import { isRecord } from "../../lib/guards";
 import { extractJson } from "../../lib/json";
-import type { IJudgeOutcome } from "./evaluate";
+
+/** Result of the deterministic gate for one feature. */
+export interface IGateOutcome {
+  passed: boolean;
+  /** Gate output (first line is surfaced as the verdict note on failure). */
+  output: string;
+}
+
+/** Result of the LLM quality judge for one feature. */
+export interface IJudgeOutcome {
+  ok: boolean;
+  notes: string;
+}
 
 /** What the feature judge is shown — the built artifact only, never the
  *  generator's trace (design-rule #2, mirrors eval's IJudgeInput). */

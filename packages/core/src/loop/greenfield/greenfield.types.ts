@@ -41,18 +41,6 @@ export interface IGreenfieldState {
   features: IFeature[];
 }
 
-/** The verdict for one feature after the layered evaluator runs. */
-export interface IFeatureVerdict {
-  passed: boolean;
-  /** One-line reason (the failing layer's message, or a success note). */
-  notes: string;
-  /** Which layer decided it (for progress.md). Omitted on a pass. */
-  stage?: "gate" | "browser" | "judge";
-  /** Fuller (capped) failing output — the actual gate/judge errors — for feeding
-   *  the next attempt so the model fixes real errors, not the one-line summary. */
-  detail?: string;
-}
-
 export interface IGreenfieldResult {
   status: "done" | "stuck" | "needs-plan";
   features: IFeature[];
@@ -61,30 +49,22 @@ export interface IGreenfieldResult {
 }
 
 /**
- * The two model-/tool-driven steps the outer loop delegates, injected so the loop
- * itself is pure and testable. `implement` makes the model build one feature;
- * `evaluate` runs the layered evaluator (gate → browser → judge) for it.
+ * The single model-/tool-driven step the outer loop delegates, injected so the loop
+ * itself is pure and testable. `implement` builds the feature AND runs the gate loop
+ * (escalation ladder) internally; it returns whether it finished or parked.
  */
 export interface IGreenfieldDeps {
-  /** Implement one feature. Returns the inner handoff when the escalation ladder
-   *  is exhausted (feature parked), or undefined when proceeding normally or passing.
+  /** Implement one feature with the internal escalation ladder. Returns {done: true}
+   *  when the feature passes all gates and is ready to ship; {done: false, handoff}
+   *  when the ladder is exhausted and the feature is parked for later. The handoff
+   *  carries the try-lever history for a revisit pass to seed a different tack.
    *  Optionally accepts seeded tried-lever state (from a prior handoff.resume) to
    *  skip levers already tried in a revisit. */
   implement(
     feature: IFeature,
     state: IGreenfieldState,
-    seed?: { triedLevers: string[] }
-  ): Promise<{ handoff?: IHandoff }>;
-  evaluate(
-    feature: IFeature,
-    state: IGreenfieldState
-  ): Promise<IFeatureVerdict>;
-  /** OPTIONAL last-resort escalation, tried ONCE before a feature parks as `stuck`:
-   *  hand the failing file + its exact errors to a stronger "expert" model (the rung
-   *  above the per-attempt feedback loop). Returns true when it applied a fix worth
-   *  a final re-evaluation. Unset = no escalation — the generic path parks as before,
-   *  so this is fully backward compatible. */
-  rescue?(feature: IFeature, state: IGreenfieldState): Promise<boolean>;
+    seed?: { triedLevers: Array<import("../loop.types").EscalationRung> }
+  ): Promise<{ done: boolean; handoff?: IHandoff }>;
 }
 
 export interface IGreenfieldOptions {

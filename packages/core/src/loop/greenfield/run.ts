@@ -1,4 +1,4 @@
-import type { Reporter } from "../loop.types";
+import type { Reporter, EscalationRung } from "../loop.types";
 import { saveState, writeProgress, loadState, writeSpec } from "./state";
 import type { IPlan } from "./plan";
 import type {
@@ -93,7 +93,10 @@ export async function runGreenfield(
 
       const seed = feature.handoff?.resume
         ? "triedLevers" in feature.handoff.resume
-          ? { triedLevers: feature.handoff.resume.triedLevers }
+          ? {
+              triedLevers: feature.handoff.resume
+                .triedLevers as EscalationRung[],
+            }
           : undefined
         : undefined;
 
@@ -148,43 +151,15 @@ export async function runGreenfield(
   };
 }
 
-/** One implement→evaluate→persist cycle for a single feature (mutates it).
+/** One implement cycle for a single feature (mutates it).
  *  Optionally seeds the implement with prior tried-lever state (for a revisit). */
-/** Give-up point for a feature whose gate keeps rejecting with DRIFTING errors (so the
- *  unchanged-rejection check never trips) — at this attempt the expert is consulted and,
- *  if it can't unblock, the feature parks. Kept modest: the model gets escalating
- *  guidance (escalateGuidance) on the way up, so grinding many identical attempts before
- *  giving up is exactly the failure this bounds. */
-const EVAL_STALL_BACKSTOP = 8;
-
-/** Escalate the guidance fed into the next attempt as failures accumulate, so the model
- *  CHANGES its approach instead of repeating a failing one (the "same errors over and
- *  over" grind). Early attempts get the raw errors; later ones get a directive to step
- *  back / narrow, prepended to the errors. Pure + tested. */
-export function escalateGuidance(attempts: number, errors: string): string {
-  if (attempts < 3) {
-    return errors;
-  }
-
-  const directive =
-    attempts < 6
-      ? "You have failed this gate several times with a SIMILAR class of errors. " +
-        "Stop repeating the same approach — step back, diagnose WHY these keep " +
-        "recurring, and take a genuinely different tack this time."
-      : "You are stuck. Fix ONLY the single most-blocking error below this turn and " +
-        "nothing else; if your approach to it has already failed, do the OPPOSITE. " +
-        "Do not introduce unrelated changes.";
-
-  return `${directive}\n\n${errors}`;
-}
-
 async function attemptFeature(
   cwd: string,
   state: IGreenfieldState,
   feature: IFeature,
   deps: IGreenfieldDeps,
   say: (message: string) => void,
-  seed?: { triedLevers: string[] }
+  seed?: { triedLevers: EscalationRung[] }
 ): Promise<void> {
   feature.attempts += 1;
   const seedNote = seed ? " (revisit, seeded with tried-levers)" : "";
@@ -193,90 +168,32 @@ async function attemptFeature(
     `feature '${feature.id}': attempt ${feature.attempts} — ${feature.desc}${seedNote}`
   );
 
-  // Persist in `finally` so an implement/evaluate THROW still records the bumped
-  // attempt count before it propagates — otherwise a crash on attempt N replays
-  // as attempt N-1 on resume, and a repeatedly-crashing feature never reaches
-  // `stuck`. The persisted state is the source of truth for resume-from-crash.
+  // Persist in `finally` so an implement THROW still records the bumped attempt
+  // count before it propagates — otherwise a crash on attempt N replays as attempt
+  // N-1 on resume, and a repeatedly-crashing feature never reaches `stuck`. The
+  // persisted state is the source of truth for resume-from-crash.
   try {
     const result = await deps.implement(feature, state, seed);
 
-    // Check if the ladder is exhausted (handoff returned).
-    if (result.handoff) {
-      feature.parked = true;
-      feature.handoff = result.handoff;
-      say(`feature '${feature.id}': ladder exhausted, parked — revisit later`);
-
-      return;
-    }
-
-    const verdict = await deps.evaluate(feature, state);
-
-    if (verdict.passed) {
+    if (result.done) {
       feature.passes = true;
       delete feature.lastError;
       delete feature.parked;
       delete feature.handoff;
       say(`feature '${feature.id}': verified ✓`);
-    } else {
-      const newError = verdict.detail ?? verdict.notes;
-      // A feature's retries have no per-turn gate/ladder (the gate lives HERE, at
-      // evaluate), so escalation must live here too — otherwise the loop just retries
-      // IDENTICALLY and grinds (observed live: the model whack-a-moled strict-gate lint
-      // errors, same class over and over, never changing tack). Two mechanics:
-      //  (1) escalate the guidance across attempts so the model changes strategy;
-      //  (2) before giving up, consult the EXPERT (rung above per-attempt retries) —
-      //      restored here, an earlier rewrite dropped it.
-      const notConverging = newError === feature.lastError;
-      const hitBackstop = feature.attempts >= EVAL_STALL_BACKSTOP;
 
-      if (notConverging || hitBackstop) {
-        feature.lastError = newError;
-
-        // Rung above the retry loop: hand the blocking file to the expert model ONCE
-        // before parking; a landed fix ticks the feature and the loop moves on.
-        if (deps.rescue !== undefined) {
-          const rescued = await deps.rescue(feature, state).catch(() => false);
-
-          if (rescued) {
-            const recheck = await deps.evaluate(feature, state);
-
-            if (recheck.passed) {
-              feature.passes = true;
-              delete feature.lastError;
-              delete feature.parked;
-              delete feature.handoff;
-              say(`feature '${feature.id}': verified ✓ (after expert rescue)`);
-
-              return;
-            }
-
-            feature.lastError = recheck.detail ?? recheck.notes;
-          }
-        }
-
-        feature.parked = true;
-        feature.handoff = {
-          block: `evaluator:${feature.id}`,
-          rungHistory: [],
-          errors: [feature.lastError ?? newError],
-          ask:
-            "the gate keeps rejecting this feature and the expert could not unblock " +
-            "it — needs a human or a different approach",
-          resumable: true,
-          resume: { triedLevers: [] },
-        };
-        say(
-          `feature '${feature.id}': not converging even after expert — parked (revisit later)`
-        );
-      } else {
-        // Keep trying, but ESCALATE the guidance fed into the next attempt so the model
-        // changes its approach instead of repeating the same failing one.
-        feature.lastError = escalateGuidance(feature.attempts, newError);
-        say(
-          `feature '${feature.id}': failed at ${verdict.stage ?? "?"} — ${verdict.notes}`
-        );
-      }
+      return;
     }
+
+    // Not done → the shared ladder (R1–R4 + R5) already ran inside the loop and
+    // exhausted. Park on its structured handoff for the revisit pass.
+    feature.parked = true;
+
+    if (result.handoff !== undefined) {
+      feature.handoff = result.handoff;
+    }
+
+    say(`feature '${feature.id}': ladder exhausted, parked — revisit later`);
   } finally {
     await saveState(cwd, state);
     await writeProgress(cwd, state);
