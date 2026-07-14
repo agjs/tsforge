@@ -96,17 +96,36 @@ forever (expert resets guards at `turn.ts:1013`). Add to `ILoopState` (in `turn.
                                   (e.g. "src/x.ts:no-unsafe-argument")
     else if gateStuckRepeats  → sorted-join of the current error keys
     else if plateau/no-new-low→ `${lowWaterCount}|${sorted recurring rule keys
-                                  over the oscillation window}`  (NOT the momentary set)
+                                  over recentGateFingerprints}`  (NOT the momentary set)
     else                      → "" (no active block)
   ```
   Must be a stable string usable as a `Map` key. Ship as a pure, unit-tested helper.
 
+- **`recentGateFingerprints: string[]`** (ring buffer, len = the oscillation window)
+  — **NEW state** (`turn.ts:328` today has only `redGates`/`plateauBest`, not the
+  per-gate key-set history). The plateau branch of `fingerprintFor` needs it to
+  compute "recurring rule keys over the window"; without it that branch can't be
+  implemented. Push the sorted key-set each gate cycle.
+
 - **`triedLeversByBlock: Map<fingerprint, Set<Rung>>`** — which rungs have been
-  applied to that exact block. Semantics: a lever counts as "tried for this block"
-  once its escalation turn **completes and the next gate shows the block unmoved**
-  (entering isn't enough — it must have failed to move it). A lever (expert included)
-  is re-applied **only for a novel fingerprint**. Genuine progress → new fingerprint
-  → `triedLeversByBlock` has no entry → the ladder naturally restarts at R1.
+  applied to that exact block. A lever counts as "tried" once its escalation turn
+  **completes AND the next gate shows the block unmoved** (entering isn't enough).
+  Re-applied **only for a novel fingerprint**. Genuine progress → new fingerprint →
+  no entry → the ladder restarts at R1.
+
+- **`pendingRung: Rung | null` + `pendingBlockFingerprint: string | null`** — **NEW
+  state, required for the "record after next gate" rule.** When a rung is applied,
+  stash it here with the fingerprint it was applied to; on the NEXT gate,
+  `settleGate` reads them back — if the recomputed fingerprint equals
+  `pendingBlockFingerprint`, record `pendingRung` into `triedLeversByBlock` (block
+  unmoved → lever failed); either way clear the pending pair. Without this, the loop
+  has no memory across the gate boundary of which lever it just tested.
+
+- **Synthetic fingerprints for non-gate exits** — some terminal exits (timeout,
+  degeneration, malformed tool call, read-only spin) have **no gate error set**, so
+  `fingerprintFor` can't derive from errors. Define synthetic keys so these blocks are
+  still identity-tracked and can climb/record: `timeout:<normalized error>`,
+  `degeneration:<task>`, `malformed-tool-call`, `readonly-spin:<lastGateBlock|no-gate>`.
 
 **State-machine semantics (replaces the scalar-only `steerLevel`):** keep
 `steerLevel` as a **purely cosmetic** display/order index only — once
@@ -172,10 +191,10 @@ measure against the block signature, escalate only if the block didn't move):
 
 1. On the first stall at a block, inject the R1 steer (existing `buildSteerMessage(1)`
    framing: "diagnose your loop; different approach").
-2. **Capture the assistant's diagnosis text** — specifically the **assistant response
-   produced on the model turn that follows the R1-injected user steer** (the first
-   assistant message of that next turn, before it makes any tool calls). That message
-   is the diagnosis.
+2. **Capture the assistant's diagnosis text** — a model response is atomic
+   (`IModelResponse` has `content` + `toolCalls` together, `inference.types.ts:33`),
+   so capture **`res.content` from the turn that follows the R1 steer.** If it is
+   non-trivial, feed it forward (step 3); if trivial/empty, mark R1 tried and escalate.
 3. On the NEXT cycle, set `pendingSteer` to a block that quotes it: *"Your own
    diagnosis last cycle: «…». Act on that different approach now — do not repeat what
    you already tried."* So the model's own words become the steering.
@@ -267,29 +286,36 @@ a clear owner and is unit-testable, not free-form.
    repurpose `interactiveBackstopTurns:250`/`webMaxTurns:400` as the backstop. Loop
    CONDITION change in `driveInner`/`run.ts:433`: normal terminal is ladder-exhaustion;
    the `for`-bound remains only as the crash-guard. Add checkpoint emission.
-7. **Greenfield parked state (bigger than a constant deletion)** — `greenfield/`:
-   - `IFeature`: add `status: "open" | "passing" | "parked"` (or a `parked` flag) +
-     carry `handoff`. Round-trip `lastError` + handoff in `state.ts`.
-   - `greenfield/run.ts`: `implement` must **read the inner `IRunResult`** and detect
-     ladder exhaustion (today it ignores it and uses its own `attempts`); delete
-     `maxAttemptsPerFeature`; on exhaustion **park the feature and skip it**, so a
-     wedged feature never blocks the rest. **Revisit is a simple two-pass:** after the
-     main pass over all open features completes, do **one** second pass over the
-     parked features; the build reports fully-stuck only if features remain parked
-     after that pass. (Simpler than "revisit when a new lever appears" and achieves
-     the same non-blocking goal.)
-   - When parking, **copy the inner run's final `triedLeversByBlock` entry** (for the
-     feature's surviving block) into the feature's `handoff`, so the second-pass
-     revisit doesn't immediately re-fire the same levers on the same block.
-   - **Wire the result through** `cli.ts:594` (it currently ignores `runTask`'s result)
-     so greenfield truly inherits R0–R5; update progress reporting.
+7. **Greenfield parked state (an API change, not a constant deletion)** — `greenfield/`:
+   - **`IGreenfieldDeps.implement` must change signature** — it returns
+     `Promise<void>` today (`greenfield/run.ts`), so the driver CANNOT see the inner
+     run's `handoff`. Change it to return an implementation result
+     (`{ handoff?: IHandoff }`), and add an input so prior handoff/tried-lever state
+     can be **seeded into a retry** (so a second-pass revisit resumes rather than
+     re-running fresh). Both consumers ignore the inner result today and must be
+     updated: CLI `greenfieldDeps.implement` → `runTask` (`cli.ts:594`) and
+     BoringStack → `host.send` (`build.ts:243`).
+   - `IFeature`: add `status: "open" | "passing" | "parked"` + carry `handoff`.
+     Round-trip `lastError` + handoff in `state.ts`.
+   - `greenfield/run.ts`: consume the returned handoff to detect ladder exhaustion;
+     delete `maxAttemptsPerFeature`; on exhaustion **park + skip**, so a wedged
+     feature never blocks the rest. **Revisit = a simple two-pass:** after the main
+     pass over open features, do **one** second pass over parked features, **seeding
+     each with its saved `triedLeversByBlock`** so the revisit doesn't immediately
+     re-fire the same levers on the same block; report fully-stuck only if features
+     remain parked after that pass.
 
 ### Checkpoint payload (concrete)
 
 The heartbeat (and pre-handoff) writes a **compact snapshot** under
 `.tsforge/checkpoints/`: **compacted messages, full `ILoopState` (incl. `steerLevel`,
-`triedLeversByBlock`, `blockFingerprint`, `focusError`), rung history, the gate
-command + last gate output, and the editable scope.** For non-greenfield tasks this
+`triedLeversByBlock`, `blockFingerprint`, `focusError`, `recentGateFingerprints`),
+rung history, the gate command + last gate output, and the editable scope.**
+**`ILoopState` cannot be `JSON.stringify`'d raw** — it holds `Map`/`Set` fields
+(`errorAge`, `pushedGuides`, the new `triedLeversByBlock`; `turn.ts:298`), which JSON
+flattens to `{}`. Ship **`serializeLoopState`/`deserializeLoopState` DTO helpers**
+(Map→entries[], Set→array) as part of the checkpoint work, before anything writes a
+checkpoint. For non-greenfield tasks this
 snapshot is new (headless has event logs but no resumable loop state today;
 interactive only persists via the session's post-send persistence). **Phasing:** ship
 the snapshot write + a clean handoff report first; **full conversation resume can be
@@ -359,6 +385,22 @@ Lower-risk but non-trivial: greenfield parked-state (a driver + state-machine ch
 not a constant deletion) and converting all bypass exits to R5.
 
 ---
+
+## Additional required state (consolidated — build with step 1)
+
+Beyond `blockFingerprint` + `triedLeversByBlock`, the mechanics above need:
+
+- **`pendingRung` + `pendingBlockFingerprint`** — cross-gate memory of the lever just
+  tested, so "record after next gate unchanged" is implementable.
+- **`recentGateFingerprints`** (oscillation-window ring buffer) — the plateau branch
+  of `fingerprintFor` can't be computed without it.
+- **Synthetic terminal fingerprints** — `timeout:…`, `degeneration:…`,
+  `malformed-tool-call`, `readonly-spin:…` — so non-gate exits are identity-tracked.
+- **`serializeLoopState`/`deserializeLoopState` DTOs** — `Map`/`Set` fields don't
+  survive `JSON.stringify`; needed before any checkpoint write.
+- **`IGreenfieldDeps.implement` returns + accepts handoff state** — currently
+  `Promise<void>`; must return the inner handoff and accept seeded tried-lever state,
+  or parked-feature revisits re-fire the same levers from a fresh run.
 
 ## Prioritized implementation order
 
