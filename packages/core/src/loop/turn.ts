@@ -1231,7 +1231,8 @@ function resetConvergenceGuards(state: ILoopState, errorCount: number): void {
  *  result, or null to keep looping — with `state.pendingSteer` set when a steer
  *  should be injected this cycle. Exported for unit tests. */
 /** Set up rung-specific logic for escalation rungs. R1 uses diagnosis-only call,
- *  R2 sets per-call model overrides, R3 narrows to focused error. */
+ *  R2 sets per-call model overrides, R3 narrows to focused error.
+ *  R2 and R3 set pendingRung so they are recorded tried when the next gate is unmoved. */
 function applyRungLogic(
   state: ILoopState,
   rungLevel: number,
@@ -1260,6 +1261,16 @@ function applyRungLogic(
       temperature: 1.2, // perturb sampling: raise temperature
       reasoningEffort: "high", // reason-more
     };
+    // R2 is recorded tried when the next gate is unmoved
+    state.pendingRung = "R2";
+    state.pendingBlockFingerprint = state.blockFingerprint ?? null;
+  }
+
+  if (rungLevel === 3) {
+    // R3: narrow to the single most-persistent error
+    // R3 is recorded tried when the next gate is unmoved
+    state.pendingRung = "R3";
+    state.pendingBlockFingerprint = state.blockFingerprint ?? null;
   }
 
   // R2, R3, and higher levels set pendingSteer (R1 returns early above)
@@ -1319,17 +1330,44 @@ export function checkStuck(
   // Update the net-progress watermark (mutates noNewLow / bestErrorCount).
   trackNetProgress(state, gateErrors.length);
 
-  // R3 narrow: clear focusError if the block has moved (genuine progress).
-  // The block moves when a new blockFingerprint is computed that differs from
-  // the current one. We'll check this after computing the new fingerprint below.
+  // PENDING RUNG RECORDING: at the start of each cycle, if a rung was applied on the
+  // previous cycle and the recomputed fingerprint is unchanged, record the rung as tried.
+  // If the block moved (progress), don't record — a new block naturally has no tried
+  // rungs and the ladder restarts at R1. Either way clear the pending pair.
   const newFingerprint = fingerprintFor(state, gateErrors);
 
+  if (state.pendingRung !== null && state.pendingRung !== undefined) {
+    if (
+      newFingerprint !== "" &&
+      newFingerprint === state.pendingBlockFingerprint
+    ) {
+      // Block unmoved: lever failed — record the rung as tried for this block
+      state.triedLeversByBlock ??= new Map();
+      const tried = state.triedLeversByBlock.get(newFingerprint) ?? new Set();
+
+      tried.add(state.pendingRung);
+      state.triedLeversByBlock.set(newFingerprint, tried);
+    }
+
+    // Either way, clear the pending pair
+    state.pendingRung = null;
+    state.pendingBlockFingerprint = null;
+  }
+
+  // R3 narrow: clear focusError if the block has moved (genuine progress).
+  // The block moves when a new blockFingerprint is computed that differs from
+  // the current one. PROGRESS RESTARTS THE LADDER: when genuine block progress,
+  // reset steerLevel and all pending state so the next stall starts fresh at R1.
   if (
     newFingerprint !== "" &&
     newFingerprint !== (state.blockFingerprint ?? "")
   ) {
-    // Block has moved — clear focusError
+    // Block has moved — genuine progress. Reset the escalation ladder for the new block.
     state.focusError = null;
+    state.steerLevel = 0;
+    state.pendingRung = null;
+    state.pendingBlockFingerprint = null;
+    state.pendingDiagnosisSteer = null;
   }
 
   // PLATEAU tracker: count gate cycles since the last ALL-TIME-low error count. A new
@@ -1383,10 +1421,11 @@ export function checkStuck(
     return null;
   }
 
-  // Stalled. Capture the block fingerprint BEFORE resetting the guards (so fingerprintFor
-  // can read the current errorAge), then escalate and reset for the next window.
-  // For simplicity, use the guard-fired reason to build a synthetic block when persisted is null
-  const block = persisted?.key ?? `escalation-${String(state.steerLevel + 1)}`;
+  // Stalled. Use the stable fingerprint (derived guard-specifically) as the block key.
+  // This is the same key used in triedLeversByBlock, so escalation records rungs on
+  // the correct block and handoff.rungHistory reflects what was actually tried.
+  const fp = fingerprintFor(state, gateErrors);
+  const block = fp !== "" ? fp : `escalation-${String(state.steerLevel + 1)}`;
 
   // R3 narrow: capture the single most-persistent error key for focusError filtering
   // (only when samePersist is the guard that fired).

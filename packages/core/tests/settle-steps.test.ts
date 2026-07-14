@@ -213,3 +213,102 @@ describe("autoFixStep", () => {
     // loaded machine can stretch the spawn well past bun's 5s default.
   }, 30_000);
 });
+
+describe("relentless-loop escalation-ladder centerpiece (fixes A/B/C)", () => {
+  test("A: progress restarts the ladder (genuine block move → steerLevel reset to 0)", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+
+    // Set up state at steerLevel=2 on block "a:1"
+    state.steerLevel = 2;
+    state.blockFingerprint = "a:1";
+    state.errorAge.set("a:1", LOOP_LIMITS.samePersist + 1);
+    state.triedLeversByBlock = new Map([["a:1", new Set(["R1"])]]);
+
+    // Change to error "b:2" with persisted age, so new block is "b:2"
+    state.errorAge.set("b:2", LOOP_LIMITS.samePersist + 1);
+
+    // Call checkStuck: detects block moved, resets steerLevel to 0, then stall fires
+    checkStuck(ctx, state, [err("b:2")], 100);
+
+    // Block moved to "b:2"
+    expect(state.blockFingerprint).toBe("b:2");
+
+    // Ladder reset on block move, then stall incremented: steerLevel=0 then 1
+    expect(state.steerLevel).toBe(1);
+
+    // pendingRung and pendingBlockFingerprint cleared when block moved (before R1 re-set them)
+    // (We don't check pendingDiagnosisSteer or focusError as they're re-set by R1 logic)
+    expect(state.pendingRung).toBeNull();
+    expect(state.pendingBlockFingerprint).toBeNull();
+  });
+
+  test("B: R2 and R3 set pendingRung; recorded on next-gate unmoved", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+
+    // Test the pending-rung recording mechanic: when a rung is applied and set as
+    // pendingRung, it's recorded into triedLeversByBlock when the next gate shows
+    // the block unchanged.
+
+    // Set up state as if R2 was just applied on block "a:1"
+    state.steerLevel = 2;
+    state.blockFingerprint = "a:1";
+    state.pendingRung = "R2";
+    state.pendingBlockFingerprint = "a:1";
+    state.errorAge.set("a:1", LOOP_LIMITS.samePersist + 1); // persistent block
+    state.triedLeversByBlock = new Map([["a:1", new Set(["R1"])]]);
+
+    // Call checkStuck with the same block
+    // The recording hook at the top will fire: R2 should be recorded to triedLeversByBlock
+    checkStuck(ctx, state, [err("a:1")], 100);
+
+    // Verify: R2 was recorded to triedLeversByBlock["a:1"]
+    const tried = state.triedLeversByBlock.get("a:1");
+
+    expect(tried?.has("R2")).toBe(true);
+    expect(tried?.has("R3")).toBe(false); // R3 not yet applied, so not recorded
+  });
+
+  test("C: exhaustion handoff keyed on stable fingerprint with complete rungHistory", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+
+    // Set up state at steerLevel=STEER_LADDER_MAX on a samePersist block "a:1"
+    // (when stall fires, steerLevel increments to STEER_LADDER_MAX+1 → terminal)
+    state.steerLevel = STEER_LADDER_MAX;
+    state.blockFingerprint = "a:1";
+    state.errorAge.set("a:1", LOOP_LIMITS.samePersist + 1); // will fire samePersist
+    state.triedLeversByBlock = new Map([["a:1", new Set(["R1", "R2", "R3"])]]);
+
+    // Call checkStuck: samePersist fires, stall, steerLevel increments to STEER_LADDER_MAX+1
+    const result = checkStuck(ctx, state, [err("a:1")], 200);
+
+    // Should be a terminal handoff result
+    expect(result?.status).toBe(RUN_STATUS.stuck);
+    expect(result?.reason).toBe("handoff");
+    expect(result?.handoff).toBeDefined();
+
+    const handoff = result?.handoff;
+
+    // The block key should be the stable fingerprint from fingerprintFor ("a:1"),
+    // not a synthetic "escalation-N" key
+    expect(handoff?.block).toBe("a:1");
+    expect(handoff?.block).not.toMatch(/^escalation-/);
+
+    // rungHistory should contain the recorded rungs
+    expect(handoff?.rungHistory).toBeDefined();
+    expect((handoff?.rungHistory ?? []).length).toBeGreaterThan(0);
+    expect(Array.from(handoff?.rungHistory ?? [])).toContain("R1");
+    expect(Array.from(handoff?.rungHistory ?? [])).toContain("R2");
+    expect(Array.from(handoff?.rungHistory ?? [])).toContain("R3");
+
+    // resume.triedLevers should match rungHistory
+    if (handoff?.resume && "triedLevers" in handoff.resume) {
+      expect(handoff.resume.triedLevers).toEqual(handoff.rungHistory);
+    }
+  });
+});
