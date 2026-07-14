@@ -2,6 +2,7 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { escalateGuidance } from "../src/loop/greenfield/run";
 import {
   runGreenfield,
   evaluateFeature,
@@ -277,6 +278,71 @@ describe("runGreenfield: outer loop", () => {
     expect(s.features[0]?.parked).toBe(true);
     // Bounded, not infinite: a couple of main-pass attempts + one revisit.
     expect(calls).toBeLessThanOrEqual(4);
+  });
+
+  test("escalateGuidance escalates the directive as attempts climb", () => {
+    const errs = "TS2322: type mismatch";
+
+    expect(escalateGuidance(1, errs)).toBe(errs); // early: raw errors
+    expect(escalateGuidance(2, errs)).toBe(errs);
+    expect(escalateGuidance(3, errs)).toContain("step back"); // mid: change tack
+    expect(escalateGuidance(3, errs)).toContain(errs);
+    expect(escalateGuidance(6, errs)).toContain("single most-blocking"); // late: narrow
+  });
+
+  test("consults the EXPERT before parking a non-converging feature (regression)", async () => {
+    // A prior rewrite dropped the expert-before-park call; this locks it back in.
+    const s = state("a");
+    let rescueCalls = 0;
+    let parkedWhenRescued = false;
+    const deps: IGreenfieldDeps = {
+      implement: async () => ({ handoff: undefined }),
+      evaluate: async () => ({
+        passed: false,
+        notes: "reject",
+        detail: "same-rejection",
+      }),
+      rescue: async (f) => {
+        rescueCalls += 1;
+
+        if (f.parked === true) {
+          parkedWhenRescued = true;
+        }
+
+        return false; // expert can't fix it → feature parks
+      },
+    };
+
+    const res = await runGreenfield(dir, s, deps);
+
+    expect(rescueCalls).toBeGreaterThan(0); // expert WAS consulted
+    expect(parkedWhenRescued).toBe(false); // …BEFORE parking
+    expect(s.features[0]?.parked).toBe(true); // parked only after expert failed
+    expect(res.status).toBe("stuck");
+  });
+
+  test("an expert rescue that lands green ticks the feature instead of parking", async () => {
+    const s = state("a");
+    let rescued = false;
+    const deps: IGreenfieldDeps = {
+      implement: async () => ({ handoff: undefined }),
+      evaluate: async () => ({
+        passed: rescued, // fails until the expert rescue runs, then passes
+        notes: "",
+        detail: "same-rejection",
+      }),
+      rescue: async () => {
+        rescued = true;
+
+        return true;
+      },
+    };
+
+    const res = await runGreenfield(dir, s, deps);
+
+    expect(s.features[0]?.passes).toBe(true);
+    expect(s.features[0]?.parked ?? false).toBe(false);
+    expect(res.status).toBe("done");
   });
 
   test("a feature that passes on its 2nd attempt is not counted stuck", async () => {
