@@ -14,6 +14,7 @@ import type { IProvider, IModelResponse } from "../inference";
 import type { TsService } from "../lsp";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import type { ILoopEvent, Reporter } from "../loop/loop.types";
+import { commandGate } from "../gate/gate-runner";
 import {
   buildTsService,
   runToolCalls,
@@ -457,7 +458,7 @@ export class AgentRunner {
           : { policyRules: opts.policyRules }),
         ...(opts.signal === undefined ? {} : { signal: opts.signal }),
       },
-      gate: { parse: undefined },
+      gate: { parse: undefined, runner: commandGate({ id: agentId, accept: "", files: ["**/*"] }, undefined) },
     };
     const state: ILoopState = {
       prevGateErrors: [],

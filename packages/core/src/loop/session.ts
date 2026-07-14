@@ -6,6 +6,7 @@ import type {
 } from "../inference";
 import type { ITask } from "../spec";
 import type { FileLinter } from "../gate";
+import { commandGate } from "../gate/gate-runner";
 import {
   type ADD_DEPENDENCY_TOOL,
   TOOL_NAME,
@@ -641,6 +642,7 @@ export class Session {
         onGateChunk: filterGateStream((text) => {
           report({ kind: "token", task: SESSION_ID, message: text });
         }),
+        runner: commandGate(task, cfg.parse),
       },
       messages:
         cfg.history !== undefined && cfg.history.length > 0

@@ -64,6 +64,7 @@ import {
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
 import type { FileLinter } from "../gate";
+import type { IGate } from "../gate/gate-runner";
 import {
   buildMetaRuleContext,
   runMetaRules,
@@ -274,6 +275,9 @@ export interface ILoopCtxGate {
    *  `flush()` (when present) is called once the gate exits to emit any final
    *  line the process printed without a trailing newline. */
   onGateChunk?: ((text: string) => void) & { flush?: () => void };
+  /** The composed gate the loop runs each cycle. Always set by the driver
+   *  (runTask/Session) — defaults to a command gate from task.accept. */
+  runner: IGate;
 }
 
 /** The coordinator's per-task working context: the flat identity/reporting core,
@@ -1013,13 +1017,12 @@ export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
 }
 
 /** STEP 2 — run the gate command (tsc/eslint/tests/…): announce it on live
- *  streams, run `validate`, and flush any final newline-less output line. */
+ *  streams, run the injected gate runner, and flush any final newline-less output line. */
 async function runGateStep(
   ctx: ILoopCtx,
   turn: number
 ): Promise<Awaited<ReturnType<typeof validate>>> {
-  const { task, cwd, report } = ctx;
-  const parse = ctx.gate.parse;
+  const { task, report } = ctx;
 
   if (ctx.gate.onGateChunk !== undefined) {
     report({
@@ -1029,7 +1032,7 @@ async function runGateStep(
     });
   }
 
-  const gate = await validate(task, cwd, parse, {
+  const gate = await ctx.gate.runner.run(ctx.cwd, {
     ...(ctx.gate.onGateChunk === undefined
       ? {}
       : { onChunk: ctx.gate.onGateChunk }),

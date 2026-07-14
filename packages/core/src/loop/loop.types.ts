@@ -1,5 +1,6 @@
 import type { ErrorParser } from "../validate";
 import type { ProfileId } from "../config/profiles";
+import type { IGate } from "../gate/gate-runner";
 import {
   type RUN_STATUS,
   type STUCK_REASON,
@@ -185,6 +186,11 @@ export interface IRunOptions {
   requireRed?: boolean;
   /** Rule profile override (from a recipe); defaults to tsforge.config.json. */
   profile?: ProfileId;
+  /** The composed gate this run's loop checks each cycle. Defaults to a command
+   *  gate built from `task.accept` (brownfield behavior). Modes inject a richer
+   *  composed gate (command + differential + judge + …) so the escalation ladder
+   *  sees the REAL errors. */
+  gate?: IGate;
 }
 
 export interface ISpecResult {

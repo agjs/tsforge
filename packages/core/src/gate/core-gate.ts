@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import type { IGate } from "./types";
+import type { IGateSpec } from "./types";
 import {
   ESLINT_BIN,
   PRETTIER_BIN,
@@ -29,7 +29,7 @@ export async function buildGate(
     includeTests?: boolean;
     conventions?: IConventions;
   }
-): Promise<IGate> {
+): Promise<IGateSpec> {
   const parts: string[] = [];
   const labels: string[] = [];
 
@@ -135,7 +135,7 @@ function lintPart(
   packs?: readonly string[],
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
   conventions?: IConventions
-): IGate {
+): IGateSpec {
   // Result caching is sound here because this pass is syntactic-only: a file's
   // lint result depends on that file alone, and eslint keys cache entries on
   // file content + resolved config hash. The type-aware pass below must stay
@@ -150,7 +150,7 @@ function lintPart(
 }
 
 /** Optional type-aware async rules — only when target has tsconfig.json. */
-async function typeAwareLintPart(cwd: string): Promise<IGate | null> {
+async function typeAwareLintPart(cwd: string): Promise<IGateSpec | null> {
   const hasTsconfig = await Bun.file(join(cwd, PROJECT_TSCONFIG)).exists();
 
   if (!hasTsconfig) {

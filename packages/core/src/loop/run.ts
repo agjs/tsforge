@@ -11,6 +11,7 @@ import {
   type IValidateResult,
   type IErrorItem,
 } from "../validate";
+import { commandGate } from "../gate/gate-runner";
 import { readFiles, type IFileView } from "../lib/fs";
 import { trace } from "../lib/trace";
 import {
@@ -979,6 +980,7 @@ export async function runTask(
       stackProfile,
       ruleOverrides:
         Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
+      runner: opts.gate ?? commandGate(task, effectiveParse),
     },
   };
   const state: ILoopState = {
