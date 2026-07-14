@@ -39,7 +39,7 @@ import type { ISlice } from "../planning/plan-types";
  *  Neither changes logic, so neither should ever cost the model a gate attempt — a
  *  dev gets both on save. Best-effort: a missing script or non-zero exit is ignored;
  *  the gate stays the source of truth. */
-async function autofixApps(cwd: string, exec: Exec): Promise<void> {
+export async function autofixApps(cwd: string, exec: Exec): Promise<void> {
   for (const app of ["apps/api", "apps/ui"]) {
     const appCwd = join(cwd, app);
 
@@ -114,7 +114,10 @@ export function scopeFor(name: string): string[] {
  * Concatenates TypeScript files from both the API resource and UI feature directories,
  * capped at ~16000 characters. Returns empty string if directories don't exist.
  */
-async function readResourceCode(cwd: string, name: string): Promise<string> {
+export async function readResourceCode(
+  cwd: string,
+  name: string
+): Promise<string> {
   const camel = toCamelCase(name);
   const blocks: string[] = [];
   const maxChars = 16000;
