@@ -314,9 +314,6 @@ export interface ILoopState {
   /** The steer message to inject on the NEXT feedback push (set when a guard trips,
    *  cleared once injected). Undefined when no steer is pending. */
   pendingSteer?: string;
-  /** How many times the EXPERT handoff (the rung above the ladder) has fired this
-   *  run. Capped so a strong-model rescue is a few-shot escape, not a loop. */
-  expertUses?: number;
   /** Set at the top steer rung: the NEXT feedback push first PRUNES the flailing
    *  conversation to its essentials (system + original task), so the model's new
    *  strategy isn't anchored to the dead-end transcript. Cleared once applied. */
@@ -1143,16 +1140,13 @@ function stuckResult(
   };
 }
 
-/** Cap on expert-handoff attempts per run — the expert is a strong-model call, not
- *  free; a couple of rescues is plenty before a genuine park. */
-const EXPERT_MAX_USES = 2;
-
 /** Before accepting a stalled PARK, try the expert handoff (the rung ABOVE the
  *  steering ladder): hand the single most-blocking failing FILE to the configured
  *  `capabilities.expert` model, apply its fix, and let the primary model continue.
  *  Returns true when a fix was applied (→ keep looping). No expert configured, no
- *  failing file, the cap reached, or the expert declining all fall through to false
- *  (→ park as before). Never throws — a handoff hiccup must not crash the run. */
+ *  failing file, R4 already tried for this block, or the expert declining all fall
+ *  through to false (→ park as before). Never throws — a handoff hiccup must not
+ *  crash the run. Expert re-enters only on a NOVEL block fingerprint (novelty gate). */
 export async function tryExpertRescue(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -1172,8 +1166,19 @@ export async function tryExpertRescue(
     return false;
   };
 
-  if ((state.expertUses ?? 0) >= EXPERT_MAX_USES) {
-    return skip(`already used ${String(EXPERT_MAX_USES)}× this run`);
+  // Novelty gate: compute the current block fingerprint and check if R4 is already
+  // recorded for this block. If so, the expert has already tried and failed on this
+  // exact block; escalate to R5 instead.
+  const block = fingerprintFor(state, gateErrors);
+
+  if (block === "") {
+    return skip("no block fingerprint computed");
+  }
+
+  state.triedLeversByBlock ??= new Map();
+
+  if (state.triedLeversByBlock.get(block)?.has("R4") === true) {
+    return skip("expert already tried for this block; escalating to R5");
   }
 
   // Resolve the file to repair: prefer a populated `.file`, else parse it from the
@@ -1219,8 +1224,11 @@ export async function tryExpertRescue(
   }
 
   // The expert fixed it — give the primary model a fresh run at the ladder to
-  // verify and finish (reset guards + steer level; count the rescue against the cap).
-  state.expertUses = (state.expertUses ?? 0) + 1;
+  // verify and finish (reset guards + steer level; record R4 as tried for this block).
+  state.triedLeversByBlock.set(
+    block,
+    new Set([...(state.triedLeversByBlock.get(block) ?? []), "R4"])
+  );
   state.steerLevel = 0;
   resetConvergenceGuards(state, gateErrors.length);
   // Rebase the plateau backstop too (fresh baseline after the expert's fix). This is
