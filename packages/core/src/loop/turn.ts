@@ -15,7 +15,7 @@ import { trace } from "../lib/trace";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
-import type { IRunResult, Reporter } from "./loop.types";
+import type { IRunResult, Reporter, EscalationRung, IHandoff } from "./loop.types";
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
@@ -1072,6 +1072,26 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
 
     return [];
   }
+}
+
+/** Pure helper: derive the handoff ask string from the final steer message and
+ *  persisting error set. Produces a non-empty, informative ask for human/stronger-model
+ *  handoff. */
+export function buildHandoffAsk(
+  finalSteer: string,
+  persistingErrors: string[]
+): string {
+  const trimmedSteer = finalSteer.trim();
+  const errorSummary =
+    persistingErrors.length > 0
+      ? `Persisting after all escalations: ${persistingErrors.slice(0, 3).join(", ")}${persistingErrors.length > 3 ? ` (+${persistingErrors.length - 3} more)` : ""}.`
+      : "Unable to make progress with local model escalations.";
+
+  if (trimmedSteer.length === 0) {
+    return `The model was unable to fix the gate errors. ${errorSummary}`;
+  }
+
+  return `${trimmedSteer.replace(/\.$/, "")}. ${errorSummary}`;
 }
 
 /** A terminal STUCK result — shared shape for every convergence guard. */

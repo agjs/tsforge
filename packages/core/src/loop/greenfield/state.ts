@@ -42,7 +42,7 @@ function toFeature(value: unknown): IFeature | null {
     return null;
   }
 
-  const { id, desc, passes, attempts, steps } = value;
+  const { id, desc, passes, attempts, steps, lastError } = value;
 
   if (typeof id !== "string" || typeof desc !== "string" || !isFeatureId(id)) {
     return null;
@@ -57,6 +57,10 @@ function toFeature(value: unknown): IFeature | null {
 
   if (Array.isArray(steps)) {
     feature.steps = steps.filter((s): s is IStep => isRecord(s));
+  }
+
+  if (typeof lastError === "string") {
+    feature.lastError = lastError;
   }
 
   return feature;

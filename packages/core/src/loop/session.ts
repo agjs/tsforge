@@ -126,6 +126,8 @@ export interface ISessionConfig {
 export interface ISendResult {
   status: "responded" | "done" | "stuck" | "interrupted";
   turns: number;
+  /** When stuck with a handoff: the structured, resumable handoff details. */
+  handoff?: import("./loop.types").IHandoff;
 }
 
 /** Cumulative model-call metrics for a session — the basis for `/metrics`. */

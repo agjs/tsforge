@@ -6,6 +6,26 @@ import {
   type SPEC_STATUS,
 } from "./loop.constants";
 
+/** An escalation rung in the steer ladder (not R0 or R5 — those are not "rungs" to be tried). */
+export type EscalationRung = "R1" | "R2" | "R3" | "R4";
+
+/** A structured, resumable handoff when all escalation rungs have been exhausted on a block. */
+export interface IHandoff {
+  /** The stable identity of the stuck block (fingerprint). */
+  block: string;
+  /** Ordered levers tried on the final block. */
+  rungHistory: EscalationRung[];
+  /** Persisting error keys/messages. */
+  errors: string[];
+  /** What a human / stronger model / more context is needed for. */
+  ask: string;
+  /** Always true: a handoff is always resumable. */
+  resumable: true;
+  /** Machine state to resume without re-firing the same levers. Either the tried levers
+   *  for the final block, or a ref to the checkpoint holding full ILoopState. */
+  resume: { triedLevers: EscalationRung[] } | { checkpointRef: string };
+}
+
 /** A progress event emitted as the loop runs, for live observability. */
 export interface ILoopEvent {
   kind:
@@ -68,6 +88,8 @@ export interface ILoopEvent {
   passed?: boolean;
   /** For `stuck` events: a human-readable blocker diagnosis. */
   detail?: string;
+  /** For `stuck` events with a handoff: the structured handoff details. */
+  handoff?: IHandoff;
   file?: string;
   /** Files a tool MUTATED without the model hand-writing them — semantic ops
    *  (move/rename/organize) and scaffolds. Accounting-only: it tells the loop the
@@ -127,6 +149,8 @@ export interface IRunResult {
   /** When stuck: a human-readable blocker diagnosis (the persistent rule/file +
    *  last error) so an interactive session can hand back something actionable. */
   detail?: string;
+  /** When stuck with a handoff: the structured, resumable handoff details. */
+  handoff?: IHandoff;
   /** Edits/creates applied to editable files (measure edit churn). */
   edits?: number;
   /** Times an edit RAISED the gate error count (regressions). */

@@ -86,6 +86,29 @@ describe("greenfield state", () => {
     expect(md).toContain("- [x] a");
     expect(md).toContain("- [ ] b");
   });
+
+  test("saveState → loadState round-trips lastError when present", async () => {
+    const s = state("a");
+
+    s.features[0]!.lastError = "Gate errors: TS2322 type mismatch in src/index.ts:15";
+    await saveState(dir, s);
+
+    const loaded = await loadState(dir);
+
+    expect(loaded?.features[0]?.lastError).toBe(
+      "Gate errors: TS2322 type mismatch in src/index.ts:15"
+    );
+  });
+
+  test("loadState defaults to undefined when lastError is absent", async () => {
+    const s = state("a");
+
+    await saveState(dir, s);
+
+    const loaded = await loadState(dir);
+
+    expect(loaded?.features[0]?.lastError).toBeUndefined();
+  });
 });
 
 describe("evaluateFeature: layered, short-circuiting", () => {

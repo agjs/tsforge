@@ -10,6 +10,7 @@ export const STUCK_REASON = {
   stalled: "stalled",
   cap: "cap",
   readonlySpin: "readonly-spin",
+  handoff: "handoff",
 } as const;
 
 /** Whole-spec outcome — compare against these, never the bare string. */
