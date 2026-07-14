@@ -8,7 +8,6 @@ import {
   runGreenfield,
   prepareState,
   planFeatures,
-  type IFeature,
   type IGreenfieldDeps,
   type Reporter,
 } from "./loop";
@@ -27,6 +26,8 @@ import {
   type ICliArgs,
 } from "./cli/args";
 import { validate } from "./validate";
+import { composeGate } from "./gate/gate-runner";
+import { judgeStage } from "./loop/boringstack/gate-stages";
 import type { OpenAICompatibleProvider } from "./inference";
 import { resolveActiveModel, resolveModelByName } from "./models-config";
 import type { ITask } from "./spec";
@@ -550,25 +551,18 @@ async function traceMode(args: ICliArgs): Promise<number> {
 }
 
 /** Build the greenfield deps: implement one feature with the work model (reusing
- *  the headless runTask driver against the build gate). The gate + escalation
- *  ladder runs inside the session's loop (requireRed:false means the gate runs
- *  for feedback, not as a pass/fail hard constraint).
- *  TODO Task 8: fully integrate evaluate+judge into the gate (currently partial). */
+ *  the headless runTask driver against a composed gate). The gate + escalation
+ *  ladder runs inside the session's loop. The composed gate = the --accept command
+ *  gate + the reject-by-default judge (no browser/reachability target in generic CLI).
+ *  The judge makes the gate RED until the feature is really built, so RED-first holds
+ *  and we no longer need requireRed:false. */
 function greenfieldDeps(
   args: ICliArgs,
   work: OpenAICompatibleProvider,
-  _evaluator: OpenAICompatibleProvider,
-  _scope: string[],
+  evaluator: OpenAICompatibleProvider,
+  scope: string[],
   report: Reporter
 ): IGreenfieldDeps {
-  const featureTask = (feature: IFeature): ITask => ({
-    id: feature.id,
-    intent: `${args.task}\n\nImplement this feature: ${feature.desc}`,
-    accept: args.accept,
-    files: args.files.length > 0 ? args.files : [],
-    context: [],
-  });
-
   const thinkingTokenBudget =
     args.thinkingBudget > 0
       ? args.thinkingBudget
@@ -576,21 +570,29 @@ function greenfieldDeps(
 
   return {
     implement: async (feature) => {
-      const base = featureTask(feature);
+      const base = {
+        id: feature.id,
+        intent: feature.desc,
+        accept: args.accept,
+        files: scope,
+        context: [],
+      };
 
-      const result = await runTask(
-        { ...base, intent: base.intent },
-        args.dir,
-        work,
-        {
-          onEvent: report,
-          // The global gate is often already green between features, so don't
-          // bail RED-first — the model must still build this feature.
-          requireRed: false,
-          ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
-          ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
-        }
-      );
+      // The composed gate: the --accept command + the reject-by-default judge.
+      // (Generic CLI greenfield has no browser/reachability target.) The judge
+      // makes the gate RED until the feature is really built, so RED-first holds
+      // and we no longer need requireRed:false.
+      const gate = composeGate([
+        { run: (cwd, opts) => validate(base, cwd, undefined, opts ?? {}) },
+        judgeStage(evaluator, args.dir, feature),
+      ]);
+
+      const result = await runTask(base, args.dir, work, {
+        onEvent: report,
+        gate,
+        ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
+        ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
+      });
 
       return {
         done: result.status === RUN_STATUS.done,
