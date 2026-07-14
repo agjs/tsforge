@@ -140,11 +140,20 @@ from the core loop's R5**, not a bolted-on greenfield mechanism.
 
 ---
 
+## Freedom to redesign (no legacy burden)
+
+The harness is in heavy development and **not yet in real use** — so there is **no
+backwards-compatibility obligation**. Make the clean, best design and **delete superseded
+code freely** (the old greenfield/boringstack split, `escalateGuidance`, the gateless
+Session, bespoke backstops). Do NOT add compat shims or preserve old shapes for their own
+sake. "Simple runs keep working" means the brownfield path still *functions*, not that it
+must be byte-identical — reshape it into a clean 1-unit plan if that's cleaner.
+
 ## Migration & risks
 
-- **Gate generalization is the linchpin** — `settleGate`/`runGateStep` must call an
-  injected `IGate.run()` (default = accept command). This is the one intrusive core
-  change; do it first, behind the existing behavior (brownfield must be byte-identical).
+- **Gate generalization is the linchpin** — `settleGate`/`runGateStep` call an injected
+  `IGate.run()`. The CLI constructs a default command-gate from `--accept`. This is the
+  one intrusive core change; do it first (it's a clean refactor, not a compat layer).
 - **Judge/browser as gate stages** run model/Playwright calls inside the gate — they're
   slower than a shell gate; run them as the FINAL stages (only when the cheaper stages
   are green) to avoid paying for them every cycle. Preserve today's short-circuit order
@@ -169,6 +178,13 @@ from the core loop's R5**, not a bolted-on greenfield mechanism.
   expert → bounded handoff — NOT an identical grind.
 - Grep-proof: escalation/handoff/checkpoint have exactly ONE implementation, invoked by
   all modes; no mode re-implements them.
+
+## Docs (part of done, not an afterthought)
+The Astro docs (`docs/` site) describe the harness's loop, gate, and build modes. They
+MUST be updated to the unified model: one loop, the `IGate`/stages concept, the planner
+seam, and the removal of the old greenfield/boringstack split. Stale docs describing the
+two-step implement/evaluate path or per-mode behavior must be corrected. Grep the docs
+site for the removed concepts and fix every reference.
 
 ## Out of scope
 - New gate stages beyond those that exist today (just make the existing ones pluggable).
