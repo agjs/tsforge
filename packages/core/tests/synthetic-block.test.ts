@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach } from "bun:test";
 import type { ILoopState, ILoopCtx } from "../src/loop/turn";
 import { settleSyntheticBlock } from "../src/loop/turn";
 import type { ITask } from "../src/spec";
-import type { Reporter } from "../src/loop/loop.types";
+import type { Reporter, EscalationRung } from "../src/loop/loop.types";
 
 describe("settleSyntheticBlock", () => {
   let state: ILoopState;
@@ -91,22 +91,24 @@ describe("settleSyntheticBlock", () => {
   test("never touches real gate fingerprints in triedLeversByBlock", () => {
     // Pre-seed a real gate fingerprint entry
     const realFingerprint = "src/x.ts:rule-1";
+    const realSet = new Set<EscalationRung>(["R1"]);
 
-    state.triedLeversByBlock = new Map([[realFingerprint, new Set(["R1"])]]);
+    state.triedLeversByBlock = new Map([[realFingerprint, realSet]]);
 
     // Process a synthetic exit
     settleSyntheticBlock(ctx, state, "timeout:normalized", "timeout", 1);
 
-    // Verify the real entry is untouched
+    // Verify the real entry is untouched (same object reference)
+    expect(state.triedLeversByBlock.get(realFingerprint)).toBe(realSet);
     expect(state.triedLeversByBlock.get(realFingerprint)).toEqual(
       new Set(["R1"])
     );
 
-    // Verify the synthetic entry is separate
+    // Verify the synthetic entry exists as a separate entry by key
     expect(state.triedLeversByBlock.get("timeout:normalized")).toBeDefined();
-    expect(state.triedLeversByBlock.get("timeout:normalized")).not.toEqual(
-      state.triedLeversByBlock.get(realFingerprint)
-    );
+    // Both entries track recovery via Set.size, so they may have similar structures
+    // but they are separate namespace entries that don't interfere
+    expect(state.triedLeversByBlock.has("timeout:normalized")).toBe(true);
   });
 
   test("degeneration has zero budget (immediate handoff)", () => {

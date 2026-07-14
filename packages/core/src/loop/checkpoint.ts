@@ -1,4 +1,10 @@
 import type { ILoopState } from "./turn";
+import type { EscalationRung } from "./loop.types";
+
+/** Type guard to validate a string is a valid EscalationRung. */
+function isValidRung(v: unknown): v is EscalationRung {
+  return typeof v === "string" && ["R1", "R2", "R3", "R4"].includes(v);
+}
 
 /** Serializable representation of ILoopState (Map/Set → entries[]/array). */
 interface ILoopStateDTO {
@@ -78,12 +84,22 @@ export function serializeLoopState(state: ILoopState): ILoopStateDTO {
 export function deserializeLoopState(dto: ILoopStateDTO): ILoopState {
   const errorAge = new Map<string, number>(dto.errorAge);
 
-  const triedLeversByBlock = new Map<string, Set<string>>();
+  const triedLeversByBlock = new Map<string, Set<EscalationRung>>();
 
   if (dto.triedLeversByBlock) {
     for (const [fp, rungs] of dto.triedLeversByBlock) {
-      // Rungs are persisted as strings; they're validated at the type boundary
-      triedLeversByBlock.set(fp, new Set(rungs));
+      // Validate each rung string and collect into a typed Set
+      const validRungs: EscalationRung[] = [];
+
+      for (const r of rungs) {
+        if (isValidRung(r)) {
+          validRungs.push(r);
+        }
+      }
+
+      if (validRungs.length > 0) {
+        triedLeversByBlock.set(fp, new Set(validRungs));
+      }
     }
   }
 
@@ -110,10 +126,8 @@ export function deserializeLoopState(dto: ILoopStateDTO): ILoopState {
     blockFingerprint: dto.blockFingerprint,
     recentGateFingerprints: dto.recentGateFingerprints,
     triedLeversByBlock:
-      triedLeversByBlock.size > 0
-        ? (triedLeversByBlock as Map<string, Set<string>>)
-        : undefined,
-    pendingRung: dto.pendingRung,
+      triedLeversByBlock.size > 0 ? triedLeversByBlock : undefined,
+    pendingRung: isValidRung(dto.pendingRung) ? dto.pendingRung : null,
     pendingBlockFingerprint: dto.pendingBlockFingerprint,
     pendingDiagnosisSteer: dto.pendingDiagnosisSteer,
     focusError: dto.focusError,
