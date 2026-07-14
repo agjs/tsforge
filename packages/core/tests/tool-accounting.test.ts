@@ -287,7 +287,11 @@ test("a rejected (out-of-scope) move_file does NOT re-gate (no false 'done')", a
       'import type { IThing } from "./types";\nexport const f = (t: IThing): number => t.value;\n'
     );
 
-    const task = { id: "t", accept: "true", files: ["types.ts", "lib/types.ts"] };
+    const task = {
+      id: "t",
+      accept: "true",
+      files: ["types.ts", "lib/types.ts"],
+    };
     const ctx: ILoopCtx = {
       task,
       cwd: dir,

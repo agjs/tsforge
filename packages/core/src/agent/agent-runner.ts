@@ -458,7 +458,13 @@ export class AgentRunner {
           : { policyRules: opts.policyRules }),
         ...(opts.signal === undefined ? {} : { signal: opts.signal }),
       },
-      gate: { parse: undefined, runner: commandGate({ id: agentId, accept: "", files: ["**/*"] }, undefined) },
+      gate: {
+        parse: undefined,
+        runner: commandGate(
+          { id: agentId, accept: "", files: ["**/*"] },
+          undefined
+        ),
+      },
     };
     const state: ILoopState = {
       prevGateErrors: [],
