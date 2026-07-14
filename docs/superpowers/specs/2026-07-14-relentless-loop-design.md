@@ -68,16 +68,41 @@ A run stops iff **every rung has been tried at the current block AND the block
 has not moved** (`gateStuckRepeats`/`samePersist` still tripping after the top
 rung). There is **no turn ceiling, no attempt ceiling, no flat expert ceiling.**
 
+### Steering is DYNAMIC, not just static content (the backbone)
+
+We cannot pre-author a playbook for every issue on earth — static injection covers
+only a handful of *known* patterns and is useless on the long tail (novel logic
+bugs, domain-specific stalls). So the ladder's backbone is **dynamic levers that
+need no pre-authored content**, applied and then measured against the progress
+signal (escalate further only if the block didn't move — they are progress-gated,
+not treated as guaranteed unblockers):
+
+- **Reason more** — raise reasoning effort / enable extended thinking on the stalled
+  step so the model deliberates before acting. Model-agnostic, zero static content;
+  tsforge reasoning is configurable per model, so escalation raises it.
+- **Self-diagnose** — a dedicated reflection turn: the model states what it tried,
+  WHY it keeps failing, and a genuinely different hypothesis; **its own output
+  becomes the next steer.** The dynamic generalization of a fixed "step back" string
+  — it scales to any issue because the model authors the steering.
+- **Perturb sampling** — raise temperature to escape a local minimum (already used
+  in `proposePlan`'s retry).
+- **Reset context** — a stuck model is often poisoned by its own failed trail; clear
+  the accumulated attempts and re-read the relevant files fresh.
+- **Escalate capability** — hand to the expert model (below).
+
+Static rule-`PLAYBOOKS` are demoted to a cheap *shortcut* for known rules, not the
+mechanism.
+
 ### The rungs (ascending; each entered only after the one below stalls)
 
-| Rung | Action | Reuses |
-|---|---|---|
-| R0 | Refine with the exact gate errors | current default |
-| R1 | Step back — diagnose the loop, change approach | `buildSteerMessage(1)` |
-| R2 | Investigate the existing codebase (read neighbors, grep the established pattern) + inject the rule-specific playbook | `buildSteerMessage(2/3)` + `PLAYBOOKS` |
-| R3 | **Change direction** — narrow to the single most-persistent error; if a whole feature/unit is wedged, **park it and move to other work, revisit later** | new (small) |
-| R4 | **Expert unblock → return to local** — hand the stuck file+errors to the expert model, apply its fix, resume the local model. Reversible; re-enterable for each *new* block | `resolveExpertAsk` (uncap it) |
-| R5 | **Handoff** — checkpoint + precise "stuck on X, tried R1–R4, need you / a stronger model / more context," resumable. The only true terminal, and it is not a discard | greenfield state is already persisted |
+| Rung | Action | Kind | Reuses |
+|---|---|---|---|
+| R0 | Refine with the exact gate errors | — | current default |
+| R1 | **Self-diagnose** — reflection turn; model authors its own next steer (falls back to `buildSteerMessage(1)` framing) | dynamic | `buildSteerMessage(1)` as scaffold |
+| R2 | **Reason more + perturb** — raise reasoning effort / thinking, bump temperature; investigate the codebase (read neighbors, grep the established pattern); inject a rule playbook IF one matches | dynamic (+static shortcut) | reasoning config, temp, `PLAYBOOKS` |
+| R3 | **Reset + change direction** — clear the poisoned trail, re-read fresh; narrow to the single most-persistent error; if a whole feature/unit is wedged, **park it and move to other work, revisit later** | dynamic | new (small) |
+| R4 | **Expert unblock → return to local** — hand the stuck file+errors to the expert model, apply its fix, resume the local model. Reversible; re-enterable for each *new* block | capability | `resolveExpertAsk` (uncap it) |
+| R5 | **Handoff** — checkpoint + precise "stuck on X, tried R1–R4, need you / a stronger model / more context," resumable. The only true terminal, and it is not a discard | — | greenfield state is already persisted |
 
 ### Progress signal (what "still moving" means)
 
