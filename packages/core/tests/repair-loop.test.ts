@@ -88,7 +88,7 @@ test("stuck when it claims done but the gate stays red, unchanged", async () => 
     );
 
     expect(r.status).toBe("stuck");
-    expect(r.reason).toBe("stalled");
+    expect(r.reason).toBe("handoff");
     // Parked at the top of the ladder: the first stall is detected patiently
     // (samePersist), then steering escalates fast (steerRetrigger) to the park — so
     // it stops in a handful of cycles, well before any raw turn cap.
