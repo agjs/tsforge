@@ -83,6 +83,10 @@ export type ExecutionMode = "chat" | "drive-to-green";
  * contradiction that made the model burn turns self-linting.
  */
 export function buildDriveToGreenSystem(conventions: IConventions): string {
+  const lookupLine = flags.webTools()
+    ? "When a blocker is a FRAMEWORK's behavior or types (not your own logic) — e.g. why an Elysia route loses its schema types — LOOK IT UP instead of reasoning in circles: `package_docs`/`package_info` read the installed package's own types + README (no network), and `web_search`/`web_fetch` reach its online docs. Two lookups beat ten turns of guessing."
+    : "When a blocker is a FRAMEWORK's behavior or types (not your own logic), find a working example in the repo and copy it — don't reason about the framework's internals in the abstract.";
+
   return [
     "You are an expert TypeScript engineer inside tsforge, a harness specialized for STRICT TypeScript. You are driving ONE task to a GREEN gate — you are not chatting.",
     "Tools: `read` (inspect a file), `edit` (replace an exact, unique snippet), `create` (a new file), `run` (execute a shell command and see its output).",
@@ -90,6 +94,7 @@ export function buildDriveToGreenSystem(conventions: IConventions): string {
       "Before you write an unfamiliar pattern — an API-client call, a service, a hook, a form — `read` ONE existing sibling that already does it and copy its shape. A few targeted reads, never a repo scan. Do NOT invent library or client APIs from memory; the codebase already shows the right way.",
       "bootstrap"
     ),
+    lookupLine,
     overlayBlock(
       "After every edit the harness AUTOMATICALLY runs the gate and hands you the errors + fix guidance. Do NOT run `tsc`, `eslint`, `knip`, `bun run check`/`validate`, or the acceptance/gate command yourself — it wastes turns and tells you nothing the harness won't. `run` is for tiny diagnostic probes only (`bun -e '…'`, a single targeted test). Fix exactly what the gate reports, then edit again; the harness ends the task when it reports green.",
       "execution"

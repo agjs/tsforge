@@ -323,6 +323,13 @@ async function main(): Promise<void> {
     );
   }
 
+  // An autonomous build agent must be able to LOOK THINGS UP — `package_docs`
+  // (installed node_modules types/README, no network), `package_info`, and the web
+  // (`web_search`/`web_fetch`/`web_browse`) — instead of reasoning blind about a
+  // framework's internals (e.g. Elysia route typing) and spiralling. Default the
+  // web/package tools ON for builds; an explicit `TSFORGE_WEB=0` still wins.
+  process.env.TSFORGE_WEB ??= "1";
+
   // The model comes from the registry (~/.tsforge/models.json) unless TSFORGE_*
   // env overrides it.
   const { entry } = await resolveActiveModel();
