@@ -282,6 +282,33 @@ const CHECK_EVERY = 3;
  *  guards so a genuine loop is stopped. */
 const FULL_GATE_EVERY = 9;
 
+/** Edits between forced gates when NEAR-GREEN or already stalling — small, so the
+ *  gate (and the escalation ladder it drives via `checkStuck`) cycles densely and
+ *  climbs to the expert in a handful of turns. */
+const FULL_GATE_EVERY_NEAR_GREEN = 2;
+
+/** A gate error count at/under this is "near green" — close enough that dense,
+ *  immediate feedback beats churning many blind edits between sparse gates. */
+const NEAR_GREEN_ERRORS = 3;
+
+/**
+ * How many edits to allow before forcing a full gate. Normally `FULL_GATE_EVERY`,
+ * but once the build is NEAR-GREEN (a small, non-zero last gate error count) or the
+ * steer ladder has already begun, collapse toward `FULL_GATE_EVERY_NEAR_GREEN` so
+ * the gate — and the escalation ladder that only advances per gate cycle — fires
+ * densely and reaches the expert in a handful of turns instead of hundreds (a live
+ * run ground ~100 turns at 1 error because gates were ~15–20 turns apart). Progress
+ * isn't penalised: a new all-time-low error count resets the guards, so only a
+ * genuine plateau escalates — this changes cadence, NOT any gate rule or threshold.
+ */
+export function forcedGateInterval(state: ILoopState): number {
+  const lastCount = state.lastGateCount;
+  const nearGreen = lastCount > 0 && lastCount <= NEAR_GREEN_ERRORS;
+  const stalling = state.steerLevel > 0;
+
+  return nearGreen || stalling ? FULL_GATE_EVERY_NEAR_GREEN : FULL_GATE_EVERY;
+}
+
 /** How many times a send recovers from a repetition loop before giving up. */
 const MAX_DEGENERATION_RECOVERIES = 2;
 
@@ -1627,7 +1654,7 @@ export class Session {
     // and trivially passes → forcing it would wrongly return done mid-edit, before
     // the model yields its final response (a no-gate session never terminates on a
     // gate). The churn guard exists to surface gate failures, so it's a no-op here.
-    if (this.hasGate && editsSinceGate >= FULL_GATE_EVERY) {
+    if (this.hasGate && editsSinceGate >= forcedGateInterval(this.state)) {
       editsSinceGate = 0;
 
       const forced = await this.gateAfterChurn(turn, turnStart, sendStart);
@@ -1704,7 +1731,7 @@ export class Session {
     this.report({
       kind: "tool",
       task: SESSION_ID,
-      message: `⚙ forcing a gate after ${String(FULL_GATE_EVERY)} edits without a checkpoint`,
+      message: `⚙ forcing a gate after ${String(forcedGateInterval(this.state))} edits without a checkpoint`,
     });
 
     const forced = await this.settleTurn(turn, turnStart, sendStart);
