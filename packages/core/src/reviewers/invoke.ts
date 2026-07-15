@@ -48,7 +48,11 @@ async function invokeModel(
 
     return reviewFrom(reviewer.id, res.content);
   } catch (err) {
-    return { status: "errored", reviewerId: reviewer.id, error: err instanceof Error ? err.message : String(err) };
+    return {
+      status: "errored",
+      reviewerId: reviewer.id,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -69,24 +73,45 @@ async function invokeBinary(
   try {
     const stdin = renderReviewPrompt(request);
     const res = await deps.runBinary(
-      { argv: reviewer.argv, input: reviewer.input, timeoutMs: reviewer.timeoutMs },
+      {
+        argv: reviewer.argv,
+        input: reviewer.input,
+        timeoutMs: reviewer.timeoutMs,
+      },
       stdin
     );
 
     if (!res.ok) {
-      return { status: "errored", reviewerId: reviewer.id, error: "binary exited non-zero or timed out" };
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: "binary exited non-zero or timed out",
+      };
     }
 
-    const payload = reviewer.parse === "json-fence" ? extractBinaryJson(res.stdout) : res.stdout;
+    const payload =
+      reviewer.parse === "json-fence"
+        ? extractBinaryJson(res.stdout)
+        : res.stdout;
 
     return reviewFrom(reviewer.id, payload);
   } catch (err) {
-    return { status: "errored", reviewerId: reviewer.id, error: err instanceof Error ? err.message : String(err) };
+    return {
+      status: "errored",
+      reviewerId: reviewer.id,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
-function invokeOne(r: ResolvedReviewer, request: IReviewRequest, deps: IInvokeDeps): Promise<ReviewOutcome> {
-  return r.kind === "model" ? invokeModel(r, request, deps) : invokeBinary(r, request, deps);
+function invokeOne(
+  r: ResolvedReviewer,
+  request: IReviewRequest,
+  deps: IInvokeDeps
+): Promise<ReviewOutcome> {
+  return r.kind === "model"
+    ? invokeModel(r, request, deps)
+    : invokeBinary(r, request, deps);
 }
 
 /** Run all reviewers with a small concurrency cap; every reviewer resolves to an
@@ -105,7 +130,10 @@ export async function reviewerInvoke(
     }
   }
 
-  const workers = Array.from({ length: Math.min(REVIEWER_CONCURRENCY, panel.reviewers.length) }, () => worker());
+  const workers = Array.from(
+    { length: Math.min(REVIEWER_CONCURRENCY, panel.reviewers.length) },
+    () => worker()
+  );
 
   await Promise.all(workers);
 

@@ -35,7 +35,10 @@ function normHost(baseUrl: string): string {
 }
 
 function sameModel(a: IModelEntry, b: IModelEntry): boolean {
-  return normHost(a.baseUrl) === normHost(b.baseUrl) && a.model.toLowerCase() === b.model.toLowerCase();
+  return (
+    normHost(a.baseUrl) === normHost(b.baseUrl) &&
+    a.model.toLowerCase() === b.model.toLowerCase()
+  );
 }
 
 interface IIndependence {
@@ -53,7 +56,11 @@ function checkModelIndependence(
   }
 
   if (sameModel(entry, active.entry)) {
-    return { ok: false, reason: "reviewer is the same model as the builder (same host + model id)" };
+    return {
+      ok: false,
+      reason:
+        "reviewer is the same model as the builder (same host + model id)",
+    };
   }
 
   return { ok: true, reason: "" };
@@ -80,7 +87,12 @@ function resolveOne(
   const entry = cfg.models[reviewer.entry];
 
   if (entry === undefined) {
-    return { skipped: { id: reviewer.id, reason: `entry "${reviewer.entry}" not in models` } };
+    return {
+      skipped: {
+        id: reviewer.id,
+        reason: `entry "${reviewer.entry}" not in models`,
+      },
+    };
   }
 
   const independence = checkModelIndependence(reviewer.entry, entry, active);
@@ -95,7 +107,10 @@ export function resolvePanel(
   active: { name: string; entry: IModelEntry }
 ): IPanel {
   const panel = cfg.reviewPanel;
-  const minReviewers = Math.max(MIN_REVIEWERS_FLOOR, panel?.minReviewers ?? MIN_REVIEWERS_FLOOR);
+  const minReviewers = Math.max(
+    MIN_REVIEWERS_FLOOR,
+    panel?.minReviewers ?? MIN_REVIEWERS_FLOOR
+  );
   const reviewers: ResolvedReviewer[] = [];
   const skipped: { id: string; reason: string }[] = [];
 
