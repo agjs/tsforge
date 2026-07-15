@@ -121,7 +121,8 @@ test("stuck immediately when the streamed model response degenerates", async () 
     );
 
     expect(r.status).toBe("stuck");
-    expect(r.reason).toBe("stalled");
+    expect(r.reason).toBe("handoff");
+    expect(r.handoff?.block).toBe("degeneration");
     expect(r.cycles).toBe(1);
   } finally {
     await rm(dir, { recursive: true, force: true });

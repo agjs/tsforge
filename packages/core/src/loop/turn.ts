@@ -1588,12 +1588,18 @@ function commonGatePhase(errors: readonly IErrorItem[]): number | undefined {
  *  with pendingRung = R1 so the model acts on its own diagnosis (Phase B).
  *  Returns true if escalation occurred (continue with next turn), false if Phase B
  *  proceeds normally. */
+export function hasPendingDiagnosis(state: {
+  readonly pendingDiagnosisSteer?: string | null;
+}): boolean {
+  return typeof state.pendingDiagnosisSteer === "string";
+}
+
 export function handleR1Diagnosis(
   state: ILoopState,
   diagnosis: string,
   gateErrors: IErrorItem[]
 ): boolean {
-  if (state.pendingDiagnosisSteer === null) {
+  if (!hasPendingDiagnosis(state)) {
     return false; // Not in R1 Phase A
   }
 

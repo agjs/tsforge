@@ -1,34 +1,68 @@
 import { test, expect, describe } from "bun:test";
+import { join } from "node:path";
+
+const LOOP_SOURCE = join(import.meta.dir, "..", "src", "loop");
+
+async function source(name: string): Promise<string> {
+  return Bun.file(join(LOOP_SOURCE, name)).text();
+}
+
+function expectOverrideConsumedBeforeCall(
+  text: string,
+  readMarker: string,
+  completeMarker: string
+): void {
+  const readAt = text.indexOf(readMarker);
+  const clearAt = text.indexOf("pendingModelOverride = null", readAt);
+  const completeAt = text.indexOf(completeMarker, readAt);
+
+  expect(readAt).toBeGreaterThanOrEqual(0);
+  expect(clearAt).toBeGreaterThan(readAt);
+  expect(completeAt).toBeGreaterThan(clearAt);
+}
 
 describe("Auxiliary call isolation (no pendingModelOverride)", () => {
-  test("pendingModelOverride is set immediately after reading, not used by auxiliary calls", () => {
-    // This structural test verifies that the override is cleared BEFORE the
-    // provider.complete() call in both session.ts and run.ts, meaning:
-    // 1. The main turn reads override into locals
-    // 2. Sets state.pendingModelOverride = null
-    // 3. Then calls provider.complete()
-    //
-    // This ensures:
-    // - If complete() throws, the override doesn't leak to the next call
-    // - Auxiliary calls (judge, planning, expert, compaction in session.ts)
-    //   never read pendingModelOverride because it's cleared immediately
-    //
-    // The verification is via code inspection:
-    // - session.ts line 1126-1129: reads override into locals, clears at 1129, then calls at 1133
-    // - run.ts line 697-706: reads override into locals, clears at 706, then calls at 708
-    //
-    // Auxiliary compaction call in session.ts line 905 never references pendingModelOverride.
-    // If someone adds it, this test would fail (it documents the structural guarantee).
-    expect(true).toBe(true);
+  test("each main-loop call consumes its override before calling the provider", async () => {
+    const [session, run] = await Promise.all([
+      source("session.ts"),
+      source("run.ts"),
+    ]);
+
+    expectOverrideConsumedBeforeCall(
+      session,
+      "const override = this.state.pendingModelOverride",
+      "this.provider.complete"
+    );
+    expectOverrideConsumedBeforeCall(
+      run,
+      "const override = args.state.pendingModelOverride",
+      "args.provider.complete"
+    );
   });
 
-  test("auxiliary calls use fixed options, not main-loop overrides", () => {
-    // The compaction call in session.ts uses hardcoded { temperature: 0 }
-    // instead of consulting any override state. This keeps auxiliary calls
-    // deterministic and separated from per-turn model tuning.
-    //
-    // Verified by code inspection: session.ts line 910 passes { temperature: 0 }
-    // directly without checking pendingModelOverride.
-    expect(true).toBe(true);
+  test("auxiliary calls cannot read the pending main-loop override", async () => {
+    const session = await source("session.ts");
+    const compactStart = session.indexOf("  async compact(");
+    const compactEnd = session.indexOf("  get messages", compactStart);
+    const compact = session.slice(compactStart, compactEnd);
+    const auxiliaryFiles = [
+      "planning/propose-plan.ts",
+      "greenfield/plan.ts",
+      "greenfield/judge.ts",
+      "expert-handoff.ts",
+      "boringstack/plan-resources.ts",
+      "review/review-change.ts",
+    ];
+    const auxiliarySources = await Promise.all(auxiliaryFiles.map(source));
+
+    expect(compactStart).toBeGreaterThanOrEqual(0);
+    expect(compactEnd).toBeGreaterThan(compactStart);
+    expect(compact).toContain("this.provider.complete");
+    expect(compact).toContain("temperature: 0");
+    expect(compact).not.toContain("pendingModelOverride");
+
+    for (const auxiliary of auxiliarySources) {
+      expect(auxiliary).not.toContain("pendingModelOverride");
+    }
   });
 });

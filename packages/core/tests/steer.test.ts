@@ -7,6 +7,7 @@ import {
   STEER_LADDER_MAX,
   type ISteerError,
 } from "../src/loop/feedback/steer";
+import { hasPendingDiagnosis } from "../src/loop/turn";
 
 const err = (rule: string): ISteerError => ({
   rule,
@@ -219,5 +220,16 @@ describe("R1 two-phase decision logic", () => {
 
     expect(shortButNovel.length < 80).toBe(true);
     expect(isTrivialDiagnosis(shortButNovel, errors)).toBe(true);
+  });
+
+  test("only a string marker activates the diagnosis-only turn", () => {
+    expect(hasPendingDiagnosis({ pendingDiagnosisSteer: "diagnose" })).toBe(
+      true
+    );
+    expect(hasPendingDiagnosis({ pendingDiagnosisSteer: null })).toBe(false);
+    expect(hasPendingDiagnosis({ pendingDiagnosisSteer: undefined })).toBe(
+      false
+    );
+    expect(hasPendingDiagnosis({})).toBe(false);
   });
 });
