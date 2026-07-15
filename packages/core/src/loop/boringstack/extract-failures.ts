@@ -42,18 +42,39 @@ function isErrorLine(line: string): boolean {
   );
 }
 
+/** App-qualify a stage-relative path using the current `::tsforge-app <prefix>::`
+ *  marker. knip run inside `apps/api` prints `src/api/note/…`; the loop needs the
+ *  repo-relative `apps/api/src/api/note/…` so the path matches the model's editable
+ *  scope (else feedback drops it as read-only). `.`/empty/already-qualified → as-is. */
+function qualify(app: string, relPath: string): string {
+  if (app === "" || app === "." || relPath.startsWith(`${app}/`)) {
+    return relPath;
+  }
+
+  return `${app}/${relPath}`;
+}
+
 export function extractFailures(output: string, cwd: string): Set<string> {
   const signatures = new Set<string>();
-  // knip prints `Unused files (N)` then one repo-relative path per line, ending at
-  // the next command echo (`$ …`), a blank line, or another section header. Each
-  // path becomes a stable actionable signature (`knip:unused-file:<path>`) so the
-  // differential + fingerprint can track it and the loop can steer on it — instead
-  // of the whole block collapsing into one opaque `gate-nonzero` fallback (which is
-  // exactly why an unused-file wall ground a live run for 130+ turns).
+  // knip prints `Unused files (N)` then one relative path per line, ending at the
+  // next command echo (`$ …`), a blank line, or another section header. Each path
+  // becomes a stable actionable signature (`knip:unused-file:<repo-relative path>`)
+  // so the differential + fingerprint can track it and the loop can steer on it —
+  // instead of the whole block collapsing into one opaque `gate-nonzero` fallback
+  // (which is exactly why an unused-file wall ground a live run for 130+ turns).
   let inUnusedFiles = false;
+  let app = "";
 
   for (const rawLine of output.split("\n")) {
     const line = normalize(rawLine, cwd);
+
+    const marker = /^::tsforge-app (.+)::$/u.exec(line);
+
+    if (marker !== null) {
+      app = marker[1] ?? "";
+      inUnusedFiles = false;
+      continue;
+    }
 
     if (/^Unused files \(\d+\)$/u.test(line)) {
       inUnusedFiles = true;
@@ -65,7 +86,7 @@ export function extractFailures(output: string, cwd: string): Set<string> {
         line.length === 0 || line.startsWith("$") || isKnipSectionHeader(line);
 
       if (!ends) {
-        signatures.add(`knip:unused-file:${line}`);
+        signatures.add(`knip:unused-file:${qualify(app, line)}`);
         continue;
       }
 

@@ -68,6 +68,23 @@ $ tsc --noEmit`;
     expect(sigs.size).toBe(1);
   });
 
+  test("app-qualifies a knip path using the ::tsforge-app:: stage marker (repo-relative for scope matching)", () => {
+    // The exact live shape: knip runs inside apps/api and prints a src-relative path.
+    // Without the app prefix the path wouldn't match the model's editable scope and
+    // the loop would drop it as read-only.
+    const out = `::tsforge-app apps/api::
+[generate:lint-meta-docs] RULES.md is up to date.
+Unused files (1)
+src/api/note/note.service.test.ts
+$ bun run check`;
+    const sigs = extractFailures(out, "/tmp/clone");
+
+    expect(
+      sigs.has("knip:unused-file:apps/api/src/api/note/note.service.test.ts")
+    ).toBe(true);
+    expect(sigs.size).toBe(1);
+  });
+
   test("captures MULTIPLE knip unused files and stops at the command echo", () => {
     const out = `Unused files (2)
 src/api/note/note.service.test.ts
