@@ -73,6 +73,34 @@ export interface IModelsConfig {
   models: Record<string, IModelEntry>;
   /** Optional capability→entry-name routing. e.g. `{ vision: "openrouter-vlm" }`. */
   capabilities?: Partial<Record<CapabilityName, string>>;
+  /** Optional panel of model + binary reviewers for collaborative review. */
+  reviewPanel?: IReviewPanel;
+}
+
+export interface IReviewerModel {
+  kind: "model";
+  id: string;
+  /** Names a key in `models` — reuses its baseUrl/key/headers. */
+  entry: string;
+}
+
+export type BinaryInputMode = "stdin" | "arg" | "tempfile";
+export type BinaryParseMode = "json-fence" | "raw";
+
+export interface IReviewerBinary {
+  kind: "binary";
+  id: string;
+  argv: string[];
+  input: BinaryInputMode;
+  timeoutMs: number;
+  parse: BinaryParseMode;
+}
+
+export type IReviewer = IReviewerModel | IReviewerBinary;
+
+export interface IReviewPanel {
+  minReviewers: number;
+  reviewers: IReviewer[];
 }
 
 /** The built-in local-qwen entry — matches PROVIDER_DEFAULTS so an absent
@@ -145,6 +173,144 @@ function assertImageApi(name: string, entry: unknown): void {
   }
 }
 
+function isInputMode(v: unknown): v is BinaryInputMode {
+  return v === "stdin" || v === "arg" || v === "tempfile";
+}
+
+function isParseMode(v: unknown): v is BinaryParseMode {
+  return v === "json-fence" || v === "raw";
+}
+
+function parseModelReviewer(raw: Record<string, unknown>, models: Record<string, IModelEntry>): IReviewerModel {
+  if (typeof raw.id !== "string" || typeof raw.entry !== "string") {
+    throw new Error('models.json: model reviewer needs { id, entry }');
+  }
+
+  if (models[raw.entry] === undefined) {
+    throw new Error(`models.json: reviewer entry "${raw.entry}" is not a configured model`);
+  }
+
+  return { kind: "model", id: raw.id, entry: raw.entry };
+}
+
+function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
+  const argv = raw.argv;
+
+  if (typeof raw.id !== "string" || !Array.isArray(argv) || argv.length === 0) {
+    throw new Error("models.json: binary reviewer needs { id, argv (non-empty) }");
+  }
+
+  if (!argv.every((a): a is string => typeof a === "string")) {
+    throw new Error("models.json: binary reviewer argv must be all strings");
+  }
+
+  if (!isInputMode(raw.input) || !isParseMode(raw.parse) || typeof raw.timeoutMs !== "number") {
+    throw new Error("models.json: binary reviewer needs { input, parse, timeoutMs }");
+  }
+
+  return { kind: "binary", id: raw.id, argv, input: raw.input, timeoutMs: raw.timeoutMs, parse: raw.parse };
+}
+
+function parseReviewer(raw: unknown, models: Record<string, IModelEntry>): IReviewer {
+  if (!isRecord(raw)) {
+    throw new Error("models.json: each reviewer must be an object");
+  }
+
+  if (raw.kind === "model") {
+    return parseModelReviewer(raw, models);
+  }
+
+  if (raw.kind === "binary") {
+    return parseBinaryReviewer(raw);
+  }
+
+  throw new Error('models.json: reviewer kind must be "model" or "binary"');
+}
+
+function parseReviewPanel(raw: unknown, models: Record<string, IModelEntry>): IReviewPanel | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(raw) || !Array.isArray(raw.reviewers)) {
+    throw new Error("models.json: reviewPanel must be { minReviewers, reviewers[] }");
+  }
+
+  const minReviewers = typeof raw.minReviewers === "number" ? raw.minReviewers : 2;
+  const reviewers = raw.reviewers.map((r) => parseReviewer(r, models));
+
+  return { minReviewers, reviewers };
+}
+
+function isInputMode(v: unknown): v is BinaryInputMode {
+  return v === "stdin" || v === "arg" || v === "tempfile";
+}
+
+function isParseMode(v: unknown): v is BinaryParseMode {
+  return v === "json-fence" || v === "raw";
+}
+
+function parseModelReviewer(raw: Record<string, unknown>, models: Record<string, IModelEntry>): IReviewerModel {
+  if (typeof raw.id !== "string" || typeof raw.entry !== "string") {
+    throw new Error('models.json: model reviewer needs { id, entry }');
+  }
+
+  if (models[raw.entry] === undefined) {
+    throw new Error(`models.json: reviewer entry "${raw.entry}" is not a configured model`);
+  }
+
+  return { kind: "model", id: raw.id, entry: raw.entry };
+}
+
+function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
+  const argv = raw.argv;
+
+  if (typeof raw.id !== "string" || !Array.isArray(argv) || argv.length === 0) {
+    throw new Error("models.json: binary reviewer needs { id, argv (non-empty) }");
+  }
+
+  if (!argv.every((a): a is string => typeof a === "string")) {
+    throw new Error("models.json: binary reviewer argv must be all strings");
+  }
+
+  if (!isInputMode(raw.input) || !isParseMode(raw.parse) || typeof raw.timeoutMs !== "number") {
+    throw new Error("models.json: binary reviewer needs { input, parse, timeoutMs }");
+  }
+
+  return { kind: "binary", id: raw.id, argv, input: raw.input, timeoutMs: raw.timeoutMs, parse: raw.parse };
+}
+
+function parseReviewer(raw: unknown, models: Record<string, IModelEntry>): IReviewer {
+  if (!isRecord(raw)) {
+    throw new Error("models.json: each reviewer must be an object");
+  }
+
+  if (raw.kind === "model") {
+    return parseModelReviewer(raw, models);
+  }
+
+  if (raw.kind === "binary") {
+    return parseBinaryReviewer(raw);
+  }
+
+  throw new Error('models.json: reviewer kind must be "model" or "binary"');
+}
+
+function parseReviewPanel(raw: unknown, models: Record<string, IModelEntry>): IReviewPanel | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(raw) || !Array.isArray(raw.reviewers)) {
+    throw new Error("models.json: reviewPanel must be { minReviewers, reviewers[] }");
+  }
+
+  const minReviewers = typeof raw.minReviewers === "number" ? raw.minReviewers : 2;
+  const reviewers = raw.reviewers.map((r) => parseReviewer(r, models));
+
+  return { minReviewers, reviewers };
+}
+
 /** Validate a parsed object into a registry, with actionable errors — the file is
  *  hand-edited, so a clear message beats a silent fallback. */
 export function parseModelsConfig(raw: unknown): IModelsConfig {
@@ -179,10 +345,13 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
   }
 
   const capabilities = parseCapabilities(raw.capabilities, models);
+  const reviewPanel = parseReviewPanel(raw.reviewPanel, models);
 
-  return capabilities === undefined
+  const withCaps = capabilities === undefined
     ? { active: raw.active, models }
     : { active: raw.active, models, capabilities };
+
+  return reviewPanel === undefined ? withCaps : { ...withCaps, reviewPanel };
 }
 
 /** Validate the optional `capabilities` block: known keys only, each pointing at
