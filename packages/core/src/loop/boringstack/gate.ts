@@ -14,9 +14,18 @@ import type { Exec } from "./exec";
 // (`apps/api/src/api/note/…`). Without this a knip "unused file" path doesn't match
 // the model's editable scope and the loop drops it as read-only. The echoes always
 // exit 0, so the `&&` short-circuit (stop at the first failing stage) is preserved.
+// The UI stage regenerates the typed OpenAPI client from the LIVE API
+// (`generate:api`) BEFORE it validates. This runs every gate cycle — not just at
+// scaffold time — so after the model changes the API schema/routes the UI never
+// validates against a stale `schema.d.ts` (the stale-client drift that pushed a live
+// run into illegal `as` casts and raw-fetch workarounds). API validate runs FIRST,
+// so a broken API surfaces as an API failure, not a confusing UI type error; only
+// once the API is healthy do we resync + validate the UI. `schema.d.ts` is
+// harness-owned (outside the model's editable scope) — the gate regenerates it, the
+// model never hand-edits it.
 const GATE =
   "echo '::tsforge-app apps/api::' && (cd apps/api && bun run validate) && " +
-  "echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run validate) && " +
+  "echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && bun run validate) && " +
   "echo '::tsforge-app .::' && bun run check";
 
 export async function runBoringstackGate(
