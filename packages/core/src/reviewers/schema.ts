@@ -81,15 +81,32 @@ function isSeverity(v: unknown): v is Severity {
 }
 
 function isFindingCode(v: unknown): v is FindingCode {
-  return typeof v === "string" && FINDING_CODES.some((c) => c === v);
+  return (
+    typeof v === "string" &&
+    (v === "missing-test" ||
+      v === "as-cast" ||
+      v === "non-null-assert" ||
+      v === "gate-relaxed" ||
+      v === "complexity" ||
+      v === "scope-bypass" ||
+      v === "security" ||
+      v === "supply-chain" ||
+      v === "dead-code" ||
+      v === "wrong-idiom" ||
+      v === "other")
+  );
 }
 
 function isVerdict(v: unknown): v is ReviewVerdict {
   return v === "approve" || v === "request-changes" || v === "reject";
 }
 
-function parseFinding(raw: unknown): IFinding | null {
-  if (!isRecord(raw) || !isSeverity(raw.severity) || !isFindingCode(raw.findingCode)) {
+export function parseFinding(raw: unknown): IFinding | null {
+  if (
+    !isRecord(raw) ||
+    !isSeverity(raw.severity) ||
+    !isFindingCode(raw.findingCode)
+  ) {
     return null;
   }
 
@@ -122,7 +139,11 @@ function parseFinding(raw: unknown): IFinding | null {
  *  malformation — the caller records that reviewer as `errored`, never as an
  *  approval, so a parse failure can't sneak through as a pass. */
 export function parseReview(reviewerId: string, raw: unknown): IReview | null {
-  if (!isRecord(raw) || !isVerdict(raw.verdict) || typeof raw.summary !== "string") {
+  if (
+    !isRecord(raw) ||
+    !isVerdict(raw.verdict) ||
+    typeof raw.summary !== "string"
+  ) {
     return null;
   }
 

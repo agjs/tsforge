@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { isRecord } from "../lib/guards/guards";
+import { isRecord } from "../lib/guards";
 import { OpenAICompatibleProvider, type IProvider } from "../inference";
 import {
   loadModelsConfig,
@@ -19,7 +19,7 @@ import {
   artifactBody,
 } from "../reviewers/harness-review";
 import { RUBRIC_VERSION } from "../reviewers/schema";
-import type { IVerdict } from "../reviewers/aggregate";
+import { parseVerdict, type IVerdict } from "../reviewers/aggregate";
 
 interface IArgs {
   base: string | undefined;
@@ -148,23 +148,7 @@ async function readCachedVerdict(cacheKey: string): Promise<IVerdict | null> {
       return null;
     }
 
-    const verdict = parsed.verdict;
-
-    if (
-      verdict !== undefined &&
-      verdict !== null &&
-      isRecord(verdict) &&
-      typeof verdict.blocked === "boolean" &&
-      typeof verdict.reason === "string" &&
-      isRecord(verdict.reviewers) &&
-      Array.isArray(verdict.ranked) &&
-      Array.isArray(verdict.perReviewer) &&
-      typeof verdict.identity === "string"
-    ) {
-      return verdict as unknown as IVerdict;
-    }
-
-    return null;
+    return parseVerdict(parsed.verdict);
   } catch {
     return null;
   }

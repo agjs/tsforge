@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { aggregate, type ReviewOutcome } from "../src/reviewers/aggregate";
+import { aggregate, parseVerdict, type ReviewOutcome, type IVerdict } from "../src/reviewers/aggregate";
 import type { IReview, IFinding } from "../src/reviewers/schema";
 
 function ok(id: string, verdict: IReview["verdict"], findings: IFinding[] = []): ReviewOutcome {
@@ -87,5 +87,155 @@ describe("aggregate", () => {
     );
 
     expect(v.blocked).toBe(false);
+  });
+});
+
+describe("parseVerdict", () => {
+  test("valid verdict round-trips", () => {
+    const v: IVerdict = {
+      blocked: true,
+      reason: "critical security finding: ssrf",
+      reviewers: { ok: 2, errored: 0 },
+      ranked: [
+        {
+          severity: "critical",
+          findingCode: "security",
+          file: "a.ts",
+          line: 42,
+          issue: "ssrf vulnerability",
+          agreement: 2,
+        },
+      ],
+      perReviewer: [
+        {
+          reviewerId: "a",
+          verdict: "request-changes",
+          findings: [{ severity: "critical", findingCode: "security", file: "a.ts", line: 42, issue: "ssrf vulnerability" }],
+          summary: "found security issue",
+        },
+        {
+          reviewerId: "b",
+          verdict: "approve",
+          findings: [],
+          summary: "looks good",
+        },
+      ],
+      identity: "local/flash",
+    };
+
+    const parsed = parseVerdict(v);
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.blocked).toBe(true);
+    expect(parsed?.reason).toBe("critical security finding: ssrf");
+    expect(parsed?.identity).toBe("local/flash");
+    expect(parsed?.reviewers).toEqual({ ok: 2, errored: 0 });
+    expect(parsed?.ranked).toHaveLength(1);
+    expect(parsed?.ranked[0]?.agreement).toBe(2);
+    expect(parsed?.perReviewer).toHaveLength(2);
+  });
+
+  test("missing verdict key → null", () => {
+    const raw = { some: "object" };
+
+    expect(parseVerdict(raw)).toBeNull();
+  });
+
+  test("non-object input → null", () => {
+    expect(parseVerdict(null)).toBeNull();
+    expect(parseVerdict("string")).toBeNull();
+    expect(parseVerdict(123)).toBeNull();
+  });
+
+  test("malformed reviewers object → null", () => {
+    const v = {
+      blocked: true,
+      reason: "test",
+      reviewers: { ok: "two", errored: 0 },
+      ranked: [],
+      perReviewer: [],
+      identity: "x",
+    };
+
+    expect(parseVerdict(v)).toBeNull();
+  });
+
+  test("missing identity string → null", () => {
+    const v = {
+      blocked: true,
+      reason: "test",
+      reviewers: { ok: 2, errored: 0 },
+      ranked: [],
+      perReviewer: [],
+      identity: 123,
+    };
+
+    expect(parseVerdict(v)).toBeNull();
+  });
+
+  test("malformed ranked finding → null", () => {
+    const v = {
+      blocked: false,
+      reason: "",
+      reviewers: { ok: 2, errored: 0 },
+      ranked: [
+        {
+          severity: "critical",
+          findingCode: "as-cast",
+          issue: "cast here",
+          agreement: "two",
+        },
+      ],
+      perReviewer: [],
+      identity: "x",
+    };
+
+    expect(parseVerdict(v)).toBeNull();
+  });
+
+  test("malformed reviewer in perReviewer → null", () => {
+    const v = {
+      blocked: false,
+      reason: "",
+      reviewers: { ok: 1, errored: 0 },
+      ranked: [],
+      perReviewer: [
+        {
+          reviewerId: "a",
+          verdict: "invalid-verdict",
+          findings: [],
+          summary: "test",
+        },
+      ],
+      identity: "x",
+    };
+
+    expect(parseVerdict(v)).toBeNull();
+  });
+
+  test("non-array ranked → null", () => {
+    const v = {
+      blocked: false,
+      reason: "",
+      reviewers: { ok: 1, errored: 0 },
+      ranked: "not an array",
+      perReviewer: [],
+      identity: "x",
+    };
+
+    expect(parseVerdict(v)).toBeNull();
+  });
+
+  test("non-array perReviewer → null", () => {
+    const v = {
+      blocked: false,
+      reason: "",
+      reviewers: { ok: 1, errored: 0 },
+      ranked: [],
+      perReviewer: { not: "array" },
+      identity: "x",
+    };
+
+    expect(parseVerdict(v)).toBeNull();
   });
 });

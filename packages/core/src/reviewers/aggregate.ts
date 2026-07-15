@@ -1,3 +1,5 @@
+import { parseReview, parseFinding } from "./schema";
+import { isRecord } from "../lib/guards";
 import type { IReview, IFinding, FindingCode } from "./schema";
 
 export type ReviewOutcome =
@@ -18,14 +20,21 @@ export interface IVerdict {
 }
 
 const SECURITY_CODES: readonly FindingCode[] = ["security", "supply-chain"];
-const SEVERITY_RANK: Record<IFinding["severity"], number> = { critical: 3, major: 2, minor: 1 };
+const SEVERITY_RANK: Record<IFinding["severity"], number> = {
+  critical: 3,
+  major: 2,
+  minor: 1,
+};
 
 function normFile(file: string | undefined): string {
   if (file === undefined) {
     return "<no-file>";
   }
 
-  return file.replace(/\\/gu, "/").replace(/^[ab]\//u, "").toLowerCase();
+  return file
+    .replace(/\\/gu, "/")
+    .replace(/^[ab]\//u, "")
+    .toLowerCase();
 }
 
 function normIssue(issue: string): string {
@@ -40,7 +49,9 @@ function normIssue(issue: string): string {
 function locusKey(f: IFinding): string {
   const file = normFile(f.file);
 
-  return f.findingCode === "other" ? `${file}::${normIssue(f.issue)}` : `${file}::${f.findingCode}`;
+  return f.findingCode === "other"
+    ? `${file}::${normIssue(f.issue)}`
+    : `${file}::${f.findingCode}`;
 }
 
 interface IGroup {
@@ -61,7 +72,10 @@ function groupFindings(reviews: IReview[]): Map<string, IGroup> {
       } else {
         existing.reviewers.add(review.reviewerId);
 
-        if (SEVERITY_RANK[finding.severity] > SEVERITY_RANK[existing.finding.severity]) {
+        if (
+          SEVERITY_RANK[finding.severity] >
+          SEVERITY_RANK[existing.finding.severity]
+        ) {
           existing.finding = finding;
         }
       }
@@ -79,7 +93,9 @@ function rank(groups: Map<string, IGroup>): IRankedFinding[] {
   }
 
   return ranked.sort(
-    (a, b) => SEVERITY_RANK[b.severity] * b.agreement - SEVERITY_RANK[a.severity] * a.agreement
+    (a, b) =>
+      SEVERITY_RANK[b.severity] * b.agreement -
+      SEVERITY_RANK[a.severity] * a.agreement
   );
 }
 
@@ -102,7 +118,7 @@ function decideReason(
   }
 
   const criticalSecurity = ranked.find(
-    (f) => f.severity === "critical" && SECURITY_CODES.some((c) => c === f.findingCode)
+    (f) => f.severity === "critical" && SECURITY_CODES.includes(f.findingCode)
   );
 
   if (criticalSecurity !== undefined) {
@@ -141,7 +157,12 @@ export function aggregate(
   }
 
   const ranked = rank(groupFindings(reviews));
-  const reason = decideReason(reviews, ranked, reviews.length, opts.minReviewers);
+  const reason = decideReason(
+    reviews,
+    ranked,
+    reviews.length,
+    opts.minReviewers
+  );
 
   return {
     blocked: reason.length > 0,
@@ -150,5 +171,84 @@ export function aggregate(
     ranked,
     perReviewer: reviews,
     identity: opts.identity,
+  };
+}
+
+/** Parse and validate a cached verdict artifact. Returns null if any field is
+ *  malformed, enabling a corrupt cache entry to be treated as a cache miss. */
+export function parseVerdict(raw: unknown): IVerdict | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const { blocked, reason, reviewers, ranked, perReviewer, identity } = raw;
+
+  // Validate scalar fields
+  if (
+    typeof blocked !== "boolean" ||
+    typeof reason !== "string" ||
+    typeof identity !== "string"
+  ) {
+    return null;
+  }
+
+  // Validate reviewers object
+  if (
+    !isRecord(reviewers) ||
+    typeof reviewers.ok !== "number" ||
+    typeof reviewers.errored !== "number"
+  ) {
+    return null;
+  }
+
+  // Validate ranked array
+  if (!Array.isArray(ranked)) {
+    return null;
+  }
+
+  const parsedRanked: IRankedFinding[] = [];
+
+  for (const item of ranked) {
+    const finding = parseFinding(item);
+
+    if (
+      finding === null ||
+      !isRecord(item) ||
+      typeof item.agreement !== "number"
+    ) {
+      return null;
+    }
+
+    parsedRanked.push({ ...finding, agreement: item.agreement });
+  }
+
+  // Validate perReviewer array
+  if (!Array.isArray(perReviewer)) {
+    return null;
+  }
+
+  const parsedReviews: IReview[] = [];
+
+  for (const item of perReviewer) {
+    if (!isRecord(item) || typeof item.reviewerId !== "string") {
+      return null;
+    }
+
+    const review = parseReview(item.reviewerId, item);
+
+    if (review === null) {
+      return null;
+    }
+
+    parsedReviews.push(review);
+  }
+
+  return {
+    blocked,
+    reason,
+    reviewers: { ok: reviewers.ok, errored: reviewers.errored },
+    ranked: parsedRanked,
+    perReviewer: parsedReviews,
+    identity,
   };
 }
