@@ -146,7 +146,9 @@ describe("${camel} routes", () => {
 \`\`\`
 Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` or the schema in a test.
 
-**Routes** (\`${camel}.routes.ts\`): a schema on EVERY route; NO per-handler try/catch (Elysia \`.onError\` handles errors centrally); NEVER \`throw new Error\` — throw \`ApiErrors.notFound(...)\` / \`.validation(...)\` / \`.unauthorized(...)\`.
+**Routes** (\`${camel}.routes.ts\`): a schema on EVERY route; NO per-handler try/catch (Elysia \`.onError\` handles errors centrally); NEVER \`throw new Error\` — throw \`ApiErrors.notFound(...)\` / \`.validation(...)\` / \`.unauthorized(...)\`. Chain \`.get\`/\`.post\`/\`.patch\`/\`.delete\` DIRECTLY on \`requireAuth().onError(...)\` — do NOT wrap them in \`.group("/", …)\` (inside a \`.group\` callback the app has no \`user\` and loses schema inference). \`.group\` is only for mounting a sub-router at a prefix.
+
+**Response schemas + nullable columns (the #1 opaque Elysia error):** a \`response\` schema field must match EXACTLY what the service returns, or Elysia rejects the handler with an inscrutable "not assignable to \`InlineHandlerNonMacro\`" \`TS2345\` on the route (it points at the route, NOT the real mismatch). The trap: a NULLABLE Drizzle column (\`.notNull()\` absent) infers \`string | null\`, but \`t.Optional(t.String())\` is \`string | undefined\` — \`null\` ≠ \`undefined\`. For a nullable column use \`t.Optional(t.Union([t.String(), t.Null()]))\` in the response (or make the column \`.notNull()\`). A \`Date\` column against \`t.String()\` is fine.
 
 **Service** (\`${camel}.service.ts\`): Drizzle + logic; throw \`ApiErrors.*\`; \`catch (err: unknown)\` → \`getErrorMessage(err)\`; singleton export.
 

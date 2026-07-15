@@ -417,6 +417,12 @@ const IDIOM_TRAPS: readonly IIdiomTrap[] = [
     relevant: /unsafe|no-explicit-any|\bany\b/i,
     hint: "`new Array(n).fill(x)` is typed `any[]` under strict TypeScript, so every element read off it is `any`. Use `Array.from({ length: n }, () => x)` — it's typed `T[]`.",
   },
+  {
+    // Elysia's opaque route error: a handler "not assignable to InlineHandler…".
+    inSource: /t\.Optional\(\s*t\.String\(\)\s*\)/,
+    relevant: /InlineHandler/i,
+    hint: "That opaque `InlineHandlerNonMacro` TS2345 on a route is NOT a routing/`.group()` problem — it means your `response:` schema doesn't match what the service returns. The usual cause: a NULLABLE Drizzle column returns `string | null`, but `t.Optional(t.String())` is `string | undefined` (`null` ≠ `undefined`). Change the response field to `t.Optional(t.Union([t.String(), t.Null()]))`, or make the column `.notNull()`. (A `Date` column vs `t.String()` is fine — don't touch that.)",
+  },
 ];
 
 /**
