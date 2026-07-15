@@ -1380,6 +1380,13 @@ export function checkStuck(
   // if any, tripped — the coarsest-first order preserves the old diagnosis text.
   const persisted = trackErrorAges(state, gateErrors);
 
+  const previousPhase = commonGatePhase(state.prevGateErrors);
+  const currentPhase = commonGatePhase(gateErrors);
+  const frontierAdvanced =
+    previousPhase !== undefined &&
+    currentPhase !== undefined &&
+    currentPhase > previousPhase;
+
   state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
     ? state.gateNoProgress + 1
     : 0;
@@ -1397,14 +1404,20 @@ export function checkStuck(
   // on each escalation (below) so escalations stay spaced, but it climbs right back under
   // oscillation because no new all-time low arrives — driving the ladder to the expert in
   // a handful of gates instead of ~150 turns (observed live: v8 still L2 at turn 153).
-  // Genuine progress this cycle = a new ALL-TIME low error count. This — NOT a change in
-  // the momentary fingerprint string — is the only signal that the block truly moved.
+  // Genuine progress is normally a new all-time-low error count. A composed,
+  // short-circuiting gate has one additional proof: reaching a later phase means the
+  // earlier phase went green. That downstream phase may legitimately reveal MORE
+  // errors, so comparing counts alone would retain an exhausted API block when the UI
+  // first becomes reachable (the exact greenfield-revisit failure).
   const madeNewLow =
     gateErrors.length < (state.plateauBest ?? Number.POSITIVE_INFINITY);
+  const madeProgress = madeNewLow || frontierAdvanced;
 
-  if (madeNewLow) {
+  if (madeProgress) {
     state.plateauBest = gateErrors.length;
     state.redGates = 0;
+    state.bestErrorCount = gateErrors.length;
+    state.noNewLow = 0;
     // Genuine progress — the oscillation history is stale; clear the window so the
     // plateau fingerprint reflects only the CURRENT stuck streak.
     state.recentGateFingerprints = [];
@@ -1421,11 +1434,11 @@ export function checkStuck(
   const momentaryFp = fingerprintFor(state, gateErrors);
 
   // STICKY BLOCK IDENTITY: a stuck streak keeps ONE identity for its whole life, even as
-  // the guard that derives the fingerprint changes. Only genuine progress (`madeNewLow`)
+  // the guard that derives the fingerprint changes. Only genuine progress (`madeProgress`)
   // moves the block; a derivation change must NOT read as progress or the ladder would
   // reset mid-climb and never reach exhaustion (and rungs would record under a shifting
   // key). This is the single key used for recording, the R4 novelty gate, and the handoff.
-  if (madeNewLow) {
+  if (madeProgress) {
     // Block moved (or resolved) — reset the ladder so the next stall starts fresh at R1.
     state.blockFingerprint = "";
     state.focusError = null;
@@ -1554,6 +1567,19 @@ export function checkStuck(
   // blockFingerprint is the STICKY identity, already set above and held for the whole
   // streak — do NOT overwrite it here with a momentary value.
   return null; // keep looping, with the steer injected this cycle
+}
+
+/** Return the single ordered phase represented by an error set. Mixed or
+ * unannotated sets are deliberately unknown and keep the conservative count-based
+ * convergence behavior. */
+function commonGatePhase(errors: readonly IErrorItem[]): number | undefined {
+  const first = errors[0]?.phase;
+
+  if (first === undefined) {
+    return undefined;
+  }
+
+  return errors.every((error) => error.phase === first) ? first : undefined;
 }
 
 /** R1 Phase B (feed-forward): after Phase A's diagnosis-only call, check if the

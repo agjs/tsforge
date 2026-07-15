@@ -17,6 +17,18 @@ import { autofixApps, readResourceCode, rescueFileFor } from "./build";
  *  ground a live run was a co-located API test knip rejected forever, and the model
  *  never got told the concrete way out (delete it / use the mirrored `tests/` path,
  *  the only knip entry for tests in this stack). */
+function phaseForFile(file: string): number | undefined {
+  if (file.startsWith("apps/api/")) {
+    return 1;
+  }
+
+  if (file.startsWith("apps/ui/")) {
+    return 2;
+  }
+
+  return file.length > 0 ? 3 : undefined;
+}
+
 function signatureToError(sig: string): IErrorItem {
   const knip = /^knip:unused-file:(.+)$/u.exec(sig);
 
@@ -27,6 +39,9 @@ function signatureToError(sig: string): IErrorItem {
       key: sig,
       rule: "knip/unused-files",
       file,
+      ...(phaseForFile(file) === undefined
+        ? {}
+        : { phase: phaseForFile(file) }),
       message:
         `knip: unused file ${file} — it isn't reachable from any configured entry, ` +
         `so it must go. If it's a co-located API test under src/**/*.test.ts, DELETE ` +
@@ -36,7 +51,55 @@ function signatureToError(sig: string): IErrorItem {
     };
   }
 
+  const structured = /^failure:([^:]*):([^:]*):([^:]*):(.*)$/u.exec(sig);
+
+  if (structured !== null) {
+    const file = decodeURIComponent(structured[1] ?? "");
+    const lineText = structured[2] ?? "";
+    const rule = decodeURIComponent(structured[3] ?? "");
+    const message = decodeURIComponent(structured[4] ?? "");
+    const phase = phaseForFile(file);
+
+    return {
+      key: sig,
+      file,
+      ...(lineText === "" ? {} : { line: Number(lineText) }),
+      rule,
+      ...(phase === undefined ? {} : { phase }),
+      message,
+    };
+  }
+
   return { key: sig, message: sig };
+}
+
+/** Preserve the failing app's section when an unfamiliar tool format defeats the
+ * parser. The old first-500-character fallback showed the preceding healthy API
+ * build and hid the actual UI failure later in the output. */
+function opaqueGateError(output: string, cwd: string): IErrorItem {
+  const markers = [...output.matchAll(/^::tsforge-app (.+)::$/gmu)];
+  const last = markers.at(-1);
+  const app = last?.[1] ?? "";
+  const start = last?.index ?? 0;
+  const section = output.slice(start).split(cwd).join("").trim();
+  const excerpt =
+    section.length <= 3_000
+      ? section
+      : `${section.slice(0, 1_800)}\n… output truncated …\n${section.slice(-1_000)}`;
+  const phase =
+    app === "apps/api"
+      ? 1
+      : app === "apps/ui"
+        ? 2
+        : app === "."
+          ? 3
+          : undefined;
+
+  return {
+    key: `gate-nonzero:${app === "" ? "unknown" : app}`,
+    ...(phase === undefined ? {} : { phase }),
+    message: `Gate exited nonzero${app === "" ? "" : ` in ${app}`} and its output format was not recognized:\n${excerpt}`,
+  };
 }
 
 /**
@@ -65,7 +128,7 @@ export function boringstackCommandStage(cwd: string, exec: Exec): IStage {
       const errors: IErrorItem[] =
         signatures.length > 0
           ? signatures.map(signatureToError)
-          : [{ key: "gate-nonzero", message: result.output.slice(0, 500) }];
+          : [opaqueGateError(result.output, cwd)];
 
       return { passed: false, errors, output: result.output };
     },

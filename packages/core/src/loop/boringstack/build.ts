@@ -17,7 +17,7 @@ import { resolveStuckFile } from "../expert-handoff";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield } from "../greenfield/run";
 import { composeBoringstackGate } from "./gate-stages";
-import type { Reporter, IHandoff } from "../loop.types";
+import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 import { slicesToFeatures } from "./plan-resources";
 import { toCamelCase } from "./case";
 import { loadApprovedPlan } from "../planning/plan-store";
@@ -183,6 +183,19 @@ interface IBoringstackHost {
   ): Promise<{ status: string; turns: number; handoff?: IHandoff }>;
 }
 
+function revisitGuidance(seed?: { triedLevers: EscalationRung[] }): string {
+  if (seed === undefined || seed.triedLevers.length === 0) {
+    return "";
+  }
+
+  return (
+    "\n\nREVISIT: the previous drive exhausted these approaches: " +
+    `${seed.triedLevers.join(", ")}. The convergence state is fresh now; inspect ` +
+    "the current gate failure and take a materially different route instead of " +
+    "repeating those approaches."
+  );
+}
+
 /**
  * Create the greenfield dependencies for the BoringStack build, composing Tasks 1-6.
  * - `implement` generates the resource, freezes the scope, injects the live composed
@@ -221,7 +234,8 @@ export function boringstackDeps(opts: {
   return {
     async implement(
       feature: IFeature,
-      _state: IGreenfieldState
+      _state: IGreenfieldState,
+      seed?: { triedLevers: EscalationRung[] }
     ): Promise<{ done: boolean; handoff?: IHandoff }> {
       // Pre-step: generate the full vertical slice + sync the STUB schema. The
       // model then fills the domain INSIDE the loop, checked by the live gate.
@@ -240,7 +254,9 @@ export function boringstackDeps(opts: {
       );
 
       const slice = sliceFor?.(feature.id);
-      const sent = await host.send(refinePrompt(feature, slice));
+      const sent = await host.send(
+        refinePrompt(feature, slice) + revisitGuidance(seed)
+      );
 
       return {
         done: sent.status === "done",

@@ -309,6 +309,31 @@ export function forcedGateInterval(state: ILoopState): number {
   return nearGreen || stalling ? FULL_GATE_EVERY_NEAR_GREEN : FULL_GATE_EVERY;
 }
 
+/** Reset convergence state at a `send()` boundary. A Session keeps conversation
+ * and cumulative edit metrics across messages, but a new drive must not inherit an
+ * exhausted ladder or sticky block from the previous drive. */
+export function resetDriveConvergence(state: ILoopState): void {
+  state.prevGateErrors = [];
+  state.gateNoProgress = 0;
+  state.bestErrorCount = Number.POSITIVE_INFINITY;
+  state.noNewLow = 0;
+  state.errorAge = new Map();
+  state.lastGateCount = -1;
+  state.steerLevel = 0;
+  state.redGates = 0;
+  state.blockFingerprint = "";
+  state.recentGateFingerprints = [];
+  state.triedLeversByBlock = new Map();
+  state.pendingRung = null;
+  state.pendingBlockFingerprint = null;
+  state.pendingDiagnosisSteer = null;
+  state.focusError = null;
+  delete state.plateauBest;
+  delete state.pendingSteer;
+  delete state.resetContext;
+  delete state.pendingModelOverride;
+}
+
 /** How many times a send recovers from a repetition loop before giving up. */
 const MAX_DEGENERATION_RECOVERIES = 2;
 
@@ -993,6 +1018,7 @@ export class Session {
     ctx.tool.signal = opts.signal;
     this.activeThinking = opts.enableThinking;
     this.repairing = false; // fresh send starts in (fast, thinking-off) creation mode
+    resetDriveConvergence(this.state);
 
     // The TtsrManager persists for the whole session, so per-rule silencing and
     // the global interrupt cap must reset per user message — otherwise a rule

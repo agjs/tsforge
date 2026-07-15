@@ -16,7 +16,8 @@ tests/config/env/validate.test.ts:
 
     expect(
       sigs.has(
-        "(fail) validateEnv > rejects production EMAIL_FROM on a placeholder domain"
+        "failure:tests%2Fconfig%2Fenv%2Fvalidate.test.ts::bun-test:" +
+          "(fail)%20validateEnv%20%3E%20rejects%20production%20EMAIL_FROM%20on%20a%20placeholder%20domain"
       )
     ).toBe(true);
     expect(sigs.size).toBe(1);
@@ -29,9 +30,46 @@ tests/config/env/validate.test.ts:
 
     expect(
       sigs.has(
-        "/apps/api/src/api/bookmark/bookmark.service.ts(38,3): error TS2532: Object is possibly 'undefined'."
+        "failure:apps%2Fapi%2Fsrc%2Fapi%2Fbookmark%2Fbookmark.service.ts:38:" +
+          "TS2532:Object%20is%20possibly%20'undefined'."
       )
     ).toBe(true);
+  });
+
+  test("captures lint-meta blocks with file and rule instead of falling back to gate output", () => {
+    const cwd = "/private/tmp/clone";
+    const out = `::tsforge-app apps/ui::
+[lint:meta] 2 violation(s):
+
+  ${cwd}/apps/ui/src/features/note/Note.queries.ts
+    logic-files-require-test-sibling: Missing colocated test. Expected \`src/features/note/Note.queries.test.ts\`.
+
+  ${cwd}/apps/ui/src/features/note/Note.store.ts
+    logic-files-require-test-sibling: Missing colocated test. Expected \`src/features/note/Note.store.test.ts\`.
+
+error: script "lint:meta" exited with code 1`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(sigs.size).toBe(2);
+    expect(
+      [...sigs].every(
+        (signature) =>
+          signature.startsWith("failure:apps%2Fui%2Fsrc%2Ffeatures%2Fnote") &&
+          signature.includes("logic-files-require-test-sibling")
+      )
+    ).toBe(true);
+  });
+
+  test("carries the preceding eslint file header into the failure signature", () => {
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/tests/api/note/note.routes.test.ts
+  68:10  error  Define a constant instead of duplicating this literal 5 times  sonarjs/no-duplicate-string`;
+    const sigs = extractFailures(out, cwd);
+    const signature = [...sigs][0] ?? "";
+
+    expect(signature).toContain(
+      "failure:apps%2Fapi%2Ftests%2Fapi%2Fnote%2Fnote.routes.test.ts:68:sonarjs%2Fno-duplicate-string"
+    );
   });
 
   test("captures eslint error rows but ignores passing/summary noise", () => {

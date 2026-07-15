@@ -137,6 +137,26 @@ describe("boringstackDeps.implement", () => {
     expect(forCmd("bun run db:push -- --force")).toContain("/repo/apps/api");
   });
 
+  test("a revisit tells the model which escalation approaches were already exhausted", async () => {
+    const host = createHost();
+    const deps = boringstackDeps({
+      host,
+      cwd: "/repo",
+      exec: createExec(),
+      evaluator: createEvaluator(),
+      generate: async () => undefined,
+      generateUi: async () => undefined,
+    });
+
+    await deps.implement(feature("Invoice"), state(), {
+      triedLevers: ["R1", "R2", "R3"],
+    });
+
+    expect(host.sent[0]).toContain("REVISIT");
+    expect(host.sent[0]).toContain("R1, R2, R3");
+    expect(host.sent[0]).toContain("materially different route");
+  });
+
   test("freezes the entity's Drizzle schema INTO scope so the model can add real columns", async () => {
     const host = createHost();
 

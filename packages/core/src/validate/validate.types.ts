@@ -4,6 +4,9 @@ export interface IErrorItem {
   file?: string;
   line?: number;
   rule?: string;
+  /** Ordered gate frontier that emitted this error. A move to a higher phase is
+   *  genuine progress even when that downstream phase reveals more errors. */
+  phase?: number;
   message: string;
 }
 

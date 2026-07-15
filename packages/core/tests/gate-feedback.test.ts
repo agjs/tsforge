@@ -68,6 +68,24 @@ test("gateFeedback degrades gracefully when an error has no location", async () 
   });
 });
 
+test("gateFeedback does not claim a populated glob scope is a missing literal file", async () => {
+  await withDir(async (dir) => {
+    await Bun.write(join(dir, "feature.ts"), "export const feature = true;\n");
+    const task: ITask = {
+      ...TASK,
+      files: ["**/*.ts"],
+    };
+    const errors: ErrorSet = [
+      { key: "nonzero", message: "command exited non-zero" },
+    ];
+
+    const feedback = await gateFeedback(errors, task, dir);
+
+    expect(feedback).not.toContain("do NOT exist yet");
+    expect(feedback).not.toContain("**/*.ts");
+  });
+});
+
 test("gateFeedback caps repeats of one rule so other rules still surface", async () => {
   await withDir(async (dir) => {
     await Bun.write(join(dir, "money.ts"), "export const x = 1;\n");

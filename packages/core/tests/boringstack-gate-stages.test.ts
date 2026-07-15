@@ -46,6 +46,40 @@ describe("boringstackCommandStage", () => {
       expect(e.key.length).toBeGreaterThan(0);
     }
   });
+
+  test("lint-meta failure is actionable and attributed to the downstream UI phase", async () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+[lint:meta] No violations.
+::tsforge-app apps/ui::
+[lint:meta] 1 violation(s):
+
+  ${cwd}/apps/ui/src/features/note/Note.store.ts
+    logic-files-require-test-sibling: Missing colocated test. Expected \`src/features/note/Note.store.test.ts\`.`;
+    const stage = boringstackCommandStage(cwd, execWith(1, out));
+    const result = await stage.run(cwd);
+    const error = result.errors[0];
+
+    expect(error?.file).toBe("apps/ui/src/features/note/Note.store.ts");
+    expect(error?.rule).toBe("logic-files-require-test-sibling");
+    expect(error?.message).toContain("Note.store.test.ts");
+    expect(error?.phase).toBe(2);
+  });
+
+  test("unknown failure format preserves the final failing app, not the healthy output head", async () => {
+    const out = `::tsforge-app apps/api::
+healthy API output that used to consume the first 500 characters
+::tsforge-app apps/ui::
+UNFAMILIAR TOOL FAILURE: the useful downstream detail`;
+    const stage = boringstackCommandStage("/tmp/clone", execWith(1, out));
+    const result = await stage.run("/tmp/clone");
+    const error = result.errors[0];
+
+    expect(error?.key).toBe("gate-nonzero:apps/ui");
+    expect(error?.phase).toBe(2);
+    expect(error?.message).toContain("useful downstream detail");
+    expect(error?.message).not.toContain("healthy API output");
+  });
 });
 
 describe("reachabilityStage", () => {

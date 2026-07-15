@@ -294,6 +294,32 @@ describe("relentless-loop escalation-ladder centerpiece (fixes A/B/C)", () => {
     expect(prog.pendingBlockFingerprint).toBeNull();
   });
 
+  test("advancing through a short-circuit gate phase resets an exhausted block even when more errors appear", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+
+    state.prevGateErrors = [{ ...err("api:1"), phase: 1 }];
+    state.steerLevel = STEER_LADDER_MAX;
+    state.blockFingerprint = "api:1";
+    state.plateauBest = 1;
+    state.pendingRung = "R3";
+    state.pendingBlockFingerprint = "api:1";
+
+    const uiErrors = Array.from({ length: 5 }, (_, index) => ({
+      ...err(`ui:${String(index)}`, "logic-files-require-test-sibling"),
+      phase: 2,
+    }));
+    const result = checkStuck(ctx, state, uiErrors, 200);
+
+    expect(result).toBeNull();
+    expect(state.steerLevel).toBe(0);
+    expect(state.blockFingerprint).toBe("");
+    expect(state.plateauBest).toBe(5);
+    expect(state.bestErrorCount).toBe(5);
+    expect(state.pendingRung).toBeNull();
+  });
+
   test("B: R2 and R3 set pendingRung; recorded on next-gate unmoved", () => {
     const events: ILoopEvent[] = [];
     const ctx = makeCtx(events);

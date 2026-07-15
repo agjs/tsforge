@@ -19,6 +19,13 @@ const FEEDBACK_MAX_LINES = 20;
  *  model never hears about the OTHER rules it also violated. */
 const FEEDBACK_MAX_PER_RULE = 3;
 
+/** A scope glob describes a set of files, not one promised literal file. Treating
+ * it as a missing pathname tells the model that existing generated files do not
+ * exist and sends it into pointless create/read loops. */
+function isLiteralPath(path: string): boolean {
+  return !["*", "?", "[", "]", "{", "}"].some((char) => path.includes(char));
+}
+
 /**
  * Gate failures the model can act on (its editable files), each rendered WITH
  * its location and the offending source line — so the model fixes the exact
@@ -122,7 +129,9 @@ export async function gateFeedback(
   // wrote the code as message TEXT instead of calling `create`. Code in your
   // reply is NEVER applied — only tool calls touch disk. Say so explicitly.
   const present = new Set(sources.map((s) => s.path));
-  const missing = task.files.filter((f) => !present.has(f));
+  const missing = task.files.filter(
+    (file) => isLiteralPath(file) && !present.has(file)
+  );
   const missingBlock =
     missing.length > 0
       ? `\n\n⚠ These editable files do NOT exist yet: ${missing.join(", ")}. ` +
