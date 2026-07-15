@@ -1672,6 +1672,45 @@ export function handleR1Diagnosis(
   return false; // Continue normally with Phase B steer set
 }
 
+/** At/under this many open errors the loop is NEAR-GREEN: the model must stop
+ *  opening new fronts and land the last few. The dominant late-run failure mode is
+ *  "spray after best" — reach 1-2 errors, then create files / add routes / refactor
+ *  and balloon back to 5-7 (bshands7/9/10 all did this). */
+const NEAR_GREEN_LOCKDOWN = 3;
+
+/** A lockdown/regression banner for the top of the feedback, or "" when far from
+ *  green and not regressing. `total` = open errors this cycle; `best` = the all-time
+ *  low (watermark). Regression = this cycle is WORSE than the best already reached. */
+export function nearGreenBanner(total: number, best: number): string {
+  const regressed = Number.isFinite(best) && total > best;
+  const near = total > 0 && total <= NEAR_GREEN_LOCKDOWN;
+
+  if (!near && !regressed) {
+    return "";
+  }
+
+  const lines: string[] = [];
+
+  if (regressed) {
+    lines.push(
+      `⚠ REGRESSION: you were at ${String(best)} error(s), now ${String(total)}. ` +
+        "Your last change re-broke something that was working. UNDO that collateral " +
+        `first to get back to ${String(best)}, then fix only what remains.`
+    );
+  }
+
+  if (near) {
+    lines.push(
+      `⚠ NEAR-GREEN — only ${String(total)} error(s) from done. Fix ONLY the error(s) ` +
+        "listed below, with the SMALLEST possible change. Do NOT create new files, add " +
+        "features/routes, refactor, rename, or touch anything not named in an error. " +
+        "Land these; don't open new fronts."
+    );
+  }
+
+  return `${lines.join("\n")}\n\n`;
+}
+
 /** STEP 5 — inject the red-gate feedback (rule docs + the auto-fix notice) into
  *  the conversation as the next user message, so the model fixes in-context.
  *  Exported for unit testing (like checkStuck/autoFixStep) — the convention PUSH
@@ -1749,9 +1788,13 @@ export async function injectFeedback(
     });
   }
 
+  // NEAR-GREEN lockdown / regression callout leads everything — the finishing
+  // discipline that stops "spray after best" (the dominant late-run failure).
+  const banner = nearGreenBanner(gateErrors.length, state.bestErrorCount);
+
   ctx.messages.push({
     role: "user",
-    content: `${steer}${notice}${feedback}${how}`,
+    content: `${banner}${steer}${notice}${feedback}${how}`,
   });
 }
 
