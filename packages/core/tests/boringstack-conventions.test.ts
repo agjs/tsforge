@@ -25,11 +25,21 @@ describe("convention registry", () => {
     expect(g).toContain("v is St");
   });
 
-  test("component-anatomy points views to src/views, not src/features", () => {
+  test("component-anatomy points components to src/features (the real boringstack layout)", () => {
     const g = conventionGuide("component-anatomy");
 
-    expect(g).toContain("src/views/");
-    expect(g).toContain("NEVER place a component under `src/features/`");
+    expect(g).toContain("src/features/<feature>/components/");
+    // The dead UI-only-React `src/views` layout must be gone.
+    expect(g).not.toContain("src/views/");
+  });
+
+  test("data-fetching guide states the apiClient pattern and forbids response.error", () => {
+    const g = conventionGuide("data-fetching");
+
+    expect(g).toContain("@/lib/api/client");
+    expect(g).toContain("const { data }");
+    expect(g).toContain("response.error");
+    expect(g).toContain("throwOnError");
   });
 });
 

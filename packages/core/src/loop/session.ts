@@ -6,6 +6,7 @@ import type {
 } from "../inference";
 import type { ITask } from "../spec";
 import type { FileLinter } from "../gate";
+import { makeFileLinter } from "../gate";
 import { commandGate, type IGate } from "../gate/gate-runner";
 import {
   type ADD_DEPENDENCY_TOOL,
@@ -50,7 +51,13 @@ import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
 import { selectThinking, offeredToolsFor } from "./model-call";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
-import { buildChatSystem, buildTddGuidance, COMPACT_SYSTEM } from "./prompt";
+import {
+  buildChatSystem,
+  buildDriveToGreenSystem,
+  buildTddGuidance,
+  COMPACT_SYSTEM,
+  type ExecutionMode,
+} from "./prompt";
 import { resolveConventions } from "../infer-rules/conventions";
 import type { IConventions } from "../infer-rules/conventions.types";
 import type { TsService } from "../lsp";
@@ -139,6 +146,10 @@ export interface ISessionConfig {
    *  Usually captured mid-build via `captureMetaBaseline()`; this is for callers that
    *  already hold one at construction time. */
   metaBaseline?: MetaBaseline;
+  /** How the model is driven. `"chat"` (default) = open-ended assistant framing;
+   *  `"drive-to-green"` = the strict expert-TS implement contract (for autonomous
+   *  builds), so the constitution is in force from the first token, not the gate. */
+  executionMode?: ExecutionMode;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -444,28 +455,45 @@ const MALFORMED_CALL_NUDGE =
 /** CHAT_SYSTEM + the (optional) workspace map + a short orientation to the
  *  workspace and gate. The map block, when present, is injected right after
  *  CHAT_SYSTEM so the agent is oriented before the task-specific lines. */
+/** Header of the DYNAMIC task-contract block. It carries the mutable facts (editable
+ *  scope + active check) and is rebuilt from LIVE `ctx.task` by `refreshTaskContract`
+ *  whenever `setScope`/`setGate` change them — so the top-priority prompt can never go
+ *  stale (the old bug: "edit any file" persisting after scope narrowed to one feature).
+ *  Kept as the LAST block of the system message; `guide()` inserts before it. */
+const TASK_CONTRACT_MARKER = "## Current task contract";
+
+/** The dynamic contract: what's editable right now + how acceptance is checked. */
+function taskContract(files: string[], accept: string | undefined): string {
+  const wholeRepo = files.length === 0 || files.includes("**/*");
+  const scope = wholeRepo
+    ? "Scope: you may read, run, and edit any file in the workspace."
+    : `Scope: edit ONLY these paths — ${files.join(", ")}. Every other file is READ-ONLY; never edit it.`;
+  const check =
+    accept !== undefined && accept.length > 0
+      ? `Check: \`${accept}\` runs automatically when you stop calling tools — fix any failures and continue until it passes.`
+      : "";
+
+  return [TASK_CONTRACT_MARKER, scope, check]
+    .filter((s) => s.length > 0)
+    .join("\n");
+}
+
+/** The STATIC system policy (identity, tools, conventions, workspace map, guidance) +
+ *  the initial dynamic task contract. Base framing is mode-driven: `drive-to-green`
+ *  (autonomous builds) gets the strict expert-TS implement contract; `chat` (default)
+ *  gets the open-ended assistant framing. The scope/check facts live in the task
+ *  contract (rebuilt per change), NOT baked statically here. */
 function systemPrompt(
   cfg: ISessionConfig,
   workspaceMap: string,
   conventions: IConventions
 ): string {
+  const base =
+    cfg.executionMode === "drive-to-green"
+      ? buildDriveToGreenSystem(conventions)
+      : buildChatSystem(conventions);
+
   const lines = [`Workspace: ${cfg.cwd}`];
-  const files = cfg.files ?? [];
-  const wholeRepo = files.length === 0 || files.includes("**/*");
-
-  lines.push(
-    wholeRepo
-      ? "You may read, run, and edit any file in the workspace."
-      : `You may only edit: ${files.join(", ")} (everything else is read-only).`
-  );
-
-  if (cfg.accept !== undefined && cfg.accept.length > 0) {
-    lines.push(
-      `A check is configured: \`${cfg.accept}\`. When you finish a change and ` +
-        "stop calling tools, it runs automatically — if it fails you'll get the " +
-        "errors and should fix them and continue until it passes."
-    );
-  }
 
   if (cfg.guidance !== undefined && cfg.guidance.length > 0) {
     lines.push(cfg.guidance);
@@ -479,7 +507,9 @@ function systemPrompt(
   // it here too so test-first is the out-of-the-box default everywhere.
   const tdd = flags.tdd() ? `${buildTddGuidance(conventions)}\n\n` : "";
 
-  return `${buildChatSystem(conventions)}\n\n${tdd}${prefix}${lines.join("\n")}`;
+  const contract = taskContract(cfg.files ?? [], cfg.accept);
+
+  return `${base}\n\n${tdd}${prefix}${lines.join("\n")}\n\n${contract}`;
 }
 
 /** Stable prefix of the delegation block — the sentinel `setDelegation` checks to
@@ -688,6 +718,24 @@ export class Session {
     // repo's structure. Cheap: loads + marks drift, never rebuilds here.
     const workspaceMap = await recallMapBlock(cfg.cwd);
 
+    const conventions = resolveConventions(projectConfig.conventions);
+
+    // Write-time eslint moat. The interactive CLI passes its own `lintFile`; an
+    // autonomous `drive-to-green` build gets one built from the DETECTED stack here
+    // (headless-build needn't know the stack) so `as`/`!`/`any` surface per-write —
+    // in seconds — instead of only at the ~90s gate. STRICT_CONFIG carries the moat.
+    const lintFile =
+      cfg.lintFile ??
+      (cfg.executionMode === "drive-to-green"
+        ? makeFileLinter(
+            "core",
+            cfg.cwd,
+            stackProfile.packs,
+            Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
+            conventions
+          )
+        : undefined);
+
     const ctx: ILoopCtx = {
       task,
       cwd: cfg.cwd,
@@ -702,7 +750,7 @@ export class Session {
       gate: {
         parse: cfg.parse,
         stackProfile,
-        ...(cfg.lintFile === undefined ? {} : { lintFile: cfg.lintFile }),
+        ...(lintFile === undefined ? {} : { lintFile }),
         ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
         ...(cfg.metaBaseline === undefined
           ? {}
@@ -721,11 +769,7 @@ export class Session {
           : [
               {
                 role: "system",
-                content: systemPrompt(
-                  cfg,
-                  workspaceMap,
-                  resolveConventions(projectConfig.conventions)
-                ),
+                content: systemPrompt(cfg, workspaceMap, conventions),
               },
             ],
     };
@@ -828,6 +872,8 @@ export class Session {
       this.ctx.gate.runner = arg;
       this.hasGate = true;
     }
+
+    this.refreshTaskContract();
   }
 
   /** Set the per-feature expert rescue target — the editable file the expert repairs
@@ -917,9 +963,31 @@ export class Session {
     this.ctx.tsService = await buildTsService(this.ctx.cwd);
   }
 
-  /** Replace the editable scope globs mid-session. */
+  /** Replace the editable scope globs mid-session. Also refreshes the system
+   *  message's task contract so the prompt reflects the NEW scope on the very next
+   *  model call (not the whole-repo scope it was created with). */
   setScope(globs: string[]): void {
     this.ctx.task.files = globs;
+    this.refreshTaskContract();
+  }
+
+  /** Rebuild the dynamic task-contract block (scope + check) from the LIVE
+   *  `ctx.task`, replacing the old block in place. The static policy above the
+   *  marker is untouched. No system message yet (shouldn't happen) ⇒ no-op. */
+  private refreshTaskContract(): void {
+    const system = this.ctx.messages[0];
+
+    if (system?.role !== "system") {
+      return;
+    }
+
+    const fresh = taskContract(this.ctx.task.files, this.ctx.task.accept);
+    const idx = system.content.indexOf(TASK_CONTRACT_MARKER);
+
+    system.content =
+      idx === -1
+        ? `${system.content}\n\n${fresh}`
+        : `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}`;
   }
 
   /** Update the context window mid-session (e.g. after a `/model` hot-swap to a
@@ -993,7 +1061,14 @@ export class Session {
     const first = this.ctx.messages[0];
 
     if (first?.role === "system") {
-      first.content = `${first.content}\n\n${text}`;
+      // Insert BEFORE the dynamic task contract so it stays the final block (and
+      // `refreshTaskContract` can splice it without clobbering this guidance).
+      const idx = first.content.indexOf(TASK_CONTRACT_MARKER);
+
+      first.content =
+        idx === -1
+          ? `${first.content}\n\n${text}`
+          : `${first.content.slice(0, idx).trimEnd()}\n\n${text}\n\n${first.content.slice(idx)}`;
     } else {
       this.ctx.messages.unshift({ role: "system", content: text });
     }

@@ -66,6 +66,40 @@ export function buildSystem(conventions: IConventions): string {
  *  don't thread conventions; the dynamic path uses {@link buildSystem}. */
 export const SYSTEM = buildSystem(DEFAULT_CONVENTIONS);
 
+/** How the model is driven: an open-ended `chat` assistant, or an autonomous
+ *  `drive-to-green` build that implements a task to a passing gate. The build path
+ *  (boringstack/greenfield-in-Session) MUST run drive-to-green so the expert-TS
+ *  contract is in force from the first token — not the soft chat framing. */
+export type ExecutionMode = "chat" | "drive-to-green";
+
+/**
+ * The DRIVE-TO-GREEN implement contract for autonomous builds. Same expert-TS
+ * constitution as {@link buildSystem} (it reuses {@link gateRulesSentence}, the one
+ * source of the hard rules), but build-tuned: inspect the target + one existing
+ * sibling that already does the unfamiliar pattern BEFORE writing it (so the model
+ * copies the real client/service/hook shape instead of inventing it), make progress
+ * via edits + tiny probes, and NEVER self-run the full gate — the harness owns it.
+ * That single command policy also resolves the old chat-prompt "run tsc/tests"
+ * contradiction that made the model burn turns self-linting.
+ */
+export function buildDriveToGreenSystem(conventions: IConventions): string {
+  return [
+    "You are an expert TypeScript engineer inside tsforge, a harness specialized for STRICT TypeScript. You are driving ONE task to a GREEN gate — you are not chatting.",
+    "Tools: `read` (inspect a file), `edit` (replace an exact, unique snippet), `create` (a new file), `run` (execute a shell command and see its output).",
+    overlayBlock(
+      "Before you write an unfamiliar pattern — an API-client call, a service, a hook, a form — `read` ONE existing sibling that already does it and copy its shape. A few targeted reads, never a repo scan. Do NOT invent library or client APIs from memory; the codebase already shows the right way.",
+      "bootstrap"
+    ),
+    overlayBlock(
+      "After every edit the harness AUTOMATICALLY runs the gate and hands you the errors + fix guidance. Do NOT run `tsc`, `eslint`, `knip`, `bun run check`/`validate`, or the acceptance/gate command yourself — it wastes turns and tells you nothing the harness won't. `run` is for tiny diagnostic probes only (`bun -e '…'`, a single targeted test). Fix exactly what the gate reports, then edit again; the harness ends the task when it reports green.",
+      "execution"
+    ),
+    "The harness AUTO-FIXES mechanical formatting on every file you write (blank lines, braces, quotes, semicolons, import order, `prefer-template`). NEVER hand-fix or chase those.",
+    gateRulesSentence(conventions),
+    "Keep functions small: the gate caps cognitive complexity at 20 and nesting depth at 4 — extract named helpers instead of one sprawling block. Always `await` promises (or `void` them deliberately) — a floating promise is a gate error.",
+  ].join("\n");
+}
+
 export function buildWebResearchGuidance(): string {
   return [
     "WEB RESEARCH — keyless internet/package tools are enabled:",

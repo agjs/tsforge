@@ -218,6 +218,10 @@ async function driveBuild(
     files: ["**/*"],
     contextWindow,
     maxTurns: LOOP_LIMITS.webMaxTurns,
+    // Autonomous build → the strict expert-TS implement contract is in force from the
+    // first token (not the soft chat prompt), and the per-write eslint moat is wired
+    // from the detected stack so `as`/`!`/`any` surface as the file is written.
+    executionMode: "drive-to-green",
     guidance:
       "You are filling in ONE BoringStack resource at a time. The API resource " +
       "files (schemas/service/types) and its UI feature are already generated and " +
