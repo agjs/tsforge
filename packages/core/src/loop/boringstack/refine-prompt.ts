@@ -103,9 +103,10 @@ You MUST fill in these generated files for the **${feature.id}** resource:
 - Edit ONLY the \`${camel}\` table. Do NOT touch any other table in this file.
 
 ### API Layer (apps/api/src/api/${camel}/)
-- \`apps/api/src/api/${camel}/${camel}.schemas.ts\` — Zod schemas for request/response validation
+- \`apps/api/src/api/${camel}/${camel}.schemas.ts\` — request/response validation schemas using **Elysia TypeBox** (\`import { t } from "elysia"\` → \`t.Object({ title: t.String(), … })\`). This is the API boundary — do NOT use Zod here; Zod is only for UI form/runtime validation.
 - \`apps/api/src/api/${camel}/${camel}.types.ts\` — TypeScript types for domain entities and DTO objects
 - \`apps/api/src/api/${camel}/${camel}.service.ts\` — Service layer business logic
+- \`apps/api/src/api/${camel}/${camel}.routes.ts\` — Elysia routes: a schema on EVERY route; \`ApiErrors.*\` for errors (never \`throw new Error\`)
 
 ### UI Feature (apps/ui/src/features/${camel}/)
 - The complete React feature slice for ${feature.id} (pages, components, hooks, state)
@@ -160,7 +161,7 @@ Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` o
 - **Use real fields**: Populate schemas and types with meaningful fields that match the resource's behavior (${feature.desc}). Avoid placeholder names like \`field1\`, \`data\`, or \`value\`.
 - **Implement real logic**: Write actual service methods that perform the described behaviour. No stubs, no empty functions.
 - **No \`as\` type casts**: Use proper types and inference. Cast-free code is a house rule.
-- **Validation**: Define appropriate Zod schemas with meaningful validation rules.
+- **Validation**: Define meaningful validation rules at each boundary — Elysia TypeBox (\`t.*\`) for the API request/response schemas, Zod only for UI form/runtime validation. Do not use Zod for API schemas.
 - **Type safety**: Ensure all functions have explicit parameter and return types.
 
 ---

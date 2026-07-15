@@ -17,6 +17,25 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("Invoice");
   });
 
+  it("prescribes Elysia TypeBox for API schemas, never Zod (the boundary the scaffold uses)", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // API schemas use Elysia TypeBox — the scaffold's *.schemas.ts is `import { t } from "elysia"`.
+    expect(prompt).toContain("TypeBox");
+    expect(prompt).toContain("elysia");
+    // The API layer must list the routes file (was omitted).
+    expect(prompt).toContain("invoice.routes.ts");
+    // Must NOT tell the model to use Zod for API request/response schemas.
+    expect(prompt).not.toContain("Zod schemas for request/response");
+  });
+
   it("leads with the prior gate errors on a retry (lastError)", () => {
     const feature: IFeature = {
       id: "Invoice",
