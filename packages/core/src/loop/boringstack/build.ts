@@ -360,7 +360,7 @@ export async function runBoringstackBuild(opts: {
     optsGreenfield.onEvent = onEvent;
   }
 
-  return runGreenfield(
+  const result = await runGreenfield(
     cwd,
     state,
     boringstackDeps({
@@ -375,4 +375,32 @@ export async function runBoringstackBuild(opts: {
     }),
     optsGreenfield
   );
+
+  // Final acceptance: the per-cycle loop uses the FAST gate (check + tests, no build/
+  // size/coverage) for speed. When every feature has passed, run the FULL gate ONCE
+  // so the expensive acceptance-only checks (production build, size:check, full UI
+  // coverage, repo-root drift) still run — just once at the end, not every turn.
+  // Best-effort + LOUD: it reports issues for a human rather than silently flipping
+  // the verdict (a pre-existing scaffold size/build budget must not fail the feature).
+  if (result.status === "done") {
+    onEvent?.({
+      kind: "tool",
+      task: "boringstack",
+      message: "final acceptance: full validate + build + size checks…",
+    });
+
+    const full = await runBoringstackGate(cwd, exec, "full");
+
+    onEvent?.({
+      kind: full.passed ? "done" : "stuck",
+      task: "boringstack",
+      message: full.passed
+        ? "✓ final acceptance GREEN — full validate + build + size checks all pass."
+        : "⚠ features passed the fast gate, but the FULL acceptance gate (build / " +
+          "size / coverage / root drift) found issues — review before shipping:\n" +
+          full.output.slice(-1200),
+    });
+  }
+
+  return result;
 }

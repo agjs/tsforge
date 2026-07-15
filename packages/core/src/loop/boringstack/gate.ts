@@ -23,16 +23,41 @@ import type { Exec } from "./exec";
 // once the API is healthy do we resync + validate the UI. `schema.d.ts` is
 // harness-owned (outside the model's editable scope) — the gate regenerates it, the
 // model never hand-edits it.
-const GATE =
+/**
+ * FAST convergence gate — run every model cycle. Each app's `check` (lint +
+ * typecheck + meta-rules + knip; UI adds format) plus the cheap API test suite. It
+ * enforces EVERY lint/type/meta/knip rule (zero enforcement lost) but deliberately
+ * omits the slow acceptance-only work that `validate` bundles — the production build,
+ * `size:check` (measured 114s+), and full UI coverage — which catch nothing the model
+ * needs per turn. This is what took a failing cycle from ~65s toward ~10s. The UI
+ * stage still regenerates the OpenAPI client (`generate:api`) first, so the UI never
+ * checks against a stale `schema.d.ts`.
+ */
+const FAST_GATE =
+  "echo '::tsforge-app apps/api::' && (cd apps/api && bun run check && bun run test) && " +
+  "echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && bun run check)";
+
+/**
+ * FULL acceptance gate — run ONCE, when every feature has passed the fast gate. The
+ * complete `validate` for both apps (adds full tests/coverage, production build,
+ * size checks) plus the repo-root drift check. This is the authoritative "the whole
+ * app is really green" gate; nothing that used to run is dropped, it just runs once
+ * at the end instead of every turn.
+ */
+const FULL_GATE =
   "echo '::tsforge-app apps/api::' && (cd apps/api && bun run validate) && " +
   "echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && bun run validate) && " +
   "echo '::tsforge-app .::' && bun run check";
 
+export type GateMode = "fast" | "full";
+
 export async function runBoringstackGate(
   cwd: string,
-  exec: Exec
+  exec: Exec,
+  mode: GateMode = "fast"
 ): Promise<{ passed: boolean; output: string }> {
-  const result = await exec(["bash", "-lc", GATE], { cwd });
+  const gate = mode === "full" ? FULL_GATE : FAST_GATE;
+  const result = await exec(["bash", "-lc", gate], { cwd });
 
   return {
     passed: result.code === 0,
