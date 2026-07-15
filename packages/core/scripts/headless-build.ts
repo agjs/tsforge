@@ -302,12 +302,20 @@ async function main(): Promise<void> {
     const ports = readHostPorts(dir);
     const pgPort = hostPortOr(ports, "POSTGRES_HOST_PORT");
     const apiPort = hostPortOr(ports, "API_HOST_PORT");
+    const valkeyPort = hostPortOr(ports, "VALKEY_HOST_PORT");
 
     process.env.TSFORGE_BORINGSTACK_DATABASE_URL ??= `postgresql://app:app_dev_password@localhost:${String(pgPort)}/app`;
     process.env.OPENAPI_URL ??= `http://localhost:${String(apiPort)}/swagger/json`;
+    // The host-run gate must reach the clone's PUBLISHED Valkey (isolated port), or
+    // Valkey-dependent tests (e.g. the OAuth state store) fail on a locked, out-of-
+    // scope file the model can't fix — wrongly blocking the feature. The app's Valkey
+    // client reads VALKEY_HOST/VALKEY_PORT; point them at localhost:<published port>,
+    // exactly as DATABASE_URL points at the published Postgres.
+    process.env.VALKEY_HOST ??= "localhost";
+    process.env.VALKEY_PORT ??= String(valkeyPort);
 
     process.stdout.write(
-      `isolated ports → postgres ${String(pgPort)} · api ${String(apiPort)}\n`
+      `isolated ports → postgres ${String(pgPort)} · api ${String(apiPort)} · valkey ${String(valkeyPort)}\n`
     );
   }
 
