@@ -96,3 +96,64 @@ test("a co-located *.test.ts satisfies the requirement", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- BoringStack monorepo: knip only treats tests/** as test entries ---
+const BS_SERVICE = "apps/api/src/api/note/note.service.ts";
+const BS_MIRRORED = "apps/api/tests/api/note/note.service.test.ts";
+
+function boringstackApiProject(withMirroredTest: boolean): string {
+  const dir = mkdtempSync(join(tmpdir(), "tsforge-bs-"));
+
+  mkdirSync(join(dir, "apps/api/src/api/note"), { recursive: true });
+  writeFileSync(
+    join(dir, BS_SERVICE),
+    "export const createNote = (t: string): string => t;\n"
+  );
+  // knip config whose ONLY test entry is tests/**/*.test.ts (BoringStack API).
+  writeFileSync(
+    join(dir, "apps/api/knip.json"),
+    JSON.stringify({
+      entry: ["scripts/**/*.ts", "src/**/index.ts", "tests/**/*.test.ts"],
+      project: ["src/**/*.ts!"],
+    })
+  );
+
+  if (withMirroredTest) {
+    mkdirSync(join(dir, "apps/api/tests/api/note"), { recursive: true });
+    writeFileSync(
+      join(dir, BS_MIRRORED),
+      'import { test } from "bun:test";\ntest("x", () => {});\n'
+    );
+  }
+
+  return dir;
+}
+
+test("BoringStack: the MIRRORED apps/api/tests test satisfies the rule (detection, not just message)", () => {
+  delete process.env.TSFORGE_TDD;
+  const dir = boringstackApiProject(true);
+
+  try {
+    // The acceptance test the review demanded: with only the mirrored test present,
+    // changing the service must produce ZERO test-sibling violations.
+    expect(siblingViolations(dir, [BS_SERVICE])).toHaveLength(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("BoringStack: with no test, the message steers to the MIRRORED path, never co-located", () => {
+  delete process.env.TSFORGE_TDD;
+  const dir = boringstackApiProject(false);
+
+  try {
+    const v = siblingViolations(dir, [BS_SERVICE]);
+
+    expect(v).toHaveLength(1);
+    expect(v[0]?.message).toContain(BS_MIRRORED);
+    // The trap was suggesting a co-located src test knip then rejects forever.
+    expect(v[0]?.message).not.toContain("(co-located)");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

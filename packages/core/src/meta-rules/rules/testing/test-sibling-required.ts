@@ -2,6 +2,7 @@ import { join, dirname, basename } from "node:path";
 import { statSync, readdirSync } from "node:fs";
 import type { IMetaRule, IMetaRuleViolation } from "../../meta-rules.types";
 import { flags } from "../../../config";
+import { isRecord } from "../../../lib/guards";
 
 /**
  * Patterns that mean "this file exports real logic" — a function or class (incl.
@@ -55,8 +56,17 @@ function fileExistsAt(root: string, rel: string): boolean {
   }
 }
 
-/** The mirrored test path under `tests/` for a given stem + test extension, or "". */
+/** The mirrored test path under `tests/` for a given stem + test extension, or "".
+ *  Handles a monorepo app sub-root (`apps/<app>/src/…` → `apps/<app>/tests/…`) as
+ *  well as top-level `src/`/`scripts/`. The app case matters for BoringStack, whose
+ *  knip config only treats `tests/**` as test entries. */
 function mirroredTest(file: string, stem: string, testExt: string): string {
+  const app = /^(apps\/[^/]+)\/src\/(.+)$/u.exec(stem);
+
+  if (app !== null) {
+    return `${app[1] ?? ""}/tests/${app[2] ?? ""}.test${testExt}`;
+  }
+
   if (file.startsWith("src/")) {
     return `tests/${stem.slice(4)}.test${testExt}`;
   }
@@ -66,6 +76,50 @@ function mirroredTest(file: string, stem: string, testExt: string): string {
   }
 
   return "";
+}
+
+/** Whether a co-located test file beside `file` is a valid test location, read from
+ *  the nearest app `knip.json`. BoringStack API restricts knip test entries to the
+ *  mirrored tests directory, so a co-located src test is flagged "unused file"
+ *  forever — a trap that ground a live run for 130+ turns (test-sibling-required told
+ *  the model "co-located", knip then rejected exactly that). Conservative: no knip
+ *  config, or a config that DOES list a src/co-located test entry, means co-located is
+ *  allowed (generic stacks unchanged). Only when knip lists mirrored-tests entries and
+ *  NO src-test entry do we forbid co-located and steer to the mirrored path. */
+function coLocatedTestAllowed(
+  file: string,
+  readFile: (relPath: string) => string | null
+): boolean {
+  const app = /^(apps\/[^/]+)\//u.exec(file);
+  const raw = readFile(
+    app !== null ? `${app[1] ?? ""}/knip.json` : "knip.json"
+  );
+
+  if (raw === null) {
+    return true;
+  }
+
+  let cfg: unknown;
+
+  try {
+    cfg = JSON.parse(raw);
+  } catch {
+    return true;
+  }
+
+  if (!isRecord(cfg) || !Array.isArray(cfg.entry)) {
+    return true;
+  }
+
+  const entries = cfg.entry.filter((e): e is string => typeof e === "string");
+  // An entry that explicitly makes a co-located src test a knip entry (starts with
+  // `src/` and ends in a test/spec file). NOT a mirrored `tests/…` entry.
+  const hasSrcTestEntry = entries.some((e) =>
+    /^src\/.*\.(test|spec)\.[tj]sx?$/u.test(e)
+  );
+  const hasTestsDirEntry = entries.some((e) => /^tests\/.*\.test/u.test(e));
+
+  return hasSrcTestEntry || !hasTestsDirEntry;
 }
 
 /** A test exists if there's a co-located `*.test|spec` sibling OR a mirrored
@@ -300,12 +354,25 @@ export const testSiblingRequiredRule: IMetaRule = {
       }
 
       const stem = basename(norm).replace(/\.tsx?$/u, "");
+      const coLocated = join(dirname(norm), `${stem}.test.ts`).replace(
+        /\\/gu,
+        "/"
+      );
+      const mirrored = mirroredTest(norm, norm.replace(/\.tsx?$/u, ""), ".ts");
+
+      // When the app's knip config only treats `tests/**` as test entries, a
+      // co-located `src/**/*.test.ts` is flagged "unused file" forever — so steer to
+      // the mirrored path ONLY (never suggest co-located, the trap that ground a run).
+      const message =
+        mirrored.length > 0 && !coLocatedTestAllowed(norm, readFile)
+          ? `Missing test for a logic file you changed. Add \`${mirrored}\` — this stack's knip config only treats \`tests/**/*.test.ts\` as test entries, so a co-located \`${coLocated}\` would be flagged as an unused file. Put the test at the mirrored \`tests/\` path, NOT beside the source.`
+          : `Missing test for a logic file you changed. Add \`${coLocated}\` (co-located) or the mirrored \`tests/\` equivalent — the harness tests what it writes.`;
 
       violations.push({
         file: norm,
         ruleId: "test-sibling-required",
         severity,
-        message: `Missing test for a logic file you changed. Add \`${join(dirname(norm), `${stem}.test.ts`).replace(/\\/gu, "/")}\` (co-located) or the mirrored \`tests/\` equivalent — the harness tests what it writes.`,
+        message,
       });
     }
 
