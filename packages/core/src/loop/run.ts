@@ -953,6 +953,9 @@ export async function runTask(
       ruleOverrides:
         Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
       runner: opts.gate ?? commandGate(task, effectiveParse),
+      ...(opts.metaBaseline === undefined
+        ? {}
+        : { metaBaseline: opts.metaBaseline }),
     },
   };
   const state: ILoopState = {

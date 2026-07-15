@@ -47,50 +47,49 @@ export async function gateFeedback(
   metaViolations: readonly IMetaRuleViolation[] = [],
   focusError: string | null = null
 ): Promise<string> {
-  const own = errors.filter((e) => {
-    if (e.file === undefined) {
-      return true;
-    }
+  const own = errors.filter((e) => isOwnError(e, cwd, task.files));
+  const outOfScope = errors.filter((e) => !isOwnError(e, cwd, task.files));
 
-    // eslint emits ABSOLUTE filePaths; normalize to workspace-relative so a
-    // scoped task (`src/**`) correctly matches its own errors instead of relying
-    // on the looser basename fallback.
-    const rel = (
-      isAbsolute(e.file) ? relative(cwd, e.file) : e.file
-    ).replaceAll("\\", "/");
+  // R3 narrow: when a focus key is set, show ONLY the matching error — in WHICHEVER
+  // partition it lives — so narrowing survives even when the sticky error sits in a
+  // file the model can't edit. Never dump the whole other partition. CRITICAL: this
+  // filters ONLY the rendered feedback; fingerprint/progress guards use the full set.
+  const focus = (list: ErrorSet): ErrorSet =>
+    focusError === null
+      ? list
+      : list.filter((e) => [e.file, e.line, e.rule].join(":") === focusError);
+  const focusedOwn = focus(own);
+  const focusedOut = focus(outOfScope);
 
-    return (
-      isInScope(rel, task.files) || isInScope(basename(e.file), task.files)
-    );
-  });
-  const readOnly = errors.length - own.length;
-
-  // R3 narrow: filter to focused error only (if set). CRITICAL: this filters ONLY
-  // the rendered feedback; the fingerprint/progress guards use the UNFILTERED set.
-  const renderedErrors =
-    focusError !== null
-      ? own.filter((e) => {
-          const key = [e.file, e.line, e.rule].join(":");
-
-          return key === focusError;
-        })
-      : own;
-
-  const { shown, skipped } = selectRepresentative(renderedErrors);
-  const list =
-    renderedErrors.length > 0
-      ? await renderErrors(shown, cwd)
-      : focusError !== null
-        ? "(no errors matching the focused error key)"
-        : "(no failures in your editable files)";
+  // ONE shared render budget across both partitions — never a 20-per-side, 40-line
+  // wall. Editable errors come first (the model acts on them directly); locked-file
+  // errors fill the remaining budget, the rest go to the overflow summary.
+  const { shown, skipped } = selectRepresentative([
+    ...focusedOwn,
+    ...focusedOut,
+  ]);
+  const shownOwn = shown.filter((e) => isOwnError(e, cwd, task.files));
+  const shownOut = shown.filter((e) => !isOwnError(e, cwd, task.files));
   const capped = overflowSummary(skipped);
 
-  const note =
-    readOnly > 0
-      ? `\n(${readOnly} other error(s) are in read-only files — not yours to fix; they resolve once your files are correct.)`
+  const noFocusMatch =
+    focusError !== null && focusedOwn.length === 0 && focusedOut.length === 0;
+  const list =
+    shownOwn.length > 0
+      ? await renderErrors(shownOwn, cwd)
+      : noFocusMatch
+        ? "(no errors matching the focused error key)"
+        : "(no failures in your editable files)";
+
+  const outOfScopeBlock =
+    shownOut.length > 0
+      ? `\n\n## Errors in files you cannot edit\nYou cannot edit these files. These ` +
+        `failures may be a downstream consequence of your editable code — a locked ` +
+        `file consumes a type or export you own. Read them, then fix the editable ` +
+        `PRODUCER. Do NOT edit the files below.\n${await renderErrors(shownOut, cwd)}`
       : "";
 
-  const help = ruleHelp(own);
+  const help = ruleHelp([...focusedOwn, ...focusedOut]);
   const helpBlock =
     help.length > 0 ? `\n\nHow to satisfy the gate:\n${help}` : "";
 
@@ -139,7 +138,30 @@ export async function gateFeedback(
         "`create` tool with the file path and full content."
       : "";
 
-  return `The acceptance command still fails:\n${list}${capped}${note}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
+  return `The acceptance command still fails:\n${list}${capped}${outOfScopeBlock}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
+}
+
+/**
+ * Is this gate error in a file the model may edit (in `task.files` scope)? An error
+ * with no file is treated as "own" (opaque command signatures belong to the model).
+ * eslint emits ABSOLUTE paths, so normalize to workspace-relative before matching;
+ * the basename fallback catches path-shape mismatches.
+ */
+function isOwnError(
+  e: ErrorSet[number],
+  cwd: string,
+  files: string[]
+): boolean {
+  if (e.file === undefined) {
+    return true;
+  }
+
+  const rel = (isAbsolute(e.file) ? relative(cwd, e.file) : e.file).replaceAll(
+    "\\",
+    "/"
+  );
+
+  return isInScope(rel, files) || isInScope(basename(e.file), files);
 }
 
 /**

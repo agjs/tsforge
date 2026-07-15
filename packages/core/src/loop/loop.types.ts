@@ -1,6 +1,7 @@
 import type { ErrorParser } from "../validate";
 import type { ProfileId } from "../config/profiles";
 import type { IGate } from "../gate/gate-runner";
+import type { MetaBaseline } from "../meta-rules";
 import {
   type RUN_STATUS,
   type STUCK_REASON,
@@ -191,6 +192,9 @@ export interface IRunOptions {
    *  composed gate (command + differential + judge + …) so the escalation ladder
    *  sees the REAL errors. */
   gate?: IGate;
+  /** Pristine-scaffold meta-rule baseline subtracted from each cycle's violations,
+   *  so a run is graded only on meta violations it INTRODUCES. */
+  metaBaseline?: MetaBaseline;
 }
 
 export interface ISpecResult {

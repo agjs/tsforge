@@ -28,16 +28,26 @@ function createHost() {
   const scopes: string[][] = [];
   const sent: string[] = [];
   const gates: unknown[] = [];
+  const rescueTargets: string[] = [];
+  const metaBaselineCaptures = { count: 0 };
 
   return {
     scopes,
     sent,
     gates,
+    rescueTargets,
+    metaBaselineCaptures,
     setScope: (g: string[]) => {
       scopes.push(g);
     },
     setGate: (g: unknown) => {
       gates.push(g);
+    },
+    setExpertRescueTarget: (f: string) => {
+      rescueTargets.push(f);
+    },
+    captureMetaBaseline: () => {
+      metaBaselineCaptures.count += 1;
     },
     send: async (m: string) => {
       sent.push(m);
@@ -382,6 +392,10 @@ describe("runBoringstackBuild", () => {
       // Check that the refine prompt contains the slice's entity description
       expect(host.sent[0]).toContain("Invoice");
       expect(host.sent[0]).toContain("A billable unit");
+      // The pristine meta-baseline was captured exactly once, before feature work.
+      expect(host.metaBaselineCaptures.count).toBe(1);
+      // The per-feature expert rescue target was set (Invoice's service file).
+      expect(host.rescueTargets.length).toBeGreaterThan(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

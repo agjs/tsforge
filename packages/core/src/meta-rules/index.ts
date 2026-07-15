@@ -7,3 +7,8 @@ export type {
 export { buildMetaRuleContext } from "./context";
 export { runMetaRules } from "./runner";
 export { META_RULES, PER_WRITE_META_RULES } from "./registry";
+export {
+  buildMetaBaseline,
+  subtractMetaBaseline,
+  type MetaBaseline,
+} from "./baseline";

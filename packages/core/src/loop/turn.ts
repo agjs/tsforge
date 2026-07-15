@@ -68,8 +68,10 @@ import type { IGate } from "../gate/gate-runner";
 import {
   buildMetaRuleContext,
   runMetaRules,
+  subtractMetaBaseline,
   META_RULES,
   type IMetaRuleViolation,
+  type MetaBaseline,
 } from "../meta-rules";
 import { runWriteGuard } from "./write-guard";
 
@@ -278,6 +280,14 @@ export interface ILoopCtxGate {
   /** The composed gate the loop runs each cycle. Always set by the driver
    *  (runTask/Session) — defaults to a command gate from task.accept. */
   runner: IGate;
+  /** Explicit editable file the expert should repair when the stuck error set is
+   *  entirely out of the model's scope (set per feature, e.g. the resource service).
+   *  Avoids re-guessing from `task.files` and keeps the expert inside scope. */
+  expertRescueTarget?: string;
+  /** Meta-rule violations present on the PRISTINE scaffold, captured once at build
+   *  start. Subtracted from each cycle's violations so pre-existing scaffold debt the
+   *  model is frozen out of never blocks a feature or clutters feedback. */
+  metaBaseline?: MetaBaseline;
 }
 
 /** The coordinator's per-task working context: the flat identity/reporting core,
@@ -1062,7 +1072,14 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
       changed
     );
 
-    return runMetaRules(META_RULES, metaContext, ctx.gate.ruleOverrides);
+    const violations = runMetaRules(
+      META_RULES,
+      metaContext,
+      ctx.gate.ruleOverrides
+    );
+
+    // Subtract pristine-scaffold debt the model is frozen out of (no-op if unset).
+    return subtractMetaBaseline(violations, ctx.gate.metaBaseline);
   } catch (err) {
     // Degrade silently — meta-rules are supplementary to the gate
     trace("runMetaRules", err);
@@ -1199,7 +1216,12 @@ export async function tryExpertRescue(
   // Resolve the file to repair: prefer a populated `.file`, else parse it from the
   // error MESSAGE (type-aware-lint names the file in text but doesn't set `.file` —
   // which skipped the expert on a whole live run). See resolveStuckFile.
-  const targetFile = await resolveStuckFile(ctx.cwd, gateErrors);
+  const targetFile = await resolveStuckFile(
+    ctx.cwd,
+    gateErrors,
+    ctx.task.files,
+    ctx.gate.expertRescueTarget
+  );
 
   if (targetFile === null) {
     return skip("no file could be resolved from the failing error(s)");
@@ -1229,7 +1251,8 @@ export async function tryExpertRescue(
   const outcome = await runExpertHandoff(
     ctx.cwd,
     { file: targetFile, content, error: errorText, goal: ctx.task.id },
-    ask
+    ask,
+    ctx.task.files
   );
 
   ctx.report({ kind: "tool", task: ctx.task.id, message: outcome.note });

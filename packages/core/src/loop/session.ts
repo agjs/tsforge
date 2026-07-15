@@ -18,6 +18,13 @@ import type { IAgentSpec } from "../agent/agent-spec";
 import type { SpawnAgentFn, IToolContext } from "./tools";
 import type { PolicyMode } from "../policy";
 import type { ProfileId } from "../config/profiles";
+import {
+  buildMetaRuleContext,
+  runMetaRules,
+  buildMetaBaseline,
+  META_RULES,
+  type MetaBaseline,
+} from "../meta-rules";
 import { flags } from "../config";
 import { trace } from "../lib/trace";
 import { validate, isEslintJsonLine, type ErrorParser } from "../validate";
@@ -128,6 +135,10 @@ export interface ISessionConfig {
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
   gate?: IGate;
+  /** Pristine-scaffold meta-rule baseline to subtract from each cycle's violations.
+   *  Usually captured mid-build via `captureMetaBaseline()`; this is for callers that
+   *  already hold one at construction time. */
+  metaBaseline?: MetaBaseline;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -693,6 +704,9 @@ export class Session {
         stackProfile,
         ...(cfg.lintFile === undefined ? {} : { lintFile: cfg.lintFile }),
         ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
+        ...(cfg.metaBaseline === undefined
+          ? {}
+          : { metaBaseline: cfg.metaBaseline }),
         // Stream the gate's output live (the interactive CLI), so a slow gate
         // (vite build + chromium) shows progress instead of running silently — but
         // filtered so the raw eslint JSON blob never floods the terminal.
@@ -813,6 +827,38 @@ export class Session {
     } else {
       this.ctx.gate.runner = arg;
       this.hasGate = true;
+    }
+  }
+
+  /** Set the per-feature expert rescue target — the editable file the expert repairs
+   *  when a stall's errors are all out of the model's scope (e.g. the resource service
+   *  file). Cleared with "". Threaded to the loop via `ctx.gate.expertRescueTarget`. */
+  setExpertRescueTarget(file: string): void {
+    this.ctx.gate.expertRescueTarget = file.length > 0 ? file : undefined;
+  }
+
+  /** Capture the meta-rule baseline of the CURRENT (pristine) workspace using this
+   *  session's own resolved stack profile + rule overrides, and store it so every
+   *  later cycle subtracts it (pre-existing scaffold debt never blocks a feature).
+   *  Call ONCE before any model work. Empty `changed` ⇒ only global rules seed it;
+   *  change-scoped rules (e.g. test-sibling) correctly don't enter the baseline.
+   *  Degrades silently — a throwing rule leaves the baseline unset (no suppression). */
+  captureMetaBaseline(): void {
+    try {
+      const metaContext = buildMetaRuleContext(
+        this.ctx.cwd,
+        this.ctx.gate.stackProfile?.packs ?? [],
+        []
+      );
+      const violations = runMetaRules(
+        META_RULES,
+        metaContext,
+        this.ctx.gate.ruleOverrides
+      );
+
+      this.ctx.gate.metaBaseline = buildMetaBaseline(violations);
+    } catch {
+      // Supplementary to the gate — never crash the build over baseline capture.
     }
   }
 

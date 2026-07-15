@@ -178,6 +178,8 @@ export async function readResourceCode(
 interface IBoringstackHost {
   setScope(globs: string[]): void;
   setGate(gate: IGate): void;
+  setExpertRescueTarget(file: string): void;
+  captureMetaBaseline(): void;
   send(
     message: string
   ): Promise<{ status: string; turns: number; handoff?: IHandoff }>;
@@ -242,6 +244,9 @@ export function boringstackDeps(opts: {
       await generate(cwd, feature.id, exec);
       await genUi(cwd, feature.id, exec);
       host.setScope(scopeFor(feature.id));
+      // The editable file the expert repairs if a stall's errors are all out of
+      // scope (locked consumers of this feature's types) — its service file.
+      host.setExpertRescueTarget((await rescueFileFor(cwd, feature)) ?? "");
       await exec(["bun", "run", "db:push", "--", "--force"], {
         cwd: join(cwd, "apps/api"),
       });
@@ -364,6 +369,11 @@ export async function runBoringstackBuild(opts: {
     task: "boringstack",
     message: report.message,
   });
+
+  // Capture the PRISTINE meta-rule baseline too (workflow perms, lockfile, etc. that
+  // the model is frozen out of). The command baseline above only covers the command
+  // gate; meta violations are subtracted separately, via the session, every cycle.
+  host.captureMetaBaseline();
 
   // Create a lookup function that maps feature ids to their plan slices
   const sliceFor = (id: string): ISlice | undefined =>

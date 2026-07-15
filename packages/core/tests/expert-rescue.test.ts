@@ -30,7 +30,13 @@ function freshState(): ILoopState {
 
 function makeCtx(events: ILoopEvent[], cwd: string): ILoopCtx {
   return {
-    task: { id: "t", intent: "test", accept: "true", files: [], context: [] },
+    task: {
+      id: "t",
+      intent: "test",
+      accept: "true",
+      files: ["**/*"],
+      context: [],
+    },
     cwd,
     tsService: null,
     report: (event) => {
@@ -41,7 +47,13 @@ function makeCtx(events: ILoopEvent[], cwd: string): ILoopCtx {
     gate: {
       parse: undefined,
       runner: commandGate(
-        { id: "t", intent: "test", accept: "true", files: [], context: [] },
+        {
+          id: "t",
+          intent: "test",
+          accept: "true",
+          files: ["**/*"],
+          context: [],
+        },
         undefined
       ),
     },
