@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { isRecord } from "../lib/guards";
 import { OpenAICompatibleProvider, type IProvider } from "../inference";
 import {
@@ -78,13 +79,60 @@ function makeProvider(entry: IModelEntry): IProvider {
   return new OpenAICompatibleProvider(providerConfig(entry));
 }
 
-async function runBinary(
+export interface IBinaryInvocation {
+  cmd: string[];
+  stdinBytes: Uint8Array | undefined;
+  tmpFile: string | undefined;
+}
+
+export function buildBinaryInvocation(
+  r: { argv: string[]; input: BinaryInputMode },
+  stdin: string,
+  tmpPath: string | undefined
+): IBinaryInvocation {
+  if (r.input === "arg") {
+    return {
+      cmd: [...r.argv, stdin],
+      stdinBytes: undefined,
+      tmpFile: undefined,
+    };
+  }
+
+  if (r.input === "stdin") {
+    return {
+      cmd: [...r.argv],
+      stdinBytes: new TextEncoder().encode(stdin),
+      tmpFile: undefined,
+    };
+  }
+
+  if (tmpPath === undefined) {
+    throw new Error("tempfile mode requires a valid tmpPath");
+  }
+
+  return {
+    cmd: [...r.argv, tmpPath],
+    stdinBytes: undefined,
+    tmpFile: tmpPath,
+  };
+}
+
+export async function runBinary(
   r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
   stdin: string
 ): Promise<{ ok: boolean; stdout: string }> {
-  const cmd = r.input === "arg" ? [...r.argv, stdin] : [...r.argv];
-  const proc = Bun.spawn(cmd, {
-    stdin: r.input === "stdin" ? new TextEncoder().encode(stdin) : undefined,
+  const tmpPath =
+    r.input === "tempfile"
+      ? join(tmpdir(), `tsforge-review-${randomUUID()}.txt`)
+      : undefined;
+
+  if (tmpPath !== undefined) {
+    await writeFile(tmpPath, stdin, "utf-8");
+  }
+
+  const invocation = buildBinaryInvocation(r, stdin, tmpPath);
+  const proc = Bun.spawn(invocation.cmd, {
+    stdin: invocation.stdinBytes,
     stdout: "pipe",
     stderr: "ignore",
   });
@@ -99,6 +147,10 @@ async function runBinary(
     return { ok: code === 0, stdout };
   } finally {
     clearTimeout(timer);
+
+    if (tmpPath !== undefined) {
+      await rm(tmpPath, { force: true });
+    }
   }
 }
 
