@@ -1,6 +1,45 @@
 import { test, expect } from "bun:test";
 import { TtsrManager, parseProjectRules } from "../src/loop/ttsr";
 import type { ITtsrRule } from "../src/loop/ttsr";
+import { DEFAULT_TTSR_RULES } from "../src/loop/ttsr-defaults";
+
+function withDefaults(): TtsrManager {
+  const m = new TtsrManager();
+
+  for (const rule of DEFAULT_TTSR_RULES) {
+    m.addRule(rule);
+  }
+
+  return m;
+}
+
+test("built-in no-as-cast fires on an `as` cast, in ANY file (no globs)", () => {
+  // A monorepo path (apps/api/…) — the old `src/**` globs never matched these.
+  const hit = withDefaults().checkDelta("  return row as IBookmark;\n", {
+    source: "tool-args",
+    currentFile: "apps/api/src/api/bookmark/x.ts",
+  });
+
+  expect(hit?.name).toBe("no-as-cast");
+});
+
+test("built-in no-as-cast does NOT fire on `as const`", () => {
+  const hit = withDefaults().checkDelta("const KEYS = ['a', 'b'] as const;\n", {
+    source: "tool-args",
+    currentFile: "apps/ui/src/x.ts",
+  });
+
+  expect(hit).toBeNull();
+});
+
+test("built-in no-eslint-disable fires on an eslint-disable comment", () => {
+  const hit = withDefaults().checkDelta(
+    "// eslint-disable-next-line @typescript-eslint/no-explicit-any\n",
+    { source: "tool-args", currentFile: "apps/api/src/x.ts" }
+  );
+
+  expect(hit?.name).toBe("no-eslint-disable");
+});
 
 test("adds and matches a single regex rule", () => {
   const manager = new TtsrManager();
