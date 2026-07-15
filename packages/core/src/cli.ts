@@ -756,6 +756,12 @@ export async function main(): Promise<number> {
     return scaffoldMode(raw.slice(1));
   }
 
+  if (raw[0] === "harness-review") {
+    const { harnessReviewMode } = await import("./cli/harness-review-mode");
+
+    return harnessReviewMode(raw.slice(1));
+  }
+
   const args = parseArgs(raw);
 
   // `--version`/`--help` print and exit — before this fix an unknown flag fell
