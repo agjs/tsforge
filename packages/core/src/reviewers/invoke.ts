@@ -71,7 +71,12 @@ async function invokeBinary(
   deps: IInvokeDeps
 ): Promise<ReviewOutcome> {
   try {
-    const stdin = renderReviewPrompt(request);
+    // Binaries have no separate system channel, so the review contract (JSON
+    // schema + reject-by-default + rubric) must be prepended to their single
+    // prompt — otherwise the binary emits prose, parseReview returns null, and
+    // the reviewer is always `errored` (which would silently break grok, the
+    // headline binary reviewer). Model reviewers get this via the system message.
+    const stdin = `${REVIEW_SYSTEM_PROMPT}\n\n${renderReviewPrompt(request)}`;
     const res = await deps.runBinary(
       {
         argv: reviewer.argv,
