@@ -39,8 +39,13 @@ describe("runBoringstackGate", () => {
     expect(j).not.toContain("docker");
     // The composed gate spans both apps + the repo-root check.
     expect(j).toContain("apps/api && bun run validate");
-    expect(j).toContain("apps/ui && bun run validate");
+    // The UI stage regenerates the typed OpenAPI client from the live API BEFORE it
+    // validates, so the UI never validates against a stale schema.d.ts.
+    expect(j).toContain("apps/ui && bun run generate:api && bun run validate");
     expect(j).toContain("bun run check");
+    // App markers let the failure parser attribute app-relative paths (knip) back to
+    // repo-relative so they match the model's editable scope.
+    expect(j).toContain("::tsforge-app apps/api::");
     // Runs with the clone as cwd (repo root visible to meta-rules).
     expect(seenCwd).toBe("/repo");
   });
