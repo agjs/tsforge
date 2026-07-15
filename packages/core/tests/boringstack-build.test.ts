@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Exec } from "../src/loop/boringstack/exec";
 import {
   boringstackDeps,
+  describeBaseline,
   rescueFileFor,
   runBoringstackBuild,
   scopeFor,
@@ -169,6 +170,31 @@ describe("boringstackDeps.implement", () => {
 
     // Just verify it has the implement method and correct signature
     expect(typeof deps.implement).toBe("function");
+  });
+});
+
+describe("describeBaseline", () => {
+  test("a passing baseline is GREEN", () => {
+    const r = describeBaseline(true, 0);
+
+    expect(r.kind).toBe("tool");
+    expect(r.message).toContain("GREEN");
+  });
+
+  test("a RED baseline with parsed failures is surfaced as RED (excluded from grading)", () => {
+    const r = describeBaseline(false, 3);
+
+    expect(r.kind).toBe("stuck");
+    expect(r.message).toContain("RED");
+    expect(r.message).toContain("3");
+  });
+
+  test("a RED baseline with ZERO parsed signatures is NEVER reported GREEN (the silent-green bug)", () => {
+    const r = describeBaseline(false, 0);
+
+    expect(r.kind).toBe("stuck");
+    expect(r.message).not.toContain("GREEN");
+    expect(r.message).toContain("did NOT parse");
   });
 });
 

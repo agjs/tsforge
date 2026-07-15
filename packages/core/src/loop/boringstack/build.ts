@@ -251,6 +251,44 @@ export function boringstackDeps(opts: {
 }
 
 /**
+ * Report the pristine-scaffold baseline. Keys off `passed`, NOT `size`: a RED
+ * baseline whose output did not parse into any known failure signatures (size 0)
+ * must NOT be announced GREEN — that both lies and hides that the differential gate
+ * can suppress NOTHING (every failure counts as novel), so the model would inherit
+ * pre-existing scaffold failures with no protection. Exported for unit testing.
+ */
+export function describeBaseline(
+  passed: boolean,
+  size: number
+): { kind: "tool" | "stuck"; message: string } {
+  if (passed) {
+    return {
+      kind: "tool",
+      message:
+        "baseline scaffold is GREEN — features graded against a clean gate.",
+    };
+  }
+
+  if (size > 0) {
+    return {
+      kind: "stuck",
+      message:
+        `⚠ baseline scaffold is RED: ${String(size)} pre-existing gate failure(s) ` +
+        `EXCLUDED from feature grading (differential gate). The app won't be fully ` +
+        `green until the scaffold baseline is fixed.`,
+    };
+  }
+
+  return {
+    kind: "stuck",
+    message:
+      "⚠ baseline scaffold is RED but its output did NOT parse into known failure " +
+      "signatures — the differential gate CANNOT suppress these, so every feature " +
+      "will inherit them. Fix the scaffold's own gate first.",
+  };
+}
+
+/**
  * Run the BoringStack build driver: require an approved plan, derive features
  * from its slices, and drive them through the greenfield loop
  * (implement → evaluate → persist).
@@ -303,15 +341,12 @@ export async function runBoringstackBuild(opts: {
     ? new Set<string>()
     : extractFailures(baseRun.output, cwd);
 
+  const report = describeBaseline(baseRun.passed, baseline.size);
+
   onEvent?.({
-    kind: baseline.size > 0 ? "stuck" : "tool",
+    kind: report.kind,
     task: "boringstack",
-    message:
-      baseline.size > 0
-        ? `⚠ baseline scaffold is RED: ${String(baseline.size)} pre-existing gate ` +
-          `failure(s) EXCLUDED from feature grading (differential gate). The app ` +
-          `won't be fully green until the scaffold baseline is fixed.`
-        : "baseline scaffold is GREEN — features graded against a clean gate.",
+    message: report.message,
   });
 
   // Create a lookup function that maps feature ids to their plan slices
