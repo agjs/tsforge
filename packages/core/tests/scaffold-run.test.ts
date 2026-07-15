@@ -38,6 +38,15 @@ function memFs(seed: Record<string, string> = {}): {
 
       return Promise.resolve();
     },
+    remove: (p) => {
+      for (const key of [...store.keys()]) {
+        if (key === p || key.startsWith(`${p}/`)) {
+          store.delete(key);
+        }
+      }
+
+      return Promise.resolve();
+    },
   };
 
   return { fs, store };
@@ -108,6 +117,44 @@ describe("runScaffold — full boringstack", () => {
       archetype: "boringstack",
       manifestVersion: 1,
     });
+  });
+
+  test("strips the template's apps/docs from a boringstack (full-stack) scaffold", async () => {
+    const { fs, store } = memFs({
+      [`${DEST}/infra/compose/compose/.env.example`]: "STACK=dev\n",
+      // the template ships its own docs site — a product must NOT carry it
+      [`${DEST}/apps/docs/package.json`]: "{}",
+      [`${DEST}/apps/docs/astro.config.mjs`]: "export default {};",
+      // the product apps must survive
+      [`${DEST}/apps/api/package.json`]: "{}",
+    });
+
+    await runScaffold(MANIFEST, answers("boringstack"), DEST, {
+      run: runner(),
+      fs,
+      boot: { poll: pollUp },
+      skipBoot: true,
+    });
+
+    expect(store.has(`${DEST}/apps/docs/package.json`)).toBe(false);
+    expect(store.has(`${DEST}/apps/docs/astro.config.mjs`)).toBe(false);
+    // product code is untouched
+    expect(store.has(`${DEST}/apps/api/package.json`)).toBe(true);
+  });
+
+  test("astro archetype KEEPS apps/docs — it is the product, not template cruft", async () => {
+    const { fs, store } = memFs({
+      [`${DEST}/apps/docs/package.json`]: "{}",
+    });
+
+    await runScaffold(MANIFEST, answers("astro"), DEST, {
+      run: runner(),
+      fs,
+      boot: { poll: pollUp },
+      skipBoot: true,
+    });
+
+    expect(store.has(`${DEST}/apps/docs/package.json`)).toBe(true);
   });
 
   test("skipBoot stands up the project without booting Docker", async () => {
