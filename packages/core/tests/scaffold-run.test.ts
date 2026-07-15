@@ -39,7 +39,7 @@ function memFs(seed: Record<string, string> = {}): {
       return Promise.resolve();
     },
     remove: (p) => {
-      for (const key of [...store.keys()]) {
+      for (const key of store.keys()) {
         if (key === p || key.startsWith(`${p}/`)) {
           store.delete(key);
         }
