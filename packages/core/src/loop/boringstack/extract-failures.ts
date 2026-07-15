@@ -27,21 +27,52 @@ function normalize(raw: string, cwd: string): string {
  *  - `… error TS####: …`           — a tsc type error (carries its file)
  *  - `L:C  error  <msg>  <rule>`    — an eslint error row
  */
+/** A knip section header line, e.g. `Unused files (1)` / `Unused dependencies (2)`.
+ *  Ends an in-progress "Unused files" path list. */
+function isKnipSectionHeader(line: string): boolean {
+  return /^(Unused|Unlisted|Unresolved|Duplicate)\b.*\(\d+\)$/u.test(line);
+}
+
+/** A bun-test / tsc / eslint failure row (each a distinct, stable signature). */
+function isErrorLine(line: string): boolean {
+  return (
+    line.startsWith("(fail)") ||
+    /error TS\d+/u.test(line) ||
+    /^\d+:\d+ error\b/u.test(line)
+  );
+}
+
 export function extractFailures(output: string, cwd: string): Set<string> {
   const signatures = new Set<string>();
+  // knip prints `Unused files (N)` then one repo-relative path per line, ending at
+  // the next command echo (`$ …`), a blank line, or another section header. Each
+  // path becomes a stable actionable signature (`knip:unused-file:<path>`) so the
+  // differential + fingerprint can track it and the loop can steer on it — instead
+  // of the whole block collapsing into one opaque `gate-nonzero` fallback (which is
+  // exactly why an unused-file wall ground a live run for 130+ turns).
+  let inUnusedFiles = false;
 
   for (const rawLine of output.split("\n")) {
     const line = normalize(rawLine, cwd);
 
-    if (line.length === 0) {
+    if (/^Unused files \(\d+\)$/u.test(line)) {
+      inUnusedFiles = true;
       continue;
     }
 
-    const isTestFail = line.startsWith("(fail)");
-    const isTscError = /error TS\d+/.test(line);
-    const isEslintError = /^\d+:\d+ error\b/.test(line);
+    if (inUnusedFiles) {
+      const ends =
+        line.length === 0 || line.startsWith("$") || isKnipSectionHeader(line);
 
-    if (isTestFail || isTscError || isEslintError) {
+      if (!ends) {
+        signatures.add(`knip:unused-file:${line}`);
+        continue;
+      }
+
+      inUnusedFiles = false;
+    }
+
+    if (line.length > 0 && isErrorLine(line)) {
       signatures.add(line);
     }
   }

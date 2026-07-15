@@ -51,6 +51,41 @@ tests/config/env/validate.test.ts:
   test("a fully green run yields no signatures", () => {
     expect(extractFailures("30 pass\n0 fail\nDone.", "/x").size).toBe(0);
   });
+
+  test("captures a knip 'Unused files' entry as an actionable signature (the live wall)", () => {
+    // The EXACT shape that ground a real run for 130+ turns: knip flagged a
+    // co-located API test as unused, but it collapsed into an opaque fallback.
+    const out = `[generate:lint-meta-docs] RULES.md is up to date.
+Unused files (1)
+src/api/note/note.service.test.ts
+$ bun run check && bun run test
+$ tsc --noEmit`;
+    const sigs = extractFailures(out, "/tmp/clone");
+
+    expect(sigs.has("knip:unused-file:src/api/note/note.service.test.ts")).toBe(
+      true
+    );
+    expect(sigs.size).toBe(1);
+  });
+
+  test("captures MULTIPLE knip unused files and stops at the command echo", () => {
+    const out = `Unused files (2)
+src/api/note/note.service.test.ts
+src/lib/orphan.ts
+$ bun run knip
+55:10 error Unexpected any @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, "/x");
+
+    expect(sigs.has("knip:unused-file:src/api/note/note.service.test.ts")).toBe(
+      true
+    );
+    expect(sigs.has("knip:unused-file:src/lib/orphan.ts")).toBe(true);
+    // The eslint row after the `$` boundary is still parsed normally.
+    expect(
+      sigs.has("55:10 error Unexpected any @typescript-eslint/no-explicit-any")
+    ).toBe(true);
+    expect(sigs.size).toBe(3);
+  });
 });
 
 describe("novelFailures", () => {

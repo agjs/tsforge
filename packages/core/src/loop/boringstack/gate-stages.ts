@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { IGate, IStage } from "../../gate/gate-runner";
 import { composeGate, differentialStage } from "../../gate/gate-runner";
-import type { IValidateResult } from "../../validate";
+import type { IValidateResult, IErrorItem } from "../../validate";
 import type { IProvider } from "../../inference";
 import type { IFeature } from "../greenfield/greenfield.types";
 import type { Exec } from "./exec";
@@ -10,6 +10,34 @@ import { extractFailures } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
 import { judgeFeature } from "../greenfield/judge";
 import { autofixApps, readResourceCode, rescueFileFor } from "./build";
+
+/** Turn one failure signature into an `IErrorItem`. Most signatures are their own
+ *  message (the raw gate row). A `knip:unused-file:<path>` signature is enriched
+ *  into an ACTIONABLE error naming the file + the fix — because the wall that
+ *  ground a live run was a co-located API test knip rejected forever, and the model
+ *  never got told the concrete way out (delete it / use the mirrored `tests/` path,
+ *  the only knip entry for tests in this stack). */
+function signatureToError(sig: string): IErrorItem {
+  const knip = /^knip:unused-file:(.+)$/u.exec(sig);
+
+  if (knip !== null) {
+    const file = knip[1] ?? "";
+
+    return {
+      key: sig,
+      rule: "knip/unused-files",
+      file,
+      message:
+        `knip: unused file ${file} — it isn't reachable from any configured entry, ` +
+        `so it must go. If it's a co-located API test under src/**/*.test.ts, DELETE ` +
+        `it and put the test at the mirrored tests/ path instead (this stack's knip ` +
+        `entries for tests are tests/**/*.test.ts, NOT co-located src tests). For a ` +
+        `production file, wire it from an entry (e.g. an index.ts barrel) or delete it.`,
+    };
+  }
+
+  return { key: sig, message: sig };
+}
 
 /**
  * The command stage: apply BoringStack's deterministic auto-fixes, sync the DB to
@@ -34,9 +62,9 @@ export function boringstackCommandStage(cwd: string, exec: Exec): IStage {
       }
 
       const signatures = [...extractFailures(result.output, cwd)];
-      const errors =
+      const errors: IErrorItem[] =
         signatures.length > 0
-          ? signatures.map((sig) => ({ key: sig, message: sig }))
+          ? signatures.map(signatureToError)
           : [{ key: "gate-nonzero", message: result.output.slice(0, 500) }];
 
       return { passed: false, errors, output: result.output };
