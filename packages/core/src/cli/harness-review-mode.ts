@@ -1,3 +1,7 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { isRecord } from "../lib/guards/guards";
 import { OpenAICompatibleProvider, type IProvider } from "../inference";
 import {
   loadModelsConfig,
@@ -11,7 +15,10 @@ import {
   runHarnessReview,
   DEFAULT_MAX_FILES,
   DEFAULT_MAX_CHARS,
+  verdictCacheKey,
+  artifactBody,
 } from "../reviewers/harness-review";
+import { RUBRIC_VERSION } from "../reviewers/schema";
 import type { IVerdict } from "../reviewers/aggregate";
 
 interface IArgs {
@@ -127,6 +134,60 @@ async function validateRunner(): Promise<{
   return { passed: code === 0, failCount: firstErrors.length, firstErrors };
 }
 
+function computePanelHash(panel: object): string {
+  return createHash("sha256").update(JSON.stringify(panel)).digest("hex");
+}
+
+async function readCachedVerdict(cacheKey: string): Promise<IVerdict | null> {
+  try {
+    const path = join(".tsforge", "harness-review", `${cacheKey}.json`);
+    const content = await readFile(path, "utf-8");
+    const parsed: unknown = JSON.parse(content);
+
+    if (!isRecord(parsed) || !("verdict" in parsed)) {
+      return null;
+    }
+
+    const verdict = parsed.verdict;
+
+    if (
+      verdict !== undefined &&
+      verdict !== null &&
+      isRecord(verdict) &&
+      typeof verdict.blocked === "boolean" &&
+      typeof verdict.reason === "string" &&
+      isRecord(verdict.reviewers) &&
+      Array.isArray(verdict.ranked) &&
+      Array.isArray(verdict.perReviewer) &&
+      typeof verdict.identity === "string"
+    ) {
+      return verdict as unknown as IVerdict;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCachedVerdict(
+  cacheKey: string,
+  verdict: IVerdict,
+  treeHash: string,
+  panelHash: string
+): Promise<void> {
+  const dir = join(".tsforge", "harness-review");
+  const path = join(dir, `${cacheKey}.json`);
+  const body = artifactBody(verdict, {
+    treeHash,
+    panelHash,
+    when: new Date().toISOString(),
+  });
+
+  await mkdir(dir, { recursive: true });
+  await writeFile(path, body, "utf-8");
+}
+
 export function formatVerdict(v: IVerdict): string {
   const head = v.blocked ? "BLOCK" : "PASS";
   const lines = [
@@ -166,22 +227,61 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
     ? { ...panel, reviewers: panel.reviewers.slice(0, 1) }
     : panel;
 
-  const verdict = await runHarnessReview(
-    {
-      git: gitRunner,
-      validate: validateRunner,
-      makeProvider,
-      runBinary,
-      panel: effective,
-      identity: `${active.name}/${active.entry.model}`,
-    },
-    {
-      base: args.base,
-      intent: args.intent,
-      maxFiles: DEFAULT_MAX_FILES,
-      maxChars: DEFAULT_MAX_CHARS,
+  const treeHashRes = await gitRunner(["write-tree"]);
+  const treeHash = treeHashRes.stdout.trim();
+  const panelHash = computePanelHash(cfg.reviewPanel ?? {});
+  const cacheKey = verdictCacheKey({
+    treeHash,
+    panelHash,
+    rubricVersion: RUBRIC_VERSION,
+  });
+
+  let verdict: IVerdict;
+
+  if (!args.ci) {
+    const cached = await readCachedVerdict(cacheKey);
+
+    if (cached !== null) {
+      process.stdout.write("harness-review: cache hit, reusing verdict\n");
+      verdict = cached;
+    } else {
+      verdict = await runHarnessReview(
+        {
+          git: gitRunner,
+          validate: validateRunner,
+          makeProvider,
+          runBinary,
+          panel: effective,
+          identity: `${active.name}/${active.entry.model}`,
+        },
+        {
+          base: args.base,
+          intent: args.intent,
+          maxFiles: DEFAULT_MAX_FILES,
+          maxChars: DEFAULT_MAX_CHARS,
+        }
+      );
+      await writeCachedVerdict(cacheKey, verdict, treeHash, panelHash);
     }
-  );
+  } else {
+    verdict = await runHarnessReview(
+      {
+        git: gitRunner,
+        validate: validateRunner,
+        makeProvider,
+        runBinary,
+        panel: effective,
+        identity: `${active.name}/${active.entry.model}`,
+      },
+      {
+        base: args.base,
+        intent: args.intent,
+        maxFiles: DEFAULT_MAX_FILES,
+        maxChars: DEFAULT_MAX_CHARS,
+      }
+    );
+    await writeCachedVerdict(cacheKey, verdict, treeHash, panelHash);
+  }
 
   process.stdout.write(`${formatVerdict(verdict)}\n`);
 
