@@ -122,6 +122,8 @@ The linter enforces test coverage. You MUST write:
 
 Without these test files, the build will fail.
 
+**Test runner — do NOT mix them:** \`apps/api\` tests use **\`bun:test\`** (\`import { describe, test, expect } from "bun:test"\`). \`apps/ui\` tests use **\`vitest\`** (\`import { describe, it, expect } from "vitest"\`) — a UI test that imports \`bun:test\` fails with "Cannot find module 'bun:test'". Match the runner already used by the sibling test files in that app; never introduce the other one.
+
 ---
 
 ## BoringStack API conventions — write it RIGHT the first time

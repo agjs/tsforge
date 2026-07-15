@@ -49,7 +49,10 @@ const EXPERT_SYSTEM =
   "that is STUCK on one file — it keeps failing the same gate check. Return the " +
   "corrected file and nothing else. Obey the project's strict rules: no `as` type " +
   "casts (narrow with a type guard), no `!` non-null assertions, no inline " +
-  "types/constants/helpers in a component file, no computation inside JSX.";
+  "types/constants/helpers in a component file, no computation inside JSX. Change " +
+  "ONLY what the error requires — do NOT rewrite imports, swap libraries, or change " +
+  "the test runner: keep whatever the file already imports (this stack uses " +
+  "`bun:test` for `apps/api`, `vitest` for `apps/ui` — never switch one for the other).";
 
 /** The scoped fix request. Pure — unit-tested. */
 export function buildFixPrompt(req: IExpertRequest): string {
