@@ -7,7 +7,11 @@ import {
   type BinaryInputMode,
 } from "../models-config";
 import { resolvePanel } from "../reviewers/registry";
-import { runHarnessReview, DEFAULT_MAX_FILES, DEFAULT_MAX_CHARS } from "../reviewers/harness-review";
+import {
+  runHarnessReview,
+  DEFAULT_MAX_FILES,
+  DEFAULT_MAX_CHARS,
+} from "../reviewers/harness-review";
 import type { IVerdict } from "../reviewers/aggregate";
 
 interface IArgs {
@@ -19,7 +23,13 @@ interface IArgs {
 }
 
 function parse(argv: string[]): IArgs {
-  const out: IArgs = { base: undefined, intent: undefined, quick: false, ci: false, installHook: false };
+  const out: IArgs = {
+    base: undefined,
+    intent: undefined,
+    quick: false,
+    ci: false,
+    installHook: false,
+  };
 
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -50,7 +60,9 @@ function providerConfig(
     model: entry.model,
     apiKey: resolveApiKey(entry),
     ...(entry.maxTokens === undefined ? {} : { maxTokens: entry.maxTokens }),
-    ...(entry.extraHeaders === undefined ? {} : { extraHeaders: entry.extraHeaders }),
+    ...(entry.extraHeaders === undefined
+      ? {}
+      : { extraHeaders: entry.extraHeaders }),
     ...(entry.extraBody === undefined ? {} : { extraBody: entry.extraBody }),
   };
 }
@@ -69,7 +81,9 @@ async function runBinary(
     stdout: "pipe",
     stderr: "ignore",
   });
-  const timer = setTimeout(() => proc.kill(), r.timeoutMs);
+  const timer = setTimeout(() => {
+    proc.kill();
+  }, r.timeoutMs);
 
   try {
     const stdout = await new Response(proc.stdout).text();
@@ -81,19 +95,34 @@ async function runBinary(
   }
 }
 
-async function gitRunner(args: string[]): Promise<{ stdout: string; code: number }> {
-  const proc = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "ignore" });
+async function gitRunner(
+  args: string[]
+): Promise<{ stdout: string; code: number }> {
+  const proc = Bun.spawn(["git", ...args], {
+    stdout: "pipe",
+    stderr: "ignore",
+  });
   const stdout = await new Response(proc.stdout).text();
   const code = await proc.exited;
 
   return { stdout, code };
 }
 
-async function validateRunner(): Promise<{ passed: boolean; failCount: number; firstErrors: string[] }> {
-  const proc = Bun.spawn(["bun", "run", "validate"], { stdout: "pipe", stderr: "pipe" });
+async function validateRunner(): Promise<{
+  passed: boolean;
+  failCount: number;
+  firstErrors: string[];
+}> {
+  const proc = Bun.spawn(["bun", "run", "validate"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const text = `${await new Response(proc.stdout).text()}\n${await new Response(proc.stderr).text()}`;
   const code = await proc.exited;
-  const firstErrors = text.split("\n").filter((l) => /error/iu.test(l)).slice(0, 20);
+  const firstErrors = text
+    .split("\n")
+    .filter((l) => /error/iu.test(l))
+    .slice(0, 20);
 
   return { passed: code === 0, failCount: firstErrors.length, firstErrors };
 }
@@ -106,7 +135,9 @@ export function formatVerdict(v: IVerdict): string {
   ];
 
   for (const f of v.ranked) {
-    lines.push(`  [${f.severity}/${f.findingCode}] ${f.file ?? "?"} — ${f.issue} (agreement ${String(f.agreement)})`);
+    lines.push(
+      `  [${f.severity}/${f.findingCode}] ${f.file ?? "?"} — ${f.issue} (agreement ${String(f.agreement)})`
+    );
   }
 
   return lines.join("\n");
@@ -116,7 +147,9 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   const args = parse(argv);
 
   if (args.installHook) {
-    process.stdout.write("Run: git config core.hooksPath .githooks (see .githooks/pre-push)\n");
+    process.stdout.write(
+      "Run: git config core.hooksPath .githooks (see .githooks/pre-push)\n"
+    );
 
     return 0;
   }
@@ -129,7 +162,9 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
     process.stdout.write(`skipped reviewer ${s.id}: ${s.reason}\n`);
   }
 
-  const effective = args.quick ? { ...panel, reviewers: panel.reviewers.slice(0, 1) } : panel;
+  const effective = args.quick
+    ? { ...panel, reviewers: panel.reviewers.slice(0, 1) }
+    : panel;
 
   const verdict = await runHarnessReview(
     {
