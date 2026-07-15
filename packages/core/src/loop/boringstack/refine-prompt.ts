@@ -178,5 +178,16 @@ If you need to make a change elsewhere, the build has already locked it. Rebase 
 
 ---
 
+## Do NOT run the gate yourself
+The harness runs the full gate (typecheck, lint, meta-rules, knip, tests) after your
+edits and hands you the exact errors. Do NOT run \`tsc\`, \`eslint\`, \`knip\`,
+\`bun run check\`/\`validate\`/\`typecheck\`, or \`scripts/stack-check.sh\` yourself —
+it wastes turns and tells you nothing the harness won't. Just edit; the gate report
+is your feedback. And NEVER use \`npx\` (or \`npm\`/\`yarn\`) — this stack is bun-only,
+and \`npx tsc\` resolves a WRONG package that prints "This is not the tsc command you
+are looking for". If you ever must run something, use the project's \`bun run <script>\`.
+
+---
+
 Begin implementation now.`;
 }
