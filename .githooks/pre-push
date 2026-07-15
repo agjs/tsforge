@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Convenience gate: run the independent review panel before a push that touches
+# harness code. CI is the authority; this only catches problems earlier. Bypass
+# with --no-verify (CI still enforces).
+set -euo pipefail
+
+base="$(git merge-base main HEAD 2>/dev/null || echo HEAD~1)"
+if git diff --name-only "$base"...HEAD | grep -q '^packages/core/'; then
+  echo "harness-review: harness code changed — running the review panel..."
+  bun run packages/core/src/cli.ts harness-review || {
+    echo "harness-review BLOCKED the push. Fix findings or --no-verify (CI still enforces)." >&2
+    exit 1
+  }
+else
+  echo "harness-review: no packages/core changes — skipping panel."
+fi
