@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import {
   buildBinaryInvocation,
   runBinary,
@@ -60,6 +61,24 @@ describe("runBinary with tempfile mode", () => {
 
     expect(result.ok).toBe(true);
     expect(result.stdout).toContain("test request content");
+  });
+
+  test("tempfile mode: deletes the temp file after the run (no leak)", async () => {
+    // The binary echoes its file-path argument ($1); after runBinary returns,
+    // the finally-block cleanup must have removed that path.
+    const result = await runBinary(
+      {
+        argv: ["sh", "-c", 'printf "%s" "$1"', "sh"],
+        input: "tempfile",
+        timeoutMs: 5000,
+      },
+      "cleanup check"
+    );
+    const path = result.stdout.trim();
+
+    expect(result.ok).toBe(true);
+    expect(path.length).toBeGreaterThan(0);
+    expect(existsSync(path)).toBe(false);
   });
 
   test("arg mode: appends content as argument and runs command", async () => {
