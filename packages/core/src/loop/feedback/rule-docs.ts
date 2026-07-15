@@ -126,6 +126,13 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "if (name) {}",
     good: "if (name !== undefined && name.length > 0) {}",
   },
+  "knip/unused-files": {
+    what: "A file exists but no configured entry reaches it, so knip fails it as an unused file. It must be deleted or wired from an entry — you cannot silence it (knip is a file-graph check, not a lint rule).",
+    bad: "apps/api/src/api/note/note.service.test.ts  // co-located API test; knip test entries are the mirrored tests/ dir, so this is 'unused' forever",
+    good: "apps/api/tests/api/note/note.service.test.ts  // mirrored test path — a configured knip entry",
+    procedure:
+      "1. If the unused file is a co-located API test under src/, DELETE it and put the test at the mirrored tests/ path (this stack's knip test entries are the mirrored tests dir, NOT co-located src tests). Keep only the mirrored copy. 2. For a production file, import it from an entry (e.g. an index.ts barrel) or delete it. Do this on the FIRST occurrence — an unused-file wall does not resolve by editing other files.",
+  },
   "@typescript-eslint/naming-convention": {
     what: "Interfaces are PascalCase with an `I` prefix.",
     bad: "interface User {}",

@@ -79,6 +79,11 @@ const PLAYBOOKS: Record<string, string> = {
     "(reads) + `<x>.mutations.ts` (writes) — each under the limit; update imports.",
   "one-component-per-file":
     "Two components in one file. Move the second into its own file and import it.",
+  "unused-files":
+    "knip flags a file no entry reaches. You CANNOT silence it. If it's a co-located " +
+    "API test under `src/`, DELETE it and keep the mirrored `tests/` copy (this stack's " +
+    "knip test entries are the mirrored tests dir, not co-located src tests). For a " +
+    "production file, import it from an entry (an `index.ts` barrel) or delete it.",
 };
 
 /** The bare rule name — the segment after the last `/` (so `tsforge/no-jsx-computation`
