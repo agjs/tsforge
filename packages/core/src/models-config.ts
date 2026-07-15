@@ -181,13 +181,18 @@ function isParseMode(v: unknown): v is BinaryParseMode {
   return v === "json-fence" || v === "raw";
 }
 
-function parseModelReviewer(raw: Record<string, unknown>, models: Record<string, IModelEntry>): IReviewerModel {
+function parseModelReviewer(
+  raw: Record<string, unknown>,
+  models: Record<string, IModelEntry>
+): IReviewerModel {
   if (typeof raw.id !== "string" || typeof raw.entry !== "string") {
-    throw new Error('models.json: model reviewer needs { id, entry }');
+    throw new Error("models.json: model reviewer needs { id, entry }");
   }
 
   if (models[raw.entry] === undefined) {
-    throw new Error(`models.json: reviewer entry "${raw.entry}" is not a configured model`);
+    throw new Error(
+      `models.json: reviewer entry "${raw.entry}" is not a configured model`
+    );
   }
 
   return { kind: "model", id: raw.id, entry: raw.entry };
@@ -197,21 +202,39 @@ function parseBinaryReviewer(raw: Record<string, unknown>): IReviewerBinary {
   const argv = raw.argv;
 
   if (typeof raw.id !== "string" || !Array.isArray(argv) || argv.length === 0) {
-    throw new Error("models.json: binary reviewer needs { id, argv (non-empty) }");
+    throw new Error(
+      "models.json: binary reviewer needs { id, argv (non-empty) }"
+    );
   }
 
   if (!argv.every((a): a is string => typeof a === "string")) {
     throw new Error("models.json: binary reviewer argv must be all strings");
   }
 
-  if (!isInputMode(raw.input) || !isParseMode(raw.parse) || typeof raw.timeoutMs !== "number") {
-    throw new Error("models.json: binary reviewer needs { input, parse, timeoutMs }");
+  if (
+    !isInputMode(raw.input) ||
+    !isParseMode(raw.parse) ||
+    typeof raw.timeoutMs !== "number"
+  ) {
+    throw new Error(
+      "models.json: binary reviewer needs { input, parse, timeoutMs }"
+    );
   }
 
-  return { kind: "binary", id: raw.id, argv, input: raw.input, timeoutMs: raw.timeoutMs, parse: raw.parse };
+  return {
+    kind: "binary",
+    id: raw.id,
+    argv,
+    input: raw.input,
+    timeoutMs: raw.timeoutMs,
+    parse: raw.parse,
+  };
 }
 
-function parseReviewer(raw: unknown, models: Record<string, IModelEntry>): IReviewer {
+function parseReviewer(
+  raw: unknown,
+  models: Record<string, IModelEntry>
+): IReviewer {
   if (!isRecord(raw)) {
     throw new Error("models.json: each reviewer must be an object");
   }
@@ -227,16 +250,22 @@ function parseReviewer(raw: unknown, models: Record<string, IModelEntry>): IRevi
   throw new Error('models.json: reviewer kind must be "model" or "binary"');
 }
 
-function parseReviewPanel(raw: unknown, models: Record<string, IModelEntry>): IReviewPanel | undefined {
+function parseReviewPanel(
+  raw: unknown,
+  models: Record<string, IModelEntry>
+): IReviewPanel | undefined {
   if (raw === undefined) {
     return undefined;
   }
 
   if (!isRecord(raw) || !Array.isArray(raw.reviewers)) {
-    throw new Error("models.json: reviewPanel must be { minReviewers, reviewers[] }");
+    throw new Error(
+      "models.json: reviewPanel must be { minReviewers, reviewers[] }"
+    );
   }
 
-  const minReviewers = typeof raw.minReviewers === "number" ? raw.minReviewers : 2;
+  const minReviewers =
+    typeof raw.minReviewers === "number" ? raw.minReviewers : 2;
   const reviewers = raw.reviewers.map((r) => parseReviewer(r, models));
 
   return { minReviewers, reviewers };
@@ -278,9 +307,10 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
   const capabilities = parseCapabilities(raw.capabilities, models);
   const reviewPanel = parseReviewPanel(raw.reviewPanel, models);
 
-  const withCaps = capabilities === undefined
-    ? { active: raw.active, models }
-    : { active: raw.active, models, capabilities };
+  const withCaps =
+    capabilities === undefined
+      ? { active: raw.active, models }
+      : { active: raw.active, models, capabilities };
 
   return reviewPanel === undefined ? withCaps : { ...withCaps, reviewPanel };
 }

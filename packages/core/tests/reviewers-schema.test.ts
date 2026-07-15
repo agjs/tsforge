@@ -13,7 +13,12 @@ describe("parseReview", () => {
       verdict: "request-changes",
       summary: "one issue",
       findings: [
-        { severity: "major", findingCode: "as-cast", file: "a.ts", issue: "cast" },
+        {
+          severity: "major",
+          findingCode: "as-cast",
+          file: "a.ts",
+          issue: "cast",
+        },
       ],
     });
 
@@ -23,7 +28,9 @@ describe("parseReview", () => {
   });
 
   test("returns null on an unknown verdict (parse fail, not silent approve)", () => {
-    expect(parseReview("opus", { verdict: "lgtm", summary: "", findings: [] })).toBeNull();
+    expect(
+      parseReview("opus", { verdict: "lgtm", summary: "", findings: [] })
+    ).toBeNull();
   });
 
   test("returns null on an unknown findingCode", () => {
@@ -37,7 +44,9 @@ describe("parseReview", () => {
   });
 
   test("returns null when findings is not an array", () => {
-    expect(parseReview("opus", { verdict: "approve", summary: "", findings: {} })).toBeNull();
+    expect(
+      parseReview("opus", { verdict: "approve", summary: "", findings: {} })
+    ).toBeNull();
   });
 });
 

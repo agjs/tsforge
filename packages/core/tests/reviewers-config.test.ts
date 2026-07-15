@@ -3,7 +3,10 @@ import { parseModelsConfig } from "../src/models-config";
 
 const base = {
   active: "local",
-  models: { local: { baseUrl: "http://x/v1", model: "m" }, opus: { baseUrl: "http://y/v1", model: "opus" } },
+  models: {
+    local: { baseUrl: "http://x/v1", model: "m" },
+    opus: { baseUrl: "http://y/v1", model: "opus" },
+  },
 };
 
 describe("parseModelsConfig reviewPanel", () => {
@@ -14,7 +17,14 @@ describe("parseModelsConfig reviewPanel", () => {
         minReviewers: 2,
         reviewers: [
           { kind: "model", id: "opus", entry: "opus" },
-          { kind: "binary", id: "grok", argv: ["grok", "-p"], input: "arg", timeoutMs: 180000, parse: "json-fence" },
+          {
+            kind: "binary",
+            id: "grok",
+            argv: ["grok", "-p"],
+            input: "arg",
+            timeoutMs: 180000,
+            parse: "json-fence",
+          },
         ],
       },
     });
@@ -26,7 +36,10 @@ describe("parseModelsConfig reviewPanel", () => {
     expect(() =>
       parseModelsConfig({
         ...base,
-        reviewPanel: { minReviewers: 2, reviewers: [{ kind: "model", id: "x", entry: "ghost" }] },
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [{ kind: "model", id: "x", entry: "ghost" }],
+        },
       })
     ).toThrow(/entry "ghost"/u);
   });
@@ -37,7 +50,16 @@ describe("parseModelsConfig reviewPanel", () => {
         ...base,
         reviewPanel: {
           minReviewers: 2,
-          reviewers: [{ kind: "binary", id: "b", argv: [], input: "arg", timeoutMs: 1000, parse: "raw" }],
+          reviewers: [
+            {
+              kind: "binary",
+              id: "b",
+              argv: [],
+              input: "arg",
+              timeoutMs: 1000,
+              parse: "raw",
+            },
+          ],
         },
       })
     ).toThrow(/argv/u);

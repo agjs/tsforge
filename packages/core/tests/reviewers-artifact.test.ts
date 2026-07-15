@@ -13,16 +13,32 @@ const v: IVerdict = {
 
 describe("artifact + cache", () => {
   test("cache key is stable for the same inputs and changes with the tree hash", () => {
-    const a = verdictCacheKey({ treeHash: "t1", panelHash: "p1", rubricVersion: "1" });
-    const b = verdictCacheKey({ treeHash: "t1", panelHash: "p1", rubricVersion: "1" });
-    const c = verdictCacheKey({ treeHash: "t2", panelHash: "p1", rubricVersion: "1" });
+    const a = verdictCacheKey({
+      treeHash: "t1",
+      panelHash: "p1",
+      rubricVersion: "1",
+    });
+    const b = verdictCacheKey({
+      treeHash: "t1",
+      panelHash: "p1",
+      rubricVersion: "1",
+    });
+    const c = verdictCacheKey({
+      treeHash: "t2",
+      panelHash: "p1",
+      rubricVersion: "1",
+    });
 
     expect(a).toBe(b);
     expect(a).not.toBe(c);
   });
 
   test("artifact body is valid JSON carrying verdict + identity + tree hash", () => {
-    const body = artifactBody(v, { treeHash: "t1", panelHash: "p1", when: "2026-07-15T00:00:00Z" });
+    const body = artifactBody(v, {
+      treeHash: "t1",
+      panelHash: "p1",
+      when: "2026-07-15T00:00:00Z",
+    });
     const parsed = JSON.parse(body);
 
     expect(parsed.verdict.identity).toBe("local/flash");

@@ -1,9 +1,21 @@
 import { test, expect, describe } from "bun:test";
-import { aggregate, parseVerdict, type ReviewOutcome, type IVerdict } from "../src/reviewers/aggregate";
+import {
+  aggregate,
+  parseVerdict,
+  type ReviewOutcome,
+  type IVerdict,
+} from "../src/reviewers/aggregate";
 import type { IReview, IFinding } from "../src/reviewers/schema";
 
-function ok(id: string, verdict: IReview["verdict"], findings: IFinding[] = []): ReviewOutcome {
-  return { status: "ok", review: { reviewerId: id, verdict, findings, summary: "" } };
+function ok(
+  id: string,
+  verdict: IReview["verdict"],
+  findings: IFinding[] = []
+): ReviewOutcome {
+  return {
+    status: "ok",
+    review: { reviewerId: id, verdict, findings, summary: "" },
+  };
 }
 
 const opts = { minReviewers: 2, identity: "local/flash" };
@@ -17,7 +29,13 @@ describe("aggregate", () => {
   });
 
   test("insufficient reviewers → block", () => {
-    const v = aggregate([ok("a", "approve"), { status: "errored", reviewerId: "b", error: "timeout" }], opts);
+    const v = aggregate(
+      [
+        ok("a", "approve"),
+        { status: "errored", reviewerId: "b", error: "timeout" },
+      ],
+      opts
+    );
 
     expect(v.blocked).toBe(true);
     expect(v.reason).toMatch(/insufficient reviewers/u);
@@ -34,7 +52,14 @@ describe("aggregate", () => {
   test("single critical security finding → block", () => {
     const v = aggregate(
       [
-        ok("a", "request-changes", [{ severity: "critical", findingCode: "security", file: "s.ts", issue: "ssrf" }]),
+        ok("a", "request-changes", [
+          {
+            severity: "critical",
+            findingCode: "security",
+            file: "s.ts",
+            issue: "ssrf",
+          },
+        ]),
         ok("b", "approve"),
       ],
       opts
@@ -45,8 +70,16 @@ describe("aggregate", () => {
   });
 
   test("two reviewers agree on a major at same locus → block", () => {
-    const f: IFinding = { severity: "major", findingCode: "as-cast", file: "a.ts", issue: "cast here" };
-    const v = aggregate([ok("a", "request-changes", [f]), ok("b", "request-changes", [{ ...f }])], opts);
+    const f: IFinding = {
+      severity: "major",
+      findingCode: "as-cast",
+      file: "a.ts",
+      issue: "cast here",
+    };
+    const v = aggregate(
+      [ok("a", "request-changes", [f]), ok("b", "request-changes", [{ ...f }])],
+      opts
+    );
 
     expect(v.blocked).toBe(true);
     expect(v.ranked[0]?.agreement).toBe(2);
@@ -56,8 +89,22 @@ describe("aggregate", () => {
   test("majority request-changes with a major but no locus agreement → block", () => {
     const v = aggregate(
       [
-        ok("a", "request-changes", [{ severity: "major", findingCode: "missing-test", file: "a.ts", issue: "no test" }]),
-        ok("b", "request-changes", [{ severity: "major", findingCode: "dead-code", file: "b.ts", issue: "unused" }]),
+        ok("a", "request-changes", [
+          {
+            severity: "major",
+            findingCode: "missing-test",
+            file: "a.ts",
+            issue: "no test",
+          },
+        ]),
+        ok("b", "request-changes", [
+          {
+            severity: "major",
+            findingCode: "dead-code",
+            file: "b.ts",
+            issue: "unused",
+          },
+        ]),
         ok("c", "approve"),
       ],
       { minReviewers: 2, identity: "x" }
@@ -70,8 +117,24 @@ describe("aggregate", () => {
   test("locus keys on findingCode, not exact line (different lines still agree)", () => {
     const v = aggregate(
       [
-        ok("a", "request-changes", [{ severity: "major", findingCode: "as-cast", file: "a.ts", line: 10, issue: "x" }]),
-        ok("b", "request-changes", [{ severity: "major", findingCode: "as-cast", file: "a.ts", line: 99, issue: "y" }]),
+        ok("a", "request-changes", [
+          {
+            severity: "major",
+            findingCode: "as-cast",
+            file: "a.ts",
+            line: 10,
+            issue: "x",
+          },
+        ]),
+        ok("b", "request-changes", [
+          {
+            severity: "major",
+            findingCode: "as-cast",
+            file: "a.ts",
+            line: 99,
+            issue: "y",
+          },
+        ]),
       ],
       opts
     );
@@ -82,7 +145,17 @@ describe("aggregate", () => {
 
   test("one minor finding, both approve → pass", () => {
     const v = aggregate(
-      [ok("a", "approve", [{ severity: "minor", findingCode: "other", file: "a.ts", issue: "nit" }]), ok("b", "approve")],
+      [
+        ok("a", "approve", [
+          {
+            severity: "minor",
+            findingCode: "other",
+            file: "a.ts",
+            issue: "nit",
+          },
+        ]),
+        ok("b", "approve"),
+      ],
       opts
     );
 
@@ -110,7 +183,15 @@ describe("parseVerdict", () => {
         {
           reviewerId: "a",
           verdict: "request-changes",
-          findings: [{ severity: "critical", findingCode: "security", file: "a.ts", line: 42, issue: "ssrf vulnerability" }],
+          findings: [
+            {
+              severity: "critical",
+              findingCode: "security",
+              file: "a.ts",
+              line: 42,
+              issue: "ssrf vulnerability",
+            },
+          ],
           summary: "found security issue",
         },
         {

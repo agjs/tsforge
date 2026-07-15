@@ -6,7 +6,15 @@ const blocked: IVerdict = {
   blocked: true,
   reason: "a reviewer rejected the change",
   reviewers: { ok: 2, errored: 1 },
-  ranked: [{ severity: "major", findingCode: "as-cast", file: "a.ts", issue: "cast", agreement: 2 }],
+  ranked: [
+    {
+      severity: "major",
+      findingCode: "as-cast",
+      file: "a.ts",
+      issue: "cast",
+      agreement: 2,
+    },
+  ],
   perReviewer: [],
   identity: "local/flash",
 };
@@ -23,7 +31,12 @@ describe("formatVerdict", () => {
   });
 
   test("a passing verdict shows PASS", () => {
-    const out = formatVerdict({ ...blocked, blocked: false, reason: "all reviewers approved", ranked: [] });
+    const out = formatVerdict({
+      ...blocked,
+      blocked: false,
+      reason: "all reviewers approved",
+      ranked: [],
+    });
 
     expect(out).toMatch(/PASS/u);
   });

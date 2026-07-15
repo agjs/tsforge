@@ -14,12 +14,20 @@ function cfg(over: Partial<IModelsConfig>): IModelsConfig {
   };
 }
 
-const active = { name: "local", entry: { baseUrl: "http://host-a/v1", model: "flash" } };
+const active = {
+  name: "local",
+  entry: { baseUrl: "http://host-a/v1", model: "flash" },
+};
 
 describe("resolvePanel independence", () => {
   test("keeps an independent model reviewer", () => {
     const p = resolvePanel(
-      cfg({ reviewPanel: { minReviewers: 2, reviewers: [{ kind: "model", id: "opus", entry: "opus" }] } }),
+      cfg({
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [{ kind: "model", id: "opus", entry: "opus" }],
+        },
+      }),
       active
     );
 
@@ -29,7 +37,12 @@ describe("resolvePanel independence", () => {
 
   test("skips the active entry by name", () => {
     const p = resolvePanel(
-      cfg({ reviewPanel: { minReviewers: 2, reviewers: [{ kind: "model", id: "self", entry: "local" }] } }),
+      cfg({
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [{ kind: "model", id: "self", entry: "local" }],
+        },
+      }),
       active
     );
 
@@ -39,7 +52,12 @@ describe("resolvePanel independence", () => {
 
   test("skips a same-weights alias (same host+model, different entry name)", () => {
     const p = resolvePanel(
-      cfg({ reviewPanel: { minReviewers: 2, reviewers: [{ kind: "model", id: "sneaky", entry: "cloneAlias" }] } }),
+      cfg({
+        reviewPanel: {
+          minReviewers: 2,
+          reviewers: [{ kind: "model", id: "sneaky", entry: "cloneAlias" }],
+        },
+      }),
       active
     );
 
@@ -52,7 +70,16 @@ describe("resolvePanel independence", () => {
       cfg({
         reviewPanel: {
           minReviewers: 2,
-          reviewers: [{ kind: "binary", id: "grok", argv: ["grok"], input: "arg", timeoutMs: 1000, parse: "raw" }],
+          reviewers: [
+            {
+              kind: "binary",
+              id: "grok",
+              argv: ["grok"],
+              input: "arg",
+              timeoutMs: 1000,
+              parse: "raw",
+            },
+          ],
         },
       }),
       active
@@ -63,7 +90,12 @@ describe("resolvePanel independence", () => {
 
   test("minReviewers is floored at 2 even if config says 1", () => {
     const p = resolvePanel(
-      cfg({ reviewPanel: { minReviewers: 1, reviewers: [{ kind: "model", id: "opus", entry: "opus" }] } }),
+      cfg({
+        reviewPanel: {
+          minReviewers: 1,
+          reviewers: [{ kind: "model", id: "opus", entry: "opus" }],
+        },
+      }),
       active
     );
 
