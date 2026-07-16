@@ -65,4 +65,31 @@ describe("renderReviewPrompt", () => {
     expect(prompt).toContain("diff --git a b");
     expect(REVIEW_SYSTEM_PROMPT).toContain("reject");
   });
+
+  test("includes changed-file contents so the review is against real code", () => {
+    const req: IReviewRequest = {
+      title: "t",
+      intent: "add X",
+      diff: "diff --git a b",
+      validateSummary: { passed: true, failCount: 0, firstErrors: [] },
+      contextFiles: ["=== src/x.ts ===\nexport const realCode = 1;"],
+      rubricVersion: RUBRIC_VERSION,
+    };
+    const prompt = renderReviewPrompt(req);
+
+    expect(prompt).toContain("Current file contents");
+    expect(prompt).toContain("realCode");
+  });
+
+  test("omits the context section entirely when there are no context files", () => {
+    const prompt = renderReviewPrompt({
+      title: "t",
+      intent: "add X",
+      diff: "d",
+      validateSummary: { passed: true, failCount: 0, firstErrors: [] },
+      rubricVersion: RUBRIC_VERSION,
+    });
+
+    expect(prompt).not.toContain("Current file contents");
+  });
 });

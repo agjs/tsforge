@@ -119,6 +119,8 @@ export async function gatherChange(
     };
   }
 
+  const contextFiles = await gatherContext(deps.git, files, opts.maxChars);
+
   return {
     kind: "request",
     request: {
@@ -126,9 +128,51 @@ export async function gatherChange(
       intent,
       diff,
       validateSummary,
+      contextFiles,
       rubricVersion: RUBRIC_VERSION,
     },
   };
+}
+
+/** The model reviewers get only the diff, so they can't see the surrounding code
+ *  a hunk lives in — the difference between "proofreading a patch" and "reviewing
+ *  against the codebase". Attach the FULL current (HEAD) contents of the changed
+ *  files, bounded by a budget; whatever doesn't fit is reported, never silently
+ *  dropped. (Agentic binary reviewers like codex can read further on their own.) */
+async function gatherContext(
+  git: IGatherDeps["git"],
+  files: string[],
+  budget: number
+): Promise<string[]> {
+  const blocks: string[] = [];
+  let used = 0;
+  let omitted = 0;
+
+  for (const file of files) {
+    const res = await git(["show", `HEAD:${file}`]);
+
+    if (res.code !== 0) {
+      continue; // deleted/renamed/binary — not readable at HEAD, skip
+    }
+
+    const block = `=== ${file} ===\n${res.stdout}`;
+
+    if (used + block.length > budget) {
+      omitted += 1;
+      continue;
+    }
+
+    used += block.length;
+    blocks.push(block);
+  }
+
+  if (omitted > 0) {
+    blocks.push(
+      `[${String(omitted)} changed file(s) omitted from context to fit the budget — review their diffs above directly]`
+    );
+  }
+
+  return blocks;
 }
 
 export interface IRunDeps extends IGatherDeps, IInvokeDeps {

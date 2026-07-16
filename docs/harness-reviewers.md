@@ -53,6 +53,12 @@ Add a `reviewPanel` block to `~/.tsforge/models.json` (sibling to `models` /
 - The review request handed to every reviewer includes a skeptical, reject-by-default
   system contract plus the house-rules rubric, so binaries (e.g. grok) return the
   required JSON shape without extra prompting.
+- Reviewers judge the change **against the codebase, not just the diff**: the prompt
+  carries the changed files' full current contents (bounded by the diff budget, with
+  any overflow reported — never silently dropped), and the agentic binary reviewers
+  (grok, codex) run in the repo and can read further on their own. Binary reviewers
+  are invoked in their natural review mode (no artificial turn cap); a per-reviewer
+  `timeoutMs` is the only backstop.
 
 Configure **2+ reviewers, all independent of the builder.** A panel that can't reach
 `minReviewers` successful reviews BLOCKS ("insufficient reviewers").

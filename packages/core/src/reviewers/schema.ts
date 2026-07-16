@@ -171,6 +171,15 @@ export function renderReviewPrompt(req: IReviewRequest): string {
     ? "validate: PASSED"
     : `validate: FAILED (${String(req.validateSummary.failCount)} errors)\n${req.validateSummary.firstErrors.join("\n")}`;
 
+  const context =
+    req.contextFiles !== undefined && req.contextFiles.length > 0
+      ? [
+          "",
+          "## Current file contents (review the diff AGAINST this real code, not in isolation)",
+          ...req.contextFiles,
+        ]
+      : [];
+
   return [
     `# Change under review: ${req.title}`,
     `Rubric version: ${req.rubricVersion}`,
@@ -182,5 +191,6 @@ export function renderReviewPrompt(req: IReviewRequest): string {
     "",
     "## Diff",
     req.diff,
+    ...context,
   ].join("\n");
 }

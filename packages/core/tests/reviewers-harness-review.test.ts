@@ -93,6 +93,28 @@ describe("gatherChange", () => {
       expect(r.request.validateSummary.passed).toBe(true);
     }
   });
+
+  test("attaches the changed files' current (HEAD) contents as review context", async () => {
+    const deps: IGatherDeps = {
+      git: git({
+        "diff --name-only": "src/x.ts",
+        diff: "diff --git a/src/x.ts b/src/x.ts\n+code",
+        "show HEAD:src/x.ts":
+          "export function realCode(): number {\n  return 42;\n}",
+      }),
+      validate: cleanValidate,
+    };
+    const r = await gatherChange(deps, opts);
+
+    expect(r.kind).toBe("request");
+
+    if (r.kind === "request") {
+      const ctx = (r.request.contextFiles ?? []).join("\n");
+
+      expect(ctx).toContain("=== src/x.ts ===");
+      expect(ctx).toContain("realCode"); // the reviewer sees the WHOLE file, not just the hunk
+    }
+  });
 });
 
 describe("runHarnessReview", () => {
