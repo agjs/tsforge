@@ -43,6 +43,10 @@ import {
   type ILoopEvent,
 } from "../loop";
 import { runPlanning } from "../loop/planning/run-planning";
+import {
+  isBoringstackProject,
+  boringstackPlanConstraints,
+} from "../loop/planning/boringstack-planning";
 import { loadApprovedPlan } from "../loop/planning/plan-store";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
@@ -131,6 +135,88 @@ function newSessionId(): string {
  *  'approve'", so casual yeses count there. */
 export function isApproval(line: string): boolean {
   return /^(approve|approved|ok|okay|yes|y|go|lgtm)\.?$/i.test(line.trim());
+}
+
+/** Map a human's plan-review reply to a decision. Pure + exported so the
+ *  approve/cancel/revise semantics are unit-tested without the interactive prompt. */
+export function parseReviewResponse(
+  response: string
+):
+  | { action: "approve" }
+  | { action: "cancel" }
+  | { action: "revise"; note: string } {
+  const trimmed = response.trim().toLowerCase();
+
+  if (trimmed === "approve" || trimmed === "a" || trimmed === "y") {
+    return { action: "approve" };
+  }
+
+  if (trimmed === "cancel" || trimmed === "c" || trimmed === "n") {
+    return { action: "cancel" };
+  }
+
+  return { action: "revise", note: response };
+}
+
+/** The greenfield BoringStack planning flow (description → proposed plan → human
+ *  approve/revise/cancel → approved plan on disk). Extracted from the line handler
+ *  to keep its cognitive complexity down; the stack detection + planner constraints
+ *  live in the tested boringstack-planning module, and this only glues them to the
+ *  interactive prompt. */
+async function runGreenfieldPlanning(
+  dir: string,
+  description: string,
+  echo: (s: string) => void,
+  rl: ReturnType<typeof createInterface> | null,
+  activeModelEntry: IModelEntry
+): Promise<void> {
+  echo("▸ planning your product first...\n");
+
+  const plannerResolved = await resolveCapabilityModel("planner");
+  const plannerProvider = makeProvider(
+    plannerResolved?.entry ?? activeModelEntry
+  );
+
+  const result = await runPlanning(dir, {
+    planner: plannerProvider,
+    // We only reach here when looksLikeBoringstack is true, so the BoringStack
+    // reserved-slice rule always applies (no gap) and every drop is surfaced.
+    constraints: boringstackPlanConstraints((dropped) => {
+      echo(
+        `▸ dropped auth slice(s) BoringStack already provides: ${dropped.join(", ")}\n`
+      );
+    }),
+    describe: async () => {
+      await Promise.resolve();
+
+      return { description };
+    },
+    review: async (plan) => {
+      await Promise.resolve();
+
+      echo(
+        `\nProposed plan:\n${JSON.stringify(plan, null, 2)}\n` +
+          `\nApprove this plan? (approve/revise/cancel)\n`
+      );
+
+      if (rl === null) {
+        echo(
+          "(editor mode: plan review not interactive — run planning again with --plan)\n"
+        );
+
+        return { action: "cancel" };
+      }
+
+      return parseReviewResponse(await rl.question("> "));
+    },
+    out: echo,
+  });
+
+  echo(
+    result === "approved"
+      ? "✓ plan approved — ready to build\n"
+      : "planning cancelled\n"
+  );
 }
 
 /** Narrow approval — GENERAL plan mode, where the model asks clarifying
@@ -694,78 +780,15 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    // GREENFIELD BORINGSTACK INTERCEPTION: if the project is a fresh boringstack
-    // clone with no approved plan, route the message into planning instead of build.
-    const appsDirPath = `${args.dir}/apps/api`;
-    let needsPlanningFirst = false;
-
-    try {
-      const stats = await Bun.file(appsDirPath).stat();
-
-      if (stats.isDirectory()) {
-        const approvedPlan = await loadApprovedPlan(args.dir);
-
-        if (approvedPlan === null) {
-          needsPlanningFirst = true;
-        }
-      }
-    } catch {
-      // File system error — treat as non-boringstack
-    }
-
-    if (needsPlanningFirst) {
-      echo("▸ planning your product first...\n");
-
-      const plannerResolved = await resolveCapabilityModel("planner");
-      const plannerEntry = plannerResolved?.entry ?? activeModelEntry;
-      const plannerProvider = makeProvider(plannerEntry);
-
-      const planningResult = await runPlanning(args.dir, {
-        planner: plannerProvider,
-        describe: async () => {
-          await Promise.resolve();
-
-          return {
-            description: line,
-          };
-        },
-        review: async (plan) => {
-          await Promise.resolve();
-
-          echo(
-            `\nProposed plan:\n${JSON.stringify(plan, null, 2)}\n` +
-              `\nApprove this plan? (approve/revise/cancel)\n`
-          );
-
-          if (rl === null) {
-            echo(
-              "(editor mode: plan review not interactive — run planning again with --plan)\n"
-            );
-
-            return { action: "cancel" };
-          }
-
-          const response = await rl.question("> ");
-          const trimmed = response.trim().toLowerCase();
-
-          if (trimmed === "approve" || trimmed === "a" || trimmed === "y") {
-            return { action: "approve" };
-          }
-
-          if (trimmed === "cancel" || trimmed === "c" || trimmed === "n") {
-            return { action: "cancel" };
-          }
-
-          return { action: "revise", note: response };
-        },
-        out: echo,
-      });
-
-      if (planningResult === "approved") {
-        echo("✓ plan approved — ready to build\n");
-      } else {
-        echo("planning cancelled\n");
-      }
+    // GREENFIELD BORINGSTACK INTERCEPTION: a fresh boringstack project with no
+    // approved plan routes into planning first. Detection + planner constraints
+    // share ONE structural signal (looksLikeBoringstack) so there is no gap where a
+    // project is planned as boringstack but not given the reserved-slice rule.
+    if (
+      (await isBoringstackProject(args.dir)) &&
+      (await loadApprovedPlan(args.dir)) === null
+    ) {
+      await runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry);
 
       return;
     }

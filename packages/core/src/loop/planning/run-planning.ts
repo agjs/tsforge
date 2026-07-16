@@ -1,10 +1,14 @@
 import { proposePlan } from "./propose-plan";
 import { writePlan } from "./plan-store";
-import type { IProductPlan } from "./plan-types";
+import type { IProductPlan, IPlanConstraints } from "./plan-types";
 import type { IProvider } from "../../inference";
 
 export interface IPlanningDeps {
   planner: IProvider;
+  /** OPT-IN stack-specific planning constraints (guidance + reserved entities).
+   *  Omitted → the planner is stack-agnostic. The BoringStack path supplies the
+   *  BoringStack constants; a plain build passes nothing. */
+  constraints?: IPlanConstraints;
   describe: () => Promise<{ description: string; mockups?: readonly string[] }>;
   review: (
     plan: IProductPlan
@@ -25,7 +29,11 @@ export async function runPlanning(
   let currentInput = await deps.describe();
 
   while (revisionCount < maxRevisions) {
-    const plan = await proposePlan({ planner: deps.planner }, currentInput);
+    const plan = await proposePlan(
+      { planner: deps.planner },
+      currentInput,
+      deps.constraints ?? {}
+    );
 
     if (plan === null) {
       deps.out("Failed to propose a plan. Please try again.");
