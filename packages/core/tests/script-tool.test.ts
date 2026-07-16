@@ -435,6 +435,24 @@ test("the RPC server rejects a request with a wrong token", async () => {
   expect(calls).toHaveLength(0);
 });
 
+test("captured script output is PLAIN — no ANSI color on logged values", async () => {
+  // The script's stdout is captured (parsed by the loop, matched in tests), never
+  // shown live — so Bun's console.log colorization (a number `403` →
+  // `\x1b[33m403\x1b[0m` under a TTY) is corruption that made captured output
+  // differ CI-vs-local. runScript sets NO_COLOR/FORCE_COLOR so output is stable;
+  // this locks that in — a regression re-enabling color would fail here.
+  const events: ILoopEvent[] = [];
+  const code = 'console.log("VAL", 403, true, { a: 1 });';
+  const out = await doScript({ code }, makeCtx({}, events), {
+    execute: recordingExecute([]),
+  });
+
+  // No ANSI escape sequence anywhere in the captured output.
+  expect(out).not.toContain("[");
+  // And the plain values survive verbatim (proves it's off, not stripped-after).
+  expect(out).toContain("VAL 403 true");
+});
+
 test("the RPC server refuses `script` (no recursion) and non-exposable tools", async () => {
   const events: ILoopEvent[] = [];
   const code = [
@@ -497,4 +515,33 @@ test("empty `code` is rejected without spawning anything", async () => {
 
   expect(out).toContain("must be a non-empty");
   expect(calls).toHaveLength(0);
+});
+
+test("captured script output is ANSI-free even when the parent env forces color", async () => {
+  // The subprocess stdout is CAPTURED (parsed by the loop, matched in tests),
+  // never shown live — so Bun colorizing a console.log'd value (a numeric 403 →
+  // \x1b[33m403\x1b[0m under a color-enabled parent) is corruption that made
+  // captured output differ between CI (plain) and a local TTY (colored). The tool
+  // sets NO_COLOR/FORCE_COLOR=0 in the child env; the captured text must be plain.
+  const events: ILoopEvent[] = [];
+  const savedForce = process.env.FORCE_COLOR;
+
+  process.env.FORCE_COLOR = "1"; // simulate a color-enabled parent (local TTY)
+
+  try {
+    const out = await doScript(
+      { code: "console.log(403);" },
+      makeCtx({}, events),
+      { execute: recordingExecute([]) }
+    );
+
+    expect(out).not.toMatch(new RegExp(String.fromCharCode(27)));
+    expect(out).toContain("403");
+  } finally {
+    if (savedForce === undefined) {
+      Reflect.deleteProperty(process.env, "FORCE_COLOR");
+    } else {
+      process.env.FORCE_COLOR = savedForce;
+    }
+  }
 });
