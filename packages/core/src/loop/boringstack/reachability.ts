@@ -96,16 +96,14 @@ function localeHasFeatureKeys(jsonSrc: string, lower: string): boolean {
 
   const feature = data.features[lower];
 
-  if (!isRecord(feature)) {
-    return false;
-  }
-
-  return (
-    typeof feature.title === "string" &&
-    feature.title.length > 0 &&
-    typeof feature.empty === "string" &&
-    feature.empty.length > 0
-  );
+  // The feature's i18n namespace must be POPULATED — but do NOT hardcode the
+  // default `title`/`empty` keys: the model legitimately restructures them (nested
+  // `features.x.list.title`, extra keys), and demanding the exact defaults false-fails
+  // "not reachable" forever once the page is customized (bshands12: ~30 cycles then
+  // parked on a solvable feature). Exact key RESOLUTION is already enforced by the
+  // `static-translation-key-exists` lint rule — every referenced key must exist — so
+  // a non-empty namespace here is a sufficient "the page isn't all raw keys" proxy.
+  return isRecord(feature) && Object.keys(feature).length > 0;
 }
 
 /**

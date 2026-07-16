@@ -79,6 +79,11 @@ const PLAYBOOKS: Record<string, string> = {
     "(reads) + `<x>.mutations.ts` (writes) — each under the limit; update imports.",
   "one-component-per-file":
     "Two components in one file. Move the second into its own file and import it.",
+  "unused-files":
+    "knip flags a file no entry reaches. You CANNOT silence it. If it's a co-located " +
+    "API test under `src/`, DELETE it and keep the mirrored `tests/` copy (this stack's " +
+    "knip test entries are the mirrored tests dir, not co-located src tests). For a " +
+    "production file, import it from an entry (an `index.ts` barrel) or delete it.",
 };
 
 /** The bare rule name — the segment after the last `/` (so `tsforge/no-jsx-computation`
@@ -96,6 +101,43 @@ export function playbookFor(rule: string | undefined): string | null {
   }
 
   return PLAYBOOKS[bareRule(rule)] ?? null;
+}
+
+/** Normalize text for comparison: trim, lowercase, remove most punctuation/whitespace. */
+function normalizeText(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+/** Check if a diagnosis is trivial (too short, or just restates existing errors).
+ *  R1 Phase A's diagnosis-only cycle should skip Phase B if the diagnosis is
+ *  trivial — the model didn't actually reflect, just regurgitated the errors. */
+export function isTrivialDiagnosis(
+  content: string,
+  errors: readonly ISteerError[]
+): boolean {
+  const trimmed = content.trim();
+
+  // Very short diagnosis is trivial (< 80 chars).
+  if (trimmed.length < 80) {
+    return true;
+  }
+
+  // If the diagnosis is just a superset of the error messages (restates them without
+  // new insight), it's trivial. Normalize both for comparison.
+  const diagNorm = normalizeText(trimmed);
+  const errorMessages = errors.map((e) => normalizeText(e.message)).join(" ");
+
+  // Diagnosis is a superset of error messages if all normalized error text is
+  // contained in the normalized diagnosis.
+  if (errorMessages.length > 0 && diagNorm.includes(errorMessages)) {
+    return true;
+  }
+
+  return false;
 }
 
 /** The distinct playbooks for the rules present in `errors`, formatted as a list.
@@ -125,12 +167,14 @@ function playbooksFor(errors: readonly ISteerError[]): string {
  *  3 — CHANGE STRATEGY: invert the failing approach, one error / one file.
  * `reason` is the convergence-guard diagnosis. `webEnabled` gates the `web_search`
  * suggestion — never tell the model to use a tool the build doesn't have.
- */
+ * `diagnosisOnly` (R1 Phase A): if true, ask ONLY for diagnosis, not action
+ * (the diagnosis becomes the next steer's input). */
 export function buildSteerMessage(
   level: number,
   errors: readonly ISteerError[],
   reason: string,
-  webEnabled = false
+  webEnabled = false,
+  diagnosisOnly = false
 ): string {
   const header = `⚠ STEER (escalation ${String(level)}/${String(STEER_LADDER_MAX)}) — you are NOT converging: ${reason}.`;
 
@@ -141,6 +185,16 @@ export function buildSteerMessage(
   // the expert model. The harness supplies the nudge; the model supplies the thinking.
   if (level <= 1) {
     // STEP BACK — make the model diagnose its OWN loop instead of guessing again.
+    if (diagnosisOnly) {
+      // Phase A: diagnosis-only, tool-less. No action yet, just reflection.
+      return (
+        `${header}\nSTEP BACK and DIAGNOSE before you touch anything. In 2–3 sentences answer: ` +
+        `(a) what have you been repeatedly trying, (b) WHY does it keep failing, ` +
+        `(c) what fundamentally DIFFERENT approach will you take? Your diagnosis will guide the next attempt.`
+      );
+    }
+
+    // Phase B: act on the diagnosis.
     return (
       `${header}\nSTEP BACK before you touch anything. In 1–2 sentences answer: ` +
       `(a) what have you been repeatedly trying, (b) WHY does it keep failing, ` +

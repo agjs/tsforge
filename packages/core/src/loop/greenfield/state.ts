@@ -22,6 +22,85 @@ export function isFeatureId(id: string): boolean {
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(id);
 }
 
+/** Validate and extract the handoff from a parsed JSON value. Returns null if invalid. */
+function parseHandoff(handoff: unknown): IFeature["handoff"] | null {
+  if (
+    !isRecord(handoff) ||
+    typeof handoff.block !== "string" ||
+    !Array.isArray(handoff.rungHistory) ||
+    !Array.isArray(handoff.errors) ||
+    typeof handoff.ask !== "string" ||
+    handoff.resumable !== true ||
+    !isRecord(handoff.resume)
+  ) {
+    return null;
+  }
+
+  // Validate rungHistory
+  const rungHistoryValid = handoff.rungHistory.every(
+    (r: unknown) => r === "R1" || r === "R2" || r === "R3" || r === "R4"
+  );
+
+  if (!rungHistoryValid) {
+    return null;
+  }
+
+  // Validate errors
+  const errorsValid = handoff.errors.every(
+    (e: unknown) => typeof e === "string"
+  );
+
+  if (!errorsValid) {
+    return null;
+  }
+
+  const resume = handoff.resume;
+  let validResume:
+    | { triedLevers: ("R1" | "R2" | "R3" | "R4")[] }
+    | { checkpointRef: string }
+    | null = null;
+
+  if (Array.isArray(resume.triedLevers)) {
+    const triedLeversValid = resume.triedLevers.every(
+      (t: unknown) => t === "R1" || t === "R2" || t === "R3" || t === "R4"
+    );
+
+    if (triedLeversValid) {
+      const typedLevers: ("R1" | "R2" | "R3" | "R4")[] =
+        resume.triedLevers.filter(
+          (t): t is "R1" | "R2" | "R3" | "R4" =>
+            t === "R1" || t === "R2" || t === "R3" || t === "R4"
+        );
+
+      validResume = { triedLevers: typedLevers };
+    }
+  } else if (typeof resume.checkpointRef === "string") {
+    validResume = { checkpointRef: resume.checkpointRef };
+  }
+
+  if (validResume === null) {
+    return null;
+  }
+
+  const typedRungs: ("R1" | "R2" | "R3" | "R4")[] = handoff.rungHistory.filter(
+    (r): r is "R1" | "R2" | "R3" | "R4" =>
+      r === "R1" || r === "R2" || r === "R3" || r === "R4"
+  );
+
+  const typedErrors: string[] = handoff.errors.filter(
+    (e): e is string => typeof e === "string"
+  );
+
+  return {
+    block: handoff.block,
+    rungHistory: typedRungs,
+    errors: typedErrors,
+    ask: handoff.ask,
+    resumable: true,
+    resume: validResume,
+  };
+}
+
 function featuresPath(cwd: string): string {
   return join(greenfieldDir(cwd), "features.json");
 }
@@ -42,7 +121,8 @@ function toFeature(value: unknown): IFeature | null {
     return null;
   }
 
-  const { id, desc, passes, attempts, steps } = value;
+  const { id, desc, passes, attempts, steps, lastError, parked, handoff } =
+    value;
 
   if (typeof id !== "string" || typeof desc !== "string" || !isFeatureId(id)) {
     return null;
@@ -57,6 +137,20 @@ function toFeature(value: unknown): IFeature | null {
 
   if (Array.isArray(steps)) {
     feature.steps = steps.filter((s): s is IStep => isRecord(s));
+  }
+
+  if (typeof lastError === "string") {
+    feature.lastError = lastError;
+  }
+
+  if (parked === true) {
+    feature.parked = true;
+  }
+
+  const parsedHandoff = parseHandoff(handoff);
+
+  if (parsedHandoff !== null) {
+    feature.handoff = parsedHandoff;
   }
 
   return feature;
@@ -103,10 +197,20 @@ export async function writeSpec(cwd: string, spec: string): Promise<void> {
 export function renderProgress(state: IGreenfieldState): string {
   const done = state.features.filter((f) => f.passes).length;
   const lines = state.features.map((f) => {
-    const box = f.passes ? "[x]" : "[ ]";
-    const attempts = f.attempts > 0 ? ` (attempts: ${f.attempts})` : "";
+    let box: string;
 
-    return `- ${box} ${f.id} — ${f.desc}${attempts}`;
+    if (f.passes) {
+      box = "[x]";
+    } else if (f.parked === true) {
+      box = "[~]";
+    } else {
+      box = "[ ]";
+    }
+
+    const attempts = f.attempts > 0 ? ` (attempts: ${f.attempts})` : "";
+    const parkedNote = f.parked === true ? " (parked)" : "";
+
+    return `- ${box} ${f.id} — ${f.desc}${attempts}${parkedNote}`;
   });
 
   return [

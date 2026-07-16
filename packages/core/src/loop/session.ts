@@ -6,6 +6,8 @@ import type {
 } from "../inference";
 import type { ITask } from "../spec";
 import type { FileLinter } from "../gate";
+import { makeFileLinter } from "../gate";
+import { commandGate, type IGate } from "../gate/gate-runner";
 import {
   type ADD_DEPENDENCY_TOOL,
   TOOL_NAME,
@@ -17,6 +19,13 @@ import type { IAgentSpec } from "../agent/agent-spec";
 import type { SpawnAgentFn, IToolContext } from "./tools";
 import type { PolicyMode } from "../policy";
 import type { ProfileId } from "../config/profiles";
+import {
+  buildMetaRuleContext,
+  runMetaRules,
+  buildMetaBaseline,
+  META_RULES,
+  type MetaBaseline,
+} from "../meta-rules";
 import { flags } from "../config";
 import { trace } from "../lib/trace";
 import { validate, isEslintJsonLine, type ErrorParser } from "../validate";
@@ -30,19 +39,32 @@ import {
 } from "../config/tsforge-config";
 import { connectMcpServers } from "../mcp";
 import { loadAndRegisterPlugins } from "../config/external-plugins";
-import { DEFAULT_TEMPERATURE, LOOP_LIMITS, RUN_STATUS } from "./loop.constants";
-import type { Reporter, ILoopEvent } from "./loop.types";
+import {
+  DEFAULT_TEMPERATURE,
+  LOOP_LIMITS,
+  RUN_STATUS,
+  READONLY_STREAK_LIMIT,
+  MAX_READONLY_RECOVERIES,
+} from "./loop.constants";
+import type { Reporter, ILoopEvent, IHandoff } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
 import { selectThinking, offeredToolsFor } from "./model-call";
 import { mineLessons, consolidate as consolidateMemory } from "./memory";
-import { buildChatSystem, buildTddGuidance, COMPACT_SYSTEM } from "./prompt";
+import {
+  buildChatSystem,
+  buildDriveToGreenSystem,
+  buildTddGuidance,
+  COMPACT_SYSTEM,
+  type ExecutionMode,
+} from "./prompt";
 import { resolveConventions } from "../infer-rules/conventions";
 import type { IConventions } from "../infer-rules/conventions.types";
 import type { TsService } from "../lsp";
 import {
   buildTsService,
   BUILD_NUDGE,
+  buildHandoffAsk,
   emitTiming,
   type ILoopCtx,
   type ILoopState,
@@ -80,8 +102,12 @@ export interface ISessionConfig {
   temperature?: number;
   enableThinking?: boolean;
   thinkingTokenBudget?: number;
-  /** Per-`send` turn cap (default LOOP_LIMITS.maxTurns). */
+  /** Runaway crash-guard on turns per send (default LOOP_LIMITS.runawayBackstopTurns).
+   *  The PRIMARY terminal is ladder-exhaustion (R5 handoff), not this turn cap. */
   maxTurns?: number;
+  /** Heartbeat cadence: emit checkpoint progress event every N turns without
+   *  terminating (default LOOP_LIMITS.checkpointIntervalTurns). */
+  checkpointIntervalTurns?: number;
   /** Base policy mode (from `--policy-mode`/config). Plan mode overrides it with
    *  `"plan"`; absent ⇒ `"default"`. */
   policyMode?: PolicyMode;
@@ -113,6 +139,17 @@ export interface ISessionConfig {
    *  a convention library (e.g. boringstack) so the model can fetch its how-to
    *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
   pullConventions?: boolean;
+  /** Composed gate the session's loop checks each cycle. Defaults to a command
+   *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
+  gate?: IGate;
+  /** Pristine-scaffold meta-rule baseline to subtract from each cycle's violations.
+   *  Usually captured mid-build via `captureMetaBaseline()`; this is for callers that
+   *  already hold one at construction time. */
+  metaBaseline?: MetaBaseline;
+  /** How the model is driven. `"chat"` (default) = open-ended assistant framing;
+   *  `"drive-to-green"` = the strict expert-TS implement contract (for autonomous
+   *  builds), so the constitution is in force from the first token, not the gate. */
+  executionMode?: ExecutionMode;
 }
 
 /** The outcome of one `send`. `responded` = conversational (no gate); the gate
@@ -120,6 +157,8 @@ export interface ISessionConfig {
 export interface ISendResult {
   status: "responded" | "done" | "stuck" | "interrupted";
   turns: number;
+  /** When stuck with a handoff: the structured, resumable handoff details. */
+  handoff?: IHandoff;
 }
 
 /** Cumulative model-call metrics for a session — the basis for `/metrics`. */
@@ -265,6 +304,58 @@ const CHECK_EVERY = 3;
  *  guards so a genuine loop is stopped. */
 const FULL_GATE_EVERY = 9;
 
+/** Edits between forced gates when NEAR-GREEN or already stalling — small, so the
+ *  gate (and the escalation ladder it drives via `checkStuck`) cycles densely and
+ *  climbs to the expert in a handful of turns. */
+const FULL_GATE_EVERY_NEAR_GREEN = 2;
+
+/** A gate error count at/under this is "near green" — close enough that dense,
+ *  immediate feedback beats churning many blind edits between sparse gates. */
+const NEAR_GREEN_ERRORS = 3;
+
+/**
+ * How many edits to allow before forcing a full gate. Normally `FULL_GATE_EVERY`,
+ * but once the build is NEAR-GREEN (a small, non-zero last gate error count) or the
+ * steer ladder has already begun, collapse toward `FULL_GATE_EVERY_NEAR_GREEN` so
+ * the gate — and the escalation ladder that only advances per gate cycle — fires
+ * densely and reaches the expert in a handful of turns instead of hundreds (a live
+ * run ground ~100 turns at 1 error because gates were ~15–20 turns apart). Progress
+ * isn't penalised: a new all-time-low error count resets the guards, so only a
+ * genuine plateau escalates — this changes cadence, NOT any gate rule or threshold.
+ */
+export function forcedGateInterval(state: ILoopState): number {
+  const lastCount = state.lastGateCount;
+  const nearGreen = lastCount > 0 && lastCount <= NEAR_GREEN_ERRORS;
+  const stalling = state.steerLevel > 0;
+
+  return nearGreen || stalling ? FULL_GATE_EVERY_NEAR_GREEN : FULL_GATE_EVERY;
+}
+
+/** Reset convergence state at a `send()` boundary. A Session keeps conversation
+ * and cumulative edit metrics across messages, but a new drive must not inherit an
+ * exhausted ladder or sticky block from the previous drive. */
+export function resetDriveConvergence(state: ILoopState): void {
+  state.prevGateErrors = [];
+  state.gateNoProgress = 0;
+  state.bestErrorCount = Number.POSITIVE_INFINITY;
+  state.noNewLow = 0;
+  state.errorAge = new Map();
+  state.lastGateCount = -1;
+  state.steerLevel = 0;
+  state.redGates = 0;
+  state.blockFingerprint = "";
+  state.recentGateFingerprints = [];
+  state.triedLeversByBlock = new Map();
+  state.pendingRung = null;
+  state.pendingBlockFingerprint = null;
+  state.pendingDiagnosisSteer = null;
+  state.focusError = null;
+  delete state.plateauBest;
+  delete state.pendingSteer;
+  delete state.resetContext;
+  delete state.pendingModelOverride;
+}
+
 /** How many times a send recovers from a repetition loop before giving up. */
 const MAX_DEGENERATION_RECOVERIES = 2;
 
@@ -298,17 +389,6 @@ const REPETITION_RESTEER =
   "You started repeating yourself. STOP — do not re-explain or re-decide. Emit " +
   "the SINGLE next tool call that makes concrete progress (create or edit ONE " +
   "file). No prose.";
-
-/** Consecutive turns of tool calls that touch NO editable file before we treat the
- *  model as spinning. The gate progress guards (samePersist/gateStuckRepeats) only
- *  evaluate after a write, so a model that reads/searches forever without ever
- *  editing slips past them all the way to the turn backstop — this is their
- *  cross-turn analogue. Set well above genuine multi-file exploration (each turn may
- *  read several files) so real work never trips it; a scaffold/edit resets it. */
-const READONLY_STREAK_LIMIT = 12;
-
-/** How many times we re-steer a read-only spin before giving up. */
-const MAX_READONLY_RECOVERIES = 2;
 
 /** Pushed on a read-only spin in a BUILD (gated) session — demand a concrete edit. */
 const READONLY_RESTEER_BUILD =
@@ -375,28 +455,45 @@ const MALFORMED_CALL_NUDGE =
 /** CHAT_SYSTEM + the (optional) workspace map + a short orientation to the
  *  workspace and gate. The map block, when present, is injected right after
  *  CHAT_SYSTEM so the agent is oriented before the task-specific lines. */
+/** Header of the DYNAMIC task-contract block. It carries the mutable facts (editable
+ *  scope + active check) and is rebuilt from LIVE `ctx.task` by `refreshTaskContract`
+ *  whenever `setScope`/`setGate` change them — so the top-priority prompt can never go
+ *  stale (the old bug: "edit any file" persisting after scope narrowed to one feature).
+ *  Kept as the LAST block of the system message; `guide()` inserts before it. */
+const TASK_CONTRACT_MARKER = "## Current task contract";
+
+/** The dynamic contract: what's editable right now + how acceptance is checked. */
+function taskContract(files: string[], accept: string | undefined): string {
+  const wholeRepo = files.length === 0 || files.includes("**/*");
+  const scope = wholeRepo
+    ? "Scope: you may read, run, and edit any file in the workspace."
+    : `Scope: edit ONLY these paths — ${files.join(", ")}. Every other file is READ-ONLY; never edit it.`;
+  const check =
+    accept !== undefined && accept.length > 0
+      ? `Check: \`${accept}\` runs automatically when you stop calling tools — fix any failures and continue until it passes.`
+      : "";
+
+  return [TASK_CONTRACT_MARKER, scope, check]
+    .filter((s) => s.length > 0)
+    .join("\n");
+}
+
+/** The STATIC system policy (identity, tools, conventions, workspace map, guidance) +
+ *  the initial dynamic task contract. Base framing is mode-driven: `drive-to-green`
+ *  (autonomous builds) gets the strict expert-TS implement contract; `chat` (default)
+ *  gets the open-ended assistant framing. The scope/check facts live in the task
+ *  contract (rebuilt per change), NOT baked statically here. */
 function systemPrompt(
   cfg: ISessionConfig,
   workspaceMap: string,
   conventions: IConventions
 ): string {
+  const base =
+    cfg.executionMode === "drive-to-green"
+      ? buildDriveToGreenSystem(conventions)
+      : buildChatSystem(conventions);
+
   const lines = [`Workspace: ${cfg.cwd}`];
-  const files = cfg.files ?? [];
-  const wholeRepo = files.length === 0 || files.includes("**/*");
-
-  lines.push(
-    wholeRepo
-      ? "You may read, run, and edit any file in the workspace."
-      : `You may only edit: ${files.join(", ")} (everything else is read-only).`
-  );
-
-  if (cfg.accept !== undefined && cfg.accept.length > 0) {
-    lines.push(
-      `A check is configured: \`${cfg.accept}\`. When you finish a change and ` +
-        "stop calling tools, it runs automatically — if it fails you'll get the " +
-        "errors and should fix them and continue until it passes."
-    );
-  }
 
   if (cfg.guidance !== undefined && cfg.guidance.length > 0) {
     lines.push(cfg.guidance);
@@ -410,7 +507,9 @@ function systemPrompt(
   // it here too so test-first is the out-of-the-box default everywhere.
   const tdd = flags.tdd() ? `${buildTddGuidance(conventions)}\n\n` : "";
 
-  return `${buildChatSystem(conventions)}\n\n${tdd}${prefix}${lines.join("\n")}`;
+  const contract = taskContract(cfg.files ?? [], cfg.accept);
+
+  return `${base}\n\n${tdd}${prefix}${lines.join("\n")}\n\n${contract}`;
 }
 
 /** Stable prefix of the delegation block — the sentinel `setDelegation` checks to
@@ -432,6 +531,26 @@ function delegationGuidance(specs: readonly IAgentSpec[]): string {
     `${DELEGATION_MARKER} you can hand focused, read-only investigation to specialist subagents with the \`spawn_agent\` tool — exploring an unfamiliar part of the codebase, researching an external API/library, or verifying a claim — instead of spending your own turns and context on it. Spawn several in one turn for independent lines of inquiry; they run in parallel, each with its own context, and only YOU edit files. The user thinks in tasks and features, never in subagents — it is YOUR call when delegation helps.`,
     `Specialists available:\n${roster}`,
   ].join("\n\n");
+}
+
+/** Build a synthetic handoff for terminal exits (build-nudge, degeneration,
+ *  timeout, readonly-spin, etc.) — a minimal, resumable handoff describing what
+ *  a stronger model or human intervention is needed for. */
+function buildSyntheticHandoff(
+  block: string,
+  errors: string[],
+  diagnosticNote: string
+): IHandoff {
+  const ask = buildHandoffAsk(diagnosticNote, errors.slice(0, 3));
+
+  return {
+    block,
+    rungHistory: [],
+    errors: errors.slice(0, 3),
+    ask,
+    resumable: true,
+    resume: { triedLevers: [] },
+  };
 }
 
 export class Session {
@@ -495,7 +614,9 @@ export class Session {
     this.provider = cfg.provider;
     this.cfg = cfg;
     this.report = cfg.report ?? ((): void => undefined);
-    this.hasGate = cfg.accept !== undefined && cfg.accept.length > 0;
+    this.hasGate =
+      cfg.gate !== undefined ||
+      (cfg.accept !== undefined && cfg.accept.length > 0);
     this.incrementalCheck = cfg.incrementalCheck ?? "";
     // Start with the 4 BASE tools (read/run/edit/create). Measured: the bigger
     // 11-tool list pushes this model onto a malformed-tool-call boundary (it
@@ -597,6 +718,24 @@ export class Session {
     // repo's structure. Cheap: loads + marks drift, never rebuilds here.
     const workspaceMap = await recallMapBlock(cfg.cwd);
 
+    const conventions = resolveConventions(projectConfig.conventions);
+
+    // Write-time eslint moat. The interactive CLI passes its own `lintFile`; an
+    // autonomous `drive-to-green` build gets one built from the DETECTED stack here
+    // (headless-build needn't know the stack) so `as`/`!`/`any` surface per-write —
+    // in seconds — instead of only at the ~90s gate. STRICT_CONFIG carries the moat.
+    const lintFile =
+      cfg.lintFile ??
+      (cfg.executionMode === "drive-to-green"
+        ? makeFileLinter(
+            "core",
+            cfg.cwd,
+            stackProfile.packs,
+            Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
+            conventions
+          )
+        : undefined);
+
     const ctx: ILoopCtx = {
       task,
       cwd: cfg.cwd,
@@ -611,14 +750,18 @@ export class Session {
       gate: {
         parse: cfg.parse,
         stackProfile,
-        ...(cfg.lintFile === undefined ? {} : { lintFile: cfg.lintFile }),
+        ...(lintFile === undefined ? {} : { lintFile }),
         ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
+        ...(cfg.metaBaseline === undefined
+          ? {}
+          : { metaBaseline: cfg.metaBaseline }),
         // Stream the gate's output live (the interactive CLI), so a slow gate
         // (vite build + chromium) shows progress instead of running silently — but
         // filtered so the raw eslint JSON blob never floods the terminal.
         onGateChunk: filterGateStream((text) => {
           report({ kind: "token", task: SESSION_ID, message: text });
         }),
+        runner: cfg.gate ?? commandGate(task, cfg.parse),
       },
       messages:
         cfg.history !== undefined && cfg.history.length > 0
@@ -626,11 +769,7 @@ export class Session {
           : [
               {
                 role: "system",
-                content: systemPrompt(
-                  cfg,
-                  workspaceMap,
-                  resolveConventions(projectConfig.conventions)
-                ),
+                content: systemPrompt(cfg, workspaceMap, conventions),
               },
             ],
     };
@@ -722,10 +861,51 @@ export class Session {
     return fraction >= threshold ? Math.round(fraction * 100) : undefined;
   }
 
-  /** Set (or clear, with "") the gate command mid-session. */
-  setGate(command: string): void {
-    this.ctx.task.accept = command;
-    this.hasGate = command.length > 0;
+  /** Set (or clear, with "") the gate command mid-session, or swap the composed
+   *  gate mid-build (one per unit/feature). For a gate runner, flips hasGate on so
+   *  the loop actually runs it and the escalation ladder sees its failures. */
+  setGate(arg: string | IGate): void {
+    if (typeof arg === "string") {
+      this.ctx.task.accept = arg;
+      this.hasGate = arg.length > 0;
+    } else {
+      this.ctx.gate.runner = arg;
+      this.hasGate = true;
+    }
+
+    this.refreshTaskContract();
+  }
+
+  /** Set the per-feature expert rescue target — the editable file the expert repairs
+   *  when a stall's errors are all out of the model's scope (e.g. the resource service
+   *  file). Cleared with "". Threaded to the loop via `ctx.gate.expertRescueTarget`. */
+  setExpertRescueTarget(file: string): void {
+    this.ctx.gate.expertRescueTarget = file.length > 0 ? file : undefined;
+  }
+
+  /** Capture the meta-rule baseline of the CURRENT (pristine) workspace using this
+   *  session's own resolved stack profile + rule overrides, and store it so every
+   *  later cycle subtracts it (pre-existing scaffold debt never blocks a feature).
+   *  Call ONCE before any model work. Empty `changed` ⇒ only global rules seed it;
+   *  change-scoped rules (e.g. test-sibling) correctly don't enter the baseline.
+   *  Degrades silently — a throwing rule leaves the baseline unset (no suppression). */
+  captureMetaBaseline(): void {
+    try {
+      const metaContext = buildMetaRuleContext(
+        this.ctx.cwd,
+        this.ctx.gate.stackProfile?.packs ?? [],
+        []
+      );
+      const violations = runMetaRules(
+        META_RULES,
+        metaContext,
+        this.ctx.gate.ruleOverrides
+      );
+
+      this.ctx.gate.metaBaseline = buildMetaBaseline(violations);
+    } catch {
+      // Supplementary to the gate — never crash the build over baseline capture.
+    }
   }
 
   /** Raise/lower the per-send turn cap mid-session — `scaffold_web` flips a chat
@@ -783,9 +963,31 @@ export class Session {
     this.ctx.tsService = await buildTsService(this.ctx.cwd);
   }
 
-  /** Replace the editable scope globs mid-session. */
+  /** Replace the editable scope globs mid-session. Also refreshes the system
+   *  message's task contract so the prompt reflects the NEW scope on the very next
+   *  model call (not the whole-repo scope it was created with). */
   setScope(globs: string[]): void {
     this.ctx.task.files = globs;
+    this.refreshTaskContract();
+  }
+
+  /** Rebuild the dynamic task-contract block (scope + check) from the LIVE
+   *  `ctx.task`, replacing the old block in place. The static policy above the
+   *  marker is untouched. No system message yet (shouldn't happen) ⇒ no-op. */
+  private refreshTaskContract(): void {
+    const system = this.ctx.messages[0];
+
+    if (system?.role !== "system") {
+      return;
+    }
+
+    const fresh = taskContract(this.ctx.task.files, this.ctx.task.accept);
+    const idx = system.content.indexOf(TASK_CONTRACT_MARKER);
+
+    system.content =
+      idx === -1
+        ? `${system.content}\n\n${fresh}`
+        : `${system.content.slice(0, idx).trimEnd()}\n\n${fresh}`;
   }
 
   /** Update the context window mid-session (e.g. after a `/model` hot-swap to a
@@ -859,7 +1061,14 @@ export class Session {
     const first = this.ctx.messages[0];
 
     if (first?.role === "system") {
-      first.content = `${first.content}\n\n${text}`;
+      // Insert BEFORE the dynamic task contract so it stays the final block (and
+      // `refreshTaskContract` can splice it without clobbering this guidance).
+      const idx = first.content.indexOf(TASK_CONTRACT_MARKER);
+
+      first.content =
+        idx === -1
+          ? `${first.content}\n\n${text}`
+          : `${first.content.slice(0, idx).trimEnd()}\n\n${text}\n\n${first.content.slice(idx)}`;
     } else {
       this.ctx.messages.unshift({ role: "system", content: text });
     }
@@ -914,13 +1123,15 @@ export class Session {
    */
   async send(text: string, opts: ISendOptions = {}): Promise<ISendResult> {
     const { ctx, report } = this;
-    // Interactive ceiling is a RUNAWAY backstop, not the primary stop — the
-    // progress guards (samePersist / gateNoProgress) pull the agent out the moment
-    // it stops converging. Set high so normal long back-and-forth never trips it.
+    // Runaway crash-guard (not the primary stop — the progress guards pull out when
+    // converging stops). The PRIMARY terminal is ladder-exhaustion (R5 handoff).
     const maxTurns =
       this.maxTurnsOverride ??
       this.cfg.maxTurns ??
-      LOOP_LIMITS.interactiveBackstopTurns;
+      LOOP_LIMITS.runawayBackstopTurns;
+
+    const checkpointIntervalTurns =
+      this.cfg.checkpointIntervalTurns ?? LOOP_LIMITS.checkpointIntervalTurns;
     const sendStart = performance.now();
 
     // Thread cancellation to the tool `run` commands and the gate (not just the
@@ -928,6 +1139,7 @@ export class Session {
     ctx.tool.signal = opts.signal;
     this.activeThinking = opts.enableThinking;
     this.repairing = false; // fresh send starts in (fast, thinking-off) creation mode
+    resetDriveConvergence(this.state);
 
     // The TtsrManager persists for the whole session, so per-rule silencing and
     // the global interrupt cap must reset per user message — otherwise a rule
@@ -970,7 +1182,12 @@ export class Session {
         ctx.messages.push({ role: "user", content: text });
       }
 
-      return await this.drive(maxTurns, sendStart, opts);
+      return await this.drive(
+        maxTurns,
+        checkpointIntervalTurns,
+        sendStart,
+        opts
+      );
     } catch (err) {
       if (opts.signal?.aborted === true) {
         report({
@@ -1099,10 +1316,24 @@ export class Session {
 
     this.ttsrManager?.resetBuffer();
 
+    // R2 per-call model overrides (temperature, reasoning effort) — applied to
+    // the NEXT main-loop turn only, then cleared. Auxiliary calls (planning,
+    // judge, expert) stay on config defaults. Applied by R2 (reason-more) rung.
+    const override = this.state.pendingModelOverride;
+    const temperature =
+      override?.temperature ?? this.cfg.temperature ?? DEFAULT_TEMPERATURE;
+    const reasoningEffort = override?.reasoningEffort;
+
+    // Clear the pending override immediately after reading it into locals, BEFORE
+    // the provider call. If complete() throws, this ensures the override won't leak
+    // into the next successful call (exception-safe one-shot semantics).
+    this.state.pendingModelOverride = null;
+
     const res = await this.provider.complete(ctx.messages, {
       tools: offeredTools,
-      temperature: this.cfg.temperature ?? DEFAULT_TEMPERATURE,
+      temperature,
       toolChoice,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       ...(enableThinking === undefined ? {} : { enableThinking }),
       ...(this.cfg.thinkingTokenBudget === undefined
         ? {}
@@ -1211,6 +1442,18 @@ export class Session {
     }
 
     if (buildNudges >= LOOP_LIMITS.maxBuildNudges) {
+      const errorMessages = this.state.prevGateErrors.map((e) => e.message);
+      const diagnosticNote = leaked
+        ? "malformed tool-call format"
+        : emptyMidBuild
+          ? "repeated empty replies"
+          : "model narrating instead of creating files";
+      const handoff = buildSyntheticHandoff(
+        "build-nudge",
+        errorMessages,
+        diagnosticNote
+      );
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,
@@ -1224,7 +1467,7 @@ export class Session {
               "them — stopped. Try a smaller step (e.g. one file at a time).",
       });
 
-      return { result: { status: "stuck", turns: turn } };
+      return { result: { status: "stuck", turns: turn, handoff } };
     }
 
     this.report({
@@ -1252,6 +1495,13 @@ export class Session {
     turn: number
   ): ISendResult | null {
     if (degenerations >= MAX_DEGENERATION_RECOVERIES) {
+      const errorMessages = this.state.prevGateErrors.map((e) => e.message);
+      const handoff = buildSyntheticHandoff(
+        "degeneration-budget",
+        errorMessages,
+        "model fell into a repetition loop"
+      );
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,
@@ -1259,7 +1509,7 @@ export class Session {
           "⚠ repetition loop persisted after recovery attempts — stopped. Try a smaller step.",
       });
 
-      return { status: "stuck", turns: turn };
+      return { status: "stuck", turns: turn, handoff };
     }
 
     this.report({
@@ -1298,13 +1548,21 @@ export class Session {
       err instanceof Error ? `${err.name}: ${err.message}` : String(err);
 
     if (timeouts >= MAX_TIMEOUT_RECOVERIES) {
+      const errorMessages = this.state.prevGateErrors.map((e) => e.message);
+      const errorType = detail.split(":")[0] ?? "unknown";
+      const handoff = buildSyntheticHandoff(
+        `timeout:${errorType}`,
+        errorMessages,
+        `model request timed out: ${detail}`
+      );
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,
         message: `⚠ model request timed out repeatedly (${detail}) — stopped. The server may be wedged or the task too large for one turn.`,
       });
 
-      return { status: "stuck", turns: turn };
+      return { status: "stuck", turns: turn, handoff };
     }
 
     this.report({
@@ -1543,7 +1801,7 @@ export class Session {
     // and trivially passes → forcing it would wrongly return done mid-edit, before
     // the model yields its final response (a no-gate session never terminates on a
     // gate). The churn guard exists to surface gate failures, so it's a no-op here.
-    if (this.hasGate && editsSinceGate >= FULL_GATE_EVERY) {
+    if (this.hasGate && editsSinceGate >= forcedGateInterval(this.state)) {
       editsSinceGate = 0;
 
       const forced = await this.gateAfterChurn(turn, turnStart, sendStart);
@@ -1620,7 +1878,7 @@ export class Session {
     this.report({
       kind: "tool",
       task: SESSION_ID,
-      message: `⚙ forcing a gate after ${String(FULL_GATE_EVERY)} edits without a checkpoint`,
+      message: `⚙ forcing a gate after ${String(forcedGateInterval(this.state))} edits without a checkpoint`,
     });
 
     const forced = await this.settleTurn(turn, turnStart, sendStart);
@@ -1648,9 +1906,13 @@ export class Session {
       return null;
     }
 
+    // Thread the structured handoff up so BoringStack/interactive callers can park &
+    // revisit on ladder exhaustion (host.send reads .handoff). Dropping it here made
+    // gate-ladder exhaustion silently un-parkable.
     return {
       status: settled.status === RUN_STATUS.done ? "done" : "stuck",
       turns: turn,
+      ...(settled.handoff !== undefined ? { handoff: settled.handoff } : {}),
     };
   }
 
@@ -1659,13 +1921,19 @@ export class Session {
    *  reset per send so each maps to one "run". */
   private async drive(
     maxTurns: number,
+    checkpointIntervalTurns: number,
     sendStart: number,
     opts: ISendOptions
   ): Promise<ISendResult> {
     this.sendEvents.length = 0;
 
     try {
-      return await this.driveInner(maxTurns, sendStart, opts);
+      return await this.driveInner(
+        maxTurns,
+        checkpointIntervalTurns,
+        sendStart,
+        opts
+      );
     } finally {
       await this.consolidateLessons();
     }
@@ -1802,6 +2070,13 @@ export class Session {
         return "retry";
       }
 
+      const errorMessages = this.state.prevGateErrors.map((e) => e.message);
+      const handoff = buildSyntheticHandoff(
+        "readonly-spin",
+        errorMessages,
+        "model called only read-only tools without making progress"
+      );
+
       this.report({
         kind: "stuck",
         task: SESSION_ID,
@@ -1810,7 +2085,7 @@ export class Session {
           "re-steering — stopped. Narrow the task or steer toward a concrete step.",
       });
 
-      return { status: "stuck", turns: turn };
+      return { status: "stuck", turns: turn, handoff };
     }
 
     const gateNote = this.hasGate ? this.outstandingGateNote() : "";
@@ -1834,6 +2109,7 @@ export class Session {
 
   private async driveInner(
     maxTurns: number,
+    checkpointIntervalTurns: number,
     sendStart: number,
     opts: ISendOptions
   ): Promise<ISendResult> {
@@ -1876,6 +2152,10 @@ export class Session {
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       const turnStart = performance.now();
+
+      // Heartbeat: emit a checkpoint progress event every checkpointIntervalTurns
+      // without terminating — allows checkpoint persistence + monitoring.
+      emitCheckpoint(report, SESSION_ID, turn, checkpointIntervalTurns);
 
       // Inject any messages the user typed while the run was in flight, so they
       // steer the next model turn instead of waiting for the run to finish.
@@ -2003,9 +2283,29 @@ export class Session {
       kind: "stuck",
       task: SESSION_ID,
       cycles: maxTurns,
-      message: `stuck (hit the ${maxTurns}-turn runaway backstop — progress guards never tripped, which is unusual; re-steer or narrow the task)`,
+      message: `stuck (hit the ${maxTurns}-turn runaway crash-guard — progress guards never tripped, which is anomalous; re-steer or narrow the task)`,
     });
 
-    return { status: "stuck", turns: maxTurns };
+    return {
+      status: "stuck",
+      turns: maxTurns,
+    };
+  }
+}
+
+/** Emit a checkpoint heartbeat event on cadence. */
+function emitCheckpoint(
+  report: Reporter,
+  taskId: string,
+  turn: number,
+  interval: number
+): void {
+  if (turn > 1 && turn % interval === 0) {
+    report({
+      kind: "checkpoint",
+      task: taskId,
+      cycle: turn,
+      message: `checkpoint: turn ${turn}`,
+    });
   }
 }

@@ -126,6 +126,13 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "if (name) {}",
     good: "if (name !== undefined && name.length > 0) {}",
   },
+  "knip/unused-files": {
+    what: "A file exists but no configured entry reaches it, so knip fails it as an unused file. It must be deleted or wired from an entry — you cannot silence it (knip is a file-graph check, not a lint rule).",
+    bad: "apps/api/src/api/note/note.service.test.ts  // co-located API test; knip test entries are the mirrored tests/ dir, so this is 'unused' forever",
+    good: "apps/api/tests/api/note/note.service.test.ts  // mirrored test path — a configured knip entry",
+    procedure:
+      "1. If the unused file is a co-located API test under src/, DELETE it and put the test at the mirrored tests/ path (this stack's knip test entries are the mirrored tests dir, NOT co-located src tests). Keep only the mirrored copy. 2. For a production file, import it from an entry (e.g. an index.ts barrel) or delete it. Do this on the FIRST occurrence — an unused-file wall does not resolve by editing other files.",
+  },
   "@typescript-eslint/naming-convention": {
     what: "Interfaces are PascalCase with an `I` prefix.",
     bad: "interface User {}",
@@ -409,6 +416,12 @@ const IDIOM_TRAPS: readonly IIdiomTrap[] = [
     inSource: /new\s+Array\s*\([^)]*\)\s*\.fill\(/,
     relevant: /unsafe|no-explicit-any|\bany\b/i,
     hint: "`new Array(n).fill(x)` is typed `any[]` under strict TypeScript, so every element read off it is `any`. Use `Array.from({ length: n }, () => x)` — it's typed `T[]`.",
+  },
+  {
+    // Elysia's opaque route error: a handler "not assignable to InlineHandler…".
+    inSource: /t\.Optional\(\s*t\.String\(\)\s*\)/,
+    relevant: /InlineHandler/i,
+    hint: "That opaque `InlineHandlerNonMacro` TS2345 on a route is NOT a routing/`.group()` problem — it means your `response:` schema doesn't match what the service returns. The usual cause: a NULLABLE Drizzle column returns `string | null`, but `t.Optional(t.String())` is `string | undefined` (`null` ≠ `undefined`). Change the response field to `t.Optional(t.Union([t.String(), t.Null()]))`, or make the column `.notNull()`. (A `Date` column vs `t.String()` is fine — don't touch that.)",
   },
 ];
 

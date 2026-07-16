@@ -7,6 +7,7 @@ import type { ILoopState, ILoopEvent } from "../src/loop";
 import { LOOP_LIMITS, RUN_STATUS } from "../src/loop";
 import { STEER_LADDER_MAX } from "../src/loop/feedback/steer";
 import type { IErrorItem } from "../src/validate";
+import { commandGate } from "../src/gate/gate-runner";
 
 /** The settleGate steps extracted for unit testing (review item 4): checkStuck
  *  composes the three convergence guards; autoFixStep reports what the janitor
@@ -38,7 +39,13 @@ function makeCtx(events: ILoopEvent[], cwd = "/tmp"): ILoopCtx {
     },
     messages: [],
     tool: {},
-    gate: { parse: undefined },
+    gate: {
+      parse: undefined,
+      runner: commandGate(
+        { id: "t", intent: "test", accept: "true", files: [], context: [] },
+        undefined
+      ),
+    },
   };
 }
 
@@ -166,6 +173,41 @@ describe("checkStuck (the composed convergence guards)", () => {
     expect(result?.status).toBe(RUN_STATUS.stuck); // reached the expert-park
     expect(result?.detail).toContain("steering exhausted");
   });
+
+  test("plateau-only exhaustion hands off with a NON-EMPTY rungHistory keyed on the stable fingerprint", () => {
+    // Regression: the block fingerprint depends on redGates, which the plateau tracker
+    // mutates mid-cycle. When the fingerprint was computed twice per cycle (once before
+    // and once after that mutation), rungs were recorded under one key but the handoff
+    // looked them up under another → EMPTY rungHistory (broke the "seed what was tried"
+    // contract). This drives the plateau-ONLY path (rotating keys, so no fine guard fires
+    // and no single key recurs → the plateau fingerprint stays stable as `${low}|`) to
+    // ladder exhaustion and asserts the handoff carries the rungs that were actually
+    // applied, keyed on the same stable fingerprint (never empty, never "escalation-N").
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+    let result: ReturnType<typeof checkStuck> = null;
+
+    const bound = LOOP_LIMITS.plateauGates * (STEER_LADDER_MAX + 1) + 5;
+
+    for (let i = 0; i < bound && result?.status !== RUN_STATUS.stuck; i += 1) {
+      result = checkStuck(ctx, state, [err(`k${String(i)}:1`)], i + 1);
+    }
+
+    expect(result?.status).toBe(RUN_STATUS.stuck);
+    expect(result?.handoff).toBeDefined();
+    // The rungs actually climbed on this block must appear in the handoff.
+    expect((result?.handoff?.rungHistory ?? []).length).toBeGreaterThan(0);
+    // Keyed on the real (stable) fingerprint, not the old synthetic escalation-N value.
+    expect(result?.handoff?.block ?? "").not.toBe("");
+    expect(result?.handoff?.block ?? "").not.toContain("escalation-");
+    // resume seeds the SAME tried-levers a greenfield revisit relies on.
+    const resume = result?.handoff?.resume;
+    const resumeLevers =
+      resume !== undefined && "triedLevers" in resume ? resume.triedLevers : [];
+
+    expect(resumeLevers.length).toBeGreaterThan(0);
+  });
 });
 
 describe("autoFixStep", () => {
@@ -212,4 +254,143 @@ describe("autoFixStep", () => {
     // Generous timeout: the fix command sleeps 1s to move mtime forward, and a
     // loaded machine can stretch the spawn well past bun's 5s default.
   }, 30_000);
+});
+
+describe("relentless-loop escalation-ladder centerpiece (fixes A/B/C)", () => {
+  test("A: a NEW ALL-TIME LOW restarts the ladder; an equal-count error swap does NOT (oscillation-proof)", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+
+    // Progress is the OSCILLATION-PROOF signal: a new all-time-low error count — NOT a
+    // change in the fingerprint string. An equal-count error swap (fix a:1, break b:2)
+    // is oscillation; treating it as progress would let a flailing model reset the
+    // ladder every cycle and dodge escalation forever (the "150-turn" disease).
+
+    // (1) Equal-count swap under an established plateau → HELD (not progress).
+    const osc = freshState();
+
+    osc.steerLevel = 2;
+    osc.blockFingerprint = "a:1";
+    osc.plateauBest = 1; // best-ever is already 1 error
+    osc.errorAge.set("b:2", LOOP_LIMITS.samePersist + 1);
+    checkStuck(ctx, osc, [err("b:2")], 100); // still ONE error → no new low
+
+    expect(osc.blockFingerprint).toBe("a:1"); // identity HELD — not a move
+    expect(osc.steerLevel).toBeGreaterThan(0); // ladder NOT reset to 0
+
+    // (2) A genuine new all-time low (fewer errors than ever seen) → ladder RESTARTS.
+    const prog = freshState();
+
+    prog.steerLevel = 2;
+    prog.blockFingerprint = "a:1";
+    prog.plateauBest = 3; // best-ever was 3 errors …
+    prog.pendingRung = "R2";
+    prog.pendingBlockFingerprint = "a:1";
+    checkStuck(ctx, prog, [err("x:1")], 101); // … now only 1 error → NEW LOW = progress
+
+    expect(prog.blockFingerprint).toBe(""); // block cleared on progress
+    expect(prog.steerLevel).toBe(0); // ladder restarted
+    expect(prog.pendingRung).toBeNull();
+    expect(prog.pendingBlockFingerprint).toBeNull();
+  });
+
+  test("advancing through a short-circuit gate phase resets an exhausted block even when more errors appear", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+
+    state.prevGateErrors = [{ ...err("api:1"), phase: 1 }];
+    state.steerLevel = STEER_LADDER_MAX;
+    state.blockFingerprint = "api:1";
+    state.plateauBest = 1;
+    state.pendingRung = "R3";
+    state.pendingBlockFingerprint = "api:1";
+
+    const uiErrors = Array.from({ length: 5 }, (_, index) => ({
+      ...err(`ui:${String(index)}`, "logic-files-require-test-sibling"),
+      phase: 2,
+    }));
+    const result = checkStuck(ctx, state, uiErrors, 200);
+
+    expect(result).toBeNull();
+    expect(state.steerLevel).toBe(0);
+    expect(state.blockFingerprint).toBe("");
+    expect(state.plateauBest).toBe(5);
+    expect(state.bestErrorCount).toBe(5);
+    expect(state.pendingRung).toBeNull();
+  });
+
+  test("B: R2 and R3 set pendingRung; recorded on next-gate unmoved", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+
+    // Test the pending-rung recording mechanic: when a rung is applied and set as
+    // pendingRung, it's recorded into triedLeversByBlock when the next gate shows
+    // the block unchanged.
+
+    // Set up state as if R2 was just applied on block "a:1". plateauBest=1 (== the open
+    // error count) so this cycle is NOT a new all-time low — i.e. the block is UNMOVED,
+    // which is exactly the "record the pending rung" case.
+    state.steerLevel = 2;
+    state.blockFingerprint = "a:1";
+    state.plateauBest = 1;
+    state.pendingRung = "R2";
+    state.pendingBlockFingerprint = "a:1";
+    state.errorAge.set("a:1", LOOP_LIMITS.samePersist + 1); // persistent block
+    state.triedLeversByBlock = new Map([["a:1", new Set(["R1"])]]);
+
+    // Call checkStuck with the same block
+    // The recording hook at the top will fire: R2 should be recorded to triedLeversByBlock
+    checkStuck(ctx, state, [err("a:1")], 100);
+
+    // Verify: R2 was recorded to triedLeversByBlock["a:1"]
+    const tried = state.triedLeversByBlock.get("a:1");
+
+    expect(tried?.has("R2")).toBe(true);
+    expect(tried?.has("R3")).toBe(false); // R3 not yet applied, so not recorded
+  });
+
+  test("C: exhaustion handoff keyed on stable fingerprint with complete rungHistory", () => {
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+    const state = freshState();
+
+    // Set up state at steerLevel=STEER_LADDER_MAX on a samePersist block "a:1"
+    // (when stall fires, steerLevel increments to STEER_LADDER_MAX+1 → terminal).
+    // plateauBest=1 (== open error count) so this cycle is NOT a new low — the block is
+    // unmoved and the sticky identity "a:1" is held into the handoff.
+    state.steerLevel = STEER_LADDER_MAX;
+    state.blockFingerprint = "a:1";
+    state.plateauBest = 1;
+    state.errorAge.set("a:1", LOOP_LIMITS.samePersist + 1); // will fire samePersist
+    state.triedLeversByBlock = new Map([["a:1", new Set(["R1", "R2", "R3"])]]);
+
+    // Call checkStuck: samePersist fires, stall, steerLevel increments to STEER_LADDER_MAX+1
+    const result = checkStuck(ctx, state, [err("a:1")], 200);
+
+    // Should be a terminal handoff result
+    expect(result?.status).toBe(RUN_STATUS.stuck);
+    expect(result?.reason).toBe("handoff");
+    expect(result?.handoff).toBeDefined();
+
+    const handoff = result?.handoff;
+
+    // The block key should be the stable fingerprint from fingerprintFor ("a:1"),
+    // not a synthetic "escalation-N" key
+    expect(handoff?.block).toBe("a:1");
+    expect(handoff?.block).not.toMatch(/^escalation-/);
+
+    // rungHistory should contain the recorded rungs
+    expect(handoff?.rungHistory).toBeDefined();
+    expect((handoff?.rungHistory ?? []).length).toBeGreaterThan(0);
+    expect(Array.from(handoff?.rungHistory ?? [])).toContain("R1");
+    expect(Array.from(handoff?.rungHistory ?? [])).toContain("R2");
+    expect(Array.from(handoff?.rungHistory ?? [])).toContain("R3");
+
+    // resume.triedLevers should match rungHistory
+    if (handoff?.resume && "triedLevers" in handoff.resume) {
+      expect(handoff.resume.triedLevers).toEqual(handoff.rungHistory);
+    }
+  });
 });

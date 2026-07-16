@@ -1,5 +1,7 @@
 # BoringStack Full-Stack Build Loop — Implementation Plan (MVP driver)
 
+> **SUPERSEDED (2026-07-15)** by the unified build loop — see `docs/superpowers/specs/2026-07-14-unified-build-loop-design.md`. The implement/evaluate split described below is removed; the real gate now runs inside the loop as a composed `IGate`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let the harness build a real full-stack feature on a cloned+booted BoringStack, one vertical slice at a time — the harness runs BoringStack's generators + deterministic wiring, the model fills domain logic + tests, evaluated by BoringStack's own `validate`.

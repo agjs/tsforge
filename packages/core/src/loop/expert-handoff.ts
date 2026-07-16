@@ -13,6 +13,7 @@
 import { stat } from "node:fs/promises";
 import { join, isAbsolute, relative } from "node:path";
 
+import { isInScope } from "../lib/scope";
 import { flags } from "../config";
 
 import { OpenAICompatibleProvider } from "../inference";
@@ -48,7 +49,10 @@ const EXPERT_SYSTEM =
   "that is STUCK on one file — it keeps failing the same gate check. Return the " +
   "corrected file and nothing else. Obey the project's strict rules: no `as` type " +
   "casts (narrow with a type guard), no `!` non-null assertions, no inline " +
-  "types/constants/helpers in a component file, no computation inside JSX.";
+  "types/constants/helpers in a component file, no computation inside JSX. Change " +
+  "ONLY what the error requires — do NOT rewrite imports, swap libraries, or change " +
+  "the test runner: keep whatever the file already imports (this stack uses " +
+  "`bun:test` for `apps/api`, `vitest` for `apps/ui` — never switch one for the other).";
 
 /** The scoped fix request. Pure — unit-tested. */
 export function buildFixPrompt(req: IExpertRequest): string {
@@ -87,8 +91,18 @@ export function extractCode(reply: string): string | null {
 export async function runExpertHandoff(
   cwd: string,
   req: IExpertRequest,
-  ask: ExpertAsk
+  ask: ExpertAsk,
+  files?: string[]
 ): Promise<IExpertOutcome> {
+  // Scope guard: the expert rewrites a whole file — never a locked/out-of-scope one.
+  // Checked BEFORE the (paid) ask so a refused target costs nothing.
+  if (files !== undefined && !isInScope(req.file, files)) {
+    return {
+      applied: false,
+      note: `expert fix target ${req.file} is out of editable scope — refused`,
+    };
+  }
+
   const reply = await ask(req).catch(() => null);
   const code = reply === null ? null : extractCode(reply);
 
@@ -124,18 +138,15 @@ function fileInMessage(message: string): string | undefined {
   return m?.[1];
 }
 
-/**
- * Best-effort workspace-relative file for the stuck error — the target the expert
- * repairs. Prefers a populated `.file`, else a path parsed from the error MESSAGES.
- * Tries each candidate as-is and `src/`-prefixed (messages often drop the `src/`),
- * and absolute→relative, returning the first that resolves to an EXISTING file.
- * Null when nothing resolves (→ the caller logs a visible skip). This is what lets
- * the expert fire on type-aware-lint failures, which killed a whole live run.
- */
-export async function resolveStuckFile(
+/** Ordered workspace-relative paths that EXIST on disk, resolved from the errors'
+ *  `.file` fields and any path parsed from their messages. Each is tried as-is and
+ *  `src/`-prefixed (messages often drop the prefix), plus a basename-glob under src/
+ *  for bare names (e.g. stub-check names "dashboard.tsx" with no directory). Order is
+ *  resolution priority; the caller applies scope selection. */
+async function resolveCandidates(
   cwd: string,
   errors: readonly { readonly file?: string; readonly message: string }[]
-): Promise<string | null> {
+): Promise<string[]> {
   const raws = [
     ...errors.flatMap((e) => (e.file === undefined ? [] : [e.file])),
     ...errors.flatMap((e) => {
@@ -145,18 +156,19 @@ export async function resolveStuckFile(
     }),
   ].map((raw) => (isAbsolute(raw) ? relative(cwd, raw) : raw));
 
+  const found: string[] = [];
+
   // Exact location: as-is, or under src/ (messages often drop the prefix).
   for (const rel of raws) {
     for (const candidate of [rel, join("src", rel)]) {
       if (await Bun.file(join(cwd, candidate)).exists()) {
-        return candidate;
+        found.push(candidate);
       }
     }
   }
 
-  // Basename only (e.g. stub-check names "dashboard.tsx" with no directory): find
-  // it anywhere under src/ — routes/, views/, components/, wherever it lives. Guard
-  // on src/ existing so a non-web build (no src/) resolves to null, not a throw.
+  // Basename only: find it anywhere under src/ — routes/, views/, components/,
+  // wherever. Guard on src/ existing so a non-web build (no src/) doesn't throw.
   const srcDir = join(cwd, "src");
   const hasSrc = await stat(srcDir)
     .then((s) => s.isDirectory())
@@ -173,9 +185,50 @@ export async function resolveStuckFile(
       for await (const match of new Bun.Glob(`**/${base}`).scan({
         cwd: srcDir,
       })) {
-        return join("src", match);
+        found.push(join("src", match));
+        break;
       }
     }
+  }
+
+  return found;
+}
+
+/**
+ * The file the expert repairs, chosen SCOPE-SAFELY (this is the one place the harness
+ * rewrites a whole file — it must never overwrite a locked/read-only file):
+ *  - `files` omitted (legacy callers) → the first path that resolves, any scope.
+ *  - `files` given → the first RESOLVED path IN the model's editable scope. If none
+ *    resolves in scope, fall back to `fallback` (the per-feature rescue target) when
+ *    it is in scope and exists — so an all-out-of-scope error set still hands the
+ *    expert the feature's real producer instead of skipping (or touching a locked file).
+ * Null when nothing usable resolves (→ the caller logs a visible skip). Letting the
+ * expert fire on type-aware-lint failures is what unblocked a whole live run.
+ */
+export async function resolveStuckFile(
+  cwd: string,
+  errors: readonly { readonly file?: string; readonly message: string }[],
+  files?: string[],
+  fallback?: string
+): Promise<string | null> {
+  const candidates = await resolveCandidates(cwd, errors);
+
+  if (files === undefined) {
+    return candidates[0] ?? null;
+  }
+
+  const inScope = candidates.find((c) => isInScope(c, files));
+
+  if (inScope !== undefined) {
+    return inScope;
+  }
+
+  if (
+    fallback !== undefined &&
+    isInScope(fallback, files) &&
+    (await Bun.file(join(cwd, fallback)).exists())
+  ) {
+    return fallback;
   }
 
   return null;

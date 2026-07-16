@@ -15,7 +15,6 @@ export type { IFileSnapshot } from "./file-snapshot";
 export {
   runGreenfield,
   prepareState,
-  evaluateFeature,
   planFeatures,
   parsePlan,
   judgeFeature,
@@ -29,12 +28,10 @@ export {
 } from "./greenfield";
 export type {
   IFeature,
-  IFeatureVerdict,
   IGreenfieldState,
   IGreenfieldResult,
   IGreenfieldDeps,
   IGreenfieldOptions,
-  IEvaluateDeps,
   IGateOutcome,
   IJudgeOutcome,
   IPlan,

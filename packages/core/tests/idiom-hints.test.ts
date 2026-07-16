@@ -25,6 +25,26 @@ test("does NOT fire when the source has no `new Array().fill()` (no false hint)"
   expect(idiomHints([src], UNSAFE_ERR)).toBe("");
 });
 
+test("explains the opaque Elysia InlineHandler TS2345 as a nullable-response mismatch", () => {
+  const src =
+    "export const XResponse = t.Object({ notes: t.Optional(t.String()) });\n";
+  const err: ErrorSet = [
+    {
+      key: "x.routes.ts:16:TS2345",
+      file: "x.routes.ts",
+      line: 16,
+      rule: "TS2345",
+      message:
+        "Argument of type '(...) => Promise<...>' is not assignable to parameter of type 'InlineHandlerNonMacro<...>'.",
+    },
+  ];
+
+  const hint = idiomHints([src], err);
+
+  expect(hint).toContain("t.Optional(t.Union([t.String(), t.Null()]))");
+  expect(hint).toContain("NOT a routing/`.group()` problem");
+});
+
 test("does NOT fire when errors are unrelated, even if the pattern is present", () => {
   // `new Array().fill()` in source, but the only error is a possibly-undefined
   // index access — not this trap's signature, so stay silent.

@@ -20,7 +20,9 @@ describe("runBoringstackGate", () => {
     expect(r.output).toContain("typecheck");
   });
 
-  test("runs the composed gate on disk in the clone (not in a container)", async () => {
+  const cmdFor = async (
+    mode?: "fast" | "full"
+  ): Promise<{ cmd: string; cwd: string }> => {
     let seen: readonly string[] = [];
     let seenCwd = "";
 
@@ -31,17 +33,37 @@ describe("runBoringstackGate", () => {
       return { code: 0, stdout: "", stderr: "" };
     };
 
-    await runBoringstackGate("/repo", exec);
-    const j = seen.join(" ");
+    await runBoringstackGate("/repo", exec, mode);
 
-    // Host shell, not `docker run` — deps live on disk after install.
-    expect(seen[0]).toBe("bash");
-    expect(j).not.toContain("docker");
-    // The composed gate spans both apps + the repo-root check.
-    expect(j).toContain("apps/api && bun run validate");
-    expect(j).toContain("apps/ui && bun run validate");
-    expect(j).toContain("bun run check");
-    // Runs with the clone as cwd (repo root visible to meta-rules).
-    expect(seenCwd).toBe("/repo");
+    return { cmd: seen.join(" "), cwd: seenCwd };
+  };
+
+  test("FAST gate (default) runs per-app `check` + API tests — NOT build/size/coverage", async () => {
+    const { cmd, cwd } = await cmdFor();
+
+    // Host shell in the clone, never docker.
+    expect(cmd.startsWith("bash")).toBe(true);
+    expect(cmd).not.toContain("docker");
+    expect(cwd).toBe("/repo");
+    // Fast = each app's `check` (lint+typecheck+meta+knip) + the cheap API tests.
+    expect(cmd).toContain("apps/api && bun run check && bun run test");
+    // UI regenerates the OpenAPI client first, then `check` (no build/size per cycle).
+    expect(cmd).toContain("apps/ui && bun run generate:api && bun run check");
+    // The slow acceptance-only work must NOT be in the per-cycle gate.
+    expect(cmd).not.toContain("bun run validate");
+    // App markers for repo-relative path attribution (knip).
+    expect(cmd).toContain("::tsforge-app apps/api::");
+  });
+
+  test("FULL gate runs the complete validate + build + size + root check (final acceptance)", async () => {
+    const { cmd } = await cmdFor("full");
+
+    expect(cmd).toContain("apps/api && bun run validate");
+    expect(cmd).toContain(
+      "apps/ui && bun run generate:api && bun run validate"
+    );
+    // The repo-root drift/build check only runs in the full gate.
+    expect(cmd).toContain("::tsforge-app .::");
+    expect(cmd).toContain("bun run check");
   });
 });

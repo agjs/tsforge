@@ -1,0 +1,230 @@
+import { createHash } from "node:crypto";
+import type { IPanel } from "./registry";
+import { reviewerInvoke, type IInvokeDeps } from "./invoke";
+import { aggregate, type IVerdict } from "./aggregate";
+import {
+  RUBRIC_VERSION,
+  type IReviewRequest,
+  type IValidateSummary,
+} from "./schema";
+
+export const DEFAULT_MAX_FILES = 40;
+export const DEFAULT_MAX_CHARS = 120000;
+const GENERIC_INTENTS = new Set([
+  "wip",
+  "fix",
+  "wip fix",
+  "update",
+  "changes",
+  "",
+]);
+
+export type IGitRunner = (
+  args: string[]
+) => Promise<{ stdout: string; code: number }>;
+
+export type IValidateRunner = () => Promise<IValidateSummary>;
+
+export interface IGatherDeps {
+  git: IGitRunner;
+  validate: IValidateRunner;
+}
+
+export interface IGatherOptions {
+  base?: string;
+  intent?: string;
+  maxFiles: number;
+  maxChars: number;
+}
+
+export type GatherResult =
+  | { kind: "request"; request: IReviewRequest }
+  | { kind: "block"; reason: string };
+
+async function resolveBase(
+  git: IGitRunner,
+  explicit: string | undefined
+): Promise<string> {
+  if (explicit !== undefined && explicit.length > 0) {
+    return explicit;
+  }
+
+  const res = await git(["merge-base", "main", "HEAD"]);
+  const base = res.stdout.trim();
+
+  return base.length > 0 ? base : "HEAD~1";
+}
+
+async function resolveIntent(
+  git: IGitRunner,
+  explicit: string | undefined
+): Promise<string | null> {
+  if (explicit !== undefined && explicit.trim().length > 0) {
+    return explicit.trim();
+  }
+
+  const subject = (await git(["log", "-1", "--format=%s"])).stdout.trim();
+
+  return GENERIC_INTENTS.has(subject.toLowerCase()) ? null : subject;
+}
+
+async function changedFiles(git: IGitRunner, base: string): Promise<string[]> {
+  const res = await git(["diff", "--name-only", `${base}...HEAD`]);
+
+  return res.stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+}
+
+export async function gatherChange(
+  deps: IGatherDeps,
+  opts: IGatherOptions
+): Promise<GatherResult> {
+  const validateSummary = await deps.validate();
+
+  if (!validateSummary.passed) {
+    return {
+      kind: "block",
+      reason: `validate failed (${String(validateSummary.failCount)} errors) — fix the gate before review:\n${validateSummary.firstErrors.join("\n")}`,
+    };
+  }
+
+  const base = await resolveBase(deps.git, opts.base);
+  const intent = await resolveIntent(deps.git, opts.intent);
+
+  if (intent === null) {
+    return {
+      kind: "block",
+      reason:
+        'intent is empty or generic — pass --intent "what this change does and why"',
+    };
+  }
+
+  const files = await changedFiles(deps.git, base);
+
+  if (files.length > opts.maxFiles) {
+    return {
+      kind: "block",
+      reason: `diff too large (${String(files.length)} files > ${String(opts.maxFiles)}) — split the PR`,
+    };
+  }
+
+  const diff = (await deps.git(["diff", `${base}...HEAD`])).stdout;
+
+  if (diff.length > opts.maxChars) {
+    return {
+      kind: "block",
+      reason: `diff too large (${String(diff.length)} chars > ${String(opts.maxChars)}) — split the PR`,
+    };
+  }
+
+  const contextFiles = await gatherContext(deps.git, files, opts.maxChars);
+
+  return {
+    kind: "request",
+    request: {
+      title: intent.slice(0, 80),
+      intent,
+      diff,
+      validateSummary,
+      contextFiles,
+      rubricVersion: RUBRIC_VERSION,
+    },
+  };
+}
+
+/** The model reviewers get only the diff, so they can't see the surrounding code
+ *  a hunk lives in — the difference between "proofreading a patch" and "reviewing
+ *  against the codebase". Attach the FULL current (HEAD) contents of the changed
+ *  files, bounded by a budget; whatever doesn't fit is reported, never silently
+ *  dropped. (Agentic binary reviewers like codex can read further on their own.) */
+async function gatherContext(
+  git: IGatherDeps["git"],
+  files: string[],
+  budget: number
+): Promise<string[]> {
+  const blocks: string[] = [];
+  let used = 0;
+  let omitted = 0;
+
+  for (const file of files) {
+    const res = await git(["show", `HEAD:${file}`]);
+
+    if (res.code !== 0) {
+      continue; // deleted/renamed/binary — not readable at HEAD, skip
+    }
+
+    const block = `=== ${file} ===\n${res.stdout}`;
+
+    if (used + block.length > budget) {
+      omitted += 1;
+      continue;
+    }
+
+    used += block.length;
+    blocks.push(block);
+  }
+
+  if (omitted > 0) {
+    blocks.push(
+      `[${String(omitted)} changed file(s) omitted from context to fit the budget — review their diffs above directly]`
+    );
+  }
+
+  return blocks;
+}
+
+export interface IRunDeps extends IGatherDeps, IInvokeDeps {
+  panel: IPanel;
+  identity: string;
+}
+
+function blockedVerdict(reason: string, identity: string): IVerdict {
+  return {
+    blocked: true,
+    reason,
+    reviewers: { ok: 0, errored: 0 },
+    ranked: [],
+    perReviewer: [],
+    identity,
+  };
+}
+
+export async function runHarnessReview(
+  deps: IRunDeps,
+  opts: IGatherOptions
+): Promise<IVerdict> {
+  const gathered = await gatherChange(deps, opts);
+
+  if (gathered.kind === "block") {
+    return blockedVerdict(gathered.reason, deps.identity);
+  }
+
+  const outcomes = await reviewerInvoke(deps.panel, gathered.request, {
+    makeProvider: deps.makeProvider,
+    runBinary: deps.runBinary,
+  });
+
+  return aggregate(outcomes, {
+    minReviewers: deps.panel.minReviewers,
+    identity: deps.identity,
+  });
+}
+
+export function verdictCacheKey(input: {
+  treeHash: string;
+  panelHash: string;
+  rubricVersion: string;
+}): string {
+  return createHash("sha256")
+    .update(`${input.treeHash} ${input.panelHash} ${input.rubricVersion}`)
+    .digest("hex");
+}
+
+export function artifactBody(
+  v: IVerdict,
+  meta: { treeHash: string; panelHash: string; when: string }
+): string {
+  return `${JSON.stringify({ when: meta.when, treeHash: meta.treeHash, panelHash: meta.panelHash, verdict: v }, null, 2)}\n`;
+}

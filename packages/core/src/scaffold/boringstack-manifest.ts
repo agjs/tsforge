@@ -146,6 +146,7 @@ function parseArchetypes(
       ...optStrField(a, "subPath"),
       ...optStrField(a, "boot"),
       ...optStrArr(a, "healthUrls"),
+      ...optStrArr(a, "strip"),
     };
   }
 

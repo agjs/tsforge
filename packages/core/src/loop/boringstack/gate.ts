@@ -8,14 +8,56 @@ import type { Exec } from "./exec";
  * The caller's Exec supplies the environment (notably a DATABASE_URL pointed at the
  * published localhost Postgres) so host-run tests / migrations reach the running stack.
  */
-const GATE =
-  "(cd apps/api && bun run validate) && (cd apps/ui && bun run validate) && bun run check";
+// App markers (`::tsforge-app <prefix>::`) are echoed before each stage so the
+// failure parser can attribute a stage's app-relative paths (e.g. knip's
+// `src/api/note/…` printed inside `apps/api`) back to their repo-relative form
+// (`apps/api/src/api/note/…`). Without this a knip "unused file" path doesn't match
+// the model's editable scope and the loop drops it as read-only. The echoes always
+// exit 0, so the `&&` short-circuit (stop at the first failing stage) is preserved.
+// The UI stage regenerates the typed OpenAPI client from the LIVE API
+// (`generate:api`) BEFORE it validates. This runs every gate cycle — not just at
+// scaffold time — so after the model changes the API schema/routes the UI never
+// validates against a stale `schema.d.ts` (the stale-client drift that pushed a live
+// run into illegal `as` casts and raw-fetch workarounds). API validate runs FIRST,
+// so a broken API surfaces as an API failure, not a confusing UI type error; only
+// once the API is healthy do we resync + validate the UI. `schema.d.ts` is
+// harness-owned (outside the model's editable scope) — the gate regenerates it, the
+// model never hand-edits it.
+/**
+ * FAST convergence gate — run every model cycle. Each app's `check` (lint +
+ * typecheck + meta-rules + knip; UI adds format) plus the cheap API test suite. It
+ * enforces EVERY lint/type/meta/knip rule (zero enforcement lost) but deliberately
+ * omits the slow acceptance-only work that `validate` bundles — the production build,
+ * `size:check` (measured 114s+), and full UI coverage — which catch nothing the model
+ * needs per turn. This is what took a failing cycle from ~65s toward ~10s. The UI
+ * stage still regenerates the OpenAPI client (`generate:api`) first, so the UI never
+ * checks against a stale `schema.d.ts`.
+ */
+const FAST_GATE =
+  "echo '::tsforge-app apps/api::' && (cd apps/api && bun run check && bun run test) && " +
+  "echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && bun run check)";
+
+/**
+ * FULL acceptance gate — run ONCE, when every feature has passed the fast gate. The
+ * complete `validate` for both apps (adds full tests/coverage, production build,
+ * size checks) plus the repo-root drift check. This is the authoritative "the whole
+ * app is really green" gate; nothing that used to run is dropped, it just runs once
+ * at the end instead of every turn.
+ */
+const FULL_GATE =
+  "echo '::tsforge-app apps/api::' && (cd apps/api && bun run validate) && " +
+  "echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && bun run validate) && " +
+  "echo '::tsforge-app .::' && bun run check";
+
+export type GateMode = "fast" | "full";
 
 export async function runBoringstackGate(
   cwd: string,
-  exec: Exec
+  exec: Exec,
+  mode: GateMode = "fast"
 ): Promise<{ passed: boolean; output: string }> {
-  const result = await exec(["bash", "-lc", GATE], { cwd });
+  const gate = mode === "full" ? FULL_GATE : FAST_GATE;
+  const result = await exec(["bash", "-lc", gate], { cwd });
 
   return {
     passed: result.code === 0,

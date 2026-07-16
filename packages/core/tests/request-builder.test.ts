@@ -82,6 +82,26 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.tool_choice).toBe("required");
   });
 
+  test("EMPTY tools array omits both `tools` and `tool_choice` (R1 no-tools call)", () => {
+    // Live regression: vLLM/DeepSeek 400 on `tools: []` ("must not be an empty array …
+    // omit the field entirely"). The R1 Phase A diagnosis call passes [] to force a
+    // tool-less turn — it must OMIT the field, not send an empty array. Fake test
+    // providers don't enforce this, so only a live run (or this test) catches it.
+    const local = body(
+      { reasoning: "deepseek", baseUrl: "http://localhost:8000/v1" },
+      { tools: [], toolChoice: "none" }
+    );
+
+    expect(local.tools).toBeUndefined();
+    expect(local.tool_choice).toBeUndefined();
+
+    // Same for the default (qwen) style.
+    const dflt = body({}, { tools: [], toolChoice: "none" });
+
+    expect(dflt.tools).toBeUndefined();
+    expect(dflt.tool_choice).toBeUndefined();
+  });
+
   test("guidedDecoding:false forces omit even on a local endpoint", () => {
     const b = body(
       {

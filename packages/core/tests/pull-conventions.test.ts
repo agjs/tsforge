@@ -5,7 +5,10 @@ describe("pull_conventions tool", () => {
   test("returns the guide for a valid topic", () => {
     expect(doPullConventions({ topic: "no-casts" })).toContain("TYPE GUARD");
     expect(doPullConventions({ topic: "component-anatomy" })).toContain(
-      "src/views/"
+      "src/features/"
+    );
+    expect(doPullConventions({ topic: "data-fetching" })).toContain(
+      "@/lib/api/client"
     );
   });
 

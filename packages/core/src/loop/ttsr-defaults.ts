@@ -9,11 +9,40 @@ const SRC_TSX_GLOBS = ["src/**/*.tsx"] as const;
  * Each rule guides the model toward the matching gate rule.
  */
 export const DEFAULT_TTSR_RULES: readonly ITtsrRule[] = [
+  // Universal house-rule bans — the harness ALREADY forbids these, so stop the
+  // model mid-stream instead of "learning" them from repeated gate failures. NO
+  // fileGlobs (they apply to every file, incl. tests) — which also sidesteps the
+  // `src/**`-glob matcher quirk that dead-ends path-scoped rules in a monorepo.
+  {
+    name: "no-as-cast",
+    // `as <type>` — `unknown`/`any`/primitive/PascalType/`{`/`[`/`(`. Excludes the
+    // one legal form, `as const` (lowercase, not in the alternation), and prose
+    // like "…as the…" (lowercase non-keyword).
+    condition: [
+      /\bas\s+(?:unknown|any|string|number|boolean|bigint|symbol|object|never|[A-Z][\w.]*|[[{(])/,
+    ],
+    scope: "tool-args",
+    guidance:
+      "No `as` type casts — only `as const` is allowed. Type the value properly: " +
+      "annotate the parameter/return, narrow with a type guard (`if (x === undefined) …`), " +
+      "or fix the source type. `as any`/`as unknown` are never acceptable.",
+    repeatMode: "cooldown",
+    repeatGap: 5,
+  },
+  {
+    name: "no-eslint-disable",
+    condition: [/eslint-disable/],
+    scope: "tool-args",
+    guidance:
+      "Never add `eslint-disable` / `eslint-disable-next-line`. Fix the underlying " +
+      "violation — the gate rejects any disabled rule.",
+    repeatMode: "cooldown",
+    repeatGap: 5,
+  },
   {
     name: "no-as-any",
     condition: [/\bas\s+any\b/],
     scope: "tool-args",
-    fileGlobs: [...SRC_TS_GLOBS],
     guidance:
       "Never use 'as any'. If the type is unknown, use 'unknown' or a proper type. " +
       "If the API is untyped, consider a declaration file.",

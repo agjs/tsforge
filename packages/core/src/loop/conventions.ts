@@ -21,6 +21,7 @@ const TOPICS = [
   "no-casts",
   "routing",
   "forms",
+  "data-fetching",
 ] as const;
 
 export type ConventionTopic = (typeof TOPICS)[number];
@@ -43,18 +44,22 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
     "no-casts": ["no-restricted-syntax", "no-non-null-assertion"],
     routing: ["component-folder-structure"],
     forms: [],
+    // `no-unnecessary-condition` on an apiClient call is the tell that the model
+    // guarded `response.error` — this stack throws on errors, so that guard is dead.
+    // Mapping it here pushes the data-fetching guide on the FIRST such red.
+    "data-fetching": ["no-unnecessary-condition"],
   };
 
 const GUIDES: Readonly<Record<ConventionTopic, string>> = {
   "component-anatomy":
-    "COMPONENT ANATOMY (boringstack). A component file `.tsx` renders props — it " +
-    "does NOT own state. Put each component in `src/views/<Feature>/`: the view root " +
-    "is `index.tsx`; extra components go in `components/<Name>.tsx`, ONE component per " +
-    "file. State/effects/memo live in `<feature>.hooks.ts`, never in the component " +
-    "body — the component imports the hook and consumes its return value. Types → " +
-    "`<feature>.types.ts`, constants → `<feature>.constants.ts`. NEVER place a " +
-    "component under `src/features/` (that's the data layer) — views live under " +
-    "`src/views/`. shadcn primitives in `src/components/ui/` are exempt.",
+    "COMPONENT ANATOMY (boringstack). A feature lives in `src/features/<feature>/`. " +
+    "Components go under `src/features/<feature>/components/<Name>/`: `<Name>.tsx` " +
+    "renders props (it does NOT own state), and `index.ts` re-exports the default — " +
+    "ONE component per file. State/effects/memo live in `<Name>.hooks.ts`, never in " +
+    "the component body — the component imports the hook and consumes its return " +
+    "value. Feature-level files sit at `src/features/<feature>/`: `<Feature>.types.ts`, " +
+    "`<Feature>.constants.ts`, `<Feature>.queries.ts`, `<Feature>.mutations.ts`. shadcn " +
+    "primitives in `src/components/ui/` are exempt.",
   "file-layout":
     "FILE PURITY (boringstack). A component `.tsx` holds ONLY imports + the component " +
     "— nothing else atop it. Move each out and import it back: a type → " +
@@ -83,15 +88,24 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "For a possibly-null DOM/query result, guard with `if (x === null) return` or " +
     "`instanceof`, never `!`.",
   routing:
-    "ROUTING (boringstack). A route file is THIN: it imports its view and renders it " +
-    "(e.g. `component: Dashboard` from `@/views/Dashboard`) — NO UI or logic of its " +
-    "own. Create ALL route files at once with `scaffold_routes` (list, detail with " +
-    "`$param` like `/accounts/$accountId`, create/edit), THEN fill each view. Never " +
-    "hand-write a route file or put a component's body in one.",
+    "ROUTING (boringstack). A route file is THIN: it imports its feature page and " +
+    "renders it — NO UI or logic of its own. Register the feature's page in the SPA " +
+    "router (`src/app/router/routes.tsx`) pointing at `@/features/<feature>` — never " +
+    "hand-write a component's body in a route file.",
   forms:
     "FORMS (boringstack). Use react-hook-form's `useForm` inside `<Component>.hooks.ts` " +
     "(not the component body). Map server/validation errors back onto the form fields; " +
     "keep the component rendering the field state the hook returns.",
+  "data-fetching":
+    "DATA-FETCHING (boringstack). ALL HTTP goes through the generated client " +
+    "`@/lib/api/client` — never `fetch`/`axios` (lint-banned). Call it as " +
+    '`const { data } = await apiClient.GET("/path")` (or `.POST`/`.PATCH`/`.DELETE` ' +
+    "with `{ body }`); `data` is typed from the OpenAPI spec. Errors THROW " +
+    "automatically via the client's `throwOnError` middleware (TanStack Query catches " +
+    "them) — so NEVER check `response.error`: it is typed `undefined`, so the guard is " +
+    "a dead `no-unnecessary-condition` gate error. Just read `data`. Put queries in " +
+    "`<Feature>.queries.ts` and mutations in `<Feature>.mutations.ts`. If a path isn't " +
+    "in the spec yet, add the API route first, then `bun run generate:api`.",
 };
 
 /** The guide for a topic (the exact string pushed or pulled). */

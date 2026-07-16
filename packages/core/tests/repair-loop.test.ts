@@ -88,7 +88,7 @@ test("stuck when it claims done but the gate stays red, unchanged", async () => 
     );
 
     expect(r.status).toBe("stuck");
-    expect(r.reason).toBe("stalled");
+    expect(r.reason).toBe("handoff");
     // Parked at the top of the ladder: the first stall is detected patiently
     // (samePersist), then steering escalates fast (steerRetrigger) to the park — so
     // it stops in a handful of cycles, well before any raw turn cap.
@@ -121,7 +121,8 @@ test("stuck immediately when the streamed model response degenerates", async () 
     );
 
     expect(r.status).toBe("stuck");
-    expect(r.reason).toBe("stalled");
+    expect(r.reason).toBe("handoff");
+    expect(r.handoff?.block).toBe("degeneration");
     expect(r.cycles).toBe(1);
   } finally {
     await rm(dir, { recursive: true, force: true });

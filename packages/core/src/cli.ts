@@ -1,6 +1,4 @@
 #!/usr/bin/env bun
-import { join, isAbsolute } from "node:path";
-import { renderCheck } from "./browser";
 import {
   runTask,
   RUN_STATUS,
@@ -9,10 +7,7 @@ import {
   formatReport,
   runGreenfield,
   prepareState,
-  evaluateFeature,
   planFeatures,
-  judgeFeature,
-  type IFeature,
   type IGreenfieldDeps,
   type Reporter,
 } from "./loop";
@@ -31,10 +26,12 @@ import {
   type ICliArgs,
 } from "./cli/args";
 import { validate } from "./validate";
+import { composeGate } from "./gate/gate-runner";
+import { judgeStage } from "./loop/boringstack/gate-stages";
 import type { OpenAICompatibleProvider } from "./inference";
 import { resolveActiveModel, resolveModelByName } from "./models-config";
 import type { ITask } from "./spec";
-import { readFiles, runShellCommand } from "./lib/fs";
+import { runShellCommand } from "./lib/fs";
 import { currentVersion } from "./update-check";
 import { trace } from "./lib/trace";
 import { repl } from "./cli/repl";
@@ -553,20 +550,12 @@ async function traceMode(args: ICliArgs): Promise<number> {
   return runTraceCommand(args.task);
 }
 
-/** Concatenate the editable scope into a single, size-capped code window for the
- *  feature judge — the BUILT ARTIFACT only (design-rule #2: no tool trace). */
-async function scopeCode(dir: string, files: string[]): Promise<string> {
-  const views = await readFiles(dir, files);
-  const joined = views.map((v) => `// ${v.path}\n${v.content}`).join("\n\n");
-  const CAP = 16000;
-
-  return joined.length > CAP ? `${joined.slice(0, CAP)}\n…[truncated]` : joined;
-}
-
 /** Build the greenfield deps: implement one feature with the work model (reusing
- *  the headless runTask driver against the build gate), then evaluate it through
- *  the layered stack — deterministic gate, optional browser steps, reject-by-
- *  default judge on the EVALUATOR model (which only ever sees the built code). */
+ *  the headless runTask driver against a composed gate). The gate + escalation
+ *  ladder runs inside the session's loop. The composed gate = the --accept command
+ *  gate + the reject-by-default judge (no browser/reachability target in generic CLI).
+ *  The judge makes the gate RED until the feature is really built, so RED-first holds
+ *  and we no longer need requireRed:false. */
 function greenfieldDeps(
   args: ICliArgs,
   work: OpenAICompatibleProvider,
@@ -574,14 +563,6 @@ function greenfieldDeps(
   scope: string[],
   report: Reporter
 ): IGreenfieldDeps {
-  const featureTask = (feature: IFeature): ITask => ({
-    id: feature.id,
-    intent: `${args.task}\n\nImplement this feature: ${feature.desc}`,
-    accept: args.accept,
-    files: scope,
-    context: [],
-  });
-
   const thinkingTokenBudget =
     args.thinkingBudget > 0
       ? args.thinkingBudget
@@ -589,48 +570,35 @@ function greenfieldDeps(
 
   return {
     implement: async (feature) => {
-      const base = featureTask(feature);
+      const base = {
+        id: feature.id,
+        intent: feature.desc,
+        accept: args.accept,
+        files: scope,
+        context: [],
+      };
 
-      await runTask({ ...base, intent: base.intent }, args.dir, work, {
+      // The composed gate: the --accept command + the reject-by-default judge.
+      // (Generic CLI greenfield has no browser/reachability target.) The judge
+      // makes the gate RED until the feature is really built, so RED-first holds
+      // and we no longer need requireRed:false.
+      const gate = composeGate([
+        { run: (cwd, opts) => validate(base, cwd, undefined, opts ?? {}) },
+        judgeStage(evaluator, args.dir, feature),
+      ]);
+
+      const result = await runTask(base, args.dir, work, {
         onEvent: report,
-        // The global gate is often already green between features, so don't
-        // bail RED-first — the model must still build this feature.
-        requireRed: false,
+        gate,
         ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
         ...(args.maxTurns > 0 ? { maxTurns: args.maxTurns } : {}),
       });
-    },
-    evaluate: (feature) =>
-      evaluateFeature(feature, {
-        gate: async () => {
-          const v = await validate(featureTask(feature), args.dir);
 
-          return { passed: v.passed, output: v.output };
-        },
-        // The browser layer runs the feature's steps only when a render target
-        // (`--browser <html>`) is configured; otherwise it's a no-op skip (the
-        // build gate already browser-smokes web apps).
-        browser: async () =>
-          args.browser.length > 0
-            ? renderCheck({
-                // Resolve a relative --browser against the RUN dir (--dir), not the
-                // launcher's cwd — greenfield checks run in-process, unlike the
-                // normal gate which already runs inside --dir.
-                file: isAbsolute(args.browser)
-                  ? args.browser
-                  : join(args.dir, args.browser),
-                smoke: true,
-                ...(feature.steps === undefined
-                  ? {}
-                  : { steps: feature.steps }),
-              })
-            : { ok: true, errors: [], skipped: true },
-        judge: async () =>
-          judgeFeature(evaluator, {
-            feature: feature.desc,
-            code: await scopeCode(args.dir, scope),
-          }),
-      }),
+      return {
+        done: result.status === RUN_STATUS.done,
+        ...(result.handoff !== undefined ? { handoff: result.handoff } : {}),
+      };
+    },
   };
 }
 
@@ -786,6 +754,18 @@ export async function main(): Promise<number> {
 
   if (raw[0] === "scaffold") {
     return scaffoldMode(raw.slice(1));
+  }
+
+  if (raw[0] === "harness-review") {
+    const { harnessReviewMode } = await import("./cli/harness-review-mode");
+
+    return harnessReviewMode(raw.slice(1));
+  }
+
+  if (raw[0] === "harness-diagnose") {
+    const { harnessDiagnoseMode } = await import("./cli/harness-diagnose-mode");
+
+    return harnessDiagnoseMode(raw.slice(1));
   }
 
   const args = parseArgs(raw);

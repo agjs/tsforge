@@ -71,12 +71,31 @@ describe("checkFeatureReachable", () => {
     expect(r.problems.join("\n")).toMatch(/i18n keys missing.*#2/u);
   });
 
-  test("empty title/empty strings do NOT count as present", () => {
+  test("a CUSTOMIZED/nested feature namespace passes (no false-fail on real content)", () => {
+    // The bshands12 wall: the model restructured its i18n away from the default
+    // `title`/`empty` into nested keys. Exact-key resolution is enforced by the
+    // `static-translation-key-exists` lint rule; reachability only needs the feature
+    // namespace to be populated — demanding the defaults false-failed for ~30 cycles.
+    const r = checkFeatureReachable("Issue", {
+      uiRoutes:
+        'const IssuePage = lazy(() => import("@/features/issue/components/IssuePage/IssuePage"));',
+      apiRoutes: "issue: issueRoutes,",
+      localeJsons: [
+        JSON.stringify({
+          features: {
+            issue: { list: { title: "Issues", empty: "No issues yet." } },
+          },
+        }),
+      ],
+    });
+
+    expect(r.ok).toBe(true);
+  });
+
+  test("an EMPTY feature namespace is still flagged (page would render raw keys)", () => {
     const r = checkFeatureReachable("Bookmark", {
       ...wiredInputs(),
-      localeJsons: [
-        JSON.stringify({ features: { bookmark: { title: "", empty: "" } } }),
-      ],
+      localeJsons: [JSON.stringify({ features: { bookmark: {} } })],
     });
 
     expect(r.ok).toBe(false);

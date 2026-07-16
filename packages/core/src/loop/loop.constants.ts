@@ -9,6 +9,8 @@ export const RUN_STATUS = {
 export const STUCK_REASON = {
   stalled: "stalled",
   cap: "cap",
+  readonlySpin: "readonly-spin",
+  handoff: "handoff",
 } as const;
 
 /** Whole-spec outcome — compare against these, never the bare string. */
@@ -20,6 +22,15 @@ export const SPEC_STATUS = {
 /** Default sampling temperature for main agent turns (Session, runTask, modelAgent).
  *  Auxiliary one-shot calls (compaction, plan summary, judge) stay at 0. */
 export const DEFAULT_TEMPERATURE = 0.2;
+
+/**
+ * Read-only-spin guard thresholds: consecutive tool calls that touch NO editable
+ * file before the model is re-steered to produce concrete work, then parked if
+ * the re-steering exhausts all recoveries. Shared by interactive (session.ts)
+ * and headless (run.ts) drivers. Mirrored in each if sharing requires deep refactors.
+ */
+export const READONLY_STREAK_LIMIT = 12;
+export const MAX_READONLY_RECOVERIES = 2;
 
 /**
  * Loop tuning — kept with the loop domain (not a global bucket). Each value's
@@ -80,21 +91,21 @@ export const LOOP_LIMITS = {
    * navigable project MAP instead of full dumps. Below it, full dumps.
    */
   mapThresholdChars: 12000,
-  /** Hard backstop on model turns per HEADLESS task (eval/cron — no human to
-   *  intervene). Interactive sessions use `interactiveBackstopTurns` instead. */
-  maxTurns: 40,
-  /** Interactive runaway safety only — NOT the primary stop. A human is present
-   *  and can interrupt, and the progress guards (`samePersist` / `gateStuckRepeats`)
-   *  pull the agent out the moment it stops converging, so this is set high enough
-   *  that normal long, productive back-and-forth never trips it. */
-  interactiveBackstopTurns: 250,
-  /** Web build RUNAWAY CEILING — NOT a completion budget. No fixed turn count fits
-   *  every app (size/complexity vary), so the real stop is the net-progress guard
-   *  (`noProgressCycles`) + `samePersist`/`gateStuckRepeats`: a build runs as long as
-   *  it keeps REDUCING errors, however many turns that takes. This is only a final
-   *  cost/infinite-loop safety for a pathological build that "progresses" forever
-   *  without finishing — set far above any real converging build. */
-  webMaxTurns: 400,
+  /** Shared runaway crash-guard for all loop types (headless, interactive, web).
+   *  The PRIMARY terminal is ladder-exhaustion (R5 handoff), not a turn count.
+   *  This exists only to kill a zero-progress/never-yielding bug; crossing it
+   *  logs an anomaly and returns STUCK_REASON.cap with NO handoff. A user-supplied
+   *  `maxTurns` in config/recipes/CLI now maps to this value (changed semantics:
+   *  was a task cap, now the crash-guard). Set far above any real converging build. */
+  runawayBackstopTurns: 1000,
+  /** Heartbeat cadence: emit a checkpoint progress event + snapshot every N turns
+   *  without terminating. Decoupled from the crash-guard so runs can persist state
+   *  on a regular interval. Reuses the old headless maxTurns number (40). */
+  checkpointIntervalTurns: 40,
+  /** Legacy aliases for compatibility. Both now map to runawayBackstopTurns. */
+  maxTurns: 1000,
+  interactiveBackstopTurns: 1000,
+  webMaxTurns: 1000,
   /**
    * How many times a build turn may dump file contents as a chat message (instead
    * of calling `create`) before the session gives up. Each time we nudge it to use

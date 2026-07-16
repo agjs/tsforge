@@ -19,50 +19,77 @@ const FEEDBACK_MAX_LINES = 20;
  *  model never hears about the OTHER rules it also violated. */
 const FEEDBACK_MAX_PER_RULE = 3;
 
+/** A scope glob describes a set of files, not one promised literal file. Treating
+ * it as a missing pathname tells the model that existing generated files do not
+ * exist and sends it into pointless create/read loops. */
+function isLiteralPath(path: string): boolean {
+  return !["*", "?", "[", "]", "{", "}"].some((char) => path.includes(char));
+}
+
 /**
  * Gate failures the model can act on (its editable files), each rendered WITH
  * its location and the offending source line — so the model fixes the exact
  * spot instead of reading the file and hand-counting to find it (which it did
  * for 3 turns on `money` when feedback was message-only). Plus the rules' fix
  * examples. Async because it reads the source lines from disk.
+ *
+ * `focusError` (R3 narrow): when set, filters the feedback to show ONLY the
+ * single most-persistent error. The key format:
+ *  - regular errors: "file:line:rule"
+ *  - metaViolations: "file:ruleId"
+ * CRITICAL: focusError filters ONLY the rendered feedback; the unfiltered error
+ * set remains for fingerprinting/progress guards (compute those BEFORE filtering).
  */
 export async function gateFeedback(
   errors: ErrorSet,
   task: ITask,
   cwd: string,
-  metaViolations: readonly IMetaRuleViolation[] = []
+  metaViolations: readonly IMetaRuleViolation[] = [],
+  focusError: string | null = null
 ): Promise<string> {
-  const own = errors.filter((e) => {
-    if (e.file === undefined) {
-      return true;
-    }
+  const own = errors.filter((e) => isOwnError(e, cwd, task.files));
+  const outOfScope = errors.filter((e) => !isOwnError(e, cwd, task.files));
 
-    // eslint emits ABSOLUTE filePaths; normalize to workspace-relative so a
-    // scoped task (`src/**`) correctly matches its own errors instead of relying
-    // on the looser basename fallback.
-    const rel = (
-      isAbsolute(e.file) ? relative(cwd, e.file) : e.file
-    ).replaceAll("\\", "/");
+  // R3 narrow: when a focus key is set, show ONLY the matching error — in WHICHEVER
+  // partition it lives — so narrowing survives even when the sticky error sits in a
+  // file the model can't edit. Never dump the whole other partition. CRITICAL: this
+  // filters ONLY the rendered feedback; fingerprint/progress guards use the full set.
+  const focus = (list: ErrorSet): ErrorSet =>
+    focusError === null
+      ? list
+      : list.filter((e) => [e.file, e.line, e.rule].join(":") === focusError);
+  const focusedOwn = focus(own);
+  const focusedOut = focus(outOfScope);
 
-    return (
-      isInScope(rel, task.files) || isInScope(basename(e.file), task.files)
-    );
-  });
-  const readOnly = errors.length - own.length;
-
-  const { shown, skipped } = selectRepresentative(own);
-  const list =
-    own.length > 0
-      ? await renderErrors(shown, cwd)
-      : "(no failures in your editable files)";
+  // ONE shared render budget across both partitions — never a 20-per-side, 40-line
+  // wall. Editable errors come first (the model acts on them directly); locked-file
+  // errors fill the remaining budget, the rest go to the overflow summary.
+  const { shown, skipped } = selectRepresentative([
+    ...focusedOwn,
+    ...focusedOut,
+  ]);
+  const shownOwn = shown.filter((e) => isOwnError(e, cwd, task.files));
+  const shownOut = shown.filter((e) => !isOwnError(e, cwd, task.files));
   const capped = overflowSummary(skipped);
 
-  const note =
-    readOnly > 0
-      ? `\n(${readOnly} other error(s) are in read-only files — not yours to fix; they resolve once your files are correct.)`
+  const noFocusMatch =
+    focusError !== null && focusedOwn.length === 0 && focusedOut.length === 0;
+  const list =
+    shownOwn.length > 0
+      ? await renderErrors(shownOwn, cwd)
+      : noFocusMatch
+        ? "(no errors matching the focused error key)"
+        : "(no failures in your editable files)";
+
+  const outOfScopeBlock =
+    shownOut.length > 0
+      ? `\n\n## Errors in files you cannot edit\nYou cannot edit these files. These ` +
+        `failures may be a downstream consequence of your editable code — a locked ` +
+        `file consumes a type or export you own. Read them, then fix the editable ` +
+        `PRODUCER. Do NOT edit the files below.\n${await renderErrors(shownOut, cwd)}`
       : "";
 
-  const help = ruleHelp(own);
+  const help = ruleHelp([...focusedOwn, ...focusedOut]);
   const helpBlock =
     help.length > 0 ? `\n\nHow to satisfy the gate:\n${help}` : "";
 
@@ -74,22 +101,36 @@ export async function gateFeedback(
   const idiomBlock =
     idioms.length > 0 ? `\n\nWatch for these strict-TS idioms:\n${idioms}` : "";
 
+  // R3 narrow: filter metaViolations to focused error only (if set).
+  const renderedMetaViolations =
+    focusError !== null
+      ? metaViolations.filter((v) => {
+          const key = `${v.file}:${v.ruleId}`;
+
+          return key === focusError;
+        })
+      : metaViolations;
+
   // Render meta-rule violations (project structure violations)
   const metaViolationsList =
-    metaViolations.length > 0 ? renderMetaViolations(metaViolations) : "";
+    renderedMetaViolations.length > 0
+      ? renderMetaViolations(renderedMetaViolations)
+      : "";
   const metaBlock =
     metaViolationsList.length > 0
       ? `\n\n## Project structure\n${metaViolationsList}`
       : "";
 
-  const metaHelp = metaRuleHelp(metaViolations);
+  const metaHelp = metaRuleHelp(renderedMetaViolations);
   const metaHelpBlock = metaHelp.length > 0 ? `\n${metaHelp}` : "";
 
   // Tool-use lapse guard: if an editable file doesn't exist, the model likely
   // wrote the code as message TEXT instead of calling `create`. Code in your
   // reply is NEVER applied — only tool calls touch disk. Say so explicitly.
   const present = new Set(sources.map((s) => s.path));
-  const missing = task.files.filter((f) => !present.has(f));
+  const missing = task.files.filter(
+    (file) => isLiteralPath(file) && !present.has(file)
+  );
   const missingBlock =
     missing.length > 0
       ? `\n\n⚠ These editable files do NOT exist yet: ${missing.join(", ")}. ` +
@@ -97,7 +138,30 @@ export async function gateFeedback(
         "`create` tool with the file path and full content."
       : "";
 
-  return `The acceptance command still fails:\n${list}${capped}${note}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
+  return `The acceptance command still fails:\n${list}${capped}${outOfScopeBlock}${helpBlock}${idiomBlock}${metaBlock}${metaHelpBlock}${missingBlock}\n\nFix your editable files and run it again.`;
+}
+
+/**
+ * Is this gate error in a file the model may edit (in `task.files` scope)? An error
+ * with no file is treated as "own" (opaque command signatures belong to the model).
+ * eslint emits ABSOLUTE paths, so normalize to workspace-relative before matching;
+ * the basename fallback catches path-shape mismatches.
+ */
+function isOwnError(
+  e: ErrorSet[number],
+  cwd: string,
+  files: string[]
+): boolean {
+  if (e.file === undefined) {
+    return true;
+  }
+
+  const rel = (isAbsolute(e.file) ? relative(cwd, e.file) : e.file).replaceAll(
+    "\\",
+    "/"
+  );
+
+  return isInScope(rel, files) || isInScope(basename(e.file), files);
 }
 
 /**

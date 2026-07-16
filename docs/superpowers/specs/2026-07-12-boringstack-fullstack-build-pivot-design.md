@@ -1,5 +1,7 @@
 # BoringStack full-stack build pivot — design
 
+> **SUPERSEDED (2026-07-15)** by the unified build loop — see `docs/superpowers/specs/2026-07-14-unified-build-loop-design.md`. The implement/evaluate split described below is removed; the real gate now runs inside the loop as a composed `IGate`.
+
 **Date:** 2026-07-12
 **Branch:** `feat/self-harness`
 **Status:** design — awaiting user review before writing-plans

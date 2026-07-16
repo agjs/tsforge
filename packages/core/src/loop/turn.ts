@@ -15,7 +15,12 @@ import { trace } from "../lib/trace";
 import type { PolicyMode, IPolicyRules } from "../policy";
 import { fileExists, resolveScopeFiles } from "../lib/fs";
 import { RUN_STATUS, STUCK_REASON, LOOP_LIMITS } from "./loop.constants";
-import type { IRunResult, Reporter } from "./loop.types";
+import type {
+  IRunResult,
+  Reporter,
+  EscalationRung,
+  IHandoff,
+} from "./loop.types";
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
@@ -23,6 +28,7 @@ import { unseenGuidesForErrors } from "./conventions";
 import {
   buildSteerMessage,
   essentialMessages,
+  isTrivialDiagnosis,
   STEER_LADDER_MAX,
 } from "./feedback/steer";
 import {
@@ -58,11 +64,14 @@ import {
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
 import type { FileLinter } from "../gate";
+import type { IGate } from "../gate/gate-runner";
 import {
   buildMetaRuleContext,
   runMetaRules,
+  subtractMetaBaseline,
   META_RULES,
   type IMetaRuleViolation,
+  type MetaBaseline,
 } from "../meta-rules";
 import { runWriteGuard } from "./write-guard";
 
@@ -268,6 +277,17 @@ export interface ILoopCtxGate {
    *  `flush()` (when present) is called once the gate exits to emit any final
    *  line the process printed without a trailing newline. */
   onGateChunk?: ((text: string) => void) & { flush?: () => void };
+  /** The composed gate the loop runs each cycle. Always set by the driver
+   *  (runTask/Session) — defaults to a command gate from task.accept. */
+  runner: IGate;
+  /** Explicit editable file the expert should repair when the stuck error set is
+   *  entirely out of the model's scope (set per feature, e.g. the resource service).
+   *  Avoids re-guessing from `task.files` and keeps the expert inside scope. */
+  expertRescueTarget?: string;
+  /** Meta-rule violations present on the PRISTINE scaffold, captured once at build
+   *  start. Subtracted from each cycle's violations so pre-existing scaffold debt the
+   *  model is frozen out of never blocks a feature or clutters feedback. */
+  metaBaseline?: MetaBaseline;
 }
 
 /** The coordinator's per-task working context: the flat identity/reporting core,
@@ -309,9 +329,6 @@ export interface ILoopState {
   /** The steer message to inject on the NEXT feedback push (set when a guard trips,
    *  cleared once injected). Undefined when no steer is pending. */
   pendingSteer?: string;
-  /** How many times the EXPERT handoff (the rung above the ladder) has fired this
-   *  run. Capped so a strong-model rescue is a few-shot escape, not a loop. */
-  expertUses?: number;
   /** Set at the top steer rung: the NEXT feedback push first PRUNES the flailing
    *  conversation to its essentials (system + original task), so the model's new
    *  strategy isn't anchored to the dead-end transcript. Cleared once applied. */
@@ -333,6 +350,47 @@ export interface ILoopState {
   /** Lowest gate-error count seen this run, NEVER reset on escalation (unlike
    *  `bestErrorCount`) — the stable baseline the plateau backstop measures against. */
   plateauBest?: number;
+  /** Guard-specific identity of the current stuck block (canonical, not the raw error
+   *  set). Derived from the guard that fired: samePersist → single error key,
+   *  gateStuckRepeats → sorted-join of current keys, plateau → normalized count|keys
+   *  over the oscillation window. Empty string when no stall is active. */
+  blockFingerprint?: string;
+  /** Ring buffer (length = LOOP_LIMITS.noProgressCycles = 12) of sorted error key-sets,
+   *  one per gate cycle. The plateau branch of fingerprintFor reads "recurring keys"
+   *  (present in ≥2 window entries) over this window to detect stable oscillation blocks
+   *  that don't improve. Pushed each gate, cleared when the block fingerprint moves. */
+  recentGateFingerprints?: string[];
+  /** Which escalation rungs have been tried for each block fingerprint. A rung is
+   *  recorded tried only when: (1) it was applied on a previous cycle, (2) the next
+   *  gate shows the block fingerprint unchanged, and (3) the pending pair is recorded
+   *  here. Per-rung state so the ladder doesn't re-fire a rung for the same block. */
+  triedLeversByBlock?: Map<string, Set<EscalationRung>>;
+  /** The rung applied on the previous cycle, paired with its block fingerprint at
+   *  application time. On the NEXT gate, if the recomputed fingerprint equals
+   *  pendingBlockFingerprint, the rung is recorded into triedLeversByBlock (block
+   *  unmoved → lever failed); either way both are cleared. */
+  pendingRung?: EscalationRung | null;
+  /** Fingerprint of the block when pendingRung was applied. */
+  pendingBlockFingerprint?: string | null;
+  /** R1 (self-diagnose) is two-phase: Phase A diagnosis-only (no writes, sets this),
+   *  Phase B act-on-diagnosis (sets pendingRung = R1). Only recorded tried after Phase B.
+   *  Cleared once Phase B runs or escalation fires. */
+  pendingDiagnosisSteer?: string | null;
+  /** Captured when samePersist identifies the persisted key (in checkStuck). Used by
+   *  R3 (narrow) to filter gate feedback down to the single most-persistent error,
+   *  shrinking the surface the model must reason about. Cleared when the block
+   *  fingerprint moves (genuine progress). */
+  focusError?: string | null;
+  /** Per-call model overrides (temperature, reasoning effort, thinking budget) applied
+   *  on the NEXT askModel call, then cleared. Set by R2 (reason-more) rung entry.
+   *  Provider-aware: best-effort, no-op where unsupported. Auxiliary calls (planning,
+   *  judge, compaction, expert) stay on defaults. */
+  pendingModelOverride?: {
+    temperature?: number;
+    reasoningEffort?: "low" | "medium" | "high";
+    enableThinking?: boolean;
+    thinkingTokenBudget?: number;
+  } | null;
 }
 
 /** Build the in-process TS LanguageService if the project has a tsconfig. Guarded
@@ -805,6 +863,120 @@ export function trackErrorAges(
   return stuck;
 }
 
+/** Derive a guard-specific, stable block identity from loop state + current gate errors.
+ *  Returns an empty string when no stall is active. Mirrors checkStuck's guard logic
+ *  (samePersist → gateStuckRepeats → plateau) but returns a fingerprint string.
+ *
+ * PURE HELPER: reads state.errorAge but does NOT mutate it. The call contract
+ * is: checkStuck calls trackErrorAges (which increments ages) on the SAME cycle,
+ * THEN fingerprintFor reads those incremented ages. This avoids double-increment.
+ * In unit tests, seed state.errorAge directly or call trackErrorAges before
+ * fingerprintFor so ages are current. Fingerprint string is deterministic: given
+ * the same state and errors, always returns the same result. */
+export function fingerprintFor(
+  state: ILoopState,
+  gateErrors: IErrorItem[]
+): string {
+  // Check samePersist: a single error key surviving >= LOOP_LIMITS.samePersist cycles.
+  // READ the already-computed age (set by trackErrorAges this cycle) without re-incrementing.
+  // Mirrors checkStuck's logic: return the first error with age >= samePersist.
+  let persistedKey: string | null = null;
+
+  for (const e of gateErrors) {
+    const age = state.errorAge.get(e.key) ?? 0;
+
+    if (age >= LOOP_LIMITS.samePersist && persistedKey === null) {
+      persistedKey = e.key;
+    }
+  }
+
+  if (persistedKey !== null) {
+    return persistedKey;
+  }
+
+  // Check gateStuckRepeats: identical error set for >= LOOP_LIMITS.gateStuckRepeats
+  // consecutive cycles. sameErrorSet already handles the comparison.
+  if (state.gateNoProgress >= LOOP_LIMITS.gateStuckRepeats) {
+    const keys = gateErrors.map((e) => e.key).sort();
+
+    return keys.join("|");
+  }
+
+  // Plateau / oscillation identity — the FALLBACK block identity for a run that is
+  // stuck without a single persisted key or a frozen set. It must fire for ANY active
+  // no-new-low streak (`redGates >= 1`), NOT only once `plateauGates` is crossed:
+  // once steering begins, escalations re-trip on the faster `steerRetrigger` cadence
+  // (which resets `redGates` before it reaches `plateauGates`), so gating on the higher
+  // threshold left the identity empty at the exact cycles rungs are applied — rungs then
+  // recorded under "" and never accumulated. `redGates` is 0 (and the window cleared)
+  // ONLY on genuine progress (a new all-time low), so this correctly returns "" when
+  // converging and a STABLE identity while stuck. The window gives recurring keys across
+  // the streak (keys present in >= 2 entries) so an A<->B oscillation resolves stably.
+  if ((state.redGates ?? 0) >= 1) {
+    const window = state.recentGateFingerprints ?? [];
+
+    if (window.length === 0) {
+      return "";
+    }
+
+    // Count key occurrences across the window.
+    const keyCount = new Map<string, number>();
+
+    for (const fingerprint of window) {
+      // Each fingerprint in the window is either a single key (from samePersist),
+      // a pipe-separated key list (from gateStuckRepeats), or empty.
+      if (fingerprint === "") {
+        continue;
+      }
+
+      const keys = fingerprint.split("|");
+
+      for (const k of keys) {
+        keyCount.set(k, (keyCount.get(k) ?? 0) + 1);
+      }
+    }
+
+    // Recurring keys: present in >= 2 window entries.
+    const recurringKeys = Array.from(keyCount.entries())
+      .filter(([_k, count]) => count >= 2)
+      .map(([k]) => k)
+      .sort();
+
+    // Construct the plateau fingerprint: lowWaterCount | sorted recurring keys.
+    const lowWater = state.plateauBest ?? 0;
+
+    return `${lowWater}|${recurringKeys.join(";")}`;
+  }
+
+  // No stall active.
+  return "";
+}
+
+/** Push this cycle's sorted error-key set into the oscillation ring buffer that the
+ *  plateau branch of `fingerprintFor` reads. Without this the window is always empty
+ *  and the plateau branch returns "" — so an OSCILLATING block (rotating error sets,
+ *  the 150-turn-thrash case) would have no stable identity and never record rungs.
+ *  Capped at `noProgressCycles`; the window is what lets an A<->B oscillation resolve
+ *  to a STABLE plateau fingerprint (`${lowWater}|${recurring keys}`). */
+function pushGateFingerprint(
+  state: ILoopState,
+  gateErrors: IErrorItem[]
+): void {
+  const entry = gateErrors
+    .map((e) => e.key)
+    .sort()
+    .join("|");
+  const window = state.recentGateFingerprints ?? [];
+
+  window.push(entry);
+
+  if (window.length > LOOP_LIMITS.noProgressCycles) {
+    window.shift();
+  }
+
+  state.recentGateFingerprints = window;
+}
+
 /** The blocker diagnosis surfaced when a single error persists too long — names
  *  the rule + file + attempt count + the last message, so an interactive session
  *  hands back something the user can act on. */
@@ -855,13 +1027,12 @@ export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
 }
 
 /** STEP 2 — run the gate command (tsc/eslint/tests/…): announce it on live
- *  streams, run `validate`, and flush any final newline-less output line. */
+ *  streams, run the injected gate runner, and flush any final newline-less output line. */
 async function runGateStep(
   ctx: ILoopCtx,
   turn: number
 ): Promise<Awaited<ReturnType<typeof validate>>> {
-  const { task, cwd, report } = ctx;
-  const parse = ctx.gate.parse;
+  const { task, report } = ctx;
 
   if (ctx.gate.onGateChunk !== undefined) {
     report({
@@ -871,7 +1042,7 @@ async function runGateStep(
     });
   }
 
-  const gate = await validate(task, cwd, parse, {
+  const gate = await ctx.gate.runner.run(ctx.cwd, {
     ...(ctx.gate.onGateChunk === undefined
       ? {}
       : { onChunk: ctx.gate.onGateChunk }),
@@ -901,7 +1072,14 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
       changed
     );
 
-    return runMetaRules(META_RULES, metaContext, ctx.gate.ruleOverrides);
+    const violations = runMetaRules(
+      META_RULES,
+      metaContext,
+      ctx.gate.ruleOverrides
+    );
+
+    // Subtract pristine-scaffold debt the model is frozen out of (no-op if unset).
+    return subtractMetaBaseline(violations, ctx.gate.metaBaseline);
   } catch (err) {
     // Degrade silently — meta-rules are supplementary to the gate
     trace("runMetaRules", err);
@@ -910,19 +1088,61 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
   }
 }
 
-/** A terminal STUCK result — shared shape for every convergence guard. */
+/** Pure helper: derive the handoff ask string from the final steer message and
+ *  persisting error set. Produces a non-empty, informative ask for human/stronger-model
+ *  handoff. */
+export function buildHandoffAsk(
+  finalSteer: string,
+  persistingErrors: string[]
+): string {
+  const trimmedSteer = finalSteer.trim();
+  const errorSummary =
+    persistingErrors.length > 0
+      ? `Persisting after all escalations: ${persistingErrors.slice(0, 3).join(", ")}${persistingErrors.length > 3 ? ` (+${persistingErrors.length - 3} more)` : ""}.`
+      : "Unable to make progress with local model escalations.";
+
+  if (trimmedSteer.length === 0) {
+    return `The model was unable to fix the gate errors. ${errorSummary}`;
+  }
+
+  return `${trimmedSteer.replace(/\.$/, "")}. ${errorSummary}`;
+}
+
+/** A terminal STUCK result — shared shape for every convergence guard. When the
+ *  ladder is exhausted, builds a handoff to a stronger model. The `block` is
+ *  captured before guard reset so it includes the current error context. */
 function stuckResult(
   ctx: ILoopCtx,
+  state: ILoopState,
+  gateErrors: IErrorItem[],
   turn: number,
   detail: string,
-  messagePrefix: string
+  messagePrefix: string,
+  finalSteer: string,
+  block: string
 ): IRunResult {
+  const rungHistory = Array.from(
+    state.triedLeversByBlock?.get(block) ?? []
+  ).sort();
+  const errorKeys = gateErrors.map((e) => e.message);
+  const ask = buildHandoffAsk(finalSteer, errorKeys);
+
+  const handoff: IHandoff = {
+    block,
+    rungHistory,
+    errors: errorKeys,
+    ask,
+    resumable: true,
+    resume: { triedLevers: rungHistory },
+  };
+
   ctx.report({
     kind: "stuck",
     task: ctx.task.id,
     cycles: turn,
     detail,
     message: `task ${ctx.task.id}: ${messagePrefix}${detail}`,
+    handoff,
   });
 
   return {
@@ -930,21 +1150,30 @@ function stuckResult(
     redConfirmed: true,
     status: RUN_STATUS.stuck,
     cycles: turn,
-    reason: STUCK_REASON.stalled,
+    reason: STUCK_REASON.handoff,
     detail,
+    handoff,
   };
 }
-
-/** Cap on expert-handoff attempts per run — the expert is a strong-model call, not
- *  free; a couple of rescues is plenty before a genuine park. */
-const EXPERT_MAX_USES = 2;
 
 /** Before accepting a stalled PARK, try the expert handoff (the rung ABOVE the
  *  steering ladder): hand the single most-blocking failing FILE to the configured
  *  `capabilities.expert` model, apply its fix, and let the primary model continue.
  *  Returns true when a fix was applied (→ keep looping). No expert configured, no
- *  failing file, the cap reached, or the expert declining all fall through to false
- *  (→ park as before). Never throws — a handoff hiccup must not crash the run. */
+ *  failing file, R4 already tried for this block, or the expert declining all fall
+ *  through to false (→ park as before). Never throws — a handoff hiccup must not
+ *  crash the run. Expert re-enters only on a NOVEL block fingerprint (novelty gate). */
+/** Whether `settleGate` should attempt the expert (R4) for this terminal result.
+ *  The ladder-exhaustion terminal carries `STUCK_REASON.handoff` (NOT `.stalled`, which
+ *  it used to — a stale check there made the expert UNREACHABLE), and the runaway-backstop
+ *  anomaly (`.cap`) must NEVER consult the expert. Pure + exported so the exact trigger
+ *  condition is unit-locked (this is the class of seam that silently regressed once). */
+export function shouldTryExpertRescue(stuck: IRunResult): boolean {
+  return (
+    stuck.status === RUN_STATUS.stuck && stuck.reason === STUCK_REASON.handoff
+  );
+}
+
 export async function tryExpertRescue(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -964,14 +1193,35 @@ export async function tryExpertRescue(
     return false;
   };
 
-  if ((state.expertUses ?? 0) >= EXPERT_MAX_USES) {
-    return skip(`already used ${String(EXPERT_MAX_USES)}× this run`);
+  // Novelty gate: prefer the STICKY block identity (the same key checkStuck records rungs
+  // under) so the R4 gate is consistent with recording; fall back to a momentary
+  // derivation only when no sticky identity exists (nothing has been recorded then, so
+  // there's no inconsistency). If R4 is already recorded for this block, the expert has
+  // already tried and failed on this exact block; escalate to R5 instead.
+  const block =
+    (state.blockFingerprint ?? "") !== ""
+      ? (state.blockFingerprint ?? "")
+      : fingerprintFor(state, gateErrors);
+
+  if (block === "") {
+    return skip("no block fingerprint computed");
+  }
+
+  state.triedLeversByBlock ??= new Map();
+
+  if (state.triedLeversByBlock.get(block)?.has("R4") === true) {
+    return skip("expert already tried for this block; escalating to R5");
   }
 
   // Resolve the file to repair: prefer a populated `.file`, else parse it from the
   // error MESSAGE (type-aware-lint names the file in text but doesn't set `.file` —
   // which skipped the expert on a whole live run). See resolveStuckFile.
-  const targetFile = await resolveStuckFile(ctx.cwd, gateErrors);
+  const targetFile = await resolveStuckFile(
+    ctx.cwd,
+    gateErrors,
+    ctx.task.files,
+    ctx.gate.expertRescueTarget
+  );
 
   if (targetFile === null) {
     return skip("no file could be resolved from the failing error(s)");
@@ -1001,7 +1251,8 @@ export async function tryExpertRescue(
   const outcome = await runExpertHandoff(
     ctx.cwd,
     { file: targetFile, content, error: errorText, goal: ctx.task.id },
-    ask
+    ask,
+    ctx.task.files
   );
 
   ctx.report({ kind: "tool", task: ctx.task.id, message: outcome.note });
@@ -1011,8 +1262,11 @@ export async function tryExpertRescue(
   }
 
   // The expert fixed it — give the primary model a fresh run at the ladder to
-  // verify and finish (reset guards + steer level; count the rescue against the cap).
-  state.expertUses = (state.expertUses ?? 0) + 1;
+  // verify and finish (reset guards + steer level; record R4 as tried for this block).
+  state.triedLeversByBlock.set(
+    block,
+    new Set([...(state.triedLeversByBlock.get(block) ?? []), "R4"])
+  );
   state.steerLevel = 0;
   resetConvergenceGuards(state, gateErrors.length);
   // Rebase the plateau backstop too (fresh baseline after the expert's fix). This is
@@ -1050,6 +1304,95 @@ function resetConvergenceGuards(state: ILoopState, errorCount: number): void {
  *  exhausted (`STEER_LADDER_MAX`) does the run park. Returns the terminal (park)
  *  result, or null to keep looping — with `state.pendingSteer` set when a steer
  *  should be injected this cycle. Exported for unit tests. */
+/** Set up rung-specific logic for escalation rungs. R1 uses diagnosis-only call,
+ *  R2 sets per-call model overrides, R3 narrows to focused error.
+ *  R2 and R3 set pendingRung so they are recorded tried when the next gate is unmoved. */
+function applyRungLogic(
+  state: ILoopState,
+  rungLevel: number,
+  gateErrors: readonly IErrorItem[],
+  reason: string,
+  blockFp: string
+): void {
+  const webEnabled = flags.webTools();
+
+  // Escalating past R1 clears any stale diagnosis marker so it can't linger and be
+  // re-injected forever (matters on paths without the headless capture, e.g. interactive).
+  if (rungLevel !== 1) {
+    state.pendingDiagnosisSteer = undefined;
+  }
+
+  if (rungLevel === 1) {
+    // R1 Phase A (self-diagnose): diagnosis-only, no writes, no tools
+    state.pendingDiagnosisSteer = buildSteerMessage(
+      rungLevel,
+      gateErrors,
+      reason,
+      webEnabled,
+      true // diagnosisOnly
+    );
+    // Phase A does NOT set pendingRung — it's recorded tried only after Phase B
+
+    return;
+  }
+
+  if (rungLevel === 2) {
+    // R2: set per-call model overrides (temperature + reasoning effort)
+    state.pendingModelOverride = {
+      temperature: 1.2, // perturb sampling: raise temperature
+      reasoningEffort: "high", // reason-more
+    };
+    // R2 is recorded tried when the next gate is unmoved
+    state.pendingRung = "R2";
+    state.pendingBlockFingerprint = blockFp !== "" ? blockFp : null;
+  }
+
+  if (rungLevel === 3) {
+    // R3: narrow to the single most-persistent error
+    // R3 is recorded tried when the next gate is unmoved
+    state.pendingRung = "R3";
+    state.pendingBlockFingerprint = blockFp !== "" ? blockFp : null;
+  }
+
+  // R2, R3, and higher levels set pendingSteer (R1 returns early above)
+  state.pendingSteer = buildSteerMessage(
+    rungLevel,
+    gateErrors,
+    reason,
+    webEnabled
+  );
+}
+
+/** Determine the stall reason from guard states. Returns null if not stalled. */
+function getStuckReason(
+  persisted: IErrorItem | null,
+  wholeSetStuck: boolean,
+  noNetProgress: boolean,
+  plateaued: boolean,
+  setCap: number,
+  progressCap: number,
+  gateErrors: IErrorItem[],
+  state: ILoopState
+): string | null {
+  if (persisted !== null) {
+    return persistDetail(persisted);
+  }
+
+  if (wholeSetStuck) {
+    return `gate unchanged ${String(setCap)} cycles (${String(gateErrors.length)} error(s) not converging)`;
+  }
+
+  if (noNetProgress) {
+    return `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(progressCap)} cycles (best ${String(state.bestErrorCount)})`;
+  }
+
+  if (plateaued) {
+    return `oscillating: ${String(gateErrors.length)} error(s) open, no NEW low in ${String(state.redGates ?? 0)} gate cycles (best ever ${String(state.plateauBest ?? 0)})`;
+  }
+
+  return null;
+}
+
 export function checkStuck(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -1059,6 +1402,13 @@ export function checkStuck(
   // Advance ALL three trackers every cycle (they mutate state), then decide which,
   // if any, tripped — the coarsest-first order preserves the old diagnosis text.
   const persisted = trackErrorAges(state, gateErrors);
+
+  const previousPhase = commonGatePhase(state.prevGateErrors);
+  const currentPhase = commonGatePhase(gateErrors);
+  const frontierAdvanced =
+    previousPhase !== undefined &&
+    currentPhase !== undefined &&
+    currentPhase > previousPhase;
 
   state.gateNoProgress = sameErrorSet(state.prevGateErrors, gateErrors)
     ? state.gateNoProgress + 1
@@ -1077,11 +1427,70 @@ export function checkStuck(
   // on each escalation (below) so escalations stay spaced, but it climbs right back under
   // oscillation because no new all-time low arrives — driving the ladder to the expert in
   // a handful of gates instead of ~150 turns (observed live: v8 still L2 at turn 153).
-  if (gateErrors.length < (state.plateauBest ?? Number.POSITIVE_INFINITY)) {
+  // Genuine progress is normally a new all-time-low error count. A composed,
+  // short-circuiting gate has one additional proof: reaching a later phase means the
+  // earlier phase went green. That downstream phase may legitimately reveal MORE
+  // errors, so comparing counts alone would retain an exhausted API block when the UI
+  // first becomes reachable (the exact greenfield-revisit failure).
+  const madeNewLow =
+    gateErrors.length < (state.plateauBest ?? Number.POSITIVE_INFINITY);
+  const madeProgress = madeNewLow || frontierAdvanced;
+
+  if (madeProgress) {
     state.plateauBest = gateErrors.length;
     state.redGates = 0;
+    state.bestErrorCount = gateErrors.length;
+    state.noNewLow = 0;
+    // Genuine progress — the oscillation history is stale; clear the window so the
+    // plateau fingerprint reflects only the CURRENT stuck streak.
+    state.recentGateFingerprints = [];
   } else {
     state.redGates = (state.redGates ?? 0) + 1;
+    // No new low — feed the oscillation window so the plateau branch of fingerprintFor
+    // (computed just below) has a populated history to derive a stable block identity.
+    pushGateFingerprint(state, gateErrors);
+  }
+
+  // Momentary derivation of the block identity from the guards. Its DERIVATION matures
+  // over a streak (plateau -> gateStuckRepeats -> samePersist), so we do NOT use it
+  // directly as the block key — see the sticky identity below.
+  const momentaryFp = fingerprintFor(state, gateErrors);
+
+  // STICKY BLOCK IDENTITY: a stuck streak keeps ONE identity for its whole life, even as
+  // the guard that derives the fingerprint changes. Only genuine progress (`madeProgress`)
+  // moves the block; a derivation change must NOT read as progress or the ladder would
+  // reset mid-climb and never reach exhaustion (and rungs would record under a shifting
+  // key). This is the single key used for recording, the R4 novelty gate, and the handoff.
+  if (madeProgress) {
+    // Block moved (or resolved) — reset the ladder so the next stall starts fresh at R1.
+    state.blockFingerprint = "";
+    state.focusError = null;
+    state.steerLevel = 0;
+    state.pendingRung = null;
+    state.pendingBlockFingerprint = null;
+    state.pendingDiagnosisSteer = null;
+  } else if ((state.blockFingerprint ?? "") === "" && momentaryFp !== "") {
+    // Start of a stuck streak — adopt the first non-empty identity and HOLD it.
+    state.blockFingerprint = momentaryFp;
+  }
+
+  const block = state.blockFingerprint ?? "";
+
+  // PENDING RUNG RECORDING: if a rung was applied last cycle and the block is UNMOVED
+  // (same sticky identity), record it as tried — the lever failed. On progress the
+  // pending pair was already cleared above. Either way clear the pending pair.
+  if (state.pendingRung !== null && state.pendingRung !== undefined) {
+    if (block !== "" && block === state.pendingBlockFingerprint) {
+      state.triedLeversByBlock ??= new Map();
+
+      const tried = state.triedLeversByBlock.get(block) ?? new Set();
+
+      tried.add(state.pendingRung);
+      state.triedLeversByBlock.set(block, tried);
+    }
+
+    state.pendingRung = null;
+    state.pendingBlockFingerprint = null;
   }
 
   // Once steering has begun, the two coarse guards re-trip on a MUCH smaller window
@@ -1104,22 +1513,37 @@ export function checkStuck(
   // fast instead of crawling. Checked LAST so the finer diagnoses win when they apply.
   const plateaued = (state.redGates ?? 0) >= LOOP_LIMITS.plateauGates;
 
-  const reason =
-    persisted !== null
-      ? persistDetail(persisted)
-      : wholeSetStuck
-        ? `gate unchanged ${String(setCap)} cycles (${String(gateErrors.length)} error(s) not converging)`
-        : noNetProgress
-          ? `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(progressCap)} cycles (best ${String(state.bestErrorCount)})`
-          : plateaued
-            ? `oscillating: ${String(gateErrors.length)} error(s) open, no NEW low in ${String(state.redGates ?? 0)} gate cycles (best ever ${String(state.plateauBest ?? 0)})`
-            : null;
+  const reason = getStuckReason(
+    persisted,
+    wholeSetStuck,
+    noNetProgress,
+    plateaued,
+    setCap,
+    progressCap,
+    gateErrors,
+    state
+  );
 
   if (reason === null) {
-    return null; // still converging — keep looping normally
+    return null;
   }
 
-  // Stalled. Escalate a steer and give the model fresh cycles at the new level. Reset the
+  // Stalled. Ensure the sticky identity is set — adopt a stable fallback ONCE if the
+  // guards produced no fingerprint yet (held for the streak, so recording + handoff use
+  // one consistent key). `blockKey` is what rungs record under and the handoff reports.
+  if ((state.blockFingerprint ?? "") === "") {
+    state.blockFingerprint = `escalation-${String(state.steerLevel + 1)}`;
+  }
+
+  const blockKey = state.blockFingerprint ?? "";
+
+  // R3 narrow: capture the single most-persistent error key for focusError filtering
+  // (only when samePersist is the guard that fired).
+  if (persisted !== null) {
+    state.focusError = persisted.key;
+  }
+
+  // Escalate a steer and give the model fresh cycles at the new level. Reset the
   // plateau COUNTER too (spacing — one escalation per plateau window) but NOT plateauBest,
   // so oscillation keeps re-tripping it and the ladder climbs to the expert.
   state.steerLevel += 1;
@@ -1128,20 +1552,26 @@ export function checkStuck(
 
   if (state.steerLevel > STEER_LADDER_MAX) {
     // Ladder exhausted — the run parks (an expert-model handoff slots in here).
+    const finalSteer =
+      state.pendingSteer ??
+      buildSteerMessage(state.steerLevel, gateErrors, reason, flags.webTools());
+
     return stuckResult(
       ctx,
+      state,
+      gateErrors,
       turn,
       `${reason} — steering exhausted after ${String(STEER_LADDER_MAX)} escalations`,
-      "parked — "
+      "parked — ",
+      finalSteer,
+      blockKey
     );
   }
 
-  state.pendingSteer = buildSteerMessage(
-    state.steerLevel,
-    gateErrors,
-    reason,
-    flags.webTools()
-  );
+  // Set up rung-specific logic: R1 diagnosis-only, R2 model overrides, R3 narrow.
+  // Pass the sticky block key so a rung's pendingBlockFingerprint matches what the
+  // recording hook will compare against next cycle.
+  applyRungLogic(state, state.steerLevel, gateErrors, reason, blockKey);
 
   // At the TOP rung (change-strategy), also RESET the conversation: the flailing
   // history anchors the model to the dead-end approach it's been repeating. Pruning
@@ -1157,7 +1587,128 @@ export function checkStuck(
     message: `⤴ steer L${String(state.steerLevel)}/${String(STEER_LADDER_MAX)}: ${reason}`,
   });
 
+  // blockFingerprint is the STICKY identity, already set above and held for the whole
+  // streak — do NOT overwrite it here with a momentary value.
   return null; // keep looping, with the steer injected this cycle
+}
+
+/** Return the single ordered phase represented by an error set. Mixed or
+ * unannotated sets are deliberately unknown and keep the conservative count-based
+ * convergence behavior. */
+function commonGatePhase(errors: readonly IErrorItem[]): number | undefined {
+  const first = errors[0]?.phase;
+
+  if (first === undefined) {
+    return undefined;
+  }
+
+  return errors.every((error) => error.phase === first) ? first : undefined;
+}
+
+/** R1 Phase B (feed-forward): after Phase A's diagnosis-only call, check if the
+ *  diagnosis is trivial. If trivial (too short or just restates errors), mark R1
+ *  tried and escalate to R2 immediately. If not trivial, save it as the next steer
+ *  with pendingRung = R1 so the model acts on its own diagnosis (Phase B).
+ *  Returns true if escalation occurred (continue with next turn), false if Phase B
+ *  proceeds normally. */
+export function hasPendingDiagnosis(state: {
+  readonly pendingDiagnosisSteer?: string | null;
+}): boolean {
+  return typeof state.pendingDiagnosisSteer === "string";
+}
+
+export function handleR1Diagnosis(
+  state: ILoopState,
+  diagnosis: string,
+  gateErrors: IErrorItem[]
+): boolean {
+  if (!hasPendingDiagnosis(state)) {
+    return false; // Not in R1 Phase A
+  }
+
+  // Check if the diagnosis is trivial
+  if (isTrivialDiagnosis(diagnosis, gateErrors)) {
+    // Trivial diagnosis: mark R1 tried and escalate directly to R2
+    const block = state.blockFingerprint ?? "unknown";
+
+    state.triedLeversByBlock ??= new Map();
+
+    const tried = state.triedLeversByBlock.get(block) ?? new Set();
+
+    tried.add("R1");
+    state.triedLeversByBlock.set(block, tried);
+
+    // Clear Phase A marker and escalate
+    state.pendingDiagnosisSteer = null;
+    state.steerLevel += 1;
+
+    // Set up R2 overrides
+    if (state.steerLevel === 2) {
+      state.pendingModelOverride = {
+        temperature: 1.2,
+        reasoningEffort: "high",
+      };
+    }
+
+    state.pendingSteer = buildSteerMessage(
+      state.steerLevel,
+      gateErrors,
+      "diagnosis was trivial — escalating",
+      flags.webTools()
+    );
+
+    return true; // Skip normal flow, use escalated steer
+  }
+
+  // Non-trivial diagnosis: Phase B (act on diagnosis)
+  state.pendingDiagnosisSteer = null;
+  state.pendingRung = "R1";
+  state.pendingBlockFingerprint = state.blockFingerprint ?? null;
+
+  state.pendingSteer =
+    `Your own diagnosis last cycle:\n«${diagnosis}»\n\n` +
+    `Act on that different approach now. Don't repeat what you tried before.`;
+
+  return false; // Continue normally with Phase B steer set
+}
+
+/** At/under this many open errors the loop is NEAR-GREEN: the model must stop
+ *  opening new fronts and land the last few. The dominant late-run failure mode is
+ *  "spray after best" — reach 1-2 errors, then create files / add routes / refactor
+ *  and balloon back to 5-7 (bshands7/9/10 all did this). */
+const NEAR_GREEN_LOCKDOWN = 3;
+
+/** A lockdown/regression banner for the top of the feedback, or "" when far from
+ *  green and not regressing. `total` = open errors this cycle; `best` = the all-time
+ *  low (watermark). Regression = this cycle is WORSE than the best already reached. */
+export function nearGreenBanner(total: number, best: number): string {
+  const regressed = Number.isFinite(best) && total > best;
+  const near = total > 0 && total <= NEAR_GREEN_LOCKDOWN;
+
+  if (!near && !regressed) {
+    return "";
+  }
+
+  const lines: string[] = [];
+
+  if (regressed) {
+    lines.push(
+      `⚠ REGRESSION: you were at ${String(best)} error(s), now ${String(total)}. ` +
+        "Your last change re-broke something that was working. UNDO that collateral " +
+        `first to get back to ${String(best)}, then fix only what remains.`
+    );
+  }
+
+  if (near) {
+    lines.push(
+      `⚠ NEAR-GREEN — only ${String(total)} error(s) from done. Fix ONLY the error(s) ` +
+        "listed below, with the SMALLEST possible change. Do NOT create new files, add " +
+        "features/routes, refactor, rename, or touch anything not named in an error. " +
+        "Land these; don't open new fronts."
+    );
+  }
+
+  return `${lines.join("\n")}\n\n`;
 }
 
 /** STEP 5 — inject the red-gate feedback (rule docs + the auto-fix notice) into
@@ -1175,13 +1726,18 @@ export async function injectFeedback(
     gateErrors,
     ctx.task,
     ctx.cwd,
-    metaViolations
+    metaViolations,
+    state.focusError ?? null
   );
   const notice = autoFixed.length > 0 ? `${autoFixNotice(autoFixed)}\n\n` : "";
-  // A pending steer (the model stalled) leads the feedback so it can't be missed,
-  // then is cleared — it's a one-shot escalation for THIS cycle.
-  const steer =
-    state.pendingSteer !== undefined ? `${state.pendingSteer}\n\n` : "";
+  // A pending steer (the model stalled) leads the feedback so it can't be missed.
+  // R1 Phase A's diagnosis-only instruction takes precedence when set, and is NOT
+  // cleared here: the next (no-tools) call reads `pendingDiagnosisSteer` to hide tools
+  // and capture the diagnosis, and the capture clears it (headless). Without injecting
+  // it the model got a tool-less turn with NO instruction to diagnose. The normal
+  // pendingSteer stays one-shot (cleared after injecting).
+  const steerText = state.pendingDiagnosisSteer ?? state.pendingSteer;
+  const steer = steerText !== undefined ? `${steerText}\n\n` : "";
 
   state.pendingSteer = undefined;
 
@@ -1232,9 +1788,13 @@ export async function injectFeedback(
     });
   }
 
+  // NEAR-GREEN lockdown / regression callout leads everything — the finishing
+  // discipline that stops "spray after best" (the dominant late-run failure).
+  const banner = nearGreenBanner(gateErrors.length, state.bestErrorCount);
+
   ctx.messages.push({
     role: "user",
-    content: `${steer}${notice}${feedback}${how}`,
+    content: `${banner}${steer}${notice}${feedback}${how}`,
   });
 }
 
@@ -1296,6 +1856,10 @@ export async function settleGate(
   });
 
   if (gatePassed) {
+    // Gate passed — clear block tracking
+    state.blockFingerprint = "";
+    state.focusError = null;
+
     await polishOnGreen(ctx);
 
     report({
@@ -1316,12 +1880,11 @@ export async function settleGate(
   const stuck = checkStuck(ctx, state, gateErrors, turn);
 
   if (stuck !== null) {
-    // A stalled park is the rung where the EXPERT handoff gets a shot before we give
-    // up: if a stronger model repairs the blocking file, keep looping instead of
-    // parking. No expert configured → this is a no-op and the run parks as before.
+    // Ladder exhaustion is the rung where the EXPERT (R4) gets a shot before R5: if a
+    // stronger model repairs the blocking file, keep looping instead of handing off.
+    // The novelty gate inside tryExpertRescue prevents re-firing on the same block.
     if (
-      stuck.status === RUN_STATUS.stuck &&
-      stuck.reason === STUCK_REASON.stalled &&
+      shouldTryExpertRescue(stuck) &&
       (await tryExpertRescue(ctx, state, gateErrors))
     ) {
       return null;
@@ -1332,6 +1895,77 @@ export async function settleGate(
 
   await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixed);
 
+  return null;
+}
+
+/** Handle a non-gate exit (timeout, degeneration, readonly-spin, malformed-tool-call)
+ *  with a small recovery budget per synthetic block. Once budget spent → R5 handoff.
+ *  Synthetic fingerprints are SEPARATE namespace from real gate fingerprints.
+ *  Returns a terminal result or null to continue. */
+export function settleSyntheticBlock(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  syntheticFingerprint: string,
+  exitKind: string,
+  turn = 1
+): IRunResult | null {
+  const { task, report } = ctx;
+
+  // Synthetic blocks have a small fixed recovery budget (not full escalation ladder)
+  const budgetPerExitKind: Record<string, number> = {
+    "readonly-spin": 1, // one nudge to act
+    timeout: 1, // one retry
+    degeneration: 0, // no retry, go straight to R5
+    "malformed-tool-call": 0,
+  };
+
+  const recoveryBudget = budgetPerExitKind[exitKind] ?? 0;
+
+  // Initialize the synthetic block's tried-lever tracking (separate namespace)
+  state.triedLeversByBlock ??= new Map();
+  const tried = state.triedLeversByBlock.get(syntheticFingerprint) ?? new Set();
+
+  // Count how many times this synthetic block has been visited (recovery attempts)
+  const recoveryAttempts = tried.size;
+
+  // If we've exhausted the budget, hand off
+  if (recoveryAttempts >= recoveryBudget) {
+    const message = `synthetic block "${exitKind}" exhausted recovery budget`;
+
+    report({
+      kind: "stuck",
+      task: task.id,
+      message,
+    });
+
+    // Synthetic blocks don't use real escalation rungs, so handoff reports empty rungHistory
+    const rungHistory: EscalationRung[] = [];
+
+    const handoff: IHandoff = {
+      block: syntheticFingerprint,
+      rungHistory,
+      errors: [exitKind],
+      ask: `${exitKind}: recovery attempts exhausted; needs manual intervention or a different approach`,
+      resumable: true,
+      resume: { triedLevers: rungHistory },
+    };
+
+    return {
+      task: task.id,
+      redConfirmed: false,
+      status: RUN_STATUS.stuck,
+      reason: STUCK_REASON.handoff,
+      handoff,
+      detail: message,
+      cycles: turn,
+    };
+  }
+
+  // Record this recovery attempt using sentinel rungs (synthetic blocks use markers, not the full R1-R4 ladder)
+  tried.add("R1");
+  state.triedLeversByBlock.set(syntheticFingerprint, tried);
+
+  // Continue — the caller will apply a small nudge/retry before looping again
   return null;
 }
 

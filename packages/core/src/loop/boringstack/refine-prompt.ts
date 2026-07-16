@@ -103,9 +103,10 @@ You MUST fill in these generated files for the **${feature.id}** resource:
 - Edit ONLY the \`${camel}\` table. Do NOT touch any other table in this file.
 
 ### API Layer (apps/api/src/api/${camel}/)
-- \`apps/api/src/api/${camel}/${camel}.schemas.ts\` — Zod schemas for request/response validation
+- \`apps/api/src/api/${camel}/${camel}.schemas.ts\` — request/response validation schemas using **Elysia TypeBox** (\`import { t } from "elysia"\` → \`t.Object({ title: t.String(), … })\`). This is the API boundary — do NOT use Zod here; Zod is only for UI form/runtime validation.
 - \`apps/api/src/api/${camel}/${camel}.types.ts\` — TypeScript types for domain entities and DTO objects
 - \`apps/api/src/api/${camel}/${camel}.service.ts\` — Service layer business logic
+- \`apps/api/src/api/${camel}/${camel}.routes.ts\` — Elysia routes: a schema on EVERY route; \`ApiErrors.*\` for errors (never \`throw new Error\`)
 
 ### UI Feature (apps/ui/src/features/${camel}/)
 - The complete React feature slice for ${feature.id} (pages, components, hooks, state)
@@ -120,6 +121,8 @@ The linter enforces test coverage. You MUST write:
 - \`apps/api/tests/api/${camel}/${camel}.service.test.ts\` — Service layer unit tests
 
 Without these test files, the build will fail.
+
+**Test runner — do NOT mix them:** \`apps/api\` tests use **\`bun:test\`** (\`import { describe, test, expect } from "bun:test"\`). \`apps/ui\` tests use **\`vitest\`** (\`import { describe, it, expect } from "vitest"\`) — a UI test that imports \`bun:test\` fails with "Cannot find module 'bun:test'". Match the runner already used by the sibling test files in that app; never introduce the other one.
 
 ---
 
@@ -145,7 +148,9 @@ describe("${camel} routes", () => {
 \`\`\`
 Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` or the schema in a test.
 
-**Routes** (\`${camel}.routes.ts\`): a schema on EVERY route; NO per-handler try/catch (Elysia \`.onError\` handles errors centrally); NEVER \`throw new Error\` — throw \`ApiErrors.notFound(...)\` / \`.validation(...)\` / \`.unauthorized(...)\`.
+**Routes** (\`${camel}.routes.ts\`): a schema on EVERY route; NO per-handler try/catch (Elysia \`.onError\` handles errors centrally); NEVER \`throw new Error\` — throw \`ApiErrors.notFound(...)\` / \`.validation(...)\` / \`.unauthorized(...)\`. Chain \`.get\`/\`.post\`/\`.patch\`/\`.delete\` DIRECTLY on \`requireAuth().onError(...)\` — do NOT wrap them in \`.group("/", …)\` (inside a \`.group\` callback the app has no \`user\` and loses schema inference). \`.group\` is only for mounting a sub-router at a prefix.
+
+**Response schemas + nullable columns (the #1 opaque Elysia error):** a \`response\` schema field must match EXACTLY what the service returns, or Elysia rejects the handler with an inscrutable "not assignable to \`InlineHandlerNonMacro\`" \`TS2345\` on the route (it points at the route, NOT the real mismatch). The trap: a NULLABLE Drizzle column (\`.notNull()\` absent) infers \`string | null\`, but \`t.Optional(t.String())\` is \`string | undefined\` — \`null\` ≠ \`undefined\`. For a nullable column use \`t.Optional(t.Union([t.String(), t.Null()]))\` in the response (or make the column \`.notNull()\`). A \`Date\` column against \`t.String()\` is fine.
 
 **Service** (\`${camel}.service.ts\`): Drizzle + logic; throw \`ApiErrors.*\`; \`catch (err: unknown)\` → \`getErrorMessage(err)\`; singleton export.
 
@@ -160,7 +165,7 @@ Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` o
 - **Use real fields**: Populate schemas and types with meaningful fields that match the resource's behavior (${feature.desc}). Avoid placeholder names like \`field1\`, \`data\`, or \`value\`.
 - **Implement real logic**: Write actual service methods that perform the described behaviour. No stubs, no empty functions.
 - **No \`as\` type casts**: Use proper types and inference. Cast-free code is a house rule.
-- **Validation**: Define appropriate Zod schemas with meaningful validation rules.
+- **Validation**: Define meaningful validation rules at each boundary — Elysia TypeBox (\`t.*\`) for the API request/response schemas, Zod only for UI form/runtime validation. Do not use Zod for API schemas.
 - **Type safety**: Ensure all functions have explicit parameter and return types.
 
 ---
@@ -174,6 +179,17 @@ Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` o
 - Other resources' files
 
 If you need to make a change elsewhere, the build has already locked it. Rebase this feature once it passes the gate.
+
+---
+
+## Do NOT run the gate yourself
+The harness runs the full gate (typecheck, lint, meta-rules, knip, tests) after your
+edits and hands you the exact errors. Do NOT run \`tsc\`, \`eslint\`, \`knip\`,
+\`bun run check\`/\`validate\`/\`typecheck\`, or \`scripts/stack-check.sh\` yourself —
+it wastes turns and tells you nothing the harness won't. Just edit; the gate report
+is your feedback. And NEVER use \`npx\` (or \`npm\`/\`yarn\`) — this stack is bun-only,
+and \`npx tsc\` resolves a WRONG package that prints "This is not the tsc command you
+are looking for". If you ever must run something, use the project's \`bun run <script>\`.
 
 ---
 

@@ -1,10 +1,32 @@
 import type { ErrorParser } from "../validate";
 import type { ProfileId } from "../config/profiles";
+import type { IGate } from "../gate/gate-runner";
+import type { MetaBaseline } from "../meta-rules";
 import {
   type RUN_STATUS,
   type STUCK_REASON,
   type SPEC_STATUS,
 } from "./loop.constants";
+
+/** An escalation rung in the steer ladder (not R0 or R5 — those are not "rungs" to be tried). */
+export type EscalationRung = "R1" | "R2" | "R3" | "R4";
+
+/** A structured, resumable handoff when all escalation rungs have been exhausted on a block. */
+export interface IHandoff {
+  /** The stable identity of the stuck block (fingerprint). */
+  block: string;
+  /** Ordered levers tried on the final block. */
+  rungHistory: EscalationRung[];
+  /** Persisting error keys/messages. */
+  errors: string[];
+  /** What a human / stronger model / more context is needed for. */
+  ask: string;
+  /** Always true: a handoff is always resumable. */
+  resumable: true;
+  /** Machine state to resume without re-firing the same levers. Either the tried levers
+   *  for the final block, or a ref to the checkpoint holding full ILoopState. */
+  resume: { triedLevers: EscalationRung[] } | { checkpointRef: string };
+}
 
 /** A progress event emitted as the loop runs, for live observability. */
 export interface ILoopEvent {
@@ -12,6 +34,7 @@ export interface ILoopEvent {
     | "start"
     | "red"
     | "cycle"
+    | "checkpoint"
     | "token"
     | "message"
     | "fix"
@@ -68,6 +91,8 @@ export interface ILoopEvent {
   passed?: boolean;
   /** For `stuck` events: a human-readable blocker diagnosis. */
   detail?: string;
+  /** For `stuck` events with a handoff: the structured handoff details. */
+  handoff?: IHandoff;
   file?: string;
   /** Files a tool MUTATED without the model hand-writing them — semantic ops
    *  (move/rename/organize) and scaffolds. Accounting-only: it tells the loop the
@@ -127,6 +152,8 @@ export interface IRunResult {
   /** When stuck: a human-readable blocker diagnosis (the persistent rule/file +
    *  last error) so an interactive session can hand back something actionable. */
   detail?: string;
+  /** When stuck with a handoff: the structured, resumable handoff details. */
+  handoff?: IHandoff;
   /** Edits/creates applied to editable files (measure edit churn). */
   edits?: number;
   /** Times an edit RAISED the gate error count (regressions). */
@@ -141,8 +168,13 @@ export interface IRunOptions {
   enableThinking?: boolean;
   /** Cap reasoning tokens per model call (vLLM `thinking_token_budget`). */
   thinkingTokenBudget?: number;
-  /** Hard backstop on model turns (default LOOP_LIMITS.maxTurns). */
+  /** Runaway crash-guard on model turns (default LOOP_LIMITS.runawayBackstopTurns).
+   *  Crossing it logs an anomaly and returns STUCK_REASON.cap with no handoff.
+   *  The PRIMARY terminal is ladder-exhaustion (R5 handoff), not this turn cap. */
   maxTurns?: number;
+  /** Heartbeat cadence: emit a checkpoint progress event every N turns without
+   *  terminating (default LOOP_LIMITS.checkpointIntervalTurns = 40). */
+  checkpointIntervalTurns?: number;
   /** Seed the run with a deterministic pre-edit scout bundle (caller blast-radius
    *  of the editable files). Opt-in; only fires on brownfield (existing-code) runs. */
   scout?: boolean;
@@ -155,6 +187,14 @@ export interface IRunOptions {
   requireRed?: boolean;
   /** Rule profile override (from a recipe); defaults to tsforge.config.json. */
   profile?: ProfileId;
+  /** The composed gate this run's loop checks each cycle. Defaults to a command
+   *  gate built from `task.accept` (brownfield behavior). Modes inject a richer
+   *  composed gate (command + differential + judge + …) so the escalation ladder
+   *  sees the REAL errors. */
+  gate?: IGate;
+  /** Pristine-scaffold meta-rule baseline subtracted from each cycle's violations,
+   *  so a run is graded only on meta violations it INTRODUCES. */
+  metaBaseline?: MetaBaseline;
 }
 
 export interface ISpecResult {

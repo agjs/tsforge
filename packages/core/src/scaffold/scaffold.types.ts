@@ -81,6 +81,12 @@ export interface IArchetypeProfile {
    *  checks, e.g. "bun run validate". For full-stack, one per app + a root drift
    *  check. */
   readonly gates: readonly { readonly cwd: string; readonly command: string }[];
+  /** Template-only paths to DELETE from the clone after scaffolding this archetype
+   *  (repo-relative). BoringStack ships its own docs site at `apps/docs`; a
+   *  scaffolded product must not carry — or gate against — the template's docs, so
+   *  the full-stack archetype strips it. Archetype-scoped on purpose: the `astro`
+   *  archetype's product IS `apps/docs`, so it strips nothing. */
+  readonly strip?: readonly string[];
   /** Scaffold-time boot command (full-stack only), e.g. "bash setup.sh --up". */
   readonly boot?: string;
   /** URLs to poll for readiness after boot (reuses scripts/boot-check pollUntilReady). */

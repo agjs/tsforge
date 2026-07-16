@@ -11,7 +11,7 @@
  * The deterministic gate loop + rule-docs cards + ast-grep polish then drive the
  * local model's output up to that bar — that's the uplift.
  */
-export interface IGate {
+export interface IGateSpec {
   /** The shell command run to verify (must exit 0). */
   command: string;
   /** A short human label for the banner. */

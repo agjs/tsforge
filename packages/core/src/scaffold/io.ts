@@ -1,4 +1,11 @@
-import { mkdir, readFile, writeFile, access, copyFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  access,
+  copyFile,
+  rm,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 import { runArgvCommand, type IShellRun } from "../lib/fs/process";
 import { pollUntilReady } from "../../scripts/boot-check";
@@ -18,6 +25,8 @@ export interface IScaffoldFs {
   readText(path: string): Promise<string>;
   writeText(path: string, content: string): Promise<void>;
   copy(from: string, to: string): Promise<void>;
+  /** Recursively delete a path; a no-op if it doesn't exist. */
+  remove(path: string): Promise<void>;
 }
 
 /** Poll a URL until it answers < 500, or time out. Matches `pollUntilReady`. */
@@ -46,6 +55,7 @@ export const realFs: IScaffoldFs = {
     await writeFile(path, content, "utf8");
   },
   copy: (from, to) => copyFile(from, to),
+  remove: (path) => rm(path, { recursive: true, force: true }),
 };
 
 export const realPoller: IReadyPoller = (url, timeoutMs) =>

@@ -123,15 +123,42 @@ export const EDIT_TOOL = {
   type: "function",
   function: {
     name: TOOL_NAME.edit,
-    description: "Replace an exact, unique snippet in an existing file.",
+    description:
+      "Replace text in an existing file. For one replacement, pass oldString/newString. " +
+      "For several replacements in the SAME file, pass edits: [{oldString,newString}, ...]; " +
+      "the batch is atomic and costs one tool call. Every oldString must identify one unique " +
+      "site, so include a few surrounding lines when the literal itself repeats.",
     parameters: {
       type: "object",
       properties: {
-        file: { type: "string" },
-        oldString: { type: "string" },
-        newString: { type: "string" },
+        file: { type: "string", description: "Workspace-relative file path." },
+        oldString: {
+          type: "string",
+          description: "Exact unique text for a single replacement.",
+        },
+        newString: {
+          type: "string",
+          description: "Replacement text for a single replacement.",
+        },
+        edits: {
+          type: "array",
+          description:
+            "Atomic multi-site replacements in this file. Use unique surrounding context for repeated literals.",
+          items: {
+            type: "object",
+            properties: {
+              oldString: { type: "string" },
+              newString: { type: "string" },
+            },
+            required: ["oldString", "newString"],
+          },
+        },
       },
-      required: ["file", "oldString", "newString"],
+      required: ["file"],
+      anyOf: [
+        { required: ["oldString", "newString"] },
+        { required: ["edits"] },
+      ],
     },
   },
 };

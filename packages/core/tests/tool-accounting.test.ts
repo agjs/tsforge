@@ -12,6 +12,7 @@ import {
 } from "../src/loop";
 import { TsService } from "../src/lsp";
 import { TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../src/agent";
+import { commandGate } from "../src/gate/gate-runner";
 
 // P1 (review): add_dependency rewrites package.json even in a narrow-scoped task
 // where it isn't in the editable globs. That sanctioned manifest change MUST still
@@ -47,7 +48,10 @@ function ctxFor(cwd: string, files: string[]): ILoopCtx {
     report: () => undefined,
     messages: [],
     tool: {},
-    gate: { parse: undefined },
+    gate: {
+      parse: undefined,
+      runner: commandGate({ id: "t", accept: "true", files }, undefined),
+    },
   };
 }
 
@@ -213,14 +217,18 @@ test("a move_file re-gates even though it is not an edit/create", async () => {
       'import type { IThing } from "./types";\nexport const f = (t: IThing): number => t.value;\n'
     );
 
+    const task = { id: "t", accept: "true", files: ["**/*"] };
     const ctx: ILoopCtx = {
-      task: { id: "t", accept: "true", files: ["**/*"] },
+      task,
       cwd: dir,
       tsService: new TsService(dir),
       report: () => undefined,
       messages: [],
       tool: {},
-      gate: { parse: undefined },
+      gate: {
+        parse: undefined,
+        runner: commandGate(task, undefined),
+      },
     };
     const state = freshState();
     const touched = await runToolCalls(
@@ -279,14 +287,22 @@ test("a rejected (out-of-scope) move_file does NOT re-gate (no false 'done')", a
       'import type { IThing } from "./types";\nexport const f = (t: IThing): number => t.value;\n'
     );
 
+    const task = {
+      id: "t",
+      accept: "true",
+      files: ["types.ts", "lib/types.ts"],
+    };
     const ctx: ILoopCtx = {
-      task: { id: "t", accept: "true", files: ["types.ts", "lib/types.ts"] },
+      task,
       cwd: dir,
       tsService: new TsService(dir),
       report: () => undefined,
       messages: [],
       tool: {},
-      gate: { parse: undefined },
+      gate: {
+        parse: undefined,
+        runner: commandGate(task, undefined),
+      },
     };
     const state = freshState();
     const touched = await runToolCalls(
@@ -455,8 +471,9 @@ function collectingCtx(
   files: string[]
 ): { ctx: ILoopCtx; events: ILoopEvent[] } {
   const events: ILoopEvent[] = [];
+  const task = { id: "t", accept: "true", files };
   const ctx: ILoopCtx = {
-    task: { id: "t", accept: "true", files },
+    task,
     cwd,
     tsService: null,
     report: (e) => {
@@ -464,7 +481,10 @@ function collectingCtx(
     },
     messages: [],
     tool: {},
-    gate: { parse: undefined },
+    gate: {
+      parse: undefined,
+      runner: commandGate(task, undefined),
+    },
   };
 
   return { ctx, events };

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Exec } from "../src/loop/boringstack/exec";
 import {
   boringstackDeps,
+  describeBaseline,
   rescueFileFor,
   runBoringstackBuild,
   scopeFor,
@@ -26,12 +27,27 @@ function state() {
 function createHost() {
   const scopes: string[][] = [];
   const sent: string[] = [];
+  const gates: unknown[] = [];
+  const rescueTargets: string[] = [];
+  const metaBaselineCaptures = { count: 0 };
 
   return {
     scopes,
     sent,
+    gates,
+    rescueTargets,
+    metaBaselineCaptures,
     setScope: (g: string[]) => {
       scopes.push(g);
+    },
+    setGate: (g: unknown) => {
+      gates.push(g);
+    },
+    setExpertRescueTarget: (f: string) => {
+      rescueTargets.push(f);
+    },
+    captureMetaBaseline: () => {
+      metaBaselineCaptures.count += 1;
     },
     send: async (m: string) => {
       sent.push(m);
@@ -93,11 +109,14 @@ describe("boringstackDeps.implement", () => {
     expect(uiCalls[0]?.name).toBe("Invoice");
     expect(host.scopes.length).toBe(1);
     expect(host.scopes[0]).toContain("apps/api/src/api/invoice/**");
+    // The composed per-feature gate is injected into the session BEFORE the send —
+    // this is the whole unification: the real gate now runs INSIDE the loop.
+    expect(host.gates.length).toBe(1);
     expect(host.sent.length).toBe(1);
     expect(host.sent[0]).toContain("Invoice");
   });
 
-  test("auto-fixes both apps (prettier + eslint --fix) after the model writes", async () => {
+  test("syncs DB after generation but before sending to the model", async () => {
     const host = createHost();
     const execCalls: { argv: string[]; cwd: string }[] = [];
 
@@ -124,17 +143,28 @@ describe("boringstackDeps.implement", () => {
         .map((c) => c.cwd)
         .sort();
 
-    expect(forCmd("bun run format")).toEqual([
-      "/repo/apps/api",
-      "/repo/apps/ui",
-    ]);
-    expect(forCmd("bun run lint:fix")).toEqual([
-      "/repo/apps/api",
-      "/repo/apps/ui",
-    ]);
-    // After the model's edits, the DB is re-synced so any domain columns the model
-    // added to its table actually persist before the gate runs.
+    // db:push is called to sync the STUB schema before the model gets the prompt
     expect(forCmd("bun run db:push -- --force")).toContain("/repo/apps/api");
+  });
+
+  test("a revisit tells the model which escalation approaches were already exhausted", async () => {
+    const host = createHost();
+    const deps = boringstackDeps({
+      host,
+      cwd: "/repo",
+      exec: createExec(),
+      evaluator: createEvaluator(),
+      generate: async () => undefined,
+      generateUi: async () => undefined,
+    });
+
+    await deps.implement(feature("Invoice"), state(), {
+      triedLevers: ["R1", "R2", "R3"],
+    });
+
+    expect(host.sent[0]).toContain("REVISIT");
+    expect(host.sent[0]).toContain("R1, R2, R3");
+    expect(host.sent[0]).toContain("materially different route");
   });
 
   test("freezes the entity's Drizzle schema INTO scope so the model can add real columns", async () => {
@@ -173,6 +203,31 @@ describe("boringstackDeps.implement", () => {
   });
 });
 
+describe("describeBaseline", () => {
+  test("a passing baseline is GREEN", () => {
+    const r = describeBaseline(true, 0);
+
+    expect(r.kind).toBe("tool");
+    expect(r.message).toContain("GREEN");
+  });
+
+  test("a RED baseline with parsed failures is surfaced as RED (excluded from grading)", () => {
+    const r = describeBaseline(false, 3);
+
+    expect(r.kind).toBe("stuck");
+    expect(r.message).toContain("RED");
+    expect(r.message).toContain("3");
+  });
+
+  test("a RED baseline with ZERO parsed signatures is NEVER reported GREEN (the silent-green bug)", () => {
+    const r = describeBaseline(false, 0);
+
+    expect(r.kind).toBe("stuck");
+    expect(r.message).not.toContain("GREEN");
+    expect(r.message).toContain("did NOT parse");
+  });
+});
+
 describe("scopeFor", () => {
   test("includes the resource dir, tests, UI feature, app schema, AND locale files", () => {
     const scope = scopeFor("Invoice");
@@ -184,126 +239,6 @@ describe("scopeFor", () => {
     // (columns) and the i18n locales (every UI string is a key that must exist).
     expect(scope).toContain(APP_SCHEMA_FILE);
     expect(scope).toContain(LOCALE_GLOB);
-  });
-});
-
-describe("boringstackDeps.evaluate", () => {
-  test("returns passed verdict when gate passes", async () => {
-    const host = createHost();
-    const exec = createExec(0);
-    const evaluator = createEvaluator();
-
-    const generate = async () => {};
-
-    const deps = boringstackDeps({
-      host,
-      cwd: "/repo",
-      exec,
-      evaluator,
-      generate,
-    });
-
-    const verdict = await deps.evaluate(feature("Invoice"), state());
-
-    expect(verdict.passed).toBe(true);
-  });
-
-  test("returns failed verdict when gate fails", async () => {
-    const host = createHost();
-    const exec = createExec(1);
-    const evaluator = createEvaluator();
-
-    const generate = async () => {};
-
-    const deps = boringstackDeps({
-      host,
-      cwd: "/repo",
-      exec,
-      evaluator,
-      generate,
-    });
-
-    const verdict = await deps.evaluate(feature("Invoice"), state());
-
-    expect(verdict.passed).toBe(false);
-    expect(verdict.stage).toBe("gate");
-  });
-
-  test("differential gate PASSES when a red gate has only baseline failures", async () => {
-    const host = createHost();
-    // Gate exits non-zero but the only failure is a pre-existing baseline one.
-    const exec: Exec = async () => ({
-      code: 1,
-      stdout: "(fail) validateEnv > rejects placeholder domain\n 1 fail\n",
-      stderr: "",
-    });
-
-    const deps = boringstackDeps({
-      host,
-      cwd: "/repo",
-      exec,
-      evaluator: createEvaluator(),
-      generate: async () => undefined,
-      baseline: new Set(["(fail) validateEnv > rejects placeholder domain"]),
-    });
-
-    const verdict = await deps.evaluate(feature("Invoice"), state());
-
-    expect(verdict.passed).toBe(true);
-  });
-
-  test("differential gate FAILS when the feature introduces a NEW failure", async () => {
-    const host = createHost();
-    const exec: Exec = async () => ({
-      code: 1,
-      stdout:
-        "(fail) validateEnv > rejects placeholder domain\n" +
-        "(fail) invoice service > creates an invoice\n 2 fail\n",
-      stderr: "",
-    });
-
-    const deps = boringstackDeps({
-      host,
-      cwd: "/repo",
-      exec,
-      evaluator: createEvaluator(),
-      generate: async () => undefined,
-      baseline: new Set(["(fail) validateEnv > rejects placeholder domain"]),
-    });
-
-    const verdict = await deps.evaluate(feature("Invoice"), state());
-
-    expect(verdict.passed).toBe(false);
-    expect(verdict.stage).toBe("gate");
-    // The full novel-failure list is in `detail` (fed to the model's next attempt);
-    // the baseline failure must NOT appear — the model can't touch it.
-    expect(verdict.detail ?? "").toContain("invoice service");
-    expect(verdict.detail ?? "").not.toContain("validateEnv");
-  });
-});
-
-describe("boringstackDeps.rescue", () => {
-  test("is a no-op (false) when expert rescue is not enabled", async () => {
-    // TSFORGE_EXPERT_RESCUE unset → resolveExpertAsk returns null → rescue can't run,
-    // so the feature parks exactly as before (fully backward compatible).
-    delete process.env.TSFORGE_EXPERT_RESCUE;
-
-    const deps = boringstackDeps({
-      host: createHost(),
-      cwd: "/repo",
-      exec: createExec(1),
-      evaluator: createEvaluator(),
-      generate: async () => undefined,
-    });
-
-    const f = {
-      ...feature("Invoice"),
-      lastError:
-        "apps/api/src/api/invoice/invoice.service.ts(3,1): error TS2304",
-    };
-
-    expect(typeof deps.rescue).toBe("function");
-    expect(await deps.rescue?.(f, state())).toBe(false);
   });
 });
 
@@ -457,6 +392,10 @@ describe("runBoringstackBuild", () => {
       // Check that the refine prompt contains the slice's entity description
       expect(host.sent[0]).toContain("Invoice");
       expect(host.sent[0]).toContain("A billable unit");
+      // The pristine meta-baseline was captured exactly once, before feature work.
+      expect(host.metaBaselineCaptures.count).toBe(1);
+      // The per-feature expert rescue target was set (Invoice's service file).
+      expect(host.rescueTargets.length).toBeGreaterThan(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -7,15 +7,12 @@ export {
   renderProgress,
   greenfieldDir,
 } from "./state";
-export { evaluateFeature } from "./evaluate";
-export type { IEvaluateDeps, IGateOutcome, IJudgeOutcome } from "./evaluate";
 export { planFeatures, parsePlan } from "./plan";
 export type { IPlan } from "./plan";
 export { judgeFeature, parseFeatureVerdict } from "./judge";
-export type { IFeatureJudgeInput } from "./judge";
+export type { IFeatureJudgeInput, IGateOutcome, IJudgeOutcome } from "./judge";
 export type {
   IFeature,
-  IFeatureVerdict,
   IGreenfieldState,
   IGreenfieldResult,
   IGreenfieldDeps,

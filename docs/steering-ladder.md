@@ -20,6 +20,8 @@ the model converges — never discarding progress on a wall it could climb with 
 Same trip signals as today (a (file,rule) persisting; whole-set unchanged; no net progress),
 but each trip **escalates a steer and continues** rather than terminating. A `steerLevel` in
 loop state rises; counters reset after each steer so the model gets fresh cycles at the new level.
+The ladder is unified — it runs inside `settleGate` in `loop/turn.ts` and fires for every build mode
+(boringstack, greenfield, core) via the shared escalation ladder, not per-mode band-aids.
 
 - **Rung 1 — surgical re-anchor.** "This isn't working. STOP rewriting the file. Here is its
   CURRENT content; make a targeted edit to ONLY the flagged line(s)." Enforced by:

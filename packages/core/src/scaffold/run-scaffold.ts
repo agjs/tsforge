@@ -108,6 +108,14 @@ export async function runScaffold(
 
   assertValid(plan);
 
+  const profile = manifest.archetypes[answers.archetype];
+
+  // Strip template-only paths (e.g. BoringStack's own `apps/docs`) BEFORE configure,
+  // so a scaffolded product neither ships nor gates against the template's docs —
+  // and the removed files are never installed/built. Archetype-scoped, so the astro
+  // archetype (whose product IS apps/docs) strips nothing.
+  await stripTemplatePaths(deps.fs, dest, profile.strip ?? []);
+
   await writeRecord(deps.fs, dest, {
     source: bootstrap.repo,
     ref: bootstrap.defaultRef,
@@ -117,8 +125,6 @@ export async function runScaffold(
   });
 
   const configured = await applyScaffold(dest, manifest, plan, deps);
-
-  const profile = manifest.archetypes[answers.archetype];
   const gateCwd =
     profile.subPath === undefined ? dest : `${dest}/${profile.subPath}`;
 
@@ -158,6 +164,27 @@ async function maybeBoot(
       ? {}
       : { timeoutMs: deps.boot.timeoutMs }),
   });
+}
+
+/** Delete the archetype's template-only paths from the clone. Each is repo-relative
+ *  and must stay INSIDE `dest` — an absolute or `..`-escaping entry is refused so a
+ *  malformed manifest can never delete outside the scaffold. */
+async function stripTemplatePaths(
+  fs: IScaffoldFs,
+  dest: string,
+  paths: readonly string[]
+): Promise<void> {
+  for (const rel of paths) {
+    if (
+      rel.length === 0 ||
+      rel.startsWith("/") ||
+      rel.split("/").includes("..")
+    ) {
+      throw new Error(`scaffold: refusing to strip unsafe path "${rel}"`);
+    }
+
+    await fs.remove(`${dest}/${rel}`);
+  }
 }
 
 async function writeRecord(

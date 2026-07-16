@@ -39,6 +39,11 @@ function memFs(seed: Record<string, string> = {}): {
 
       return Promise.resolve();
     },
+    remove: (p) => {
+      store.delete(p);
+
+      return Promise.resolve();
+    },
   };
 
   return { fs, store };

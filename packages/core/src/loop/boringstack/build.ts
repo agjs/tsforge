@@ -7,27 +7,17 @@ import type {
   IGreenfieldResult,
   IGreenfieldOptions,
 } from "../greenfield/greenfield.types";
-import { evaluateFeature } from "../greenfield/evaluate";
-import type {
-  IEvaluateDeps,
-  IGateOutcome,
-  IJudgeOutcome,
-} from "../greenfield/evaluate";
-import { judgeFeature } from "../greenfield/judge";
 import type { IProvider } from "../../inference";
+import type { IGate } from "../../gate/gate-runner";
 import type { Exec } from "./exec";
 import { generateResource, generateFeature } from "./generate";
 import { runBoringstackGate } from "./gate";
-import { extractFailures, novelFailures } from "./extract-failures";
-import { verifyFeatureReachable } from "./reachability";
-import {
-  resolveExpertAsk,
-  resolveStuckFile,
-  runExpertHandoff,
-} from "../expert-handoff";
+import { extractFailures } from "./extract-failures";
+import { resolveStuckFile } from "../expert-handoff";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield } from "../greenfield/run";
-import type { Reporter } from "../loop.types";
+import { composeBoringstackGate } from "./gate-stages";
+import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 import { slicesToFeatures } from "./plan-resources";
 import { toCamelCase } from "./case";
 import { loadApprovedPlan } from "../planning/plan-store";
@@ -39,7 +29,7 @@ import type { ISlice } from "../planning/plan-types";
  *  Neither changes logic, so neither should ever cost the model a gate attempt — a
  *  dev gets both on save. Best-effort: a missing script or non-zero exit is ignored;
  *  the gate stays the source of truth. */
-async function autofixApps(cwd: string, exec: Exec): Promise<void> {
+export async function autofixApps(cwd: string, exec: Exec): Promise<void> {
   for (const app of ["apps/api", "apps/ui"]) {
     const appCwd = join(cwd, app);
 
@@ -114,7 +104,10 @@ export function scopeFor(name: string): string[] {
  * Concatenates TypeScript files from both the API resource and UI feature directories,
  * capped at ~16000 characters. Returns empty string if directories don't exist.
  */
-async function readResourceCode(cwd: string, name: string): Promise<string> {
+export async function readResourceCode(
+  cwd: string,
+  name: string
+): Promise<string> {
   const camel = toCamelCase(name);
   const blocks: string[] = [];
   const maxChars = 16000;
@@ -184,13 +177,32 @@ async function readResourceCode(cwd: string, name: string): Promise<string> {
  */
 interface IBoringstackHost {
   setScope(globs: string[]): void;
-  send(message: string): Promise<{ status: string; turns: number }>;
+  setGate(gate: IGate): void;
+  setExpertRescueTarget(file: string): void;
+  captureMetaBaseline(): void;
+  send(
+    message: string
+  ): Promise<{ status: string; turns: number; handoff?: IHandoff }>;
+}
+
+function revisitGuidance(seed?: { triedLevers: EscalationRung[] }): string {
+  if (seed === undefined || seed.triedLevers.length === 0) {
+    return "";
+  }
+
+  return (
+    "\n\nREVISIT: the previous drive exhausted these approaches: " +
+    `${seed.triedLevers.join(", ")}. The convergence state is fresh now; inspect ` +
+    "the current gate failure and take a materially different route instead of " +
+    "repeating those approaches."
+  );
 }
 
 /**
- * Create the greenfield dependencies for the BoringStack build, composing Tasks 1-5.
- * - `implement` generates the resource, freezes the scope, and sends the refine prompt.
- * - `evaluate` runs the layered evaluator (gate → browser → judge).
+ * Create the greenfield dependencies for the BoringStack build, composing Tasks 1-6.
+ * - `implement` generates the resource, freezes the scope, injects the live composed
+ *   gate, and sends the refine prompt. The escalation ladder runs INSIDE settleGate
+ *   in the session; implement returns {done} or {done:false,handoff} accordingly.
  */
 export function boringstackDeps(opts: {
   host: IBoringstackHost;
@@ -224,184 +236,76 @@ export function boringstackDeps(opts: {
   return {
     async implement(
       feature: IFeature,
-      _state: IGreenfieldState
-    ): Promise<void> {
-      // Generate the FULL vertical slice: API resource (Drizzle+Elysia) then the
-      // UI feature. generateFeature runs `generate:api`, syncing the UI's typed
-      // OpenAPI client — without this the root drift check ("OpenAPI drift") fails.
+      _state: IGreenfieldState,
+      seed?: { triedLevers: EscalationRung[] }
+    ): Promise<{ done: boolean; handoff?: IHandoff }> {
+      // Pre-step: generate the full vertical slice + sync the STUB schema. The
+      // model then fills the domain INSIDE the loop, checked by the live gate.
       await generate(cwd, feature.id, exec);
       await genUi(cwd, feature.id, exec);
-
-      // Freeze the scope to this resource's files
       host.setScope(scopeFor(feature.id));
-
-      // Task 5: Send the refined prompt to the model
-      // If building from a plan, include the plan slice for rich context
-      const slice = sliceFor?.(feature.id);
-      const prompt = refinePrompt(feature, slice);
-
-      await host.send(prompt);
-
-      // Apply BoringStack's deterministic auto-fixes (prettier + eslint --fix) to
-      // the model's edits BEFORE the gate. These classes are 100% auto-fixable and
-      // shouldn't cost the model an attempt — a dev gets them on save. Only genuine
-      // (non-auto-fixable) violations reach the gate as feedback.
-      await autofixApps(cwd, exec);
-
-      // The model may have just added domain columns to its table. Sync them to the
-      // DB so the gate — and the running API the gate's OpenAPI check hits — see the
-      // real schema. (`generate` only db:pushes the STUB schema, before these edits.)
-      // Best-effort: a broken schema edit surfaces as a typecheck failure at the
-      // gate, so a non-zero db:push here must not abort the attempt.
+      // The editable file the expert repairs if a stall's errors are all out of
+      // scope (locked consumers of this feature's types) — its service file.
+      host.setExpertRescueTarget((await rescueFileFor(cwd, feature)) ?? "");
       await exec(["bun", "run", "db:push", "--", "--force"], {
         cwd: join(cwd, "apps/api"),
       });
-    },
 
-    async evaluate(feature: IFeature) {
-      const evaluateDeps: IEvaluateDeps = {
-        // Task 3: Run the deterministic gate — DIFFERENTIAL against the baseline.
-        // A truly-green gate passes outright. A red gate passes ONLY if every
-        // failure is a pre-existing baseline failure (the feature added nothing
-        // broken); otherwise it fails with ONLY the new failures as feedback, so
-        // the model never chases base-suite defects it's frozen out of.
-        async gate(): Promise<IGateOutcome> {
-          // A feature isn't "done" just because it COMPILES — it must be reachable
-          // and usable. After the build gate is green, require the static
-          // reachability check (route wired, API mounted, i18n keys present) too;
-          // otherwise a gate-green feature can still be a dead page (the class of
-          // bugs found live: unreachable route, raw i18n keys, unmounted API).
-          const passReachable = async (
-            output: string
-          ): Promise<IGateOutcome> => {
-            const reach = await verifyFeatureReachable(cwd, feature.id);
-
-            if (reach.ok) {
-              return { passed: true, output };
-            }
-
-            return {
-              passed: false,
-              output:
-                `The build gate is green, but "${feature.id}" is NOT reachable or ` +
-                `usable — a user could not get to it or it renders raw keys:\n- ` +
-                reach.problems.join("\n- "),
-            };
-          };
-
-          const result = await runBoringstackGate(cwd, exec);
-
-          if (result.passed) {
-            return await passReachable(result.output);
-          }
-
-          const current = extractFailures(result.output, cwd);
-          const novel = novelFailures(current, baseline);
-
-          // Pass-despite-red ONLY when we PARSED failures and every one is a
-          // baseline failure. An empty parse on a non-zero exit means we can't
-          // prove the redness is baseline-only (unrecognized output / a
-          // build-step crash) — stay failed and hand back the raw output.
-          if (current.size > 0 && novel.length === 0) {
-            return await passReachable(
-              `gate exit non-zero, but every failure is a pre-existing baseline ` +
-                `failure (${String(baseline.size)}) the feature cannot touch — no ` +
-                `new failures introduced.`
-            );
-          }
-
-          if (novel.length > 0) {
-            // Only mention baseline suppression when there's actually something
-            // hidden — a green baseline shouldn't print "0 baseline failures hidden".
-            const hidden =
-              baseline.size > 0
-                ? ` (${String(baseline.size)} pre-existing baseline failure(s) hidden)`
-                : "";
-
-            return {
-              passed: false,
-              output:
-                `NEW failures introduced by this feature` +
-                `${hidden}:\n${novel.join("\n")}`,
-            };
-          }
-
-          return { passed: false, output: result.output };
-        },
-
-        // Skip browser check (playwright not available in BoringStack)
-        async browser() {
-          return Promise.resolve({
-            ok: true,
-            errors: [],
-            skipped: true,
-          });
-        },
-
-        // Task 4: Judge the implementation quality
-        async judge(): Promise<IJudgeOutcome> {
-          const code = await readResourceCode(cwd, feature.id);
-
-          return await judgeFeature(evaluator, {
-            feature: feature.desc,
-            code,
-          });
-        },
-      };
-
-      return evaluateFeature(feature, evaluateDeps);
-    },
-
-    // Expert rescue: the rung above the per-attempt feedback loop. Before a stuck
-    // feature parks, hand its failing file + exact errors to the configured
-    // `capabilities.expert` model (a stronger model — the automated version of "a
-    // human steps in"). Opt-in via TSFORGE_EXPERT_RESCUE (the expert is typically a
-    // paid API); when off or unconfigured, `resolveExpertAsk` returns null and this
-    // is a no-op → the feature parks exactly as before.
-    async rescue(feature: IFeature): Promise<boolean> {
-      const ask = await resolveExpertAsk();
-
-      if (ask === null) {
-        return false;
-      }
-
-      const lastError = feature.lastError ?? "";
-
-      if (lastError.trim().length === 0) {
-        return false;
-      }
-
-      // Gate stuck → the file named in the errors; judge stuck → the service file.
-      const file = await rescueFileFor(cwd, feature);
-
-      if (file === null) {
-        return false;
-      }
-
-      const content = await Bun.file(join(cwd, file))
-        .text()
-        .catch(() => null);
-
-      if (content === null) {
-        return false;
-      }
-
-      const outcome = await runExpertHandoff(
-        cwd,
-        { file, content, error: lastError, goal: feature.desc },
-        ask
+      // Inject THIS feature's composed gate (differential command + reachability +
+      // judge). Now settleGate runs it every cycle and the shared ladder escalates
+      // on lint/judge/reachability failures — the whole point of the unification.
+      host.setGate(
+        composeBoringstackGate({ cwd, exec, evaluator, baseline, feature })
       );
 
-      if (!outcome.applied) {
-        return false;
-      }
+      const slice = sliceFor?.(feature.id);
+      const sent = await host.send(
+        refinePrompt(feature, slice) + revisitGuidance(seed)
+      );
 
-      // Re-apply the deterministic auto-fixes over the expert's file before the
-      // final re-evaluation, same as an ordinary attempt.
-      await autofixApps(cwd, exec);
-
-      return true;
+      return {
+        done: sent.status === "done",
+        ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
+      };
     },
+  };
+}
+
+/**
+ * Report the pristine-scaffold baseline. Keys off `passed`, NOT `size`: a RED
+ * baseline whose output did not parse into any known failure signatures (size 0)
+ * must NOT be announced GREEN — that both lies and hides that the differential gate
+ * can suppress NOTHING (every failure counts as novel), so the model would inherit
+ * pre-existing scaffold failures with no protection. Exported for unit testing.
+ */
+export function describeBaseline(
+  passed: boolean,
+  size: number
+): { kind: "tool" | "stuck"; message: string } {
+  if (passed) {
+    return {
+      kind: "tool",
+      message:
+        "baseline scaffold is GREEN — features graded against a clean gate.",
+    };
+  }
+
+  if (size > 0) {
+    return {
+      kind: "stuck",
+      message:
+        `⚠ baseline scaffold is RED: ${String(size)} pre-existing gate failure(s) ` +
+        `EXCLUDED from feature grading (differential gate). The app won't be fully ` +
+        `green until the scaffold baseline is fixed.`,
+    };
+  }
+
+  return {
+    kind: "stuck",
+    message:
+      "⚠ baseline scaffold is RED but its output did NOT parse into known failure " +
+      "signatures — the differential gate CANNOT suppress these, so every feature " +
+      "will inherit them. Fix the scaffold's own gate first.",
   };
 }
 
@@ -458,16 +362,18 @@ export async function runBoringstackBuild(opts: {
     ? new Set<string>()
     : extractFailures(baseRun.output, cwd);
 
+  const report = describeBaseline(baseRun.passed, baseline.size);
+
   onEvent?.({
-    kind: baseline.size > 0 ? "stuck" : "tool",
+    kind: report.kind,
     task: "boringstack",
-    message:
-      baseline.size > 0
-        ? `⚠ baseline scaffold is RED: ${String(baseline.size)} pre-existing gate ` +
-          `failure(s) EXCLUDED from feature grading (differential gate). The app ` +
-          `won't be fully green until the scaffold baseline is fixed.`
-        : "baseline scaffold is GREEN — features graded against a clean gate.",
+    message: report.message,
   });
+
+  // Capture the PRISTINE meta-rule baseline too (workflow perms, lockfile, etc. that
+  // the model is frozen out of). The command baseline above only covers the command
+  // gate; meta violations are subtracted separately, via the session, every cycle.
+  host.captureMetaBaseline();
 
   // Create a lookup function that maps feature ids to their plan slices
   const sliceFor = (id: string): ISlice | undefined =>
@@ -480,7 +386,7 @@ export async function runBoringstackBuild(opts: {
     optsGreenfield.onEvent = onEvent;
   }
 
-  return runGreenfield(
+  const result = await runGreenfield(
     cwd,
     state,
     boringstackDeps({
@@ -495,4 +401,32 @@ export async function runBoringstackBuild(opts: {
     }),
     optsGreenfield
   );
+
+  // Final acceptance: the per-cycle loop uses the FAST gate (check + tests, no build/
+  // size/coverage) for speed. When every feature has passed, run the FULL gate ONCE
+  // so the expensive acceptance-only checks (production build, size:check, full UI
+  // coverage, repo-root drift) still run — just once at the end, not every turn.
+  // Best-effort + LOUD: it reports issues for a human rather than silently flipping
+  // the verdict (a pre-existing scaffold size/build budget must not fail the feature).
+  if (result.status === "done") {
+    onEvent?.({
+      kind: "tool",
+      task: "boringstack",
+      message: "final acceptance: full validate + build + size checks…",
+    });
+
+    const full = await runBoringstackGate(cwd, exec, "full");
+
+    onEvent?.({
+      kind: full.passed ? "done" : "stuck",
+      task: "boringstack",
+      message: full.passed
+        ? "✓ final acceptance GREEN — full validate + build + size checks all pass."
+        : "⚠ features passed the fast gate, but the FULL acceptance gate (build / " +
+          "size / coverage / root drift) found issues — review before shipping:\n" +
+          full.output.slice(-1200),
+    });
+  }
+
+  return result;
 }

@@ -137,6 +137,21 @@ test("ruleHelp: curated AI-SDK rules surface a worked ✗/✓ example", () => {
   expect(h).toContain("maxTokens");
 });
 
+test("ruleHelp: knip/unused-files gets the delete/mirrored fix on the FIRST red gate", () => {
+  const h = ruleHelp([
+    {
+      key: "knip:unused-file:apps/api/src/api/note/note.service.test.ts",
+      rule: "knip/unused-files",
+      message: "unused file",
+    },
+  ]);
+
+  expect(h).toContain("knip/unused-files");
+  // The way out of the trap: delete the co-located test, use the mirrored tests/ path.
+  expect(h.toLowerCase()).toContain("delete");
+  expect(h).toContain("mirrored");
+});
+
 test("ruleHelp: implicit-any no-unsafe rule shows the validate-the-boundary fix", () => {
   const h = ruleHelp([
     {

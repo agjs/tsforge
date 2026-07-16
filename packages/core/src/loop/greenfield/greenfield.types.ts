@@ -1,5 +1,5 @@
 import type { IStep } from "../../browser";
-import type { Reporter } from "../loop.types";
+import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 
 /**
  * One feature in a greenfield build's checklist. The unit the outer loop drives:
@@ -24,6 +24,14 @@ export interface IFeature {
    *  into the NEXT attempt's implement prompt so the model fixes the actual errors
    *  instead of rebuilding blind. Cleared on a pass. */
   lastError?: string;
+  /** True when all escalation rungs have been exhausted on this feature and the
+   *  driver parked it for a later revisit pass. Transient during the build,
+   *  persisted for resumption. */
+  parked?: boolean;
+  /** The structured handoff from the escalation ladder (ladder exhaustion).
+   *  Includes the tried-lever history for seeding a revisit. Persisted with the
+   *  feature so a second pass can retry without repeating the same levers. */
+  handoff?: IHandoff;
 }
 
 /** A greenfield build's whole state: the one-line goal + the feature checklist. */
@@ -31,18 +39,6 @@ export interface IGreenfieldState {
   /** The one-line build goal (what the planner was asked to build). */
   goal: string;
   features: IFeature[];
-}
-
-/** The verdict for one feature after the layered evaluator runs. */
-export interface IFeatureVerdict {
-  passed: boolean;
-  /** One-line reason (the failing layer's message, or a success note). */
-  notes: string;
-  /** Which layer decided it (for progress.md). Omitted on a pass. */
-  stage?: "gate" | "browser" | "judge";
-  /** Fuller (capped) failing output — the actual gate/judge errors — for feeding
-   *  the next attempt so the model fixes real errors, not the one-line summary. */
-  detail?: string;
 }
 
 export interface IGreenfieldResult {
@@ -53,26 +49,24 @@ export interface IGreenfieldResult {
 }
 
 /**
- * The two model-/tool-driven steps the outer loop delegates, injected so the loop
- * itself is pure and testable. `implement` makes the model build one feature;
- * `evaluate` runs the layered evaluator (gate → browser → judge) for it.
+ * The single model-/tool-driven step the outer loop delegates, injected so the loop
+ * itself is pure and testable. `implement` builds the feature AND runs the gate loop
+ * (escalation ladder) internally; it returns whether it finished or parked.
  */
 export interface IGreenfieldDeps {
-  implement(feature: IFeature, state: IGreenfieldState): Promise<void>;
-  evaluate(
+  /** Implement one feature with the internal escalation ladder. Returns {done: true}
+   *  when the feature passes all gates and is ready to ship; {done: false, handoff}
+   *  when the ladder is exhausted and the feature is parked for later. The handoff
+   *  carries the try-lever history for a revisit pass to seed a different tack.
+   *  Optionally accepts seeded tried-lever state (from a prior handoff.resume) to
+   *  skip levers already tried in a revisit. */
+  implement(
     feature: IFeature,
-    state: IGreenfieldState
-  ): Promise<IFeatureVerdict>;
-  /** OPTIONAL last-resort escalation, tried ONCE before a feature parks as `stuck`:
-   *  hand the failing file + its exact errors to a stronger "expert" model (the rung
-   *  above the per-attempt feedback loop). Returns true when it applied a fix worth
-   *  a final re-evaluation. Unset = no escalation — the generic path parks as before,
-   *  so this is fully backward compatible. */
-  rescue?(feature: IFeature, state: IGreenfieldState): Promise<boolean>;
+    state: IGreenfieldState,
+    seed?: { triedLevers: EscalationRung[] }
+  ): Promise<{ done: boolean; handoff?: IHandoff }>;
 }
 
 export interface IGreenfieldOptions {
-  /** Give up on a feature after this many implement→evaluate cycles (default 3). */
-  maxAttemptsPerFeature?: number;
   onEvent?: Reporter;
 }

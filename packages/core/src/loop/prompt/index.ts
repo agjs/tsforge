@@ -4,9 +4,11 @@ export {
   COMPACT_SYSTEM,
   TDD_GUIDANCE,
   buildChatSystem,
+  buildDriveToGreenSystem,
   buildTddGuidance,
   buildSystemPrompt,
   seedPrompt,
+  type ExecutionMode,
 } from "./prompt";
 export { renderFileSection, exportedSymbols } from "./project-map";
 export { parseAtPaths, resolveAtMentions, composeMessage } from "./at-mention";

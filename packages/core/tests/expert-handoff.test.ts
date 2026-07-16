@@ -193,3 +193,90 @@ describe("resolveStuckFile (the v5 fix — expert can target file-less errors)",
     }
   });
 });
+
+describe("resolveStuckFile scope-safety (expert must not target locked files)", () => {
+  test("prefers an in-scope resolved file over an out-of-scope one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "stuck-"));
+
+    try {
+      await Bun.write(join(dir, "locked.ts"), "x\n");
+      await Bun.write(join(dir, "src/app.ts"), "y\n");
+
+      // Error names the locked file FIRST, then the editable one; scope wins.
+      const f = await resolveStuckFile(
+        dir,
+        [
+          { file: "locked.ts", message: "boom" },
+          { file: "src/app.ts", message: "boom2" },
+        ],
+        ["src/**"]
+      );
+
+      expect(f).toBe("src/app.ts");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns null when only out-of-scope files resolve and no fallback", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "stuck-"));
+
+    try {
+      await Bun.write(join(dir, "locked.ts"), "x\n");
+
+      const f = await resolveStuckFile(
+        dir,
+        [{ file: "locked.ts", message: "boom" }],
+        ["src/**"]
+      );
+
+      expect(f).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to the in-scope rescue target when only out-of-scope files resolve", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "stuck-"));
+
+    try {
+      await Bun.write(join(dir, "locked.ts"), "x\n");
+      await Bun.write(join(dir, "src/service.ts"), "y\n");
+
+      const f = await resolveStuckFile(
+        dir,
+        [{ file: "locked.ts", message: "boom" }],
+        ["src/**"],
+        "src/service.ts"
+      );
+
+      expect(f).toBe("src/service.ts");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runExpertHandoff scope guard", () => {
+  test("refuses to write a target outside the editable scope", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "expert-"));
+
+    try {
+      await Bun.write(join(dir, "locked.ts"), "original\n");
+      const ask: ExpertAsk = async () => "```ts\nexport const good = 1;\n```";
+
+      const out = await runExpertHandoff(
+        dir,
+        { file: "locked.ts", content: "x", error: "e", goal: "g" },
+        ask,
+        ["src/**"]
+      );
+
+      expect(out.applied).toBe(false);
+      // The locked file is untouched.
+      expect(await Bun.file(join(dir, "locked.ts")).text()).toBe("original\n");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

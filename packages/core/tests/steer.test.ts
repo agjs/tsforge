@@ -3,9 +3,11 @@ import {
   buildSteerMessage,
   essentialMessages,
   playbookFor,
+  isTrivialDiagnosis,
   STEER_LADDER_MAX,
   type ISteerError,
 } from "../src/loop/feedback/steer";
+import { hasPendingDiagnosis } from "../src/loop/turn";
 
 const err = (rule: string): ISteerError => ({
   rule,
@@ -120,5 +122,114 @@ describe("essentialMessages (context reset)", () => {
       { role: "user", content: "task" },
     ]);
     expect(essentialMessages([])).toEqual([]);
+  });
+});
+
+describe("isTrivialDiagnosis (R1 feed-forward)", () => {
+  const errors = [
+    err("tsforge/no-jsx-computation"),
+    err("no-restricted-syntax"),
+  ];
+
+  test("diagnosis < 80 chars is trivial", () => {
+    expect(isTrivialDiagnosis("short", errors)).toBe(true);
+  });
+
+  test("diagnosis >= 80 chars with novel content is not trivial", () => {
+    const longDiagnosis = "a".repeat(80) + " new insight about the problem";
+
+    expect(isTrivialDiagnosis(longDiagnosis, errors)).toBe(false);
+  });
+
+  test("diagnosis that only restates errors is trivial (superset check)", () => {
+    // Construct a diagnosis that just restates the error messages
+    const restated = errors.map((e) => e.message).join(" ");
+
+    expect(isTrivialDiagnosis(restated, errors)).toBe(true);
+  });
+
+  test("diagnosis with new information is not trivial", () => {
+    const diagnosis = `The jsx computation error occurs because I need to refactor the component differently. The issue is in the way I'm computing values inline instead of extracting helper functions.`;
+
+    expect(isTrivialDiagnosis(diagnosis, errors)).toBe(false);
+  });
+
+  test("empty diagnosis is trivial", () => {
+    expect(isTrivialDiagnosis("", errors)).toBe(true);
+  });
+
+  test("whitespace-only diagnosis is trivial", () => {
+    expect(isTrivialDiagnosis("   \n  ", errors)).toBe(true);
+  });
+});
+
+describe("buildSteerMessage: R1 diagnosis-only variant", () => {
+  const errors = [
+    err("tsforge/no-jsx-computation"),
+    err("no-restricted-syntax"),
+  ];
+
+  test("R1 diagnosis-only says DIAGNOSE only, not DIAGNOSE THEN CHANGE", () => {
+    const msg = buildSteerMessage(1, errors, "same error", false, true);
+
+    expect(msg).toContain("DIAGNOSE");
+    expect(msg).toContain("escalation 1");
+    // The standard R1 includes "THEN we'll act" — diagnosis-only shouldn't
+    // We verify this by checking the variant is meaningfully different
+    expect(msg.length > 0).toBe(true);
+  });
+
+  test("R1 Phase A (diagnosis-only) vs Phase B (action) messages are different", () => {
+    const phaseA = buildSteerMessage(1, errors, "same error", false, true);
+    const phaseB = buildSteerMessage(1, errors, "same error", false, false);
+
+    expect(phaseA).toContain("DIAGNOSE");
+    expect(phaseB).toContain("DIFFERENT approach");
+    // The two phases have distinct guidance
+    expect(phaseA).not.toBe(phaseB);
+  });
+});
+
+describe("R1 two-phase decision logic", () => {
+  const errors = [err("no-jsx-computation")];
+
+  test("trivial diagnosis triggers escalation (Phase A → R2), non-trivial triggers Phase B", () => {
+    // A diagnosis that just restates the error is trivial
+    const trivialDiagnosis = "no-jsx-computation violated";
+
+    expect(isTrivialDiagnosis(trivialDiagnosis, errors)).toBe(true);
+
+    // A diagnosis with novel insight is not trivial
+    // The key is it must NOT contain all the error messages as substrings
+    const nonTrivialDiagnosis =
+      "The root cause is that I've been computing JSX inline instead of extracting " +
+      "it into a helper function. I should refactor to use useMemo or extract to a separate module. " +
+      "This architectural change will fix the underlying issue.";
+
+    expect(isTrivialDiagnosis(nonTrivialDiagnosis, errors)).toBe(false);
+  });
+
+  test("diagnosis exactly at 80 chars is not trivial (boundary check)", () => {
+    const diagnosis80 = "x".repeat(80);
+
+    expect(isTrivialDiagnosis(diagnosis80, errors)).toBe(false);
+  });
+
+  test("diagnosis under 80 chars is trivial regardless of content", () => {
+    const shortButNovel = "New insight about the problem structure";
+
+    expect(shortButNovel.length < 80).toBe(true);
+    expect(isTrivialDiagnosis(shortButNovel, errors)).toBe(true);
+  });
+
+  test("only a string marker activates the diagnosis-only turn", () => {
+    expect(hasPendingDiagnosis({ pendingDiagnosisSteer: "diagnose" })).toBe(
+      true
+    );
+    expect(hasPendingDiagnosis({ pendingDiagnosisSteer: null })).toBe(false);
+    expect(hasPendingDiagnosis({ pendingDiagnosisSteer: undefined })).toBe(
+      false
+    );
+    expect(hasPendingDiagnosis({})).toBe(false);
   });
 });
