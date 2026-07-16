@@ -762,6 +762,12 @@ export async function main(): Promise<number> {
     return harnessReviewMode(raw.slice(1));
   }
 
+  if (raw[0] === "harness-diagnose") {
+    const { harnessDiagnoseMode } = await import("./cli/harness-diagnose-mode");
+
+    return harnessDiagnoseMode(raw.slice(1));
+  }
+
   const args = parseArgs(raw);
 
   // `--version`/`--help` print and exit — before this fix an unknown flag fell

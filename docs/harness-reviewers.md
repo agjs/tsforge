@@ -103,6 +103,27 @@ is **not** a CI gate — a GitHub runner cannot reach those. Enforcement is loca
   (via `apiKeyEnv` + GitHub secrets), skipping the local binaries. Not enabled here;
   it needs repo secrets set by the maintainer.
 
+## Diagnose a parked/failed build (`tsforge harness-diagnose`)
+
+The same panel can read a build's transcript and tell you WHY it parked, instead
+of only judging a code diff:
+
+```bash
+tsforge harness-diagnose <build-log.jsonl> [--domain X] [--reason "…"] [--max-chars N] [--tail N]
+```
+
+Flow: read the transcript → `sliceBuildLog` extracts a signal-first, budgeted
+slice (every `fix`/park + gate/error line + the last `--tail` events; whatever is
+dropped is **counted and reported** — never silent) → each reviewer gets a
+skeptical diagnosis contract asking for ONE JSON object
+`{ category, confidence, rootCause, suggestedFix }` where `category` is one of a
+fixed enum (`gate-parity`, `near-green-oscillation`, `scaffold-infra`,
+`wrong-idiom`, `scope-freeze`, `prompt-contradiction`, `other`) → deterministic
+`aggregateDiagnoses` picks the most-voted category (ties → the earlier/more
+structural one) and surfaces the agreeing reviewers' fixes. Errored reviewers are
+counted, never voted. Output + an artifact under `.tsforge/harness-diagnose/`.
+Advisory (always exit 0) — it informs a fix, it is not a gate.
+
 ## Independence invariant (the point)
 
 The builder reacts to findings and re-runs; it never emits a PASS. The verdict is the

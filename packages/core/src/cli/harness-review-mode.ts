@@ -75,7 +75,7 @@ function providerConfig(
   };
 }
 
-function makeProvider(entry: IModelEntry): IProvider {
+export function makeProvider(entry: IModelEntry): IProvider {
   return new OpenAICompatibleProvider(providerConfig(entry));
 }
 
