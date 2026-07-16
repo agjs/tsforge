@@ -50,7 +50,11 @@ import type { Reporter, ILoopEvent, IHandoff } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
 import { selectThinking, offeredToolsFor } from "./model-call";
-import { mineLessons, consolidate as consolidateMemory } from "./memory";
+import {
+  mineLessons,
+  consolidate as consolidateMemory,
+  type ICandidateLesson,
+} from "./memory";
 import {
   buildChatSystem,
   buildDriveToGreenSystem,
@@ -76,6 +80,14 @@ import {
   tryExpertRescue,
 } from "./turn";
 
+/** Signature of the memory-consolidation step, injectable for tests so they can
+ *  capture the per-build source id each send passes. */
+export type ConsolidateLessonsFn = (
+  cwd: string,
+  candidates: readonly ICandidateLesson[],
+  source: string
+) => Promise<number>;
+
 /**
  * A persistent, tool-using conversation against a working directory — the engine
  * behind the interactive CLI. Unlike `runTask` (one RED-first task driven to
@@ -99,6 +111,10 @@ export interface ISessionConfig {
   context?: string[];
   parse?: ErrorParser;
   report?: Reporter;
+  /** Test seam: override the memory-consolidation step (defaults to the real
+   *  cross-build learned-rule pipeline). Lets a test observe the stable per-build
+   *  source id passed on every send. */
+  consolidateLessons?: ConsolidateLessonsFn;
   temperature?: number;
   enableThinking?: boolean;
   thinkingTokenBudget?: number;
@@ -190,6 +206,20 @@ export interface ISendOptions {
 }
 
 const SESSION_ID = "session";
+
+/** ONE stable memory-source id for this whole PROCESS (= one build; the nightly
+ *  loop spawns a fresh headless-build process per domain, and all of a build's
+ *  features / revisit attempts / Sessions run inside it). Memory's recurrence
+ *  gate (MIN_HITS_TO_ACTIVATE) treats a distinct `source` as a distinct session,
+ *  so this MUST be stable across the build — a per-send/per-Session id makes a
+ *  lesson mined twice within ONE build look like a cross-session recurrence,
+ *  activate mid-build, and trap the model with notes about its own in-progress
+ *  code (the learned-rule self-poisoning bug). Cross-build learning still works:
+ *  a separate invocation is a new process with a new id, so a genuinely
+ *  recurring lesson still bumps hits and activates on the next build. The pid
+ *  disambiguates two builds started in the same millisecond (Date.now alone can
+ *  collide), so genuine cross-build recurrence is never misread as same-build. */
+export const MEMORY_RUN_ID = `${SESSION_ID}-${Date.now().toString(36)}-${process.pid.toString(36)}`;
 
 /** A gate-output sink that also carries `flush()` — call it when the stream
  *  ends to emit any trailing line the process printed without a newline. */
@@ -1943,8 +1973,8 @@ export class Session {
   private async consolidateLessons(): Promise<void> {
     try {
       const candidates = mineLessons(this.sendEvents);
-      const runId = `${SESSION_ID}-${Date.now().toString(36)}`;
-      const active = await consolidateMemory(this.ctx.cwd, candidates, runId);
+      const consolidate = this.cfg.consolidateLessons ?? consolidateMemory;
+      const active = await consolidate(this.ctx.cwd, candidates, MEMORY_RUN_ID);
 
       if (active > 0) {
         this.report({
