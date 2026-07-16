@@ -90,7 +90,10 @@ export function parse(argv: string[]): IArgs {
       out.reason = argv[i];
     } else if (a === "--builder") {
       i += 1;
-      out.builder = argv[i];
+      // A bare `--builder` with no value becomes "" (not undefined), so it hits
+      // the unknown-model hard error rather than silently taking the
+      // omitted-flag active-model fallback.
+      out.builder = argv[i] ?? "";
     } else if (a === "--max-chars") {
       i += 1;
       out.maxChars = posInt(argv[i], DEFAULT_MAX_CHARS);
@@ -122,26 +125,32 @@ function resolve(line: string): Record<string, unknown> | null {
 }
 
 export function deriveParkReason(raw: string): string {
-  const fixMsgs: string[] = [];
+  // Terminal failures come through as `fix` (feature parked) OR `stuck` (the run
+  // gave up) — consider both, or a stuck-terminated build reads as "unknown".
+  const msgs: string[] = [];
 
   for (const line of raw.split("\n")) {
     const rec = resolve(line);
     const kind = rec?.kind ?? rec?.type;
 
-    if (rec !== null && kind === "fix" && typeof rec.message === "string") {
-      fixMsgs.push(rec.message);
+    if (
+      rec !== null &&
+      (kind === "fix" || kind === "stuck") &&
+      typeof rec.message === "string"
+    ) {
+      msgs.push(rec.message);
     }
   }
 
-  for (let i = fixMsgs.length - 1; i >= 0; i -= 1) {
-    const m = fixMsgs[i];
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    const m = msgs[i];
 
-    if (m !== undefined && /park|exhaust|fail/iu.test(m)) {
+    if (m !== undefined && /park|exhaust|fail|stuck|gave up/iu.test(m)) {
       return m;
     }
   }
 
-  return fixMsgs.at(-1) ?? "unknown (no fix/park event found)";
+  return msgs.at(-1) ?? "unknown (no fix/stuck/park event found)";
 }
 
 /** The last observed turn/cycle number, as a short summary string. */
@@ -169,6 +178,12 @@ export function formatConsensus(c: IConsensus, identity: string): string {
     );
 
     return lines.join("\n");
+  }
+
+  if (!c.sufficient) {
+    lines.push(
+      `⚠ NOT AN INDEPENDENT VERDICT: only ${String(c.totalOk)} reviewer(s) succeeded (need ${String(c.minReviewers)}); treat the below as a single opinion, not a panel consensus.`
+    );
   }
 
   lines.push(
@@ -265,7 +280,7 @@ export async function harnessDiagnoseMode(
     sliceNote: slice.note,
   };
   const outcomes = await io.invoke(panel, request);
-  const consensus = aggregateDiagnoses(outcomes);
+  const consensus = aggregateDiagnoses(outcomes, panel.minReviewers);
 
   process.stdout.write(`${formatConsensus(consensus, identity)}\n`);
 

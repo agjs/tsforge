@@ -1,6 +1,10 @@
 import { extractJson } from "../lib/json/json";
 import type { IPanel, ResolvedReviewer } from "./registry";
-import { REVIEWER_CONCURRENCY, type IInvokeDeps } from "./invoke";
+import {
+  REVIEWER_CONCURRENCY,
+  extractBinaryJson,
+  type IInvokeDeps,
+} from "./invoke";
 import {
   parseDiagnosis,
   renderDiagnosePrompt,
@@ -80,7 +84,14 @@ async function invokeBinary(
       };
     }
 
-    return diagFrom(reviewer.id, res.stdout);
+    // Honor the configured parse mode, exactly like the review path: json-fence
+    // extracts the LAST ```json block; raw uses stdout as-is.
+    const payload =
+      reviewer.parse === "json-fence"
+        ? extractBinaryJson(res.stdout)
+        : res.stdout;
+
+    return diagFrom(reviewer.id, payload);
   } catch (err) {
     return {
       status: "errored",
@@ -139,6 +150,12 @@ export interface IConsensus {
   agreement: number; // how many reviewers picked the consensus category
   totalOk: number; // successful reviewers
   totalErrored: number;
+  /** True only when enough INDEPENDENT reviewers succeeded (totalOk >=
+   *  minReviewers). When false, the "consensus" is one or two opinions — the
+   *  panel collapsed to a non-independent view and the reader must not trust it
+   *  as a panel verdict. */
+  sufficient: boolean;
+  minReviewers: number;
   votes: IConsensusVote[];
   suggestedFixes: string[]; // distinct fixes from reviewers who voted the consensus
 }
@@ -146,8 +163,12 @@ export interface IConsensus {
 /** Fuse diagnoses into a consensus: the most-voted category wins (ties broken by
  *  FAILURE_CATEGORIES order — most-structural first), and we surface the fixes
  *  proposed by the reviewers who agreed on it. Errored reviewers are counted but
- *  never vote. */
-export function aggregateDiagnoses(outcomes: DiagOutcome[]): IConsensus {
+ *  never vote. `minReviewers` gates independence: below it, `sufficient` is false
+ *  so a panel silently reduced to a single opinion can't masquerade as a verdict. */
+export function aggregateDiagnoses(
+  outcomes: DiagOutcome[],
+  minReviewers: number
+): IConsensus {
   const votes: IConsensusVote[] = [];
   let errored = 0;
 
@@ -165,12 +186,16 @@ export function aggregateDiagnoses(outcomes: DiagOutcome[]): IConsensus {
     }
   }
 
+  const sufficient = votes.length >= minReviewers;
+
   if (votes.length === 0) {
     return {
       category: null,
       agreement: 0,
       totalOk: 0,
       totalErrored: errored,
+      sufficient,
+      minReviewers,
       votes: [],
       suggestedFixes: [],
     };
@@ -207,6 +232,8 @@ export function aggregateDiagnoses(outcomes: DiagOutcome[]): IConsensus {
     agreement: bestCount,
     totalOk: votes.length,
     totalErrored: errored,
+    sufficient,
+    minReviewers,
     votes,
     suggestedFixes,
   };

@@ -58,7 +58,7 @@ async function invokeModel(
 
 /** For `json-fence`, extract the last ```json block; for `raw`, use stdout as-is.
  *  Both then flow through the same JSON+schema guard, so a fence miss → errored. */
-function extractBinaryJson(stdout: string): string {
+export function extractBinaryJson(stdout: string): string {
   const matches = [...stdout.matchAll(/```json\s*([\s\S]*?)```/gu)];
   const last = matches.at(-1);
 

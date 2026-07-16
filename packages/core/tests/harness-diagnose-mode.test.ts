@@ -62,7 +62,19 @@ describe("deriveParkReason", () => {
     expect(deriveParkReason(raw)).toContain("parked");
   });
 
-  test("falls back to a generic label when there is no fix event", () => {
+  test("uses a `stuck` terminal event when there is no fix event", () => {
+    const raw = jsonl([
+      { kind: "cycle", cycle: 5 },
+      {
+        kind: "stuck",
+        message: "no progress — gave up after ladder exhausted",
+      },
+    ]);
+
+    expect(deriveParkReason(raw)).toContain("gave up");
+  });
+
+  test("falls back to a generic label when there is no fix/stuck event", () => {
     expect(deriveParkReason(jsonl([{ kind: "cycle", cycle: 1 }]))).toContain(
       "unknown"
     );
@@ -98,6 +110,8 @@ describe("formatConsensus", () => {
     agreement: 2,
     totalOk: 3,
     totalErrored: 1,
+    sufficient: true,
+    minReviewers: 2,
     votes: [
       {
         reviewerId: "glm",
@@ -126,6 +140,8 @@ describe("formatConsensus", () => {
         agreement: 0,
         totalOk: 0,
         totalErrored: 2,
+        sufficient: false,
+        minReviewers: 2,
         votes: [],
         suggestedFixes: [],
       },
@@ -218,7 +234,8 @@ describe("harnessDiagnoseMode (orchestration, injected IO)", () => {
 
     expect(parsed).toMatchObject({
       identity: "builder-x/flash",
-      consensus: { category: "gate-parity" },
+      // 1 successful reviewer but minReviewers:2 → reported yet flagged non-independent
+      consensus: { category: "gate-parity", sufficient: false },
     });
   });
 

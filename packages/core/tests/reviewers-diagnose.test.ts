@@ -32,11 +32,14 @@ function err(reviewerId: string): DiagOutcome {
 
 describe("aggregateDiagnoses", () => {
   test("majority category wins; agreement counts the agreeing reviewers", () => {
-    const c = aggregateDiagnoses([
-      ok("a", "gate-parity"),
-      ok("b", "gate-parity"),
-      ok("c", "near-green-oscillation"),
-    ]);
+    const c = aggregateDiagnoses(
+      [
+        ok("a", "gate-parity"),
+        ok("b", "gate-parity"),
+        ok("c", "near-green-oscillation"),
+      ],
+      2
+    );
 
     expect(c.category).toBe("gate-parity");
     expect(c.agreement).toBe(2);
@@ -44,7 +47,10 @@ describe("aggregateDiagnoses", () => {
   });
 
   test("errored reviewers are counted but never vote", () => {
-    const c = aggregateDiagnoses([ok("a", "wrong-idiom"), err("b"), err("c")]);
+    const c = aggregateDiagnoses(
+      [ok("a", "wrong-idiom"), err("b"), err("c")],
+      1
+    );
 
     expect(c.category).toBe("wrong-idiom");
     expect(c.totalOk).toBe(1);
@@ -53,7 +59,7 @@ describe("aggregateDiagnoses", () => {
   });
 
   test("no successful reviewer → null consensus, no crash", () => {
-    const c = aggregateDiagnoses([err("a"), err("b")]);
+    const c = aggregateDiagnoses([err("a"), err("b")], 2);
 
     expect(c.category).toBeNull();
     expect(c.totalOk).toBe(0);
@@ -62,22 +68,40 @@ describe("aggregateDiagnoses", () => {
 
   test("a tie resolves to the earlier (more structural) category", () => {
     // gate-parity precedes near-green-oscillation in FAILURE_CATEGORIES.
-    const c = aggregateDiagnoses([
-      ok("a", "near-green-oscillation"),
-      ok("b", "gate-parity"),
-    ]);
+    const c = aggregateDiagnoses(
+      [ok("a", "near-green-oscillation"), ok("b", "gate-parity")],
+      2
+    );
 
     expect(c.category).toBe("gate-parity");
     expect(c.agreement).toBe(1);
   });
 
+  test("sufficient is false when fewer than minReviewers succeeded", () => {
+    const thin = aggregateDiagnoses([ok("a", "gate-parity"), err("b")], 2);
+
+    expect(thin.category).toBe("gate-parity"); // still reported
+    expect(thin.sufficient).toBe(false); // but flagged as not an independent verdict
+    expect(thin.minReviewers).toBe(2);
+
+    const full = aggregateDiagnoses(
+      [ok("a", "gate-parity"), ok("b", "gate-parity")],
+      2
+    );
+
+    expect(full.sufficient).toBe(true);
+  });
+
   test("suggestedFixes are the distinct fixes from the consensus voters only", () => {
-    const c = aggregateDiagnoses([
-      ok("a", "gate-parity", "make gates identical"),
-      ok("b", "gate-parity", "make gates identical"),
-      ok("c", "gate-parity", "run prettier at write time"),
-      ok("d", "scaffold-infra", "irrelevant fix"),
-    ]);
+    const c = aggregateDiagnoses(
+      [
+        ok("a", "gate-parity", "make gates identical"),
+        ok("b", "gate-parity", "make gates identical"),
+        ok("c", "gate-parity", "run prettier at write time"),
+        ok("d", "scaffold-infra", "irrelevant fix"),
+      ],
+      2
+    );
 
     expect(c.category).toBe("gate-parity");
     expect(c.suggestedFixes).toHaveLength(2);
