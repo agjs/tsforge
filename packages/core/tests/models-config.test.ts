@@ -285,6 +285,28 @@ test("capabilities: parse validates known keys + real entry targets, round-trips
   ).toThrow(/capability "vision" must name a model/);
 });
 
+test("capabilities: every CAPABILITY_NAMES key (incl. planner + expert) is a valid config target", () => {
+  // Regression: parseCapabilities hardcoded {vision,imageGen,expert} and rejected
+  // `planner`, even though planner IS a CapabilityName routable via env — so a
+  // planner role could never be set in models.json. The allowlist now derives from
+  // CAPABILITY_NAMES, so config and env agree on the full capability set.
+  const cfg = parseModelsConfig({
+    active: "a",
+    models: { a: { baseUrl: "u", model: "m" } },
+    capabilities: {
+      vision: "a",
+      imageGen: "a",
+      expert: "a",
+      planner: "a",
+    },
+  });
+
+  expect(cfg.capabilities?.vision).toBe("a");
+  expect(cfg.capabilities?.imageGen).toBe("a");
+  expect(cfg.capabilities?.expert).toBe("a");
+  expect(cfg.capabilities?.planner).toBe("a");
+});
+
 test("parseModelsConfig rejects a bad imageApi (fails loud, no silent fallback)", () => {
   expect(() =>
     parseModelsConfig({

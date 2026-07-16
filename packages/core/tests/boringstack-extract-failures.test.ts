@@ -72,6 +72,23 @@ error: script "lint:meta" exited with code 1`;
     );
   });
 
+  test("an eslint PARSING error is captured as `syntax`, not the message's last word", () => {
+    // A parsing-error row carries no ruleId; after normalize() collapses the
+    // message↔ruleId gap the generic row regex would grab `expected` (the last
+    // word of `… ';' expected`) and mint a phantom rule that later poisons mined
+    // lessons. It must be tagged `syntax` (the tsc-parser convention) instead.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/note/note.routes.ts
+  12:5  error  Parsing error: ';' expected`;
+    const sigs = extractFailures(out, cwd);
+    const signature = [...sigs][0] ?? "";
+
+    expect(signature).toContain(
+      "failure:apps%2Fapi%2Fsrc%2Fapi%2Fnote%2Fnote.routes.ts:12:syntax"
+    );
+    expect(signature).not.toContain(":expected:");
+  });
+
   test("captures eslint error rows but ignores passing/summary noise", () => {
     const out = `
   12:10  error  Unexpected any  @typescript-eslint/no-explicit-any

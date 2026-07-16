@@ -210,6 +210,23 @@ function parsedDiagnostic(
     );
   }
 
+  // An eslint PARSING error carries no ruleId — the row is `L:C error Parsing
+  // error: <detail>`. normalize() has already collapsed the multi-space gap that
+  // separates an eslint message from its trailing ruleId, so the generic row
+  // regex below would grab the message's last word (`… ';' expected` → rule
+  // `expected`) and mint a phantom rule. Capture these as `syntax` (matching the
+  // tsc-parser convention) so no message word ever masquerades as a rule id.
+  const eslintParseError = /^(\d+):(\d+) error (Parsing error:.*)$/u.exec(line);
+
+  if (eslintParseError !== null && state.currentFile !== "") {
+    return structuredFailure(
+      state.currentFile,
+      Number(eslintParseError[1] ?? "0"),
+      "syntax",
+      eslintParseError[3] ?? line
+    );
+  }
+
   const eslintError = /^(\d+):(\d+) error (.+?) ([\w@/-]+)$/u.exec(line);
 
   if (eslintError !== null && state.currentFile !== "") {

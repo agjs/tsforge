@@ -157,3 +157,93 @@ test("runPlanning cancels when proposePlan returns null", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("runPlanning forwards constraints (guidance) to the planner", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "plan-"));
+
+  try {
+    let system = "";
+    const capturingPlanner: IProvider = {
+      complete: async (msgs) => {
+        system = msgs.find((m) => m.role === "system")?.content ?? "";
+
+        return { content: JSON.stringify(mockPlan), toolCalls: [] };
+      },
+    };
+
+    const deps: IPlanningDeps = {
+      planner: capturingPlanner,
+      constraints: { guidance: "STACK-MARKER-XYZ" },
+      describe: async () => ({ description: "a bookmarking app" }),
+      review: async () => ({ action: "approve" as const }),
+      out: () => {},
+    };
+
+    expect(await runPlanning(dir, deps)).toBe("approved");
+    // The passthrough is real: the constraint's guidance reached the planner.
+    expect(system).toContain("STACK-MARKER-XYZ");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runPlanning forwards reservedEntities + onStripped (a reserved slice is dropped AND surfaced)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "plan-"));
+
+  try {
+    // Planner returns a reserved "User" slice plus the real Bookmark slice.
+    const planner: IProvider = {
+      complete: async () => ({
+        content: JSON.stringify({
+          product: "p",
+          slices: [
+            {
+              entity: {
+                id: "User",
+                desc: "auth",
+                fields: [{ name: "email", type: "string" }],
+                relationships: [],
+                rules: [],
+              },
+              ui: {
+                screens: ["form"],
+                action: "log in",
+                shows: ["email"],
+                nav: "User",
+              },
+              verification: {
+                mustRemainTrue: ["auth"],
+                mustNotHappen: ["x"],
+                acceptanceCheck: "bun test",
+              },
+            },
+            ...mockPlan.slices,
+          ],
+        }),
+        toolCalls: [],
+      }),
+    };
+
+    const dropped: string[][] = [];
+    const deps: IPlanningDeps = {
+      planner,
+      constraints: {
+        reservedEntities: new Set(["user"]),
+        onStripped: (ids) => dropped.push([...ids]),
+      },
+      describe: async () => ({ description: "bookmarks" }),
+      review: async () => ({ action: "approve" as const }),
+      out: () => {},
+    };
+
+    expect(await runPlanning(dir, deps)).toBe("approved");
+    // The reserved slice was dropped from the written plan…
+    const written = await readPlan(dir);
+
+    expect(written?.plan.slices.map((s) => s.entity.id)).toEqual(["Bookmark"]);
+    // …AND the drop was surfaced through the reporter (never silent).
+    expect(dropped).toEqual([["User"]]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
