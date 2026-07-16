@@ -313,6 +313,15 @@ export async function doScript(
       ctx.cwd,
       {
         ...process.env,
+        // The script's stdout is CAPTURED (parsed by the loop, matched in tests),
+        // never shown live in a terminal — so any ANSI colorization is corruption,
+        // not presentation. Bun colorizes console.log values (e.g. a numeric
+        // `403` → `\x1b[33m403\x1b[0m`) whenever it detects color support, which
+        // makes captured output non-deterministic across TTY/no-TTY (a literal
+        // "STATUS 403" match passes in CI but breaks under the local pre-push).
+        // Force color OFF so captured output is plain and stable everywhere.
+        NO_COLOR: "1",
+        FORCE_COLOR: "0",
         TSFORGE_RPC_URL: server.url,
         TSFORGE_RPC_TOKEN: server.token,
       },
