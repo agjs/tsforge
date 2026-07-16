@@ -112,9 +112,13 @@ of only judging a code diff:
 tsforge harness-diagnose <build-log.jsonl> [--domain X] [--reason "…"] [--max-chars N] [--tail N]
 ```
 
-Flow: read the transcript → `sliceBuildLog` extracts a signal-first, budgeted
-slice (every `fix`/park + gate/error line + the last `--tail` events; whatever is
-dropped is **counted and reported** — never silent) → each reviewer gets a
+Flow: read the transcript (both log shapes — the flat reporter jsonl and the
+typed `LedgerWriter` `{type,payload}` ledger) → `sliceBuildLog` extracts a
+signal-first, budgeted slice: each event is flattened to one capped line,
+identical lines are deduped as `(×N)`, failing commands keep their
+`output`/`errors` diagnostics while green output is elided for cost, and whatever
+is dropped is **counted and reported** — never silent (~130K→24K tokens on a real
+run) → each reviewer gets a
 skeptical diagnosis contract asking for ONE JSON object
 `{ category, confidence, rootCause, suggestedFix }` where `category` is one of a
 fixed enum (`gate-parity`, `near-green-oscillation`, `scaffold-infra`,

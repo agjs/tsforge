@@ -23,7 +23,7 @@ interface IArgs {
   tail: number;
 }
 
-function parse(argv: string[]): IArgs {
+export function parse(argv: string[]): IArgs {
   const out: IArgs = {
     logFile: undefined,
     domain: undefined,
@@ -61,18 +61,31 @@ function parse(argv: string[]): IArgs {
 
 /** Best-effort extraction of the park reason from the last `fix` event that
  *  mentions a park; falls back to the last fix message, then a generic label. */
-function deriveParkReason(raw: string): string {
+/** Resolve an event's fields from either log shape: flat `{kind,message,…}` or
+ *  the typed ledger `{type,payload:{…}}` (payload wins). */
+function resolve(line: string): Record<string, unknown> | null {
+  try {
+    const o: unknown = JSON.parse(line);
+
+    if (!isRecord(o)) {
+      return null;
+    }
+
+    return isRecord(o.payload) ? { ...o, ...o.payload } : o;
+  } catch {
+    return null;
+  }
+}
+
+export function deriveParkReason(raw: string): string {
   const fixMsgs: string[] = [];
 
   for (const line of raw.split("\n")) {
-    try {
-      const o: unknown = JSON.parse(line);
+    const rec = resolve(line);
+    const kind = rec?.kind ?? rec?.type;
 
-      if (isRecord(o) && o.kind === "fix" && typeof o.message === "string") {
-        fixMsgs.push(o.message);
-      }
-    } catch {
-      // non-JSON line — ignore for this extraction
+    if (rec !== null && kind === "fix" && typeof rec.message === "string") {
+      fixMsgs.push(rec.message);
     }
   }
 
@@ -88,25 +101,22 @@ function deriveParkReason(raw: string): string {
 }
 
 /** The last observed turn/cycle number, as a short summary string. */
-function deriveTurns(raw: string): string {
+export function deriveTurns(raw: string): string {
   let last = 0;
 
   for (const line of raw.split("\n")) {
-    try {
-      const o: unknown = JSON.parse(line);
+    const rec = resolve(line);
+    const kind = rec?.kind ?? rec?.type;
 
-      if (isRecord(o) && o.kind === "cycle" && typeof o.cycle === "number") {
-        last = o.cycle;
-      }
-    } catch {
-      // ignore
+    if (rec !== null && kind === "cycle" && typeof rec.cycle === "number") {
+      last = rec.cycle;
     }
   }
 
   return last > 0 ? `${String(last)} cycles` : "unknown";
 }
 
-function formatConsensus(c: IConsensus, identity: string): string {
+export function formatConsensus(c: IConsensus, identity: string): string {
   const lines: string[] = [];
 
   if (c.category === null) {
