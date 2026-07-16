@@ -110,6 +110,42 @@ describe("mineLessons", () => {
 
     expect(mineLessons(events)).toHaveLength(0);
   });
+
+  test("drops non-pattern gate verdicts but keeps every real rule id", () => {
+    // The boringstack gate surfaces structural/behavioral VERDICTS — `reachability`
+    // (route not wired), `judge` (quality critique), `bun-test` (failing assertion),
+    // `syntax` (unparseable) — that name no code construct, so a mined snippet keyed
+    // to one is noise. Everything else is a real diagnostic id and stays learnable,
+    // INCLUDING bare eslint core rules like `eqeqeq`/`curly` that carry no `/` or `-`
+    // (this repo's gate enables them as errors — dropping them would be silent loss).
+    const events: ILoopEvent[] = [
+      red([
+        "reachability",
+        "judge",
+        "bun-test",
+        "syntax",
+        "knip/unused-files",
+        "gate-nonzero",
+        "TS2345",
+        "no-invalid-void-type",
+        "eqeqeq",
+        "curly",
+      ]),
+      edit("src/a.ts", "async f(this: void)", "async f()"),
+      validated([]),
+    ];
+
+    const rules = mineLessons(events)
+      .map((c) => c.rule)
+      .sort();
+
+    expect(rules).toEqual([
+      "TS2345",
+      "curly",
+      "eqeqeq",
+      "no-invalid-void-type",
+    ]);
+  });
 });
 
 describe("mergeCandidates + activeRules", () => {
