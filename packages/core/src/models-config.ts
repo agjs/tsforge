@@ -332,10 +332,14 @@ function parseCapabilities(
 
   const out: Partial<Record<CapabilityName, string>> = {};
 
+  const capabilityNames: ReadonlySet<string> = new Set(CAPABILITY_NAMES);
+  const isCapabilityName = (cap: string): cap is CapabilityName =>
+    capabilityNames.has(cap);
+
   for (const [cap, target] of Object.entries(raw)) {
-    if (cap !== "vision" && cap !== "imageGen" && cap !== "expert") {
+    if (!isCapabilityName(cap)) {
       throw new Error(
-        `models.json: unknown capability "${cap}" — expected vision, imageGen, expert`
+        `models.json: unknown capability "${cap}" — expected ${CAPABILITY_NAMES.join(", ")}`
       );
     }
 
