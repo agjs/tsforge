@@ -150,6 +150,41 @@ describe("sliceBuildLog", () => {
     expect(s.text).not.toContain("apps/a.ts");
   });
 
+  test("a FAILED command outside the tail is kept even with no keyword (exit 137 Killed)", () => {
+    const events: object[] = [
+      {
+        kind: "run",
+        message: "$ bun test suite",
+        exitCode: 137,
+        output: "Killed",
+      },
+    ];
+
+    for (let i = 0; i < 60; i += 1) {
+      events.push({ kind: "policy", message: `read ${String(i)}` });
+    }
+
+    const s = sliceBuildLog(jsonl(events), { maxChars: 4000, tailLines: 1 });
+
+    expect(s.text).toContain("exit=137");
+    expect(s.text).toContain("Killed");
+  });
+
+  test("keeps the TAIL of a long diagnostic (final error not truncated away)", () => {
+    const filler = "passing setup line. ".repeat(60); // ~1200 chars of noise first
+    const raw = jsonl([
+      {
+        kind: "run",
+        message: "$ bun test",
+        exitCode: 1,
+        output: `${filler}FATAL: the decisive error is here`,
+      },
+    ]);
+    const s = sliceBuildLog(raw, { maxChars: 10_000, tailLines: 5 });
+
+    expect(s.text).toContain("the decisive error is here");
+  });
+
   test("annotates non-zero exit codes and file paths", () => {
     const raw = jsonl([
       { kind: "run", message: "$ bun run validate", exitCode: 1 },

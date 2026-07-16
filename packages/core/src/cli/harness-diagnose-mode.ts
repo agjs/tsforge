@@ -2,15 +2,46 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { isRecord } from "../lib/guards";
-import { loadModelsConfig, resolveActiveModel } from "../models-config";
-import { resolvePanel } from "../reviewers/registry";
+import {
+  loadModelsConfig,
+  resolveActiveModel,
+  type IModelsConfig,
+  type IModelEntry,
+} from "../models-config";
+import { resolvePanel, type IPanel } from "../reviewers/registry";
 import { sliceBuildLog } from "../reviewers/log-slice";
 import {
   diagnoseInvoke,
   aggregateDiagnoses,
   type IConsensus,
+  type DiagOutcome,
 } from "../reviewers/diagnose";
+import type { IDiagnoseRequest } from "../reviewers/diagnose-schema";
 import { makeProvider, runBinary } from "./harness-review-mode";
+
+/** Injectable IO so the orchestration (missing-file path, independence guard,
+ *  artifact write) is testable without real config, network, or filesystem. */
+export interface IDiagnoseIo {
+  readLog: (path: string) => Promise<string>;
+  loadConfig: () => Promise<IModelsConfig>;
+  resolveActive: () => Promise<{ name: string; entry: IModelEntry }>;
+  invoke: (panel: IPanel, request: IDiagnoseRequest) => Promise<DiagOutcome[]>;
+  writeArtifact: (fileName: string, body: string) => Promise<void>;
+}
+
+const realIo: IDiagnoseIo = {
+  readLog: (path) => readFile(path, "utf-8"),
+  loadConfig: loadModelsConfig,
+  resolveActive: resolveActiveModel,
+  invoke: (panel, request) =>
+    diagnoseInvoke(panel, request, { makeProvider, runBinary }),
+  writeArtifact: async (fileName, body) => {
+    const dir = join(".tsforge", "harness-diagnose");
+
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, fileName), body, "utf-8");
+  },
+};
 
 const DEFAULT_MAX_CHARS = 24_000;
 const DEFAULT_TAIL = 40;
@@ -162,7 +193,10 @@ export function formatConsensus(c: IConsensus, identity: string): string {
   return lines.join("\n");
 }
 
-export async function harnessDiagnoseMode(argv: string[]): Promise<number> {
+export async function harnessDiagnoseMode(
+  argv: string[],
+  io: IDiagnoseIo = realIo
+): Promise<number> {
   const args = parse(argv);
 
   if (args.logFile === undefined) {
@@ -173,18 +207,33 @@ export async function harnessDiagnoseMode(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const raw = await readFile(args.logFile, "utf-8");
-  const slice = sliceBuildLog(raw, {
-    maxChars: args.maxChars,
-    tailLines: args.tail,
-  });
-  const cfg = await loadModelsConfig();
-  const active = await resolveActiveModel();
+  let raw: string;
+
+  try {
+    raw = await io.readLog(args.logFile);
+  } catch {
+    process.stdout.write(`error: cannot read log file "${args.logFile}"\n`);
+
+    return 2;
+  }
+
+  const cfg = await io.loadConfig();
+  const active = await io.resolveActive();
+
   // Independence must be judged against the model that PRODUCED the transcript,
   // not whatever happens to be active now — otherwise, after switching models, a
   // log's real builder could sit on the panel and review its own run. The log
-  // does not record its builder, so allow `--builder <entry>` to name it; absent
-  // that, fall back to the active model and say so loudly.
+  // does not record its builder, so `--builder <entry>` names it. An UNKNOWN
+  // entry is a hard error (never a silent downgrade to the active model); an
+  // omitted flag falls back to the active model with a loud note.
+  if (args.builder !== undefined && cfg.models[args.builder] === undefined) {
+    process.stdout.write(
+      `error: --builder "${args.builder}" is not a configured model in models.json\n`
+    );
+
+    return 2;
+  }
+
   const override =
     args.builder !== undefined ? cfg.models[args.builder] : undefined;
   const builder =
@@ -193,12 +242,6 @@ export async function harnessDiagnoseMode(argv: string[]): Promise<number> {
       : active;
   const panel = resolvePanel(cfg, builder);
   const identity = `${builder.name}/${builder.entry.model}`;
-
-  if (args.builder !== undefined && override === undefined) {
-    process.stdout.write(
-      `warning: --builder "${args.builder}" is not a configured model; independence checked against the active model instead\n`
-    );
-  }
 
   if (args.builder === undefined) {
     process.stdout.write(
@@ -210,17 +253,18 @@ export async function harnessDiagnoseMode(argv: string[]): Promise<number> {
     process.stdout.write(`skipped reviewer ${s.id}: ${s.reason}\n`);
   }
 
-  const request = {
+  const slice = sliceBuildLog(raw, {
+    maxChars: args.maxChars,
+    tailLines: args.tail,
+  });
+  const request: IDiagnoseRequest = {
     domain: args.domain ?? "unknown",
     parkReason: args.reason ?? deriveParkReason(raw),
     turnsSummary: deriveTurns(raw),
     logSlice: slice.text,
     sliceNote: slice.note,
   };
-  const outcomes = await diagnoseInvoke(panel, request, {
-    makeProvider,
-    runBinary,
-  });
+  const outcomes = await io.invoke(panel, request);
   const consensus = aggregateDiagnoses(outcomes);
 
   process.stdout.write(`${formatConsensus(consensus, identity)}\n`);
@@ -229,17 +273,14 @@ export async function harnessDiagnoseMode(argv: string[]): Promise<number> {
     .update(`${args.logFile}\n${slice.text}`)
     .digest("hex")
     .slice(0, 16);
-  const dir = join(".tsforge", "harness-diagnose");
 
-  await mkdir(dir, { recursive: true });
-  await writeFile(
-    join(dir, `${key}.json`),
+  await io.writeArtifact(
+    `${key}.json`,
     JSON.stringify(
       { request: { ...request, logSlice: undefined }, consensus, identity },
       null,
       2
-    ),
-    "utf-8"
+    )
   );
 
   return 0;

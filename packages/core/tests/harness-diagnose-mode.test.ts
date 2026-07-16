@@ -4,8 +4,11 @@ import {
   deriveParkReason,
   deriveTurns,
   formatConsensus,
+  harnessDiagnoseMode,
+  type IDiagnoseIo,
 } from "../src/cli/harness-diagnose-mode";
-import type { IConsensus } from "../src/reviewers/diagnose";
+import type { IConsensus, DiagOutcome } from "../src/reviewers/diagnose";
+import type { IModelsConfig } from "../src/models-config";
 
 function jsonl(events: object[]): string {
   return events.map((e) => JSON.stringify(e)).join("\n");
@@ -130,5 +133,102 @@ describe("formatConsensus", () => {
     );
 
     expect(out).toContain("NO CONSENSUS");
+  });
+});
+
+describe("harnessDiagnoseMode (orchestration, injected IO)", () => {
+  const builderEntry = { baseUrl: "http://192.168.0.1/v1", model: "flash" };
+  const cfg: IModelsConfig = {
+    active: "builder-x",
+    models: {
+      "builder-x": builderEntry,
+      "rev-a": { baseUrl: "https://api.other.com/v1", model: "pro" },
+    },
+    reviewPanel: {
+      minReviewers: 2,
+      reviewers: [{ kind: "model", id: "rev-a", entry: "rev-a" }],
+    },
+  };
+  const okOutcome: DiagOutcome = {
+    status: "ok",
+    diagnosis: {
+      reviewerId: "rev-a",
+      category: "gate-parity",
+      confidence: "high",
+      rootCause: "phantom rule",
+      suggestedFix: "reconcile against the validator",
+    },
+  };
+
+  function makeIo(overrides: Partial<IDiagnoseIo> = {}): {
+    io: IDiagnoseIo;
+    written: { name: string; body: string }[];
+  } {
+    const written: { name: string; body: string }[] = [];
+    const io: IDiagnoseIo = {
+      readLog: () =>
+        Promise.resolve(JSON.stringify({ kind: "fix", message: "parked" })),
+      loadConfig: () => Promise.resolve(cfg),
+      resolveActive: () =>
+        Promise.resolve({ name: "builder-x", entry: builderEntry }),
+      invoke: () => Promise.resolve([okOutcome]),
+      writeArtifact: (name, body) => {
+        written.push({ name, body });
+
+        return Promise.resolve();
+      },
+      ...overrides,
+    };
+
+    return { io, written };
+  }
+
+  test("usage + exit 2 when no log file is given", async () => {
+    const { io } = makeIo();
+
+    expect(await harnessDiagnoseMode([], io)).toBe(2);
+  });
+
+  test("exit 2 when the log file cannot be read", async () => {
+    const { io } = makeIo({
+      readLog: () => Promise.reject(new Error("ENOENT")),
+    });
+
+    expect(await harnessDiagnoseMode(["missing.jsonl"], io)).toBe(2);
+  });
+
+  test("unknown --builder is a HARD error (exit 2), never a silent fallback", async () => {
+    const { io, written } = makeIo();
+
+    expect(
+      await harnessDiagnoseMode(["log.jsonl", "--builder", "nope"], io)
+    ).toBe(2);
+    expect(written).toHaveLength(0);
+  });
+
+  test("happy path: exit 0 and writes an artifact with the consensus + identity", async () => {
+    const { io, written } = makeIo();
+
+    const code = await harnessDiagnoseMode(["log.jsonl", "--domain", "x"], io);
+
+    expect(code).toBe(0);
+    expect(written).toHaveLength(1);
+
+    const parsed: unknown = JSON.parse(written[0]?.body ?? "{}");
+
+    expect(parsed).toMatchObject({
+      identity: "builder-x/flash",
+      consensus: { category: "gate-parity" },
+    });
+  });
+
+  test("--builder names the log's real builder for identity + independence", async () => {
+    const { io, written } = makeIo();
+
+    await harnessDiagnoseMode(["log.jsonl", "--builder", "builder-x"], io);
+
+    const parsed: unknown = JSON.parse(written[0]?.body ?? "{}");
+
+    expect(parsed).toMatchObject({ identity: "builder-x/flash" });
   });
 });

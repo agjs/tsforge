@@ -43,8 +43,36 @@ function flat(s: string): string {
   return s.replace(/\s+/gu, " ").trim();
 }
 
+/** Split into graphemes so truncation never slices a surrogate pair (or an emoji
+ *  ZWJ cluster) into invalid Unicode. */
+const SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function graphemes(s: string): string[] {
+  return [...SEGMENTER.segment(s)].map((seg) => seg.segment);
+}
+
+/** Truncate to at most `n` graphemes with a trailing elision marker. */
 function capTo(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+  const g = graphemes(s);
+
+  return g.length > n ? `${g.slice(0, n - 1).join("")}…` : s;
+}
+
+/** Cap a diagnostic while keeping BOTH ends: compilers emit the first error at
+ *  the top, test runners emit the decisive failure at the bottom — a head-only
+ *  cap would drop whichever matters. Keeps a head and a tail slice with an
+ *  elision marker between. Grapheme-safe. */
+function capEnds(s: string, n: number): string {
+  const g = graphemes(s);
+
+  if (g.length <= n) {
+    return s;
+  }
+
+  const head = Math.ceil((n - 1) / 2);
+  const tail = n - 1 - head;
+
+  return `${g.slice(0, head).join("")}…${g.slice(g.length - tail).join("")}`;
 }
 
 /** First non-empty string, else "". Avoids `a || b` on strings (which the
@@ -141,13 +169,15 @@ function classify(line: string): IClassified {
   const key = withDiag.length > 0 ? `${head} :: ${withDiag}` : head;
   const text =
     withDiag.length > 0
-      ? `${capTo(head, HEAD_CAP)} :: ${capTo(withDiag, DIAG_CAP)}`
+      ? `${capTo(head, HEAD_CAP)} :: ${capEnds(withDiag, DIAG_CAP)}`
       : capTo(head, HEAD_CAP);
 
   return {
     key,
     text,
-    signal: kind === "fix" || SIGNAL.test(key),
+    // A non-zero exit IS a signal on its own — a failed command (e.g. exit 137
+    // "Killed") must never be droppable just because its text lacks a keyword.
+    signal: kind === "fix" || failed || SIGNAL.test(key),
     fix: kind === "fix",
   };
 }
@@ -229,7 +259,9 @@ export function sliceBuildLog(
         running += lineCost(u);
         picked.push(u);
       } else {
-        dropped[tier] += 1;
+        // Count EVENTS dropped (a deduped line stands for `count` events), so the
+        // per-tier breakdown reconciles with droppedLines instead of undercounting.
+        dropped[tier] += u.count;
       }
     }
   };
@@ -251,7 +283,7 @@ export function sliceBuildLog(
           `SUMMARY (compressed for cost): ${String(picked.length)} unique lines representing ${String(representedEvents)} of ${String(total)} events (identical lines deduped as "(×N)").`,
           `Dropped ${String(droppedLines)} events: bulk low-signal context outside the last ${String(opts.tailLines)}` +
             (budgetDrops > 0
-              ? `, plus ${String(budgetDrops)} lines cut for the ${String(opts.maxChars)}-char budget (fix ${String(dropped.fix)}, signal ${String(dropped.signal)}, context ${String(dropped.context)})`
+              ? `, plus ${String(budgetDrops)} events cut for the ${String(opts.maxChars)}-char budget (fix ${String(dropped.fix)}, signal ${String(dropped.signal)}, context ${String(dropped.context)})`
               : ""),
         ].join(" ");
 
