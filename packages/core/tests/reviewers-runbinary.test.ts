@@ -5,7 +5,19 @@ import { existsSync } from "node:fs";
 import {
   buildBinaryInvocation,
   runBinary,
+  makeProvider,
 } from "../src/cli/harness-review-mode";
+
+describe("makeProvider", () => {
+  test("builds a provider with a complete() method from a model entry", () => {
+    const provider = makeProvider({
+      baseUrl: "https://api.example.com/v1",
+      model: "some-model",
+    });
+
+    expect(typeof provider.complete).toBe("function");
+  });
+});
 
 describe("buildBinaryInvocation — pure invocation builder", () => {
   test("arg mode: appends stdin as last argv element", () => {

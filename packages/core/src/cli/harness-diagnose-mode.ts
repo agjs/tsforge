@@ -19,8 +19,19 @@ interface IArgs {
   logFile: string | undefined;
   domain: string | undefined;
   reason: string | undefined;
+  builder: string | undefined;
   maxChars: number;
   tail: number;
+}
+
+/** Parse a positive-integer flag value, ignoring missing/NaN/Infinity/≤0 so a
+ *  bad `--max-chars`/`--tail` falls back to the default instead of poisoning the
+ *  budget with NaN (which would make every `x <= NaN` comparison false → an
+ *  empty, misleading slice). */
+function posInt(value: string | undefined, fallbackValue: number): number {
+  const n = Number(value);
+
+  return Number.isInteger(n) && n > 0 ? n : fallbackValue;
 }
 
 export function parse(argv: string[]): IArgs {
@@ -28,6 +39,7 @@ export function parse(argv: string[]): IArgs {
     logFile: undefined,
     domain: undefined,
     reason: undefined,
+    builder: undefined,
     maxChars: DEFAULT_MAX_CHARS,
     tail: DEFAULT_TAIL,
   };
@@ -45,12 +57,15 @@ export function parse(argv: string[]): IArgs {
     } else if (a === "--reason") {
       i += 1;
       out.reason = argv[i];
+    } else if (a === "--builder") {
+      i += 1;
+      out.builder = argv[i];
     } else if (a === "--max-chars") {
       i += 1;
-      out.maxChars = Number(argv[i]);
+      out.maxChars = posInt(argv[i], DEFAULT_MAX_CHARS);
     } else if (a === "--tail") {
       i += 1;
-      out.tail = Number(argv[i]);
+      out.tail = posInt(argv[i], DEFAULT_TAIL);
     } else if (!a.startsWith("--") && out.logFile === undefined) {
       out.logFile = a;
     }
@@ -59,8 +74,6 @@ export function parse(argv: string[]): IArgs {
   return out;
 }
 
-/** Best-effort extraction of the park reason from the last `fix` event that
- *  mentions a park; falls back to the last fix message, then a generic label. */
 /** Resolve an event's fields from either log shape: flat `{kind,message,…}` or
  *  the typed ledger `{type,payload:{…}}` (payload wins). */
 function resolve(line: string): Record<string, unknown> | null {
@@ -154,7 +167,7 @@ export async function harnessDiagnoseMode(argv: string[]): Promise<number> {
 
   if (args.logFile === undefined) {
     process.stdout.write(
-      'usage: tsforge harness-diagnose <build-log.jsonl> [--domain X] [--reason "…"] [--max-chars N] [--tail N]\n'
+      'usage: tsforge harness-diagnose <build-log.jsonl> [--domain X] [--reason "…"] [--builder <entry>] [--max-chars N] [--tail N]\n'
     );
 
     return 2;
@@ -167,7 +180,31 @@ export async function harnessDiagnoseMode(argv: string[]): Promise<number> {
   });
   const cfg = await loadModelsConfig();
   const active = await resolveActiveModel();
-  const panel = resolvePanel(cfg, active);
+  // Independence must be judged against the model that PRODUCED the transcript,
+  // not whatever happens to be active now — otherwise, after switching models, a
+  // log's real builder could sit on the panel and review its own run. The log
+  // does not record its builder, so allow `--builder <entry>` to name it; absent
+  // that, fall back to the active model and say so loudly.
+  const override =
+    args.builder !== undefined ? cfg.models[args.builder] : undefined;
+  const builder =
+    override !== undefined
+      ? { name: args.builder ?? active.name, entry: override }
+      : active;
+  const panel = resolvePanel(cfg, builder);
+  const identity = `${builder.name}/${builder.entry.model}`;
+
+  if (args.builder !== undefined && override === undefined) {
+    process.stdout.write(
+      `warning: --builder "${args.builder}" is not a configured model; independence checked against the active model instead\n`
+    );
+  }
+
+  if (args.builder === undefined) {
+    process.stdout.write(
+      `note: independence checked against the CURRENT active builder (${identity}); pass --builder <entry> if this log came from a different model\n`
+    );
+  }
 
   for (const s of panel.skipped) {
     process.stdout.write(`skipped reviewer ${s.id}: ${s.reason}\n`);
@@ -185,7 +222,6 @@ export async function harnessDiagnoseMode(argv: string[]): Promise<number> {
     runBinary,
   });
   const consensus = aggregateDiagnoses(outcomes);
-  const identity = `${active.name}/${active.entry.model}`;
 
   process.stdout.write(`${formatConsensus(consensus, identity)}\n`);
 

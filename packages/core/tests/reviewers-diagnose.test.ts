@@ -1,9 +1,13 @@
 import { test, expect, describe } from "bun:test";
 import {
   aggregateDiagnoses,
+  diagnoseInvoke,
   type DiagOutcome,
 } from "../src/reviewers/diagnose";
 import type { IDiagnosis } from "../src/reviewers/diagnose-schema";
+import type { IPanel } from "../src/reviewers/registry";
+import type { IInvokeDeps } from "../src/reviewers/invoke";
+import type { IModelResponse } from "../src/inference";
 
 function ok(
   reviewerId: string,
@@ -80,5 +84,152 @@ describe("aggregateDiagnoses", () => {
     expect(c.suggestedFixes).toContain("make gates identical");
     expect(c.suggestedFixes).toContain("run prettier at write time");
     expect(c.suggestedFixes).not.toContain("irrelevant fix");
+  });
+});
+
+const GOOD_DIAGNOSIS = JSON.stringify({
+  category: "gate-parity",
+  confidence: "high",
+  rootCause: "phantom learned rule vs real eslint",
+  suggestedFix: "reconcile learned rules against the validator",
+});
+
+function modelResponse(content: string): IModelResponse {
+  return { content, toolCalls: [] };
+}
+
+const REQUEST = {
+  domain: "expense",
+  parkReason: "ladder exhausted, parked",
+  turnsSummary: "141 cycles",
+  logSlice: "[fix] parked",
+  sliceNote: "compacted",
+};
+
+describe("diagnoseInvoke (invoke → parse → outcome)", () => {
+  test("a model reviewer returning valid JSON becomes a vote", async () => {
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        { kind: "model", id: "m1", entry: { baseUrl: "http://x", model: "z" } },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse(GOOD_DIAGNOSIS)),
+      }),
+      runBinary: () => Promise.resolve({ ok: true, stdout: "" }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("ok");
+
+    if (outcome?.status === "ok") {
+      expect(outcome.diagnosis.category).toBe("gate-parity");
+      expect(outcome.diagnosis.reviewerId).toBe("m1");
+    }
+  });
+
+  test("extracts JSON even when the model wraps it in prose", async () => {
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        { kind: "model", id: "m1", entry: { baseUrl: "http://x", model: "z" } },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () =>
+          Promise.resolve(
+            modelResponse(`Sure, here you go:\n${GOOD_DIAGNOSIS}\nThanks`)
+          ),
+      }),
+      runBinary: () => Promise.resolve({ ok: true, stdout: "" }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("ok");
+  });
+
+  test("malformed output makes the reviewer errored, never a vote", async () => {
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        { kind: "model", id: "m1", entry: { baseUrl: "http://x", model: "z" } },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse("not json")),
+      }),
+      runBinary: () => Promise.resolve({ ok: true, stdout: "" }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("errored");
+  });
+
+  test("a binary reviewer that exits non-zero is errored", async () => {
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        {
+          kind: "binary",
+          id: "b1",
+          argv: ["x"],
+          input: "arg",
+          timeoutMs: 1000,
+          parse: "raw",
+        },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse("")),
+      }),
+      runBinary: () => Promise.resolve({ ok: false, stdout: "" }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("errored");
+  });
+
+  test("a binary reviewer returning valid JSON on stdout becomes a vote", async () => {
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        {
+          kind: "binary",
+          id: "grok",
+          argv: ["x"],
+          input: "arg",
+          timeoutMs: 1000,
+          parse: "raw",
+        },
+      ],
+    };
+    const deps: IInvokeDeps = {
+      makeProvider: () => ({
+        complete: () => Promise.resolve(modelResponse("")),
+      }),
+      runBinary: () => Promise.resolve({ ok: true, stdout: GOOD_DIAGNOSIS }),
+    };
+
+    const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
+
+    expect(outcome?.status).toBe("ok");
+
+    if (outcome?.status === "ok") {
+      expect(outcome.diagnosis.reviewerId).toBe("grok");
+    }
   });
 });

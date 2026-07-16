@@ -12,11 +12,6 @@ export interface ILogSlice {
   note: string;
 }
 
-/** One event costs real tokens, so each rendered line is flattened to a single
- *  line and capped — a model's multi-paragraph turn would otherwise dump
- *  thousands of characters of low-value prose into every reviewer's prompt. */
-const PER_LINE_CAP = 240;
-
 /** Lines whose content names a failure/progress signal are the spine of the
  *  story a diagnoser needs (park reasons, gate errors, regressions, acceptance
  *  state) — kept ahead of ordinary context. */
@@ -24,13 +19,32 @@ const SIGNAL =
   /parked|ladder exhausted|revisit|no-unsafe|prettier|regress|stuck|oscillat|escalat|expert|acceptance|verified|gate|phantom|memory\.json|error|fail|❌|✗/iu;
 
 interface IClassified {
+  /** Full, uncapped rendering — the dedupe identity. Two events are "the same"
+   *  only if their FULL text matches, so distinct events that merely share a
+   *  240-char prefix are never falsely collapsed. */
+  key: string;
+  /** Capped display text (message and diagnostics capped SEPARATELY so a long
+   *  command prefix can't truncate the actual compiler/test error away). */
   text: string;
   signal: boolean;
   fix: boolean;
 }
 
+/** Message portion of a line is capped short; diagnostics get their own, larger
+ *  budget so the real failure survives (see IClassified.text). */
+const HEAD_CAP = 160;
+const DIAG_CAP = 300;
+
 function str(v: unknown): string {
   return typeof v === "string" ? v : "";
+}
+
+function flat(s: string): string {
+  return s.replace(/\s+/gu, " ").trim();
+}
+
+function capTo(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
 /** First non-empty string, else "". Avoids `a || b` on strings (which the
@@ -72,17 +86,28 @@ function diagnostics(rec: Record<string, unknown>): string {
  *  `LedgerWriter` ledger (`{type,payload:{…}}`) — fields resolve from either
  *  level. Falls back to the raw line for non-JSON input (plain logs). Signal is
  *  detected on the FULL text (incl. diagnostics) before capping. */
+function fallback(line: string): IClassified {
+  const f = flat(line);
+
+  return {
+    key: f,
+    text: capTo(f, HEAD_CAP + DIAG_CAP),
+    signal: SIGNAL.test(f),
+    fix: false,
+  };
+}
+
 function classify(line: string): IClassified {
   let obj: unknown;
 
   try {
     obj = JSON.parse(line);
   } catch {
-    return { ...cap(line), signal: SIGNAL.test(line), fix: false };
+    return fallback(line);
   }
 
   if (!isRecord(obj)) {
-    return { ...cap(line), signal: SIGNAL.test(line), fix: false };
+    return fallback(line);
   }
 
   // Merge the typed-ledger `payload` up so a nested writer reads the same way as
@@ -107,28 +132,29 @@ function classify(line: string): IClassified {
   const diag = diagnostics(rec);
   // Include diagnostics when the event failed or the output itself names a
   // signal — otherwise a green command's stdout is dropped as pure noise.
-  const withDiag = failed || SIGNAL.test(diag) ? diag : "";
-  const full = `[${kind}] ${msg}${extra.length > 0 ? ` (${extra.join(" ")})` : ""}${withDiag.length > 0 ? ` :: ${withDiag}` : ""}`;
+  const withDiag = failed || SIGNAL.test(diag) ? flat(diag) : "";
+  const head = flat(
+    `[${kind}] ${msg}${extra.length > 0 ? ` (${extra.join(" ")})` : ""}`
+  );
+  // Full text is the dedupe key; display caps head and diagnostics separately so
+  // a verbose command prefix can never truncate the failure diagnostic away.
+  const key = withDiag.length > 0 ? `${head} :: ${withDiag}` : head;
+  const text =
+    withDiag.length > 0
+      ? `${capTo(head, HEAD_CAP)} :: ${capTo(withDiag, DIAG_CAP)}`
+      : capTo(head, HEAD_CAP);
 
   return {
-    ...cap(full),
-    signal: kind === "fix" || SIGNAL.test(full),
+    key,
+    text,
+    signal: kind === "fix" || SIGNAL.test(key),
     fix: kind === "fix",
   };
 }
 
-/** Collapse internal whitespace to single spaces and cap the length. */
-function cap(raw: string): { text: string } {
-  const flat = raw.replace(/\s+/gu, " ").trim();
-
-  return {
-    text:
-      flat.length > PER_LINE_CAP ? `${flat.slice(0, PER_LINE_CAP - 1)}…` : flat,
-  };
-}
-
 interface IUnique {
-  text: string;
+  key: string; // full text — the dedupe identity
+  text: string; // capped display text
   idx: number; // last occurrence, so ordering reflects when it last mattered
   count: number;
   signal: boolean;
@@ -155,16 +181,19 @@ export function sliceBuildLog(
   const total = lines.length;
   const tailStart = Math.max(0, total - opts.tailLines);
 
-  // Dedupe by rendered text, remembering the last position + occurrence count.
+  // Dedupe by FULL text (the key), remembering the last position + count. Two
+  // events collapse only if their full text is identical; flags are OR-merged so
+  // a later occurrence that is signal/fix/tail is never demoted.
   const byText = new Map<string, IUnique>();
 
   lines.forEach((line, idx) => {
     const c = classify(line);
     const tail = idx >= tailStart;
-    const prev = byText.get(c.text);
+    const prev = byText.get(c.key);
 
     if (prev === undefined) {
-      byText.set(c.text, {
+      byText.set(c.key, {
+        key: c.key,
         text: c.text,
         idx,
         count: 1,
@@ -175,6 +204,8 @@ export function sliceBuildLog(
     } else {
       prev.count += 1;
       prev.idx = idx;
+      prev.signal = prev.signal || c.signal;
+      prev.fix = prev.fix || c.fix;
       prev.tail = prev.tail || tail;
     }
   });
