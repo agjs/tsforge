@@ -50,6 +50,8 @@ export const PLANNER_EXAMPLE = {
  */
 const PLANNER_SYSTEM = `You are a product architect. From the product description and any mockups, propose a domain model as feature slices (one per entity). Respond with ONLY a JSON object — no prose, no markdown fences — matching this schema EXACTLY. Use these exact key names and value shapes; do not add, rename, or nest differently.
 
+The target stack ALREADY PROVIDES authentication, user accounts, and sessions out of the box: sign-up, log-in, log-out, the users table, and per-user ownership all exist. Do NOT propose a slice for User, Account, Auth, Session, Login, SignUp, Profile, or any authentication/identity concept — building it duplicates the built-in surface and traps the build. Treat "a user" as an existing actor that your entities belong to (via a relationship like "belongs to a User"), never as an entity to build. Propose slices ONLY for the product's own domain entities.
+
 Schema:
 {
   "product": "<one short paragraph: what the product is for>",
@@ -101,10 +103,45 @@ export function parsePlanJson(raw: string): IProductPlan | null {
   }
 }
 
+/** Identity/auth concepts the BoringStack starter already ships (sign-up, log-in,
+ *  the users table, per-user ownership). A slice for one of these duplicates the
+ *  built-in surface and traps the build — its locale keys/routes never wire up
+ *  because the real usage lives in the scaffold's auth feature, so the gate loops
+ *  forever on "unused" keys. The prompt steers away from them; this set is the
+ *  enforcement backstop. Compared lowercased. */
+export const RESERVED_ENTITY_IDS: ReadonlySet<string> = new Set([
+  "user",
+  "users",
+  "account",
+  "auth",
+  "authentication",
+  "session",
+  "login",
+  "signin",
+  "signup",
+  "logout",
+  "profile",
+  "credential",
+]);
+
+/** Drop slices whose entity is a reserved identity concept the stack already
+ *  provides. If stripping would empty the plan (a description of nothing but
+ *  auth), keep the original — an empty plan builds nothing and signals a
+ *  mis-scoped description, which is worse than one redundant slice. */
+export function stripReservedSlices(plan: IProductPlan): IProductPlan {
+  const kept = plan.slices.filter(
+    (slice) => !RESERVED_ENTITY_IDS.has(slice.entity.id.toLowerCase())
+  );
+
+  return kept.length > 0 ? { ...plan, slices: kept } : plan;
+}
+
 /**
  * Ask the model to propose a structured product plan from a description.
  * Returns null when the model's response can't be parsed into a usable plan.
- * Retries once at higher temperature (0 → 0.7) on parse failure.
+ * Retries once at higher temperature (0 → 0.7) on parse failure. Reserved
+ * identity slices (User/Auth/…) the stack already ships are stripped from the
+ * result so the build never chases a redundant, un-satisfiable slice.
  */
 export async function proposePlan(
   deps: { planner: IProvider },
@@ -127,7 +164,7 @@ export async function proposePlan(
   const parsed1 = parsePlanJson(res1.content);
 
   if (parsed1 !== null) {
-    return parsed1;
+    return stripReservedSlices(parsed1);
   }
 
   // Retry: temperature 0.7 (more creative/forgiving)
@@ -139,5 +176,7 @@ export async function proposePlan(
     { temperature: 0.7 }
   );
 
-  return parsePlanJson(res2.content);
+  const parsed2 = parsePlanJson(res2.content);
+
+  return parsed2 === null ? null : stripReservedSlices(parsed2);
 }

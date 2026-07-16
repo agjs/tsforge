@@ -2,8 +2,10 @@ import { test, expect } from "bun:test";
 import {
   proposePlan,
   parsePlanJson,
+  stripReservedSlices,
   PLANNER_EXAMPLE,
 } from "../src/loop/planning/propose-plan";
+import type { IProductPlan } from "../src/loop/planning/plan-types";
 import { isProductPlan } from "../src/loop/planning/plan-store";
 import type { IProvider } from "../src/inference";
 
@@ -147,6 +149,77 @@ test("parsePlanJson rejects invalid plan shape", () => {
   const result = parsePlanJson(invalid);
 
   expect(result).toBeNull();
+});
+
+function userSlice(id: string) {
+  return {
+    entity: {
+      id,
+      desc: "an account",
+      fields: [{ name: "email", type: "string" }],
+      relationships: [],
+      rules: [],
+    },
+    ui: {
+      screens: ["form"],
+      action: "sign up / log in",
+      shows: ["email"],
+      nav: id,
+    },
+    verification: {
+      mustRemainTrue: ["auth"],
+      mustNotHappen: ["no email"],
+      acceptanceCheck: "bun test",
+    },
+  };
+}
+
+test("stripReservedSlices drops an identity slice the stack ships but keeps real ones", () => {
+  const plan = {
+    ...mockPlan,
+    slices: [userSlice("User"), mockPlan.slices[0]],
+  } as IProductPlan;
+
+  const stripped = stripReservedSlices(plan);
+
+  expect(stripped.slices.map((s) => s.entity.id)).toEqual(["Bookmark"]);
+});
+
+test("stripReservedSlices keeps the original when EVERY slice is reserved (no empty plan)", () => {
+  const plan = {
+    ...mockPlan,
+    slices: [userSlice("User"), userSlice("Session")],
+  } as IProductPlan;
+
+  // An all-auth plan is mis-scoped, but an empty plan builds nothing — keep it.
+  expect(stripReservedSlices(plan).slices).toHaveLength(2);
+});
+
+test("proposePlan strips a redundant User slice (the live bookmark-app collision)", async () => {
+  // The exact failure observed live: the planner returned User + Bookmark; the
+  // User slice's locale keys never wired up (real auth lives in the scaffold),
+  // so the gate looped forever on unused keys. proposePlan must not emit it.
+  const planner: IProvider = {
+    complete: async () => ({
+      content: JSON.stringify({
+        ...mockPlan,
+        slices: [userSlice("User"), mockPlan.slices[0]],
+      }),
+      toolCalls: [],
+    }),
+  };
+
+  const plan = await proposePlan({ planner }, { description: "bookmarks" });
+
+  expect(plan?.slices.map((s) => s.entity.id)).toEqual(["Bookmark"]);
+});
+
+test("PLANNER_EXAMPLE proposes no reserved identity entity", () => {
+  // The worked example must model good behaviour: no User/Auth/Session slice.
+  const ids = PLANNER_EXAMPLE.slices.map((s) => s.entity.id.toLowerCase());
+
+  expect(ids).not.toContain("user");
+  expect(ids).not.toContain("auth");
 });
 
 test("PLANNER_EXAMPLE (the shape shown to the model) is itself a valid plan", () => {
