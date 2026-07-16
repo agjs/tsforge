@@ -415,6 +415,14 @@ export async function runBoringstackBuild(opts: {
       message: "final acceptance: full validate + build + size checks…",
     });
 
+    // GATE PARITY: the per-cycle fast gate applies deterministic auto-fixes
+    // (prettier + eslint --fix) BEFORE it runs, but the full acceptance gate did
+    // not — so a feature could freeze fast-green yet fail final `validate` on
+    // auto-fixable formatting the model was never shown (e.g. a missing `;`).
+    // Apply the SAME auto-fixes here so acceptance and the per-cycle gate agree;
+    // this normalizes formatting a dev gets on save, it does not suppress errors.
+    await autofixApps(cwd, exec);
+
     const full = await runBoringstackGate(cwd, exec, "full");
 
     onEvent?.({
