@@ -11,9 +11,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildGate } from "../src/gate";
-
-const ROOT = join(import.meta.dir, "..", "..", "..");
-const TSC_BIN = join(ROOT, "node_modules", ".bin", "tsc");
+// Use the gate's OWN resolved compiler (TS7 via resolveTs7Tsc), not a hardcoded
+// .bin/tsc — so this incremental proof runs the exact binary the gate embeds.
+import { TSC_BIN } from "../src/gate/tool-paths";
 
 const TSCONFIG = JSON.stringify({
   compilerOptions: {

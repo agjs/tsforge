@@ -37,12 +37,63 @@ function resolveToolBin(name: string): string {
   return name;
 }
 
+// TypeScript 7 (the Go-native compiler, ~10x faster typecheck) ships as the
+// `@typescript/native` package so it can coexist with the `typescript` package,
+// whose 6.x programmatic API our tooling (typescript-eslint, proptest) still
+// needs — TS7 has no stable programmatic API until 7.1. It is a real dependency
+// of this package, so consumers get it too (the gate typechecks on TS7
+// everywhere, not just in-repo). Both packages expose a `tsc` bin, so `.bin/tsc`
+// is ambiguous; resolve TS7's compiler by its package path instead. The plain
+// `tsc` fallback is only a defensive safety net (should never fire given the
+// dependency) that keeps the gate functional on TS6 rather than crashing.
+export function resolveTs7Tsc(startDir: string = import.meta.dir): string {
+  let dir = startDir;
+  let parent = dirname(dir);
+
+  while (parent !== dir) {
+    // Hoisted (monorepo): <dir>/node_modules/@typescript/native/bin/tsc.
+    const hoisted = join(
+      dir,
+      "node_modules",
+      "@typescript",
+      "native",
+      "bin",
+      "tsc"
+    );
+
+    if (existsSync(hoisted)) {
+      return hoisted;
+    }
+
+    // Published/global install where `dir` is itself a `node_modules`: the
+    // package sits directly inside it (same double-`node_modules` case
+    // resolveToolBin handles). Without this, a consumer install misses TS7.
+    const direct = join(dir, "@typescript", "native", "bin", "tsc");
+
+    if (existsSync(direct)) {
+      return direct;
+    }
+
+    dir = parent;
+    parent = dirname(dir);
+  }
+
+  // @typescript/native is a dependency, so a miss is unexpected — say so LOUDLY
+  // (not a silent downgrade) before falling back to an ambient tsc so the gate
+  // degrades instead of crashing.
+  process.stderr.write(
+    "tsforge: @typescript/native (TypeScript 7) not found — the gate is falling back to an ambient `tsc`, which may be TS6 or another version.\n"
+  );
+
+  return resolveToolBin("tsc");
+}
+
 // This module lives at `src/gate/`, so the package root (where the bundled eslint
 // configs + `scripts/` live) is TWO levels up — `import.meta.dir/../..`.
 const PKG_ROOT = join(import.meta.dir, "..", "..");
 
 export const ESLINT_BIN = resolveToolBin("eslint");
-export const TSC_BIN = resolveToolBin("tsc");
+export const TSC_BIN = resolveTs7Tsc();
 export const PRETTIER_BIN = resolveToolBin("prettier");
 export const STRICT_CONFIG = join(PKG_ROOT, "strict.eslint.config.mjs");
 export const TYPE_AWARE_CONFIG = join(
