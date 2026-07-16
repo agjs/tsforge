@@ -2,6 +2,7 @@ import { test, expect, describe } from "bun:test";
 import {
   extractFailures,
   novelFailures,
+  classifyOpenApiFailure,
 } from "../src/loop/boringstack/extract-failures";
 
 describe("extractFailures", () => {
@@ -87,6 +88,41 @@ error: script "lint:meta" exited with code 1`;
       "failure:apps%2Fapi%2Fsrc%2Fapi%2Fnote%2Fnote.routes.ts:12:syntax"
     );
     expect(signature).not.toContain(":expected:");
+  });
+
+  test("a generate:api FAILED line becomes a clear, STABLE openapi-unreachable infra signature (not opaque)", () => {
+    const out =
+      "::tsforge-app apps/ui::\n" +
+      "[generate:api] Fetching http://localhost:62306/swagger/json\n" +
+      "[generate:api] FAILED: fetch failed (ECONNREFUSED)\n" +
+      "[generate:api] Hint: start apps/api or set OPENAPI_URL to a reachable spec.";
+    const sigs = extractFailures(out, "/tmp/clone");
+    const sig =
+      [...sigs].find((s) => s.startsWith("openapi-unreachable:")) ?? "";
+
+    // The signature has NO file component (prefix is `openapi-unreachable:`, not
+    // `failure:<file>:…`) so it maps to a file-less "own" error the model sees, not
+    // an out-of-scope/locked-file diagnostic. The suffix is a STABLE failure CLASS
+    // (not the raw prose) so the fingerprint doesn't drift with the wording.
+    expect(sig).toBe("openapi-unreachable:connection-refused");
+    expect(sig).not.toStartWith("failure:");
+    expect(sig).not.toContain("gate-nonzero");
+  });
+
+  describe("classifyOpenApiFailure", () => {
+    test("maps distinct wordings of the same infra class to one stable token", () => {
+      expect(classifyOpenApiFailure("fetch failed (ECONNREFUSED)")).toBe(
+        "connection-refused"
+      );
+      expect(classifyOpenApiFailure("The operation timed out")).toBe("timeout");
+      expect(classifyOpenApiFailure("getaddrinfo ENOTFOUND api")).toBe("dns");
+      expect(classifyOpenApiFailure("responded with 503 Service")).toBe(
+        "http-503"
+      );
+      expect(classifyOpenApiFailure("something weird happened")).toBe(
+        "unreachable"
+      );
+    });
   });
 
   test("captures eslint error rows but ignores passing/summary noise", () => {

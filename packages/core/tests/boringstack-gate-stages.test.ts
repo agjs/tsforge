@@ -3,6 +3,7 @@ import {
   boringstackCommandStage,
   reachabilityStage,
   judgeStage,
+  signatureToError,
 } from "../src/loop/boringstack/gate-stages";
 import type { Exec } from "../src/loop/boringstack/exec";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
@@ -79,6 +80,24 @@ UNFAMILIAR TOOL FAILURE: the useful downstream detail`;
     expect(error?.phase).toBe(2);
     expect(error?.message).toContain("useful downstream detail");
     expect(error?.message).not.toContain("healthy API output");
+  });
+});
+
+describe("signatureToError", () => {
+  test("an openapi-unreachable signature maps to a file-less, model-visible infra error", () => {
+    const sig = "openapi-unreachable:connection-refused";
+    const err = signatureToError(sig);
+
+    // NO file — so it stays an "own" error the model sees, not a locked/out-of-scope
+    // diagnostic. Phase 2 matches the apps/ui stage it replaces. The key stays the
+    // stable class; the actionable guidance (incl. the class + dev.sh) is built here.
+    expect(err.key).toBe(sig);
+    expect(err.rule).toBe("openapi-unreachable");
+    expect(err.file).toBeUndefined();
+    expect(err.phase).toBe(2);
+    expect(err.message).toContain("connection-refused");
+    expect(err.message).toContain("dev.sh up");
+    expect(err.message).toContain("Do NOT edit");
   });
 });
 
