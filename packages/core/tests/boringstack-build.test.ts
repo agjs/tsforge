@@ -400,4 +400,83 @@ describe("runBoringstackBuild", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("gate parity: applies the deterministic auto-fixes right before final acceptance", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bs-"));
+
+    try {
+      const plan: IProductPlan = {
+        product: "A simple app",
+        slices: [
+          {
+            entity: {
+              id: "Invoice",
+              desc: "A billable unit",
+              fields: [{ name: "amount", type: "number" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list"],
+              action: "create invoices",
+              shows: ["amount"],
+              nav: "Invoices",
+            },
+            verification: {
+              mustRemainTrue: ["auth required"],
+              mustNotHappen: ["unauthenticated access"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      const execCalls: { argv: string[]; cwd: string }[] = [];
+
+      const exec: Exec = async (argv, opts) => {
+        execCalls.push({ argv: [...argv], cwd: opts.cwd });
+
+        return { code: 0, stdout: "", stderr: "" };
+      };
+
+      const res = await runBoringstackBuild({
+        cwd: dir,
+        goal: "simple app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec,
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(res.status).toBe("done");
+
+      // The FULL acceptance gate ran…
+      const full = execCalls.findIndex(
+        (c) =>
+          c.argv[0] === "bash" && c.argv.join(" ").includes("bun run validate")
+      );
+
+      expect(full).toBeGreaterThan(0);
+
+      // …and the FOUR exec calls immediately before it are the full autofixApps
+      // contract — format + lint:fix for BOTH apps — proving acceptance is
+      // preceded by the same deterministic auto-fixes the per-cycle gate applies.
+      // Dropping `format` or the api half must fail this (not just the last step).
+      const before = execCalls
+        .slice(full - 4, full)
+        .map((c) => `${c.argv.join(" ")} @ ${c.cwd.replace(dir, "")}`);
+
+      expect(before).toEqual([
+        "bun run format @ /apps/api",
+        "bun run lint:fix @ /apps/api",
+        "bun run format @ /apps/ui",
+        "bun run lint:fix @ /apps/ui",
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
