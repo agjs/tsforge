@@ -3,8 +3,11 @@
 An independent panel of _other_ models/binaries reviews a change to the tsforge
 harness and produces a **deterministic, blocking verdict the builder cannot fake**.
 Reviewers must be independent of the active builder model — the tool refuses a
-reviewer that is the same model as the builder. CI is the authority; a local
-pre-push hook is convenience.
+reviewer that is the same model as the builder. The panel runs **locally** (the
+pre-push hook + `tsforge harness-review`), because it uses local binaries (grok,
+codex) and local/keyed model endpoints that a CI runner cannot reach. The local
+pre-push hook is the authority; `core-ci.yml` still enforces the code gate
+(typecheck/lint/format/test) server-side, independently of the panel.
 
 ## Configure the panel
 
@@ -69,7 +72,9 @@ in parallel → deterministic `aggregate` → print verdict + write an audit art
 rubric version, so any of those changing is a cache miss). **Exit: 0 = PASS, 1 = BLOCK.**
 
 - `--quick` — one external reviewer + validate (fast local iteration).
-- `--ci` — strict, no cache, no hook install (CI's mode; the enforcement of record).
+- `--ci` — strict, no cache. Runs the panel non-interactively; usable from any
+  automation that can reach the reviewers (for this repo that means a local
+  runner, since the panel uses local binaries).
 - `--base <ref>` — override the diff base.
 - `--intent "…"` — the change's purpose (required when the commit subject is generic).
 - `--install-hook` — prints the command to activate the pre-push hook.
@@ -84,16 +89,24 @@ PASS. Errored/timed-out reviewers are never counted as approvals.
 
 ## Enforcement
 
-- **CI (authority):** `.github/workflows/harness-review.yml` runs
-  `tsforge harness-review --ci` on PRs touching `packages/core/**`, blocking merge.
-- **Pre-push (convenience):** `.githooks/pre-push` runs the panel only when
+The panel uses local binaries (grok, codex) and local/keyed model endpoints, so it
+is **not** a CI gate — a GitHub runner cannot reach those. Enforcement is local:
+
+- **Pre-push (authority):** `.githooks/pre-push` runs the panel when
   `packages/core/**` changed. Activate with `git config core.hooksPath .githooks`
   (off by default so it can't block pushes before a panel is configured). Bypassable
-  with `--no-verify`; CI still enforces.
+  with `--no-verify`.
+- **Code gate (CI, independent):** `core-ci.yml` still runs
+  typecheck/lint/format/test server-side on every PR — that half of the gate does
+  not depend on the panel.
+- **CI panel variant (optional):** a CI job could run the _model_ reviewers only
+  (via `apiKeyEnv` + GitHub secrets), skipping the local binaries. Not enabled here;
+  it needs repo secrets set by the maintainer.
 
 ## Independence invariant (the point)
 
 The builder reacts to findings and re-runs; it never emits a PASS. The verdict is the
-panel's, computed by deterministic code, runnable identically by a human or CI. The
-audit artifact records which builder model was active at review time, so independence
+panel's, computed by deterministic code, runnable identically by a human or by
+automation. The audit artifact records which builder model was active at review
+time, so independence
 can be checked after the fact.
