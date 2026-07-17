@@ -1,17 +1,18 @@
 import type { EditGuard, IEditVeto } from "../tools/tool-context";
 
 /**
- * BoringStack edit guard: reject a PURE deletion of `features.*` translation
- * keys from a locale `common.json`.
+ * BoringStack edit guard: block the model from DELETING `features.*` translation
+ * keys it authored earlier this build (to clear the `i18n-locale-keys-used`
+ * "unused key" check) instead of wiring them into the UI — which ships a hollow
+ * app (a list-only page, no form/confirm/toasts) and churns.
  *
- * The build model repeatedly wrote proper locale keys (error/confirm/success
- * strings, form-field labels) and then DELETED them to clear the boringstack
- * `i18n-locale-keys-used` "unused key" check — instead of wiring them into the
- * UI. That ships a hollow app (a list-only page, no form/confirm/toasts) and
- * churns. Prompt guidance alone did not stop it, so this is a hard, snapshot-free
- * guard: it compares only the single edit's before/after (never a saved tree). A
- * rename/restructure (removes some keys AND adds others) is allowed; only a pure
- * deletion of feature translations is blocked, forcing the model to wire them up.
+ * Stateful, per-build (see {@link makeBoringstackEditGuard}): it tracks the
+ * feature keys THIS session has written (via edit/edit_lines/create) per locale
+ * file, and vetoes an edit whose NET loss of session-authored keys is positive
+ * (more authored keys removed than keys added). That blocks a wholesale gut while
+ * ALLOWING a balanced rename/restructure (remove one authored key, add its
+ * replacement) — so the now-unused old key never deadlocks the gate. Pre-existing
+ * / scaffold keys are never tracked, so removing a genuinely obsolete key is fine.
  *
  * This is a BoringStack overlay — the core edit tool stays domain-agnostic and
  * calls whatever {@link EditGuard} is injected via the tool context.
@@ -133,32 +134,49 @@ export function makeBoringstackEditGuard(): EditGuard {
       };
     }
 
-    // Malformed before-content (rare) — can't compute a delta; fail OPEN.
+    const authored = authoredByFile.get(file) ?? new Set<string>();
     const beforeKeys = featureLeafKeys(before);
 
+    // A NEW file (empty before — e.g. `create` seeding the locale vocabulary):
+    // every key is written this session, so record them all as authored. This
+    // closes the create→gut bypass (keys added via create are now tracked, so a
+    // later edit that deletes them is caught).
+    if (before.trim() === "") {
+      for (const k of afterKeys) {
+        authored.add(k);
+      }
+
+      authoredByFile.set(file, authored);
+
+      return null;
+    }
+
+    // Non-empty but unparseable before (rare) — can't compute a delta; fail OPEN
+    // without recording (uncertain baseline; not state this guard created).
     if (beforeKeys === null) {
       return null;
     }
 
-    const authored = authoredByFile.get(file) ?? new Set<string>();
-    // Destructive = removing a key THIS SESSION authored (and not re-adding it).
-    // Pre-existing keys are absent from `authored`, so their removal is allowed.
     const removed = [...beforeKeys].filter((k) => !afterKeys.has(k));
-    const destructive = removed.filter((k) => authored.has(k));
+    const added = [...afterKeys].filter((k) => !beforeKeys.has(k));
+    // Destructive = a NET loss of keys THIS SESSION authored. Removing an authored
+    // key is fine if the edit adds at least as many keys (a rename/restructure —
+    // no deadlock on the now-unused old key); a wholesale gut (remove many
+    // authored, add few) is vetoed. Pre-existing keys aren't authored, so their
+    // removal never counts.
+    const authoredRemoved = removed.filter((k) => authored.has(k));
 
-    if (destructive.length > 0) {
+    if (authoredRemoved.length > added.length) {
       return {
         reason: "i18n-destructive-delete",
-        message: destructiveLocaleRejection(file, destructive),
+        message: destructiveLocaleRejection(file, authoredRemoved),
       };
     }
 
     // Accepted edit: record newly-added keys as session-authored, and forget any
     // that were legitimately removed, so state tracks the file's live key set.
-    for (const k of afterKeys) {
-      if (!beforeKeys.has(k)) {
-        authored.add(k);
-      }
+    for (const k of added) {
+      authored.add(k);
     }
 
     for (const k of removed) {

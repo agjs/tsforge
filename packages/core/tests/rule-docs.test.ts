@@ -235,9 +235,9 @@ test("ruleHelp: i18n-locale-keys-used steers WIRE-UP, never delete-what-you-wrot
   expect(h).toContain("procedure:");
   expect(h.toLowerCase()).toContain("wire it up");
   // …and explicitly forbid deleting a translation the model just wrote (aligned
-  // with the hard guard: deletion is not an option).
+  // with the hard guard: deletion is reverted, not the fix).
   expect(h.toLowerCase()).toContain("do not delete");
-  expect(h.toLowerCase()).toContain("not an option");
+  expect(h.toLowerCase()).toContain("not the fix");
 });
 
 test("ruleHelp: a pack rule with no worked example shows only its description (no fake ✗/✓)", () => {

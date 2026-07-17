@@ -67,20 +67,21 @@ test("ALLOWS adding keys (the wire-up direction)", () => {
   expect(guard(EN, minimal, full)).toBeNull();
 });
 
-test("a throwaway addition does NOT license deleting an authored key", () => {
+test("a single throwaway addition does NOT license a NET deletion of authored keys", () => {
   const guard = makeBoringstackEditGuard();
 
-  guard(EN, minimal, full); // author the vocabulary
+  guard(EN, minimal, full); // author createError/deleteError/confirmDelete
 
-  // Delete the authored deleteError while adding a throwaway `note` — the count
-  // heuristic would have allowed this; authorship does not.
+  // Delete TWO authored keys while adding ONE throwaway → net loss of authored
+  // keys (2 removed > 1 added) → vetoed. (A balanced 1-for-1 is allowed by design
+  // — it's indistinguishable from a rename and self-limiting, since a throwaway
+  // is itself an unused key the gate then flags.)
   const after = JSON.stringify({
     features: {
       contact: {
         title: "Contacts",
         empty: "None.",
         createError: "c",
-        confirmDelete: "q",
         note: "throwaway",
       },
     },
@@ -90,7 +91,39 @@ test("a throwaway addition does NOT license deleting an authored key", () => {
 
   expect(veto).not.toBeNull();
   expect(veto?.reason).toBe("i18n-destructive-delete");
-  expect(veto?.message).toContain("deleteError");
+});
+
+test("ALLOWS a rename of an authored key (remove old + add new — no deadlock)", () => {
+  const guard = makeBoringstackEditGuard();
+
+  guard(EN, minimal, full); // author the vocabulary
+
+  // Rename deleteError → deleteFailed: removes 1 authored key, adds 1. A balanced
+  // rename must be allowed so the now-unused old key can't deadlock the gate.
+  const renamed = JSON.stringify({
+    features: {
+      contact: {
+        title: "Contacts",
+        empty: "None.",
+        createError: "c",
+        deleteFailed: "d",
+        confirmDelete: "q",
+      },
+    },
+  });
+
+  expect(guard(EN, full, renamed)).toBeNull();
+});
+
+test("seeds authorship from a NEW-file create (empty before) → a later gut is vetoed", () => {
+  const guard = makeBoringstackEditGuard();
+
+  // `create` writes the vocab into a new locale file (empty before): all keys are
+  // session-authored, closing the create→gut bypass.
+  expect(guard(EN, "", full)).toBeNull();
+
+  // A later edit that guts it is caught even though the keys arrived via create.
+  expect(guard(EN, full, minimal)).not.toBeNull();
 });
 
 test("VETOES an edit that leaves the locale file invalid JSON (closes the 2-step bypass)", () => {

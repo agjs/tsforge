@@ -6,6 +6,7 @@ import { applyEdit, applyEdits } from "../src/files/edit";
 import { doEdit, doCreate } from "../src/loop/tools/file-ops";
 import { doHashlineEdit } from "../src/loop/tools/edit-hashline";
 import { computeFileHash } from "../src/files/hashline-format";
+import { makeBoringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
 import type { IToolContext } from "../src/loop/tools/tool-context";
 
 async function tmp(files: Record<string, string>): Promise<string> {
@@ -511,6 +512,42 @@ test("editGuard is enforced on the edit_lines path too (no bypass) and reverts",
     expect(msg).toContain("shrinks file");
     // Reverted: the delete did NOT land via edit_lines.
     expect(await Bun.file(join(dir, "a.txt")).text()).toBe(original);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("product path: keys added via create, then gutted via edit, is vetoed (boringstack guard)", async () => {
+  // The exact bypass a reviewer found: author the vocab through `create` (a NEW
+  // file, so edit/edit_lines never saw it), then delete it through `edit`. The
+  // stateful guard must have recorded the create's keys as session-authored.
+  const full =
+    '{\n  "features": { "contact": { "title": "T", "deleteError": "E" } }\n}\n';
+  const gutted = '{\n  "features": { "contact": { "title": "T" } }\n}\n';
+  const dir = await tmp({}); // LOCALE does not exist yet
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+    editGuard: makeBoringstackEditGuard(),
+  };
+
+  try {
+    // create seeds the vocabulary (new file).
+    const created = await doCreate({ file: LOCALE, content: full }, ctx);
+
+    expect(created).toContain("created");
+
+    // Now try to gut it via edit → the guard vetoes and reverts.
+    const msg = await doEdit(
+      { file: LOCALE, oldString: full, newString: gutted },
+      ctx
+    );
+
+    expect(msg).toContain("REJECTED");
+    expect(msg).toContain("deleteError");
+    expect(await Bun.file(join(dir, LOCALE)).text()).toBe(full);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

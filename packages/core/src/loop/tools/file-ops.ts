@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { applyEdits } from "../../files/edit";
 import type { EditsResult } from "../../files/files.types";
 import { applyCreate } from "../../files/create";
@@ -871,31 +872,37 @@ export async function doCreate(
   // overwrite is the only clean fix and loses nothing (it's already garbage).
   const createPath = join(ctx.cwd, create.file);
   const exists = await Bun.file(createPath).exists();
+  const before = exists
+    ? await Bun.file(createPath)
+        .text()
+        .catch(() => "")
+    : "";
 
-  if (exists) {
-    const current = await Bun.file(createPath)
-      .text()
-      .catch(() => "");
-
-    if (!isSyntacticallyBroken(current, create.file)) {
-      return reject(
-        ctx,
-        "create:exists",
-        `create ${create.file} REJECTED: it already exists and parses. Use \`edit\` to change it — \`edit\` now accepts a replacement of ANY size (there is no line cap), so pass the whole file as one edit if you want to rewrite it. \`create\`-overwrite is blocked only to stop a wholesale write from wiping OTHER code that shares this file.`
-      );
-    }
-    // NOTE: no editGuard call here. create-overwrite is reachable ONLY for a
-    // syntactically-broken file, and a guard that diffs content keys can't verify
-    // an unparseable baseline (it fails open) — so a guard here would be vacuous
-    // theatre. The real protection is above (a VALID file — including JSON, parsed
-    // as JSON — is never overwritable) plus the edit/edit_lines guards that refuse
-    // to leave a locale file invalid, so a locale file can't reach the broken state
-    // through any tool in the first place.
+  if (exists && !isSyntacticallyBroken(before, create.file)) {
+    return reject(
+      ctx,
+      "create:exists",
+      `create ${create.file} REJECTED: it already exists and parses. Use \`edit\` to change it — \`edit\` now accepts a replacement of ANY size (there is no line cap), so pass the whole file as one edit if you want to rewrite it. \`create\`-overwrite is blocked only to stop a wholesale write from wiping OTHER code that shares this file.`
+    );
   }
 
   const result = await applyCreate(ctx.cwd, create, exists);
 
   if (result.ok) {
+    // Run the edit guard on the create too — NOT as overwrite protection (a valid
+    // file is already refused above), but so a guard with per-build state SEES the
+    // keys this create writes (e.g. the boringstack i18n guard records them as
+    // session-authored, closing the create→gut bypass). A veto reverts the write.
+    const veto = guardVeto(ctx, create.file, before, create.content);
+
+    if (veto !== null) {
+      await (exists
+        ? Bun.write(createPath, before)
+        : rm(createPath, { force: true }));
+
+      return reject(ctx, `create:${veto.reason}`, veto.message);
+    }
+
     ctx.report({
       kind: "create",
       task: ctx.task,
