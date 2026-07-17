@@ -20,6 +20,10 @@ import { renderEvent } from "../src/render";
 import { logsDir } from "../src/session-store";
 import { loadApprovedPlan, parsePlan } from "../src/loop/planning/plan-store";
 import { readHostPorts, hostPortOr } from "../src/scaffold";
+import {
+  preflightOrExit,
+  resolveOpenApiUrl,
+} from "../src/loop/boringstack/openapi-preflight";
 
 export interface IHeadlessArgs {
   prompt?: string;
@@ -333,7 +337,11 @@ async function main(): Promise<void> {
     const valkeyPort = hostPortOr(ports, "VALKEY_HOST_PORT");
 
     process.env.TSFORGE_BORINGSTACK_DATABASE_URL ??= `postgresql://app:app_dev_password@localhost:${String(pgPort)}/app`;
-    process.env.OPENAPI_URL ??= `http://localhost:${String(apiPort)}/swagger/json`;
+    // Resolve the OpenAPI URL once (explicit env wins) and reuse it for both the
+    // gate's generate:api and the pre-flight below.
+    const openApiUrl = resolveOpenApiUrl(process.env.OPENAPI_URL, apiPort);
+
+    process.env.OPENAPI_URL = openApiUrl;
     // The host-run gate must reach the clone's PUBLISHED Valkey (isolated port), or
     // Valkey-dependent tests (e.g. the OAuth state store) fail on a locked, out-of-
     // scope file the model can't fix — wrongly blocking the feature. The app's Valkey
@@ -345,6 +353,16 @@ async function main(): Promise<void> {
     process.stdout.write(
       `isolated ports → postgres ${String(pgPort)} · api ${String(apiPort)} · valkey ${String(valkeyPort)}\n`
     );
+
+    // PRECONDITION: the stack's API must already be serving its OpenAPI spec — the
+    // UI regenerates its typed client from it on EVERY gate cycle. Verify it up
+    // front and fail LOUD + closed if not, rather than starting a build that would
+    // oscillate the model against an opaque, un-fixable "API unreachable" gate error.
+    await preflightOrExit(openApiUrl, dir, {
+      writeOut: (text) => process.stdout.write(text),
+      writeErr: (text) => process.stderr.write(text),
+      exit: (code) => process.exit(code),
+    });
   }
 
   // An autonomous build agent must be able to LOOK THINGS UP — `package_docs`

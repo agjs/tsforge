@@ -245,6 +245,60 @@ function parsedDiagnostic(
   return line.length > 0 && isErrorLine(line) ? line : null;
 }
 
+/** Reduce a raw `[generate:api] FAILED: <reason>` reason to a STABLE class token, so
+ *  the same infra failure class ("API down") yields the same signature regardless of
+ *  the exact wording (ECONNREFUSED vs. timeout vs. a status line). A fingerprint that
+ *  drifted with the reason text would defeat stuck-detection for one infra class. */
+export function classifyOpenApiFailure(reason: string): string {
+  const r = reason.toLowerCase();
+
+  if (r.includes("econnrefused") || r.includes("connection refused")) {
+    return "connection-refused";
+  }
+
+  if (
+    r.includes("etimedout") ||
+    r.includes("timeout") ||
+    r.includes("timed out")
+  ) {
+    return "timeout";
+  }
+
+  if (
+    r.includes("enotfound") ||
+    r.includes("getaddrinfo") ||
+    r.includes("dns")
+  ) {
+    return "dns";
+  }
+
+  const status = /\b([1-5]\d\d)\b/u.exec(reason);
+
+  if (status !== null) {
+    return `http-${status[1] ?? ""}`;
+  }
+
+  return "unreachable";
+}
+
+/** The BoringStack UI's `generate:api` step fetches the OpenAPI spec from the
+ *  running API and prints `[generate:api] FAILED: <reason>` when it can't. That is
+ *  an INFRA/precondition failure (the API isn't serving /swagger/json), not a lint
+ *  or type diagnostic the model can edit toward — left unrecognized it collapses
+ *  into an opaque `gate-nonzero` the model oscillated on for 5 cycles then regressed.
+ *  Surface it as one clear, actionable signature (rule `openapi-unreachable`) keyed by
+ *  a STABLE failure class (NO file component — signatureToError maps it to a file-less
+ *  "own" error; the full actionable guidance is built there). */
+function generateApiFailure(line: string): string | null {
+  const failed = /^\[generate:api\] FAILED: (.+)$/u.exec(line);
+
+  if (failed === null) {
+    return null;
+  }
+
+  return `openapi-unreachable:${classifyOpenApiFailure(failed[1] ?? "fetch failed")}`;
+}
+
 export function extractFailures(output: string, cwd: string): Set<string> {
   const signatures = new Set<string>();
   // knip prints `Unused files (N)` then one relative path per line, ending at the
@@ -276,6 +330,13 @@ export function extractFailures(output: string, cwd: string): Set<string> {
     }
 
     if (consumeSourceFile(line, state)) {
+      continue;
+    }
+
+    const apiFailure = generateApiFailure(line);
+
+    if (apiFailure !== null) {
+      signatures.add(apiFailure);
       continue;
     }
 
