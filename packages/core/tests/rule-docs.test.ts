@@ -88,6 +88,25 @@ test("injects React framework idiom cards keyed by the gate's rule id", () => {
   expect(key).toContain("stable id");
 });
 
+test("gives the concrete split procedure for module-boundaries/single-semantic-module", () => {
+  // A live build oscillated here: once the full message surfaced (multi-line fix),
+  // the model saw the categories but not HOW to split — this card gives the fix.
+  const h = ruleHelp([
+    {
+      key: "k",
+      rule: "module-boundaries/single-semantic-module",
+      message: "Mixed semantic categories detected in module: - type - schema",
+    },
+  ]);
+
+  expect(h).toContain("module-boundaries/single-semantic-module");
+  expect(h.toLowerCase()).toContain("one concern");
+  // The actionable split procedure, not just "don't mix".
+  expect(h).toContain("*.types.ts");
+  expect(h).toContain("*.schemas.ts");
+  expect(h.toLowerCase()).toContain("move");
+});
+
 test("gives the guard idiom (bad/good) for a TS unchecked-index error", () => {
   const h = ruleHelp([
     { key: "k", rule: "TS2532", message: "Object is possibly 'undefined'." },

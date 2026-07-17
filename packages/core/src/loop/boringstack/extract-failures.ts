@@ -18,6 +18,116 @@ function normalize(raw: string, cwd: string): string {
 }
 
 /**
+ * eslint's stylish formatter renders a MULTI-LINE rule message across several lines:
+ * the `L:C error <first line>` row, then the raw continuation lines, with the ruleId
+ * appended (after 2+ spaces of padding) to the LAST line. Example (module-boundaries
+ * `single-semantic-module`):
+ *
+ *   6:8  error  Mixed semantic categories detected in module:
+ *   - function
+ *   - class
+ *
+ *   A module must contain only one semantic concern.
+ *   Move declarations into separate files/modules  module-boundaries/single-semantic-module
+ *
+ * The per-line parser would keep only the first line (and miss the ruleId), so the
+ * model sees a truncated, unactionable message ("…detected in module:" — no categories,
+ * no fix) and sprays near-green (observed live). Collapse each such multi-line row into
+ * ONE line so the full message + ruleId parse. Single-line rows (message + ruleId
+ * already together) pass through untouched.
+ */
+function joinMultilineEslintRows(output: string): string {
+  const lines = output.split("\n");
+  const plain = (s: string): string => s.replace(ANSI, "");
+  const isErrorStart = (s: string): boolean =>
+    /^\s*\d+:\d+\s+error\s/u.test(plain(s));
+  // A COMPLETE single-line row already has its ruleId (ANY id, incl. bare core rules
+  // like `eqeqeq`) in eslint's padded right column: `… message  rule`. Such rows —
+  // and rule-LESS ones we can't safely join — pass through untouched.
+  const isCompleteRow = (s: string): boolean =>
+    isErrorStart(s) && /\S {2,}[\w@/-]+\s*$/u.test(plain(s));
+  // A multi-line TERMINATOR is the padded ruleId column carrying a PLUGIN-qualified id
+  // (contains `/`, e.g. `module-boundaries/single-semantic-module`). Requiring the
+  // slash keeps a prose continuation like `Do not use  console` from being mistaken
+  // for a ruleId and terminating the join early.
+  const isRuleIdTerminator = (s: string): boolean =>
+    /\S {2,}@?[\w-]+\/[\w@/-]+\s*$/u.test(plain(s));
+
+  // Any diagnostic row (error OR warning) — a following one must never be fused into
+  // the current message, even though a warning row is also plugin-qualified.
+  const isDiagnosticRow = (s: string): boolean =>
+    /^\s*\d+:\d+\s+(?:error|warning)\s/u.test(plain(s));
+
+  // A BOUNDARY the join must NOT cross or consume — ANY other failure/structural line
+  // in the interleaved gate output: an eslint diagnostic row (error/warning), a tsc
+  // `error TS…`, a bun `(fail)` row, a knip `Unused files` header, a `[lint:meta]`
+  // block, an `::tsforge-app::` marker, a `$` echo, or a source-file HEADER. The
+  // header must be a BARE path (the whole trimmed line is a single path token) — NOT
+  // any line that merely ends in `.ts`, else a prose body like `Move types into
+  // bookmark.types.ts` would abort the join. This keeps the join from swallowing an
+  // interleaved OTHER failure (which the outer parser would then never see) and from
+  // fusing a following diagnostic into the current message.
+  const isBoundary = (s: string): boolean => {
+    const p = plain(s).trim();
+
+    return (
+      isDiagnosticRow(s) ||
+      /\berror TS\d+/u.test(p) ||
+      p.startsWith("(fail)") ||
+      /^Unused files \(\d+\)$/u.test(p) ||
+      p.startsWith("[lint:meta]") ||
+      p.startsWith("$") ||
+      /^::tsforge-app .+::$/u.test(p) ||
+      /^\S+\.[cm]?[jt]sx?:?$/u.test(p)
+    );
+  };
+
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const start = lines[i] ?? "";
+
+    // Only a multi-line OPEN — an error row that is NOT already complete — can start a
+    // join. Everything else (non-errors, complete single-line rows, rule-less rows)
+    // passes through.
+    if (!isErrorStart(start) || isCompleteRow(start)) {
+      out.push(start);
+      continue;
+    }
+
+    // Scan forward for a plugin-qualified terminator, STOPPING at (never crossing) a
+    // boundary. No line cap: the boundary IS the stop condition, so nothing is
+    // silently truncated by an arbitrary length limit.
+    let j = i + 1;
+
+    while (
+      j < lines.length &&
+      !isRuleIdTerminator(lines[j] ?? "") &&
+      !isBoundary(lines[j] ?? "")
+    ) {
+      j += 1;
+    }
+
+    // Collapse ONLY when the stop line is a genuine terminator that is NOT itself a
+    // boundary (a following error row is both, and must stay separate). Otherwise emit
+    // the start row UNCHANGED — a parse error / unterminated block never absorbs.
+    const terminator =
+      j < lines.length &&
+      isRuleIdTerminator(lines[j] ?? "") &&
+      !isBoundary(lines[j] ?? "");
+
+    if (terminator) {
+      out.push(lines.slice(i, j + 1).join(" "));
+      i = j;
+    } else {
+      out.push(start);
+    }
+  }
+
+  return out.join("\n");
+}
+
+/**
  * Extract a set of FAILURE SIGNATURES from a composed BoringStack gate run
  * (`bun test` + `tsc` + `eslint`, all interleaved). Each signature identifies one
  * distinct failure so two gate runs can be diffed: a feature is judged only on the
@@ -61,11 +171,14 @@ function structuredFailure(
   ].join(":");
 }
 
-/** A source-file header printed before bun/eslint/lint-meta diagnostics. */
+/** A source-file header printed before bun/eslint/lint-meta diagnostics. A real header
+ *  is a BARE path (the whole line is one path token) — require that, so a prose line
+ *  that merely ENDS in `.ts` (e.g. a rule message "Move types into bookmark.types.ts")
+ *  is never mistaken for a header and promoted to `currentFile`. */
 function sourceFileFromLine(line: string, app: string): string | null {
   const withoutColon = line.endsWith(":") ? line.slice(0, -1) : line;
 
-  if (!/\.[cm]?[jt]sx?$/u.test(withoutColon)) {
+  if (!/^\S+\.[cm]?[jt]sx?$/u.test(withoutColon.trim())) {
     return null;
   }
 
@@ -314,7 +427,7 @@ export function extractFailures(output: string, cwd: string): Set<string> {
     inUnusedFiles: false,
   };
 
-  for (const rawLine of output.split("\n")) {
+  for (const rawLine of joinMultilineEslintRows(output).split("\n")) {
     const line = normalize(rawLine, cwd);
 
     if (consumeMarker(line, state)) {

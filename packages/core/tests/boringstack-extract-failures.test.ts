@@ -73,6 +73,211 @@ error: script "lint:meta" exited with code 1`;
     );
   });
 
+  test("captures the FULL multi-line eslint message (rule + fix), not just its truncated first line", () => {
+    // The EXACT stylish shape that ground a live build near-green: the model saw only
+    // "…detected in module:" (no categories, no fix) and sprayed. The parser must
+    // stitch the continuation lines + the trailing ruleId into one signature.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/bookmark/bookmark.service.ts
+  6:8  error  Mixed semantic categories detected in module:
+- function
+- class
+
+A module must contain only one semantic concern.
+Move declarations into separate files/modules  module-boundaries/single-semantic-module`;
+    const sigs = extractFailures(out, cwd);
+    const signature = [...sigs][0] ?? "";
+
+    // Rule id captured (enables rule-help), file + line correct…
+    expect(signature).toContain(
+      "failure:apps%2Fapi%2Fsrc%2Fapi%2Fbookmark%2Fbookmark.service.ts:6:module-boundaries%2Fsingle-semantic-module"
+    );
+    // …and the ACTIONABLE detail survives (categories + the fix), decoded.
+    const decoded = decodeURIComponent(signature);
+
+    expect(decoded).toContain("- function");
+    expect(decoded).toContain("- class");
+    expect(decoded).toContain("Move declarations into separate files");
+    // Exactly one signature — the continuation lines didn't leak as junk rows.
+    expect(sigs.size).toBe(1);
+  });
+
+  test("a rule-less parse error does NOT swallow the next file's header + diagnostics (join stops at boundaries)", () => {
+    // The regression the join must avoid: a `Parsing error` carries no ruleId, so a
+    // greedy join would absorb every following line — losing file B's header and
+    // mis-attributing its error to file A. The join must stop at the next file header.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  1:1  error  Parsing error: ';' expected
+${cwd}/apps/api/src/api/b/b.ts
+  2:3  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // Two DISTINCT signatures, each attributed to its OWN file.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:1:syntax")
+      )
+    ).toBe(true);
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fb%2Fb.ts:2:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    expect(sigs.size).toBe(2);
+  });
+
+  test("two single-line eslint errors in ONE file stay separate (a following error is a boundary, never fused)", () => {
+    // The exact hole the conservative join must close: a bare CORE-rule error (no
+    // slash in its id) is not "complete" under the terminator check, so it must NOT
+    // open a join that swallows the NEXT (@typescript-eslint) error row.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  3:1  error  Expected '===' and instead saw '=='  eqeqeq
+  4:7  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:3:eqeqeq")
+      )
+    ).toBe(true);
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    expect(sigs.size).toBe(2);
+  });
+
+  test("an INCOMPLETE multi-line open is NOT fused with a following plugin-qualified error (the boundary-terminator guard)", () => {
+    // The actual hole the guard closes: an open row (no ruleId on line 1, ends with
+    // `:`) immediately followed by a complete plugin-qualified error. The following
+    // error is a boundary AND matches the ruleId pattern — it must NOT be consumed as
+    // this open's terminator.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  3:8  error  Mixed semantic categories detected in module:
+  9:1  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // The open row stays its OWN signature (unterminated → truncated first line, NOT
+    // fused) — it must NOT carry the following error's rule id.
+    expect(
+      [...sigs].some(
+        (s) =>
+          decodeURIComponent(s).includes("Mixed semantic categories") &&
+          !s.includes("no-explicit-any")
+      )
+    ).toBe(true);
+    // …and the following error remains a SEPARATE, correctly-attributed signature.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:9:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    expect(sigs.size).toBe(2);
+  });
+
+  test("a following WARNING row is a boundary, not a terminator (not fused into the error)", () => {
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  3:8  error  Mixed semantic categories detected in module:
+  9:1  warning  Prefer const  sonarjs/prefer-const`;
+    const sigs = extractFailures(out, cwd);
+
+    // The error's (truncated) signature must NOT carry the warning's rule id — the
+    // warning row is a boundary, and warnings aren't captured as failures at all.
+    expect([...sigs].some((s) => s.includes("prefer-const"))).toBe(false);
+    expect(
+      [...sigs].some((s) =>
+        decodeURIComponent(s).includes("Mixed semantic categories")
+      )
+    ).toBe(true);
+  });
+
+  test("a multi-line message whose BODY ends in a .ts path still joins (no abort, no currentFile corruption)", () => {
+    // A prose line ENDING in `.ts` (`Move the type into a.types.ts`) is NOT a bare-path
+    // file header — it must not abort the join nor be promoted to currentFile. The join
+    // reaches its real terminator; the NEXT file's error attributes to the NEXT file.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  6:8  error  Mixed semantic categories detected in module:
+- type
+- schema
+Move the type into a.types.ts
+Move declarations into separate files/modules  module-boundaries/single-semantic-module
+${cwd}/apps/api/src/api/b/b.ts
+  2:1  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // a.ts joined to its real terminator (rule id captured; prose body survives).
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:6:module-boundaries%2Fsingle-semantic-module"
+        )
+      )
+    ).toBe(true);
+    // b.ts's error attributes to b.ts — NOT to `a.types.ts` from the prose body.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fb%2Fb.ts:2:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    // No signature is ATTRIBUTED to the prose path (that would be currentFile
+    // corruption); the prose may appear inside a message, but never as a file.
+    expect([...sigs].some((s) => s.startsWith("failure:a.types.ts"))).toBe(
+      false
+    );
+    expect(sigs.size).toBe(2);
+  });
+
+  test("an unterminated eslint open does NOT swallow an interleaved tsc/bun failure", () => {
+    // Interleaved gate output: an eslint multi-line-looking open (no plugin terminator)
+    // followed by a tsc error then a bun (fail). The join must stop at each — never
+    // absorb them — so the outer parser still sees all three failures.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  6:8  error  Some message with no ruleId on this line:
+${cwd}/apps/api/src/api/a/a.service.ts(4,3): error TS2532: Object is possibly 'undefined'.
+tests/api/a/a.service.test.ts:
+(fail) aService > creates [0.2ms]`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) => s.includes("TS2532") || s.includes("2532"))
+    ).toBe(true);
+    expect(
+      [...sigs].some((s) => decodeURIComponent(s).includes("(fail)"))
+    ).toBe(true);
+    // The eslint open is still its own (truncated) signature — nothing was fused.
+    expect(
+      [...sigs].some((s) => decodeURIComponent(s).includes("no ruleId on this"))
+    ).toBe(true);
+  });
+
+  test("a single-line eslint row is unaffected by the multi-line join", () => {
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/x/x.ts
+  6:1  error  Expected blank line before this statement  padding-line-between-statements`;
+    const sigs = extractFailures(out, cwd);
+    const signature = [...sigs][0] ?? "";
+
+    expect(signature).toContain(
+      "failure:apps%2Fapi%2Fsrc%2Fapi%2Fx%2Fx.ts:6:padding-line-between-statements"
+    );
+    expect(sigs.size).toBe(1);
+  });
+
   test("an eslint PARSING error is captured as `syntax`, not the message's last word", () => {
     // A parsing-error row carries no ruleId; after normalize() collapses the
     // message↔ruleId gap the generic row regex would grab `expected` (the last
