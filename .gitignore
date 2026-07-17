@@ -30,3 +30,4 @@ models.json
 /src/
 __pycache__/
 .claude/settings.local.json
+packages/core/scripts/gen-plan.ts

@@ -681,6 +681,98 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
   }
 }
 
+/** Snapshot the current on-disk contents of every existing file in `files`. */
+async function snapshotFiles(
+  cwd: string,
+  files: readonly string[]
+): Promise<Map<string, string>> {
+  const snapshot = new Map<string, string>();
+
+  for (const f of files) {
+    if (await fileExists(cwd, f)) {
+      snapshot.set(f, await Bun.file(join(cwd, f)).text());
+    }
+  }
+
+  return snapshot;
+}
+
+/** Drop redundant annotations across `files`, degrading silently per-file. */
+async function dropRedundantAcross(
+  cwd: string,
+  files: readonly string[]
+): Promise<number> {
+  let dropped = 0;
+
+  for (const f of files) {
+    if (await fileExists(cwd, f)) {
+      try {
+        dropped += await dropRedundantAnnotations(join(cwd, f));
+      } catch (err) {
+        // degrade silently — we revalidate and revert below
+        trace("polishOnGreen.dropAnnotations", err);
+      }
+    }
+  }
+
+  return dropped;
+}
+
+/**
+ * Re-gate after a polish drop using the SAME gate the loop uses
+ * (`ctx.gate.runner`), NOT `validate(task, …)`. `validate` runs `task.accept`,
+ * which is EMPTY for the boringstack build — it drives an INJECTED gate via
+ * `setGate`, not `task.accept` — so `validate` returned a VACUOUS pass and the
+ * "revert if regressed" guarantee was dead: dropping a load-bearing annotation
+ * (e.g. `: unknown` on `await res.json()`, which suppresses `no-unsafe-*`)
+ * shipped green, and only final acceptance caught it — after the feature was
+ * already verified. The injected gate runs the real checks (including its own
+ * format/autofix), so a drop that changed an inferred type fails here. For
+ * `runTask` this is equivalent (its gate runs `accept`).
+ *
+ * The injected gate can THROW (its composed stages include a judge MODEL call
+ * whose provider request can fail transiently). A throw must NOT be trusted as a
+ * pass. Returns `passed=false` on any transient failure so the caller reverts.
+ * A caller CANCELLATION is not a transient failure — it is captured as `abortErr`
+ * and re-thrown by the caller AFTER the rollback, honoring the signal contract.
+ */
+async function recheckAfterPolish(
+  ctx: ILoopCtx,
+  cwd: string
+): Promise<{ passed: boolean; abortErr: unknown }> {
+  let passed = false;
+  let abortErr: unknown = null;
+
+  try {
+    const recheck = await ctx.gate.runner.run(cwd, {
+      ...(ctx.gate.onGateChunk === undefined
+        ? {}
+        : { onChunk: ctx.gate.onGateChunk }),
+      ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
+    });
+
+    passed = recheck.passed;
+  } catch (err) {
+    if (ctx.tool.signal?.aborted === true) {
+      abortErr = err;
+    } else {
+      // Transient gate/judge failure → do not trust the drop; caller reverts.
+      trace("polishOnGreen.recheck", err);
+    }
+  } finally {
+    // Flush any final newline-less gate line the stream filter still holds
+    // (mirrors runGateStep). GUARDED: a throwing flush must never mask the
+    // caller's rollback.
+    try {
+      ctx.gate.onGateChunk?.flush?.();
+    } catch (err) {
+      trace("polishOnGreen.flush", err);
+    }
+  }
+
+  return { passed, abortErr };
+}
+
 /**
  * On a GREEN task, strip the redundant `const` annotations no stock lint rule
  * catches (over-annotation of call/expression-initialized locals) — then re-gate
@@ -694,26 +786,8 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
 
   // Resolve globs so a glob scope is polished too (not silently skipped).
   const files = await resolveScopeFiles(cwd, task.files);
-  const snapshot = new Map<string, string>();
-
-  for (const f of files) {
-    if (await fileExists(cwd, f)) {
-      snapshot.set(f, await Bun.file(join(cwd, f)).text());
-    }
-  }
-
-  let dropped = 0;
-
-  for (const f of files) {
-    if (await fileExists(cwd, f)) {
-      try {
-        dropped += await dropRedundantAnnotations(join(cwd, f));
-      } catch (err) {
-        // degrade silently — we revalidate and revert below
-        trace("applyDeterministicFixes.dropAnnotations", err);
-      }
-    }
-  }
+  const snapshot = await snapshotFiles(cwd, files);
+  const dropped = await dropRedundantAcross(cwd, files);
 
   if (dropped === 0) {
     return;
@@ -728,51 +802,7 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     );
   }
 
-  // Re-gate with the SAME gate the loop uses (`ctx.gate.runner`), NOT
-  // `validate(task, …)`. `validate` runs `task.accept`, which is EMPTY for the
-  // boringstack build — it drives an INJECTED gate via `setGate`, not `task.accept` — so
-  // `validate` returned a VACUOUS pass and the "revert if regressed" guarantee below was
-  // dead: dropping a load-bearing annotation (e.g. `: unknown` on `await res.json()`,
-  // which suppresses `no-unsafe-*`) shipped green, and only final acceptance caught it —
-  // after the feature was already verified. The injected gate runs the real checks
-  // (including its own format/autofix), so a drop that changed an inferred type fails
-  // here and is rolled back. For `runTask` this is equivalent (its gate runs `accept`).
-  // The injected gate can THROW (its composed stages include a judge MODEL call whose
-  // provider request can fail transiently). A throw must NOT leave the unverified drops
-  // on disk — treat any failure OR error as "not verified" and fall through to the
-  // rollback, so the pre-polish green state is always restored. Polish is best-effort;
-  // a transient gate error must never ship an unsafe drop nor crash the turn.
-  let passed = false;
-  let abortErr: unknown = null;
-
-  try {
-    const recheck = await ctx.gate.runner.run(cwd, {
-      ...(ctx.gate.onGateChunk === undefined
-        ? {}
-        : { onChunk: ctx.gate.onGateChunk }),
-      ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
-    });
-
-    passed = recheck.passed;
-  } catch (err) {
-    // A caller CANCELLATION is not a transient gate failure — it must not be swallowed
-    // (settleGate would then report the task done, breaking the signal contract). Capture
-    // it and re-throw AFTER the rollback below, so the tree is still restored to green.
-    if (ctx.tool.signal?.aborted === true) {
-      abortErr = err;
-    } else {
-      // Transient gate/judge failure → do not trust the drop; revert below.
-      trace("polishOnGreen.recheck", err);
-    }
-  } finally {
-    // Flush any final newline-less gate line the stream filter still holds (mirrors
-    // runGateStep). GUARDED: a throwing flush must never mask the rollback below.
-    try {
-      ctx.gate.onGateChunk?.flush?.();
-    } catch (err) {
-      trace("polishOnGreen.flush", err);
-    }
-  }
+  const { passed, abortErr } = await recheckAfterPolish(ctx, cwd);
 
   if (passed) {
     report({
@@ -792,7 +822,9 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
 
   // Cancellation was deferred past the rollback so the tree is restored — now honor it.
   if (abortErr !== null) {
-    throw abortErr;
+    throw abortErr instanceof Error
+      ? abortErr
+      : new Error("polishOnGreen: re-gate aborted by caller signal");
   }
 }
 

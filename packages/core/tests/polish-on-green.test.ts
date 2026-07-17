@@ -107,6 +107,7 @@ test("polishOnGreen re-throws on caller cancellation (honors the signal) but sti
     await Bun.write(join(dir, "a.ts"), SOURCE);
 
     const controller = new AbortController();
+
     controller.abort();
 
     const ctx: ILoopCtx = {
@@ -143,6 +144,67 @@ test("polishOnGreen re-throws on caller cancellation (honors the signal) but sti
 
     expect(threw).toBe(true);
     // …but the tree is still restored to the pre-polish green state first.
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe(SOURCE);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("polishOnGreen wraps a NON-Error abort rejection in an Error (typed re-throw)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
+
+  try {
+    await Bun.write(join(dir, "a.ts"), SOURCE);
+
+    const controller = new AbortController();
+
+    controller.abort();
+
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["a.ts"],
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { signal: controller.signal },
+      gate: {
+        parse: undefined,
+        runner: {
+          // A rejection that is NOT an Error (some providers reject with a
+          // string/object). Typed `unknown` so it is a rejection reason, not a
+          // literal throw. The typed-throw branch must wrap it in an Error so
+          // only-throw-error holds and the caller gets a real Error.
+          run: async (): Promise<IValidateResult> => {
+            const reason: unknown = "aborted-string";
+
+            throw reason;
+          },
+        },
+      },
+    };
+
+    let caught: unknown = null;
+
+    try {
+      await polishOnGreen(ctx);
+    } catch (err) {
+      caught = err;
+    }
+
+    // Re-thrown as a real Error (not the raw string) with the abort message…
+    expect(caught).toBeInstanceOf(Error);
+
+    if (caught instanceof Error) {
+      expect(caught.message).toContain("aborted by caller signal");
+    }
+
+    // …and the tree is still restored first.
     expect(await Bun.file(join(dir, "a.ts")).text()).toBe(SOURCE);
   } finally {
     await rm(dir, { recursive: true, force: true });
