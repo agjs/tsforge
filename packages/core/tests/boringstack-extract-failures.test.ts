@@ -479,6 +479,67 @@ ${cwd}/apps/api/src/x.ts
     ).toBe(true);
   });
 
+  test("a valid-shaped block whose message entries are malformed does NOT count as coverage (stylish still scraped)", () => {
+    // `[{filePath, messages:[{}]}]` passes shape validation but yields ZERO error
+    // signatures (the {} message has no severity 2). Coverage requires ≥1 real error,
+    // so the app is NOT covered and its stylish error is still captured — the panel's
+    // "shape-valid but incomplete payload silently loses lint" finding.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/x.ts
+  4:2  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fx.ts:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("an unterminated JSON block ends at the next ::tsforge-app:: marker (no cross-app swallow)", () => {
+    // The API JSON block is missing its end marker (truncated capture). Without an
+    // app-boundary reset the inEslintJson flag would stay true across the boundary and
+    // swallow EVERY later line — the UI's tsc error included. The next app marker must
+    // end the block so the UI failure is still captured.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[
+::tsforge-app apps/ui::
+${cwd}/apps/ui/src/features/x/x.ts(10,5): error TS2532: Object is possibly 'undefined'.`;
+    const sigs = extractFailures(out, cwd);
+
+    expect([...sigs].some((s) => s.includes("TS2532"))).toBe(true);
+    expect(
+      [...sigs].some((s) => s.startsWith("failure:apps%2Fui%2Fsrc%2Ffeatures"))
+    ).toBe(true);
+  });
+
+  test("a multi-line JSON message is whitespace-collapsed so its signature matches the stylish path", () => {
+    // Same error, two sources: the JSON message carries literal newlines, the stylish
+    // row is space-joined. Both must key to the SAME signature — else a JSON block that
+    // intermittently fails to parse would make a pre-existing failure look novel in the
+    // differential. Assert the JSON signature has NO encoded newline (%0A) and DOES
+    // contain the full space-joined message.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{"ruleId":"module-boundaries/single-semantic-module","severity":2,"message":"Mixed categories:\\n- type\\n- schema","line":6,"column":8}]}]
+::tsforge-eslint-json-end::`;
+    const sigs = extractFailures(out, cwd);
+    const sig = [...sigs][0] ?? "";
+
+    expect(sig).not.toContain("%0A");
+    expect(decodeURIComponent(sig)).toContain(
+      "Mixed categories: - type - schema"
+    );
+  });
+
   test("a fully green run yields no signatures", () => {
     expect(extractFailures("30 pass\n0 fail\nDone.", "/x").size).toBe(0);
   });

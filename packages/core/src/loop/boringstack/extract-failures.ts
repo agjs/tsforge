@@ -51,7 +51,13 @@ function eslintResultSignatures(
     }
 
     const rule = typeof message.ruleId === "string" ? message.ruleId : "syntax";
-    const text = typeof message.message === "string" ? message.message : "";
+    // Collapse whitespace so a multi-line message yields the SAME signature as the
+    // stylish path (which normalize()s to single spaces) — else the same error would
+    // key differently by source and a re-parse could look "novel" in the differential.
+    const text =
+      typeof message.message === "string"
+        ? message.message.replace(/\s+/gu, " ").trim()
+        : "";
     const line = typeof message.line === "number" ? message.line : undefined;
 
     signatures.add(structuredFailure(file, line, rule, text));
@@ -59,10 +65,12 @@ function eslintResultSignatures(
 }
 
 /** Is this a genuine eslint `--format json` payload — an array of result objects each
- *  carrying `filePath` + a `messages` array (an empty array is valid = a green app)?
- *  Rejects a JSON array of the wrong shape (`[1,2,3]`) so it can't be mistaken for
- *  eslint coverage and wrongly suppress the stylish fallback. */
-function isEslintResultArray(value: unknown): boolean {
+ *  carrying `filePath` + a `messages` array? Rejects a JSON array of the wrong shape
+ *  (`[1,2,3]`) so it can't be mistaken for eslint output. Shape validity alone does NOT
+ *  grant coverage (see parseEslintJsonBlocks) — an empty/all-green array is valid but
+ *  yields no errors, so it must not suppress the stylish fallback. Typed as a guard so
+ *  the caller can iterate `results` without a redundant re-check. */
+function isEslintResultArray(value: unknown): value is unknown[] {
   return (
     Array.isArray(value) &&
     value.every(
@@ -75,10 +83,14 @@ function isEslintResultArray(value: unknown): boolean {
 }
 
 /** Parse every `::tsforge-eslint-json <app>::` … `::tsforge-eslint-json-end::` block
- *  into structured eslint signatures. Returns the SET OF APPS whose block parsed into
- *  a valid eslint-result array — the caller ignores stylish eslint rows ONLY for those
- *  apps (per-app, not global). An app whose block is missing / malformed / wrong-shaped
- *  is NOT in the set, so its stylish rows are still scraped and no lint error is lost. */
+ *  into structured eslint signatures. Returns the SET OF APPS whose block actually
+ *  yielded ≥1 ERROR signature — the caller ignores stylish eslint rows ONLY for those
+ *  apps (per-app, not global). "Covered" deliberately means "the errors for this app are
+ *  already in the JSON", NOT merely "the block parsed": an empty `[]`, an all-green app,
+ *  a 0-file run, or a payload whose message entries are malformed all yield zero errors,
+ *  so they are NOT covered and their stylish rows are still scraped. This is safe both
+ *  ways — a truly green app has no stylish error rows to lose, and a broken JSON pass
+ *  falls back to `check`'s own stylish output, so a lint error is never silently lost. */
 function parseEslintJsonBlocks(
   output: string,
   cwd: string,
@@ -107,14 +119,19 @@ function parseEslintJsonBlocks(
       continue;
     }
 
-    if (!isEslintResultArray(results) || !Array.isArray(results)) {
+    if (!isEslintResultArray(results)) {
       continue;
     }
 
-    covered.add(app);
+    const before = signatures.size;
 
     for (const result of results) {
       eslintResultSignatures(result, cwd, signatures);
+    }
+
+    // Cover the app only when the JSON produced at least one real error signature.
+    if (signatures.size > before) {
+      covered.add(app);
     }
   }
 
@@ -534,6 +551,16 @@ function consumeEslintJsonBlock(
     state.inEslintJson = true;
 
     return true;
+  }
+
+  // An `::tsforge-app <prefix>::` stage marker is a hard boundary. If a JSON block was
+  // left unterminated (truncated capture, missing end marker), it ends HERE rather than
+  // swallowing every later line (tsc errors, bun fails, stylish rows) across the app
+  // boundary — the exact silent-loss the panel flagged. Fall through to consumeMarker.
+  if (/^::tsforge-app .+::$/u.test(line)) {
+    state.inEslintJson = false;
+
+    return false;
   }
 
   return state.inEslintJson;

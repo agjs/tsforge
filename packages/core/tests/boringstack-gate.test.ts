@@ -55,7 +55,14 @@ describe("runBoringstackGate", () => {
     expect(cmd).toContain("::tsforge-app apps/api::");
     // Each app emits its eslint as STRUCTURED JSON (via its own lint script) so the
     // failure parser reads exact {file,line,rule,message} instead of stylish text.
+    // BOTH apps must emit — per-app coverage means a missing UI block silently drops
+    // to stylish, so assert the UI marker is present (inside the UI stage) too.
     expect(cmd).toContain("::tsforge-eslint-json apps/api::");
+    expect(cmd).toContain("::tsforge-eslint-json apps/ui::");
+    expect(cmd).toContain("apps/ui && bun run generate:api");
+    expect(cmd.indexOf("::tsforge-eslint-json apps/ui::")).toBeGreaterThan(
+      cmd.indexOf("apps/ui && bun run generate:api")
+    );
     expect(cmd).toContain("bun run --silent lint -- --format json");
   });
 
@@ -67,7 +74,8 @@ describe("runBoringstackGate", () => {
     // The repo-root drift/build check only runs in the full gate.
     expect(cmd).toContain("::tsforge-app .::");
     expect(cmd).toContain("bun run check");
-    // Structured eslint JSON is emitted in the full gate too.
+    // Structured eslint JSON is emitted for BOTH apps in the full gate too.
     expect(cmd).toContain("::tsforge-eslint-json apps/api::");
+    expect(cmd).toContain("::tsforge-eslint-json apps/ui::");
   });
 });
