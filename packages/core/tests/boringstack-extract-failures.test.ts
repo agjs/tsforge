@@ -153,6 +153,54 @@ ${cwd}/apps/api/src/api/b/b.ts
     expect(sigs.size).toBe(2);
   });
 
+  test("an INCOMPLETE multi-line open is NOT fused with a following plugin-qualified error (the boundary-terminator guard)", () => {
+    // The actual hole the guard closes: an open row (no ruleId on line 1, ends with
+    // `:`) immediately followed by a complete plugin-qualified error. The following
+    // error is a boundary AND matches the ruleId pattern — it must NOT be consumed as
+    // this open's terminator.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  3:8  error  Mixed semantic categories detected in module:
+  9:1  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // The open row stays its OWN signature (unterminated → truncated first line, NOT
+    // fused) — it must NOT carry the following error's rule id.
+    expect(
+      [...sigs].some(
+        (s) =>
+          decodeURIComponent(s).includes("Mixed semantic categories") &&
+          !s.includes("no-explicit-any")
+      )
+    ).toBe(true);
+    // …and the following error remains a SEPARATE, correctly-attributed signature.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:9:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    expect(sigs.size).toBe(2);
+  });
+
+  test("a following WARNING row is a boundary, not a terminator (not fused into the error)", () => {
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  3:8  error  Mixed semantic categories detected in module:
+  9:1  warning  Prefer const  sonarjs/prefer-const`;
+    const sigs = extractFailures(out, cwd);
+
+    // The error's (truncated) signature must NOT carry the warning's rule id — the
+    // warning row is a boundary, and warnings aren't captured as failures at all.
+    expect([...sigs].some((s) => s.includes("prefer-const"))).toBe(false);
+    expect(
+      [...sigs].some((s) =>
+        decodeURIComponent(s).includes("Mixed semantic categories")
+      )
+    ).toBe(true);
+  });
+
   test("a single-line eslint row is unaffected by the multi-line join", () => {
     const cwd = "/tmp/clone";
     const out = `${cwd}/apps/api/src/api/x/x.ts

@@ -53,16 +53,21 @@ function joinMultilineEslintRows(output: string): string {
   const isRuleIdTerminator = (s: string): boolean =>
     /\S {2,}@?[\w-]+\/[\w@/-]+\s*$/u.test(plain(s));
 
-  // A BOUNDARY the join must NOT cross or consume: a new error row, a source-file
-  // header (path ending in .ts/.tsx), an `::tsforge-app::` marker, or a `$` echo.
-  // This is what stops a rule-LESS row (a `Parsing error` carries no ruleId) from
-  // swallowing the next file's header + diagnostics, and stops a following error row
-  // (which is itself plugin-qualified) from being fused into the current one.
+  // Any diagnostic row (error OR warning) — a following one must never be fused into
+  // the current message, even though a warning row is also plugin-qualified.
+  const isDiagnosticRow = (s: string): boolean =>
+    /^\s*\d+:\d+\s+(?:error|warning)\s/u.test(plain(s));
+
+  // A BOUNDARY the join must NOT cross or consume: another diagnostic row, a source-
+  // file header (path ending in .ts/.tsx), an `::tsforge-app::` marker, or a `$` echo.
+  // This stops a rule-LESS row (a `Parsing error` carries no ruleId) from swallowing
+  // the next file's header + diagnostics, and stops a following error/warning row
+  // (itself plugin-qualified) from being fused into the current one.
   const isBoundary = (s: string): boolean => {
     const p = plain(s).trim();
 
     return (
-      isErrorStart(s) ||
+      isDiagnosticRow(s) ||
       p.startsWith("$") ||
       /^::tsforge-app .+::$/u.test(p) ||
       /\.[cm]?[jt]sx?:?$/u.test(p)
