@@ -29,7 +29,7 @@ function phaseForFile(file: string): number | undefined {
   return file.length > 0 ? 3 : undefined;
 }
 
-function signatureToError(sig: string): IErrorItem {
+export function signatureToError(sig: string): IErrorItem {
   const knip = /^knip:unused-file:(.+)$/u.exec(sig);
 
   if (knip !== null) {
@@ -48,6 +48,33 @@ function signatureToError(sig: string): IErrorItem {
         `it and put the test at the mirrored tests/ path instead (this stack's knip ` +
         `entries for tests are tests/**/*.test.ts, NOT co-located src tests). For a ` +
         `production file, wire it from an entry (e.g. an index.ts barrel) or delete it.`,
+    };
+  }
+
+  const openapi = /^openapi-unreachable:(.*)$/u.exec(sig);
+
+  if (openapi !== null) {
+    // NO file — this is an infra/precondition failure (the API isn't serving its
+    // spec), not a diagnostic in an editable file. A file (even "") would get it
+    // mis-classified as an out-of-scope/locked-file error; with no file it stays an
+    // "own", model-visible error carrying the actionable infra message. Phase 2
+    // (the apps/ui stage it comes from) so the frontier accounting matches the
+    // opaque apps/ui fallback it replaces. The signature carries a STABLE failure
+    // class (connection-refused / timeout / dns / http-NNN / unreachable); the full
+    // guidance is built here so the key stays stable across reason wording.
+    const failureClass = openapi[1] ?? "unreachable";
+
+    return {
+      key: sig,
+      rule: "openapi-unreachable",
+      phase: 2,
+      message:
+        `generate:api could not fetch the OpenAPI spec (${failureClass}). The API ` +
+        `is not serving /swagger/json. This is an INFRA PRECONDITION, not something ` +
+        `to fix in code — the BoringStack stack must be running (bring it up with ` +
+        `dev.sh up). If the stack IS up, your apps/api changes may have broken the ` +
+        `server so it can't boot — check apps/api compiles and starts. Do NOT edit ` +
+        `UI code to chase this.`,
     };
   }
 

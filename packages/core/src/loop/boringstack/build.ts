@@ -309,6 +309,41 @@ export function describeBaseline(
   };
 }
 
+export interface IBaselinePartition {
+  /** `openapi-unreachable` signatures from the pristine gate: an INFRA precondition
+   *  failure (the API isn't serving its OpenAPI spec), never a real baseline. */
+  infra: string[];
+  /** Everything else — the genuine pre-existing scaffold defects that form the
+   *  differential baseline features are graded against. */
+  baseline: Set<string>;
+}
+
+/**
+ * Split the pristine gate's failure signatures into infra-precondition failures
+ * (`openapi-unreachable`) and everything else. `openapi-unreachable` must NEVER enter
+ * the differential baseline: if it did, `differentialStage` would suppress it forever
+ * and a feature whose only failure is the API being down would "pass" green with a
+ * stale/wrong client. It also must not be silently dropped (that would let
+ * `describeBaseline` misreport a RED-only-because-of-infra gate as "did NOT parse").
+ * The caller fails LOUD + closed on a non-empty `infra` list instead.
+ */
+export function partitionBaseline(
+  signatures: Iterable<string>
+): IBaselinePartition {
+  const infra: string[] = [];
+  const baseline = new Set<string>();
+
+  for (const sig of signatures) {
+    if (sig.startsWith("openapi-unreachable:")) {
+      infra.push(sig);
+    } else {
+      baseline.add(sig);
+    }
+  }
+
+  return { infra, baseline };
+}
+
 /**
  * Run the BoringStack build driver: require an approved plan, derive features
  * from its slices, and drive them through the greenfield loop
@@ -358,9 +393,32 @@ export async function runBoringstackBuild(opts: {
   });
 
   const baseRun = await runBoringstackGate(cwd, exec);
-  const baseline = baseRun.passed
-    ? new Set<string>()
-    : extractFailures(baseRun.output, cwd);
+  const { infra, baseline } = baseRun.passed
+    ? { infra: [], baseline: new Set<string>() }
+    : partitionBaseline(extractFailures(baseRun.output, cwd));
+
+  // FAIL CLOSED on an unmet infra precondition. If the pristine gate can't reach the
+  // API's OpenAPI spec, the UI's generate:api will fail EVERY cycle — driving the
+  // model against infra it cannot fix. Stop here with a clear, actionable status
+  // rather than start a build (this covers every entry path, and an API death between
+  // the headless pre-flight and this baseline).
+  if (infra.length > 0) {
+    const classes = infra
+      .map((sig) => sig.slice("openapi-unreachable:".length))
+      .join(", ");
+    const message =
+      `the BoringStack API is not serving its OpenAPI spec (${classes}) — the UI ` +
+      `regenerates its typed client from it every gate cycle. Bring the stack up ` +
+      `(dev.sh up) before building. This is an infra precondition, not a code fix.`;
+
+    onEvent?.({
+      kind: "stuck",
+      task: "boringstack",
+      message: `✗ precondition not met: ${message}`,
+    });
+
+    return { status: "needs-infra", features: [], infra: message };
+  }
 
   const report = describeBaseline(baseRun.passed, baseline.size);
 
