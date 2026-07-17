@@ -26,6 +26,98 @@ export function loadBundledManifest(): IScaffoldManifest {
   return bundled;
 }
 
+/** The recorded values a dependency field can actually take in the wizard's
+ *  single-select state: a toggle stores "1"/"0"; a one-of stores one of its
+ *  options. Anything else (multi lives in state.multi; secret/text/STACK are never
+ *  single wizard answers) can never match, so it's not a valid askWhen target. */
+function recordableValues(field: IConfigField): readonly string[] | null {
+  if (field.key === "STACK") {
+    return null; // STACK is not a wizard question
+  }
+
+  if (field.kind === "toggle") {
+    return ["1", "0"];
+  }
+
+  if (field.kind === "one-of") {
+    return field.options ?? [];
+  }
+
+  return null; // multi / secret / text never populate state.single
+}
+
+/** Fail loud on a malformed or dangerous `askWhen`: it must be exactly `KEY=value`
+ *  (non-empty key and value, a single `=`), reference a real field asked EARLIER,
+ *  not depend on a field that itself has an `askWhen` (chains would read a hidden
+ *  field's stale answer), and name a value the dependency can actually record. A
+ *  silent skip would apply the default forever, so this throws. */
+function validateAskWhen(fields: readonly IConfigField[]): void {
+  const byKey = new Map(fields.map((f, i) => [f.key, { field: f, index: i }]));
+  const gated = new Set(
+    fields.filter((f) => f.askWhen !== undefined).map((f) => f.key)
+  );
+
+  fields.forEach((field, i) => {
+    const token = field.askWhen;
+
+    if (token === undefined) {
+      return;
+    }
+
+    const where = `fields[${String(i)}] (${field.key}).askWhen`;
+    const eq = token.indexOf("=");
+
+    if (eq <= 0 || eq !== token.lastIndexOf("=")) {
+      throw new Error(
+        `scaffold manifest: ${where} must be exactly "KEY=value" — got "${token}"`
+      );
+    }
+
+    const key = token.slice(0, eq);
+    const value = token.slice(eq + 1);
+
+    if (value.length === 0) {
+      throw new Error(
+        `scaffold manifest: ${where} has an empty value in "${token}"`
+      );
+    }
+
+    const dep = byKey.get(key);
+
+    if (dep === undefined) {
+      throw new Error(
+        `scaffold manifest: ${where} references unknown field "${key}"`
+      );
+    }
+
+    if (dep.index >= i) {
+      throw new Error(
+        `scaffold manifest: ${where} references "${key}", which must be asked before it`
+      );
+    }
+
+    if (gated.has(key)) {
+      throw new Error(
+        `scaffold manifest: ${where} depends on "${key}", which itself has askWhen — chained conditions are not supported`
+      );
+    }
+
+    const valid = recordableValues(dep.field);
+
+    if (valid === null) {
+      throw new Error(
+        `scaffold manifest: ${where} depends on "${key}", which is not a yes/no or single-choice wizard question (its answer never reaches the gate)`
+      );
+    }
+
+    if (!valid.includes(value)) {
+      throw new Error(
+        `scaffold manifest: ${where} value "${value}" can never match "${key}" — expected one of ${valid.join(" | ")} (a toggle records "1"/"0", not "true")`
+      );
+    }
+  });
+}
+
 /** Parse + validate the boringstack scaffold manifest (read from the cloned repo
  *  or a test fixture). Narrows `unknown` with guards (no casts); throws a clear
  *  error on malformed input so a bad manifest fails loudly rather than producing
@@ -56,6 +148,15 @@ export function parseManifest(raw: unknown): IScaffoldManifest {
       );
     }
 
+    // askWhen must be a STRING when present. optStrField silently drops a non-string
+    // (e.g. `askWhen: true`), which would leave the step unconditional — the opposite
+    // of the fail-loud contract validateAskWhen enforces. Reject it here.
+    if ("askWhen" in f && typeof f.askWhen !== "string") {
+      throw new Error(
+        `scaffold manifest: fields[${String(i)}] askWhen must be a string, got ${typeof f.askWhen}`
+      );
+    }
+
     return {
       key: str(f, "key", `fields[${String(i)}]`),
       kind: narrowKind(kind),
@@ -69,6 +170,7 @@ export function parseManifest(raw: unknown): IScaffoldManifest {
       ...optRecordOfStrArr(f, "requiresSecrets"),
       ...optBool(f, "requiresSecretsProdOnly"),
       ...optStrField(f, "requiresSecretsWhen"),
+      ...optStrField(f, "askWhen"),
       ...optBool(f, "prodOnly"),
       ...optGenerate(f),
       ...optStrField(f, "envFile"),
@@ -95,6 +197,8 @@ export function parseManifest(raw: unknown): IScaffoldManifest {
       };
     }
   );
+
+  validateAskWhen(fields);
 
   return {
     manifestVersion: num(raw, "manifestVersion"),

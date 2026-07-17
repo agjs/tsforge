@@ -59,9 +59,17 @@ export interface IConfigField {
    *  (STRIPE, email, OAuth) are required whenever the field is on, regardless. */
   readonly requiresSecretsProdOnly?: boolean;
   /** Gate `requiresSecrets` on another field being active (a `field=value` or
-   *  `field:*` token, same grammar as cross-rules). E.g. AI_PROVIDER's provider
-   *  keys are required only when `AI_ENABLED=true`. Absent → always evaluated. */
+   *  `field:*` token, same grammar as cross-rules). Use the `field:*` "is on" form
+   *  for a toggle gate — the wizard records toggles as "1"/"0", so a literal
+   *  `field=true` would never match a wizard answer. E.g. AI_PROVIDER's keys are
+   *  required only when `AI_ENABLED:*`. Absent → always evaluated. */
   readonly requiresSecretsWhen?: string;
+  /** Gate whether the WIZARD even ASKS this field on another field's answer, as a
+   *  `KEY=value` token. The wizard records toggles as "1"/"0", so a field that only
+   *  matters when a toggle is on uses `KEY=1` (e.g. CACHE_PROVIDER → `CACHE_ENABLED=1`).
+   *  When the token doesn't match, the step is skipped and the planner falls back to
+   *  the field's default. Absent → always asked. */
+  readonly askWhen?: string;
   /** Only required when STACK=prod (e.g. JWT_SECRET, VALKEY_PASSWORD). */
   readonly prodOnly?: boolean;
   /** Generate via `openssl rand` rather than prompting (JWT_SECRET, MFA key). */
