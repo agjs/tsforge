@@ -344,6 +344,284 @@ tests/api/a/a.service.test.ts:
     expect(sigs.size).toBe(1);
   });
 
+  test("structured eslint JSON → exact signatures; stylish rows for the same run are ignored (no double)", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/api/a/a.ts","messages":[{"ruleId":"module-boundaries/single-semantic-module","severity":2,"message":"Mixed semantic categories detected in module:\\n- type\\n- schema\\nMove declarations into separate files/modules","line":6,"column":8},{"ruleId":"@typescript-eslint/no-explicit-any","severity":2,"message":"Unexpected any.","line":9,"column":3},{"ruleId":"prefer-const","severity":1,"message":"just a warning","line":1,"column":1}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/api/a/a.ts
+  6:8  error  Mixed semantic categories detected in module:
+- type
+- schema
+Move declarations into separate files/modules  module-boundaries/single-semantic-module
+  9:3  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // Exact structured signatures from JSON (full multi-line message, correct rule).
+    const semantic = [...sigs].find((s) =>
+      s.includes("single-semantic-module")
+    );
+
+    expect(semantic).toBeDefined();
+    expect(semantic).toStartWith(
+      "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:6:module-boundaries%2Fsingle-semantic-module"
+    );
+    expect(decodeURIComponent(semantic ?? "")).toContain(
+      "Move declarations into separate files"
+    );
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:9:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    // Warning (severity 1) is NOT a failure.
+    expect([...sigs].some((s) => s.includes("prefer-const"))).toBe(false);
+    // Exactly the two errors — the stylish rows did NOT create duplicates.
+    expect(sigs.size).toBe(2);
+  });
+
+  test("a JSON message containing `error TS…` is not mis-parsed as a tsc diagnostic", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{"ruleId":"no-console","severity":2,"message":"Do not mention error TS2532 here","line":2,"column":1}]}]
+::tsforge-eslint-json-end::`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(sigs.size).toBe(1);
+    expect([...sigs][0]).toStartWith(
+      "failure:apps%2Fapi%2Fsrc%2Fx.ts:2:no-console"
+    );
+    // The `error TS2532` inside the message did NOT mint a phantom tsc signature.
+    expect([...sigs].some((s) => s.includes("TS2532:"))).toBe(false);
+  });
+
+  test("tsc + bun failures still parse alongside a JSON eslint block", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{"ruleId":"no-console","severity":2,"message":"no console","line":2,"column":1}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/y.ts(38,3): error TS2532: Object is possibly 'undefined'.
+tests/api/z/z.test.ts:
+(fail) zService > works [0.2ms]`;
+    const sigs = extractFailures(out, cwd);
+
+    expect([...sigs].some((s) => s.includes("no-console"))).toBe(true);
+    expect([...sigs].some((s) => s.includes("TS2532"))).toBe(true);
+    expect(
+      [...sigs].some((s) => decodeURIComponent(s).includes("(fail)"))
+    ).toBe(true);
+  });
+
+  test("a malformed JSON block falls back to scraping stylish eslint (no lint error lost)", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-eslint-json apps/api::
+not valid json {[
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/x.ts
+  4:2  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // JSON unparseable → stylish path still captures the eslint error.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fx.ts:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("API JSON `[]` (green) does NOT suppress UI's stylish errors when the UI block is malformed", () => {
+    // The gate emits TWO blocks (api, ui). API is green ([]) and UI's block is malformed
+    // → neither contributes dedup keys, so UI's stylish eslint error must still be
+    // captured (a global suppression flag would have lost it — the near-green regression).
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[]
+::tsforge-eslint-json-end::
+::tsforge-app apps/ui::
+::tsforge-eslint-json apps/ui::
+not valid json {[
+::tsforge-eslint-json-end::
+${cwd}/apps/ui/src/features/x/X.tsx
+  4:2  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fui%2Fsrc%2Ffeatures%2Fx%2FX.tsx:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("a wrong-shaped JSON array (`[1,2,3]`) yields no dedup keys — stylish is still scraped", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[1,2,3]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/x.ts
+  4:2  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fx.ts:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("a valid-shaped block whose message entries are malformed yields no dedup keys (stylish still scraped)", () => {
+    // `[{filePath, messages:[{}]}]` is a valid array but the {} message has no
+    // severity 2, so it contributes ZERO dedup keys. The stylish error is therefore
+    // still captured — the panel's "shape-valid but incomplete payload silently loses
+    // lint" finding, resolved by per-error dedup rather than per-app suppression.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/x.ts
+  4:2  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fx.ts:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("an unterminated JSON block never swallows later diagnostics (only CLOSED blocks are stripped)", () => {
+    // The API JSON block is missing its end marker (truncated/killed capture). Only
+    // CLOSED blocks are stripped from the scanned text; an unterminated one is left in
+    // place and parsed line-by-line — its partial JSON line is not an error row, so it
+    // is skipped harmlessly, and the UI's tsc error that follows is still captured. A
+    // sticky skip flag would have swallowed every later line.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[
+::tsforge-app apps/ui::
+${cwd}/apps/ui/src/features/x/x.ts(10,5): error TS2532: Object is possibly 'undefined'.`;
+    const sigs = extractFailures(out, cwd);
+
+    expect([...sigs].some((s) => s.includes("TS2532"))).toBe(true);
+    expect(
+      [...sigs].some((s) => s.startsWith("failure:apps%2Fui%2Fsrc%2Ffeatures"))
+    ).toBe(true);
+  });
+
+  test("an unterminated block does NOT pair with a LATER closed block (no cross-block strip)", () => {
+    // The tempered regex must stop the API block's content at the UI opening marker.
+    // A naive `[\s\S]*?` would pair the unterminated API opening with the UI closing and
+    // strip everything between — losing the intervening tsc error AND the UI JSON error.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/api/x.ts","messages":[
+${cwd}/apps/api/src/api/x.ts(5,3): error TS1005: ';' expected.
+::tsforge-app apps/ui::
+::tsforge-eslint-json apps/ui::
+[{"filePath":"${cwd}/apps/ui/src/features/y/y.ts","messages":[{"ruleId":"no-console","severity":2,"message":"no console","line":2,"column":1}]}]
+::tsforge-eslint-json-end::`;
+    const sigs = extractFailures(out, cwd);
+
+    // The tsc error between the two blocks survives (API block was NOT stripped)…
+    expect([...sigs].some((s) => s.includes("TS1005"))).toBe(true);
+    // …and the CLOSED UI block still parses to its structured signature.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fui%2Fsrc%2Ffeatures%2Fy%2Fy.ts:2:no-console"
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("column is in the dedup key: a stylish error at a different column on the same line/rule is NOT dropped", () => {
+    // JSON reports ONE no-console at 6:3; stylish has that one PLUS a second no-console at
+    // 6:20 the JSON never emitted. With column in the dedup key, only the 6:3 twin is
+    // deduped and 6:20 survives. A column-less key (file:line:rule) would drop BOTH
+    // stylish rows and silently lose the 6:20 error.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/api/a/a.ts","messages":[{"ruleId":"no-console","severity":2,"message":"a","line":6,"column":3}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/api/a/a.ts
+  6:3  error  a  no-console
+  6:20  error  b  no-console`;
+    const sigs = extractFailures(out, cwd);
+    const consoleErrors = [...sigs].filter((s) =>
+      s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:6:no-console")
+    );
+
+    // The JSON error (6:3) and the stylish-only error (6:20) — two distinct signatures.
+    expect(consoleErrors).toHaveLength(2);
+  });
+
+  test("a JSON error at one line does NOT suppress a stylish-only error at another (per-error dedup, not per-app)", () => {
+    // The panel's core finding: if the JSON is a SUBSET of the real lint failures, a
+    // per-app suppression would drop the stylish-only errors. Per-(file,line,rule) dedup
+    // drops only the exact error the JSON already reported (a.ts:6), keeping the
+    // stylish-only error at a.ts:9 that the JSON never emitted.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/api/a/a.ts","messages":[{"ruleId":"no-console","severity":2,"message":"no console","line":6,"column":8}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/api/a/a.ts
+  6:8  error  no console  no-console
+  9:3  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // The JSON error (line 6) is kept exactly once — its stylish duplicate is deduped.
+    expect(
+      [...sigs].filter((s) =>
+        s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:6:no-console")
+      )
+    ).toHaveLength(1);
+    // The stylish-ONLY error (line 9) — never in the JSON — is still captured.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:9:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    expect(sigs.size).toBe(2);
+  });
+
+  test("a multi-line JSON message is whitespace-collapsed so its signature matches the stylish path", () => {
+    // Same error, two sources: the JSON message carries literal newlines, the stylish
+    // row is space-joined. Both must key to the SAME signature — else a JSON block that
+    // intermittently fails to parse would make a pre-existing failure look novel in the
+    // differential. Assert the JSON signature has NO encoded newline (%0A) and DOES
+    // contain the full space-joined message.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{"ruleId":"module-boundaries/single-semantic-module","severity":2,"message":"Mixed categories:\\n- type\\n- schema","line":6,"column":8}]}]
+::tsforge-eslint-json-end::`;
+    const sigs = extractFailures(out, cwd);
+    const sig = [...sigs][0] ?? "";
+
+    expect(sig).not.toContain("%0A");
+    expect(decodeURIComponent(sig)).toContain(
+      "Mixed categories: - type - schema"
+    );
+  });
+
   test("a fully green run yields no signatures", () => {
     expect(extractFailures("30 pass\n0 fail\nDone.", "/x").size).toBe(0);
   });

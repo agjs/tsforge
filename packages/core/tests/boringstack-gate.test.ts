@@ -45,25 +45,49 @@ describe("runBoringstackGate", () => {
     expect(cmd.startsWith("bash")).toBe(true);
     expect(cmd).not.toContain("docker");
     expect(cwd).toBe("/repo");
-    // Fast = each app's `check` (lint+typecheck+meta+knip) + the cheap API tests.
-    expect(cmd).toContain("apps/api && bun run check && bun run test");
-    // UI regenerates the OpenAPI client first, then `check` (no build/size per cycle).
-    expect(cmd).toContain("apps/ui && bun run generate:api && bun run check");
+    // Fast = each app's `check` (lint+typecheck+meta+knip) + the cheap API tests. The
+    // API stage must still END with `check && test` (the JSON aid is inserted BEFORE it).
+    expect(cmd).toContain("cd apps/api &&");
+    expect(cmd).toContain("bun run check && bun run test)");
+    // The UI stage regenerates the OpenAPI client first and must still RUN `check` — the
+    // stage ends with `&& bun run check)` so dropping it would fail this assertion.
+    expect(cmd).toContain("cd apps/ui && bun run generate:api &&");
+    expect(cmd).toContain("&& bun run check)");
     // The slow acceptance-only work must NOT be in the per-cycle gate.
     expect(cmd).not.toContain("bun run validate");
     // App markers for repo-relative path attribution (knip).
     expect(cmd).toContain("::tsforge-app apps/api::");
+    // Each app emits its eslint as STRUCTURED JSON (via its own lint script) so the
+    // failure parser reads exact {file,line,rule,message} instead of stylish text.
+    // BOTH apps must emit; the UI marker must sit inside the UI stage (after generate:api).
+    expect(cmd).toContain("::tsforge-eslint-json apps/api::");
+    expect(cmd).toContain("::tsforge-eslint-json apps/ui::");
+    expect(cmd.indexOf("::tsforge-eslint-json apps/ui::")).toBeGreaterThan(
+      cmd.indexOf("cd apps/ui && bun run generate:api")
+    );
+    expect(cmd).toContain("bun run --silent lint -- --format json");
   });
 
   test("FULL gate runs the complete validate + build + size + root check (final acceptance)", async () => {
     const { cmd } = await cmdFor("full");
 
-    expect(cmd).toContain("apps/api && bun run validate");
-    expect(cmd).toContain(
-      "apps/ui && bun run generate:api && bun run validate"
+    // Both apps must still RUN validate (the JSON aid is inserted before it). Slice from
+    // each stage's `cd` so a dropped validate in EITHER stage fails the assertion.
+    expect(cmd).toContain("cd apps/api &&");
+    expect(cmd).toContain("cd apps/ui && bun run generate:api &&");
+    const apiStage = cmd.slice(
+      cmd.indexOf("cd apps/api"),
+      cmd.indexOf("cd apps/ui")
     );
+    const uiStage = cmd.slice(cmd.indexOf("cd apps/ui"));
+
+    expect(apiStage).toContain("bun run validate");
+    expect(uiStage).toContain("bun run validate");
     // The repo-root drift/build check only runs in the full gate.
     expect(cmd).toContain("::tsforge-app .::");
     expect(cmd).toContain("bun run check");
+    // Structured eslint JSON is emitted for BOTH apps in the full gate too.
+    expect(cmd).toContain("::tsforge-eslint-json apps/api::");
+    expect(cmd).toContain("::tsforge-eslint-json apps/ui::");
   });
 });
