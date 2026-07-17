@@ -72,6 +72,48 @@ error: script "lint:meta" exited with code 1`;
     );
   });
 
+  test("captures the FULL multi-line eslint message (rule + fix), not just its truncated first line", () => {
+    // The EXACT stylish shape that ground a live build near-green: the model saw only
+    // "…detected in module:" (no categories, no fix) and sprayed. The parser must
+    // stitch the continuation lines + the trailing ruleId into one signature.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/bookmark/bookmark.service.ts
+  6:8  error  Mixed semantic categories detected in module:
+- function
+- class
+
+A module must contain only one semantic concern.
+Move declarations into separate files/modules  module-boundaries/single-semantic-module`;
+    const sigs = extractFailures(out, cwd);
+    const signature = [...sigs][0] ?? "";
+
+    // Rule id captured (enables rule-help), file + line correct…
+    expect(signature).toContain(
+      "failure:apps%2Fapi%2Fsrc%2Fapi%2Fbookmark%2Fbookmark.service.ts:6:module-boundaries%2Fsingle-semantic-module"
+    );
+    // …and the ACTIONABLE detail survives (categories + the fix), decoded.
+    const decoded = decodeURIComponent(signature);
+
+    expect(decoded).toContain("- function");
+    expect(decoded).toContain("- class");
+    expect(decoded).toContain("Move declarations into separate files");
+    // Exactly one signature — the continuation lines didn't leak as junk rows.
+    expect(sigs.size).toBe(1);
+  });
+
+  test("a single-line eslint row is unaffected by the multi-line join", () => {
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/x/x.ts
+  6:1  error  Expected blank line before this statement  padding-line-between-statements`;
+    const sigs = extractFailures(out, cwd);
+    const signature = [...sigs][0] ?? "";
+
+    expect(signature).toContain(
+      "failure:apps%2Fapi%2Fsrc%2Fapi%2Fx%2Fx.ts:6:padding-line-between-statements"
+    );
+    expect(sigs.size).toBe(1);
+  });
+
   test("an eslint PARSING error is captured as `syntax`, not the message's last word", () => {
     // A parsing-error row carries no ruleId; after normalize() collapses the
     // message↔ruleId gap the generic row regex would grab `expected` (the last

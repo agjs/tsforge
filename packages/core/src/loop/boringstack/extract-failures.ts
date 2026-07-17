@@ -18,6 +18,71 @@ function normalize(raw: string, cwd: string): string {
 }
 
 /**
+ * eslint's stylish formatter renders a MULTI-LINE rule message across several lines:
+ * the `L:C error <first line>` row, then the raw continuation lines, with the ruleId
+ * appended (after 2+ spaces of padding) to the LAST line. Example (module-boundaries
+ * `single-semantic-module`):
+ *
+ *   6:8  error  Mixed semantic categories detected in module:
+ *   - function
+ *   - class
+ *
+ *   A module must contain only one semantic concern.
+ *   Move declarations into separate files/modules  module-boundaries/single-semantic-module
+ *
+ * The per-line parser would keep only the first line (and miss the ruleId), so the
+ * model sees a truncated, unactionable message ("…detected in module:" — no categories,
+ * no fix) and sprays near-green (observed live). Collapse each such multi-line row into
+ * ONE line so the full message + ruleId parse. Single-line rows (message + ruleId
+ * already together) pass through untouched.
+ */
+function joinMultilineEslintRows(output: string): string {
+  const lines = output.split("\n");
+  const plain = (s: string): string => s.replace(ANSI, "");
+  const isErrorStart = (s: string): boolean =>
+    /^\s*\d+:\d+\s+error\s/u.test(plain(s));
+  // eslint right-pads the ruleId with 2+ spaces: `… message  rule/id`.
+  const endsWithRuleId = (s: string): boolean =>
+    /\S {2,}[\w@/-]+\s*$/u.test(plain(s));
+
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const start = lines[i] ?? "";
+
+    // Not a multi-line START (either not an error row, or already a complete
+    // single-line row with its ruleId) → pass through.
+    if (!isErrorStart(start) || endsWithRuleId(start)) {
+      out.push(start);
+      continue;
+    }
+
+    // Accumulate continuation lines until one carries the ruleId (inclusive),
+    // stopping short of the next error row so a missing ruleId can't swallow it.
+    let j = i + 1;
+
+    while (
+      j < lines.length &&
+      !endsWithRuleId(lines[j] ?? "") &&
+      !isErrorStart(lines[j] ?? "")
+    ) {
+      j += 1;
+    }
+
+    const consumedRuleId =
+      j < lines.length &&
+      endsWithRuleId(lines[j] ?? "") &&
+      !isErrorStart(lines[j] ?? "");
+    const end = consumedRuleId ? j + 1 : j;
+
+    out.push(lines.slice(i, end).join(" "));
+    i = end - 1;
+  }
+
+  return out.join("\n");
+}
+
+/**
  * Extract a set of FAILURE SIGNATURES from a composed BoringStack gate run
  * (`bun test` + `tsc` + `eslint`, all interleaved). Each signature identifies one
  * distinct failure so two gate runs can be diffed: a feature is judged only on the
@@ -260,7 +325,7 @@ export function extractFailures(output: string, cwd: string): Set<string> {
     inUnusedFiles: false,
   };
 
-  for (const rawLine of output.split("\n")) {
+  for (const rawLine of joinMultilineEslintRows(output).split("\n")) {
     const line = normalize(rawLine, cwd);
 
     if (consumeMarker(line, state)) {
