@@ -5,6 +5,17 @@ import type { IFailureParserState } from "./extract-failures.types";
 // literal control char (a regex literal with \x1b trips no-control-regex).
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
+/** A CLOSED eslint-JSON block: opening marker, content (capture group 1), closing marker.
+ *  The content is TEMPERED against another opening marker (`(?!…opening…)`) so an
+ *  UNTERMINATED block can never pair with a LATER block's end marker and strip the
+ *  intervening tsc/stylish/knip/app-marker output between them. Used both to extract
+ *  signatures and to strip already-parsed blocks from the line-scanned text; an
+ *  unterminated block matches nothing, so it stays in place and is parsed line-by-line
+ *  (its partial JSON isn't an error row, so it never swallows the diagnostics that follow).
+ *  A fresh RegExp is built per use so the shared `g`-flag lastIndex is never carried over. */
+const ESLINT_JSON_BLOCK_SOURCE =
+  "::tsforge-eslint-json \\S+::((?:(?!::tsforge-eslint-json \\S+::)[\\s\\S])*?)::tsforge-eslint-json-end::";
+
 /** Normalize one line of composed gate output into a stable comparison key:
  *  strip ANSI, remove the clone's absolute path (so signatures are portable),
  *  drop bun's per-test timing suffix, and collapse whitespace. */
@@ -24,14 +35,20 @@ function toRepoRelative(filePath: string, cwd: string): string {
   return filePath.split(cwd).join("").replace(/^\/+/u, "").trim();
 }
 
-/** The location-key of a failure signature: `failure:<encFile>:<line>:<encRule>` — the
- *  first four colon fields (file/rule are URL-encoded and the line is numeric, so none
- *  contain a raw `:`; the message is the only dropped field). Two signatures share a key
- *  iff they describe the SAME eslint error at the same file/line/rule — used to dedup a
- *  stylish row against the JSON signature for the identical error, WITHOUT suppressing a
- *  stylish-only error the JSON never reported. */
-function signatureKey(signature: string): string {
-  return signature.split(":").slice(0, 4).join(":");
+/** The dedup key for a single eslint error: file + line + column + rule. Two eslint
+ *  errors share a key iff they are the SAME diagnostic (same location AND rule) — column
+ *  is included so two reports of the same rule on the same line at different columns stay
+ *  DISTINCT. The message is deliberately excluded: the JSON and stylish formatters render
+ *  the same error's text slightly differently (trailing period, truncation), so keying on
+ *  message would fail to dedup identical errors. Built identically from the JSON payload
+ *  and the stylish row so the two match exactly. */
+function eslintKey(
+  file: string,
+  line: number | undefined,
+  column: number | undefined,
+  rule: string
+): string {
+  return `${file}:${line ?? ""}:${column ?? ""}:${rule}`;
 }
 
 /** Turn one eslint JSON result-file into structured failure signatures — the same
@@ -72,10 +89,11 @@ function eslintResultSignatures(
         ? message.message.replace(/\s+/gu, " ").trim()
         : "";
     const line = typeof message.line === "number" ? message.line : undefined;
-    const signature = structuredFailure(file, line, rule, text);
+    const column =
+      typeof message.column === "number" ? message.column : undefined;
 
-    signatures.add(signature);
-    keys.add(signatureKey(signature));
+    signatures.add(structuredFailure(file, line, rule, text));
+    keys.add(eslintKey(file, line, column, rule));
   }
 }
 
@@ -94,9 +112,7 @@ function parseEslintJsonBlocks(
   signatures: Set<string>,
   keys: Set<string>
 ): void {
-  const blocks = output.matchAll(
-    /::tsforge-eslint-json \S+::([\s\S]*?)::tsforge-eslint-json-end::/gu
-  );
+  const blocks = output.matchAll(new RegExp(ESLINT_JSON_BLOCK_SOURCE, "gu"));
 
   for (const block of blocks) {
     const raw = (block[1] ?? "").replace(ANSI, "");
@@ -411,10 +427,18 @@ function consumeSourceFile(line: string, state: IFailureParserState): boolean {
   return true;
 }
 
+/** A parsed failure line: its stable signature plus, for eslint rows only, the dedup key
+ *  used to drop a stylish row that duplicates a JSON-reported error. `dedupKey` is null
+ *  for tsc/bun/fallback rows (they never collide with an eslint JSON key). */
+interface IParsedDiagnostic {
+  signature: string;
+  dedupKey: string | null;
+}
+
 function parsedDiagnostic(
   line: string,
   state: IFailureParserState
-): string | null {
+): IParsedDiagnostic | null {
   const typeError = /^(.+)\((\d+),(\d+)\): error (TS\d+): (.+)$/u.exec(line);
 
   if (typeError !== null) {
@@ -423,12 +447,15 @@ function parsedDiagnostic(
       (typeError[1] ?? "").replace(/^\.\//u, "").replace(/^\//u, "")
     );
 
-    return structuredFailure(
-      file,
-      Number(typeError[2] ?? "0"),
-      typeError[4] ?? "tsc",
-      typeError[5] ?? line
-    );
+    return {
+      signature: structuredFailure(
+        file,
+        Number(typeError[2] ?? "0"),
+        typeError[4] ?? "tsc",
+        typeError[5] ?? line
+      ),
+      dedupKey: null,
+    };
   }
 
   // An eslint PARSING error carries no ruleId — the row is `L:C error Parsing
@@ -440,30 +467,53 @@ function parsedDiagnostic(
   const eslintParseError = /^(\d+):(\d+) error (Parsing error:.*)$/u.exec(line);
 
   if (eslintParseError !== null && state.currentFile !== "") {
-    return structuredFailure(
-      state.currentFile,
-      Number(eslintParseError[1] ?? "0"),
-      "syntax",
-      eslintParseError[3] ?? line
-    );
+    const eslintLine = Number(eslintParseError[1] ?? "0");
+    const column = Number(eslintParseError[2] ?? "0");
+
+    return {
+      signature: structuredFailure(
+        state.currentFile,
+        eslintLine,
+        "syntax",
+        eslintParseError[3] ?? line
+      ),
+      dedupKey: eslintKey(state.currentFile, eslintLine, column, "syntax"),
+    };
   }
 
   const eslintError = /^(\d+):(\d+) error (.+?) ([\w@/-]+)$/u.exec(line);
 
   if (eslintError !== null && state.currentFile !== "") {
-    return structuredFailure(
-      state.currentFile,
-      Number(eslintError[1] ?? "0"),
-      eslintError[4] ?? "eslint",
-      eslintError[3] ?? line
-    );
+    const eslintLine = Number(eslintError[1] ?? "0");
+    const column = Number(eslintError[2] ?? "0");
+    const rule = eslintError[4] ?? "eslint";
+
+    return {
+      signature: structuredFailure(
+        state.currentFile,
+        eslintLine,
+        rule,
+        eslintError[3] ?? line
+      ),
+      dedupKey: eslintKey(state.currentFile, eslintLine, column, rule),
+    };
   }
 
   if (line.startsWith("(fail)") && state.currentFile !== "") {
-    return structuredFailure(state.currentFile, undefined, "bun-test", line);
+    return {
+      signature: structuredFailure(
+        state.currentFile,
+        undefined,
+        "bun-test",
+        line
+      ),
+      dedupKey: null,
+    };
   }
 
-  return line.length > 0 && isErrorLine(line) ? line : null;
+  return line.length > 0 && isErrorLine(line)
+    ? { signature: line, dedupKey: null }
+    : null;
 }
 
 /** Reduce a raw `[generate:api] FAILED: <reason>` reason to a STABLE class token, so
@@ -520,13 +570,6 @@ function generateApiFailure(line: string): string | null {
   return `openapi-unreachable:${classifyOpenApiFailure(failed[1] ?? "fetch failed")}`;
 }
 
-/** Regex for a CLOSED eslint-JSON block, used to strip already-parsed blocks from the
- *  line-scanned output. Stripping (not a stateful skip flag) means an UNTERMINATED block
- *  — a truncated/killed capture with no end marker — is simply left in place for normal
- *  line parsing, so it can never swallow the tsc/stylish/knip diagnostics that follow. */
-const CLOSED_ESLINT_JSON_BLOCK =
-  /::tsforge-eslint-json \S+::[\s\S]*?::tsforge-eslint-json-end::/gu;
-
 export function extractFailures(output: string, cwd: string): Set<string> {
   const signatures = new Set<string>();
   // knip prints `Unused files (N)` then one relative path per line, ending at the
@@ -552,7 +595,10 @@ export function extractFailures(output: string, cwd: string): Set<string> {
 
   parseEslintJsonBlocks(output, cwd, signatures, jsonKeys);
 
-  const scanned = output.replace(CLOSED_ESLINT_JSON_BLOCK, "");
+  const scanned = output.replace(
+    new RegExp(ESLINT_JSON_BLOCK_SOURCE, "gu"),
+    ""
+  );
 
   for (const rawLine of joinMultilineEslintRows(scanned).split("\n")) {
     const line = normalize(rawLine, cwd);
@@ -582,12 +628,19 @@ export function extractFailures(output: string, cwd: string): Set<string> {
 
     const diagnostic = parsedDiagnostic(line, state);
 
-    // Drop a stylish row only when the JSON already reported the SAME error (identical
-    // file/line/rule) — dedup, not per-app suppression, so a stylish-only error the
-    // JSON never emitted is always kept.
-    if (diagnostic !== null && !jsonKeys.has(signatureKey(diagnostic))) {
-      signatures.add(diagnostic);
+    if (diagnostic === null) {
+      continue;
     }
+
+    // Drop a stylish eslint row only when the JSON already reported the SAME error
+    // (identical file/line/column/rule) — dedup, not per-app suppression, so a
+    // stylish-only error the JSON never emitted is always kept. Non-eslint rows
+    // (tsc/bun/fallback) carry no dedupKey and are never dropped.
+    if (diagnostic.dedupKey !== null && jsonKeys.has(diagnostic.dedupKey)) {
+      continue;
+    }
+
+    signatures.add(diagnostic.signature);
   }
 
   return signatures;

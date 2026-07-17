@@ -522,6 +522,55 @@ ${cwd}/apps/ui/src/features/x/x.ts(10,5): error TS2532: Object is possibly 'unde
     ).toBe(true);
   });
 
+  test("an unterminated block does NOT pair with a LATER closed block (no cross-block strip)", () => {
+    // The tempered regex must stop the API block's content at the UI opening marker.
+    // A naive `[\s\S]*?` would pair the unterminated API opening with the UI closing and
+    // strip everything between — losing the intervening tsc error AND the UI JSON error.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/api/x.ts","messages":[
+${cwd}/apps/api/src/api/x.ts(5,3): error TS1005: ';' expected.
+::tsforge-app apps/ui::
+::tsforge-eslint-json apps/ui::
+[{"filePath":"${cwd}/apps/ui/src/features/y/y.ts","messages":[{"ruleId":"no-console","severity":2,"message":"no console","line":2,"column":1}]}]
+::tsforge-eslint-json-end::`;
+    const sigs = extractFailures(out, cwd);
+
+    // The tsc error between the two blocks survives (API block was NOT stripped)…
+    expect([...sigs].some((s) => s.includes("TS1005"))).toBe(true);
+    // …and the CLOSED UI block still parses to its structured signature.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fui%2Fsrc%2Ffeatures%2Fy%2Fy.ts:2:no-console"
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("column is in the dedup key: a stylish error at a different column on the same line/rule is NOT dropped", () => {
+    // JSON reports ONE no-console at 6:3; stylish has that one PLUS a second no-console at
+    // 6:20 the JSON never emitted. With column in the dedup key, only the 6:3 twin is
+    // deduped and 6:20 survives. A column-less key (file:line:rule) would drop BOTH
+    // stylish rows and silently lose the 6:20 error.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/api/a/a.ts","messages":[{"ruleId":"no-console","severity":2,"message":"a","line":6,"column":3}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/api/a/a.ts
+  6:3  error  a  no-console
+  6:20  error  b  no-console`;
+    const sigs = extractFailures(out, cwd);
+    const consoleErrors = [...sigs].filter((s) =>
+      s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:6:no-console")
+    );
+
+    // The JSON error (6:3) and the stylish-only error (6:20) — two distinct signatures.
+    expect(consoleErrors).toHaveLength(2);
+  });
+
   test("a JSON error at one line does NOT suppress a stylish-only error at another (per-error dedup, not per-app)", () => {
     // The panel's core finding: if the JSON is a SUBSET of the real lint failures, a
     // per-app suppression would drop the stylish-only errors. Per-(file,line,rule) dedup
