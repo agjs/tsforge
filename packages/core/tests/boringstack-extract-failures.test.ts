@@ -201,16 +201,16 @@ ${cwd}/apps/api/src/api/b/b.ts
     ).toBe(true);
   });
 
-  test("a multi-line message whose BODY mentions a .ts path still joins (no abort, no currentFile corruption)", () => {
-    // A prose line like `Move the type into a.types.ts` ends in .ts but is NOT a file
-    // header — it must not abort the join nor be promoted to currentFile. The join
+  test("a multi-line message whose BODY ends in a .ts path still joins (no abort, no currentFile corruption)", () => {
+    // A prose line ENDING in `.ts` (`Move the type into a.types.ts`) is NOT a bare-path
+    // file header — it must not abort the join nor be promoted to currentFile. The join
     // reaches its real terminator; the NEXT file's error attributes to the NEXT file.
     const cwd = "/tmp/clone";
     const out = `${cwd}/apps/api/src/api/a/a.ts
   6:8  error  Mixed semantic categories detected in module:
 - type
 - schema
-Move the type into a.types.ts instead
+Move the type into a.types.ts
 Move declarations into separate files/modules  module-boundaries/single-semantic-module
 ${cwd}/apps/api/src/api/b/b.ts
   2:1  error  Unexpected any  @typescript-eslint/no-explicit-any`;
@@ -238,6 +238,30 @@ ${cwd}/apps/api/src/api/b/b.ts
       false
     );
     expect(sigs.size).toBe(2);
+  });
+
+  test("an unterminated eslint open does NOT swallow an interleaved tsc/bun failure", () => {
+    // Interleaved gate output: an eslint multi-line-looking open (no plugin terminator)
+    // followed by a tsc error then a bun (fail). The join must stop at each — never
+    // absorb them — so the outer parser still sees all three failures.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  6:8  error  Some message with no ruleId on this line:
+${cwd}/apps/api/src/api/a/a.service.ts(4,3): error TS2532: Object is possibly 'undefined'.
+tests/api/a/a.service.test.ts:
+(fail) aService > creates [0.2ms]`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) => s.includes("TS2532") || s.includes("2532"))
+    ).toBe(true);
+    expect(
+      [...sigs].some((s) => decodeURIComponent(s).includes("(fail)"))
+    ).toBe(true);
+    // The eslint open is still its own (truncated) signature — nothing was fused.
+    expect(
+      [...sigs].some((s) => decodeURIComponent(s).includes("no ruleId on this"))
+    ).toBe(true);
   });
 
   test("a single-line eslint row is unaffected by the multi-line join", () => {

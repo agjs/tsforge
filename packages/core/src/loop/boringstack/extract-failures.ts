@@ -58,18 +58,24 @@ function joinMultilineEslintRows(output: string): string {
   const isDiagnosticRow = (s: string): boolean =>
     /^\s*\d+:\d+\s+(?:error|warning)\s/u.test(plain(s));
 
-  // A BOUNDARY the join must NOT cross or consume: another diagnostic row, an
-  // `::tsforge-app::` marker, a `$` echo, or a source-file HEADER. The header must be
-  // a BARE path (the whole trimmed line is a single path token) — NOT any line that
-  // merely ends in `.ts`, else a prose message body like `Move types into
-  // bookmark.types.ts` would abort the join. This stops a rule-LESS row (a `Parsing
-  // error` carries no ruleId) from swallowing the next file's header + diagnostics,
-  // and stops a following error/warning row from being fused into the current one.
+  // A BOUNDARY the join must NOT cross or consume — ANY other failure/structural line
+  // in the interleaved gate output: an eslint diagnostic row (error/warning), a tsc
+  // `error TS…`, a bun `(fail)` row, a knip `Unused files` header, a `[lint:meta]`
+  // block, an `::tsforge-app::` marker, a `$` echo, or a source-file HEADER. The
+  // header must be a BARE path (the whole trimmed line is a single path token) — NOT
+  // any line that merely ends in `.ts`, else a prose body like `Move types into
+  // bookmark.types.ts` would abort the join. This keeps the join from swallowing an
+  // interleaved OTHER failure (which the outer parser would then never see) and from
+  // fusing a following diagnostic into the current message.
   const isBoundary = (s: string): boolean => {
     const p = plain(s).trim();
 
     return (
       isDiagnosticRow(s) ||
+      /\berror TS\d+/u.test(p) ||
+      p.startsWith("(fail)") ||
+      /^Unused files \(\d+\)$/u.test(p) ||
+      p.startsWith("[lint:meta]") ||
       p.startsWith("$") ||
       /^::tsforge-app .+::$/u.test(p) ||
       /^\S+\.[cm]?[jt]sx?:?$/u.test(p)
@@ -165,11 +171,14 @@ function structuredFailure(
   ].join(":");
 }
 
-/** A source-file header printed before bun/eslint/lint-meta diagnostics. */
+/** A source-file header printed before bun/eslint/lint-meta diagnostics. A real header
+ *  is a BARE path (the whole line is one path token) — require that, so a prose line
+ *  that merely ENDS in `.ts` (e.g. a rule message "Move types into bookmark.types.ts")
+ *  is never mistaken for a header and promoted to `currentFile`. */
 function sourceFileFromLine(line: string, app: string): string | null {
   const withoutColon = line.endsWith(":") ? line.slice(0, -1) : line;
 
-  if (!/\.[cm]?[jt]sx?$/u.test(withoutColon)) {
+  if (!/^\S+\.[cm]?[jt]sx?$/u.test(withoutColon.trim())) {
     return null;
   }
 
