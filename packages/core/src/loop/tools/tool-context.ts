@@ -23,10 +23,45 @@ export type SpawnAgentFn = (
   opts: { signal?: AbortSignal; report: Reporter }
 ) => Promise<string>;
 
+/** A guard's veto of an applied edit: a stable `reason` slug (surfaced as
+ *  `edit:<reason>`) and the model-facing rejection `message`. */
+export interface IEditVeto {
+  reason: string;
+  message: string;
+}
+
+/** Inspect an edit AFTER it applied (given the file's before/after bytes) and
+ *  return a veto to reject+revert it, or `null` to accept. A generic seam:
+ *  the CORE edit tool knows nothing about what a guard checks — stack overlays
+ *  (e.g. the boringstack build) inject domain rules here. */
+export type EditGuard = (
+  file: string,
+  before: string,
+  after: string
+) => IEditVeto | null;
+
+/** Call the registered edit guard (if any) with an edit's before/after bytes.
+ *  Returns its veto, or null when no guard is set or the guard accepts. Every
+ *  mutating tool (`edit`, `edit_lines`) runs this so no path bypasses the guard;
+ *  the caller reverts the file on a veto. */
+export function guardVeto(
+  ctx: Pick<IToolContext, "editGuard">,
+  file: string,
+  before: string,
+  after: string
+): IEditVeto | null {
+  return ctx.editGuard === undefined
+    ? null
+    : ctx.editGuard(file, before, after);
+}
+
 export interface IToolContext {
   cwd: string;
   /** Editable scope — `edit`/`create` outside it are rejected. */
   files: string[];
+  /** Optional edit guard: vetoes an applied edit (reverted on veto). Absent ⇒ no
+   *  guard. The core tool stays domain-agnostic; overlays inject the rule. */
+  editGuard?: EditGuard;
   report: Reporter;
   task: string;
   /** In-process TypeScript LanguageService — backs the semantic tools

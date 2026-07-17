@@ -1,5 +1,7 @@
 import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { applyEdits } from "../../files/edit";
+import type { EditsResult } from "../../files/files.types";
 import { applyCreate } from "../../files/create";
 import { EDIT_FAIL_REASON } from "../../files";
 import { writable, normalizeWorkspacePath } from "../../lib/scope";
@@ -7,7 +9,12 @@ import { LOOP_LIMITS } from "../loop.constants";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
 import { condenseToolOutput } from "./condense";
-import { parseOrRepair, reject, type IToolContext } from "./tool-context";
+import {
+  parseOrRepair,
+  reject,
+  guardVeto,
+  type IToolContext,
+} from "./tool-context";
 import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
 import { SessionSnapshotStore } from "../../files/hashline";
 import { trace } from "../../lib/trace";
@@ -585,6 +592,20 @@ function isSyntacticallyBroken(content: string, file: string): boolean {
     return false;
   }
 
+  // JSON must be parsed as JSON, NOT transpiled as JS: a valid JSON object
+  // (`{ "features": {…} }`) is a block statement to the JS transpiler and would
+  // be misread as "broken", letting `create` overwrite (and gut) a valid locale
+  // file. Parse it properly so a valid .json file is protected.
+  if (file.endsWith(".json")) {
+    try {
+      JSON.parse(content);
+
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
   const loader = file.endsWith(".tsx")
     ? "tsx"
     : file.endsWith(".jsx")
@@ -633,7 +654,21 @@ export async function doEdit(
   // is that each `oldString` matches a UNIQUE region, which `applyEdits` enforces;
   // edit SIZE is the model's call, guided softly by the tool description (like pi's
   // edit/write split). The gate is the sole arbiter of correctness.
+  // A registered edit guard may VETO an edit (e.g. a stack overlay that forbids a
+  // destructive change): capture the pre-edit bytes, let the edit apply, then let
+  // the guard inspect before/after and, on veto, revert + return its rejection.
+  const guardBefore =
+    ctx.editGuard === undefined
+      ? null
+      : await readFileTextOrNull(join(ctx.cwd, edit.file));
+
   const result = await applyEdits(ctx.cwd, edit.file, edit.edits);
+
+  const veto = await runEditGuard(ctx, edit.file, guardBefore, result);
+
+  if (veto !== null) {
+    return veto;
+  }
 
   if (result.ok) {
     // A no-op edit (same content / already applied) wrote nothing — report NO
@@ -686,13 +721,62 @@ export async function doEdit(
  *  advising a `read` so a huge file can't flood the model's context. */
 const EDIT_REJECT_MAX_LINES = 400;
 
+/** Run the registered edit guard (if any) against a just-applied edit. On veto,
+ *  reverts the file to `before` and returns the model-facing rejection; otherwise
+ *  null. No-op when no guard is set, the edit failed/no-op'd, or `before` is
+ *  unavailable. */
+async function runEditGuard(
+  ctx: IToolContext,
+  file: string,
+  before: string | null,
+  result: EditsResult
+): Promise<string | null> {
+  if (
+    ctx.editGuard === undefined ||
+    before === null ||
+    !result.ok ||
+    !result.changed
+  ) {
+    return null;
+  }
+
+  const after = await readFileTextOrNull(join(ctx.cwd, file));
+  const veto = after === null ? null : guardVeto(ctx, file, before, after);
+
+  if (veto === null) {
+    return null;
+  }
+
+  await Bun.write(join(ctx.cwd, file), before);
+
+  return reject(ctx, `edit:${veto.reason}`, veto.message);
+}
+
+/** Read a file's text, or null if it doesn't exist / can't be read. Used to diff
+ *  a file's bytes before/after an edit for a registered edit guard. */
+async function readFileTextOrNull(path: string): Promise<string | null> {
+  try {
+    const handle = Bun.file(path);
+
+    if (!(await handle.exists())) {
+      return null;
+    }
+
+    return await handle.text();
+  } catch (err) {
+    trace("tools.readFileTextOrNull", err);
+
+    return null;
+  }
+}
+
 /** The file's current content as numbered rows (line number + `HL_LINE_SEP` + text)
  *  — like `read`'s body but WITHOUT its hashline header (this repairs a `str_replace`
  *  edit, which anchors on verbatim text, not a line hash). Null if the file is
  *  missing, too large to inline, or unreadable. Used to repair a stale-anchor edit in
- *  the SAME turn — the model copies its oldString from the post-format text. Returns null on any I/O error (race, permissions): the edit has
- *  already failed, so enriching its message must never crash the tool — the caller
- *  then falls back to advising a `read`. */
+ *  the SAME turn — the model copies its oldString from the post-format text. Returns
+ *  null on any I/O error (race, permissions): the edit has already failed, so
+ *  enriching its message must never crash the tool — the caller then advises a `read`. */
 async function currentFileView(
   cwd: string,
   file: string
@@ -788,24 +872,37 @@ export async function doCreate(
   // overwrite is the only clean fix and loses nothing (it's already garbage).
   const createPath = join(ctx.cwd, create.file);
   const exists = await Bun.file(createPath).exists();
+  const before = exists
+    ? await Bun.file(createPath)
+        .text()
+        .catch(() => "")
+    : "";
 
-  if (exists) {
-    const current = await Bun.file(createPath)
-      .text()
-      .catch(() => "");
-
-    if (!isSyntacticallyBroken(current, create.file)) {
-      return reject(
-        ctx,
-        "create:exists",
-        `create ${create.file} REJECTED: it already exists and parses. Use \`edit\` to change it — \`edit\` now accepts a replacement of ANY size (there is no line cap), so pass the whole file as one edit if you want to rewrite it. \`create\`-overwrite is blocked only to stop a wholesale write from wiping OTHER code that shares this file.`
-      );
-    }
+  if (exists && !isSyntacticallyBroken(before, create.file)) {
+    return reject(
+      ctx,
+      "create:exists",
+      `create ${create.file} REJECTED: it already exists and parses. Use \`edit\` to change it — \`edit\` now accepts a replacement of ANY size (there is no line cap), so pass the whole file as one edit if you want to rewrite it. \`create\`-overwrite is blocked only to stop a wholesale write from wiping OTHER code that shares this file.`
+    );
   }
 
   const result = await applyCreate(ctx.cwd, create, exists);
 
   if (result.ok) {
+    // Run the edit guard on the create too — NOT as overwrite protection (a valid
+    // file is already refused above), but so a guard with per-build state SEES the
+    // keys this create writes (e.g. the boringstack i18n guard records them as
+    // session-authored, closing the create→gut bypass). A veto reverts the write.
+    const veto = guardVeto(ctx, create.file, before, create.content);
+
+    if (veto !== null) {
+      await (exists
+        ? Bun.write(createPath, before)
+        : rm(createPath, { force: true }));
+
+      return reject(ctx, `create:${veto.reason}`, veto.message);
+    }
+
     ctx.report({
       kind: "create",
       task: ctx.task,

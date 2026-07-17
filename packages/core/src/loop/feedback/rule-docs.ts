@@ -133,6 +133,13 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     procedure:
       "1. If the unused file is a co-located API test under src/, DELETE it and put the test at the mirrored tests/ path (this stack's knip test entries are the mirrored tests dir, NOT co-located src tests). Keep only the mirrored copy. 2. For a production file, import it from an entry (e.g. an index.ts barrel) or delete it. Do this on the FIRST occurrence — an unused-file wall does not resolve by editing other files.",
   },
+  "i18n-locale-keys-used": {
+    what: "A locale key you added is defined but never referenced in `src`. This means you wrote the translation but not the code that shows it — it does NOT mean the string is unwanted. WIRE IT UP; do NOT delete a translation you just authored to clear this rule (that removes real functionality the feature needs, and you will re-add it later — pure churn).",
+    bad: 'await deleteTask(id); // common.json has features.task.deleteError, but no code calls t("features.task.deleteError") → "unused"',
+    good: 'try {\n  await deleteTask(id);\n} catch {\n  toast.error(t("features.task.deleteError")); // the key is now referenced\n}',
+    procedure:
+      "This key is flagged because you added the translation but no `src` code references it YET — the fix is to USE it, not remove it. Wire each unused key to the UI state it names: error keys (createError/updateError/deleteError) → the mutation's onError handler (a toast or inline error rendered via t(key)); confirm keys (confirmDelete) → the destructive action's confirmation dialog/prompt; empty/loading/title keys → the matching render state. Deleting the key is NOT the fix — the harness reverts an edit that drops feature translation keys you added this build (a rename that swaps one key for another is fine; wholesale removal is not). Build the behaviour the string describes.",
+  },
   "@typescript-eslint/naming-convention": {
     what: "Interfaces are PascalCase with an `I` prefix.",
     bad: "interface User {}",

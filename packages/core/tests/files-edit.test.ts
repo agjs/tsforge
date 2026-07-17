@@ -3,7 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyEdit, applyEdits } from "../src/files/edit";
-import { doEdit } from "../src/loop/tools/file-ops";
+import { doEdit, doCreate } from "../src/loop/tools/file-ops";
+import { doHashlineEdit } from "../src/loop/tools/edit-hashline";
+import { computeFileHash } from "../src/files/hashline-format";
+import { makeBoringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
 import type { IToolContext } from "../src/loop/tools/tool-context";
 
 async function tmp(files: Record<string, string>): Promise<string> {
@@ -386,6 +389,65 @@ test("applyEdits sees the result of earlier replacements (sequential)", async ()
   }
 });
 
+// A registered editGuard can VETO an applied edit; doEdit reverts the file and
+// returns the guard's rejection. The guard here is a generic stand-in (the core
+// tool is domain-agnostic) — it vetoes any edit that shrinks the file.
+test("editGuard vetoes an applied edit and doEdit reverts the file", async () => {
+  const original = "line one\nline two\nline three\n";
+  const dir = await tmp({ "a.txt": original });
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+    editGuard: (file, before, after) =>
+      after.length < before.length
+        ? {
+            reason: "test-shrink",
+            message: `edit ${file} REJECTED: shrinks file`,
+          }
+        : null,
+  };
+
+  try {
+    const msg = await doEdit(
+      { file: "a.txt", oldString: "line one\nline two\n", newString: "" },
+      ctx
+    );
+
+    // The guard's rejection is returned…
+    expect(msg).toContain("REJECTED");
+    expect(msg).toContain("shrinks file");
+    // …and the file was reverted to its pre-edit content (veto = no net change).
+    expect(await Bun.file(join(dir, "a.txt")).text()).toBe(original);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("editGuard that returns null lets the edit stand", async () => {
+  const dir = await tmp({ "a.txt": "hello\n" });
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+    editGuard: () => null,
+  };
+
+  try {
+    const msg = await doEdit(
+      { file: "a.txt", oldString: "hello", newString: "goodbye" },
+      ctx
+    );
+
+    expect(msg).toContain("edited");
+    expect(await Bun.file(join(dir, "a.txt")).text()).toBe("goodbye\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // A not-found edit (stale anchor after auto-format) inlines the file's CURRENT
 // content into the rejection, so the model repairs it in the SAME turn instead
 // of spending one on a re-`read` — the model's #1 reported friction.
@@ -411,6 +473,113 @@ test("not-found edit rejection carries the file's current content", async () => 
     expect(msg).toContain("const y = 2;");
     // And it does NOT tell the model to go `read` the file (content is inline).
     expect(msg).not.toContain("`read` a.ts to see");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The edit guard must cover the edit_lines/hashline path too — not just `edit`.
+// The model exploited this exact bypass in a live build. This tests the generic
+// SEAM (a plain guard is called + the change reverted); the boringstack i18n rule
+// is tested in boringstack-i18n-guard.test.ts.
+const LOCALE = "apps/ui/src/lib/i18n/locales/en/common.json";
+
+// A generic guard for the seam tests: veto any edit that shrinks the file.
+const shrinkGuard = (file: string, before: string, after: string) =>
+  after.length < before.length
+    ? { reason: "test-shrink", message: `edit ${file} REJECTED: shrinks file` }
+    : null;
+
+test("editGuard is enforced on the edit_lines path too (no bypass) and reverts", async () => {
+  const original = "line one\nline two\nline three\n";
+  const dir = await tmp({ "a.txt": original });
+  const hash = computeFileHash(original);
+  // Delete line 2 → the file shrinks → the guard vetoes.
+  const input = `¶a.txt#${hash}\ndelete 2..2`;
+
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+    editGuard: shrinkGuard,
+  };
+
+  try {
+    const msg = await doHashlineEdit({ file: "a.txt", input }, ctx);
+
+    expect(msg).toContain("REJECTED");
+    expect(msg).toContain("shrinks file");
+    // Reverted: the delete did NOT land via edit_lines.
+    expect(await Bun.file(join(dir, "a.txt")).text()).toBe(original);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("product path: keys added via create, then gutted via edit, is vetoed (boringstack guard)", async () => {
+  // The exact bypass a reviewer found: author the vocab through `create` (a NEW
+  // file, so edit/edit_lines never saw it), then delete it through `edit`. The
+  // stateful guard must have recorded the create's keys as session-authored.
+  const full =
+    '{\n  "features": { "contact": { "title": "T", "deleteError": "E" } }\n}\n';
+  const gutted = '{\n  "features": { "contact": { "title": "T" } }\n}\n';
+  const dir = await tmp({}); // LOCALE does not exist yet
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+    editGuard: makeBoringstackEditGuard(),
+  };
+
+  try {
+    // create seeds the vocabulary (new file).
+    const created = await doCreate({ file: LOCALE, content: full }, ctx);
+
+    expect(created).toContain("created");
+
+    // Now try to gut it via edit → the guard vetoes and reverts.
+    const msg = await doEdit(
+      { file: LOCALE, oldString: full, newString: gutted },
+      ctx
+    );
+
+    expect(msg).toContain("REJECTED");
+    expect(msg).toContain("deleteError");
+    expect(await Bun.file(join(dir, LOCALE)).text()).toBe(full);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("create refuses to overwrite an existing VALID locale JSON file (no create bypass)", async () => {
+  const original =
+    '{ "features": { "contact": { "title": "T", "deleteError": "E" } } }\n';
+  const dir = await tmp({ [LOCALE]: original });
+
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+  };
+
+  try {
+    // A wholesale `create` that guts the vocabulary must be refused — a valid
+    // JSON file is protected (isSyntacticallyBroken parses .json as JSON now, so
+    // it is NOT mistaken for "broken" and overwrite-able).
+    const msg = await doCreate(
+      {
+        file: LOCALE,
+        content: '{ "features": { "contact": { "title": "T" } } }\n',
+      },
+      ctx
+    );
+
+    expect(msg).toContain("REJECTED");
+    // Untouched.
+    expect(await Bun.file(join(dir, LOCALE)).text()).toBe(original);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

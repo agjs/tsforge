@@ -16,7 +16,7 @@ import {
   GENERATE_IMAGE_TOOL,
 } from "../agent";
 import type { IAgentSpec } from "../agent/agent-spec";
-import type { SpawnAgentFn, IToolContext } from "./tools";
+import type { SpawnAgentFn, IToolContext, EditGuard } from "./tools";
 import type { PolicyMode } from "../policy";
 import type { ProfileId } from "../config/profiles";
 import {
@@ -28,7 +28,13 @@ import {
 } from "../meta-rules";
 import { flags } from "../config";
 import { trace } from "../lib/trace";
-import { validate, isEslintJsonLine, type ErrorParser } from "../validate";
+import {
+  validate,
+  isEslintJsonLine,
+  type ErrorParser,
+  type ErrorSet,
+} from "../validate";
+import { ruleHelp } from "./feedback";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -150,6 +156,10 @@ export interface ISessionConfig {
    *  the write-guard reports lint violations — the moat rules tsc can't see (`as`,
    *  `I`-prefix) — inline, so they're fixed in-context not piled up at the gate. */
   lintFile?: FileLinter;
+  /** Optional edit guard that can veto+revert an applied edit. Set by a build
+   *  BACKEND (e.g. boringstack) to inject a domain rule; the core edit tool stays
+   *  domain-agnostic. Absent ⇒ no guard. */
+  editGuard?: EditGuard;
   /** Rule profile override for this session (from a recipe); defaults to config file. */
   profile?: ProfileId;
   /** Offer the read-only `pull_conventions` tool — set by a build BACKEND that ships
@@ -432,6 +442,34 @@ const INTERIM_CHECK_NOTE =
   "Interim type-check (NOT the final gate) — fix these now, while they are few, " +
   "before writing more. IGNORE any `Cannot find module './…'` for files you have " +
   "not created yet; fix the real type errors:";
+
+/** How many interim errors to surface per turn (raw message + rule-doc lookup). */
+const INTERIM_ERROR_CAP = 20;
+
+/**
+ * Compose the interim-check user message: the note, the capped raw error list,
+ * and — when a failing rule has a curated doc — the fix RECIPE from `ruleHelp`.
+ * Without this the build model saw only raw rule messages (e.g.
+ * `i18n-locale-keys-used: … dead translation surface (remove … or wire it up)`)
+ * and took the destructive path (deleting keys it just wrote) because nothing
+ * taught it the constructive fix (wire the key into the UI state it names).
+ * Exported for unit testing.
+ */
+export function interimCheckContent(errors: ErrorSet): string {
+  const shown = errors.slice(0, INTERIM_ERROR_CAP);
+  const detail = shown.map((e) => e.message).join("\n");
+  // No silent truncation: if the cap dropped errors, say how many remain so the
+  // model knows the list is partial (not that only `shown` are outstanding).
+  const omitted = errors.length - shown.length;
+  const more =
+    omitted > 0
+      ? `\n… and ${String(omitted)} more error(s) not shown — fix these first, then re-run.`
+      : "";
+  const help = ruleHelp(shown);
+  const guidance = help.length > 0 ? `\n\n${help}` : "";
+
+  return `${INTERIM_CHECK_NOTE}\n${detail}${more}${guidance}`;
+}
 
 /**
  * Did the model write whole files INTO its chat message instead of calling
@@ -769,6 +807,7 @@ export class Session {
         policyMode: baseMode,
         ...(policyRules === undefined ? {} : { policyRules }),
         ...(mcpRegistry === null ? {} : { mcpRegistry }),
+        ...(cfg.editGuard === undefined ? {} : { editGuard: cfg.editGuard }),
       },
       gate: {
         parse: cfg.parse,
@@ -1286,7 +1325,7 @@ export class Session {
     this.repairing = true; // errors outstanding → next turns think to converge
 
     const detail = errors
-      .slice(0, 20)
+      .slice(0, INTERIM_ERROR_CAP)
       .map((e) => e.message)
       .join("\n");
 
@@ -1298,9 +1337,12 @@ export class Session {
       message: `⊙ interim check: ${String(errors.length)} error(s) — fixing now:\n${detail}`,
     });
 
+    // The pushed message adds the curated fix RECIPE (ruleHelp) on top of the raw
+    // errors, so the model gets the constructive fix (e.g. WIRE UP an unused i18n
+    // key) instead of only the raw rule message that invites deletion.
     ctx.messages.push({
       role: "user",
-      content: `${INTERIM_CHECK_NOTE}\n${detail}`,
+      content: interimCheckContent(errors),
     });
   }
 

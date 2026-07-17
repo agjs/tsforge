@@ -259,6 +259,10 @@ export interface ILoopCtxTool {
   /** Wired by the interactive CLI: preview a just-generated image inline (the
    *  `generate_image` tool calls it). Threaded into the tool context. */
   previewImage?: IToolContext["previewImage"];
+  /** Optional edit guard set by a build backend (e.g. boringstack) to veto a
+   *  destructive edit. Threaded into the tool context so `edit`/`edit_lines`
+   *  enforce it; declared here so the seam is typed, not accidental. */
+  editGuard?: IToolContext["editGuard"];
 }
 
 /** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */

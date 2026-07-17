@@ -36,6 +36,22 @@ describe("refinePrompt", () => {
     expect(prompt).not.toContain("Zod schemas for request/response");
   });
 
+  it("tells the model to WIRE UP an unused i18n key, never delete what it wrote", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // The unused-key case must steer toward wiring up, not deleting.
+    expect(prompt).toContain("i18n-locale-keys-used");
+    expect(prompt).toContain("WIRE IT UP");
+    expect(prompt).toContain("NEVER delete a translation you just authored");
+  });
+
   it("leads with the prior gate errors on a retry (lastError)", () => {
     const feature: IFeature = {
       id: "Invoice",
