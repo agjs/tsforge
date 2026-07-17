@@ -884,15 +884,13 @@ export async function doCreate(
         `create ${create.file} REJECTED: it already exists and parses. Use \`edit\` to change it — \`edit\` now accepts a replacement of ANY size (there is no line cap), so pass the whole file as one edit if you want to rewrite it. \`create\`-overwrite is blocked only to stop a wholesale write from wiping OTHER code that shares this file.`
       );
     }
-
-    // Even overwriting a syntactically-broken file must not become a guard bypass:
-    // run the same edit guard on the proposed content (before=current) so a
-    // wholesale `create` can't gut protected content that `edit`/`edit_lines` block.
-    const veto = guardVeto(ctx, create.file, current, create.content);
-
-    if (veto !== null) {
-      return reject(ctx, `create:${veto.reason}`, veto.message);
-    }
+    // NOTE: no editGuard call here. create-overwrite is reachable ONLY for a
+    // syntactically-broken file, and a guard that diffs content keys can't verify
+    // an unparseable baseline (it fails open) — so a guard here would be vacuous
+    // theatre. The real protection is above (a VALID file — including JSON, parsed
+    // as JSON — is never overwritable) plus the edit/edit_lines guards that refuse
+    // to leave a locale file invalid, so a locale file can't reach the broken state
+    // through any tool in the first place.
   }
 
   const result = await applyCreate(ctx.cwd, create, exists);

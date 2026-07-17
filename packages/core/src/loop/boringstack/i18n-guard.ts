@@ -71,15 +71,20 @@ function collectLeafPaths(
 /** The model-facing rejection: names the deleted keys, points at wiring up. */
 function destructiveLocaleRejection(
   file: string,
-  removed: readonly string[]
+  removed: readonly string[],
+  addedCount: number
 ): string {
   const shown = removed.slice(0, 8).join(", ");
   const more =
     removed.length > 8 ? `, +${String(removed.length - 8)} more` : "";
+  const addedNote =
+    addedCount > 0
+      ? `adds only ${String(addedCount)} (a net loss of translations)`
+      : "adds none";
 
   return (
     `edit ${file} REJECTED: this edit DELETES ${String(removed.length)} translation ` +
-    `key(s) you authored (${shown}${more}) and adds none. Do NOT delete translations ` +
+    `key(s) you authored (${shown}${more}) and ${addedNote}. Do NOT delete translations ` +
     `to clear the \`i18n-locale-keys-used\` "unused" check — that ships a hollow app ` +
     `(a list-only page with no form, confirmation, or success/error messages). WIRE ` +
     `THEM UP instead: build the UI that uses them — form field labels, the create/edit/` +
@@ -130,16 +135,17 @@ export const boringstackEditGuard: EditGuard = (
   const added = [...afterKeys].filter((k) => !beforeKeys.has(k));
 
   // Allow when nothing is removed, or when at least as many keys are added as
-  // removed (a balanced rename/refactor). Veto a NET key loss — this closes the
-  // "add one throwaway key to license deleting the rest" bypass: deleting 20 keys
-  // while adding 1 is removed(20) > added(1) → vetoed. Cross-feature masking is
-  // caught too, since the delta is over all `features.*` keys, not one entity.
+  // removed (a balanced rename/refactor). Veto a NET key loss — this blocks the
+  // dominant pattern (gut the vocabulary: remove 20, add 0-1). A 1-for-1 swap of a
+  // real key for a throwaway is not fully caught by counting, but it is
+  // self-limiting: the throwaway is itself an unused key the gate then flags, so
+  // it buys the model nothing toward green.
   if (removed.length === 0 || added.length >= removed.length) {
     return null;
   }
 
   return {
     reason: "i18n-destructive-delete",
-    message: destructiveLocaleRejection(file, removed),
+    message: destructiveLocaleRejection(file, removed, added.length),
   };
 };

@@ -19,7 +19,7 @@ test("interimCheckContent surfaces the raw error message AND the curated fix rec
   expect(content).toContain("features.task.deleteError");
   // …AND the curated recipe (ruleHelp) is appended, steering wire-up not delete.
   expect(content.toLowerCase()).toContain("wire it up");
-  expect(content.toLowerCase()).toContain("never delete");
+  expect(content.toLowerCase()).toContain("do not delete");
 });
 
 test("interimCheckContent is just the note + errors when no rule has a curated doc", () => {
