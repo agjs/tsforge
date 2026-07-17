@@ -6,7 +6,6 @@ import { applyEdit, applyEdits } from "../src/files/edit";
 import { doEdit, doCreate } from "../src/loop/tools/file-ops";
 import { doHashlineEdit } from "../src/loop/tools/edit-hashline";
 import { computeFileHash } from "../src/files/hashline-format";
-import { boringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
 import type { IToolContext } from "../src/loop/tools/tool-context";
 
 async function tmp(files: Record<string, string>): Promise<string> {
@@ -479,37 +478,39 @@ test("not-found edit rejection carries the file's current content", async () => 
 });
 
 // The edit guard must cover the edit_lines/hashline path too — not just `edit`.
-// The model exploited this exact bypass in a live build (deleted locale keys via
-// edit_lines while the guard was only on `edit`).
+// The model exploited this exact bypass in a live build. This tests the generic
+// SEAM (a plain guard is called + the change reverted); the boringstack i18n rule
+// is tested in boringstack-i18n-guard.test.ts.
 const LOCALE = "apps/ui/src/lib/i18n/locales/en/common.json";
 
-test("editGuard vetoes a destructive locale delete via edit_lines (no bypass)", async () => {
-  const original =
-    "{\n" +
-    '  "features": { "contact": { "title": "T", "deleteError": "E" } }\n' +
-    "}\n";
-  const dir = await tmp({ [LOCALE]: original });
+// A generic guard for the seam tests: veto any edit that shrinks the file.
+const shrinkGuard = (file: string, before: string, after: string) =>
+  after.length < before.length
+    ? { reason: "test-shrink", message: `edit ${file} REJECTED: shrinks file` }
+    : null;
+
+test("editGuard is enforced on the edit_lines path too (no bypass) and reverts", async () => {
+  const original = "line one\nline two\nline three\n";
+  const dir = await tmp({ "a.txt": original });
   const hash = computeFileHash(original);
-  // Replace line 2 with a version that drops the deleteError key.
-  const input =
-    `¶${LOCALE}#${hash}\nreplace 2..2:\n` +
-    '+  "features": { "contact": { "title": "T" } }';
+  // Delete line 2 → the file shrinks → the guard vetoes.
+  const input = `¶a.txt#${hash}\ndelete 2..2`;
 
   const ctx: IToolContext = {
     cwd: dir,
     files: ["**/*"],
     task: "t",
     report: () => undefined,
-    editGuard: boringstackEditGuard,
+    editGuard: shrinkGuard,
   };
 
   try {
-    const msg = await doHashlineEdit({ file: LOCALE, input }, ctx);
+    const msg = await doHashlineEdit({ file: "a.txt", input }, ctx);
 
     expect(msg).toContain("REJECTED");
-    expect(msg).toContain("deleteError");
-    // Reverted: the key survives (the delete did NOT land via edit_lines).
-    expect(await Bun.file(join(dir, LOCALE)).text()).toBe(original);
+    expect(msg).toContain("shrinks file");
+    // Reverted: the delete did NOT land via edit_lines.
+    expect(await Bun.file(join(dir, "a.txt")).text()).toBe(original);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -525,7 +526,6 @@ test("create refuses to overwrite an existing VALID locale JSON file (no create 
     files: ["**/*"],
     task: "t",
     report: () => undefined,
-    editGuard: boringstackEditGuard,
   };
 
   try {

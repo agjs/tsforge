@@ -14,7 +14,7 @@ import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { Session, LOOP_LIMITS, type Reporter } from "../src/loop";
 import { runBoringstackBuild } from "../src/loop/boringstack/build";
-import { boringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
+import { makeBoringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
 import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
 import { renderEvent } from "../src/render";
@@ -251,9 +251,10 @@ async function driveBuild(
     // BoringStack ships a convention library — offer pull_conventions so the model
     // can fetch its how-to patterns on demand (decoupled from any flag).
     pullConventions: true,
-    // BoringStack overlay: veto a pure deletion of feature translation keys (the
-    // model's lazy "clear the unused-key check" shortcut that ships a hollow app).
-    editGuard: boringstackEditGuard,
+    // BoringStack overlay: veto deletion of a feature translation key the model
+    // authored earlier this build (its lazy "clear the unused-key check" shortcut
+    // that ships a hollow app). Stateful → one instance per build.
+    editGuard: makeBoringstackEditGuard(),
     report,
   });
 

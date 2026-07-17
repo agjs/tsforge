@@ -71,21 +71,17 @@ function collectLeafPaths(
 /** The model-facing rejection: names the deleted keys, points at wiring up. */
 function destructiveLocaleRejection(
   file: string,
-  removed: readonly string[],
-  addedCount: number
+  removed: readonly string[]
 ): string {
   const shown = removed.slice(0, 8).join(", ");
   const more =
     removed.length > 8 ? `, +${String(removed.length - 8)} more` : "";
-  const addedNote =
-    addedCount > 0
-      ? `adds only ${String(addedCount)} (a net loss of translations)`
-      : "adds none";
 
   return (
     `edit ${file} REJECTED: this edit DELETES ${String(removed.length)} translation ` +
-    `key(s) you authored (${shown}${more}) and ${addedNote}. Do NOT delete translations ` +
-    `to clear the \`i18n-locale-keys-used\` "unused" check — that ships a hollow app ` +
+    `key(s) YOU added earlier this build (${shown}${more}). Do NOT delete translations ` +
+    `you authored to clear the \`i18n-locale-keys-used\` "unused" check — that ships a ` +
+    `hollow app ` +
     `(a list-only page with no form, confirmation, or success/error messages). WIRE ` +
     `THEM UP instead: build the UI that uses them — form field labels, the create/edit/` +
     `delete buttons, the delete confirmation, and success/error toasts rendered via ` +
@@ -93,59 +89,84 @@ function destructiveLocaleRejection(
   );
 }
 
-/** The boringstack {@link EditGuard}: vetoes a pure deletion of locale feature
- *  keys, and vetoes an edit that leaves the locale file as invalid JSON. A no-op
- *  for any non-locale file or any edit that also adds keys.
+/**
+ * Build a stateful boringstack {@link EditGuard}. It tracks, per locale file, the
+ * feature keys the SESSION has authored (added via a prior accepted edit), and
+ * vetoes a later edit that DELETES one of those session-authored keys — the exact
+ * destructive pattern (write a translation, then delete it to clear the unused
+ * check). It also vetoes an edit that leaves the locale file as invalid JSON.
  *
- *  Vetoing invalid-JSON-after is what closes the two-edit bypass a reviewer
- *  found: without it, the model could (1) delete keys AND malform the JSON in one
- *  edit — fail-open lets it through — then (2) repair the JSON without the keys.
- *  Rejecting step (1)'s malformed result blocks the sequence at the source; a
- *  locale file must always be valid JSON anyway (the gate would fail it too). */
-export const boringstackEditGuard: EditGuard = (
-  file: string,
-  before: string,
-  after: string
-): IEditVeto | null => {
-  if (!isLocaleCommonJson(file)) {
+ * Authorship state is the fix for over-blocking: PRE-EXISTING keys (scaffold-
+ * seeded, or another feature's) are NOT tracked, so removing a genuinely obsolete
+ * key is allowed and the gate can never deadlock. It also removes the need for the
+ * gameable count heuristic — each key is judged by whether this session wrote it.
+ *
+ * Vetoing invalid-JSON-after closes a two-edit bypass: delete keys AND malform the
+ * JSON in one edit (fail-open), then repair without the keys. A locale file must
+ * always parse, so rejecting the malformed result blocks the sequence at step 1.
+ *
+ * Call once per build (the state must persist across the build's edits) and pass
+ * the result as the Session's `editGuard`.
+ *
+ * KNOWN LIMITATION (architectural, not closeable here): the `run` shell tool can
+ * write any file directly (`bun -e`, `sed -i`, a script), bypassing ALL edit-tool
+ * guards — this one and scope enforcement alike. Closing that needs run-write
+ * interception, a separate concern from this per-edit guard.
+ */
+export function makeBoringstackEditGuard(): EditGuard {
+  const authoredByFile = new Map<string, Set<string>>();
+
+  return (file: string, before: string, after: string): IEditVeto | null => {
+    if (!isLocaleCommonJson(file)) {
+      return null;
+    }
+
+    const afterKeys = featureLeafKeys(after);
+
+    if (afterKeys === null) {
+      return {
+        reason: "i18n-invalid-json",
+        message:
+          `edit ${file} REJECTED: this edit left the locale file as invalid JSON. ` +
+          `Fix the JSON syntax and KEEP every feature translation key — do not drop ` +
+          `keys while "cleaning up". A locale file must always parse.`,
+      };
+    }
+
+    // Malformed before-content (rare) — can't compute a delta; fail OPEN.
+    const beforeKeys = featureLeafKeys(before);
+
+    if (beforeKeys === null) {
+      return null;
+    }
+
+    const authored = authoredByFile.get(file) ?? new Set<string>();
+    // Destructive = removing a key THIS SESSION authored (and not re-adding it).
+    // Pre-existing keys are absent from `authored`, so their removal is allowed.
+    const removed = [...beforeKeys].filter((k) => !afterKeys.has(k));
+    const destructive = removed.filter((k) => authored.has(k));
+
+    if (destructive.length > 0) {
+      return {
+        reason: "i18n-destructive-delete",
+        message: destructiveLocaleRejection(file, destructive),
+      };
+    }
+
+    // Accepted edit: record newly-added keys as session-authored, and forget any
+    // that were legitimately removed, so state tracks the file's live key set.
+    for (const k of afterKeys) {
+      if (!beforeKeys.has(k)) {
+        authored.add(k);
+      }
+    }
+
+    for (const k of removed) {
+      authored.delete(k);
+    }
+
+    authoredByFile.set(file, authored);
+
     return null;
-  }
-
-  const afterKeys = featureLeafKeys(after);
-
-  if (afterKeys === null) {
-    return {
-      reason: "i18n-invalid-json",
-      message:
-        `edit ${file} REJECTED: this edit left the locale file as invalid JSON. ` +
-        `Fix the JSON syntax and KEEP every feature translation key — do not drop ` +
-        `keys while "cleaning up". A locale file must always parse.`,
-    };
-  }
-
-  const beforeKeys = featureLeafKeys(before);
-
-  // Pre-existing malformed before-content (rare) — cannot reason about removals;
-  // fail OPEN rather than block on state this guard didn't create.
-  if (beforeKeys === null) {
-    return null;
-  }
-
-  const removed = [...beforeKeys].filter((k) => !afterKeys.has(k));
-  const added = [...afterKeys].filter((k) => !beforeKeys.has(k));
-
-  // Allow when nothing is removed, or when at least as many keys are added as
-  // removed (a balanced rename/refactor). Veto a NET key loss — this blocks the
-  // dominant pattern (gut the vocabulary: remove 20, add 0-1). A 1-for-1 swap of a
-  // real key for a throwaway is not fully caught by counting, but it is
-  // self-limiting: the throwaway is itself an unused key the gate then flags, so
-  // it buys the model nothing toward green.
-  if (removed.length === 0 || added.length >= removed.length) {
-    return null;
-  }
-
-  return {
-    reason: "i18n-destructive-delete",
-    message: destructiveLocaleRejection(file, removed, added.length),
   };
-};
+}

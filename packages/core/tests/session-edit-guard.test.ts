@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
 import { Session } from "../src/loop";
-import { boringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
+import type { EditGuard } from "../src/loop/tools";
+
+// A generic guard for this seam test: veto any edit that shrinks the file. This
+// verifies editGuard reaches the tool context executeTool uses and reverts —
+// independent of the boringstack i18n rule (unit-tested elsewhere).
+const shrinkGuard: EditGuard = (file, before, after) =>
+  after.length < before.length
+    ? { reason: "test-shrink", message: `edit ${file} REJECTED: shrinks file` }
+    : null;
 
 const REL = "apps/ui/src/lib/i18n/locales/en/common.json";
 
@@ -65,7 +73,7 @@ test("a Session wired with editGuard vetoes a destructive locale edit end-to-end
       provider: scriptedDeleteProvider(),
       cwd: dir,
       files: ["**/*"],
-      editGuard: boringstackEditGuard,
+      editGuard: shrinkGuard,
     });
 
     await session.send("gut the locale file");
