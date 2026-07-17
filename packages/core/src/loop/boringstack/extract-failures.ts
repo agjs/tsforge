@@ -58,23 +58,40 @@ function eslintResultSignatures(
   }
 }
 
-/** Parse every `::tsforge-eslint-json::` … `::tsforge-eslint-json-end::` block into
- *  structured eslint signatures. Returns true when ≥1 block PARSED — the caller then
- *  ignores the stylish eslint rows (JSON is the single source of truth for lint). A
- *  present-but-malformed block returns false, so the stylish fallback still runs and
- *  a lint error is never silently lost. */
+/** Is this a genuine eslint `--format json` payload — an array of result objects each
+ *  carrying `filePath` + a `messages` array (an empty array is valid = a green app)?
+ *  Rejects a JSON array of the wrong shape (`[1,2,3]`) so it can't be mistaken for
+ *  eslint coverage and wrongly suppress the stylish fallback. */
+function isEslintResultArray(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (r) =>
+        isRecord(r) &&
+        typeof r.filePath === "string" &&
+        Array.isArray(r.messages)
+    )
+  );
+}
+
+/** Parse every `::tsforge-eslint-json <app>::` … `::tsforge-eslint-json-end::` block
+ *  into structured eslint signatures. Returns the SET OF APPS whose block parsed into
+ *  a valid eslint-result array — the caller ignores stylish eslint rows ONLY for those
+ *  apps (per-app, not global). An app whose block is missing / malformed / wrong-shaped
+ *  is NOT in the set, so its stylish rows are still scraped and no lint error is lost. */
 function parseEslintJsonBlocks(
   output: string,
   cwd: string,
   signatures: Set<string>
-): boolean {
+): Set<string> {
+  const covered = new Set<string>();
   const blocks = output.matchAll(
-    /::tsforge-eslint-json::([\s\S]*?)::tsforge-eslint-json-end::/gu
+    /::tsforge-eslint-json (\S+)::([\s\S]*?)::tsforge-eslint-json-end::/gu
   );
-  let parsedAny = false;
 
   for (const block of blocks) {
-    const raw = (block[1] ?? "").replace(ANSI, "");
+    const app = block[1] ?? "";
+    const raw = (block[2] ?? "").replace(ANSI, "");
     const start = raw.indexOf("[");
     const end = raw.lastIndexOf("]");
 
@@ -90,18 +107,18 @@ function parseEslintJsonBlocks(
       continue;
     }
 
-    if (!Array.isArray(results)) {
+    if (!isEslintResultArray(results) || !Array.isArray(results)) {
       continue;
     }
 
-    parsedAny = true;
+    covered.add(app);
 
     for (const result of results) {
       eslintResultSignatures(result, cwd, signatures);
     }
   }
 
-  return parsedAny;
+  return covered;
 }
 
 /**
@@ -507,14 +524,14 @@ function consumeEslintJsonBlock(
   line: string,
   state: IFailureParserState
 ): boolean {
-  if (line === "::tsforge-eslint-json::") {
-    state.inEslintJson = true;
+  if (line === "::tsforge-eslint-json-end::") {
+    state.inEslintJson = false;
 
     return true;
   }
 
-  if (line === "::tsforge-eslint-json-end::") {
-    state.inEslintJson = false;
+  if (/^::tsforge-eslint-json .+::$/u.test(line)) {
+    state.inEslintJson = true;
 
     return true;
   }
@@ -536,19 +553,18 @@ export function extractFailures(output: string, cwd: string): Set<string> {
     inLintMeta: false,
     inUnusedFiles: false,
     inEslintJson: false,
-    eslintJsonPresent: false,
+    eslintJsonApps: new Set<string>(),
   };
 
-  // Prefer STRUCTURED eslint output: parse the `::tsforge-eslint-json::` block(s) into
-  // exact signatures. When present, the line loop ignores the ambiguous stylish eslint
-  // rows (JSON is the single source of truth). When ABSENT or malformed, fall back to
-  // scraping stylish (joined for multi-line) so an eslint error is never lost.
-  state.eslintJsonPresent = parseEslintJsonBlocks(output, cwd, signatures);
-  const source = state.eslintJsonPresent
-    ? output
-    : joinMultilineEslintRows(output);
+  // Prefer STRUCTURED eslint output: parse each app's `::tsforge-eslint-json <app>::`
+  // block into exact signatures. For a covered app the line loop ignores its ambiguous
+  // stylish eslint rows (JSON is the single source of truth); an uncovered app (block
+  // missing/malformed/wrong-shaped) still falls back to scraping stylish — joined for
+  // multi-line — so an eslint error is never lost. Joining is harmless for covered apps
+  // (their rows are skipped anyway).
+  state.eslintJsonApps = parseEslintJsonBlocks(output, cwd, signatures);
 
-  for (const rawLine of source.split("\n")) {
+  for (const rawLine of joinMultilineEslintRows(output).split("\n")) {
     const line = normalize(rawLine, cwd);
 
     if (consumeEslintJsonBlock(line, state)) {
@@ -578,9 +594,10 @@ export function extractFailures(output: string, cwd: string): Set<string> {
       continue;
     }
 
-    // eslint is owned by the JSON block — ignore the duplicated stylish rows so a
-    // failure isn't counted twice (once clean from JSON, once mangled from text).
-    if (state.eslintJsonPresent && /^\d+:\d+ (?:error|warning)\b/u.test(line)) {
+    // For an app whose eslint came from JSON, ignore its duplicated stylish ERROR
+    // rows so a failure isn't counted twice (once clean from JSON, once mangled from
+    // text). Only error rows — warnings were never captured by the stylish path.
+    if (state.eslintJsonApps.has(state.app) && /^\d+:\d+ error\b/u.test(line)) {
       continue;
     }
 

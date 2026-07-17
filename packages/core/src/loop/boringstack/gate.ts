@@ -40,14 +40,14 @@ import type { Exec } from "./exec";
  *  the app's `lint` script and appends `--format json`, so there's no coupling to the
  *  app's glob list. Runs BEFORE `check` and never aborts (`|| true`) — it's a parsing
  *  aid; `check` still owns pass/fail (its own eslint sets the exit code). */
-const eslintJson = (): string =>
-  "{ echo '::tsforge-eslint-json::'; " +
+const eslintJson = (app: string): string =>
+  `{ echo '::tsforge-eslint-json ${app}::'; ` +
   "bun run --silent lint -- --format json 2>/dev/null || true; " +
   "echo '::tsforge-eslint-json-end::'; }";
 
 const FAST_GATE =
-  `echo '::tsforge-app apps/api::' && (cd apps/api && ${eslintJson()} && bun run check && bun run test) && ` +
-  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson()} && bun run check)`;
+  `echo '::tsforge-app apps/api::' && (cd apps/api && ${eslintJson("apps/api")} && bun run check && bun run test) && ` +
+  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson("apps/ui")} && bun run check)`;
 
 /**
  * FULL acceptance gate — run ONCE, when every feature has passed the fast gate. The
@@ -57,8 +57,8 @@ const FAST_GATE =
  * at the end instead of every turn.
  */
 const FULL_GATE =
-  `echo '::tsforge-app apps/api::' && (cd apps/api && ${eslintJson()} && bun run validate) && ` +
-  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson()} && bun run validate) && ` +
+  `echo '::tsforge-app apps/api::' && (cd apps/api && ${eslintJson("apps/api")} && bun run validate) && ` +
+  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson("apps/ui")} && bun run validate) && ` +
   "echo '::tsforge-app .::' && bun run check";
 
 export type GateMode = "fast" | "full";

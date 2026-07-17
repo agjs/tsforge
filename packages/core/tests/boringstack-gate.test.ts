@@ -55,7 +55,7 @@ describe("runBoringstackGate", () => {
     expect(cmd).toContain("::tsforge-app apps/api::");
     // Each app emits its eslint as STRUCTURED JSON (via its own lint script) so the
     // failure parser reads exact {file,line,rule,message} instead of stylish text.
-    expect(cmd).toContain("::tsforge-eslint-json::");
+    expect(cmd).toContain("::tsforge-eslint-json apps/api::");
     expect(cmd).toContain("bun run --silent lint -- --format json");
   });
 
@@ -68,6 +68,6 @@ describe("runBoringstackGate", () => {
     expect(cmd).toContain("::tsforge-app .::");
     expect(cmd).toContain("bun run check");
     // Structured eslint JSON is emitted in the full gate too.
-    expect(cmd).toContain("::tsforge-eslint-json::");
+    expect(cmd).toContain("::tsforge-eslint-json apps/api::");
   });
 });

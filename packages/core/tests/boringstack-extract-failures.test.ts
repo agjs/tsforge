@@ -347,7 +347,7 @@ tests/api/a/a.service.test.ts:
   test("structured eslint JSON → exact signatures; stylish rows for the same run are ignored (no double)", () => {
     const cwd = "/tmp/clone";
     const out = `::tsforge-app apps/api::
-::tsforge-eslint-json::
+::tsforge-eslint-json apps/api::
 [{"filePath":"${cwd}/apps/api/src/api/a/a.ts","messages":[{"ruleId":"module-boundaries/single-semantic-module","severity":2,"message":"Mixed semantic categories detected in module:\\n- type\\n- schema\\nMove declarations into separate files/modules","line":6,"column":8},{"ruleId":"@typescript-eslint/no-explicit-any","severity":2,"message":"Unexpected any.","line":9,"column":3},{"ruleId":"prefer-const","severity":1,"message":"just a warning","line":1,"column":1}]}]
 ::tsforge-eslint-json-end::
 ${cwd}/apps/api/src/api/a/a.ts
@@ -385,7 +385,7 @@ Move declarations into separate files/modules  module-boundaries/single-semantic
 
   test("a JSON message containing `error TS…` is not mis-parsed as a tsc diagnostic", () => {
     const cwd = "/tmp/clone";
-    const out = `::tsforge-eslint-json::
+    const out = `::tsforge-eslint-json apps/api::
 [{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{"ruleId":"no-console","severity":2,"message":"Do not mention error TS2532 here","line":2,"column":1}]}]
 ::tsforge-eslint-json-end::`;
     const sigs = extractFailures(out, cwd);
@@ -400,7 +400,7 @@ Move declarations into separate files/modules  module-boundaries/single-semantic
 
   test("tsc + bun failures still parse alongside a JSON eslint block", () => {
     const cwd = "/tmp/clone";
-    const out = `::tsforge-eslint-json::
+    const out = `::tsforge-eslint-json apps/api::
 [{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{"ruleId":"no-console","severity":2,"message":"no console","line":2,"column":1}]}]
 ::tsforge-eslint-json-end::
 ${cwd}/apps/api/src/y.ts(38,3): error TS2532: Object is possibly 'undefined'.
@@ -417,7 +417,7 @@ tests/api/z/z.test.ts:
 
   test("a malformed JSON block falls back to scraping stylish eslint (no lint error lost)", () => {
     const cwd = "/tmp/clone";
-    const out = `::tsforge-eslint-json::
+    const out = `::tsforge-eslint-json apps/api::
 not valid json {[
 ::tsforge-eslint-json-end::
 ${cwd}/apps/api/src/x.ts
@@ -425,6 +425,51 @@ ${cwd}/apps/api/src/x.ts
     const sigs = extractFailures(out, cwd);
 
     // JSON unparseable → stylish path still captures the eslint error.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fx.ts:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("per-app coverage: API JSON `[]` (green) does NOT suppress UI's stylish errors when the UI block is malformed", () => {
+    // The gate emits TWO blocks (api, ui). API is green ([]), UI's block is malformed
+    // → UI is NOT "covered", so its stylish eslint error must still be captured (a
+    // global flag would have lost it — the exact near-green regression the panel flagged).
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[]
+::tsforge-eslint-json-end::
+::tsforge-app apps/ui::
+::tsforge-eslint-json apps/ui::
+not valid json {[
+::tsforge-eslint-json-end::
+${cwd}/apps/ui/src/features/x/X.tsx
+  4:2  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fui%2Fsrc%2Ffeatures%2Fx%2FX.tsx:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("a wrong-shaped JSON array (`[1,2,3]`) does NOT count as coverage — stylish is still scraped", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[1,2,3]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/x.ts
+  4:2  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
     expect(
       [...sigs].some((s) =>
         s.startsWith(
