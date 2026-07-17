@@ -42,10 +42,14 @@ export interface IGreenfieldState {
 }
 
 export interface IGreenfieldResult {
-  status: "done" | "stuck" | "needs-plan";
+  status: "done" | "stuck" | "needs-plan" | "needs-infra";
   features: IFeature[];
   /** When stuck: the feature that exhausted its attempts. */
   stuckFeature?: string;
+  /** When needs-infra: the unmet precondition (e.g. the API isn't serving its
+   *  OpenAPI spec), so the caller can fail LOUD + closed rather than drive the model
+   *  against infra it cannot fix. */
+  infra?: string;
 }
 
 /**

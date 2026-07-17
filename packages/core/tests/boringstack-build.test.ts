@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Exec } from "../src/loop/boringstack/exec";
 import {
   boringstackDeps,
+  partitionBaseline,
   describeBaseline,
   rescueFileFor,
   runBoringstackBuild,
@@ -228,6 +229,31 @@ describe("describeBaseline", () => {
   });
 });
 
+describe("partitionBaseline", () => {
+  test("keeps ordinary pre-existing failures as the baseline, no infra", () => {
+    const { infra, baseline } = partitionBaseline([
+      "failure:apps%2Fapi%2Fsrc%2Ffoo.ts:1:TS2322:bad",
+      "knip:unused-file:src/orphan.ts",
+    ]);
+
+    expect(baseline.size).toBe(2);
+    expect(infra).toEqual([]);
+  });
+
+  test("splits openapi-unreachable OUT into infra (never the baseline) so the differential gate can't suppress the infra signal → false green", () => {
+    const { infra, baseline } = partitionBaseline([
+      "failure:apps%2Fapi%2Fsrc%2Ffoo.ts:1:TS2322:bad",
+      "openapi-unreachable:connection-refused",
+    ]);
+
+    expect(baseline.size).toBe(1);
+    expect(
+      [...baseline].some((s) => s.startsWith("openapi-unreachable:"))
+    ).toBe(false);
+    expect(infra).toEqual(["openapi-unreachable:connection-refused"]);
+  });
+});
+
 describe("scopeFor", () => {
   test("includes the resource dir, tests, UI feature, app schema, AND locale files", () => {
     const scope = scopeFor("Invoice");
@@ -396,6 +422,69 @@ describe("runBoringstackBuild", () => {
       expect(host.metaBaselineCaptures.count).toBe(1);
       // The per-feature expert rescue target was set (Invoice's service file).
       expect(host.rescueTargets.length).toBeGreaterThan(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fails CLOSED (needs-infra) when the pristine gate can't reach the API's OpenAPI spec", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bs-"));
+
+    try {
+      const plan: IProductPlan = {
+        product: "A simple app",
+        slices: [
+          {
+            entity: {
+              id: "Invoice",
+              desc: "A billable unit",
+              fields: [{ name: "amount", type: "number" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list"],
+              action: "create invoices",
+              shows: ["amount"],
+              nav: "Invoices",
+            },
+            verification: {
+              mustRemainTrue: ["auth required"],
+              mustNotHappen: ["unauthenticated access"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      const host = createHost();
+      // The pristine baseline gate is RED solely because generate:api can't reach
+      // the API — an infra precondition, not a code defect the model can fix.
+      const exec: Exec = async () => ({
+        code: 1,
+        stdout:
+          "::tsforge-app apps/ui::\n" +
+          "[generate:api] FAILED: fetch failed (ECONNREFUSED)",
+        stderr: "",
+      });
+
+      const res = await runBoringstackBuild({
+        cwd: dir,
+        goal: "simple app",
+        host,
+        evaluator: createEvaluator(),
+        exec,
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(res.status).toBe("needs-infra");
+      expect(res.infra).toContain("OpenAPI spec");
+      // It stopped BEFORE any feature work: no meta-baseline, nothing sent to the model.
+      expect(host.metaBaselineCaptures.count).toBe(0);
+      expect(host.sent.length).toBe(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
