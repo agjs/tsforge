@@ -675,6 +675,170 @@ ${cwd}/apps/api/src/api/a/a.ts
     expect(sigs.size).toBe(0);
   });
 
+  test("parses a vitest suite-load FAIL (vi.mock hoisting): Caused-by root cause wins, verbatim", () => {
+    // The EXACT gate-parity failure, with REAL vitest 4 output: a long generic Error line
+    // (with a URL) FIRST, then the `Caused by:` root cause. The root cause must win and be
+    // captured VERBATIM (no truncation — house rule).
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/ui::
+ FAIL  src/features/task/hooks/useTasks.test.tsx [ src/features/task/hooks/useTasks.test.tsx ]
+Error: [vitest] There was an error when mocking a module. If you are using "vi.mock" factory, make sure there are no top level variables inside, since this call is hoisted to top of the file. Read more: https://vitest.dev/api/vi.html#vi-mock
+Caused by: ReferenceError: Cannot access 'mockGet' before initialization`;
+    const sigs = extractFailures(out, cwd);
+    const vitest = [...sigs].find((s) => s.includes(":vitest:"));
+
+    expect(vitest).toBeDefined();
+    expect(vitest).toStartWith(
+      "failure:apps%2Fui%2Fsrc%2Ffeatures%2Ftask%2Fhooks%2FuseTasks.test.tsx::vitest:"
+    );
+    // The ROOT cause (Caused by) is captured, in FULL — not the generic first line, and
+    // not truncated mid-word.
+    const decoded = decodeURIComponent(vitest ?? "");
+
+    expect(decoded).toContain(
+      "Caused by: ReferenceError: Cannot access 'mockGet' before initialization"
+    );
+  });
+
+  test("a bare-file vitest FAIL does NOT leak across an app boundary (no cross-app contamination)", () => {
+    // A UI suite-load FAIL with no detail line before the next ::tsforge-app marker. The
+    // pending file must be flushed to apps/ui at the boundary — the api error line that
+    // follows must NOT be attributed to the ui test file.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/ui::
+ FAIL  src/features/task/hooks/useTasks.test.tsx [ src/features/task/hooks/useTasks.test.tsx ]
+::tsforge-app apps/api::
+${cwd}/apps/api/src/x.ts(3,3): error TS2532: Object is possibly 'undefined'.`;
+    const sigs = extractFailures(out, cwd);
+    const vitest = [...sigs].find((s) => s.includes(":vitest:")) ?? "";
+
+    // The vitest signature is attributed to apps/ui and carries a generic (not api) detail.
+    expect(vitest).toStartWith(
+      "failure:apps%2Fui%2Fsrc%2Ffeatures%2Ftask%2Fhooks%2FuseTasks.test.tsx::vitest:"
+    );
+    expect(decodeURIComponent(vitest)).toContain("test suite failed to load");
+    // The api tsc error is its OWN signature, not swallowed as the ui test's detail.
+    expect([...sigs].some((s) => s.includes("TS2532"))).toBe(true);
+  });
+
+  test("parses a named vitest test FAIL: keeps the test name AND its AssertionError body", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/ui::
+ FAIL  src/features/task/TaskList.test.tsx > TaskList > renders empty state
+AssertionError: expected element to be in the document`;
+    const sigs = extractFailures(out, cwd);
+    const vitest = [...sigs].find((s) =>
+      s.startsWith(
+        "failure:apps%2Fui%2Fsrc%2Ffeatures%2Ftask%2FTaskList.test.tsx::vitest:"
+      )
+    );
+
+    expect(vitest).toBeDefined();
+    const decoded = decodeURIComponent(vitest ?? "");
+
+    expect(decoded).toContain("renders empty state");
+    expect(decoded).toContain(
+      "AssertionError: expected element to be in the document"
+    );
+  });
+
+  test("keeps a parameterized test's [param] suffix so distinct cases stay distinct", () => {
+    const cwd = "/tmp/clone";
+    const mobile = `::tsforge-app apps/ui::\n FAIL  src/features/task/TaskList.test.tsx > renders [mobile]`;
+    const desktop = `::tsforge-app apps/ui::\n FAIL  src/features/task/TaskList.test.tsx > renders [desktop]`;
+    const a =
+      [...extractFailures(mobile, cwd)].find((s) => s.includes(":vitest:")) ??
+      "";
+    const b =
+      [...extractFailures(desktop, cwd)].find((s) => s.includes(":vitest:")) ??
+      "";
+
+    expect(decodeURIComponent(a)).toContain("[mobile]");
+    expect(decodeURIComponent(b)).toContain("[desktop]");
+    expect(a).not.toBe(b); // different params → different signatures, not a collision
+  });
+
+  test("captures an Error-only suite-load failure (no Caused by), e.g. SyntaxError", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/ui::
+ FAIL  src/features/task/Task.utils.test.ts [ src/features/task/Task.utils.test.ts ]
+SyntaxError: Unexpected token '}'`;
+    const vitest =
+      [...extractFailures(out, cwd)].find((s) => s.includes(":vitest:")) ?? "";
+
+    expect(vitest).toStartWith(
+      "failure:apps%2Fui%2Fsrc%2Ffeatures%2Ftask%2FTask.utils.test.ts::vitest:"
+    );
+    expect(decodeURIComponent(vitest)).toContain(
+      "SyntaxError: Unexpected token '}'"
+    );
+  });
+
+  test("captures a BASE `Error:` suite-load line (no Caused by) — not just prefixed *Errors", () => {
+    // The vi.mock message starts with a bare `Error: [vitest] …`; if no `Caused by:`
+    // follows, that line MUST still be captured (a prior regex required a char before
+    // "Error" and dropped it, flushing a useless "test suite failed to load").
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/ui::
+ FAIL  src/features/task/hooks/useTasks.test.tsx [ src/features/task/hooks/useTasks.test.tsx ]
+Error: [vitest] There was an error when mocking a module.`;
+    const vitest =
+      [...extractFailures(out, cwd)].find((s) => s.includes(":vitest:")) ?? "";
+
+    expect(decodeURIComponent(vitest)).toContain(
+      "Error: [vitest] There was an error"
+    );
+    expect(decodeURIComponent(vitest)).not.toContain(
+      "test suite failed to load"
+    );
+  });
+
+  test("two sequential vitest FAILs each flush with their OWN detail (flush-on-next-FAIL)", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/ui::
+ FAIL  src/features/task/A.test.tsx > A > one
+AssertionError: expected 1 to be 2
+ FAIL  src/features/task/B.test.tsx > B > two
+AssertionError: expected 3 to be 4`;
+    const sigs = [...extractFailures(out, cwd)];
+    const a =
+      sigs.find((s) =>
+        s.startsWith("failure:apps%2Fui%2Fsrc%2Ffeatures%2Ftask%2FA.test.tsx")
+      ) ?? "";
+    const b =
+      sigs.find((s) =>
+        s.startsWith("failure:apps%2Fui%2Fsrc%2Ffeatures%2Ftask%2FB.test.tsx")
+      ) ?? "";
+
+    expect(decodeURIComponent(a)).toContain("expected 1 to be 2");
+    expect(decodeURIComponent(b)).toContain("expected 3 to be 4");
+    // Details didn't cross-contaminate.
+    expect(decodeURIComponent(a)).not.toContain("expected 3");
+  });
+
+  test("parses a .spec.ts vitest FAIL (not just .test.*)", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/ui::
+ FAIL  src/features/task/Task.spec.ts > does a thing`;
+    const vitest =
+      [...extractFailures(out, cwd)].find((s) => s.includes(":vitest:")) ?? "";
+
+    expect(vitest).toStartWith(
+      "failure:apps%2Fui%2Fsrc%2Ffeatures%2Ftask%2FTask.spec.ts::vitest:"
+    );
+  });
+
+  test("a passing vitest summary yields no vitest signatures", () => {
+    const out =
+      "::tsforge-app apps/ui::\n Test Files  129 passed (129)\n      Tests  413 passed (413)";
+
+    expect(
+      [...extractFailures(out, "/tmp/clone")].some((s) =>
+        s.includes(":vitest:")
+      )
+    ).toBe(false);
+  });
+
   test("a fully green run yields no signatures", () => {
     expect(extractFailures("30 pass\n0 fail\nDone.", "/x").size).toBe(0);
   });
