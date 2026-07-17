@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { parseHeadlessArgs } from "../scripts/headless-build";
+import { mkdtemp, rm, mkdir, symlink, realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  parseHeadlessArgs,
+  resolveWorkspaceDir,
+} from "../scripts/headless-build";
 
 describe("parseHeadlessArgs", () => {
   test("parses prompt and dir from positional arguments", () => {
@@ -65,5 +71,32 @@ describe("parseHeadlessArgs", () => {
 
     expect(result.prompt).toBe("goal");
     expect(result.dir).toBeUndefined();
+  });
+});
+
+describe("resolveWorkspaceDir", () => {
+  test("resolves a symlinked clone dir to its real path (so gate paths match cwd)", async () => {
+    const base = await mkdtemp(join(tmpdir(), "hb-real-"));
+
+    try {
+      const real = join(base, "real-clone");
+      const link = join(base, "link-clone");
+
+      await mkdir(real, { recursive: true });
+      await symlink(real, link);
+
+      // The symlink resolves to the real dir — this is the macOS /tmp→/private/tmp
+      // class of mismatch that mangled gate paths and falsely "locked" files.
+      expect(await realpath(link)).toBe(await realpath(real));
+      expect(resolveWorkspaceDir(link)).toBe(await realpath(real));
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test("returns a non-existent dir unchanged (the apps/api check reports it later)", () => {
+    const missing = join(tmpdir(), "hb-does-not-exist-xyz-12345");
+
+    expect(resolveWorkspaceDir(missing)).toBe(missing);
   });
 });
