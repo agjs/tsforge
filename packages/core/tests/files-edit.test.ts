@@ -3,7 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyEdit, applyEdits } from "../src/files/edit";
-import { doEdit } from "../src/loop/tools/file-ops";
+import { doEdit, doCreate } from "../src/loop/tools/file-ops";
+import { doHashlineEdit } from "../src/loop/tools/edit-hashline";
+import { computeFileHash } from "../src/files/hashline-format";
+import { boringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
 import type { IToolContext } from "../src/loop/tools/tool-context";
 
 async function tmp(files: Record<string, string>): Promise<string> {
@@ -470,6 +473,76 @@ test("not-found edit rejection carries the file's current content", async () => 
     expect(msg).toContain("const y = 2;");
     // And it does NOT tell the model to go `read` the file (content is inline).
     expect(msg).not.toContain("`read` a.ts to see");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The edit guard must cover the edit_lines/hashline path too — not just `edit`.
+// The model exploited this exact bypass in a live build (deleted locale keys via
+// edit_lines while the guard was only on `edit`).
+const LOCALE = "apps/ui/src/lib/i18n/locales/en/common.json";
+
+test("editGuard vetoes a destructive locale delete via edit_lines (no bypass)", async () => {
+  const original =
+    "{\n" +
+    '  "features": { "contact": { "title": "T", "deleteError": "E" } }\n' +
+    "}\n";
+  const dir = await tmp({ [LOCALE]: original });
+  const hash = computeFileHash(original);
+  // Replace line 2 with a version that drops the deleteError key.
+  const input =
+    `¶${LOCALE}#${hash}\nreplace 2..2:\n` +
+    '+  "features": { "contact": { "title": "T" } }';
+
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+    editGuard: boringstackEditGuard,
+  };
+
+  try {
+    const msg = await doHashlineEdit({ file: LOCALE, input }, ctx);
+
+    expect(msg).toContain("REJECTED");
+    expect(msg).toContain("deleteError");
+    // Reverted: the key survives (the delete did NOT land via edit_lines).
+    expect(await Bun.file(join(dir, LOCALE)).text()).toBe(original);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("create refuses to overwrite an existing VALID locale JSON file (no create bypass)", async () => {
+  const original =
+    '{ "features": { "contact": { "title": "T", "deleteError": "E" } } }\n';
+  const dir = await tmp({ [LOCALE]: original });
+
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+    editGuard: boringstackEditGuard,
+  };
+
+  try {
+    // A wholesale `create` that guts the vocabulary must be refused — a valid
+    // JSON file is protected (isSyntacticallyBroken parses .json as JSON now, so
+    // it is NOT mistaken for "broken" and overwrite-able).
+    const msg = await doCreate(
+      {
+        file: LOCALE,
+        content: '{ "features": { "contact": { "title": "T" } } }\n',
+      },
+      ctx
+    );
+
+    expect(msg).toContain("REJECTED");
+    // Untouched.
+    expect(await Bun.file(join(dir, LOCALE)).text()).toBe(original);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

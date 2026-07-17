@@ -120,19 +120,20 @@ export async function doHashlineEdit(
 
     // Same edit guard as `edit`: this mutation path must not be a bypass. A veto
     // reverts to the pre-edit content (and re-records the snapshot) and returns
-    // the guard's rejection. Uses the before/after the apply already computed.
-    const veto = guardVeto(
-      ctx,
-      edit.file,
-      result.previousContent ?? "",
-      result.newContent ?? ""
-    );
+    // the guard's rejection. Only runs when the apply gave us BOTH before and
+    // after — passing "" for a missing side would feed the guard invalid content
+    // (JSON.parse("") throws → fails open), silently skipping the veto. Skip
+    // instead, symmetric with doEdit's readFileTextOrNull short-circuit.
+    const guardBefore = result.previousContent;
+    const guardAfter = result.newContent;
+    const veto =
+      guardBefore === undefined || guardAfter === undefined
+        ? null
+        : guardVeto(ctx, edit.file, guardBefore, guardAfter);
 
     if (veto !== null) {
-      const prev = result.previousContent ?? "";
-
-      await Bun.write(join(ctx.cwd, edit.file), prev);
-      snapshotStore.record(edit.file, prev);
+      await Bun.write(join(ctx.cwd, edit.file), guardBefore ?? "");
+      snapshotStore.record(edit.file, guardBefore ?? "");
 
       return reject(ctx, `edit_lines:${veto.reason}`, veto.message);
     }

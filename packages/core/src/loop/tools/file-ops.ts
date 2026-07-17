@@ -8,7 +8,12 @@ import { LOOP_LIMITS } from "../loop.constants";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
 import { condenseToolOutput } from "./condense";
-import { parseOrRepair, reject, type IToolContext } from "./tool-context";
+import {
+  parseOrRepair,
+  reject,
+  guardVeto,
+  type IToolContext,
+} from "./tool-context";
 import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
 import { SessionSnapshotStore } from "../../files/hashline";
 import { trace } from "../../lib/trace";
@@ -586,6 +591,20 @@ function isSyntacticallyBroken(content: string, file: string): boolean {
     return false;
   }
 
+  // JSON must be parsed as JSON, NOT transpiled as JS: a valid JSON object
+  // (`{ "features": {…} }`) is a block statement to the JS transpiler and would
+  // be misread as "broken", letting `create` overwrite (and gut) a valid locale
+  // file. Parse it properly so a valid .json file is protected.
+  if (file.endsWith(".json")) {
+    try {
+      JSON.parse(content);
+
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
   const loader = file.endsWith(".tsx")
     ? "tsx"
     : file.endsWith(".jsx")
@@ -721,7 +740,7 @@ async function runEditGuard(
   }
 
   const after = await readFileTextOrNull(join(ctx.cwd, file));
-  const veto = after === null ? null : ctx.editGuard(file, before, after);
+  const veto = after === null ? null : guardVeto(ctx, file, before, after);
 
   if (veto === null) {
     return null;
@@ -864,6 +883,15 @@ export async function doCreate(
         "create:exists",
         `create ${create.file} REJECTED: it already exists and parses. Use \`edit\` to change it — \`edit\` now accepts a replacement of ANY size (there is no line cap), so pass the whole file as one edit if you want to rewrite it. \`create\`-overwrite is blocked only to stop a wholesale write from wiping OTHER code that shares this file.`
       );
+    }
+
+    // Even overwriting a syntactically-broken file must not become a guard bypass:
+    // run the same edit guard on the proposed content (before=current) so a
+    // wholesale `create` can't gut protected content that `edit`/`edit_lines` block.
+    const veto = guardVeto(ctx, create.file, current, create.content);
+
+    if (veto !== null) {
+      return reject(ctx, `create:${veto.reason}`, veto.message);
     }
   }
 

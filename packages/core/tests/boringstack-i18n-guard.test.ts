@@ -63,6 +63,20 @@ test("guard ALLOWS adding keys (the wire-up direction)", () => {
   expect(boringstackEditGuard(EN, gutted, full)).toBeNull();
 });
 
+test("guard VETOES mass deletion masked by a single throwaway addition (net key loss)", () => {
+  // The bypass a reviewer found: add ONE key to license deleting the rest.
+  const oneAddManyDeleted = JSON.stringify({
+    features: { contact: { title: "Contacts", note: "throwaway" } },
+  });
+
+  // before: 5 keys (title/empty/createError/deleteError/confirmDelete)
+  // after: 2 keys (title + the throwaway `note`) → removed 4, added 1 → NET LOSS.
+  const veto = boringstackEditGuard(EN, full, oneAddManyDeleted);
+
+  expect(veto).not.toBeNull();
+  expect(veto?.reason).toBe("i18n-destructive-delete");
+});
+
 test("guard is a NO-OP for non-locale files", () => {
   expect(
     boringstackEditGuard(

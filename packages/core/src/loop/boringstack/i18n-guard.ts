@@ -129,7 +129,12 @@ export const boringstackEditGuard: EditGuard = (
   const removed = [...beforeKeys].filter((k) => !afterKeys.has(k));
   const added = [...afterKeys].filter((k) => !beforeKeys.has(k));
 
-  if (removed.length === 0 || added.length > 0) {
+  // Allow when nothing is removed, or when at least as many keys are added as
+  // removed (a balanced rename/refactor). Veto a NET key loss — this closes the
+  // "add one throwaway key to license deleting the rest" bypass: deleting 20 keys
+  // while adding 1 is removed(20) > added(1) → vetoed. Cross-feature masking is
+  // caught too, since the delta is over all `features.*` keys, not one entity.
+  if (removed.length === 0 || added.length >= removed.length) {
     return null;
   }
 
