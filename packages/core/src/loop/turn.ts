@@ -2,7 +2,7 @@ import { basename, join, relative, isAbsolute } from "node:path";
 import type { ITask } from "../spec";
 import type { IChatMessage, IToolCall } from "../inference";
 import {
-  validate,
+  type validate,
   runAccept,
   sameErrorSet,
   type ErrorParser,
@@ -689,9 +689,8 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
  * so a drop that changed an inferred type can never ship. Runs once, on the turn
  * the task goes green; a no-op when ast-grep is off or nothing is redundant.
  */
-async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
+export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   const { task, cwd, report } = ctx;
-  const parse = ctx.gate.parse;
 
   // Resolve globs so a glob scope is polished too (not silently skipped).
   const files = await resolveScopeFiles(cwd, task.files);
@@ -729,14 +728,53 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     );
   }
 
-  const recheck = await validate(
-    task,
-    cwd,
-    parse,
-    ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
-  );
+  // Re-gate with the SAME gate the loop uses (`ctx.gate.runner`), NOT
+  // `validate(task, …)`. `validate` runs `task.accept`, which is EMPTY for the
+  // boringstack build — it drives an INJECTED gate via `setGate`, not `task.accept` — so
+  // `validate` returned a VACUOUS pass and the "revert if regressed" guarantee below was
+  // dead: dropping a load-bearing annotation (e.g. `: unknown` on `await res.json()`,
+  // which suppresses `no-unsafe-*`) shipped green, and only final acceptance caught it —
+  // after the feature was already verified. The injected gate runs the real checks
+  // (including its own format/autofix), so a drop that changed an inferred type fails
+  // here and is rolled back. For `runTask` this is equivalent (its gate runs `accept`).
+  // The injected gate can THROW (its composed stages include a judge MODEL call whose
+  // provider request can fail transiently). A throw must NOT leave the unverified drops
+  // on disk — treat any failure OR error as "not verified" and fall through to the
+  // rollback, so the pre-polish green state is always restored. Polish is best-effort;
+  // a transient gate error must never ship an unsafe drop nor crash the turn.
+  let passed = false;
+  let abortErr: unknown = null;
 
-  if (recheck.passed) {
+  try {
+    const recheck = await ctx.gate.runner.run(cwd, {
+      ...(ctx.gate.onGateChunk === undefined
+        ? {}
+        : { onChunk: ctx.gate.onGateChunk }),
+      ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
+    });
+
+    passed = recheck.passed;
+  } catch (err) {
+    // A caller CANCELLATION is not a transient gate failure — it must not be swallowed
+    // (settleGate would then report the task done, breaking the signal contract). Capture
+    // it and re-throw AFTER the rollback below, so the tree is still restored to green.
+    if (ctx.tool.signal?.aborted === true) {
+      abortErr = err;
+    } else {
+      // Transient gate/judge failure → do not trust the drop; revert below.
+      trace("polishOnGreen.recheck", err);
+    }
+  } finally {
+    // Flush any final newline-less gate line the stream filter still holds (mirrors
+    // runGateStep). GUARDED: a throwing flush must never mask the rollback below.
+    try {
+      ctx.gate.onGateChunk?.flush?.();
+    } catch (err) {
+      trace("polishOnGreen.flush", err);
+    }
+  }
+
+  if (passed) {
     report({
       kind: "tool",
       task: task.id,
@@ -746,9 +784,15 @@ async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     return;
   }
 
-  // A drop changed an inferred type — roll the whole file set back to green.
+  // A drop changed an inferred type (or the recheck failed/was aborted) — roll the whole
+  // file set back to the pre-polish green state.
   for (const [f, content] of snapshot) {
     await Bun.write(join(cwd, f), content);
+  }
+
+  // Cancellation was deferred past the rollback so the tree is restored — now honor it.
+  if (abortErr !== null) {
+    throw abortErr;
   }
 }
 
