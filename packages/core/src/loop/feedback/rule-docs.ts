@@ -388,6 +388,19 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "export const plugin = new Elysia();",
     good: "export const plugin = new Elysia({ name: 'auth-plugin' });",
   },
+  // BoringStack module-boundaries: a file must hold ONE semantic category. The
+  // message lists the mixed categories (type / schema / constant / function / class /
+  // react-component / hook) — the fix is always to MOVE the odd one(s) out into the
+  // conventionally-named sibling file, never to merge or suppress. (A live build
+  // oscillated here once the full message finally surfaced but it couldn't pick the
+  // split.)
+  "module-boundaries/single-semantic-module": {
+    what: "This file mixes semantic categories (the message lists which, e.g. `type` + `schema`). A module must contain exactly ONE concern — split the odd category into its own file and import it back.",
+    bad: "// bookmark.schemas.ts\nexport interface IBookmark { url: string } // type\nexport const CreateBookmark = z.object({ url: z.string() }); // schema",
+    good: "// bookmark.types.ts\nexport interface IBookmark { url: string }\n// bookmark.schemas.ts\nimport type { IBookmark } from './bookmark.types';\nexport const CreateBookmark = z.object({ url: z.string() });",
+    procedure:
+      "1. Read the message: it names the categories present (type/schema/constant/function/class/react-component/hook).\n2. Keep the file's PRIMARY category (the one its name implies: *.schemas.ts→schema, *.types.ts→type, *.constants.ts→constant, *.utils.ts→function, *.service.ts→class+singleton).\n3. MOVE every declaration of the other category into its conventional sibling file (create it if absent): types→*.types.ts, zod/valibot schemas→*.schemas.ts, runtime constants→*.constants.ts, plain functions→*.utils.ts.\n4. Re-import the moved names where they were used. Do NOT merge categories or add an eslint-disable.",
+  },
 };
 
 /**
