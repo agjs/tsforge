@@ -201,6 +201,45 @@ ${cwd}/apps/api/src/api/b/b.ts
     ).toBe(true);
   });
 
+  test("a multi-line message whose BODY mentions a .ts path still joins (no abort, no currentFile corruption)", () => {
+    // A prose line like `Move the type into a.types.ts` ends in .ts but is NOT a file
+    // header — it must not abort the join nor be promoted to currentFile. The join
+    // reaches its real terminator; the NEXT file's error attributes to the NEXT file.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  6:8  error  Mixed semantic categories detected in module:
+- type
+- schema
+Move the type into a.types.ts instead
+Move declarations into separate files/modules  module-boundaries/single-semantic-module
+${cwd}/apps/api/src/api/b/b.ts
+  2:1  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // a.ts joined to its real terminator (rule id captured; prose body survives).
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:6:module-boundaries%2Fsingle-semantic-module"
+        )
+      )
+    ).toBe(true);
+    // b.ts's error attributes to b.ts — NOT to `a.types.ts` from the prose body.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fb%2Fb.ts:2:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    // No signature is ATTRIBUTED to the prose path (that would be currentFile
+    // corruption); the prose may appear inside a message, but never as a file.
+    expect([...sigs].some((s) => s.startsWith("failure:a.types.ts"))).toBe(
+      false
+    );
+    expect(sigs.size).toBe(2);
+  });
+
   test("a single-line eslint row is unaffected by the multi-line join", () => {
     const cwd = "/tmp/clone";
     const out = `${cwd}/apps/api/src/api/x/x.ts

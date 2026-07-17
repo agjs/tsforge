@@ -58,11 +58,13 @@ function joinMultilineEslintRows(output: string): string {
   const isDiagnosticRow = (s: string): boolean =>
     /^\s*\d+:\d+\s+(?:error|warning)\s/u.test(plain(s));
 
-  // A BOUNDARY the join must NOT cross or consume: another diagnostic row, a source-
-  // file header (path ending in .ts/.tsx), an `::tsforge-app::` marker, or a `$` echo.
-  // This stops a rule-LESS row (a `Parsing error` carries no ruleId) from swallowing
-  // the next file's header + diagnostics, and stops a following error/warning row
-  // (itself plugin-qualified) from being fused into the current one.
+  // A BOUNDARY the join must NOT cross or consume: another diagnostic row, an
+  // `::tsforge-app::` marker, a `$` echo, or a source-file HEADER. The header must be
+  // a BARE path (the whole trimmed line is a single path token) — NOT any line that
+  // merely ends in `.ts`, else a prose message body like `Move types into
+  // bookmark.types.ts` would abort the join. This stops a rule-LESS row (a `Parsing
+  // error` carries no ruleId) from swallowing the next file's header + diagnostics,
+  // and stops a following error/warning row from being fused into the current one.
   const isBoundary = (s: string): boolean => {
     const p = plain(s).trim();
 
@@ -70,11 +72,10 @@ function joinMultilineEslintRows(output: string): string {
       isDiagnosticRow(s) ||
       p.startsWith("$") ||
       /^::tsforge-app .+::$/u.test(p) ||
-      /\.[cm]?[jt]sx?:?$/u.test(p)
+      /^\S+\.[cm]?[jt]sx?:?$/u.test(p)
     );
   };
 
-  const MAX_SPAN = 40;
   const out: string[] = [];
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -89,12 +90,12 @@ function joinMultilineEslintRows(output: string): string {
     }
 
     // Scan forward for a plugin-qualified terminator, STOPPING at (never crossing) a
-    // boundary or the span cap.
+    // boundary. No line cap: the boundary IS the stop condition, so nothing is
+    // silently truncated by an arbitrary length limit.
     let j = i + 1;
 
     while (
       j < lines.length &&
-      j - i <= MAX_SPAN &&
       !isRuleIdTerminator(lines[j] ?? "") &&
       !isBoundary(lines[j] ?? "")
     ) {
@@ -106,7 +107,6 @@ function joinMultilineEslintRows(output: string): string {
     // the start row UNCHANGED — a parse error / unterminated block never absorbs.
     const terminator =
       j < lines.length &&
-      j - i <= MAX_SPAN &&
       isRuleIdTerminator(lines[j] ?? "") &&
       !isBoundary(lines[j] ?? "");
 
