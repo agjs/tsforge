@@ -33,6 +33,15 @@ export async function autofixApps(cwd: string, exec: Exec): Promise<void> {
   for (const app of ["apps/api", "apps/ui"]) {
     const appCwd = join(cwd, app);
 
+    // Clear eslint's cache FIRST. `eslint --cache` (which the app's lint/lint:fix scripts
+    // use) is UNSOUND for TYPE-AWARE rules: it keys on a file's own content, so a file
+    // whose content is unchanged stays cached-CLEAN even when a CROSS-FILE type change
+    // introduced a `no-unsafe-*` / type-checked violation in it. Live-observed break: the
+    // fast gate read a stale-clean cache and marked a feature GREEN while
+    // `no-unsafe-assignment` errors existed in a route test, which only surfaced at full
+    // acceptance — a gate-parity hole (4/4 panel). `lint:fix` re-populates a fresh cache
+    // for this cycle right after, so the later `check` → `lint` read stays fast AND sound.
+    await exec(["rm", "-f", ".eslintcache"], { cwd: appCwd });
     await exec(["bun", "run", "format"], { cwd: appCwd });
     await exec(["bun", "run", "lint:fix"], { cwd: appCwd });
   }

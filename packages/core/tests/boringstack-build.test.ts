@@ -550,17 +550,22 @@ describe("runBoringstackBuild", () => {
 
       expect(full).toBeGreaterThan(0);
 
-      // …and the FOUR exec calls immediately before it are the full autofixApps
-      // contract — format + lint:fix for BOTH apps — proving acceptance is
-      // preceded by the same deterministic auto-fixes the per-cycle gate applies.
-      // Dropping `format` or the api half must fail this (not just the last step).
+      // …and the SIX exec calls immediately before it are the full autofixApps
+      // contract — clear eslint cache + format + lint:fix for BOTH apps — proving
+      // acceptance is preceded by the same deterministic auto-fixes the per-cycle gate
+      // applies. The `rm -f .eslintcache` FIRST is the type-aware-lint soundness fix:
+      // eslint --cache can return a stale-clean result for a file whose content is
+      // unchanged but whose cross-file types changed, so the cache is cleared each cycle.
+      // Dropping the cache clear, `format`, or the api half must fail this.
       const before = execCalls
-        .slice(full - 4, full)
+        .slice(full - 6, full)
         .map((c) => `${c.argv.join(" ")} @ ${c.cwd.replace(dir, "")}`);
 
       expect(before).toEqual([
+        "rm -f .eslintcache @ /apps/api",
         "bun run format @ /apps/api",
         "bun run lint:fix @ /apps/api",
+        "rm -f .eslintcache @ /apps/ui",
         "bun run format @ /apps/ui",
         "bun run lint:fix @ /apps/ui",
       ]);
