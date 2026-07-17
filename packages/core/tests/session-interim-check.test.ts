@@ -49,4 +49,6 @@ test("interimCheckContent caps the surfaced errors so a wall can't blow the prom
   // First 20 shown, 21st (index 20) dropped.
   expect(content).toContain("err-19");
   expect(content).not.toContain("err-20");
+  // NOT silently truncated: the omitted count is surfaced (40 - 20 = 20).
+  expect(content).toContain("20 more error(s) not shown");
 });

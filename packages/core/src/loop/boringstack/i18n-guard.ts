@@ -17,9 +17,10 @@ import type { EditGuard, IEditVeto } from "../tools/tool-context";
  * calls whatever {@link EditGuard} is injected via the tool context.
  */
 
-/** A boringstack locale message file whose `features.*` keys this guard protects. */
+/** A boringstack locale message file whose `features.*` keys this guard protects.
+ *  Requires a path boundary before `i18n` so it can't match `…myi18n/locales/…`. */
 export function isLocaleCommonJson(file: string): boolean {
-  return /i18n\/locales\/[^/]+\/common\.json$/u.test(file);
+  return /(?:^|\/)i18n\/locales\/[^/]+\/common\.json$/u.test(file);
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -67,28 +68,6 @@ function collectLeafPaths(
   }
 }
 
-export interface ILocaleKeyDelta {
-  removed: readonly string[];
-  added: readonly string[];
-}
-
-/** Feature keys removed vs added between two versions of a locale file. If either
- *  version is unparseable, returns empty deltas so callers fail OPEN (a malformed
- *  version is a different problem the gate catches, not this guard's concern). */
-export function localeKeyDelta(before: string, after: string): ILocaleKeyDelta {
-  const b = featureLeafKeys(before);
-  const a = featureLeafKeys(after);
-
-  if (b === null || a === null) {
-    return { removed: [], added: [] };
-  }
-
-  return {
-    removed: [...b].filter((k) => !a.has(k)),
-    added: [...a].filter((k) => !b.has(k)),
-  };
-}
-
 /** The model-facing rejection: names the deleted keys, points at wiring up. */
 function destructiveLocaleRejection(
   file: string,
@@ -110,7 +89,14 @@ function destructiveLocaleRejection(
 }
 
 /** The boringstack {@link EditGuard}: vetoes a pure deletion of locale feature
- *  keys. A no-op for any non-locale file or any edit that also adds keys. */
+ *  keys, and vetoes an edit that leaves the locale file as invalid JSON. A no-op
+ *  for any non-locale file or any edit that also adds keys.
+ *
+ *  Vetoing invalid-JSON-after is what closes the two-edit bypass a reviewer
+ *  found: without it, the model could (1) delete keys AND malform the JSON in one
+ *  edit — fail-open lets it through — then (2) repair the JSON without the keys.
+ *  Rejecting step (1)'s malformed result blocks the sequence at the source; a
+ *  locale file must always be valid JSON anyway (the gate would fail it too). */
 export const boringstackEditGuard: EditGuard = (
   file: string,
   before: string,
@@ -120,7 +106,28 @@ export const boringstackEditGuard: EditGuard = (
     return null;
   }
 
-  const { removed, added } = localeKeyDelta(before, after);
+  const afterKeys = featureLeafKeys(after);
+
+  if (afterKeys === null) {
+    return {
+      reason: "i18n-invalid-json",
+      message:
+        `edit ${file} REJECTED: this edit left the locale file as invalid JSON. ` +
+        `Fix the JSON syntax and KEEP every feature translation key — do not drop ` +
+        `keys while "cleaning up". A locale file must always parse.`,
+    };
+  }
+
+  const beforeKeys = featureLeafKeys(before);
+
+  // Pre-existing malformed before-content (rare) — cannot reason about removals;
+  // fail OPEN rather than block on state this guard didn't create.
+  if (beforeKeys === null) {
+    return null;
+  }
+
+  const removed = [...beforeKeys].filter((k) => !afterKeys.has(k));
+  const added = [...afterKeys].filter((k) => !beforeKeys.has(k));
 
   if (removed.length === 0 || added.length > 0) {
     return null;

@@ -1,7 +1,6 @@
 import { test, expect } from "bun:test";
 import {
   isLocaleCommonJson,
-  localeKeyDelta,
   boringstackEditGuard,
 } from "../src/loop/boringstack/i18n-guard";
 
@@ -32,17 +31,6 @@ test("isLocaleCommonJson matches boringstack locale message files only", () => {
     isLocaleCommonJson("apps/ui/src/features/contact/ContactPage.tsx")
   ).toBe(false);
   expect(isLocaleCommonJson("apps/api/src/config/env/schema.ts")).toBe(false);
-});
-
-test("localeKeyDelta reports removed and added feature keys", () => {
-  const delta = localeKeyDelta(full, gutted);
-
-  expect([...delta.removed].sort()).toEqual([
-    "contact.confirmDelete",
-    "contact.createError",
-    "contact.deleteError",
-  ]);
-  expect(delta.added).toEqual([]);
 });
 
 test("guard VETOES the CRM anti-pattern: gutting the vocabulary to title+empty", () => {
@@ -85,7 +73,16 @@ test("guard is a NO-OP for non-locale files", () => {
   ).toBeNull();
 });
 
-test("guard fails OPEN on malformed JSON (never blocks on a parse error)", () => {
-  expect(boringstackEditGuard(EN, full, "{ not valid json")).toBeNull();
+test("guard VETOES an edit that leaves the locale file invalid JSON (closes the 2-step bypass)", () => {
+  // Step 1 of the malform-then-repair bypass: delete keys AND break the JSON in
+  // one edit. Rejecting the invalid-JSON result blocks the sequence at the source.
+  const veto = boringstackEditGuard(EN, full, "{ not valid json");
+
+  expect(veto).not.toBeNull();
+  expect(veto?.reason).toBe("i18n-invalid-json");
+  expect(veto?.message).toContain("invalid JSON");
+});
+
+test("guard fails OPEN when the BEFORE content is malformed (pre-existing state it didn't create)", () => {
   expect(boringstackEditGuard(EN, "{ broken", gutted)).toBeNull();
 });

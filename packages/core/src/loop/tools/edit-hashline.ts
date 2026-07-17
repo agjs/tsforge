@@ -6,7 +6,12 @@ import {
 } from "../../files/hashline";
 import { extractHash } from "../../files/hashline-format";
 import { syntaxErrorCount } from "../../files/syntax-check";
-import { parseOrRepair, reject, type IToolContext } from "./tool-context";
+import {
+  parseOrRepair,
+  reject,
+  guardVeto,
+  type IToolContext,
+} from "./tool-context";
 import { toHashlineEdit } from "../../agent";
 import { writable, normalizeWorkspacePath } from "../../lib/scope";
 
@@ -111,6 +116,25 @@ export async function doHashlineEdit(
         "edit_lines:syntax-regression",
         `edit_lines ${edit.file} REVERTED: your edit introduced ${String(after - before)} new syntax error(s) — the file no longer parses, so it was rolled back to its previous content. Your line ops likely landed on the wrong lines. \`read\` ${edit.file} again to get fresh line anchors, then make a SMALL, targeted edit of only the broken lines.`
       );
+    }
+
+    // Same edit guard as `edit`: this mutation path must not be a bypass. A veto
+    // reverts to the pre-edit content (and re-records the snapshot) and returns
+    // the guard's rejection. Uses the before/after the apply already computed.
+    const veto = guardVeto(
+      ctx,
+      edit.file,
+      result.previousContent ?? "",
+      result.newContent ?? ""
+    );
+
+    if (veto !== null) {
+      const prev = result.previousContent ?? "";
+
+      await Bun.write(join(ctx.cwd, edit.file), prev);
+      snapshotStore.record(edit.file, prev);
+
+      return reject(ctx, `edit_lines:${veto.reason}`, veto.message);
     }
 
     ctx.report({

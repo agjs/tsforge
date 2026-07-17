@@ -40,6 +40,21 @@ export type EditGuard = (
   after: string
 ) => IEditVeto | null;
 
+/** Call the registered edit guard (if any) with an edit's before/after bytes.
+ *  Returns its veto, or null when no guard is set or the guard accepts. Every
+ *  mutating tool (`edit`, `edit_lines`) runs this so no path bypasses the guard;
+ *  the caller reverts the file on a veto. */
+export function guardVeto(
+  ctx: Pick<IToolContext, "editGuard">,
+  file: string,
+  before: string,
+  after: string
+): IEditVeto | null {
+  return ctx.editGuard === undefined
+    ? null
+    : ctx.editGuard(file, before, after);
+}
+
 export interface IToolContext {
   cwd: string;
   /** Editable scope — `edit`/`create` outside it are rejected. */

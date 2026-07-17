@@ -458,10 +458,17 @@ const INTERIM_ERROR_CAP = 20;
 export function interimCheckContent(errors: ErrorSet): string {
   const shown = errors.slice(0, INTERIM_ERROR_CAP);
   const detail = shown.map((e) => e.message).join("\n");
+  // No silent truncation: if the cap dropped errors, say how many remain so the
+  // model knows the list is partial (not that only `shown` are outstanding).
+  const omitted = errors.length - shown.length;
+  const more =
+    omitted > 0
+      ? `\n… and ${String(omitted)} more error(s) not shown — fix these first, then re-run.`
+      : "";
   const help = ruleHelp(shown);
   const guidance = help.length > 0 ? `\n\n${help}` : "";
 
-  return `${INTERIM_CHECK_NOTE}\n${detail}${guidance}`;
+  return `${INTERIM_CHECK_NOTE}\n${detail}${more}${guidance}`;
 }
 
 /**
