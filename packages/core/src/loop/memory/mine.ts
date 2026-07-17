@@ -11,7 +11,7 @@ const MAX_EDITS_PER_WINDOW = 3;
  *  rule with a before→after edit snippet, which only generalizes when the rule
  *  names a *code construct* (a TS error code, an eslint rule). These verdicts are
  *  structural or behavioral — a route not wired (`reachability`), a quality
- *  critique (`judge`), a failing assertion (`bun-test`), an unreachable file
+ *  critique (`judge`), a failing assertion (`bun-test`/`vitest`), an unreachable file
  *  (`knip/unused-files`), or an unparseable source (`syntax`) — so the edit that
  *  clears one is arbitrary; attaching it to the verdict just noises up the ledger.
  *
@@ -24,6 +24,10 @@ const NON_PATTERN_VERDICTS = new Set<string>([
   "reachability",
   "judge",
   "bun-test",
+  // `vitest` is the UI twin of `bun-test`: a failing UI assertion / suite-load error is
+  // behavioral, not a code-construct diagnostic, so the edit that clears it doesn't
+  // generalize into a learnable rule. Denylist it for the same reason as `bun-test`.
+  "vitest",
   "syntax",
   "knip/unused-files",
   // The unclassified-gate fallback. Today opaqueGateError carries no `.rule`, so

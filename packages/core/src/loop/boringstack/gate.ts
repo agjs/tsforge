@@ -45,9 +45,20 @@ const eslintJson = (app: string): string =>
   "bun run --silent lint -- --format json 2>/dev/null || true; " +
   "echo '::tsforge-eslint-json-end::'; }";
 
+// The UI stage runs the FEATURE test suite (`vitest run src/features`) too — NOT just
+// `check`. The API stage always ran its tests in the fast gate; the UI stage did not, so
+// a UI test that type-checks and lints but fails at RUNTIME (e.g. a `vi.mock` hoisting
+// TDZ: "Cannot access 'mockGet' before initialization") stayed invisible until the FULL
+// acceptance gate — the model froze the feature "green", then acceptance failed on a test
+// it never saw and couldn't fix (gate-parity gap, 4/4 panel). Scoped to `src/features`
+// (where feature tests live) so it's ~20s, not the full ~32s suite; cross-cutting UI
+// regressions still surface at the full gate's `validate`. Invoked as `bun run test --
+// run src/features`: the app's own `test` script is vitest (WATCH by default — it would
+// hang a gate), and passing `run` switches it to a single non-watch run via the LOCAL
+// vitest (no `bunx` network/install risk), scoped to the feature tests.
 const FAST_GATE =
   `echo '::tsforge-app apps/api::' && (cd apps/api && ${eslintJson("apps/api")} && bun run check && bun run test) && ` +
-  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson("apps/ui")} && bun run check)`;
+  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson("apps/ui")} && bun run check && bun run test -- run src/features)`;
 
 /**
  * FULL acceptance gate — run ONCE, when every feature has passed the fast gate. The

@@ -49,10 +49,12 @@ describe("runBoringstackGate", () => {
     // API stage must still END with `check && test` (the JSON aid is inserted BEFORE it).
     expect(cmd).toContain("cd apps/api &&");
     expect(cmd).toContain("bun run check && bun run test)");
-    // The UI stage regenerates the OpenAPI client first and must still RUN `check` — the
-    // stage ends with `&& bun run check)` so dropping it would fail this assertion.
+    // The UI stage regenerates the OpenAPI client first and must still RUN `check`, then
+    // the feature tests — the stage ends with `&& bun run test -- run src/features)`.
     expect(cmd).toContain("cd apps/ui && bun run generate:api &&");
-    expect(cmd).toContain("&& bun run check)");
+    expect(cmd).toContain(
+      "&& bun run check && bun run test -- run src/features)"
+    );
     // The slow acceptance-only work must NOT be in the per-cycle gate.
     expect(cmd).not.toContain("bun run validate");
     // App markers for repo-relative path attribution (knip).
@@ -66,6 +68,13 @@ describe("runBoringstackGate", () => {
       cmd.indexOf("cd apps/ui && bun run generate:api")
     );
     expect(cmd).toContain("bun run --silent lint -- --format json");
+    // The UI stage now runs the feature test suite too (gate parity with acceptance) —
+    // a UI test that lints/typechecks but fails at runtime (vi.mock hoisting) must fail
+    // the FAST gate, not only the full acceptance gate.
+    expect(cmd).toContain("bun run test -- run src/features");
+    expect(cmd.indexOf("bun run test -- run src/features")).toBeGreaterThan(
+      cmd.indexOf("cd apps/ui")
+    );
   });
 
   test("FULL gate runs the complete validate + build + size + root check (final acceptance)", async () => {
