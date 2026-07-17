@@ -1155,3 +1155,78 @@ test("a no-gate session does NOT force a gate on edit-churn (regression: F23 mus
     await rm(dir, { recursive: true, force: true });
   }
 }, 30000);
+
+test("assistantMessage drops partial tool_calls on a TTSR abort (no dangling tool_calls → API 400)", async () => {
+  const { assistantMessage } = await import("../src/loop/assistant-message");
+
+  // A normal turn keeps its tool_calls.
+  const normal = assistantMessage({
+    content: "",
+    toolCalls: [{ id: "a", name: "create_file", arguments: { path: "x" } }],
+  });
+
+  expect(normal.toolCalls).toHaveLength(1);
+
+  // A TTSR-aborted turn: the partial tool_call never executed, so it must NOT be
+  // recorded (else the assistant tool_calls has no matching tool response and a strict
+  // API 400s on the next request). Content is backfilled so it's never empty+tool-less.
+  const aborted = assistantMessage({
+    content: "",
+    toolCalls: [{ id: "a", name: "create_file", arguments: { path: "x" } }],
+    ttsrFired: { ruleName: "no-as-cast", guidance: "no as casts" },
+  });
+
+  expect(aborted.toolCalls).toBeUndefined();
+  expect(aborted.content.length).toBeGreaterThan(0);
+});
+
+test("Session: a TTSR abort leaves NO dangling assistant tool_calls in the next request", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-session-"));
+
+  try {
+    const seen: { role: string; toolCalls?: unknown[] }[][] = [];
+    let calls = 0;
+    const provider: IProvider = {
+      async complete(messages) {
+        seen.push(
+          messages.map((m) => ({ role: m.role, toolCalls: m.toolCalls }))
+        );
+        calls += 1;
+
+        // Turn 1: a tool call aborted mid-stream by TTSR (partial, never executed).
+        if (calls === 1) {
+          return {
+            content: "",
+            toolCalls: [
+              { id: "1", name: "create", arguments: { file: "x.ts" } },
+            ],
+            ttsrFired: { ruleName: "no-as-cast", guidance: "no as casts" },
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      accept: "true",
+      files: ["**/*"],
+    });
+
+    await session.send("create x.ts");
+
+    // The 2nd request (the TTSR retry) is where a dangling tool_calls would 400 a
+    // strict API. Its history must carry NO assistant message with tool_calls — the
+    // aborted partial call was dropped, only the corrective user guidance remains.
+    const retryMessages = seen[1] ?? [];
+    const dangling = retryMessages.filter(
+      (m) => m.role === "assistant" && (m.toolCalls?.length ?? 0) > 0
+    );
+
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(dangling).toHaveLength(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

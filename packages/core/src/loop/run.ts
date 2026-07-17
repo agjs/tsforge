@@ -5,6 +5,7 @@ import type {
   IProvider,
   IToolCall,
 } from "../inference";
+import { assistantMessage } from "./assistant-message";
 import {
   validate,
   type ErrorParser,
@@ -702,14 +703,9 @@ async function runMainLoop(args: {
       })
     );
 
-    args.messages.push({
-      role: "assistant",
-      content: res.content,
-      toolCalls: res.toolCalls,
-      ...(res.reasoning === undefined
-        ? {}
-        : { reasoningContent: res.reasoning }),
-    });
+    // TTSR-aware: on a mid-stream abort this drops the partial (never-executed)
+    // tool_calls so the history has no dangling `tool_calls` (strict APIs 400 otherwise).
+    args.messages.push(assistantMessage(res));
 
     // Every model call advances cooldown accounting — including interrupted
     // ones, otherwise repeatGap rules mis-count after a TTSR retry.

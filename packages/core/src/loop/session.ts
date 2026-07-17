@@ -49,6 +49,7 @@ import {
 import type { Reporter, ILoopEvent, IHandoff } from "./loop.types";
 import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
+import { assistantMessage } from "./assistant-message";
 import { selectThinking, offeredToolsFor } from "./model-call";
 import {
   mineLessons,
@@ -272,16 +273,8 @@ export function filterGateStream(
   return fn;
 }
 
-/** Build the assistant history message, carrying `reasoningContent` when the
- *  model produced it (DeepSeek's thinking mode requires it replayed). */
-function assistantMessage(res: IModelResponse): IChatMessage {
-  return {
-    role: "assistant",
-    content: res.content,
-    toolCalls: res.toolCalls,
-    ...(res.reasoning === undefined ? {} : { reasoningContent: res.reasoning }),
-  };
-}
+// assistantMessage moved to ./assistant-message so runTask (run.ts) and Session share
+// ONE TTSR-aware builder — a fix in one path but not the other left the API-400 bug live.
 
 /** Default share of the context window that triggers auto-compaction. */
 const AUTO_COMPACT_AT = 0.8;
