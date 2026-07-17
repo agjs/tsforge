@@ -434,10 +434,10 @@ ${cwd}/apps/api/src/x.ts
     ).toBe(true);
   });
 
-  test("per-app coverage: API JSON `[]` (green) does NOT suppress UI's stylish errors when the UI block is malformed", () => {
-    // The gate emits TWO blocks (api, ui). API is green ([]), UI's block is malformed
-    // → UI is NOT "covered", so its stylish eslint error must still be captured (a
-    // global flag would have lost it — the exact near-green regression the panel flagged).
+  test("API JSON `[]` (green) does NOT suppress UI's stylish errors when the UI block is malformed", () => {
+    // The gate emits TWO blocks (api, ui). API is green ([]) and UI's block is malformed
+    // → neither contributes dedup keys, so UI's stylish eslint error must still be
+    // captured (a global suppression flag would have lost it — the near-green regression).
     const cwd = "/tmp/clone";
     const out = `::tsforge-app apps/api::
 ::tsforge-eslint-json apps/api::
@@ -460,7 +460,7 @@ ${cwd}/apps/ui/src/features/x/X.tsx
     ).toBe(true);
   });
 
-  test("a wrong-shaped JSON array (`[1,2,3]`) does NOT count as coverage — stylish is still scraped", () => {
+  test("a wrong-shaped JSON array (`[1,2,3]`) yields no dedup keys — stylish is still scraped", () => {
     const cwd = "/tmp/clone";
     const out = `::tsforge-app apps/api::
 ::tsforge-eslint-json apps/api::
@@ -479,11 +479,11 @@ ${cwd}/apps/api/src/x.ts
     ).toBe(true);
   });
 
-  test("a valid-shaped block whose message entries are malformed does NOT count as coverage (stylish still scraped)", () => {
-    // `[{filePath, messages:[{}]}]` passes shape validation but yields ZERO error
-    // signatures (the {} message has no severity 2). Coverage requires ≥1 real error,
-    // so the app is NOT covered and its stylish error is still captured — the panel's
-    // "shape-valid but incomplete payload silently loses lint" finding.
+  test("a valid-shaped block whose message entries are malformed yields no dedup keys (stylish still scraped)", () => {
+    // `[{filePath, messages:[{}]}]` is a valid array but the {} message has no
+    // severity 2, so it contributes ZERO dedup keys. The stylish error is therefore
+    // still captured — the panel's "shape-valid but incomplete payload silently loses
+    // lint" finding, resolved by per-error dedup rather than per-app suppression.
     const cwd = "/tmp/clone";
     const out = `::tsforge-app apps/api::
 ::tsforge-eslint-json apps/api::
@@ -502,11 +502,12 @@ ${cwd}/apps/api/src/x.ts
     ).toBe(true);
   });
 
-  test("an unterminated JSON block ends at the next ::tsforge-app:: marker (no cross-app swallow)", () => {
-    // The API JSON block is missing its end marker (truncated capture). Without an
-    // app-boundary reset the inEslintJson flag would stay true across the boundary and
-    // swallow EVERY later line — the UI's tsc error included. The next app marker must
-    // end the block so the UI failure is still captured.
+  test("an unterminated JSON block never swallows later diagnostics (only CLOSED blocks are stripped)", () => {
+    // The API JSON block is missing its end marker (truncated/killed capture). Only
+    // CLOSED blocks are stripped from the scanned text; an unterminated one is left in
+    // place and parsed line-by-line — its partial JSON line is not an error row, so it
+    // is skipped harmlessly, and the UI's tsc error that follows is still captured. A
+    // sticky skip flag would have swallowed every later line.
     const cwd = "/tmp/clone";
     const out = `::tsforge-app apps/api::
 ::tsforge-eslint-json apps/api::
@@ -519,6 +520,38 @@ ${cwd}/apps/ui/src/features/x/x.ts(10,5): error TS2532: Object is possibly 'unde
     expect(
       [...sigs].some((s) => s.startsWith("failure:apps%2Fui%2Fsrc%2Ffeatures"))
     ).toBe(true);
+  });
+
+  test("a JSON error at one line does NOT suppress a stylish-only error at another (per-error dedup, not per-app)", () => {
+    // The panel's core finding: if the JSON is a SUBSET of the real lint failures, a
+    // per-app suppression would drop the stylish-only errors. Per-(file,line,rule) dedup
+    // drops only the exact error the JSON already reported (a.ts:6), keeping the
+    // stylish-only error at a.ts:9 that the JSON never emitted.
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json apps/api::
+[{"filePath":"${cwd}/apps/api/src/api/a/a.ts","messages":[{"ruleId":"no-console","severity":2,"message":"no console","line":6,"column":8}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/api/a/a.ts
+  6:8  error  no console  no-console
+  9:3  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // The JSON error (line 6) is kept exactly once — its stylish duplicate is deduped.
+    expect(
+      [...sigs].filter((s) =>
+        s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:6:no-console")
+      )
+    ).toHaveLength(1);
+    // The stylish-ONLY error (line 9) — never in the JSON — is still captured.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:9:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    expect(sigs.size).toBe(2);
   });
 
   test("a multi-line JSON message is whitespace-collapsed so its signature matches the stylish path", () => {

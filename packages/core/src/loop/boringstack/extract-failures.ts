@@ -24,15 +24,28 @@ function toRepoRelative(filePath: string, cwd: string): string {
   return filePath.split(cwd).join("").replace(/^\/+/u, "").trim();
 }
 
+/** The location-key of a failure signature: `failure:<encFile>:<line>:<encRule>` — the
+ *  first four colon fields (file/rule are URL-encoded and the line is numeric, so none
+ *  contain a raw `:`; the message is the only dropped field). Two signatures share a key
+ *  iff they describe the SAME eslint error at the same file/line/rule — used to dedup a
+ *  stylish row against the JSON signature for the identical error, WITHOUT suppressing a
+ *  stylish-only error the JSON never reported. */
+function signatureKey(signature: string): string {
+  return signature.split(":").slice(0, 4).join(":");
+}
+
 /** Turn one eslint JSON result-file into structured failure signatures — the same
  *  `failure:<file>:<line>:<rule>:<message>` shape the stylish path produces, but from
  *  UNAMBIGUOUS structured data (exact file/line/ruleId/message per message). Only
  *  ERRORS (severity 2) count — warnings don't fail the gate. A rule-less message (a
- *  parsing error) is tagged `syntax`, matching the tsc-parser convention. */
+ *  parsing error) is tagged `syntax`, matching the tsc-parser convention. Each emitted
+ *  signature's location-key is also recorded in `keys` so the line loop can dedup the
+ *  matching stylish row (and ONLY that row). */
 function eslintResultSignatures(
   result: unknown,
   cwd: string,
-  signatures: Set<string>
+  signatures: Set<string>,
+  keys: Set<string>
 ): void {
   if (!isRecord(result) || typeof result.filePath !== "string") {
     return;
@@ -59,51 +72,34 @@ function eslintResultSignatures(
         ? message.message.replace(/\s+/gu, " ").trim()
         : "";
     const line = typeof message.line === "number" ? message.line : undefined;
+    const signature = structuredFailure(file, line, rule, text);
 
-    signatures.add(structuredFailure(file, line, rule, text));
+    signatures.add(signature);
+    keys.add(signatureKey(signature));
   }
 }
 
-/** Is this a genuine eslint `--format json` payload — an array of result objects each
- *  carrying `filePath` + a `messages` array? Rejects a JSON array of the wrong shape
- *  (`[1,2,3]`) so it can't be mistaken for eslint output. Shape validity alone does NOT
- *  grant coverage (see parseEslintJsonBlocks) — an empty/all-green array is valid but
- *  yields no errors, so it must not suppress the stylish fallback. Typed as a guard so
- *  the caller can iterate `results` without a redundant re-check. */
-function isEslintResultArray(value: unknown): value is unknown[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (r) =>
-        isRecord(r) &&
-        typeof r.filePath === "string" &&
-        Array.isArray(r.messages)
-    )
-  );
-}
-
 /** Parse every `::tsforge-eslint-json <app>::` … `::tsforge-eslint-json-end::` block
- *  into structured eslint signatures. Returns the SET OF APPS whose block actually
- *  yielded ≥1 ERROR signature — the caller ignores stylish eslint rows ONLY for those
- *  apps (per-app, not global). "Covered" deliberately means "the errors for this app are
- *  already in the JSON", NOT merely "the block parsed": an empty `[]`, an all-green app,
- *  a 0-file run, or a payload whose message entries are malformed all yield zero errors,
- *  so they are NOT covered and their stylish rows are still scraped. This is safe both
- *  ways — a truly green app has no stylish error rows to lose, and a broken JSON pass
- *  falls back to `check`'s own stylish output, so a lint error is never silently lost. */
+ *  into structured eslint signatures (added to `signatures`), recording each error's
+ *  location-key in `keys`. A green/empty `[]`, a wrong-shaped array (`[1,2,3]`), or a
+ *  malformed message entry simply contributes NO keys — so it suppresses nothing. The
+ *  line loop later drops a stylish row ONLY when its exact location-key is already in
+ *  `keys` (the same error, from JSON), never an error the JSON didn't report. This is
+ *  dedup, not per-app suppression: a JSON subset can no longer hide a stylish-only
+ *  error, and a broken/absent block loses nothing. Only CLOSED blocks match here; an
+ *  unterminated block contributes nothing and is left in the text for normal parsing. */
 function parseEslintJsonBlocks(
   output: string,
   cwd: string,
-  signatures: Set<string>
-): Set<string> {
-  const covered = new Set<string>();
+  signatures: Set<string>,
+  keys: Set<string>
+): void {
   const blocks = output.matchAll(
-    /::tsforge-eslint-json (\S+)::([\s\S]*?)::tsforge-eslint-json-end::/gu
+    /::tsforge-eslint-json \S+::([\s\S]*?)::tsforge-eslint-json-end::/gu
   );
 
   for (const block of blocks) {
-    const app = block[1] ?? "";
-    const raw = (block[2] ?? "").replace(ANSI, "");
+    const raw = (block[1] ?? "").replace(ANSI, "");
     const start = raw.indexOf("[");
     const end = raw.lastIndexOf("]");
 
@@ -119,23 +115,14 @@ function parseEslintJsonBlocks(
       continue;
     }
 
-    if (!isEslintResultArray(results)) {
+    if (!Array.isArray(results)) {
       continue;
     }
 
-    const before = signatures.size;
-
     for (const result of results) {
-      eslintResultSignatures(result, cwd, signatures);
-    }
-
-    // Cover the app only when the JSON produced at least one real error signature.
-    if (signatures.size > before) {
-      covered.add(app);
+      eslintResultSignatures(result, cwd, signatures, keys);
     }
   }
-
-  return covered;
 }
 
 /**
@@ -533,38 +520,12 @@ function generateApiFailure(line: string): string | null {
   return `openapi-unreachable:${classifyOpenApiFailure(failed[1] ?? "fetch failed")}`;
 }
 
-/** Skip the raw JSON lines of an eslint-JSON block (parsed separately by
- *  parseEslintJsonBlocks) so a message value like `error TS…` inside the JSON can't be
- *  mis-parsed as a real diagnostic. Toggles on the markers; returns true while inside
- *  the block or on a marker line. Markers survive `normalize` (no whitespace). */
-function consumeEslintJsonBlock(
-  line: string,
-  state: IFailureParserState
-): boolean {
-  if (line === "::tsforge-eslint-json-end::") {
-    state.inEslintJson = false;
-
-    return true;
-  }
-
-  if (/^::tsforge-eslint-json .+::$/u.test(line)) {
-    state.inEslintJson = true;
-
-    return true;
-  }
-
-  // An `::tsforge-app <prefix>::` stage marker is a hard boundary. If a JSON block was
-  // left unterminated (truncated capture, missing end marker), it ends HERE rather than
-  // swallowing every later line (tsc errors, bun fails, stylish rows) across the app
-  // boundary — the exact silent-loss the panel flagged. Fall through to consumeMarker.
-  if (/^::tsforge-app .+::$/u.test(line)) {
-    state.inEslintJson = false;
-
-    return false;
-  }
-
-  return state.inEslintJson;
-}
+/** Regex for a CLOSED eslint-JSON block, used to strip already-parsed blocks from the
+ *  line-scanned output. Stripping (not a stateful skip flag) means an UNTERMINATED block
+ *  — a truncated/killed capture with no end marker — is simply left in place for normal
+ *  line parsing, so it can never swallow the tsc/stylish/knip diagnostics that follow. */
+const CLOSED_ESLINT_JSON_BLOCK =
+  /::tsforge-eslint-json \S+::[\s\S]*?::tsforge-eslint-json-end::/gu;
 
 export function extractFailures(output: string, cwd: string): Set<string> {
   const signatures = new Set<string>();
@@ -579,24 +540,22 @@ export function extractFailures(output: string, cwd: string): Set<string> {
     currentFile: "",
     inLintMeta: false,
     inUnusedFiles: false,
-    inEslintJson: false,
-    eslintJsonApps: new Set<string>(),
   };
 
-  // Prefer STRUCTURED eslint output: parse each app's `::tsforge-eslint-json <app>::`
-  // block into exact signatures. For a covered app the line loop ignores its ambiguous
-  // stylish eslint rows (JSON is the single source of truth); an uncovered app (block
-  // missing/malformed/wrong-shaped) still falls back to scraping stylish — joined for
-  // multi-line — so an eslint error is never lost. Joining is harmless for covered apps
-  // (their rows are skipped anyway).
-  state.eslintJsonApps = parseEslintJsonBlocks(output, cwd, signatures);
+  // Prefer STRUCTURED eslint output: parse each `::tsforge-eslint-json <app>::` block
+  // into exact signatures and record each error's location-key. Then STRIP the closed
+  // blocks from the line-scanned text so a JSON message like `error TS…` can't be
+  // mis-parsed as a diagnostic — an unterminated block is left in place and parsed
+  // normally, never swallowing later lines. A stylish row that duplicates a JSON error
+  // (same file/line/rule key) is dropped in the loop; a stylish-only error is kept.
+  const jsonKeys = new Set<string>();
 
-  for (const rawLine of joinMultilineEslintRows(output).split("\n")) {
+  parseEslintJsonBlocks(output, cwd, signatures, jsonKeys);
+
+  const scanned = output.replace(CLOSED_ESLINT_JSON_BLOCK, "");
+
+  for (const rawLine of joinMultilineEslintRows(scanned).split("\n")) {
     const line = normalize(rawLine, cwd);
-
-    if (consumeEslintJsonBlock(line, state)) {
-      continue;
-    }
 
     if (consumeMarker(line, state)) {
       continue;
@@ -621,16 +580,12 @@ export function extractFailures(output: string, cwd: string): Set<string> {
       continue;
     }
 
-    // For an app whose eslint came from JSON, ignore its duplicated stylish ERROR
-    // rows so a failure isn't counted twice (once clean from JSON, once mangled from
-    // text). Only error rows — warnings were never captured by the stylish path.
-    if (state.eslintJsonApps.has(state.app) && /^\d+:\d+ error\b/u.test(line)) {
-      continue;
-    }
-
     const diagnostic = parsedDiagnostic(line, state);
 
-    if (diagnostic !== null) {
+    // Drop a stylish row only when the JSON already reported the SAME error (identical
+    // file/line/rule) — dedup, not per-app suppression, so a stylish-only error the
+    // JSON never emitted is always kept.
+    if (diagnostic !== null && !jsonKeys.has(signatureKey(diagnostic))) {
       signatures.add(diagnostic);
     }
   }
