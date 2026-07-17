@@ -41,18 +41,23 @@ function joinMultilineEslintRows(output: string): string {
   const plain = (s: string): string => s.replace(ANSI, "");
   const isErrorStart = (s: string): boolean =>
     /^\s*\d+:\d+\s+error\s/u.test(plain(s));
-  // A join TERMINATOR is eslint's padded ruleId column: 2+ spaces then a
-  // PLUGIN-qualified id (contains `/`, e.g. `module-boundaries/single-semantic-module`
-  // or `@typescript-eslint/x`). Requiring the slash avoids a prose continuation like
-  // `Do not use  console` being mistaken for a ruleId and terminating early.
-  const endsWithRuleId = (s: string): boolean =>
+  // A COMPLETE single-line row already has its ruleId (ANY id, incl. bare core rules
+  // like `eqeqeq`) in eslint's padded right column: `… message  rule`. Such rows —
+  // and rule-LESS ones we can't safely join — pass through untouched.
+  const isCompleteRow = (s: string): boolean =>
+    isErrorStart(s) && /\S {2,}[\w@/-]+\s*$/u.test(plain(s));
+  // A multi-line TERMINATOR is the padded ruleId column carrying a PLUGIN-qualified id
+  // (contains `/`, e.g. `module-boundaries/single-semantic-module`). Requiring the
+  // slash keeps a prose continuation like `Do not use  console` from being mistaken
+  // for a ruleId and terminating the join early.
+  const isRuleIdTerminator = (s: string): boolean =>
     /\S {2,}@?[\w-]+\/[\w@/-]+\s*$/u.test(plain(s));
 
-  // A BOUNDARY stops the join WITHOUT being consumed — the multi-line message can't
-  // legitimately cross it: a new error row, a source-file header (a path ending in
-  // .ts/.tsx), an `::tsforge-app::` stage marker, or a `$` command echo. This stops
-  // a rule-LESS row (e.g. a `Parsing error`, which carries no ruleId) from swallowing
-  // the next file's header + diagnostics.
+  // A BOUNDARY the join must NOT cross or consume: a new error row, a source-file
+  // header (path ending in .ts/.tsx), an `::tsforge-app::` marker, or a `$` echo.
+  // This is what stops a rule-LESS row (a `Parsing error` carries no ruleId) from
+  // swallowing the next file's header + diagnostics, and stops a following error row
+  // (which is itself plugin-qualified) from being fused into the current one.
   const isBoundary = (s: string): boolean => {
     const p = plain(s).trim();
 
@@ -64,40 +69,43 @@ function joinMultilineEslintRows(output: string): string {
     );
   };
 
-  const MAX_SPAN = 15;
-
+  const MAX_SPAN = 40;
   const out: string[] = [];
 
   for (let i = 0; i < lines.length; i += 1) {
     const start = lines[i] ?? "";
 
-    // Not a multi-line START (either not an error row, or already a complete
-    // single-line row with its ruleId) → pass through.
-    if (!isErrorStart(start) || endsWithRuleId(start)) {
+    // Only a multi-line OPEN — an error row that is NOT already complete — can start a
+    // join. Everything else (non-errors, complete single-line rows, rule-less rows)
+    // passes through.
+    if (!isErrorStart(start) || isCompleteRow(start)) {
       out.push(start);
       continue;
     }
 
-    // Scan forward for the ruleId terminator, but STOP at a boundary or the span cap.
-    // Only collapse when a terminator is actually found — otherwise a rule-less error
-    // (parse error) or an unterminated block is emitted UNCHANGED (old per-line
-    // behavior), so nothing downstream is swallowed.
+    // Scan forward for a plugin-qualified terminator, STOPPING at (never crossing) a
+    // boundary or the span cap.
     let j = i + 1;
 
     while (
       j < lines.length &&
       j - i <= MAX_SPAN &&
-      !endsWithRuleId(lines[j] ?? "") &&
+      !isRuleIdTerminator(lines[j] ?? "") &&
       !isBoundary(lines[j] ?? "")
     ) {
       j += 1;
     }
 
-    if (
+    // Collapse ONLY when the stop line is a genuine terminator that is NOT itself a
+    // boundary (a following error row is both, and must stay separate). Otherwise emit
+    // the start row UNCHANGED — a parse error / unterminated block never absorbs.
+    const terminator =
       j < lines.length &&
       j - i <= MAX_SPAN &&
-      endsWithRuleId(lines[j] ?? "")
-    ) {
+      isRuleIdTerminator(lines[j] ?? "") &&
+      !isBoundary(lines[j] ?? "");
+
+    if (terminator) {
       out.push(lines.slice(i, j + 1).join(" "));
       i = j;
     } else {

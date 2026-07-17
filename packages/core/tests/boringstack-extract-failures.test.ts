@@ -128,6 +128,31 @@ ${cwd}/apps/api/src/api/b/b.ts
     expect(sigs.size).toBe(2);
   });
 
+  test("two single-line eslint errors in ONE file stay separate (a following error is a boundary, never fused)", () => {
+    // The exact hole the conservative join must close: a bare CORE-rule error (no
+    // slash in its id) is not "complete" under the terminator check, so it must NOT
+    // open a join that swallows the NEXT (@typescript-eslint) error row.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  3:1  error  Expected '===' and instead saw '=='  eqeqeq
+  4:7  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:3:eqeqeq")
+      )
+    ).toBe(true);
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    expect(sigs.size).toBe(2);
+  });
+
   test("a single-line eslint row is unaffected by the multi-line join", () => {
     const cwd = "/tmp/clone";
     const out = `${cwd}/apps/api/src/api/x/x.ts
