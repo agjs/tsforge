@@ -439,6 +439,11 @@ function consumeMarker(line: string, state: IFailureParserState): boolean {
   state.inUnusedFiles = false;
   state.inLintMeta = false;
   state.currentFile = "";
+  // Defense: a pending vitest FAIL must never survive into the next app (the loop flushes
+  // it just before this runs, so it's already emitted — this only guards against leak).
+  state.pendingVitestFile = "";
+  state.pendingVitestName = "";
+  state.pendingVitestError = "";
 
   return true;
 }
@@ -675,6 +680,97 @@ function generateApiFailure(line: string): string | null {
   return `openapi-unreachable:${classifyOpenApiFailure(failed[1] ?? "fetch failed")}`;
 }
 
+/** Emit the pending vitest FAIL as one signature and clear it. The detail composes the
+ *  test title and the captured error line (both VERBATIM — no truncation, per the
+ *  no-silent-truncation house rule). Called on the next FAIL, at an app boundary, and at
+ *  EOF so a pending file never leaks across an `::tsforge-app` marker and grabs the next
+ *  app's error line. */
+function flushPendingVitest(
+  state: IFailureParserState,
+  signatures: Set<string>
+): void {
+  if (state.pendingVitestFile === "") {
+    return;
+  }
+
+  const parts = [state.pendingVitestName, state.pendingVitestError].filter(
+    (p) => p !== ""
+  );
+  const detail =
+    parts.length > 0 ? parts.join(" — ") : "test suite failed to load";
+
+  signatures.add(
+    structuredFailure(state.pendingVitestFile, undefined, "vitest", detail)
+  );
+  state.pendingVitestFile = "";
+  state.pendingVitestName = "";
+  state.pendingVitestError = "";
+}
+
+/** An anchored error-header line: any `…Error` class — the base `Error`, plus TypeError /
+ *  ReferenceError / SyntaxError / AssertionError / RangeError / … (`\w*Error` matches the
+ *  bare `Error:` too, which the vi.mock suite-load message starts with) — or an
+ *  `Expected …` assertion body. Anchored at line start so prose lines don't false-match. */
+function isVitestErrorHeader(line: string): boolean {
+  return /^(?:\w*Error\b|Expected\b)/u.test(line);
+}
+
+/** Parse vitest's failure output (the UI test runner) into actionable signatures.
+ *  vitest prints ` FAIL  <file>[ [ file ]][ > describe > test [param]]` per failing
+ *  file/test, then error detail on following lines: a generic `*Error: …`/`Expected …`
+ *  first, then often the `Caused by: …` ROOT cause. One signature per failing FILE (rule
+ *  `vitest`), detail = the test title (with any `[param]` kept) + the error line. Every
+ *  FAIL holds pending until its detail arrives so named-test AssertionErrors are captured
+ *  too; `Caused by:` wins over the first error line and closes the block. Detail is stored
+ *  VERBATIM. Returns true when the line was a vitest FAIL or its captured detail.
+ *  `bun test` (API) uses `(fail)`, not `FAIL`, so no overlap. */
+function consumeVitest(
+  line: string,
+  state: IFailureParserState,
+  signatures: Set<string>
+): boolean {
+  // `[ file ]` (the bare-file echo) only appears right after the file; a `[param]` suffix
+  // rides along inside the `> test` capture (kept), so parameterized cases stay distinct.
+  const fail =
+    /^FAIL (\S+\.(?:test|spec)\.[cm]?[jt]sx?)(?: \[[^\]]*\])?(?: > (.+))?$/u.exec(
+      line
+    );
+
+  if (fail !== null) {
+    flushPendingVitest(state, signatures);
+
+    state.pendingVitestFile = qualify(
+      state.app,
+      (fail[1] ?? "").replace(/^\.\//u, "").replace(/^\//u, "")
+    );
+    state.pendingVitestName = fail[2] ?? "";
+    state.pendingVitestError = "";
+
+    return true;
+  }
+
+  if (state.pendingVitestFile === "") {
+    return false;
+  }
+
+  // The `Caused by:` root cause wins and closes the block.
+  if (/^Caused by:/iu.test(line)) {
+    state.pendingVitestError = line;
+    flushPendingVitest(state, signatures);
+
+    return true;
+  }
+
+  // The first error/assertion line — remember it, but keep waiting for a `Caused by:`.
+  if (state.pendingVitestError === "" && isVitestErrorHeader(line)) {
+    state.pendingVitestError = line;
+
+    return true;
+  }
+
+  return false;
+}
+
 export function extractFailures(output: string, cwd: string): Set<string> {
   const signatures = new Set<string>();
   // knip prints `Unused files (N)` then one relative path per line, ending at the
@@ -688,6 +784,9 @@ export function extractFailures(output: string, cwd: string): Set<string> {
     currentFile: "",
     inLintMeta: false,
     inUnusedFiles: false,
+    pendingVitestFile: "",
+    pendingVitestName: "",
+    pendingVitestError: "",
   };
 
   // Prefer STRUCTURED eslint output: parse each `::tsforge-eslint-json <app>::` block
@@ -706,6 +805,12 @@ export function extractFailures(output: string, cwd: string): Set<string> {
   for (const rawLine of joinMultilineEslintRows(scanned).split("\n")) {
     const line = normalize(rawLine, cwd);
 
+    // An app-stage marker is a hard boundary: flush any pending vitest FAIL BEFORE the
+    // marker resets the app, so it's attributed to the app it came from — never the next.
+    if (/^::tsforge-app .+::$/u.test(line)) {
+      flushPendingVitest(state, signatures);
+    }
+
     if (consumeMarker(line, state)) {
       continue;
     }
@@ -719,6 +824,10 @@ export function extractFailures(output: string, cwd: string): Set<string> {
     }
 
     if (consumeSourceFile(line, state)) {
+      continue;
+    }
+
+    if (consumeVitest(line, state, signatures)) {
       continue;
     }
 
@@ -745,6 +854,9 @@ export function extractFailures(output: string, cwd: string): Set<string> {
 
     signatures.add(diagnostic.signature);
   }
+
+  // A trailing bare-file vitest FAIL whose detail line never arrived (truncated output).
+  flushPendingVitest(state, signatures);
 
   return signatures;
 }
