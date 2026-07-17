@@ -225,6 +225,19 @@ test("ruleHelp: every multi-step architecture rule carries a fix procedure", () 
   }
 });
 
+test("ruleHelp: i18n-locale-keys-used steers WIRE-UP, never delete-what-you-wrote", () => {
+  const h = ruleHelp([
+    { key: "k", rule: "i18n-locale-keys-used", message: "" },
+  ]);
+
+  expect(h).toContain("i18n-locale-keys-used");
+  // Must carry the constructive procedure…
+  expect(h).toContain("procedure:");
+  expect(h.toLowerCase()).toContain("wire it up");
+  // …and explicitly forbid deleting a translation the model just wrote.
+  expect(h.toLowerCase()).toContain("never delete");
+});
+
 test("ruleHelp: a pack rule with no worked example shows only its description (no fake ✗/✓)", () => {
   // job-name-must-be-constant has a generated (empty bad/good) entry, no curated one.
   const h = ruleHelp([
