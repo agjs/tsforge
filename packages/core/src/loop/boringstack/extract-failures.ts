@@ -1,3 +1,4 @@
+import { isRecord } from "../../lib/guards";
 import type { IFailureParserState } from "./extract-failures.types";
 
 // Build the ANSI-escape matcher from the ESC code point so the source carries no
@@ -15,6 +16,92 @@ function normalize(raw: string, cwd: string): string {
     .replace(/\[\d+(?:\.\d+)?ms\]\s*$/, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** eslint's absolute `filePath` → repo-relative (strip the clone path + leading `/`).
+ *  Collapse whitespace so it matches the model's editable-scope globs. */
+function toRepoRelative(filePath: string, cwd: string): string {
+  return filePath.split(cwd).join("").replace(/^\/+/u, "").trim();
+}
+
+/** Turn one eslint JSON result-file into structured failure signatures — the same
+ *  `failure:<file>:<line>:<rule>:<message>` shape the stylish path produces, but from
+ *  UNAMBIGUOUS structured data (exact file/line/ruleId/message per message). Only
+ *  ERRORS (severity 2) count — warnings don't fail the gate. A rule-less message (a
+ *  parsing error) is tagged `syntax`, matching the tsc-parser convention. */
+function eslintResultSignatures(
+  result: unknown,
+  cwd: string,
+  signatures: Set<string>
+): void {
+  if (!isRecord(result) || typeof result.filePath !== "string") {
+    return;
+  }
+
+  const file = toRepoRelative(result.filePath, cwd);
+  const messages = result.messages;
+
+  if (!Array.isArray(messages)) {
+    return;
+  }
+
+  for (const message of messages) {
+    if (!isRecord(message) || message.severity !== 2) {
+      continue;
+    }
+
+    const rule = typeof message.ruleId === "string" ? message.ruleId : "syntax";
+    const text = typeof message.message === "string" ? message.message : "";
+    const line = typeof message.line === "number" ? message.line : undefined;
+
+    signatures.add(structuredFailure(file, line, rule, text));
+  }
+}
+
+/** Parse every `::tsforge-eslint-json::` … `::tsforge-eslint-json-end::` block into
+ *  structured eslint signatures. Returns true when ≥1 block PARSED — the caller then
+ *  ignores the stylish eslint rows (JSON is the single source of truth for lint). A
+ *  present-but-malformed block returns false, so the stylish fallback still runs and
+ *  a lint error is never silently lost. */
+function parseEslintJsonBlocks(
+  output: string,
+  cwd: string,
+  signatures: Set<string>
+): boolean {
+  const blocks = output.matchAll(
+    /::tsforge-eslint-json::([\s\S]*?)::tsforge-eslint-json-end::/gu
+  );
+  let parsedAny = false;
+
+  for (const block of blocks) {
+    const raw = (block[1] ?? "").replace(ANSI, "");
+    const start = raw.indexOf("[");
+    const end = raw.lastIndexOf("]");
+
+    if (start < 0 || end <= start) {
+      continue;
+    }
+
+    let results: unknown;
+
+    try {
+      results = JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      continue;
+    }
+
+    if (!Array.isArray(results)) {
+      continue;
+    }
+
+    parsedAny = true;
+
+    for (const result of results) {
+      eslintResultSignatures(result, cwd, signatures);
+    }
+  }
+
+  return parsedAny;
 }
 
 /**
@@ -412,6 +499,29 @@ function generateApiFailure(line: string): string | null {
   return `openapi-unreachable:${classifyOpenApiFailure(failed[1] ?? "fetch failed")}`;
 }
 
+/** Skip the raw JSON lines of an eslint-JSON block (parsed separately by
+ *  parseEslintJsonBlocks) so a message value like `error TS…` inside the JSON can't be
+ *  mis-parsed as a real diagnostic. Toggles on the markers; returns true while inside
+ *  the block or on a marker line. Markers survive `normalize` (no whitespace). */
+function consumeEslintJsonBlock(
+  line: string,
+  state: IFailureParserState
+): boolean {
+  if (line === "::tsforge-eslint-json::") {
+    state.inEslintJson = true;
+
+    return true;
+  }
+
+  if (line === "::tsforge-eslint-json-end::") {
+    state.inEslintJson = false;
+
+    return true;
+  }
+
+  return state.inEslintJson;
+}
+
 export function extractFailures(output: string, cwd: string): Set<string> {
   const signatures = new Set<string>();
   // knip prints `Unused files (N)` then one relative path per line, ending at the
@@ -425,10 +535,25 @@ export function extractFailures(output: string, cwd: string): Set<string> {
     currentFile: "",
     inLintMeta: false,
     inUnusedFiles: false,
+    inEslintJson: false,
+    eslintJsonPresent: false,
   };
 
-  for (const rawLine of joinMultilineEslintRows(output).split("\n")) {
+  // Prefer STRUCTURED eslint output: parse the `::tsforge-eslint-json::` block(s) into
+  // exact signatures. When present, the line loop ignores the ambiguous stylish eslint
+  // rows (JSON is the single source of truth). When ABSENT or malformed, fall back to
+  // scraping stylish (joined for multi-line) so an eslint error is never lost.
+  state.eslintJsonPresent = parseEslintJsonBlocks(output, cwd, signatures);
+  const source = state.eslintJsonPresent
+    ? output
+    : joinMultilineEslintRows(output);
+
+  for (const rawLine of source.split("\n")) {
     const line = normalize(rawLine, cwd);
+
+    if (consumeEslintJsonBlock(line, state)) {
+      continue;
+    }
 
     if (consumeMarker(line, state)) {
       continue;
@@ -450,6 +575,12 @@ export function extractFailures(output: string, cwd: string): Set<string> {
 
     if (apiFailure !== null) {
       signatures.add(apiFailure);
+      continue;
+    }
+
+    // eslint is owned by the JSON block — ignore the duplicated stylish rows so a
+    // failure isn't counted twice (once clean from JSON, once mangled from text).
+    if (state.eslintJsonPresent && /^\d+:\d+ (?:error|warning)\b/u.test(line)) {
       continue;
     }
 

@@ -46,24 +46,28 @@ describe("runBoringstackGate", () => {
     expect(cmd).not.toContain("docker");
     expect(cwd).toBe("/repo");
     // Fast = each app's `check` (lint+typecheck+meta+knip) + the cheap API tests.
-    expect(cmd).toContain("apps/api && bun run check && bun run test");
+    expect(cmd).toContain("bun run check && bun run test");
     // UI regenerates the OpenAPI client first, then `check` (no build/size per cycle).
-    expect(cmd).toContain("apps/ui && bun run generate:api && bun run check");
+    expect(cmd).toContain("apps/ui && bun run generate:api");
     // The slow acceptance-only work must NOT be in the per-cycle gate.
     expect(cmd).not.toContain("bun run validate");
     // App markers for repo-relative path attribution (knip).
     expect(cmd).toContain("::tsforge-app apps/api::");
+    // Each app emits its eslint as STRUCTURED JSON (via its own lint script) so the
+    // failure parser reads exact {file,line,rule,message} instead of stylish text.
+    expect(cmd).toContain("::tsforge-eslint-json::");
+    expect(cmd).toContain("bun run --silent lint -- --format json");
   });
 
   test("FULL gate runs the complete validate + build + size + root check (final acceptance)", async () => {
     const { cmd } = await cmdFor("full");
 
-    expect(cmd).toContain("apps/api && bun run validate");
-    expect(cmd).toContain(
-      "apps/ui && bun run generate:api && bun run validate"
-    );
+    expect(cmd).toContain("bun run validate");
+    expect(cmd).toContain("apps/ui && bun run generate:api");
     // The repo-root drift/build check only runs in the full gate.
     expect(cmd).toContain("::tsforge-app .::");
     expect(cmd).toContain("bun run check");
+    // Structured eslint JSON is emitted in the full gate too.
+    expect(cmd).toContain("::tsforge-eslint-json::");
   });
 });

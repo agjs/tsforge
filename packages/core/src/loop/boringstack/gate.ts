@@ -33,9 +33,21 @@ import type { Exec } from "./exec";
  * stage still regenerates the OpenAPI client (`generate:api`) first, so the UI never
  * checks against a stale `schema.d.ts`.
  */
+/** Emit the app's OWN eslint (same config + file globs) as STRUCTURED JSON, wrapped
+ *  in markers, so the failure parser reads exact {file,line,rule,message} instead of
+ *  scraping eslint's ambiguous "stylish" text (which truncated multi-line messages and
+ *  mis-attributed interleaved output). `bun run --silent lint -- --format json` reuses
+ *  the app's `lint` script and appends `--format json`, so there's no coupling to the
+ *  app's glob list. Runs BEFORE `check` and never aborts (`|| true`) — it's a parsing
+ *  aid; `check` still owns pass/fail (its own eslint sets the exit code). */
+const eslintJson = (): string =>
+  "{ echo '::tsforge-eslint-json::'; " +
+  "bun run --silent lint -- --format json 2>/dev/null || true; " +
+  "echo '::tsforge-eslint-json-end::'; }";
+
 const FAST_GATE =
-  "echo '::tsforge-app apps/api::' && (cd apps/api && bun run check && bun run test) && " +
-  "echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && bun run check)";
+  `echo '::tsforge-app apps/api::' && (cd apps/api && ${eslintJson()} && bun run check && bun run test) && ` +
+  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson()} && bun run check)`;
 
 /**
  * FULL acceptance gate — run ONCE, when every feature has passed the fast gate. The
@@ -45,8 +57,8 @@ const FAST_GATE =
  * at the end instead of every turn.
  */
 const FULL_GATE =
-  "echo '::tsforge-app apps/api::' && (cd apps/api && bun run validate) && " +
-  "echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && bun run validate) && " +
+  `echo '::tsforge-app apps/api::' && (cd apps/api && ${eslintJson()} && bun run validate) && ` +
+  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson()} && bun run validate) && ` +
   "echo '::tsforge-app .::' && bun run check";
 
 export type GateMode = "fast" | "full";

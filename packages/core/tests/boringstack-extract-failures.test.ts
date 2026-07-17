@@ -344,6 +344,96 @@ tests/api/a/a.service.test.ts:
     expect(sigs.size).toBe(1);
   });
 
+  test("structured eslint JSON → exact signatures; stylish rows for the same run are ignored (no double)", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-app apps/api::
+::tsforge-eslint-json::
+[{"filePath":"${cwd}/apps/api/src/api/a/a.ts","messages":[{"ruleId":"module-boundaries/single-semantic-module","severity":2,"message":"Mixed semantic categories detected in module:\\n- type\\n- schema\\nMove declarations into separate files/modules","line":6,"column":8},{"ruleId":"@typescript-eslint/no-explicit-any","severity":2,"message":"Unexpected any.","line":9,"column":3},{"ruleId":"prefer-const","severity":1,"message":"just a warning","line":1,"column":1}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/api/a/a.ts
+  6:8  error  Mixed semantic categories detected in module:
+- type
+- schema
+Move declarations into separate files/modules  module-boundaries/single-semantic-module
+  9:3  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // Exact structured signatures from JSON (full multi-line message, correct rule).
+    const semantic = [...sigs].find((s) =>
+      s.includes("single-semantic-module")
+    );
+
+    expect(semantic).toBeDefined();
+    expect(semantic).toStartWith(
+      "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:6:module-boundaries%2Fsingle-semantic-module"
+    );
+    expect(decodeURIComponent(semantic ?? "")).toContain(
+      "Move declarations into separate files"
+    );
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:9:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    // Warning (severity 1) is NOT a failure.
+    expect([...sigs].some((s) => s.includes("prefer-const"))).toBe(false);
+    // Exactly the two errors — the stylish rows did NOT create duplicates.
+    expect(sigs.size).toBe(2);
+  });
+
+  test("a JSON message containing `error TS…` is not mis-parsed as a tsc diagnostic", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-eslint-json::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{"ruleId":"no-console","severity":2,"message":"Do not mention error TS2532 here","line":2,"column":1}]}]
+::tsforge-eslint-json-end::`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(sigs.size).toBe(1);
+    expect([...sigs][0]).toStartWith(
+      "failure:apps%2Fapi%2Fsrc%2Fx.ts:2:no-console"
+    );
+    // The `error TS2532` inside the message did NOT mint a phantom tsc signature.
+    expect([...sigs].some((s) => s.includes("TS2532:"))).toBe(false);
+  });
+
+  test("tsc + bun failures still parse alongside a JSON eslint block", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-eslint-json::
+[{"filePath":"${cwd}/apps/api/src/x.ts","messages":[{"ruleId":"no-console","severity":2,"message":"no console","line":2,"column":1}]}]
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/y.ts(38,3): error TS2532: Object is possibly 'undefined'.
+tests/api/z/z.test.ts:
+(fail) zService > works [0.2ms]`;
+    const sigs = extractFailures(out, cwd);
+
+    expect([...sigs].some((s) => s.includes("no-console"))).toBe(true);
+    expect([...sigs].some((s) => s.includes("TS2532"))).toBe(true);
+    expect(
+      [...sigs].some((s) => decodeURIComponent(s).includes("(fail)"))
+    ).toBe(true);
+  });
+
+  test("a malformed JSON block falls back to scraping stylish eslint (no lint error lost)", () => {
+    const cwd = "/tmp/clone";
+    const out = `::tsforge-eslint-json::
+not valid json {[
+::tsforge-eslint-json-end::
+${cwd}/apps/api/src/x.ts
+  4:2  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // JSON unparseable → stylish path still captures the eslint error.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fx.ts:4:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+  });
+
   test("a fully green run yields no signatures", () => {
     expect(extractFailures("30 pass\n0 fail\nDone.", "/x").size).toBe(0);
   });
