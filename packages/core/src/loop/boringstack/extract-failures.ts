@@ -5,16 +5,123 @@ import type { IFailureParserState } from "./extract-failures.types";
 // literal control char (a regex literal with \x1b trips no-control-regex).
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
-/** A CLOSED eslint-JSON block: opening marker, content (capture group 1), closing marker.
- *  The content is TEMPERED against another opening marker (`(?!…opening…)`) so an
- *  UNTERMINATED block can never pair with a LATER block's end marker and strip the
- *  intervening tsc/stylish/knip/app-marker output between them. Used both to extract
- *  signatures and to strip already-parsed blocks from the line-scanned text; an
- *  unterminated block matches nothing, so it stays in place and is parsed line-by-line
- *  (its partial JSON isn't an error row, so it never swallows the diagnostics that follow).
- *  A fresh RegExp is built per use so the shared `g`-flag lastIndex is never carried over. */
-const ESLINT_JSON_BLOCK_SOURCE =
-  "::tsforge-eslint-json \\S+::((?:(?!::tsforge-eslint-json \\S+::)[\\s\\S])*?)::tsforge-eslint-json-end::";
+const ESLINT_JSON_END = "::tsforge-eslint-json-end::";
+// Matches ONLY an opening marker: `::tsforge-eslint-json <app>::`. The required space
+// after `json` means it never matches the end marker (`…json-end::`). The app token is
+// `[^\s:]+` (NOT `\S+`): forbidding `:` means the `+` deterministically stops at the
+// closing `::` and cannot backtrack across colon runs — so a malformed `…json <long-run>`
+// with no closer can't trigger `\S+::` O(n²) backtracking (a latent ReDoS). App prefixes
+// (`apps/api`, `apps/ui`, `.`) never contain a colon, so this matches every real marker.
+const ESLINT_JSON_OPEN = /::tsforge-eslint-json ([^\s:]+)::/gu;
+
+/** A CLOSED eslint-JSON block, located by index (not by a tempered regex). */
+interface IEslintJsonBlock {
+  /** Raw text between the opening and closing markers (the JSON payload). */
+  readonly content: string;
+  /** Index of the opening marker's first char. */
+  readonly start: number;
+  /** Index just past the closing marker (exclusive) — for range-based stripping. */
+  readonly end: number;
+}
+
+/** Every start index of a literal `needle` in `haystack`, ascending. One linear pass —
+ *  each `indexOf` resumes past the previous hit, so total work is O(n), not O(n·hits). */
+function allIndicesOf(haystack: string, needle: string): number[] {
+  const out: number[] = [];
+
+  for (
+    let i = haystack.indexOf(needle);
+    i !== -1;
+    i = haystack.indexOf(needle, i + needle.length)
+  ) {
+    out.push(i);
+  }
+
+  return out;
+}
+
+/** Locate every CLOSED `::tsforge-eslint-json <app>::` … `::…-end::` block in O(n).
+ *  Collect all opening and closing marker positions (both ascending) in single passes,
+ *  then MERGE them with one forward-only pointer: each opening claims the first end that
+ *  comes after it and before the next opening. An opening with no such end is UNTERMINATED
+ *  → skipped, so a truncated block never pairs with a later block's end and never swallows
+ *  the diagnostics between them. Replaces a tempered-quantifier regex whose backtracking
+ *  was O(n²)+ and hung the gate on 100KB+ output; the earlier per-opening `indexOf(END)`
+ *  was also O(n²) when many openings each rescanned to EOF — this merge fixes both. */
+function findClosedEslintJsonBlocks(output: string): IEslintJsonBlock[] {
+  const opens: { markerStart: number; contentStart: number }[] = [];
+
+  ESLINT_JSON_OPEN.lastIndex = 0;
+
+  for (
+    let m = ESLINT_JSON_OPEN.exec(output);
+    m !== null;
+    m = ESLINT_JSON_OPEN.exec(output)
+  ) {
+    opens.push({ markerStart: m.index, contentStart: m.index + m[0].length });
+  }
+
+  const ends = allIndicesOf(output, ESLINT_JSON_END);
+  const blocks: IEslintJsonBlock[] = [];
+  let e = 0;
+
+  for (let i = 0; i < opens.length; i += 1) {
+    const open = opens[i];
+
+    if (open === undefined) {
+      continue;
+    }
+
+    const nextOpen = opens[i + 1]?.markerStart ?? output.length;
+
+    // Forward-only: skip end markers that fall before this opening's content (they
+    // belonged to an earlier block, or to none). The pointer never rewinds → O(n).
+    while (e < ends.length && (ends[e] ?? Infinity) < open.contentStart) {
+      e += 1;
+    }
+
+    const endIdx = ends[e];
+
+    // No remaining end, or the next block opens first → unterminated; skip.
+    if (endIdx === undefined || endIdx >= nextOpen) {
+      continue;
+    }
+
+    blocks.push({
+      content: output.slice(open.contentStart, endIdx),
+      start: open.markerStart,
+      end: endIdx + ESLINT_JSON_END.length,
+    });
+    e += 1;
+  }
+
+  return blocks;
+}
+
+/** Remove the given (already-parsed) block ranges from `output` in one O(n) pass, so a
+ *  JSON message like `error TS…` can't be re-parsed as a diagnostic by the line loop.
+ *  Blocks are in ascending, non-overlapping order (findClosedEslintJsonBlocks emits them
+ *  left-to-right). An unterminated block is NOT in the list, so it stays in the text. */
+function stripRanges(
+  output: string,
+  blocks: readonly IEslintJsonBlock[]
+): string {
+  if (blocks.length === 0) {
+    return output;
+  }
+
+  const parts: string[] = [];
+  let cursor = 0;
+
+  for (const block of blocks) {
+    parts.push(output.slice(cursor, block.start));
+    cursor = block.end;
+  }
+
+  parts.push(output.slice(cursor));
+
+  return parts.join("");
+}
 
 /** Normalize one line of composed gate output into a stable comparison key:
  *  strip ANSI, remove the clone's absolute path (so signatures are portable),
@@ -107,15 +214,13 @@ function eslintResultSignatures(
  *  error, and a broken/absent block loses nothing. Only CLOSED blocks match here; an
  *  unterminated block contributes nothing and is left in the text for normal parsing. */
 function parseEslintJsonBlocks(
-  output: string,
+  blocks: readonly IEslintJsonBlock[],
   cwd: string,
   signatures: Set<string>,
   keys: Set<string>
 ): void {
-  const blocks = output.matchAll(new RegExp(ESLINT_JSON_BLOCK_SOURCE, "gu"));
-
   for (const block of blocks) {
-    const raw = (block[1] ?? "").replace(ANSI, "");
+    const raw = block.content.replace(ANSI, "");
     const start = raw.indexOf("[");
     const end = raw.lastIndexOf("]");
 
@@ -592,13 +697,11 @@ export function extractFailures(output: string, cwd: string): Set<string> {
   // normally, never swallowing later lines. A stylish row that duplicates a JSON error
   // (same file/line/rule key) is dropped in the loop; a stylish-only error is kept.
   const jsonKeys = new Set<string>();
+  const jsonBlocks = findClosedEslintJsonBlocks(output);
 
-  parseEslintJsonBlocks(output, cwd, signatures, jsonKeys);
+  parseEslintJsonBlocks(jsonBlocks, cwd, signatures, jsonKeys);
 
-  const scanned = output.replace(
-    new RegExp(ESLINT_JSON_BLOCK_SOURCE, "gu"),
-    ""
-  );
+  const scanned = stripRanges(output, jsonBlocks);
 
   for (const rawLine of joinMultilineEslintRows(scanned).split("\n")) {
     const line = normalize(rawLine, cwd);

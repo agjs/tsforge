@@ -622,6 +622,59 @@ ${cwd}/apps/api/src/api/a/a.ts
     );
   });
 
+  test("parses a LARGE (~1MB) realistic gate output in well under a second (ReDoS regression guard)", () => {
+    // A prior tempered-quantifier regex (`(?:(?!open)[\\s\\S])*?`) backtracked O(n²)+
+    // and hung the whole gate for minutes on real ~1MB output — tiny fixtures hid it.
+    const cwd = "/tmp/clone";
+    const chunk =
+      `::tsforge-app apps/api::\n` +
+      `::tsforge-eslint-json apps/api::\n` +
+      `[{"filePath":"${cwd}/apps/api/src/f.ts","messages":[]}]\n` +
+      `::tsforge-eslint-json-end::\n` +
+      `${cwd}/apps/api/src/f.ts(3,3): error TS2532: Object is possibly 'undefined'.\n` +
+      `tests/api/a/a.test.ts:\n(fail) svc > works [0.2ms]\n` +
+      ` 100 pass\n 1 fail\n`;
+    const out = chunk.repeat(4000); // ~1MB+
+
+    const started = Date.now();
+    const sigs = extractFailures(out, cwd);
+
+    expect(Date.now() - started).toBeLessThan(2000);
+    // Still correct: the tsc error is captured (deduped across identical chunks).
+    expect([...sigs].some((s) => s.includes("TS2532"))).toBe(true);
+  });
+
+  test("stays fast with MANY opening markers and NO end markers (the O(n²) per-open trap)", () => {
+    // The pathological input the merge scan must handle: thousands of UNTERMINATED
+    // `::tsforge-eslint-json <app>::` openings and no end marker. A per-opening
+    // `indexOf(END, …)` would rescan to EOF for every one → O(n²). The forward-only
+    // end-pointer merge keeps it O(n). Also asserts no block is wrongly closed.
+    const cwd = "/tmp/clone";
+    const open = `::tsforge-eslint-json apps/api::\n[{"filePath":"x"}]\n`;
+    const out = open.repeat(20000); // ~1MB of openings, zero end markers
+
+    const started = Date.now();
+    const sigs = extractFailures(out, cwd);
+
+    expect(Date.now() - started).toBeLessThan(2000);
+    // No end markers → no closed blocks parsed, nothing spuriously matched.
+    expect(sigs.size).toBe(0);
+  });
+
+  test("a long non-space run after an opener with no closer stays fast (\\S+:: backtracking guard)", () => {
+    // The precise catastrophic shape: `::tsforge-eslint-json ` then a long unbroken
+    // non-space run and NO closing `::`. A `(\\S+)::` app token would backtrack O(n²)
+    // trying every split for the missing `::`. `[^\\s:]+` stops dead at the first colon,
+    // so there is nothing to backtrack. Assert it parses near-instantly.
+    const out = `::tsforge-eslint-json ${"a".repeat(300000)}\nno end marker here`;
+
+    const started = Date.now();
+    const sigs = extractFailures(out, "/tmp/clone");
+
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(sigs.size).toBe(0);
+  });
+
   test("a fully green run yields no signatures", () => {
     expect(extractFailures("30 pass\n0 fail\nDone.", "/x").size).toBe(0);
   });
