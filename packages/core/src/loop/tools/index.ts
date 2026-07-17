@@ -1,2 +1,7 @@
 export { executeTool } from "./execute-tool";
-export type { IToolContext, SpawnAgentFn } from "./tool-context";
+export type {
+  IToolContext,
+  SpawnAgentFn,
+  EditGuard,
+  IEditVeto,
+} from "./tool-context";

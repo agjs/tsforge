@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { applyEdits } from "../../files/edit";
+import type { EditsResult } from "../../files/files.types";
 import { applyCreate } from "../../files/create";
 import { EDIT_FAIL_REASON } from "../../files";
 import { writable, normalizeWorkspacePath } from "../../lib/scope";
@@ -633,7 +634,21 @@ export async function doEdit(
   // is that each `oldString` matches a UNIQUE region, which `applyEdits` enforces;
   // edit SIZE is the model's call, guided softly by the tool description (like pi's
   // edit/write split). The gate is the sole arbiter of correctness.
+  // A registered edit guard may VETO an edit (e.g. a stack overlay that forbids a
+  // destructive change): capture the pre-edit bytes, let the edit apply, then let
+  // the guard inspect before/after and, on veto, revert + return its rejection.
+  const guardBefore =
+    ctx.editGuard === undefined
+      ? null
+      : await readFileTextOrNull(join(ctx.cwd, edit.file));
+
   const result = await applyEdits(ctx.cwd, edit.file, edit.edits);
+
+  const veto = await runEditGuard(ctx, edit.file, guardBefore, result);
+
+  if (veto !== null) {
+    return veto;
+  }
 
   if (result.ok) {
     // A no-op edit (same content / already applied) wrote nothing — report NO
@@ -693,6 +708,55 @@ const EDIT_REJECT_MAX_LINES = 400;
  *  the SAME turn — the model copies its oldString from the post-format text. Returns null on any I/O error (race, permissions): the edit has
  *  already failed, so enriching its message must never crash the tool — the caller
  *  then falls back to advising a `read`. */
+/** Run the registered edit guard (if any) against a just-applied edit. On veto,
+ *  reverts the file to `before` and returns the model-facing rejection; otherwise
+ *  null. No-op when no guard is set, the edit failed/no-op'd, or `before` is
+ *  unavailable. */
+async function runEditGuard(
+  ctx: IToolContext,
+  file: string,
+  before: string | null,
+  result: EditsResult
+): Promise<string | null> {
+  if (
+    ctx.editGuard === undefined ||
+    before === null ||
+    !result.ok ||
+    !result.changed
+  ) {
+    return null;
+  }
+
+  const after = await readFileTextOrNull(join(ctx.cwd, file));
+  const veto = after === null ? null : ctx.editGuard(file, before, after);
+
+  if (veto === null) {
+    return null;
+  }
+
+  await Bun.write(join(ctx.cwd, file), before);
+
+  return reject(ctx, `edit:${veto.reason}`, veto.message);
+}
+
+/** Read a file's text, or null if it doesn't exist / can't be read. Used to diff
+ *  a file's bytes before/after an edit for a registered edit guard. */
+async function readFileTextOrNull(path: string): Promise<string | null> {
+  try {
+    const handle = Bun.file(path);
+
+    if (!(await handle.exists())) {
+      return null;
+    }
+
+    return await handle.text();
+  } catch (err) {
+    trace("tools.readFileTextOrNull", err);
+
+    return null;
+  }
+}
+
 async function currentFileView(
   cwd: string,
   file: string

@@ -16,7 +16,7 @@ import {
   GENERATE_IMAGE_TOOL,
 } from "../agent";
 import type { IAgentSpec } from "../agent/agent-spec";
-import type { SpawnAgentFn, IToolContext } from "./tools";
+import type { SpawnAgentFn, IToolContext, EditGuard } from "./tools";
 import type { PolicyMode } from "../policy";
 import type { ProfileId } from "../config/profiles";
 import {
@@ -156,6 +156,10 @@ export interface ISessionConfig {
    *  the write-guard reports lint violations — the moat rules tsc can't see (`as`,
    *  `I`-prefix) — inline, so they're fixed in-context not piled up at the gate. */
   lintFile?: FileLinter;
+  /** Optional edit guard that can veto+revert an applied edit. Set by a build
+   *  BACKEND (e.g. boringstack) to inject a domain rule; the core edit tool stays
+   *  domain-agnostic. Absent ⇒ no guard. */
+  editGuard?: EditGuard;
   /** Rule profile override for this session (from a recipe); defaults to config file. */
   profile?: ProfileId;
   /** Offer the read-only `pull_conventions` tool — set by a build BACKEND that ships
@@ -796,6 +800,7 @@ export class Session {
         policyMode: baseMode,
         ...(policyRules === undefined ? {} : { policyRules }),
         ...(mcpRegistry === null ? {} : { mcpRegistry }),
+        ...(cfg.editGuard === undefined ? {} : { editGuard: cfg.editGuard }),
       },
       gate: {
         parse: cfg.parse,

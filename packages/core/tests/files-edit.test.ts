@@ -386,6 +386,65 @@ test("applyEdits sees the result of earlier replacements (sequential)", async ()
   }
 });
 
+// A registered editGuard can VETO an applied edit; doEdit reverts the file and
+// returns the guard's rejection. The guard here is a generic stand-in (the core
+// tool is domain-agnostic) — it vetoes any edit that shrinks the file.
+test("editGuard vetoes an applied edit and doEdit reverts the file", async () => {
+  const original = "line one\nline two\nline three\n";
+  const dir = await tmp({ "a.txt": original });
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+    editGuard: (file, before, after) =>
+      after.length < before.length
+        ? {
+            reason: "test-shrink",
+            message: `edit ${file} REJECTED: shrinks file`,
+          }
+        : null,
+  };
+
+  try {
+    const msg = await doEdit(
+      { file: "a.txt", oldString: "line one\nline two\n", newString: "" },
+      ctx
+    );
+
+    // The guard's rejection is returned…
+    expect(msg).toContain("REJECTED");
+    expect(msg).toContain("shrinks file");
+    // …and the file was reverted to its pre-edit content (veto = no net change).
+    expect(await Bun.file(join(dir, "a.txt")).text()).toBe(original);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("editGuard that returns null lets the edit stand", async () => {
+  const dir = await tmp({ "a.txt": "hello\n" });
+  const ctx: IToolContext = {
+    cwd: dir,
+    files: ["**/*"],
+    task: "t",
+    report: () => undefined,
+    editGuard: () => null,
+  };
+
+  try {
+    const msg = await doEdit(
+      { file: "a.txt", oldString: "hello", newString: "goodbye" },
+      ctx
+    );
+
+    expect(msg).toContain("edited");
+    expect(await Bun.file(join(dir, "a.txt")).text()).toBe("goodbye\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // A not-found edit (stale anchor after auto-format) inlines the file's CURRENT
 // content into the rejection, so the model repairs it in the SAME turn instead
 // of spending one on a re-`read` — the model's #1 reported friction.
