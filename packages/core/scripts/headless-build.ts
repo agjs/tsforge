@@ -8,7 +8,7 @@
 //
 // The driver plans resources, runs BoringStack's generators + wiring per resource,
 // the model fills the domain, and BoringStack's own `validate`/`check` is the gate.
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
@@ -62,6 +62,21 @@ async function installPlanFile(
     return `failed to process plan from ${planPath}: ${
       err instanceof Error ? err.message : String(err)
     }`;
+  }
+}
+
+/**
+ * Resolve a clone dir to its REAL (symlink-canonical) path so it matches the paths
+ * the gate's tools print. macOS resolves `/tmp/x` → `/private/tmp/x`; without this,
+ * cwd-stripping in the failure parser leaves a stray prefix and mangles every file
+ * path, so the model is wrongly told editable files are out of scope. A missing dir
+ * is returned unchanged — the downstream `apps/api` check reports it cleanly.
+ */
+export function resolveWorkspaceDir(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return dir;
   }
 }
 
@@ -262,19 +277,28 @@ async function main(): Promise<void> {
   const args = parseHeadlessArgs(process.argv.slice(2));
 
   const prompt = args.prompt;
-  const dir = args.dir;
+  const rawDir = args.dir;
 
   if (
     prompt === undefined ||
     prompt.length === 0 ||
-    dir === undefined ||
-    dir.length === 0
+    rawDir === undefined ||
+    rawDir.length === 0
   ) {
     process.stderr.write(
       'usage: headless-build.ts "<build goal>" <boringstack-clone-dir> [--log-file <path>] [--plan <file>]\n'
     );
     process.exit(2);
   }
+
+  // Canonicalize the clone dir to its REAL path. The gate's tools (bun/eslint/tsc)
+  // emit OS-resolved absolute paths — on macOS `/tmp/x` is really `/private/tmp/x` —
+  // so if we stripped a logical/symlinked cwd from those, a stray prefix would remain
+  // and every file path would be mangled (`apps/api/private/apps/api/…`). That path
+  // matches no editable-scope glob, so the model gets told real, editable files are
+  // "locked" and parks (observed live on a `/tmp` clone). Resolving up front makes the
+  // cwd match what the tools print.
+  const dir = resolveWorkspaceDir(rawDir);
 
   // For a greenfield boringstack clone (has apps/api directory), enforce that an
   // approved plan is either already in place or supplied via --plan.
