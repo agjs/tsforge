@@ -113,8 +113,8 @@ describe("mineLessons", () => {
 
   test("drops non-pattern gate verdicts but keeps every real rule id", () => {
     // The boringstack gate surfaces structural/behavioral VERDICTS — `reachability`
-    // (route not wired), `judge` (quality critique), `bun-test` (failing assertion),
-    // `syntax` (unparseable) — that name no code construct, so a mined snippet keyed
+    // (route not wired), `judge` (quality critique), `bun-test`/`vitest` (failing
+    // assertion), `syntax` (unparseable) — that name no code construct, so a mined keyed
     // to one is noise. Everything else is a real diagnostic id and stays learnable,
     // INCLUDING bare eslint core rules like `eqeqeq`/`curly` that carry no `/` or `-`
     // (this repo's gate enables them as errors — dropping them would be silent loss).
@@ -123,6 +123,7 @@ describe("mineLessons", () => {
         "reachability",
         "judge",
         "bun-test",
+        "vitest",
         "syntax",
         "knip/unused-files",
         "gate-nonzero",
