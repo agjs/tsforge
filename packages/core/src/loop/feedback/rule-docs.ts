@@ -397,7 +397,7 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
   "module-boundaries/single-semantic-module": {
     what: "This file mixes semantic categories (the message lists which, e.g. `type` + `schema`). A module must contain exactly ONE concern — split the odd category into its own file and import it back.",
     bad: "// bookmark.schemas.ts\nexport interface IBookmark { url: string } // type\nexport const CreateBookmark = z.object({ url: z.string() }); // schema",
-    good: "// bookmark.types.ts\nexport interface IBookmark { url: string }\n// bookmark.schemas.ts\nimport type { IBookmark } from './bookmark.types';\nexport const CreateBookmark = z.object({ url: z.string() });",
+    good: "// bookmark.types.ts (types only)\nexport interface IBookmark { url: string }\n// bookmark.schemas.ts (schemas only — no type declarations)\nexport const CreateBookmark = z.object({ url: z.string() });",
     procedure:
       "1. Read the message: it names the categories present (type/schema/constant/function/class/react-component/hook).\n2. Keep the file's PRIMARY category (the one its name implies: *.schemas.ts→schema, *.types.ts→type, *.constants.ts→constant, *.utils.ts→function, *.service.ts→class+singleton).\n3. MOVE every declaration of the other category into its conventional sibling file (create it if absent): types→*.types.ts, zod/valibot schemas→*.schemas.ts, runtime constants→*.constants.ts, plain functions→*.utils.ts.\n4. Re-import the moved names where they were used. Do NOT merge categories or add an eslint-disable.",
   },

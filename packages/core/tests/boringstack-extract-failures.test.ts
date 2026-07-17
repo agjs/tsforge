@@ -101,6 +101,33 @@ Move declarations into separate files/modules  module-boundaries/single-semantic
     expect(sigs.size).toBe(1);
   });
 
+  test("a rule-less parse error does NOT swallow the next file's header + diagnostics (join stops at boundaries)", () => {
+    // The regression the join must avoid: a `Parsing error` carries no ruleId, so a
+    // greedy join would absorb every following line — losing file B's header and
+    // mis-attributing its error to file A. The join must stop at the next file header.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/a/a.ts
+  1:1  error  Parsing error: ';' expected
+${cwd}/apps/api/src/api/b/b.ts
+  2:3  error  Unexpected any  @typescript-eslint/no-explicit-any`;
+    const sigs = extractFailures(out, cwd);
+
+    // Two DISTINCT signatures, each attributed to its OWN file.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fa%2Fa.ts:1:syntax")
+      )
+    ).toBe(true);
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fapi%2Fsrc%2Fapi%2Fb%2Fb.ts:2:%40typescript-eslint%2Fno-explicit-any"
+        )
+      )
+    ).toBe(true);
+    expect(sigs.size).toBe(2);
+  });
+
   test("a single-line eslint row is unaffected by the multi-line join", () => {
     const cwd = "/tmp/clone";
     const out = `${cwd}/apps/api/src/api/x/x.ts

@@ -41,9 +41,30 @@ function joinMultilineEslintRows(output: string): string {
   const plain = (s: string): string => s.replace(ANSI, "");
   const isErrorStart = (s: string): boolean =>
     /^\s*\d+:\d+\s+error\s/u.test(plain(s));
-  // eslint right-pads the ruleId with 2+ spaces: `… message  rule/id`.
+  // A join TERMINATOR is eslint's padded ruleId column: 2+ spaces then a
+  // PLUGIN-qualified id (contains `/`, e.g. `module-boundaries/single-semantic-module`
+  // or `@typescript-eslint/x`). Requiring the slash avoids a prose continuation like
+  // `Do not use  console` being mistaken for a ruleId and terminating early.
   const endsWithRuleId = (s: string): boolean =>
-    /\S {2,}[\w@/-]+\s*$/u.test(plain(s));
+    /\S {2,}@?[\w-]+\/[\w@/-]+\s*$/u.test(plain(s));
+
+  // A BOUNDARY stops the join WITHOUT being consumed — the multi-line message can't
+  // legitimately cross it: a new error row, a source-file header (a path ending in
+  // .ts/.tsx), an `::tsforge-app::` stage marker, or a `$` command echo. This stops
+  // a rule-LESS row (e.g. a `Parsing error`, which carries no ruleId) from swallowing
+  // the next file's header + diagnostics.
+  const isBoundary = (s: string): boolean => {
+    const p = plain(s).trim();
+
+    return (
+      isErrorStart(s) ||
+      p.startsWith("$") ||
+      /^::tsforge-app .+::$/u.test(p) ||
+      /\.[cm]?[jt]sx?:?$/u.test(p)
+    );
+  };
+
+  const MAX_SPAN = 15;
 
   const out: string[] = [];
 
@@ -57,26 +78,31 @@ function joinMultilineEslintRows(output: string): string {
       continue;
     }
 
-    // Accumulate continuation lines until one carries the ruleId (inclusive),
-    // stopping short of the next error row so a missing ruleId can't swallow it.
+    // Scan forward for the ruleId terminator, but STOP at a boundary or the span cap.
+    // Only collapse when a terminator is actually found — otherwise a rule-less error
+    // (parse error) or an unterminated block is emitted UNCHANGED (old per-line
+    // behavior), so nothing downstream is swallowed.
     let j = i + 1;
 
     while (
       j < lines.length &&
+      j - i <= MAX_SPAN &&
       !endsWithRuleId(lines[j] ?? "") &&
-      !isErrorStart(lines[j] ?? "")
+      !isBoundary(lines[j] ?? "")
     ) {
       j += 1;
     }
 
-    const consumedRuleId =
+    if (
       j < lines.length &&
-      endsWithRuleId(lines[j] ?? "") &&
-      !isErrorStart(lines[j] ?? "");
-    const end = consumedRuleId ? j + 1 : j;
-
-    out.push(lines.slice(i, end).join(" "));
-    i = end - 1;
+      j - i <= MAX_SPAN &&
+      endsWithRuleId(lines[j] ?? "")
+    ) {
+      out.push(lines.slice(i, j + 1).join(" "));
+      i = j;
+    } else {
+      out.push(start);
+    }
   }
 
   return out.join("\n");
