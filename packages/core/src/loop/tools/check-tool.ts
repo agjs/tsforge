@@ -4,9 +4,14 @@ import type { IErrorItem } from "../../validate/validate.types";
 /** Cap the error list so a huge failure set can't blow the turn's context budget. */
 const MAX_ERRORS = 200;
 
-/** Cap raw gate output (surfaced only when the gate failed but parsed NO structured
- *  errors) so an unparsed failure blob can't blow the turn's context budget. */
+/** Raw-output cap when the gate failed but parsed NO structured errors — the output
+ *  IS the only diagnostic, so keep a big tail. */
 const MAX_OUTPUT_CHARS = 4000;
+
+/** Raw-output cap when structured errors ARE present — the errors are the distilled
+ *  signal; a short tail only needs to catch a trailing unparsed crash without
+ *  re-dumping the whole gate log (which extract-failures already condensed). */
+const MAX_OUTPUT_WITH_ERRORS = 600;
 
 /** One structured error as the model sees it — the actionable fields only. */
 interface ICheckError {
@@ -25,23 +30,26 @@ function toStruct(e: IErrorItem): ICheckError {
   };
 }
 
-/** Cap raw gate output to its last {@link MAX_OUTPUT_CHARS} chars — the TAIL, where
- *  a crash's actionable error usually sits — and disclose the cut (`outputTruncated`
- *  + `outputOmittedChars`) so a cut-off log never reads as the whole failure
- *  (no-silent-truncation house rule). Under the cap ⇒ just `{output}`. */
-function capOutput(output: string): {
+/** Cap raw gate output to its last `max` chars — the TAIL, where a crash's actionable
+ *  error usually sits — and disclose the cut (`outputTruncated` + `outputOmittedChars`)
+ *  so a cut-off log never reads as the whole failure (no-silent-truncation house rule).
+ *  Under the cap ⇒ just `{output}`. */
+function capOutput(
+  output: string,
+  max: number
+): {
   output: string;
   outputTruncated?: true;
   outputOmittedChars?: number;
 } {
-  if (output.length <= MAX_OUTPUT_CHARS) {
+  if (output.length <= max) {
     return { output };
   }
 
   return {
-    output: output.slice(output.length - MAX_OUTPUT_CHARS),
+    output: output.slice(output.length - max),
     outputTruncated: true,
-    outputOmittedChars: output.length - MAX_OUTPUT_CHARS,
+    outputOmittedChars: output.length - max,
   };
 }
 
@@ -68,6 +76,12 @@ function dedupe(errors: readonly IErrorItem[]): IErrorItem[] {
  * ask; a primary driver of near-green turn-waste). The gate runner is injected
  * (`ctx.runCheck`) so the core tool stays stack-agnostic; absent ⇒ it says so
  * rather than pretending. Returns compact JSON the model can act on directly.
+ *
+ * ORDERING: check runs the gate's autofix (mutates on-disk source), so its result is
+ * only authoritative if no edit runs concurrently. It relies on `runToolCalls`, which
+ * executes every non-`spawn_agent` tool SEQUENTIALLY as an ordering barrier — an
+ * `edit` and a `check` in one model response never overlap. If that executor ever
+ * parallelizes non-spawn tools, check would need its own serialization.
  */
 export async function doCheck(
   _args: Record<string, unknown>,
@@ -102,13 +116,17 @@ export async function doCheck(
   const shown = deduped.slice(0, MAX_ERRORS).map(toStruct);
   const omitted = deduped.length - shown.length;
 
-  // A gate can fail with NO parseable errors (a command crashed in an unrecognized
-  // format). Empty `errors` would leave the model blind, so surface the raw output
-  // as the only diagnostic it has — keeping the TAIL (a crash's actionable error is
-  // usually last) and DISCLOSING the cut, per the no-silent-truncation house rule.
+  // Surface the raw gate output on EVERY failure — not only when zero errors parsed.
+  // A partial parse (some lint errors PLUS an unrecognized crash line) would otherwise
+  // hide the crash while the response looks complete. Big tail when errors are empty
+  // (output is the ONLY signal); short tail when errors are present (they're the
+  // distilled signal — just catch a trailing crash). Always DISCLOSE any cut.
   const rawOutput =
-    deduped.length === 0 && result.output.trim().length > 0
-      ? capOutput(result.output)
+    result.output.trim().length > 0
+      ? capOutput(
+          result.output,
+          deduped.length === 0 ? MAX_OUTPUT_CHARS : MAX_OUTPUT_WITH_ERRORS
+        )
       : {};
 
   return JSON.stringify({

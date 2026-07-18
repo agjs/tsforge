@@ -6,6 +6,7 @@ import type { IProvider, IChatMessage } from "../src/inference";
 import { Session } from "../src/loop";
 import type { IGate } from "../src/gate/gate-runner";
 import type { IValidateResult } from "../src/validate";
+import { isRecord } from "../src/lib/guards/guards";
 
 // WS-G end-to-end: the `check` tool must reach the tool context executeTool uses,
 // survive the policy layer (it was DOA once — unknown→deny), and run the SAME gate
@@ -232,6 +233,22 @@ test("check goes RED on a META_RULE error even when the gate command is GREEN (t
   }
 });
 
+/** Extract an advertised tool's name via runtime narrowing — no `as` cast (house
+ *  rule), since opts.tools is typed `unknown[]` at the provider boundary. */
+function advertisedName(tool: unknown): string | undefined {
+  if (!isRecord(tool)) {
+    return undefined;
+  }
+
+  const fn = tool.function;
+
+  if (!isRecord(fn) || typeof fn.name !== "string") {
+    return undefined;
+  }
+
+  return fn.name;
+}
+
 /** Captures the tool NAMES the Session advertised to the model (opts.tools), then
  *  ends cleanly. Proves offerCheck actually reaches the advertised schema — not just
  *  that a forced check call happens to dispatch. */
@@ -241,9 +258,9 @@ function toolNameCapturingProvider(captured: { names: string[] }): IProvider {
       const tools = Array.isArray(opts?.tools) ? opts.tools : [];
 
       captured.names = tools.flatMap((t) => {
-        const name = (t as { function?: { name?: unknown } }).function?.name;
+        const name = advertisedName(t);
 
-        return typeof name === "string" ? [name] : [];
+        return name === undefined ? [] : [name];
       });
 
       return { content: "done", toolCalls: [] };

@@ -12,9 +12,9 @@ import { appendFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
-import { Session, LOOP_LIMITS, type Reporter } from "../src/loop";
+import { LOOP_LIMITS, type Reporter } from "../src/loop";
 import { runBoringstackBuild } from "../src/loop/boringstack/build";
-import { BORINGSTACK_BUILD_SESSION } from "../src/loop/boringstack/build-config";
+import { createBoringstackHostSession } from "../src/loop/boringstack/build-session";
 import { makeBoringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
 import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
@@ -233,21 +233,17 @@ async function driveBuild(
     await boringstackExec(["bun", "run", "format"], { cwd: join(dir, app) });
   }
 
-  const host = await Session.create({
+  // The SINGLE constructor for the boringstack host session — carries the fixed build
+  // flags (drive-to-green, guidance, pull_conventions, the WS-G `check` tool) and is
+  // unit-tested to advertise `check`, so this wiring can't silently regress. The i18n
+  // editGuard is stateful (one per build) so it's supplied here, not in the flags.
+  const host = await createBoringstackHostSession({
     provider,
     cwd: dir,
-    files: ["**/*"],
     contextWindow,
     maxTurns: LOOP_LIMITS.webMaxTurns,
-    // The BoringStack build's fixed Session flags (drive-to-green, guidance,
-    // pull_conventions, offer the `check` tool) — extracted + unit-tested so a
-    // dropped flag can't silently un-offer a tool. See build-config.ts.
-    ...BORINGSTACK_BUILD_SESSION,
-    // BoringStack overlay: veto deletion of a feature translation key the model
-    // authored earlier this build (its lazy "clear the unused-key check" shortcut
-    // that ships a hollow app). Stateful → one instance per build.
-    editGuard: makeBoringstackEditGuard(),
     report,
+    editGuard: makeBoringstackEditGuard(),
   });
 
   const result = await runBoringstackBuild({

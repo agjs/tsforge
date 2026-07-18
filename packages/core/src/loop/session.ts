@@ -169,9 +169,11 @@ export interface ISessionConfig {
   pullConventions?: boolean;
   /** Offer the callable, structured `check` tool (WS-G) — set by a build BACKEND
    *  whose gate is authoritative (e.g. boringstack, which injects its gate per-slice
-   *  via `setGate`). The tool runs `ctx.gate.runner` on demand and returns the whole
-   *  structured error set MID-TURN, so the model fixes every error in one pass. Left
-   *  off for plain eval/scratch tasks (their acceptance set can be empty ⇒ vacuous). */
+   *  via `setGate`). The tool runs the SAME full evaluation `settleGate` does
+   *  (`runCheckGate` → autofix + gate command + META_RULES combined — NOT the gate
+   *  runner alone) and returns the whole structured error set MID-TURN, so the model
+   *  fixes every error in one pass. Left off for plain eval/scratch tasks (their
+   *  acceptance set can be empty ⇒ vacuous). */
   offerCheck?: boolean;
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */

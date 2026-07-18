@@ -150,19 +150,28 @@ test("doCheck surfaces raw output when the gate failed but parsed NO structured 
   expect(parsed.output).toContain("ENOSPC");
 });
 
-test("doCheck does NOT dump raw output when structured errors are present", async () => {
+test("doCheck surfaces a SHORT output tail when structured errors are present (catches a hidden crash, disclosed)", async () => {
+  // The errors are the distilled signal; output is capped hard (600) so a trailing
+  // unparsed crash is still visible without re-dumping the whole gate log.
+  const head = "lint noise ".repeat(200);
+  const tail = "SEGFAULT after the lint errors";
   const out = await doCheck(
     {},
     ctxWith(async () =>
       result([err({ key: "a", file: "src/x.ts", message: "e" })], {
         passed: false,
-        output: "noisy full gate log that would blow the context budget",
+        output: head + tail,
       })
     )
   );
 
-  expect(out).not.toContain("output");
-  expect(out).not.toContain("noisy full gate log");
+  const parsed = JSON.parse(out);
+
+  expect(parsed.errorCount).toBe(1);
+  // The trailing crash survives; the head is dropped and the cut disclosed.
+  expect(parsed.output).toContain("SEGFAULT after the lint errors");
+  expect(parsed.output.length).toBe(600);
+  expect(parsed.outputTruncated).toBe(true);
 });
 
 test("doCheck discloses the output cap (tail kept, omitted count) — no silent truncation", async () => {
