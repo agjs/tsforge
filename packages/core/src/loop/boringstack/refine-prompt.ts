@@ -87,6 +87,16 @@ export function refinePrompt(feature: IFeature, slice?: ISlice): string {
 
   const productContext = slice ? `\n\n${productContextSection(slice)}\n` : "";
 
+  // Where the model reads the resource's PERSISTED/EDITABLE domain fields from — the
+  // columns to store and the form inputs to render. This is the entity's **Fields**
+  // ONLY: **Display** is a rendering hint (may be computed values, relationship
+  // labels, or a read-only subset) and must NOT be turned into columns or inputs.
+  // With a slice the Product Context section is present; without one, fall back to
+  // the behavior so no instruction dangles a reference to a section that wasn't emitted.
+  const domainFields = slice
+    ? "the entity's **Fields** in Product Context above (the **Display** list is for rendering only — do NOT treat it as columns or form inputs)"
+    : `the fields implied by the behavior "${feature.desc}"`;
+
   return `You are implementing the **${feature.id}** resource.
 
 **Behavior**: ${feature.desc}${priorFailure}${productContext}
@@ -98,27 +108,37 @@ export function refinePrompt(feature: IFeature, slice?: ISlice): string {
 You MUST fill in these generated files for the **${feature.id}** resource:
 
 ### Persistence (apps/api/src/clients/postgres/schema/app.schema.ts)
-- The \`${camel}\` Drizzle table is generated with only stub columns (\`id\`, \`userId\`, \`name\`, timestamps). **Add the real domain columns to it** — one column per field listed under Product Context above (choose the right Drizzle type: \`varchar\`/\`text\` for strings, \`boolean().notNull().default(false)\` for booleans, \`integer\`/\`numeric\` for numbers, \`timestamp\` for dates; make \`[optional]\` fields nullable). These columns are what actually persists — the service and types must read/write REAL columns, never in-memory-only fields.
+- The \`${camel}\` Drizzle table is generated with only stub columns (\`id\`, \`userId\`, \`name\`, timestamps). **Add the real domain columns to it** — one column per ${domainFields} (choose the right Drizzle type: \`varchar\`/\`text\` for strings, \`boolean().notNull().default(false)\` for booleans, \`integer\`/\`numeric\` for numbers, \`timestamp\` for dates; make \`[optional]\` fields nullable). These columns are what actually persists — the service and types must read/write REAL columns, never in-memory-only fields.
 - **Import every column builder you use.** If you add a \`boolean\`/\`text\`/\`integer\`/\`numeric\`/\`jsonb\` column, that identifier MUST be added to the existing \`import { ... } from "drizzle-orm/pg-core"\` line at the top of the file. A missing import is a \`ReferenceError\` that crashes the API on boot — the #1 cause of a failed build here.
 - Edit ONLY the \`${camel}\` table. Do NOT touch any other table in this file.
 
 ### API Layer (apps/api/src/api/${camel}/)
-- \`apps/api/src/api/${camel}/${camel}.schemas.ts\` — request/response validation schemas using **Elysia TypeBox** (\`import { t } from "elysia"\` → \`t.Object({ title: t.String(), … })\`). This is the API boundary — do NOT use Zod here; Zod is only for UI form/runtime validation.
+The UI needs FULL CRUD, so the API must expose it. The scaffold ships only list+create — you MUST add get-one, update, and delete so the UI's edit/delete have real endpoints (missing routes surface as typed api-client failures after \`generate:api\`).
+- \`apps/api/src/api/${camel}/${camel}.routes.ts\` — Elysia routes for the full set: **list (\`GET /\`), get-one (\`GET /:id\`), create (\`POST /\`), update (\`PATCH /:id\`), delete (\`DELETE /:id\`)**. Every route stays under \`requireAuth()\` and passes \`user.id\` to the service on EVERY call. A schema on EVERY route; \`ApiErrors.*\` (never \`throw new Error\`).
+- \`apps/api/src/api/${camel}/${camel}.service.ts\` — a user-scoped method backing each route, EXTENDING the scaffold's existing \`listForUser(userId)\` + \`create({ …, userId })\` convention (do NOT rename them — that breaks the baseline): add \`getForUser(id, userId)\`, \`updateForUser(id, userId, data)\`, \`deleteForUser(id, userId)\`. Real Drizzle ops, not stubs.
+  - **SECURITY (critical): every get/update/delete MUST filter by BOTH the row id AND the authenticated \`userId\`** — \`where: and(eq(${camel}.id, id), eq(${camel}.userId, userId))\` (import \`and\` and \`eq\` from \`drizzle-orm\` — a missing import is the same boot-crashing ReferenceError as a missing column builder). A row is owned by one user; an id-only query lets one user read, modify, or delete another user's records (horizontal privilege escalation). Never look up or mutate a row by id alone.
+- \`apps/api/src/api/${camel}/${camel}.schemas.ts\` — request/response validation schemas for each operation (create body, update body, item response) using **Elysia TypeBox** (\`import { t } from "elysia"\` → \`t.Object({ title: t.String(), … })\`). This is the API boundary — do NOT use Zod here; Zod is only for UI form/runtime validation.
 - \`apps/api/src/api/${camel}/${camel}.types.ts\` — TypeScript types for domain entities and DTO objects
-- \`apps/api/src/api/${camel}/${camel}.service.ts\` — Service layer business logic
-- \`apps/api/src/api/${camel}/${camel}.routes.ts\` — Elysia routes: a schema on EVERY route; \`ApiErrors.*\` for errors (never \`throw new Error\`)
 
 ### UI Feature (apps/ui/src/features/${camel}/)
-- The complete React feature slice for ${feature.id} (pages, components, hooks, state)
+The generated feature is a HOLLOW starting point — a list-only page plus STUB hooks (\`use${feature.id}\` returns \`[]\`, \`useCreate${feature.id}\` just returns its input). A page that only lists records (or only shows an empty state) is an INCOMPLETE feature and must not be shipped. Build the REAL CRUD UI:
+- **Mutations** (\`${feature.id}.mutations.ts\` — PascalCase file in \`apps/ui/src/features/${camel}/\`): implement real \`useCreate${feature.id}\`, \`useUpdate${feature.id}\`, and \`useDelete${feature.id}\` — each calls \`@/lib/api/client\` (\`apiClient.POST/PATCH/DELETE\`). **The typed api-client resolves HTTP 4xx/5xx as a result object \`{ data, error }\` — it does NOT throw.** So each mutationFn MUST \`const { data, error } = await apiClient.POST(…); if (error) throw error; return data;\` — otherwise React Query treats a failed request as a success and runs \`onSuccess\` on an error. Then invalidate the list query in \`onSuccess\`; surface the thrown failure via \`onError\`. Do NOT leave the stub that returns its input.
+  (Use the REAL domain fields of ${feature.id} — ${domainFields} — NOT a single placeholder \`name\`.)
+- **List query** (\`${feature.id}.queries.ts\` — PascalCase file): implement \`use${feature.id}\` to actually fetch via \`apiClient.GET\` (the scaffold stub returns \`[]\`, so the list is permanently empty and create→appears-in-list is impossible until you do this). Same result-object rule as mutations: the queryFn MUST \`const { data, error } = await apiClient.GET(…); if (error) throw error; return data;\` — do NOT return \`data\` without the \`error\` check, or a failed fetch silently resolves to \`undefined\` and the query never enters its error state.
+- **List**: render the fetched records (not just an empty state) — one row per record showing those domain fields, each row with **Edit** and **Delete** actions.
+- **Create/Edit form**: one input per domain field. Validate with Zod; on submit call the create/update mutation; on error render \`t("features.${camel}.<action>Error")\`.
+- **Delete**: a confirmation using \`t("features.${camel}.confirmDelete")\` that calls \`useDelete${feature.id}\`.
+- The UI must carry out the feature's flow end to end (create → it appears in the list → edit → delete). Wiring the mutations into a real form + list is what makes the i18n error/confirm keys "used" — that is the intended way to clear \`i18n-locale-keys-used\`, never by deleting keys.
 
 ---
 
 ## Required Test Siblings
 
-The linter enforces test coverage. You MUST write:
+The linter enforces test coverage — **every logic file you add or change needs a mirrored test sibling**, API and UI alike:
 
-- \`apps/api/tests/api/${camel}/${camel}.routes.test.ts\` — API endpoint tests
-- \`apps/api/tests/api/${camel}/${camel}.service.test.ts\` — Service layer unit tests
+- \`apps/api/tests/api/${camel}/${camel}.routes.test.ts\` — API endpoint tests covering create/update/delete, not just list.
+- \`apps/api/tests/api/${camel}/${camel}.service.test.ts\` — Service layer unit tests. **These MUST include an ownership-isolation test that PROVES the userId scoping above:** create a row as user A, then assert user B's \`getForUser\`/\`updateForUser\`/\`deleteForUser\` on that id find/affect NOTHING (returns not-found / 0 rows — the same as a missing id), and that user A still can. Without this test the id-only privilege-escalation bug passes the gate — prose alone does not stop it.
+- \`apps/ui/src/features/${camel}/…\` — **vitest**, a co-located mirrored test for every UI logic file you write (mutations/hooks/form). Beyond unit-testing the mutations (mock \`@/lib/api/client\`, assert \`useCreate${feature.id}\`/\`useUpdate${feature.id}\`/\`useDelete${feature.id}\` call it), include a test that RENDERS the feature page and drives the REAL flow through the list: fill the create form and submit (assert the create mutation fires), then trigger a rendered row's **Edit** (assert the update mutation fires) and **Delete** confirmation (assert the delete mutation fires). A test that only checks the hooks call the client — or that exercises create alone — can pass while update/delete stay disconnected from the page and the feature is still hollow; it MUST drive edit and delete from the rendered list.
 
 Without these test files, the build will fail.
 

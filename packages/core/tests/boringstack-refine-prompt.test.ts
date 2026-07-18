@@ -36,6 +36,67 @@ describe("refinePrompt", () => {
     expect(prompt).not.toContain("Zod schemas for request/response");
   });
 
+  it("demands a REAL CRUD UI (mutations + list + form + delete), not a hollow list-only page", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // The three real mutations must be named (the stub gap).
+    expect(prompt).toContain("useCreateInvoice");
+    expect(prompt).toContain("useUpdateInvoice");
+    expect(prompt).toContain("useDeleteInvoice");
+    // A hollow list-only page is explicitly rejected.
+    expect(prompt).toContain("INCOMPLETE feature");
+    // Form + delete confirmation are required.
+    expect(prompt).toContain("Create/Edit form");
+    expect(prompt).toContain("confirmDelete");
+    // The old vague phrasing is gone (would let the model ship anything).
+    expect(prompt).not.toContain("The complete React feature slice for");
+    // The API must expose the full CRUD the UI mutations target (no contradiction).
+    expect(prompt).toContain("PATCH /:id");
+    expect(prompt).toContain("DELETE /:id");
+    // User-scoped, mirroring the scaffold convention (extend, don't rename).
+    expect(prompt).toContain("listForUser");
+    expect(prompt).toContain("getForUser");
+    // SECURITY: get/update/delete must filter by the authenticated userId.
+    expect(prompt.toLowerCase()).toContain("privilege escalation");
+    expect(prompt).toContain("eq(invoice.userId, userId)");
+    // The list QUERY must be really implemented (not left as the []-returning stub),
+    // and referenced by the PascalCase file name the scaffold emits (not camelCase).
+    expect(prompt).toContain("Invoice.queries.ts");
+    expect(prompt).toContain("Invoice.mutations.ts");
+    expect(prompt).not.toContain("invoice.mutations.ts");
+    // UI logic files need mirrored test siblings, not just the two API tests.
+    expect(prompt).toContain("features/invoice/");
+  });
+
+  it("UI contract has NO dangling 'above' references on the no-slice path", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    // refinePrompt(feature) WITHOUT a slice → the Product Context section (its
+    // "## Product Context" header + "### UI Intent") is not emitted, so the UI
+    // contract must not require reading fields from a section that isn't there.
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).not.toContain("## Product Context");
+    expect(prompt).not.toContain("### UI Intent");
+    // No bare "Product Context above" anchor anywhere (Persistence + UI both use the
+    // slice-aware fieldSource, so nothing points at a section that wasn't emitted).
+    expect(prompt).not.toContain("Product Context above");
+    // The contract degrades to the behavior-based fallback (no dangling anchor).
+    expect(prompt).toContain("the fields implied by the behavior");
+  });
+
   it("tells the model to WIRE UP an unused i18n key, never delete what it wrote", () => {
     const feature: IFeature = {
       id: "Invoice",
@@ -285,6 +346,12 @@ describe("refinePrompt", () => {
     expect(p).toContain("belongsTo User");
     expect(p).toContain("save → list"); // UI intent
     expect(p).toContain("url required"); // rule
+    // The slice branch of domainFields must actually be taken — a regression that
+    // always used the no-slice fallback would still pass the assertions above.
+    expect(p).toContain("the entity's **Fields** in Product Context above");
+    expect(p).not.toContain("the fields implied by the behavior");
+    // Display is a rendering hint, NOT columns/inputs (no domain-contract corruption).
+    expect(p).toContain("**Display** list is for rendering only");
   });
 
   it("refinePrompt without a slice is unchanged (contains id + desc)", () => {
@@ -296,5 +363,47 @@ describe("refinePrompt", () => {
     });
 
     expect(p).toContain("Bookmark");
+  });
+
+  it("teaches the result-object error idiom: check `error` and throw, never ignore it", () => {
+    const p = refinePrompt({
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    });
+
+    // The typed api-client returns { data, error } and does NOT throw on 4xx/5xx —
+    // both queries and mutations must check `error` and throw so React Query behaves.
+    expect(p).toContain("if (error) throw error");
+    expect(p).toContain("does NOT throw");
+    // The old, wrong instruction must be gone (it caused silent-undefined + onSuccess-on-error).
+    expect(p).not.toContain("never check `response.error`");
+  });
+
+  it("forces an ownership-isolation test so the userId security clause is verified, not just prose", () => {
+    const p = refinePrompt({
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    });
+
+    expect(p).toContain("ownership-isolation test");
+    expect(p).toContain("user B"); // another user cannot read/update/delete A's row
+    expect(p.toLowerCase()).toContain("privilege");
+  });
+
+  it("requires the UI test to drive edit AND delete from the list, not just create", () => {
+    const p = refinePrompt({
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    });
+
+    expect(p).toContain("the update mutation fires");
+    expect(p).toContain("the delete mutation fires");
+    expect(p).toContain("MUST drive edit and delete from the rendered list");
   });
 });
