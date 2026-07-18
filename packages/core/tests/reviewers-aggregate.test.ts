@@ -28,6 +28,18 @@ describe("aggregate", () => {
     expect(v.reviewers).toEqual({ ok: 2, errored: 0 });
   });
 
+  test("a REAL aggregated verdict never carries preReview (so the panel result IS cached)", () => {
+    // preReview marks ONLY pre-review gate blocks. If aggregate ever set it, every
+    // panel result would be skipped by shouldCacheVerdict and never cached — assert
+    // the invariant on both a pass and a reject.
+    expect(
+      aggregate([ok("a", "approve"), ok("b", "approve")], opts).preReview
+    ).toBeUndefined();
+    expect(
+      aggregate([ok("a", "approve"), ok("b", "reject")], opts).preReview
+    ).toBeUndefined();
+  });
+
   test("insufficient reviewers → block", () => {
     const v = aggregate(
       [
@@ -214,6 +226,35 @@ describe("parseVerdict", () => {
     expect(parsed?.ranked).toHaveLength(1);
     expect(parsed?.ranked[0]?.agreement).toBe(2);
     expect(parsed?.perReviewer).toHaveLength(2);
+  });
+
+  test("round-trips the preReview flag (cache-poison guard survives serialize→parse)", () => {
+    const v = {
+      blocked: true,
+      reason: "validate failed",
+      reviewers: { ok: 0, errored: 0 },
+      ranked: [],
+      perReviewer: [],
+      identity: "local/flash",
+      preReview: true,
+    };
+
+    // The flag MUST survive a read so the read-side guard can reject a legacy
+    // poisoned block; dropping it here would silently re-enable the poison.
+    expect(parseVerdict(v)?.preReview).toBe(true);
+  });
+
+  test("a verdict without preReview parses to preReview undefined (not injected)", () => {
+    const v = {
+      blocked: false,
+      reason: "",
+      reviewers: { ok: 2, errored: 0 },
+      ranked: [],
+      perReviewer: [],
+      identity: "local/flash",
+    };
+
+    expect(parseVerdict(v)?.preReview).toBeUndefined();
   });
 
   test("missing verdict key → null", () => {

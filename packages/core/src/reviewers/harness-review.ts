@@ -188,6 +188,10 @@ function blockedVerdict(reason: string, identity: string): IVerdict {
     ranked: [],
     perReviewer: [],
     identity,
+    // Pre-review gate/precondition block — the panel did not run. Marked so the
+    // caller never caches it (a transient validate flake must not poison the
+    // tree-hash and block every later push).
+    preReview: true,
   };
 }
 
@@ -212,14 +216,40 @@ export async function runHarnessReview(
   });
 }
 
+/** Verdict-cache schema version. Bump to invalidate ALL previously written cache
+ *  artifacts in one shot. Bumped to "2" when pre-review gate blocks stopped being
+ *  cached: legacy "1" artifacts can hold a poisoned "validate failed" block with no
+ *  `preReview` marker, and without a version change readCachedVerdict would keep
+ *  serving them and block every push of that tree. */
+export const CACHE_VERSION = "2";
+
 export function verdictCacheKey(input: {
   treeHash: string;
   panelHash: string;
   rubricVersion: string;
+  cacheVersion: string;
 }): string {
   return createHash("sha256")
-    .update(`${input.treeHash} ${input.panelHash} ${input.rubricVersion}`)
+    .update(
+      `${input.treeHash} ${input.panelHash} ${input.rubricVersion} ${input.cacheVersion}`
+    )
     .digest("hex");
+}
+
+/** The caching decision, isolated so it is unit-testable without the filesystem.
+ *  ONLY a real panel verdict is cached. A pre-review gate/precondition block
+ *  (validate failed, empty intent, diff too large) is transient — caching one
+ *  poisons the tree-hash so a flaky validate under load blocks every later push. */
+export function shouldCacheVerdict(verdict: IVerdict): boolean {
+  return verdict.preReview !== true;
+}
+
+/** The read-side guard, isolated for testing: a cached pre-review gate block must
+ *  never be honored (defense in depth beside the CACHE_VERSION bump — belt and
+ *  suspenders for any pre-review artifact that reaches disk). Returns the verdict
+ *  to use, or null to force a fresh live review. */
+export function honorCachedVerdict(verdict: IVerdict | null): IVerdict | null {
+  return verdict !== null && verdict.preReview === true ? null : verdict;
 }
 
 export function artifactBody(

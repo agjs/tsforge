@@ -2,6 +2,7 @@ import { test, expect, describe } from "bun:test";
 import {
   gatherChange,
   runHarnessReview,
+  shouldCacheVerdict,
   type IGatherDeps,
   type IRunDeps,
 } from "../src/reviewers/harness-review";
@@ -149,5 +150,32 @@ describe("runHarnessReview", () => {
 
     expect(v.blocked).toBe(true);
     expect(invoked).toBe(false);
+    // Marked as a PRE-REVIEW gate block so the caller never caches it — a transient
+    // validate flake under load must not poison the tree-hash for every later push.
+    expect(v.preReview).toBe(true);
+  });
+});
+
+describe("shouldCacheVerdict", () => {
+  const base = {
+    reason: "",
+    reviewers: { ok: 2, errored: 0 },
+    ranked: [],
+    perReviewer: [],
+    identity: "local/flash",
+  };
+
+  test("a pre-review gate block is NOT cached (preReview true → false)", () => {
+    // The whole cache-poison fix: a transient validate/precondition block must not be
+    // persisted, or a flake under load blocks every later push of that tree.
+    expect(
+      shouldCacheVerdict({ ...base, blocked: true, preReview: true })
+    ).toBe(false);
+  });
+
+  test("a REAL panel verdict IS cached — both a clean pass and a findings block", () => {
+    // The expensive panel result must be cached; only the pre-review shape is skipped.
+    expect(shouldCacheVerdict({ ...base, blocked: false })).toBe(true);
+    expect(shouldCacheVerdict({ ...base, blocked: true })).toBe(true);
   });
 });
