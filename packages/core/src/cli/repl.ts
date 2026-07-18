@@ -799,8 +799,9 @@ export async function repl(args: ICliArgs): Promise<number> {
     await runSend(line);
   };
 
-  // Placeholder declaration for handleHelp; defined after runLine is available.
+  // Placeholder declarations; defined after runLine / editorControl are available.
   let handleHelp: () => Promise<void>;
+  let openScaffold: () => Promise<void>;
 
   // Slash-command dispatch. Returns true to EXIT the REPL. Kept as a closure so
   // it can rebuild `session` (e.g. /clear) and reach config/persist.
@@ -896,6 +897,10 @@ export async function repl(args: ICliArgs): Promise<number> {
 
       case "config":
         await handleConfig();
+        break;
+
+      case "scaffold":
+        await openScaffold();
         break;
 
       case "setup": {
@@ -1685,6 +1690,29 @@ export async function repl(args: ICliArgs): Promise<number> {
       if (statusBar.active) {
         statusBar.update(statusInfo());
       }
+    };
+
+    // Open the in-REPL scaffold wizard (create a new project here), reachable as a
+    // first-class typed/palette command so it's discoverable at the prompt. This
+    // path AWAITS openScaffoldInRepl, so the wizard's suspend/resume owns the screen
+    // for its whole lifetime. (The `/help` capability browser reaches scaffold
+    // through its dedicated wizard row instead — never a fire-and-forget
+    // `void runLine` command row, which would race the wizard for stdin.) Extracted
+    // from the command switch to keep that dispatcher's cognitive complexity down.
+    openScaffold = async (): Promise<void> => {
+      await openScaffoldInRepl({
+        cwd: args.dir,
+        suspend: () => {
+          editorControl?.suspend();
+          editorControl?.setInputInert(true);
+        },
+        resume: () => {
+          editorControl?.setInputInert(false);
+          editorControl?.resume();
+          editorControl?.getBuffer().setText("");
+        },
+        out: (s) => process.stdout.write(s),
+      });
     };
 
     // Helper: repaint the editor buffer to the status bar after palette insertion.
