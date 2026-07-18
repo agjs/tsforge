@@ -578,10 +578,11 @@ function parsedDiagnostic(
 
   if (eslintParseError !== null && state.currentFile !== "") {
     const detail = eslintParseError[3] ?? line;
-    // A `parserOptions.project` parse error is emitted as a LOCATED per-file signature
-    // like any other syntax error; extractFailures' post-pass (dropParserProjectCascadeNoise)
-    // drops these ONLY within an app that has a real syntax break (cascade noise), and
-    // keeps them located otherwise (a genuine "file not in tsconfig").
+    // A `parserOptions.project` parse error is emitted as a LOCATED per-file signature,
+    // like any other syntax error (correct file → correct phase). We do NOT delete these
+    // as "cascade noise": deleting gate diagnostics risks hiding a real failure. The model
+    // is instead steered to fix the ONE real syntax break in full (see signatureToError),
+    // which clears the whole parserOptions fan-out at its source.
     const eslintLine = Number(eslintParseError[1] ?? "0");
     const column = Number(eslintParseError[2] ?? "0");
 
@@ -776,120 +777,6 @@ function consumeVitest(
   return false;
 }
 
-// The type-aware ESLint program's "this file is not covered by the project" message.
-const PARSER_PROJECT_MESSAGE =
-  /parserOptions\.project|ESLint was configured to run on/u;
-
-/** The decoded message of a located `failure:<file>:<line>:syntax:<msg>` signature, or
- *  null if `sig` is not that shape. structuredFailure joins exactly 5 colon-separated,
- *  URI-encoded parts, so a real one never has extra colons; a malformed URI (only
- *  possible from a future code path) is treated as "not a syntax signature", never a
- *  crash. */
-function syntaxSignatureMessage(sig: string): string | null {
-  const parts = sig.split(":");
-
-  if (parts.length !== 5 || parts[0] !== "failure" || parts[3] !== "syntax") {
-    return null;
-  }
-
-  try {
-    return decodeURIComponent(parts[4] ?? "");
-  } catch {
-    return null;
-  }
-}
-
-/** A `parserOptions.project` parse error (the type-aware program couldn't cover the file). */
-function isParserProjectSignature(sig: string): boolean {
-  const message = syntaxSignatureMessage(sig);
-
-  return message !== null && PARSER_PROJECT_MESSAGE.test(message);
-}
-
-/** A REAL syntax break (`Parsing error: '}' expected`, unexpected token, …) — a parse
- *  error that is NOT the parserOptions "file not covered" message. This is what makes
- *  the whole type-aware program fail to build. */
-function isRealSyntaxBreakSignature(sig: string): boolean {
-  const message = syntaxSignatureMessage(sig);
-
-  return (
-    message !== null &&
-    message.includes("Parsing error:") &&
-    !PARSER_PROJECT_MESSAGE.test(message)
-  );
-}
-
-/** The recognized app a located signature belongs to (`apps/api` / `apps/ui`), or null
- *  for a root/other path. The parserOptions cascade is per tsconfig PROGRAM — one per app
- *  in this stack — so noise is scoped by app; a null (unrecognized) path is NEVER a
- *  cascade scope, so a root-file break can't delete unrelated paths' errors. */
-function appOfSignature(sig: string): string | null {
-  const parts = sig.split(":");
-
-  if (parts.length !== 5 || parts[0] !== "failure") {
-    return null;
-  }
-
-  let file: string;
-
-  try {
-    file = decodeURIComponent(parts[1] ?? "");
-  } catch {
-    return null;
-  }
-
-  if (file.startsWith("apps/api/")) {
-    return "apps/api";
-  }
-
-  return file.startsWith("apps/ui/") ? "apps/ui" : null;
-}
-
-/** When ONE file has a real syntax break, the type-aware ESLint program for THAT APP
- *  fails to build, so every other file IN THE SAME APP reports the SAME
- *  `parserOptions.project` parse error — pure noise that inflates a near-green build's
- *  error count (1→38) and makes the oscillation logic thrash on a phantom regression.
- *  Drop those sibling `parserOptions` signatures — but ONLY within an app that actually
- *  has a real syntax break (proof it's a cascade there, not genuine per-file
- *  tsconfig-exclusion errors), leaving the located break(s) as the real, actionable
- *  signal (correct file → correct phase). A DIFFERENT app's genuine parserOptions errors
- *  (no break there) are KEPT. No global token is minted, so nothing enters the baseline
- *  or loses its file/app. Runs on the FINAL set → covers both the stylish and JSON
- *  eslint paths.
- *
- *  Safe against the differential gate: the baseline is the PRISTINE scaffold, which the
- *  harness requires to be GREEN (features are graded against a clean gate), so the
- *  baseline set is empty — it carries no parserOptions error that a break in `current`
- *  could make "disappear" from the diff. And each app lints under ONE tsconfig program
- *  here, so app-scope IS program-scope. */
-function dropParserProjectCascadeNoise(signatures: Set<string>): void {
-  const sigs = [...signatures];
-  // Only RECOGNIZED apps (apps/api, apps/ui) with a real break are cascade scopes — a
-  // root/other break (null app) marks nothing, so it can't delete unrelated errors.
-  const brokenApps = new Set(
-    sigs
-      .filter(isRealSyntaxBreakSignature)
-      .map(appOfSignature)
-      .filter((app): app is string => app !== null)
-  );
-
-  if (brokenApps.size === 0) {
-    return;
-  }
-
-  for (const sig of sigs) {
-    if (!isParserProjectSignature(sig)) {
-      continue;
-    }
-
-    const app = appOfSignature(sig);
-
-    if (app !== null && brokenApps.has(app)) {
-      signatures.delete(sig);
-    }
-  }
-}
-
 export function extractFailures(output: string, cwd: string): Set<string> {
   const signatures = new Set<string>();
   // knip prints `Unused files (N)` then one relative path per line, ending at the
@@ -976,10 +863,6 @@ export function extractFailures(output: string, cwd: string): Set<string> {
 
   // A trailing bare-file vitest FAIL whose detail line never arrived (truncated output).
   flushPendingVitest(state, signatures);
-
-  // Drop the parserOptions.project fan-out noise from a real syntax break (both eslint
-  // paths), leaving the located break(s) — so the count reflects the broken file, not N.
-  dropParserProjectCascadeNoise(signatures);
 
   return signatures;
 }
