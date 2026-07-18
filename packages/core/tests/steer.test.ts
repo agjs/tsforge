@@ -7,7 +7,9 @@ import {
   STEER_LADDER_MAX,
   type ISteerError,
 } from "../src/loop/feedback/steer";
-import { hasPendingDiagnosis } from "../src/loop/turn";
+import { hasPendingDiagnosis, getStuckReason } from "../src/loop/turn";
+import type { ILoopState } from "../src/loop/turn";
+import type { IErrorItem } from "../src/validate";
 
 const err = (rule: string): ISteerError => ({
   rule,
@@ -231,5 +233,64 @@ describe("R1 two-phase decision logic", () => {
       false
     );
     expect(hasPendingDiagnosis({})).toBe(false);
+  });
+});
+
+describe("getStuckReason best-ever display", () => {
+  function stuckState(overrides: Partial<ILoopState>): ILoopState {
+    return {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: Number.POSITIVE_INFINITY,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: -1,
+      edits: 0,
+      regressions: 0,
+      ttsrInterrupts: 0,
+      steerLevel: 4,
+      ...overrides,
+    };
+  }
+
+  const errors: IErrorItem[] = [
+    { key: "a", message: "a" },
+    { key: "b", message: "b" },
+    { key: "c", message: "c" },
+  ];
+
+  test("no-net-progress cites the ALL-TIME low (plateauBest), not the escalation-rebased local best", () => {
+    // bestErrorCount is rebased to the current count on every steer escalation, so it
+    // can read 17 while the true all-time low was 6. The message must show 6.
+    const state = stuckState({ bestErrorCount: 17, plateauBest: 6 });
+    const reason = getStuckReason(
+      null,
+      false,
+      true,
+      false,
+      3,
+      2,
+      errors,
+      state
+    );
+
+    expect(reason).toContain("best ever 6");
+    expect(reason).not.toContain("17");
+  });
+
+  test("falls back to bestErrorCount when no plateauBest is recorded yet", () => {
+    const state = stuckState({ bestErrorCount: 4 });
+    const reason = getStuckReason(
+      null,
+      false,
+      true,
+      false,
+      3,
+      2,
+      errors,
+      state
+    );
+
+    expect(reason).toContain("best ever 4");
   });
 });
