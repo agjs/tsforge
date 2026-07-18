@@ -234,3 +234,67 @@ test("resume refresh preserves a LATER system message (delegation/scope), replac
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("resume refresh is two-directional: a stale check-requiring prompt is dropped when offerCheck is now OFF", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-dtg-"));
+  const cap: { system: string; roles?: string[] } = { system: "" };
+
+  // History persisted while offerCheck was ON (prompt tells the model to use `check`).
+  // Resuming WITHOUT offerCheck must refresh the prompt so it no longer requires a tool
+  // the session no longer advertises — the mirror of the on-resume case.
+  const staleHistory = [
+    {
+      role: "system" as const,
+      content: "OLD PROMPT: call the `check` tool before you stop.",
+    },
+    { role: "user" as const, content: "earlier" },
+    { role: "assistant" as const, content: "ok" },
+  ];
+
+  try {
+    const session = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      // offerCheck omitted → the refreshed prompt must NOT mention check.
+      history: staleHistory,
+    });
+
+    await session.send("continue");
+
+    expect(cap.system).not.toContain("`check`");
+    expect(cap.system).not.toContain("OLD PROMPT");
+    expect(cap.roles).toEqual(["system", "user", "assistant", "user"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("resume where history does NOT start with a system message prepends the fresh one, keeping all turns", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-dtg-"));
+  const cap: { system: string; roles?: string[] } = { system: "" };
+
+  const history = [
+    { role: "user" as const, content: "no leading system message" },
+    { role: "assistant" as const, content: "ok" },
+  ];
+
+  try {
+    const session = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      history,
+    });
+
+    await session.send("continue");
+
+    // Fresh system prepended; both original turns survive.
+    expect(cap.system.length).toBeGreaterThan(0);
+    expect(cap.roles).toEqual(["system", "user", "assistant", "user"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -595,14 +595,15 @@ function systemPrompt(
 }
 
 /** Build the initial message list. A FRESH session gets one freshly-built system
- *  prompt. A RESUMED session (`cfg.history`) reuses its persisted messages as-is —
- *  EXCEPT when a build flag that CHANGES the prompt is set (`offerCheck` in
- *  drive-to-green → the check-aware execution block + Tools line; `pullConventions` →
- *  the convention index + pull_conventions in the Tools line). The persisted prompt
- *  predates those, so it would advertise a tool the prompt omits or contradicts. In
- *  that case the leading system message is refreshed to the current prompt and every
- *  non-system turn is kept in order — enforcing the flag↔prompt invariant in code,
- *  not by an unchecked caller rule. */
+ *  prompt. A RESUMED session (`cfg.history`) has its LEADING base-prompt system message
+ *  refreshed to the current prompt, keeping every later message in order. Refreshing is
+ *  unconditional and idempotent: the prompt is deterministic from `cfg`, so an unchanged
+ *  config rebuilds the identical string, while a config that toggled a flag either way
+ *  (`offerCheck`/`pullConventions` on OR off) gets a prompt consistent with what
+ *  `toolsFor` now advertises — so a resumed build can never carry a prompt that requires
+ *  or advertises a tool the session no longer exposes (the flag↔prompt invariant, both
+ *  directions). Only the LEADING system message is replaced; a LATER persisted system
+ *  instruction (delegation, scope notes) is preserved. */
 function resumeMessages(
   cfg: ISessionConfig,
   freshSystem: string
@@ -613,17 +614,6 @@ function resumeMessages(
     return [systemMsg];
   }
 
-  const promptFlagSet =
-    (cfg.offerCheck === true && cfg.executionMode === "drive-to-green") ||
-    cfg.pullConventions === true;
-
-  if (!promptFlagSet) {
-    return [...cfg.history];
-  }
-
-  // Replace ONLY the leading base-prompt system message; keep every later message —
-  // including any LATER system instruction (persisted delegation, scope notes), which
-  // a blanket "drop all system" filter would silently lose.
   const [first, ...rest] = cfg.history;
 
   return first?.role === "system"
@@ -751,12 +741,10 @@ export class Session {
     // (not at construction), so this is an explicit flag, not `cfg.gate !== undefined`
     // (which is still undefined here). A plain eval/scratch task leaves it off — its
     // acceptance set can be empty, so a callable gate would answer vacuously.
-    // A resumed session (cfg.history) with offerCheck would otherwise carry a persisted
-    // prompt that predates the check tool ("never run the gate") while advertising it —
-    // `resumeMessages` refreshes the leading system message to the check-aware prompt so
-    // the two can't contradict, enforcing the invariant in code (not a caller rule).
     // Requires drive-to-green: only that base prompt is check-aware, and toolsFor must
     // not advertise check in a chat session whose prompt would omit + contradict it.
+    // (`resumeMessages` keeps the persisted prompt in lockstep with this on resume, so
+    // the advertised tool set and the prompt can never disagree in either direction.)
     const offerCheck =
       cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 
