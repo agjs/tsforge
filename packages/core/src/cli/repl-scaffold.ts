@@ -4,10 +4,8 @@ import {
   buildScaffoldSteps,
   stateToAnswers,
   runScaffold,
+  makeScaffoldRunDeps,
   loadBundledManifest,
-  realFs,
-  realRunner,
-  realPoller,
 } from "../scaffold";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -159,7 +157,11 @@ function printHandoff(
  * Suspends the editor during the wizard and resumes in a finally block.
  */
 export async function openScaffoldInRepl(
-  deps: IReplScaffoldDeps
+  deps: IReplScaffoldDeps,
+  // Injection seam for tests: the real scaffold runner by default. A test drives the
+  // wizard and passes a fake to verify progress (onPhase) reaches deps.out — without
+  // a real clone/boot.
+  run: typeof runScaffold = runScaffold
 ): Promise<void> {
   deps.suspend();
 
@@ -234,35 +236,52 @@ export async function openScaffoldInRepl(
         ? { ...base, superuser: { email: suEmail, password: suPassword } }
         : base;
 
-    try {
-      const outcome = await runScaffold(manifest, answers, dest, {
-        run: realRunner,
-        fs: realFs,
-        boot: { poll: realPoller },
-      });
-
-      printHandoff(
-        deps.out,
-        outcome.dir,
-        outcome.resolvedSha,
-        outcome.booted,
-        outcome.bootError,
-        outcome.summary
-      );
-
-      // For boringstack, planning will be triggered by the REPL interception when the
-      // user tries to build for the first time. No need to run it here during scaffold.
-      if (archetype === "boringstack") {
-        deps.out(
-          "\n✓ scaffold complete — run planning when you submit your first build request\n"
-        );
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-
-      deps.out(`scaffold failed: ${message}\n`);
-    }
+    await scaffoldFromAnswers(manifest, answers, dest, deps.out, run);
   } finally {
     deps.resume();
+  }
+}
+
+/**
+ * Run the scaffold from collected answers and report to `out`: forward each phase
+ * as a "  → …" progress line (via makeScaffoldRunDeps), print the handoff, and note
+ * the boringstack planning next-step. Extracted from openScaffoldInRepl so the
+ * run+progress+handoff wiring is testable without driving the interactive wizard.
+ */
+export async function scaffoldFromAnswers(
+  manifest: Parameters<typeof runScaffold>[0],
+  answers: Parameters<typeof runScaffold>[1],
+  dest: string,
+  out: (s: string) => void,
+  run: typeof runScaffold = runScaffold
+): Promise<void> {
+  try {
+    const outcome = await run(
+      manifest,
+      answers,
+      dest,
+      makeScaffoldRunDeps(out)
+    );
+
+    printHandoff(
+      out,
+      outcome.dir,
+      outcome.resolvedSha,
+      outcome.booted,
+      outcome.bootError,
+      outcome.summary
+    );
+
+    // For boringstack, planning will be triggered by the REPL interception when the
+    // user tries to build for the first time. No need to run it here during scaffold.
+    if (answers.archetype === "boringstack") {
+      out(
+        "\n✓ scaffold complete — run planning when you submit your first build request\n"
+      );
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    out(`scaffold failed: ${message}\n`);
   }
 }

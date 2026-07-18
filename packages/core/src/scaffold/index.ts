@@ -29,7 +29,12 @@ export { cloneRepo, scaffoldRecord } from "./clone";
 export type { ICloneResult, IScaffoldRecord } from "./clone";
 export { bootStack } from "./boot";
 export type { IBootDeps, IBootResult } from "./boot";
-export { runScaffold, gateCommand } from "./run-scaffold";
+export {
+  runScaffold,
+  gateCommand,
+  scaffoldPhaseReporter,
+  makeScaffoldRunDeps,
+} from "./run-scaffold";
 export type { IScaffoldDeps, IScaffoldOutcome } from "./run-scaffold";
 export { realRunner, realFs, realPoller } from "./io";
 export type { IScaffoldRunner, IScaffoldFs, IReadyPoller } from "./io";
