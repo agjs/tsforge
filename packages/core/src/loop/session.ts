@@ -596,11 +596,13 @@ function systemPrompt(
 
 /** Build the initial message list. A FRESH session gets one freshly-built system
  *  prompt. A RESUMED session (`cfg.history`) reuses its persisted messages as-is —
- *  EXCEPT when `offerCheck` is set: the persisted prompt predates the `check` tool and
- *  would tell the model "never run the gate" while the tool is advertised (the exact
- *  contradiction WS-A4 removes). In that case the leading system message is refreshed
- *  to the current check-aware prompt and the rest of the conversation is kept intact —
- *  enforcing the offerCheck↔prompt invariant in code, not by an unchecked caller rule. */
+ *  EXCEPT when a build flag that CHANGES the prompt is set (`offerCheck` in
+ *  drive-to-green → the check-aware execution block + Tools line; `pullConventions` →
+ *  the convention index + pull_conventions in the Tools line). The persisted prompt
+ *  predates those, so it would advertise a tool the prompt omits or contradicts. In
+ *  that case the leading system message is refreshed to the current prompt and every
+ *  non-system turn is kept in order — enforcing the flag↔prompt invariant in code,
+ *  not by an unchecked caller rule. */
 function resumeMessages(
   cfg: ISessionConfig,
   freshSystem: string
@@ -611,7 +613,11 @@ function resumeMessages(
     return [systemMsg];
   }
 
-  if (cfg.offerCheck !== true) {
+  const promptFlagSet =
+    (cfg.offerCheck === true && cfg.executionMode === "drive-to-green") ||
+    cfg.pullConventions === true;
+
+  if (!promptFlagSet) {
     return [...cfg.history];
   }
 
@@ -742,7 +748,10 @@ export class Session {
     // prompt that predates the check tool ("never run the gate") while advertising it —
     // `resumeMessages` refreshes the leading system message to the check-aware prompt so
     // the two can't contradict, enforcing the invariant in code (not a caller rule).
-    const offerCheck = cfg.offerCheck === true;
+    // Requires drive-to-green: only that base prompt is check-aware, and toolsFor must
+    // not advertise check in a chat session whose prompt would omit + contradict it.
+    const offerCheck =
+      cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 
     this.tools = toolsFor(false, {}, cfg.pullConventions === true, offerCheck);
 

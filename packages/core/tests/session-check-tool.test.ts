@@ -70,6 +70,7 @@ test("offerCheck wires the seam: the model's check call returns the injected gat
       provider: checkingProvider(captured),
       cwd: dir,
       files: ["**/*"],
+      executionMode: "drive-to-green",
       offerCheck: true,
       gate: fixedGate(RED),
     });
@@ -123,6 +124,7 @@ test("runCheck reads the gate LAZILY — a mid-build setGate swap is honored", a
       provider: checkingProvider(captured),
       cwd: dir,
       files: ["**/*"],
+      executionMode: "drive-to-green",
       offerCheck: true,
       gate: fixedGate(GREEN), // initial gate: green
     });
@@ -211,6 +213,7 @@ test("check goes RED on a META_RULE error even when the gate command is GREEN (t
       provider: createThenCheckProvider(captured, "src/bad.ts"),
       cwd: dir,
       files: ["**/*"],
+      executionMode: "drive-to-green",
       offerCheck: true,
       // Gate COMMAND is green — only the meta-rule (no-eslint-disable-comments,
       // change-scoped to the file the model just wrote) makes it red.
@@ -277,6 +280,7 @@ test("offerCheck:true makes the Session ADVERTISE check to the model", async () 
       provider: toolNameCapturingProvider(captured),
       cwd: dir,
       files: ["**/*"],
+      executionMode: "drive-to-green",
       offerCheck: true,
       gate: fixedGate(GREEN),
     });

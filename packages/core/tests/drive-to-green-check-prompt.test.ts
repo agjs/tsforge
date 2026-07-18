@@ -40,12 +40,16 @@ test("offerCheck defaults to false (non-build drive-to-green paths unchanged)", 
 // Session-level wiring: the pure-builder tests above pass even if Session stops
 // forwarding cfg.offerCheck. These drive a real Session and inspect the SYSTEM
 // message, so a reverted one-liner (tool advertised + gate-ban prompt) fails here.
-function systemCapturingProvider(cap: { system: string }): IProvider {
+function systemCapturingProvider(cap: {
+  system: string;
+  roles?: string[];
+}): IProvider {
   return {
     async complete(messages: IChatMessage[]) {
       const sys = messages.find((m) => m.role === "system");
 
       cap.system = typeof sys?.content === "string" ? sys.content : "";
+      cap.roles = messages.map((m) => m.role);
 
       return { content: "done", toolCalls: [] };
     },
@@ -112,7 +116,7 @@ test("the Tools inventory lists check and pull_conventions when they are offered
 
 test("a resumed offerCheck session refreshes its system prompt to the check-aware one", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-dtg-"));
-  const cap = { system: "" };
+  const cap: { system: string; roles?: string[] } = { system: "" };
 
   // A persisted history whose system message predates the check tool (says the old
   // "never run the gate yourself"). On resume WITH offerCheck it must be refreshed.
@@ -141,7 +145,19 @@ test("a resumed offerCheck session refreshes its system prompt to the check-awar
     // The stale system message is gone; the check-aware prompt is in its place.
     expect(cap.system).toContain("`check`");
     expect(cap.system).not.toContain("OLD PROMPT");
+    // Two-sided: the refresh must KEEP the prior conversation, not drop it to a lone
+    // system message. The earlier user + assistant turns survive after the fresh system.
+    expect(cap.roles).toEqual(["system", "user", "assistant", "user"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("the Tools inventory lists pull_conventions alone when only offerConventions is set", () => {
+  const prompt = buildDriveToGreenSystem(DEFAULT_CONVENTIONS, false, true);
+  const toolsLine =
+    prompt.split("\n").find((l) => l.startsWith("Tools:")) ?? "";
+
+  expect(toolsLine).toContain("`pull_conventions`");
+  expect(toolsLine).not.toContain("`check`");
 });
