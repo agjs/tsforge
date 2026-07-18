@@ -6,7 +6,7 @@ import type { IProvider } from "../../inference";
 import type { IFeature } from "../greenfield/greenfield.types";
 import type { Exec } from "./exec";
 import { runBoringstackGate } from "./gate";
-import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
+import { extractFailures } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
 import { judgeFeature } from "../greenfield/judge";
 import { autofixApps, readResourceCode, rescueFileFor } from "./build";
@@ -78,25 +78,6 @@ export function signatureToError(sig: string): IErrorItem {
     };
   }
 
-  if (sig === ESLINT_PROGRAM_UNPARSABLE) {
-    // The whole type-aware ESLint program failed to build — collapsed from a
-    // per-file `parserOptions.project` cascade (see extract-failures). File-less so
-    // it stays a model-visible "own" error, not an out-of-scope one.
-    return {
-      key: sig,
-      rule: "eslint-program-unparsable",
-      phase: 2,
-      message:
-        "The TypeScript-aware lint could not build its program: ONE file has a real " +
-        "syntax/parse error (`Parsing error: … expected`), which makes ESLint report a " +
-        "`parserOptions.project` parse error on EVERY .tsx file. This is ONE broken " +
-        "file, not many separate errors — do NOT chase the per-file parse errors. Find " +
-        "the file with the actual `Parsing error: … expected` and REWRITE IT IN FULL " +
-        "(a surgical patch on an already-broken file usually re-breaks its braces/" +
-        "generics). Once that file parses, the whole cascade clears at once.",
-    };
-  }
-
   const structured = /^failure:([^:]*):([^:]*):([^:]*):(.*)$/u.exec(sig);
 
   if (structured !== null) {
@@ -105,6 +86,19 @@ export function signatureToError(sig: string): IErrorItem {
     const rule = decodeURIComponent(structured[3] ?? "");
     const message = decodeURIComponent(structured[4] ?? "");
     const phase = phaseForFile(file);
+    // A REAL syntax break (`Parsing error: … expected`) breaks the type-aware program for
+    // the whole app — fix THIS file first, and REWRITE it in full: a surgical patch on an
+    // already-broken file usually re-breaks its braces/generics (the live thrash). EXCLUDE
+    // the parserOptions.project "file not covered" message (same `syntax`/`Parsing error:`
+    // shape but NOT a break — it needs a tsconfig entry, not a rewrite); those siblings are
+    // dropped in extract-failures anyway when a real break in the app caused them.
+    const isRealSyntaxBreak =
+      rule === "syntax" &&
+      message.includes("Parsing error:") &&
+      !/parserOptions\.project|ESLint was configured to run on/u.test(message);
+    const steer = isRealSyntaxBreak
+      ? `${message} — this syntax break fails the type-aware lint for the whole app; fix it FIRST, and REWRITE this file in full (a surgical patch on an already-broken file usually re-breaks it). Once it parses, the other files' parse errors clear.`
+      : message;
 
     return {
       key: sig,
@@ -112,7 +106,7 @@ export function signatureToError(sig: string): IErrorItem {
       ...(lineText === "" ? {} : { line: Number(lineText) }),
       rule,
       ...(phase === undefined ? {} : { phase }),
-      message,
+      message: steer,
     };
   }
 

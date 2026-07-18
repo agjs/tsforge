@@ -129,12 +129,13 @@ ${cwd}/apps/api/src/api/b/b.ts
     expect(sigs.size).toBe(2);
   });
 
-  test("collapses a parserOptions.project parse-error cascade to ONE signature (one broken file, not N regressions)", () => {
-    // When ONE file has a real syntax error, the type-aware ESLint program fails to
-    // build and reports a `parserOptions.project` parse error on EVERY other .tsx.
-    // Counting each as a distinct error inflates a near-green build 1→N and makes the
-    // oscillation logic thrash. The cascade must collapse to one signature; the REAL
-    // syntax error stays distinct so the model knows which file to rewrite.
+  test("drops the parserOptions.project fan-out NOISE from a real syntax break, keeping the located break", () => {
+    // When ONE file has a real syntax break, the type-aware ESLint program fails to
+    // build and reports a `parserOptions.project` parse error on EVERY other .tsx —
+    // pure noise that inflates a near-green build 1→N and thrashes the oscillation
+    // logic. Those siblings are dropped; the REAL break stays its own located signature
+    // (correct file → correct phase) so the model knows which file to rewrite. NO global
+    // token is minted (nothing can enter the baseline and hide a later failure).
     const cwd = "/tmp/clone";
     const out = `${cwd}/apps/ui/src/features/ticket/Ticket.mutations.test.tsx
   12:3  error  Parsing error: '}' expected
@@ -146,9 +147,7 @@ ${cwd}/apps/ui/src/features/ticket/TicketPage.tsx
   1:1  error  Parsing error: ESLint was configured to run on \`<tsconfigRootDir>/src/features/ticket/TicketPage.tsx\` using \`parserOptions.project\`: tsconfig.json`;
     const sigs = extractFailures(out, cwd);
 
-    // The three parserOptions.project cascade errors collapse to ONE token...
-    expect(sigs.has("eslint-program-unparsable")).toBe(true);
-    // ...the real syntax error stays its own located signature...
+    // The located real syntax break survives...
     expect(
       [...sigs].some((s) =>
         s.startsWith(
@@ -156,8 +155,61 @@ ${cwd}/apps/ui/src/features/ticket/TicketPage.tsx
         )
       )
     ).toBe(true);
-    // ...so the count is 2 (broken program + the real break), NOT 4.
+    // ...the 3 parserOptions siblings are dropped, and no global token is minted...
+    expect([...sigs].some((s) => s.includes("parserOptions"))).toBe(false);
+    expect([...sigs].some((s) => s.includes("eslint-program-unparsable"))).toBe(
+      false
+    );
+    // ...so the count is 1 (the broken file), NOT 4.
+    expect(sigs.size).toBe(1);
+  });
+
+  test("KEEPS genuine parserOptions errors located when there is NO syntax break (not a cascade)", () => {
+    // Two independent 'file not in tsconfig' errors with no real syntax break are NOT a
+    // cascade — they are real, per-file, actionable config problems. They must keep their
+    // files (→ correct phase) and messages, never be dropped or globbed.
+    const cwd = "/tmp/clone";
+    const cfg = "using parserOptions.project: tsconfig.json";
+    const out = `${cwd}/apps/api/src/api/x/x.ts
+  1:1  error  Parsing error: ESLint was configured to run on x.ts ${cfg}
+${cwd}/apps/ui/src/features/y/y.ts
+  1:1  error  Parsing error: ESLint was configured to run on y.ts ${cfg}`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fx%2Fx.ts:1:syntax")
+      )
+    ).toBe(true);
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith("failure:apps%2Fui%2Fsrc%2Ffeatures%2Fy%2Fy.ts:1:syntax")
+      )
+    ).toBe(true);
     expect(sigs.size).toBe(2);
+  });
+
+  test("drops the cascade noise in the JSON path too (both eslint paths, one post-pass)", () => {
+    // The gate emits eslint as JSON blocks in production; the drop runs on the final
+    // signature set, so a JSON cascade is handled just like the stylish one.
+    const cwd = "/tmp/clone";
+    const base = "apps/ui/src/features/task";
+    const cfg =
+      "ESLint was configured to run on X using parserOptions.project: tsconfig.json";
+    const out = `::tsforge-eslint-json apps/ui::
+[{"filePath":"${cwd}/${base}/Task.mutations.test.tsx","messages":[{"ruleId":null,"severity":2,"message":"Parsing error: '}' expected","line":12,"column":3}]},{"filePath":"${cwd}/${base}/Task.queries.test.tsx","messages":[{"ruleId":null,"severity":2,"message":"Parsing error: ${cfg}","line":1,"column":1}]},{"filePath":"${cwd}/${base}/Task.hooks.ts","messages":[{"ruleId":null,"severity":2,"message":"Parsing error: ${cfg}","line":1,"column":1}]}]
+::tsforge-eslint-json-end::`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fui%2Fsrc%2Ffeatures%2Ftask%2FTask.mutations.test.tsx:12:syntax"
+        )
+      )
+    ).toBe(true);
+    expect([...sigs].some((s) => s.includes("parserOptions"))).toBe(false);
+    expect(sigs.size).toBe(1);
   });
 
   test("two single-line eslint errors in ONE file stay separate (a following error is a boundary, never fused)", () => {
@@ -411,6 +463,50 @@ Move declarations into separate files/modules  module-boundaries/single-semantic
     // Warning (severity 1) is NOT a failure.
     expect([...sigs].some((s) => s.includes("prefer-const"))).toBe(false);
     // Exactly the two errors — the stylish rows did NOT create duplicates.
+    expect(sigs.size).toBe(2);
+  });
+
+  test("scopes the drop by APP — a break in one app never deletes another app's genuine parserOptions errors", () => {
+    const cwd = "/tmp/clone";
+    const cfg = "using parserOptions.project: tsconfig.json";
+    const out = `${cwd}/apps/ui/src/features/z/Z.tsx
+  4:2  error  Parsing error: '}' expected
+${cwd}/apps/ui/src/features/z/Z.hooks.ts
+  1:1  error  Parsing error: ESLint was configured to run on Z.hooks.ts ${cfg}
+${cwd}/apps/api/src/api/w/w.ts
+  1:1  error  Parsing error: ESLint was configured to run on w.ts ${cfg}`;
+    const sigs = extractFailures(out, cwd);
+
+    // apps/ui has the break → its parserOptions sibling is cascade noise, dropped...
+    expect([...sigs].some((s) => s.includes("Z.hooks.ts"))).toBe(false);
+    // ...the located ui break stays...
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith("failure:apps%2Fui%2Fsrc%2Ffeatures%2Fz%2FZ.tsx:4:syntax")
+      )
+    ).toBe(true);
+    // ...but apps/api (no break there) KEEPS its genuine parserOptions error.
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith("failure:apps%2Fapi%2Fsrc%2Fapi%2Fw%2Fw.ts:1:syntax")
+      )
+    ).toBe(true);
+    expect(sigs.size).toBe(2);
+  });
+
+  test("a tsc-only syntax error does NOT drop parserOptions siblings (the eslint `Parsing error:` is the cascade signal)", () => {
+    // If a file is truly unparsable, eslint itself emits a `Parsing error:` — that is the
+    // reliable cascade signal. A tsc TS#### with no eslint parse error is not treated as a
+    // cascade, so the parserOptions errors are KEPT (locked keep-noise behavior).
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/api/src/api/x/x.ts(3,10): error TS1005: ',' expected.
+${cwd}/apps/api/src/api/y/y.ts
+  1:1  error  Parsing error: ESLint was configured to run on y.ts using parserOptions.project: tsconfig.json`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(
+      [...sigs].some((s) => s.includes("y.ts") && s.includes(":syntax:"))
+    ).toBe(true);
     expect(sigs.size).toBe(2);
   });
 

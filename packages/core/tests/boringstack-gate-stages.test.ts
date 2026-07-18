@@ -100,16 +100,34 @@ describe("signatureToError", () => {
     expect(err.message).toContain("Do NOT edit");
   });
 
-  test("the eslint-program-unparsable signature maps to a file-less rewrite-the-broken-file error", () => {
-    const err = signatureToError("eslint-program-unparsable");
+  test("a syntax Parsing-error signature keeps its file/phase and gets a REWRITE-in-full steer", () => {
+    const file = "apps/ui/src/features/x/X.tsx";
+    const sig = `failure:${encodeURIComponent(file)}:4:${encodeURIComponent(
+      "syntax"
+    )}:${encodeURIComponent("Parsing error: '}' expected")}`;
+    const err = signatureToError(sig);
 
-    // File-less (model-visible "own" error), phase 2, and steers toward a FULL
-    // rewrite of the one broken file — not chasing the per-file cascade.
-    expect(err.rule).toBe("eslint-program-unparsable");
-    expect(err.file).toBeUndefined();
+    // Correct routing (not a file-less token): the broken file + its UI phase...
+    expect(err.file).toBe(file);
     expect(err.phase).toBe(2);
-    expect(err.message).toContain("ONE broken file");
-    expect(err.message).toContain("REWRITE IT IN FULL");
+    expect(err.rule).toBe("syntax");
+    // ...plus the steer that replaces the removed global token's guidance.
+    expect(err.message).toContain("Parsing error: '}' expected");
+    expect(err.message).toContain("REWRITE this file in full");
+  });
+
+  test("a KEPT genuine parserOptions.project error does NOT get the rewrite steer (it needs a tsconfig entry)", () => {
+    const file = "apps/api/src/api/x/x.ts";
+    const msg =
+      "Parsing error: ESLint was configured to run on x.ts using parserOptions.project: tsconfig.json";
+    const sig = `failure:${encodeURIComponent(file)}:1:${encodeURIComponent(
+      "syntax"
+    )}:${encodeURIComponent(msg)}`;
+    const err = signatureToError(sig);
+
+    // Same syntax/`Parsing error:` shape, but it's a config exclusion — no rewrite steer.
+    expect(err.message).toBe(msg);
+    expect(err.message).not.toContain("REWRITE this file in full");
   });
 });
 
