@@ -1212,11 +1212,11 @@ export async function evaluateGate(
   const metaErrors = metaViolations.filter((v) => v.severity === "error");
   const errors = gate.errors.concat(
     metaErrors.map((v) => ({
-      // Include the message so two DISTINCT violations of the same rule in one file
-      // (IMetaRuleViolation has no line) get distinct keys — else the `check` tool's
-      // key-dedupe collapses them and under-reports errorCount. Message is stable
-      // per violation, so settleGate's cross-cycle age/fingerprint tracking is safe.
-      key: `${v.file}:${v.ruleId}:${v.message}`,
+      // Key stays `file:ruleId` — the R3 escalation focus contract (gateFeedback
+      // filters metaViolations by exactly this) depends on it. Distinct-message
+      // collapse is handled by the `check` tool's dedupe (full-identity), NOT by
+      // widening this key, so the ladder's focus matching is untouched.
+      key: `${v.file}:${v.ruleId}`,
       file: v.file,
       rule: v.ruleId,
       message: v.message,

@@ -53,15 +53,20 @@ function capOutput(
   };
 }
 
-/** Drop duplicate diagnostics by their stable `key` (same file/line/rule), keeping
- *  first-seen order — repeated `check` calls and dual-format gate output stay clean. */
+/** Drop only diagnostics identical in EVERY reported field (file, line, rule, message),
+ *  keeping first-seen order — so a dual-format re-emission of the same error is removed,
+ *  but two DISTINCT diagnostics that merely share the coarse `key` (e.g. two meta
+ *  violations of one rule in one file, whose key is only `file:ruleId`) both survive.
+ *  Deduping on `e.key` alone would silently under-report errorCount. */
 function dedupe(errors: readonly IErrorItem[]): IErrorItem[] {
   const seen = new Set<string>();
   const out: IErrorItem[] = [];
 
   for (const e of errors) {
-    if (!seen.has(e.key)) {
-      seen.add(e.key);
+    const identity = JSON.stringify([e.file, e.line, e.rule, e.message]);
+
+    if (!seen.has(identity)) {
+      seen.add(identity);
       out.push(e);
     }
   }

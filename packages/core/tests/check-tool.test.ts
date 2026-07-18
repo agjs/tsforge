@@ -87,7 +87,7 @@ test("doCheck returns the whole structured error set on a red gate", async () =>
   expect(out).not.toContain('"key"');
 });
 
-test("doCheck dedupes by stable key so repeated/dual-format output stays clean", async () => {
+test("doCheck drops only fully-identical diagnostics (dual-format re-emission)", async () => {
   const out = await doCheck(
     {},
     ctxWith(async () =>
@@ -95,6 +95,36 @@ test("doCheck dedupes by stable key so repeated/dual-format output stays clean",
         err({ key: "dup", file: "src/x.ts", line: 1, message: "same" }),
         err({ key: "dup", file: "src/x.ts", line: 1, message: "same" }),
         err({ key: "other", file: "src/z.ts", line: 9, message: "diff" }),
+      ])
+    )
+  );
+
+  const parsed = JSON.parse(out);
+
+  expect(parsed.errorCount).toBe(2);
+  expect(parsed.errors).toHaveLength(2);
+});
+
+test("doCheck keeps two DISTINCT diagnostics that share a coarse key but differ in message", async () => {
+  // Meta-rule keys are only `file:ruleId` (no line), so two distinct violations of one
+  // rule in one file share a key. Deduping on key alone would collapse them and
+  // under-report errorCount — the whole-error-set contract must not silently drop one.
+  const out = await doCheck(
+    {},
+    ctxWith(async () =>
+      result([
+        err({
+          key: "src/a.ts:no-eslint-disable-comments",
+          file: "src/a.ts",
+          rule: "no-eslint-disable-comments",
+          message: "disable on line 3",
+        }),
+        err({
+          key: "src/a.ts:no-eslint-disable-comments",
+          file: "src/a.ts",
+          rule: "no-eslint-disable-comments",
+          message: "disable on line 9",
+        }),
       ])
     )
   );

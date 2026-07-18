@@ -244,3 +244,53 @@ test("meta-rule violations are sorted deterministically", async () => {
     }
   });
 });
+
+// R3 escalation focus contract: gateFeedback filters metaViolations by `file:ruleId`
+// (== IErrorItem.key that evaluateGate builds for a meta error, == focusError R3 sets).
+// This pins that key format — widening it (e.g. adding :message) silently drops the
+// focused project-structure feedback while the build is still red. That regression
+// landed once precisely because this contract was untested.
+test("gateFeedback R3 focus matches a meta violation by file:ruleId (the focusError contract)", async () => {
+  await withDir(async (dir) => {
+    const task: ITask = {
+      id: "1",
+      files: ["a.service.ts"],
+      accept: "tsc -p tsconfig.json",
+      intent: "",
+    };
+
+    const metaViolations: IMetaRuleViolation[] = [
+      {
+        file: "a.service.ts",
+        ruleId: "test-sibling-required",
+        severity: "error",
+        message: "a.service.ts has no test sibling",
+      },
+    ];
+
+    // focusError = `${file}:${ruleId}` — what evaluateGate keys a meta error as, and
+    // what R3 sets focus to. The violation must survive the focus filter.
+    const focused = await gateFeedback(
+      [],
+      task,
+      dir,
+      metaViolations,
+      "a.service.ts:test-sibling-required"
+    );
+
+    expect(focused).toContain("## Project structure");
+    expect(focused).toContain("test-sibling-required");
+
+    // A focusError carrying the message (the reverted-then-rejected key shape) must
+    // NOT match — proving the contract is file:ruleId, nothing wider.
+    const mismatched = await gateFeedback(
+      [],
+      task,
+      dir,
+      metaViolations,
+      "a.service.ts:test-sibling-required:a.service.ts has no test sibling"
+    );
+
+    expect(mismatched).not.toContain("test-sibling-required");
+  });
+});
