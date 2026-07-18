@@ -414,6 +414,33 @@ Move declarations into separate files/modules  module-boundaries/single-semantic
     expect(sigs.size).toBe(2);
   });
 
+  test("collapses a parserOptions.project cascade in the JSON path too (the production path)", () => {
+    // The gate emits eslint as JSON blocks in production, so the cascade must collapse
+    // HERE as well — otherwise the per-file JSON `syntax` signatures re-inflate the count
+    // even though the stylish path collapses. One real syntax error + two cascade errors.
+    const cwd = "/tmp/clone";
+    const base = "apps/ui/src/features/task";
+    const cfg =
+      "ESLint was configured to run on X using parserOptions.project: tsconfig.json";
+    const out = `::tsforge-eslint-json apps/ui::
+[{"filePath":"${cwd}/${base}/Task.mutations.test.tsx","messages":[{"ruleId":null,"severity":2,"message":"Parsing error: '}' expected","line":12,"column":3}]},{"filePath":"${cwd}/${base}/Task.queries.test.tsx","messages":[{"ruleId":null,"severity":2,"message":"Parsing error: ${cfg}","line":1,"column":1}]},{"filePath":"${cwd}/${base}/Task.hooks.ts","messages":[{"ruleId":null,"severity":2,"message":"Parsing error: ${cfg}","line":1,"column":1}]}]
+::tsforge-eslint-json-end::`;
+    const sigs = extractFailures(out, cwd);
+
+    // The two cascade parse errors collapse to ONE token...
+    expect(sigs.has("eslint-program-unparsable")).toBe(true);
+    // ...the real syntax error stays its own located signature...
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fui%2Fsrc%2Ffeatures%2Ftask%2FTask.mutations.test.tsx:12:syntax"
+        )
+      )
+    ).toBe(true);
+    // ...so the count is 2, NOT 3.
+    expect(sigs.size).toBe(2);
+  });
+
   test("a JSON message containing `error TS…` is not mis-parsed as a tsc diagnostic", () => {
     const cwd = "/tmp/clone";
     const out = `::tsforge-eslint-json apps/api::

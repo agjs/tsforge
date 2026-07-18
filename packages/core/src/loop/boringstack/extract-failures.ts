@@ -204,6 +204,20 @@ function eslintResultSignatures(
       typeof message.message === "string"
         ? message.message.replace(/\s+/gu, " ").trim()
         : "";
+
+    // Same `parserOptions.project` cascade collapse as the stylish path (parsedDiagnostic):
+    // one broken file makes the type-aware program report this parse error on EVERY .tsx.
+    // Collapse the whole fan-out to ONE token so the JSON path can't re-inflate the count
+    // (the gate emits eslint as JSON blocks in production, so this path is the live one).
+    // A real syntax error ('}' expected) does NOT match this and stays a per-file signature.
+    if (
+      rule === "syntax" &&
+      /parserOptions\.project|ESLint was configured to run on/u.test(text)
+    ) {
+      signatures.add(ESLINT_PROGRAM_UNPARSABLE);
+      continue;
+    }
+
     const line = typeof message.line === "number" ? message.line : undefined;
     const column =
       typeof message.column === "number" ? message.column : undefined;
