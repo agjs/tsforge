@@ -35,6 +35,7 @@ import {
   type ErrorSet,
 } from "../validate";
 import { ruleHelp } from "./feedback";
+import { buildConventionIndex } from "./conventions";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -577,9 +578,16 @@ function systemPrompt(
   // it here too so test-first is the out-of-the-box default everywhere.
   const tdd = flags.tdd() ? `${buildTddGuidance(conventions)}\n\n` : "";
 
+  // WS-A1: front-load the stack convention topic index when the backend ships a
+  // convention library (pullConventions). PUSHes awareness that the catalog exists so
+  // the model pulls the compliant pattern BEFORE writing — the Bucket-1 fix that stops
+  // it drafting convention-violating code it then burns turns repairing.
+  const conv =
+    cfg.pullConventions === true ? `${buildConventionIndex()}\n\n` : "";
+
   const contract = taskContract(cfg.files ?? [], cfg.accept);
 
-  return `${base}\n\n${tdd}${prefix}${lines.join("\n")}\n\n${contract}`;
+  return `${base}\n\n${tdd}${conv}${prefix}${lines.join("\n")}\n\n${contract}`;
 }
 
 /** Stable prefix of the delegation block — the sentinel `setDelegation` checks to
@@ -702,6 +710,11 @@ export class Session {
     // (not at construction), so this is an explicit flag, not `cfg.gate !== undefined`
     // (which is still undefined here). A plain eval/scratch task leaves it off — its
     // acceptance set can be empty, so a callable gate would answer vacuously.
+    // NOTE: the check-AWARE system prompt (see systemPrompt) is baked only for a FRESH
+    // session; a session resumed from `cfg.history` reuses its persisted prompt. That
+    // can't contradict today because offerCheck is set ONLY by the fresh headless
+    // boringstack build, which never resumes with history — if a resumable path ever
+    // sets offerCheck, rebuild or patch the persisted prompt there.
     const offerCheck = cfg.offerCheck === true;
 
     this.tools = toolsFor(false, {}, cfg.pullConventions === true, offerCheck);

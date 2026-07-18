@@ -118,6 +118,25 @@ export function conventionTopics(): ConventionTopic[] {
   return [...TOPICS];
 }
 
+/** A compact PUSH index of the pullable convention topics + the gate rules each one
+ *  prevents (WS-A1). Front-loaded into the build system prompt so the model knows the
+ *  catalog exists and pulls the compliant pattern BEFORE writing that kind of code —
+ *  the situational awareness that stops it writing a convention-violating draft it
+ *  then burns turns fixing. Complements `pull_conventions` (the on-demand fetch). */
+export function buildConventionIndex(): string {
+  const rows = conventionTopics().map((t) => {
+    const rules = TOPIC_RULES[t];
+    const prevents = rules.length > 0 ? ` — prevents: ${rules.join(", ")}` : "";
+
+    return `  • ${t}${prevents}`;
+  });
+
+  return [
+    "STACK CONVENTIONS. This stack enforces strict patterns the gate REJECTS if you guess. Before writing a given kind of code, call `pull_conventions` with the matching topic to get the compliant shape FIRST — do not write from memory and discover the rule at the gate. Topics:",
+    ...rows,
+  ].join("\n");
+}
+
 /** Narrow an arbitrary string to a ConventionTopic (for the pull tool's arg) —
  *  membership test, no `as` cast. */
 export function isConventionTopic(s: string): s is ConventionTopic {
