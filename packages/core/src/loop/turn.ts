@@ -1444,7 +1444,7 @@ function applyRungLogic(
 }
 
 /** Determine the stall reason from guard states. Returns null if not stalled. */
-function getStuckReason(
+export function getStuckReason(
   persisted: IErrorItem | null,
   wholeSetStuck: boolean,
   noNetProgress: boolean,
@@ -1463,7 +1463,17 @@ function getStuckReason(
   }
 
   if (noNetProgress) {
-    return `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(progressCap)} cycles (best ${String(state.bestErrorCount)})`;
+    // Show the true ALL-TIME low (plateauBest), not bestErrorCount — the latter is the
+    // fine guard's local watermark that resetConvergenceGuards rebases to the current
+    // count on every steer escalation, so it would tell the model "best 17" after an
+    // escalation even though it once reached 6. The guard logic still uses the local
+    // watermark; only this displayed number is the honest all-time best.
+    const bestEver = Math.min(
+      state.bestErrorCount,
+      state.plateauBest ?? state.bestErrorCount
+    );
+
+    return `no net progress: ${String(gateErrors.length)} error(s) open, none cleared in ${String(progressCap)} cycles (best ever ${String(bestEver)})`;
   }
 
   if (plateaued) {
