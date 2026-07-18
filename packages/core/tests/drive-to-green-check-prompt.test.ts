@@ -161,3 +161,76 @@ test("the Tools inventory lists pull_conventions alone when only offerConvention
   expect(toolsLine).toContain("`pull_conventions`");
   expect(toolsLine).not.toContain("`check`");
 });
+
+test("a resumed pullConventions session (no offerCheck) refreshes to include the convention index", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-dtg-"));
+  const cap: { system: string; roles?: string[] } = { system: "" };
+
+  const staleHistory = [
+    {
+      role: "system" as const,
+      content: "OLD PROMPT: no convention index here.",
+    },
+    { role: "user" as const, content: "earlier" },
+    { role: "assistant" as const, content: "ok" },
+  ];
+
+  try {
+    // pullConventions only — NO offerCheck. Locks the `|| cfg.pullConventions` arm:
+    // deleting it would leave the stale prompt (no convention index) on resume.
+    const session = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      history: staleHistory,
+    });
+
+    await session.send("continue");
+
+    expect(cap.system).toContain("STACK CONVENTIONS");
+    expect(cap.system).not.toContain("OLD PROMPT");
+    expect(cap.roles).toEqual(["system", "user", "assistant", "user"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("resume refresh preserves a LATER system message (delegation/scope), replacing only the leading one", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-dtg-"));
+  const cap: { system: string; roles?: string[] } = { system: "" };
+
+  const laterSystem = "DELEGATION: keep this later system instruction intact.";
+  const history = [
+    { role: "system" as const, content: "OLD PROMPT: leading base prompt." },
+    { role: "user" as const, content: "earlier" },
+    { role: "system" as const, content: laterSystem },
+    { role: "assistant" as const, content: "ok" },
+  ];
+
+  try {
+    const session = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      offerCheck: true,
+      history,
+    });
+
+    await session.send("continue");
+
+    // The LEADING base prompt is replaced; the later system message is NOT dropped.
+    expect(cap.system).not.toContain("OLD PROMPT");
+    expect(cap.roles).toEqual([
+      "system",
+      "user",
+      "system",
+      "assistant",
+      "user",
+    ]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

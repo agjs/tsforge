@@ -621,7 +621,14 @@ function resumeMessages(
     return [...cfg.history];
   }
 
-  return [systemMsg, ...cfg.history.filter((m) => m.role !== "system")];
+  // Replace ONLY the leading base-prompt system message; keep every later message —
+  // including any LATER system instruction (persisted delegation, scope notes), which
+  // a blanket "drop all system" filter would silently lose.
+  const [first, ...rest] = cfg.history;
+
+  return first?.role === "system"
+    ? [systemMsg, ...rest]
+    : [systemMsg, ...cfg.history];
 }
 
 /** Stable prefix of the delegation block — the sentinel `setDelegation` checks to

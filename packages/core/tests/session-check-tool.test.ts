@@ -312,3 +312,27 @@ test("without offerCheck the Session does NOT advertise check (the tool is un-di
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a CHAT session with offerCheck does NOT advertise check (tool tied to drive-to-green)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-check-"));
+  const captured: { names: string[] } = { names: [] };
+
+  try {
+    // offerCheck:true but NO executionMode (defaults to chat, whose prompt is not
+    // check-aware). Advertising check here would give the tool + a contradicting
+    // prompt — so it must be withheld. Locks the drive-to-green guard.
+    const session = await Session.create({
+      provider: toolNameCapturingProvider(captured),
+      cwd: dir,
+      files: ["**/*"],
+      offerCheck: true,
+      gate: fixedGate(GREEN),
+    });
+
+    await session.send("go");
+
+    expect(captured.names).not.toContain("check");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
