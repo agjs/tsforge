@@ -18,6 +18,9 @@ import {
   DEFAULT_MAX_CHARS,
   verdictCacheKey,
   artifactBody,
+  shouldCacheVerdict,
+  honorCachedVerdict,
+  CACHE_VERSION,
 } from "../reviewers/harness-review";
 import { RUBRIC_VERSION } from "../reviewers/schema";
 import { parseVerdict, type IVerdict } from "../reviewers/aggregate";
@@ -190,9 +193,14 @@ function computePanelHash(panel: object): string {
   return createHash("sha256").update(JSON.stringify(panel)).digest("hex");
 }
 
-async function readCachedVerdict(cacheKey: string): Promise<IVerdict | null> {
+export const CACHE_DIR = join(".tsforge", "harness-review");
+
+async function readCachedVerdict(
+  cacheKey: string,
+  dir = CACHE_DIR
+): Promise<IVerdict | null> {
   try {
-    const path = join(".tsforge", "harness-review", `${cacheKey}.json`);
+    const path = join(dir, `${cacheKey}.json`);
     const content = await readFile(path, "utf-8");
     const parsed: unknown = JSON.parse(content);
 
@@ -200,7 +208,9 @@ async function readCachedVerdict(cacheKey: string): Promise<IVerdict | null> {
       return null;
     }
 
-    return parseVerdict(parsed.verdict);
+    // honorCachedVerdict drops any cached pre-review gate block (defense in depth
+    // beside the CACHE_VERSION bump) so a transient precondition never re-serves.
+    return honorCachedVerdict(parseVerdict(parsed.verdict));
   } catch {
     return null;
   }
@@ -210,9 +220,9 @@ async function writeCachedVerdict(
   cacheKey: string,
   verdict: IVerdict,
   treeHash: string,
-  panelHash: string
+  panelHash: string,
+  dir = CACHE_DIR
 ): Promise<void> {
-  const dir = join(".tsforge", "harness-review");
   const path = join(dir, `${cacheKey}.json`);
   const body = artifactBody(verdict, {
     treeHash,
@@ -222,6 +232,23 @@ async function writeCachedVerdict(
 
   await mkdir(dir, { recursive: true });
   await writeFile(path, body, "utf-8");
+}
+
+/** The persistence seam — the ACTUAL guard at the write path, exported so a test
+ *  can prove (against a real dir) that a pre-review gate block writes NO artifact
+ *  while a real panel verdict does. A pure `shouldCacheVerdict` test alone can't
+ *  catch an omitted/inverted/bypassed guard here; both cache-write call sites in
+ *  this file go through this one function. */
+export async function persistVerdict(
+  verdict: IVerdict,
+  cacheKey: string,
+  treeHash: string,
+  panelHash: string,
+  dir = CACHE_DIR
+): Promise<void> {
+  if (shouldCacheVerdict(verdict)) {
+    await writeCachedVerdict(cacheKey, verdict, treeHash, panelHash, dir);
+  }
 }
 
 export function formatVerdict(v: IVerdict): string {
@@ -270,6 +297,7 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
     treeHash,
     panelHash,
     rubricVersion: RUBRIC_VERSION,
+    cacheVersion: CACHE_VERSION,
   });
 
   let verdict: IVerdict;
@@ -297,7 +325,11 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
           maxChars: DEFAULT_MAX_CHARS,
         }
       );
-      await writeCachedVerdict(cacheKey, verdict, treeHash, panelHash);
+
+      // persistVerdict caches ONLY a real panel verdict. A pre-review gate block
+      // (validate flake, empty intent, diff too large) is transient — caching one
+      // poisons the tree-hash so a flaky validate under load blocks every future push.
+      await persistVerdict(verdict, cacheKey, treeHash, panelHash);
     }
   } else {
     verdict = await runHarnessReview(
@@ -316,7 +348,8 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
         maxChars: DEFAULT_MAX_CHARS,
       }
     );
-    await writeCachedVerdict(cacheKey, verdict, treeHash, panelHash);
+
+    await persistVerdict(verdict, cacheKey, treeHash, panelHash);
   }
 
   process.stdout.write(`${formatVerdict(verdict)}\n`);

@@ -17,6 +17,12 @@ export interface IVerdict {
   ranked: IRankedFinding[];
   perReviewer: IReview[];
   identity: string;
+  /** True when this verdict is a PRE-REVIEW gate/precondition block (validate
+   *  failed, empty intent, diff too large) — the panel never ran. These are
+   *  transient/precondition failures, NOT reviewer judgments, so they must never
+   *  be cached: a flaky validate under load would otherwise poison the tree-hash
+   *  and block every future push until the cache is hand-purged. */
+  preReview?: boolean;
 }
 
 const SECURITY_CODES: readonly FindingCode[] = ["security", "supply-chain"];
@@ -250,5 +256,6 @@ export function parseVerdict(raw: unknown): IVerdict | null {
     ranked: parsedRanked,
     perReviewer: parsedReviews,
     identity,
+    ...(raw.preReview === true ? { preReview: true } : {}),
   };
 }
