@@ -3,7 +3,7 @@ import { cloneRepo, scaffoldRecord } from "./clone";
 import { bootStack, type IBootDeps } from "./boot";
 import { answersToPlan } from "./plan";
 import { parseManifest } from "./boringstack-manifest";
-import type { IScaffoldFs } from "./io";
+import { realRunner, realFs, realPoller, type IScaffoldFs } from "./io";
 import type {
   IArchetypeProfile,
   IScaffoldAnswers,
@@ -64,6 +64,38 @@ export interface IScaffoldDeps extends IConfigureDeps {
   readonly boot: Pick<IBootDeps, "poll" | "timeoutMs">;
   /** Skip the Docker boot (CI / `--no-boot` / STACK=smoke). */
   readonly skipBoot?: boolean;
+  /** Progress reporter for the long, otherwise-silent scaffold phases (clone,
+   *  configure, boot). Called at each phase boundary so a caller can show the user
+   *  what's happening instead of 20-30s of dead air. Absent → silent. Wrap a sink
+   *  with {@link scaffoldPhaseReporter} for the standard "  → …" line format. */
+  readonly onPhase?: (message: string) => void;
+}
+
+/** Wrap an output sink into an `onPhase` reporter with the standard progress-line
+ *  format (`  → <message>\n`). Both scaffold entry points (the in-REPL wizard and
+ *  the `tsforge scaffold` CLI) use this so the formatting stays in one tested place. */
+export function scaffoldPhaseReporter(
+  out: (line: string) => void
+): (message: string) => void {
+  return (message) => {
+    out(`  → ${message}\n`);
+  };
+}
+
+/** The real-IO {@link IScaffoldDeps} both entry points hand to {@link runScaffold},
+ *  with progress wired to `out`. Extracted so the onPhase wiring each caller depends
+ *  on is covered by one test instead of duplicated, untested, inline in each. */
+export function makeScaffoldRunDeps(
+  out: (line: string) => void,
+  opts: { readonly skipBoot?: boolean } = {}
+): IScaffoldDeps {
+  return {
+    run: realRunner,
+    fs: realFs,
+    boot: { poll: realPoller },
+    onPhase: scaffoldPhaseReporter(out),
+    ...(opts.skipBoot === undefined ? {} : { skipBoot: opts.skipBoot }),
+  };
 }
 
 export interface IScaffoldOutcome {
@@ -92,10 +124,13 @@ export async function runScaffold(
   dest: string,
   deps: IScaffoldDeps
 ): Promise<IScaffoldOutcome> {
+  const phase = deps.onPhase ?? ((): void => undefined);
+
   // The bundled manifest is ONLY the bootstrap (repo + ref); validation happens
   // post-clone against the repo's own manifest. We deliberately do NOT pre-validate
   // against the bundle — a config valid under a newer `--ref` must not be rejected
   // by stale bundled cross-rules.
+  phase("Cloning the project template…");
   const { resolvedSha } = await cloneRepo(
     bootstrap.repo,
     bootstrap.defaultRef,
@@ -124,10 +159,13 @@ export async function runScaffold(
     manifestVersion: manifest.manifestVersion,
   });
 
+  phase("Applying your configuration…");
   const configured = await applyScaffold(dest, manifest, plan, deps);
   const gateCwd =
     profile.subPath === undefined ? dest : `${dest}/${profile.subPath}`;
 
+  // maybeBoot reports its own "starting services" phase from the exact path that
+  // boots, so the message can never diverge from whether a boot actually happens.
   const boot = await maybeBoot(dest, manifest, answers, deps, configured.ports);
 
   return {
@@ -153,6 +191,12 @@ async function maybeBoot(
   if (answers.archetype !== "boringstack" || deps.skipBoot === true) {
     return { booted: false };
   }
+
+  // Reported here, on the path that actually boots — never from a duplicated
+  // predicate elsewhere that could drift out of sync with this guard.
+  deps.onPhase?.(
+    "Starting services (Postgres, API, UI)… this can take ~20-30s"
+  );
 
   return bootStack(dest, manifest, {
     run: deps.run,

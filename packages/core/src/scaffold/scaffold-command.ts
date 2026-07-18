@@ -3,8 +3,11 @@ import { loadBundledManifest } from "./boringstack-manifest";
 import { buildScaffoldSteps, stateToAnswers } from "./wizard";
 import { scaffoldPreview } from "./preview";
 import { parseScaffoldArgs } from "./scaffold-cli";
-import { runScaffold, type IScaffoldOutcome } from "./run-scaffold";
-import { realRunner, realFs, realPoller } from "./io";
+import {
+  runScaffold,
+  makeScaffoldRunDeps,
+  type IScaffoldOutcome,
+} from "./run-scaffold";
 import type { IScaffoldAnswers, IScaffoldManifest } from "./scaffold.types";
 
 type IValues = Readonly<Record<string, string | readonly string[]>>;
@@ -38,7 +41,11 @@ function withRef(manifest: IScaffoldManifest, ref: string): IScaffoldManifest {
  */
 export async function runScaffoldCommand(
   argv: readonly string[],
-  color: boolean
+  color: boolean,
+  // Injection seam for tests: the real scaffold runner by default. A test can pass a
+  // fake to verify this command wires progress (onPhase) to stdout without a real
+  // clone/boot.
+  run: typeof runScaffold = runScaffold
 ): Promise<IScaffoldOutcome | null> {
   const opts = parseScaffoldArgs(argv);
   const manifest = withRef(loadBundledManifest(), opts.ref);
@@ -72,10 +79,12 @@ export async function runScaffoldCommand(
     values = answersFor(state).values;
   }
 
-  return runScaffold(manifest, { archetype, stack, values }, opts.dest, {
-    run: realRunner,
-    fs: realFs,
-    boot: { poll: realPoller },
-    skipBoot: opts.skipBoot,
-  });
+  return run(
+    manifest,
+    { archetype, stack, values },
+    opts.dest,
+    makeScaffoldRunDeps((line) => process.stdout.write(line), {
+      skipBoot: opts.skipBoot,
+    })
+  );
 }

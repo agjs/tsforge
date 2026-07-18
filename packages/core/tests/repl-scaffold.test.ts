@@ -2,7 +2,55 @@ import { test, expect } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { archetypeStep, resolveScaffoldDest } from "../src/cli/repl-scaffold";
+import {
+  archetypeStep,
+  resolveScaffoldDest,
+  scaffoldFromAnswers,
+} from "../src/cli/repl-scaffold";
+import {
+  loadBundledManifest,
+  type runScaffold,
+  type IScaffoldOutcome,
+} from "../src/scaffold";
+
+const STUB_OUTCOME: IScaffoldOutcome = {
+  dir: "/tmp/proj",
+  gateCwd: "/tmp/proj",
+  gateCommand: "bun run validate",
+  resolvedSha: "abc123",
+  booted: true,
+  summary: ["STACK=dev"],
+  ports: {},
+};
+
+test("scaffoldFromAnswers forwards clone progress to out and prints the handoff", async () => {
+  const out: string[] = [];
+
+  // A fake runner that fires a progress phase and returns a stub outcome — no real
+  // clone/boot. Proves openScaffoldInRepl's run+progress+handoff wiring end to end.
+  const fakeRun: typeof runScaffold = (_manifest, _answers, _dest, deps) => {
+    deps.onPhase?.("Cloning the project template…");
+
+    return Promise.resolve(STUB_OUTCOME);
+  };
+
+  await scaffoldFromAnswers(
+    loadBundledManifest(),
+    { archetype: "boringstack", stack: "dev", values: {} },
+    "/tmp/proj",
+    (s) => out.push(s),
+    fakeRun
+  );
+
+  const joined = out.join("");
+
+  // Progress reached the sink in the standard "  → …" format...
+  expect(joined).toContain("  → Cloning the project template…\n");
+  // ...the handoff printed...
+  expect(joined).toContain("scaffold ready → /tmp/proj");
+  // ...and the boringstack planning note followed.
+  expect(joined).toContain("run planning when you submit");
+});
 
 test("archetype step offers boringstack, astro", () => {
   const step = archetypeStep();
