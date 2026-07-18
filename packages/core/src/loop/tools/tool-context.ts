@@ -4,6 +4,15 @@ import type { Reporter } from "../loop.types";
 import type { SessionSnapshotStore } from "../../files/hashline";
 import type { McpRegistry } from "../../mcp";
 import type { PolicyMode, IPolicyRules } from "../../policy";
+import type { IValidateResult } from "../../validate/validate.types";
+
+/** Run the workspace's fast acceptance gate on demand and return its STRUCTURED
+ *  result (errors as `{file,line,rule,message}`), so the `check` tool can hand the
+ *  model its whole error set MID-TURN instead of only at end-of-turn. A generic
+ *  injected seam (like {@link EditGuard}): the core tool knows nothing about which
+ *  gate runs — a stack overlay (the boringstack build) wires the real runner.
+ *  Absent ⇒ `check` reports it isn't available here. */
+export type RunCheck = () => Promise<IValidateResult>;
 
 /** One model-invoked delegation to a read-only specialist subagent (the
  *  `spawn_agent` tool). Wired by the CLI/session, which owns model resolution,
@@ -109,6 +118,9 @@ export interface IToolContext {
     base64: string;
     mimeType: string;
   }) => void;
+  /** Run the fast acceptance gate on demand for the `check` tool (see {@link RunCheck}).
+   *  Wired by the build overlay; absent ⇒ `check` says it isn't available here. */
+  runCheck?: RunCheck;
 }
 
 /** A required string arg, or "" if missing/wrong-type. */

@@ -60,6 +60,7 @@ import {
   GIT_CONTEXT_TOOL,
   READ_IMAGE_TOOL,
   GENERATE_IMAGE_TOOL,
+  CHECK_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
@@ -114,7 +115,8 @@ type AdvertisedTool =
   | typeof SCRIPT_TOOL
   | typeof GIT_CONTEXT_TOOL
   | typeof READ_IMAGE_TOOL
-  | typeof GENERATE_IMAGE_TOOL;
+  | typeof GENERATE_IMAGE_TOOL
+  | typeof CHECK_TOOL;
 
 /** Which extra capability backends are configured this run — decides whether the
  *  image tools are advertised. Resolved once by the driver (run.ts) so
@@ -166,12 +168,19 @@ function imageTools(caps: ICapabilityFlags): AdvertisedTool[] {
 export function toolsFor(
   hasExistingCode: boolean,
   caps: ICapabilityFlags = {},
-  offerConventions = false
+  offerConventions = false,
+  offerCheck = false
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
   const script = scriptTools();
   const image = imageTools(caps);
+
+  // check — the callable, structured acceptance gate. Offered ONLY when the caller
+  // wires a `runCheck` seam on the tool context (the boringstack build does); a
+  // plain scratch/logic task leaves it off so the base set stays minimal. Same
+  // per-backend opt-in shape as pull_conventions — decoupled from every flag.
+  const check: AdvertisedTool[] = offerCheck ? [CHECK_TOOL] : [];
 
   // pull_conventions — a read-only knowledge tool the model calls to fetch the
   // BoringStack how-to BEFORE writing that kind of code (the PULL complement to the
@@ -189,6 +198,7 @@ export function toolsFor(
       ...BASE_TOOLS,
       ...HASHLINE_TOOLS,
       ...conventions,
+      ...check,
       ...web,
       ...git,
       ...script,
@@ -201,6 +211,7 @@ export function toolsFor(
     ...BASE_TOOLS,
     ...HASHLINE_TOOLS,
     ...conventions,
+    ...check,
     ...LSP_TOOLS,
     ...web,
     ...git,
@@ -263,6 +274,10 @@ export interface ILoopCtxTool {
    *  destructive edit. Threaded into the tool context so `edit`/`edit_lines`
    *  enforce it; declared here so the seam is typed, not accidental. */
   editGuard?: IToolContext["editGuard"];
+  /** Optional callable-gate runner set by a build backend (WS-G): runs the gate on
+   *  demand for the `check` tool. Threaded into the tool context; declared here so
+   *  the seam is typed, not accidental. Absent ⇒ `check` isn't offered. */
+  runCheck?: IToolContext["runCheck"];
 }
 
 /** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */

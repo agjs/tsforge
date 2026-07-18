@@ -108,6 +108,19 @@ test("pull_conventions is offered per build BACKEND, not per flag", () => {
   expect(names(toolsFor(true, {}, true))).toContain("pull_conventions");
 });
 
+test("check is offered per build BACKEND (offerCheck), not by any flag", () => {
+  // WS-G: the callable structured gate. Off by default on every path (a plain
+  // eval/scratch task has no authoritative injected gate → a callable gate would
+  // answer vacuously). A build backend opts in via the 4th toolsFor arg. Web being
+  // on must NOT drag it in.
+  process.env.TSFORGE_WEB = "1";
+  expect(names(toolsFor(false))).not.toContain("check");
+  expect(names(toolsFor(true))).not.toContain("check");
+
+  expect(names(toolsFor(false, {}, false, true))).toContain("check");
+  expect(names(toolsFor(true, {}, false, true))).toContain("check");
+});
+
 test("the script tool is on by default for scratch and existing code", () => {
   expect(names(toolsFor(true))).toContain("script");
   expect(names(toolsFor(false))).toContain("script");

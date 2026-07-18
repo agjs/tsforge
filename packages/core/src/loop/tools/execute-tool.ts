@@ -13,6 +13,7 @@ import { doPackageInfo, doPackageDocs } from "./package-info";
 import { doScript } from "./script-tool";
 import { doSpawnAgent } from "./spawn-agent";
 import { doReadImage, doGenerateImage } from "./image-tools";
+import { doCheck } from "./check-tool";
 import { reject, type IToolContext } from "./tool-context";
 import {
   classifyAction,
@@ -58,6 +59,7 @@ const HANDLERS: Record<ToolName, ToolHandler> = {
   [TOOL_NAME.spawnAgent]: doSpawnAgent,
   [TOOL_NAME.readImage]: doReadImage,
   [TOOL_NAME.generateImage]: doGenerateImage,
+  [TOOL_NAME.check]: doCheck,
 };
 
 function isToolName(name: string): name is ToolName {

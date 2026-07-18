@@ -444,11 +444,16 @@ const MUTATING_TOOLS = new Set<string>([
 // script = runs a program whose tool calls (incl. edit/create) re-enter
 // executeTool and report their OWN mutations, so the script call itself accounts
 // for nothing; generate_image writes ONLY to the .tsforge/images artifact dir
-// (not gated source) and reports no mutation, so it triggers no re-gate.
+// (not gated source) and reports no mutation, so it triggers no re-gate;
+// check = runs the acceptance gate on demand (WS-G). The gate's autofix may
+// reformat files, but check reports NO scoped mutation and returns the errors as
+// its result — the loop does not re-gate off it. Not plan-mode-safe (readOnly:false)
+// because that autofix touches source, so it's special-with-reason, not read-only.
 const SPECIAL_TOOLS = new Set<string>([
   TOOL_NAME.run,
   TOOL_NAME.script,
   TOOL_NAME.generateImage,
+  TOOL_NAME.check,
 ]);
 
 test("every registered tool is classified read-only, mutating, or special", () => {

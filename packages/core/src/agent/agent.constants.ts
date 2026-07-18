@@ -33,6 +33,7 @@ export const TOOL_NAME = {
   spawnAgent: "spawn_agent",
   readImage: "read_image",
   generateImage: "generate_image",
+  check: "check",
 } as const;
 
 /** Per-tool capability flags — the single source of truth the plan-mode set and
@@ -91,6 +92,10 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   // backend (see toolsFor). Not script-exposable initially (network + I/O heavy).
   [TOOL_NAME.readImage]: { readOnly: true, scriptExposable: false },
   [TOOL_NAME.generateImage]: { readOnly: false, scriptExposable: false },
+  // `check` runs the gate, which applies the workspace's deterministic auto-fixes
+  // (prettier / eslint --fix) — so it can mutate → NOT plan-mode-safe. Not script-
+  // exposable: the gate is heavy and already runs at end-of-turn.
+  [TOOL_NAME.check]: { readOnly: false, scriptExposable: false },
 };
 
 function toolNamesWhere(
@@ -676,6 +681,19 @@ export const GENERATE_IMAGE_TOOL = {
     },
   },
 };
+
+export const CHECK_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.check,
+    description:
+      "Run the fast acceptance gate NOW and get back ALL current errors as structured JSON ({file, line, rule, message}). Call it before you stop — see and fix your whole error set in ONE pass instead of discovering errors one at a time on later turns. Takes no arguments. Returns {passed:true} when clean.",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+} as const;
 
 /**
  * The model-invoked delegation tool (like Claude Code's Task tool). The

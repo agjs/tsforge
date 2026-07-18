@@ -251,6 +251,11 @@ async function driveBuild(
     // BoringStack ships a convention library — offer pull_conventions so the model
     // can fetch its how-to patterns on demand (decoupled from any flag).
     pullConventions: true,
+    // WS-G: offer the callable, structured `check` tool. The per-slice gate is
+    // injected via setGate inside runBoringstackBuild, and check runs THAT gate on
+    // demand — so the model sees its whole error set mid-turn (fix all in one pass)
+    // instead of discovering them one-per-turn after it stops.
+    offerCheck: true,
     // BoringStack overlay: veto deletion of a feature translation key the model
     // authored earlier this build (its lazy "clear the unused-key check" shortcut
     // that ships a hollow app). Stateful → one instance per build.
