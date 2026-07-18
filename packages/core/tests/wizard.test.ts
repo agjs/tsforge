@@ -392,3 +392,217 @@ describe("wizardOwnsRawMode: raw-mode ownership rule", () => {
     expect(wizardOwnsRawMode(true, true, false, 0)).toBe(false);
   });
 });
+
+describe("conditional step visibility (visibleWhen)", () => {
+  // A: an enable toggle ("1"/"0"). B: shown only when A === "1". C: always shown.
+  const COND: IWizardStep[] = [
+    {
+      key: "A",
+      kind: "single",
+      title: "Enable cache",
+      explanation: "on?",
+      evidence: [],
+      options: [
+        { label: "Enabled", value: "1" },
+        { label: "Disabled", value: "0" },
+      ],
+      defaultIndex: 0,
+    },
+    {
+      key: "B",
+      kind: "single",
+      title: "Cache provider",
+      explanation: "which?",
+      evidence: [],
+      options: [
+        { label: "memory", value: "memory" },
+        { label: "valkey", value: "valkey" },
+      ],
+      defaultIndex: 1,
+      visibleWhen: (s) => s.single.A === "1",
+    },
+    {
+      key: "C",
+      kind: "single",
+      title: "Notifications",
+      explanation: "on?",
+      evidence: [],
+      options: [
+        { label: "Enabled", value: "1" },
+        { label: "Disabled", value: "0" },
+      ],
+      defaultIndex: 0,
+    },
+  ];
+
+  test("confirming the gate ON shows the dependent step next", () => {
+    let s = initWizard(COND);
+
+    expect(s.stepIndex).toBe(0); // A is visible from the start
+    // cursor already on "Enabled" (index 0) → confirm keeps A="1".
+    s = reduceWizard(s, "confirm", COND);
+    expect(s.stepIndex).toBe(1); // B is shown because A === "1"
+  });
+
+  test("confirming the gate OFF skips the dependent step", () => {
+    let s = initWizard(COND);
+
+    s = reduceWizard(s, "down", COND); // move cursor to "Disabled"
+    s = reduceWizard(s, "confirm", COND); // A = "0"
+    expect(s.single.A).toBe("0");
+    expect(s.stepIndex).toBe(2); // jumped over B straight to C
+  });
+
+  test("going back from C skips the hidden dependent step", () => {
+    let s = initWizard(COND);
+
+    s = reduceWizard(s, "down", COND);
+    s = reduceWizard(s, "confirm", COND); // A="0", now on C (index 2)
+    expect(s.stepIndex).toBe(2);
+    s = reduceWizard(s, "back", COND); // back must skip hidden B → A
+    expect(s.stepIndex).toBe(0);
+  });
+
+  test("the review overview omits a hidden step", () => {
+    let s = initWizard(COND);
+
+    s = reduceWizard(s, "down", COND);
+    s = reduceWizard(s, "confirm", COND); // A="0" → B hidden
+    s = reduceWizard(s, "confirm", COND); // confirm C → overview
+    const frame = renderFrame(s, COND, false);
+
+    expect(frame).toContain("Enable cache");
+    expect(frame).toContain("Notifications");
+    expect(frame).not.toContain("Cache provider"); // hidden B absent from review
+  });
+
+  test('"Step X of N" reflects the visible count, not the raw index', () => {
+    let s = initWizard(COND);
+
+    s = reduceWizard(s, "down", COND);
+    s = reduceWizard(s, "confirm", COND); // A="0" → only A and C are visible
+    // Now on C: it is the 2nd (and last) visible step of 2.
+    expect(renderFrame(s, COND, false)).toContain("Step 2 of 2");
+  });
+
+  test('"Step X of N" counts a default-ON gate\'s dependent before it is confirmed', () => {
+    // A defaults to "Enabled" (index 0 = "1"), so B is visible on the default path.
+    // On step A (unanswered yet), the total must already be 3 — not 2 that jumps to 3.
+    const s = initWizard(COND);
+
+    expect(s.stepIndex).toBe(0);
+    expect(renderFrame(s, COND, false)).toContain("Step 1 of 3");
+  });
+
+  test("review:false applies immediately when every remaining step is hidden", () => {
+    const steps: IWizardStep[] = [
+      {
+        key: "a",
+        kind: "single",
+        title: "A",
+        explanation: "",
+        evidence: [],
+        options: [{ label: "x", value: "x" }],
+        defaultIndex: 0,
+      },
+      {
+        key: "b",
+        kind: "single",
+        title: "B",
+        explanation: "",
+        evidence: [],
+        options: [{ label: "y", value: "y" }],
+        defaultIndex: 0,
+        visibleWhen: () => false, // never shown
+      },
+    ];
+    let s = initWizard(steps); // on A (index 0)
+
+    expect(s.stepIndex).toBe(0);
+    // Confirming A with review off: the only remaining step (B) is hidden, so the
+    // wizard applies immediately instead of stopping on a hidden step.
+    s = reduceWizard(s, "confirm", steps, { review: false });
+    expect(s.status).toBe("apply");
+  });
+
+  test("overview back cancels when every step is hidden (no dead-end)", () => {
+    const allHidden: IWizardStep[] = [
+      {
+        key: "x",
+        kind: "single",
+        title: "X",
+        explanation: "",
+        evidence: [],
+        options: [{ label: "a", value: "a" }],
+        defaultIndex: 0,
+        visibleWhen: () => false,
+      },
+    ];
+    let s = initWizard(allHidden);
+
+    expect(s.stepIndex).toBe(allHidden.length); // straight to the overview
+    s = reduceWizard(s, "back", allHidden);
+    expect(s.status).toBe("cancel");
+  });
+
+  test("review ON: a step whose gate is on still shows the dependent in the overview", () => {
+    let s = initWizard(COND);
+
+    s = reduceWizard(s, "confirm", COND); // A="1" → B visible, now on B
+    s = reduceWizard(s, "confirm", COND); // confirm B (valkey default)
+    s = reduceWizard(s, "confirm", COND); // confirm C → overview
+    const frame = renderFrame(s, COND, false);
+
+    expect(frame).toContain("Cache provider");
+    expect(frame).toContain("valkey"); // its chosen value appears in the review
+  });
+
+  test("initWizard lands on the first VISIBLE step when step 0 is initially hidden", () => {
+    const steps: IWizardStep[] = [
+      {
+        key: "hidden",
+        kind: "single",
+        title: "Never shown",
+        explanation: "",
+        evidence: [],
+        options: [{ label: "x", value: "x" }],
+        defaultIndex: 0,
+        visibleWhen: () => false,
+      },
+      {
+        key: "shown",
+        kind: "single",
+        title: "First visible",
+        explanation: "",
+        evidence: [],
+        options: [{ label: "y", value: "y" }],
+        defaultIndex: 0,
+      },
+    ];
+    const s = initWizard(steps);
+
+    expect(s.stepIndex).toBe(1);
+  });
+
+  test("answering a dependent then flipping the gate off re-hides it (review omits it; engine keeps the raw value for the projection layer to drop)", () => {
+    let s = initWizard(COND);
+
+    s = reduceWizard(s, "confirm", COND); // A="1" → on B
+    s = reduceWizard(s, "confirm", COND); // B="valkey" (default) → on C
+    s = reduceWizard(s, "back", COND); // back to B (still visible, A="1")
+    expect(s.stepIndex).toBe(1);
+    s = reduceWizard(s, "back", COND); // back to A
+    expect(s.stepIndex).toBe(0);
+    s = reduceWizard(s, "down", COND); // cursor → Disabled
+    s = reduceWizard(s, "confirm", COND); // A="0" → B now hidden, skip to C
+    expect(s.stepIndex).toBe(2);
+    s = reduceWizard(s, "confirm", COND); // confirm C → overview
+
+    const frame = renderFrame(s, COND, false);
+
+    expect(frame).not.toContain("Cache provider"); // hidden B omitted from review
+    // The engine intentionally does NOT clear B's recorded value; dropping the
+    // stale answer is the projection layer's job (scaffold stateToAnswers).
+    expect(s.single.B).toBe("valkey");
+  });
+});

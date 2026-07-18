@@ -101,9 +101,51 @@ function multiStep(field: IConfigField, stack: IStack): IWizardStep {
   };
 }
 
+/** Build a step visibility predicate from a field's `askWhen` token ("KEY=value").
+ *  The wizard records toggles as "1"/"0", so a field gated on a toggle uses `KEY=1`.
+ *  Absent or malformed → undefined (the step is always shown). */
+function visibleWhenFor(
+  askWhen: string | undefined
+): ((state: IWizardState) => boolean) | undefined {
+  if (askWhen === undefined) {
+    return undefined;
+  }
+
+  // Split on the FIRST "=" only, so a value is never silently truncated. Require a
+  // non-empty key AND value ("=v" / "KEY=" are malformed). parseManifest already
+  // rejects these loudly; this stays defensive for any direct caller.
+  const eq = askWhen.indexOf("=");
+
+  if (eq <= 0) {
+    return undefined;
+  }
+
+  const key = askWhen.slice(0, eq);
+  const value = askWhen.slice(eq + 1);
+
+  if (value.length === 0) {
+    return undefined;
+  }
+
+  return (state) => state.single[key] === value;
+}
+
+function stepFor(field: IConfigField, stack: IStack): IWizardStep {
+  if (field.kind === "toggle") {
+    return toggleStep(field, stack);
+  }
+
+  if (field.kind === "multi") {
+    return multiStep(field, stack);
+  }
+
+  return oneOfStep(field, stack);
+}
+
 /** Generate the wizard steps for an archetype from the manifest. Astro takes no
  *  further config (static site, no env); boringstack yields one select step per
- *  selectable field, in manifest order. Pure — driven/tested via render/wizard. */
+ *  selectable field, in manifest order. A field with `askWhen` becomes a step that
+ *  the wizard skips unless the gate matches. Pure — driven/tested via render/wizard. */
 export function buildScaffoldSteps(
   manifest: IScaffoldManifest,
   archetype: IArchetype,
@@ -114,21 +156,35 @@ export function buildScaffoldSteps(
   }
 
   return manifest.fields.filter(isSelectable).map((field) => {
-    if (field.kind === "toggle") {
-      return toggleStep(field, stack);
-    }
+    const step = stepFor(field, stack);
+    const visibleWhen = visibleWhenFor(field.askWhen);
 
-    if (field.kind === "multi") {
-      return multiStep(field, stack);
-    }
-
-    return oneOfStep(field, stack);
+    return visibleWhen === undefined ? step : { ...step, visibleWhen };
   });
 }
 
+/** Keys whose step is hidden for the given state (gate answered off). A hidden
+ *  field must NOT contribute an answer — even if it was visited earlier and then
+ *  hidden by flipping its gate back — so a later disable can't leave a stale value
+ *  that the review never showed. Recomputed from the same askWhen→visibleWhen path
+ *  buildScaffoldSteps uses, so projection and navigation agree on visibility. */
+function hiddenKeys(
+  manifest: IScaffoldManifest,
+  archetype: IArchetype,
+  stack: IStack,
+  state: IWizardState
+): ReadonlySet<string> {
+  return new Set(
+    buildScaffoldSteps(manifest, archetype, stack)
+      .filter((s) => s.visibleWhen !== undefined && !s.visibleWhen(state))
+      .map((s) => s.key)
+  );
+}
+
 /** Read a finished (or partial) wizard state back into scaffold answers. Missing
- *  selections are simply absent — the planner falls back to the stack default for
- *  any unanswered field, so this is safe on an un-driven state too. */
+ *  selections — and any field whose gate is off (see hiddenKeys) — are simply
+ *  absent, so the planner falls back to the stack default. Safe on an un-driven
+ *  state too. */
 export function stateToAnswers(
   manifest: IScaffoldManifest,
   archetype: IArchetype,
@@ -138,7 +194,13 @@ export function stateToAnswers(
   const values: Record<string, string | readonly string[]> = {};
 
   if (archetype === "boringstack") {
+    const hidden = hiddenKeys(manifest, archetype, stack, state);
+
     for (const field of manifest.fields.filter(isSelectable)) {
+      if (hidden.has(field.key)) {
+        continue; // gate is off — no answer, planner uses the default
+      }
+
       if (field.kind === "multi") {
         const idxs = state.multi[field.key] ?? [];
         const opts = field.options ?? [];
