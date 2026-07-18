@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
-import { buildCapabilities } from "../src/cli/capabilities";
+import {
+  buildCapabilities,
+  COMMAND_WIZARD_HOME,
+} from "../src/cli/capabilities";
 import { COMMANDS } from "../src/cli/commands";
 
 const deps = { hasRecipes: true };
@@ -31,6 +34,12 @@ test("ANTI-DRIFT: every slash command has a discovery home", () => {
           : ""
       )
   );
+  // A command whose home is a wizard row is covered iff that wizard capability exists.
+  const wizardOpeners = new Set(
+    caps
+      .filter((c) => c.invoke?.type === "wizard")
+      .map((c) => (c.invoke?.type === "wizard" ? c.invoke.opener : ""))
+  );
   // Commands intentionally excluded from the browser (they ARE the browser / trivial).
   const exempt = new Set(["/help", "/exit"]);
 
@@ -39,8 +48,32 @@ test("ANTI-DRIFT: every slash command has a discovery home", () => {
       continue;
     }
 
-    expect(covered.has(spec.name)).toBe(true);
+    const wizardHome = COMMAND_WIZARD_HOME[spec.name];
+    const hasHome =
+      covered.has(spec.name) ||
+      (wizardHome !== undefined && wizardOpeners.has(wizardHome));
+
+    expect(hasHome).toBe(true);
   }
+});
+
+test("ANTI-DRIFT: /scaffold has a WIZARD home, never a fire-and-forget command row", () => {
+  const caps = buildCapabilities(deps);
+
+  // No generated command row for /scaffold (that path uses `void runLine` from the
+  // browser, which races the wizard for stdin). Its home is the scaffold wizard row.
+  const runRows = caps.filter(
+    (c) =>
+      (c.invoke?.type === "run" || c.invoke?.type === "prefill") &&
+      c.invoke.command === "/scaffold"
+  );
+
+  expect(runRows).toHaveLength(0);
+  expect(
+    caps.some(
+      (c) => c.invoke?.type === "wizard" && c.invoke.opener === "scaffold"
+    )
+  ).toBe(true);
 });
 
 test("recipe row is present only when recipes exist", () => {

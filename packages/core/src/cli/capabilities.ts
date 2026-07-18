@@ -28,6 +28,19 @@ const SESSION_AND_COST = "Session & cost";
 
 // ── Command group mapping ────────────────────────────────────────────────────
 
+// Slash commands whose discovery home in the browser is a WIZARD row, not a
+// generated command row. `/scaffold` opens the scaffold wizard: the browser must
+// route it through the awaited wizard path (`openWizard`), never a fire-and-forget
+// `void runLine`, or the wizard and the editor both consume stdin (the double-typed
+// -text failure). So it gets NO command-capability row here — the "Build something
+// new" wizard row (below) is its single browser home. It stays in COMMANDS for the
+// `/help` text, the `/` palette, and typed dispatch (all of which are already safe).
+export const COMMAND_WIZARD_HOME: Readonly<
+  Record<string, "scaffold" | "recipe">
+> = {
+  "/scaffold": "scaffold",
+};
+
 const COMMAND_TO_GROUP: Readonly<Record<string, string>> = {
   "/review": UNDERSTAND_YOUR_CODE,
   "/map": UNDERSTAND_YOUR_CODE,
@@ -53,7 +66,11 @@ function commandCapabilities(): ICapability[] {
   const capabilities: ICapability[] = [];
 
   for (const spec of COMMANDS) {
-    if (exempt.has(spec.name)) {
+    // Skip the browser-exempt commands and any command whose home is a wizard row.
+    if (
+      exempt.has(spec.name) ||
+      Object.hasOwn(COMMAND_WIZARD_HOME, spec.name)
+    ) {
       continue;
     }
 
