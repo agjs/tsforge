@@ -365,7 +365,7 @@ describe("refinePrompt", () => {
     expect(p).toContain("Bookmark");
   });
 
-  it("teaches the result-object error idiom: check `error` and throw, never ignore it", () => {
+  it("teaches the THROWING-client error idiom: never check `error` (it is typed undefined)", () => {
     const p = refinePrompt({
       id: "Invoice",
       desc: "Customer billing record",
@@ -373,12 +373,18 @@ describe("refinePrompt", () => {
       attempts: 0,
     });
 
-    // The typed api-client returns { data, error } and does NOT throw on 4xx/5xx —
-    // both queries and mutations must check `error` and throw so React Query behaves.
-    expect(p).toContain("if (error) throw error");
-    expect(p).toContain("does NOT throw");
-    // The old, wrong instruction must be gone (it caused silent-undefined + onSuccess-on-error).
-    expect(p).not.toContain("never check `response.error`");
+    // The boringstack client's throwOnError middleware THROWS on non-2xx and types
+    // `error` as undefined — so mutations/queries must just read `data`, never guard
+    // `error`. The prompt names the old "if (error) throw error" idiom only to forbid
+    // it (calling it a DEAD no-unnecessary-condition / only-throw-error).
+    expect(p).toContain("throwOnError");
+    expect(p).toContain(
+      "const { data } = await apiClient.POST(…); return data;"
+    );
+    expect(p).toContain("no-unnecessary-condition");
+    expect(p).toContain("only-throw-error");
+    // The wrong "does NOT throw" framing must be gone.
+    expect(p).not.toContain("does NOT throw");
   });
 
   it("forces an ownership-isolation test so the userId security clause is verified, not just prose", () => {
