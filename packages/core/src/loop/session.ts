@@ -603,7 +603,9 @@ function systemPrompt(
  *  `toolsFor` now advertises — so a resumed build can never carry a prompt that requires
  *  or advertises a tool the session no longer exposes (the flag↔prompt invariant, both
  *  directions). Only the LEADING system message is replaced; a LATER persisted system
- *  instruction (delegation, scope notes) is preserved. */
+ *  instruction (delegation, scope notes) is preserved. This assumes `history[0]` is the
+ *  generated base prompt — true for every caller here, since `create` always seeds it
+ *  with `systemPrompt(cfg)` and later system text is APPENDED, never prepended. */
 function resumeMessages(
   cfg: ISessionConfig,
   freshSystem: string

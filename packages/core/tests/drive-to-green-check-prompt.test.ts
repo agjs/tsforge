@@ -43,6 +43,7 @@ test("offerCheck defaults to false (non-build drive-to-green paths unchanged)", 
 function systemCapturingProvider(cap: {
   system: string;
   roles?: string[];
+  contents?: string[];
 }): IProvider {
   return {
     async complete(messages: IChatMessage[]) {
@@ -50,6 +51,9 @@ function systemCapturingProvider(cap: {
 
       cap.system = typeof sys?.content === "string" ? sys.content : "";
       cap.roles = messages.map((m) => m.role);
+      cap.contents = messages.map((m) =>
+        typeof m.content === "string" ? m.content : ""
+      );
 
       return { content: "done", toolCalls: [] };
     },
@@ -176,8 +180,8 @@ test("a resumed pullConventions session (no offerCheck) refreshes to include the
   ];
 
   try {
-    // pullConventions only — NO offerCheck. Locks the `|| cfg.pullConventions` arm:
-    // deleting it would leave the stale prompt (no convention index) on resume.
+    // pullConventions only — NO offerCheck. The unconditional resume refresh must still
+    // rebuild the prompt so the convention index appears in place of the stale one.
     const session = await Session.create({
       provider: systemCapturingProvider(cap),
       cwd: dir,
@@ -199,7 +203,9 @@ test("a resumed pullConventions session (no offerCheck) refreshes to include the
 
 test("resume refresh preserves a LATER system message (delegation/scope), replacing only the leading one", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-dtg-"));
-  const cap: { system: string; roles?: string[] } = { system: "" };
+  const cap: { system: string; roles?: string[]; contents?: string[] } = {
+    system: "",
+  };
 
   const laterSystem = "DELEGATION: keep this later system instruction intact.";
   const history = [
@@ -221,7 +227,8 @@ test("resume refresh preserves a LATER system message (delegation/scope), replac
 
     await session.send("continue");
 
-    // The LEADING base prompt is replaced; the later system message is NOT dropped.
+    // The LEADING base prompt is replaced; the later system message is NOT dropped —
+    // and its CONTENT survives verbatim (a role-only check would pass if it were cleared).
     expect(cap.system).not.toContain("OLD PROMPT");
     expect(cap.roles).toEqual([
       "system",
@@ -230,6 +237,7 @@ test("resume refresh preserves a LATER system message (delegation/scope), replac
       "assistant",
       "user",
     ]);
+    expect(cap.contents).toContain(laterSystem);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
