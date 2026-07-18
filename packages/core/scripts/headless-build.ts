@@ -14,7 +14,7 @@ import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { Session, LOOP_LIMITS, type Reporter } from "../src/loop";
 import { runBoringstackBuild } from "../src/loop/boringstack/build";
-import { makeBoringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
+import { makeBoringstackBuildGuard } from "../src/loop/boringstack/dual-extension-guard";
 import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
 import { renderEvent } from "../src/render";
@@ -251,10 +251,11 @@ async function driveBuild(
     // BoringStack ships a convention library — offer pull_conventions so the model
     // can fetch its how-to patterns on demand (decoupled from any flag).
     pullConventions: true,
-    // BoringStack overlay: veto deletion of a feature translation key the model
-    // authored earlier this build (its lazy "clear the unused-key check" shortcut
-    // that ships a hollow app). Stateful → one instance per build.
-    editGuard: makeBoringstackEditGuard(),
+    // BoringStack overlays (composed, see makeBoringstackBuildGuard): (1) veto
+    // deletion of a feature translation key the model authored earlier this build;
+    // (2) veto creating a same-basename .test.ts + .test.tsx twin that orphans the
+    // .tsx from the TS program and wedges the type-aware lint for the whole app.
+    editGuard: makeBoringstackBuildGuard(dir),
     report,
   });
 

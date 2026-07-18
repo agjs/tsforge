@@ -55,6 +55,24 @@ export function guardVeto(
     : ctx.editGuard(file, before, after);
 }
 
+/** Combine several edit guards into one: run them in order and return the FIRST
+ *  veto (short-circuit), or null if all accept. Lets a stack overlay stack multiple
+ *  independent rules (e.g. boringstack's i18n-deletion guard AND its dual-extension
+ *  guard) into the single `editGuard` slot without either knowing about the other. */
+export function composeGuards(...guards: readonly EditGuard[]): EditGuard {
+  return (file, before, after) => {
+    for (const guard of guards) {
+      const veto = guard(file, before, after);
+
+      if (veto !== null) {
+        return veto;
+      }
+    }
+
+    return null;
+  };
+}
+
 export interface IToolContext {
   cwd: string;
   /** Editable scope — `edit`/`create` outside it are rejected. */
