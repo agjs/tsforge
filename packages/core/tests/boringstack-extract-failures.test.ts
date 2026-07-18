@@ -129,6 +129,37 @@ ${cwd}/apps/api/src/api/b/b.ts
     expect(sigs.size).toBe(2);
   });
 
+  test("collapses a parserOptions.project parse-error cascade to ONE signature (one broken file, not N regressions)", () => {
+    // When ONE file has a real syntax error, the type-aware ESLint program fails to
+    // build and reports a `parserOptions.project` parse error on EVERY other .tsx.
+    // Counting each as a distinct error inflates a near-green build 1→N and makes the
+    // oscillation logic thrash. The cascade must collapse to one signature; the REAL
+    // syntax error stays distinct so the model knows which file to rewrite.
+    const cwd = "/tmp/clone";
+    const out = `${cwd}/apps/ui/src/features/ticket/Ticket.mutations.test.tsx
+  12:3  error  Parsing error: '}' expected
+${cwd}/apps/ui/src/features/ticket/Ticket.queries.test.tsx
+  1:1  error  Parsing error: ESLint was configured to run on \`<tsconfigRootDir>/src/features/ticket/Ticket.queries.test.tsx\` using \`parserOptions.project\`: tsconfig.json
+${cwd}/apps/ui/src/features/ticket/Ticket.hooks.ts
+  1:1  error  Parsing error: ESLint was configured to run on \`<tsconfigRootDir>/src/features/ticket/Ticket.hooks.ts\` using \`parserOptions.project\`: tsconfig.json
+${cwd}/apps/ui/src/features/ticket/TicketPage.tsx
+  1:1  error  Parsing error: ESLint was configured to run on \`<tsconfigRootDir>/src/features/ticket/TicketPage.tsx\` using \`parserOptions.project\`: tsconfig.json`;
+    const sigs = extractFailures(out, cwd);
+
+    // The three parserOptions.project cascade errors collapse to ONE token...
+    expect(sigs.has("eslint-program-unparsable")).toBe(true);
+    // ...the real syntax error stays its own located signature...
+    expect(
+      [...sigs].some((s) =>
+        s.startsWith(
+          "failure:apps%2Fui%2Fsrc%2Ffeatures%2Fticket%2FTicket.mutations.test.tsx:12:syntax"
+        )
+      )
+    ).toBe(true);
+    // ...so the count is 2 (broken program + the real break), NOT 4.
+    expect(sigs.size).toBe(2);
+  });
+
   test("two single-line eslint errors in ONE file stay separate (a following error is a boundary, never fused)", () => {
     // The exact hole the conservative join must close: a bare CORE-rule error (no
     // slash in its id) is not "complete" under the terminator check, so it must NOT
