@@ -25,6 +25,26 @@ function toStruct(e: IErrorItem): ICheckError {
   };
 }
 
+/** Cap raw gate output to its last {@link MAX_OUTPUT_CHARS} chars — the TAIL, where
+ *  a crash's actionable error usually sits — and disclose the cut (`outputTruncated`
+ *  + `outputOmittedChars`) so a cut-off log never reads as the whole failure
+ *  (no-silent-truncation house rule). Under the cap ⇒ just `{output}`. */
+function capOutput(output: string): {
+  output: string;
+  outputTruncated?: true;
+  outputOmittedChars?: number;
+} {
+  if (output.length <= MAX_OUTPUT_CHARS) {
+    return { output };
+  }
+
+  return {
+    output: output.slice(output.length - MAX_OUTPUT_CHARS),
+    outputTruncated: true,
+    outputOmittedChars: output.length - MAX_OUTPUT_CHARS,
+  };
+}
+
 /** Drop duplicate diagnostics by their stable `key` (same file/line/rule), keeping
  *  first-seen order — repeated `check` calls and dual-format gate output stay clean. */
 function dedupe(errors: readonly IErrorItem[]): IErrorItem[] {
@@ -84,10 +104,11 @@ export async function doCheck(
 
   // A gate can fail with NO parseable errors (a command crashed in an unrecognized
   // format). Empty `errors` would leave the model blind, so surface the raw output
-  // (capped) as the only diagnostic it has.
+  // as the only diagnostic it has — keeping the TAIL (a crash's actionable error is
+  // usually last) and DISCLOSING the cut, per the no-silent-truncation house rule.
   const rawOutput =
     deduped.length === 0 && result.output.trim().length > 0
-      ? { output: result.output.slice(0, MAX_OUTPUT_CHARS) }
+      ? capOutput(result.output)
       : {};
 
   return JSON.stringify({

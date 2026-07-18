@@ -164,3 +164,35 @@ test("doCheck does NOT dump raw output when structured errors are present", asyn
   expect(out).not.toContain("output");
   expect(out).not.toContain("noisy full gate log");
 });
+
+test("doCheck discloses the output cap (tail kept, omitted count) — no silent truncation", async () => {
+  // Failure detail is usually LAST, so the tail must survive and the cut be disclosed.
+  const head = "x".repeat(5000);
+  const tail = "FATAL: the real error is here";
+  const out = await doCheck(
+    {},
+    ctxWith(async () => result([], { passed: false, output: head + tail }))
+  );
+
+  const parsed = JSON.parse(out);
+
+  expect(parsed.outputTruncated).toBe(true);
+  expect(parsed.outputOmittedChars).toBe(head.length + tail.length - 4000);
+  expect(parsed.output).toContain("FATAL: the real error is here");
+  expect(parsed.output.length).toBe(4000);
+});
+
+test("doCheck does NOT mark truncation when output fits under the cap", async () => {
+  const out = await doCheck(
+    {},
+    ctxWith(async () =>
+      result([], { passed: false, output: "short crash log" })
+    )
+  );
+
+  const parsed = JSON.parse(out);
+
+  expect(parsed.output).toBe("short crash log");
+  expect(parsed.outputTruncated).toBeUndefined();
+  expect(parsed.outputOmittedChars).toBeUndefined();
+});

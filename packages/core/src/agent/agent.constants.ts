@@ -687,7 +687,7 @@ export const CHECK_TOOL = {
   function: {
     name: TOOL_NAME.check,
     description:
-      "Run the fast acceptance gate NOW and get back ALL current errors as structured JSON ({file, line, rule, message}). Call it before you stop — see and fix your whole error set in ONE pass instead of discovering errors one at a time on later turns. Takes no arguments. Returns {passed:true} when clean.",
+      "Run the fast acceptance gate NOW and get back ALL current errors as structured JSON ({file, line, rule, message}). Call it before you stop — see and fix your whole error set in ONE pass instead of discovering errors one at a time on later turns. Takes no arguments. Returns {passed:true} when clean. If the result has an `autoFixed` list, the gate reformatted those files on disk this run — RE-READ them before your next edit (their content and line anchors changed); do NOT redo that formatting by hand.",
     parameters: {
       type: "object",
       properties: {},

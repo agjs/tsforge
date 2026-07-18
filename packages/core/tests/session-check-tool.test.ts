@@ -231,3 +231,63 @@ test("check goes RED on a META_RULE error even when the gate command is GREEN (t
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+/** Captures the tool NAMES the Session advertised to the model (opts.tools), then
+ *  ends cleanly. Proves offerCheck actually reaches the advertised schema — not just
+ *  that a forced check call happens to dispatch. */
+function toolNameCapturingProvider(captured: { names: string[] }): IProvider {
+  return {
+    async complete(_messages, opts) {
+      const tools = Array.isArray(opts?.tools) ? opts.tools : [];
+
+      captured.names = tools.flatMap((t) => {
+        const name = (t as { function?: { name?: unknown } }).function?.name;
+
+        return typeof name === "string" ? [name] : [];
+      });
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+}
+
+test("offerCheck:true makes the Session ADVERTISE check to the model", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-check-"));
+  const captured = { names: [] as string[] };
+
+  try {
+    const session = await Session.create({
+      provider: toolNameCapturingProvider(captured),
+      cwd: dir,
+      files: ["**/*"],
+      offerCheck: true,
+      gate: fixedGate(GREEN),
+    });
+
+    await session.send("go");
+
+    expect(captured.names).toContain("check");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("without offerCheck the Session does NOT advertise check (the tool is un-discoverable)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-check-"));
+  const captured = { names: [] as string[] };
+
+  try {
+    const session = await Session.create({
+      provider: toolNameCapturingProvider(captured),
+      cwd: dir,
+      files: ["**/*"],
+      gate: fixedGate(GREEN),
+    });
+
+    await session.send("go");
+
+    expect(captured.names).not.toContain("check");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

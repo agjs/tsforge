@@ -14,6 +14,7 @@ import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { Session, LOOP_LIMITS, type Reporter } from "../src/loop";
 import { runBoringstackBuild } from "../src/loop/boringstack/build";
+import { BORINGSTACK_BUILD_SESSION } from "../src/loop/boringstack/build-config";
 import { makeBoringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
 import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
@@ -238,24 +239,10 @@ async function driveBuild(
     files: ["**/*"],
     contextWindow,
     maxTurns: LOOP_LIMITS.webMaxTurns,
-    // Autonomous build → the strict expert-TS implement contract is in force from the
-    // first token (not the soft chat prompt), and the per-write eslint moat is wired
-    // from the detected stack so `as`/`!`/`any` surface as the file is written.
-    executionMode: "drive-to-green",
-    guidance:
-      "You are filling in ONE BoringStack resource at a time. The API resource " +
-      "files (schemas/service/types) and its UI feature are already generated and " +
-      "wired; edit ONLY the files named in the task, add real domain fields + logic " +
-      "(never an `as` cast), and write the required test siblings. Everything else " +
-      "is locked.",
-    // BoringStack ships a convention library — offer pull_conventions so the model
-    // can fetch its how-to patterns on demand (decoupled from any flag).
-    pullConventions: true,
-    // WS-G: offer the callable, structured `check` tool. The per-slice gate is
-    // injected via setGate inside runBoringstackBuild, and check runs THAT gate on
-    // demand — so the model sees its whole error set mid-turn (fix all in one pass)
-    // instead of discovering them one-per-turn after it stops.
-    offerCheck: true,
+    // The BoringStack build's fixed Session flags (drive-to-green, guidance,
+    // pull_conventions, offer the `check` tool) — extracted + unit-tested so a
+    // dropped flag can't silently un-offer a tool. See build-config.ts.
+    ...BORINGSTACK_BUILD_SESSION,
     // BoringStack overlay: veto deletion of a feature translation key the model
     // authored earlier this build (its lazy "clear the unused-key check" shortcut
     // that ships a hollow app). Stateful → one instance per build.
