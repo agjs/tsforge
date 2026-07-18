@@ -77,14 +77,17 @@ export type ExecutionMode = "chat" | "drive-to-green";
  * constitution as {@link buildSystem} (it reuses {@link gateRulesSentence}, the one
  * source of the hard rules), but build-tuned: inspect the target + one existing
  * sibling that already does the unfamiliar pattern BEFORE writing it (so the model
- * copies the real client/service/hook shape instead of inventing it), make progress
- * via edits + tiny probes, and NEVER self-run the full gate — the harness owns it.
- * That single command policy also resolves the old chat-prompt "run tsc/tests"
- * contradiction that made the model burn turns self-linting.
+ * copies the real client/service/hook shape instead of inventing it), and make
+ * progress via edits + tiny probes. Gate policy depends on `offerCheck`: WITHOUT it
+ * the harness owns the gate (never self-run it via the shell); WITH it (WS-G) the
+ * model MUST run the gate mid-turn via the `check` tool, while shell gate commands
+ * stay banned. Either way, the old chat-prompt "run tsc/tests" contradiction that
+ * made the model burn turns self-linting is resolved.
  */
 export function buildDriveToGreenSystem(
   conventions: IConventions,
-  offerCheck = false
+  offerCheck = false,
+  offerConventions = false
 ): string {
   const lookupLine = flags.webTools()
     ? "When a blocker is a FRAMEWORK's behavior or types (not your own logic) — e.g. why an Elysia route loses its schema types — LOOK IT UP instead of reasoning in circles: `package_docs`/`package_info` read the installed package's own types + README (no network), and `web_search`/`web_fetch` reach its online docs. Two lookups beat ten turns of guessing."
@@ -98,9 +101,25 @@ export function buildDriveToGreenSystem(
     ? "After every edit the harness runs the gate automatically — AND you can run it yourself any time with the `check` tool, which returns your WHOLE structured error set (`{file,line,rule,message}`) mid-turn. Call `check` before you stop and fix every error it lists in ONE pass, then `check` again; `passed:true` means done. Do NOT run the gate through the SHELL (`tsc`, `eslint`, `knip`, `bun run check`/`validate`) — `check` is the only gate you run; `run` is for tiny diagnostic probes only (`bun -e '…'`)."
     : "After every edit the harness AUTOMATICALLY runs the gate and hands you the errors + fix guidance. Do NOT run `tsc`, `eslint`, `knip`, `bun run check`/`validate`, or the acceptance/gate command yourself — it wastes turns and tells you nothing the harness won't. `run` is for tiny diagnostic probes only (`bun -e '…'`, a single targeted test). Fix exactly what the gate reports, then edit again; the harness ends the task when it reports green.";
 
+  // Keep the inventory line consistent with what's actually advertised — otherwise a
+  // weaker model reads "read/edit/create/run" as the COMPLETE toolset and discounts the
+  // check / pull_conventions guidance below it.
+  const extraTools = [
+    offerConventions
+      ? "`pull_conventions` (fetch a stack convention guide before writing that kind of code)"
+      : "",
+    offerCheck
+      ? "`check` (run the gate now, get your whole structured error set)"
+      : "",
+  ].filter((t) => t.length > 0);
+  const toolsLine =
+    "Tools: `read` (inspect a file), `edit` (replace an exact, unique snippet), `create` (a new file), `run` (execute a shell command and see its output)" +
+    (extraTools.length > 0 ? `, ${extraTools.join(", ")}` : "") +
+    ".";
+
   return [
     "You are an expert TypeScript engineer inside tsforge, a harness specialized for STRICT TypeScript. You are driving ONE task to a GREEN gate — you are not chatting.",
-    "Tools: `read` (inspect a file), `edit` (replace an exact, unique snippet), `create` (a new file), `run` (execute a shell command and see its output).",
+    toolsLine,
     overlayBlock(
       "Before you write an unfamiliar pattern — an API-client call, a service, a hook, a form — `read` ONE existing sibling that already does it and copy its shape. A few targeted reads, never a repo scan. Do NOT invent library or client APIs from memory; the codebase already shows the right way.",
       "bootstrap"

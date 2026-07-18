@@ -561,7 +561,11 @@ function systemPrompt(
 ): string {
   const base =
     cfg.executionMode === "drive-to-green"
-      ? buildDriveToGreenSystem(conventions, cfg.offerCheck === true)
+      ? buildDriveToGreenSystem(
+          conventions,
+          cfg.offerCheck === true,
+          cfg.pullConventions === true
+        )
       : buildChatSystem(conventions);
 
   const lines = [`Workspace: ${cfg.cwd}`];
@@ -588,6 +592,30 @@ function systemPrompt(
   const contract = taskContract(cfg.files ?? [], cfg.accept);
 
   return `${base}\n\n${tdd}${conv}${prefix}${lines.join("\n")}\n\n${contract}`;
+}
+
+/** Build the initial message list. A FRESH session gets one freshly-built system
+ *  prompt. A RESUMED session (`cfg.history`) reuses its persisted messages as-is —
+ *  EXCEPT when `offerCheck` is set: the persisted prompt predates the `check` tool and
+ *  would tell the model "never run the gate" while the tool is advertised (the exact
+ *  contradiction WS-A4 removes). In that case the leading system message is refreshed
+ *  to the current check-aware prompt and the rest of the conversation is kept intact —
+ *  enforcing the offerCheck↔prompt invariant in code, not by an unchecked caller rule. */
+function resumeMessages(
+  cfg: ISessionConfig,
+  freshSystem: string
+): IChatMessage[] {
+  const systemMsg: IChatMessage = { role: "system", content: freshSystem };
+
+  if (cfg.history === undefined || cfg.history.length === 0) {
+    return [systemMsg];
+  }
+
+  if (cfg.offerCheck !== true) {
+    return [...cfg.history];
+  }
+
+  return [systemMsg, ...cfg.history.filter((m) => m.role !== "system")];
 }
 
 /** Stable prefix of the delegation block — the sentinel `setDelegation` checks to
@@ -710,11 +738,10 @@ export class Session {
     // (not at construction), so this is an explicit flag, not `cfg.gate !== undefined`
     // (which is still undefined here). A plain eval/scratch task leaves it off — its
     // acceptance set can be empty, so a callable gate would answer vacuously.
-    // NOTE: the check-AWARE system prompt (see systemPrompt) is baked only for a FRESH
-    // session; a session resumed from `cfg.history` reuses its persisted prompt. That
-    // can't contradict today because offerCheck is set ONLY by the fresh headless
-    // boringstack build, which never resumes with history — if a resumable path ever
-    // sets offerCheck, rebuild or patch the persisted prompt there.
+    // A resumed session (cfg.history) with offerCheck would otherwise carry a persisted
+    // prompt that predates the check tool ("never run the gate") while advertising it —
+    // `resumeMessages` refreshes the leading system message to the check-aware prompt so
+    // the two can't contradict, enforcing the invariant in code (not a caller rule).
     const offerCheck = cfg.offerCheck === true;
 
     this.tools = toolsFor(false, {}, cfg.pullConventions === true, offerCheck);
@@ -865,15 +892,10 @@ export class Session {
         }),
         runner: cfg.gate ?? commandGate(task, cfg.parse),
       },
-      messages:
-        cfg.history !== undefined && cfg.history.length > 0
-          ? [...cfg.history]
-          : [
-              {
-                role: "system",
-                content: systemPrompt(cfg, workspaceMap, conventions),
-              },
-            ],
+      messages: resumeMessages(
+        cfg,
+        systemPrompt(cfg, workspaceMap, conventions)
+      ),
     };
 
     const session = new Session(cfg, ctx);

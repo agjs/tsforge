@@ -94,3 +94,54 @@ test("a drive-to-green Session WITHOUT offerCheck keeps the original gate guidan
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("the Tools inventory lists check and pull_conventions when they are offered", () => {
+  const both = buildDriveToGreenSystem(DEFAULT_CONVENTIONS, true, true);
+
+  expect(both).toContain("`check` (run the gate now");
+  expect(both).toContain("`pull_conventions`");
+
+  // Neither leaks into the inventory when not offered.
+  const neither = buildDriveToGreenSystem(DEFAULT_CONVENTIONS, false, false);
+  const toolsLine =
+    neither.split("\n").find((l) => l.startsWith("Tools:")) ?? "";
+
+  expect(toolsLine).not.toContain("check");
+  expect(toolsLine).not.toContain("pull_conventions");
+});
+
+test("a resumed offerCheck session refreshes its system prompt to the check-aware one", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-dtg-"));
+  const cap = { system: "" };
+
+  // A persisted history whose system message predates the check tool (says the old
+  // "never run the gate yourself"). On resume WITH offerCheck it must be refreshed.
+  const staleHistory = [
+    {
+      role: "system" as const,
+      content:
+        "OLD PROMPT: never run `tsc`/the gate yourself; the harness owns it.",
+    },
+    { role: "user" as const, content: "earlier turn" },
+    { role: "assistant" as const, content: "ok" },
+  ];
+
+  try {
+    const session = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      offerCheck: true,
+      history: staleHistory,
+    });
+
+    await session.send("continue");
+
+    // The stale system message is gone; the check-aware prompt is in its place.
+    expect(cap.system).toContain("`check`");
+    expect(cap.system).not.toContain("OLD PROMPT");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
