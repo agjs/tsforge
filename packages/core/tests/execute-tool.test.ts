@@ -694,3 +694,65 @@ test("edit not-found steers to a surgical edit on current content, never a rewri
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// ── WS-G: the callable `check` tool must survive the policy layer ──────────────
+// classifyAction/evaluatePolicy run BEFORE dispatch. `check` was born dead once:
+// absent from KIND_BY_TOOL it classified `unknown` → default/non-interactive deny,
+// so every call was rejected before doCheck. These pin the real end-to-end path.
+
+test("check passes policy (default mode) and dispatches to doCheck — structured JSON", async () => {
+  const r = await executeTool(
+    { name: "check", arguments: {} },
+    {
+      cwd: "/workspace",
+      files: [],
+      task: "t",
+      report: () => undefined,
+      runCheck: async () => ({
+        passed: false,
+        errors: [
+          {
+            key: "a",
+            file: "src/x.ts",
+            line: 2,
+            rule: "no-unused-vars",
+            message: "'y' is unused",
+          },
+        ],
+        output: "",
+      }),
+    }
+  );
+
+  // NOT a policy rejection — it reached doCheck and returned its JSON.
+  expect(r).not.toContain("policy");
+  expect(r).not.toContain("unrecognized action");
+  expect(JSON.parse(r)).toEqual({
+    passed: false,
+    errorCount: 1,
+    errors: [
+      {
+        file: "src/x.ts",
+        line: 2,
+        rule: "no-unused-vars",
+        message: "'y' is unused",
+      },
+    ],
+  });
+});
+
+test("check is rejected in PLAN mode (not read-only, not run) — the hard guard holds", async () => {
+  const r = await executeTool(
+    { name: "check", arguments: {} },
+    {
+      cwd: "/workspace",
+      files: [],
+      task: "t",
+      report: () => undefined,
+      readOnly: true,
+      runCheck: async () => ({ passed: true, errors: [], output: "" }),
+    }
+  );
+
+  expect(r).toContain("plan mode");
+});

@@ -81,6 +81,7 @@ import {
   type ILoopState,
   isPhantomRouteError,
   NO_TOOL_CALL_NUDGE,
+  runCheckGate,
   runToolCalls,
   settleGate,
   toolsFor,
@@ -705,12 +706,14 @@ export class Session {
 
     this.ctx = ctx;
 
-    // Wire the `check` tool's runCheck seam to the SAME gate settleGate runs
-    // (`ctx.gate.runner`), read LAZILY so a mid-build `setGate` swap is honored, and
-    // never `validate(accept)` (empty for an injected gate — see the vacuous-recheck
-    // trap). Absent ⇒ the tool isn't offered and reports it isn't available.
+    // Wire the `check` tool's runCheck seam to `runCheckGate` — the SAME full
+    // evaluation `settleGate` runs (autofix → gate command → META_RULES combined),
+    // so `check` can never report green while the end-of-turn settle is red. Reads
+    // `this.ctx` LAZILY so a mid-build `setGate` swap is honored, and never
+    // `validate(accept)` (empty for an injected gate — the vacuous-recheck trap).
+    // Absent ⇒ the tool isn't offered and reports it isn't available.
     if (offerCheck) {
-      this.ctx.tool.runCheck = () => this.ctx.gate.runner.run(this.ctx.cwd);
+      this.ctx.tool.runCheck = () => runCheckGate(this.ctx);
     }
 
     // create() already resolved the base mode (CLI > config > default) onto ctx.

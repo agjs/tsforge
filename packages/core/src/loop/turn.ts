@@ -8,6 +8,7 @@ import {
   type ErrorParser,
   type ErrorSet,
   type IErrorItem,
+  type IValidateResult,
 } from "../validate";
 import { TOOL_NAME } from "../agent/agent.constants";
 import { isInScope } from "../lib/scope";
@@ -1183,6 +1184,57 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
   }
 }
 
+/** The FULL gate evaluation — autofix, then the gate command, then the harness
+ *  meta-rules — combined into ONE pass/fail with the union error set. This is the
+ *  authoritative "is it green?" answer; `settleGate` (the end-of-turn settle) and
+ *  the callable `check` tool (WS-G, mid-turn) BOTH go through here so they can never
+ *  disagree — the model can't see `check` say green while the settle path is red
+ *  (e.g. a `test-sibling-required` meta-error the gate command alone doesn't emit).
+ *  Signal-forwarding and gate streaming come for free via `runGateStep`. */
+export async function evaluateGate(
+  ctx: ILoopCtx,
+  turn: number
+): Promise<{
+  passed: boolean;
+  errors: IErrorItem[];
+  output: string;
+  metaViolations: IMetaRuleViolation[];
+  autoFixed: string[];
+}> {
+  const autoFixed = await autoFixStep(ctx);
+  const gate = await runGateStep(ctx, turn);
+  const metaViolations = runMetaRulesStep(ctx);
+
+  const metaErrors = metaViolations.filter((v) => v.severity === "error");
+  const errors = gate.errors.concat(
+    metaErrors.map((v) => ({
+      key: `${v.file}:${v.ruleId}`,
+      file: v.file,
+      rule: v.ruleId,
+      message: v.message,
+    }))
+  );
+
+  return {
+    // Green only when BOTH the gate command AND the meta-rules are clean.
+    passed: gate.passed && metaErrors.length === 0,
+    errors,
+    output: gate.output,
+    metaViolations,
+    autoFixed,
+  };
+}
+
+/** The callable-gate seam the `check` tool (WS-G) runs: the SAME full evaluation
+ *  `settleGate` uses, projected to the {@link IValidateResult} the tool returns.
+ *  Wired onto the tool context by the build overlay (Session). `turn` is 0 — a
+ *  mid-turn check is not a settle cycle; it only affects a cosmetic progress line. */
+export async function runCheckGate(ctx: ILoopCtx): Promise<IValidateResult> {
+  const { passed, errors, output } = await evaluateGate(ctx, 0);
+
+  return { passed, errors, output };
+}
+
 /** Pure helper: derive the handoff ask string from the final steer message and
  *  persisting error set. Produces a non-empty, informative ask for human/stronger-model
  *  handoff. */
@@ -1913,28 +1965,20 @@ export async function settleGate(
   turn: number
 ): Promise<IRunResult | null> {
   const { task, report } = ctx;
-  const autoFixed = await autoFixStep(ctx);
-  const gate = await runGateStep(ctx, turn);
-  const metaViolations = runMetaRulesStep(ctx);
-
-  const metaErrors = metaViolations.filter((v) => v.severity === "error");
-  const gateErrors = gate.errors.concat(
-    metaErrors.map((v) => ({
-      key: `${v.file}:${v.ruleId}`,
-      file: v.file,
-      rule: v.ruleId,
-      message: v.message,
-    }))
-  );
+  // The FULL evaluation (autofix → gate command → meta-rules), shared verbatim with
+  // the `check` tool via evaluateGate so the two never disagree.
+  const {
+    passed: gatePassed,
+    errors: gateErrors,
+    metaViolations,
+    autoFixed,
+  } = await evaluateGate(ctx, turn);
 
   if (state.lastGateCount >= 0 && gateErrors.length > state.lastGateCount) {
     state.regressions += 1;
   }
 
   state.lastGateCount = gateErrors.length;
-
-  // Determine pass/fail: the gate passes only if BOTH gate command AND meta-rules are clean
-  const gatePassed = gate.passed && metaErrors.length === 0;
 
   // On red, surface the ACTUAL errors (codes + messages) into the event — so the
   // log records WHAT failed at the gate, not just a count (the analysis substrate

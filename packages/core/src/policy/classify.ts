@@ -25,6 +25,12 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   // `script` runs a program that can call other tools — classify as shell so the
   // policy treats it like `run` (its stub calls are each re-classified on dispatch).
   [TOOL_NAME.script]: "shell",
+  // `check` (WS-G) runs the acceptance gate on demand (bun/eslint/tsc + meta-rules)
+  // — command execution with side effects, exactly like `run`/`script`, so it's
+  // `shell`: allowed in the build's default mode, and plan mode still blocks it via
+  // executeTool's non-read-only hard guard. WITHOUT this it classifies `unknown` →
+  // deny, and every check call dies before doCheck (the spawn_agent/script regression).
+  [TOOL_NAME.check]: "shell",
   // Delegating to a read-only subagent — its own class so a repo can deny/ask it
   // specifically; the child's tool calls are re-classified as they dispatch.
   [TOOL_NAME.spawnAgent]: "spawn_agent",
