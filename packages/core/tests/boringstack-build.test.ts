@@ -14,6 +14,7 @@ import {
   LOCALE_GLOB,
 } from "../src/loop/boringstack/build";
 import type { IProvider } from "../src/inference";
+import type { IGate } from "../src/gate/gate-runner";
 import { writePlan } from "../src/loop/planning/plan-store";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
 
@@ -115,6 +116,95 @@ describe("boringstackDeps.implement", () => {
     expect(host.gates.length).toBe(1);
     expect(host.sent.length).toBe(1);
     expect(host.sent[0]).toContain("Invoice");
+  });
+
+  test("hands the OTHER features to the judge as siblings, derived from state", async () => {
+    // Guards the state→gate wiring itself: the judge must receive the sibling ids that
+    // come from state.features (minus the current one). A judgeStage-only test can't
+    // catch this closure omitting siblings, including the current feature, or reading
+    // the wrong state. Run the injected gate so the real judge prompt is observed.
+    const base = createHost();
+    let gate: IGate | undefined;
+    const host = {
+      ...base,
+      setGate: (g: IGate) => {
+        gate = g;
+      },
+    };
+    const seen: string[] = [];
+    const evaluator: IProvider = {
+      complete: async (messages) => {
+        for (const m of messages) {
+          if (m.role === "user") {
+            seen.push(m.content);
+          }
+        }
+
+        return { content: '{"pass":true,"notes":"ok"}', toolCalls: [] };
+      },
+    };
+    const st = {
+      goal: "g",
+      features: [feature("Supplier"), feature("Product")],
+    };
+
+    const deps = boringstackDeps({
+      host,
+      cwd: "/repo",
+      exec: createExec(0),
+      evaluator,
+      generate: async () => {},
+      generateUi: async () => {},
+    });
+
+    await deps.implement(feature("Supplier"), st);
+    await gate?.run("/repo");
+
+    const prompt = seen.join("\n");
+
+    // The sibling (Product) reaches the judge; the clause is present.
+    expect(prompt).toContain("Product");
+    expect(prompt).toContain("separate slices");
+  });
+
+  test("a single-feature build passes NO sibling clause (current feature is excluded)", async () => {
+    // Proves the current feature is not handed to itself as a sibling: with only
+    // Supplier in state, siblings is empty, so the judge gets the unchanged prompt.
+    const base = createHost();
+    let gate: IGate | undefined;
+    const host = {
+      ...base,
+      setGate: (g: IGate) => {
+        gate = g;
+      },
+    };
+    const seen: string[] = [];
+    const evaluator: IProvider = {
+      complete: async (messages) => {
+        for (const m of messages) {
+          if (m.role === "user") {
+            seen.push(m.content);
+          }
+        }
+
+        return { content: '{"pass":true,"notes":"ok"}', toolCalls: [] };
+      },
+    };
+    const st = { goal: "g", features: [feature("Supplier")] };
+
+    const deps = boringstackDeps({
+      host,
+      cwd: "/repo",
+      exec: createExec(0),
+      evaluator,
+      generate: async () => {},
+      generateUi: async () => {},
+    });
+
+    await deps.implement(feature("Supplier"), st);
+    await gate?.run("/repo");
+
+    expect(seen.join("\n")).not.toContain("separate slices");
   });
 
   test("syncs DB after generation but before sending to the model", async () => {

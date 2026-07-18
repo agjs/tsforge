@@ -15,7 +15,7 @@ import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { LOOP_LIMITS, type Reporter } from "../src/loop";
 import { runBoringstackBuild } from "../src/loop/boringstack/build";
 import { createBoringstackHostSession } from "../src/loop/boringstack/build-session";
-import { makeBoringstackEditGuard } from "../src/loop/boringstack/i18n-guard";
+import { makeBoringstackBuildGuard } from "../src/loop/boringstack/dual-extension-guard";
 import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
 import { renderEvent } from "../src/render";
@@ -243,7 +243,13 @@ async function driveBuild(
     contextWindow,
     maxTurns: LOOP_LIMITS.webMaxTurns,
     report,
-    editGuard: makeBoringstackEditGuard(),
+    // BoringStack overlays (composed, see makeBoringstackBuildGuard): (1) veto
+    // deletion of a feature translation key the model authored earlier this build;
+    // (2) veto creating a same-basename .test.ts + .test.tsx twin that orphans the
+    // .tsx from the TS program and wedges the type-aware lint for the whole app.
+    // The drive-to-green + guidance + pull_conventions + check flags live in the
+    // constructor (BORINGSTACK_BUILD_SESSION); only the stateful guard is passed here.
+    editGuard: makeBoringstackBuildGuard(dir),
   });
 
   const result = await runBoringstackBuild({

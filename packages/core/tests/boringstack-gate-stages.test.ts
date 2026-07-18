@@ -140,6 +140,29 @@ describe("judgeStage", () => {
     expect(r.errors[0]?.message).toContain("stub only");
   });
 
+  test("threads siblingEntities into the judge prompt (scopes to this feature's own job)", async () => {
+    const seen: string[] = [];
+    const capturing: IProvider = {
+      complete: async (messages) => {
+        for (const m of messages) {
+          if (m.role === "user") {
+            seen.push(m.content);
+          }
+        }
+
+        return { content: '{"pass":true,"notes":"ok"}', toolCalls: [] };
+      },
+    };
+    const stage = judgeStage(capturing, "/tmp/clone", feature, ["product"]);
+
+    await stage.run("/tmp/clone");
+
+    // The other slice's entity reaches the judge, so it won't reject this feature for
+    // lacking a link to a not-yet-built child (the relational-collision park).
+    expect(seen.join("\n")).toContain("product");
+    expect(seen.join("\n")).toContain("separate slices");
+  });
+
   test("judge passes → green", async () => {
     const providerWithPass: IProvider = {
       complete: async () => ({
