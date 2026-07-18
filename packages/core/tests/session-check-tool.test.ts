@@ -270,7 +270,7 @@ function toolNameCapturingProvider(captured: { names: string[] }): IProvider {
 
 test("offerCheck:true makes the Session ADVERTISE check to the model", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-check-"));
-  const captured = { names: [] as string[] };
+  const captured: { names: string[] } = { names: [] };
 
   try {
     const session = await Session.create({
@@ -291,7 +291,7 @@ test("offerCheck:true makes the Session ADVERTISE check to the model", async () 
 
 test("without offerCheck the Session does NOT advertise check (the tool is un-discoverable)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-check-"));
-  const captured = { names: [] as string[] };
+  const captured: { names: string[] } = { names: [] };
 
   try {
     const session = await Session.create({

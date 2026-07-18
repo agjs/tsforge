@@ -7,6 +7,20 @@ import { BORINGSTACK_BUILD_SESSION } from "../src/loop/boringstack/build-config"
 import { createBoringstackHostSession } from "../src/loop/boringstack/build-session";
 import { isRecord } from "../src/lib/guards/guards";
 
+// The headless driver must construct its host session THROUGH the tested constructor,
+// or the whole offerCheck wiring is untested — reverting to an inline Session.create
+// (with or without offerCheck) would leave the behavioral tests below green. This
+// source guard fails on exactly that revert.
+test("headless-build.ts wires its host session via createBoringstackHostSession, not an inline Session.create", async () => {
+  const src = await Bun.file(
+    join(import.meta.dir, "..", "scripts", "headless-build.ts")
+  ).text();
+
+  expect(src).toContain("createBoringstackHostSession({");
+  // A re-inlined host session (the exact regression) would reintroduce Session.create.
+  expect(src).not.toContain("Session.create(");
+});
+
 // createBoringstackHostSession is the SINGLE constructor the headless driver uses, so
 // asserting the session it builds actually advertises `check` closes the real gap:
 // dropping offerCheck from the flags — or bypassing the constructor — regresses here.
@@ -19,7 +33,7 @@ test("the BoringStack build flags keep offerCheck + convention library + drive-t
 
 test("the boringstack host session actually ADVERTISES check to the model", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-hostcfg-"));
-  const captured = { names: [] as string[] };
+  const captured: { names: string[] } = { names: [] };
 
   const provider: IProvider = {
     async complete(_messages, opts) {

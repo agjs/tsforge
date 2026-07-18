@@ -203,8 +203,10 @@ If you need to make a change elsewhere, the build has already locked it. Rebase 
 ---
 
 ## Use the \`check\` tool to see ALL your errors before you stop
-Call the \`check\` tool to run the gate (typecheck, lint, meta-rules, knip) NOW and get
-back your WHOLE structured error set (\`{file, line, rule, message}\`) mid-turn. Fix every
+Call the \`check\` tool to run the gate (typecheck, lint, meta-rules, knip, AND the API +
+UI feature test suites) NOW and get back your WHOLE structured error set
+(\`{file, line, rule, message}\`) mid-turn. A failing test reds the gate just like a type
+error, so your test siblings must actually PASS — not merely exist. Fix every
 error it lists in ONE pass, then \`check\` again — do NOT fix one, stop, and discover the
 rest next turn. When \`check\` returns \`passed: true\`, you are done.
 
