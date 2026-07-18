@@ -4,6 +4,10 @@ import type { IErrorItem } from "../../validate/validate.types";
 /** Cap the error list so a huge failure set can't blow the turn's context budget. */
 const MAX_ERRORS = 200;
 
+/** Cap raw gate output (surfaced only when the gate failed but parsed NO structured
+ *  errors) so an unparsed failure blob can't blow the turn's context budget. */
+const MAX_OUTPUT_CHARS = 4000;
+
 /** One structured error as the model sees it — the actionable fields only. */
 interface ICheckError {
   file?: string;
@@ -64,18 +68,34 @@ export async function doCheck(
 
   const result = await ctx.runCheck();
 
+  // Files the gate's autofix reformatted/rewrote this run — the model must re-read
+  // them before editing again (their on-disk content + anchors changed). Surfaced
+  // on BOTH pass and fail, mirroring settleGate's autofix notice.
+  const autoFixed =
+    result.autoFixed.length > 0 ? { autoFixed: result.autoFixed } : {};
+
   if (result.passed) {
-    return JSON.stringify({ passed: true, errors: [] });
+    return JSON.stringify({ passed: true, errors: [], ...autoFixed });
   }
 
   const deduped = dedupe(result.errors);
   const shown = deduped.slice(0, MAX_ERRORS).map(toStruct);
   const omitted = deduped.length - shown.length;
 
+  // A gate can fail with NO parseable errors (a command crashed in an unrecognized
+  // format). Empty `errors` would leave the model blind, so surface the raw output
+  // (capped) as the only diagnostic it has.
+  const rawOutput =
+    deduped.length === 0 && result.output.trim().length > 0
+      ? { output: result.output.slice(0, MAX_OUTPUT_CHARS) }
+      : {};
+
   return JSON.stringify({
     passed: false,
     errorCount: deduped.length,
     ...(omitted > 0 ? { omitted } : {}),
     errors: shown,
+    ...rawOutput,
+    ...autoFixed,
   });
 }

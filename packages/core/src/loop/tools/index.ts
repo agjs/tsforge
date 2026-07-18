@@ -4,4 +4,6 @@ export type {
   SpawnAgentFn,
   EditGuard,
   IEditVeto,
+  RunCheck,
+  ICheckOutcome,
 } from "./tool-context";

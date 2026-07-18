@@ -140,3 +140,94 @@ test("runCheck reads the gate LAZILY — a mid-build setGate swap is honored", a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+/** turn 1: create a file with an eslint-disable comment (→ touched, meta-rule red);
+ *  turn 2: check (its result comes back turn 3); turn 3: capture it, then rewrite the
+ *  file CLEAN so the gate greens and the session terminates. A red gate can't be
+ *  "done"-ed out of, so we must actually fix it — and we never overwrite a captured
+ *  result with null (a later compaction drops the tool message). */
+function createThenCheckProvider(
+  captured: { result: string | null },
+  file: string
+): IProvider {
+  let turn = 0;
+
+  return {
+    async complete(messages: IChatMessage[]) {
+      turn += 1;
+
+      if (turn === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "1",
+              name: "create",
+              arguments: {
+                file,
+                content:
+                  "// eslint-disable-next-line no-console\nconsole.log(1);\n",
+              },
+            },
+          ],
+        };
+      }
+
+      if (turn === 2) {
+        return {
+          content: "",
+          toolCalls: [{ id: "2", name: "check", arguments: {} }],
+        };
+      }
+
+      const toolMsg = [...messages].reverse().find((m) => m.role === "tool");
+
+      if (typeof toolMsg?.content === "string" && captured.result === null) {
+        captured.result = toolMsg.content;
+      }
+
+      // Green the gate (remove the disable comment) so the loop can terminate.
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: "3",
+            name: "create",
+            arguments: { file, content: "export const x = 1;\n" },
+          },
+        ],
+      };
+    },
+  };
+}
+
+test("check goes RED on a META_RULE error even when the gate command is GREEN (the gate-relaxed fix)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-check-"));
+  const captured: { result: string | null } = { result: null };
+
+  try {
+    const session = await Session.create({
+      provider: createThenCheckProvider(captured, "src/bad.ts"),
+      cwd: dir,
+      files: ["**/*"],
+      offerCheck: true,
+      // Gate COMMAND is green — only the meta-rule (no-eslint-disable-comments,
+      // change-scoped to the file the model just wrote) makes it red.
+      gate: fixedGate(GREEN),
+    });
+
+    await session.send("write a file");
+
+    const parsed: { passed: boolean; errors: { rule?: string }[] } = JSON.parse(
+      captured.result ?? ""
+    );
+
+    // If runCheck had regressed to ctx.gate.runner alone, this would be passed:true.
+    expect(parsed.passed).toBe(false);
+    expect(
+      parsed.errors.some((e) => e.rule === "no-eslint-disable-comments")
+    ).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

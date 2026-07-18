@@ -412,4 +412,22 @@ describe("refinePrompt", () => {
     expect(p).toContain("the delete mutation fires");
     expect(p).toContain("MUST drive edit and delete from the rendered list");
   });
+
+  it("instructs the model to use the `check` tool and forbids running the gate via shell (WS-G contract)", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // WS-G: the callable gate replaced the old "do NOT run the gate yourself".
+    expect(prompt).toContain("check");
+    expect(prompt).toContain("passed: true");
+    // Shell gate execution is still forbidden (check is a tool, not `npx tsc`).
+    expect(prompt).toContain("Do NOT run the gate through the shell");
+    expect(prompt).not.toContain("Do NOT run the gate yourself");
+  });
 });

@@ -8,7 +8,6 @@ import {
   type ErrorParser,
   type ErrorSet,
   type IErrorItem,
-  type IValidateResult,
 } from "../validate";
 import { TOOL_NAME } from "../agent/agent.constants";
 import { isInScope } from "../lib/scope";
@@ -38,7 +37,12 @@ import {
   resolveStuckFile,
   type ExpertAsk,
 } from "./expert-handoff";
-import { executeTool, type SpawnAgentFn, type IToolContext } from "./tools";
+import {
+  executeTool,
+  type SpawnAgentFn,
+  type IToolContext,
+  type ICheckOutcome,
+} from "./tools";
 import {
   astGrepFix,
   dropRedundantAnnotations,
@@ -1226,13 +1230,15 @@ export async function evaluateGate(
 }
 
 /** The callable-gate seam the `check` tool (WS-G) runs: the SAME full evaluation
- *  `settleGate` uses, projected to the {@link IValidateResult} the tool returns.
+ *  `settleGate` uses, projected to the {@link ICheckOutcome} the tool returns —
+ *  including `autoFixed`, so `check` can warn the model that mid-turn autofix
+ *  rewrote files (the desync guard `settleGate` gives via its autofix notice).
  *  Wired onto the tool context by the build overlay (Session). `turn` is 0 — a
  *  mid-turn check is not a settle cycle; it only affects a cosmetic progress line. */
-export async function runCheckGate(ctx: ILoopCtx): Promise<IValidateResult> {
-  const { passed, errors, output } = await evaluateGate(ctx, 0);
+export async function runCheckGate(ctx: ILoopCtx): Promise<ICheckOutcome> {
+  const { passed, errors, output, autoFixed } = await evaluateGate(ctx, 0);
 
-  return { passed, errors, output };
+  return { passed, errors, output, autoFixed };
 }
 
 /** Pure helper: derive the handoff ask string from the final steer message and

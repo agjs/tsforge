@@ -1,10 +1,10 @@
 import { test, expect } from "bun:test";
 import { doCheck } from "../src/loop/tools/check-tool";
-import type { IToolContext } from "../src/loop/tools/tool-context";
 import type {
-  IErrorItem,
-  IValidateResult,
-} from "../src/validate/validate.types";
+  IToolContext,
+  ICheckOutcome,
+} from "../src/loop/tools/tool-context";
+import type { IErrorItem } from "../src/validate/validate.types";
 
 /** A minimal structural IToolContext — only the fields doCheck reads, plus an
  *  injectable runCheck. Built structurally (no cast) so the test tracks the real
@@ -23,8 +23,17 @@ function err(part: Partial<IErrorItem> & { key: string }): IErrorItem {
   return { message: "boom", ...part };
 }
 
-function result(errors: IErrorItem[]): IValidateResult {
-  return { passed: errors.length === 0, errors, output: "" };
+function result(
+  errors: IErrorItem[],
+  extra: Partial<ICheckOutcome> = {}
+): ICheckOutcome {
+  return {
+    passed: errors.length === 0,
+    errors,
+    output: "",
+    autoFixed: [],
+    ...extra,
+  };
 }
 
 test("doCheck reports it isn't available when no runCheck is wired", async () => {
@@ -110,4 +119,48 @@ test("doCheck caps the list at 200 and records how many were omitted", async () 
   expect(parsed.errorCount).toBe(250);
   expect(parsed.errors).toHaveLength(200);
   expect(parsed.omitted).toBe(50);
+});
+
+test("doCheck surfaces autoFixed files so the model re-reads after a mid-turn rewrite", async () => {
+  const out = await doCheck(
+    {},
+    ctxWith(async () => result([], { autoFixed: ["src/a.ts", "src/b.ts"] }))
+  );
+
+  expect(JSON.parse(out)).toEqual({
+    passed: true,
+    errors: [],
+    autoFixed: ["src/a.ts", "src/b.ts"],
+  });
+});
+
+test("doCheck surfaces raw output when the gate failed but parsed NO structured errors", async () => {
+  const out = await doCheck(
+    {},
+    ctxWith(async () =>
+      result([], { passed: false, output: "Command crashed: ENOSPC\nstack..." })
+    )
+  );
+
+  const parsed = JSON.parse(out);
+
+  expect(parsed.passed).toBe(false);
+  expect(parsed.errorCount).toBe(0);
+  // Without this the model would be blind to why the gate failed.
+  expect(parsed.output).toContain("ENOSPC");
+});
+
+test("doCheck does NOT dump raw output when structured errors are present", async () => {
+  const out = await doCheck(
+    {},
+    ctxWith(async () =>
+      result([err({ key: "a", file: "src/x.ts", message: "e" })], {
+        passed: false,
+        output: "noisy full gate log that would blow the context budget",
+      })
+    )
+  );
+
+  expect(out).not.toContain("output");
+  expect(out).not.toContain("noisy full gate log");
 });

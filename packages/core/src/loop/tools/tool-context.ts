@@ -6,13 +6,22 @@ import type { McpRegistry } from "../../mcp";
 import type { PolicyMode, IPolicyRules } from "../../policy";
 import type { IValidateResult } from "../../validate/validate.types";
 
+/** What one on-demand gate run produced for the `check` tool: the standard
+ *  validate result PLUS the files the gate's autofix reformatted/rewrote on disk
+ *  this run. The model MUST re-read those before its next edit — their on-disk
+ *  content (and hashline anchors) changed underneath it, exactly as `settleGate`
+ *  warns via its autofix notice. */
+export interface ICheckOutcome extends IValidateResult {
+  autoFixed: string[];
+}
+
 /** Run the workspace's fast acceptance gate on demand and return its STRUCTURED
- *  result (errors as `{file,line,rule,message}`), so the `check` tool can hand the
- *  model its whole error set MID-TURN instead of only at end-of-turn. A generic
- *  injected seam (like {@link EditGuard}): the core tool knows nothing about which
- *  gate runs — a stack overlay (the boringstack build) wires the real runner.
- *  Absent ⇒ `check` reports it isn't available here. */
-export type RunCheck = () => Promise<IValidateResult>;
+ *  result (errors as `{file,line,rule,message}` + the autofixed file list), so the
+ *  `check` tool can hand the model its whole error set MID-TURN instead of only at
+ *  end-of-turn. A generic injected seam (like {@link EditGuard}): the core tool
+ *  knows nothing about which gate runs — a stack overlay (the boringstack build)
+ *  wires the real runner. Absent ⇒ `check` reports it isn't available here. */
+export type RunCheck = () => Promise<ICheckOutcome>;
 
 /** One model-invoked delegation to a read-only specialist subagent (the
  *  `spawn_agent` tool). Wired by the CLI/session, which owns model resolution,

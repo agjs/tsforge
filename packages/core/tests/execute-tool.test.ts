@@ -720,6 +720,7 @@ test("check passes policy (default mode) and dispatches to doCheck — structure
           },
         ],
         output: "",
+        autoFixed: [],
       }),
     }
   );
@@ -750,7 +751,12 @@ test("check is rejected in PLAN mode (not read-only, not run) — the hard guard
       task: "t",
       report: () => undefined,
       readOnly: true,
-      runCheck: async () => ({ passed: true, errors: [], output: "" }),
+      runCheck: async () => ({
+        passed: true,
+        errors: [],
+        output: "",
+        autoFixed: [],
+      }),
     }
   );
 

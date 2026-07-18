@@ -47,6 +47,9 @@ describe("classifyAction", () => {
       ["move_file", "write_file"],
       ["run", "shell"],
       ["add_dependency", "shell"],
+      // WS-G: check runs the gate (bun/eslint/tsc) — shell, NOT unknown. Absent from
+      // this table it classified `unknown` → non-interactive deny → every call DOA.
+      ["check", "shell"],
       ["package_info", "network"],
       ["package_docs", "network"],
       ["web_fetch", "network"],
