@@ -99,6 +99,18 @@ describe("signatureToError", () => {
     expect(err.message).toContain("dev.sh up");
     expect(err.message).toContain("Do NOT edit");
   });
+
+  test("the eslint-program-unparsable signature maps to a file-less rewrite-the-broken-file error", () => {
+    const err = signatureToError("eslint-program-unparsable");
+
+    // File-less (model-visible "own" error), phase 2, and steers toward a FULL
+    // rewrite of the one broken file — not chasing the per-file cascade.
+    expect(err.rule).toBe("eslint-program-unparsable");
+    expect(err.file).toBeUndefined();
+    expect(err.phase).toBe(2);
+    expect(err.message).toContain("ONE broken file");
+    expect(err.message).toContain("REWRITE IT IN FULL");
+  });
 });
 
 describe("reachabilityStage", () => {

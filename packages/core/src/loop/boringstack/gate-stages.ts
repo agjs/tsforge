@@ -6,7 +6,7 @@ import type { IProvider } from "../../inference";
 import type { IFeature } from "../greenfield/greenfield.types";
 import type { Exec } from "./exec";
 import { runBoringstackGate } from "./gate";
-import { extractFailures } from "./extract-failures";
+import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
 import { judgeFeature } from "../greenfield/judge";
 import { autofixApps, readResourceCode, rescueFileFor } from "./build";
@@ -75,6 +75,25 @@ export function signatureToError(sig: string): IErrorItem {
         `dev.sh up). If the stack IS up, your apps/api changes may have broken the ` +
         `server so it can't boot — check apps/api compiles and starts. Do NOT edit ` +
         `UI code to chase this.`,
+    };
+  }
+
+  if (sig === ESLINT_PROGRAM_UNPARSABLE) {
+    // The whole type-aware ESLint program failed to build — collapsed from a
+    // per-file `parserOptions.project` cascade (see extract-failures). File-less so
+    // it stays a model-visible "own" error, not an out-of-scope one.
+    return {
+      key: sig,
+      rule: "eslint-program-unparsable",
+      phase: 2,
+      message:
+        "The TypeScript-aware lint could not build its program: ONE file has a real " +
+        "syntax/parse error (`Parsing error: … expected`), which makes ESLint report a " +
+        "`parserOptions.project` parse error on EVERY .tsx file. This is ONE broken " +
+        "file, not many separate errors — do NOT chase the per-file parse errors. Find " +
+        "the file with the actual `Parsing error: … expected` and REWRITE IT IN FULL " +
+        "(a surgical patch on an already-broken file usually re-breaks its braces/" +
+        "generics). Once that file parses, the whole cascade clears at once.",
     };
   }
 

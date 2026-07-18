@@ -14,6 +14,15 @@ const ESLINT_JSON_END = "::tsforge-eslint-json-end::";
 // (`apps/api`, `apps/ui`, `.`) never contain a colon, so this matches every real marker.
 const ESLINT_JSON_OPEN = /::tsforge-eslint-json ([^\s:]+)::/gu;
 
+// One fixed, file-less signature for a WHOLE type-aware ESLint program-build failure.
+// When one file has a real syntax error, ESLint emits a `parserOptions.project` parse
+// error on EVERY .tsx file; collapsing them to this single signature keeps the error
+// COUNT at one-broken-program instead of N phantom regressions. signatureToError maps
+// it (file-less, like openapi-unreachable) to the actionable "find + rewrite the one
+// broken file" guidance. Bare token (not a `failure:…:file:…` shape) so it is never
+// mis-classified as an out-of-scope/locked-file error and stays model-visible.
+export const ESLINT_PROGRAM_UNPARSABLE = "eslint-program-unparsable";
+
 /** A CLOSED eslint-JSON block, located by index (not by a tempered regex). */
 interface IEslintJsonBlock {
   /** Raw text between the opening and closing markers (the JSON payload). */
@@ -577,6 +586,23 @@ function parsedDiagnostic(
   const eslintParseError = /^(\d+):(\d+) error (Parsing error:.*)$/u.exec(line);
 
   if (eslintParseError !== null && state.currentFile !== "") {
+    const detail = eslintParseError[3] ?? line;
+
+    // A `parserOptions.project` / "ESLint was configured to run on …" parse error is
+    // NOT an independent, model-fixable diagnostic: it is the TYPE-AWARE ESLint program
+    // failing to build because ANOTHER file has a real syntax error. One broken file
+    // fans this out across EVERY .tsx file, so a near-green build reads a phantom
+    // 1→38 spike and the oscillation logic thrashes. Collapse the whole cascade to ONE
+    // fixed, file-less signature (the Set dedups identical signatures) — the count then
+    // reflects one broken program, not N regressions. The REAL syntax error (`'}'
+    // expected`, etc.) is a DIFFERENT parse-error line and stays a distinct, located
+    // signature that points the model at the file to rewrite.
+    if (
+      /parserOptions\.project|ESLint was configured to run on/u.test(detail)
+    ) {
+      return { signature: ESLINT_PROGRAM_UNPARSABLE, dedupKey: null };
+    }
+
     const eslintLine = Number(eslintParseError[1] ?? "0");
     const column = Number(eslintParseError[2] ?? "0");
 
@@ -585,7 +611,7 @@ function parsedDiagnostic(
         state.currentFile,
         eslintLine,
         "syntax",
-        eslintParseError[3] ?? line
+        detail
       ),
       dedupKey: eslintKey(state.currentFile, eslintLine, column, "syntax"),
     };
