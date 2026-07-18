@@ -72,7 +72,9 @@ def main():
 
     # Selecting a command must actually RUN it (regression: runCommand prepended a
     # slash to the already-slashed name → "//sessions" → unknown command). Reopen
-    # /help, pick /plan (rows 0=/compact 1=/clear 2=/plan), confirm it toggled mode.
+    # /help, pick /plan (rows 0=/compact 1=/clear 2=/plan; /scaffold's home is the
+    # wizard row under "Build something new", not a command row), confirm it toggled
+    # mode.
     os.write(m, b"/")
     read_until(m, lambda b: "commands" in b, 8)
     os.write(m, b"help\r")

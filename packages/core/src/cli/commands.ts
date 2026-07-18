@@ -16,6 +16,11 @@ export interface ICommandSpec {
 export const COMMANDS: readonly ICommandSpec[] = [
   { name: "/help", summary: "show this help" },
   {
+    name: "/scaffold",
+    summary:
+      "create a new full-stack project here (BoringStack / Astro) via the wizard",
+  },
+  {
     name: "/compact",
     summary: "summarize the conversation to free up context",
   },
