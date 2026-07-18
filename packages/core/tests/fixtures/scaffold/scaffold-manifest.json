@@ -230,7 +230,8 @@
         "memory",
         "valkey"
       ],
-      "devDefault": "valkey"
+      "devDefault": "valkey",
+      "askWhen": "CACHE_ENABLED=1"
     },
     {
       "key": "NOTIFICATIONS_SSE_ENABLED",
@@ -259,7 +260,8 @@
         "noop"
       ],
       "devDefault": "openai",
-      "requiresSecretsWhen": "AI_ENABLED=true",
+      "askWhen": "AI_ENABLED=1",
+      "requiresSecretsWhen": "AI_ENABLED:*",
       "requiresSecrets": {
         "openai": [
           "OPENAI_API_KEY"

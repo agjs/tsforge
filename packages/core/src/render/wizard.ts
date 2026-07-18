@@ -35,13 +35,22 @@ export function initWizard(steps: readonly IWizardStep[]): IWizardState {
     }
   }
 
-  return {
+  const base: IWizardState = {
     stepIndex: 0,
-    cursor: steps[0]?.defaultIndex ?? 0,
+    cursor: 0,
     single: {},
     multi,
     text,
     status: "active",
+  };
+  // Start on the first VISIBLE step — an initially-hidden step 0 must be skipped
+  // so the wizard never opens on a question it means to hide.
+  const startIndex = nextVisibleIndex(steps, 0, base);
+
+  return {
+    ...base,
+    stepIndex: startIndex,
+    cursor: steps[startIndex]?.defaultIndex ?? 0,
   };
 }
 
@@ -66,6 +75,107 @@ function cursorForStep(step: IWizardStep, state: IWizardState): number {
   }
 
   return step.defaultIndex ?? 0;
+}
+
+/** A step with no predicate is always shown; otherwise its predicate decides. */
+function isVisible(step: IWizardStep, state: IWizardState): boolean {
+  return step.visibleWhen === undefined || step.visibleWhen(state);
+}
+
+/** First index >= `from` whose step is visible; `steps.length` if none remain. */
+function nextVisibleIndex(
+  steps: readonly IWizardStep[],
+  from: number,
+  state: IWizardState
+): number {
+  let i = Math.max(0, from);
+
+  while (i < steps.length) {
+    const s = steps[i];
+
+    if (s !== undefined && isVisible(s, state)) {
+      return i;
+    }
+
+    i += 1;
+  }
+
+  return steps.length;
+}
+
+/** Last index <= `from` whose step is visible; -1 if none remain before it. */
+function prevVisibleIndex(
+  steps: readonly IWizardStep[],
+  from: number,
+  state: IWizardState
+): number {
+  let i = Math.min(from, steps.length - 1);
+
+  while (i >= 0) {
+    const s = steps[i];
+
+    if (s !== undefined && isVisible(s, state)) {
+      return i;
+    }
+
+    i -= 1;
+  }
+
+  return -1;
+}
+
+/** Overlay each unanswered single step's DEFAULT value onto the state. The "Step X
+ *  of N" counter uses this so a default-ON gate's dependent is counted from the
+ *  start — without it, a dependent reads as hidden until its gate is confirmed and
+ *  the total would jump (e.g. "1 of 14" → "of 15" after confirming the cache). */
+function withDefaultAnswers(
+  steps: readonly IWizardStep[],
+  state: IWizardState
+): IWizardState {
+  const single: Record<string, string> = { ...state.single };
+
+  for (const s of steps) {
+    if (s.kind === "single" && single[s.key] === undefined) {
+      const v = s.options[s.defaultIndex ?? 0]?.value;
+
+      if (v !== undefined) {
+        single[s.key] = v;
+      }
+    }
+  }
+
+  return { ...state, single };
+}
+
+/** Count of visible steps under the current answers + unanswered defaults (the
+ *  denominator for "Step X of N"). */
+function visibleTotal(
+  steps: readonly IWizardStep[],
+  state: IWizardState
+): number {
+  const eff = withDefaultAnswers(steps, state);
+
+  return steps.filter((s) => isVisible(s, eff)).length;
+}
+
+/** 1-based position of `stepIndex` among the visible steps (for "Step X of N"). */
+function visiblePosition(
+  steps: readonly IWizardStep[],
+  state: IWizardState,
+  stepIndex: number
+): number {
+  const eff = withDefaultAnswers(steps, state);
+  let n = 0;
+
+  for (let i = 0; i <= stepIndex && i < steps.length; i += 1) {
+    const s = steps[i];
+
+    if (s !== undefined && isVisible(s, eff)) {
+      n += 1;
+    }
+  }
+
+  return n;
 }
 
 function toggleCheck(state: IWizardState, step: IWizardStep): IWizardState {
@@ -146,9 +256,12 @@ function confirmStep(
               ?.value ?? "",
         }
       : state.single;
-  const nextIndex = state.stepIndex + 1;
+  // Visibility of later steps can depend on the answer just recorded (e.g. turning
+  // the cache off hides "cache provider"), so evaluate against the updated state.
+  const advanced = { ...state, single };
+  const nextIndex = nextVisibleIndex(steps, state.stepIndex + 1, advanced);
 
-  // Review off + last step → apply immediately, skipping the overview.
+  // Review off + no visible step left → apply immediately, skipping the overview.
   if (opts.review === false && nextIndex >= steps.length) {
     return { ...state, single, status: "apply" };
   }
@@ -159,7 +272,7 @@ function confirmStep(
     ...state,
     single,
     stepIndex: nextIndex,
-    cursor: next === undefined ? 0 : cursorForStep(next, { ...state, single }),
+    cursor: next === undefined ? 0 : cursorForStep(next, advanced),
   };
 }
 
@@ -167,11 +280,14 @@ function goBack(
   state: IWizardState,
   steps: readonly IWizardStep[]
 ): IWizardState {
-  if (state.stepIndex === 0) {
+  // Step back to the previous VISIBLE step; if none precede this one, cancel
+  // (mirrors the old stepIndex===0 behavior once hidden steps are skipped).
+  const idx = prevVisibleIndex(steps, state.stepIndex - 1, state);
+
+  if (idx < 0) {
     return { ...state, status: "cancel" };
   }
 
-  const idx = state.stepIndex - 1;
   const step = steps[idx];
 
   return {
@@ -229,7 +345,14 @@ function reduceOverview(
   }
 
   if (action === "back") {
-    const idx = steps.length - 1;
+    const idx = prevVisibleIndex(steps, steps.length - 1, state);
+
+    if (idx < 0) {
+      // No visible step to return to (every step is hidden) — treat back as
+      // cancel, matching goBack, rather than dead-ending on the review screen.
+      return { ...state, status: "cancel" };
+    }
+
     const step = steps[idx];
 
     return {
@@ -411,12 +534,13 @@ function renderStep(
   step: IWizardStep,
   state: IWizardState,
   color: boolean,
+  position: number,
   total: number,
   title: string
 ): string {
   return [
     paint(title, STYLE.brand, color),
-    `${paint(`Step ${state.stepIndex + 1} of ${total}`, STYLE.bold, color)} · ${step.title}`,
+    `${paint(`Step ${position} of ${total}`, STYLE.bold, color)} · ${step.title}`,
     RULE,
     step.explanation,
     "",
@@ -433,11 +557,14 @@ function overviewLines(
   state: IWizardState,
   color: boolean
 ): string[] {
-  return steps.map((step) => {
-    const value = overviewValue(step, state);
+  // Hidden steps have no answer that matters — omit them from the review.
+  return steps
+    .filter((step) => isVisible(step, state))
+    .map((step) => {
+      const value = overviewValue(step, state);
 
-    return `  ${paint(step.title, STYLE.bold, color)}: ${value}`;
-  });
+      return `  ${paint(step.title, STYLE.bold, color)}: ${value}`;
+    });
 }
 
 /** The one-line answer shown for a step on the review screen. */
@@ -496,7 +623,14 @@ export function renderFrame(
 
   return step === undefined
     ? ""
-    : renderStep(step, state, color, steps.length, title);
+    : renderStep(
+        step,
+        state,
+        color,
+        visiblePosition(steps, state, state.stepIndex),
+        visibleTotal(steps, state),
+        title
+      );
 }
 
 // ──────────────────────────── interactive driver ────────────────────────────
