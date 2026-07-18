@@ -245,7 +245,7 @@ export function boringstackDeps(opts: {
   return {
     async implement(
       feature: IFeature,
-      _state: IGreenfieldState,
+      state: IGreenfieldState,
       seed?: { triedLevers: EscalationRung[] }
     ): Promise<{ done: boolean; handoff?: IHandoff }> {
       // Pre-step: generate the full vertical slice + sync the STUB schema. The
@@ -263,8 +263,22 @@ export function boringstackDeps(opts: {
       // Inject THIS feature's composed gate (differential command + reachability +
       // judge). Now settleGate runs it every cycle and the shared ladder escalates
       // on lint/judge/reachability failures — the whole point of the unification.
+      // The OTHER features' ids are handed to the judge so it scopes to this
+      // feature's own responsibilities and never rejects it for lacking a link to a
+      // sibling entity a different slice owns (the relational-collision park).
+      const siblingEntities = state.features
+        .filter((f) => f.id !== feature.id)
+        .map((f) => f.id);
+
       host.setGate(
-        composeBoringstackGate({ cwd, exec, evaluator, baseline, feature })
+        composeBoringstackGate({
+          cwd,
+          exec,
+          evaluator,
+          baseline,
+          feature,
+          siblingEntities,
+        })
       );
 
       const slice = sliceFor?.(feature.id);

@@ -225,7 +225,8 @@ export function reachabilityStage(cwd: string, featureId: string): IStage {
 export function judgeStage(
   evaluator: IProvider,
   cwd: string,
-  feature: IFeature
+  feature: IFeature,
+  siblingEntities: readonly string[] = []
 ): IStage {
   return {
     async run(): Promise<IValidateResult> {
@@ -233,6 +234,9 @@ export function judgeStage(
       const verdict = await judgeFeature(evaluator, {
         feature: feature.desc,
         code,
+        // The other slices' entities: the judge must not reject THIS feature for
+        // lacking a cross-slice link a later slice owns (the relational-collision bug).
+        siblingEntities: [...siblingEntities],
       });
 
       if (verdict.ok) {
@@ -270,12 +274,15 @@ export function composeBoringstackGate(opts: {
   evaluator: IProvider;
   baseline: ReadonlySet<string>;
   feature: IFeature;
+  /** The OTHER features/entities in this build, so the judge scopes to this
+   *  feature's own responsibilities and never demands a link to an unbuilt slice. */
+  siblingEntities?: readonly string[];
 }): IGate {
   const { cwd, exec, evaluator, baseline, feature } = opts;
 
   return composeGate([
     differentialStage(boringstackCommandStage(cwd, exec), baseline),
     reachabilityStage(cwd, feature.id),
-    judgeStage(evaluator, cwd, feature),
+    judgeStage(evaluator, cwd, feature, opts.siblingEntities ?? []),
   ]);
 }

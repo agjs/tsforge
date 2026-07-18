@@ -22,6 +22,13 @@ export interface IFeatureJudgeInput {
   feature: string;
   /** The relevant built code. */
   code: string;
+  /** Entities/features that belong to OTHER slices in the same build and are NOT
+   *  this feature's responsibility. Names only. When set, the judge is told not to
+   *  reject THIS feature for lacking associations to a sibling that a later slice
+   *  owns — the bug that parked a live inventory build: the Supplier judge demanded
+   *  a link to Product (a not-yet-built slice), so the model created Product early
+   *  and the Product slice's scaffolder then collided on the duplicate. */
+  siblingEntities?: string[];
 }
 
 /**
@@ -60,17 +67,42 @@ export function parseFeatureVerdict(raw: string): IJudgeOutcome {
   };
 }
 
+/** Build the sibling-scope clause: tells the judge which entities belong to OTHER
+ *  slices so it does not reject THIS feature for lacking a cross-slice association.
+ *  Empty when there are no siblings, so a single-entity build judges exactly as
+ *  before. Pure — unit-testable. */
+export function siblingScopeClause(siblings: readonly string[]): string {
+  const named = siblings.map((s) => s.trim()).filter((s) => s.length > 0);
+
+  if (named.length === 0) {
+    return "";
+  }
+
+  return (
+    `\n\nThis feature is ONE slice of a larger app. These other entities have their ` +
+    `OWN separate slices, built elsewhere: ${named.join(", ")}. Judge THIS feature's ` +
+    `own responsibilities in full — its own fields, validation, endpoints, and UI. But ` +
+    `do NOT reject it for not BUILDING those other entities here: their tables, ` +
+    `resources, CRUD, and pages belong to their slices, and creating them here collides ` +
+    `with the slice that owns them. A relationship BETWEEN entities is owned by exactly ` +
+    `one side (the slice that holds the foreign key); judge it only in that owning slice, ` +
+    `not in the other. If THIS feature's own description requires a field or behavior, ` +
+    `still require it.`
+  );
+}
+
 /** Run the reject-by-default feature judge. */
 export async function judgeFeature(
   provider: IProvider,
   input: IFeatureJudgeInput
 ): Promise<IJudgeOutcome> {
+  const scope = siblingScopeClause(input.siblingEntities ?? []);
   const res = await provider.complete(
     [
       { role: "system", content: SYSTEM },
       {
         role: "user",
-        content: `Feature: ${input.feature}\n\nCode:\n${input.code}`,
+        content: `Feature: ${input.feature}${scope}\n\nCode:\n${input.code}`,
       },
     ],
     { temperature: 0 }
