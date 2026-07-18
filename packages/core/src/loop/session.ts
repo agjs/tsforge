@@ -560,7 +560,7 @@ function systemPrompt(
 ): string {
   const base =
     cfg.executionMode === "drive-to-green"
-      ? buildDriveToGreenSystem(conventions)
+      ? buildDriveToGreenSystem(conventions, cfg.offerCheck === true)
       : buildChatSystem(conventions);
 
   const lines = [`Workspace: ${cfg.cwd}`];

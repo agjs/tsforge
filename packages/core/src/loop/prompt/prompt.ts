@@ -82,10 +82,21 @@ export type ExecutionMode = "chat" | "drive-to-green";
  * That single command policy also resolves the old chat-prompt "run tsc/tests"
  * contradiction that made the model burn turns self-linting.
  */
-export function buildDriveToGreenSystem(conventions: IConventions): string {
+export function buildDriveToGreenSystem(
+  conventions: IConventions,
+  offerCheck = false
+): string {
   const lookupLine = flags.webTools()
     ? "When a blocker is a FRAMEWORK's behavior or types (not your own logic) — e.g. why an Elysia route loses its schema types — LOOK IT UP instead of reasoning in circles: `package_docs`/`package_info` read the installed package's own types + README (no network), and `web_search`/`web_fetch` reach its online docs. Two lookups beat ten turns of guessing."
     : "When a blocker is a FRAMEWORK's behavior or types (not your own logic), find a working example in the repo and copy it — don't reason about the framework's internals in the abstract.";
+
+  // With the `check` tool wired (WS-G), the model SHOULD run the gate on demand via
+  // that tool — the opposite of the default "don't run the gate yourself". Only the
+  // SHELL gate commands stay banned (they waste turns / resolve the wrong tsc). Without
+  // check, keep the original guidance (the gate runs automatically after each edit).
+  const executionLine = offerCheck
+    ? "After every edit the harness runs the gate automatically — AND you can run it yourself any time with the `check` tool, which returns your WHOLE structured error set (`{file,line,rule,message}`) mid-turn. Call `check` before you stop and fix every error it lists in ONE pass, then `check` again; `passed:true` means done. Do NOT run the gate through the SHELL (`tsc`, `eslint`, `knip`, `bun run check`/`validate`) — `check` is the only gate you run; `run` is for tiny diagnostic probes only (`bun -e '…'`)."
+    : "After every edit the harness AUTOMATICALLY runs the gate and hands you the errors + fix guidance. Do NOT run `tsc`, `eslint`, `knip`, `bun run check`/`validate`, or the acceptance/gate command yourself — it wastes turns and tells you nothing the harness won't. `run` is for tiny diagnostic probes only (`bun -e '…'`, a single targeted test). Fix exactly what the gate reports, then edit again; the harness ends the task when it reports green.";
 
   return [
     "You are an expert TypeScript engineer inside tsforge, a harness specialized for STRICT TypeScript. You are driving ONE task to a GREEN gate — you are not chatting.",
@@ -95,10 +106,7 @@ export function buildDriveToGreenSystem(conventions: IConventions): string {
       "bootstrap"
     ),
     lookupLine,
-    overlayBlock(
-      "After every edit the harness AUTOMATICALLY runs the gate and hands you the errors + fix guidance. Do NOT run `tsc`, `eslint`, `knip`, `bun run check`/`validate`, or the acceptance/gate command yourself — it wastes turns and tells you nothing the harness won't. `run` is for tiny diagnostic probes only (`bun -e '…'`, a single targeted test). Fix exactly what the gate reports, then edit again; the harness ends the task when it reports green.",
-      "execution"
-    ),
+    overlayBlock(executionLine, "execution"),
     "The harness AUTO-FIXES mechanical formatting on every file you write (blank lines, braces, quotes, semicolons, import order, `prefer-template`). NEVER hand-fix or chase those.",
     gateRulesSentence(conventions),
     "Keep functions small: the gate caps cognitive complexity at 20 and nesting depth at 4 — extract named helpers instead of one sprawling block. Always `await` promises (or `void` them deliberately) — a floating promise is a gate error.",
