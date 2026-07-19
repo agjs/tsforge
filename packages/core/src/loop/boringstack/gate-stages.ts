@@ -111,11 +111,19 @@ export function signatureToError(sig: string): IErrorItem {
     // re-breaks its braces/generics/JSX, so it grinds at the SAME error for turns (observed
     // live: stuck at 2 `'>' expected` for 40min). Steer it to REWRITE THE WHOLE FILE, and flag
     // the JSX-in-`.ts` case (a `.ts` can't hold JSX → `<X>` reads as a generic wanting `>`).
-    const isParse =
-      /parsing error|['`][^'`]*['`] expected|unexpected token/iu.test(message);
+    // Match the whole tsc/eslint syntax-error family: `Parsing error`, `Unexpected token`, and
+    // any `… expected.` (quoted `';' expected` OR bare `Expression/Declaration/Identifier/Type
+    // expected`). The trailing-`expected` form is anchored so it doesn't catch type errors that
+    // merely contain the word mid-sentence.
+    const isParse = /parsing error|unexpected token|expected\.?\s*$/iu.test(
+      message
+    );
+    // The `.tsx` root-cause tip is ONLY valid for the JSX/generic `'>' expected` class — appended
+    // elsewhere it invents a wrong cause and can push a rename detour for a plain `';' expected`.
+    const isJsxGenericParse = /['`]>['`]\s+expected/iu.test(message);
     const parseSteer =
-      file.endsWith(".ts") && !file.endsWith(".d.ts")
-        ? " If this file contains JSX it must be a `.tsx` — a `.ts` parses `<X>` as a generic and demands `>`."
+      isJsxGenericParse && file.endsWith(".ts") && !file.endsWith(".d.ts")
+        ? " This `'>' expected` in a `.ts` is usually JSX in a non-JSX file — if it contains JSX, it must be a `.tsx` (a `.ts` parses `<X>` as a generic and demands `>`)."
         : "";
 
     return {

@@ -114,13 +114,16 @@ describe("signatureToError", () => {
 
   test("a discrete PARSE error is steered to a full rewrite (not a surgical patch)", () => {
     // The class the model can't fix by patching — observed live stuck at 2 `'>' expected`.
-    const sig =
-      "failure:apps%2Fui%2Fsrc%2Ffeatures%2Fx%2FX.tsx:5::Parsing%20error%3A%20'%3E'%20expected.";
-    const err = signatureToError(sig);
+    const err = signatureToError(
+      "failure:apps%2Fui%2Fsrc%2Ffeatures%2Fx%2FX.tsx:5::Parsing%20error%3A%20'%3E'%20expected."
+    );
 
     expect(err.file).toBe("apps/ui/src/features/x/X.tsx");
     expect(err.message).toContain("SYNTAX/PARSE error");
     expect(err.message).toContain("REWRITE THE WHOLE FILE");
+    // A .tsx file already holds JSX — it must NOT get the "must be a `.tsx`" rename tip.
+    expect(err.message).not.toContain("must be a `.tsx`");
+
     // A non-parse error is left untouched (no rewrite steer).
     const plain = signatureToError(
       "failure:apps%2Fui%2Fsrc%2Fx.ts:3:no-unused-vars:'y'%20is%20defined%20but%20never%20used."
@@ -129,12 +132,30 @@ describe("signatureToError", () => {
     expect(plain.message).not.toContain("REWRITE THE WHOLE FILE");
   });
 
-  test("a parse error in a .ts file flags the JSX-must-be-.tsx cause", () => {
-    const sig =
-      "failure:apps%2Fui%2Fsrc%2Ffeatures%2Fx%2FX.hooks.ts:9::'%3E'%20expected.";
-    const err = signatureToError(sig);
+  test("an UNQUOTED parse diagnostic still gets the rewrite steer", () => {
+    // `Expression expected.` / `Declaration or statement expected.` carry no quoted token.
+    const err = signatureToError(
+      "failure:apps%2Fapi%2Fsrc%2Fx.ts:2::Expression%20expected."
+    );
 
-    expect(err.message).toContain("must be a `.tsx`");
+    expect(err.message).toContain("REWRITE THE WHOLE FILE");
+  });
+
+  test("a `'>' expected` in a .ts flags the JSX-must-be-.tsx cause; other .ts parse errors do NOT", () => {
+    // The one class the .tsx tip is valid for.
+    const jsx = signatureToError(
+      "failure:apps%2Fui%2Fsrc%2Ffeatures%2Fx%2FX.hooks.ts:9::'%3E'%20expected."
+    );
+
+    expect(jsx.message).toContain("must be a `.tsx`");
+
+    // A plain `';' expected` in a .ts is NOT a JSX problem — must not suggest a rename detour.
+    const semi = signatureToError(
+      "failure:apps%2Fapi%2Fsrc%2Fx.ts:4::';'%20expected."
+    );
+
+    expect(semi.message).toContain("REWRITE THE WHOLE FILE");
+    expect(semi.message).not.toContain("must be a `.tsx`");
   });
 });
 
