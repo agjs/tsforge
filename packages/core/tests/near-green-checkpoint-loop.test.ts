@@ -316,6 +316,80 @@ test("rollbackNearGreen reverts OUT-OF-SCOPE package.json + binary lockfile (ROL
   }
 });
 
+test("rollbackNearGreen TOMBSTONES a lockfile the spray CREATED (none existed at checkpoint)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await Bun.write(join(dir, "src", "feature.ts"), "export const GOOD = 1;\n");
+    // At the near-green low: package.json exists, but NO lockfile yet.
+    const pkgOrig = '{"name":"app","dependencies":{}}\n';
+
+    await Bun.write(join(dir, "package.json"), pkgOrig);
+
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["src/**"], // narrow scope: dep files handled only via depFiles
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set() },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            errors: [],
+            output: "",
+          }),
+        },
+      },
+    };
+
+    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "e0", message: "one error" },
+    ]);
+
+    // A dependency spray installs a package → add_dependency mutates package.json AND CREATES a
+    // lockfile that did NOT exist at the checkpoint.
+    await Bun.write(
+      join(dir, "package.json"),
+      '{"name":"app","dependencies":{"left-pad":"1.0.0"}}\n'
+    );
+    await Bun.write(join(dir, "bun.lock"), "sprayed lockfile\n");
+
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 8,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: 8,
+      edits: 0,
+      regressions: 1,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      nearGreenCheckpoint: checkpoint,
+      nearGreenRollbacks: 0,
+    };
+
+    await rollbackNearGreen(ctx, state, 8);
+
+    // package.json reverted to the checkpoint bytes …
+    expect(await Bun.file(join(dir, "package.json")).text()).toBe(pkgOrig);
+    // … and the spray-CREATED lockfile is TOMBSTONED (not left on disk to keep the tree sprayed).
+    expect(await Bun.file(join(dir, "bun.lock")).exists()).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 /** A gate that sprays (8 errors) iff a spray-marker file exists, else near-green (1). Lets
  *  us prove that a spray which CREATES a new file is fully reverted — the file tombstoned. */
 function existenceGate(dir: string): IGate {

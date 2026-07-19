@@ -1,4 +1,5 @@
 import { basename, join, relative, isAbsolute } from "node:path";
+import { rm } from "node:fs/promises";
 import type { ITask } from "../spec";
 import type { IChatMessage, IToolCall } from "../inference";
 import {
@@ -2174,6 +2175,19 @@ export async function rollbackNearGreen(
   // text/tombstone snapshot doesn't cover, so a dependency-induced spray is fully reverted.
   for (const [rel, bytes] of cp.depFiles) {
     await Bun.write(join(ctx.cwd, rel), bytes);
+  }
+
+  // Tombstone dependency files the spray CREATED — add_dependency can create a lockfile where
+  // none existed at the near-green low (so it isn't in depFiles). They're out of task scope, so
+  // the shared tombstone scan can't see them; delete them here or a spray-created lockfile stays
+  // on disk and the restored gate diverges (a dependency-spray hole).
+  for (const rel of ROLLBACK_EXTRA_FILES) {
+    if (
+      !cp.depFiles.has(rel) &&
+      (await Bun.file(join(ctx.cwd, rel)).exists())
+    ) {
+      await rm(join(ctx.cwd, rel), { force: true });
+    }
   }
 
   // Restore the change-scoping set to the checkpoint's, so change-scoped meta-rules see the
