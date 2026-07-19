@@ -165,8 +165,9 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "(do NOT try to fix that by casting or changing production code). Use `mockResolvedValueOnce` " +
     "per call; use `mockResolvedValue` only for a call that retries (e.g. a GET-me loop). RESET the " +
     "mocks between tests — `beforeEach(() => { apiMock.GET.mockReset(); apiMock.POST.mockReset(); … })` " +
-    "(or `vi.clearAllMocks()`) — or a leftover `mockResolvedValue` leaks into the next test (it passes " +
-    "alone but fails in the suite). Wrap the " +
+    "(or `vi.resetAllMocks()`; NOT `vi.clearAllMocks()`, which clears only call history and leaves " +
+    "queued return values in place) — or a leftover `mockResolvedValue` leaks into the next test (it " +
+    "passes alone but fails in the suite). Wrap the " +
     "hook in a `QueryClient` with `retry:false` via `renderHook(() => useX(), { wrapper })` and " +
     "assert with `await waitFor(() => …)`. Imports: `vitest` (`describe, it, expect, vi, beforeEach`) " +
     "+ `@testing-library/react` (`renderHook, waitFor, act`) + `@tanstack/react-query`.\n" +

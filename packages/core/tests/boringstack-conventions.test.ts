@@ -57,6 +57,10 @@ describe("convention registry", () => {
     // Mock reset between tests (deepseek-flagged gap): the pass-alone-fail-in-suite trap.
     expect(g).toContain("mockReset");
     expect(g).toContain("fails in the suite");
+    // The correct global reset is resetAllMocks (resets queued return values); clearAllMocks
+    // only clears call history and would NOT prevent the leak — the guide must steer away from it.
+    expect(g).toContain("resetAllMocks");
+    expect(g).toContain("NOT `vi.clearAllMocks()`");
     // The API route test idiom from the shipped example.
     expect(g).toContain("createApp()");
     expect(g).toContain("app.handle");
