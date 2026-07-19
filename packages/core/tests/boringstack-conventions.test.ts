@@ -41,6 +41,41 @@ describe("convention registry", () => {
     expect(g).toContain("response.error");
     expect(g).toContain("throwOnError");
   });
+
+  test("testing guide teaches the exact idioms the model kept failing (extension, hoisted mock, route tests, rules)", () => {
+    const g = conventionGuide("testing");
+
+    // The .test.ts vs .test.tsx decision + the never-both rule (the dual-extension churn).
+    expect(g).toContain(".test.tsx");
+    expect(g).toContain(".test.ts");
+    expect(g).toContain("never both");
+    // The api-client mock idiom the model reinvented 16× (getting `any`-typed data).
+    expect(g).toContain("vi.hoisted");
+    expect(g).toContain('vi.mock("@/lib/api/client"');
+    expect(g).toContain("mockResolvedValueOnce");
+    expect(g).toContain("keeps `data` typed");
+    // Mock reset between tests (deepseek-flagged gap): the pass-alone-fail-in-suite trap.
+    expect(g).toContain("mockReset");
+    expect(g).toContain("fails in the suite");
+    // The API route test idiom from the shipped example.
+    expect(g).toContain("createApp()");
+    expect(g).toContain("app.handle");
+    expect(g).toContain("loginCookie");
+    // The enforced test rules, each named so the model connects error → fix.
+    expect(g).toContain("no-focused-tests");
+    expect(g).toContain("no-conditional-expect");
+    expect(g).toContain("fake-timers-must-be-restored");
+    // The auto-reformat re-read (the not-found edit-reject churn).
+    expect(g).toContain("AUTO-FORMATS");
+  });
+});
+
+describe("topicForRule (testing)", () => {
+  test("a test rule maps to the testing topic so its gate error pushes the guide", () => {
+    expect(topicForRule("test-sibling-required")).toBe("testing");
+    expect(topicForRule("no-real-network-in-unit-tests")).toBe("testing");
+    expect(topicForRule("no-focused-tests")).toBe("testing");
+  });
 });
 
 describe("topicForRule", () => {

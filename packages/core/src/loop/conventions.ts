@@ -23,6 +23,7 @@ const TOPICS = [
   "forms",
   "data-fetching",
   "lint-gotchas",
+  "testing",
 ] as const;
 
 export type ConventionTopic = (typeof TOPICS)[number];
@@ -59,6 +60,18 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
       "no-confusing-void-expression",
       "no-error-stringify",
       "no-duplicate-string",
+    ],
+    // Tests were 61% of the edits on a live CRUD build (measured) — the model doesn't
+    // know the stack's test idioms so it flails: guesses .test.ts vs .test.tsx (and makes
+    // BOTH), reinvents the api-client mock (getting `any`-typed `data`), uses the wrong
+    // vi mock method. These rules fire on those mistakes; the guide teaches the idiom.
+    testing: [
+      "test-sibling-required",
+      "test-file-mirrors-source",
+      "no-focused-tests",
+      "no-conditional-expect",
+      "no-real-network-in-unit-tests",
+      "fake-timers-must-be-restored",
     ],
   };
 
@@ -133,6 +146,44 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     '`log.error({ err }, "failed")`, never `` log.error(`${err}`) `` or `String(err)`.\n' +
     "• HOIST heavily-repeated string literals — the same literal 5+ times is a no-duplicate-string " +
     "error; pull it into a `const` (or `<Feature>.constants.ts`) and reference that.",
+  testing:
+    "TESTING (boringstack). Every logic file needs a co-located test (test-sibling-required), " +
+    "and tests are where builds waste the MOST turns — because the model guesses the idioms. " +
+    "Write them right the first time:\n" +
+    "• EXTENSION — pick ONE, never both: `.test.tsx` ONLY if the test renders JSX (`renderHook` " +
+    "with a wrapper, `render`, any `<X/>`); `.test.ts` for pure logic (schemas, utils, services, " +
+    "API route tests). The sibling check accepts EITHER, so if you create both, the unused twin " +
+    "becomes a knip `unused file` error. A `<X>` inside a `.test.ts` parses as a generic and fails " +
+    "with `'>' expected` — that means the file must be `.test.tsx`.\n" +
+    "• UI query/mutation/hook tests (`.test.tsx`) — mock the api-client HOISTED at the top, exactly " +
+    "this shape:\n" +
+    "    const apiMock = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn(), PATCH: vi.fn(), PUT: vi.fn(), DELETE: vi.fn() }));\n" +
+    '    vi.mock("@/lib/api/client", () => ({ apiClient: apiMock }));\n' +
+    "  Return a CONCRETE typed object from the mock — `apiMock.POST.mockResolvedValueOnce({ data: { " +
+    "...the real response shape... } })`. A concrete literal keeps `data` typed; a bare `vi.fn()` " +
+    "return is `any`, which then trips no-unsafe/no-unnecessary-condition in the code under test " +
+    "(do NOT try to fix that by casting or changing production code). Use `mockResolvedValueOnce` " +
+    "per call; use `mockResolvedValue` only for a call that retries (e.g. a GET-me loop). RESET the " +
+    "mocks between tests — `beforeEach(() => { apiMock.GET.mockReset(); apiMock.POST.mockReset(); … })` " +
+    "(or `vi.clearAllMocks()`) — or a leftover `mockResolvedValue` leaks into the next test (it passes " +
+    "alone but fails in the suite). Wrap the " +
+    "hook in a `QueryClient` with `retry:false` via `renderHook(() => useX(), { wrapper })` and " +
+    "assert with `await waitFor(() => …)`. Imports: `vitest` (`describe, it, expect, vi, beforeEach`) " +
+    "+ `@testing-library/react` (`renderHook, waitFor, act`) + `@tanstack/react-query`.\n" +
+    "• API route tests (`apps/api/tests/**/*.routes.test.ts`, pure `.ts`) — handle the app in-process, " +
+    "never a real network (no-real-network-in-unit-tests):\n" +
+    '    const app = createApp(); // from "../../../src/config/app"\n' +
+    '    const res = await app.handle(new Request("http://localhost/api/v1/<path>", { method, headers, body }));\n' +
+    "    expect(res.status).toBe(200);\n" +
+    "  Read the body as `unknown` then TYPE-GUARD it (`const isX = (v: unknown): v is {…} => …; if " +
+    "(!isX(body)) throw new Error(…)`) — never `as`. For an authed route, define a local `loginCookie` " +
+    "helper (copy it verbatim from an existing `*.routes.test.ts`) and pass the returned cookie in headers.\n" +
+    "• RULES the gate enforces: no `.only`/`.skip` (no-focused-tests); never put `expect` inside an " +
+    "`if`/`try`/`catch` (no-conditional-expect); if you use fake timers, restore them in `afterEach` " +
+    "(fake-timers-must-be-restored); the test path/name mirrors its source (test-file-mirrors-source).\n" +
+    "• After you write a test the harness AUTO-FORMATS it (imports reordered, quotes/commas normalized), " +
+    "so your next `edit` oldString won't match — RE-READ the file and copy oldString from its current " +
+    "content; do NOT recreate the whole file.",
 };
 
 /** The guide for a topic (the exact string pushed or pulled). */

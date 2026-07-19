@@ -366,9 +366,10 @@ export const PULL_CONVENTIONS_TOOL = {
             "forms",
             "data-fetching",
             "lint-gotchas",
+            "testing",
           ],
           description:
-            "which guide: component-anatomy (where a component lives + one-per-file), file-layout (no inline types/constants/helpers), jsx (no computation in markup), state (hooks, not component body), no-casts (type guards instead of `as`/`!`), routing (thin route files), forms, data-fetching (api-client, never raw fetch), lint-gotchas (await promises, no void-expr values, no stringified errors, no duplicate strings).",
+            "which guide: component-anatomy (where a component lives + one-per-file), file-layout (no inline types/constants/helpers), jsx (no computation in markup), state (hooks, not component body), no-casts (type guards instead of `as`/`!`), routing (thin route files), forms, data-fetching (api-client, never raw fetch), lint-gotchas (await promises, no void-expr values, no stringified errors, no duplicate strings), testing (.test.ts vs .test.tsx, the vi.hoisted api-client mock, createApp/app.handle route tests, enforced test rules).",
         },
       },
       required: ["topic"],
