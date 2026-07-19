@@ -5,6 +5,22 @@ import { join } from "node:path";
 import type { IProvider } from "../src/inference";
 import { Session } from "../src/loop";
 import type { ILoopEvent } from "../src/loop/loop.types";
+import type { IGate } from "../src/gate/gate-runner";
+
+/** A gate that never passes, returning one STABLE error — so checkStuck holds one block
+ *  identity and the escalation ladder climbs to exhaustion (the settleGate stalled-park). */
+const stubbornGate: IGate = {
+  run: async () => ({
+    passed: false,
+    errors: [
+      {
+        key: "stubborn-error",
+        message: "the stubborn error that never clears",
+      },
+    ],
+    output: "1 error",
+  }),
+};
 
 // WS-C3: a stuck terminal RAISES A HAND (pause + ask) when a human co-pilot is present,
 // and PARKS (today's behaviour) when unattended. Driven end-to-end through the real
@@ -60,6 +76,91 @@ test("interactive: a read-only spin RAISES A HAND instead of parking", async () 
     expect(events.some((e) => e.kind === "ask_user")).toBe(true);
     // A raise-hand is not a park — no handoff on the result.
     expect(res.handoff).toBeUndefined();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/** A provider that alternates a real edit (dirties a file so the gate runs) with a yield
+ *  (triggers settleGate → checkStuck). With the stubborn gate this climbs the ladder to
+ *  exhaustion — the settleGate stalled-park terminal, the OTHER terminal WS-C3 hooks. */
+function ladderExhauster(): IProvider {
+  let n = 0;
+
+  return {
+    async complete() {
+      n += 1;
+
+      if (n % 2 === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: `e${String(n)}`,
+              name: "create",
+              arguments: {
+                file: `f${String(n)}.ts`,
+                content: `export const v${String(n)} = ${String(n)};\n`,
+              },
+            },
+          ],
+        };
+      }
+
+      return { content: "still working on it", toolCalls: [] };
+    },
+  };
+}
+
+test("interactive: LADDER EXHAUSTION (settleTurn) raises a hand, not a park", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-raisehand-"));
+  const events: ILoopEvent[] = [];
+
+  try {
+    const session = await Session.create({
+      provider: ladderExhauster(),
+      cwd: dir,
+      files: ["**/*"],
+      interactive: true, // co-pilot present
+      gate: stubbornGate, // never green → the ladder climbs to exhaustion
+      maxTurns: 80,
+      report: (e) => events.push(e),
+    });
+
+    const res = await session.send("build it");
+
+    // The settleTurn stuck terminal converted to a raise-hand (distinct from the
+    // readonly-spin terminal above — this locks the settleTurn call site specifically).
+    expect(res.status).toBe("responded");
+    expect(res.awaitingUser).toContain("How should I proceed?");
+    expect(res.handoff).toBeUndefined();
+    expect(events.some((e) => e.kind === "ask_user")).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("unattended: the SAME ladder exhaustion PARKS (stuck + handoff), never asks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-raisehand-"));
+  const events: ILoopEvent[] = [];
+
+  try {
+    const session = await Session.create({
+      provider: ladderExhauster(),
+      cwd: dir,
+      files: ["**/*"],
+      // interactive omitted → headless
+      gate: stubbornGate,
+      maxTurns: 80,
+      report: (e) => events.push(e),
+    });
+
+    const res = await session.send("build it");
+
+    expect(res.status).toBe("stuck");
+    expect(res.handoff).toBeDefined();
+    expect(res.awaitingUser).toBeUndefined();
+    expect(events.some((e) => e.kind === "ask_user")).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

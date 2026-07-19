@@ -35,6 +35,21 @@ test("/clear carries the deferred gate across the Session rebuild", async () => 
   expect(src).toContain("pausedWithEdit: carryDeferredGate");
 });
 
+// WS-C: the deferred gate must ALSO survive the process boundary (--continue / --resume),
+// not just the in-process /clear. The persist path writes session.hasDeferredGate into the
+// record and the resumed Session.create re-seeds pausedWithEdit from it — else a resumed
+// session drops the deferred gate (session-store.test.ts locks the record round-trip).
+test("--continue persists + re-seeds the deferred gate", async () => {
+  const src = await Bun.file(
+    join(import.meta.dir, "..", "src", "cli", "repl.ts")
+  ).text();
+
+  // Written into the persisted record…
+  expect(src).toContain("pausedWithEdit: session.hasDeferredGate");
+  // …and re-seeded on the resumed Session.create.
+  expect(src).toContain("resumed?.pausedWithEdit === true");
+});
+
 // The SAFETY contract, unit-tested via the pure router: while awaiting an ask_user
 // answer, a plan-approval word must route to "answer", NOT "plan-approval" — else the
 // human's reply would silently exit plan mode and unlock mutating tools.

@@ -2126,13 +2126,12 @@ export class Session {
       return this.raiseHandOrStuck(settled.handoff, turn);
     }
 
-    // Thread the structured handoff up so BoringStack/interactive callers can park &
-    // revisit on ladder exhaustion (host.send reads .handoff). Dropping it here made
-    // gate-ladder exhaustion silently un-parkable.
+    // Any stuck terminal from settleGate carries a handoff (checkStuck always builds
+    // one), so it already returned via raiseHandOrStuck above. The only results reaching
+    // here are `done` and the defensive no-handoff stuck — neither threads a handoff.
     return {
       status: settled.status === RUN_STATUS.done ? "done" : "stuck",
       turns: turn,
-      ...(settled.handoff !== undefined ? { handoff: settled.handoff } : {}),
     };
   }
 

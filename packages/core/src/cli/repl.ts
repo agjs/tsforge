@@ -375,6 +375,10 @@ async function initReplSession(args: ICliArgs): Promise<{
     ...(lintFile === undefined ? {} : { lintFile }),
     ...(resumed === null ? {} : { history: resumed.messages }),
     fix: buildCoreFix(),
+    // A resumed session with a still-unvalidated pre-pause edit re-seeds the deferred
+    // gate so it re-gates on the first send — never silently dropped across --continue
+    // (WS-C; the persisted counterpart of the /clear carry).
+    ...(resumed?.pausedWithEdit === true ? { pausedWithEdit: true } : {}),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
     // `--policy-mode` (validated) overrides the config file's policy.mode.
@@ -410,6 +414,8 @@ async function initReplSession(args: ICliArgs): Promise<{
       files: session.scope,
       updatedAt: Date.now(),
       planMode: false, // will be set by caller
+      // Persist a still-pending deferred gate so --continue re-gates it (WS-C).
+      pausedWithEdit: session.hasDeferredGate,
       messages: [...session.messages],
     });
   };
@@ -482,6 +488,8 @@ export async function repl(args: ICliArgs): Promise<number> {
       files: session.scope,
       updatedAt: Date.now(),
       planMode,
+      // Persist a still-pending deferred gate so --continue re-gates it (WS-C).
+      pausedWithEdit: session.hasDeferredGate,
       messages: [...session.messages],
     });
   };

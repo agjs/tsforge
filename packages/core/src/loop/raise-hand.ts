@@ -3,10 +3,13 @@ import type { ISendResult } from "./session";
 
 /** WS-C3 — stuck → ASK instead of PARK.
  *
- *  When the escalation ladder exhausts (or a read-only / timeout spin gives up) and no
- *  expert rescue applies, an UNATTENDED build parks with a structured handoff. But when a
- *  human co-pilot is present, parking wastes them: the build should RAISE A HAND — pose
- *  the block to the human and pause — instead of dying on a wall a 30-second nudge clears.
+ *  When the escalation ladder exhausts (or a read-only spin gives up) and no expert
+ *  rescue applies, an UNATTENDED build parks with a structured handoff. But when a human
+ *  co-pilot is present, parking wastes them: the build should RAISE A HAND — pose the
+ *  block to the human and pause — instead of dying on a wall a 30-second nudge clears.
+ *  (A repeated request TIMEOUT stays a park — it's an infrastructure failure a human
+ *  steer can't unblock, so only the two STEERABLE terminals — ladder exhaustion and
+ *  read-only spin — raise a hand.)
  *
  *  These pure helpers own the park-vs-raise-hand DECISION so it can be unit-locked away
  *  from the Session's side effect (emitting the `ask_user` event that renders the
