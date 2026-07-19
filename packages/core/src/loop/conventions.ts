@@ -131,7 +131,7 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "a BLOCK body: `onClick={() => { setOpen(true); }}`, not `() => setOpen(true)`.\n" +
     "• NEVER stringify an error into a log — pass the error object: " +
     '`log.error({ err }, "failed")`, never `` log.error(`${err}`) `` or `String(err)`.\n' +
-    "• HOIST repeated string literals — the same literal 3+ times is a no-duplicate-string " +
+    "• HOIST heavily-repeated string literals — the same literal 5+ times is a no-duplicate-string " +
     "error; pull it into a `const` (or `<Feature>.constants.ts`) and reference that.",
 };
 
