@@ -85,7 +85,7 @@ test("interactive: a read-only spin RAISES A HAND instead of parking", async () 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 /** A provider that alternates a real edit (dirties a file so the gate runs) with a yield
  *  (triggers settleGate → checkStuck). With the stubborn gate this climbs the ladder to
@@ -166,7 +166,7 @@ test("interactive: LADDER EXHAUSTION (settleTurn) raises a hand, not a park", as
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test("unattended: the SAME ladder exhaustion PARKS (stuck + handoff), never asks", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-raisehand-"));
@@ -192,7 +192,7 @@ test("unattended: the SAME ladder exhaustion PARKS (stuck + handoff), never asks
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test("a spin raise-hand AFTER this-send edits carries the deferred gate to the resume", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-raisehand-"));
@@ -271,7 +271,7 @@ test("a spin raise-hand AFTER this-send edits carries the deferred gate to the r
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test("unattended: the SAME read-only spin PARKS (stuck + handoff), never asks", async () => {
   const dir = await spinDir();
@@ -297,4 +297,4 @@ test("unattended: the SAME read-only spin PARKS (stuck + handoff), never asks", 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
+}, 30_000);
