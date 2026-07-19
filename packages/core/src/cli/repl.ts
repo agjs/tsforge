@@ -833,6 +833,9 @@ export async function repl(args: ICliArgs): Promise<number> {
           contextWindow,
           report: makeReporter(logFile, id, id),
           enableThinking: false,
+          // Still an interactive REPL after /clear — keep ask_user (WS-C) offered, or
+          // the co-pilot raise-hand silently dies mid-session.
+          interactive: true,
           ...(profile === undefined ? {} : { profile }),
         });
         wireDelegation(); // re-offer spawn_agent on the rebuilt session

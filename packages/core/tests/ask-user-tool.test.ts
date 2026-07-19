@@ -8,15 +8,15 @@ import {
 } from "../src/loop/tools/ask-user-tool";
 import type { IToolContext } from "../src/loop/tools/tool-context";
 
-/** Minimal structural ctx — only what doAskUser reads. `interactive` toggles the two
+/** Minimal structural ctx — only what doAskUser reads. `humanPresent` toggles the two
  *  behaviours. Built structurally (no cast) so it tracks the real interface. */
-function ctx(interactive: boolean): IToolContext {
+function ctx(humanPresent: boolean): IToolContext {
   return {
     cwd: "/workspace",
     files: [],
     report: () => undefined,
     task: "ask-test",
-    interactive,
+    humanPresent,
   };
 }
 

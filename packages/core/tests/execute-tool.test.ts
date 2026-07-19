@@ -772,7 +772,7 @@ test("ask_user passes policy and dispatches to doAskUser (interactive → pause 
       files: [],
       task: "t",
       report: () => undefined,
-      interactive: true,
+      humanPresent: true,
     }
   );
 

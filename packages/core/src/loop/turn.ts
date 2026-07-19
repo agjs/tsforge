@@ -272,8 +272,13 @@ export interface ILoopCtxTool {
   policyMode?: PolicyMode;
   /** Config-driven policy rules (deny/allow/ask) threaded to the tool context. */
   policyRules?: IPolicyRules;
-  /** Whether an interactive per-action approval path exists (false today). */
+  /** Whether an interactive per-action approval path exists (false today) — a POLICY
+   *  signal, threaded to the tool context. NOT "a human is watching". */
   interactive?: boolean;
+  /** WS-C: a human is present to answer `ask_user` (the interactive REPL). Threaded to
+   *  the tool context; distinct from `interactive` so co-pilot presence never loosens
+   *  policy. Absent ⇒ ask_user proceeds without pausing. */
+  humanPresent?: boolean;
   /** Connected MCP servers (opt-in via tsforge.config.json `mcpServers`). Threaded
    *  into the tool context so `mcp__<server>__<tool>` calls dispatch to them. */
   mcpRegistry?: McpRegistry;
@@ -551,7 +556,10 @@ async function runOneToolCall(
   // ends this send, surface it as an `ask_user` event, and feed a CLEAN tool result
   // back (NEVER the raw sentinel) — the tool_call still gets its tool_result (no
   // dangling call → 400), the turn ends, and the human's next send is the answer.
-  if (isAskUserResult(result)) {
+  // Gate on the CALL being ask_user (not just the result prefix): any other tool or an
+  // MCP server returning text starting with the sentinel must NOT be able to forge a
+  // pause / halt an unattended run.
+  if (call.name === TOOL_NAME.askUser && isAskUserResult(result)) {
     const question = askUserQuestion(result);
 
     state.pendingAskUser = question;
@@ -677,9 +685,42 @@ export async function runToolCalls(
     touchedEditable =
       (await runOneToolCall(call, i, ctx, state)) || touchedEditable;
     i += 1;
+
+    // WS-C: ask_user is a real execution BOUNDARY — the human must answer before
+    // anything else runs. If this call raised the hand, do NOT execute the sibling
+    // calls in the SAME model response (a `[ask_user, create]` batch must not write the
+    // file before the human replies); STUB the rest (so no tool_call dangles → no 400)
+    // and stop. The model re-issues them, with the answer in hand, on the next send.
+    if (state.pendingAskUser !== undefined) {
+      stubUnrunCalls(toolCalls, i, ctx);
+      break;
+    }
   }
 
   return touchedEditable;
+}
+
+/** Push a "not run" tool_result for every remaining tool call from `from` onward, so a
+ *  batch cut short by ask_user leaves no dangling tool_call (which the next API request
+ *  rejects). Purely bookkeeping — none of the stubbed calls execute. */
+function stubUnrunCalls(
+  toolCalls: readonly IToolCall[],
+  from: number,
+  ctx: ILoopCtx
+): void {
+  for (let i = from; i < toolCalls.length; i += 1) {
+    const skipped = toolCalls[i];
+
+    if (skipped !== undefined) {
+      ctx.messages.push({
+        role: "tool",
+        content:
+          "Not run: you asked the human a question — wait for their answer, " +
+          "then re-issue this call if it's still needed.",
+        toolCallId: callKey(skipped, i),
+      });
+    }
+  }
 }
 
 /**

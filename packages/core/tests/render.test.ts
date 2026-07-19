@@ -134,3 +134,14 @@ test("a non-token event flushes a held partial content line first", () => {
 
   renderEvent({ kind: "message", task: "1", message: "x" }); // settle stream
 });
+
+test("renderEvent surfaces an ask_user question prominently (WS-C)", () => {
+  const out = renderEvent(
+    { kind: "ask_user", task: "t", message: "ask_user: Postgres or MySQL?" },
+    { color: false }
+  );
+
+  expect(out).toContain("Postgres or MySQL?");
+  // Not swallowed to empty like the ledger-only kinds (policy/usage/reverted).
+  expect(out.trim().length).toBeGreaterThan(0);
+});

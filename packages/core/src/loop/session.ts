@@ -893,8 +893,10 @@ export class Session {
         ...(mcpRegistry === null ? {} : { mcpRegistry }),
         ...(cfg.editGuard === undefined ? {} : { editGuard: cfg.editGuard }),
         // A real human is present (the interactive REPL) → ask_user can pause for an
-        // answer; absent/false ⇒ unattended, and ask_user proceeds without hanging.
-        ...(cfg.interactive === true ? { interactive: true } : {}),
+        // answer; absent/false ⇒ unattended, ask_user proceeds without hanging. Set
+        // `humanPresent`, NOT `interactive` — the latter is a POLICY signal (approval
+        // path) and co-pilot presence must not loosen policy verdicts.
+        ...(cfg.interactive === true ? { humanPresent: true } : {}),
       },
       gate: {
         parse: cfg.parse,

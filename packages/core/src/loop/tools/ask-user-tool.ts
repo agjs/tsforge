@@ -29,7 +29,7 @@ export function askUserQuestion(result: string): string {
  * The `ask_user` tool (WS-C1): the co-pilot's raise-hand. The model calls it when it's
  * genuinely blocked on a DECISION only the human can make; the turn pauses, the human
  * answers, and it continues. Behaviour splits on whether a human is present:
- *   - INTERACTIVE (`ctx.interactive`): returns the {@link ASK_USER_SENTINEL} + question,
+ *   - HUMAN PRESENT (`ctx.humanPresent`): returns the {@link ASK_USER_SENTINEL} + question,
  *     which the loop intercepts to surface the question and re-enter with the answer.
  *   - UNATTENDED: returns {@link ASK_USER_NO_HUMAN} immediately so an eval/CI run never
  *     hangs — the model proceeds and logs its assumption.
@@ -48,7 +48,7 @@ export function doAskUser(
     );
   }
 
-  if (ctx.interactive !== true) {
+  if (ctx.humanPresent !== true) {
     return ASK_USER_NO_HUMAN;
   }
 
