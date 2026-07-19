@@ -37,4 +37,26 @@ describe("nearGreenBanner (finishing discipline near green)", () => {
   test("at the watermark, far from green → no banner", () => {
     expect(nearGreenBanner(5, 5)).toBe("");
   });
+
+  test("#61: completionOnly flips the banner to BUILD the UI (not the don't-create-files lockdown)", () => {
+    // The remaining error clears only by ADDING code — the normal lockdown would forbid the
+    // create/edit/delete UI the feature needs. The banner must instruct the opposite.
+    const b = nearGreenBanner(1, 1, true);
+
+    expect(b).toContain("ADDING the code");
+    expect(b).toContain("BUILD the");
+    expect(b).toContain("NOT a regression");
+    // The contradictory lockdown text must be GONE for a completion state.
+    expect(b).not.toContain("Do NOT create new files");
+    expect(b).not.toContain("NEAR-GREEN — only");
+  });
+
+  test("#61: completionOnly during a spike (total>best) still says BUILD, not UNDO", () => {
+    // While the model adds the demanded files the count rises; it must not be told to undo.
+    const b = nearGreenBanner(8, 1, true);
+
+    expect(b).toContain("BUILD the");
+    expect(b).not.toContain("REGRESSION");
+    expect(b).not.toContain("UNDO");
+  });
 });
