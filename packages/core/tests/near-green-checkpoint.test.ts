@@ -2,12 +2,45 @@ import { test, expect } from "bun:test";
 import {
   shouldCheckpoint,
   shouldRollback,
+  isCompletionClass,
+  allCompletionClass,
   NEAR_GREEN_N,
   NEAR_GREEN_M,
   MAX_NEAR_GREEN_ROLLBACKS,
   type INearGreenCheckpoint,
 } from "../src/loop/near-green-checkpoint";
+import type { IErrorItem } from "../src/validate/validate.types";
 import type { IFileSnapshot } from "../src/loop/file-snapshot";
+
+// #61: a HOLLOW near-green state (remaining errors clear only by ADDING code — i18n keys,
+// reachability, judge) must NOT be checkpointed, or WS-B reverts the demanded completion edit.
+const err = (rule: string): IErrorItem => ({ key: rule, rule, message: rule });
+
+test("isCompletionClass: only add-code rules (reachability/i18n-locale-keys-used/judge), bare or prefixed", () => {
+  expect(isCompletionClass(err("reachability"))).toBe(true);
+  expect(isCompletionClass(err("i18n-locale-keys-used"))).toBe(true);
+  expect(isCompletionClass(err("judge"))).toBe(true);
+  expect(isCompletionClass(err("plugin/i18n-locale-keys-used"))).toBe(true);
+  // Fixable-in-place errors are NOT completion-class (WS-B still protects against those).
+  expect(isCompletionClass(err("no-floating-promises"))).toBe(false);
+  expect(isCompletionClass(err("@typescript-eslint/no-unsafe-argument"))).toBe(
+    false
+  );
+  expect(isCompletionClass({ key: "x", message: "no rule" })).toBe(false);
+});
+
+test("allCompletionClass: true only when EVERY error is completion-class; empty is false", () => {
+  expect(allCompletionClass([err("i18n-locale-keys-used")])).toBe(true);
+  expect(
+    allCompletionClass([err("reachability"), err("i18n-locale-keys-used")])
+  ).toBe(true);
+  // A single fixable error among completion ones means the state is NOT purely hollow —
+  // WS-B should still protect it (the fixable error is a real revert target).
+  expect(
+    allCompletionClass([err("i18n-locale-keys-used"), err("no-console")])
+  ).toBe(false);
+  expect(allCompletionClass([])).toBe(false);
+});
 
 // WS-B: the pure checkpoint/rollback decision, unit-locked with the Phase 0a thresholds
 // (N=2, M=3) away from the Session's file I/O. Real spray data from inv157/inv156.
