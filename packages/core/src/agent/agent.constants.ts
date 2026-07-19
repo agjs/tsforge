@@ -34,6 +34,7 @@ export const TOOL_NAME = {
   readImage: "read_image",
   generateImage: "generate_image",
   check: "check",
+  askUser: "ask_user",
 } as const;
 
 /** Per-tool capability flags — the single source of truth the plan-mode set and
@@ -96,6 +97,10 @@ export const TOOL_SPECS: Readonly<Record<ToolName, IToolSpec>> = {
   // (prettier / eslint --fix) — so it can mutate → NOT plan-mode-safe. Not script-
   // exposable: the gate is heavy and already runs at end-of-turn.
   [TOOL_NAME.check]: { readOnly: false, scriptExposable: false },
+  // `ask_user` asks the human ONE bounded question and mutates nothing — plan-mode
+  // safe (clarifying while planning is fine). Not script-exposable: it's an
+  // interactive control-flow tool, not a data call a program should make.
+  [TOOL_NAME.askUser]: { readOnly: true, scriptExposable: false },
 };
 
 function toolNamesWhere(
@@ -691,6 +696,26 @@ export const CHECK_TOOL = {
     parameters: {
       type: "object",
       properties: {},
+    },
+  },
+} as const;
+
+export const ASK_USER_TOOL = {
+  type: "function",
+  function: {
+    name: TOOL_NAME.askUser,
+    description:
+      "Ask the human ONE specific, bounded question when you are genuinely blocked on a DECISION only they can make — an ambiguous requirement, a product choice, a missing credential — and cannot proceed sensibly on your own. This is a last resort, not a substitute for investigating the code: try `read`/`search` first. Do NOT use it to narrate progress or ask permission for routine work. Ask one concrete question with the options you're weighing; the human answers and you continue. If no human is available (an unattended run), you'll be told to proceed with your best judgment.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description:
+            "The single, specific question for the human — include the concrete options or the decision you're stuck on.",
+        },
+      },
+      required: ["question"],
     },
   },
 } as const;

@@ -31,6 +31,10 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   // executeTool's non-read-only hard guard. WITHOUT this it classifies `unknown` →
   // deny, and every check call dies before doCheck (the spawn_agent/script regression).
   [TOOL_NAME.check]: "shell",
+  // `ask_user` (WS-C1) asks the human a question and mutates nothing → zero-risk,
+  // classified `read_file` so it's allowed in every mode (incl. plan). Absent here it
+  // would classify `unknown` → deny before the handler runs (the check/script DOA class).
+  [TOOL_NAME.askUser]: "read_file",
   // Delegating to a read-only subagent — its own class so a repo can deny/ask it
   // specifically; the child's tool calls are re-classified as they dispatch.
   [TOOL_NAME.spawnAgent]: "spawn_agent",

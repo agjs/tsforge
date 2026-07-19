@@ -33,6 +33,10 @@ export interface ISessionRecord {
   /** Plan mode was on when last saved — restored on `--continue` so a resumed
    *  session doesn't silently drop its read-only guarantee. */
   planMode?: boolean;
+  /** A still-unvalidated edit was pending behind an ask_user pause when last saved —
+   *  restored on `--continue`/`--resume` so a resumed session re-gates that edit on its
+   *  first send instead of silently dropping the deferred gate (WS-C, same as /clear). */
+  pausedWithEdit?: boolean;
   /** The full conversation, including the system message. */
   messages: IChatMessage[];
 }
@@ -170,6 +174,11 @@ async function readRecord(path: string): Promise<ISessionRecord | null> {
         // persists it but readRecord dropped it, so `--continue` always lost it.
         ...(typeof data.planMode === "boolean"
           ? { planMode: data.planMode }
+          : {}),
+        // Restored so a resumed session re-gates a still-pending pre-pause edit instead
+        // of dropping the deferred gate across the process boundary (WS-C).
+        ...(typeof data.pausedWithEdit === "boolean"
+          ? { pausedWithEdit: data.pausedWithEdit }
           : {}),
         messages: toMessages(data.messages),
       };

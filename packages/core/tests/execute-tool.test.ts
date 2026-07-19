@@ -762,3 +762,31 @@ test("check is rejected in PLAN mode (not read-only, not run) — the hard guard
 
   expect(r).toContain("plan mode");
 });
+
+// ── WS-C1: ask_user must survive the policy layer (read_file kind) ─────────────
+test("ask_user passes policy and dispatches to doAskUser (interactive → pause sentinel)", async () => {
+  const r = await executeTool(
+    { name: "ask_user", arguments: { question: "which db?" } },
+    {
+      cwd: "/workspace",
+      files: [],
+      task: "t",
+      report: () => undefined,
+      humanPresent: true,
+    }
+  );
+
+  // NOT a policy rejection — it reached the handler.
+  expect(r).not.toContain("policy");
+  expect(r).not.toContain("unrecognized action");
+  expect(r).toContain("which db?");
+});
+
+test("ask_user in an unattended run returns proceed-with-judgment (never hangs)", async () => {
+  const r = await executeTool(
+    { name: "ask_user", arguments: { question: "which db?" } },
+    { cwd: "/workspace", files: [], task: "t", report: () => undefined }
+  );
+
+  expect(r).toContain("No human is available");
+});

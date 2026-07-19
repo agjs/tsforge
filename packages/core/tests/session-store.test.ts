@@ -80,6 +80,24 @@ test("resume preserves planMode (read-only guarantee survives --continue)", asyn
   expect(resumed?.planMode).toBe(true);
 });
 
+test("resume preserves pausedWithEdit (deferred gate survives --continue)", async () => {
+  // WS-C: a still-unvalidated pre-pause edit must survive the process boundary, or
+  // --continue silently drops the deferred gate (the same hole /clear closed in-process).
+  await saveSession({
+    id: "pwe",
+    cwd: "/proj/pwe",
+    accept: "",
+    files: [],
+    updatedAt: 1000,
+    pausedWithEdit: true,
+    messages: [{ role: "system", content: "sys" }],
+  });
+
+  const resumed = await latestSession("/proj/pwe");
+
+  expect(resumed?.pausedWithEdit).toBe(true);
+});
+
 test("resume preserves assistant reasoningContent (DeepSeek replay)", async () => {
   await saveSession({
     id: "rc",

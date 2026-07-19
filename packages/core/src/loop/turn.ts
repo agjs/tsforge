@@ -39,6 +39,8 @@ import {
 } from "./expert-handoff";
 import {
   executeTool,
+  shouldPauseForAskUser,
+  askUserQuestion,
   type SpawnAgentFn,
   type IToolContext,
   type ICheckOutcome,
@@ -66,6 +68,7 @@ import {
   READ_IMAGE_TOOL,
   GENERATE_IMAGE_TOOL,
   CHECK_TOOL,
+  ASK_USER_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
@@ -121,7 +124,8 @@ type AdvertisedTool =
   | typeof GIT_CONTEXT_TOOL
   | typeof READ_IMAGE_TOOL
   | typeof GENERATE_IMAGE_TOOL
-  | typeof CHECK_TOOL;
+  | typeof CHECK_TOOL
+  | typeof ASK_USER_TOOL;
 
 /** Which extra capability backends are configured this run — decides whether the
  *  image tools are advertised. Resolved once by the driver (run.ts) so
@@ -174,7 +178,8 @@ export function toolsFor(
   hasExistingCode: boolean,
   caps: ICapabilityFlags = {},
   offerConventions = false,
-  offerCheck = false
+  offerCheck = false,
+  offerAskUser = false
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
@@ -186,6 +191,12 @@ export function toolsFor(
   // plain scratch/logic task leaves it off so the base set stays minimal. Same
   // per-backend opt-in shape as pull_conventions — decoupled from every flag.
   const check: AdvertisedTool[] = offerCheck ? [CHECK_TOOL] : [];
+
+  // ask_user (WS-C1) — the co-pilot's raise-hand. Offered only when the caller opts in
+  // (an interactive co-pilot session); off for autonomous eval/CI so the model isn't
+  // tempted to ask a question no one will answer. The handler ALSO guards on
+  // ctx.humanPresent, so a stray call in an unattended run returns "proceed" not a hang.
+  const askUser: AdvertisedTool[] = offerAskUser ? [ASK_USER_TOOL] : [];
 
   // pull_conventions — a read-only knowledge tool the model calls to fetch the
   // BoringStack how-to BEFORE writing that kind of code (the PULL complement to the
@@ -204,6 +215,7 @@ export function toolsFor(
       ...HASHLINE_TOOLS,
       ...conventions,
       ...check,
+      ...askUser,
       ...web,
       ...git,
       ...script,
@@ -217,6 +229,7 @@ export function toolsFor(
     ...HASHLINE_TOOLS,
     ...conventions,
     ...check,
+    ...askUser,
     ...LSP_TOOLS,
     ...web,
     ...git,
@@ -259,8 +272,13 @@ export interface ILoopCtxTool {
   policyMode?: PolicyMode;
   /** Config-driven policy rules (deny/allow/ask) threaded to the tool context. */
   policyRules?: IPolicyRules;
-  /** Whether an interactive per-action approval path exists (false today). */
+  /** Whether an interactive per-action approval path exists (false today) — a POLICY
+   *  signal, threaded to the tool context. NOT "a human is watching". */
   interactive?: boolean;
+  /** WS-C: a human is present to answer `ask_user` (the interactive REPL). Threaded to
+   *  the tool context; distinct from `interactive` so co-pilot presence never loosens
+   *  policy. Absent ⇒ ask_user proceeds without pausing. */
+  humanPresent?: boolean;
   /** Connected MCP servers (opt-in via tsforge.config.json `mcpServers`). Threaded
    *  into the tool context so `mcp__<server>__<tool>` calls dispatch to them. */
   mcpRegistry?: McpRegistry;
@@ -330,6 +348,15 @@ export interface ILoopCtx {
 export interface ILoopState {
   prevGateErrors: ErrorSet;
   gateNoProgress: number;
+  /** WS-C: set when the model called `ask_user` this turn — carries the question. The
+   *  drive loop ENDS the send (surfacing the question) so the human's next send is the
+   *  reply. Cleared once consumed. Absent on autonomous runs (ask_user isn't offered). */
+  pendingAskUser?: string;
+  /** WS-C: an ask_user pause ended a send that had ALSO edited a file. The `edited`
+   *  accumulator is per-send, so the resume send would start `edited=false` and skip the
+   *  gate — leaving that edit unvalidated. This flag re-seeds `edited` on the resume send
+   *  so the pending edit IS gated. */
+  pausedWithEdit?: boolean;
   /** Fewest gate errors seen so far (the convergence watermark) + how many cycles
    *  since it last hit a NEW low. Drives the net-progress stop: a churning build
    *  whose error SET keeps shuffling (so `gateNoProgress` resets) and whose errors
@@ -486,6 +513,34 @@ interface IIndexedCall {
   readonly index: number;
 }
 
+/** WS-C: the model raised its hand via ask_user. Record the question so the drive loop
+ *  ends this send, surface it as an `ask_user` event, and feed a CLEAN tool result back
+ *  (NEVER the raw sentinel) — the tool_call still gets its result (no dangling call →
+ *  400) and the human's next send is the answer. */
+function interceptAskUser(
+  call: IToolCall,
+  index: number,
+  result: string,
+  ctx: ILoopCtx,
+  state: ILoopState
+): void {
+  const question = askUserQuestion(result);
+
+  state.pendingAskUser = question;
+  ctx.report({
+    kind: "ask_user",
+    task: ctx.task.id,
+    message: `ask_user: ${question}`,
+  });
+  ctx.messages.push({
+    role: "tool",
+    content:
+      "Your question was posed to the human; their answer arrives as the next " +
+      "message. Stop here and wait for it.",
+    toolCallId: callKey(call, index),
+  });
+}
+
 /**
  * Run ONE non-spawn tool call: execute it, apply the write-guard + mutation
  * accounting, and push its tool reply. Returns whether it touched an editable
@@ -529,6 +584,17 @@ async function runOneToolCall(
   };
 
   const result = await executeTool(call, toolContextFor(ctx, report));
+
+  // WS-C: the model raised its hand — record the question, surface it, feed a clean
+  // tool result, and end here (no editable file touched). Gated on the CALL being
+  // ask_user (shouldPauseForAskUser) so a forged sentinel from another tool can't hijack
+  // control flow.
+  if (shouldPauseForAskUser(call.name, result)) {
+    interceptAskUser(call, index, result, ctx, state);
+
+    return false;
+  }
+
   let feedback = "";
 
   if (wrote.size > 0) {
@@ -635,9 +701,42 @@ export async function runToolCalls(
     touchedEditable =
       (await runOneToolCall(call, i, ctx, state)) || touchedEditable;
     i += 1;
+
+    // WS-C: ask_user is a real execution BOUNDARY — the human must answer before
+    // anything else runs. If this call raised the hand, do NOT execute the sibling
+    // calls in the SAME model response (a `[ask_user, create]` batch must not write the
+    // file before the human replies); STUB the rest (so no tool_call dangles → no 400)
+    // and stop. The model re-issues them, with the answer in hand, on the next send.
+    if (state.pendingAskUser !== undefined) {
+      stubUnrunCalls(toolCalls, i, ctx);
+      break;
+    }
   }
 
   return touchedEditable;
+}
+
+/** Push a "not run" tool_result for every remaining tool call from `from` onward, so a
+ *  batch cut short by ask_user leaves no dangling tool_call (which the next API request
+ *  rejects). Purely bookkeeping — none of the stubbed calls execute. */
+function stubUnrunCalls(
+  toolCalls: readonly IToolCall[],
+  from: number,
+  ctx: ILoopCtx
+): void {
+  for (let i = from; i < toolCalls.length; i += 1) {
+    const skipped = toolCalls[i];
+
+    if (skipped !== undefined) {
+      ctx.messages.push({
+        role: "tool",
+        content:
+          "Not run: you asked the human a question — wait for their answer, " +
+          "then re-issue this call if it's still needed.",
+        toolCallId: callKey(skipped, i),
+      });
+    }
+  }
 }
 
 /**

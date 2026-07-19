@@ -226,6 +226,78 @@ export function isPlanApproval(line: string): boolean {
   return /^(approve|approved|go|lgtm|implement)[.!]?$/i.test(line.trim());
 }
 
+/** How a free-text (non-slash) REPL line is routed. Pure so the safety-critical
+ *  ORDERING is unit-testable without the readline loop. */
+export type ReplRoute = "answer" | "plan-approval" | "plan-discuss" | "normal";
+
+/** Decide the route for a free-text line. `awaitingAnswer` (the session paused on
+ *  `ask_user`) is checked FIRST and unconditionally → the line is the ANSWER, so
+ *  "go"/"approve" replies to the model's question and CANNOT be mistaken for a plan
+ *  approval (which would unlock mutating tools). Only after that does plan-mode routing
+ *  apply. (Slash commands are handled earlier, in runLine, and are intentionally not
+ *  rerouted here — a slash during a pause is a deliberate command.) */
+export function classifyReplRoute(
+  line: string,
+  state: {
+    readonly planMode: boolean;
+    readonly planDiscussed: boolean;
+    readonly awaitingAnswer: boolean;
+  }
+): ReplRoute {
+  if (state.awaitingAnswer) {
+    return "answer";
+  }
+
+  if (state.planMode && state.planDiscussed && isPlanApproval(line)) {
+    return "plan-approval";
+  }
+
+  return state.planMode ? "plan-discuss" : "normal";
+}
+
+/** Whether the REPL is (still) awaiting an ask_user answer after a send resolves.
+ *  - a NEW pause (`result.awaitingUser` set) → true;
+ *  - a send that made NO progress (`turns === 0`) and failed (`interrupted`/`stuck` —
+ *    Session.send catches abort/provider errors and returns exactly these with turns 0,
+ *    it rarely throws) → KEEP the current flag: the answer was never processed, so the
+ *    retry must still route as the answer (not a stray plan approval);
+ *  - any send that ran at least one turn (`turns > 0`) CONSUMED the answer — even a
+ *    later ladder-exhaustion `stuck` (turns = maxTurns) — → false. Keeping the flag
+ *    then would strand plan-mode approval, routing every later free-text line as an
+ *    answer until the next terminal send. */
+export function nextAwaitingAnswer(
+  current: boolean,
+  result: {
+    readonly status: string;
+    readonly awaitingUser?: string;
+    readonly turns?: number;
+  }
+): boolean {
+  if (result.awaitingUser !== undefined) {
+    return true;
+  }
+
+  if (
+    result.turns === 0 &&
+    (result.status === "interrupted" || result.status === "stuck")
+  ) {
+    return current;
+  }
+
+  return false;
+}
+
+/** WS-C: whether a real human is at the keyboard. Only a TTY stdin has someone who can
+ *  answer an ask_user / raise-hand pause. Piped / non-TTY input (`echo "task" | tsforge`)
+ *  has no human: offering ask_user there would advertise a pause nobody can resume, and
+ *  EOF would end the REPL with the build parked mid-question — so `interactive` is gated on
+ *  this, not hard-coded true. */
+export function humanAtKeyboard(): boolean {
+  // @types/node types `isTTY` as boolean, but at runtime it is `undefined` on a non-TTY
+  // stream — which is falsy, so a piped REPL correctly resolves to non-interactive.
+  return process.stdin.isTTY;
+}
+
 // The /help body is generated from the command registry (src/cli/commands.ts) so
 // the help text and the interactive `/` palette can never drift.
 const HELP = formatHelp();
@@ -241,7 +313,6 @@ async function initReplSession(args: ICliArgs): Promise<{
   id: string;
   gateLabel: string;
   logFile: string;
-  persist: () => Promise<void>;
   report: Reporter;
   resumed: ISessionRecord | null;
   files: string[];
@@ -306,11 +377,19 @@ async function initReplSession(args: ICliArgs): Promise<{
     accept,
     contextWindow,
     report,
+    // Offer `ask_user` (WS-C) only when a human is actually at the keyboard (TTY): the
+    // model can pause for a bounded question and the human's next line answers it. Piped /
+    // non-TTY input has no one to answer, so it stays unattended (ask_user proceeds).
+    interactive: humanAtKeyboard(),
     // PER-WRITE lint moat (eslint rules per file as it's written), so violations
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
     ...(resumed === null ? {} : { history: resumed.messages }),
     fix: buildCoreFix(),
+    // A resumed session with a still-unvalidated pre-pause edit re-seeds the deferred
+    // gate so it re-gates on the first send — never silently dropped across --continue
+    // (WS-C; the persisted counterpart of the /clear carry).
+    ...(resumed?.pausedWithEdit === true ? { pausedWithEdit: true } : {}),
     ...(thinkingTokenBudget === undefined ? {} : { thinkingTokenBudget }),
     ...(autoCompactAt === undefined ? {} : { autoCompactAt }),
     // `--policy-mode` (validated) overrides the config file's policy.mode.
@@ -335,21 +414,6 @@ async function initReplSession(args: ICliArgs): Promise<{
     contextWindow,
   });
 
-  const persist = async (): Promise<void> => {
-    await saveSession({
-      id,
-      cwd: args.dir,
-      // The LIVE gate/scope — not the startup constants. /gate, /files, and a web
-      // scaffold all mutate these mid-session; persisting the originals would
-      // silently restore stale settings on --continue. See P2 review.
-      accept: session.gate,
-      files: session.scope,
-      updatedAt: Date.now(),
-      planMode: false, // will be set by caller
-      messages: [...session.messages],
-    });
-  };
-
   return {
     session,
     provider,
@@ -358,7 +422,6 @@ async function initReplSession(args: ICliArgs): Promise<{
     id,
     gateLabel,
     logFile,
-    persist,
     report,
     resumed,
     files,
@@ -418,6 +481,8 @@ export async function repl(args: ICliArgs): Promise<number> {
       files: session.scope,
       updatedAt: Date.now(),
       planMode,
+      // Persist a still-pending deferred gate so --continue re-gates it (WS-C).
+      pausedWithEdit: session.hasDeferredGate,
       messages: [...session.messages],
     });
   };
@@ -501,6 +566,13 @@ export async function repl(args: ICliArgs): Promise<number> {
   // True once a plan-mode exchange has happened, so a stray "approve" before any
   // discussion is just a message, not an approval.
   let planDiscussed = false;
+  // WS-C: true when the last send paused on `ask_user`. The NEXT free-text line is the
+  // ANSWER — routed to a normal send BEFORE plan-approval detection (classifyReplRoute),
+  // so "go"/"approve" answers the question, not the plan (which would unlock mutations).
+  // Slash commands still run (handled in runLine before dispatch) — a slash during a
+  // pause is a deliberate command; and the answer goes through the normal send path
+  // (@file/image expansion still apply — it is not sent byte-for-byte verbatim).
+  let awaitingUserAnswer = false;
   // The current interactive mode (Shift+Tab cycles it; /plan toggles it). Kept in
   // sync with `planMode`; shown as a chip in the status bar.
   let currentModeId = planMode ? "plan" : "normal";
@@ -674,6 +746,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     run: (opts: { signal: AbortSignal; steer: () => string[] }) => Promise<{
       status: string;
       turns: number;
+      awaitingUser?: string;
     }>
   ): Promise<void> => {
     active = new AbortController();
@@ -696,6 +769,10 @@ export async function repl(args: ICliArgs): Promise<number> {
 
       lastElapsedMs = performance.now() - started;
       lastStatus = result.status;
+      // WS-C: track whether the NEXT user line is an ask_user answer. A FAILED answer
+      // send (interrupted/stuck) KEEPS the flag so the retry is still the answer — see
+      // nextAwaitingAnswer.
+      awaitingUserAnswer = nextAwaitingAnswer(awaitingUserAnswer, result);
     } finally {
       spinner.stop();
       active = null;
@@ -752,10 +829,28 @@ export async function repl(args: ICliArgs): Promise<number> {
     });
 
   const dispatch = async (line: string): Promise<void> => {
+    const route = classifyReplRoute(line, {
+      planMode,
+      planDiscussed,
+      awaitingAnswer: awaitingUserAnswer,
+    });
+
+    // WS-C: the previous send paused on `ask_user`, so this line is the ANSWER — send it
+    // as an ordinary message BEFORE plan-approval routing, so "go"/"approve" replies to
+    // the model's question instead of approving a plan (which would unlock mutations).
+    // Do NOT clear awaitingUserAnswer here — `drive` clears it only after the send
+    // resolves (from result.awaitingUser); if the send throws, the flag stays set so a
+    // retry is still routed as the answer, not a stray plan approval.
+    if (route === "answer") {
+      await runSend(line);
+
+      return;
+    }
+
     // GENERAL plan mode, approval: unlock the tools and implement the plan that
     // is already the latest assistant message. Only an explicit approval word
     // counts ("yes" may be answering one of the model's clarifying questions).
-    if (planMode && planDiscussed && isPlanApproval(line)) {
+    if (route === "plan-approval") {
       planMode = false;
       planDiscussed = false;
       session.setPlanMode(false);
@@ -767,7 +862,7 @@ export async function repl(args: ICliArgs): Promise<number> {
 
     // GENERAL plan mode, discussion: the agent explores read-only, asks its
     // clarifying questions, and proposes/revises a plan. Stays in plan mode.
-    if (planMode) {
+    if (route === "plan-discuss") {
       await runSend(line);
       planDiscussed = true;
 
@@ -821,6 +916,11 @@ export async function repl(args: ICliArgs): Promise<number> {
         // Rebuild the session with the current state (config is not reused;
         // repl's /clear creates a fresh Session.create call)
         const profile = resolveCliProfile(args.profile);
+        // Carry a still-unvalidated pre-pause edit across the rebuild so /clear does not
+        // silently drop the deferred gate: the gate fires on mutation state (`edited`),
+        // not merely a dirty tree, so a fresh session would otherwise never re-validate
+        // the on-disk edit on a conversational send (WS-C).
+        const carryDeferredGate = session.hasDeferredGate;
 
         session = await Session.create({
           provider,
@@ -830,6 +930,12 @@ export async function repl(args: ICliArgs): Promise<number> {
           contextWindow,
           report: makeReporter(logFile, id, id),
           enableThinking: false,
+          // Keep ask_user (WS-C) offered after /clear when a human is present — but gated
+          // on the TTY like the init session, so a piped REPL doesn't advertise a pause
+          // nobody can answer.
+          interactive: humanAtKeyboard(),
+          // Plain boolean (no branch): the constructor only seeds the flag when true.
+          pausedWithEdit: carryDeferredGate,
           ...(profile === undefined ? {} : { profile }),
         });
         wireDelegation(); // re-offer spawn_agent on the rebuilt session
@@ -839,6 +945,11 @@ export async function repl(args: ICliArgs): Promise<number> {
         void discardClipboardImages(pendingImages.splice(0));
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
         planDiscussed = false;
+        // /clear rebuilds the Session, so the pending ask_user QUESTION is gone — drop the
+        // answer-routing flag. (The still-unvalidated EDIT behind that pause is not lost:
+        // it's carried into the new session via pausedWithEdit above, so its gate still
+        // fires on the first send.)
+        awaitingUserAnswer = false;
         await persist();
         clearScreen(); // wipe the visible terminal + scrollback, not just the state
         process.stdout.write("conversation cleared\n");

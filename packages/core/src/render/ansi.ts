@@ -430,6 +430,11 @@ function renderEventBody(event: ILoopEvent, color: boolean): string {
       // Noise on screen (the status line shows turns + elapsed); log only.
       return color ? "" : `  ${event.message}\n`;
 
+    case "ask_user":
+      // The co-pilot raised its hand (WS-C): surface the question prominently so the
+      // human sees what to answer. `message` is already "ask_user: <question>".
+      return `\n${paint(`${GLYPH.bullet} ${event.message}`, STYLE.brand + STYLE.bold, color)}\n`;
+
     default:
       return `\n${event.message}\n`;
   }

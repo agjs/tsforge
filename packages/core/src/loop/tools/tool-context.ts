@@ -119,8 +119,15 @@ export interface IToolContext {
    *  default. Absent ⇒ mode default only. */
   policyRules?: IPolicyRules;
   /** Whether a real interactive per-action approval path exists. Absent/false ⇒
-   *  a policy `ask` resolves to `deny` (no approval UI today). */
+   *  a policy `ask` resolves to `deny` (no approval UI today). NOTE: this is a POLICY
+   *  signal — it does NOT mean "a human is watching"; the REPL sets `humanPresent`, not
+   *  this, precisely so co-pilot presence can't loosen policy verdicts. */
   interactive?: boolean;
+  /** WS-C: a human is present to answer an `ask_user` question (the interactive REPL).
+   *  Distinct from `interactive` (a policy approval path) — a human at the keyboard is
+   *  NOT a per-action approval UI. Absent/false ⇒ `ask_user` proceeds without pausing so
+   *  an unattended run never hangs. */
+  humanPresent?: boolean;
   /** Hashline snapshot store for stale-anchor recovery (per-session, lazily initialized). */
   snapshotStore?: SessionSnapshotStore;
   /** Files the model has SUCCESSFULLY WRITTEN this session (create/edit/edit_lines

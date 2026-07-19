@@ -88,6 +88,7 @@ import {
   toolsFor,
   tryExpertRescue,
 } from "./turn";
+import { parkOrRaiseHand } from "./raise-hand";
 
 /** Signature of the memory-consolidation step, injectable for tests so they can
  *  capture the per-build source id each send passes. */
@@ -176,6 +177,19 @@ export interface ISessionConfig {
    *  fixes every error in one pass. Left off for plain eval/scratch tasks (their
    *  acceptance set can be empty ⇒ vacuous). */
   offerCheck?: boolean;
+  /** A real human is present to answer (the interactive REPL sets this). Threads to
+   *  `ctx.tool.humanPresent` (NOT `ctx.tool.interactive` — that's a POLICY approval-path
+   *  signal, and co-pilot presence must not loosen policy verdicts) and offers the
+   *  `ask_user` tool (WS-C): the model can pause for a human decision. Absent/false ⇒
+   *  unattended (headless/eval) — ask_user isn't offered and, if forced, returns
+   *  "proceed" so a run never hangs. */
+  interactive?: boolean;
+  /** Seed the deferred-gate flag at construction: an edit written before an ask_user
+   *  pause that has NOT yet been validated. Set when a caller rebuilds the Session (e.g.
+   *  the REPL's /clear) but must not drop the still-pending gate — the first send that
+   *  yields (or churns) then validates the on-disk edit. Without this the rebuilt session
+   *  starts `edited=false` and a conversational send silently skips the gate (WS-C). */
+  pausedWithEdit?: boolean;
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
   gate?: IGate;
@@ -196,6 +210,13 @@ export interface ISendResult {
   turns: number;
   /** When stuck with a handoff: the structured, resumable handoff details. */
   handoff?: IHandoff;
+  /** WS-C: set to the question when the send ended because the model called `ask_user`.
+   *  The REPL routes the user's NEXT free-text line as the answer BEFORE plan-approval
+   *  detection (so "go"/"approve" answers the question, not the plan — which would
+   *  wrongly unlock mutating tools). Slash commands still run (a slash during a pause is
+   *  a deliberate command), and the answer goes through the normal send path (@file/image
+   *  expansion apply) — it is NOT delivered byte-for-byte verbatim. */
+  awaitingUser?: string;
 }
 
 /** Cumulative model-call metrics for a session — the basis for `/metrics`. */
@@ -750,7 +771,13 @@ export class Session {
     const offerCheck =
       cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 
-    this.tools = toolsFor(false, {}, cfg.pullConventions === true, offerCheck);
+    this.tools = toolsFor(
+      false,
+      {},
+      cfg.pullConventions === true,
+      offerCheck,
+      cfg.interactive === true
+    );
 
     this.ctx = ctx;
 
@@ -789,6 +816,9 @@ export class Session {
       steerLevel: 0,
       // Same signal as the pull_conventions tool: push + pull activate together.
       conventionsEnabled: cfg.pullConventions === true,
+      // Carried across a Session rebuild (e.g. /clear) so a still-unvalidated pre-pause
+      // edit is gated by the first send of the new session, not silently dropped (WS-C).
+      ...(cfg.pausedWithEdit === true ? { pausedWithEdit: true } : {}),
     };
   }
 
@@ -881,6 +911,11 @@ export class Session {
         ...(policyRules === undefined ? {} : { policyRules }),
         ...(mcpRegistry === null ? {} : { mcpRegistry }),
         ...(cfg.editGuard === undefined ? {} : { editGuard: cfg.editGuard }),
+        // A real human is present (the interactive REPL) → ask_user can pause for an
+        // answer; absent/false ⇒ unattended, ask_user proceeds without hanging. Set
+        // `humanPresent`, NOT `interactive` — the latter is a POLICY signal (approval
+        // path) and co-pilot presence must not loosen policy verdicts.
+        ...(cfg.interactive === true ? { humanPresent: true } : {}),
       },
       gate: {
         parse: cfg.parse,
@@ -929,6 +964,14 @@ export class Session {
   /** The editable scope globs. */
   get scope(): string[] {
     return this.ctx.task.files;
+  }
+
+  /** True when a still-unvalidated edit is pending behind an ask_user pause (an edit
+   *  written before the pause whose gate hasn't run). A caller rebuilding the Session
+   *  (e.g. /clear) reads this and passes `pausedWithEdit` to `create` so the deferred
+   *  gate survives the rebuild instead of being silently dropped (WS-C). */
+  get hasDeferredGate(): boolean {
+    return this.state.pausedWithEdit === true;
   }
 
   /** The session's TS LanguageService (null when the workspace has no tsconfig),
@@ -1695,6 +1738,11 @@ export class Session {
         message: `⚠ model request timed out repeatedly (${detail}) — stopped. The server may be wedged or the task too large for one turn.`,
       });
 
+      // Deliberately a PARK, not a WS-C3 raise-hand: a repeated request timeout is an
+      // infrastructure failure (wedged server / over-large turn), not a build decision a
+      // human steer can unblock — asking "how should I proceed?" would just move the hang
+      // to the human. Raise-hand is reserved for steerable stalls (ladder exhaustion,
+      // read-only spin).
       return { status: "stuck", turns: turn, handoff };
     }
 
@@ -1832,6 +1880,31 @@ export class Session {
       sendStart
     );
 
+    // WS-C: the model raised its hand via ask_user (runOneToolCall set this). END the
+    // send now — the question was already surfaced as an `ask_user` event; the REPL
+    // shows it and the human's next `send` carries the answer. A `responded` result is
+    // the normal "the model produced output, your turn" signal the REPL already handles.
+    if (this.state.pendingAskUser !== undefined) {
+      const question = this.state.pendingAskUser;
+
+      this.state.pendingAskUser = undefined;
+      // If this send also edited a file, carry that across the pause so the RESUME send
+      // re-seeds `edited` and gates the pending edit (per-send `edited` resets to false).
+      this.state.pausedWithEdit = edited;
+
+      return {
+        action: {
+          status: "responded",
+          turns: turn,
+          awaitingUser: question,
+        },
+        edited,
+        editsSinceCheck,
+        readonlyStreak: carry.readonlyStreak,
+        readonlyRecoveries: carry.readonlyRecoveries,
+      };
+    }
+
     const base = { action: "continue" as const, edited, editsSinceCheck };
 
     if (progressed) {
@@ -1846,7 +1919,8 @@ export class Session {
     const spin = await this.readonlySpinStop(
       readonlyStreak,
       carry.readonlyRecoveries,
-      turn
+      turn,
+      edited
     );
 
     // Re-steered: reset the streak and spend one recovery, then keep looping so
@@ -2033,20 +2107,90 @@ export class Session {
   ): Promise<ISendResult | null> {
     const settled = await settleGate(this.ctx, this.state, turn);
 
+    // The gate has now actually run over the working tree — so any edit that a prior
+    // ask_user pause deferred is validated by THIS run. Clear the deferred-gate flag
+    // only here (never at drive entry): if settleGate throws (e.g. abort mid-gate) we
+    // never reach this line, so the flag persists and the next send re-gates. This is
+    // what makes the deferral durable across a non-yielding resume (WS-C).
+    this.state.pausedWithEdit = false;
+
     emitTiming(this.report, SESSION_ID, turn, turnStart, sendStart);
 
     if (settled === null) {
       return null;
     }
 
-    // Thread the structured handoff up so BoringStack/interactive callers can park &
-    // revisit on ladder exhaustion (host.send reads .handoff). Dropping it here made
-    // gate-ladder exhaustion silently un-parkable.
+    // A stuck terminal carries a handoff. With a human co-pilot present, RAISE A HAND
+    // (pause + ask) on that block instead of parking on it (WS-C3) — the human's next
+    // send resumes the build. Unattended (humanPresent false) → park exactly as before.
+    if (settled.status !== RUN_STATUS.done && settled.handoff !== undefined) {
+      // settleGate just ran, so there is no unvalidated edit pending (editedPending=false).
+      return this.raiseHandOrStuck(settled.handoff, turn, false);
+    }
+
+    // Any stuck terminal from settleGate carries a handoff (checkStuck always builds
+    // one), so it already returned via raiseHandOrStuck above. The only results reaching
+    // here are `done` and the defensive no-handoff stuck — neither threads a handoff.
     return {
       status: settled.status === RUN_STATUS.done ? "done" : "stuck",
       turns: turn,
-      ...(settled.handoff !== undefined ? { handoff: settled.handoff } : {}),
     };
+  }
+
+  /** WS-C3: turn a stuck terminal into a co-pilot RAISE-HAND when a human is present,
+   *  else return today's park. The pure `parkOrRaiseHand` decides; here we apply the raise
+   *  hand's side effects and return the terminal directly. We deliberately do NOT set
+   *  `state.pendingAskUser` (that is the ask_user TOOL's handoff to runToolTurn; a gate
+   *  terminal returns awaitingUser itself, so setting it would leak the pause into the next
+   *  send). Headless is untouched: `settleTurn` is Session-only and the raise-hand is gated
+   *  on `humanPresent`.
+   *
+   *  `editedPending` is whether THIS send has an unvalidated edit whose gate has not run.
+   *  A read-only-spin raise-hand can fire after the model edited earlier this send (before
+   *  it started only reading), so — exactly like the ask_user tool pause — we carry that
+   *  across the pause (`pausedWithEdit`) so the resume send re-seeds `edited` and gates the
+   *  dirty files. Ladder exhaustion passes false: settleGate JUST ran, so nothing is
+   *  pending. */
+  private raiseHandOrStuck(
+    handoff: IHandoff,
+    turn: number,
+    editedPending: boolean
+  ): ISendResult {
+    const { result, question } = parkOrRaiseHand(
+      handoff,
+      this.ctx.tool.humanPresent === true,
+      turn
+    );
+
+    if (question !== undefined) {
+      // Carry a still-unvalidated edit across the pause so the resume gates it (WS-C).
+      this.state.pausedWithEdit = editedPending;
+      // The HARNESS raised this hand (not the model via a tool call), so frame it as a
+      // harness injection — role:"user", exactly like resteers / nudges / expert notes.
+      // Attributing it as role:"assistant" would (a) forge harness text as model output
+      // and (b) on the ladder path follow acquireResponse's own assistant yield with a
+      // second assistant message (a consecutive-assistant shape stricter providers 400 on).
+      // The message MUST carry the actual `question` body (block, the errors that won't
+      // clear, the ask) — unlike the ask_user TOOL path, there is no tool_call holding it,
+      // so without it the human's next-send answer (and --continue, which persists only
+      // messages) would be unanchored to any question the model can see.
+      this.ctx.messages.push({
+        role: "user",
+        content:
+          "You raised a hand to your human co-pilot — the automatic fixes couldn't clear " +
+          `this wall, so the build paused with this question:\n\n${question}\n\n` +
+          "Their answer is the next message — apply it and continue.",
+      });
+      this.report({
+        kind: "ask_user",
+        task: SESSION_ID,
+        // Same `ask_user: <question>` shape the ask_user tool path emits — render/ansi.ts
+        // renders event.message verbatim, so raise-hand and tool asks look identical.
+        message: `ask_user: ${question}`,
+      });
+    }
+
+    return result;
   }
 
   /** Drive one send to a terminal result, then mine the send's events for
@@ -2184,7 +2328,8 @@ export class Session {
   private async readonlySpinStop(
     streak: number,
     recoveries: number,
-    turn: number
+    turn: number,
+    edited: boolean
   ): Promise<ISendResult | "retry" | null> {
     if (streak < READONLY_STREAK_LIMIT) {
       return null;
@@ -2218,7 +2363,10 @@ export class Session {
           "re-steering — stopped. Narrow the task or steer toward a concrete step.",
       });
 
-      return { status: "stuck", turns: turn, handoff };
+      // With a human present, raise a hand on this spin instead of parking (WS-C3). The
+      // spin can follow edits made earlier THIS send (before the model started only
+      // reading), so carry `edited` across the pause — the resume must re-gate them.
+      return this.raiseHandOrStuck(handoff, turn, edited);
     }
 
     const gateNote = this.hasGate ? this.outstandingGateNote() : "";
@@ -2250,7 +2398,14 @@ export class Session {
     // The gate confirms CHANGES, not answers: it fires only once the model has
     // actually edited a file this turn. So a pure question never triggers a gate
     // run (even with one configured) — and an auto-detected gate stays unobtrusive.
-    let edited = false;
+    // Normally false — but if a prior send PAUSED on ask_user right after an edit,
+    // re-seed so this resume send gates that still-unvalidated edit (WS-C). Do NOT
+    // clear the flag here: it is cleared only when the gate actually RUNS (settleTurn).
+    // A resume that exits via a non-yielding path (interrupted, stuck, degeneration,
+    // read-only spin) never reaches the gate — clearing here would drop the pending
+    // edit before it was validated, permanently skipping it. Leaving the flag set
+    // means the NEXT send re-seeds and re-attempts the gate until it truly runs.
+    let edited = this.state.pausedWithEdit === true;
     // How many times this send the model dumped file contents as a chat message
     // instead of calling `create` (the narrate-instead-of-build failure).
     let buildNudges = 0;
