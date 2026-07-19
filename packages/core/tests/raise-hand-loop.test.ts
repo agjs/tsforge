@@ -147,11 +147,14 @@ test("interactive: LADDER EXHAUSTION (settleTurn) raises a hand, not a park", as
     // assistant message. The last message is that frame.
     const msgs = session.messages;
     const frame = msgs[msgs.length - 1];
+    const frameText = typeof frame?.content === "string" ? frame.content : "";
 
     expect(frame?.role).toBe("user");
-    expect(typeof frame?.content === "string" ? frame.content : "").toContain(
-      "raised a hand"
-    );
+    expect(frameText).toContain("raised a hand");
+    // The actual question BODY must be in the injection (no tool_call holds it for the
+    // harness path) — the block's errors and the ask — so the human's answer is anchored.
+    expect(frameText).toContain("the stubborn error that never clears");
+    expect(frameText).toContain("How should I proceed?");
     // And it must not create two consecutive assistant turns (the ladder path already
     // pushed the model's own yielding assistant message) — a shape stricter providers 400.
     const consecutiveAssistants = msgs.some(

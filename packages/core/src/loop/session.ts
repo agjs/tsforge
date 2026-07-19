@@ -2170,14 +2170,16 @@ export class Session {
       // Attributing it as role:"assistant" would (a) forge harness text as model output
       // and (b) on the ladder path follow acquireResponse's own assistant yield with a
       // second assistant message (a consecutive-assistant shape stricter providers 400 on).
-      // This gives the model the context so the human's next-send answer isn't bare, and
-      // it persists for --continue.
+      // The message MUST carry the actual `question` body (block, the errors that won't
+      // clear, the ask) — unlike the ask_user TOOL path, there is no tool_call holding it,
+      // so without it the human's next-send answer (and --continue, which persists only
+      // messages) would be unanchored to any question the model can see.
       this.ctx.messages.push({
         role: "user",
         content:
-          "You raised a hand to your human co-pilot: the automatic fixes couldn't clear " +
-          "this wall, so the build paused to ask for a steer. Their answer is the next " +
-          "message — apply it and continue.",
+          "You raised a hand to your human co-pilot — the automatic fixes couldn't clear " +
+          `this wall, so the build paused with this question:\n\n${question}\n\n` +
+          "Their answer is the next message — apply it and continue.",
       });
       this.report({
         kind: "ask_user",
