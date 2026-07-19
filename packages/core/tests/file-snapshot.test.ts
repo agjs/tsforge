@@ -155,4 +155,35 @@ test("snapshotFiles leaves a file over the raw cap existence-only (no OOM)", asy
   expect(snap.existed.has("big.wasm")).toBe(true); // still tracked (not wrongly tombstoned)
   expect(snap.raw.has("big.wasm")).toBe(false); // NOT buffered
   expect(snap.contents.has("big.wasm")).toBe(false);
+  expect(snap.skipped.has("big.wasm")).toBe(true); // truncation surfaced, not silent
+});
+
+// Regression (panel): the per-file cap alone leaves TOTAL memory unbounded — many binaries
+// each under the per-file cap would still all buffer and OOM. The aggregate budget stops
+// raw-backing once the running total is exceeded; the rest go existence-only + `skipped`.
+// (Caps are injected tiny here so the budget is exercised without writing 64 MiB to disk.)
+test("snapshotFiles stops raw-backing at the AGGREGATE budget, surfacing the rest", async () => {
+  // Three 1 KB binaries; a 2.2 KB total budget admits ~2, then stops.
+  writeFileSync(join(dir, "a.bin"), new Uint8Array(1000));
+  writeFileSync(join(dir, "b.bin"), new Uint8Array(1000));
+  writeFileSync(join(dir, "c.bin"), new Uint8Array(1000));
+
+  const snap = await snapshotFiles(dir, ["**/*"], { maxTotalRawBytes: 2200 });
+
+  const raws = [...snap.raw.keys()].filter((k) => k.endsWith(".bin"));
+  const skips = [...snap.skipped].filter((k) => k.endsWith(".bin"));
+
+  expect(raws.length).toBeGreaterThanOrEqual(1); // some are backed…
+  expect(raws.length).toBeLessThan(3); // …but the budget stopped it before all three
+  expect(raws.length + skips.length).toBe(3); // every eligible file is raw OR skipped
+  // The raw-backed entries are still faithfully restorable after the budget cutoff.
+  const [kept] = raws;
+
+  if (kept === undefined) {
+    throw new Error("expected at least one raw-backed file");
+  }
+
+  writeFileSync(join(dir, kept), new Uint8Array([9, 9, 9])); // mutate a kept file
+  await restoreFiles(snap);
+  expect(readFileSync(join(dir, kept)).length).toBe(1000); // reverted to original size
 });

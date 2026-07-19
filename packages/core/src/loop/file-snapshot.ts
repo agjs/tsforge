@@ -40,6 +40,19 @@ export interface IFileSnapshot {
    *  Without this a dependency spray that rewrites a lockfile would report "reverted" while
    *  the sprayed lockfile stayed on disk — restore must rewrite these byte-for-byte too. */
   raw: Map<string, Uint8Array>;
+  /** Files that EXISTED but were too large to back (over the per-file raw cap, or past the
+   *  aggregate raw budget). They're tracked in `existed` (so restore won't tombstone them),
+   *  but restore CANNOT revert a mutation to them — this set makes that truncation explicit
+   *  (not silent) so a caller can tell whether its revert was complete. */
+  skipped: Set<string>;
+}
+
+/** Optional size caps for `snapshotFiles` — default to the module constants. Injectable so
+ *  the budget behavior is unit-testable with tiny values instead of writing 64 MiB to disk. */
+export interface ISnapshotCaps {
+  maxFileBytes?: number;
+  maxRawBytes?: number;
+  maxTotalRawBytes?: number;
 }
 
 /**
@@ -52,11 +65,17 @@ export interface IFileSnapshot {
  */
 export async function snapshotFiles(
   cwd: string,
-  scope: readonly string[]
+  scope: readonly string[],
+  caps: ISnapshotCaps = {}
 ): Promise<IFileSnapshot> {
+  const maxFile = caps.maxFileBytes ?? MAX_SNAPSHOT_BYTES;
+  const maxRaw = caps.maxRawBytes ?? MAX_RAW_SNAPSHOT_BYTES;
+  const maxTotalRaw = caps.maxTotalRawBytes ?? MAX_TOTAL_RAW_SNAPSHOT_BYTES;
+
   const existed = new Set<string>();
   const contents = new Map<string, string>();
   const raw = new Map<string, Uint8Array>();
+  const skipped = new Set<string>();
   let rawTotal = 0;
 
   for (const file of await resolveScopeFilesForRollback(cwd, scope)) {
@@ -68,25 +87,24 @@ export async function snapshotFiles(
 
     existed.add(file);
 
-    if (!isBinaryPath(file) && handle.size <= MAX_SNAPSHOT_BYTES) {
+    if (!isBinaryPath(file) && handle.size <= maxFile) {
       contents.set(file, await handle.text());
-    } else if (
-      handle.size <= MAX_RAW_SNAPSHOT_BYTES &&
-      rawTotal + handle.size <= MAX_TOTAL_RAW_SNAPSHOT_BYTES
-    ) {
+    } else if (handle.size <= maxRaw && rawTotal + handle.size <= maxTotalRaw) {
       // Binary (lockfiles like bun.lockb) or oversize text (a big package-lock.json): back it
       // by RAW BYTES so restore is faithful. A string round-trip would corrupt the binary and
       // the string cap would silently drop the oversize file, leaving a spray un-reverted.
-      // Skipped (existence-only) when the file exceeds the per-file cap OR would push the
-      // running raw total past MAX_TOTAL_RAW_SNAPSHOT_BYTES — bounding worst-case memory so a
-      // broad scope full of medium binaries can't OOM the rollback. Existence-only files are
-      // still tracked (not wrongly tombstoned), just not content-restored (best-effort).
       raw.set(file, new Uint8Array(await handle.arrayBuffer()));
       rawTotal += handle.size;
+    } else {
+      // Over the per-file cap OR past the aggregate raw budget: existence-only (bounds
+      // worst-case memory so a broad scope of medium binaries can't OOM the rollback). Tracked
+      // in `existed` (not tombstoned) AND surfaced in `skipped` so the incomplete-restore is
+      // explicit, not silent — restore cannot revert a mutation to these.
+      skipped.add(file);
     }
   }
 
-  return { cwd, scope, existed, contents, raw };
+  return { cwd, scope, existed, contents, raw, skipped };
 }
 
 /**

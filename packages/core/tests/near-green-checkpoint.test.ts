@@ -18,6 +18,7 @@ const emptySnapshot: IFileSnapshot = {
   existed: new Set(),
   contents: new Map(),
   raw: new Map(),
+  skipped: new Set(),
 };
 
 /** A checkpoint at `errorCount`. */
