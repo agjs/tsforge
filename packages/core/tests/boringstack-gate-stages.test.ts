@@ -141,6 +141,26 @@ describe("signatureToError", () => {
     expect(err.message).toContain("REWRITE THE WHOLE FILE");
   });
 
+  test("a PathsWithMethod type error steers to REGISTER the route (not fight the UI types)", () => {
+    // Observed live (build6): model called apiClient.POST('/api/v1/supplier') before the
+    // route was in the OpenAPI spec → fought the UI types + coupled test-sibling for 20+ turns.
+    const msg =
+      "Argument of type '\"/api/v1/supplier\"' is not assignable to parameter of type 'PathsWithMethod<paths, \"post\">'.";
+    const err = signatureToError(
+      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:12:no-unsafe:${encodeURIComponent(msg)}`
+    );
+
+    expect(err.message).toContain("NOT in the OpenAPI spec");
+    expect(err.message).toContain("register");
+    expect(err.message).toContain("generate:api");
+    // A plain type error (no PathsWithMethod) is left untouched.
+    const plain = signatureToError(
+      "failure:apps%2Fui%2Fsrc%2Fx.ts:3:no-unsafe:Type%20'string'%20is%20not%20assignable%20to%20'number'."
+    );
+
+    expect(plain.message).not.toContain("NOT in the OpenAPI spec");
+  });
+
   test("a `'>' expected` in a .ts flags the JSX-must-be-.tsx cause; other .ts parse errors do NOT", () => {
     // The one class the .tsx tip is valid for.
     const jsx = signatureToError(

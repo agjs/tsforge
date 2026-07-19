@@ -126,6 +126,14 @@ export function signatureToError(sig: string): IErrorItem {
         ? " This `'>' expected` in a `.ts` is usually JSX in a non-JSX file — if it contains JSX, it must be a `.tsx` (a `.ts` parses `<X>` as a generic and demands `>`)."
         : "";
 
+    // The api-client's types are GENERATED from the OpenAPI spec. Calling
+    // `apiClient.<M>("/api/v1/x")` for a path not yet in the spec fails typing with
+    // `PathsWithMethod<paths, …>` — the tell that the UI was written BEFORE the API route
+    // was registered + the client regenerated, NOT a UI-type bug to fight in the component.
+    // Steer to fix the ORDER, not the call site (observed: model ground on this + the
+    // coupled test-sibling for 20+ turns instead of touching the route).
+    const isPathsWithMethod = message.includes("PathsWithMethod");
+
     return {
       key: sig,
       file,
@@ -134,7 +142,9 @@ export function signatureToError(sig: string): IErrorItem {
       ...(phase === undefined ? {} : { phase }),
       message: isParse
         ? `${message}\n↳ SYNTAX/PARSE error — do NOT surgically patch it (a patch on a broken-parse file re-breaks its braces/generics/JSX). REWRITE THE WHOLE FILE \`${file}\` cleanly in one pass; once it parses, downstream errors clear.${parseSteer}`
-        : message,
+        : isPathsWithMethod
+          ? `${message}\n↳ This path is NOT in the OpenAPI spec yet — the api-client types are GENERATED from it, so don't fight the UI types. Make sure the API route exists AND is registered/mounted (so it shows in /swagger/json), then let the gate run — it re-runs generate:api and the path type appears. A \`/api/v1/…\` literal rejected by \`PathsWithMethod\` means the route isn't in the spec; fix the route/registration, not the call site.`
+          : message,
     };
   }
 
