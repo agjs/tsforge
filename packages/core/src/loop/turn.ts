@@ -2117,7 +2117,8 @@ const ROLLBACK_EXTRA_FILES: readonly string[] = [
 export async function captureNearGreenCheckpoint(
   ctx: ILoopCtx,
   errorCount: number,
-  gateErrors: readonly IErrorItem[]
+  gateErrors: readonly IErrorItem[],
+  editsAtCapture: number
 ): Promise<INearGreenCheckpoint> {
   // Snapshot the editable scope PLUS the out-of-scope files the harness lets the model
   // mutate (package.json + lockfiles via add_dependency) — else a dependency-induced spray
@@ -2139,6 +2140,7 @@ export async function captureNearGreenCheckpoint(
     snapshot,
     // Copy the change-scoping set so rollback restores it (see INearGreenCheckpoint.touched).
     touched: new Set(ctx.tool.touched ?? []),
+    editsAtCapture,
   };
 }
 
@@ -2278,31 +2280,16 @@ async function nearGreenRollbackStep(
   return false;
 }
 
-/** Whether two error sets carry the SAME multiset of keys (order-independent). Used to tell a
- *  genuine lateral error MOVE (refresh the checkpoint) from a no-op re-settle at the identical
- *  errors (skip — don't re-buffer the snapshot). */
-function sameErrorKeys(
-  a: readonly IErrorItem[],
-  b: readonly IErrorItem[]
-): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-
-  const ka = a.map((e) => e.key).sort();
-  const kb = b.map((e) => e.key).sort();
-
-  return ka.every((k, i) => k === kb[i]);
-}
-
 /** WS-B: after end-of-cycle feedback, re-arm the near-green checkpoint. Captures a fresh
  *  snapshot when the state is near green (1..N) AND it's worth protecting — either no
  *  checkpoint is held (`needsReArm`: re-establishes after a resume, since the snapshot isn't
- *  serialized), the count strictly improves (`isBetter`), OR it's a LATERAL same-count move to
- *  a DIFFERENT error set (`isLateralMove`: 1-error-A → 1-error-B). Refreshing on the lateral
- *  case tracks the model's LATEST near-green work — else a later spray reverts to the OLD
- *  snapshot and discards every edit since. It refreshes ONLY when the errors actually changed,
- *  so a no-op re-settle at the identical errors does not re-buffer the scope. The watermark is
+ *  serialized), the count strictly improves (`isBetter`), OR it's a LATERAL same-count settle
+ *  where the model actually WROTE files since the checkpoint (`isLateralWork`: state.edits
+ *  advanced past cp.editsAtCapture). Refreshing on the lateral-work case tracks the model's
+ *  LATEST near-green tree — else a later spray reverts to the OLD snapshot and tombstones the
+ *  real work (new helpers/tests, refactors, partial fixes) even when the error count/keys are
+ *  unchanged. It refreshes on EDITS, not error identity, so same-key progress is protected AND
+ *  a no-op "working" yield turn (no edits) does not re-buffer the whole scope. The watermark is
  *  WS-B's `nearGreenBest`, NOT checkStuck's plateauBest (which uses commonGatePhase and stalls
  *  with meta errors). Flag-gated no-op. */
 async function nearGreenCheckpointStep(
@@ -2323,24 +2310,24 @@ async function nearGreenCheckpointStep(
     return;
   }
 
-  const needsReArm = state.nearGreenCheckpoint === undefined;
+  const cp = state.nearGreenCheckpoint;
+  const needsReArm = cp === undefined;
   const best = state.nearGreenBest ?? Number.POSITIVE_INFINITY;
   // A strictly-lower near-green count → always refresh (a new best worth protecting).
   const isBetter = curr < best;
-  // A LATERAL move (SAME count) refreshes the snapshot to the model's latest tree — but ONLY
-  // when the error SET actually changed (a genuine 1-error-A → 1-error-B). A no-op re-settle at
-  // the IDENTICAL errors (e.g. a "working" turn with no edits) must NOT re-capture, or WS-B
-  // re-buffers the whole rollback scope every near-green cycle while the model thrashes.
-  const isLateralMove =
-    curr === best &&
-    state.nearGreenCheckpoint !== undefined &&
-    !sameErrorKeys(state.nearGreenCheckpoint.errors, gateErrors);
+  // A LATERAL settle (SAME count) refreshes to the model's latest tree — but ONLY when the
+  // model actually WROTE files since the checkpoint (state.edits advanced). That protects
+  // same-key real work (a new helper alongside the same 1 error) while a no-op "working" yield
+  // turn (no edits) does NOT re-capture, so WS-B can't re-buffer the whole scope every cycle.
+  const isLateralWork =
+    curr === best && cp !== undefined && state.edits > cp.editsAtCapture;
 
-  if (shouldCheckpoint(curr, needsReArm || isBetter || isLateralMove)) {
+  if (shouldCheckpoint(curr, needsReArm || isBetter || isLateralWork)) {
     state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
       ctx,
       curr,
-      gateErrors
+      gateErrors,
+      state.edits
     );
     // The new best this checkpoint protects. Deliberately do NOT reset nearGreenRollbacks —
     // it bounds TOTAL reverts this drive.

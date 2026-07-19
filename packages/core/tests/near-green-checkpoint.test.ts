@@ -28,6 +28,7 @@ function cp(errorCount: number): INearGreenCheckpoint {
     errors: [],
     snapshot: emptySnapshot,
     touched: new Set(),
+    editsAtCapture: 0,
   };
 }
 

@@ -174,9 +174,12 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
     };
 
     // Checkpoint the near-green state (feature.ts = GOOD, 1 error, touched = {a.ts}).
-    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
-      { key: "e0", message: "the one remaining error" },
-    ]);
+    const checkpoint = await captureNearGreenCheckpoint(
+      ctx,
+      1,
+      [{ key: "e0", message: "the one remaining error" }],
+      0
+    );
 
     // A spray then CREATED extra.ts, touched a NEW file (b.ts), and inflated every guard.
     await Bun.write(join(dir, "extra.ts"), "export const BAD = 1;\n");
@@ -260,6 +263,7 @@ test("rollbackNearGreen SURFACES snapshot.skipped files + keeps an unreverted on
       errors: [{ key: "e0", message: "one error" }],
       snapshot,
       touched: new Set(["a.ts"]), // the checkpoint's change-scope did NOT include big.bin
+      editsAtCapture: 0,
     };
     const ctx: ILoopCtx = {
       task: {
@@ -360,9 +364,12 @@ test("rollbackNearGreen reverts OUT-OF-SCOPE package.json + binary lockfile (ROL
       },
     };
 
-    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
-      { key: "e0", message: "one error" },
-    ]);
+    const checkpoint = await captureNearGreenCheckpoint(
+      ctx,
+      1,
+      [{ key: "e0", message: "one error" }],
+      0
+    );
 
     // A dependency spray rewrites the out-of-scope files (as add_dependency would).
     await Bun.write(
@@ -784,9 +791,10 @@ test("flag ON: the checkpoint REFRESHES on a LATERAL same-count near-green move 
     // stateB.ts SURVIVES → the checkpoint refreshed on the lateral 1→1 move to the LATEST tree.
     expect(await Bun.file(join(dir, "stateB.ts")).exists()).toBe(true);
     expect(await Bun.file(join(dir, "stateA.ts")).exists()).toBe(true);
-    // Exactly TWO checkpoint captures: the initial (eA) + the lateral refresh (eB). The no-op
-    // "working" turns at the IDENTICAL error must NOT re-buffer the snapshot (finding: WS-B
-    // must not re-capture every near-green cycle while thrashing).
+    // Checkpoint captures are bounded by EDIT events (initial arm + one per create that lands
+    // near-green: stateA, stateB) — NOT by near-green cycle count. The no-op "working" turns
+    // must NOT re-buffer: with dense near-green gating over ~10 turns the OLD `curr <= best`
+    // rule would lock on every cycle (≥5); edit-driven caps it at ≤3.
     const locks = events.filter(
       (e) =>
         e.kind === "tool" &&
@@ -794,7 +802,7 @@ test("flag ON: the checkpoint REFRESHES on a LATERAL same-count near-green move 
         e.message.includes("near-green checkpoint: locked")
     ).length;
 
-    expect(locks).toBe(2);
+    expect(locks).toBeLessThanOrEqual(3);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

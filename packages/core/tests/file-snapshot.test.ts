@@ -168,7 +168,7 @@ test("snapshotFiles stops raw-backing at the AGGREGATE budget, surfacing the res
   writeFileSync(join(dir, "b.bin"), new Uint8Array(1000));
   writeFileSync(join(dir, "c.bin"), new Uint8Array(1000));
 
-  const snap = await snapshotFiles(dir, ["**/*"], { maxTotalRawBytes: 2200 });
+  const snap = await snapshotFiles(dir, ["**/*"], { maxTotalBytes: 2200 });
 
   const raws = [...snap.raw.keys()].filter((k) => k.endsWith(".bin"));
   const skips = [...snap.skipped].filter((k) => k.endsWith(".bin"));

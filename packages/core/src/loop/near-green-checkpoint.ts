@@ -43,6 +43,12 @@ export interface INearGreenCheckpoint {
    *  the checkpoint — else a file first edited during the spray stays "touched" after its
    *  contents revert, and the restored gate diverges from the checkpoint's errors. */
   readonly touched: ReadonlySet<string>;
+  /** The cumulative `state.edits` count at checkpoint time. A later same-count near-green
+   *  settle refreshes the checkpoint only when `state.edits` has ADVANCED past this — i.e. the
+   *  model actually wrote files since (real work worth re-snapshotting), not a no-op re-settle
+   *  at the identical tree. Distinguishes "1-error-A, then more work still at 1 error" (refresh)
+   *  from a "working" yield turn (skip — don't re-buffer the whole scope). */
+  readonly editsAtCapture: number;
 }
 
 /** Whether a fresh gate result should be CHECKPOINTED: it's a new all-time low, it's near
