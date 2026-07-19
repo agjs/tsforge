@@ -4,6 +4,7 @@ import {
   shouldRollback,
   isCompletionClass,
   allCompletionClass,
+  nextCompletionPhase,
   NEAR_GREEN_N,
   NEAR_GREEN_M,
   MAX_NEAR_GREEN_ROLLBACKS,
@@ -29,6 +30,23 @@ test("isCompletionClass: only reliable add-code rules (reachability/i18n-locale-
     false
   );
   expect(isCompletionClass({ key: "x", message: "no rule" })).toBe(false);
+});
+
+test("nextCompletionPhase: ENTER on all-completion, STAY through the mixed spike, EXIT when no completion error remains", () => {
+  const i18n = err("i18n-locale-keys-used");
+  const compile = err("no-unsafe-argument");
+
+  // ENTER: reached the hollow all-completion state.
+  expect(nextCompletionPhase(false, [i18n])).toBe(true);
+  // STAY: the model started adding the UI → MIXED errors (this is the case a per-cycle
+  // all-completion check got wrong — it would flip false here and re-arm rollback/undo).
+  expect(nextCompletionPhase(true, [i18n, compile, compile])).toBe(true);
+  // EXIT: the keys are now referenced → only fixable errors remain → WS-B re-engages.
+  expect(nextCompletionPhase(true, [compile, compile])).toBe(false);
+  // EXIT on green (no errors at all).
+  expect(nextCompletionPhase(true, [])).toBe(false);
+  // Never enters from a purely-fixable state.
+  expect(nextCompletionPhase(false, [compile])).toBe(false);
 });
 
 test("allCompletionClass: true only when EVERY error is completion-class; empty is false", () => {
