@@ -170,6 +170,12 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "hook in a `QueryClient` with `retry:false` via `renderHook(() => useX(), { wrapper })` and " +
     "assert with `await waitFor(() => …)`. Imports: `vitest` (`describe, it, expect, vi, beforeEach`) " +
     "+ `@testing-library/react` (`renderHook, waitFor, act`) + `@tanstack/react-query`.\n" +
+    "• API tests (apps/api) run under `bun:test`, NOT vitest — `import { describe, expect, test } " +
+    'from "bun:test"` (vitest + `vi.*` are UI-only; using them in an apps/api test fails to resolve). ' +
+    "For a `*.service.ts` whose function hits the DB (Drizzle), do NOT unit-test it in isolation — you'll " +
+    "fight `string | SQLWrapper` types and need a live DB. Its behaviour is covered by the route test " +
+    "below; the `*.service.test.ts` only needs to satisfy the test-sibling floor with a minimal smoke " +
+    'test (e.g. `expect(typeof myServiceFn).toBe("function")`). Put the real assertions in the route test.\n' +
     "• API route tests (`apps/api/tests/**/*.routes.test.ts`, pure `.ts`) — handle the app in-process, " +
     "never a real network (no-real-network-in-unit-tests):\n" +
     '    const app = createApp(); // from "../../../src/config/app"\n' +

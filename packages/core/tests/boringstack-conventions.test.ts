@@ -61,6 +61,11 @@ describe("convention registry", () => {
     expect(g).toContain("createApp()");
     expect(g).toContain("app.handle");
     expect(g).toContain("loginCookie");
+    // API runner is bun:test (not vitest) + the service-test smoke idiom (build4 residual:
+    // 14 edits grinding a DB-hitting supplier.service.test.ts against Drizzle types).
+    expect(g).toContain('from "bun:test"');
+    expect(g).toContain("smoke");
+    expect(g).toContain('expect(typeof myServiceFn).toBe("function")');
     // The enforced test rules, each named so the model connects error → fix.
     expect(g).toContain("no-focused-tests");
     expect(g).toContain("no-conditional-expect");
