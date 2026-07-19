@@ -12,7 +12,11 @@ import {
   rollbackNearGreen,
 } from "../src/loop/turn";
 import type { IValidateResult } from "../src/validate";
-import { MAX_NEAR_GREEN_ROLLBACKS } from "../src/loop/near-green-checkpoint";
+import type { IFileSnapshot } from "../src/loop/file-snapshot";
+import {
+  MAX_NEAR_GREEN_ROLLBACKS,
+  type INearGreenCheckpoint,
+} from "../src/loop/near-green-checkpoint";
 
 // WS-B end-to-end: with the flag ON, a build that reaches near-green (1 error) then SPRAYS
 // (8 errors) must REVERT the scope files to the near-green best; with the flag OFF the path
@@ -232,6 +236,85 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
     // The spray-created file is tombstoned; the near-green file restored.
     expect(await Bun.file(join(dir, "extra.ts")).exists()).toBe(false);
     expect(await Bun.file(join(dir, "feature.ts")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("rollbackNearGreen SURFACES snapshot.skipped files + keeps an unreverted one under enforcement", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+  const events: ILoopEvent[] = [];
+
+  try {
+    // A checkpoint whose snapshot marked big.bin as SKIPPED (too large to back → not revertable).
+    const snapshot: IFileSnapshot = {
+      cwd: dir,
+      scope: ["**/*"],
+      existed: new Set(["big.bin", "a.ts"]),
+      contents: new Map(),
+      raw: new Map(),
+      skipped: new Set(["big.bin"]),
+    };
+    const cp: INearGreenCheckpoint = {
+      errorCount: 1,
+      errors: [{ key: "e0", message: "one error" }],
+      snapshot,
+      touched: new Set(["a.ts"]), // the checkpoint's change-scope did NOT include big.bin
+    };
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["**/*"],
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: (e) => events.push(e),
+      messages: [],
+      // The spray touched big.bin (a skipped file) AND b.ts (a normal one).
+      tool: { touched: new Set(["a.ts", "b.ts", "big.bin"]) },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            errors: [],
+            output: "",
+          }),
+        },
+      },
+    };
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 8,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: 8,
+      edits: 0,
+      regressions: 1,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      nearGreenCheckpoint: cp,
+      nearGreenRollbacks: 0,
+    };
+
+    await rollbackNearGreen(ctx, state, 8);
+
+    // The incomplete revert is SURFACED (not silent) — production code reads snapshot.skipped.
+    const warned = events.some(
+      (e) =>
+        e.kind === "tool" &&
+        typeof e.message === "string" &&
+        e.message.includes("could NOT be byte-reverted")
+    );
+
+    expect(warned).toBe(true);
+    // big.bin (skipped + spray-touched, thus NOT reverted) STAYS touched so meta-rules still
+    // enforce it; b.ts (revertable) is dropped back to the checkpoint's touched set {a.ts}.
+    expect([...(ctx.tool.touched ?? [])].sort()).toEqual(["a.ts", "big.bin"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

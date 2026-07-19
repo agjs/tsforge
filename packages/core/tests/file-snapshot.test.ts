@@ -187,3 +187,20 @@ test("snapshotFiles stops raw-backing at the AGGREGATE budget, surfacing the res
   await restoreFiles(snap);
   expect(readFileSync(join(dir, kept)).length).toBe(1000); // reverted to original size
 });
+
+// The contract `skipped` exists to expose: a file too large to back is NOT byte-reverted by
+// restoreFiles. Callers (near-green rollback) read `skipped` to surface the incomplete revert.
+test("restoreFiles does NOT revert a skipped (over-cap) file — the contract skipped exposes", async () => {
+  writeFileSync(join(dir, "x.bin"), new Uint8Array(100));
+
+  const snap = await snapshotFiles(dir, ["**/*"], { maxRawBytes: 10 }); // 100 > 10 → skipped
+
+  expect(snap.skipped.has("x.bin")).toBe(true);
+  expect(snap.raw.has("x.bin")).toBe(false);
+
+  writeFileSync(join(dir, "x.bin"), new Uint8Array([1, 2, 3])); // a spray mutates it
+  await restoreFiles(snap);
+
+  // NOT reverted — existence-only. This is why rollback must surface `skipped`, not claim clean.
+  expect(readFileSync(join(dir, "x.bin")).length).toBe(3);
+});

@@ -2161,13 +2161,28 @@ export async function rollbackNearGreen(
 
   await restoreFiles(cp.snapshot);
 
+  // Files too large to back at snapshot time (over the per-file cap or past the aggregate raw
+  // budget) are existence-only: restoreFiles CANNOT byte-revert them. If the spray mutated one
+  // it stays sprayed on disk — surfaced below and kept under change-scoped enforcement, never
+  // silently dropped.
+  const skipped = cp.snapshot.skipped;
+
   // Restore the change-scoping set to the checkpoint's, so change-scoped meta-rules see the
   // same touched files as at the checkpoint (a spray-touched file whose contents were just
-  // reverted must not stay "touched"). ctx.tool.touched is a live Set — clear + refill it.
+  // reverted must not stay "touched"). EXCEPTION: a skipped file the spray touched was NOT
+  // reverted, so it must STAY touched — else its lingering mutation escapes enforcement.
   if (ctx.tool.touched !== undefined) {
+    const unrevertedTouched = [...ctx.tool.touched].filter((f) =>
+      skipped.has(f)
+    );
+
     ctx.tool.touched.clear();
 
     for (const f of cp.touched) {
+      ctx.tool.touched.add(f);
+    }
+
+    for (const f of unrevertedTouched) {
       ctx.tool.touched.add(f);
     }
   }
@@ -2205,6 +2220,16 @@ export async function rollbackNearGreen(
     task: ctx.task.id,
     message: `↩ near-green rollback ${String(state.nearGreenRollbacks)}/${String(MAX_NEAR_GREEN_ROLLBACKS)}: reverted a ${String(sprayCount)}-error spray to the ${String(cp.errorCount)}-error best; steering a targeted fix`,
   });
+
+  // Non-silent truncation: if the checkpoint had files too large to snapshot, the revert is
+  // best-effort — say so, so a lingering mutation on one of them isn't mistaken for clean.
+  if (skipped.size > 0) {
+    ctx.report({
+      kind: "tool",
+      task: ctx.task.id,
+      message: `⚠ near-green rollback: ${String(skipped.size)} file(s) exceeded the snapshot size caps and could NOT be byte-reverted (best-effort; kept under enforcement): ${[...skipped].slice(0, 5).join(", ")}`,
+    });
+  }
 
   const errorList = cp.errors
     .slice(0, 20)
