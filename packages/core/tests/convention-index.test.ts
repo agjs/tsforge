@@ -6,6 +6,7 @@ import {
   buildConventionGuides,
   conventionGuide,
   conventionTopics,
+  topicForRule,
 } from "../src/loop/conventions";
 import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
 import type { IProvider, IChatMessage } from "../src/inference";
@@ -115,8 +116,26 @@ test("the STATE guide routes server data through the api-client, not raw fetch",
 test("the lint-gotchas guide covers the top strict-lint offenders", () => {
   const g = conventionGuide("lint-gotchas");
 
-  expect(g).toContain("AWAIT");
   expect(g).toContain("void expression");
   expect(g).toContain("stringify an error");
   expect(g).toContain("repeated string literals");
+  // await-thenable and no-floating-promises are OPPOSITE rules — the guide must teach BOTH
+  // directions (add await for a floating promise; DROP await on a non-promise), not conflate them.
+  expect(g).toContain("no-floating-promises");
+  expect(g).toContain("await-thenable");
+  expect(g).toContain("drop the `await`");
+});
+
+// Lock the rule→lint-gotchas mapping so unseenGuidesForErrors re-injects this guide on exactly
+// these rules (and a renamed/removed rule fails the test rather than silently un-mapping).
+test("the strict-lint rules map to the lint-gotchas guide", () => {
+  for (const rule of [
+    "await-thenable",
+    "no-floating-promises",
+    "no-confusing-void-expression",
+    "no-error-stringify",
+    "no-duplicate-string",
+  ]) {
+    expect(topicForRule(rule)).toBe("lint-gotchas");
+  }
 });

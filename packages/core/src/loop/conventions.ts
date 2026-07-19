@@ -122,9 +122,10 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
   "lint-gotchas":
     "STRICT-LINT GOTCHAS (boringstack). The gate is eslint with EVERY rule an error; a fresh " +
     "feature trips these most, so write them right up front:\n" +
-    "• AWAIT every promise — an async call you don't await is a floating-promise / " +
-    "await-thenable error. Write `await doX()`; only `void doX()` if you deliberately " +
-    "fire-and-forget.\n" +
+    "• AWAIT the promises you use — an un-awaited async call is a no-floating-promises error; " +
+    "write `await doX()` (or `void doX()` to deliberately fire-and-forget).\n" +
+    "• …but do NOT await non-promises — `await` on a plain value or a sync function's result is " +
+    "an await-thenable error; drop the `await`.\n" +
     "• NO value out of a void expression — never `return foo.forEach(...)` or " +
     "`const x = setState(v)`; call the void thing, then return/act separately. For handlers use " +
     "a BLOCK body: `onClick={() => { setOpen(true); }}`, not `() => setOpen(true)`.\n" +
