@@ -28,8 +28,17 @@ import { unseenGuidesForErrors } from "./conventions";
 import {
   shouldCheckpoint,
   shouldRollback,
+  MAX_NEAR_GREEN_ROLLBACKS,
   type INearGreenCheckpoint,
 } from "./near-green-checkpoint";
+// The SHARED rollback substrate (aliased — turn.ts has its own polish-only `snapshotFiles`
+// returning a plain Map). `snapshotFilesForRollback` captures an IFileSnapshot and
+// `restoreFiles` rewrites edited files AND tombstones files a spray created (incl.
+// binaries/assets) — a plain content map would leave those on disk and keep the gate red.
+import {
+  snapshotFiles as snapshotFilesForRollback,
+  restoreFiles,
+} from "./file-snapshot";
 import {
   buildSteerMessage,
   essentialMessages,
@@ -410,6 +419,10 @@ export interface ILoopState {
    *  near-green low (1..N errors). If a later gate SPRAYS past it, the loop reverts to
    *  this state instead of letting the model build on the regression. Flag-gated. */
   nearGreenCheckpoint?: INearGreenCheckpoint;
+  /** WS-B: consecutive reverts against the CURRENT checkpoint. Reset to 0 when a fresh
+   *  (lower) near-green low is captured; caps the revert loop (MAX_NEAR_GREEN_ROLLBACKS) so
+   *  a model that can't fix from near-green is parked by the ladder, not thrashed forever. */
+  nearGreenRollbacks?: number;
   /** Guard-specific identity of the current stuck block (canonical, not the raw error
    *  set). Derived from the guard that fired: samePersist → single error key,
    *  gateStuckRepeats → sorted-join of current keys, plateau → normalized count|keys
@@ -2078,15 +2091,16 @@ export async function injectFeedback(
  *  the signature and `IRunResult | null` contract (null ⇒ keep looping) are the
  *  same as ever, so both drivers (run.ts / session.ts) are untouched. */
 /** WS-B: snapshot the scope files at a fresh near-green low so a later spray can revert to
- *  this best state. Stores the open gate errors too — used for the revert steer and to
- *  realign the loop's tracking on rollback. */
-async function captureNearGreenCheckpoint(
+ *  this best state. Uses the SHARED IFileSnapshot substrate (binary-inclusive, tombstone-
+ *  aware) so a rollback can also delete files a spray creates — a plain content map would
+ *  leave them on disk. Stores the open errors + the common gate phase for the revert steer,
+ *  the tracking realignment, and the frontier check. */
+export async function captureNearGreenCheckpoint(
   ctx: ILoopCtx,
   errorCount: number,
   gateErrors: readonly IErrorItem[]
 ): Promise<INearGreenCheckpoint> {
-  const files = await resolveScopeFiles(ctx.cwd, ctx.task.files);
-  const snapshot = await snapshotFiles(ctx.cwd, files);
+  const snapshot = await snapshotFilesForRollback(ctx.cwd, ctx.task.files);
 
   ctx.report({
     kind: "tool",
@@ -2094,14 +2108,21 @@ async function captureNearGreenCheckpoint(
     message: `⚑ near-green checkpoint: locked the ${String(errorCount)}-error best state`,
   });
 
-  return { errorCount, files: snapshot, errors: [...gateErrors] };
+  return {
+    errorCount,
+    errors: [...gateErrors],
+    phase: commonGatePhase(gateErrors),
+    snapshot,
+  };
 }
 
-/** WS-B: a spray past the near-green checkpoint — restore the best on-disk state, realign
- *  the loop's error tracking to it, and steer the model to make a SMALL targeted fix rather
- *  than build further on the regression. The caller returns WITHOUT running checkStuck, so
- *  a revert never advances the steer ladder or resets the block fingerprint. */
-async function rollbackNearGreen(
+/** WS-B: a spray past the near-green checkpoint — restore the best on-disk state (rewriting
+ *  edited files AND tombstoning any the spray created), reset the CONVERGENCE guards so the
+ *  next cycle measures from the restored best (not the spray's inflated ages/plateau
+ *  counters, which would otherwise escalate the ladder right after a revert), and steer a
+ *  SMALL targeted fix. The caller returns WITHOUT running checkStuck, so a revert never
+ *  advances the steer ladder or resets the block fingerprint. */
+export async function rollbackNearGreen(
   ctx: ILoopCtx,
   state: ILoopState,
   sprayCount: number
@@ -2112,19 +2133,23 @@ async function rollbackNearGreen(
     return;
   }
 
-  for (const [f, content] of cp.files) {
-    await Bun.write(join(ctx.cwd, f), content);
-  }
+  await restoreFiles(cp.snapshot);
 
-  // Realign the loop's error tracking to the RESTORED state — the spray is gone, so the
-  // next cycle measures its delta from the near-green best, not the discarded regression.
+  // Realign ALL convergence guards to the RESTORED near-green state: prev errors + count,
+  // and — via resetConvergenceGuards — errorAge / gateNoProgress / noNewLow / bestErrorCount
+  // (the spray's aged keys and climbed counters are stale now). redGates too, or the plateau
+  // guard would fire on the first post-revert cycle. Deliberately NOT touched: steerLevel,
+  // blockFingerprint, plateauBest (a revert is not a NEW block and not ladder progress).
   state.prevGateErrors = [...cp.errors];
   state.lastGateCount = cp.errorCount;
+  resetConvergenceGuards(state, cp.errorCount);
+  state.redGates = 0;
+  state.nearGreenRollbacks = (state.nearGreenRollbacks ?? 0) + 1;
 
   ctx.report({
     kind: "tool",
     task: ctx.task.id,
-    message: `↩ near-green rollback: reverted a ${String(sprayCount)}-error spray to the ${String(cp.errorCount)}-error best; steering a targeted fix`,
+    message: `↩ near-green rollback ${String(state.nearGreenRollbacks)}/${String(MAX_NEAR_GREEN_ROLLBACKS)}: reverted a ${String(sprayCount)}-error spray to the ${String(cp.errorCount)}-error best; steering a targeted fix`,
   });
 
   const errorList = cp.errors
@@ -2198,6 +2223,7 @@ export async function settleGate(
     state.focusError = null;
     // WS-B: the build is green — there's no near-green state left to protect.
     state.nearGreenCheckpoint = undefined;
+    state.nearGreenRollbacks = 0;
 
     await polishOnGreen(ctx);
 
@@ -2222,7 +2248,12 @@ export async function settleGate(
   // steer ladder or reset the block fingerprint. Flag-gated (default off → no path change).
   if (
     flags.nearGreenCheckpoint() &&
-    shouldRollback(state.nearGreenCheckpoint, curr)
+    shouldRollback(
+      state.nearGreenCheckpoint,
+      curr,
+      commonGatePhase(gateErrors),
+      state.nearGreenRollbacks ?? 0
+    )
   ) {
     await rollbackNearGreen(ctx, state, curr);
 
@@ -2258,6 +2289,8 @@ export async function settleGate(
       curr,
       gateErrors
     );
+    // A fresh (lower) low earns a fresh revert budget.
+    state.nearGreenRollbacks = 0;
   }
 
   return null;
