@@ -1,6 +1,10 @@
 import { test, expect } from "bun:test";
 import { join } from "node:path";
-import { classifyReplRoute, nextAwaitingAnswer } from "../src/cli/repl";
+import {
+  classifyReplRoute,
+  nextAwaitingAnswer,
+  humanAtKeyboard,
+} from "../src/cli/repl";
 
 // WS-C: the interactive REPL must offer ask_user, and it must SURVIVE /clear. The /clear
 // path rebuilds Session.create WITHOUT reusing the init config, so it silently dropped
@@ -51,6 +55,35 @@ test("--continue persists + re-seeds the deferred gate", async () => {
   expect(src).toContain("pausedWithEdit: session.hasDeferredGate");
   // …and re-seeded on the resumed Session.create.
   expect(src).toContain("resumed?.pausedWithEdit === true");
+});
+
+// WS-C: humanAtKeyboard() is the safety gate that stops a piped/non-TTY REPL from
+// advertising ask_user (no human → EOF ends the REPL mid-question). Lock the isTTY
+// truthiness contract behaviorally, not just via the source-string guard: true → present;
+// undefined (Node's real non-TTY value) / false → absent.
+test("humanAtKeyboard reflects stdin.isTTY: true → present, undefined/false → absent", () => {
+  const original = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+
+  const set = (value: unknown): void => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value,
+      configurable: true,
+    });
+  };
+
+  try {
+    set(true);
+    expect(humanAtKeyboard()).toBe(true);
+    // A piped stream: Node reports `undefined` (not false) at runtime.
+    set(undefined);
+    expect(humanAtKeyboard()).toBeFalsy();
+    set(false);
+    expect(humanAtKeyboard()).toBe(false);
+  } finally {
+    if (original !== undefined) {
+      Object.defineProperty(process.stdin, "isTTY", original);
+    }
+  }
 });
 
 // The SAFETY contract, unit-tested via the pure router: while awaiting an ask_user

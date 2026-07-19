@@ -292,7 +292,7 @@ export function nextAwaitingAnswer(
  *  has no human: offering ask_user there would advertise a pause nobody can resume, and
  *  EOF would end the REPL with the build parked mid-question — so `interactive` is gated on
  *  this, not hard-coded true. */
-function humanAtKeyboard(): boolean {
+export function humanAtKeyboard(): boolean {
   // @types/node types `isTTY` as boolean, but at runtime it is `undefined` on a non-TTY
   // stream — which is falsy, so a piped REPL correctly resolves to non-interactive.
   return process.stdin.isTTY;

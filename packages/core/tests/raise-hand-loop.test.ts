@@ -141,6 +141,25 @@ test("interactive: LADDER EXHAUSTION (settleTurn) raises a hand, not a park", as
     expect(res.awaitingUser).toContain("How should I proceed?");
     expect(res.handoff).toBeUndefined();
     expect(events.some((e) => e.kind === "ask_user")).toBe(true);
+
+    // The raise-hand puts context into the conversation so the human's next-send answer
+    // isn't bare — as a role:"user" HARNESS injection (like resteers), never a forged
+    // assistant message. The last message is that frame.
+    const msgs = session.messages;
+    const frame = msgs[msgs.length - 1];
+
+    expect(frame?.role).toBe("user");
+    expect(typeof frame?.content === "string" ? frame.content : "").toContain(
+      "raised a hand"
+    );
+    // And it must not create two consecutive assistant turns (the ladder path already
+    // pushed the model's own yielding assistant message) — a shape stricter providers 400.
+    const consecutiveAssistants = msgs.some(
+      (m, i) =>
+        i > 0 && m.role === "assistant" && msgs[i - 1]?.role === "assistant"
+    );
+
+    expect(consecutiveAssistants).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

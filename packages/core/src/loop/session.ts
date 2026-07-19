@@ -2165,12 +2165,20 @@ export class Session {
     if (question !== undefined) {
       // Carry a still-unvalidated edit across the pause so the resume gates it (WS-C).
       this.state.pausedWithEdit = editedPending;
-      // The harness generated this question — the model didn't produce it via a tool call,
-      // so put it in the conversation as the build's own message. Otherwise the human's
-      // answer on the next send would reply to a question absent from the model's context
-      // (and be lost entirely on --continue, which persists messages). Mirrors the ask_user
-      // tool path, where the question already lives in the model's own tool call.
-      this.ctx.messages.push({ role: "assistant", content: question });
+      // The HARNESS raised this hand (not the model via a tool call), so frame it as a
+      // harness injection — role:"user", exactly like resteers / nudges / expert notes.
+      // Attributing it as role:"assistant" would (a) forge harness text as model output
+      // and (b) on the ladder path follow acquireResponse's own assistant yield with a
+      // second assistant message (a consecutive-assistant shape stricter providers 400 on).
+      // This gives the model the context so the human's next-send answer isn't bare, and
+      // it persists for --continue.
+      this.ctx.messages.push({
+        role: "user",
+        content:
+          "You raised a hand to your human co-pilot: the automatic fixes couldn't clear " +
+          "this wall, so the build paused to ask for a steer. Their answer is the next " +
+          "message — apply it and continue.",
+      });
       this.report({
         kind: "ask_user",
         task: SESSION_ID,
