@@ -287,6 +287,17 @@ export function nextAwaitingAnswer(
   return false;
 }
 
+/** WS-C: whether a real human is at the keyboard. Only a TTY stdin has someone who can
+ *  answer an ask_user / raise-hand pause. Piped / non-TTY input (`echo "task" | tsforge`)
+ *  has no human: offering ask_user there would advertise a pause nobody can resume, and
+ *  EOF would end the REPL with the build parked mid-question — so `interactive` is gated on
+ *  this, not hard-coded true. */
+function humanAtKeyboard(): boolean {
+  // @types/node types `isTTY` as boolean, but at runtime it is `undefined` on a non-TTY
+  // stream — which is falsy, so a piped REPL correctly resolves to non-interactive.
+  return process.stdin.isTTY;
+}
+
 // The /help body is generated from the command registry (src/cli/commands.ts) so
 // the help text and the interactive `/` palette can never drift.
 const HELP = formatHelp();
@@ -366,9 +377,10 @@ async function initReplSession(args: ICliArgs): Promise<{
     accept,
     contextWindow,
     report,
-    // A real human is at the keyboard → offer `ask_user` (WS-C): the model can pause
-    // to ask a bounded question and the human's next line answers it.
-    interactive: true,
+    // Offer `ask_user` (WS-C) only when a human is actually at the keyboard (TTY): the
+    // model can pause for a bounded question and the human's next line answers it. Piped /
+    // non-TTY input has no one to answer, so it stays unattended (ask_user proceeds).
+    interactive: humanAtKeyboard(),
     // PER-WRITE lint moat (eslint rules per file as it's written), so violations
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
@@ -918,9 +930,10 @@ export async function repl(args: ICliArgs): Promise<number> {
           contextWindow,
           report: makeReporter(logFile, id, id),
           enableThinking: false,
-          // Still an interactive REPL after /clear — keep ask_user (WS-C) offered, or
-          // the co-pilot raise-hand silently dies mid-session.
-          interactive: true,
+          // Keep ask_user (WS-C) offered after /clear when a human is present — but gated
+          // on the TTY like the init session, so a piped REPL doesn't advertise a pause
+          // nobody can answer.
+          interactive: humanAtKeyboard(),
           // Plain boolean (no branch): the constructor only seeds the flag when true.
           pausedWithEdit: carryDeferredGate,
           ...(profile === undefined ? {} : { profile }),

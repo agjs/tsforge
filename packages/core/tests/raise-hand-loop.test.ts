@@ -22,6 +22,12 @@ const stubbornGate: IGate = {
   }),
 };
 
+/** A gate that always passes — so a deferred edit's gate, once it runs, comes back GREEN
+ *  (and emits a `validated` event we can assert on). */
+const passingGate: IGate = {
+  run: async () => ({ passed: true, errors: [], output: "" }),
+};
+
 // WS-C3: a stuck terminal RAISES A HAND (pause + ask) when a human co-pilot is present,
 // and PARKS (today's behaviour) when unattended. Driven end-to-end through the real
 // read-only-spin terminal: a provider that only ever calls a read-only tool exhausts the
@@ -161,6 +167,85 @@ test("unattended: the SAME ladder exhaustion PARKS (stuck + handoff), never asks
     expect(res.handoff).toBeDefined();
     expect(res.awaitingUser).toBeUndefined();
     expect(events.some((e) => e.kind === "ask_user")).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a spin raise-hand AFTER this-send edits carries the deferred gate to the resume", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-raisehand-"));
+
+  await writeFile(join(dir, "readme.txt"), "hello\n");
+  const events: ILoopEvent[] = [];
+
+  // The panel's gap: the model edits early this send (unvalidated), then only reads until
+  // the spin gives up. The raise-hand must carry that edit (pausedWithEdit) so the resume
+  // re-gates it — exactly like the ask_user tool pause. `resumed` flips the provider to a
+  // plain yield so the resume send actually runs the deferred gate.
+  let n = 0;
+  let resumed = false;
+  const provider: IProvider = {
+    async complete() {
+      n += 1;
+
+      if (resumed) {
+        return { content: "ok, thanks", toolCalls: [] };
+      }
+
+      if (n === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "e1",
+              name: "create",
+              arguments: { file: "work.ts", content: "export const x = 1;\n" },
+            },
+          ],
+        };
+      }
+
+      // Then only read — never yield — until the read-only spin gives up.
+      return {
+        content: "",
+        toolCalls: [
+          {
+            id: `r${String(n)}`,
+            name: "read",
+            arguments: { file: "readme.txt" },
+          },
+        ],
+      };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      interactive: true,
+      gate: passingGate,
+      maxTurns: 60,
+      report: (e) => events.push(e),
+    });
+
+    const res = await session.send("build it"); // edit → spin → raise-hand
+
+    expect(res.status).toBe("responded");
+    // The pre-spin edit is carried across the pause — NOT silently dropped.
+    expect(session.hasDeferredGate).toBe(true);
+
+    resumed = true;
+    const beforeResume = events.length;
+
+    await session.send("just wrap it up"); // resume → the deferred gate finally runs
+
+    // The gate ran on the resume (a validated event), and the deferred flag cleared.
+    expect(events.slice(beforeResume).some((e) => e.kind === "validated")).toBe(
+      true
+    );
+    expect(session.hasDeferredGate).toBe(false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

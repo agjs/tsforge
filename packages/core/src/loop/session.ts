@@ -1919,7 +1919,8 @@ export class Session {
     const spin = await this.readonlySpinStop(
       readonlyStreak,
       carry.readonlyRecoveries,
-      turn
+      turn,
+      edited
     );
 
     // Re-steered: reset the streak and spend one recovery, then keep looping so
@@ -2123,7 +2124,8 @@ export class Session {
     // (pause + ask) on that block instead of parking on it (WS-C3) — the human's next
     // send resumes the build. Unattended (humanPresent false) → park exactly as before.
     if (settled.status !== RUN_STATUS.done && settled.handoff !== undefined) {
-      return this.raiseHandOrStuck(settled.handoff, turn);
+      // settleGate just ran, so there is no unvalidated edit pending (editedPending=false).
+      return this.raiseHandOrStuck(settled.handoff, turn, false);
     }
 
     // Any stuck terminal from settleGate carries a handoff (checkStuck always builds
@@ -2136,13 +2138,24 @@ export class Session {
   }
 
   /** WS-C3: turn a stuck terminal into a co-pilot RAISE-HAND when a human is present,
-   *  else return today's park. The pure `parkOrRaiseHand` decides; here we apply the one
-   *  side effect — emit the `ask_user` event so the REPL renders the question — and return
-   *  the terminal directly. We deliberately do NOT set `state.pendingAskUser` (that is the
-   *  ask_user TOOL's handoff to runToolTurn; a gate terminal returns awaitingUser itself,
-   *  so setting it would leak the pause into the next send). Headless is untouched:
-   *  `settleTurn` is Session-only and the raise-hand is gated on `humanPresent`. */
-  private raiseHandOrStuck(handoff: IHandoff, turn: number): ISendResult {
+   *  else return today's park. The pure `parkOrRaiseHand` decides; here we apply the raise
+   *  hand's side effects and return the terminal directly. We deliberately do NOT set
+   *  `state.pendingAskUser` (that is the ask_user TOOL's handoff to runToolTurn; a gate
+   *  terminal returns awaitingUser itself, so setting it would leak the pause into the next
+   *  send). Headless is untouched: `settleTurn` is Session-only and the raise-hand is gated
+   *  on `humanPresent`.
+   *
+   *  `editedPending` is whether THIS send has an unvalidated edit whose gate has not run.
+   *  A read-only-spin raise-hand can fire after the model edited earlier this send (before
+   *  it started only reading), so — exactly like the ask_user tool pause — we carry that
+   *  across the pause (`pausedWithEdit`) so the resume send re-seeds `edited` and gates the
+   *  dirty files. Ladder exhaustion passes false: settleGate JUST ran, so nothing is
+   *  pending. */
+  private raiseHandOrStuck(
+    handoff: IHandoff,
+    turn: number,
+    editedPending: boolean
+  ): ISendResult {
     const { result, question } = parkOrRaiseHand(
       handoff,
       this.ctx.tool.humanPresent === true,
@@ -2150,10 +2163,20 @@ export class Session {
     );
 
     if (question !== undefined) {
+      // Carry a still-unvalidated edit across the pause so the resume gates it (WS-C).
+      this.state.pausedWithEdit = editedPending;
+      // The harness generated this question — the model didn't produce it via a tool call,
+      // so put it in the conversation as the build's own message. Otherwise the human's
+      // answer on the next send would reply to a question absent from the model's context
+      // (and be lost entirely on --continue, which persists messages). Mirrors the ask_user
+      // tool path, where the question already lives in the model's own tool call.
+      this.ctx.messages.push({ role: "assistant", content: question });
       this.report({
         kind: "ask_user",
         task: SESSION_ID,
-        message: question,
+        // Same `ask_user: <question>` shape the ask_user tool path emits — render/ansi.ts
+        // renders event.message verbatim, so raise-hand and tool asks look identical.
+        message: `ask_user: ${question}`,
       });
     }
 
@@ -2295,7 +2318,8 @@ export class Session {
   private async readonlySpinStop(
     streak: number,
     recoveries: number,
-    turn: number
+    turn: number,
+    edited: boolean
   ): Promise<ISendResult | "retry" | null> {
     if (streak < READONLY_STREAK_LIMIT) {
       return null;
@@ -2329,8 +2353,10 @@ export class Session {
           "re-steering — stopped. Narrow the task or steer toward a concrete step.",
       });
 
-      // With a human present, raise a hand on this spin instead of parking (WS-C3).
-      return this.raiseHandOrStuck(handoff, turn);
+      // With a human present, raise a hand on this spin instead of parking (WS-C3). The
+      // spin can follow edits made earlier THIS send (before the model started only
+      // reading), so carry `edited` across the pause — the resume must re-gate them.
+      return this.raiseHandOrStuck(handoff, turn, edited);
     }
 
     const gateNote = this.hasGate ? this.outstandingGateNote() : "";
