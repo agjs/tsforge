@@ -226,6 +226,35 @@ export function isPlanApproval(line: string): boolean {
   return /^(approve|approved|go|lgtm|implement)[.!]?$/i.test(line.trim());
 }
 
+/** How a free-text (non-slash) REPL line is routed. Pure so the safety-critical
+ *  ORDERING is unit-testable without the readline loop. */
+export type ReplRoute = "answer" | "plan-approval" | "plan-discuss" | "normal";
+
+/** Decide the route for a free-text line. `awaitingAnswer` (the session paused on
+ *  `ask_user`) is checked FIRST and unconditionally → the line is the ANSWER, so
+ *  "go"/"approve" replies to the model's question and CANNOT be mistaken for a plan
+ *  approval (which would unlock mutating tools). Only after that does plan-mode routing
+ *  apply. (Slash commands are handled earlier, in runLine, and are intentionally not
+ *  rerouted here — a slash during a pause is a deliberate command.) */
+export function classifyReplRoute(
+  line: string,
+  state: {
+    readonly planMode: boolean;
+    readonly planDiscussed: boolean;
+    readonly awaitingAnswer: boolean;
+  }
+): ReplRoute {
+  if (state.awaitingAnswer) {
+    return "answer";
+  }
+
+  if (state.planMode && state.planDiscussed && isPlanApproval(line)) {
+    return "plan-approval";
+  }
+
+  return state.planMode ? "plan-discuss" : "normal";
+}
+
 // The /help body is generated from the command registry (src/cli/commands.ts) so
 // the help text and the interactive `/` palette can never drift.
 const HELP = formatHelp();
@@ -504,9 +533,12 @@ export async function repl(args: ICliArgs): Promise<number> {
   // True once a plan-mode exchange has happened, so a stray "approve" before any
   // discussion is just a message, not an approval.
   let planDiscussed = false;
-  // WS-C: set to the model's question when the last send paused on `ask_user`. The NEXT
-  // user line is the ANSWER — delivered verbatim, bypassing plan-approval/slash routing
+  // WS-C: true when the last send paused on `ask_user`. The NEXT free-text line is the
+  // ANSWER — routed to a normal send BEFORE plan-approval detection (classifyReplRoute),
   // so "go"/"approve" answers the question, not the plan (which would unlock mutations).
+  // Slash commands still run (handled in runLine before dispatch) — a slash during a
+  // pause is a deliberate command; and the answer goes through the normal send path
+  // (@file/image expansion still apply — it is not sent byte-for-byte verbatim).
   let awaitingUserAnswer = false;
   // The current interactive mode (Shift+Tab cycles it; /plan toggles it). Kept in
   // sync with `planMode`; shown as a chip in the status bar.
@@ -762,11 +794,19 @@ export async function repl(args: ICliArgs): Promise<number> {
     });
 
   const dispatch = async (line: string): Promise<void> => {
-    // WS-C: the previous send paused on `ask_user`. This line is the ANSWER — deliver it
-    // verbatim, BEFORE any plan-approval/mode routing, so answering "go"/"approve" replies
-    // to the model's question instead of approving a plan (which would unlock mutations).
-    if (awaitingUserAnswer) {
-      awaitingUserAnswer = false;
+    const route = classifyReplRoute(line, {
+      planMode,
+      planDiscussed,
+      awaitingAnswer: awaitingUserAnswer,
+    });
+
+    // WS-C: the previous send paused on `ask_user`, so this line is the ANSWER — send it
+    // as an ordinary message BEFORE plan-approval routing, so "go"/"approve" replies to
+    // the model's question instead of approving a plan (which would unlock mutations).
+    // Do NOT clear awaitingUserAnswer here — `drive` clears it only after the send
+    // resolves (from result.awaitingUser); if the send throws, the flag stays set so a
+    // retry is still routed as the answer, not a stray plan approval.
+    if (route === "answer") {
       await runSend(line);
 
       return;
@@ -775,7 +815,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     // GENERAL plan mode, approval: unlock the tools and implement the plan that
     // is already the latest assistant message. Only an explicit approval word
     // counts ("yes" may be answering one of the model's clarifying questions).
-    if (planMode && planDiscussed && isPlanApproval(line)) {
+    if (route === "plan-approval") {
       planMode = false;
       planDiscussed = false;
       session.setPlanMode(false);
@@ -787,7 +827,7 @@ export async function repl(args: ICliArgs): Promise<number> {
 
     // GENERAL plan mode, discussion: the agent explores read-only, asks its
     // clarifying questions, and proposes/revises a plan. Stays in plan mode.
-    if (planMode) {
+    if (route === "plan-discuss") {
       await runSend(line);
       planDiscussed = true;
 
@@ -862,6 +902,9 @@ export async function repl(args: ICliArgs): Promise<number> {
         void discardClipboardImages(pendingImages.splice(0));
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
         planDiscussed = false;
+        // /clear rebuilds the Session, so any pending ask_user pause is gone — drop the
+        // answer-routing flag too, else the next line skips plan routing on a stale flag.
+        awaitingUserAnswer = false;
         await persist();
         clearScreen(); // wipe the visible terminal + scrollback, not just the state
         process.stdout.write("conversation cleared\n");

@@ -199,9 +199,13 @@ test("a batch ordered [create, ask_user] runs the create THEN pauses (create isn
   const dir = await mkdtemp(join(tmpdir(), "tsforge-ask-"));
   const events: ILoopEvent[] = [];
 
-  // The panel's ordering case: a mutation BEFORE the ask. The create is a deliberate
-  // edit — it runs (not lost); then ask_user pauses. The edit is gated on the resume
-  // send (the human's answer), not silently dropped.
+  // The panel's ordering case: a mutation BEFORE the ask. The create is a DELIBERATE
+  // edit the model chose — it runs (correct; not lost). ask_user then pauses. The edit
+  // is NOT yet settled by the end-of-turn gate (the pause pre-empts it); it gets gated
+  // on the RESUME send (the human's answer). This is deferred gating, acceptable for an
+  // interactive pause where the human sees both the edit and the question — NOT a
+  // silent unvalidated write. (If the human exits without answering, they hold a
+  // reviewable, ungated edit — same as any mid-session interrupt.)
   let turn = 0;
   const provider: IProvider = {
     async complete() {

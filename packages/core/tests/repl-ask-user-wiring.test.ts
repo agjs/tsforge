@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { join } from "node:path";
+import { classifyReplRoute } from "../src/cli/repl";
 
 // WS-C: the interactive REPL must offer ask_user, and it must SURVIVE /clear. The /clear
 // path rebuilds Session.create WITHOUT reusing the init config, so it silently dropped
@@ -17,4 +18,40 @@ test("both REPL Session.create sites (init + /clear) set interactive:true for as
 
   expect(createCount).toBeGreaterThanOrEqual(2);
   expect(interactiveCount).toBe(createCount);
+});
+
+// The SAFETY contract, unit-tested via the pure router: while awaiting an ask_user
+// answer, a plan-approval word must route to "answer", NOT "plan-approval" — else the
+// human's reply would silently exit plan mode and unlock mutating tools.
+test("classifyReplRoute: awaiting an answer beats plan-approval (the safety hole)", () => {
+  const planState = {
+    planMode: true,
+    planDiscussed: true,
+    awaitingAnswer: true,
+  };
+
+  // "approve"/"go" while awaiting an answer → the ANSWER, never a plan approval.
+  expect(classifyReplRoute("approve", planState)).toBe("answer");
+  expect(classifyReplRoute("go", planState)).toBe("answer");
+  expect(classifyReplRoute("Postgres, please", planState)).toBe("answer");
+});
+
+test("classifyReplRoute: normal plan-mode routing when NOT awaiting an answer", () => {
+  const base = { planMode: true, planDiscussed: true, awaitingAnswer: false };
+
+  // Same words, but no pending question → plan approval / discussion as before.
+  expect(classifyReplRoute("approve", base)).toBe("plan-approval");
+  expect(classifyReplRoute("what about auth?", base)).toBe("plan-discuss");
+  expect(classifyReplRoute("go", { ...base, planDiscussed: false })).toBe(
+    "plan-discuss"
+  ); // a stray "go" before any discussion isn't an approval
+
+  // Outside plan mode → a normal message.
+  expect(
+    classifyReplRoute("hello", {
+      planMode: false,
+      planDiscussed: false,
+      awaitingAnswer: false,
+    })
+  ).toBe("normal");
 });
