@@ -423,6 +423,12 @@ export interface ILoopState {
    *  (lower) near-green low is captured; caps the revert loop (MAX_NEAR_GREEN_ROLLBACKS) so
    *  a model that can't fix from near-green is parked by the ladder, not thrashed forever. */
   nearGreenRollbacks?: number;
+  /** WS-B: the best (lowest) error count the CURRENT checkpoint protects. WS-B's OWN
+   *  watermark — NOT checkStuck's plateauBest, which uses commonGatePhase and is unreliable
+   *  with meta errors — so the checkpoint refreshes to a strictly better near-green count
+   *  (e.g. phase-2 2→1) instead of rolling back to a worse saved state. Reset when the
+   *  frontier advances past the checkpoint (new phase = fresh watermark) and on green. */
+  nearGreenBest?: number;
   /** Guard-specific identity of the current stuck block (canonical, not the raw error
    *  set). Derived from the guard that fired: samePersist → single error key,
    *  gateStuckRepeats → sorted-join of current keys, plateau → normalized count|keys
@@ -2173,6 +2179,9 @@ export async function rollbackNearGreen(
   state.focusError = null;
   state.pendingRung = null;
   state.pendingBlockFingerprint = null;
+  // A stale R1 diagnosis steer from the spray cycle would otherwise be re-injected next
+  // cycle, fighting the rollback's "make a SMALL targeted fix" message — clear it too.
+  state.pendingDiagnosisSteer = null;
   state.nearGreenRollbacks = (state.nearGreenRollbacks ?? 0) + 1;
 
   ctx.report({
@@ -2221,9 +2230,10 @@ async function nearGreenRollbackStep(
     cp.phase !== undefined &&
     currMaxPhase > cp.phase
   ) {
-    // The frontier advanced past this checkpoint — drop it so WS-B re-arms at the new
-    // phase's next near-green low (needsReArm) instead of staying inert for the run.
+    // The frontier advanced past this checkpoint — drop it (and its watermark) so WS-B
+    // re-arms at the new phase's next near-green low (needsReArm) instead of staying inert.
     state.nearGreenCheckpoint = undefined;
+    state.nearGreenBest = undefined;
     state.nearGreenRollbacks = 0;
 
     return false;
@@ -2239,32 +2249,35 @@ async function nearGreenRollbackStep(
 }
 
 /** WS-B: after end-of-cycle feedback, re-arm the near-green checkpoint. Captures a fresh
- *  snapshot when the state is near green (1..N) AND it's worth protecting — a new all-time-low
- *  COUNT, OR a frontier ADVANCE that lands near-green (new phase = new territory, and this
- *  does not depend on checkStuck's plateauBest, which can't see a meta-bearing advance), OR no
- *  checkpoint is currently held (`needsReArm`: re-establishes protection after a resume — the
- *  snapshot is not serialized — or after a stale-phase invalidation). Flag-gated no-op. */
+ *  snapshot when the state is near green (1..N) AND it's worth protecting — either no
+ *  checkpoint is held (`needsReArm`: re-establishes after a resume, since the snapshot isn't
+ *  serialized, or after a stale-phase invalidation), OR the count strictly improves on the
+ *  checkpoint's own watermark (`isBetter`). The watermark is WS-B's `nearGreenBest`, NOT
+ *  checkStuck's plateauBest — plateauBest uses commonGatePhase and stalls with meta errors,
+ *  which would leave a worse checkpoint in place and let a spray revert to it. Flag-gated
+ *  no-op. */
 async function nearGreenCheckpointStep(
   ctx: ILoopCtx,
   state: ILoopState,
   curr: number,
-  gateErrors: readonly IErrorItem[],
-  isNewLow: boolean,
-  frontierAdvanced: boolean
+  gateErrors: readonly IErrorItem[]
 ): Promise<void> {
   if (!flags.nearGreenCheckpoint()) {
     return;
   }
 
   const needsReArm = state.nearGreenCheckpoint === undefined;
+  const isBetter = curr < (state.nearGreenBest ?? Number.POSITIVE_INFINITY);
 
-  if (shouldCheckpoint(curr, isNewLow || frontierAdvanced || needsReArm)) {
+  if (shouldCheckpoint(curr, needsReArm || isBetter)) {
     state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
       ctx,
       curr,
       gateErrors
     );
-    // A fresh capture earns a fresh revert budget.
+    // This count is the new best the checkpoint protects; a fresh capture earns a fresh
+    // revert budget.
+    state.nearGreenBest = curr;
     state.nearGreenRollbacks = 0;
   }
 }
@@ -2285,23 +2298,11 @@ export async function settleGate(
   } = await evaluateGate(ctx, turn);
 
   const curr = gateErrors.length;
-  // WS-B: the all-time low BEFORE checkStuck mutates it — so we can tell a fresh
-  // near-green low (worth a checkpoint) from a non-improving re-visit.
-  const prevPlateauBest = state.plateauBest;
-  // WS-B: the furthest gate phase this cycle vs the previous (computed BEFORE checkStuck
-  // updates state.prevGateErrors). A frontier ADVANCE — a later-phase error now present —
-  // is genuine progress even if the count grew, so it must NOT roll back AND it deserves a
-  // fresh checkpoint (a phase-advance that lands near-green is a new best to protect).
+  // WS-B: the FURTHEST gate phase this cycle (maxGatePhase survives meta errors, which
+  // erase commonGatePhase). Used to skip a rollback across a genuine frontier advance and
+  // to invalidate a checkpoint the frontier has moved past. WS-B tracks its own near-green
+  // watermark (state.nearGreenBest), so it needs nothing from checkStuck's plateauBest here.
   const currMaxPhase = maxGatePhase(gateErrors);
-  const prevMaxPhase = maxGatePhase(state.prevGateErrors);
-  // A true frontier advance needs a phased error on BOTH sides moving to a later phase.
-  // If the previous set had NO phased error (undefined), that is not an advance: it was
-  // either the very first gate or a meta-only state where the phased checks had passed —
-  // introducing phase errors then is a REGRESSION, and the count-based path handles it.
-  const frontierAdvanced =
-    currMaxPhase !== undefined &&
-    prevMaxPhase !== undefined &&
-    currMaxPhase > prevMaxPhase;
 
   if (state.lastGateCount >= 0 && curr > state.lastGateCount) {
     state.regressions += 1;
@@ -2339,6 +2340,7 @@ export async function settleGate(
     state.focusError = null;
     // WS-B: the build is green — there's no near-green state left to protect.
     state.nearGreenCheckpoint = undefined;
+    state.nearGreenBest = undefined;
     state.nearGreenRollbacks = 0;
 
     await polishOnGreen(ctx);
@@ -2382,14 +2384,7 @@ export async function settleGate(
 
   await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixed);
 
-  await nearGreenCheckpointStep(
-    ctx,
-    state,
-    curr,
-    gateErrors,
-    curr < (prevPlateauBest ?? Number.POSITIVE_INFINITY),
-    frontierAdvanced
-  );
+  await nearGreenCheckpointStep(ctx, state, curr, gateErrors);
 
   return null;
 }

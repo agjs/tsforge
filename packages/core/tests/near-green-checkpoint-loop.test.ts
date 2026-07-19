@@ -217,6 +217,7 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
       conventionsEnabled: false,
       blockFingerprint: "block-x",
       plateauBest: 1,
+      pendingDiagnosisSteer: "stale R1 diagnosis from the spray cycle",
       nearGreenCheckpoint: checkpoint,
       nearGreenRollbacks: 0,
     };
@@ -237,6 +238,10 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
     expect(state.steerLevel).toBe(2);
     expect(state.blockFingerprint).toBe("block-x");
     expect(state.plateauBest).toBe(1);
+    // The spray was reverted, so it's not a real regression of the metric — undone.
+    expect(state.regressions).toBe(2);
+    // A stale R1 diagnosis steer from the spray cycle is cleared (not re-injected next turn).
+    expect(state.pendingDiagnosisSteer).toBeNull();
     // The spray-created file is tombstoned; the near-green file restored.
     expect(await Bun.file(join(dir, "extra.ts")).exists()).toBe(false);
     expect(await Bun.file(join(dir, "feature.ts")).exists()).toBe(true);
@@ -565,6 +570,95 @@ test("flag ON: WS-B stays armed across a MULTI-PHASE run — a phase-2 spray is 
     expect(await Bun.file(join(dir, "sprayed.ts")).exists()).toBe(false);
     expect(await Bun.file(join(dir, "fixed.ts")).exists()).toBe(true);
     expect(await Bun.file(join(dir, "advanced.ts")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("flag ON: the checkpoint REFRESHES to a strictly better near-green count", async () => {
+  process.env[FLAG] = "1";
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+  const events: ILoopEvent[] = [];
+
+  // near-green count 2 (checkpoint) → improve to count 1 (must RE-checkpoint via nearGreenBest,
+  // NOT checkStuck's plateauBest) → spray. The revert must restore the count-1 state (keeping
+  // improved.ts). If the checkpoint had stayed at count 2, improved.ts (created after that
+  // snapshot) would be tombstoned — so its survival proves the refresh.
+  const errs = (n: number): IValidateResult => ({
+    passed: false,
+    errors: Array.from({ length: n }, (_, i) => ({
+      key: `e${String(i)}`,
+      message: `error ${String(i)}`,
+    })),
+    output: `${String(n)} error(s)`,
+  });
+  const gate: IGate = {
+    run: async (): Promise<IValidateResult> => {
+      if (await Bun.file(join(dir, "sprayed.ts")).exists()) {
+        return errs(8);
+      }
+
+      if (await Bun.file(join(dir, "improved.ts")).exists()) {
+        return errs(1);
+      }
+
+      return errs(2);
+    },
+  };
+  const create = (id: string, file: string) => ({
+    content: "",
+    toolCalls: [
+      {
+        id,
+        name: "create",
+        arguments: { file, content: "export const X = 1;\n" },
+      },
+    ],
+  });
+  let n = 0;
+  const provider: IProvider = {
+    async complete() {
+      n += 1;
+
+      if (n === 1) {
+        return create("a", "feature.ts");
+      } // count 2 → checkpoint@2
+
+      if (n === 3) {
+        return create("b", "improved.ts");
+      } // count 1 → re-checkpoint@1
+
+      if (n === 5) {
+        return create("c", "sprayed.ts");
+      } // count 8 → revert to count-1
+
+      return { content: "working", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      gate,
+      maxTurns: 14,
+      report: (e) => events.push(e),
+    });
+
+    await session.send("build it");
+
+    const rolledBack = events.some(
+      (e) =>
+        e.kind === "tool" &&
+        typeof e.message === "string" &&
+        e.message.includes("near-green rollback")
+    );
+
+    expect(rolledBack).toBe(true);
+    expect(await Bun.file(join(dir, "sprayed.ts")).exists()).toBe(false);
+    // improved.ts survives → the checkpoint refreshed to the count-1 state, not the count-2.
+    expect(await Bun.file(join(dir, "improved.ts")).exists()).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
