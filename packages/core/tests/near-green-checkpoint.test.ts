@@ -17,8 +17,6 @@ const emptySnapshot: IFileSnapshot = {
   scope: [],
   existed: new Set(),
   contents: new Map(),
-  raw: new Map(),
-  skipped: new Set(),
 };
 
 /** A checkpoint at `errorCount`. */
@@ -28,7 +26,7 @@ function cp(errorCount: number): INearGreenCheckpoint {
     errors: [],
     snapshot: emptySnapshot,
     touched: new Set(),
-    editsAtCapture: 0,
+    depFiles: new Map(),
   };
 }
 

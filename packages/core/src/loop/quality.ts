@@ -6,11 +6,7 @@ import { runAccept } from "../validate";
 import { readFiles } from "../lib/fs";
 import { judge } from "../eval";
 import { qualityHints } from "./feedback";
-import {
-  snapshotFiles,
-  restoreFiles,
-  skippedRestoreNote,
-} from "./file-snapshot";
+import { snapshotFiles, restoreFiles } from "./file-snapshot";
 import type { Reporter } from "./loop.types";
 
 export interface IQualityResult {
@@ -146,7 +142,7 @@ export async function qualityRepair(
       report({
         kind: "fix",
         task: task.id,
-        message: `quality attempt ${attempts}: broke the gate — reverted${skippedRestoreNote(snapshot)}`,
+        message: `quality attempt ${attempts}: broke the gate — reverted`,
       });
       continue;
     }
@@ -171,7 +167,7 @@ export async function qualityRepair(
       report({
         kind: "fix",
         task: task.id,
-        message: `quality attempt ${attempts}: no gain (${next.quality}/5) — kept previous${skippedRestoreNote(snapshot)}`,
+        message: `quality attempt ${attempts}: no gain (${next.quality}/5) — kept previous`,
       });
     }
   }

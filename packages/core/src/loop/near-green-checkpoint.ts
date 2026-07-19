@@ -43,12 +43,12 @@ export interface INearGreenCheckpoint {
    *  the checkpoint — else a file first edited during the spray stays "touched" after its
    *  contents revert, and the restored gate diverges from the checkpoint's errors. */
   readonly touched: ReadonlySet<string>;
-  /** The cumulative `state.edits` count at checkpoint time. A later same-count near-green
-   *  settle refreshes the checkpoint only when `state.edits` has ADVANCED past this — i.e. the
-   *  model actually wrote files since (real work worth re-snapshotting), not a no-op re-settle
-   *  at the identical tree. Distinguishes "1-error-A, then more work still at 1 error" (refresh)
-   *  from a "working" yield turn (skip — don't re-buffer the whole scope). */
-  readonly editsAtCapture: number;
+  /** Raw bytes of the out-of-scope dependency files (package.json + lockfiles) at checkpoint
+   *  time. These are a FIXED, tiny set (see ROLLBACK_EXTRA_FILES) that the shared text/tombstone
+   *  snapshot can't faithfully restore (binary lockfiles), so WS-B captures them itself as raw
+   *  bytes and rewrites them on rollback — no generic raw-backing / memory caps on the shared
+   *  substrate needed, because this set is bounded and small. */
+  readonly depFiles: ReadonlyMap<string, Uint8Array>;
 }
 
 /** Whether a fresh gate result should be CHECKPOINTED: it's a new all-time low, it's near

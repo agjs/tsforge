@@ -5,11 +5,7 @@ import { validate, runAccept } from "../validate";
 import type { ErrorParser, ErrorSet } from "../validate";
 import { reviewChange } from "./review/review-change";
 import type { IVerifiedFinding } from "./review/review.types";
-import {
-  snapshotFiles,
-  restoreFiles,
-  skippedRestoreNote,
-} from "./file-snapshot";
+import { snapshotFiles, restoreFiles } from "./file-snapshot";
 import type { Reporter } from "./loop.types";
 
 /** Outcome of one post-green review-and-repair pass. */
@@ -147,7 +143,7 @@ export async function reviewRepair(
   report({
     kind: "fix",
     task: task.id,
-    message: `post-green review repair broke the gate — reverted${skippedRestoreNote(snapshot)}`,
+    message: "post-green review repair broke the gate — reverted",
   });
 
   return { findings: findings.length, repaired: false, reverted: true };

@@ -2110,23 +2110,30 @@ const ROLLBACK_EXTRA_FILES: readonly string[] = [
 ];
 
 /** WS-B: snapshot the scope files at a fresh near-green low so a later spray can revert to
- *  this best state. Uses the SHARED IFileSnapshot substrate (binary-inclusive, tombstone-
- *  aware, raw-bytes for lockfiles) so a rollback rewrites edited files, restores lockfiles
- *  faithfully, AND deletes files a spray creates. Stores the open errors + the change-scoping
- *  set for the revert steer and the tracking realignment. */
+ *  this best state. The editable source scope goes through the SHARED IFileSnapshot substrate
+ *  (text-backed, tombstone-aware). The out-of-scope dependency files the harness lets the model
+ *  mutate (package.json + lockfiles via add_dependency) are captured SEPARATELY as raw bytes
+ *  (depFiles) — a fixed tiny set the shared substrate can't faithfully restore (binary
+ *  lockfiles), kept self-contained here so the shared substrate needs no raw-backing/memory
+ *  caps. Stores the open errors + the change-scoping set for the revert steer and realignment. */
 export async function captureNearGreenCheckpoint(
   ctx: ILoopCtx,
   errorCount: number,
-  gateErrors: readonly IErrorItem[],
-  editsAtCapture: number
+  gateErrors: readonly IErrorItem[]
 ): Promise<INearGreenCheckpoint> {
-  // Snapshot the editable scope PLUS the out-of-scope files the harness lets the model
-  // mutate (package.json + lockfiles via add_dependency) — else a dependency-induced spray
-  // leaves those on disk while rollback claims "reverted", and the gate stays red.
-  const snapshot = await snapshotFilesForRollback(ctx.cwd, [
-    ...ctx.task.files,
-    ...ROLLBACK_EXTRA_FILES,
-  ]);
+  const snapshot = await snapshotFilesForRollback(ctx.cwd, ctx.task.files);
+
+  // Raw-capture the out-of-scope dependency files (bounded, small set) so a dependency-induced
+  // spray can be reverted byte-for-byte — else those mutations survive and the gate stays red.
+  const depFiles = new Map<string, Uint8Array>();
+
+  for (const rel of ROLLBACK_EXTRA_FILES) {
+    const handle = Bun.file(join(ctx.cwd, rel));
+
+    if (await handle.exists()) {
+      depFiles.set(rel, new Uint8Array(await handle.arrayBuffer()));
+    }
+  }
 
   ctx.report({
     kind: "tool",
@@ -2140,7 +2147,7 @@ export async function captureNearGreenCheckpoint(
     snapshot,
     // Copy the change-scoping set so rollback restores it (see INearGreenCheckpoint.touched).
     touched: new Set(ctx.tool.touched ?? []),
-    editsAtCapture,
+    depFiles,
   };
 }
 
@@ -2163,28 +2170,19 @@ export async function rollbackNearGreen(
 
   await restoreFiles(cp.snapshot);
 
-  // Files too large to back at snapshot time (over the per-file cap or past the aggregate raw
-  // budget) are existence-only: restoreFiles CANNOT byte-revert them. If the spray mutated one
-  // it stays sprayed on disk — surfaced below and kept under change-scoped enforcement, never
-  // silently dropped.
-  const skipped = cp.snapshot.skipped;
+  // Byte-restore the out-of-scope dependency files (package.json + lockfiles) the shared
+  // text/tombstone snapshot doesn't cover, so a dependency-induced spray is fully reverted.
+  for (const [rel, bytes] of cp.depFiles) {
+    await Bun.write(join(ctx.cwd, rel), bytes);
+  }
 
   // Restore the change-scoping set to the checkpoint's, so change-scoped meta-rules see the
   // same touched files as at the checkpoint (a spray-touched file whose contents were just
-  // reverted must not stay "touched"). EXCEPTION: a skipped file the spray touched was NOT
-  // reverted, so it must STAY touched — else its lingering mutation escapes enforcement.
+  // reverted must not stay "touched"). ctx.tool.touched is a live Set — clear + refill it.
   if (ctx.tool.touched !== undefined) {
-    const unrevertedTouched = [...ctx.tool.touched].filter((f) =>
-      skipped.has(f)
-    );
-
     ctx.tool.touched.clear();
 
     for (const f of cp.touched) {
-      ctx.tool.touched.add(f);
-    }
-
-    for (const f of unrevertedTouched) {
       ctx.tool.touched.add(f);
     }
   }
@@ -2222,20 +2220,6 @@ export async function rollbackNearGreen(
     task: ctx.task.id,
     message: `↩ near-green rollback ${String(state.nearGreenRollbacks)}/${String(MAX_NEAR_GREEN_ROLLBACKS)}: reverted a ${String(sprayCount)}-error spray to the ${String(cp.errorCount)}-error best; steering a targeted fix`,
   });
-
-  // Non-silent truncation: if the checkpoint had files too large to snapshot, the revert is
-  // best-effort — say so, so a lingering mutation on one of them isn't mistaken for clean. (A
-  // skipped file the spray also TOUCHED is kept in ctx.tool.touched above so change-scoped
-  // rules still see it; a skipped file mutated OUTSIDE the touched set — e.g. a >8 MiB lockfile
-  // rewritten by add_dependency, which does not track the lockfile in touched — cannot be
-  // retained, hence the honest "may persist" wording rather than a blanket enforcement claim.)
-  if (skipped.size > 0) {
-    ctx.report({
-      kind: "tool",
-      task: ctx.task.id,
-      message: `⚠ near-green rollback: ${String(skipped.size)} file(s) exceeded the snapshot size caps and were NOT byte-reverted (best-effort — a lingering mutation may persist): ${[...skipped].slice(0, 5).join(", ")}`,
-    });
-  }
 
   const errorList = cp.errors
     .slice(0, 20)
@@ -2281,16 +2265,14 @@ async function nearGreenRollbackStep(
 }
 
 /** WS-B: after end-of-cycle feedback, re-arm the near-green checkpoint. Captures a fresh
- *  snapshot when the state is near green (1..N) AND it's worth protecting — either no
- *  checkpoint is held (`needsReArm`: re-establishes after a resume, since the snapshot isn't
- *  serialized), the count strictly improves (`isBetter`), OR it's a LATERAL same-count settle
- *  where the model actually WROTE files since the checkpoint (`isLateralWork`: state.edits
- *  advanced past cp.editsAtCapture). Refreshing on the lateral-work case tracks the model's
- *  LATEST near-green tree — else a later spray reverts to the OLD snapshot and tombstones the
- *  real work (new helpers/tests, refactors, partial fixes) even when the error count/keys are
- *  unchanged. It refreshes on EDITS, not error identity, so same-key progress is protected AND
- *  a no-op "working" yield turn (no edits) does not re-buffer the whole scope. The watermark is
- *  WS-B's `nearGreenBest`, NOT checkStuck's plateauBest (which uses commonGatePhase and stalls
+ *  snapshot when the state is near green (1..N) AND it's worth protecting — either no checkpoint
+ *  is held (`needsReArm`: re-establishes after a resume, since the snapshot isn't serialized) OR
+ *  the count STRICTLY improves (`isBetter`) on WS-B's `nearGreenBest` watermark. A same-count
+ *  settle deliberately does NOT refresh: the checkpoint protects the best-by-count state, and a
+ *  spray then reverts to it — at worst the model redoes a small same-count delta, which is far
+ *  simpler and more robust than trying to signal "did the model do real work at the same count"
+ *  (every such signal — error keys, edit counters — misses cases like add_dependency). The
+ *  watermark is WS-B's own, NOT checkStuck's plateauBest (which uses commonGatePhase and stalls
  *  with meta errors). Flag-gated no-op. */
 async function nearGreenCheckpointStep(
   ctx: ILoopCtx,
@@ -2310,24 +2292,15 @@ async function nearGreenCheckpointStep(
     return;
   }
 
-  const cp = state.nearGreenCheckpoint;
-  const needsReArm = cp === undefined;
-  const best = state.nearGreenBest ?? Number.POSITIVE_INFINITY;
-  // A strictly-lower near-green count → always refresh (a new best worth protecting).
-  const isBetter = curr < best;
-  // A LATERAL settle (SAME count) refreshes to the model's latest tree — but ONLY when the
-  // model actually WROTE files since the checkpoint (state.edits advanced). That protects
-  // same-key real work (a new helper alongside the same 1 error) while a no-op "working" yield
-  // turn (no edits) does NOT re-capture, so WS-B can't re-buffer the whole scope every cycle.
-  const isLateralWork =
-    curr === best && cp !== undefined && state.edits > cp.editsAtCapture;
+  const needsReArm = state.nearGreenCheckpoint === undefined;
+  // A strictly-lower near-green count → refresh (a new best worth protecting).
+  const isBetter = curr < (state.nearGreenBest ?? Number.POSITIVE_INFINITY);
 
-  if (shouldCheckpoint(curr, needsReArm || isBetter || isLateralWork)) {
+  if (shouldCheckpoint(curr, needsReArm || isBetter)) {
     state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
       ctx,
       curr,
-      gateErrors,
-      state.edits
+      gateErrors
     );
     // The new best this checkpoint protects. Deliberately do NOT reset nearGreenRollbacks —
     // it bounds TOTAL reverts this drive.

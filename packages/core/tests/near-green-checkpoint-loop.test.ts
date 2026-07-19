@@ -12,11 +12,7 @@ import {
   rollbackNearGreen,
 } from "../src/loop/turn";
 import type { IValidateResult } from "../src/validate";
-import type { IFileSnapshot } from "../src/loop/file-snapshot";
-import {
-  MAX_NEAR_GREEN_ROLLBACKS,
-  type INearGreenCheckpoint,
-} from "../src/loop/near-green-checkpoint";
+import { MAX_NEAR_GREEN_ROLLBACKS } from "../src/loop/near-green-checkpoint";
 
 // WS-B end-to-end: with the flag ON, a build that reaches near-green (1 error) then SPRAYS
 // (8 errors) must REVERT the scope files to the near-green best; with the flag OFF the path
@@ -174,12 +170,9 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
     };
 
     // Checkpoint the near-green state (feature.ts = GOOD, 1 error, touched = {a.ts}).
-    const checkpoint = await captureNearGreenCheckpoint(
-      ctx,
-      1,
-      [{ key: "e0", message: "the one remaining error" }],
-      0
-    );
+    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "e0", message: "the one remaining error" },
+    ]);
 
     // A spray then CREATED extra.ts, touched a NEW file (b.ts), and inflated every guard.
     await Bun.write(join(dir, "extra.ts"), "export const BAD = 1;\n");
@@ -244,86 +237,6 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
   }
 });
 
-test("rollbackNearGreen SURFACES snapshot.skipped files + keeps an unreverted one under enforcement", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
-  const events: ILoopEvent[] = [];
-
-  try {
-    // A checkpoint whose snapshot marked big.bin as SKIPPED (too large to back → not revertable).
-    const snapshot: IFileSnapshot = {
-      cwd: dir,
-      scope: ["**/*"],
-      existed: new Set(["big.bin", "a.ts"]),
-      contents: new Map(),
-      raw: new Map(),
-      skipped: new Set(["big.bin"]),
-    };
-    const cp: INearGreenCheckpoint = {
-      errorCount: 1,
-      errors: [{ key: "e0", message: "one error" }],
-      snapshot,
-      touched: new Set(["a.ts"]), // the checkpoint's change-scope did NOT include big.bin
-      editsAtCapture: 0,
-    };
-    const ctx: ILoopCtx = {
-      task: {
-        id: "t",
-        intent: "test",
-        accept: "",
-        files: ["**/*"],
-        context: [],
-      },
-      cwd: dir,
-      tsService: null,
-      report: (e) => events.push(e),
-      messages: [],
-      // The spray touched big.bin (a skipped file) AND b.ts (a normal one).
-      tool: { touched: new Set(["a.ts", "b.ts", "big.bin"]) },
-      gate: {
-        parse: undefined,
-        runner: {
-          run: async (): Promise<IValidateResult> => ({
-            passed: false,
-            errors: [],
-            output: "",
-          }),
-        },
-      },
-    };
-    const state: ILoopState = {
-      prevGateErrors: [],
-      gateNoProgress: 0,
-      bestErrorCount: 8,
-      noNewLow: 0,
-      errorAge: new Map(),
-      lastGateCount: 8,
-      edits: 0,
-      regressions: 1,
-      ttsrInterrupts: 0,
-      steerLevel: 0,
-      nearGreenCheckpoint: cp,
-      nearGreenRollbacks: 0,
-    };
-
-    await rollbackNearGreen(ctx, state, 8);
-
-    // The incomplete revert is SURFACED (not silent) — production code reads snapshot.skipped.
-    const warned = events.some(
-      (e) =>
-        e.kind === "tool" &&
-        typeof e.message === "string" &&
-        e.message.includes("were NOT byte-reverted")
-    );
-
-    expect(warned).toBe(true);
-    // big.bin (skipped + spray-touched, thus NOT reverted) STAYS touched so meta-rules still
-    // enforce it; b.ts (revertable) is dropped back to the checkpoint's touched set {a.ts}.
-    expect([...(ctx.tool.touched ?? [])].sort()).toEqual(["a.ts", "big.bin"]);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 test("rollbackNearGreen reverts OUT-OF-SCOPE package.json + binary lockfile (ROLLBACK_EXTRA_FILES)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
 
@@ -364,12 +277,9 @@ test("rollbackNearGreen reverts OUT-OF-SCOPE package.json + binary lockfile (ROL
       },
     };
 
-    const checkpoint = await captureNearGreenCheckpoint(
-      ctx,
-      1,
-      [{ key: "e0", message: "one error" }],
-      0
-    );
+    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "e0", message: "one error" },
+    ]);
 
     // A dependency spray rewrites the out-of-scope files (as add_dependency would).
     await Bun.write(
@@ -699,110 +609,6 @@ test("flag ON: the checkpoint REFRESHES to a strictly better near-green count", 
     expect(await Bun.file(join(dir, "sprayed.ts")).exists()).toBe(false);
     // improved.ts survives → the checkpoint refreshed to the count-1 state, not the count-2.
     expect(await Bun.file(join(dir, "improved.ts")).exists()).toBe(true);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}, 30_000);
-
-test("flag ON: the checkpoint REFRESHES on a LATERAL same-count near-green move (1→1)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
-  const events: ILoopEvent[] = [];
-
-  // The lateral path: near-green at 1 (state A, key eA, checkpoint@1) → a DIFFERENT 1-error
-  // state B (key eB — the model fixed A's error and a new one remains; count unchanged but the
-  // error SET CHANGED → REFRESH so the snapshot now includes stateB.ts) → spray to 8 (revert).
-  // The refresh restores B (stateB.ts survives); without the lateral refresh the checkpoint
-  // would be stuck at A and the revert would TOMBSTONE stateB.ts. (The refresh fires on the
-  // error-set CHANGE, not on a no-op re-settle at the identical error.)
-  const one = (key: string): IValidateResult => ({
-    passed: false,
-    errors: [{ key, message: `error ${key}` }],
-    output: "1 error(s)",
-  });
-  const has = (f: string): Promise<boolean> => Bun.file(join(dir, f)).exists();
-  const gate: IGate = {
-    run: async (): Promise<IValidateResult> => {
-      if (await has("sprayed.ts")) {
-        return {
-          passed: false,
-          errors: Array.from({ length: 8 }, (_, i) => ({
-            key: `s${String(i)}`,
-            message: `spray ${String(i)}`,
-          })),
-          output: "8 error(s)",
-        };
-      }
-
-      return (await has("stateB.ts")) ? one("eB") : one("eA"); // lateral A→B (different key)
-    },
-  };
-  const create = (id: string, file: string) => ({
-    content: "",
-    toolCalls: [
-      {
-        id,
-        name: "create",
-        arguments: { file, content: "export const X = 1;\n" },
-      },
-    ],
-  });
-  let n = 0;
-  const provider: IProvider = {
-    async complete() {
-      n += 1;
-
-      if (n === 1) {
-        return create("a", "stateA.ts");
-      } // near-green 1 → checkpoint@1 (A)
-
-      if (n === 3) {
-        return create("b", "stateB.ts");
-      } // still 1 (lateral) → REFRESH@1 (now includes stateB.ts)
-
-      if (n === 5) {
-        return create("c", "sprayed.ts");
-      } // spray 8 → revert to the LATEST 1-error tree (B)
-
-      return { content: "working", toolCalls: [] };
-    },
-  };
-
-  try {
-    const session = await Session.create({
-      provider,
-      cwd: dir,
-      files: ["**/*"],
-      gate,
-      maxTurns: 14,
-      report: (e) => events.push(e),
-    });
-
-    await session.send("build it");
-
-    const rolledBack = events.some(
-      (e) =>
-        e.kind === "tool" &&
-        typeof e.message === "string" &&
-        e.message.includes("near-green rollback")
-    );
-
-    expect(rolledBack).toBe(true);
-    expect(await Bun.file(join(dir, "sprayed.ts")).exists()).toBe(false);
-    // stateB.ts SURVIVES → the checkpoint refreshed on the lateral 1→1 move to the LATEST tree.
-    expect(await Bun.file(join(dir, "stateB.ts")).exists()).toBe(true);
-    expect(await Bun.file(join(dir, "stateA.ts")).exists()).toBe(true);
-    // Checkpoint captures are bounded by EDIT events (initial arm + one per create that lands
-    // near-green: stateA, stateB) — NOT by near-green cycle count. The no-op "working" turns
-    // must NOT re-buffer: with dense near-green gating over ~10 turns the OLD `curr <= best`
-    // rule would lock on every cycle (≥5); edit-driven caps it at ≤3.
-    const locks = events.filter(
-      (e) =>
-        e.kind === "tool" &&
-        typeof e.message === "string" &&
-        e.message.includes("near-green checkpoint: locked")
-    ).length;
-
-    expect(locks).toBeLessThanOrEqual(3);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
