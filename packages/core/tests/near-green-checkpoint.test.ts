@@ -16,11 +16,13 @@ import type { IFileSnapshot } from "../src/loop/file-snapshot";
 // reachability, judge) must NOT be checkpointed, or WS-B reverts the demanded completion edit.
 const err = (rule: string): IErrorItem => ({ key: rule, rule, message: rule });
 
-test("isCompletionClass: only add-code rules (reachability/i18n-locale-keys-used/judge), bare or prefixed", () => {
+test("isCompletionClass: only reliable add-code rules (reachability/i18n-locale-keys-used), bare or prefixed", () => {
   expect(isCompletionClass(err("reachability"))).toBe(true);
   expect(isCompletionClass(err("i18n-locale-keys-used"))).toBe(true);
-  expect(isCompletionClass(err("judge"))).toBe(true);
   expect(isCompletionClass(err("plugin/i18n-locale-keys-used"))).toBe(true);
+  // `judge` is EXCLUDED — it can reject defects in existing code, not only hollowness, so it
+  // isn't a reliable add-only signal (would falsely disable WS-B on a fixable judge rejection).
+  expect(isCompletionClass(err("judge"))).toBe(false);
   // Fixable-in-place errors are NOT completion-class (WS-B still protects against those).
   expect(isCompletionClass(err("no-floating-promises"))).toBe(false);
   expect(isCompletionClass(err("@typescript-eslint/no-unsafe-argument"))).toBe(

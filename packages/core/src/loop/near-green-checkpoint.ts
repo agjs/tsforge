@@ -51,18 +51,20 @@ export interface INearGreenCheckpoint {
   readonly depFiles: ReadonlyMap<string, Uint8Array>;
 }
 
-/** Gate errors that clear ONLY by ADDING code — wiring the i18n keys the feature declared
- *  (`i18n-locale-keys-used`), making the feature reachable (`reachability`), or passing the
- *  hollow-app quality `judge`. They are NOT fixable in the current files. A near-green state
- *  whose remaining errors are all of this class is a HOLLOW state (e.g. a list-only page with
- *  unused create/edit/delete translations): reaching green REQUIRES the model to add the
- *  form + buttons + toasts, which transiently spikes the error count. WS-B's count-only spray
- *  detection can't tell that legitimate completion edit from a bad convention spray, so
- *  checkpointing this state and reverting to it traps the model in the hollow app. */
+/** Gate errors that in THIS stack clear ONLY by ADDING code — wiring the i18n keys the feature
+ *  declared (`i18n-locale-keys-used`; the i18n-destructive-delete guard forbids the removal
+ *  shortcut, so the model MUST add the UI that references them), or making the feature reachable
+ *  (`reachability`; add the route/mount). A near-green state whose remaining errors are all of
+ *  this class is a HOLLOW state (e.g. a list-only page with unused create/edit/delete
+ *  translations): reaching green REQUIRES the model to add the form + buttons + toasts, which
+ *  transiently spikes the error count. WS-B's count-only spray detection can't tell that
+ *  legitimate completion edit from a bad convention spray, so checkpointing this state and
+ *  reverting to it traps the model in the hollow app. NOTE: `judge` is deliberately EXCLUDED —
+ *  the quality judge can reject defects in EXISTING code (fixable in place), not only
+ *  hollowness, so it is not a reliable add-only signal. */
 const COMPLETION_CLASS_RULES: ReadonlySet<string> = new Set([
   "reachability",
   "i18n-locale-keys-used",
-  "judge",
 ]);
 
 /** Whether a gate error clears only by adding code (see COMPLETION_CLASS_RULES). Matches the

@@ -1978,12 +1978,31 @@ const NEAR_GREEN_LOCKDOWN = 3;
 /** A lockdown/regression banner for the top of the feedback, or "" when far from
  *  green and not regressing. `total` = open errors this cycle; `best` = the all-time
  *  low (watermark). Regression = this cycle is WORSE than the best already reached. */
-export function nearGreenBanner(total: number, best: number): string {
+export function nearGreenBanner(
+  total: number,
+  best: number,
+  completionOnly = false
+): string {
   const regressed = Number.isFinite(best) && total > best;
   const near = total > 0 && total <= NEAR_GREEN_LOCKDOWN;
 
   if (!near && !regressed) {
     return "";
+  }
+
+  // When EVERY remaining error clears only by ADDING code (unused i18n keys / not reachable —
+  // see allCompletionClass), the normal near-green lockdown ("smallest change, do NOT create
+  // files or add features") is exactly BACKWARDS: it forbids the create/edit/delete UI the
+  // feature must have. Emit the opposite instruction so the model builds it (WS-B has already
+  // stood its checkpoint down for this state, so the resulting spike won't be reverted).
+  if (completionOnly) {
+    return (
+      `⚠ ${String(total)} error(s) left, and they clear only by ADDING the code the feature is ` +
+      "missing — it declared UI it hasn't built (unused i18n keys / not reachable). BUILD the " +
+      "create/edit/delete UI, the success/error toasts that reference those keys, and the route " +
+      "wiring. The error count WILL rise as you add these files — that's expected progress here, " +
+      "NOT a regression to undo. Keep going until the added code references everything.\n\n"
+    );
   }
 
   const lines: string[] = [];
@@ -2086,8 +2105,14 @@ export async function injectFeedback(
   }
 
   // NEAR-GREEN lockdown / regression callout leads everything — the finishing
-  // discipline that stops "spray after best" (the dominant late-run failure).
-  const banner = nearGreenBanner(gateErrors.length, state.bestErrorCount);
+  // discipline that stops "spray after best" (the dominant late-run failure). When the
+  // remaining errors are all completion-class, the banner flips to "build the missing UI"
+  // instead of "don't create files" (else it contradicts the completeness guard).
+  const banner = nearGreenBanner(
+    gateErrors.length,
+    state.bestErrorCount,
+    allCompletionClass(gateErrors)
+  );
 
   ctx.messages.push({
     role: "user",
