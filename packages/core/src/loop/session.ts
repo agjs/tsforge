@@ -81,6 +81,7 @@ import {
   type ILoopState,
   isPhantomRouteError,
   NO_TOOL_CALL_NUDGE,
+  runCheckGate,
   runToolCalls,
   settleGate,
   toolsFor,
@@ -166,6 +167,14 @@ export interface ISessionConfig {
    *  a convention library (e.g. boringstack) so the model can fetch its how-to
    *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
   pullConventions?: boolean;
+  /** Offer the callable, structured `check` tool (WS-G) — set by a build BACKEND
+   *  whose gate is authoritative (e.g. boringstack, which injects its gate per-slice
+   *  via `setGate`). The tool runs the SAME full evaluation `settleGate` does
+   *  (`runCheckGate` → autofix + gate command + META_RULES combined — NOT the gate
+   *  runner alone) and returns the whole structured error set MID-TURN, so the model
+   *  fixes every error in one pass. Left off for plain eval/scratch tasks (their
+   *  acceptance set can be empty ⇒ vacuous). */
+  offerCheck?: boolean;
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
   gate?: IGate;
@@ -688,9 +697,27 @@ export class Session {
     // no tsconfig, and is the plan-mode explorer's main tool besides `read`.
     // Headless/eval sessions keep the measured base set (see
     // lsp-tools-regress-scratch: nav tools hurt from-scratch builds).
-    this.tools = toolsFor(false, {}, cfg.pullConventions === true);
+    // `check` (WS-G): offered only when the build BACKEND opts in (`cfg.offerCheck`).
+    // The boringstack build injects its authoritative gate per-slice via `setGate`
+    // (not at construction), so this is an explicit flag, not `cfg.gate !== undefined`
+    // (which is still undefined here). A plain eval/scratch task leaves it off — its
+    // acceptance set can be empty, so a callable gate would answer vacuously.
+    const offerCheck = cfg.offerCheck === true;
+
+    this.tools = toolsFor(false, {}, cfg.pullConventions === true, offerCheck);
 
     this.ctx = ctx;
+
+    // Wire the `check` tool's runCheck seam to `runCheckGate` — the SAME full
+    // evaluation `settleGate` runs (autofix → gate command → META_RULES combined),
+    // so `check` can never report green while the end-of-turn settle is red. Reads
+    // `this.ctx` LAZILY so a mid-build `setGate` swap is honored, and never
+    // `validate(accept)` (empty for an injected gate — the vacuous-recheck trap).
+    // Absent ⇒ the tool isn't offered and reports it isn't available.
+    if (offerCheck) {
+      this.ctx.tool.runCheck = () => runCheckGate(this.ctx);
+    }
+
     // create() already resolved the base mode (CLI > config > default) onto ctx.
     this.baseMode = ctx.tool.policyMode ?? "default";
     this.ctx.tool.policyMode = this.planMode ? "plan" : this.baseMode;

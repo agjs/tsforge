@@ -37,7 +37,12 @@ import {
   resolveStuckFile,
   type ExpertAsk,
 } from "./expert-handoff";
-import { executeTool, type SpawnAgentFn, type IToolContext } from "./tools";
+import {
+  executeTool,
+  type SpawnAgentFn,
+  type IToolContext,
+  type ICheckOutcome,
+} from "./tools";
 import {
   astGrepFix,
   dropRedundantAnnotations,
@@ -60,6 +65,7 @@ import {
   GIT_CONTEXT_TOOL,
   READ_IMAGE_TOOL,
   GENERATE_IMAGE_TOOL,
+  CHECK_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
@@ -114,7 +120,8 @@ type AdvertisedTool =
   | typeof SCRIPT_TOOL
   | typeof GIT_CONTEXT_TOOL
   | typeof READ_IMAGE_TOOL
-  | typeof GENERATE_IMAGE_TOOL;
+  | typeof GENERATE_IMAGE_TOOL
+  | typeof CHECK_TOOL;
 
 /** Which extra capability backends are configured this run — decides whether the
  *  image tools are advertised. Resolved once by the driver (run.ts) so
@@ -166,12 +173,19 @@ function imageTools(caps: ICapabilityFlags): AdvertisedTool[] {
 export function toolsFor(
   hasExistingCode: boolean,
   caps: ICapabilityFlags = {},
-  offerConventions = false
+  offerConventions = false,
+  offerCheck = false
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
   const script = scriptTools();
   const image = imageTools(caps);
+
+  // check — the callable, structured acceptance gate. Offered ONLY when the caller
+  // wires a `runCheck` seam on the tool context (the boringstack build does); a
+  // plain scratch/logic task leaves it off so the base set stays minimal. Same
+  // per-backend opt-in shape as pull_conventions — decoupled from every flag.
+  const check: AdvertisedTool[] = offerCheck ? [CHECK_TOOL] : [];
 
   // pull_conventions — a read-only knowledge tool the model calls to fetch the
   // BoringStack how-to BEFORE writing that kind of code (the PULL complement to the
@@ -189,6 +203,7 @@ export function toolsFor(
       ...BASE_TOOLS,
       ...HASHLINE_TOOLS,
       ...conventions,
+      ...check,
       ...web,
       ...git,
       ...script,
@@ -201,6 +216,7 @@ export function toolsFor(
     ...BASE_TOOLS,
     ...HASHLINE_TOOLS,
     ...conventions,
+    ...check,
     ...LSP_TOOLS,
     ...web,
     ...git,
@@ -263,6 +279,10 @@ export interface ILoopCtxTool {
    *  destructive edit. Threaded into the tool context so `edit`/`edit_lines`
    *  enforce it; declared here so the seam is typed, not accidental. */
   editGuard?: IToolContext["editGuard"];
+  /** Optional callable-gate runner set by a build backend (WS-G): runs the gate on
+   *  demand for the `check` tool. Threaded into the tool context; declared here so
+   *  the seam is typed, not accidental. Absent ⇒ `check` isn't offered. */
+  runCheck?: IToolContext["runCheck"];
 }
 
 /** Gate/VALIDATION options — what `settleGate` and the write-guard consume. */
@@ -1168,6 +1188,63 @@ function runMetaRulesStep(ctx: ILoopCtx): IMetaRuleViolation[] {
   }
 }
 
+/** The FULL gate evaluation — autofix, then the gate command, then the harness
+ *  meta-rules — combined into ONE pass/fail with the union error set. This is the
+ *  authoritative "is it green?" answer; `settleGate` (the end-of-turn settle) and
+ *  the callable `check` tool (WS-G, mid-turn) BOTH go through here so they can never
+ *  disagree — the model can't see `check` say green while the settle path is red
+ *  (e.g. a `test-sibling-required` meta-error the gate command alone doesn't emit).
+ *  Signal-forwarding and gate streaming come for free via `runGateStep`. */
+export async function evaluateGate(
+  ctx: ILoopCtx,
+  turn: number
+): Promise<{
+  passed: boolean;
+  errors: IErrorItem[];
+  output: string;
+  metaViolations: IMetaRuleViolation[];
+  autoFixed: string[];
+}> {
+  const autoFixed = await autoFixStep(ctx);
+  const gate = await runGateStep(ctx, turn);
+  const metaViolations = runMetaRulesStep(ctx);
+
+  const metaErrors = metaViolations.filter((v) => v.severity === "error");
+  const errors = gate.errors.concat(
+    metaErrors.map((v) => ({
+      // Key stays `file:ruleId` — the R3 escalation focus contract (gateFeedback
+      // filters metaViolations by exactly this) depends on it. Distinct-message
+      // collapse is handled by the `check` tool's dedupe (full-identity), NOT by
+      // widening this key, so the ladder's focus matching is untouched.
+      key: `${v.file}:${v.ruleId}`,
+      file: v.file,
+      rule: v.ruleId,
+      message: v.message,
+    }))
+  );
+
+  return {
+    // Green only when BOTH the gate command AND the meta-rules are clean.
+    passed: gate.passed && metaErrors.length === 0,
+    errors,
+    output: gate.output,
+    metaViolations,
+    autoFixed,
+  };
+}
+
+/** The callable-gate seam the `check` tool (WS-G) runs: the SAME full evaluation
+ *  `settleGate` uses, projected to the {@link ICheckOutcome} the tool returns —
+ *  including `autoFixed`, so `check` can warn the model that mid-turn autofix
+ *  rewrote files (the desync guard `settleGate` gives via its autofix notice).
+ *  Wired onto the tool context by the build overlay (Session). `turn` is 0 — a
+ *  mid-turn check is not a settle cycle; it only affects a cosmetic progress line. */
+export async function runCheckGate(ctx: ILoopCtx): Promise<ICheckOutcome> {
+  const { passed, errors, output, autoFixed } = await evaluateGate(ctx, 0);
+
+  return { passed, errors, output, autoFixed };
+}
+
 /** Pure helper: derive the handoff ask string from the final steer message and
  *  persisting error set. Produces a non-empty, informative ask for human/stronger-model
  *  handoff. */
@@ -1898,28 +1975,20 @@ export async function settleGate(
   turn: number
 ): Promise<IRunResult | null> {
   const { task, report } = ctx;
-  const autoFixed = await autoFixStep(ctx);
-  const gate = await runGateStep(ctx, turn);
-  const metaViolations = runMetaRulesStep(ctx);
-
-  const metaErrors = metaViolations.filter((v) => v.severity === "error");
-  const gateErrors = gate.errors.concat(
-    metaErrors.map((v) => ({
-      key: `${v.file}:${v.ruleId}`,
-      file: v.file,
-      rule: v.ruleId,
-      message: v.message,
-    }))
-  );
+  // The FULL evaluation (autofix → gate command → meta-rules), shared verbatim with
+  // the `check` tool via evaluateGate so the two never disagree.
+  const {
+    passed: gatePassed,
+    errors: gateErrors,
+    metaViolations,
+    autoFixed,
+  } = await evaluateGate(ctx, turn);
 
   if (state.lastGateCount >= 0 && gateErrors.length > state.lastGateCount) {
     state.regressions += 1;
   }
 
   state.lastGateCount = gateErrors.length;
-
-  // Determine pass/fail: the gate passes only if BOTH gate command AND meta-rules are clean
-  const gatePassed = gate.passed && metaErrors.length === 0;
 
   // On red, surface the ACTUAL errors (codes + messages) into the event — so the
   // log records WHAT failed at the gate, not just a count (the analysis substrate

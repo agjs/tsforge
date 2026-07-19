@@ -12,8 +12,9 @@ import { appendFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { OpenAICompatibleProvider, PROVIDER_LIMITS } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
-import { Session, LOOP_LIMITS, type Reporter } from "../src/loop";
+import { LOOP_LIMITS, type Reporter } from "../src/loop";
 import { runBoringstackBuild } from "../src/loop/boringstack/build";
+import { createBoringstackHostSession } from "../src/loop/boringstack/build-session";
 import { makeBoringstackBuildGuard } from "../src/loop/boringstack/dual-extension-guard";
 import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
@@ -232,31 +233,23 @@ async function driveBuild(
     await boringstackExec(["bun", "run", "format"], { cwd: join(dir, app) });
   }
 
-  const host = await Session.create({
+  // The SINGLE constructor for the boringstack host session — carries the fixed build
+  // flags (drive-to-green, guidance, pull_conventions, the WS-G `check` tool) and is
+  // unit-tested to advertise `check`, so this wiring can't silently regress. The i18n
+  // editGuard is stateful (one per build) so it's supplied here, not in the flags.
+  const host = await createBoringstackHostSession({
     provider,
     cwd: dir,
-    files: ["**/*"],
     contextWindow,
     maxTurns: LOOP_LIMITS.webMaxTurns,
-    // Autonomous build → the strict expert-TS implement contract is in force from the
-    // first token (not the soft chat prompt), and the per-write eslint moat is wired
-    // from the detected stack so `as`/`!`/`any` surface as the file is written.
-    executionMode: "drive-to-green",
-    guidance:
-      "You are filling in ONE BoringStack resource at a time. The API resource " +
-      "files (schemas/service/types) and its UI feature are already generated and " +
-      "wired; edit ONLY the files named in the task, add real domain fields + logic " +
-      "(never an `as` cast), and write the required test siblings. Everything else " +
-      "is locked.",
-    // BoringStack ships a convention library — offer pull_conventions so the model
-    // can fetch its how-to patterns on demand (decoupled from any flag).
-    pullConventions: true,
+    report,
     // BoringStack overlays (composed, see makeBoringstackBuildGuard): (1) veto
     // deletion of a feature translation key the model authored earlier this build;
     // (2) veto creating a same-basename .test.ts + .test.tsx twin that orphans the
     // .tsx from the TS program and wedges the type-aware lint for the whole app.
+    // The drive-to-green + guidance + pull_conventions + check flags live in the
+    // constructor (BORINGSTACK_BUILD_SESSION); only the stateful guard is passed here.
     editGuard: makeBoringstackBuildGuard(dir),
-    report,
   });
 
   const result = await runBoringstackBuild({
