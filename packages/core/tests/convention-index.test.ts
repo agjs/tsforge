@@ -109,3 +109,14 @@ test("the STATE guide routes server data through the api-client, not raw fetch",
   expect(state).toContain("api-client");
   expect(state).not.toContain("react-query/fetch");
 });
+
+// The lint-gotchas guide targets the strict rules a fresh feature trips most (measured live):
+// await-thenable, no-confusing-void-expression, no-error-stringify, no-duplicate-string.
+test("the lint-gotchas guide covers the top strict-lint offenders", () => {
+  const g = conventionGuide("lint-gotchas");
+
+  expect(g).toContain("AWAIT");
+  expect(g).toContain("void expression");
+  expect(g).toContain("stringify an error");
+  expect(g).toContain("repeated string literals");
+});

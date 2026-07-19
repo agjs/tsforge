@@ -22,6 +22,7 @@ const TOPICS = [
   "routing",
   "forms",
   "data-fetching",
+  "lint-gotchas",
 ] as const;
 
 export type ConventionTopic = (typeof TOPICS)[number];
@@ -48,6 +49,17 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
     // guarded `response.error` — this stack throws on errors, so that guard is dead.
     // Mapping it here pushes the data-fetching guide on the FIRST such red.
     "data-fetching": ["no-unnecessary-condition"],
+    // The strict-lint rules a fresh feature trips most (measured on a live build): floating/
+    // un-awaited promises, void-returning expressions used as values, errors stringified into
+    // logs, and repeated string literals. None are structural — they're write-time habits the
+    // model gets wrong then grinds down one gate at a time.
+    "lint-gotchas": [
+      "await-thenable",
+      "no-floating-promises",
+      "no-confusing-void-expression",
+      "no-error-stringify",
+      "no-duplicate-string",
+    ],
   };
 
 const GUIDES: Readonly<Record<ConventionTopic, string>> = {
@@ -107,6 +119,19 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "a dead `no-unnecessary-condition` gate error. Just read `data`. Put queries in " +
     "`<Feature>.queries.ts` and mutations in `<Feature>.mutations.ts`. If a path isn't " +
     "in the spec yet, add the API route first, then `bun run generate:api`.",
+  "lint-gotchas":
+    "STRICT-LINT GOTCHAS (boringstack). The gate is eslint with EVERY rule an error; a fresh " +
+    "feature trips these most, so write them right up front:\n" +
+    "• AWAIT every promise — an async call you don't await is a floating-promise / " +
+    "await-thenable error. Write `await doX()`; only `void doX()` if you deliberately " +
+    "fire-and-forget.\n" +
+    "• NO value out of a void expression — never `return foo.forEach(...)` or " +
+    "`const x = setState(v)`; call the void thing, then return/act separately. For handlers use " +
+    "a BLOCK body: `onClick={() => { setOpen(true); }}`, not `() => setOpen(true)`.\n" +
+    "• NEVER stringify an error into a log — pass the error object: " +
+    '`log.error({ err }, "failed")`, never `` log.error(`${err}`) `` or `String(err)`.\n' +
+    "• HOIST repeated string literals — the same literal 3+ times is a no-duplicate-string " +
+    "error; pull it into a `const` (or `<Feature>.constants.ts`) and reference that.",
 };
 
 /** The guide for a topic (the exact string pushed or pulled). */
