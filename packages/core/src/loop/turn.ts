@@ -39,6 +39,8 @@ import {
 } from "./expert-handoff";
 import {
   executeTool,
+  isAskUserResult,
+  askUserQuestion,
   type SpawnAgentFn,
   type IToolContext,
   type ICheckOutcome,
@@ -341,6 +343,10 @@ export interface ILoopCtx {
 export interface ILoopState {
   prevGateErrors: ErrorSet;
   gateNoProgress: number;
+  /** WS-C: set when the model called `ask_user` this turn — carries the question. The
+   *  drive loop ENDS the send (surfacing the question) so the human's next send is the
+   *  reply. Cleared once consumed. Absent on autonomous runs (ask_user isn't offered). */
+  pendingAskUser?: string;
   /** Fewest gate errors seen so far (the convergence watermark) + how many cycles
    *  since it last hit a NEW low. Drives the net-progress stop: a churning build
    *  whose error SET keeps shuffling (so `gateNoProgress` resets) and whose errors
@@ -540,6 +546,31 @@ async function runOneToolCall(
   };
 
   const result = await executeTool(call, toolContextFor(ctx, report));
+
+  // WS-C: the model raised its hand (ask_user). Record the question so the drive loop
+  // ends this send, surface it as an `ask_user` event, and feed a CLEAN tool result
+  // back (NEVER the raw sentinel) — the tool_call still gets its tool_result (no
+  // dangling call → 400), the turn ends, and the human's next send is the answer.
+  if (isAskUserResult(result)) {
+    const question = askUserQuestion(result);
+
+    state.pendingAskUser = question;
+    ctx.report({
+      kind: "ask_user",
+      task: ctx.task.id,
+      message: `ask_user: ${question}`,
+    });
+    ctx.messages.push({
+      role: "tool",
+      content:
+        "Your question was posed to the human; their answer arrives as the next " +
+        "message. Stop here and wait for it.",
+      toolCallId: callKey(call, index),
+    });
+
+    return false;
+  }
+
   let feedback = "";
 
   if (wrote.size > 0) {

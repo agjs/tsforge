@@ -176,6 +176,11 @@ export interface ISessionConfig {
    *  fixes every error in one pass. Left off for plain eval/scratch tasks (their
    *  acceptance set can be empty ⇒ vacuous). */
   offerCheck?: boolean;
+  /** A real human is present to answer (the interactive REPL sets this). Threads to
+   *  `ctx.tool.interactive` and offers the `ask_user` tool (WS-C): the model can pause
+   *  for a human decision. Absent/false ⇒ unattended (headless/eval) — ask_user isn't
+   *  offered and, if forced, returns "proceed" so a run never hangs. */
+  interactive?: boolean;
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
   gate?: IGate;
@@ -750,7 +755,13 @@ export class Session {
     const offerCheck =
       cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 
-    this.tools = toolsFor(false, {}, cfg.pullConventions === true, offerCheck);
+    this.tools = toolsFor(
+      false,
+      {},
+      cfg.pullConventions === true,
+      offerCheck,
+      cfg.interactive === true
+    );
 
     this.ctx = ctx;
 
@@ -881,6 +892,9 @@ export class Session {
         ...(policyRules === undefined ? {} : { policyRules }),
         ...(mcpRegistry === null ? {} : { mcpRegistry }),
         ...(cfg.editGuard === undefined ? {} : { editGuard: cfg.editGuard }),
+        // A real human is present (the interactive REPL) → ask_user can pause for an
+        // answer; absent/false ⇒ unattended, and ask_user proceeds without hanging.
+        ...(cfg.interactive === true ? { interactive: true } : {}),
       },
       gate: {
         parse: cfg.parse,
@@ -1831,6 +1845,22 @@ export class Session {
       turnStart,
       sendStart
     );
+
+    // WS-C: the model raised its hand via ask_user (runOneToolCall set this). END the
+    // send now — the question was already surfaced as an `ask_user` event; the REPL
+    // shows it and the human's next `send` carries the answer. A `responded` result is
+    // the normal "the model produced output, your turn" signal the REPL already handles.
+    if (this.state.pendingAskUser !== undefined) {
+      this.state.pendingAskUser = undefined;
+
+      return {
+        action: { status: "responded", turns: turn },
+        edited,
+        editsSinceCheck,
+        readonlyStreak: carry.readonlyStreak,
+        readonlyRecoveries: carry.readonlyRecoveries,
+      };
+    }
 
     const base = { action: "continue" as const, edited, editsSinceCheck };
 

@@ -66,7 +66,11 @@ export interface ILoopEvent {
     | "agent_started"
     // A subagent finished; `output` carries its final text/structured payload and
     // `passed` whether it completed (vs failed/aborted).
-    | "agent_result";
+    | "agent_result"
+    // The co-pilot (WS-C) raised its hand: the model called `ask_user` and the turn
+    // PAUSED for a human answer. `message` carries the question; the REPL renders it
+    // and the human's next send is the reply. Interactive-only (never headless).
+    | "ask_user";
   task: string;
   /** Which subagent emitted this event. Absent = the parent/main loop. Set on
    *  every event a subagent emits (not just agent_* kinds), so interleaved

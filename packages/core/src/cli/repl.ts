@@ -306,6 +306,9 @@ async function initReplSession(args: ICliArgs): Promise<{
     accept,
     contextWindow,
     report,
+    // A real human is at the keyboard → offer `ask_user` (WS-C): the model can pause
+    // to ask a bounded question and the human's next line answers it.
+    interactive: true,
     // PER-WRITE lint moat (eslint rules per file as it's written), so violations
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
