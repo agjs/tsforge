@@ -127,7 +127,7 @@ export function conventionTopics(): ConventionTopic[] {
  *  long tail, not the primary teaching. */
 export function buildConventionGuides(): string {
   return [
-    "HOW THIS STACK WRITES CODE — read this BEFORE you write, not after the gate rejects you. These are the exact compliant patterns the gate enforces; write your FIRST draft this way instead of guessing from memory and burning turns repairing. (Each guide names the rules it satisfies; `pull_conventions` fetches any of these again on demand.)",
+    "HOW THIS STACK WRITES CODE — read this BEFORE you write, not after the gate rejects you. These are the exact compliant patterns the gate enforces; write your FIRST draft this way instead of guessing from memory and burning turns repairing. (`pull_conventions` re-fetches any of these on demand.)",
     "",
     ...conventionTopics().map((t) => conventionGuide(t)),
   ].join("\n\n");

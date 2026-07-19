@@ -7,6 +7,7 @@ import {
   conventionGuide,
   conventionTopics,
 } from "../src/loop/conventions";
+import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
 import type { IProvider, IChatMessage } from "../src/inference";
 import { Session } from "../src/loop";
 
@@ -87,4 +88,24 @@ test("the convention guides are in the system prompt with pullConventions, absen
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// The pull_conventions tool enum is a hand-maintained duplicate of TOPICS — this locks it to
+// conventionTopics() so a new topic (or a dropped one, like data-fetching was) can't silently
+// diverge, leaving a guide the model can't actually pull.
+test("PULL_CONVENTIONS_TOOL enum stays in sync with conventionTopics()", () => {
+  const enumTopics =
+    PULL_CONVENTIONS_TOOL.function.parameters.properties.topic.enum;
+
+  expect([...enumTopics].sort()).toEqual([...conventionTopics()].sort());
+});
+
+// The STATE guide must NOT tell the model to use raw fetch (it contradicts DATA-FETCHING's
+// fetch ban) — the aggregate front-load test can't catch this because the data-fetching guide
+// separately contains the api-client string.
+test("the STATE guide routes server data through the api-client, not raw fetch", () => {
+  const state = conventionGuide("state");
+
+  expect(state).toContain("api-client");
+  expect(state).not.toContain("react-query/fetch");
 });
