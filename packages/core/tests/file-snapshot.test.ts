@@ -141,3 +141,18 @@ test("restoreFiles faithfully restores a mutated OVERSIZE text file (raw bytes)"
 
   expect(readFileSync(join(dir, "package-lock.json"), "utf8")).toBe(big);
 });
+
+// Regression (panel): with WS-B default-ON and a broad `**/*` scope, buffering EVERY binary
+// with no ceiling could OOM the rollback. A file over MAX_RAW_SNAPSHOT_BYTES (8 MiB) is left
+// existence-only — tracked so it isn't tombstoned, but not buffered.
+test("snapshotFiles leaves a file over the raw cap existence-only (no OOM)", async () => {
+  const huge = new Uint8Array(8_388_609); // 1 byte over 8 MiB
+
+  writeFileSync(join(dir, "big.wasm"), huge);
+
+  const snap = await snapshotFiles(dir, ["**/*"]);
+
+  expect(snap.existed.has("big.wasm")).toBe(true); // still tracked (not wrongly tombstoned)
+  expect(snap.raw.has("big.wasm")).toBe(false); // NOT buffered
+  expect(snap.contents.has("big.wasm")).toBe(false);
+});

@@ -2,10 +2,17 @@ import { join } from "node:path";
 import { rm } from "node:fs/promises";
 import { resolveScopeFilesForRollback, isBinaryPath } from "../lib/fs";
 
-/** Per-file size cap on snapshot CONTENT (matches readFiles' MAX_FILE_BYTES): a
- *  source file we'd ever edit is well under this. Oversize files are still
- *  recorded as pre-existing (so they aren't tombstoned), just not content-backed. */
+/** Per-file size cap for STRING content backing (matches readFiles' MAX_FILE_BYTES): a
+ *  source file we'd ever edit is well under this. A text file over this — or any binary —
+ *  is backed by RAW BYTES instead (up to MAX_RAW_SNAPSHOT_BYTES). */
 const MAX_SNAPSHOT_BYTES = 131_072;
+
+/** Hard ceiling on RAW-BYTE backing. Lockfiles (bun.lockb, a multi-MB package-lock.json)
+ *  are the real target and sit well under this; the cap stops a broad `**\/*` scope from
+ *  buffering a huge artifact (video/wasm/archive) fully into memory — with WS-B default-ON
+ *  a rollback could otherwise OOM. A file over BOTH caps degrades to existence-only:
+ *  tracked so it isn't tombstoned, but not restored (best-effort, not airtight). */
+const MAX_RAW_SNAPSHOT_BYTES = 8_388_608; // 8 MiB
 
 /**
  * A rollback point for an "try an edit, keep only if it helps" loop: the contents
@@ -30,11 +37,11 @@ export interface IFileSnapshot {
 
 /**
  * Capture a rollback point for `scope` (which may contain globs — e.g. the
- * whole-repo `**\/*`). One traversal (binary-inclusive, uncapped): every existing
- * file is recorded in `existed` for tombstoning, and the text ones small enough
- * to back are content-captured for rewrite. Binaries are tracked by path but not
- * content (writing back their `.text()` would corrupt them). The shared substrate
- * for quality- and review-repair, so the revert semantics can't drift between them.
+ * whole-repo `**\/*`). One traversal: every existing file is recorded in `existed`
+ * for tombstoning; text files under MAX_SNAPSHOT_BYTES are string-backed, and
+ * binaries / oversize text up to MAX_RAW_SNAPSHOT_BYTES are RAW-BYTE backed (so a
+ * lockfile restores faithfully). A file over BOTH caps is existence-only. The shared
+ * substrate for quality- and review-repair, so revert semantics can't drift between them.
  */
 export async function snapshotFiles(
   cwd: string,
@@ -55,10 +62,12 @@ export async function snapshotFiles(
 
     if (!isBinaryPath(file) && handle.size <= MAX_SNAPSHOT_BYTES) {
       contents.set(file, await handle.text());
-    } else {
+    } else if (handle.size <= MAX_RAW_SNAPSHOT_BYTES) {
       // Binary (lockfiles like bun.lockb) or oversize text (a big package-lock.json): back it
       // by RAW BYTES so restore is faithful. A string round-trip would corrupt the binary and
-      // the size cap would silently drop the oversize file, leaving a spray un-reverted.
+      // the string cap would silently drop the oversize file, leaving a spray un-reverted.
+      // Over MAX_RAW_SNAPSHOT_BYTES the file is left existence-only (see the cap's rationale) —
+      // it won't OOM the rollback, and it's still tracked so it isn't wrongly tombstoned.
       raw.set(file, new Uint8Array(await handle.arrayBuffer()));
     }
   }

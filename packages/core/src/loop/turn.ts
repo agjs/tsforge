@@ -426,9 +426,9 @@ export interface ILoopState {
   nearGreenRollbacks?: number;
   /** WS-B: the best (lowest) error count the CURRENT checkpoint protects. WS-B's OWN
    *  watermark — NOT checkStuck's plateauBest, which uses commonGatePhase and is unreliable
-   *  with meta errors — so the checkpoint refreshes to a strictly better near-green count
-   *  (e.g. phase-2 2→1) instead of rolling back to a worse saved state. Reset when the
-   *  frontier advances past the checkpoint (new phase = fresh watermark) and on green. */
+   *  with meta errors — so the checkpoint refreshes to a better OR lateral near-green count
+   *  (e.g. 2→1, or 1→1 different error) instead of a spray reverting to a worse/older saved
+   *  state. Reset on green and at the drive boundary; lowered as the checkpoint refreshes. */
   nearGreenBest?: number;
   /** Guard-specific identity of the current stuck block (canonical, not the raw error
    *  set). Derived from the guard that fired: samePersist → single error key,
@@ -2252,11 +2252,13 @@ async function nearGreenRollbackStep(
 /** WS-B: after end-of-cycle feedback, re-arm the near-green checkpoint. Captures a fresh
  *  snapshot when the state is near green (1..N) AND it's worth protecting — either no
  *  checkpoint is held (`needsReArm`: re-establishes after a resume, since the snapshot isn't
- *  serialized), OR the count strictly improves on the
- *  checkpoint's own watermark (`isBetter`). The watermark is WS-B's `nearGreenBest`, NOT
- *  checkStuck's plateauBest — plateauBest uses commonGatePhase and stalls with meta errors,
- *  which would leave a worse checkpoint in place and let a spray revert to it. Flag-gated
- *  no-op. */
+ *  serialized), OR the count is NO WORSE than the checkpoint's watermark
+ *  (`isBetterOrLateral`): a strictly-better low OR a LATERAL same-count move (e.g. 1-error-A →
+ *  1-error-B, the model fixed one error and a different one remains). Refreshing on the lateral
+ *  case tracks the model's LATEST near-green work — else a later spray reverts to the OLD
+ *  same-count snapshot and discards every edit since, potentially many. The watermark is WS-B's
+ *  `nearGreenBest`, NOT checkStuck's plateauBest (which uses commonGatePhase and stalls with
+ *  meta errors). Flag-gated no-op. */
 async function nearGreenCheckpointStep(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -2276,9 +2278,12 @@ async function nearGreenCheckpointStep(
   }
 
   const needsReArm = state.nearGreenCheckpoint === undefined;
-  const isBetter = curr < (state.nearGreenBest ?? Number.POSITIVE_INFINITY);
+  // `<=` (not `<`) so a LATERAL same-count near-green move refreshes the snapshot to the
+  // model's latest state — a spray then reverts to the newest near-green work, not an older one.
+  const isBetterOrLateral =
+    curr <= (state.nearGreenBest ?? Number.POSITIVE_INFINITY);
 
-  if (shouldCheckpoint(curr, needsReArm || isBetter)) {
+  if (shouldCheckpoint(curr, needsReArm || isBetterOrLateral)) {
     state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
       ctx,
       curr,
