@@ -29,7 +29,7 @@ import { unseenGuidesForErrors } from "./conventions";
 import {
   shouldCheckpoint,
   shouldRollback,
-  allCompletionClass,
+  nextCompletionPhase,
   MAX_NEAR_GREEN_ROLLBACKS,
   type INearGreenCheckpoint,
 } from "./near-green-checkpoint";
@@ -432,6 +432,15 @@ export interface ILoopState {
    *  (e.g. 2→1, or 1→1 different error) instead of a spray reverting to a worse/older saved
    *  state. Reset on green and at the drive boundary; lowered as the checkpoint refreshes. */
   nearGreenBest?: number;
+  /** WS-B: the model is in the COMPLETION phase — it reached an all-completion-class state
+   *  (only add-code errors: unused i18n keys / not reachable) and is now building the demanded
+   *  create/edit/delete UI. This PERSISTS across the resulting error spike (which is MIXED —
+   *  new compile errors + the shrinking completion errors), because a per-cycle all-completion
+   *  check flips false the moment the model starts adding code, re-arming the rollback + the
+   *  "undo" banner mid-add. Set when all errors are completion-class; held while ANY completion
+   *  error remains; cleared when none remain (completion done → WS-B re-engages) or on green /
+   *  at the drive boundary. While set, WS-B does not roll back and the banner says "build it". */
+  completionPhase?: boolean;
   /** Guard-specific identity of the current stuck block (canonical, not the raw error
    *  set). Derived from the guard that fired: samePersist → single error key,
    *  gateStuckRepeats → sorted-join of current keys, plateau → normalized count|keys
@@ -2111,7 +2120,7 @@ export async function injectFeedback(
   const banner = nearGreenBanner(
     gateErrors.length,
     state.bestErrorCount,
-    allCompletionClass(gateErrors)
+    state.completionPhase === true
   );
 
   ctx.messages.push({
@@ -2289,6 +2298,13 @@ async function nearGreenRollbackStep(
     return false;
   }
 
+  // During the COMPLETION phase the model is ADDING the demanded UI, so the error spike is
+  // progress, not a spray — never roll it back (this runs before checkpointStep, so the flag,
+  // not a per-cycle all-completion check, is what protects the mixed-error spike).
+  if (state.completionPhase === true) {
+    return false;
+  }
+
   if (
     shouldRollback(
       state.nearGreenCheckpoint,
@@ -2332,14 +2348,13 @@ async function nearGreenCheckpointStep(
     return;
   }
 
-  // Never protect a HOLLOW near-green state — one whose remaining errors ALL clear only by
-  // ADDING code (wiring i18n keys, reachability, the judge). The completeness guards demand
-  // that code; the model's large completion edit transiently spikes the count, and a
-  // checkpoint here would revert it to the hollow app (observed: 1→27 spray reverted to a
-  // list-only page, model re-does it → thrash). CLEAR any checkpoint (drops an earlier
-  // compile-state one too, so the spray isn't reverted to that either) and don't capture;
-  // WS-B resumes once errors are fixable-in-place again.
-  if (allCompletionClass(gateErrors)) {
+  // Never protect a HOLLOW state while in the COMPLETION phase — the model is adding the
+  // demanded create/edit/delete UI (wiring i18n keys / reachability), so a checkpoint here
+  // would revert it to the list-only page (observed: 1→27 spray reverted, model re-does it →
+  // thrash). CLEAR any checkpoint (drops an earlier compile-state one too — its fixable errors
+  // are already resolved, so it's stale) and don't capture; WS-B re-engages when the phase ends
+  // (no completion error remains). completionPhase was advanced at the top of settleGate.
+  if (state.completionPhase === true) {
     state.nearGreenCheckpoint = undefined;
 
     return;
@@ -2377,6 +2392,15 @@ export async function settleGate(
   } = await evaluateGate(ctx, turn);
 
   const curr = gateErrors.length;
+
+  // WS-B: advance the completion-phase flag BEFORE the rollback/banner/checkpoint steps read
+  // it — so the phase set at the hollow state survives the mixed-error spike that follows
+  // (the rollback step runs first, and a per-cycle all-completion check would already be false
+  // there once the model started adding code).
+  state.completionPhase = nextCompletionPhase(
+    state.completionPhase ?? false,
+    gateErrors
+  );
 
   if (state.lastGateCount >= 0 && curr > state.lastGateCount) {
     state.regressions += 1;

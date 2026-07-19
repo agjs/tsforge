@@ -82,6 +82,26 @@ export function allCompletionClass(errors: readonly IErrorItem[]): boolean {
   return errors.length > 0 && errors.every(isCompletionClass);
 }
 
+/** Advance the persistent completion-phase flag. ENTER when every error is completion-class (a
+ *  hollow state); STAY while ANY completion error remains (the MIXED spike as the model wires
+ *  the keys — a per-cycle all-completion check would flip false here and re-arm the rollback +
+ *  "undo" banner mid-add); EXIT when no completion error remains (the model finished wiring →
+ *  only fixable errors left → WS-B re-engages) or when green (no errors). */
+export function nextCompletionPhase(
+  prev: boolean,
+  errors: readonly IErrorItem[]
+): boolean {
+  if (allCompletionClass(errors)) {
+    return true;
+  }
+
+  if (!errors.some(isCompletionClass)) {
+    return false;
+  }
+
+  return prev;
+}
+
 /** Whether a fresh gate result should be CHECKPOINTED: it's a new all-time low, it's near
  *  green (1..N), and not zero (zero means the build just went green — nothing to protect).
  *  `isNewLow` is the loop's own genuine-progress signal, passed in so this stays pure. */
