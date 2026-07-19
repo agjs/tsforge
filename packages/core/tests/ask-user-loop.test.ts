@@ -301,6 +301,43 @@ test("interactive session sets humanPresent but NOT policy-interactive (co-pilot
   }
 });
 
+test("pausedWithEdit seeded at create gates on the first conversational send (carries /clear)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-ask-"));
+  const events: ILoopEvent[] = [];
+
+  // The /clear carry mechanism: a rebuilt Session is handed pausedWithEdit=true so a
+  // still-unvalidated pre-pause edit is NOT dropped. Even a purely conversational first
+  // send (no new edit) must run the gate, because the flag seeds `edited=true`. Without
+  // the carry the fresh session starts edited=false and silently skips the gate.
+  const provider: IProvider = {
+    async complete() {
+      return { content: "sounds good", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      interactive: true,
+      gate: passingGate,
+      pausedWithEdit: true,
+      report: (e) => events.push(e),
+    });
+
+    expect(session.hasDeferredGate).toBe(true);
+
+    await session.send("hi"); // conversational — but the carried flag forces the gate
+
+    expect(events.some((e) => e.kind === "validated")).toBe(true);
+    // Once the gate ran, the deferred flag is cleared.
+    expect(session.hasDeferredGate).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a FAILED (non-yielding) resume PRESERVES the deferred gate — it runs on a later send", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-ask-"));
   const events: ILoopEvent[] = [];

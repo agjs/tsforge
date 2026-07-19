@@ -287,19 +287,6 @@ export function nextAwaitingAnswer(
   return false;
 }
 
-/** Print a one-line note when /clear discards a pending ask_user question, so the
- *  drop is legible. Any edit the paused turn already wrote stays on disk and is
- *  re-validated by the next gate over the working tree — this is a notice, not a loss. */
-function noteDiscardedPendingAnswer(pending: boolean): void {
-  if (!pending) {
-    return;
-  }
-
-  process.stdout.write(
-    "note: a pending question was discarded by /clear; any change already written stays on disk and is re-checked by the next build/gate.\n"
-  );
-}
-
 // The /help body is generated from the command registry (src/cli/commands.ts) so
 // the help text and the interactive `/` palette can never drift.
 const HELP = formatHelp();
@@ -928,6 +915,11 @@ export async function repl(args: ICliArgs): Promise<number> {
         // Rebuild the session with the current state (config is not reused;
         // repl's /clear creates a fresh Session.create call)
         const profile = resolveCliProfile(args.profile);
+        // Carry a still-unvalidated pre-pause edit across the rebuild so /clear does not
+        // silently drop the deferred gate: the gate fires on mutation state (`edited`),
+        // not merely a dirty tree, so a fresh session would otherwise never re-validate
+        // the on-disk edit on a conversational send (WS-C).
+        const carryDeferredGate = session.hasDeferredGate;
 
         session = await Session.create({
           provider,
@@ -940,6 +932,8 @@ export async function repl(args: ICliArgs): Promise<number> {
           // Still an interactive REPL after /clear — keep ask_user (WS-C) offered, or
           // the co-pilot raise-hand silently dies mid-session.
           interactive: true,
+          // Plain boolean (no branch): the constructor only seeds the flag when true.
+          pausedWithEdit: carryDeferredGate,
           ...(profile === undefined ? {} : { profile }),
         });
         wireDelegation(); // re-offer spawn_agent on the rebuilt session
@@ -949,14 +943,10 @@ export async function repl(args: ICliArgs): Promise<number> {
         void discardClipboardImages(pendingImages.splice(0));
         session.setPlanMode(planMode); // a /clear must not silently drop the mode
         planDiscussed = false;
-        // /clear rebuilds the Session, so any pending ask_user pause is gone — drop the
-        // answer-routing flag too, else the next line skips plan routing on a stale flag.
-        // Surface the discard: if a raise-hand was pending, the human should know it was
-        // dropped. Any edit the paused turn already wrote stays on disk and is NOT lost
-        // to validation — the gate is defined over the working tree, so the next send,
-        // a fresh session, or the build's own gate re-validates it (pausedWithEdit is a
-        // within-session promptness optimization, not the only path to the gate).
-        noteDiscardedPendingAnswer(awaitingUserAnswer);
+        // /clear rebuilds the Session, so the pending ask_user QUESTION is gone — drop the
+        // answer-routing flag. (The still-unvalidated EDIT behind that pause is not lost:
+        // it's carried into the new session via pausedWithEdit above, so its gate still
+        // fires on the first send.)
         awaitingUserAnswer = false;
         await persist();
         clearScreen(); // wipe the visible terminal + scrollback, not just the state

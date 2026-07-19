@@ -20,6 +20,21 @@ test("both REPL Session.create sites (init + /clear) set interactive:true for as
   expect(interactiveCount).toBe(createCount);
 });
 
+// WS-C: /clear rebuilds the Session, and the gate fires on mutation state (`edited`), not
+// a dirty tree — so a rebuild that dropped the deferred-gate flag would silently skip
+// re-validating an on-disk pre-pause edit. The /clear path must read session.hasDeferredGate
+// and pass pausedWithEdit into the new session. Source-guarded (the /clear rebuild lives in
+// the readline loop, not unit-reachable); the create-option BEHAVIOR is tested in
+// ask-user-loop.test.ts.
+test("/clear carries the deferred gate across the Session rebuild", async () => {
+  const src = await Bun.file(
+    join(import.meta.dir, "..", "src", "cli", "repl.ts")
+  ).text();
+
+  expect(src).toContain("session.hasDeferredGate");
+  expect(src).toContain("pausedWithEdit: carryDeferredGate");
+});
+
 // The SAFETY contract, unit-tested via the pure router: while awaiting an ask_user
 // answer, a plan-approval word must route to "answer", NOT "plan-approval" — else the
 // human's reply would silently exit plan mode and unlock mutating tools.

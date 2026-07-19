@@ -183,6 +183,12 @@ export interface ISessionConfig {
    *  unattended (headless/eval) — ask_user isn't offered and, if forced, returns
    *  "proceed" so a run never hangs. */
   interactive?: boolean;
+  /** Seed the deferred-gate flag at construction: an edit written before an ask_user
+   *  pause that has NOT yet been validated. Set when a caller rebuilds the Session (e.g.
+   *  the REPL's /clear) but must not drop the still-pending gate — the first send that
+   *  yields (or churns) then validates the on-disk edit. Without this the rebuilt session
+   *  starts `edited=false` and a conversational send silently skips the gate (WS-C). */
+  pausedWithEdit?: boolean;
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
   gate?: IGate;
@@ -809,6 +815,9 @@ export class Session {
       steerLevel: 0,
       // Same signal as the pull_conventions tool: push + pull activate together.
       conventionsEnabled: cfg.pullConventions === true,
+      // Carried across a Session rebuild (e.g. /clear) so a still-unvalidated pre-pause
+      // edit is gated by the first send of the new session, not silently dropped (WS-C).
+      ...(cfg.pausedWithEdit === true ? { pausedWithEdit: true } : {}),
     };
   }
 
@@ -954,6 +963,14 @@ export class Session {
   /** The editable scope globs. */
   get scope(): string[] {
     return this.ctx.task.files;
+  }
+
+  /** True when a still-unvalidated edit is pending behind an ask_user pause (an edit
+   *  written before the pause whose gate hasn't run). A caller rebuilding the Session
+   *  (e.g. /clear) reads this and passes `pausedWithEdit` to `create` so the deferred
+   *  gate survives the rebuild instead of being silently dropped (WS-C). */
+  get hasDeferredGate(): boolean {
+    return this.state.pausedWithEdit === true;
   }
 
   /** The session's TS LanguageService (null when the workspace has no tsconfig),
