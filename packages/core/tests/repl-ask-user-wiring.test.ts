@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { join } from "node:path";
-import { classifyReplRoute } from "../src/cli/repl";
+import { classifyReplRoute, nextAwaitingAnswer } from "../src/cli/repl";
 
 // WS-C: the interactive REPL must offer ask_user, and it must SURVIVE /clear. The /clear
 // path rebuilds Session.create WITHOUT reusing the init config, so it silently dropped
@@ -54,4 +54,19 @@ test("classifyReplRoute: normal plan-mode routing when NOT awaiting an answer", 
       awaitingAnswer: false,
     })
   ).toBe("normal");
+});
+
+// nextAwaitingAnswer: a FAILED answer send (interrupted/stuck — Session.send returns
+// these, it rarely throws) must KEEP the flag, or a retried "approve" reopens the hole.
+test("nextAwaitingAnswer keeps the flag when the answer send fails, clears it on success", () => {
+  // New pause → true.
+  expect(
+    nextAwaitingAnswer(false, { status: "responded", awaitingUser: "q?" })
+  ).toBe(true);
+  // Failed answer send → keep waiting (answer not delivered).
+  expect(nextAwaitingAnswer(true, { status: "interrupted" })).toBe(true);
+  expect(nextAwaitingAnswer(true, { status: "stuck" })).toBe(true);
+  // Completed answer send (no new pause) → cleared.
+  expect(nextAwaitingAnswer(true, { status: "responded" })).toBe(false);
+  expect(nextAwaitingAnswer(true, { status: "done" })).toBe(false);
 });

@@ -255,6 +255,27 @@ export function classifyReplRoute(
   return state.planMode ? "plan-discuss" : "normal";
 }
 
+/** Whether the REPL is (still) awaiting an ask_user answer after a send resolves.
+ *  - a NEW pause (`result.awaitingUser` set) → true;
+ *  - a FAILED send (`interrupted`/`stuck` — Session.send catches abort/provider errors
+ *    and returns these, it rarely throws) → KEEP the current flag: the answer was NOT
+ *    delivered, so the retry must still route as the answer (not a stray plan approval);
+ *  - a completed send (responded/done, no new pause) → false, the answer landed. */
+export function nextAwaitingAnswer(
+  current: boolean,
+  result: { readonly status: string; readonly awaitingUser?: string }
+): boolean {
+  if (result.awaitingUser !== undefined) {
+    return true;
+  }
+
+  if (result.status === "interrupted" || result.status === "stuck") {
+    return current;
+  }
+
+  return false;
+}
+
 // The /help body is generated from the command registry (src/cli/commands.ts) so
 // the help text and the interactive `/` palette can never drift.
 const HELP = formatHelp();
@@ -736,8 +757,10 @@ export async function repl(args: ICliArgs): Promise<number> {
 
       lastElapsedMs = performance.now() - started;
       lastStatus = result.status;
-      // WS-C: the send paused on ask_user → the NEXT user line is the answer.
-      awaitingUserAnswer = result.awaitingUser !== undefined;
+      // WS-C: track whether the NEXT user line is an ask_user answer. A FAILED answer
+      // send (interrupted/stuck) KEEPS the flag so the retry is still the answer — see
+      // nextAwaitingAnswer.
+      awaitingUserAnswer = nextAwaitingAnswer(awaitingUserAnswer, result);
     } finally {
       spinner.stop();
       active = null;

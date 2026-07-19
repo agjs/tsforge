@@ -204,9 +204,11 @@ export interface ISendResult {
   /** When stuck with a handoff: the structured, resumable handoff details. */
   handoff?: IHandoff;
   /** WS-C: set to the question when the send ended because the model called `ask_user`.
-   *  The REPL delivers the user's NEXT line as the answer VERBATIM — bypassing plan
-   *  approval / slash-command interception, so "go"/"approve" answers a question, not
-   *  the plan (which would wrongly unlock mutating tools). */
+   *  The REPL routes the user's NEXT free-text line as the answer BEFORE plan-approval
+   *  detection (so "go"/"approve" answers the question, not the plan — which would
+   *  wrongly unlock mutating tools). Slash commands still run (a slash during a pause is
+   *  a deliberate command), and the answer goes through the normal send path (@file/image
+   *  expansion apply) — it is NOT delivered byte-for-byte verbatim. */
   awaitingUser?: string;
 }
 
@@ -1863,6 +1865,9 @@ export class Session {
       const question = this.state.pendingAskUser;
 
       this.state.pendingAskUser = undefined;
+      // If this send also edited a file, carry that across the pause so the RESUME send
+      // re-seeds `edited` and gates the pending edit (per-send `edited` resets to false).
+      this.state.pausedWithEdit = edited;
 
       return {
         action: {
@@ -2295,7 +2300,11 @@ export class Session {
     // The gate confirms CHANGES, not answers: it fires only once the model has
     // actually edited a file this turn. So a pure question never triggers a gate
     // run (even with one configured) — and an auto-detected gate stays unobtrusive.
-    let edited = false;
+    // Normally false — but if the previous send PAUSED on ask_user right after an edit,
+    // re-seed it so this resume send gates that still-unvalidated edit (WS-C).
+    let edited = this.state.pausedWithEdit === true;
+
+    this.state.pausedWithEdit = false;
     // How many times this send the model dumped file contents as a chat message
     // instead of calling `create` (the narrate-instead-of-build failure).
     let buildNudges = 0;

@@ -352,6 +352,11 @@ export interface ILoopState {
    *  drive loop ENDS the send (surfacing the question) so the human's next send is the
    *  reply. Cleared once consumed. Absent on autonomous runs (ask_user isn't offered). */
   pendingAskUser?: string;
+  /** WS-C: an ask_user pause ended a send that had ALSO edited a file. The `edited`
+   *  accumulator is per-send, so the resume send would start `edited=false` and skip the
+   *  gate — leaving that edit unvalidated. This flag re-seeds `edited` on the resume send
+   *  so the pending edit IS gated. */
+  pausedWithEdit?: boolean;
   /** Fewest gate errors seen so far (the convergence watermark) + how many cycles
    *  since it last hit a NEW low. Drives the net-progress stop: a churning build
    *  whose error SET keeps shuffling (so `gateNoProgress` resets) and whose errors

@@ -5,6 +5,12 @@ import { join } from "node:path";
 import type { IProvider, IChatMessage } from "../src/inference";
 import { Session } from "../src/loop";
 import type { ILoopEvent } from "../src/loop/loop.types";
+import type { IGate } from "../src/gate/gate-runner";
+
+/** A gate that always passes — enough to make hasGate true so resolveYield can gate. */
+const passingGate: IGate = {
+  run: async () => ({ passed: true, errors: [], output: "" }),
+};
 
 // WS-C2: the loop must CONSUME the ask_user sentinel — end the send and surface the
 // question — not feed the sentinel back to the model. Without this, WS-C1's tool is
@@ -290,6 +296,63 @@ test("interactive session sets humanPresent but NOT policy-interactive (co-pilot
 
     // Decoupled: policy still sees interactive=false → ask resolves to deny, not ask.
     expect(policyForRun?.decision).toBe("deny");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a [create, ask_user] pause still gates the edit on RESUME (even a conversational answer)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-ask-"));
+  const events: ILoopEvent[] = [];
+
+  // turn 1: create + ask (pause, edit unvalidated). turn 2 (the answer send): a purely
+  // conversational reply — no new edit. The pending edit MUST still be gated on resume,
+  // or it's left permanently unvalidated (pausedWithEdit re-seeds `edited`).
+  let turn = 0;
+  const provider: IProvider = {
+    async complete() {
+      turn += 1;
+
+      if (turn === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "1",
+              name: "create",
+              arguments: { file: "made.ts", content: "export const x = 1;\n" },
+            },
+            { id: "2", name: "ask_user", arguments: { question: "ok?" } },
+          ],
+        };
+      }
+
+      return { content: "sounds good", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      interactive: true,
+      gate: passingGate,
+      report: (e) => events.push(e),
+    });
+
+    await session.send("go"); // turn 1 → pause after the create
+    const beforeResume = events.length;
+
+    await session.send("yes"); // turn 2 → conversational answer
+
+    // The gate RAN on the resume send (a validated event), so the create didn't slip
+    // through unvalidated.
+    const gatedOnResume = events
+      .slice(beforeResume)
+      .some((e) => e.kind === "validated");
+
+    expect(gatedOnResume).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
