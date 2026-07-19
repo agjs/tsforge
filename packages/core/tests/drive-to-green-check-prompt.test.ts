@@ -181,7 +181,7 @@ test("a resumed pullConventions session (no offerCheck) refreshes to include the
 
   try {
     // pullConventions only — NO offerCheck. The unconditional resume refresh must still
-    // rebuild the prompt so the convention index appears in place of the stale one.
+    // rebuild the prompt so the convention guides appear in place of the stale one.
     const session = await Session.create({
       provider: systemCapturingProvider(cap),
       cwd: dir,
@@ -193,7 +193,7 @@ test("a resumed pullConventions session (no offerCheck) refreshes to include the
 
     await session.send("continue");
 
-    expect(cap.system).toContain("STACK CONVENTIONS");
+    expect(cap.system).toContain("HOW THIS STACK WRITES CODE");
     expect(cap.system).not.toContain("OLD PROMPT");
     expect(cap.roles).toEqual(["system", "user", "assistant", "user"]);
   } finally {
