@@ -56,17 +56,27 @@ test("classifyReplRoute: normal plan-mode routing when NOT awaiting an answer", 
   ).toBe("normal");
 });
 
-// nextAwaitingAnswer: a FAILED answer send (interrupted/stuck — Session.send returns
-// these, it rarely throws) must KEEP the flag, or a retried "approve" reopens the hole.
-test("nextAwaitingAnswer keeps the flag when the answer send fails, clears it on success", () => {
+// nextAwaitingAnswer: a NO-PROGRESS failed answer send (turns 0 — Session.send returns
+// interrupted/stuck with turns 0 on abort/provider error) must KEEP the flag, or a
+// retried "approve" reopens the hole. But a send that RAN (turns > 0) consumed the
+// answer — even a later ladder-exhaustion stuck — so the flag must clear, else plan
+// approval is stranded.
+test("nextAwaitingAnswer keeps the flag only on a no-progress failed send", () => {
   // New pause → true.
   expect(
     nextAwaitingAnswer(false, { status: "responded", awaitingUser: "q?" })
   ).toBe(true);
-  // Failed answer send → keep waiting (answer not delivered).
-  expect(nextAwaitingAnswer(true, { status: "interrupted" })).toBe(true);
-  expect(nextAwaitingAnswer(true, { status: "stuck" })).toBe(true);
+  // Failed answer send that made no progress (turns 0) → keep (answer not processed).
+  expect(nextAwaitingAnswer(true, { status: "interrupted", turns: 0 })).toBe(
+    true
+  );
+  expect(nextAwaitingAnswer(true, { status: "stuck", turns: 0 })).toBe(true);
+  // A stuck AFTER a full build (turns > 0) CONSUMED the answer → clear (don't strand
+  // plan approval).
+  expect(nextAwaitingAnswer(true, { status: "stuck", turns: 40 })).toBe(false);
   // Completed answer send (no new pause) → cleared.
-  expect(nextAwaitingAnswer(true, { status: "responded" })).toBe(false);
-  expect(nextAwaitingAnswer(true, { status: "done" })).toBe(false);
+  expect(nextAwaitingAnswer(true, { status: "responded", turns: 3 })).toBe(
+    false
+  );
+  expect(nextAwaitingAnswer(true, { status: "done", turns: 5 })).toBe(false);
 });

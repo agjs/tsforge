@@ -301,6 +301,77 @@ test("interactive session sets humanPresent but NOT policy-interactive (co-pilot
   }
 });
 
+test("a FAILED (non-yielding) resume PRESERVES the deferred gate — it runs on a later send", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-ask-"));
+  const events: ILoopEvent[] = [];
+
+  // The durability case the panel caught: turn 1 = [create, ask_user] → pause (edit
+  // deferred). The RESUME send is aborted before it can reach the gate (interrupted,
+  // turns 0 — the send-catch path). The deferred edit must NOT be silently dropped:
+  // the flag persists, and the NEXT send finally runs the gate. Without this, a resume
+  // that ends via ANY non-yielding path (interrupted/stuck/degeneration/read-only spin)
+  // would permanently skip validating the paused write.
+  let calls = 0;
+  const provider: IProvider = {
+    async complete() {
+      calls += 1;
+
+      if (calls === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "1",
+              name: "create",
+              arguments: { file: "made.ts", content: "export const x = 1;\n" },
+            },
+            { id: "2", name: "ask_user", arguments: { question: "ok?" } },
+          ],
+        };
+      }
+
+      if (calls === 2) {
+        // The resume send fails BEFORE reaching the gate — a non-timeout provider
+        // error propagates to Session.send's catch → interrupted (turns 0). This is
+        // the "interrupted (send catch)" non-yielding exit the panel named.
+        throw new Error("provider blew up mid-resume");
+      }
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      interactive: true,
+      gate: passingGate,
+      report: (e) => events.push(e),
+    });
+
+    await session.send("go"); // turn 1 → pause after the create
+
+    const failed = await session.send("yes"); // resume fails before the gate runs
+
+    // A non-abort provider error ends as stuck (turns 0) via the send-catch; an abort
+    // ends as interrupted (turns 0). Both are non-yielding exits that never reach the
+    // gate — the shared trait the fix relies on is turns 0, flag preserved.
+    expect(failed.turns).toBe(0);
+    expect(["stuck", "interrupted"]).toContain(failed.status);
+    // The gate did NOT run on the failed resume — the edit is still pending.
+    expect(events.filter((e) => e.kind === "validated").length).toBe(0);
+
+    await session.send("ok"); // a normal resume → the deferred gate finally runs
+
+    // The pending create was validated on the LATER send, not lost to the failed one.
+    expect(events.some((e) => e.kind === "validated")).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a [create, ask_user] pause still gates the edit on RESUME (even a conversational answer)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-ask-"));
   const events: ILoopEvent[] = [];

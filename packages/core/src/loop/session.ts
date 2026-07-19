@@ -2083,6 +2083,13 @@ export class Session {
   ): Promise<ISendResult | null> {
     const settled = await settleGate(this.ctx, this.state, turn);
 
+    // The gate has now actually run over the working tree — so any edit that a prior
+    // ask_user pause deferred is validated by THIS run. Clear the deferred-gate flag
+    // only here (never at drive entry): if settleGate throws (e.g. abort mid-gate) we
+    // never reach this line, so the flag persists and the next send re-gates. This is
+    // what makes the deferral durable across a non-yielding resume (WS-C).
+    this.state.pausedWithEdit = false;
+
     emitTiming(this.report, SESSION_ID, turn, turnStart, sendStart);
 
     if (settled === null) {
@@ -2300,11 +2307,14 @@ export class Session {
     // The gate confirms CHANGES, not answers: it fires only once the model has
     // actually edited a file this turn. So a pure question never triggers a gate
     // run (even with one configured) — and an auto-detected gate stays unobtrusive.
-    // Normally false — but if the previous send PAUSED on ask_user right after an edit,
-    // re-seed it so this resume send gates that still-unvalidated edit (WS-C).
+    // Normally false — but if a prior send PAUSED on ask_user right after an edit,
+    // re-seed so this resume send gates that still-unvalidated edit (WS-C). Do NOT
+    // clear the flag here: it is cleared only when the gate actually RUNS (settleTurn).
+    // A resume that exits via a non-yielding path (interrupted, stuck, degeneration,
+    // read-only spin) never reaches the gate — clearing here would drop the pending
+    // edit before it was validated, permanently skipping it. Leaving the flag set
+    // means the NEXT send re-seeds and re-attempts the gate until it truly runs.
     let edited = this.state.pausedWithEdit === true;
-
-    this.state.pausedWithEdit = false;
     // How many times this send the model dumped file contents as a chat message
     // instead of calling `create` (the narrate-instead-of-build failure).
     let buildNudges = 0;

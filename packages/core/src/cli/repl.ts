@@ -257,23 +257,47 @@ export function classifyReplRoute(
 
 /** Whether the REPL is (still) awaiting an ask_user answer after a send resolves.
  *  - a NEW pause (`result.awaitingUser` set) → true;
- *  - a FAILED send (`interrupted`/`stuck` — Session.send catches abort/provider errors
- *    and returns these, it rarely throws) → KEEP the current flag: the answer was NOT
- *    delivered, so the retry must still route as the answer (not a stray plan approval);
- *  - a completed send (responded/done, no new pause) → false, the answer landed. */
+ *  - a send that made NO progress (`turns === 0`) and failed (`interrupted`/`stuck` —
+ *    Session.send catches abort/provider errors and returns exactly these with turns 0,
+ *    it rarely throws) → KEEP the current flag: the answer was never processed, so the
+ *    retry must still route as the answer (not a stray plan approval);
+ *  - any send that ran at least one turn (`turns > 0`) CONSUMED the answer — even a
+ *    later ladder-exhaustion `stuck` (turns = maxTurns) — → false. Keeping the flag
+ *    then would strand plan-mode approval, routing every later free-text line as an
+ *    answer until the next terminal send. */
 export function nextAwaitingAnswer(
   current: boolean,
-  result: { readonly status: string; readonly awaitingUser?: string }
+  result: {
+    readonly status: string;
+    readonly awaitingUser?: string;
+    readonly turns?: number;
+  }
 ): boolean {
   if (result.awaitingUser !== undefined) {
     return true;
   }
 
-  if (result.status === "interrupted" || result.status === "stuck") {
+  if (
+    result.turns === 0 &&
+    (result.status === "interrupted" || result.status === "stuck")
+  ) {
     return current;
   }
 
   return false;
+}
+
+/** Print a one-line note when /clear discards a pending ask_user question, so the
+ *  drop is legible. Any edit the paused turn already wrote stays on disk and is
+ *  re-validated by the next gate over the working tree — this is a notice, not a loss. */
+function noteDiscardedPendingAnswer(pending: boolean): void {
+  if (!pending) {
+    return;
+  }
+
+  process.stdout.write(
+    "note: a pending question was discarded by /clear; any change already written stays on disk and is re-checked by the next build/gate.\n"
+  );
 }
 
 // The /help body is generated from the command registry (src/cli/commands.ts) so
@@ -927,6 +951,12 @@ export async function repl(args: ICliArgs): Promise<number> {
         planDiscussed = false;
         // /clear rebuilds the Session, so any pending ask_user pause is gone — drop the
         // answer-routing flag too, else the next line skips plan routing on a stale flag.
+        // Surface the discard: if a raise-hand was pending, the human should know it was
+        // dropped. Any edit the paused turn already wrote stays on disk and is NOT lost
+        // to validation — the gate is defined over the working tree, so the next send,
+        // a fresh session, or the build's own gate re-validates it (pausedWithEdit is a
+        // within-session promptness optimization, not the only path to the gate).
+        noteDiscardedPendingAnswer(awaitingUserAnswer);
         awaitingUserAnswer = false;
         await persist();
         clearScreen(); // wipe the visible terminal + scrollback, not just the state
