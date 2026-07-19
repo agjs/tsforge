@@ -22,6 +22,7 @@ const TOPICS = [
   "routing",
   "forms",
   "data-fetching",
+  "lint-gotchas",
 ] as const;
 
 export type ConventionTopic = (typeof TOPICS)[number];
@@ -48,6 +49,17 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
     // guarded `response.error` — this stack throws on errors, so that guard is dead.
     // Mapping it here pushes the data-fetching guide on the FIRST such red.
     "data-fetching": ["no-unnecessary-condition"],
+    // The strict-lint rules a fresh feature trips most (measured on a live build): floating/
+    // un-awaited promises, void-returning expressions used as values, errors stringified into
+    // logs, and repeated string literals. None are structural — they're write-time habits the
+    // model gets wrong then grinds down one gate at a time.
+    "lint-gotchas": [
+      "await-thenable",
+      "no-floating-promises",
+      "no-confusing-void-expression",
+      "no-error-stringify",
+      "no-duplicate-string",
+    ],
   };
 
 const GUIDES: Readonly<Record<ConventionTopic, string>> = {
@@ -76,7 +88,8 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
   state:
     "STATE (boringstack). ALL `useState`/`useReducer`/`useEffect`/`useMemo`/" +
     "`useCallback` live in `<feature>.hooks.ts`, never in a component body. Server " +
-    "data → a hook using react-query/fetch that narrows the response. A hooks file " +
+    "data → a hook using react-query over the generated api-client (NEVER raw `fetch` — " +
+    "see data-fetching) that narrows the response. A hooks file " +
     "exporting too many hooks splits into focused modules (e.g. `*.queries.ts` + " +
     "`*.mutations.ts`).",
   "no-casts":
@@ -106,6 +119,20 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "a dead `no-unnecessary-condition` gate error. Just read `data`. Put queries in " +
     "`<Feature>.queries.ts` and mutations in `<Feature>.mutations.ts`. If a path isn't " +
     "in the spec yet, add the API route first, then `bun run generate:api`.",
+  "lint-gotchas":
+    "STRICT-LINT GOTCHAS (boringstack). The gate is eslint with EVERY rule an error; a fresh " +
+    "feature trips these most, so write them right up front:\n" +
+    "• AWAIT the promises you use — an un-awaited async call is a no-floating-promises error; " +
+    "write `await doX()` (or `void doX()` to deliberately fire-and-forget).\n" +
+    "• …but do NOT await non-promises — `await` on a plain value or a sync function's result is " +
+    "an await-thenable error; drop the `await`.\n" +
+    "• NO value out of a void expression — never `return foo.forEach(...)` or " +
+    "`const x = setState(v)`; call the void thing, then return/act separately. For handlers use " +
+    "a BLOCK body: `onClick={() => { setOpen(true); }}`, not `() => setOpen(true)`.\n" +
+    "• NEVER stringify an error into a log — pass the error object: " +
+    '`log.error({ err }, "failed")`, never `` log.error(`${err}`) `` or `String(err)`.\n' +
+    "• HOIST heavily-repeated string literals — the same literal 5+ times is a no-duplicate-string " +
+    "error; pull it into a `const` (or `<Feature>.constants.ts`) and reference that.",
 };
 
 /** The guide for a topic (the exact string pushed or pulled). */
@@ -118,23 +145,18 @@ export function conventionTopics(): ConventionTopic[] {
   return [...TOPICS];
 }
 
-/** A compact PUSH index of the pullable convention topics + the gate rules each one
- *  prevents (WS-A1). Front-loaded into the build system prompt so the model knows the
- *  catalog exists and pulls the compliant pattern BEFORE writing that kind of code —
- *  the situational awareness that stops it writing a convention-violating draft it
- *  then burns turns fixing. Complements `pull_conventions` (the on-demand fetch). */
-export function buildConventionIndex(): string {
-  const rows = conventionTopics().map((t) => {
-    const rules = TOPIC_RULES[t];
-    const prevents = rules.length > 0 ? ` — prevents: ${rules.join(", ")}` : "";
-
-    return `  • ${t}${prevents}`;
-  });
-
+/** The full PUSH body of every stack convention GUIDE (not just a topic index), joined for the
+ *  build system prompt (WS-A1). Front-loading the actual compliant patterns — the exact shape
+ *  for components, state, JSX, casts, data-fetching, etc. — lets the model write it right on the
+ *  FIRST draft instead of guessing from memory and burning turns at the gate. The reactive PUSH
+ *  (`unseenGuidesForErrors`) and `pull_conventions` remain fallbacks for reinforcement and the
+ *  long tail, not the primary teaching. */
+export function buildConventionGuides(): string {
   return [
-    "STACK CONVENTIONS. This stack enforces strict patterns the gate REJECTS if you guess. Before writing a given kind of code, call `pull_conventions` with the matching topic to get the compliant shape FIRST — do not write from memory and discover the rule at the gate. Topics:",
-    ...rows,
-  ].join("\n");
+    "HOW THIS STACK WRITES CODE — read this BEFORE you write, not after the gate rejects you. These are the exact compliant patterns the gate enforces; write your FIRST draft this way instead of guessing from memory and burning turns repairing. (`pull_conventions` re-fetches any of these on demand.)",
+    "",
+    ...conventionTopics().map((t) => conventionGuide(t)),
+  ].join("\n\n");
 }
 
 /** Narrow an arbitrary string to a ConventionTopic (for the pull tool's arg) —

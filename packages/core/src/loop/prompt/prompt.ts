@@ -106,7 +106,7 @@ export function buildDriveToGreenSystem(
   // check / pull_conventions guidance below it.
   const extraTools = [
     offerConventions
-      ? "`pull_conventions` (fetch a stack convention guide before writing that kind of code)"
+      ? "`pull_conventions` (re-fetch a stack convention guide on demand — the core guides are already in this prompt)"
       : "",
     offerCheck
       ? "`check` (run the gate now, get your whole structured error set)"
