@@ -118,11 +118,12 @@ export function conventionTopics(): ConventionTopic[] {
   return [...TOPICS];
 }
 
-/** A compact PUSH index of the pullable convention topics + the gate rules each one
- *  prevents (WS-A1). Front-loaded into the build system prompt so the model knows the
- *  catalog exists and pulls the compliant pattern BEFORE writing that kind of code —
- *  the situational awareness that stops it writing a convention-violating draft it
- *  then burns turns fixing. Complements `pull_conventions` (the on-demand fetch). */
+/** The full PUSH body of every stack convention GUIDE (not just a topic index), joined for the
+ *  build system prompt (WS-A1). Front-loading the actual compliant patterns — the exact shape
+ *  for components, state, JSX, casts, data-fetching, etc. — lets the model write it right on the
+ *  FIRST draft instead of guessing from memory and burning turns at the gate. The reactive PUSH
+ *  (`unseenGuidesForErrors`) and `pull_conventions` remain fallbacks for reinforcement and the
+ *  long tail, not the primary teaching. */
 export function buildConventionGuides(): string {
   return [
     "HOW THIS STACK WRITES CODE — read this BEFORE you write, not after the gate rejects you. These are the exact compliant patterns the gate enforces; write your FIRST draft this way instead of guessing from memory and burning turns repairing. (Each guide names the rules it satisfies; `pull_conventions` fetches any of these again on demand.)",
