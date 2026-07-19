@@ -2222,12 +2222,16 @@ export async function rollbackNearGreen(
   });
 
   // Non-silent truncation: if the checkpoint had files too large to snapshot, the revert is
-  // best-effort — say so, so a lingering mutation on one of them isn't mistaken for clean.
+  // best-effort — say so, so a lingering mutation on one of them isn't mistaken for clean. (A
+  // skipped file the spray also TOUCHED is kept in ctx.tool.touched above so change-scoped
+  // rules still see it; a skipped file mutated OUTSIDE the touched set — e.g. a >8 MiB lockfile
+  // rewritten by add_dependency, which does not track the lockfile in touched — cannot be
+  // retained, hence the honest "may persist" wording rather than a blanket enforcement claim.)
   if (skipped.size > 0) {
     ctx.report({
       kind: "tool",
       task: ctx.task.id,
-      message: `⚠ near-green rollback: ${String(skipped.size)} file(s) exceeded the snapshot size caps and could NOT be byte-reverted (best-effort; kept under enforcement): ${[...skipped].slice(0, 5).join(", ")}`,
+      message: `⚠ near-green rollback: ${String(skipped.size)} file(s) exceeded the snapshot size caps and were NOT byte-reverted (best-effort — a lingering mutation may persist): ${[...skipped].slice(0, 5).join(", ")}`,
     });
   }
 
@@ -2274,16 +2278,33 @@ async function nearGreenRollbackStep(
   return false;
 }
 
+/** Whether two error sets carry the SAME multiset of keys (order-independent). Used to tell a
+ *  genuine lateral error MOVE (refresh the checkpoint) from a no-op re-settle at the identical
+ *  errors (skip — don't re-buffer the snapshot). */
+function sameErrorKeys(
+  a: readonly IErrorItem[],
+  b: readonly IErrorItem[]
+): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  const ka = a.map((e) => e.key).sort();
+  const kb = b.map((e) => e.key).sort();
+
+  return ka.every((k, i) => k === kb[i]);
+}
+
 /** WS-B: after end-of-cycle feedback, re-arm the near-green checkpoint. Captures a fresh
  *  snapshot when the state is near green (1..N) AND it's worth protecting — either no
  *  checkpoint is held (`needsReArm`: re-establishes after a resume, since the snapshot isn't
- *  serialized), OR the count is NO WORSE than the checkpoint's watermark
- *  (`isBetterOrLateral`): a strictly-better low OR a LATERAL same-count move (e.g. 1-error-A →
- *  1-error-B, the model fixed one error and a different one remains). Refreshing on the lateral
+ *  serialized), the count strictly improves (`isBetter`), OR it's a LATERAL same-count move to
+ *  a DIFFERENT error set (`isLateralMove`: 1-error-A → 1-error-B). Refreshing on the lateral
  *  case tracks the model's LATEST near-green work — else a later spray reverts to the OLD
- *  same-count snapshot and discards every edit since, potentially many. The watermark is WS-B's
- *  `nearGreenBest`, NOT checkStuck's plateauBest (which uses commonGatePhase and stalls with
- *  meta errors). Flag-gated no-op. */
+ *  snapshot and discards every edit since. It refreshes ONLY when the errors actually changed,
+ *  so a no-op re-settle at the identical errors does not re-buffer the scope. The watermark is
+ *  WS-B's `nearGreenBest`, NOT checkStuck's plateauBest (which uses commonGatePhase and stalls
+ *  with meta errors). Flag-gated no-op. */
 async function nearGreenCheckpointStep(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -2303,12 +2324,19 @@ async function nearGreenCheckpointStep(
   }
 
   const needsReArm = state.nearGreenCheckpoint === undefined;
-  // `<=` (not `<`) so a LATERAL same-count near-green move refreshes the snapshot to the
-  // model's latest state — a spray then reverts to the newest near-green work, not an older one.
-  const isBetterOrLateral =
-    curr <= (state.nearGreenBest ?? Number.POSITIVE_INFINITY);
+  const best = state.nearGreenBest ?? Number.POSITIVE_INFINITY;
+  // A strictly-lower near-green count → always refresh (a new best worth protecting).
+  const isBetter = curr < best;
+  // A LATERAL move (SAME count) refreshes the snapshot to the model's latest tree — but ONLY
+  // when the error SET actually changed (a genuine 1-error-A → 1-error-B). A no-op re-settle at
+  // the IDENTICAL errors (e.g. a "working" turn with no edits) must NOT re-capture, or WS-B
+  // re-buffers the whole rollback scope every near-green cycle while the model thrashes.
+  const isLateralMove =
+    curr === best &&
+    state.nearGreenCheckpoint !== undefined &&
+    !sameErrorKeys(state.nearGreenCheckpoint.errors, gateErrors);
 
-  if (shouldCheckpoint(curr, needsReArm || isBetterOrLateral)) {
+  if (shouldCheckpoint(curr, needsReArm || isBetter || isLateralMove)) {
     state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
       ctx,
       curr,

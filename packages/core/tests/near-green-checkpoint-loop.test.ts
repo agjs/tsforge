@@ -308,7 +308,7 @@ test("rollbackNearGreen SURFACES snapshot.skipped files + keeps an unreverted on
       (e) =>
         e.kind === "tool" &&
         typeof e.message === "string" &&
-        e.message.includes("could NOT be byte-reverted")
+        e.message.includes("were NOT byte-reverted")
     );
 
     expect(warned).toBe(true);
@@ -701,27 +701,32 @@ test("flag ON: the checkpoint REFRESHES on a LATERAL same-count near-green move 
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
-  // The lateral path (the `<=` refresh): near-green at 1 (state A, checkpoint@1) → a DIFFERENT
-  // 1-error state B (the model fixed A's error and a new one remains; count unchanged →
-  // REFRESH so the snapshot now includes stateB.ts) → spray to 8 (revert). With `<=` the
-  // revert restores B (stateB.ts survives); with a strict `<` the checkpoint would be stuck at
-  // A and the revert would TOMBSTONE stateB.ts, discarding the model's lateral work.
-  const err = (count: number): IValidateResult => ({
+  // The lateral path: near-green at 1 (state A, key eA, checkpoint@1) → a DIFFERENT 1-error
+  // state B (key eB — the model fixed A's error and a new one remains; count unchanged but the
+  // error SET CHANGED → REFRESH so the snapshot now includes stateB.ts) → spray to 8 (revert).
+  // The refresh restores B (stateB.ts survives); without the lateral refresh the checkpoint
+  // would be stuck at A and the revert would TOMBSTONE stateB.ts. (The refresh fires on the
+  // error-set CHANGE, not on a no-op re-settle at the identical error.)
+  const one = (key: string): IValidateResult => ({
     passed: false,
-    errors: Array.from({ length: count }, (_, i) => ({
-      key: `e${String(i)}`,
-      message: `error ${String(i)}`,
-    })),
-    output: `${String(count)} error(s)`,
+    errors: [{ key, message: `error ${key}` }],
+    output: "1 error(s)",
   });
   const has = (f: string): Promise<boolean> => Bun.file(join(dir, f)).exists();
   const gate: IGate = {
     run: async (): Promise<IValidateResult> => {
       if (await has("sprayed.ts")) {
-        return err(8);
+        return {
+          passed: false,
+          errors: Array.from({ length: 8 }, (_, i) => ({
+            key: `s${String(i)}`,
+            message: `spray ${String(i)}`,
+          })),
+          output: "8 error(s)",
+        };
       }
 
-      return err(1); // near-green at 1 both before and after stateB.ts (a LATERAL move)
+      return (await has("stateB.ts")) ? one("eB") : one("eA"); // lateral A→B (different key)
     },
   };
   const create = (id: string, file: string) => ({
@@ -779,6 +784,17 @@ test("flag ON: the checkpoint REFRESHES on a LATERAL same-count near-green move 
     // stateB.ts SURVIVES → the checkpoint refreshed on the lateral 1→1 move to the LATEST tree.
     expect(await Bun.file(join(dir, "stateB.ts")).exists()).toBe(true);
     expect(await Bun.file(join(dir, "stateA.ts")).exists()).toBe(true);
+    // Exactly TWO checkpoint captures: the initial (eA) + the lateral refresh (eB). The no-op
+    // "working" turns at the IDENTICAL error must NOT re-buffer the snapshot (finding: WS-B
+    // must not re-capture every near-green cycle while thrashing).
+    const locks = events.filter(
+      (e) =>
+        e.kind === "tool" &&
+        typeof e.message === "string" &&
+        e.message.includes("near-green checkpoint: locked")
+    ).length;
+
+    expect(locks).toBe(2);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

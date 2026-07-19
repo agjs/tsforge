@@ -62,6 +62,11 @@ export interface ISnapshotCaps {
  * binaries / oversize text up to MAX_RAW_SNAPSHOT_BYTES are RAW-BYTE backed (so a
  * lockfile restores faithfully). A file over BOTH caps is existence-only. The shared
  * substrate for quality- and review-repair, so revert semantics can't drift between them.
+ * Memory bounds (best-effort, not airtight — matching the plan's run-tool-bypass stance):
+ * `raw` is bounded per-file AND in aggregate (maxTotalRawBytes); `contents` is bounded
+ * per-file (maxFileBytes) but NOT in count, so a very large `**\/*` text repo relies on the
+ * caller keeping scope bounded. WS-B's near-green scope IS bounded (task.files + a few
+ * lockfiles), so this is a non-issue there; broad-scope callers accept best-effort.
  */
 export async function snapshotFiles(
   cwd: string,
