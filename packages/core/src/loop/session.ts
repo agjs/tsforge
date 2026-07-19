@@ -88,6 +88,7 @@ import {
   toolsFor,
   tryExpertRescue,
 } from "./turn";
+import { parkOrRaiseHand } from "./raise-hand";
 
 /** Signature of the memory-consolidation step, injectable for tests so they can
  *  capture the per-build source id each send passes. */
@@ -1737,6 +1738,11 @@ export class Session {
         message: `⚠ model request timed out repeatedly (${detail}) — stopped. The server may be wedged or the task too large for one turn.`,
       });
 
+      // Deliberately a PARK, not a WS-C3 raise-hand: a repeated request timeout is an
+      // infrastructure failure (wedged server / over-large turn), not a build decision a
+      // human steer can unblock — asking "how should I proceed?" would just move the hang
+      // to the human. Raise-hand is reserved for steerable stalls (ladder exhaustion,
+      // read-only spin).
       return { status: "stuck", turns: turn, handoff };
     }
 
@@ -2113,6 +2119,13 @@ export class Session {
       return null;
     }
 
+    // A stuck terminal carries a handoff. With a human co-pilot present, RAISE A HAND
+    // (pause + ask) on that block instead of parking on it (WS-C3) — the human's next
+    // send resumes the build. Unattended (humanPresent false) → park exactly as before.
+    if (settled.status !== RUN_STATUS.done && settled.handoff !== undefined) {
+      return this.raiseHandOrStuck(settled.handoff, turn);
+    }
+
     // Thread the structured handoff up so BoringStack/interactive callers can park &
     // revisit on ladder exhaustion (host.send reads .handoff). Dropping it here made
     // gate-ladder exhaustion silently un-parkable.
@@ -2121,6 +2134,31 @@ export class Session {
       turns: turn,
       ...(settled.handoff !== undefined ? { handoff: settled.handoff } : {}),
     };
+  }
+
+  /** WS-C3: turn a stuck terminal into a co-pilot RAISE-HAND when a human is present,
+   *  else return today's park. The pure `parkOrRaiseHand` decides; here we apply the one
+   *  side effect — emit the `ask_user` event so the REPL renders the question — and return
+   *  the terminal directly. We deliberately do NOT set `state.pendingAskUser` (that is the
+   *  ask_user TOOL's handoff to runToolTurn; a gate terminal returns awaitingUser itself,
+   *  so setting it would leak the pause into the next send). Headless is untouched:
+   *  `settleTurn` is Session-only and the raise-hand is gated on `humanPresent`. */
+  private raiseHandOrStuck(handoff: IHandoff, turn: number): ISendResult {
+    const { result, question } = parkOrRaiseHand(
+      handoff,
+      this.ctx.tool.humanPresent === true,
+      turn
+    );
+
+    if (question !== undefined) {
+      this.report({
+        kind: "ask_user",
+        task: SESSION_ID,
+        message: question,
+      });
+    }
+
+    return result;
   }
 
   /** Drive one send to a terminal result, then mine the send's events for
@@ -2292,7 +2330,8 @@ export class Session {
           "re-steering — stopped. Narrow the task or steer toward a concrete step.",
       });
 
-      return { status: "stuck", turns: turn, handoff };
+      // With a human present, raise a hand on this spin instead of parking (WS-C3).
+      return this.raiseHandOrStuck(handoff, turn);
     }
 
     const gateNote = this.hasGate ? this.outstandingGateNote() : "";
