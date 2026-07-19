@@ -66,6 +66,7 @@ import {
   READ_IMAGE_TOOL,
   GENERATE_IMAGE_TOOL,
   CHECK_TOOL,
+  ASK_USER_TOOL,
 } from "../agent";
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
@@ -121,7 +122,8 @@ type AdvertisedTool =
   | typeof GIT_CONTEXT_TOOL
   | typeof READ_IMAGE_TOOL
   | typeof GENERATE_IMAGE_TOOL
-  | typeof CHECK_TOOL;
+  | typeof CHECK_TOOL
+  | typeof ASK_USER_TOOL;
 
 /** Which extra capability backends are configured this run — decides whether the
  *  image tools are advertised. Resolved once by the driver (run.ts) so
@@ -174,7 +176,8 @@ export function toolsFor(
   hasExistingCode: boolean,
   caps: ICapabilityFlags = {},
   offerConventions = false,
-  offerCheck = false
+  offerCheck = false,
+  offerAskUser = false
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
@@ -186,6 +189,12 @@ export function toolsFor(
   // plain scratch/logic task leaves it off so the base set stays minimal. Same
   // per-backend opt-in shape as pull_conventions — decoupled from every flag.
   const check: AdvertisedTool[] = offerCheck ? [CHECK_TOOL] : [];
+
+  // ask_user (WS-C1) — the co-pilot's raise-hand. Offered only when the caller opts in
+  // (an interactive co-pilot session); off for autonomous eval/CI so the model isn't
+  // tempted to ask a question no one will answer. The handler ALSO guards on
+  // ctx.interactive, so a stray call in an unattended run returns "proceed" not a hang.
+  const askUser: AdvertisedTool[] = offerAskUser ? [ASK_USER_TOOL] : [];
 
   // pull_conventions — a read-only knowledge tool the model calls to fetch the
   // BoringStack how-to BEFORE writing that kind of code (the PULL complement to the
@@ -204,6 +213,7 @@ export function toolsFor(
       ...HASHLINE_TOOLS,
       ...conventions,
       ...check,
+      ...askUser,
       ...web,
       ...git,
       ...script,
@@ -217,6 +227,7 @@ export function toolsFor(
     ...HASHLINE_TOOLS,
     ...conventions,
     ...check,
+    ...askUser,
     ...LSP_TOOLS,
     ...web,
     ...git,

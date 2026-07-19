@@ -50,6 +50,8 @@ describe("classifyAction", () => {
       // WS-G: check runs the gate (bun/eslint/tsc) — shell, NOT unknown. Absent from
       // this table it classified `unknown` → non-interactive deny → every call DOA.
       ["check", "shell"],
+      // WS-C1: ask_user mutates nothing — read_file (zero-risk), NOT unknown.
+      ["ask_user", "read_file"],
       ["package_info", "network"],
       ["package_docs", "network"],
       ["web_fetch", "network"],

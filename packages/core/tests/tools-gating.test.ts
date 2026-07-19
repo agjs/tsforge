@@ -121,6 +121,17 @@ test("check is offered per build BACKEND (offerCheck), not by any flag", () => {
   expect(names(toolsFor(true, {}, false, true))).toContain("check");
 });
 
+test("ask_user is offered only via offerAskUser (the co-pilot opt-in), off by default", () => {
+  // WS-C1: the raise-hand tool. Off on every path unless the interactive co-pilot opts
+  // in — an autonomous eval/CI run must not be tempted to ask a question no one answers.
+  process.env.TSFORGE_WEB = "1";
+  expect(names(toolsFor(false))).not.toContain("ask_user");
+  expect(names(toolsFor(true))).not.toContain("ask_user");
+
+  expect(names(toolsFor(false, {}, false, false, true))).toContain("ask_user");
+  expect(names(toolsFor(true, {}, false, false, true))).toContain("ask_user");
+});
+
 test("the script tool is on by default for scratch and existing code", () => {
   expect(names(toolsFor(true))).toContain("script");
   expect(names(toolsFor(false))).toContain("script");
