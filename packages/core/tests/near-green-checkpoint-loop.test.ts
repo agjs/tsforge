@@ -13,6 +13,7 @@ import {
   maxGatePhase,
 } from "../src/loop/turn";
 import type { IValidateResult } from "../src/validate";
+import { MAX_NEAR_GREEN_ROLLBACKS } from "../src/loop/near-green-checkpoint";
 
 // WS-B phase robustness (panel critical): the frontier signal must survive the meta errors
 // evaluateGate ALWAYS appends. commonGatePhase() collapses to undefined the moment any
@@ -45,10 +46,12 @@ test("maxGatePhase: furthest phased error, ignoring unphased meta errors", () =>
 // (8 errors) must REVERT the scope files to the near-green best; with the flag OFF the path
 // is unchanged (no revert). Driven through the real settleGate integration.
 
-const FLAG = "TSFORGE_NEAR_GREEN_CHECKPOINT";
+// WS-B is DEFAULT ON — the tests below run it without any env. KILL is the kill-switch the
+// "disabled" test sets to turn it off.
+const KILL = "TSFORGE_NO_NEAR_GREEN_CHECKPOINT";
 
 afterEach(() => {
-  delete process.env.TSFORGE_NEAR_GREEN_CHECKPOINT;
+  delete process.env.TSFORGE_NO_NEAR_GREEN_CHECKPOINT;
 });
 
 /** A gate whose error count depends on the file the model wrote: content with "BAD" = an
@@ -129,7 +132,6 @@ function nearGreenThenSpray(): IProvider {
 }
 
 test("flag ON: a spray past the near-green checkpoint REVERTS the file to the best state", async () => {
-  process.env[FLAG] = "1";
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
@@ -271,7 +273,6 @@ function existenceGate(dir: string): IGate {
 }
 
 test("flag ON: a spray that CREATES a new file is reverted — the file is tombstoned", async () => {
-  process.env[FLAG] = "1";
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
@@ -382,7 +383,6 @@ function phaseAdvanceGate(dir: string): IGate {
 }
 
 test("flag ON: a genuine FRONTIER ADVANCE (later phase + meta) is NOT rolled back", async () => {
-  process.env[FLAG] = "1";
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
@@ -503,7 +503,6 @@ function multiPhaseGate(dir: string): IGate {
 }
 
 test("flag ON: WS-B stays armed across a MULTI-PHASE run — a phase-2 spray is reverted", async () => {
-  process.env[FLAG] = "1";
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
@@ -576,7 +575,6 @@ test("flag ON: WS-B stays armed across a MULTI-PHASE run — a phase-2 spray is 
 }, 30_000);
 
 test("flag ON: the checkpoint REFRESHES to a strictly better near-green count", async () => {
-  process.env[FLAG] = "1";
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
@@ -684,8 +682,82 @@ test("flag ON: the checkpoint REFRESHES to a strictly better near-green count", 
   }
 }, 30_000);
 
-test("flag OFF (default): the SAME spray is NOT reverted — no path change", async () => {
-  // FLAG unset → default off.
+test("WS-B bounds TOTAL reverts per drive — the (MAX+1)th spray is NOT reverted", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+  const events: ILoopEvent[] = [];
+
+  // The model oscillates forever: reach near-green (GOOD, 1) → spray (BAD, 8) → revert →
+  // repeat. WS-B must revert at most MAX_NEAR_GREEN_ROLLBACKS times, then STOP (hand the
+  // stall to the ladder) — else a pathological build thrashes to maxTurns.
+  let n = 0;
+  const provider: IProvider = {
+    async complete() {
+      n += 1;
+
+      if (n === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "c1",
+              name: "create",
+              arguments: { file: "feature.ts", content: "const GOOD = 1;\n" },
+            },
+          ],
+        };
+      }
+
+      // Odd turns after the first: spray (GOOD → BAD); even turns: yield to gate it. After a
+      // revert the file is GOOD again, so the same edit re-sprays each cycle.
+      if (n % 2 === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: `s${String(n)}`,
+              name: "edit",
+              arguments: {
+                file: "feature.ts",
+                oldString: "GOOD",
+                newString: "BAD",
+              },
+            },
+          ],
+        };
+      }
+
+      return { content: "working", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      gate: contentAwareGate(dir),
+      maxTurns: 40,
+      report: (e) => events.push(e),
+    });
+
+    await session.send("build it");
+
+    const rollbacks = events.filter(
+      (e) =>
+        e.kind === "tool" &&
+        typeof e.message === "string" &&
+        e.message.includes("near-green rollback")
+    ).length;
+
+    // Reverts are capped — WS-B gives up after the budget, it does not thrash forever.
+    expect(rollbacks).toBe(MAX_NEAR_GREEN_ROLLBACKS);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("kill-switch: with WS-B disabled, the SAME spray is NOT reverted — no path change", async () => {
+  process.env[KILL] = "1"; // TSFORGE_NO_NEAR_GREEN_CHECKPOINT → WS-B off
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 

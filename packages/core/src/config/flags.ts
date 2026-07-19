@@ -49,8 +49,9 @@ export const flags = {
   /** WS-B near-green checkpoint/rollback: when the build reaches a near-green low (1..N
    *  errors) snapshot the scope files, and if the next gate SPRAYS past it (curr >
    *  checkpoint + M) revert to that best instead of letting the model build on the
-   *  regression. Opt-in (default OFF) so it changes no path until explicitly enabled —
-   *  real builders turn it on; eval/unit runs stay byte-identical unless they ask.
-   *  Thresholds N=2, M=3 from Phase 0a's real-log analysis. */
-  nearGreenCheckpoint: (): boolean => isOn(ENV_FLAG.nearGreenCheckpoint),
+   *  regression. DEFAULT ON — it's the fix for the near-green oscillation that thrashes real
+   *  builds (Phase 0a), and it's deterministic (no network), so every build should get it
+   *  without knowing a flag exists. Kill-switch TSFORGE_NO_NEAR_GREEN_CHECKPOINT=1 disables
+   *  it (A/B control / escape hatch). Thresholds N=2, M=3 from Phase 0a. */
+  nearGreenCheckpoint: (): boolean => !isOn(ENV_FLAG.noNearGreenCheckpoint),
 };

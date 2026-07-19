@@ -25,9 +25,10 @@ export const NEAR_GREEN_N = 2;
  *  the checkpoint (Phase 0a — benign wobble is +1, damaging sprays are +4 and up). */
 export const NEAR_GREEN_M = 3;
 
-/** Cap on consecutive reverts against ONE checkpoint before WS-B gives up: a model that
- *  keeps spraying from the near-green state can't fix it, so stop reverting and let the
- *  escalation ladder park it — bounds the revert loop so it can't thrash to maxTurns. */
+/** Cap on TOTAL reverts WS-B performs per drive before it stops (reverting AND
+ *  checkpointing) and hands the stall to the escalation ladder. A per-drive total (reset in
+ *  driveInner), not per-checkpoint — so a model that sprays → reverts → re-settles → sprays
+ *  can't thrash to maxTurns by earning a fresh budget each re-arm. */
 export const MAX_NEAR_GREEN_ROLLBACKS = 3;
 
 /** A captured near-green state. Uses the shared IFileSnapshot substrate so a rollback

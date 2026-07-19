@@ -2232,9 +2232,9 @@ async function nearGreenRollbackStep(
   ) {
     // The frontier advanced past this checkpoint — drop it (and its watermark) so WS-B
     // re-arms at the new phase's next near-green low (needsReArm) instead of staying inert.
+    // The revert budget is a per-drive TOTAL, so it is NOT refreshed here.
     state.nearGreenCheckpoint = undefined;
     state.nearGreenBest = undefined;
-    state.nearGreenRollbacks = 0;
 
     return false;
   }
@@ -2243,19 +2243,6 @@ async function nearGreenRollbackStep(
     await rollbackNearGreen(ctx, state, curr);
 
     return true;
-  }
-
-  // Revert budget spent (the ladder now owns this stall) — DROP the checkpoint rather than
-  // hold it dead. Keeping it would leave needsReArm false and isBetter unreachable at the
-  // floor (nearGreenBest===1), permanently disarming WS-B for the rest of the run; clearing
-  // lets a later near-green re-settle re-arm fresh via needsReArm.
-  if (
-    cp !== undefined &&
-    (state.nearGreenRollbacks ?? 0) >= MAX_NEAR_GREEN_ROLLBACKS
-  ) {
-    state.nearGreenCheckpoint = undefined;
-    state.nearGreenBest = undefined;
-    state.nearGreenRollbacks = 0;
   }
 
   return false;
@@ -2279,6 +2266,14 @@ async function nearGreenCheckpointStep(
     return;
   }
 
+  // The revert budget is a per-DRIVE TOTAL (reset in driveInner), NOT reset on capture.
+  // Once spent, WS-B is done for this drive — stop capturing too, or it would re-arm into a
+  // fresh checkpoint and a model that sprays→reverts→re-settles could thrash to maxTurns.
+  // The escalation ladder now owns the stall.
+  if ((state.nearGreenRollbacks ?? 0) >= MAX_NEAR_GREEN_ROLLBACKS) {
+    return;
+  }
+
   const needsReArm = state.nearGreenCheckpoint === undefined;
   const isBetter = curr < (state.nearGreenBest ?? Number.POSITIVE_INFINITY);
 
@@ -2288,10 +2283,9 @@ async function nearGreenCheckpointStep(
       curr,
       gateErrors
     );
-    // This count is the new best the checkpoint protects; a fresh capture earns a fresh
-    // revert budget.
+    // The new best this checkpoint protects. Deliberately do NOT reset nearGreenRollbacks —
+    // it bounds TOTAL reverts this drive.
     state.nearGreenBest = curr;
-    state.nearGreenRollbacks = 0;
   }
 }
 

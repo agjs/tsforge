@@ -1,22 +1,22 @@
 import { test, expect, afterEach } from "bun:test";
 import { flags } from "../src/config";
 
-// WS-B: the nearGreenCheckpoint flag gates the whole feature. It must be OFF by default
-// (so no path changes until a builder opts in) and read LIVE from the env (so a run/test
-// can toggle it). Locks the accessor directly, not just via the loop integration tests.
+// WS-B: the near-green checkpoint is DEFAULT ON (it fixes the near-green oscillation that
+// thrashes real builds — users shouldn't need to know a flag exists). A kill-switch
+// TSFORGE_NO_NEAR_GREEN_CHECKPOINT=1 disables it. Read LIVE so a run/test can toggle it.
 
 afterEach(() => {
-  delete process.env.TSFORGE_NEAR_GREEN_CHECKPOINT;
+  delete process.env.TSFORGE_NO_NEAR_GREEN_CHECKPOINT;
 });
 
-test("nearGreenCheckpoint is OFF by default and reads TSFORGE_NEAR_GREEN_CHECKPOINT live", () => {
-  delete process.env.TSFORGE_NEAR_GREEN_CHECKPOINT;
-  expect(flags.nearGreenCheckpoint()).toBe(false);
-
-  process.env.TSFORGE_NEAR_GREEN_CHECKPOINT = "1";
+test("nearGreenCheckpoint is ON by default; the kill-switch disables it", () => {
+  delete process.env.TSFORGE_NO_NEAR_GREEN_CHECKPOINT;
   expect(flags.nearGreenCheckpoint()).toBe(true);
 
-  // Any non-"1" value is off (the FLAG_ON contract).
-  process.env.TSFORGE_NEAR_GREEN_CHECKPOINT = "0";
+  process.env.TSFORGE_NO_NEAR_GREEN_CHECKPOINT = "1";
   expect(flags.nearGreenCheckpoint()).toBe(false);
+
+  // Any non-"1" value leaves it ON (the FLAG_ON contract).
+  process.env.TSFORGE_NO_NEAR_GREEN_CHECKPOINT = "0";
+  expect(flags.nearGreenCheckpoint()).toBe(true);
 });

@@ -36,7 +36,8 @@ interface ILoopStateDTO {
 
 /** Convert ILoopState to a JSON-serializable DTO (Map → entries[], Set → array). */
 export function serializeLoopState(state: ILoopState): ILoopStateDTO {
-  // WS-B: `nearGreenCheckpoint` / `nearGreenRollbacks` are deliberately NOT persisted. The
+  // WS-B: `nearGreenCheckpoint` / `nearGreenBest` / `nearGreenRollbacks` are deliberately NOT
+  // persisted (and reset per drive anyway). The
   // checkpoint holds a full scope-file snapshot (potentially MBs of content) — too heavy to
   // write into every session record — and it is cheap, transient protection. A resumed
   // session re-establishes it on its FIRST near-green cycle: settleGate's `needsReArm`
