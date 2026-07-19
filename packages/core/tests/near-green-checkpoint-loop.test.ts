@@ -343,6 +343,117 @@ test("flag ON: a spray that CREATES a new file is reverted — the file is tombs
   }
 }, 30_000);
 
+/** A phase-aware gate: once the advance marker (extra.ts) exists it returns a LATER-phase
+ *  error alongside an UNPHASED meta error (the shape evaluateGate produces); before that,
+ *  a single phase-1 error. Proves a genuine frontier advance isn't mistaken for a spray. */
+function phaseAdvanceGate(dir: string): IGate {
+  return {
+    run: async (): Promise<IValidateResult> => {
+      const advanced = await Bun.file(join(dir, "extra.ts")).exists();
+
+      if (advanced) {
+        return {
+          passed: false,
+          errors: [
+            { key: "p2", message: "phase 2 error", phase: 2 },
+            { key: "meta", message: "test-sibling-required" }, // unphased meta
+            ...Array.from({ length: 6 }, (_, i) => ({
+              key: `x${String(i)}`,
+              message: `error ${String(i)}`,
+              phase: 2,
+            })),
+          ],
+          output: "8 error(s)",
+        };
+      }
+
+      return {
+        passed: false,
+        errors: [{ key: "p1", message: "phase 1 error", phase: 1 }],
+        output: "1 error",
+      };
+    },
+  };
+}
+
+test("flag ON: a genuine FRONTIER ADVANCE (later phase + meta) is NOT rolled back", async () => {
+  process.env[FLAG] = "1";
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+  const events: ILoopEvent[] = [];
+
+  // Checkpoint at phase 1 (1 error), then the model advances the frontier — a phase-2 error
+  // appears ALONGSIDE an unphased meta error and the count grows to 8. commonGatePhase would
+  // read undefined here and revert real progress; maxGatePhase sees phase 2 > 1 → no revert.
+  let n = 0;
+  const provider: IProvider = {
+    async complete() {
+      n += 1;
+
+      if (n === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "c1",
+              name: "create",
+              arguments: {
+                file: "feature.ts",
+                content: "export const GOOD = 1;\n",
+              },
+            },
+          ],
+        };
+      }
+
+      if (n === 3) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "c2",
+              name: "create",
+              arguments: {
+                file: "extra.ts",
+                content: "export const NEXT = 1;\n",
+              },
+            },
+          ],
+        };
+      }
+
+      return { content: "working", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      gate: phaseAdvanceGate(dir),
+      maxTurns: 12,
+      report: (e) => events.push(e),
+    });
+
+    await session.send("build it");
+
+    // No rollback — the frontier advance is progress, not a spray.
+    const rolledBack = events.some(
+      (e) =>
+        e.kind === "tool" &&
+        typeof e.message === "string" &&
+        e.message.includes("near-green rollback")
+    );
+
+    expect(rolledBack).toBe(false);
+    // The phase-2 work survives on disk (not reverted to the phase-1 snapshot).
+    expect(await Bun.file(join(dir, "extra.ts")).exists()).toBe(true);
+    expect(await Bun.file(join(dir, "feature.ts")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("flag OFF (default): the SAME spray is NOT reverted — no path change", async () => {
   // FLAG unset → default off.
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));

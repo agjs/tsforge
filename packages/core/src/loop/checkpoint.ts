@@ -38,10 +38,11 @@ interface ILoopStateDTO {
 export function serializeLoopState(state: ILoopState): ILoopStateDTO {
   // WS-B: `nearGreenCheckpoint` / `nearGreenRollbacks` are deliberately NOT persisted. The
   // checkpoint holds a full scope-file snapshot (potentially MBs of content) — too heavy to
-  // write into every session record — and it is cheap, transient protection: a resumed
-  // session simply re-establishes it the next time it reaches a near-green low. Persisting a
-  // partial checkpoint (count without the snapshot) would be worse — a rollback with nothing
-  // to restore. So it's in-memory-only by design, not an oversight.
+  // write into every session record — and it is cheap, transient protection. A resumed
+  // session re-establishes it on its FIRST near-green cycle: settleGate's `needsReArm`
+  // (checkpoint === undefined) forces a fresh snapshot even when the resumed count is not a
+  // new low, so protection is not lost across resume. Persisting a partial checkpoint (count
+  // without the snapshot) would be worse — a rollback with nothing to restore.
   const errorAgeEntries: [string, number][] = Array.from(
     state.errorAge.entries()
   );

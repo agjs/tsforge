@@ -2112,8 +2112,8 @@ export async function injectFeedback(
 /** WS-B: snapshot the scope files at a fresh near-green low so a later spray can revert to
  *  this best state. Uses the SHARED IFileSnapshot substrate (binary-inclusive, tombstone-
  *  aware) so a rollback can also delete files a spray creates — a plain content map would
- *  leave them on disk. Stores the open errors + the common gate phase for the revert steer,
- *  the tracking realignment, and the frontier check. */
+ *  leave them on disk. Stores the open errors + the FURTHEST gate phase (maxGatePhase) for
+ *  the revert steer, the tracking realignment, and the frontier check. */
 export async function captureNearGreenCheckpoint(
   ctx: ILoopCtx,
   errorCount: number,
@@ -2218,9 +2218,14 @@ export async function settleGate(
   // fresh checkpoint (a phase-advance that lands near-green is a new best to protect).
   const currMaxPhase = maxGatePhase(gateErrors);
   const prevMaxPhase = maxGatePhase(state.prevGateErrors);
+  // A true frontier advance needs a phased error on BOTH sides moving to a later phase.
+  // If the previous set had NO phased error (undefined), that is not an advance: it was
+  // either the very first gate or a meta-only state where the phased checks had passed —
+  // introducing phase errors then is a REGRESSION, and the count-based path handles it.
   const frontierAdvanced =
     currMaxPhase !== undefined &&
-    (prevMaxPhase === undefined || currMaxPhase > prevMaxPhase);
+    prevMaxPhase !== undefined &&
+    currMaxPhase > prevMaxPhase;
 
   if (state.lastGateCount >= 0 && curr > state.lastGateCount) {
     state.regressions += 1;
@@ -2314,15 +2319,24 @@ export async function settleGate(
   await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixed);
 
   // WS-B: after this cycle's progress accounting, snapshot a FRESH near-green low so a
-  // future spray can revert to it. "Fresh" = a new all-time-low COUNT, OR a frontier
-  // ADVANCE that lands near-green (a later phase is new territory worth protecting even if
-  // its count isn't a new low — else a phase-1 checkpoint would go stale and same-phase
-  // sprays from the new near-green state wouldn't be caught).
+  // future spray can revert to it. Re-arm on ANY of:
+  //   - a new all-time-low COUNT (the normal near-green low);
+  //   - a frontier ADVANCE that lands near-green (a later phase is new territory worth
+  //     protecting even if its count isn't a new low — and this does NOT rely on checkStuck's
+  //     plateauBest, which uses commonGatePhase and can't see a meta-bearing advance, so WS-B
+  //     never goes inert after one);
+  //   - NO checkpoint currently held (`needsReArm`): re-establishes protection the first
+  //     near-green cycle after a resume (the snapshot is deliberately not serialized) or any
+  //     gap, so a persisted one-error low can't leave WS-B permanently un-armed.
+  const needsReArm = state.nearGreenCheckpoint === undefined;
+
   if (
     flags.nearGreenCheckpoint() &&
     shouldCheckpoint(
       curr,
-      curr < (prevPlateauBest ?? Number.POSITIVE_INFINITY) || frontierAdvanced
+      curr < (prevPlateauBest ?? Number.POSITIVE_INFINITY) ||
+        frontierAdvanced ||
+        needsReArm
     )
   ) {
     state.nearGreenCheckpoint = await captureNearGreenCheckpoint(

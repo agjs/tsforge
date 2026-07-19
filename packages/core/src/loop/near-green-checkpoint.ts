@@ -36,8 +36,10 @@ export const MAX_NEAR_GREEN_ROLLBACKS = 3;
 export interface INearGreenCheckpoint {
   readonly errorCount: number;
   readonly errors: readonly IErrorItem[];
-  /** The common gate phase at checkpoint time (undefined for a mixed/unphased set) — so a
-   *  later-phase gate result (genuine frontier progress) isn't mistaken for a spray. */
+  /** The FURTHEST gate phase reached at checkpoint time (maxGatePhase — the max over phased
+   *  errors, ignoring unphased meta; undefined only when no error carried a phase) — so a
+   *  later-phase gate result (genuine frontier progress) isn't mistaken for a spray, even
+   *  when meta errors are mixed in. */
   readonly phase: number | undefined;
   readonly snapshot: IFileSnapshot;
 }
