@@ -751,6 +751,107 @@ test("WS-B bounds TOTAL reverts per drive — the (MAX+1)th spray is NOT reverte
 
     // Reverts are capped — WS-B gives up after the budget, it does not thrash forever.
     expect(rollbacks).toBe(MAX_NEAR_GREEN_ROLLBACKS);
+    // …and it really STOPS reverting: after the budget the spray is left on disk (BAD),
+    // not silently reverted while just suppressing the event.
+    expect(await Bun.file(join(dir, "feature.ts")).text()).toContain("BAD");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("a SECOND drive after budget exhaustion gets a FRESH revert budget", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+  const events: ILoopEvent[] = [];
+
+  // Two sends. Each drive: ensure GOOD → yield (checkpoint) → spray/yield…. Drive 1 exhausts
+  // the budget (MAX reverts). Drive 2 must get a FRESH budget (proving the per-drive reset in
+  // driveInner / resetDriveConvergence) and revert again — else the budget leaked and WS-B
+  // would be dead for the rest of the session.
+  const countRollbacks = (): number =>
+    events.filter(
+      (e) =>
+        e.kind === "tool" &&
+        typeof e.message === "string" &&
+        e.message.includes("near-green rollback")
+    ).length;
+  let t = 0;
+  const provider: IProvider = {
+    async complete() {
+      t += 1;
+
+      if (t === 1) {
+        // Ensure the near-green file exists as GOOD (create first time, else un-spray it).
+        if (await Bun.file(join(dir, "feature.ts")).exists()) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: `g${String(t)}`,
+                name: "edit",
+                arguments: {
+                  file: "feature.ts",
+                  oldString: "BAD",
+                  newString: "GOOD",
+                },
+              },
+            ],
+          };
+        }
+
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "g0",
+              name: "create",
+              arguments: { file: "feature.ts", content: "const GOOD = 1;\n" },
+            },
+          ],
+        };
+      }
+
+      // odd t → spray (GOOD → BAD); even t → yield to gate it.
+      if (t % 2 === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: `s${String(t)}`,
+              name: "edit",
+              arguments: {
+                file: "feature.ts",
+                oldString: "GOOD",
+                newString: "BAD",
+              },
+            },
+          ],
+        };
+      }
+
+      return { content: "working", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      gate: contentAwareGate(dir),
+      maxTurns: 40,
+      report: (e) => events.push(e),
+    });
+
+    t = 0;
+    await session.send("build it"); // drive 1: exhaust the budget
+    const drive1 = countRollbacks();
+
+    t = 0;
+    await session.send("keep going"); // drive 2: fresh budget
+    const total = countRollbacks();
+
+    expect(drive1).toBe(MAX_NEAR_GREEN_ROLLBACKS); // drive 1 hit the cap
+    expect(total).toBeGreaterThan(drive1); // drive 2 reverted again → fresh per-drive budget
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

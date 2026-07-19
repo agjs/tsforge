@@ -418,6 +418,12 @@ export function resetDriveConvergence(state: ILoopState): void {
   delete state.pendingSteer;
   delete state.resetContext;
   delete state.pendingModelOverride;
+  // WS-B is per-drive: a new drive starts with no checkpoint, watermark, or revert budget
+  // (the budget bounds TOTAL reverts for the drive). Kept in sync with driveInner's own
+  // per-drive reset so no path can carry a spent budget or stale checkpoint across a send.
+  delete state.nearGreenCheckpoint;
+  delete state.nearGreenBest;
+  delete state.nearGreenRollbacks;
 }
 
 /** How many times a send recovers from a repetition loop before giving up. */

@@ -419,9 +419,10 @@ export interface ILoopState {
    *  near-green low (1..N errors). If a later gate SPRAYS past it, the loop reverts to
    *  this state instead of letting the model build on the regression. Flag-gated. */
   nearGreenCheckpoint?: INearGreenCheckpoint;
-  /** WS-B: consecutive reverts against the CURRENT checkpoint. Reset to 0 when a fresh
-   *  (lower) near-green low is captured; caps the revert loop (MAX_NEAR_GREEN_ROLLBACKS) so
-   *  a model that can't fix from near-green is parked by the ladder, not thrashed forever. */
+  /** WS-B: TOTAL reverts this DRIVE (reset only at the drive boundary — resetDriveConvergence
+   *  / driveInner — NOT on capture). At MAX_NEAR_GREEN_ROLLBACKS, WS-B stops reverting AND
+   *  capturing and hands the stall to the escalation ladder; monotonic-per-drive so a model
+   *  that sprays → reverts → re-settles can't earn a fresh budget each re-arm and thrash. */
   nearGreenRollbacks?: number;
   /** WS-B: the best (lowest) error count the CURRENT checkpoint protects. WS-B's OWN
    *  watermark — NOT checkStuck's plateauBest, which uses commonGatePhase and is unreliable
@@ -2179,9 +2180,12 @@ export async function rollbackNearGreen(
   state.focusError = null;
   state.pendingRung = null;
   state.pendingBlockFingerprint = null;
-  // A stale R1 diagnosis steer from the spray cycle would otherwise be re-injected next
-  // cycle, fighting the rollback's "make a SMALL targeted fix" message — clear it too.
+  // A stale steer from the spray cycle would otherwise be injected on the next non-rollback
+  // cycle (injectFeedback reads pendingDiagnosisSteer ?? pendingSteer), fighting — or even
+  // re-triggering — the approach that caused the spray, against the rollback's "make a SMALL
+  // targeted fix" message. The rollback path skips injectFeedback, so clear BOTH here.
   state.pendingDiagnosisSteer = null;
+  state.pendingSteer = undefined;
   state.nearGreenRollbacks = (state.nearGreenRollbacks ?? 0) + 1;
 
   ctx.report({

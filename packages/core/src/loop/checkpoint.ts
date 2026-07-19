@@ -37,12 +37,13 @@ interface ILoopStateDTO {
 /** Convert ILoopState to a JSON-serializable DTO (Map → entries[], Set → array). */
 export function serializeLoopState(state: ILoopState): ILoopStateDTO {
   // WS-B: `nearGreenCheckpoint` / `nearGreenBest` / `nearGreenRollbacks` are deliberately NOT
-  // persisted (and reset per drive anyway). The
-  // checkpoint holds a full scope-file snapshot (potentially MBs of content) — too heavy to
-  // write into every session record — and it is cheap, transient protection. A resumed
-  // session re-establishes it on its FIRST near-green cycle: settleGate's `needsReArm`
-  // (checkpoint === undefined) forces a fresh snapshot even when the resumed count is not a
-  // new low, so protection is not lost across resume. Persisting a partial checkpoint (count
+  // persisted (and reset per drive anyway). The checkpoint holds a full scope-file snapshot
+  // (potentially MBs of content) — too heavy to write into every session record — and it is
+  // cheap, transient protection. A resumed session RE-ARMS on its first near-green cycle
+  // (settleGate's `needsReArm` snapshots even when the resumed count isn't a new low). The
+  // one uncovered gap this leaves: a spray on the VERY FIRST settle after resume — before any
+  // near-green cycle re-arms — has no checkpoint to restore to, so that spray is not reverted
+  // (bounded: only until the first near-green). Persisting a partial checkpoint (count
   // without the snapshot) would be worse — a rollback with nothing to restore.
   const errorAgeEntries: [string, number][] = Array.from(
     state.errorAge.entries()
