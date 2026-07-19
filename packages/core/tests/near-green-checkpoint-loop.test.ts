@@ -10,6 +10,7 @@ import type { ILoopCtx, ILoopState } from "../src/loop/turn";
 import {
   captureNearGreenCheckpoint,
   rollbackNearGreen,
+  settleGate,
 } from "../src/loop/turn";
 import type { IValidateResult } from "../src/validate";
 import { MAX_NEAR_GREEN_ROLLBACKS } from "../src/loop/near-green-checkpoint";
@@ -133,6 +134,78 @@ test("flag ON: a spray past the near-green checkpoint REVERTS the file to the be
 
     expect(final).toContain("GOOD");
     expect(final).not.toContain("BAD");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("#61: settleGate does NOT checkpoint a HOLLOW near-green state (all-completion-class errors) and clears any prior one", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
+
+    // The gate is near-green with ONE remaining error that clears only by ADDING code (the
+    // feature declared i18n keys it hasn't wired yet). settleGate must NOT lock this hollow
+    // state — else the model's demanded completion edit (which spikes the count) gets reverted.
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["**/*"],
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set(["feature.ts"]) },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            errors: [
+              {
+                key: "i18n:supplier.createSuccess",
+                rule: "i18n-locale-keys-used",
+                message: "Locale key defined but never referenced",
+              },
+            ],
+            output: "",
+          }),
+        },
+      },
+    };
+
+    // Seed a stale checkpoint from an earlier compile-clean cycle — the guard must CLEAR it,
+    // so a later spray can't be reverted to it either.
+    const stale = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "old", message: "earlier compile error" },
+    ]);
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 1,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: 1,
+      edits: 5,
+      regressions: 0,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      conventionsEnabled: false,
+      nearGreenCheckpoint: stale,
+      nearGreenBest: 1,
+      nearGreenRollbacks: 0,
+    };
+
+    await settleGate(ctx, state, 10);
+
+    // The hollow state was NOT protected: the checkpoint is cleared (no revert target), so
+    // the model's next completion edit proceeds forward instead of being reverted to hollow.
+    expect(state.nearGreenCheckpoint).toBeUndefined();
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

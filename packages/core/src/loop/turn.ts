@@ -29,6 +29,7 @@ import { unseenGuidesForErrors } from "./conventions";
 import {
   shouldCheckpoint,
   shouldRollback,
+  allCompletionClass,
   MAX_NEAR_GREEN_ROLLBACKS,
   type INearGreenCheckpoint,
 } from "./near-green-checkpoint";
@@ -2303,6 +2304,19 @@ async function nearGreenCheckpointStep(
   // fresh checkpoint and a model that sprays→reverts→re-settles could thrash to maxTurns.
   // The escalation ladder now owns the stall.
   if ((state.nearGreenRollbacks ?? 0) >= MAX_NEAR_GREEN_ROLLBACKS) {
+    return;
+  }
+
+  // Never protect a HOLLOW near-green state — one whose remaining errors ALL clear only by
+  // ADDING code (wiring i18n keys, reachability, the judge). The completeness guards demand
+  // that code; the model's large completion edit transiently spikes the count, and a
+  // checkpoint here would revert it to the hollow app (observed: 1→27 spray reverted to a
+  // list-only page, model re-does it → thrash). CLEAR any checkpoint (drops an earlier
+  // compile-state one too, so the spray isn't reverted to that either) and don't capture;
+  // WS-B resumes once errors are fixable-in-place again.
+  if (allCompletionClass(gateErrors)) {
+    state.nearGreenCheckpoint = undefined;
+
     return;
   }
 
