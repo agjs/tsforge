@@ -3,36 +3,45 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildConventionIndex,
+  buildConventionGuides,
+  conventionGuide,
   conventionTopics,
 } from "../src/loop/conventions";
 import type { IProvider, IChatMessage } from "../src/inference";
 import { Session } from "../src/loop";
 
-// WS-A1: the PUSH index that front-loads the pullable convention catalog so the model
-// pulls the compliant pattern BEFORE writing (Bucket 1), complementing pull_conventions.
+// WS-A1: front-load the actual convention GUIDES (the compliant patterns), not merely a
+// topic index — so the model writes it right the FIRST time (Bucket 1) instead of pulling
+// only reactively after the gate rejects it.
 
-test("buildConventionIndex lists every pullable topic", () => {
-  const index = buildConventionIndex();
+test("buildConventionGuides front-loads the actual guide CONTENT for every topic", () => {
+  const guides = buildConventionGuides();
 
+  // The full compliant pattern for each topic is present — not just its name.
   for (const topic of conventionTopics()) {
-    expect(index).toContain(topic);
+    expect(guides).toContain(conventionGuide(topic));
   }
 });
 
-test("buildConventionIndex tells the model to pull BEFORE writing", () => {
-  const index = buildConventionIndex();
+test("buildConventionGuides carries the concrete patterns that prevent the traced sprays", () => {
+  const guides = buildConventionGuides();
 
-  expect(index).toContain("pull_conventions");
-  expect(index).toContain("FIRST");
-  // Cross-references the gate rules a topic prevents, so the model connects
-  // topic → rule and knows what it's avoiding.
-  expect(index).toContain("prevents:");
-  expect(index).toContain("component-folder-structure");
+  // The exact idioms the model was guessing wrong (the inv157 1→8 spray classes):
+  expect(guides).toContain("@/lib/api/client"); // data-fetching (no fetch/axios)
+  expect(guides).toContain("src/features/"); // component anatomy / layout
+  expect(guides).toContain("TYPE GUARD"); // no-casts (no `as`/`!`)
+  expect(guides).toContain("hooks.ts"); // state lives in hooks, not the body
 });
 
-// Behavioral: the index reaches the model's SYSTEM prompt only when the backend ships
-// a convention library (pullConventions), so plain sessions stay minimal.
+test("buildConventionGuides tells the model to write it right BEFORE the gate", () => {
+  const guides = buildConventionGuides();
+
+  expect(guides).toContain("BEFORE you write");
+  expect(guides).toContain("FIRST");
+});
+
+// Behavioral: the guides reach the model's SYSTEM prompt only when the backend ships a
+// convention library (pullConventions), so plain sessions stay minimal.
 function systemCapturingProvider(cap: { system: string }): IProvider {
   return {
     async complete(messages: IChatMessage[]) {
@@ -45,7 +54,7 @@ function systemCapturingProvider(cap: { system: string }): IProvider {
   };
 }
 
-test("the convention index is in the system prompt with pullConventions, absent without", async () => {
+test("the convention guides are in the system prompt with pullConventions, absent without", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-"));
 
   try {
@@ -60,7 +69,9 @@ test("the convention index is in the system prompt with pullConventions, absent 
 
     await on.send("go");
 
-    expect(withConv.system).toContain("STACK CONVENTIONS");
+    expect(withConv.system).toContain("HOW THIS STACK WRITES CODE");
+    // The actual pattern is inline, not just a menu entry.
+    expect(withConv.system).toContain("@/lib/api/client");
 
     const noConv = { system: "" };
     const off = await Session.create({
@@ -72,7 +83,7 @@ test("the convention index is in the system prompt with pullConventions, absent 
 
     await off.send("go");
 
-    expect(noConv.system).not.toContain("STACK CONVENTIONS");
+    expect(noConv.system).not.toContain("HOW THIS STACK WRITES CODE");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

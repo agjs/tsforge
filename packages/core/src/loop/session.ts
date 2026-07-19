@@ -35,7 +35,7 @@ import {
   type ErrorSet,
 } from "../validate";
 import { ruleHelp } from "./feedback";
-import { buildConventionIndex } from "./conventions";
+import { buildConventionGuides } from "./conventions";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -603,12 +603,13 @@ function systemPrompt(
   // it here too so test-first is the out-of-the-box default everywhere.
   const tdd = flags.tdd() ? `${buildTddGuidance(conventions)}\n\n` : "";
 
-  // WS-A1: front-load the stack convention topic index when the backend ships a
-  // convention library (pullConventions). PUSHes awareness that the catalog exists so
-  // the model pulls the compliant pattern BEFORE writing — the Bucket-1 fix that stops
-  // it drafting convention-violating code it then burns turns repairing.
+  // WS-A1: front-load the actual stack convention GUIDES (not just a topic index) when the
+  // backend ships a convention library (pullConventions). The compliant pattern for every core
+  // topic is in the prompt UP FRONT, so the model writes it right the FIRST time — the Bucket-1
+  // fix. The reactive PUSH (unseenGuidesForErrors) and `pull_conventions` remain as fallbacks
+  // for reinforcement and the long tail, not the primary teaching.
   const conv =
-    cfg.pullConventions === true ? `${buildConventionIndex()}\n\n` : "";
+    cfg.pullConventions === true ? `${buildConventionGuides()}\n\n` : "";
 
   const contract = taskContract(cfg.files ?? [], cfg.accept);
 

@@ -123,18 +123,12 @@ export function conventionTopics(): ConventionTopic[] {
  *  catalog exists and pulls the compliant pattern BEFORE writing that kind of code —
  *  the situational awareness that stops it writing a convention-violating draft it
  *  then burns turns fixing. Complements `pull_conventions` (the on-demand fetch). */
-export function buildConventionIndex(): string {
-  const rows = conventionTopics().map((t) => {
-    const rules = TOPIC_RULES[t];
-    const prevents = rules.length > 0 ? ` — prevents: ${rules.join(", ")}` : "";
-
-    return `  • ${t}${prevents}`;
-  });
-
+export function buildConventionGuides(): string {
   return [
-    "STACK CONVENTIONS. This stack enforces strict patterns the gate REJECTS if you guess. Before writing a given kind of code, call `pull_conventions` with the matching topic to get the compliant shape FIRST — do not write from memory and discover the rule at the gate. Topics:",
-    ...rows,
-  ].join("\n");
+    "HOW THIS STACK WRITES CODE — read this BEFORE you write, not after the gate rejects you. These are the exact compliant patterns the gate enforces; write your FIRST draft this way instead of guessing from memory and burning turns repairing. (Each guide names the rules it satisfies; `pull_conventions` fetches any of these again on demand.)",
+    "",
+    ...conventionTopics().map((t) => conventionGuide(t)),
+  ].join("\n\n");
 }
 
 /** Narrow an arbitrary string to a ConventionTopic (for the pull tool's arg) —
