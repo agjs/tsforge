@@ -580,29 +580,45 @@ test("flag ON: the checkpoint REFRESHES to a strictly better near-green count", 
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
-  // near-green count 2 (checkpoint) → improve to count 1 (must RE-checkpoint via nearGreenBest,
-  // NOT checkStuck's plateauBest) → spray. The revert must restore the count-1 state (keeping
-  // improved.ts). If the checkpoint had stayed at count 2, improved.ts (created after that
-  // snapshot) would be tombstoned — so its survival proves the refresh.
-  const errs = (n: number): IValidateResult => ({
+  // The independence-from-plateauBest path: phase-1 near-green (plateauBest=1) → META-bearing
+  // advance to PHASE 2 count 2 (commonGatePhase=undefined, so checkStuck NEVER rebases
+  // plateauBest — it stays 1) → phase-2 improves to count 1. Under the old `curr < plateauBest`
+  // rule that's `1 < 1` = false → NO refresh, and a spray would revert to the WORSE count-2
+  // snapshot. nearGreenBest (=2) sees `1 < 2` → refresh@1, so the spray reverts to count 1 and
+  // improved.ts survives. This ONLY passes with the nearGreenBest watermark.
+  const p1 = (): IValidateResult => ({
     passed: false,
-    errors: Array.from({ length: n }, (_, i) => ({
-      key: `e${String(i)}`,
-      message: `error ${String(i)}`,
-    })),
-    output: `${String(n)} error(s)`,
+    errors: [{ key: "p1", message: "phase 1 error", phase: 1 }],
+    output: "1 error",
   });
+  const p2 = (count: number, meta: boolean): IValidateResult => ({
+    passed: false,
+    errors: [
+      ...(meta ? [{ key: "meta", message: "test-sibling-required" }] : []),
+      ...Array.from({ length: count - (meta ? 1 : 0) }, (_, i) => ({
+        key: `p2_${String(i)}`,
+        message: `phase 2 error ${String(i)}`,
+        phase: 2,
+      })),
+    ],
+    output: `${String(count)} error(s)`,
+  });
+  const has = (f: string): Promise<boolean> => Bun.file(join(dir, f)).exists();
   const gate: IGate = {
     run: async (): Promise<IValidateResult> => {
-      if (await Bun.file(join(dir, "sprayed.ts")).exists()) {
-        return errs(8);
+      if (!(await has("advanced.ts"))) {
+        return p1();
       }
 
-      if (await Bun.file(join(dir, "improved.ts")).exists()) {
-        return errs(1);
+      if (await has("sprayed.ts")) {
+        return p2(8, true);
       }
 
-      return errs(2);
+      if (await has("improved.ts")) {
+        return p2(1, false);
+      } // pure phase-2, count 1
+
+      return p2(2, true); // META-bearing advance, count 2 → plateauBest can't rebase
     },
   };
   const create = (id: string, file: string) => ({
@@ -622,15 +638,19 @@ test("flag ON: the checkpoint REFRESHES to a strictly better near-green count", 
 
       if (n === 1) {
         return create("a", "feature.ts");
-      } // count 2 → checkpoint@2
+      } // phase-1 near-green → checkpoint@p1
 
       if (n === 3) {
-        return create("b", "improved.ts");
-      } // count 1 → re-checkpoint@1
+        return create("b", "advanced.ts");
+      } // phase-2 count 2 → re-arm@p2 count 2
 
       if (n === 5) {
-        return create("c", "sprayed.ts");
-      } // count 8 → revert to count-1
+        return create("c", "improved.ts");
+      } // phase-2 count 1 → REFRESH@p2 count 1
+
+      if (n === 7) {
+        return create("d", "sprayed.ts");
+      } // phase-2 count 8 → revert to count 1
 
       return { content: "working", toolCalls: [] };
     },

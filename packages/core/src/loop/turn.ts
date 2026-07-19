@@ -2245,6 +2245,19 @@ async function nearGreenRollbackStep(
     return true;
   }
 
+  // Revert budget spent (the ladder now owns this stall) — DROP the checkpoint rather than
+  // hold it dead. Keeping it would leave needsReArm false and isBetter unreachable at the
+  // floor (nearGreenBest===1), permanently disarming WS-B for the rest of the run; clearing
+  // lets a later near-green re-settle re-arm fresh via needsReArm.
+  if (
+    cp !== undefined &&
+    (state.nearGreenRollbacks ?? 0) >= MAX_NEAR_GREEN_ROLLBACKS
+  ) {
+    state.nearGreenCheckpoint = undefined;
+    state.nearGreenBest = undefined;
+    state.nearGreenRollbacks = 0;
+  }
+
   return false;
 }
 
