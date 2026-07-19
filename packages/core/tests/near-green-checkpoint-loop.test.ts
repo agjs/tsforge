@@ -10,8 +10,36 @@ import type { ILoopCtx, ILoopState } from "../src/loop/turn";
 import {
   captureNearGreenCheckpoint,
   rollbackNearGreen,
+  maxGatePhase,
 } from "../src/loop/turn";
 import type { IValidateResult } from "../src/validate";
+
+// WS-B phase robustness (panel critical): the frontier signal must survive the meta errors
+// evaluateGate ALWAYS appends. commonGatePhase() collapses to undefined the moment any
+// error is unphased; maxGatePhase() takes the furthest PHASED error, ignoring meta — so a
+// genuine phase advance (a later-phase error present alongside meta noise) is still seen and
+// NOT mistaken for a spray.
+test("maxGatePhase: furthest phased error, ignoring unphased meta errors", () => {
+  expect(maxGatePhase([{ key: "a", message: "m", phase: 1 }])).toBe(1);
+  // Mixed phases → the max.
+  expect(
+    maxGatePhase([
+      { key: "a", message: "m", phase: 1 },
+      { key: "b", message: "m", phase: 2 },
+    ])
+  ).toBe(2);
+  // THE FIX: a later-phase error alongside an unphased meta error → still phase 2 (not
+  // undefined, as commonGatePhase would give — which made a real advance look like a spray).
+  expect(
+    maxGatePhase([
+      { key: "meta", message: "test-sibling-required" }, // no phase
+      { key: "b", message: "m", phase: 2 },
+    ])
+  ).toBe(2);
+  // No phased error at all → undefined (fall back to count-based).
+  expect(maxGatePhase([{ key: "meta", message: "m" }])).toBeUndefined();
+  expect(maxGatePhase([])).toBeUndefined();
+});
 
 // WS-B end-to-end: with the flag ON, a build that reaches near-green (1 error) then SPRAYS
 // (8 errors) must REVERT the scope files to the near-green best; with the flag OFF the path

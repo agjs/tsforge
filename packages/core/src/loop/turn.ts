@@ -1893,6 +1893,25 @@ function commonGatePhase(errors: readonly IErrorItem[]): number | undefined {
   return errors.every((error) => error.phase === first) ? first : undefined;
 }
 
+/** The FURTHEST gate phase any error in the set reaches, ignoring unphased errors.
+ *  Unlike `commonGatePhase` (undefined the moment ANY error is unphased), this survives
+ *  the meta errors `evaluateGate` always appends — so WS-B can still recognise a genuine
+ *  frontier advance (a later-phase error present alongside meta noise) and not mistake it
+ *  for a spray. Undefined only when NO error carries a phase. */
+export function maxGatePhase(
+  errors: readonly IErrorItem[]
+): number | undefined {
+  let max: number | undefined;
+
+  for (const error of errors) {
+    if (error.phase !== undefined && (max === undefined || error.phase > max)) {
+      max = error.phase;
+    }
+  }
+
+  return max;
+}
+
 /** R1 Phase B (feed-forward): after Phase A's diagnosis-only call, check if the
  *  diagnosis is trivial. If trivial (too short or just restates errors), mark R1
  *  tried and escalate to R2 immediately. If not trivial, save it as the next steer
@@ -2111,7 +2130,7 @@ export async function captureNearGreenCheckpoint(
   return {
     errorCount,
     errors: [...gateErrors],
-    phase: commonGatePhase(gateErrors),
+    phase: maxGatePhase(gateErrors),
     snapshot,
   };
 }
@@ -2144,6 +2163,13 @@ export async function rollbackNearGreen(
   state.lastGateCount = cp.errorCount;
   resetConvergenceGuards(state, cp.errorCount);
   state.redGates = 0;
+  // Purge stale SPRAY bookkeeping so the next checkStuck can't derive a wrong block
+  // identity from spray-cycle keys, or record a pending rung as "tried" against a spray
+  // that was reverted (burning a lever). The restored state is a clean slate for the block.
+  state.recentGateFingerprints = [];
+  state.focusError = null;
+  state.pendingRung = null;
+  state.pendingBlockFingerprint = null;
   state.nearGreenRollbacks = (state.nearGreenRollbacks ?? 0) + 1;
 
   ctx.report({
@@ -2186,6 +2212,15 @@ export async function settleGate(
   // WS-B: the all-time low BEFORE checkStuck mutates it — so we can tell a fresh
   // near-green low (worth a checkpoint) from a non-improving re-visit.
   const prevPlateauBest = state.plateauBest;
+  // WS-B: the furthest gate phase this cycle vs the previous (computed BEFORE checkStuck
+  // updates state.prevGateErrors). A frontier ADVANCE — a later-phase error now present —
+  // is genuine progress even if the count grew, so it must NOT roll back AND it deserves a
+  // fresh checkpoint (a phase-advance that lands near-green is a new best to protect).
+  const currMaxPhase = maxGatePhase(gateErrors);
+  const prevMaxPhase = maxGatePhase(state.prevGateErrors);
+  const frontierAdvanced =
+    currMaxPhase !== undefined &&
+    (prevMaxPhase === undefined || currMaxPhase > prevMaxPhase);
 
   if (state.lastGateCount >= 0 && curr > state.lastGateCount) {
     state.regressions += 1;
@@ -2251,7 +2286,7 @@ export async function settleGate(
     shouldRollback(
       state.nearGreenCheckpoint,
       curr,
-      commonGatePhase(gateErrors),
+      currMaxPhase,
       state.nearGreenRollbacks ?? 0
     )
   ) {
@@ -2278,11 +2313,17 @@ export async function settleGate(
 
   await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixed);
 
-  // WS-B: after this cycle's progress accounting, snapshot a FRESH near-green low (1..N,
-  // and a genuine new all-time low) so a future spray can revert to it.
+  // WS-B: after this cycle's progress accounting, snapshot a FRESH near-green low so a
+  // future spray can revert to it. "Fresh" = a new all-time-low COUNT, OR a frontier
+  // ADVANCE that lands near-green (a later phase is new territory worth protecting even if
+  // its count isn't a new low — else a phase-1 checkpoint would go stale and same-phase
+  // sprays from the new near-green state wouldn't be caught).
   if (
     flags.nearGreenCheckpoint() &&
-    shouldCheckpoint(curr, curr < (prevPlateauBest ?? Number.POSITIVE_INFINITY))
+    shouldCheckpoint(
+      curr,
+      curr < (prevPlateauBest ?? Number.POSITIVE_INFINITY) || frontierAdvanced
+    )
   ) {
     state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
       ctx,
