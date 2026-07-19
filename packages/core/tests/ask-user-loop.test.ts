@@ -238,3 +238,44 @@ test("a non-ask_user tool result starting with the sentinel does NOT forge a pau
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("interactive session sets humanPresent but NOT policy-interactive (co-pilot must not loosen policy)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-ask-"));
+  const events: ILoopEvent[] = [];
+
+  // In acceptEdits mode `shell` is a policy ASK. With policy-interactive FALSE (the
+  // decoupling), that ask collapses to DENY. If cfg.interactive wrongly set
+  // ctx.tool.interactive, the decision would be "ask" instead — this locks the split.
+  const provider: IProvider = {
+    async complete() {
+      return {
+        content: "",
+        toolCalls: [
+          { id: "1", name: "run", arguments: { command: "echo hi" } },
+        ],
+      };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      interactive: true, // co-pilot present
+      policyMode: "acceptEdits",
+      report: (e) => events.push(e),
+    });
+
+    await session.send("go");
+
+    const policyForRun = events.find(
+      (e) => e.kind === "policy" && e.message.includes("run")
+    );
+
+    // Decoupled: policy still sees interactive=false → ask resolves to deny, not ask.
+    expect(policyForRun?.decision).toBe("deny");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

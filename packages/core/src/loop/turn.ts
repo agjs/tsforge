@@ -195,7 +195,7 @@ export function toolsFor(
   // ask_user (WS-C1) — the co-pilot's raise-hand. Offered only when the caller opts in
   // (an interactive co-pilot session); off for autonomous eval/CI so the model isn't
   // tempted to ask a question no one will answer. The handler ALSO guards on
-  // ctx.interactive, so a stray call in an unattended run returns "proceed" not a hang.
+  // ctx.humanPresent, so a stray call in an unattended run returns "proceed" not a hang.
   const askUser: AdvertisedTool[] = offerAskUser ? [ASK_USER_TOOL] : [];
 
   // pull_conventions — a read-only knowledge tool the model calls to fetch the
@@ -508,6 +508,34 @@ interface IIndexedCall {
   readonly index: number;
 }
 
+/** WS-C: the model raised its hand via ask_user. Record the question so the drive loop
+ *  ends this send, surface it as an `ask_user` event, and feed a CLEAN tool result back
+ *  (NEVER the raw sentinel) — the tool_call still gets its result (no dangling call →
+ *  400) and the human's next send is the answer. Always returns true (intercepted). */
+function interceptAskUser(
+  call: IToolCall,
+  index: number,
+  result: string,
+  ctx: ILoopCtx,
+  state: ILoopState
+): void {
+  const question = askUserQuestion(result);
+
+  state.pendingAskUser = question;
+  ctx.report({
+    kind: "ask_user",
+    task: ctx.task.id,
+    message: `ask_user: ${question}`,
+  });
+  ctx.messages.push({
+    role: "tool",
+    content:
+      "Your question was posed to the human; their answer arrives as the next " +
+      "message. Stop here and wait for it.",
+    toolCallId: callKey(call, index),
+  });
+}
+
 /**
  * Run ONE non-spawn tool call: execute it, apply the write-guard + mutation
  * accounting, and push its tool reply. Returns whether it touched an editable
@@ -552,29 +580,11 @@ async function runOneToolCall(
 
   const result = await executeTool(call, toolContextFor(ctx, report));
 
-  // WS-C: the model raised its hand (ask_user). Record the question so the drive loop
-  // ends this send, surface it as an `ask_user` event, and feed a CLEAN tool result
-  // back (NEVER the raw sentinel) — the tool_call still gets its tool_result (no
-  // dangling call → 400), the turn ends, and the human's next send is the answer.
-  // Gate on the CALL being ask_user (not just the result prefix): any other tool or an
-  // MCP server returning text starting with the sentinel must NOT be able to forge a
-  // pause / halt an unattended run.
+  // WS-C: the model raised its hand — record the question, surface it, feed a clean
+  // tool result, and end here (no editable file touched). Gated on the CALL being
+  // ask_user so a forged sentinel from another tool can't hijack control flow.
   if (call.name === TOOL_NAME.askUser && isAskUserResult(result)) {
-    const question = askUserQuestion(result);
-
-    state.pendingAskUser = question;
-    ctx.report({
-      kind: "ask_user",
-      task: ctx.task.id,
-      message: `ask_user: ${question}`,
-    });
-    ctx.messages.push({
-      role: "tool",
-      content:
-        "Your question was posed to the human; their answer arrives as the next " +
-        "message. Stop here and wait for it.",
-      toolCallId: callKey(call, index),
-    });
+    interceptAskUser(call, index, result, ctx, state);
 
     return false;
   }

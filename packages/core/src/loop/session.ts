@@ -177,9 +177,11 @@ export interface ISessionConfig {
    *  acceptance set can be empty ⇒ vacuous). */
   offerCheck?: boolean;
   /** A real human is present to answer (the interactive REPL sets this). Threads to
-   *  `ctx.tool.interactive` and offers the `ask_user` tool (WS-C): the model can pause
-   *  for a human decision. Absent/false ⇒ unattended (headless/eval) — ask_user isn't
-   *  offered and, if forced, returns "proceed" so a run never hangs. */
+   *  `ctx.tool.humanPresent` (NOT `ctx.tool.interactive` — that's a POLICY approval-path
+   *  signal, and co-pilot presence must not loosen policy verdicts) and offers the
+   *  `ask_user` tool (WS-C): the model can pause for a human decision. Absent/false ⇒
+   *  unattended (headless/eval) — ask_user isn't offered and, if forced, returns
+   *  "proceed" so a run never hangs. */
   interactive?: boolean;
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
