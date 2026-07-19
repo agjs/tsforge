@@ -46,4 +46,12 @@ export const flags = {
    *  explicitly ask. Real autonomous builders (the headless web builder, interactive
    *  sessions) turn it on. Without it, a stall parks with all work kept, as before. */
   expertRescue: (): boolean => isOn(ENV_FLAG.expertRescue),
+  /** WS-B near-green checkpoint/rollback: when the build reaches a near-green low (1..N
+   *  errors) snapshot the scope files, and if the next gate SPRAYS past it (curr >
+   *  checkpoint + M) revert to that best instead of letting the model build on the
+   *  regression. DEFAULT ON — it's the fix for the near-green oscillation that thrashes real
+   *  builds (Phase 0a), and it's deterministic (no network), so every build should get it
+   *  without knowing a flag exists. Kill-switch TSFORGE_NO_NEAR_GREEN_CHECKPOINT=1 disables
+   *  it (A/B control / escape hatch). Thresholds N=2, M=3 from Phase 0a. */
+  nearGreenCheckpoint: (): boolean => !isOn(ENV_FLAG.noNearGreenCheckpoint),
 };

@@ -1,4 +1,5 @@
 import { basename, join, relative, isAbsolute } from "node:path";
+import { rm } from "node:fs/promises";
 import type { ITask } from "../spec";
 import type { IChatMessage, IToolCall } from "../inference";
 import {
@@ -25,6 +26,20 @@ import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
 import { unseenGuidesForErrors } from "./conventions";
+import {
+  shouldCheckpoint,
+  shouldRollback,
+  MAX_NEAR_GREEN_ROLLBACKS,
+  type INearGreenCheckpoint,
+} from "./near-green-checkpoint";
+// The SHARED rollback substrate (aliased — turn.ts has its own polish-only `snapshotFiles`
+// returning a plain Map). `snapshotFilesForRollback` captures an IFileSnapshot and
+// `restoreFiles` rewrites edited files AND tombstones files a spray created (incl.
+// binaries/assets) — a plain content map would leave those on disk and keep the gate red.
+import {
+  snapshotFiles as snapshotFilesForRollback,
+  restoreFiles,
+} from "./file-snapshot";
 import {
   buildSteerMessage,
   essentialMessages,
@@ -401,6 +416,21 @@ export interface ILoopState {
   /** Lowest gate-error count seen this run, NEVER reset on escalation (unlike
    *  `bestErrorCount`) — the stable baseline the plateau backstop measures against. */
   plateauBest?: number;
+  /** WS-B near-green checkpoint: the on-disk scope-file snapshot captured at the last
+   *  near-green low (1..N errors). If a later gate SPRAYS past it, the loop reverts to
+   *  this state instead of letting the model build on the regression. Flag-gated. */
+  nearGreenCheckpoint?: INearGreenCheckpoint;
+  /** WS-B: TOTAL reverts this DRIVE (reset only at the drive boundary — resetDriveConvergence
+   *  / driveInner — NOT on capture). At MAX_NEAR_GREEN_ROLLBACKS, WS-B stops reverting AND
+   *  capturing and hands the stall to the escalation ladder; monotonic-per-drive so a model
+   *  that sprays → reverts → re-settles can't earn a fresh budget each re-arm and thrash. */
+  nearGreenRollbacks?: number;
+  /** WS-B: the best (lowest) error count the CURRENT checkpoint protects. WS-B's OWN
+   *  watermark — NOT checkStuck's plateauBest, which uses commonGatePhase and is unreliable
+   *  with meta errors — so the checkpoint refreshes to a better OR lateral near-green count
+   *  (e.g. 2→1, or 1→1 different error) instead of a spray reverting to a worse/older saved
+   *  state. Reset on green and at the drive boundary; lowered as the checkpoint refreshes. */
+  nearGreenBest?: number;
   /** Guard-specific identity of the current stuck block (canonical, not the raw error
    *  set). Derived from the guard that fired: samePersist → single error key,
    *  gateStuckRepeats → sorted-join of current keys, plateau → normalized count|keys
@@ -2068,6 +2098,230 @@ export async function injectFeedback(
  *  stuck-check → feedback). A thin orchestrator over the exported steps above —
  *  the signature and `IRunResult | null` contract (null ⇒ keep looping) are the
  *  same as ever, so both drivers (run.ts / session.ts) are untouched. */
+/** Out-of-scope files WS-B also snapshots/reverts: the harness lets the model mutate these
+ *  (add_dependency writes package.json + the lockfile) even though they're outside the
+ *  editable `task.files`, so a dependency-induced spray must be reverted with them too. */
+const ROLLBACK_EXTRA_FILES: readonly string[] = [
+  "package.json",
+  "bun.lock",
+  "bun.lockb",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+];
+
+/** WS-B: snapshot the scope files at a fresh near-green low so a later spray can revert to
+ *  this best state. The editable source scope goes through the SHARED IFileSnapshot substrate
+ *  (text-backed, tombstone-aware). The out-of-scope dependency files the harness lets the model
+ *  mutate (package.json + lockfiles via add_dependency) are captured SEPARATELY as raw bytes
+ *  (depFiles) — a fixed tiny set the shared substrate can't faithfully restore (binary
+ *  lockfiles), kept self-contained here so the shared substrate needs no raw-backing/memory
+ *  caps. Stores the open errors + the change-scoping set for the revert steer and realignment. */
+export async function captureNearGreenCheckpoint(
+  ctx: ILoopCtx,
+  errorCount: number,
+  gateErrors: readonly IErrorItem[]
+): Promise<INearGreenCheckpoint> {
+  const snapshot = await snapshotFilesForRollback(ctx.cwd, ctx.task.files);
+
+  // Raw-capture the out-of-scope dependency files (bounded, small set) so a dependency-induced
+  // spray can be reverted byte-for-byte — else those mutations survive and the gate stays red.
+  const depFiles = new Map<string, Uint8Array>();
+
+  for (const rel of ROLLBACK_EXTRA_FILES) {
+    const handle = Bun.file(join(ctx.cwd, rel));
+
+    if (await handle.exists()) {
+      depFiles.set(rel, new Uint8Array(await handle.arrayBuffer()));
+    }
+  }
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task.id,
+    message: `⚑ near-green checkpoint: locked the ${String(errorCount)}-error best state`,
+  });
+
+  return {
+    errorCount,
+    errors: [...gateErrors],
+    snapshot,
+    // Copy the change-scoping set so rollback restores it (see INearGreenCheckpoint.touched).
+    touched: new Set(ctx.tool.touched ?? []),
+    depFiles,
+  };
+}
+
+/** WS-B: a spray past the near-green checkpoint — restore the best on-disk state (rewriting
+ *  edited files AND tombstoning any the spray created), reset the CONVERGENCE guards so the
+ *  next cycle measures from the restored best (not the spray's inflated ages/plateau
+ *  counters, which would otherwise escalate the ladder right after a revert), and steer a
+ *  SMALL targeted fix. The caller returns WITHOUT running checkStuck, so a revert never
+ *  advances the steer ladder or resets the block fingerprint. */
+export async function rollbackNearGreen(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  sprayCount: number
+): Promise<void> {
+  const cp = state.nearGreenCheckpoint;
+
+  if (cp === undefined) {
+    return;
+  }
+
+  await restoreFiles(cp.snapshot);
+
+  // Byte-restore the out-of-scope dependency files (package.json + lockfiles) the shared
+  // text/tombstone snapshot doesn't cover, so a dependency-induced spray is fully reverted.
+  for (const [rel, bytes] of cp.depFiles) {
+    await Bun.write(join(ctx.cwd, rel), bytes);
+  }
+
+  // Tombstone dependency files the spray CREATED — add_dependency can create a lockfile where
+  // none existed at the near-green low (so it isn't in depFiles). They're out of task scope, so
+  // the shared tombstone scan can't see them; delete them here or a spray-created lockfile stays
+  // on disk and the restored gate diverges (a dependency-spray hole).
+  for (const rel of ROLLBACK_EXTRA_FILES) {
+    if (
+      !cp.depFiles.has(rel) &&
+      (await Bun.file(join(ctx.cwd, rel)).exists())
+    ) {
+      await rm(join(ctx.cwd, rel), { force: true });
+    }
+  }
+
+  // Restore the change-scoping set to the checkpoint's, so change-scoped meta-rules see the
+  // same touched files as at the checkpoint (a spray-touched file whose contents were just
+  // reverted must not stay "touched"). ctx.tool.touched is a live Set — clear + refill it.
+  if (ctx.tool.touched !== undefined) {
+    ctx.tool.touched.clear();
+
+    for (const f of cp.touched) {
+      ctx.tool.touched.add(f);
+    }
+  }
+
+  // Realign ALL convergence guards to the RESTORED near-green state: prev errors + count,
+  // and — via resetConvergenceGuards — errorAge / gateNoProgress / noNewLow / bestErrorCount
+  // (the spray's aged keys and climbed counters are stale now). redGates too, or the plateau
+  // guard would fire on the first post-revert cycle. Deliberately NOT touched: steerLevel,
+  // blockFingerprint, plateauBest (a revert is not a NEW block and not ladder progress).
+  state.prevGateErrors = [...cp.errors];
+  state.lastGateCount = cp.errorCount;
+  resetConvergenceGuards(state, cp.errorCount);
+  state.redGates = 0;
+  // settleGate counted this spray as a regression on entry; it's being reverted, so it's
+  // not a real regression of the metric — undo that increment.
+  state.regressions = Math.max(0, state.regressions - 1);
+  // Purge the stale SPRAY fingerprints so the next checkStuck can't derive a wrong block
+  // identity from spray-cycle keys. The escalation-ladder bookkeeping (steerLevel,
+  // blockFingerprint, pendingRung, pendingBlockFingerprint) is left UNTOUCHED: the rung was
+  // applied on a PRIOR cycle and legitimately advanced steerLevel; clearing pendingRung while
+  // keeping steerLevel desynced the two (rung never recorded tried, yet the ladder advanced),
+  // burning levers and exhausting the ladder early. A revert reverses files, not ladder state.
+  state.recentGateFingerprints = [];
+  state.focusError = null;
+  // A stale steer from the spray cycle would otherwise be injected on the next non-rollback
+  // cycle (injectFeedback reads pendingDiagnosisSteer ?? pendingSteer), fighting — or even
+  // re-triggering — the approach that caused the spray, against the rollback's "make a SMALL
+  // targeted fix" message. The rollback path skips injectFeedback, so clear BOTH here.
+  state.pendingDiagnosisSteer = null;
+  state.pendingSteer = undefined;
+  state.nearGreenRollbacks = (state.nearGreenRollbacks ?? 0) + 1;
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task.id,
+    message: `↩ near-green rollback ${String(state.nearGreenRollbacks)}/${String(MAX_NEAR_GREEN_ROLLBACKS)}: reverted a ${String(sprayCount)}-error spray to the ${String(cp.errorCount)}-error best; steering a targeted fix`,
+  });
+
+  const errorList = cp.errors
+    .slice(0, 20)
+    .map((e) => `  - ${e.message}`)
+    .join("\n");
+
+  ctx.messages.push({
+    role: "user",
+    content:
+      `Your last change made things WORSE — the gate went from ${String(cp.errorCount)} ` +
+      `to ${String(sprayCount)} error(s) — so I reverted those edits back to your best ` +
+      `state (${String(cp.errorCount)} error(s) left). Do NOT rewrite files or start over. ` +
+      `Make a SMALL, targeted fix for ONLY these remaining errors, one at a time:\n${errorList}`,
+  });
+}
+
+/** WS-B: the red-gate rollback step. If the current result is a count SPRAY past a near-green
+ *  checkpoint (no phase heuristic — see shouldRollback), revert to the best on-disk state.
+ *  Returns true when it rolled back (caller returns null to keep looping — a revert is not a
+ *  checkStuck attempt). Flag-gated: a no-op when the flag is off, so no path changes. */
+async function nearGreenRollbackStep(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  curr: number
+): Promise<boolean> {
+  if (!flags.nearGreenCheckpoint()) {
+    return false;
+  }
+
+  if (
+    shouldRollback(
+      state.nearGreenCheckpoint,
+      curr,
+      state.nearGreenRollbacks ?? 0
+    )
+  ) {
+    await rollbackNearGreen(ctx, state, curr);
+
+    return true;
+  }
+
+  return false;
+}
+
+/** WS-B: after end-of-cycle feedback, re-arm the near-green checkpoint. Captures a fresh
+ *  snapshot when the state is near green (1..N) AND it's worth protecting — either no checkpoint
+ *  is held (`needsReArm`: re-establishes after a resume, since the snapshot isn't serialized) OR
+ *  the count STRICTLY improves (`isBetter`) on WS-B's `nearGreenBest` watermark. A same-count
+ *  settle deliberately does NOT refresh: the checkpoint protects the best-by-count state, and a
+ *  spray then reverts to it — at worst the model redoes a small same-count delta, which is far
+ *  simpler and more robust than trying to signal "did the model do real work at the same count"
+ *  (every such signal — error keys, edit counters — misses cases like add_dependency). The
+ *  watermark is WS-B's own, NOT checkStuck's plateauBest (which uses commonGatePhase and stalls
+ *  with meta errors). Flag-gated no-op. */
+async function nearGreenCheckpointStep(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  curr: number,
+  gateErrors: readonly IErrorItem[]
+): Promise<void> {
+  if (!flags.nearGreenCheckpoint()) {
+    return;
+  }
+
+  // The revert budget is a per-DRIVE TOTAL (reset in driveInner), NOT reset on capture.
+  // Once spent, WS-B is done for this drive — stop capturing too, or it would re-arm into a
+  // fresh checkpoint and a model that sprays→reverts→re-settles could thrash to maxTurns.
+  // The escalation ladder now owns the stall.
+  if ((state.nearGreenRollbacks ?? 0) >= MAX_NEAR_GREEN_ROLLBACKS) {
+    return;
+  }
+
+  const needsReArm = state.nearGreenCheckpoint === undefined;
+  // A strictly-lower near-green count → refresh (a new best worth protecting).
+  const isBetter = curr < (state.nearGreenBest ?? Number.POSITIVE_INFINITY);
+
+  if (shouldCheckpoint(curr, needsReArm || isBetter)) {
+    state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
+      ctx,
+      curr,
+      gateErrors
+    );
+    // The new best this checkpoint protects. Deliberately do NOT reset nearGreenRollbacks —
+    // it bounds TOTAL reverts this drive.
+    state.nearGreenBest = curr;
+  }
+}
+
 export async function settleGate(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -2083,11 +2337,13 @@ export async function settleGate(
     autoFixed,
   } = await evaluateGate(ctx, turn);
 
-  if (state.lastGateCount >= 0 && gateErrors.length > state.lastGateCount) {
+  const curr = gateErrors.length;
+
+  if (state.lastGateCount >= 0 && curr > state.lastGateCount) {
     state.regressions += 1;
   }
 
-  state.lastGateCount = gateErrors.length;
+  state.lastGateCount = curr;
 
   // On red, surface the ACTUAL errors (codes + messages) into the event — so the
   // log records WHAT failed at the gate, not just a count (the analysis substrate
@@ -2117,6 +2373,10 @@ export async function settleGate(
     // Gate passed — clear block tracking
     state.blockFingerprint = "";
     state.focusError = null;
+    // WS-B: the build is green — there's no near-green state left to protect.
+    state.nearGreenCheckpoint = undefined;
+    state.nearGreenBest = undefined;
+    state.nearGreenRollbacks = 0;
 
     await polishOnGreen(ctx);
 
@@ -2133,6 +2393,12 @@ export async function settleGate(
       status: RUN_STATUS.done,
       cycles: turn,
     };
+  }
+
+  // WS-B: revert a count spray to the best on-disk near-green state (returning BEFORE
+  // checkStuck — a revert must not advance the ladder).
+  if (await nearGreenRollbackStep(ctx, state, curr)) {
+    return null;
   }
 
   const stuck = checkStuck(ctx, state, gateErrors, turn);
@@ -2152,6 +2418,8 @@ export async function settleGate(
   }
 
   await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixed);
+
+  await nearGreenCheckpointStep(ctx, state, curr, gateErrors);
 
   return null;
 }
