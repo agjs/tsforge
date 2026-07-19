@@ -203,6 +203,11 @@ export interface ISendResult {
   turns: number;
   /** When stuck with a handoff: the structured, resumable handoff details. */
   handoff?: IHandoff;
+  /** WS-C: set to the question when the send ended because the model called `ask_user`.
+   *  The REPL delivers the user's NEXT line as the answer VERBATIM — bypassing plan
+   *  approval / slash-command interception, so "go"/"approve" answers a question, not
+   *  the plan (which would wrongly unlock mutating tools). */
+  awaitingUser?: string;
 }
 
 /** Cumulative model-call metrics for a session — the basis for `/metrics`. */
@@ -1855,10 +1860,16 @@ export class Session {
     // shows it and the human's next `send` carries the answer. A `responded` result is
     // the normal "the model produced output, your turn" signal the REPL already handles.
     if (this.state.pendingAskUser !== undefined) {
+      const question = this.state.pendingAskUser;
+
       this.state.pendingAskUser = undefined;
 
       return {
-        action: { status: "responded", turns: turn },
+        action: {
+          status: "responded",
+          turns: turn,
+          awaitingUser: question,
+        },
         edited,
         editsSinceCheck,
         readonlyStreak: carry.readonlyStreak,

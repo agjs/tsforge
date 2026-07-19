@@ -39,7 +39,7 @@ import {
 } from "./expert-handoff";
 import {
   executeTool,
-  isAskUserResult,
+  shouldPauseForAskUser,
   askUserQuestion,
   type SpawnAgentFn,
   type IToolContext,
@@ -511,7 +511,7 @@ interface IIndexedCall {
 /** WS-C: the model raised its hand via ask_user. Record the question so the drive loop
  *  ends this send, surface it as an `ask_user` event, and feed a CLEAN tool result back
  *  (NEVER the raw sentinel) — the tool_call still gets its result (no dangling call →
- *  400) and the human's next send is the answer. Always returns true (intercepted). */
+ *  400) and the human's next send is the answer. */
 function interceptAskUser(
   call: IToolCall,
   index: number,
@@ -582,8 +582,9 @@ async function runOneToolCall(
 
   // WS-C: the model raised its hand — record the question, surface it, feed a clean
   // tool result, and end here (no editable file touched). Gated on the CALL being
-  // ask_user so a forged sentinel from another tool can't hijack control flow.
-  if (call.name === TOOL_NAME.askUser && isAskUserResult(result)) {
+  // ask_user (shouldPauseForAskUser) so a forged sentinel from another tool can't hijack
+  // control flow.
+  if (shouldPauseForAskUser(call.name, result)) {
     interceptAskUser(call, index, result, ctx, state);
 
     return false;

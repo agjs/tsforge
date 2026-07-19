@@ -4,6 +4,7 @@ export {
   ASK_USER_NO_HUMAN,
   isAskUserResult,
   askUserQuestion,
+  shouldPauseForAskUser,
 } from "./ask-user-tool";
 export type {
   IToolContext,

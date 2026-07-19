@@ -1,3 +1,4 @@
+import { TOOL_NAME } from "../../agent";
 import { str, type IToolContext } from "./tool-context";
 
 /** Prefix marking a tool result the LOOP must intercept rather than feed back to the
@@ -23,6 +24,17 @@ export function isAskUserResult(result: string): boolean {
 /** The question carried by an ask_user sentinel result (empty string if not one). */
 export function askUserQuestion(result: string): string {
   return isAskUserResult(result) ? result.slice(ASK_USER_SENTINEL.length) : "";
+}
+
+/** True ONLY for a genuine ask_user pause: the CALL was `ask_user` AND its result is the
+ *  sentinel. Gating on the call NAME (not just the result prefix) stops any other tool —
+ *  an MCP server, web_fetch, a bare-passthrough result — that happens to start with the
+ *  sentinel from forging a human-pause or halting an unattended run. */
+export function shouldPauseForAskUser(
+  callName: string,
+  result: string
+): boolean {
+  return callName === TOOL_NAME.askUser && isAskUserResult(result);
 }
 
 /**
@@ -52,11 +64,8 @@ export function doAskUser(
     return ASK_USER_NO_HUMAN;
   }
 
-  ctx.report({
-    kind: "tool",
-    task: ctx.task,
-    message: `ask_user: ${question}`,
-  });
-
+  // NOTE: the loop (interceptAskUser) emits the human-facing `ask_user` event when it
+  // intercepts this sentinel — do NOT also report a `tool` event here, or the question
+  // prints twice.
   return `${ASK_USER_SENTINEL}${question}`;
 }

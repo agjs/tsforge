@@ -504,6 +504,10 @@ export async function repl(args: ICliArgs): Promise<number> {
   // True once a plan-mode exchange has happened, so a stray "approve" before any
   // discussion is just a message, not an approval.
   let planDiscussed = false;
+  // WS-C: set to the model's question when the last send paused on `ask_user`. The NEXT
+  // user line is the ANSWER — delivered verbatim, bypassing plan-approval/slash routing
+  // so "go"/"approve" answers the question, not the plan (which would unlock mutations).
+  let awaitingUserAnswer = false;
   // The current interactive mode (Shift+Tab cycles it; /plan toggles it). Kept in
   // sync with `planMode`; shown as a chip in the status bar.
   let currentModeId = planMode ? "plan" : "normal";
@@ -677,6 +681,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     run: (opts: { signal: AbortSignal; steer: () => string[] }) => Promise<{
       status: string;
       turns: number;
+      awaitingUser?: string;
     }>
   ): Promise<void> => {
     active = new AbortController();
@@ -699,6 +704,8 @@ export async function repl(args: ICliArgs): Promise<number> {
 
       lastElapsedMs = performance.now() - started;
       lastStatus = result.status;
+      // WS-C: the send paused on ask_user → the NEXT user line is the answer.
+      awaitingUserAnswer = result.awaitingUser !== undefined;
     } finally {
       spinner.stop();
       active = null;
@@ -755,6 +762,16 @@ export async function repl(args: ICliArgs): Promise<number> {
     });
 
   const dispatch = async (line: string): Promise<void> => {
+    // WS-C: the previous send paused on `ask_user`. This line is the ANSWER — deliver it
+    // verbatim, BEFORE any plan-approval/mode routing, so answering "go"/"approve" replies
+    // to the model's question instead of approving a plan (which would unlock mutations).
+    if (awaitingUserAnswer) {
+      awaitingUserAnswer = false;
+      await runSend(line);
+
+      return;
+    }
+
     // GENERAL plan mode, approval: unlock the tools and implement the plan that
     // is already the latest assistant message. Only an explicit approval word
     // counts ("yes" may be answering one of the model's clarifying questions).

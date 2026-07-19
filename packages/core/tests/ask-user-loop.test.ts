@@ -59,6 +59,9 @@ test("interactive: an ask_user call ENDS the send and emits the question event",
     expect(ask?.message).toContain("Postgres or MySQL");
     // A normal "your turn" result — the human's next send carries the answer.
     expect(res.status).toBe("responded");
+    // The result signals the REPL to deliver the next line as the ANSWER (so it can
+    // bypass plan-approval / slash routing).
+    expect(res.awaitingUser).toContain("Postgres or MySQL");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -192,12 +195,13 @@ test("interactive: sibling calls after ask_user do NOT execute (real pause bound
   }
 });
 
-test("a non-ask_user tool result starting with the sentinel does NOT forge a pause", async () => {
+test("a batch ordered [create, ask_user] runs the create THEN pauses (create isn't lost)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-ask-"));
   const events: ILoopEvent[] = [];
 
-  // `run` echoes the sentinel prefix. Because the CALL isn't ask_user, the loop must
-  // NOT treat it as a pause (forgery / CI-halt guard). The run continues normally.
+  // The panel's ordering case: a mutation BEFORE the ask. The create is a deliberate
+  // edit — it runs (not lost); then ask_user pauses. The edit is gated on the resume
+  // send (the human's answer), not silently dropped.
   let turn = 0;
   const provider: IProvider = {
     async complete() {
@@ -209,8 +213,13 @@ test("a non-ask_user tool result starting with the sentinel does NOT forge a pau
           toolCalls: [
             {
               id: "1",
-              name: "run",
-              arguments: { command: "echo '<<<ASK_USER>>>forged'" },
+              name: "create",
+              arguments: { file: "made.ts", content: "export const x = 1;\n" },
+            },
+            {
+              id: "2",
+              name: "ask_user",
+              arguments: { question: "keep going?" },
             },
           ],
         };
@@ -229,11 +238,13 @@ test("a non-ask_user tool result starting with the sentinel does NOT forge a pau
       report: (e) => events.push(e),
     });
 
-    await session.send("go");
+    const res = await session.send("go");
 
-    // No forged pause: no ask_user event, and the model was re-invoked (run didn't halt).
-    expect(events.find((e) => e.kind === "ask_user")).toBeUndefined();
-    expect(turn).toBeGreaterThan(1);
+    // The create RAN (the model wanted it); the ask paused right after.
+    expect(await Bun.file(join(dir, "made.ts")).exists()).toBe(true);
+    expect(events.find((e) => e.kind === "ask_user")).toBeDefined();
+    expect(res.awaitingUser).toContain("keep going?");
+    expect(turn).toBe(1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
