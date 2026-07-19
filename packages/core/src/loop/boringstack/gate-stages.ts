@@ -106,13 +106,35 @@ export function signatureToError(sig: string): IErrorItem {
     const message = decodeURIComponent(structured[4] ?? "");
     const phase = phaseForFile(file);
 
+    // A syntax/parse error (`'>' expected`, `Parsing error`, `Unexpected token`) is the one
+    // class the model can't fix by surgical patch — a patch on an already-broken file usually
+    // re-breaks its braces/generics/JSX, so it grinds at the SAME error for turns (observed
+    // live: stuck at 2 `'>' expected` for 40min). Steer it to REWRITE THE WHOLE FILE, and flag
+    // the JSX-in-`.ts` case (a `.ts` can't hold JSX → `<X>` reads as a generic wanting `>`).
+    // Match the whole tsc/eslint syntax-error family: `Parsing error`, `Unexpected token`, and
+    // any `… expected.` (quoted `';' expected` OR bare `Expression/Declaration/Identifier/Type
+    // expected`). The trailing-`expected` form is anchored so it doesn't catch type errors that
+    // merely contain the word mid-sentence.
+    const isParse = /parsing error|unexpected token|expected\.?\s*$/iu.test(
+      message
+    );
+    // The `.tsx` root-cause tip is ONLY valid for the JSX/generic `'>' expected` class — appended
+    // elsewhere it invents a wrong cause and can push a rename detour for a plain `';' expected`.
+    const isJsxGenericParse = /['`]>['`]\s+expected/iu.test(message);
+    const parseSteer =
+      isJsxGenericParse && file.endsWith(".ts") && !file.endsWith(".d.ts")
+        ? " This `'>' expected` in a `.ts` is usually JSX in a non-JSX file — if it contains JSX, it must be a `.tsx` (a `.ts` parses `<X>` as a generic and demands `>`)."
+        : "";
+
     return {
       key: sig,
       file,
       ...(lineText === "" ? {} : { line: Number(lineText) }),
       rule,
       ...(phase === undefined ? {} : { phase }),
-      message,
+      message: isParse
+        ? `${message}\n↳ SYNTAX/PARSE error — do NOT surgically patch it (a patch on a broken-parse file re-breaks its braces/generics/JSX). REWRITE THE WHOLE FILE \`${file}\` cleanly in one pass; once it parses, downstream errors clear.${parseSteer}`
+        : message,
     };
   }
 
