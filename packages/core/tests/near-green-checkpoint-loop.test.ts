@@ -10,36 +10,36 @@ import type { ILoopCtx, ILoopState } from "../src/loop/turn";
 import {
   captureNearGreenCheckpoint,
   rollbackNearGreen,
-  maxGatePhase,
+  phasedCommonPhase,
 } from "../src/loop/turn";
 import type { IValidateResult } from "../src/validate";
 import { MAX_NEAR_GREEN_ROLLBACKS } from "../src/loop/near-green-checkpoint";
 
-// WS-B phase robustness (panel critical): the frontier signal must survive the meta errors
-// evaluateGate ALWAYS appends. commonGatePhase() collapses to undefined the moment any
-// error is unphased; maxGatePhase() takes the furthest PHASED error, ignoring meta — so a
-// genuine phase advance (a later-phase error present alongside meta noise) is still seen and
-// NOT mistaken for a spray.
-test("maxGatePhase: furthest phased error, ignoring unphased meta errors", () => {
-  expect(maxGatePhase([{ key: "a", message: "m", phase: 1 }])).toBe(1);
-  // Mixed phases → the max.
+// WS-B phase signal: the COMMON phase over the PHASED errors, ignoring the unphased meta
+// evaluateGate appends. Survives meta (unlike commonGatePhase, which collapses to undefined
+// next to any unphased error) AND does not misread a MIXED-phase result (BoringStack tags
+// phase by file path — api=1, ui=2 — in one result) as its highest phase (which a max-over-
+// phases would, wrongly wiping a near-green api checkpoint when a ui error appears).
+test("phasedCommonPhase: common phase of phased errors; meta ignored; mixed → undefined", () => {
+  expect(phasedCommonPhase([{ key: "a", message: "m", phase: 1 }])).toBe(1);
+  // A single phase alongside unphased meta → that phase (meta ignored).
   expect(
-    maxGatePhase([
-      { key: "a", message: "m", phase: 1 },
-      { key: "b", message: "m", phase: 2 },
-    ])
-  ).toBe(2);
-  // THE FIX: a later-phase error alongside an unphased meta error → still phase 2 (not
-  // undefined, as commonGatePhase would give — which made a real advance look like a spray).
-  expect(
-    maxGatePhase([
+    phasedCommonPhase([
       { key: "meta", message: "test-sibling-required" }, // no phase
       { key: "b", message: "m", phase: 2 },
     ])
   ).toBe(2);
+  // MIXED phased errors (api=1 + ui=2 in one result) → undefined → conservative count-based,
+  // NOT a wrongful "advanced to phase 2" that would wipe a phase-1 checkpoint.
+  expect(
+    phasedCommonPhase([
+      { key: "a", message: "m", phase: 1 },
+      { key: "b", message: "m", phase: 2 },
+    ])
+  ).toBeUndefined();
   // No phased error at all → undefined (fall back to count-based).
-  expect(maxGatePhase([{ key: "meta", message: "m" }])).toBeUndefined();
-  expect(maxGatePhase([])).toBeUndefined();
+  expect(phasedCommonPhase([{ key: "meta", message: "m" }])).toBeUndefined();
+  expect(phasedCommonPhase([])).toBeUndefined();
 });
 
 // WS-B end-to-end: with the flag ON, a build that reaches near-green (1 error) then SPRAYS
@@ -184,7 +184,7 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
       tsService: null,
       report: () => undefined,
       messages: [],
-      tool: {},
+      tool: { touched: new Set(["a.ts"]) },
       gate: {
         parse: undefined,
         runner: {
@@ -197,13 +197,14 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
       },
     };
 
-    // Checkpoint the near-green state (feature.ts = GOOD, 1 error).
+    // Checkpoint the near-green state (feature.ts = GOOD, 1 error, touched = {a.ts}).
     const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
       { key: "e0", message: "the one remaining error" },
     ]);
 
-    // A spray then CREATED extra.ts and inflated every convergence guard.
+    // A spray then CREATED extra.ts, touched a NEW file (b.ts), and inflated every guard.
     await Bun.write(join(dir, "extra.ts"), "export const BAD = 1;\n");
+    ctx.tool.touched?.add("b.ts");
     const state: ILoopState = {
       prevGateErrors: [{ key: "spray", message: "spray error" }],
       gateNoProgress: 5,
@@ -220,6 +221,7 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
       blockFingerprint: "block-x",
       plateauBest: 1,
       pendingDiagnosisSteer: "stale R1 diagnosis from the spray cycle",
+      pendingSteer: "stale R2/R3 steer from the spray cycle",
       nearGreenCheckpoint: checkpoint,
       nearGreenRollbacks: 0,
     };
@@ -242,8 +244,12 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
     expect(state.plateauBest).toBe(1);
     // The spray was reverted, so it's not a real regression of the metric — undone.
     expect(state.regressions).toBe(2);
-    // A stale R1 diagnosis steer from the spray cycle is cleared (not re-injected next turn).
+    // BOTH stale steers from the spray cycle are cleared (injectFeedback reads
+    // pendingDiagnosisSteer ?? pendingSteer, and the rollback path skips injectFeedback).
     expect(state.pendingDiagnosisSteer).toBeNull();
+    expect(state.pendingSteer).toBeUndefined();
+    // The change-scoping set is restored to the checkpoint's — the spray-touched b.ts is gone.
+    expect([...(ctx.tool.touched ?? [])].sort()).toEqual(["a.ts"]);
     // The spray-created file is tombstoned; the near-green file restored.
     expect(await Bun.file(join(dir, "extra.ts")).exists()).toBe(false);
     expect(await Bun.file(join(dir, "feature.ts")).exists()).toBe(true);
@@ -386,9 +392,9 @@ test("flag ON: a genuine FRONTIER ADVANCE (later phase + meta) is NOT rolled bac
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
-  // Checkpoint at phase 1 (1 error), then the model advances the frontier — a phase-2 error
-  // appears ALONGSIDE an unphased meta error and the count grows to 8. commonGatePhase would
-  // read undefined here and revert real progress; maxGatePhase sees phase 2 > 1 → no revert.
+  // Checkpoint at phase 1 (1 error), then the model advances the frontier — phase-2 errors
+  // appear ALONGSIDE an unphased meta error and the count grows to 8. commonGatePhase would
+  // read undefined here and revert real progress; phasedCommonPhase sees phase 2 > 1 → no revert.
   let n = 0;
   const provider: IProvider = {
     async complete() {

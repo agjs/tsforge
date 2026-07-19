@@ -53,6 +53,9 @@ test("resetDriveConvergence gives a revisit a fresh ladder while preserving cumu
     pendingRung: "R3",
     pendingBlockFingerprint: "api",
     triedLeversByBlock: new Map([["api", new Set(["R1", "R2", "R3"])]]),
+    // WS-B is per-drive — the send-boundary reset must clear its watermark + budget too.
+    nearGreenBest: 1,
+    nearGreenRollbacks: 3,
   });
 
   resetDriveConvergence(state);
@@ -64,6 +67,10 @@ test("resetDriveConvergence gives a revisit a fresh ladder while preserving cumu
   expect(state.plateauBest).toBeUndefined();
   expect(state.edits).toBe(17);
   expect(state.regressions).toBe(3);
+  // WS-B per-drive state is cleared at the send boundary (not just in driveInner).
+  expect(state.nearGreenBest).toBeUndefined();
+  expect(state.nearGreenRollbacks).toBeUndefined();
+  expect(state.nearGreenCheckpoint).toBeUndefined();
 });
 
 test("Session.setGate flips hasGate on and routes the gate through the loop", async () => {

@@ -21,7 +21,13 @@ const emptySnapshot: IFileSnapshot = {
 
 /** A checkpoint at `errorCount`, optionally at a specific gate `phase`. */
 function cp(errorCount: number, phase?: number): INearGreenCheckpoint {
-  return { errorCount, errors: [], phase, snapshot: emptySnapshot };
+  return {
+    errorCount,
+    errors: [],
+    phase,
+    snapshot: emptySnapshot,
+    touched: new Set(),
+  };
 }
 
 test("defaults match Phase 0a (N=2, M=3) + a bounded revert budget", () => {

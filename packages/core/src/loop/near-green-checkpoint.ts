@@ -37,12 +37,16 @@ export const MAX_NEAR_GREEN_ROLLBACKS = 3;
 export interface INearGreenCheckpoint {
   readonly errorCount: number;
   readonly errors: readonly IErrorItem[];
-  /** The FURTHEST gate phase reached at checkpoint time (maxGatePhase — the max over phased
-   *  errors, ignoring unphased meta; undefined only when no error carried a phase) — so a
-   *  later-phase gate result (genuine frontier progress) isn't mistaken for a spray, even
-   *  when meta errors are mixed in. */
+  /** The COMMON phase of the checkpoint's phased errors (phasedCommonPhase — ignores meta,
+   *  undefined if the phased errors span >1 phase) — so a genuine later-phase frontier isn't
+   *  mistaken for a spray, without a mixed-phase result wrongly wiping the checkpoint. */
   readonly phase: number | undefined;
   readonly snapshot: IFileSnapshot;
+  /** The change-scoping `ctx.tool.touched` set at checkpoint time. Restored on rollback so
+   *  change-scoped meta-rules (e.g. test-sibling-required) see the SAME touched files as at
+   *  the checkpoint — else a file first edited during the spray stays "touched" after its
+   *  contents revert, and the restored gate diverges from the checkpoint's errors. */
+  readonly touched: ReadonlySet<string>;
 }
 
 /** Whether a fresh gate result should be CHECKPOINTED: it's a new all-time low, it's near
