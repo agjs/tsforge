@@ -103,3 +103,41 @@ test("a literal scope still snapshots exactly those files", async () => {
 
   expect([...snap.contents.keys()]).toEqual(["src/a.ts"]);
 });
+
+// Regression (panel): a dependency spray rewrites bun.lockb — a BINARY. A string content map
+// can't hold it (the size/binary skip left it in `existed` only), so restore left the sprayed
+// lockfile on disk while reporting "reverted". It must be backed by RAW BYTES and restored.
+test("restoreFiles faithfully restores a mutated BINARY lockfile (raw bytes)", async () => {
+  const orig = new Uint8Array([0, 1, 2, 255, 254, 0, 42]);
+
+  writeFileSync(join(dir, "bun.lockb"), orig);
+
+  const snap = await snapshotFiles(dir, ["**/*"]);
+
+  // Binary → backed by raw bytes, NOT the text content map.
+  expect(snap.raw.has("bun.lockb")).toBe(true);
+  expect(snap.contents.has("bun.lockb")).toBe(false);
+
+  writeFileSync(join(dir, "bun.lockb"), new Uint8Array([9, 9, 9])); // the spray
+  await restoreFiles(snap);
+
+  expect(new Uint8Array(readFileSync(join(dir, "bun.lockb")))).toEqual(orig);
+});
+
+// Regression (panel): a large package-lock.json exceeds MAX_SNAPSHOT_BYTES (128KB), so the
+// content map silently dropped it and restore was a no-op. Oversize text is now raw-backed too.
+test("restoreFiles faithfully restores a mutated OVERSIZE text file (raw bytes)", async () => {
+  const big = "x".repeat(131_073); // just over MAX_SNAPSHOT_BYTES
+
+  writeFileSync(join(dir, "package-lock.json"), big);
+
+  const snap = await snapshotFiles(dir, ["**/*"]);
+
+  expect(snap.raw.has("package-lock.json")).toBe(true);
+  expect(snap.contents.has("package-lock.json")).toBe(false);
+
+  writeFileSync(join(dir, "package-lock.json"), "SPRAYED");
+  await restoreFiles(snap);
+
+  expect(readFileSync(join(dir, "package-lock.json"), "utf8")).toBe(big);
+});

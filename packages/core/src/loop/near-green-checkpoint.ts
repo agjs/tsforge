@@ -37,10 +37,6 @@ export const MAX_NEAR_GREEN_ROLLBACKS = 3;
 export interface INearGreenCheckpoint {
   readonly errorCount: number;
   readonly errors: readonly IErrorItem[];
-  /** The COMMON phase of the checkpoint's phased errors (phasedCommonPhase — ignores meta,
-   *  undefined if the phased errors span >1 phase) — so a genuine later-phase frontier isn't
-   *  mistaken for a spray, without a mixed-phase result wrongly wiping the checkpoint. */
-  readonly phase: number | undefined;
   readonly snapshot: IFileSnapshot;
   /** The change-scoping `ctx.tool.touched` set at checkpoint time. Restored on rollback so
    *  change-scoped meta-rules (e.g. test-sibling-required) see the SAME touched files as at
@@ -60,15 +56,18 @@ export function shouldCheckpoint(
   return isNewLow && curr >= 1 && curr <= n;
 }
 
-/** Whether the current gate result is a SPRAY that should roll back to `checkpoint`. A
- *  spray is a count jump of MORE than M beyond a near-green checkpoint — but NOT when:
- *   - `rollbacks` has hit the cap (give up; let the ladder park the staller), or
- *   - the gate advanced to a LATER phase than the checkpoint (frontier progress: a composed
- *     gate legitimately reveals more errors past a phase boundary — never revert that). */
+/** Whether the current gate result is a SPRAY that should roll back to `checkpoint`. A spray
+ *  is purely a COUNT jump of MORE than M beyond a near-green checkpoint — no phase heuristic
+ *  (builder-model verdict + panel: phase-tagging conflated origin with regression and let a
+ *  mostly-unphased spray masquerade as "frontier progress" and survive; count is monotonic
+ *  under regression, so it catches every spray). It does NOT roll back when `rollbacks` has
+ *  hit the cap (give up; let the ladder park the staller). The one accepted trade: if the
+ *  model legitimately opens new work right at near-green, its first cycle can be reverted —
+ *  bounded by the revert budget, and re-established on the next low. Never MISSING a spray is
+ *  the correct bias for a near-green safety net. */
 export function shouldRollback(
   checkpoint: INearGreenCheckpoint | undefined,
   curr: number,
-  currPhase: number | undefined,
   rollbacks: number,
   n: number = NEAR_GREEN_N,
   m: number = NEAR_GREEN_M
@@ -78,14 +77,6 @@ export function shouldRollback(
   }
 
   if (rollbacks >= MAX_NEAR_GREEN_ROLLBACKS) {
-    return false;
-  }
-
-  if (
-    checkpoint.phase !== undefined &&
-    currPhase !== undefined &&
-    currPhase > checkpoint.phase
-  ) {
     return false;
   }
 

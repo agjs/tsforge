@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IProvider } from "../src/inference";
@@ -10,37 +10,9 @@ import type { ILoopCtx, ILoopState } from "../src/loop/turn";
 import {
   captureNearGreenCheckpoint,
   rollbackNearGreen,
-  phasedCommonPhase,
 } from "../src/loop/turn";
 import type { IValidateResult } from "../src/validate";
 import { MAX_NEAR_GREEN_ROLLBACKS } from "../src/loop/near-green-checkpoint";
-
-// WS-B phase signal: the COMMON phase over the PHASED errors, ignoring the unphased meta
-// evaluateGate appends. Survives meta (unlike commonGatePhase, which collapses to undefined
-// next to any unphased error) AND does not misread a MIXED-phase result (BoringStack tags
-// phase by file path — api=1, ui=2 — in one result) as its highest phase (which a max-over-
-// phases would, wrongly wiping a near-green api checkpoint when a ui error appears).
-test("phasedCommonPhase: common phase of phased errors; meta ignored; mixed → undefined", () => {
-  expect(phasedCommonPhase([{ key: "a", message: "m", phase: 1 }])).toBe(1);
-  // A single phase alongside unphased meta → that phase (meta ignored).
-  expect(
-    phasedCommonPhase([
-      { key: "meta", message: "test-sibling-required" }, // no phase
-      { key: "b", message: "m", phase: 2 },
-    ])
-  ).toBe(2);
-  // MIXED phased errors (api=1 + ui=2 in one result) → undefined → conservative count-based,
-  // NOT a wrongful "advanced to phase 2" that would wipe a phase-1 checkpoint.
-  expect(
-    phasedCommonPhase([
-      { key: "a", message: "m", phase: 1 },
-      { key: "b", message: "m", phase: 2 },
-    ])
-  ).toBeUndefined();
-  // No phased error at all → undefined (fall back to count-based).
-  expect(phasedCommonPhase([{ key: "meta", message: "m" }])).toBeUndefined();
-  expect(phasedCommonPhase([])).toBeUndefined();
-});
 
 // WS-B end-to-end: with the flag ON, a build that reaches near-green (1 error) then SPRAYS
 // (8 errors) must REVERT the scope files to the near-green best; with the flag OFF the path
@@ -220,6 +192,8 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
       conventionsEnabled: false,
       blockFingerprint: "block-x",
       plateauBest: 1,
+      pendingRung: "R2",
+      pendingBlockFingerprint: "block-x",
       pendingDiagnosisSteer: "stale R1 diagnosis from the spray cycle",
       pendingSteer: "stale R2/R3 steer from the spray cycle",
       nearGreenCheckpoint: checkpoint,
@@ -242,6 +216,11 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
     expect(state.steerLevel).toBe(2);
     expect(state.blockFingerprint).toBe("block-x");
     expect(state.plateauBest).toBe(1);
+    // The ladder RECORDING state is preserved too: the rung was applied on a prior cycle and
+    // legitimately advanced steerLevel, so clearing pendingRung while keeping steerLevel would
+    // desync them (rung never recorded tried, yet the ladder advanced → burned lever).
+    expect(state.pendingRung).toBe("R2");
+    expect(state.pendingBlockFingerprint).toBe("block-x");
     // The spray was reverted, so it's not a real regression of the metric — undone.
     expect(state.regressions).toBe(2);
     // BOTH stale steers from the spray cycle are cleared (injectFeedback reads
@@ -253,6 +232,85 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
     // The spray-created file is tombstoned; the near-green file restored.
     expect(await Bun.file(join(dir, "extra.ts")).exists()).toBe(false);
     expect(await Bun.file(join(dir, "feature.ts")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("rollbackNearGreen reverts OUT-OF-SCOPE package.json + binary lockfile (ROLLBACK_EXTRA_FILES)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await Bun.write(join(dir, "src", "feature.ts"), "export const GOOD = 1;\n");
+    // Out-of-scope dependency files at their near-green (checkpoint) state.
+    const pkgOrig = '{"name":"app","dependencies":{}}\n';
+    const lockOrig = new Uint8Array([1, 2, 3, 250, 0, 7]); // binary bun.lockb
+
+    await Bun.write(join(dir, "package.json"), pkgOrig);
+    await Bun.write(join(dir, "bun.lockb"), lockOrig);
+
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        // NARROW scope — deliberately EXCLUDES package.json / lockfiles. They are captured only
+        // via ROLLBACK_EXTRA_FILES, so this proves the out-of-scope revert path.
+        files: ["src/**"],
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set() },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            errors: [],
+            output: "",
+          }),
+        },
+      },
+    };
+
+    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "e0", message: "one error" },
+    ]);
+
+    // A dependency spray rewrites the out-of-scope files (as add_dependency would).
+    await Bun.write(
+      join(dir, "package.json"),
+      '{"name":"app","dependencies":{"left-pad":"1.0.0"}}\n'
+    );
+    await Bun.write(join(dir, "bun.lockb"), new Uint8Array([9, 9, 9]));
+
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 8,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: 8,
+      edits: 0,
+      regressions: 1,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      nearGreenCheckpoint: checkpoint,
+      nearGreenRollbacks: 0,
+    };
+
+    await rollbackNearGreen(ctx, state, 8);
+
+    // Both out-of-scope files reverted to the checkpoint bytes — NOT left sprayed. The binary
+    // lockfile is restored faithfully (raw bytes), the text manifest verbatim.
+    expect(await Bun.file(join(dir, "package.json")).text()).toBe(pkgOrig);
+    expect(
+      new Uint8Array(await Bun.file(join(dir, "bun.lockb")).arrayBuffer())
+    ).toEqual(lockOrig);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -355,9 +413,10 @@ test("flag ON: a spray that CREATES a new file is reverted — the file is tombs
   }
 }, 30_000);
 
-/** A phase-aware gate: once the advance marker (extra.ts) exists it returns a LATER-phase
- *  error alongside an UNPHASED meta error (the shape evaluateGate produces); before that,
- *  a single phase-1 error. Proves a genuine frontier advance isn't mistaken for a spray. */
+/** A gate that, once the marker (extra.ts) exists, jumps from 1 error to 8 (a later-phase
+ *  error + unphased meta + 6 more — the shape evaluateGate produces); before that, a single
+ *  error. Under COUNT-ONLY spray detection this +7 jump at near-green IS a spray and reverts,
+ *  regardless of any error's phase — no phase exemption. */
 function phaseAdvanceGate(dir: string): IGate {
   return {
     run: async (): Promise<IValidateResult> => {
@@ -388,13 +447,14 @@ function phaseAdvanceGate(dir: string): IGate {
   };
 }
 
-test("flag ON: a genuine FRONTIER ADVANCE (later phase + meta) is NOT rolled back", async () => {
+test("flag ON: a big count jump at near-green IS reverted — no phase exemption", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
-  // Checkpoint at phase 1 (1 error), then the model advances the frontier — phase-2 errors
-  // appear ALONGSIDE an unphased meta error and the count grows to 8. commonGatePhase would
-  // read undefined here and revert real progress; phasedCommonPhase sees phase 2 > 1 → no revert.
+  // Checkpoint at 1 error, then the count jumps to 8 with later-phase + meta errors. The old
+  // phase heuristic exempted this as a "frontier advance" and let the regression survive; the
+  // builder-model + panel verdict is that this masked real sprays. Count-only reverts it — the
+  // accepted trade is that legitimately opening new work at near-green may be reverted once.
   let n = 0;
   const provider: IProvider = {
     async complete() {
@@ -448,7 +508,7 @@ test("flag ON: a genuine FRONTIER ADVANCE (later phase + meta) is NOT rolled bac
 
     await session.send("build it");
 
-    // No rollback — the frontier advance is progress, not a spray.
+    // Count-only: the +7 jump is a spray and reverts.
     const rolledBack = events.some(
       (e) =>
         e.kind === "tool" &&
@@ -456,125 +516,10 @@ test("flag ON: a genuine FRONTIER ADVANCE (later phase + meta) is NOT rolled bac
         e.message.includes("near-green rollback")
     );
 
-    expect(rolledBack).toBe(false);
-    // The phase-2 work survives on disk (not reverted to the phase-1 snapshot).
-    expect(await Bun.file(join(dir, "extra.ts")).exists()).toBe(true);
+    expect(rolledBack).toBe(true);
+    // The spray file was tombstoned; the near-green file survives.
+    expect(await Bun.file(join(dir, "extra.ts")).exists()).toBe(false);
     expect(await Bun.file(join(dir, "feature.ts")).exists()).toBe(true);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}, 30_000);
-
-/** A 3-state phase-2 gate keyed by marker files: before `advanced.ts` → phase-1 near-green
- *  (1); with `advanced.ts` but not `fixed.ts` → phase-2 landing ABOVE near-green (8); with
- *  `fixed.ts` → phase-2 near-green (1); with `sprayed.ts` → phase-2 spray (8). All phase-2
- *  states carry an unphased meta error (the evaluateGate shape). */
-function multiPhaseGate(dir: string): IGate {
-  const exists = (f: string): Promise<boolean> =>
-    Bun.file(join(dir, f)).exists();
-  const phase2 = (count: number): IValidateResult => ({
-    passed: false,
-    errors: [
-      { key: "meta", message: "test-sibling-required" }, // unphased meta
-      ...Array.from({ length: count }, (_, i) => ({
-        key: `p2_${String(i)}`,
-        message: `phase 2 error ${String(i)}`,
-        phase: 2,
-      })),
-    ],
-    output: `${String(count)} error(s)`,
-  });
-
-  return {
-    run: async (): Promise<IValidateResult> => {
-      if (!(await exists("advanced.ts"))) {
-        return {
-          passed: false,
-          errors: [{ key: "p1", message: "phase 1 error", phase: 1 }],
-          output: "1 error",
-        };
-      }
-
-      if (await exists("sprayed.ts")) {
-        return phase2(8);
-      }
-
-      if (await exists("fixed.ts")) {
-        return phase2(1);
-      }
-
-      return phase2(8); // the advance itself lands above near-green
-    },
-  };
-}
-
-test("flag ON: WS-B stays armed across a MULTI-PHASE run — a phase-2 spray is reverted", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
-  const events: ILoopEvent[] = [];
-
-  // phase-1 near-green (checkpoint) → advance to phase-2 above near-green (stale checkpoint
-  // invalidated, no revert) → phase-2 near-green (RE-checkpoint via needsReArm) → phase-2
-  // spray (must revert to the phase-2 checkpoint). This is the inert-after-advance case.
-  const create = (id: string, file: string) => ({
-    content: "",
-    toolCalls: [
-      {
-        id,
-        name: "create",
-        arguments: { file, content: `export const X = 1;\n` },
-      },
-    ],
-  });
-  let n = 0;
-  const provider: IProvider = {
-    async complete() {
-      n += 1;
-
-      if (n === 1) {
-        return create("a", "feature.ts");
-      } // phase-1 near-green
-
-      if (n === 3) {
-        return create("b", "advanced.ts");
-      } // advance to phase 2 (count 8)
-
-      if (n === 5) {
-        return create("c", "fixed.ts");
-      } // phase-2 near-green
-
-      if (n === 7) {
-        return create("d", "sprayed.ts");
-      } // phase-2 spray
-
-      return { content: "working", toolCalls: [] };
-    },
-  };
-
-  try {
-    const session = await Session.create({
-      provider,
-      cwd: dir,
-      files: ["**/*"],
-      gate: multiPhaseGate(dir),
-      maxTurns: 16,
-      report: (e) => events.push(e),
-    });
-
-    await session.send("build it");
-
-    // WS-B re-armed at phase 2 and reverted the phase-2 spray — NOT inert after the advance.
-    const rollbacks = events.filter(
-      (e) =>
-        e.kind === "tool" &&
-        typeof e.message === "string" &&
-        e.message.includes("near-green rollback")
-    ).length;
-
-    expect(rollbacks).toBeGreaterThanOrEqual(1);
-    // The phase-2 spray file was tombstoned; the phase-2 near-green files survive.
-    expect(await Bun.file(join(dir, "sprayed.ts")).exists()).toBe(false);
-    expect(await Bun.file(join(dir, "fixed.ts")).exists()).toBe(true);
-    expect(await Bun.file(join(dir, "advanced.ts")).exists()).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -584,45 +529,30 @@ test("flag ON: the checkpoint REFRESHES to a strictly better near-green count", 
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];
 
-  // The independence-from-plateauBest path: phase-1 near-green (plateauBest=1) → META-bearing
-  // advance to PHASE 2 count 2 (commonGatePhase=undefined, so checkStuck NEVER rebases
-  // plateauBest — it stays 1) → phase-2 improves to count 1. Under the old `curr < plateauBest`
-  // rule that's `1 < 1` = false → NO refresh, and a spray would revert to the WORSE count-2
-  // snapshot. nearGreenBest (=2) sees `1 < 2` → refresh@1, so the spray reverts to count 1 and
-  // improved.ts survives. This ONLY passes with the nearGreenBest watermark.
-  const p1 = (): IValidateResult => ({
+  // The nearGreenBest-watermark path (count-only, phase-free): near-green at 2 (checkpoint@2,
+  // nearGreenBest=2) → improves to 1 (isBetter 1<2 → REFRESH@1, snapshot now includes
+  // improved.ts) → sprays to 8 (revert to the count-1 checkpoint). If WS-B failed to refresh,
+  // the spray would revert to the WORSE count-2 snapshot and improved.ts would be tombstoned.
+  const err = (count: number): IValidateResult => ({
     passed: false,
-    errors: [{ key: "p1", message: "phase 1 error", phase: 1 }],
-    output: "1 error",
-  });
-  const p2 = (count: number, meta: boolean): IValidateResult => ({
-    passed: false,
-    errors: [
-      ...(meta ? [{ key: "meta", message: "test-sibling-required" }] : []),
-      ...Array.from({ length: count - (meta ? 1 : 0) }, (_, i) => ({
-        key: `p2_${String(i)}`,
-        message: `phase 2 error ${String(i)}`,
-        phase: 2,
-      })),
-    ],
+    errors: Array.from({ length: count }, (_, i) => ({
+      key: `e${String(i)}`,
+      message: `error ${String(i)}`,
+    })),
     output: `${String(count)} error(s)`,
   });
   const has = (f: string): Promise<boolean> => Bun.file(join(dir, f)).exists();
   const gate: IGate = {
     run: async (): Promise<IValidateResult> => {
-      if (!(await has("advanced.ts"))) {
-        return p1();
-      }
-
       if (await has("sprayed.ts")) {
-        return p2(8, true);
+        return err(8);
       }
 
       if (await has("improved.ts")) {
-        return p2(1, false);
-      } // pure phase-2, count 1
+        return err(1);
+      } // strictly better near-green
 
-      return p2(2, true); // META-bearing advance, count 2 → plateauBest can't rebase
+      return err(2); // initial near-green
     },
   };
   const create = (id: string, file: string) => ({
@@ -642,19 +572,15 @@ test("flag ON: the checkpoint REFRESHES to a strictly better near-green count", 
 
       if (n === 1) {
         return create("a", "feature.ts");
-      } // phase-1 near-green → checkpoint@p1
+      } // near-green 2 → checkpoint@2
 
       if (n === 3) {
-        return create("b", "advanced.ts");
-      } // phase-2 count 2 → re-arm@p2 count 2
+        return create("b", "improved.ts");
+      } // near-green 1 → REFRESH@1
 
       if (n === 5) {
-        return create("c", "improved.ts");
-      } // phase-2 count 1 → REFRESH@p2 count 1
-
-      if (n === 7) {
-        return create("d", "sprayed.ts");
-      } // phase-2 count 8 → revert to count 1
+        return create("c", "sprayed.ts");
+      } // spray 8 → revert to count 1
 
       return { content: "working", toolCalls: [] };
     },

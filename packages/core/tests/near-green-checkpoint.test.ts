@@ -17,14 +17,14 @@ const emptySnapshot: IFileSnapshot = {
   scope: [],
   existed: new Set(),
   contents: new Map(),
+  raw: new Map(),
 };
 
-/** A checkpoint at `errorCount`, optionally at a specific gate `phase`. */
-function cp(errorCount: number, phase?: number): INearGreenCheckpoint {
+/** A checkpoint at `errorCount`. */
+function cp(errorCount: number): INearGreenCheckpoint {
   return {
     errorCount,
     errors: [],
-    phase,
     snapshot: emptySnapshot,
     touched: new Set(),
   };
@@ -46,49 +46,43 @@ test("shouldCheckpoint: a NEW LOW at 1..N is worth protecting; 0 and >N are not"
 });
 
 test("shouldRollback: fires on a damaging near-green spray, not on benign wobble", () => {
-  // Phase 0a damaging sprays (prev∈{1,2}, jump≥4) → roll back. (currPhase undefined,
-  // rollbacks 0.)
-  expect(shouldRollback(cp(1), 8, undefined, 0)).toBe(true); // inv157 1→8 (+7)
-  expect(shouldRollback(cp(2), 6, undefined, 0)).toBe(true); // 2→6 (+4)
-  expect(shouldRollback(cp(2), 30, undefined, 0)).toBe(true); // 2→30 (+28)
-  expect(shouldRollback(cp(1), 5, undefined, 0)).toBe(true); // 1→5 (+4) over the line
+  // Phase 0a damaging sprays (prev∈{1,2}, jump≥4) → roll back. (rollbacks 0.)
+  expect(shouldRollback(cp(1), 8, 0)).toBe(true); // inv157 1→8 (+7)
+  expect(shouldRollback(cp(2), 6, 0)).toBe(true); // 2→6 (+4)
+  expect(shouldRollback(cp(2), 30, 0)).toBe(true); // 2→30 (+28)
+  expect(shouldRollback(cp(1), 5, 0)).toBe(true); // 1→5 (+4) over the line
   // Benign wobble (jump ≤ M) → NO rollback.
-  expect(shouldRollback(cp(1), 2, undefined, 0)).toBe(false); // 1→2 (+1)
-  expect(shouldRollback(cp(2), 5, undefined, 0)).toBe(false); // 2→5 (+3, not > M)
-  expect(shouldRollback(cp(1), 4, undefined, 0)).toBe(false); // 1→4 (+3, not > M)
+  expect(shouldRollback(cp(1), 2, 0)).toBe(false); // 1→2 (+1)
+  expect(shouldRollback(cp(2), 5, 0)).toBe(false); // 2→5 (+3, not > M)
+  expect(shouldRollback(cp(1), 4, 0)).toBe(false); // 1→4 (+3, not > M)
 });
 
 test("shouldRollback: no checkpoint → never rolls back", () => {
-  expect(shouldRollback(undefined, 99, undefined, 0)).toBe(false);
+  expect(shouldRollback(undefined, 99, 0)).toBe(false);
 });
 
 test("shouldRollback: a checkpoint above the near-green ceiling never rolls back", () => {
-  expect(shouldRollback(cp(5), 59, undefined, 0)).toBe(false);
+  expect(shouldRollback(cp(5), 59, 0)).toBe(false);
 });
 
-test("shouldRollback: a PHASE ADVANCE is progress, not a spray — never reverted", () => {
-  // The composed gate moved from phase 1 (checkpoint) to phase 2, revealing more errors —
-  // that's crossing the frontier, not a regression. Must NOT roll back.
-  expect(shouldRollback(cp(1, 1), 8, 2, 0)).toBe(false);
-  // Same phase (or lower) with a big jump IS a spray → roll back.
-  expect(shouldRollback(cp(1, 1), 8, 1, 0)).toBe(true);
-  // No phase info either side → count-based decision applies.
-  expect(shouldRollback(cp(1, undefined), 8, undefined, 0)).toBe(true);
+test("shouldRollback: spray detection is COUNT-only — no phase heuristic", () => {
+  // The builder-model + panel verdict: phase-tagging let a mostly-unphased spray masquerade
+  // as "frontier progress" and survive. Detection is now purely the count jump — a big jump
+  // past a near-green checkpoint is ALWAYS a spray, regardless of any error's origin/phase.
+  expect(shouldRollback(cp(1), 8, 0)).toBe(true);
+  // A jump within M is still benign wobble, never a spray.
+  expect(shouldRollback(cp(1), 3, 0)).toBe(false); // +2, not > M
 });
 
 test("shouldRollback: gives up after MAX_NEAR_GREEN_ROLLBACKS (bounds the revert loop)", () => {
   // Under the cap → still reverts.
-  expect(
-    shouldRollback(cp(1), 8, undefined, MAX_NEAR_GREEN_ROLLBACKS - 1)
-  ).toBe(true);
+  expect(shouldRollback(cp(1), 8, MAX_NEAR_GREEN_ROLLBACKS - 1)).toBe(true);
   // At/over the cap → stop reverting, let the escalation ladder park the staller.
-  expect(shouldRollback(cp(1), 8, undefined, MAX_NEAR_GREEN_ROLLBACKS)).toBe(
-    false
-  );
+  expect(shouldRollback(cp(1), 8, MAX_NEAR_GREEN_ROLLBACKS)).toBe(false);
 });
 
 test("thresholds are overridable (for config / A/B)", () => {
   expect(shouldCheckpoint(3, true, 4)).toBe(true); // wider ceiling
-  expect(shouldRollback(cp(3), 7, undefined, 0, 4, 3)).toBe(true); // N=4,M=3 → 3→7 (+4)
-  expect(shouldRollback(cp(1), 3, undefined, 0, 2, 1)).toBe(true); // M=1 → 1→3 (+2)
+  expect(shouldRollback(cp(3), 7, 0, 4, 3)).toBe(true); // N=4,M=3 → 3→7 (+4)
+  expect(shouldRollback(cp(1), 3, 0, 2, 1)).toBe(true); // M=1 → 1→3 (+2)
 });

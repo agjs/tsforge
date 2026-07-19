@@ -1900,39 +1900,6 @@ function commonGatePhase(errors: readonly IErrorItem[]): number | undefined {
   return errors.every((error) => error.phase === first) ? first : undefined;
 }
 
-/** The FURTHEST gate phase any error in the set reaches, ignoring unphased errors.
- *  Unlike `commonGatePhase` (undefined the moment ANY error is unphased), this survives
- *  the meta errors `evaluateGate` always appends — so WS-B can still recognise a genuine
- *  frontier advance (a later-phase error present alongside meta noise) and not mistake it
- *  for a spray. Undefined only when NO error carries a phase. */
-/** The COMMON phase of an error set, over its PHASED errors only (unphased meta ignored):
- *  the single phase they all share, or undefined if the phased errors span more than one
- *  phase (or there are none). Unlike `commonGatePhase` this survives the meta errors
- *  evaluateGate appends; unlike a max-over-phases it does NOT collapse a genuinely
- *  MIXED-phase result (e.g. BoringStack tags phase by file path — api=1, ui=2 — in one
- *  result) to its highest phase, which would let a ui error wrongly "advance past" and wipe
- *  a near-green api checkpoint. Mixed → undefined → WS-B falls back to the conservative
- *  count-based decision (no wrongful invalidation). */
-export function phasedCommonPhase(
-  errors: readonly IErrorItem[]
-): number | undefined {
-  let phase: number | undefined;
-
-  for (const error of errors) {
-    if (error.phase === undefined) {
-      continue;
-    }
-
-    if (phase === undefined) {
-      phase = error.phase;
-    } else if (phase !== error.phase) {
-      return undefined; // phased errors span >1 phase → mixed, not a single frontier
-    }
-  }
-
-  return phase;
-}
-
 /** R1 Phase B (feed-forward): after Phase A's diagnosis-only call, check if the
  *  diagnosis is trivial. If trivial (too short or just restates errors), mark R1
  *  tried and escalate to R2 immediately. If not trivial, save it as the next steer
@@ -2144,9 +2111,9 @@ const ROLLBACK_EXTRA_FILES: readonly string[] = [
 
 /** WS-B: snapshot the scope files at a fresh near-green low so a later spray can revert to
  *  this best state. Uses the SHARED IFileSnapshot substrate (binary-inclusive, tombstone-
- *  aware) so a rollback can also delete files a spray creates — a plain content map would
- *  leave them on disk. Stores the open errors + the phased-common phase + the change-scoping
- *  set for the revert steer, the tracking realignment, and the frontier check. */
+ *  aware, raw-bytes for lockfiles) so a rollback rewrites edited files, restores lockfiles
+ *  faithfully, AND deletes files a spray creates. Stores the open errors + the change-scoping
+ *  set for the revert steer and the tracking realignment. */
 export async function captureNearGreenCheckpoint(
   ctx: ILoopCtx,
   errorCount: number,
@@ -2169,7 +2136,6 @@ export async function captureNearGreenCheckpoint(
   return {
     errorCount,
     errors: [...gateErrors],
-    phase: phasedCommonPhase(gateErrors),
     snapshot,
     // Copy the change-scoping set so rollback restores it (see INearGreenCheckpoint.touched).
     touched: new Set(ctx.tool.touched ?? []),
@@ -2218,13 +2184,14 @@ export async function rollbackNearGreen(
   // settleGate counted this spray as a regression on entry; it's being reverted, so it's
   // not a real regression of the metric — undo that increment.
   state.regressions = Math.max(0, state.regressions - 1);
-  // Purge stale SPRAY bookkeeping so the next checkStuck can't derive a wrong block
-  // identity from spray-cycle keys, or record a pending rung as "tried" against a spray
-  // that was reverted (burning a lever). The restored state is a clean slate for the block.
+  // Purge the stale SPRAY fingerprints so the next checkStuck can't derive a wrong block
+  // identity from spray-cycle keys. The escalation-ladder bookkeeping (steerLevel,
+  // blockFingerprint, pendingRung, pendingBlockFingerprint) is left UNTOUCHED: the rung was
+  // applied on a PRIOR cycle and legitimately advanced steerLevel; clearing pendingRung while
+  // keeping steerLevel desynced the two (rung never recorded tried, yet the ladder advanced),
+  // burning levers and exhausting the ladder early. A revert reverses files, not ladder state.
   state.recentGateFingerprints = [];
   state.focusError = null;
-  state.pendingRung = null;
-  state.pendingBlockFingerprint = null;
   // A stale steer from the spray cycle would otherwise be injected on the next non-rollback
   // cycle (injectFeedback reads pendingDiagnosisSteer ?? pendingSteer), fighting — or even
   // re-triggering — the approach that caused the spray, against the rollback's "make a SMALL
@@ -2254,42 +2221,25 @@ export async function rollbackNearGreen(
   });
 }
 
-/** WS-B: the red-gate rollback step. First INVALIDATES a checkpoint the frontier has moved
- *  PAST (currCommonPhase beyond it): that checkpoint is stale — the model is in new territory,
- *  and leaving it would both block re-arming (needsReArm stays false) and make every later
- *  phase look like "progress" so a same-phase spray there never reverts. Then, if the current
- *  result is a spray past a still-valid near-green checkpoint, revert. Returns true when it
- *  rolled back (caller returns null to keep looping — a revert is not a checkStuck attempt).
- *  Flag-gated: a no-op when the flag is off, so no path changes. */
+/** WS-B: the red-gate rollback step. If the current result is a count SPRAY past a near-green
+ *  checkpoint (no phase heuristic — see shouldRollback), revert to the best on-disk state.
+ *  Returns true when it rolled back (caller returns null to keep looping — a revert is not a
+ *  checkStuck attempt). Flag-gated: a no-op when the flag is off, so no path changes. */
 async function nearGreenRollbackStep(
   ctx: ILoopCtx,
   state: ILoopState,
-  curr: number,
-  currCommonPhase: number | undefined
+  curr: number
 ): Promise<boolean> {
   if (!flags.nearGreenCheckpoint()) {
     return false;
   }
 
-  const cp = state.nearGreenCheckpoint;
-
   if (
-    cp !== undefined &&
-    currCommonPhase !== undefined &&
-    cp.phase !== undefined &&
-    currCommonPhase > cp.phase
-  ) {
-    // The frontier advanced past this checkpoint — drop it (and its watermark) so WS-B
-    // re-arms at the new phase's next near-green low (needsReArm) instead of staying inert.
-    // The revert budget is a per-drive TOTAL, so it is NOT refreshed here.
-    state.nearGreenCheckpoint = undefined;
-    state.nearGreenBest = undefined;
-
-    return false;
-  }
-
-  if (
-    shouldRollback(cp, curr, currCommonPhase, state.nearGreenRollbacks ?? 0)
+    shouldRollback(
+      state.nearGreenCheckpoint,
+      curr,
+      state.nearGreenRollbacks ?? 0
+    )
   ) {
     await rollbackNearGreen(ctx, state, curr);
 
@@ -2302,7 +2252,7 @@ async function nearGreenRollbackStep(
 /** WS-B: after end-of-cycle feedback, re-arm the near-green checkpoint. Captures a fresh
  *  snapshot when the state is near green (1..N) AND it's worth protecting — either no
  *  checkpoint is held (`needsReArm`: re-establishes after a resume, since the snapshot isn't
- *  serialized, or after a stale-phase invalidation), OR the count strictly improves on the
+ *  serialized), OR the count strictly improves on the
  *  checkpoint's own watermark (`isBetter`). The watermark is WS-B's `nearGreenBest`, NOT
  *  checkStuck's plateauBest — plateauBest uses commonGatePhase and stalls with meta errors,
  *  which would leave a worse checkpoint in place and let a spray revert to it. Flag-gated
@@ -2356,11 +2306,6 @@ export async function settleGate(
   } = await evaluateGate(ctx, turn);
 
   const curr = gateErrors.length;
-  // WS-B: the COMMON phase of this cycle's phased errors (survives meta; undefined if mixed),
-  // erase commonGatePhase). Used to skip a rollback across a genuine frontier advance and
-  // to invalidate a checkpoint the frontier has moved past. WS-B tracks its own near-green
-  // watermark (state.nearGreenBest), so it needs nothing from checkStuck's plateauBest here.
-  const currCommonPhase = phasedCommonPhase(gateErrors);
 
   if (state.lastGateCount >= 0 && curr > state.lastGateCount) {
     state.regressions += 1;
@@ -2418,9 +2363,9 @@ export async function settleGate(
     };
   }
 
-  // WS-B: drop a checkpoint the frontier has moved past, then revert a spray to the best
-  // on-disk state (returning BEFORE checkStuck — a revert must not advance the ladder).
-  if (await nearGreenRollbackStep(ctx, state, curr, currCommonPhase)) {
+  // WS-B: revert a count spray to the best on-disk near-green state (returning BEFORE
+  // checkStuck — a revert must not advance the ladder).
+  if (await nearGreenRollbackStep(ctx, state, curr)) {
     return null;
   }
 

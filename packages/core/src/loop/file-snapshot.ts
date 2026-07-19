@@ -19,8 +19,13 @@ export interface IFileSnapshot {
   scope: readonly string[];
   /** Every path that existed in scope at snapshot time (content-backed or not). */
   existed: Set<string>;
-  /** Pre-edit contents of the files small enough to back (keyed by rel path). */
+  /** Pre-edit contents of the TEXT files small enough to back as strings (keyed by rel path). */
   contents: Map<string, string>;
+  /** Pre-edit RAW bytes of the files a string can't faithfully hold: binaries (e.g.
+   *  `bun.lockb`) and oversize text (a large `package-lock.json` over MAX_SNAPSHOT_BYTES).
+   *  Without this a dependency spray that rewrites a lockfile would report "reverted" while
+   *  the sprayed lockfile stayed on disk — restore must rewrite these byte-for-byte too. */
+  raw: Map<string, Uint8Array>;
 }
 
 /**
@@ -37,6 +42,7 @@ export async function snapshotFiles(
 ): Promise<IFileSnapshot> {
   const existed = new Set<string>();
   const contents = new Map<string, string>();
+  const raw = new Map<string, Uint8Array>();
 
   for (const file of await resolveScopeFilesForRollback(cwd, scope)) {
     const handle = Bun.file(join(cwd, file));
@@ -49,10 +55,15 @@ export async function snapshotFiles(
 
     if (!isBinaryPath(file) && handle.size <= MAX_SNAPSHOT_BYTES) {
       contents.set(file, await handle.text());
+    } else {
+      // Binary (lockfiles like bun.lockb) or oversize text (a big package-lock.json): back it
+      // by RAW BYTES so restore is faithful. A string round-trip would corrupt the binary and
+      // the size cap would silently drop the oversize file, leaving a spray un-reverted.
+      raw.set(file, new Uint8Array(await handle.arrayBuffer()));
     }
   }
 
-  return { cwd, scope, existed, contents };
+  return { cwd, scope, existed, contents, raw };
 }
 
 /**
@@ -63,10 +74,15 @@ export async function snapshotFiles(
  * surviving on disk.
  */
 export async function restoreFiles(snapshot: IFileSnapshot): Promise<void> {
-  const { cwd, scope, existed, contents } = snapshot;
+  const { cwd, scope, existed, contents, raw } = snapshot;
 
   for (const [file, content] of contents) {
     await Bun.write(join(cwd, file), content);
+  }
+
+  // Rewrite the byte-backed files (binaries + oversize text) faithfully.
+  for (const [file, bytes] of raw) {
+    await Bun.write(join(cwd, file), bytes);
   }
 
   for (const file of await resolveScopeFilesForRollback(cwd, scope)) {
