@@ -70,6 +70,7 @@ test("offerCheck wires the seam: the model's check call returns the injected gat
       provider: checkingProvider(captured),
       cwd: dir,
       files: ["**/*"],
+      executionMode: "drive-to-green",
       offerCheck: true,
       gate: fixedGate(RED),
     });
@@ -123,6 +124,7 @@ test("runCheck reads the gate LAZILY — a mid-build setGate swap is honored", a
       provider: checkingProvider(captured),
       cwd: dir,
       files: ["**/*"],
+      executionMode: "drive-to-green",
       offerCheck: true,
       gate: fixedGate(GREEN), // initial gate: green
     });
@@ -211,6 +213,7 @@ test("check goes RED on a META_RULE error even when the gate command is GREEN (t
       provider: createThenCheckProvider(captured, "src/bad.ts"),
       cwd: dir,
       files: ["**/*"],
+      executionMode: "drive-to-green",
       offerCheck: true,
       // Gate COMMAND is green — only the meta-rule (no-eslint-disable-comments,
       // change-scoped to the file the model just wrote) makes it red.
@@ -277,6 +280,7 @@ test("offerCheck:true makes the Session ADVERTISE check to the model", async () 
       provider: toolNameCapturingProvider(captured),
       cwd: dir,
       files: ["**/*"],
+      executionMode: "drive-to-green",
       offerCheck: true,
       gate: fixedGate(GREEN),
     });
@@ -298,6 +302,30 @@ test("without offerCheck the Session does NOT advertise check (the tool is un-di
       provider: toolNameCapturingProvider(captured),
       cwd: dir,
       files: ["**/*"],
+      gate: fixedGate(GREEN),
+    });
+
+    await session.send("go");
+
+    expect(captured.names).not.toContain("check");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a CHAT session with offerCheck does NOT advertise check (tool tied to drive-to-green)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-check-"));
+  const captured: { names: string[] } = { names: [] };
+
+  try {
+    // offerCheck:true but NO executionMode (defaults to chat, whose prompt is not
+    // check-aware). Advertising check here would give the tool + a contradicting
+    // prompt — so it must be withheld. Locks the drive-to-green guard.
+    const session = await Session.create({
+      provider: toolNameCapturingProvider(captured),
+      cwd: dir,
+      files: ["**/*"],
+      offerCheck: true,
       gate: fixedGate(GREEN),
     });
 

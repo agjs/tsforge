@@ -35,6 +35,7 @@ import {
   type ErrorSet,
 } from "../validate";
 import { ruleHelp } from "./feedback";
+import { buildConventionIndex } from "./conventions";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -560,7 +561,11 @@ function systemPrompt(
 ): string {
   const base =
     cfg.executionMode === "drive-to-green"
-      ? buildDriveToGreenSystem(conventions)
+      ? buildDriveToGreenSystem(
+          conventions,
+          cfg.offerCheck === true,
+          cfg.pullConventions === true
+        )
       : buildChatSystem(conventions);
 
   const lines = [`Workspace: ${cfg.cwd}`];
@@ -577,9 +582,45 @@ function systemPrompt(
   // it here too so test-first is the out-of-the-box default everywhere.
   const tdd = flags.tdd() ? `${buildTddGuidance(conventions)}\n\n` : "";
 
+  // WS-A1: front-load the stack convention topic index when the backend ships a
+  // convention library (pullConventions). PUSHes awareness that the catalog exists so
+  // the model pulls the compliant pattern BEFORE writing — the Bucket-1 fix that stops
+  // it drafting convention-violating code it then burns turns repairing.
+  const conv =
+    cfg.pullConventions === true ? `${buildConventionIndex()}\n\n` : "";
+
   const contract = taskContract(cfg.files ?? [], cfg.accept);
 
-  return `${base}\n\n${tdd}${prefix}${lines.join("\n")}\n\n${contract}`;
+  return `${base}\n\n${tdd}${conv}${prefix}${lines.join("\n")}\n\n${contract}`;
+}
+
+/** Build the initial message list. A FRESH session gets one freshly-built system
+ *  prompt. A RESUMED session (`cfg.history`) has its LEADING base-prompt system message
+ *  refreshed to the current prompt, keeping every later message in order. Refreshing is
+ *  unconditional and idempotent: the prompt is deterministic from `cfg`, so an unchanged
+ *  config rebuilds the identical string, while a config that toggled a flag either way
+ *  (`offerCheck`/`pullConventions` on OR off) gets a prompt consistent with what
+ *  `toolsFor` now advertises — so a resumed build can never carry a prompt that requires
+ *  or advertises a tool the session no longer exposes (the flag↔prompt invariant, both
+ *  directions). Only the LEADING system message is replaced; a LATER persisted system
+ *  instruction (delegation, scope notes) is preserved. This assumes `history[0]` is the
+ *  generated base prompt — true for every caller here, since `create` always seeds it
+ *  with `systemPrompt(cfg)` and later system text is APPENDED, never prepended. */
+function resumeMessages(
+  cfg: ISessionConfig,
+  freshSystem: string
+): IChatMessage[] {
+  const systemMsg: IChatMessage = { role: "system", content: freshSystem };
+
+  if (cfg.history === undefined || cfg.history.length === 0) {
+    return [systemMsg];
+  }
+
+  const [first, ...rest] = cfg.history;
+
+  return first?.role === "system"
+    ? [systemMsg, ...rest]
+    : [systemMsg, ...cfg.history];
 }
 
 /** Stable prefix of the delegation block — the sentinel `setDelegation` checks to
@@ -702,7 +743,12 @@ export class Session {
     // (not at construction), so this is an explicit flag, not `cfg.gate !== undefined`
     // (which is still undefined here). A plain eval/scratch task leaves it off — its
     // acceptance set can be empty, so a callable gate would answer vacuously.
-    const offerCheck = cfg.offerCheck === true;
+    // Requires drive-to-green: only that base prompt is check-aware, and toolsFor must
+    // not advertise check in a chat session whose prompt would omit + contradict it.
+    // (`resumeMessages` keeps the persisted prompt in lockstep with this on resume, so
+    // the advertised tool set and the prompt can never disagree in either direction.)
+    const offerCheck =
+      cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 
     this.tools = toolsFor(false, {}, cfg.pullConventions === true, offerCheck);
 
@@ -852,15 +898,10 @@ export class Session {
         }),
         runner: cfg.gate ?? commandGate(task, cfg.parse),
       },
-      messages:
-        cfg.history !== undefined && cfg.history.length > 0
-          ? [...cfg.history]
-          : [
-              {
-                role: "system",
-                content: systemPrompt(cfg, workspaceMap, conventions),
-              },
-            ],
+      messages: resumeMessages(
+        cfg,
+        systemPrompt(cfg, workspaceMap, conventions)
+      ),
     };
 
     const session = new Session(cfg, ctx);
