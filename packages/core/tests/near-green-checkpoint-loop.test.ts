@@ -454,6 +454,122 @@ test("flag ON: a genuine FRONTIER ADVANCE (later phase + meta) is NOT rolled bac
   }
 }, 30_000);
 
+/** A 3-state phase-2 gate keyed by marker files: before `advanced.ts` → phase-1 near-green
+ *  (1); with `advanced.ts` but not `fixed.ts` → phase-2 landing ABOVE near-green (8); with
+ *  `fixed.ts` → phase-2 near-green (1); with `sprayed.ts` → phase-2 spray (8). All phase-2
+ *  states carry an unphased meta error (the evaluateGate shape). */
+function multiPhaseGate(dir: string): IGate {
+  const exists = (f: string): Promise<boolean> =>
+    Bun.file(join(dir, f)).exists();
+  const phase2 = (count: number): IValidateResult => ({
+    passed: false,
+    errors: [
+      { key: "meta", message: "test-sibling-required" }, // unphased meta
+      ...Array.from({ length: count }, (_, i) => ({
+        key: `p2_${String(i)}`,
+        message: `phase 2 error ${String(i)}`,
+        phase: 2,
+      })),
+    ],
+    output: `${String(count)} error(s)`,
+  });
+
+  return {
+    run: async (): Promise<IValidateResult> => {
+      if (!(await exists("advanced.ts"))) {
+        return {
+          passed: false,
+          errors: [{ key: "p1", message: "phase 1 error", phase: 1 }],
+          output: "1 error",
+        };
+      }
+
+      if (await exists("sprayed.ts")) {
+        return phase2(8);
+      }
+
+      if (await exists("fixed.ts")) {
+        return phase2(1);
+      }
+
+      return phase2(8); // the advance itself lands above near-green
+    },
+  };
+}
+
+test("flag ON: WS-B stays armed across a MULTI-PHASE run — a phase-2 spray is reverted", async () => {
+  process.env[FLAG] = "1";
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+  const events: ILoopEvent[] = [];
+
+  // phase-1 near-green (checkpoint) → advance to phase-2 above near-green (stale checkpoint
+  // invalidated, no revert) → phase-2 near-green (RE-checkpoint via needsReArm) → phase-2
+  // spray (must revert to the phase-2 checkpoint). This is the inert-after-advance case.
+  const create = (id: string, file: string) => ({
+    content: "",
+    toolCalls: [
+      {
+        id,
+        name: "create",
+        arguments: { file, content: `export const X = 1;\n` },
+      },
+    ],
+  });
+  let n = 0;
+  const provider: IProvider = {
+    async complete() {
+      n += 1;
+
+      if (n === 1) {
+        return create("a", "feature.ts");
+      } // phase-1 near-green
+
+      if (n === 3) {
+        return create("b", "advanced.ts");
+      } // advance to phase 2 (count 8)
+
+      if (n === 5) {
+        return create("c", "fixed.ts");
+      } // phase-2 near-green
+
+      if (n === 7) {
+        return create("d", "sprayed.ts");
+      } // phase-2 spray
+
+      return { content: "working", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      gate: multiPhaseGate(dir),
+      maxTurns: 16,
+      report: (e) => events.push(e),
+    });
+
+    await session.send("build it");
+
+    // WS-B re-armed at phase 2 and reverted the phase-2 spray — NOT inert after the advance.
+    const rollbacks = events.filter(
+      (e) =>
+        e.kind === "tool" &&
+        typeof e.message === "string" &&
+        e.message.includes("near-green rollback")
+    ).length;
+
+    expect(rollbacks).toBeGreaterThanOrEqual(1);
+    // The phase-2 spray file was tombstoned; the phase-2 near-green files survive.
+    expect(await Bun.file(join(dir, "sprayed.ts")).exists()).toBe(false);
+    expect(await Bun.file(join(dir, "fixed.ts")).exists()).toBe(true);
+    expect(await Bun.file(join(dir, "advanced.ts")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("flag OFF (default): the SAME spray is NOT reverted — no path change", async () => {
   // FLAG unset → default off.
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));

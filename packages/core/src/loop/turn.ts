@@ -2163,6 +2163,9 @@ export async function rollbackNearGreen(
   state.lastGateCount = cp.errorCount;
   resetConvergenceGuards(state, cp.errorCount);
   state.redGates = 0;
+  // settleGate counted this spray as a regression on entry; it's being reverted, so it's
+  // not a real regression of the metric — undo that increment.
+  state.regressions = Math.max(0, state.regressions - 1);
   // Purge stale SPRAY bookkeeping so the next checkStuck can't derive a wrong block
   // identity from spray-cycle keys, or record a pending rung as "tried" against a spray
   // that was reverted (burning a lever). The restored state is a clean slate for the block.
@@ -2191,6 +2194,79 @@ export async function rollbackNearGreen(
       `state (${String(cp.errorCount)} error(s) left). Do NOT rewrite files or start over. ` +
       `Make a SMALL, targeted fix for ONLY these remaining errors, one at a time:\n${errorList}`,
   });
+}
+
+/** WS-B: the red-gate rollback step. First INVALIDATES a checkpoint the frontier has moved
+ *  PAST (currMaxPhase beyond it): that checkpoint is stale — the model is in new territory,
+ *  and leaving it would both block re-arming (needsReArm stays false) and make every later
+ *  phase look like "progress" so a same-phase spray there never reverts. Then, if the current
+ *  result is a spray past a still-valid near-green checkpoint, revert. Returns true when it
+ *  rolled back (caller returns null to keep looping — a revert is not a checkStuck attempt).
+ *  Flag-gated: a no-op when the flag is off, so no path changes. */
+async function nearGreenRollbackStep(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  curr: number,
+  currMaxPhase: number | undefined
+): Promise<boolean> {
+  if (!flags.nearGreenCheckpoint()) {
+    return false;
+  }
+
+  const cp = state.nearGreenCheckpoint;
+
+  if (
+    cp !== undefined &&
+    currMaxPhase !== undefined &&
+    cp.phase !== undefined &&
+    currMaxPhase > cp.phase
+  ) {
+    // The frontier advanced past this checkpoint — drop it so WS-B re-arms at the new
+    // phase's next near-green low (needsReArm) instead of staying inert for the run.
+    state.nearGreenCheckpoint = undefined;
+    state.nearGreenRollbacks = 0;
+
+    return false;
+  }
+
+  if (shouldRollback(cp, curr, currMaxPhase, state.nearGreenRollbacks ?? 0)) {
+    await rollbackNearGreen(ctx, state, curr);
+
+    return true;
+  }
+
+  return false;
+}
+
+/** WS-B: after end-of-cycle feedback, re-arm the near-green checkpoint. Captures a fresh
+ *  snapshot when the state is near green (1..N) AND it's worth protecting — a new all-time-low
+ *  COUNT, OR a frontier ADVANCE that lands near-green (new phase = new territory, and this
+ *  does not depend on checkStuck's plateauBest, which can't see a meta-bearing advance), OR no
+ *  checkpoint is currently held (`needsReArm`: re-establishes protection after a resume — the
+ *  snapshot is not serialized — or after a stale-phase invalidation). Flag-gated no-op. */
+async function nearGreenCheckpointStep(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  curr: number,
+  gateErrors: readonly IErrorItem[],
+  isNewLow: boolean,
+  frontierAdvanced: boolean
+): Promise<void> {
+  if (!flags.nearGreenCheckpoint()) {
+    return;
+  }
+
+  const needsReArm = state.nearGreenCheckpoint === undefined;
+
+  if (shouldCheckpoint(curr, isNewLow || frontierAdvanced || needsReArm)) {
+    state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
+      ctx,
+      curr,
+      gateErrors
+    );
+    // A fresh capture earns a fresh revert budget.
+    state.nearGreenRollbacks = 0;
+  }
 }
 
 export async function settleGate(
@@ -2282,21 +2358,9 @@ export async function settleGate(
     };
   }
 
-  // WS-B: a spray PAST a near-green checkpoint — revert to the best on-disk state instead
-  // of letting the model build further on the regression, and steer a targeted fix. A
-  // revert is NOT a failed attempt, so we return BEFORE checkStuck: it must not advance the
-  // steer ladder or reset the block fingerprint. Flag-gated (default off → no path change).
-  if (
-    flags.nearGreenCheckpoint() &&
-    shouldRollback(
-      state.nearGreenCheckpoint,
-      curr,
-      currMaxPhase,
-      state.nearGreenRollbacks ?? 0
-    )
-  ) {
-    await rollbackNearGreen(ctx, state, curr);
-
+  // WS-B: drop a checkpoint the frontier has moved past, then revert a spray to the best
+  // on-disk state (returning BEFORE checkStuck — a revert must not advance the ladder).
+  if (await nearGreenRollbackStep(ctx, state, curr, currMaxPhase)) {
     return null;
   }
 
@@ -2318,35 +2382,14 @@ export async function settleGate(
 
   await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixed);
 
-  // WS-B: after this cycle's progress accounting, snapshot a FRESH near-green low so a
-  // future spray can revert to it. Re-arm on ANY of:
-  //   - a new all-time-low COUNT (the normal near-green low);
-  //   - a frontier ADVANCE that lands near-green (a later phase is new territory worth
-  //     protecting even if its count isn't a new low — and this does NOT rely on checkStuck's
-  //     plateauBest, which uses commonGatePhase and can't see a meta-bearing advance, so WS-B
-  //     never goes inert after one);
-  //   - NO checkpoint currently held (`needsReArm`): re-establishes protection the first
-  //     near-green cycle after a resume (the snapshot is deliberately not serialized) or any
-  //     gap, so a persisted one-error low can't leave WS-B permanently un-armed.
-  const needsReArm = state.nearGreenCheckpoint === undefined;
-
-  if (
-    flags.nearGreenCheckpoint() &&
-    shouldCheckpoint(
-      curr,
-      curr < (prevPlateauBest ?? Number.POSITIVE_INFINITY) ||
-        frontierAdvanced ||
-        needsReArm
-    )
-  ) {
-    state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
-      ctx,
-      curr,
-      gateErrors
-    );
-    // A fresh (lower) low earns a fresh revert budget.
-    state.nearGreenRollbacks = 0;
-  }
+  await nearGreenCheckpointStep(
+    ctx,
+    state,
+    curr,
+    gateErrors,
+    curr < (prevPlateauBest ?? Number.POSITIVE_INFINITY),
+    frontierAdvanced
+  );
 
   return null;
 }
