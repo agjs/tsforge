@@ -614,6 +614,93 @@ test("flag ON: the checkpoint REFRESHES to a strictly better near-green count", 
   }
 }, 30_000);
 
+test("flag ON: the checkpoint REFRESHES on a LATERAL same-count near-green move (1→1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+  const events: ILoopEvent[] = [];
+
+  // The lateral path (the `<=` refresh): near-green at 1 (state A, checkpoint@1) → a DIFFERENT
+  // 1-error state B (the model fixed A's error and a new one remains; count unchanged →
+  // REFRESH so the snapshot now includes stateB.ts) → spray to 8 (revert). With `<=` the
+  // revert restores B (stateB.ts survives); with a strict `<` the checkpoint would be stuck at
+  // A and the revert would TOMBSTONE stateB.ts, discarding the model's lateral work.
+  const err = (count: number): IValidateResult => ({
+    passed: false,
+    errors: Array.from({ length: count }, (_, i) => ({
+      key: `e${String(i)}`,
+      message: `error ${String(i)}`,
+    })),
+    output: `${String(count)} error(s)`,
+  });
+  const has = (f: string): Promise<boolean> => Bun.file(join(dir, f)).exists();
+  const gate: IGate = {
+    run: async (): Promise<IValidateResult> => {
+      if (await has("sprayed.ts")) {
+        return err(8);
+      }
+
+      return err(1); // near-green at 1 both before and after stateB.ts (a LATERAL move)
+    },
+  };
+  const create = (id: string, file: string) => ({
+    content: "",
+    toolCalls: [
+      {
+        id,
+        name: "create",
+        arguments: { file, content: "export const X = 1;\n" },
+      },
+    ],
+  });
+  let n = 0;
+  const provider: IProvider = {
+    async complete() {
+      n += 1;
+
+      if (n === 1) {
+        return create("a", "stateA.ts");
+      } // near-green 1 → checkpoint@1 (A)
+
+      if (n === 3) {
+        return create("b", "stateB.ts");
+      } // still 1 (lateral) → REFRESH@1 (now includes stateB.ts)
+
+      if (n === 5) {
+        return create("c", "sprayed.ts");
+      } // spray 8 → revert to the LATEST 1-error tree (B)
+
+      return { content: "working", toolCalls: [] };
+    },
+  };
+
+  try {
+    const session = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      gate,
+      maxTurns: 14,
+      report: (e) => events.push(e),
+    });
+
+    await session.send("build it");
+
+    const rolledBack = events.some(
+      (e) =>
+        e.kind === "tool" &&
+        typeof e.message === "string" &&
+        e.message.includes("near-green rollback")
+    );
+
+    expect(rolledBack).toBe(true);
+    expect(await Bun.file(join(dir, "sprayed.ts")).exists()).toBe(false);
+    // stateB.ts SURVIVES → the checkpoint refreshed on the lateral 1→1 move to the LATEST tree.
+    expect(await Bun.file(join(dir, "stateB.ts")).exists()).toBe(true);
+    expect(await Bun.file(join(dir, "stateA.ts")).exists()).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("WS-B bounds TOTAL reverts per drive — the (MAX+1)th spray is NOT reverted", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
   const events: ILoopEvent[] = [];

@@ -7,12 +7,19 @@ import { resolveScopeFilesForRollback, isBinaryPath } from "../lib/fs";
  *  is backed by RAW BYTES instead (up to MAX_RAW_SNAPSHOT_BYTES). */
 const MAX_SNAPSHOT_BYTES = 131_072;
 
-/** Hard ceiling on RAW-BYTE backing. Lockfiles (bun.lockb, a multi-MB package-lock.json)
+/** Per-file ceiling on RAW-BYTE backing. Lockfiles (bun.lockb, a multi-MB package-lock.json)
  *  are the real target and sit well under this; the cap stops a broad `**\/*` scope from
  *  buffering a huge artifact (video/wasm/archive) fully into memory — with WS-B default-ON
- *  a rollback could otherwise OOM. A file over BOTH caps degrades to existence-only:
+ *  a rollback could otherwise OOM. A file over the cap degrades to existence-only:
  *  tracked so it isn't tombstoned, but not restored (best-effort, not airtight). */
 const MAX_RAW_SNAPSHOT_BYTES = 8_388_608; // 8 MiB
+
+/** AGGREGATE ceiling on RAW-BYTE backing across the whole snapshot. The per-file cap alone
+ *  is not enough: a broad scope with many binaries EACH just under the per-file cap would
+ *  still buffer them all and OOM. Once the running raw total reaches this, further binaries/
+ *  oversize files degrade to existence-only. Sized to comfortably hold the lockfiles a real
+ *  snapshot needs while bounding worst-case memory. */
+const MAX_TOTAL_RAW_SNAPSHOT_BYTES = 67_108_864; // 64 MiB
 
 /**
  * A rollback point for an "try an edit, keep only if it helps" loop: the contents
@@ -50,6 +57,7 @@ export async function snapshotFiles(
   const existed = new Set<string>();
   const contents = new Map<string, string>();
   const raw = new Map<string, Uint8Array>();
+  let rawTotal = 0;
 
   for (const file of await resolveScopeFilesForRollback(cwd, scope)) {
     const handle = Bun.file(join(cwd, file));
@@ -62,13 +70,19 @@ export async function snapshotFiles(
 
     if (!isBinaryPath(file) && handle.size <= MAX_SNAPSHOT_BYTES) {
       contents.set(file, await handle.text());
-    } else if (handle.size <= MAX_RAW_SNAPSHOT_BYTES) {
+    } else if (
+      handle.size <= MAX_RAW_SNAPSHOT_BYTES &&
+      rawTotal + handle.size <= MAX_TOTAL_RAW_SNAPSHOT_BYTES
+    ) {
       // Binary (lockfiles like bun.lockb) or oversize text (a big package-lock.json): back it
       // by RAW BYTES so restore is faithful. A string round-trip would corrupt the binary and
       // the string cap would silently drop the oversize file, leaving a spray un-reverted.
-      // Over MAX_RAW_SNAPSHOT_BYTES the file is left existence-only (see the cap's rationale) —
-      // it won't OOM the rollback, and it's still tracked so it isn't wrongly tombstoned.
+      // Skipped (existence-only) when the file exceeds the per-file cap OR would push the
+      // running raw total past MAX_TOTAL_RAW_SNAPSHOT_BYTES — bounding worst-case memory so a
+      // broad scope full of medium binaries can't OOM the rollback. Existence-only files are
+      // still tracked (not wrongly tombstoned), just not content-restored (best-effort).
       raw.set(file, new Uint8Array(await handle.arrayBuffer()));
+      rawTotal += handle.size;
     }
   }
 
