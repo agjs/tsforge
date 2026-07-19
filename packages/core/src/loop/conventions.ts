@@ -76,7 +76,8 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
   state:
     "STATE (boringstack). ALL `useState`/`useReducer`/`useEffect`/`useMemo`/" +
     "`useCallback` live in `<feature>.hooks.ts`, never in a component body. Server " +
-    "data → a hook using react-query/fetch that narrows the response. A hooks file " +
+    "data → a hook using react-query over the generated api-client (NEVER raw `fetch` — " +
+    "see data-fetching) that narrows the response. A hooks file " +
     "exporting too many hooks splits into focused modules (e.g. `*.queries.ts` + " +
     "`*.mutations.ts`).",
   "no-casts":

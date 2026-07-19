@@ -350,7 +350,7 @@ export const PULL_CONVENTIONS_TOOL = {
   function: {
     name: TOOL_NAME.pullConventions,
     description:
-      "Pull the boringstack HOW-TO guide for a topic BEFORE you write that kind of code — so you write it right the first time instead of getting a gate error. Call it when you're about to create a component, write JSX, place state, add a route/form, or hit a rule you're unsure how to satisfy. Returns the exact pattern the gate enforces.",
+      "Re-fetch the boringstack HOW-TO guide for a topic on demand. The core guides are ALREADY front-loaded in your system prompt — use this to re-read one you need again, or for a rule you're still unsure how to satisfy. Returns the exact pattern the gate enforces.",
     parameters: {
       type: "object",
       properties: {
@@ -364,9 +364,10 @@ export const PULL_CONVENTIONS_TOOL = {
             "no-casts",
             "routing",
             "forms",
+            "data-fetching",
           ],
           description:
-            "which guide: component-anatomy (where a component lives + one-per-file), file-layout (no inline types/constants/helpers), jsx (no computation in markup), state (hooks, not component body), no-casts (type guards instead of `as`/`!`), routing (thin route files), forms.",
+            "which guide: component-anatomy (where a component lives + one-per-file), file-layout (no inline types/constants/helpers), jsx (no computation in markup), state (hooks, not component body), no-casts (type guards instead of `as`/`!`), routing (thin route files), forms, data-fetching (api-client, never raw fetch).",
         },
       },
       required: ["topic"],
