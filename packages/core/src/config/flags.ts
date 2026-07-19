@@ -46,4 +46,11 @@ export const flags = {
    *  explicitly ask. Real autonomous builders (the headless web builder, interactive
    *  sessions) turn it on. Without it, a stall parks with all work kept, as before. */
   expertRescue: (): boolean => isOn(ENV_FLAG.expertRescue),
+  /** WS-B near-green checkpoint/rollback: when the build reaches a near-green low (1..N
+   *  errors) snapshot the scope files, and if the next gate SPRAYS past it (curr >
+   *  checkpoint + M) revert to that best instead of letting the model build on the
+   *  regression. Opt-in (default OFF) so it changes no path until explicitly enabled —
+   *  real builders turn it on; eval/unit runs stay byte-identical unless they ask.
+   *  Thresholds N=2, M=3 from Phase 0a's real-log analysis. */
+  nearGreenCheckpoint: (): boolean => isOn(ENV_FLAG.nearGreenCheckpoint),
 };

@@ -26,6 +26,11 @@ import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
 import { unseenGuidesForErrors } from "./conventions";
 import {
+  shouldCheckpoint,
+  shouldRollback,
+  type INearGreenCheckpoint,
+} from "./near-green-checkpoint";
+import {
   buildSteerMessage,
   essentialMessages,
   isTrivialDiagnosis,
@@ -401,6 +406,10 @@ export interface ILoopState {
   /** Lowest gate-error count seen this run, NEVER reset on escalation (unlike
    *  `bestErrorCount`) — the stable baseline the plateau backstop measures against. */
   plateauBest?: number;
+  /** WS-B near-green checkpoint: the on-disk scope-file snapshot captured at the last
+   *  near-green low (1..N errors). If a later gate SPRAYS past it, the loop reverts to
+   *  this state instead of letting the model build on the regression. Flag-gated. */
+  nearGreenCheckpoint?: INearGreenCheckpoint;
   /** Guard-specific identity of the current stuck block (canonical, not the raw error
    *  set). Derived from the guard that fired: samePersist → single error key,
    *  gateStuckRepeats → sorted-join of current keys, plateau → normalized count|keys
@@ -2068,6 +2077,71 @@ export async function injectFeedback(
  *  stuck-check → feedback). A thin orchestrator over the exported steps above —
  *  the signature and `IRunResult | null` contract (null ⇒ keep looping) are the
  *  same as ever, so both drivers (run.ts / session.ts) are untouched. */
+/** WS-B: snapshot the scope files at a fresh near-green low so a later spray can revert to
+ *  this best state. Stores the open gate errors too — used for the revert steer and to
+ *  realign the loop's tracking on rollback. */
+async function captureNearGreenCheckpoint(
+  ctx: ILoopCtx,
+  errorCount: number,
+  gateErrors: readonly IErrorItem[]
+): Promise<INearGreenCheckpoint> {
+  const files = await resolveScopeFiles(ctx.cwd, ctx.task.files);
+  const snapshot = await snapshotFiles(ctx.cwd, files);
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task.id,
+    message: `⚑ near-green checkpoint: locked the ${String(errorCount)}-error best state`,
+  });
+
+  return { errorCount, files: snapshot, errors: [...gateErrors] };
+}
+
+/** WS-B: a spray past the near-green checkpoint — restore the best on-disk state, realign
+ *  the loop's error tracking to it, and steer the model to make a SMALL targeted fix rather
+ *  than build further on the regression. The caller returns WITHOUT running checkStuck, so
+ *  a revert never advances the steer ladder or resets the block fingerprint. */
+async function rollbackNearGreen(
+  ctx: ILoopCtx,
+  state: ILoopState,
+  sprayCount: number
+): Promise<void> {
+  const cp = state.nearGreenCheckpoint;
+
+  if (cp === undefined) {
+    return;
+  }
+
+  for (const [f, content] of cp.files) {
+    await Bun.write(join(ctx.cwd, f), content);
+  }
+
+  // Realign the loop's error tracking to the RESTORED state — the spray is gone, so the
+  // next cycle measures its delta from the near-green best, not the discarded regression.
+  state.prevGateErrors = [...cp.errors];
+  state.lastGateCount = cp.errorCount;
+
+  ctx.report({
+    kind: "tool",
+    task: ctx.task.id,
+    message: `↩ near-green rollback: reverted a ${String(sprayCount)}-error spray to the ${String(cp.errorCount)}-error best; steering a targeted fix`,
+  });
+
+  const errorList = cp.errors
+    .slice(0, 20)
+    .map((e) => `  - ${e.message}`)
+    .join("\n");
+
+  ctx.messages.push({
+    role: "user",
+    content:
+      `Your last change made things WORSE — the gate went from ${String(cp.errorCount)} ` +
+      `to ${String(sprayCount)} error(s) — so I reverted those edits back to your best ` +
+      `state (${String(cp.errorCount)} error(s) left). Do NOT rewrite files or start over. ` +
+      `Make a SMALL, targeted fix for ONLY these remaining errors, one at a time:\n${errorList}`,
+  });
+}
+
 export async function settleGate(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -2083,11 +2157,16 @@ export async function settleGate(
     autoFixed,
   } = await evaluateGate(ctx, turn);
 
-  if (state.lastGateCount >= 0 && gateErrors.length > state.lastGateCount) {
+  const curr = gateErrors.length;
+  // WS-B: the all-time low BEFORE checkStuck mutates it — so we can tell a fresh
+  // near-green low (worth a checkpoint) from a non-improving re-visit.
+  const prevPlateauBest = state.plateauBest;
+
+  if (state.lastGateCount >= 0 && curr > state.lastGateCount) {
     state.regressions += 1;
   }
 
-  state.lastGateCount = gateErrors.length;
+  state.lastGateCount = curr;
 
   // On red, surface the ACTUAL errors (codes + messages) into the event — so the
   // log records WHAT failed at the gate, not just a count (the analysis substrate
@@ -2117,6 +2196,8 @@ export async function settleGate(
     // Gate passed — clear block tracking
     state.blockFingerprint = "";
     state.focusError = null;
+    // WS-B: the build is green — there's no near-green state left to protect.
+    state.nearGreenCheckpoint = undefined;
 
     await polishOnGreen(ctx);
 
@@ -2133,6 +2214,19 @@ export async function settleGate(
       status: RUN_STATUS.done,
       cycles: turn,
     };
+  }
+
+  // WS-B: a spray PAST a near-green checkpoint — revert to the best on-disk state instead
+  // of letting the model build further on the regression, and steer a targeted fix. A
+  // revert is NOT a failed attempt, so we return BEFORE checkStuck: it must not advance the
+  // steer ladder or reset the block fingerprint. Flag-gated (default off → no path change).
+  if (
+    flags.nearGreenCheckpoint() &&
+    shouldRollback(state.nearGreenCheckpoint, curr)
+  ) {
+    await rollbackNearGreen(ctx, state, curr);
+
+    return null;
   }
 
   const stuck = checkStuck(ctx, state, gateErrors, turn);
@@ -2152,6 +2246,19 @@ export async function settleGate(
   }
 
   await injectFeedback(ctx, state, gateErrors, metaViolations, autoFixed);
+
+  // WS-B: after this cycle's progress accounting, snapshot a FRESH near-green low (1..N,
+  // and a genuine new all-time low) so a future spray can revert to it.
+  if (
+    flags.nearGreenCheckpoint() &&
+    shouldCheckpoint(curr, curr < (prevPlateauBest ?? Number.POSITIVE_INFINITY))
+  ) {
+    state.nearGreenCheckpoint = await captureNearGreenCheckpoint(
+      ctx,
+      curr,
+      gateErrors
+    );
+  }
 
   return null;
 }
