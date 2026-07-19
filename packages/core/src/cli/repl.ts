@@ -302,7 +302,6 @@ async function initReplSession(args: ICliArgs): Promise<{
   id: string;
   gateLabel: string;
   logFile: string;
-  persist: () => Promise<void>;
   report: Reporter;
   resumed: ISessionRecord | null;
   files: string[];
@@ -403,23 +402,6 @@ async function initReplSession(args: ICliArgs): Promise<{
     contextWindow,
   });
 
-  const persist = async (): Promise<void> => {
-    await saveSession({
-      id,
-      cwd: args.dir,
-      // The LIVE gate/scope — not the startup constants. /gate, /files, and a web
-      // scaffold all mutate these mid-session; persisting the originals would
-      // silently restore stale settings on --continue. See P2 review.
-      accept: session.gate,
-      files: session.scope,
-      updatedAt: Date.now(),
-      planMode: false, // will be set by caller
-      // Persist a still-pending deferred gate so --continue re-gates it (WS-C).
-      pausedWithEdit: session.hasDeferredGate,
-      messages: [...session.messages],
-    });
-  };
-
   return {
     session,
     provider,
@@ -428,7 +410,6 @@ async function initReplSession(args: ICliArgs): Promise<{
     id,
     gateLabel,
     logFile,
-    persist,
     report,
     resumed,
     files,
