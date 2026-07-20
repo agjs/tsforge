@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import {
   conventionGuide,
   conventionTopics,
+  isConventionTopic,
   topicForRule,
   unseenGuidesForErrors,
 } from "../src/loop/conventions";
+import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
 import { injectFeedback, type ILoopCtx } from "../src/loop/turn";
 import type { ILoopState, ILoopEvent } from "../src/loop";
 import type { IErrorItem } from "../src/validate";
@@ -59,6 +61,45 @@ describe("convention registry", () => {
     // Panel-diagnosed root cause of the Readable<SuccessResponse> UI residual: route response schema.
     expect(g).toContain("response:");
     expect(g).toContain("Readable<SuccessResponse");
+  });
+
+  test("i18n guide bans pre-declaring keys — the dominant near-green thrash (build11: 19× dead-key)", () => {
+    const g = conventionGuide("i18n");
+
+    // The CAUSE: the model pre-declares locale keys it never references. The guide must forbid it
+    // and pin the two-way rule so the model connects the gate error to the fix.
+    expect(g).toContain("PRE-DECLARING");
+    expect(g).toContain("i18n-locale-keys-used");
+    expect(g).toContain("SAME change");
+    // The verified wiring idiom (react-i18next, full dotted literal, both locales).
+    expect(g).toContain("useTranslation");
+    expect(g).toContain("react-i18next");
+    expect(g).toContain("STRING LITERAL");
+    expect(g).toContain("locales/en/common.json");
+    expect(g).toContain("locales/de/common.json");
+    // The fix MUST be the harness-sanctioned one — WIRE IT UP, never delete a session-authored
+    // key (rule-docs.ts + i18n-guard + near-green completion-class all mandate clear-by-adding).
+    // The guide must NOT offer deletion as an equal fix (that re-introduces the #49 churn).
+    expect(g).toContain("WIRE IT UP");
+    expect(g).toContain("Do NOT delete a key you authored");
+    expect(g).toContain("VETOES");
+    expect(g).not.toContain("EXACTLY ONE");
+    // A dynamic template key bypasses the used→defined (static-translation-key-exists) check,
+    // so the guide must forbid it and require a static literal per concrete case.
+    expect(g).toContain("BYPASSES validation");
+  });
+
+  test("i18n is a first-class pullable topic — registry AND pull_conventions enum agree (no drift)", () => {
+    // The three hand-maintained surfaces for a topic must all carry `i18n`, or the model
+    // hits a live guide it can't `pull_conventions` for (enum reject) — the exact drift the
+    // reviewers flagged. convention-index.test.ts locks the full enum↔topics parity; this pins
+    // the NEW topic explicitly in its own change so the guard is visible beside the addition.
+    expect(conventionTopics()).toContain("i18n");
+    expect(isConventionTopic("i18n")).toBe(true);
+    const enumTopics =
+      PULL_CONVENTIONS_TOOL.function.parameters.properties.topic.enum;
+
+    expect(enumTopics).toContain("i18n");
   });
 
   test("forms guide steers away from the invented FormEvent + deprecated z.string().email() (live-build residuals)", () => {
@@ -145,6 +186,13 @@ describe("topicForRule", () => {
     expect(topicForRule("no-restricted-syntax")).toBe("no-casts");
     expect(topicForRule("component-folder-structure")).toBe(
       "component-anatomy"
+    );
+    // BOTH i18n directions must PUSH the i18n guide: the dead-key trap (defined→used, build11)
+    // AND a t() whose key isn't defined (used→defined, plugin-prefixed in the wild).
+    expect(topicForRule("i18n-locale-keys-used")).toBe("i18n");
+    expect(topicForRule("static-translation-key-exists")).toBe("i18n");
+    expect(topicForRule("i18n-keys/static-translation-key-exists")).toBe(
+      "i18n"
     );
   });
 

@@ -25,6 +25,7 @@ const TOPICS = [
   "lint-gotchas",
   "testing",
   "api-service",
+  "i18n",
 ] as const;
 
 export type ConventionTopic = (typeof TOPICS)[number];
@@ -77,6 +78,12 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
     // The audit-event rule is a boringstack-OWN eslint rule (not a tsforge meta-rule), so it
     // isn't keyed here for the reactive PUSH — the front-loaded guide is the delivery path.
     "api-service": [],
+    // The DOMINANT recurring error on a live near-green build (measured: 19× in one run — it
+    // trapped the model oscillating around 1 error): the model pre-declares locale keys it never
+    // references, so each is a `i18n-locale-keys-used` dead-key error. Both i18n directions map here
+    // so EITHER pushes the guide: `i18n-locale-keys-used` (defined→used, the dead-key trap) and
+    // `static-translation-key-exists` (used→defined, a `t()` whose key isn't in the locale files).
+    i18n: ["i18n-locale-keys-used", "static-translation-key-exists"],
   };
 
 const GUIDES: Readonly<Record<ConventionTopic, string>> = {
@@ -231,6 +238,28 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "types), openapi-fetch types the UI's `data` as `Readable<SuccessResponse<…>>` instead of the " +
     "JSON body, and the UI can't consume it (a persistent 'not assignable to …' error you canNOT fix " +
     "on the UI side — fix the ROUTE's response schema).",
+  i18n:
+    "I18N LOCALE KEYS (boringstack). Every user-facing string is a translation key, and the gate " +
+    'enforces BOTH directions: a `t("key")` with no locale entry fails (used→defined), AND a key ' +
+    "defined in the locale files that NO src file references fails as 'dead translation surface' " +
+    "(i18n-locale-keys-used, defined→used). THE TRAP that stalls near-green builds is PRE-DECLARING " +
+    "keys: never add a key to the locale JSON 'for later' or in a batch. Add a key and its single " +
+    '`t("full.dotted.path")` reference in the SAME change — if you are not calling `t()` on it right ' +
+    'now, do not define it. WIRING: `import { useTranslation } from "react-i18next"`, then ' +
+    "`const { t } = useTranslation()` in the component (a hook — it lives in the component body per " +
+    'react-hooks rules, NOT in `.hooks.ts`), and `t("features.<feature>.<key>")` in the JSX. The ' +
+    "reference must ALWAYS be the FULL dotted key as a plain STRING LITERAL — never assemble a key by " +
+    "concatenation or a template (`t(`…${x}`)`): the used→defined check (static-translation-key-exists) " +
+    "only reads string literals, so a dynamic key silently BYPASSES validation and ships missing " +
+    "translations. If a value varies (e.g. a status label), map each concrete case to its own literal " +
+    "key. LOCALE FILES: add the key to EVERY locale — `src/lib/i18n/locales/en/common.json` (the " +
+    "canonical file the rule scans) AND `src/lib/i18n/locales/de/common.json` — nested under the dotted " +
+    "path. FIXING a dead-key (i18n-locale-keys-used) error: WIRE IT UP — add the missing " +
+    '`t("features.<feature>.<key>")` in the component that should display it. This clears by ADDING code, ' +
+    "not removing it. Do NOT delete a key you authored this session to silence the rule: it strips real " +
+    "functionality the feature needs (a hollow list-only page), it's pure churn you'll re-add, and the " +
+    "build's i18n edit-guard VETOES a net deletion of session-authored keys anyway. (Removal is only for " +
+    "a genuinely obsolete pre-existing key, or a balanced rename that adds the replacement in the same edit.)",
 };
 
 /** The guide for a topic (the exact string pushed or pulled). */
