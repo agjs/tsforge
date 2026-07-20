@@ -41,6 +41,26 @@ describe("convention registry", () => {
     expect(g).toContain("response.error");
     expect(g).toContain("throwOnError");
   });
+
+  test("data-fetching guide tells the model the gate runs generate:api for it (no manual regen, no file-by-file type chase)", () => {
+    const g = conventionGuide("data-fetching");
+
+    // Minimal, unattackable claims only: generate:api is PART OF the gate (a plain fact
+    // about the gate command), so the model shouldn't run it by hand or chase client
+    // types file-by-file. Deliberately makes NO guarantee about what a passing gate
+    // proves (the api-leg && short-circuit + differential suppression make any such
+    // guarantee false in edge cases) and NO db:push claim (its exit is swallowed — #60).
+    expect(g).toContain("generate:api");
+    expect(g).toContain("don't run `generate:api` by hand");
+    expect(g).toContain("part of the gate");
+    // No overclaim: no "every cycle", no "passing gate proves X", no db:push claim, no
+    // stale-client framing, no instruction to run generate:api itself.
+    expect(g).not.toContain("every gate cycle");
+    expect(g).not.toContain("passing gate");
+    expect(g).not.toContain("db:push");
+    expect(g).not.toContain("NEVER stale");
+    expect(g).not.toContain("then `bun run generate:api`");
+  });
 });
 
 describe("topicForRule", () => {

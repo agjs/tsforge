@@ -117,8 +117,10 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "automatically via the client's `throwOnError` middleware (TanStack Query catches " +
     "them) — so NEVER check `response.error`: it is typed `undefined`, so the guard is " +
     "a dead `no-unnecessary-condition` gate error. Just read `data`. Put queries in " +
-    "`<Feature>.queries.ts` and mutations in `<Feature>.mutations.ts`. If a path isn't " +
-    "in the spec yet, add the API route first, then `bun run generate:api`.",
+    "`<Feature>.queries.ts` and mutations in `<Feature>.mutations.ts`. Regenerating this " +
+    "typed client with `generate:api` is part of the gate, so don't run `generate:api` " +
+    "by hand or chase client type errors file-by-file: add or rename the API route, let " +
+    "the gate run (or call `check`), and fix the WHOLE reported set in one pass.",
   "lint-gotchas":
     "STRICT-LINT GOTCHAS (boringstack). The gate is eslint with EVERY rule an error; a fresh " +
     "feature trips these most, so write them right up front:\n" +
