@@ -170,6 +170,23 @@ describe("signatureToError", () => {
     expect(plain.message).not.toContain("call site");
   });
 
+  test("a Readable<SuccessResponse> error steers to the CONSUMER unwrap, not a route/schema fix (build15 wall)", () => {
+    const msg =
+      "Type 'Readable<SuccessResponse<{ 200: {} }>>' is not assignable to type 'Promise<ISupplierItem>'.";
+    const err = signatureToError(
+      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
+    );
+
+    // Steer names it universal/expected and points at the consumer fix (infer, then unwrap).
+    expect(err.message).toContain("UNIVERSAL");
+    expect(err.message).toContain("CONSUMER");
+    // Universal move is infer-don't-annotate; unwrap is shape-conditional (not blind .data).
+    expect(err.message).toContain("let TS INFER");
+    expect(err.message).toContain("don't blindly add");
+    // Must NOT tell the model to fix the route/schema for this.
+    expect(err.message).toContain("CANNOT remove it by editing the route");
+  });
+
   test("a `'>' expected` in a .ts flags the JSX-must-be-.tsx cause; other .ts parse errors do NOT", () => {
     // The one class the .tsx tip is valid for.
     const jsx = signatureToError(

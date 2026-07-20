@@ -106,49 +106,56 @@ export function signatureToError(sig: string): IErrorItem {
     const message = decodeURIComponent(structured[4] ?? "");
     const phase = phaseForFile(file);
 
-    // A syntax/parse error (`'>' expected`, `Parsing error`, `Unexpected token`) is the one
-    // class the model can't fix by surgical patch — a patch on an already-broken file usually
-    // re-breaks its braces/generics/JSX, so it grinds at the SAME error for turns (observed
-    // live: stuck at 2 `'>' expected` for 40min). Steer it to REWRITE THE WHOLE FILE, and flag
-    // the JSX-in-`.ts` case (a `.ts` can't hold JSX → `<X>` reads as a generic wanting `>`).
-    // Match the whole tsc/eslint syntax-error family: `Parsing error`, `Unexpected token`, and
-    // any `… expected.` (quoted `';' expected` OR bare `Expression/Declaration/Identifier/Type
-    // expected`). The trailing-`expected` form is anchored so it doesn't catch type errors that
-    // merely contain the word mid-sentence.
-    const isParse = /parsing error|unexpected token|expected\.?\s*$/iu.test(
-      message
-    );
-    // The `.tsx` root-cause tip is ONLY valid for the JSX/generic `'>' expected` class — appended
-    // elsewhere it invents a wrong cause and can push a rename detour for a plain `';' expected`.
-    const isJsxGenericParse = /['`]>['`]\s+expected/iu.test(message);
-    const parseSteer =
-      isJsxGenericParse && file.endsWith(".ts") && !file.endsWith(".d.ts")
-        ? " This `'>' expected` in a `.ts` is usually JSX in a non-JSX file — if it contains JSX, it must be a `.tsx` (a `.ts` parses `<X>` as a generic and demands `>`)."
-        : "";
-
-    // The api-client's types are GENERATED from the OpenAPI spec. A `PathsWithMethod<paths, …>`
-    // error means the path STRING doesn't match any generated key — which has TWO causes, and
-    // the steer must name both (observed live: build12's model used `/api/supplier` — a wrong
-    // CALL-SITE string, the route `/api/v1/supplier/{id}` was already in the spec — yet re-ran
-    // generate:api 5× because the old steer only ever said "route not in spec"). Cause 1 (check
-    // FIRST, cheaper): the path literal is wrong. Cause 2: the route genuinely isn't registered.
-    const isPathsWithMethod = message.includes("PathsWithMethod");
-
     return {
       key: sig,
       file,
       ...(lineText === "" ? {} : { line: Number(lineText) }),
       rule,
       ...(phase === undefined ? {} : { phase }),
-      message: isParse
-        ? `${message}\n↳ SYNTAX/PARSE error — do NOT surgically patch it (a patch on a broken-parse file re-breaks its braces/generics/JSX). REWRITE THE WHOLE FILE \`${file}\` cleanly in one pass; once it parses, downstream errors clear.${parseSteer}`
-        : isPathsWithMethod
-          ? `${message}\n↳ \`PathsWithMethod<…, "<verb>">\` means no generated key matches this path AND method. Three causes — check the call site FIRST (generate:api fixes NEITHER of the first two): (1) WRONG PATH string — the literal must EXACTLY match a generated key: the COLLECTION root carries a TRAILING SLASH (list/create are \`/api/v1/<resource>/\`, e.g. \`POST "/api/v1/<resource>/"\` — a POST/GET to \`/api/v1/<resource>\` WITHOUT the slash is the usual cause here; ADD it), while by-id is \`/api/v1/<resource>/{id}\` (no trailing slash) with a literal \`{id}\` segment, value via \`{ params: { path: { id } } }\`, never interpolated; \`/api/x\` or \`/x\` (missing the \`/api/v1/\` prefix) is also wrong; (2) WRONG VERB — the path exists but doesn't support this method (e.g. a GET-only path called with POST); call the method the route actually defines; (3) ONLY if path AND verb are already right is the route genuinely unregistered — ensure it exists AND is mounted (shows in /swagger/json), then the gate re-runs generate:api and the type appears. Do NOT re-run generate:api for a call-site (path/verb) bug.`
-          : message,
+      message: structuredSteerMessage(message, file),
     };
   }
 
   return { key: sig, message: sig };
+}
+
+/** Enrich a structured gate error's raw message with the actionable steer for the failure
+ *  classes the model chronically mis-fixes (each observed live). Extracted from
+ *  signatureToError to keep that function's branching under the cognitive-complexity cap. */
+function structuredSteerMessage(message: string, file: string): string {
+  // A syntax/parse error (`'>' expected`, `Parsing error`, `Unexpected token`) is the one class
+  // the model can't fix by surgical patch — a patch on an already-broken file usually re-breaks
+  // its braces/generics/JSX, so it grinds at the SAME error for turns (observed live: stuck at 2
+  // `'>' expected` for 40min). Steer it to REWRITE THE WHOLE FILE, and flag the JSX-in-`.ts` case.
+  const isParse = /parsing error|unexpected token|expected\.?\s*$/iu.test(
+    message
+  );
+
+  if (isParse) {
+    // The `.tsx` tip is ONLY valid for the JSX/generic `'>' expected` class.
+    const isJsxGenericParse = /['`]>['`]\s+expected/iu.test(message);
+    const parseSteer =
+      isJsxGenericParse && file.endsWith(".ts") && !file.endsWith(".d.ts")
+        ? " This `'>' expected` in a `.ts` is usually JSX in a non-JSX file — if it contains JSX, it must be a `.tsx` (a `.ts` parses `<X>` as a generic and demands `>`)."
+        : "";
+
+    return `${message}\n↳ SYNTAX/PARSE error — do NOT surgically patch it (a patch on a broken-parse file re-breaks its braces/generics/JSX). REWRITE THE WHOLE FILE \`${file}\` cleanly in one pass; once it parses, downstream errors clear.${parseSteer}`;
+  }
+
+  // `Readable<SuccessResponse<…>>` is Elysia+openapi-fetch's UNIVERSAL response type (swagger
+  // emits json+multipart+text for EVERY route, scaffold ones included) — NOT a route/schema bug.
+  // The model burned ~60 turns (build15) chasing it on the API side; steer to the consumer.
+  if (message.includes("Readable<SuccessResponse")) {
+    return `${message}\n↳ \`Readable<SuccessResponse<…>>\` is the api-client's NORMAL, UNIVERSAL response type — Elysia's swagger emits three media types (json/multipart/text) for EVERY route (the scaffold's own auth/dashboard routes are identical), so you CANNOT remove it by editing the route or the \`response:\` schema — do NOT try. Fix it on the CONSUMER: the 'not assignable to Promise<IEntity>' error means you annotated the \`.queries.ts\`/\`.mutations.ts\` fn \`: Promise<IEntity>\` and did a bare \`return data\` — the fix is to REMOVE that return-type annotation and let TS INFER it (never \`as\`-cast). Then return the payload for THIS route's response shape: if it wraps \`{ data: … }\` (scaffold auth pattern) read \`data?.data\`; if it returns the object/array directly, just \`return data\` — match your \`response:\` schema, don't blindly add \`.data\`.`;
+  }
+
+  // A `PathsWithMethod<paths, …>` error means the path STRING doesn't match any generated key —
+  // three causes, call-site first (build12/build14 evidence in the message below).
+  if (message.includes("PathsWithMethod")) {
+    return `${message}\n↳ \`PathsWithMethod<…, "<verb>">\` means no generated key matches this path AND method. Three causes — check the call site FIRST (generate:api fixes NEITHER of the first two): (1) WRONG PATH string — the literal must EXACTLY match a generated key: the COLLECTION root carries a TRAILING SLASH (list/create are \`/api/v1/<resource>/\`, e.g. \`POST "/api/v1/<resource>/"\` — a POST/GET to \`/api/v1/<resource>\` WITHOUT the slash is the usual cause here; ADD it), while by-id is \`/api/v1/<resource>/{id}\` (no trailing slash) with a literal \`{id}\` segment, value via \`{ params: { path: { id } } }\`, never interpolated; \`/api/x\` or \`/x\` (missing the \`/api/v1/\` prefix) is also wrong; (2) WRONG VERB — the path exists but doesn't support this method (e.g. a GET-only path called with POST); call the method the route actually defines; (3) ONLY if path AND verb are already right is the route genuinely unregistered — ensure it exists AND is mounted (shows in /swagger/json), then the gate re-runs generate:api and the type appears. Do NOT re-run generate:api for a call-site (path/verb) bug.`;
+  }
+
+  return message;
 }
 
 /** Preserve the failing app's section when an unfamiliar tool format defeats the

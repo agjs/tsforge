@@ -181,11 +181,19 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "passing body as a THIRD argument is an arity error: 'Expected 2 arguments, but got 3'). Errors THROW automatically via the " +
     "client's `throwOnError` middleware (TanStack Query catches them) — so NEVER check " +
     "`response.error`: it is typed `undefined`, so the guard is a dead `no-unnecessary-condition` " +
-    "gate error. Just read `data`; let TS infer its type (do NOT annotate a return type or `as`-cast " +
-    "it — index into it with a null-narrow, e.g. `data?.items ?? []`, to satisfy strict undefined " +
-    "checks). If `data` types as `Readable<SuccessResponse<…>>` instead of the JSON body, the API " +
-    "ROUTE is missing a single-content-type `response:` schema — fix the route (see api-service), " +
-    "not the consumer. Put queries in `<Feature>.queries.ts` and mutations in " +
+    "gate error. `data` is typed `Readable<SuccessResponse<…>>` (a read-only type helper, NOT a " +
+    "stream) for EVERY route — Elysia's swagger emits three media types (json/multipart/text) so " +
+    "openapi-fetch unions them. This is EXPECTED and UNIVERSAL (the scaffold's own auth/dashboard " +
+    "routes are identical); you CANNOT remove it from the route/response schema, so do NOT try. FIX " +
+    "IT ON THE CONSUMER. The error `Readable<…> not assignable to Promise<IEntity>` means you " +
+    "annotated the query/mutation fn `: Promise<IEntity>` and did a bare `return data` — the " +
+    "UNIVERSAL fix is to REMOVE that return-type annotation and let TS INFER it (never `as`-cast). " +
+    "Then return the payload for YOUR route's response SHAPE: if the response wraps `{ data: … }` " +
+    '(the scaffold auth pattern), read `data?.data` — `const { data } = await apiClient.GET("/api/v1/' +
+    'supplier/"); return data?.data ?? [];`; if the route returns the object/array DIRECTLY (no ' +
+    "`data` envelope), just `return data` — match what your `response:` schema actually declares, " +
+    "don't blindly add `.data`. Put " +
+    "queries in `<Feature>.queries.ts` and mutations in " +
     "`<Feature>.mutations.ts`. If a path genuinely isn't in the spec yet, add the API route first, " +
     "then `bun run generate:api` ONCE — if the error persists after one regen, the path STRING or " +
     "call shape is wrong, not the spec.",
@@ -257,12 +265,13 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "`void auditLogService.record({ userId, action: AUDIT_ACTIONS.<ENTITY_ACTION>, metadata: { … } })` " +
     "(the `void` satisfies no-floating-promises). Read-only methods (get/list) don't need it. Surface " +
     "failures by THROWING an `ApiError` (e.g. 404/409), not by returning an error envelope — the route " +
-    "layer maps thrown ApiErrors to responses. Every ROUTE must declare a single-content-type " +
-    "`response:` schema (`.get(path, handler, { response: <Entity>ResponseSchema })`) — the UI's " +
-    "api-client is generated from this. If a route omits `response:` (or allows multiple content " +
-    "types), openapi-fetch types the UI's `data` as `Readable<SuccessResponse<…>>` instead of the " +
-    "JSON body, and the UI can't consume it (a persistent 'not assignable to …' error you canNOT fix " +
-    "on the UI side — fix the ROUTE's response schema).",
+    "layer maps thrown ApiErrors to responses. Every ROUTE should declare a `response:` schema " +
+    "(`.get(path, handler, { response: <Entity>ResponseSchema })`) so the body TYPE is generated — " +
+    "define it like the scaffold's `AccountResponse` (a plain `t.Object({…})`, NO `headers`). NOTE: a " +
+    "`response:` schema does NOT collapse the media types — Elysia's swagger always emits " +
+    "json+multipart+text, so the UI's `data` is ALWAYS `Readable<SuccessResponse<…>>` (true for the " +
+    "scaffold's own routes too). That is NORMAL and is handled on the CONSUMER via `data?.data` (see " +
+    "data-fetching), NOT by changing this route — do not chase it from the API side.",
   i18n:
     "I18N LOCALE KEYS (boringstack). Every user-facing string is a translation key, and the gate " +
     'enforces BOTH directions: a `t("key")` with no locale entry fails (used→defined), AND a key ' +

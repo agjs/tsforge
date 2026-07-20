@@ -58,9 +58,14 @@ describe("convention registry", () => {
     // Mutations only; reads exempt; throw ApiError (not error envelopes).
     expect(g).toContain("create/update/delete");
     expect(g).toContain("ApiError");
-    // Panel-diagnosed root cause of the Readable<SuccessResponse> UI residual: route response schema.
+    // response: schema is for the body TYPE, define it like AccountResponse (no headers)…
     expect(g).toContain("response:");
+    expect(g).toContain("AccountResponse");
+    // …but build15 proved Readable<SuccessResponse> is NOT a route fix — the guide must say so
+    // (Elysia always emits multi media types; the consumer handles it via data?.data).
     expect(g).toContain("Readable<SuccessResponse");
+    expect(g).toContain("does NOT collapse the media types");
+    expect(g).toContain("data?.data");
   });
 
   test("i18n guide bans pre-declaring keys — the dominant near-green thrash (build11: 19× dead-key)", () => {
@@ -152,8 +157,17 @@ describe("convention registry", () => {
     // generate:api is the WRONG lever for a consumer/usage error (model reran it 5×).
     expect(g).toContain("generate:api");
     expect(g).toContain("usage bug, not a stale-spec bug");
-    // The Readable wrapper is a ROUTE response-schema problem, not a consumer fix.
+    // Readable<SuccessResponse> is UNIVERSAL + EXPECTED (build15) — consumed via data?.data,
+    // NOT fixed on the route. The guide must teach the consumer unwrap + infer-not-annotate.
     expect(g).toContain("Readable<SuccessResponse");
+    expect(g).toContain("data?.data");
+    expect(g).toContain("EXPECTED and UNIVERSAL");
+    expect(g).toContain("not assignable to Promise<IEntity>");
+    // The UNIVERSAL fix is infer-don't-annotate; data?.data is SHAPE-CONDITIONAL (panel: not
+    // every response is {data:…} — a raw object/array returns `data` directly), so the guide
+    // must NOT categorically prescribe .data.
+    expect(g).toContain("let TS INFER");
+    expect(g).toContain("don't blindly add");
   });
 
   test("testing guide teaches the exact idioms the model kept failing (extension, hoisted mock, route tests, rules)", () => {
