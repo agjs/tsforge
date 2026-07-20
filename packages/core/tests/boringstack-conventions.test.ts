@@ -33,6 +33,17 @@ describe("convention registry", () => {
     expect(g).not.toContain("src/views/");
   });
 
+  test("jsx guide gives the exact jsx-no-bind fix for list-row handlers (build7 parking residual)", () => {
+    const g = conventionGuide("jsx");
+
+    expect(g).toContain("react/jsx-no-bind");
+    expect(g).toContain("STABLE reference");
+    // Both an inline arrow AND a body-defined arrow are rejected — the model kept doing the latter.
+    expect(g).toContain("recreated every render");
+    expect(g).toContain("useCallback");
+    expect(g).toContain("onEdit(id)");
+  });
+
   test("api-service guide teaches the audit-event idiom on mutating methods (build6 hard-gate residual)", () => {
     const g = conventionGuide("api-service");
 

@@ -101,7 +101,14 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "already-computed values. A derived value → a `useMemo` in `<feature>.hooks.ts`; " +
     "a pure transform → a function in `src/lib`. A simple ternary is fine; a " +
     "`.map()`/`.filter()`/arithmetic/`Object.entries()` in the markup is not (extract " +
-    "it). Every `<button>` needs an explicit `type`.",
+    "it). Every `<button>` needs an explicit `type`. A function passed to a JSX prop " +
+    "(`onClick`, `onChange`, `onSubmit`) must be a STABLE reference — `react/jsx-no-bind` " +
+    "rejects BOTH an inline arrow (`onClick={() => …}`) AND a plain arrow defined in the " +
+    "component body (it's recreated every render). Make it stable: for a list ROW, give " +
+    "the row its own component with an `onEdit(id)`/`onDelete(id)` prop and pass that prop " +
+    "straight to `onClick`; the parent supplies each callback via `useCallback` in " +
+    "`<feature>.hooks.ts`. A handler needing an argument → `useCallback(() => onEdit(id), " +
+    "[onEdit, id])` in the row's hook, not an inline `() => onEdit(id)` in the markup.",
   state:
     "STATE (boringstack). ALL `useState`/`useReducer`/`useEffect`/`useMemo`/" +
     "`useCallback` live in `<feature>.hooks.ts`, never in a component body. Server " +
