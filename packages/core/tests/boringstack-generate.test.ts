@@ -99,11 +99,13 @@ describe("generateResource", () => {
 });
 
 describe("generateResource idempotency (retry-safe)", () => {
-  test("skips new:resource + wiring when the resource already exists, still re-syncs", async () => {
+  test("skips new:resource on an existing dir, but STILL wires the route + re-syncs (build13 remount fix)", async () => {
     const tmpDir = await createTestEnv();
 
     try {
-      // Simulate a prior attempt: the resource dir already exists on disk.
+      // Simulate a prior attempt: the resource dir already exists on disk, but the route
+      // is NOT mounted (a rollback reverted the mount, or the dir pre-existed). Before the
+      // fix, wiring was gated on the scaffold branch and skipped here → knip unused + park.
       await mkdir(join(tmpDir, "apps/api/src/api/project"), {
         recursive: true,
       });
@@ -115,9 +117,39 @@ describe("generateResource idempotency (retry-safe)", () => {
 
       // new:resource would CRASH on an existing dir — it must be skipped on retry…
       expect(joined.some((c) => c.includes("new:resource"))).toBe(false);
-      // …but the downstream sync still runs so a fix is reflected.
+      // …but the route IS now mounted (wireResource runs every attempt, self-healing a
+      // lost/absent mount) — the exact build13 park fix.
+      const routesSrc = await Bun.file(
+        join(tmpDir, "apps/api/src/config/routes/routes.ts")
+      ).text();
+
+      expect(routesSrc).toContain("project: projectRoutes,");
+      // …and the downstream sync still runs so a fix is reflected.
       expect(joined.some((c) => c.includes("run format"))).toBe(true);
       expect(joined.some((c) => c.includes("db:push"))).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("re-running generateResource does NOT double-mount (idempotent wire on every attempt)", async () => {
+    const tmpDir = await createTestEnv();
+
+    try {
+      await mkdir(join(tmpDir, "apps/api/src/api/project"), {
+        recursive: true,
+      });
+      const { exec } = recorder();
+
+      await generateResource(tmpDir, "Project", exec);
+      await generateResource(tmpDir, "Project", exec);
+
+      const routesSrc = await Bun.file(
+        join(tmpDir, "apps/api/src/config/routes/routes.ts")
+      ).text();
+      const mounts = routesSrc.split("project: projectRoutes,").length - 1;
+
+      expect(mounts).toBe(1);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

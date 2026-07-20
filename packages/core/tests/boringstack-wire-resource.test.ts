@@ -129,6 +129,36 @@ describe("wireRoutesFile", () => {
     expect(out).toContain("invoice: invoiceRoutes,");
     expect(out).toContain("health: healthRoutes,");
   });
+
+  test("is idempotent — re-wiring an already-mounted route is a no-op (build13 remount safety)", () => {
+    const src = `import healthRoutes from "../../api/health/health.routes";\n\nexport const routes = {\n  health: healthRoutes,\n};\n`;
+    const once = wireRoutesFile(src, "Invoice");
+
+    // wireResource now runs on EVERY attempt, so a second wire must NOT double-insert.
+    expect(wireRoutesFile(once, "Invoice")).toBe(once);
+  });
+
+  test("self-heals a PARTIAL state: entry present but import reverted → adds the import (no dup entry)", () => {
+    // import line removed, map entry left behind — the guard must restore the import only.
+    const src = `import healthRoutes from "../../api/health/health.routes";\n\nexport const routes = {\n  health: healthRoutes,\n  invoice: invoiceRoutes,\n};\n`;
+    const out = wireRoutesFile(src, "Invoice");
+
+    expect(out).toContain(
+      'import invoiceRoutes from "../../api/invoice/invoice.routes";'
+    );
+    expect(out.split("invoice: invoiceRoutes,").length - 1).toBe(1); // entry not duplicated
+  });
+
+  test("self-heals a PARTIAL state: import present but entry reverted → adds the entry (no dup import)", () => {
+    const src = `import healthRoutes from "../../api/health/health.routes";\nimport invoiceRoutes from "../../api/invoice/invoice.routes";\n\nexport const routes = {\n  health: healthRoutes,\n};\n`;
+    const out = wireRoutesFile(src, "Invoice");
+
+    expect(out).toContain("invoice: invoiceRoutes,");
+    expect(
+      out.split('import invoiceRoutes from "../../api/invoice/invoice.routes";')
+        .length - 1
+    ).toBe(1); // import not duplicated
+  });
 });
 
 describe("wireAppFile", () => {
@@ -142,6 +172,13 @@ describe("wireAppFile", () => {
     );
     expect(out).toContain(".use(routes.health)");
   });
+
+  test("is idempotent — the group mount is inserted at most once", () => {
+    const src = `  return (\n    app\n      .use(routes.health)\n  );\n`;
+    const once = wireAppFile(src, "Invoice");
+
+    expect(wireAppFile(once, "Invoice")).toBe(once);
+  });
 });
 
 describe("wireSwaggerFile", () => {
@@ -154,6 +191,13 @@ describe("wireSwaggerFile", () => {
       '{ name: "Invoice", description: "Invoice resource" }'
     );
     expect(out).toContain('{ name: "Health", description: "probes" }');
+  });
+
+  test("is idempotent — the swagger tag is added at most once", () => {
+    const src = `    tags: [\n      { name: "Health", description: "probes" },\n    ],\n`;
+    const once = wireSwaggerFile(src, "Invoice");
+
+    expect(wireSwaggerFile(once, "Invoice")).toBe(once);
   });
 });
 

@@ -31,13 +31,19 @@ export async function generateResource(
   // IDEMPOTENT on retry: `new:resource` refuses to overwrite an existing resource
   // dir, so on a second attempt (the model is fixing gate failures) we must NOT
   // regenerate — that would crash AND clobber the model's in-progress fixes. Only
-  // scaffold + wire when the resource doesn't exist yet; always re-run the
-  // downstream sync (format + db:push) so a schema/format tweak is reflected.
+  // SCAFFOLD when the resource doesn't exist yet.
   if (!existsSync(`${apiCwd}/src/api/${camel}`)) {
     await execOrThrow(exec, ["bun", "run", "new:resource", "--", name], apiCwd);
-
-    await wireResource(cwd, name);
   }
+
+  // …but WIRE on EVERY attempt — this is the API analog of generateFeature's
+  // unconditional `wireUiFeature`. Mounting the route (routes map + app `.group` +
+  // swagger) was previously gated on the scaffold branch, so once the dir existed —
+  // a pre-existing dir, or a near-green rollback that reverted the mount — the route
+  // was NEVER mounted again: knip `unused file` + an unreachable route → park
+  // (observed live, build13). wireResource is idempotent (each wire* checks it isn't
+  // already present), so re-running it every attempt is safe and self-heals a lost mount.
+  await wireResource(cwd, name);
 
   // Format with BoringStack's OWN pinned prettier (its `format` script), NEVER
   // `bunx prettier` — bunx pulls the latest prettier, which formats differently

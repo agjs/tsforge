@@ -29,35 +29,64 @@ export function wireRoutesFile(src: string, name: string): string {
   const importLine = `import ${camel}Routes from "../../api/${camel}/${camel}.routes";\n`;
   const objectEntry = `  ${camel}: ${camel}Routes,\n`;
 
-  const lastImportIndex = src.lastIndexOf("import ");
+  // wireResource runs on EVERY attempt (like the UI wirer), so this must be idempotent.
+  // Guard the import and the map entry INDEPENDENTLY so every partial state self-heals to
+  // the complete pair without duplicating: both present → no-op; neither → both added;
+  // import-only (entry reverted) → add entry; entry-only (import reverted) → add import.
+  const hasImport = src.includes(importLine.trimEnd());
+  const hasEntry = src.includes(`${camel}: ${camel}Routes`);
 
-  if (lastImportIndex === -1) {
-    throw new Error("No import statement found");
+  if (hasImport && hasEntry) {
+    return src;
   }
 
-  const importEndIndex = src.indexOf("\n", lastImportIndex);
+  let out = src;
 
-  if (importEndIndex === -1) {
-    throw new Error("No newline after import found");
+  if (!hasImport) {
+    const lastImportIndex = out.lastIndexOf("import ");
+
+    if (lastImportIndex === -1) {
+      throw new Error("No import statement found");
+    }
+
+    const importEndIndex = out.indexOf("\n", lastImportIndex);
+
+    if (importEndIndex === -1) {
+      throw new Error("No newline after import found");
+    }
+
+    out =
+      out.slice(0, importEndIndex + 1) +
+      importLine +
+      out.slice(importEndIndex + 1);
   }
 
-  const afterImports =
-    src.slice(0, importEndIndex + 1) +
-    importLine +
-    src.slice(importEndIndex + 1);
+  if (!hasEntry) {
+    out = insertBeforeLast(out, "};", objectEntry);
+  }
 
-  return insertBeforeLast(afterImports, "};", objectEntry);
+  return out;
 }
 
 export function wireAppFile(src: string, name: string): string {
   const camel = toCamelCase(name);
   const groupCall = `.group("/api/v1/${camel}", (group) => group.use(routes.${camel}))\n  `;
 
+  // Idempotent (retry-safe): the sub-router is already mounted at this prefix.
+  if (src.includes(`.group("/api/v1/${camel}",`)) {
+    return src;
+  }
+
   return insertBeforeLast(src, ");", groupCall);
 }
 
 export function wireSwaggerFile(src: string, name: string): string {
   const tagEntry = `{ name: "${name}", description: "${name} resource" },\n    `;
+
+  // Idempotent (retry-safe): the swagger tag is already registered.
+  if (src.includes(`{ name: "${name}",`)) {
+    return src;
+  }
 
   return insertBeforeLast(src, "],", tagEntry);
 }
