@@ -183,6 +183,10 @@ describe("signatureToError", () => {
     // Universal move is infer-don't-annotate; unwrap is shape-conditional (not blind .data).
     expect(err.message).toContain("let TS INFER");
     expect(err.message).toContain("don't blindly add");
+    // Steer must name BOTH annotation sites — the fn AND the useMutation/useQuery HOOK generic
+    // (build16 oscillated on the hook one; guide + steer must agree).
+    expect(err.message).toContain("UseMutationResult<Readable");
+    expect(err.message).toContain("HOOK generic");
     // Must NOT tell the model to fix the route/schema for this.
     expect(err.message).toContain("CANNOT remove it by editing the route");
   });

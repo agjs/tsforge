@@ -163,6 +163,10 @@ describe("convention registry", () => {
     expect(g).toContain("data?.data");
     expect(g).toContain("EXPECTED and UNIVERSAL");
     expect(g).toContain("not assignable to Promise<IEntity>");
+    // build16: the SAME over-annotation habit also hits the HOOK generic (useMutation/useQuery),
+    // not just the fn return — the guide must name that facet too.
+    expect(g).toContain("UseMutationResult<Readable");
+    expect(g).toContain("HOOK's");
     // The UNIVERSAL fix is infer-don't-annotate; data?.data is SHAPE-CONDITIONAL (panel: not
     // every response is {data:…} — a raw object/array returns `data` directly), so the guide
     // must NOT categorically prescribe .data.
@@ -202,6 +206,9 @@ describe("convention registry", () => {
     expect(g).toContain("no-focused-tests");
     expect(g).toContain("no-conditional-expect");
     expect(g).toContain("fake-timers-must-be-restored");
+    // build16 final blocker: empty placeholder callbacks in tests → no-empty-function; use vi.fn().
+    expect(g).toContain("no-empty-function");
+    expect(g).toContain("vi.fn()");
     // The auto-reformat re-read (the not-found edit-reject churn).
     expect(g).toContain("AUTO-FORMATS");
   });
@@ -209,7 +216,7 @@ describe("convention registry", () => {
 
 describe("topicForRule (testing)", () => {
   test("EVERY testing rule maps to the testing topic so its gate error pushes the guide", () => {
-    // Lock all six — a typo in any would silently disable the reactive PUSH for that error.
+    // Lock all — a typo in any would silently disable the reactive PUSH for that error.
     for (const rule of [
       "test-sibling-required",
       "test-file-mirrors-source",
@@ -217,6 +224,8 @@ describe("topicForRule (testing)", () => {
       "no-conditional-expect",
       "no-real-network-in-unit-tests",
       "fake-timers-must-be-restored",
+      // build16: the empty-placeholder-callback rule must re-push the testing guide too.
+      "no-empty-function",
     ]) {
       expect(topicForRule(rule)).toBe("testing");
     }

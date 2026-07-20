@@ -74,6 +74,9 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
       "no-conditional-expect",
       "no-real-network-in-unit-tests",
       "fake-timers-must-be-restored",
+      // build16's final blocker (9× in one row-hook test): empty placeholder callbacks. The
+      // testing guide teaches `vi.fn()` for these, so map the rule here to re-push it reactively.
+      "no-empty-function",
     ],
     // The audit-event rule is a boringstack-OWN eslint rule (not a tsforge meta-rule), so it
     // isn't keyed here for the reactive PUSH — the front-loaded guide is the delivery path.
@@ -185,9 +188,13 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "stream) for EVERY route — Elysia's swagger emits three media types (json/multipart/text) so " +
     "openapi-fetch unions them. This is EXPECTED and UNIVERSAL (the scaffold's own auth/dashboard " +
     "routes are identical); you CANNOT remove it from the route/response schema, so do NOT try. FIX " +
-    "IT ON THE CONSUMER. The error `Readable<…> not assignable to Promise<IEntity>` means you " +
-    "annotated the query/mutation fn `: Promise<IEntity>` and did a bare `return data` — the " +
-    "UNIVERSAL fix is to REMOVE that return-type annotation and let TS INFER it (never `as`-cast). " +
+    "IT ON THE CONSUMER by INFERRING, not annotating. The error appears two ways, BOTH fixed by " +
+    "removing a type annotation so TS infers from the unwrapped payload (never `as`-cast): " +
+    "(a) `Readable<…> not assignable to Promise<IEntity>` — you annotated the query/mutation fn " +
+    "`: Promise<IEntity>` and did a bare `return data`; (b) `UseMutationResult<Readable<…>> not " +
+    "assignable to UseMutationResult<IEntity>` (or `UseQueryResult<…>`) — you annotated the HOOK's " +
+    "generic/return type (`useMutation<IEntity>` / `: UseMutationResult<IEntity>`). Do NEITHER: " +
+    "leave the fn AND the hook UN-annotated and let TS INFER both. " +
     "Then return the payload for YOUR route's response SHAPE: if the response wraps `{ data: … }` " +
     '(the scaffold auth pattern), read `data?.data` — `const { data } = await apiClient.GET("/api/v1/' +
     'supplier/"); return data?.data ?? [];`; if the route returns the object/array DIRECTLY (no ' +
@@ -253,7 +260,9 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "• RULES the gate enforces: no `.only`/`.skip` (no-focused-tests); never put `expect` inside an " +
     "`if`/loop/`switch`/ternary — assert unconditionally (no-conditional-expect); if you use fake " +
     "timers, restore them in `afterEach` (fake-timers-must-be-restored); the test path/name mirrors " +
-    "its source (test-file-mirrors-source).\n" +
+    "its source (test-file-mirrors-source). A no-op/placeholder callback (e.g. an unused handler " +
+    "arg when testing ONE of a hook's callbacks) must be `vi.fn()`, NEVER an empty `() => {}` — an " +
+    "empty arrow/function body is a `no-empty-function` gate error (observed: 9 in one row-hook test).\n" +
     "• After you write a test the harness AUTO-FORMATS it (imports reordered, quotes/commas normalized), " +
     "so your next `edit` oldString won't match — RE-READ the file and copy oldString from its current " +
     "content; do NOT recreate the whole file.",
