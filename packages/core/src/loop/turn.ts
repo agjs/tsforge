@@ -1494,10 +1494,28 @@ export async function tryExpertRescue(
   // derivation only when no sticky identity exists (nothing has been recorded then, so
   // there's no inconsistency). If R4 is already recorded for this block, the expert has
   // already tried and failed on this exact block; escalate to R5 instead.
-  const block =
+  let block =
     (state.blockFingerprint ?? "") !== ""
       ? (state.blockFingerprint ?? "")
       : fingerprintFor(state, gateErrors);
+
+  // The expert is the LAST resort before parking. Callers OUTSIDE checkStuck reach here without
+  // its `escalation-N` guard — notably the read-only-spin park (session.ts) — so BOTH identity
+  // sources can be empty at once (observed live, build12: a near-green rollback reset errorAge so
+  // fingerprintFor derives nothing, and blockFingerprint was never set on this path). The old code
+  // then SKIPPED the expert and parked, wasting the rung. Derive a per-error-set identity from the
+  // failing error KEYS (the dialect fingerprintFor/samePersist use — NOT e.file, which would
+  // collapse distinct errors in one file). This local id is used for BOTH the R4 lookup below and
+  // the record-on-success — so the SAME error set skips (fires once) while a DIFFERENT set gets a
+  // distinct id and its own shot. It is deliberately NOT written to state.blockFingerprint: this
+  // fallback only fires on the settleGate-less callers (settleGate always has escalation-N), so
+  // persisting would only leave a stale id that makes a later, different stall skip the expert.
+  if (block === "") {
+    block = gateErrors
+      .map((e) => e.key)
+      .sort()
+      .join("|");
+  }
 
   if (block === "") {
     return skip("no block fingerprint computed");

@@ -289,6 +289,88 @@ describe("tryExpertRescue", () => {
     }
   });
 
+  test("EMPTY fingerprint at exhaustion (post-rollback errorAge reset) → expert STILL fires, not skip+park", async () => {
+    // build12: a near-green rollback reset errorAge (so fingerprintFor derives nothing) and a
+    // frontier-advance had cleared blockFingerprint — so at ladder exhaustion the expert was
+    // skipped ("no block fingerprint computed; parking"), wasting the last-resort rung with
+    // rollback budget spent. The expert must fall back to a stable per-error-set identity and fire.
+    const dir = await mkdtemp(join(tmpdir(), "expert-rescue-empty-fp-"));
+
+    try {
+      await Bun.write(join(dir, "x.ts"), "export const s = v as any;\n");
+      const events: ILoopEvent[] = [];
+      const ctx = makeCtx(events, dir);
+      const state = freshState();
+
+      // The exact empty-fingerprint state: NO blockFingerprint, NO aged errors, NO history.
+      state.blockFingerprint = "";
+      state.errorAge = new Map();
+      state.recentGateFingerprints = [];
+      state.triedLeversByBlock = new Map();
+
+      const ask: ExpertAsk = async () =>
+        "```ts\nexport const s = String(v);\n```";
+
+      const rescued = await tryExpertRescue(
+        ctx,
+        state,
+        [fileErr("x.ts")],
+        async () => ask
+      );
+
+      // The last-resort expert fired instead of skip+park.
+      expect(rescued).toBe(true);
+      expect(await Bun.file(join(dir, "x.ts")).text()).toBe(
+        "export const s = String(v);\n"
+      );
+      // It did NOT bail with the empty-fingerprint skip.
+      expect(
+        toolMsgs(events).some((m) => m.includes("no block fingerprint"))
+      ).toBe(false);
+      // The fallback id is derived from the error KEYS and used for recording — but is NOT
+      // persisted to state (persisting would leave a stale id that skips a later DIFFERENT stall).
+      const derivedId = [fileErr("x.ts").key].sort().join("|");
+
+      expect(state.blockFingerprint ?? "").toBe("");
+      expect(state.triedLeversByBlock.get(derivedId)?.has("R4")).toBe(true);
+
+      // ONE-SHOT for the SAME error set: a second exhaustion (file reverted) SKIPS as already-tried.
+      await Bun.write(join(dir, "x.ts"), "export const s = v as any;\n");
+      const rescued2 = await tryExpertRescue(
+        ctx,
+        state,
+        [fileErr("x.ts")],
+        async () => ask
+      );
+
+      expect(rescued2).toBe(false);
+      expect(
+        toolMsgs(events).some((m) => m.includes("already tried for this block"))
+      ).toBe(true);
+
+      // But a DIFFERENT error set is NOT stale-skipped — it gets its own shot (the bug a sticky
+      // write would cause: the old id lingers and a new stall finds R4 under it and never fires).
+      await Bun.write(join(dir, "y.ts"), "export const t = w as any;\n");
+      const askY: ExpertAsk = async () =>
+        "```ts\nexport const t = String(w);\n```";
+      const rescuedY = await tryExpertRescue(
+        ctx,
+        state,
+        [fileErr("y.ts")],
+        async () => askY
+      );
+
+      expect(rescuedY).toBe(true);
+      expect(
+        state.triedLeversByBlock
+          .get([fileErr("y.ts").key].sort().join("|"))
+          ?.has("R4")
+      ).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("no file-scoped error → skips with a visible reason", async () => {
     const events: ILoopEvent[] = [];
     const ctx = makeCtx(events, "/tmp");
