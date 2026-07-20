@@ -33,6 +33,18 @@ describe("convention registry", () => {
     expect(g).not.toContain("src/views/");
   });
 
+  test("forms guide steers away from the invented FormEvent + deprecated z.string().email() (live-build residuals)", () => {
+    const g = conventionGuide("forms");
+
+    expect(g).toContain("zodResolver");
+    expect(g).toContain("handleSubmit");
+    // The model repeatedly invented React's FormEvent and used the deprecated Zod string email.
+    expect(g).toContain("FormEvent");
+    expect(g).toContain("z.email()");
+    expect(g).toContain("z.string().email()");
+    expect(g).toContain("BaseSyntheticEvent");
+  });
+
   test("data-fetching guide states the apiClient pattern and forbids response.error", () => {
     const g = conventionGuide("data-fetching");
 

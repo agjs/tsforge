@@ -119,9 +119,15 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "router (`src/app/router/routes.tsx`) pointing at `@/features/<feature>` — never " +
     "hand-write a component's body in a route file.",
   forms:
-    "FORMS (boringstack). Use react-hook-form's `useForm` inside `<Component>.hooks.ts` " +
-    "(not the component body). Map server/validation errors back onto the form fields; " +
-    "keep the component rendering the field state the hook returns.",
+    "FORMS (boringstack). Use react-hook-form's `useForm<T>({ resolver: zodResolver(schema) })` " +
+    "(from `react-hook-form` + `@hookform/resolvers/zod`) inside `<Component>.hooks.ts`, not the " +
+    "component body. Submit via the returned `handleSubmit(onSubmit)` — do NOT hand-type the " +
+    "submit handler with React's `FormEvent` (it's the wrong type here and a repeatedly-invented " +
+    "error); if you must name the event it is a `BaseSyntheticEvent`, and fire it as " +
+    "`void handleSubmit(onSubmit)(event)` (the `void` satisfies no-floating-promises). In the Zod " +
+    "schema use the TOP-LEVEL validators — `z.email()`, `z.url()`, `z.uuid()` — NOT the deprecated " +
+    "`z.string().email()`. Map server/validation errors back onto the fields (`setError`); keep " +
+    "the component rendering the field state the hook returns.",
   "data-fetching":
     "DATA-FETCHING (boringstack). ALL HTTP goes through the generated client " +
     "`@/lib/api/client` — never `fetch`/`axios` (lint-banned). Call it as " +
