@@ -24,6 +24,7 @@ const TOPICS = [
   "data-fetching",
   "lint-gotchas",
   "testing",
+  "api-service",
 ] as const;
 
 export type ConventionTopic = (typeof TOPICS)[number];
@@ -73,6 +74,9 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
       "no-real-network-in-unit-tests",
       "fake-timers-must-be-restored",
     ],
+    // The audit-event rule is a boringstack-OWN eslint rule (not a tsforge meta-rule), so it
+    // isn't keyed here for the reactive PUSH — the front-loaded guide is the delivery path.
+    "api-service": [],
   };
 
 const GUIDES: Readonly<Record<ConventionTopic, string>> = {
@@ -198,6 +202,15 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "• After you write a test the harness AUTO-FORMATS it (imports reordered, quotes/commas normalized), " +
     "so your next `edit` oldString won't match — RE-READ the file and copy oldString from its current " +
     "content; do NOT recreate the whole file.",
+  "api-service":
+    "API SERVICE (boringstack). apps/api resource logic lives in `<entity>.service.ts`. Every " +
+    "MUTATING method (create/update/delete) MUST record an audit event — the gate rejects one that " +
+    "doesn't (`Mutating method '…' does not record an audit event`). Import `{ AUDIT_ACTIONS, " +
+    'auditLogService } from "../../lib/audit-log"` and, after the mutation, call ' +
+    "`void auditLogService.record({ userId, action: AUDIT_ACTIONS.<ENTITY_ACTION>, metadata: { … } })` " +
+    "(the `void` satisfies no-floating-promises). Read-only methods (get/list) don't need it. Surface " +
+    "failures by THROWING an `ApiError` (e.g. 404/409), not by returning an error envelope — the route " +
+    "layer maps thrown ApiErrors to responses.",
 };
 
 /** The guide for a topic (the exact string pushed or pulled). */

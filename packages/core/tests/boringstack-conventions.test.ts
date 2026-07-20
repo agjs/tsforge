@@ -33,6 +33,17 @@ describe("convention registry", () => {
     expect(g).not.toContain("src/views/");
   });
 
+  test("api-service guide teaches the audit-event idiom on mutating methods (build6 hard-gate residual)", () => {
+    const g = conventionGuide("api-service");
+
+    expect(g).toContain("auditLogService.record");
+    expect(g).toContain("AUDIT_ACTIONS");
+    expect(g).toContain("audit event");
+    // Mutations only; reads exempt; throw ApiError (not error envelopes).
+    expect(g).toContain("create/update/delete");
+    expect(g).toContain("ApiError");
+  });
+
   test("forms guide steers away from the invented FormEvent + deprecated z.string().email() (live-build residuals)", () => {
     const g = conventionGuide("forms");
 
