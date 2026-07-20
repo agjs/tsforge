@@ -137,7 +137,13 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "error); if you must name the event it is a `BaseSyntheticEvent`, and fire it as " +
     "`void handleSubmit(onSubmit)(event)` (the `void` satisfies no-floating-promises). In the Zod " +
     "schema use the TOP-LEVEL validators — `z.email()`, `z.url()`, `z.uuid()` — NOT the deprecated " +
-    "`z.string().email()`. Map server/validation errors back onto the fields (`setError`); keep " +
+    "`z.string().email()`. RESOLVER TYPES: do NOT put `.optional()`/`.default()` on a form field's " +
+    "schema — it makes the Zod INPUT type differ from the OUTPUT type, so `zodResolver` yields a " +
+    "`Resolver<In, any, Out>` that won't match `useForm`/`SubmitHandler` (a persistent 'Resolver … " +
+    "not assignable' / 'not assignable to SubmitHandler' error). Keep every field required in the " +
+    "schema and supply its initial value in `useForm({ defaultValues })`; type the hook as " +
+    "`useForm<z.infer<typeof schema>>` so onSubmit's input matches `SubmitHandler`. Map " +
+    "server/validation errors back onto the fields (`setError`); keep " +
     "the component rendering the field state the hook returns.",
   "data-fetching":
     "DATA-FETCHING (boringstack). ALL HTTP goes through the generated client " +
@@ -217,7 +223,12 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "`void auditLogService.record({ userId, action: AUDIT_ACTIONS.<ENTITY_ACTION>, metadata: { … } })` " +
     "(the `void` satisfies no-floating-promises). Read-only methods (get/list) don't need it. Surface " +
     "failures by THROWING an `ApiError` (e.g. 404/409), not by returning an error envelope — the route " +
-    "layer maps thrown ApiErrors to responses.",
+    "layer maps thrown ApiErrors to responses. Every ROUTE must declare a single-content-type " +
+    "`response:` schema (`.get(path, handler, { response: <Entity>ResponseSchema })`) — the UI's " +
+    "api-client is generated from this. If a route omits `response:` (or allows multiple content " +
+    "types), openapi-fetch types the UI's `data` as `Readable<SuccessResponse<…>>` instead of the " +
+    "JSON body, and the UI can't consume it (a persistent 'not assignable to …' error you canNOT fix " +
+    "on the UI side — fix the ROUTE's response schema).",
 };
 
 /** The guide for a topic (the exact string pushed or pulled). */
