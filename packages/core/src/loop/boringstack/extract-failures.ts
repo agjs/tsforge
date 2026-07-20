@@ -430,7 +430,13 @@ function structuredFailure(
 function sourceFileFromLine(line: string, app: string): string | null {
   const withoutColon = line.endsWith(":") ? line.slice(0, -1) : line;
 
-  if (!/^\S+\.[cm]?[jt]sx?$/u.test(withoutColon.trim())) {
+  // JS/TS source files AND `.json` — the latter because meta-rules like
+  // `i18n-locale-keys-used` report their file HEADER as an i18n locale `.json`. Without
+  // `.json` here, `consumeLintMeta` never sets `currentFile` for such a violation, drops
+  // it, and the whole apps/ui gate falls through to opaqueGateError — which hid a lone
+  // unused-locale-key from the structured error path (so #61's completion-phase couldn't
+  // see it and WS-B reverted the model's wiring). A bare path-only line is unambiguous.
+  if (!/^\S+\.([cm]?[jt]sx?|json)$/u.test(withoutColon.trim())) {
     return null;
   }
 
