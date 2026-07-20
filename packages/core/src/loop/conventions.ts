@@ -159,17 +159,22 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "`@/lib/api/client` — never `fetch`/`axios` (lint-banned). PATH STRINGS are the #1 thing " +
     "the model gets wrong: the path is a LITERAL that must exactly match a key in the generated " +
     "`paths` type, and every route is mounted under `/api/v1/` — so it is " +
-    '`apiClient.GET("/api/v1/<resource>")`, NOT `"/<resource>"` or `"/api/<resource>"` (a wrong ' +
+    '`apiClient.GET("/api/v1/<resource>/")`, NOT `"/<resource>"` or `"/api/<resource>"` (a wrong ' +
     "string is a `PathsWithMethod`/'not assignable' error that `generate:api` will NEVER fix — it " +
-    "is a usage bug, not a stale-spec bug). For a by-id path, use the LITERAL `{id}` segment and " +
-    "pass the value via params — never string-interpolate the id into the path. CALL SHAPE: the " +
+    "is a usage bug, not a stale-spec bug). TRAILING SLASH matters and is the #1 cause of a POST/GET " +
+    "`PathsWithMethod` on a path that otherwise looks right: the COLLECTION root carries a trailing " +
+    'slash — list is `GET "/api/v1/<resource>/"` and create is `POST "/api/v1/<resource>/"` (Elysia ' +
+    "mounts the group at `/api/v1/<resource>` and the handler at `/`, so the generated key is " +
+    '`/api/v1/<resource>/`). The by-id path has NO trailing slash: `"/api/v1/<resource>/{id}"` — use ' +
+    "the LITERAL `{id}` segment and pass the value via params, never string-interpolate the id. If a " +
+    "POST to `/api/v1/<resource>` (no slash) is rejected, ADD the trailing slash. CALL SHAPE: the " +
     "options object is OPTIONAL — a plain list GET is one arg (`GET(path)`); when you need params " +
     "and/or a body they ALL go together in ONE options object as the SECOND arg — there is NEVER a " +
     "third positional argument:\n" +
-    '• list:   `const { data } = await apiClient.GET("/api/v1/supplier")`\n' +
+    '• list:   `const { data } = await apiClient.GET("/api/v1/supplier/")`  (collection → TRAILING SLASH)\n' +
     '• by id:  `const { data } = await apiClient.GET("/api/v1/supplier/{id}", { params: { path: { id } } })`\n' +
-    '• query:  `await apiClient.GET("/api/v1/supplier", { params: { query: { status: "active" } } })`\n' +
-    '• create: `const { data } = await apiClient.POST("/api/v1/supplier", { body: input })`\n' +
+    '• query:  `await apiClient.GET("/api/v1/supplier/", { params: { query: { status: "active" } } })`\n' +
+    '• create: `const { data } = await apiClient.POST("/api/v1/supplier/", { body: input })`  (collection → TRAILING SLASH)\n' +
     '• update: `const { data } = await apiClient.PATCH("/api/v1/supplier/{id}", { params: { path: { id } }, body: input })`\n' +
     '• delete: `await apiClient.DELETE("/api/v1/supplier/{id}", { params: { path: { id } } })`\n' +
     "PATCH/PUT take path AND body in the SAME options object (one object as the second arg — " +

@@ -133,13 +133,18 @@ describe("convention registry", () => {
     expect(g).toContain("/api/v1/");
     expect(g).toContain("PathsWithMethod");
     // Full method↔shape pairings (not loose fragments) — a fragment on the wrong method must fail.
-    expect(g).toContain('apiClient.POST("/api/v1/supplier", { body: input })');
+    // COLLECTION root carries a TRAILING SLASH (build14: the model sprayed on POST /api/v1/supplier
+    // for ~40 turns until it discovered the generated key is /api/v1/supplier/).
+    expect(g).toContain('apiClient.POST("/api/v1/supplier/", { body: input })');
     expect(g).toContain(
       'apiClient.PATCH("/api/v1/supplier/{id}", { params: { path: { id } }, body: input })'
     );
     expect(g).toContain(
       'apiClient.DELETE("/api/v1/supplier/{id}", { params: { path: { id } } })'
     );
+    // The trailing-slash rule is stated explicitly (collection root vs by-id).
+    expect(g).toContain("TRAILING SLASH");
+    expect(g).toContain('POST "/api/v1/<resource>/"');
     // Options are OPTIONAL and there is never a THIRD positional arg (the corrected contradiction).
     expect(g).toContain("options object is OPTIONAL");
     expect(g).toContain("NEVER a " + "third positional argument");

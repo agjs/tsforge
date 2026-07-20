@@ -157,6 +157,9 @@ describe("signatureToError", () => {
     expect(err.message).toContain("WRONG PATH");
     expect(err.message).toContain("WRONG VERB");
     expect(err.message).toContain("unregistered");
+    // The steer must name the collection TRAILING SLASH (build14 endgame) — else the per-error
+    // feedback contradicts the front-loaded guide when the model is stuck on a slashless POST.
+    expect(err.message).toContain("TRAILING SLASH");
     // …and the wrong-lever warning: don't re-run generate:api for a call-site string bug.
     expect(err.message).toContain("Do NOT re-run generate:api");
     // A plain type error (no PathsWithMethod) is left untouched.
