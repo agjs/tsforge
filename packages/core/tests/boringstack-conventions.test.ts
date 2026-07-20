@@ -53,6 +53,9 @@ describe("convention registry", () => {
     // Mutations only; reads exempt; throw ApiError (not error envelopes).
     expect(g).toContain("create/update/delete");
     expect(g).toContain("ApiError");
+    // Panel-diagnosed root cause of the Readable<SuccessResponse> UI residual: route response schema.
+    expect(g).toContain("response:");
+    expect(g).toContain("Readable<SuccessResponse");
   });
 
   test("forms guide steers away from the invented FormEvent + deprecated z.string().email() (live-build residuals)", () => {
@@ -65,6 +68,9 @@ describe("convention registry", () => {
     expect(g).toContain("z.email()");
     expect(g).toContain("z.string().email()");
     expect(g).toContain("BaseSyntheticEvent");
+    // build8 park (#67): the rhf resolver input≠output type mismatch from .optional()/.default().
+    expect(g).toContain("SubmitHandler");
+    expect(g).toContain("defaultValues");
   });
 
   test("data-fetching guide states the apiClient pattern and forbids response.error", () => {
