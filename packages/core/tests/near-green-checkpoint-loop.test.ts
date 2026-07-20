@@ -10,6 +10,7 @@ import type { ILoopCtx, ILoopState } from "../src/loop/turn";
 import {
   captureNearGreenCheckpoint,
   rollbackNearGreen,
+  settleGate,
 } from "../src/loop/turn";
 import type { IValidateResult } from "../src/validate";
 import { MAX_NEAR_GREEN_ROLLBACKS } from "../src/loop/near-green-checkpoint";
@@ -133,6 +134,157 @@ test("flag ON: a spray past the near-green checkpoint REVERTS the file to the be
 
     expect(final).toContain("GOOD");
     expect(final).not.toContain("BAD");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("#61: settleGate does NOT checkpoint a HOLLOW near-green state (all-completion-class errors) and clears any prior one", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
+
+    // The gate is near-green with ONE remaining error that clears only by ADDING code (the
+    // feature declared i18n keys it hasn't wired yet). settleGate must NOT lock this hollow
+    // state — else the model's demanded completion edit (which spikes the count) gets reverted.
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["**/*"],
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set(["feature.ts"]) },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            errors: [
+              {
+                key: "i18n:supplier.createSuccess",
+                rule: "i18n-locale-keys-used",
+                message: "Locale key defined but never referenced",
+              },
+            ],
+            output: "",
+          }),
+        },
+      },
+    };
+
+    // Seed a stale checkpoint from an earlier compile-clean cycle — the guard must CLEAR it,
+    // so a later spray can't be reverted to it either.
+    const stale = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "old", message: "earlier compile error" },
+    ]);
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 1,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: 1,
+      edits: 5,
+      regressions: 0,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      conventionsEnabled: false,
+      nearGreenCheckpoint: stale,
+      nearGreenBest: 1,
+      nearGreenRollbacks: 0,
+    };
+
+    await settleGate(ctx, state, 10);
+
+    // The hollow state was NOT protected: the checkpoint is cleared (no revert target), so
+    // the model's next completion edit proceeds forward instead of being reverted to hollow.
+    expect(state.nearGreenCheckpoint).toBeUndefined();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("#61: during the completion phase, a mixed-error SPIKE is NOT rolled back (banner+rollback stand down through the spike)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
+
+    // The model is mid-add: it entered the completion phase last cycle, and this gate shows a
+    // MIXED spike (the shrinking i18n completion error + new compile errors from the half-written
+    // UI) well past the rollback threshold. A per-cycle all-completion check would be FALSE here
+    // and roll back; the persistent completionPhase flag must keep WS-B (and the undo banner) off.
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["**/*"],
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set(["feature.ts"]) },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            errors: [
+              {
+                key: "i18n:x",
+                rule: "i18n-locale-keys-used",
+                message: "unused key",
+              },
+              { key: "c1", rule: "no-unsafe-argument", message: "unsafe" },
+              { key: "c2", rule: "no-unsafe-argument", message: "unsafe" },
+              { key: "c3", rule: "no-unsafe-argument", message: "unsafe" },
+              { key: "c4", rule: "no-unsafe-argument", message: "unsafe" },
+              { key: "c5", rule: "no-unsafe-argument", message: "unsafe" },
+            ],
+            output: "",
+          }),
+        },
+      },
+    };
+    const cp = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "i18n:x", rule: "i18n-locale-keys-used", message: "unused key" },
+    ]);
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 1,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: 1,
+      edits: 5,
+      regressions: 0,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      conventionsEnabled: false,
+      completionPhase: true,
+      nearGreenCheckpoint: cp,
+      nearGreenBest: 1,
+      nearGreenRollbacks: 0,
+    };
+
+    await settleGate(ctx, state, 10);
+
+    // 6 errors is > checkpoint(1) + M(3), so WITHOUT the phase flag WS-B would revert. It did NOT:
+    // no rollback was counted, and the phase persisted (a completion error still remains).
+    expect(state.nearGreenRollbacks).toBe(0);
+    expect(state.completionPhase).toBe(true);
+    // feature.ts was NOT reverted (no rollback restored the checkpoint snapshot).
+    expect(await Bun.file(join(dir, "feature.ts")).text()).toContain("GOOD");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -29,6 +29,7 @@ import { unseenGuidesForErrors } from "./conventions";
 import {
   shouldCheckpoint,
   shouldRollback,
+  nextCompletionPhase,
   MAX_NEAR_GREEN_ROLLBACKS,
   type INearGreenCheckpoint,
 } from "./near-green-checkpoint";
@@ -431,6 +432,15 @@ export interface ILoopState {
    *  (e.g. 2→1, or 1→1 different error) instead of a spray reverting to a worse/older saved
    *  state. Reset on green and at the drive boundary; lowered as the checkpoint refreshes. */
   nearGreenBest?: number;
+  /** WS-B: the model is in the COMPLETION phase — it reached an all-completion-class state
+   *  (only add-code errors: unused i18n keys / not reachable) and is now building the demanded
+   *  create/edit/delete UI. This PERSISTS across the resulting error spike (which is MIXED —
+   *  new compile errors + the shrinking completion errors), because a per-cycle all-completion
+   *  check flips false the moment the model starts adding code, re-arming the rollback + the
+   *  "undo" banner mid-add. Set when all errors are completion-class; held while ANY completion
+   *  error remains; cleared when none remain (completion done → WS-B re-engages) or on green /
+   *  at the drive boundary. While set, WS-B does not roll back and the banner says "build it". */
+  completionPhase?: boolean;
   /** Guard-specific identity of the current stuck block (canonical, not the raw error
    *  set). Derived from the guard that fired: samePersist → single error key,
    *  gateStuckRepeats → sorted-join of current keys, plateau → normalized count|keys
@@ -1977,12 +1987,31 @@ const NEAR_GREEN_LOCKDOWN = 3;
 /** A lockdown/regression banner for the top of the feedback, or "" when far from
  *  green and not regressing. `total` = open errors this cycle; `best` = the all-time
  *  low (watermark). Regression = this cycle is WORSE than the best already reached. */
-export function nearGreenBanner(total: number, best: number): string {
+export function nearGreenBanner(
+  total: number,
+  best: number,
+  completionOnly = false
+): string {
   const regressed = Number.isFinite(best) && total > best;
   const near = total > 0 && total <= NEAR_GREEN_LOCKDOWN;
 
   if (!near && !regressed) {
     return "";
+  }
+
+  // When EVERY remaining error clears only by ADDING code (unused i18n keys / not reachable —
+  // see allCompletionClass), the normal near-green lockdown ("smallest change, do NOT create
+  // files or add features") is exactly BACKWARDS: it forbids the create/edit/delete UI the
+  // feature must have. Emit the opposite instruction so the model builds it (WS-B has already
+  // stood its checkpoint down for this state, so the resulting spike won't be reverted).
+  if (completionOnly) {
+    return (
+      `⚠ ${String(total)} error(s) left, and they clear only by ADDING the code the feature is ` +
+      "missing — it declared UI it hasn't built (unused i18n keys / not reachable). BUILD the " +
+      "create/edit/delete UI, the success/error toasts that reference those keys, and the route " +
+      "wiring. The error count WILL rise as you add these files — that's expected progress here, " +
+      "NOT a regression to undo. Keep going until the added code references everything.\n\n"
+    );
   }
 
   const lines: string[] = [];
@@ -2085,8 +2114,14 @@ export async function injectFeedback(
   }
 
   // NEAR-GREEN lockdown / regression callout leads everything — the finishing
-  // discipline that stops "spray after best" (the dominant late-run failure).
-  const banner = nearGreenBanner(gateErrors.length, state.bestErrorCount);
+  // discipline that stops "spray after best" (the dominant late-run failure). When the
+  // remaining errors are all completion-class, the banner flips to "build the missing UI"
+  // instead of "don't create files" (else it contradicts the completeness guard).
+  const banner = nearGreenBanner(
+    gateErrors.length,
+    state.bestErrorCount,
+    state.completionPhase === true
+  );
 
   ctx.messages.push({
     role: "user",
@@ -2263,6 +2298,13 @@ async function nearGreenRollbackStep(
     return false;
   }
 
+  // During the COMPLETION phase the model is ADDING the demanded UI, so the error spike is
+  // progress, not a spray — never roll it back (this runs before checkpointStep, so the flag,
+  // not a per-cycle all-completion check, is what protects the mixed-error spike).
+  if (state.completionPhase === true) {
+    return false;
+  }
+
   if (
     shouldRollback(
       state.nearGreenCheckpoint,
@@ -2306,6 +2348,18 @@ async function nearGreenCheckpointStep(
     return;
   }
 
+  // Never protect a HOLLOW state while in the COMPLETION phase — the model is adding the
+  // demanded create/edit/delete UI (wiring i18n keys / reachability), so a checkpoint here
+  // would revert it to the list-only page (observed: 1→27 spray reverted, model re-does it →
+  // thrash). CLEAR any checkpoint (drops an earlier compile-state one too — its fixable errors
+  // are already resolved, so it's stale) and don't capture; WS-B re-engages when the phase ends
+  // (no completion error remains). completionPhase was advanced at the top of settleGate.
+  if (state.completionPhase === true) {
+    state.nearGreenCheckpoint = undefined;
+
+    return;
+  }
+
   const needsReArm = state.nearGreenCheckpoint === undefined;
   // A strictly-lower near-green count → refresh (a new best worth protecting).
   const isBetter = curr < (state.nearGreenBest ?? Number.POSITIVE_INFINITY);
@@ -2338,6 +2392,15 @@ export async function settleGate(
   } = await evaluateGate(ctx, turn);
 
   const curr = gateErrors.length;
+
+  // WS-B: advance the completion-phase flag BEFORE the rollback/banner/checkpoint steps read
+  // it — so the phase set at the hollow state survives the mixed-error spike that follows
+  // (the rollback step runs first, and a per-cycle all-completion check would already be false
+  // there once the model started adding code).
+  state.completionPhase = nextCompletionPhase(
+    state.completionPhase ?? false,
+    gateErrors
+  );
 
   if (state.lastGateCount >= 0 && curr > state.lastGateCount) {
     state.regressions += 1;

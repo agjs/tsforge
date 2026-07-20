@@ -2,12 +2,65 @@ import { test, expect } from "bun:test";
 import {
   shouldCheckpoint,
   shouldRollback,
+  isCompletionClass,
+  allCompletionClass,
+  nextCompletionPhase,
   NEAR_GREEN_N,
   NEAR_GREEN_M,
   MAX_NEAR_GREEN_ROLLBACKS,
   type INearGreenCheckpoint,
 } from "../src/loop/near-green-checkpoint";
+import type { IErrorItem } from "../src/validate/validate.types";
 import type { IFileSnapshot } from "../src/loop/file-snapshot";
+
+// #61: a HOLLOW near-green state (remaining errors clear only by ADDING code — i18n keys,
+// reachability, judge) must NOT be checkpointed, or WS-B reverts the demanded completion edit.
+const err = (rule: string): IErrorItem => ({ key: rule, rule, message: rule });
+
+test("isCompletionClass: only reliable add-code rules (reachability/i18n-locale-keys-used), bare or prefixed", () => {
+  expect(isCompletionClass(err("reachability"))).toBe(true);
+  expect(isCompletionClass(err("i18n-locale-keys-used"))).toBe(true);
+  expect(isCompletionClass(err("plugin/i18n-locale-keys-used"))).toBe(true);
+  // `judge` is EXCLUDED — it can reject defects in existing code, not only hollowness, so it
+  // isn't a reliable add-only signal (would falsely disable WS-B on a fixable judge rejection).
+  expect(isCompletionClass(err("judge"))).toBe(false);
+  // Fixable-in-place errors are NOT completion-class (WS-B still protects against those).
+  expect(isCompletionClass(err("no-floating-promises"))).toBe(false);
+  expect(isCompletionClass(err("@typescript-eslint/no-unsafe-argument"))).toBe(
+    false
+  );
+  expect(isCompletionClass({ key: "x", message: "no rule" })).toBe(false);
+});
+
+test("nextCompletionPhase: ENTER on all-completion, STAY through the mixed spike, EXIT when no completion error remains", () => {
+  const i18n = err("i18n-locale-keys-used");
+  const compile = err("no-unsafe-argument");
+
+  // ENTER: reached the hollow all-completion state.
+  expect(nextCompletionPhase(false, [i18n])).toBe(true);
+  // STAY: the model started adding the UI → MIXED errors (this is the case a per-cycle
+  // all-completion check got wrong — it would flip false here and re-arm rollback/undo).
+  expect(nextCompletionPhase(true, [i18n, compile, compile])).toBe(true);
+  // EXIT: the keys are now referenced → only fixable errors remain → WS-B re-engages.
+  expect(nextCompletionPhase(true, [compile, compile])).toBe(false);
+  // EXIT on green (no errors at all).
+  expect(nextCompletionPhase(true, [])).toBe(false);
+  // Never enters from a purely-fixable state.
+  expect(nextCompletionPhase(false, [compile])).toBe(false);
+});
+
+test("allCompletionClass: true only when EVERY error is completion-class; empty is false", () => {
+  expect(allCompletionClass([err("i18n-locale-keys-used")])).toBe(true);
+  expect(
+    allCompletionClass([err("reachability"), err("i18n-locale-keys-used")])
+  ).toBe(true);
+  // A single fixable error among completion ones means the state is NOT purely hollow —
+  // WS-B should still protect it (the fixable error is a real revert target).
+  expect(
+    allCompletionClass([err("i18n-locale-keys-used"), err("no-console")])
+  ).toBe(false);
+  expect(allCompletionClass([])).toBe(false);
+});
 
 // WS-B: the pure checkpoint/rollback decision, unit-locked with the Phase 0a thresholds
 // (N=2, M=3) away from the Session's file I/O. Real spray data from inv157/inv156.

@@ -51,6 +51,57 @@ export interface INearGreenCheckpoint {
   readonly depFiles: ReadonlyMap<string, Uint8Array>;
 }
 
+/** Gate errors that in THIS stack clear ONLY by ADDING code — wiring the i18n keys the feature
+ *  declared (`i18n-locale-keys-used`; the i18n-destructive-delete guard forbids the removal
+ *  shortcut, so the model MUST add the UI that references them), or making the feature reachable
+ *  (`reachability`; add the route/mount). A near-green state whose remaining errors are all of
+ *  this class is a HOLLOW state (e.g. a list-only page with unused create/edit/delete
+ *  translations): reaching green REQUIRES the model to add the form + buttons + toasts, which
+ *  transiently spikes the error count. WS-B's count-only spray detection can't tell that
+ *  legitimate completion edit from a bad convention spray, so checkpointing this state and
+ *  reverting to it traps the model in the hollow app. NOTE: `judge` is deliberately EXCLUDED —
+ *  the quality judge can reject defects in EXISTING code (fixable in place), not only
+ *  hollowness, so it is not a reliable add-only signal. */
+const COMPLETION_CLASS_RULES: ReadonlySet<string> = new Set([
+  "reachability",
+  "i18n-locale-keys-used",
+]);
+
+/** Whether a gate error clears only by adding code (see COMPLETION_CLASS_RULES). Matches the
+ *  bare rule id so a plugin-prefixed form (`plugin/i18n-locale-keys-used`) still classifies. */
+export function isCompletionClass(error: IErrorItem): boolean {
+  const rule = error.rule ?? "";
+  const bare = rule.split("/").pop() ?? rule;
+
+  return COMPLETION_CLASS_RULES.has(bare);
+}
+
+/** True when EVERY remaining gate error is completion-class — the hollow near-green state WS-B
+ *  must not protect. Empty is false (green is handled elsewhere; nothing to classify). */
+export function allCompletionClass(errors: readonly IErrorItem[]): boolean {
+  return errors.length > 0 && errors.every(isCompletionClass);
+}
+
+/** Advance the persistent completion-phase flag. ENTER when every error is completion-class (a
+ *  hollow state); STAY while ANY completion error remains (the MIXED spike as the model wires
+ *  the keys — a per-cycle all-completion check would flip false here and re-arm the rollback +
+ *  "undo" banner mid-add); EXIT when no completion error remains (the model finished wiring →
+ *  only fixable errors left → WS-B re-engages) or when green (no errors). */
+export function nextCompletionPhase(
+  prev: boolean,
+  errors: readonly IErrorItem[]
+): boolean {
+  if (allCompletionClass(errors)) {
+    return true;
+  }
+
+  if (!errors.some(isCompletionClass)) {
+    return false;
+  }
+
+  return prev;
+}
+
 /** Whether a fresh gate result should be CHECKPOINTED: it's a new all-time low, it's near
  *  green (1..N), and not zero (zero means the build just went green — nothing to protect).
  *  `isNewLow` is the loop's own genuine-progress signal, passed in so this stays pure. */

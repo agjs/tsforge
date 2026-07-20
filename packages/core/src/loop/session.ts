@@ -424,6 +424,7 @@ export function resetDriveConvergence(state: ILoopState): void {
   delete state.nearGreenCheckpoint;
   delete state.nearGreenBest;
   delete state.nearGreenRollbacks;
+  delete state.completionPhase;
 }
 
 /** How many times a send recovers from a repetition loop before giving up. */
