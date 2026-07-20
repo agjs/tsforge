@@ -30,8 +30,13 @@ import {
   shouldCheckpoint,
   shouldRollback,
   nextCompletionPhase,
+  errorSetSignature,
+  isNearGreenRotation,
+  NEAR_GREEN_N,
   MAX_NEAR_GREEN_ROLLBACKS,
+  MAX_NEAR_GREEN_SPIKE_GAP,
   type INearGreenCheckpoint,
+  type INearGreenSample,
 } from "./near-green-checkpoint";
 // The SHARED rollback substrate (aliased — turn.ts has its own polish-only `snapshotFiles`
 // returning a plain Map). `snapshotFilesForRollback` captures an IFileSnapshot and
@@ -441,6 +446,21 @@ export interface ILoopState {
    *  error remains; cleared when none remain (completion done → WS-B re-engages) or on green /
    *  at the drive boundary. While set, WS-B does not roll back and the banner says "build it". */
   completionPhase?: boolean;
+  /** WS-B rotation (#77): the trailing {count, error-set signature} samples of the near-green
+   *  cycles the drive has visited (curr in 1..N). Spikes above N are ignored (not pushed, not
+   *  cleared) so a transient regression between two near-green visits doesn't reset the window;
+   *  completion-phase cycles are NOT recorded (their churn is legitimate, not rotation); cleared on
+   *  green / at the drive boundary. `isNearGreenRotation` reads the last ROTATION_WINDOW of these —
+   *  it needs the COUNT (to require a plateau) as well as the signature (the changing identity). */
+  nearGreenSamples?: INearGreenSample[];
+  /** WS-B rotation (#77): count of CONSECUTIVE spikes (cycles above N) since the last near-green
+   *  sample. Reset to 0 on each near-green sample; past MAX_NEAR_GREEN_SPIKE_GAP the window is
+   *  stale and cleared so far-apart near-green visits can't combine into a false rotation. */
+  nearGreenSpikeGap?: number;
+  /** WS-B rotation (#77): true when the near-green error set has been ROTATING (fixing one error
+   *  spawns another at the same low count). Set from `isNearGreenRotation(nearGreenSamples)`; while
+   *  set, injectFeedback prepends the completion-only steer. Cleared on green. Flag-gated. */
+  nearGreenRotation?: boolean;
   /** Guard-specific identity of the current stuck block (canonical, not the raw error
    *  set). Derived from the guard that fired: samePersist → single error key,
    *  gateStuckRepeats → sorted-join of current keys, plateau → normalized count|keys
@@ -2004,7 +2024,9 @@ const NEAR_GREEN_LOCKDOWN = 3;
 
 /** A lockdown/regression banner for the top of the feedback, or "" when far from
  *  green and not regressing. `total` = open errors this cycle; `best` = the all-time
- *  low (watermark). Regression = this cycle is WORSE than the best already reached. */
+ *  low (watermark). Regression = this cycle is WORSE than the best already reached.
+ *  (The #77 rotation caller suppresses this banner entirely while rotation is active — the steer
+ *  owns the finishing discipline there — so this function need not special-case rotation.) */
 export function nearGreenBanner(
   total: number,
   best: number,
@@ -2131,19 +2153,51 @@ export async function injectFeedback(
     });
   }
 
-  // NEAR-GREEN lockdown / regression callout leads everything — the finishing
-  // discipline that stops "spray after best" (the dominant late-run failure). When the
-  // remaining errors are all completion-class, the banner flips to "build the missing UI"
-  // instead of "don't create files" (else it contradicts the completeness guard).
-  const banner = nearGreenBanner(
-    gateErrors.length,
-    state.bestErrorCount,
-    state.completionPhase === true
-  );
+  // #77: when the near-green error set is ROTATING (fix-one-spawn-another), lead with the
+  // completion-only steer. Gate on FOUR conditions, not just the sticky flag:
+  //  • the flag is on — read flags.nearGreenRotation() HERE too (not only in the tracker) so the
+  //    kill-switch is authoritative at the emit point regardless of tracker ordering;
+  //  • nearGreenRotation set (the detector fired);
+  //  • the CURRENT cycle is actually near green (≤ N) — the detector deliberately ignores spikes
+  //    above N so the flag stays set across them, but the steer's "one or two errors from done"
+  //    wording (and its relevance) only holds at a near-green count, so don't inject on a spike;
+  //  • NOT completionPhase — that state legitimately wants the model to ADD the missing UI, which
+  //    the "do NOT create new files" steer would directly contradict.
+  // Gate on: kill-switch on (read HERE too so it's authoritative at the emit point regardless of
+  // tracker ordering) AND the detector fired AND NOT completionPhase (which legitimately wants the
+  // model to ADD the missing UI). While rotation is ACTIVE the model is in ATOMIC-COMPLETION mode
+  // and WS-B's rollback has stood down (nearGreenRollbackStep), so the whole spray/regression/
+  // lockdown apparatus is counterproductive.
+  const rotationActive =
+    flags.nearGreenRotation() &&
+    state.nearGreenRotation === true &&
+    state.completionPhase !== true;
+  // The completion-only steer leads only at a near-green cycle (≤ N) — "one or two errors from
+  // done" only holds there; above N the model is executing the steer's atomic completion.
+  const rotating = rotationActive && gateErrors.length <= NEAR_GREEN_N;
+  const rotation = rotating ? `${NEAR_GREEN_ROTATION_STEER}\n\n` : "";
+
+  // NEAR-GREEN lockdown / regression callout leads everything — the finishing discipline that
+  // stops "spray after best" (the dominant late-run failure). When the remaining errors are all
+  // completion-class, the banner flips to "build the missing UI" instead of "don't create files"
+  // (else it contradicts the completeness guard). SUPPRESS the banner entirely whenever rotation
+  // is active (near-green OR spike): its "don't create new files" lockdown and its "UNDO that
+  // collateral to get back to best" regression callout BOTH contradict the rotation steer's
+  // "create the required siblings/tests together, complete atomically" — stacking them is the
+  // model-driven spray→revert loop build17 parked on. The steer carries the guidance at near
+  // green; at a spike the plain errors do. WS-B has already stood down, so there is nothing to
+  // "undo" here.
+  const banner = rotationActive
+    ? ""
+    : nearGreenBanner(
+        gateErrors.length,
+        state.bestErrorCount,
+        state.completionPhase === true
+      );
 
   ctx.messages.push({
     role: "user",
-    content: `${banner}${steer}${notice}${feedback}${how}`,
+    content: `${rotation}${banner}${steer}${notice}${feedback}${how}`,
   });
 }
 
@@ -2323,6 +2377,21 @@ async function nearGreenRollbackStep(
     return false;
   }
 
+  // #77: while the near-green error set is ROTATING, injectFeedback is steering the model to
+  // COMPLETE a file atomically — create its required companion/sibling files + colocated test in
+  // ONE change. That coordinated edit transiently spikes the count past the checkpoint, exactly
+  // like a completion-phase add. Rolling it back would undo the completion the steer just asked
+  // for — the very spray→revert loop build17 parked on, with the steer and WS-B fighting. So WS-B
+  // stands its rollback down here too. It is not defenceless: if the spike does NOT resolve back
+  // to near green within MAX_NEAR_GREEN_SPIKE_GAP cycles, trackNearGreenRotation clears the
+  // rotation flag (the streak is stale), WS-B re-arms, and the held near-green checkpoint reverts
+  // the persistent spray on the next cycle. Re-check the kill-switch HERE too (not only in the
+  // tracker) so disabling it is authoritative at this decision point regardless of call ordering —
+  // symmetric with injectFeedback's emit-path check.
+  if (flags.nearGreenRotation() && state.nearGreenRotation === true) {
+    return false;
+  }
+
   if (
     shouldRollback(
       state.nearGreenCheckpoint,
@@ -2394,6 +2463,94 @@ async function nearGreenCheckpointStep(
   }
 }
 
+/** #77 completion-only steer text — GENERIC (no stack knowledge). Injected while the near-green
+ *  error set is ROTATING: the model is ~1 error from done but each fix spawns another at the same
+ *  low count (e.g. it extracts a component, so that component's required siblings/tests are now
+ *  missing). The fix is to stop opening new surface and COMPLETE existing files atomically. */
+export const NEAR_GREEN_ROTATION_STEER =
+  "You are only one or two errors from done, but the errors keep ROTATING — each fix spawns a " +
+  "different error at the same low count, so the build never reaches zero. This happens when a fix " +
+  "OPENS NEW SURFACE that carries its own requirements. Two rules until the count reaches zero:\n" +
+  "1. Do NOT open new surface: do not extract components, split existing code into new modules/" +
+  "units, or add new features/routes/schemas that no current error requires. That is what keeps " +
+  "spawning the next error.\n" +
+  "2. But DO finish what the current errors demand, ATOMICALLY: when you fix a file that has an " +
+  "error, create ALL the companion/sibling files and the colocated test that satisfying it " +
+  "requires in the SAME change — even though those files are not themselves in the error list yet " +
+  "— so the fix can't leave a fresh gap that becomes the next error.\n" +
+  "Resolve exactly the listed errors and the siblings/tests they require — nothing else.";
+
+/** #77: update the near-green ROTATION signal for this cycle. Records this cycle's {count, error-set
+ *  signature} on the drive's near-green window ONLY when `curr` is near green (1..N) — spikes above
+ *  N are IGNORED (not pushed, not cleared) so a transient regression between two near-green visits
+ *  doesn't reset the window (build17's real pattern is 1↔3↔6: only the 1s are near green, and they
+ *  rotate). COMPLETION-PHASE cycles are also skipped: a hollow state legitimately churns its error
+ *  identity while the model ADDS the missing UI, and recording that churn would pre-fill the window
+ *  and mis-fire the "don't create new files" steer the moment completion ends. Green clears it. Sets
+ *  `state.nearGreenRotation` from the window (needs the count → plateau AND the signature → changing
+ *  identity; see isNearGreenRotation). When the flag is OFF this CLEARS the sticky state (so a
+ *  mid-run kill-switch flip is authoritative — the steer stops), not just early-returns. GENERIC:
+ *  keyed only on the stack-agnostic rule/file via errorSetSignature. Exported for tests. */
+export function trackNearGreenRotation(
+  state: ILoopState,
+  curr: number,
+  gateErrors: readonly IErrorItem[]
+): void {
+  // Flag off OR a green cycle OR the completion phase: clear the window + flag. Clearing (not just
+  // returning) makes the kill-switch authoritative mid-run and prevents completion-phase churn from
+  // filling the window and firing on the first post-completion near-green cycle.
+  if (
+    !flags.nearGreenRotation() ||
+    curr === 0 ||
+    state.completionPhase === true
+  ) {
+    state.nearGreenSamples = [];
+    state.nearGreenRotation = false;
+    state.nearGreenSpikeGap = 0;
+
+    return;
+  }
+
+  // Spikes above the near-green ceiling are transient — tolerate a FEW between near-green visits so
+  // the rotating near-green states on either side of a spray→revert still accumulate. But a LONG
+  // run of them means the earlier near-green streak is stale (a later near-green state is a fresh
+  // episode, not the same rotation), so past the gap bound clear the window rather than let far-
+  // apart samples combine into a false rotation.
+  if (curr > NEAR_GREEN_N) {
+    const gap = (state.nearGreenSpikeGap ?? 0) + 1;
+
+    state.nearGreenSpikeGap = gap;
+
+    if (gap > MAX_NEAR_GREEN_SPIKE_GAP) {
+      state.nearGreenSamples = [];
+      state.nearGreenRotation = false;
+    }
+
+    return;
+  }
+
+  // A near-green sample resets the spike gap (the streak is contiguous again).
+  state.nearGreenSpikeGap = 0;
+
+  const samples = state.nearGreenSamples ?? [];
+  // The gate FRONTIER phase this cycle sits at (a short-circuiting composed gate emits only the
+  // current phase's errors). A phase move across the window is frontier PROGRESS, not rotation —
+  // isNearGreenRotation requires a constant phase. 0 when the gate tags no phase (→ no-op).
+  const phase = Math.max(0, ...gateErrors.map((err) => err.phase ?? 0));
+
+  samples.push({ count: curr, phase, sig: errorSetSignature(gateErrors) });
+
+  // Bound the window — only the last few matter to isNearGreenRotation.
+  const MAX_SAMPLES = 8;
+
+  if (samples.length > MAX_SAMPLES) {
+    samples.splice(0, samples.length - MAX_SAMPLES);
+  }
+
+  state.nearGreenSamples = samples;
+  state.nearGreenRotation = isNearGreenRotation(samples);
+}
+
 export async function settleGate(
   ctx: ILoopCtx,
   state: ILoopState,
@@ -2419,6 +2576,11 @@ export async function settleGate(
     state.completionPhase ?? false,
     gateErrors
   );
+
+  // WS-B rotation (#77): update the near-green rotation signal BEFORE injectFeedback reads it,
+  // and before the green branch (curr===0 clears it). Ignores spikes above N, so the rotating
+  // near-green states accumulate across the transient regressions between them.
+  trackNearGreenRotation(state, curr, gateErrors);
 
   if (state.lastGateCount >= 0 && curr > state.lastGateCount) {
     state.regressions += 1;

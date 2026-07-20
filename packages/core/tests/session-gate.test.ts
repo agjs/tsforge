@@ -56,6 +56,11 @@ test("resetDriveConvergence gives a revisit a fresh ladder while preserving cumu
     // WS-B is per-drive — the send-boundary reset must clear its watermark + budget too.
     nearGreenBest: 1,
     nearGreenRollbacks: 3,
+    // #77: the rotation window + flag are per-drive too — a stale flag would inject the
+    // completion-only steer on a fresh drive with no evidence.
+    nearGreenSamples: [{ count: 1, phase: 0, sig: "a" }],
+    nearGreenSpikeGap: 2,
+    nearGreenRotation: true,
   });
 
   resetDriveConvergence(state);
@@ -71,6 +76,10 @@ test("resetDriveConvergence gives a revisit a fresh ladder while preserving cumu
   expect(state.nearGreenBest).toBeUndefined();
   expect(state.nearGreenRollbacks).toBeUndefined();
   expect(state.nearGreenCheckpoint).toBeUndefined();
+  // #77: the rotation window + flag + spike-gap are per-drive — cleared so they can't leak.
+  expect(state.nearGreenSamples).toBeUndefined();
+  expect(state.nearGreenSpikeGap).toBeUndefined();
+  expect(state.nearGreenRotation).toBeUndefined();
 });
 
 test("Session.setGate flips hasGate on and routes the gate through the loop", async () => {
