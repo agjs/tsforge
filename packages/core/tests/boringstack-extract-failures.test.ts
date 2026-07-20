@@ -61,6 +61,32 @@ error: script "lint:meta" exited with code 1`;
     ).toBe(true);
   });
 
+  test("captures a lint-meta violation whose file header is a .json locale file (i18n-locale-keys-used)", () => {
+    // build10 trap: the ONLY failure was an unused i18n key, whose lint:meta file header is a
+    // `.json` locale file. sourceFileFromLine matched only JS/TS, so currentFile never set →
+    // the violation was dropped → the whole apps/ui gate fell to opaqueGateError → #61's
+    // completion-phase couldn't see rule=i18n-locale-keys-used and WS-B reverted the wiring.
+    const cwd = "/private/tmp/clone";
+    const out = `::tsforge-app apps/ui::
+[generate:api] Wrote src/lib/api/schema.d.ts
+::tsforge-eslint-json apps/ui::
+[{"filePath":"${cwd}/apps/ui/x.tsx","messages":[],"errorCount":0,"warningCount":0}]
+::tsforge-eslint-json-end::
+[lint:meta] 1 violation(s):
+
+  ${cwd}/apps/ui/src/lib/i18n/locales/en/common.json
+    i18n-locale-keys-used: Locale key \`features.supplier.loadError\` is defined but never referenced in src — dead translation surface (remove it from every locale, or wire it up).
+
+error: script "lint:meta" exited with code 1`;
+    const sigs = extractFailures(out, cwd);
+
+    expect(sigs.size).toBe(1);
+    const sig = [...sigs][0] ?? "";
+
+    expect(sig).toContain("i18n-locale-keys-used");
+    expect(sig).toContain("common.json");
+  });
+
   test("carries the preceding eslint file header into the failure signature", () => {
     const cwd = "/tmp/clone";
     const out = `${cwd}/apps/api/tests/api/note/note.routes.test.ts
