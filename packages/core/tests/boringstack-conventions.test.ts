@@ -92,10 +92,18 @@ describe("convention registry", () => {
 });
 
 describe("topicForRule (testing)", () => {
-  test("a test rule maps to the testing topic so its gate error pushes the guide", () => {
-    expect(topicForRule("test-sibling-required")).toBe("testing");
-    expect(topicForRule("no-real-network-in-unit-tests")).toBe("testing");
-    expect(topicForRule("no-focused-tests")).toBe("testing");
+  test("EVERY testing rule maps to the testing topic so its gate error pushes the guide", () => {
+    // Lock all six — a typo in any would silently disable the reactive PUSH for that error.
+    for (const rule of [
+      "test-sibling-required",
+      "test-file-mirrors-source",
+      "no-focused-tests",
+      "no-conditional-expect",
+      "no-real-network-in-unit-tests",
+      "fake-timers-must-be-restored",
+    ]) {
+      expect(topicForRule(rule)).toBe("testing");
+    }
   });
 });
 

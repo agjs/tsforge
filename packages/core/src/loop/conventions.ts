@@ -192,8 +192,9 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "(!isX(body)) throw new Error(…)`) — never `as`. For an authed route, define a local `loginCookie` " +
     "helper (copy it verbatim from an existing `*.routes.test.ts`) and pass the returned cookie in headers.\n" +
     "• RULES the gate enforces: no `.only`/`.skip` (no-focused-tests); never put `expect` inside an " +
-    "`if`/`try`/`catch` (no-conditional-expect); if you use fake timers, restore them in `afterEach` " +
-    "(fake-timers-must-be-restored); the test path/name mirrors its source (test-file-mirrors-source).\n" +
+    "`if`/loop/`switch`/ternary — assert unconditionally (no-conditional-expect); if you use fake " +
+    "timers, restore them in `afterEach` (fake-timers-must-be-restored); the test path/name mirrors " +
+    "its source (test-file-mirrors-source).\n" +
     "• After you write a test the harness AUTO-FORMATS it (imports reordered, quotes/commas normalized), " +
     "so your next `edit` oldString won't match — RE-READ the file and copy oldString from its current " +
     "content; do NOT recreate the whole file.",
