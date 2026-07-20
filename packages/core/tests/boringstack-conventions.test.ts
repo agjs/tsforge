@@ -126,6 +126,31 @@ describe("convention registry", () => {
     expect(g).toContain("throwOnError");
   });
 
+  test("data-fetching guide pins the exact api-client path format + call shapes (build12 park cluster)", () => {
+    const g = conventionGuide("data-fetching");
+
+    // The path bug that sprayed build12: model used "/api/supplier" — must be "/api/v1/…".
+    expect(g).toContain("/api/v1/");
+    expect(g).toContain("PathsWithMethod");
+    // Full method↔shape pairings (not loose fragments) — a fragment on the wrong method must fail.
+    expect(g).toContain('apiClient.POST("/api/v1/supplier", { body: input })');
+    expect(g).toContain(
+      'apiClient.PATCH("/api/v1/supplier/{id}", { params: { path: { id } }, body: input })'
+    );
+    expect(g).toContain(
+      'apiClient.DELETE("/api/v1/supplier/{id}", { params: { path: { id } } })'
+    );
+    // Options are OPTIONAL and there is never a THIRD positional arg (the corrected contradiction).
+    expect(g).toContain("options object is OPTIONAL");
+    expect(g).toContain("NEVER a " + "third positional argument");
+    expect(g).toContain("arity error");
+    // generate:api is the WRONG lever for a consumer/usage error (model reran it 5×).
+    expect(g).toContain("generate:api");
+    expect(g).toContain("usage bug, not a stale-spec bug");
+    // The Readable wrapper is a ROUTE response-schema problem, not a consumer fix.
+    expect(g).toContain("Readable<SuccessResponse");
+  });
+
   test("testing guide teaches the exact idioms the model kept failing (extension, hoisted mock, route tests, rules)", () => {
     const g = conventionGuide("testing");
 

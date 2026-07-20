@@ -141,24 +141,30 @@ describe("signatureToError", () => {
     expect(err.message).toContain("REWRITE THE WHOLE FILE");
   });
 
-  test("a PathsWithMethod type error steers to REGISTER the route (not fight the UI types)", () => {
-    // Observed live (build6): model called apiClient.POST('/api/v1/supplier') before the
-    // route was in the OpenAPI spec → fought the UI types + coupled test-sibling for 20+ turns.
+  test("a PathsWithMethod type error steers to BOTH causes, call-site FIRST (build12: wrong /api/… string, route WAS in spec)", () => {
+    // build12: model used a wrong call-site string and re-ran generate:api 5× because the old
+    // steer only ever said "route not in spec". The steer must name the call-site cause first.
     const msg =
-      "Argument of type '\"/api/v1/supplier\"' is not assignable to parameter of type 'PathsWithMethod<paths, \"post\">'.";
+      "Argument of type '\"/api/supplier\"' is not assignable to parameter of type 'PathsWithMethod<paths, \"post\">'.";
     const err = signatureToError(
       `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:12:no-unsafe:${encodeURIComponent(msg)}`
     );
 
-    expect(err.message).toContain("NOT in the OpenAPI spec");
-    expect(err.message).toContain("register");
-    expect(err.message).toContain("generate:api");
+    // Call-site cause named first, with the exact /api/v1/ format.
+    expect(err.message).toContain("call site");
+    expect(err.message).toContain("/api/v1/");
+    // All three causes present: wrong path, wrong VERB (method-specific), unregistered route.
+    expect(err.message).toContain("WRONG PATH");
+    expect(err.message).toContain("WRONG VERB");
+    expect(err.message).toContain("unregistered");
+    // …and the wrong-lever warning: don't re-run generate:api for a call-site string bug.
+    expect(err.message).toContain("Do NOT re-run generate:api");
     // A plain type error (no PathsWithMethod) is left untouched.
     const plain = signatureToError(
       "failure:apps%2Fui%2Fsrc%2Fx.ts:3:no-unsafe:Type%20'string'%20is%20not%20assignable%20to%20'number'."
     );
 
-    expect(plain.message).not.toContain("NOT in the OpenAPI spec");
+    expect(plain.message).not.toContain("call site");
   });
 
   test("a `'>' expected` in a .ts flags the JSX-must-be-.tsx cause; other .ts parse errors do NOT", () => {

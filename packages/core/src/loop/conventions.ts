@@ -156,14 +156,34 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "the component rendering the field state the hook returns.",
   "data-fetching":
     "DATA-FETCHING (boringstack). ALL HTTP goes through the generated client " +
-    "`@/lib/api/client` — never `fetch`/`axios` (lint-banned). Call it as " +
-    '`const { data } = await apiClient.GET("/path")` (or `.POST`/`.PATCH`/`.DELETE` ' +
-    "with `{ body }`); `data` is typed from the OpenAPI spec. Errors THROW " +
-    "automatically via the client's `throwOnError` middleware (TanStack Query catches " +
-    "them) — so NEVER check `response.error`: it is typed `undefined`, so the guard is " +
-    "a dead `no-unnecessary-condition` gate error. Just read `data`. Put queries in " +
-    "`<Feature>.queries.ts` and mutations in `<Feature>.mutations.ts`. If a path isn't " +
-    "in the spec yet, add the API route first, then `bun run generate:api`.",
+    "`@/lib/api/client` — never `fetch`/`axios` (lint-banned). PATH STRINGS are the #1 thing " +
+    "the model gets wrong: the path is a LITERAL that must exactly match a key in the generated " +
+    "`paths` type, and every route is mounted under `/api/v1/` — so it is " +
+    '`apiClient.GET("/api/v1/<resource>")`, NOT `"/<resource>"` or `"/api/<resource>"` (a wrong ' +
+    "string is a `PathsWithMethod`/'not assignable' error that `generate:api` will NEVER fix — it " +
+    "is a usage bug, not a stale-spec bug). For a by-id path, use the LITERAL `{id}` segment and " +
+    "pass the value via params — never string-interpolate the id into the path. CALL SHAPE: the " +
+    "options object is OPTIONAL — a plain list GET is one arg (`GET(path)`); when you need params " +
+    "and/or a body they ALL go together in ONE options object as the SECOND arg — there is NEVER a " +
+    "third positional argument:\n" +
+    '• list:   `const { data } = await apiClient.GET("/api/v1/supplier")`\n' +
+    '• by id:  `const { data } = await apiClient.GET("/api/v1/supplier/{id}", { params: { path: { id } } })`\n' +
+    '• query:  `await apiClient.GET("/api/v1/supplier", { params: { query: { status: "active" } } })`\n' +
+    '• create: `const { data } = await apiClient.POST("/api/v1/supplier", { body: input })`\n' +
+    '• update: `const { data } = await apiClient.PATCH("/api/v1/supplier/{id}", { params: { path: { id } }, body: input })`\n' +
+    '• delete: `await apiClient.DELETE("/api/v1/supplier/{id}", { params: { path: { id } } })`\n' +
+    "PATCH/PUT take path AND body in the SAME options object (one object as the second arg — " +
+    "passing body as a THIRD argument is an arity error: 'Expected 2 arguments, but got 3'). Errors THROW automatically via the " +
+    "client's `throwOnError` middleware (TanStack Query catches them) — so NEVER check " +
+    "`response.error`: it is typed `undefined`, so the guard is a dead `no-unnecessary-condition` " +
+    "gate error. Just read `data`; let TS infer its type (do NOT annotate a return type or `as`-cast " +
+    "it — index into it with a null-narrow, e.g. `data?.items ?? []`, to satisfy strict undefined " +
+    "checks). If `data` types as `Readable<SuccessResponse<…>>` instead of the JSON body, the API " +
+    "ROUTE is missing a single-content-type `response:` schema — fix the route (see api-service), " +
+    "not the consumer. Put queries in `<Feature>.queries.ts` and mutations in " +
+    "`<Feature>.mutations.ts`. If a path genuinely isn't in the spec yet, add the API route first, " +
+    "then `bun run generate:api` ONCE — if the error persists after one regen, the path STRING or " +
+    "call shape is wrong, not the spec.",
   "lint-gotchas":
     "STRICT-LINT GOTCHAS (boringstack). The gate is eslint with EVERY rule an error; a fresh " +
     "feature trips these most, so write them right up front:\n" +
