@@ -82,13 +82,15 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
 const GUIDES: Readonly<Record<ConventionTopic, string>> = {
   "component-anatomy":
     "COMPONENT ANATOMY (boringstack). A feature lives in `src/features/<feature>/`. " +
-    "Components go under `src/features/<feature>/components/<Name>/`: `<Name>.tsx` " +
-    "renders props (it does NOT own state), and `index.ts` re-exports the default — " +
-    "ONE component per file. State/effects/memo live in `<Name>.hooks.ts`, never in " +
-    "the component body — the component imports the hook and consumes its return " +
-    "value. Feature-level files sit at `src/features/<feature>/`: `<Feature>.types.ts`, " +
-    "`<Feature>.constants.ts`, `<Feature>.queries.ts`, `<Feature>.mutations.ts`. shadcn " +
-    "primitives in `src/components/ui/` are exempt.",
+    "Components go under `src/features/<feature>/components/<Name>/`, and component-folder-" +
+    "structure requires the FULL sibling set — create ALL of them or the gate rejects the " +
+    "folder ('missing required siblings'): `<Name>.tsx` (renders props, does NOT own state), " +
+    "`<Name>.hooks.ts` (all state/effects/memo — never in the body), `<Name>.types.ts` (its " +
+    "Props interface), `<Name>.stories.tsx` (a Storybook story — REQUIRED, easy to forget), " +
+    "`<Name>.test.tsx` (or `.test.ts`), and `index.ts` (`export { default as <Name> } from " +
+    '"./<Name>"`). ONE component per file. Feature-level files sit at `src/features/<feature>/`: ' +
+    "`<Feature>.types.ts`, `<Feature>.constants.ts`, `<Feature>.queries.ts`, " +
+    "`<Feature>.mutations.ts`. shadcn primitives in `src/components/ui/` are exempt.",
   "file-layout":
     "FILE PURITY (boringstack). A component `.tsx` holds ONLY imports + the component " +
     "— nothing else atop it. Move each out and import it back: a type → " +

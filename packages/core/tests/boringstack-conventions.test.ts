@@ -31,6 +31,9 @@ describe("convention registry", () => {
     expect(g).toContain("src/features/<feature>/components/");
     // The dead UI-only-React `src/views` layout must be gone.
     expect(g).not.toContain("src/views/");
+    // The FULL required sibling set incl the easily-forgotten .stories.tsx (build9 arch wall).
+    expect(g).toContain(".stories.tsx");
+    expect(g).toContain("missing required siblings");
   });
 
   test("jsx guide gives the exact jsx-no-bind fix for list-row handlers (build7 parking residual)", () => {
