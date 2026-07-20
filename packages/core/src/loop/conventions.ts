@@ -24,6 +24,7 @@ const TOPICS = [
   "data-fetching",
   "lint-gotchas",
   "testing",
+  "api-service",
 ] as const;
 
 export type ConventionTopic = (typeof TOPICS)[number];
@@ -73,6 +74,9 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
       "no-real-network-in-unit-tests",
       "fake-timers-must-be-restored",
     ],
+    // The audit-event rule is a boringstack-OWN eslint rule (not a tsforge meta-rule), so it
+    // isn't keyed here for the reactive PUSH — the front-loaded guide is the delivery path.
+    "api-service": [],
   };
 
 const GUIDES: Readonly<Record<ConventionTopic, string>> = {
@@ -97,7 +101,14 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "already-computed values. A derived value → a `useMemo` in `<feature>.hooks.ts`; " +
     "a pure transform → a function in `src/lib`. A simple ternary is fine; a " +
     "`.map()`/`.filter()`/arithmetic/`Object.entries()` in the markup is not (extract " +
-    "it). Every `<button>` needs an explicit `type`.",
+    "it). Every `<button>` needs an explicit `type`. A function passed to a JSX prop " +
+    "(`onClick`, `onChange`, `onSubmit`) must be a STABLE reference — `react/jsx-no-bind` " +
+    "rejects BOTH an inline arrow (`onClick={() => …}`) AND a plain arrow defined in the " +
+    "component body (it's recreated every render). Make it stable: for a list ROW, give " +
+    "the row its own component with an `onEdit(id)`/`onDelete(id)` prop and pass that prop " +
+    "straight to `onClick`; the parent supplies each callback via `useCallback` in " +
+    "`<feature>.hooks.ts`. A handler needing an argument → `useCallback(() => onEdit(id), " +
+    "[onEdit, id])` in the row's hook, not an inline `() => onEdit(id)` in the markup.",
   state:
     "STATE (boringstack). ALL `useState`/`useReducer`/`useEffect`/`useMemo`/" +
     "`useCallback` live in `<feature>.hooks.ts`, never in a component body. Server " +
@@ -119,9 +130,15 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "router (`src/app/router/routes.tsx`) pointing at `@/features/<feature>` — never " +
     "hand-write a component's body in a route file.",
   forms:
-    "FORMS (boringstack). Use react-hook-form's `useForm` inside `<Component>.hooks.ts` " +
-    "(not the component body). Map server/validation errors back onto the form fields; " +
-    "keep the component rendering the field state the hook returns.",
+    "FORMS (boringstack). Use react-hook-form's `useForm<T>({ resolver: zodResolver(schema) })` " +
+    "(from `react-hook-form` + `@hookform/resolvers/zod`) inside `<Component>.hooks.ts`, not the " +
+    "component body. Submit via the returned `handleSubmit(onSubmit)` — do NOT hand-type the " +
+    "submit handler with React's `FormEvent` (it's the wrong type here and a repeatedly-invented " +
+    "error); if you must name the event it is a `BaseSyntheticEvent`, and fire it as " +
+    "`void handleSubmit(onSubmit)(event)` (the `void` satisfies no-floating-promises). In the Zod " +
+    "schema use the TOP-LEVEL validators — `z.email()`, `z.url()`, `z.uuid()` — NOT the deprecated " +
+    "`z.string().email()`. Map server/validation errors back onto the fields (`setError`); keep " +
+    "the component rendering the field state the hook returns.",
   "data-fetching":
     "DATA-FETCHING (boringstack). ALL HTTP goes through the generated client " +
     "`@/lib/api/client` — never `fetch`/`axios` (lint-banned). Call it as " +
@@ -186,11 +203,21 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "(!isX(body)) throw new Error(…)`) — never `as`. For an authed route, define a local `loginCookie` " +
     "helper (copy it verbatim from an existing `*.routes.test.ts`) and pass the returned cookie in headers.\n" +
     "• RULES the gate enforces: no `.only`/`.skip` (no-focused-tests); never put `expect` inside an " +
-    "`if`/`try`/`catch` (no-conditional-expect); if you use fake timers, restore them in `afterEach` " +
-    "(fake-timers-must-be-restored); the test path/name mirrors its source (test-file-mirrors-source).\n" +
+    "`if`/loop/`switch`/ternary — assert unconditionally (no-conditional-expect); if you use fake " +
+    "timers, restore them in `afterEach` (fake-timers-must-be-restored); the test path/name mirrors " +
+    "its source (test-file-mirrors-source).\n" +
     "• After you write a test the harness AUTO-FORMATS it (imports reordered, quotes/commas normalized), " +
     "so your next `edit` oldString won't match — RE-READ the file and copy oldString from its current " +
     "content; do NOT recreate the whole file.",
+  "api-service":
+    "API SERVICE (boringstack). apps/api resource logic lives in `<entity>.service.ts`. Every " +
+    "MUTATING method (create/update/delete) MUST record an audit event — the gate rejects one that " +
+    "doesn't (`Mutating method '…' does not record an audit event`). Import `{ AUDIT_ACTIONS, " +
+    'auditLogService } from "../../lib/audit-log"` and, after the mutation, call ' +
+    "`void auditLogService.record({ userId, action: AUDIT_ACTIONS.<ENTITY_ACTION>, metadata: { … } })` " +
+    "(the `void` satisfies no-floating-promises). Read-only methods (get/list) don't need it. Surface " +
+    "failures by THROWING an `ApiError` (e.g. 404/409), not by returning an error envelope — the route " +
+    "layer maps thrown ApiErrors to responses.",
 };
 
 /** The guide for a topic (the exact string pushed or pulled). */

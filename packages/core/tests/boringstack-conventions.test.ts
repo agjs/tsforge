@@ -33,6 +33,40 @@ describe("convention registry", () => {
     expect(g).not.toContain("src/views/");
   });
 
+  test("jsx guide gives the exact jsx-no-bind fix for list-row handlers (build7 parking residual)", () => {
+    const g = conventionGuide("jsx");
+
+    expect(g).toContain("react/jsx-no-bind");
+    expect(g).toContain("STABLE reference");
+    // Both an inline arrow AND a body-defined arrow are rejected — the model kept doing the latter.
+    expect(g).toContain("recreated every render");
+    expect(g).toContain("useCallback");
+    expect(g).toContain("onEdit(id)");
+  });
+
+  test("api-service guide teaches the audit-event idiom on mutating methods (build6 hard-gate residual)", () => {
+    const g = conventionGuide("api-service");
+
+    expect(g).toContain("auditLogService.record");
+    expect(g).toContain("AUDIT_ACTIONS");
+    expect(g).toContain("audit event");
+    // Mutations only; reads exempt; throw ApiError (not error envelopes).
+    expect(g).toContain("create/update/delete");
+    expect(g).toContain("ApiError");
+  });
+
+  test("forms guide steers away from the invented FormEvent + deprecated z.string().email() (live-build residuals)", () => {
+    const g = conventionGuide("forms");
+
+    expect(g).toContain("zodResolver");
+    expect(g).toContain("handleSubmit");
+    // The model repeatedly invented React's FormEvent and used the deprecated Zod string email.
+    expect(g).toContain("FormEvent");
+    expect(g).toContain("z.email()");
+    expect(g).toContain("z.string().email()");
+    expect(g).toContain("BaseSyntheticEvent");
+  });
+
   test("data-fetching guide states the apiClient pattern and forbids response.error", () => {
     const g = conventionGuide("data-fetching");
 
@@ -80,10 +114,18 @@ describe("convention registry", () => {
 });
 
 describe("topicForRule (testing)", () => {
-  test("a test rule maps to the testing topic so its gate error pushes the guide", () => {
-    expect(topicForRule("test-sibling-required")).toBe("testing");
-    expect(topicForRule("no-real-network-in-unit-tests")).toBe("testing");
-    expect(topicForRule("no-focused-tests")).toBe("testing");
+  test("EVERY testing rule maps to the testing topic so its gate error pushes the guide", () => {
+    // Lock all six — a typo in any would silently disable the reactive PUSH for that error.
+    for (const rule of [
+      "test-sibling-required",
+      "test-file-mirrors-source",
+      "no-focused-tests",
+      "no-conditional-expect",
+      "no-real-network-in-unit-tests",
+      "fake-timers-must-be-restored",
+    ]) {
+      expect(topicForRule(rule)).toBe("testing");
+    }
   });
 });
 
