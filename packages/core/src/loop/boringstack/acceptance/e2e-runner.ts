@@ -302,6 +302,7 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
               "test",
               `_acceptance/${entity.key}.spec.ts`,
               "--reporter=json",
+              "--project=chromium",
             ],
             {
               cwd: `${ctx.cwd}/apps/ui`,

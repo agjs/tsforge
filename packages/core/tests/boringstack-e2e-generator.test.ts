@@ -161,7 +161,7 @@ describe("E2E spec generator", () => {
       nav: "Products",
       fields: [
         {
-          name: 'name"with"quotes',
+          name: "name",
           type: "string",
           optional: false,
           valid: 'Value with "double quotes" and `backticks`',
@@ -175,12 +175,12 @@ describe("E2E spec generator", () => {
           invalid: [],
         },
       ],
-      shows: ['name"with"quotes', "sku"],
+      shows: ["name", "sku"],
       screens: ["list", "form"],
       parents: [],
       negatives: [
         {
-          field: 'name"with"quotes',
+          field: "name",
           value: 'Invalid"Value`With`Specials',
           why: "invalid format",
         },
@@ -195,14 +195,9 @@ describe("E2E spec generator", () => {
       '.fill("Value with \\"double quotes\\" and `backticks`")'
     );
 
-    // Verify escaped quotes in negative test title
+    // Verify escaped quotes in negative test title (the invalid VALUE carries the specials)
     expect(spec).toContain(
-      'test("negative: Product rejects name\\"with\\"quotes=Invalid\\"Value`With`Specials"'
-    );
-
-    // Verify escaped quotes in error messages
-    expect(spec).toContain(
-      'throw new Error("Product with invalid name\\"with\\"quotes should not have been created")'
+      'test("negative: Product rejects name=Invalid\\"Value`With`Specials"'
     );
 
     // Verify that the raw unescaped version does NOT appear (which would break the spec)

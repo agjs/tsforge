@@ -148,7 +148,6 @@ function generateNegativeBlocks(
     .map((neg) => {
       const fieldTestId = ids.field(neg.field);
       const testTitle = `negative: ${entity.id} rejects ${neg.field}=${neg.value}`;
-      const errorMsg = `${entity.id} with invalid ${neg.field} should not have been created`;
 
       return `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
@@ -157,7 +156,7 @@ function generateNegativeBlocks(
     const initialRowCount = await page.getByTestId("${ids.row}").count();
 
     await page.getByTestId("${ids.create}").click();
-    await page.waitForURL(/.*\\/${entity.key}\\/new/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
     // Fill form with valid values first
 ${fieldFillSteps}
@@ -168,12 +167,10 @@ ${fieldFillSteps}
 
     await page.getByTestId("${ids.submit}").click();
 
-    // Should not navigate away (form validation prevents submission)
-    // and no new row should appear
-    const finalRowCount = await page.getByTestId("${ids.row}").count();
-    if (finalRowCount > initialRowCount) {
-      throw new Error(${JSON.stringify(errorMsg)});
-    }
+    // Invalid input must be rejected: no new row is created.
+    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount, {
+      timeout: 3000,
+    });
   });
 `;
     })
@@ -260,11 +257,10 @@ ${fieldFillSteps}
     // Wait for form to disappear (indicates mutation + list refresh completed)
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    // New row should be visible with the filled values
-    const finalRowCount = await page.getByTestId("${ids.row}").count();
-    if (finalRowCount <= initialRowCount) {
-      throw new Error(${JSON.stringify(`New ${name} row did not appear after creation`)});
-    }
+    // New row should appear — web-first assertion retries through the async list refetch
+    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount + 1, {
+      timeout: 10000,
+    });
 
     // Verify the new row contains the expected values
 ${rowCellAssertions}
@@ -291,11 +287,10 @@ ${fieldFillSteps}
     await page.reload();
     await page.waitForURL(/\\/${entity.key}/);
 
-    // Row count should still be the same (new record persisted)
-    const reloadedRowCount = await page.getByTestId("${ids.row}").count();
-    if (reloadedRowCount <= initialRowCount) {
-      throw new Error(${JSON.stringify(`${name} did not persist after reload`)});
-    }
+    // The created row survives the reload — retry through the post-reload fetch
+    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount + 1, {
+      timeout: 10000,
+    });
   });
 
   test(${JSON.stringify(stepTitle("update", entity.key, name))}, async ({ page, authedPage }) => {
@@ -351,30 +346,24 @@ ${fieldFillSteps}
     await page.getByTestId("${ids.submit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
 
-    const afterCreateRowCount = await page.getByTestId("${ids.row}").count();
+    // The create landed before we delete — retry through the async list update
+    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount + 1, {
+      timeout: 10000,
+    });
 
     // Delete the last row
     await page.getByTestId("${ids.rowDelete}").last().click();
 
-    // Confirm delete
-    const confirmButton = page.getByRole("button", { name: /confirm|delete|yes/i });
-    if (await confirmButton.isVisible()) {
-      await confirmButton.click();
+    // Confirm delete if a confirmation control appears
+    const confirmButton = page.getByTestId("${ids.confirmDelete}");
+    if ((await confirmButton.count()) > 0) {
+      await confirmButton.first().click();
     }
 
-    // Wait for row to disappear
-    await page.waitForFunction(
-      async () => {
-        const count = await page.getByTestId("${ids.row}").count();
-        return count < afterCreateRowCount;
-      },
-      { timeout: 5000 }
-    );
-
-    const finalRowCount = await page.getByTestId("${ids.row}").count();
-    if (finalRowCount >= afterCreateRowCount) {
-      throw new Error(${JSON.stringify(`${name} row was not deleted`)});
-    }
+    // Row is removed — web-first assertion retries through the async list update
+    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount, {
+      timeout: 10000,
+    });
   });
 
 ${negativeBlocks}
@@ -417,17 +406,16 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
 
     const initialCount = await page.getByTestId("${ids.row}").count();
     await page.getByTestId("${ids.create}").click();
-    await page.waitForURL(/.*\\/${entity.key}\\/new/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${fieldFill}
 
     await page.getByTestId("${ids.submit}").click();
-    await page.waitForURL(/\\/${entity.key}(?:\\/|$)/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    const finalCount = await page.getByTestId("${ids.row}").count();
-    if (finalCount <= initialCount) {
-      throw new Error("${entity.id} was not created");
-    }
+    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialCount + 1, {
+      timeout: 10000,
+    });
   });`);
     } else {
       testSteps.push(`  test("create child entity: ${entity.id} with parent linkage", async ({ page, authedPage }) => {
@@ -436,19 +424,18 @@ ${fieldFill}
 
     const initialCount = await page.getByTestId("${ids.row}").count();
     await page.getByTestId("${ids.create}").click();
-    await page.waitForURL(/.*\\/${entity.key}\\/new/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${parentSeeding}
 
 ${fieldFill}
 
     await page.getByTestId("${ids.submit}").click();
-    await page.waitForURL(/\\/${entity.key}(?:\\/|$)/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    const finalCount = await page.getByTestId("${ids.row}").count();
-    if (finalCount <= initialCount) {
-      throw new Error("${entity.id} was not created");
-    }
+    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialCount + 1, {
+      timeout: 10000,
+    });
   });`);
     }
   }
