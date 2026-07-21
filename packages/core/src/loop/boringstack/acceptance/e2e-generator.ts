@@ -152,8 +152,7 @@ function generateNegativeBlocks(
 
       return `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await page.getByTestId("${ids.nav}").click();
-    await page.waitForURL(/\\/${entity.key}/);
+    await navigateTo${entity.id}(page);
 
     const initialRowCount = await page.getByTestId("${ids.row}").count();
 
@@ -205,18 +204,22 @@ export function generateEntitySpec(entity: IEntityAcceptance): string {
 
   return `import { expect, test } from "./auth-helper";
 
+async function navigateTo${entity.id}(page: import("@playwright/test").Page) {
+  const uiBase = process.env.PLAYWRIGHT_HOST || "http://localhost";
+  const uiPort = process.env.PLAYWRIGHT_PORT || "7331";
+  await page.goto(\`\${uiBase}:\${uiPort}/${entity.key}\`, { waitUntil: "domcontentloaded" });
+}
+
 test.describe(${JSON.stringify(name)}, () => {
   test(${JSON.stringify(stepTitle("nav", entity.key, entity.id))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await page.getByTestId("${ids.nav}").click();
-    await page.waitForURL(/\\/${entity.key}/);
+    await navigateTo${entity.id}(page);
     await expect(page).toHaveURL(/\\/${entity.key}/);
   });
 
   test(${JSON.stringify(stepTitle("list", entity.key, entity.id))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await page.getByTestId("${ids.nav}").click();
-    await page.waitForURL(/\\/${entity.key}/);
+    await navigateTo${entity.id}(page);
 
     const listPresent = await page.getByTestId("${ids.list}").isVisible();
     const emptyPresent = await page.getByTestId("${ids.empty}").isVisible();
@@ -228,8 +231,7 @@ test.describe(${JSON.stringify(name)}, () => {
 
   test(${JSON.stringify(stepTitle("create", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await page.getByTestId("${ids.nav}").click();
-    await page.waitForURL(/\\/${entity.key}/);
+    await navigateTo${entity.id}(page);
 
     const initialRowCount = await page.getByTestId("${ids.row}").count();
 
@@ -260,8 +262,7 @@ ${rowCellAssertions}
 
   test(${JSON.stringify(stepTitle("persist", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await page.getByTestId("${ids.nav}").click();
-    await page.waitForURL(/\\/${entity.key}/);
+    await navigateTo${entity.id}(page);
 
     const initialRowCount = await page.getByTestId("${ids.row}").count();
 
@@ -289,8 +290,7 @@ ${fieldFillSteps}
 
   test(${JSON.stringify(stepTitle("update", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await page.getByTestId("${ids.nav}").click();
-    await page.waitForURL(/\\/${entity.key}/);
+    await navigateTo${entity.id}(page);
 
     // Create a record first
     const initialRowCount = await page.getByTestId("${ids.row}").count();
@@ -326,8 +326,7 @@ ${fieldFillSteps}
 
   test(${JSON.stringify(stepTitle("delete", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await page.getByTestId("${ids.nav}").click();
-    await page.waitForURL(/\\/${entity.key}/);
+    await navigateTo${entity.id}(page);
 
     const initialRowCount = await page.getByTestId("${ids.row}").count();
 
@@ -404,8 +403,7 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
     if (isRoot) {
       testSteps.push(`  test("create root entity: ${entity.id}", async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await page.getByTestId("${ids.nav}").click();
-    await page.waitForURL(/\\/${entity.key}/);
+    await navigateTo${entity.id}(page);
 
     const initialCount = await page.getByTestId("${ids.row}").count();
     await page.getByTestId("${ids.create}").click();
@@ -424,8 +422,7 @@ ${fieldFill}
     } else {
       testSteps.push(`  test("create child entity: ${entity.id} with parent linkage", async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await page.getByTestId("${ids.nav}").click();
-    await page.waitForURL(/\\/${entity.key}/);
+    await navigateTo${entity.id}(page);
 
     const initialCount = await page.getByTestId("${ids.row}").count();
     await page.getByTestId("${ids.create}").click();
@@ -578,6 +575,9 @@ export const test = base.extend<
   { testUser: ITestUser }
 >({
   page: async ({ page }, use) => {
+    // Set desktop viewport so sidebar is visible (hidden on mobile)
+    await page.setViewportSize({ width: 1280, height: 720 });
+
     await page.addInitScript(
       ({ key, value }: { key: string; value: string }) => {
         try {
