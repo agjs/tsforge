@@ -323,13 +323,14 @@ ${fieldFillSteps}
     const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
     await expect(createdRow).toBeVisible({ timeout: 10000 });
     await createdRow.getByTestId("${ids.rowEdit}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
-    await page.getByTestId("${ids.field(firstFieldName)}").clear();
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(updatedValue);
-
+    // Edit inputs appear — inline in the row OR in a reopened form. Either way the
+    // field testid becomes editable (do NOT assume the create form is reused).
+    const editField = page.getByTestId("${ids.field(firstFieldName)}");
+    await editField.waitFor({ state: "visible", timeout: 5000 });
+    await editField.clear();
+    await editField.fill(updatedValue);
     await page.getByTestId("${ids.submit}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
     // The updated value is now shown in the list
     await expect(
