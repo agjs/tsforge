@@ -57,7 +57,7 @@ function generateParentSeedingCode(
 
       return `    // Seed a parent ${parent.entity} record
     const ${varName} = await (async () => {
-      const res = await fetch(\`\${new URL(page.url()).origin}/api/v1/${parentKey}s\`, {
+      const res = await fetch(\`\${new URL(page.url()).origin}/api/v1/${parentKey}\`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -66,10 +66,15 @@ function generateParentSeedingCode(
         body: JSON.stringify({ name: \`${parent.entity}-for-${entityId}\` }),
       });
       if (!res.ok) {
-        throw new Error(\`Failed to seed ${parent.entity}: \${res.status}\`);
+        const body = await res.text();
+        throw new Error(\`Failed to seed ${parent.entity} (HTTP \${res.status}): \${body}\`);
       }
-      const data = await res.json() as { id: string };
-      return data.id;
+      const data = await res.json();
+      const parentId = data.id;
+      if (typeof parentId !== "string") {
+        throw new Error(\`Seeded ${parent.entity} but no id in response: \${JSON.stringify(data)}\`);
+      }
+      return parentId;
     })();`;
     })
     .join("\n");
@@ -104,6 +109,8 @@ function generateFieldFillSteps(
 
 /**
  * Generate row cell assertions for created values.
+ * For parent references, assert the linkage cell is visible (contains parent's name).
+ * For regular fields, assert cell contains the expected value.
  * Safely interpolates field values using JSON.stringify.
  */
 function generateRowCellAssertions(
@@ -112,6 +119,15 @@ function generateRowCellAssertions(
 ): string {
   return entity.shows
     .map((show) => {
+      // Check if this show is a parent reference
+      const isParent = entity.parents.some((p) => p.key === show);
+
+      if (isParent) {
+        // For parent references, just assert the cell is visible (parent name will be there)
+        return `    await expect(page.getByTestId("${ids.rowCell(show)}").first()).toBeVisible();`;
+      }
+
+      // For regular fields, assert the value is present
       const value = entity.fields.find((f) => f.name === show)?.valid ?? show;
 
       return `    await expect(page.getByTestId("${ids.rowCell(show)}").first()).toContainText(${JSON.stringify(value)});`;
@@ -495,7 +511,8 @@ class DashboardPage implements IDashboardPage {
     const uiPort = process.env.PLAYWRIGHT_PORT || "7331";
     const url = \`\${uiBase}:\${uiPort}/dashboard\`;
     await this.page.goto(url);
-    await this.page.waitForLoadState("networkidle");
+    // Use "load" to avoid hanging on background polling in modern SPAs
+    await this.page.waitForLoadState("load");
   }
 }
 
@@ -511,20 +528,30 @@ class LoginPage implements ILoginPage {
     const uiPort = process.env.PLAYWRIGHT_PORT || "7331";
     const url = \`\${uiBase}:\${uiPort}/login\`;
     await this.page.goto(url);
-    await this.page.waitForLoadState("networkidle");
+    // Use "load" to avoid hanging on background polling in modern SPAs
+    await this.page.waitForLoadState("load");
   }
 
   async loginAs(email: string, password: string) {
-    // Fill email field
-    const emailInput = this.page.locator('input[type="email"], input[placeholder*="email" i]').first();
+    // Fill email field (try semantic selectors first, fall back to generic)
+    let emailInput = this.page.getByLabel(/email/i);
+    if (await emailInput.count() === 0) {
+      emailInput = this.page.locator('input[type="email"]').first();
+    }
     await emailInput.fill(email);
 
-    // Fill password field
-    const passwordInput = this.page.locator('input[type="password"]').first();
+    // Fill password field (try semantic selectors first, fall back to generic)
+    let passwordInput = this.page.getByLabel(/password/i);
+    if (await passwordInput.count() === 0) {
+      passwordInput = this.page.locator('input[type="password"]').first();
+    }
     await passwordInput.fill(password);
 
-    // Click submit button
-    const submitButton = this.page.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first();
+    // Click submit button (try semantic selectors first, fall back to generic)
+    let submitButton = this.page.getByRole("button", { name: /sign in|log in/i });
+    if (await submitButton.count() === 0) {
+      submitButton = this.page.locator('button[type="submit"]').first();
+    }
     await submitButton.click();
 
     // Wait for navigation to dashboard

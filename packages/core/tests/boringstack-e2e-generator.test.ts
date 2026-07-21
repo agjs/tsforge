@@ -263,7 +263,7 @@ describe("E2E spec generator", () => {
       const spec = generateEntitySpec(contactEntity);
 
       expect(spec).toContain("Seed a parent Company record");
-      expect(spec).toContain("/api/v1/companys");
+      expect(spec).toContain("/api/v1/company");
     });
 
     test("generateEntitySpec for child entity uses selectOption for FK field", () => {
@@ -334,7 +334,7 @@ describe("E2E spec generator - Relationships", () => {
 
     // Should seed parent Company via API
     expect(spec).toContain("Seed a parent Company record");
-    expect(spec).toContain("/api/v1/companys");
+    expect(spec).toContain("/api/v1/company");
     expect(spec).toContain("Company-for-Contact");
   });
 
