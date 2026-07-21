@@ -455,9 +455,22 @@ export async function runBoringstackBuild(opts: {
   onEvent?: Reporter;
   generate?: (cwd: string, name: string, exec: Exec) => Promise<void>;
   generateUi?: (cwd: string, name: string, exec: Exec) => Promise<void>;
+  acceptanceRunner?: IAcceptanceRunner;
 }): Promise<IGreenfieldResult> {
-  const { cwd, goal, evaluator, exec, host, onEvent, generate, generateUi } =
-    opts;
+  const {
+    cwd,
+    goal,
+    evaluator,
+    exec,
+    host,
+    onEvent,
+    generate,
+    generateUi,
+    acceptanceRunner,
+  } = opts;
+
+  const e2eAcceptanceDisabled =
+    process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
   // Require an approved plan before building
   const approved = await loadApprovedPlan(cwd);
@@ -553,6 +566,7 @@ export async function runBoringstackBuild(opts: {
       sliceFor,
       generate,
       generateUi,
+      acceptanceRunner,
     }),
     optsGreenfield
   );
@@ -580,14 +594,49 @@ export async function runBoringstackBuild(opts: {
 
     const full = await runBoringstackGate(cwd, exec, "full");
 
+    let finalPassed = full.passed;
+    let finalMessage = full.passed
+      ? "✓ final acceptance GREEN — full validate + build + size checks all pass."
+      : "⚠ features passed the fast gate, but the FULL acceptance gate (build / " +
+        "size / coverage / root drift) found issues — review before shipping:\n" +
+        full.output.slice(-1200);
+
+    // After base gate passes, run relational chain acceptance (if available)
+    if (full.passed && !e2eAcceptanceDisabled && acceptanceRunner) {
+      const hostPorts = readHostPorts(cwd);
+      const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
+      const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
+      const ctx: IAcceptanceRunCtx = {
+        cwd,
+        apiBase: `http://localhost:${apiPort}`,
+        uiBase: `http://localhost:${uiPort}`,
+      };
+
+      const spec = planToAcceptanceSpec(approved);
+      const chainOutcome = await acceptanceRunner.runChain(spec, ctx);
+
+      // Infrastructure error: route to infra-abort path, not feature red
+      if (chainOutcome.infraError !== undefined) {
+        const infraMsg = `Acceptance chain: ${chainOutcome.infraError}`;
+
+        return {
+          status: "needs-infra",
+          features: result.features,
+          infra: infraMsg,
+        };
+      }
+
+      // Chain assertion failed: flip final to not-green with detail
+      if (!chainOutcome.ok) {
+        finalPassed = false;
+        finalMessage = `chain acceptance failed: ${chainOutcome.detail ?? "assertion failure in relational flow"}`;
+      }
+    }
+
     onEvent?.({
-      kind: full.passed ? "done" : "stuck",
+      kind: finalPassed ? "done" : "stuck",
       task: "boringstack",
-      message: full.passed
-        ? "✓ final acceptance GREEN — full validate + build + size checks all pass."
-        : "⚠ features passed the fast gate, but the FULL acceptance gate (build / " +
-          "size / coverage / root drift) found issues — review before shipping:\n" +
-          full.output.slice(-1200),
+      message: finalMessage,
     });
   }
 

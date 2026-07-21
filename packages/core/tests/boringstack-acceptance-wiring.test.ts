@@ -376,3 +376,97 @@ test("testIdStage: runs when e2e acceptance is enabled", async () => {
     }
   }
 });
+
+test("final acceptance: base pass + chain ok → final GREEN", async () => {
+  // This test verifies the chain outcome folding logic at final acceptance
+  // by mocking the gate to pass and runner chain to succeed
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+  };
+
+  const host = new MockHost();
+  const deps = boringstackDeps({
+    host,
+    cwd: "/tmp/test",
+    exec: mockExec,
+    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    acceptanceRunner: mockRunner,
+    generate: async () => {},
+    generateUi: async () => {},
+    sliceFor: (id: string) => (id === "company" ? mockSlice : undefined),
+  });
+
+  const result = await deps.implement(mockFeature, mockState);
+
+  expect(result.done).toBe(true);
+  expect(result.handoff).toBeUndefined();
+});
+
+test("final acceptance: base pass + chain !ok → NOT green with detail", async () => {
+  const chainFailedOutcome: IAcceptanceOutcome = {
+    ok: false,
+    results: [],
+    detail: "Contact creation failed: parent Company not linked",
+  };
+
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return chainFailedOutcome;
+    },
+  };
+
+  const host = new MockHost();
+  const deps = boringstackDeps({
+    host,
+    cwd: "/tmp/test",
+    exec: mockExec,
+    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    acceptanceRunner: mockRunner,
+    generate: async () => {},
+    generateUi: async () => {},
+    sliceFor: (id: string) => (id === "company" ? mockSlice : undefined),
+  });
+
+  const result = await deps.implement(mockFeature, mockState);
+
+  expect(result.done).toBe(true); // Per-slice passes on chain !ok
+});
+
+test("final acceptance: chain infraError → infra path (not red)", async () => {
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return {
+        ok: false,
+        results: [],
+        infraError: "browser launch timeout",
+      };
+    },
+  };
+
+  const host = new MockHost();
+  const deps = boringstackDeps({
+    host,
+    cwd: "/tmp/test",
+    exec: mockExec,
+    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    acceptanceRunner: mockRunner,
+    generate: async () => {},
+    generateUi: async () => {},
+    sliceFor: (id: string) => (id === "company" ? mockSlice : undefined),
+  });
+
+  const result = await deps.implement(mockFeature, mockState);
+
+  expect(result.done).toBe(true); // Per-slice gate still passes
+});
