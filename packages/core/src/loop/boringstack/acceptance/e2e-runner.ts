@@ -3,7 +3,13 @@ import { dirname } from "node:path";
 import { URL } from "node:url";
 
 import type { Exec } from "../exec";
-import { generateEntitySpec, specPath, stepTitle } from "./e2e-generator";
+import {
+  generateEntitySpec,
+  specPath,
+  stepTitle,
+  generateChainSpec,
+  chainSpecPath,
+} from "./e2e-generator";
 import type {
   AcceptStep,
   IAcceptanceOutcome,
@@ -49,6 +55,7 @@ function isPlaywrightReport(obj: unknown): obj is IPlaywrightReportType {
 /**
  * Map a Playwright test title to an AcceptStep.
  * Reverse of stepTitle() in the generator.
+ * Also recognizes chain spec test titles.
  */
 function parseStep(
   testTitle: string,
@@ -92,6 +99,15 @@ function parseStep(
 
   if (testTitle.startsWith("negative: ")) {
     return "negative";
+  }
+
+  // Chain spec titles: "create root entity: Company" or "create child entity: Contact with parent linkage"
+  if (
+    testTitle.includes(`create ${entity.id}`) ||
+    testTitle.includes(`create root entity: ${entity.id}`) ||
+    testTitle.includes(`create child entity: ${entity.id}`)
+  ) {
+    return "create";
   }
 
   return null;
@@ -292,23 +308,64 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
       spec: IAcceptanceSpec,
       ctx: IAcceptanceRunCtx
     ): Promise<IAcceptanceOutcome> {
-      const allResults: IAcceptanceResult[] = [];
+      const chainSpec = generateChainSpec(spec);
+      const path = chainSpecPath(ctx.cwd);
 
-      for (const entity of spec.entities) {
-        const outcome = await this.run(entity, ctx);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, chainSpec, "utf-8");
 
-        if (outcome.infraError !== undefined) {
-          return outcome;
+      let lastError: string | undefined;
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const uiPort = portFromURL(ctx.uiBase);
+        const env = {
+          ...process.env,
+          PLAYWRIGHT_PORT: uiPort,
+          VITE_API_BASE: ctx.apiBase,
+        };
+
+        const result = await exec(
+          [
+            "bunx",
+            "playwright",
+            "test",
+            "_acceptance/chain.spec.ts",
+            "--reporter=json",
+          ],
+          {
+            cwd: `${ctx.cwd}/apps/ui`,
+            env,
+          }
+        );
+
+        // For chain specs, collect results from all entities
+        const allResults: IAcceptanceResult[] = [];
+
+        for (const entity of spec.entities) {
+          const parseResult = parsePlaywrightJSON(result.stdout, entity);
+
+          if (parseResult !== null) {
+            allResults.push(...parseResult);
+          }
         }
 
-        allResults.push(...outcome.results);
+        if (allResults.length > 0) {
+          return summarize(allResults);
+        }
 
-        if (!outcome.ok) {
+        lastError = result.stderr;
+        const hasInfraError = isInfraError(result.stderr);
+
+        if (!hasInfraError || attempt === 2) {
           break;
         }
       }
 
-      return summarize(allResults);
+      return {
+        ok: false,
+        results: [],
+        infraError: lastError ?? "playwright chain execution failed",
+      };
     },
   };
 }

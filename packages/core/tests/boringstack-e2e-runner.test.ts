@@ -344,44 +344,26 @@ test("runChain: returns summarized outcome across entities", async () => {
     id: "Contact",
     key: "contact",
     nav: "Contacts",
+    parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
   };
 
-  const fakeExec: Exec = async (argv) => {
-    // Determine which entity by looking at the spec file path
-    const specArg = argv
-      .find((arg) => arg.includes("_acceptance/"))
-      ?.match(/(\w+)\.spec\.ts/)?.[1];
-    const isCompany = specArg === "company";
-
+  const fakeExec: Exec = async (_argv) => {
     const report = {
       suites: [
         {
-          title: isCompany ? "e2e/company.spec.ts" : "e2e/contact.spec.ts",
-          specs: isCompany
-            ? [
-                {
-                  title: "navigate to company list via sidebar",
-                  ok: true,
-                  tests: [{ results: [{ status: "passed" }] }],
-                },
-                {
-                  title: "create Company: form fill, submit, row appears",
-                  ok: true,
-                  tests: [{ results: [{ status: "passed" }] }],
-                },
-              ]
-            : [
-                {
-                  title: "navigate to contact list via sidebar",
-                  ok: true,
-                  tests: [{ results: [{ status: "passed" }] }],
-                },
-                {
-                  title: "create Contact: form fill, submit, row appears",
-                  ok: true,
-                  tests: [{ results: [{ status: "passed" }] }],
-                },
-              ],
+          title: "Full Relational Chain: Company → Contact",
+          specs: [
+            {
+              title: "create root entity: Company",
+              ok: true,
+              tests: [{ results: [{ status: "passed" }] }],
+            },
+            {
+              title: "create child entity: Contact with parent linkage",
+              ok: true,
+              tests: [{ results: [{ status: "passed" }] }],
+            },
+          ],
         },
       ],
       stats: { expected: 2, unexpected: 0, flaky: 0, skipped: 0 },
@@ -405,6 +387,7 @@ test("runChain: returns summarized outcome across entities", async () => {
 
   // Both entities passed, so overall ok should be true
   expect(outcome.ok).toBe(true);
+  expect(outcome.results.length).toBeGreaterThan(0);
 });
 
 test("runChain: stops on first infra error", async () => {
@@ -413,30 +396,7 @@ test("runChain: stops on first infra error", async () => {
   const fakeExec: Exec = async () => {
     execCallCount++;
 
-    if (execCallCount === 1) {
-      return {
-        code: 0,
-        stdout: JSON.stringify({
-          suites: [
-            {
-              title: "e2e/company.spec.ts",
-              specs: [
-                {
-                  title: "navigate to company list via sidebar",
-                  ok: true,
-                  tests: [{ results: [{ status: "passed" }] }],
-                },
-              ],
-            },
-          ],
-          stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
-          errors: [],
-        }),
-        stderr: "",
-      };
-    }
-
-    // Second entity call gets infra error
+    // Chain spec execution gets infra error
     return {
       code: 1,
       stdout: "",
@@ -454,8 +414,8 @@ test("runChain: stops on first infra error", async () => {
 
   expect(outcome.infraError).toBeDefined();
   expect(outcome.ok).toBe(false);
-  // Retried up to 3 times on second entity
-  expect(execCallCount).toBe(1 + 3);
+  // Retried up to 3 times on chain spec
+  expect(execCallCount).toBe(3);
 });
 
 test("runner: passes correct env vars (PLAYWRIGHT_PORT, VITE_API_BASE) and inherits process.env", async () => {

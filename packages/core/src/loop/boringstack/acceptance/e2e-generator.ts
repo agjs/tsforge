@@ -1,6 +1,8 @@
 import type {
   AcceptStep,
   IEntityAcceptance,
+  IAcceptanceSpec,
+  IParentRef,
 } from "../../acceptance/acceptance.types";
 import { testIdsFor } from "../../acceptance/acceptance-spec";
 
@@ -36,6 +38,44 @@ export function stepTitle(
 }
 
 /**
+ * Generate API seeding code for parent entities before form submission.
+ * For each parent, creates a record via the API using the parent's valid field values.
+ * Returns TypeScript code that declares parentId variables.
+ */
+function generateParentSeedingCode(
+  parents: IParentRef[],
+  entityId: string
+): string {
+  if (parents.length === 0) {
+    return "";
+  }
+
+  return parents
+    .map((parent) => {
+      const parentKey = parent.key;
+      const varName = `${parentKey}Id`;
+
+      return `    // Seed a parent ${parent.entity} record
+    const ${varName} = await (async () => {
+      const res = await fetch(\`\${new URL(page.url()).origin}/api/v1/${parentKey}s\`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cookie": await page.context().cookies().then(c => c.map(x => \`\${x.name}=\${x.value}\`).join("; ")),
+        },
+        body: JSON.stringify({ name: \`${parent.entity}-for-${entityId}\` }),
+      });
+      if (!res.ok) {
+        throw new Error(\`Failed to seed ${parent.entity}: \${res.status}\`);
+      }
+      const data = await res.json() as { id: string };
+      return data.id;
+    })();`;
+    })
+    .join("\n");
+}
+
+/**
  * Generate field fill steps for form inputs.
  * Each step safely interpolates field.valid using JSON.stringify.
  */
@@ -44,10 +84,21 @@ function generateFieldFillSteps(
   ids: ReturnType<typeof testIdsFor>
 ): string {
   return entity.fields
-    .map(
-      (field) =>
-        `    await page.getByTestId("${ids.field(field.name)}").fill(${JSON.stringify(field.valid)});`
-    )
+    .map((field) => {
+      const isFK = entity.parents.some((p) => p.fkField === field.name);
+
+      if (isFK) {
+        const parent = entity.parents.find((p) => p.fkField === field.name);
+
+        if (parent) {
+          const varName = `${parent.key}Id`;
+
+          return `    await page.getByTestId("${ids.field(field.name)}").selectOption(${varName});`;
+        }
+      }
+
+      return `    await page.getByTestId("${ids.field(field.name)}").fill(${JSON.stringify(field.valid)});`;
+    })
     .join("\n");
 }
 
@@ -120,8 +171,7 @@ ${fieldFillSteps}
  *
  * Covers: nav, list (or empty), create, persist (reload), update, delete, and negative cases.
  * Uses the app's authedPage fixture and getByTestId selectors.
- *
- * No relationship logic yet (Task 6 adds parent-select + linkage).
+ * For entities with parents, seeds the parent via API and selects it in the form.
  */
 export function generateEntitySpec(entity: IEntityAcceptance): string {
   const ids = testIdsFor(entity.key);
@@ -129,6 +179,10 @@ export function generateEntitySpec(entity: IEntityAcceptance): string {
   const fieldFillSteps = generateFieldFillSteps(entity, ids);
   const rowCellAssertions = generateRowCellAssertions(entity, ids);
   const negativeBlocks = generateNegativeBlocks(entity, ids, fieldFillSteps);
+  const parentSeedingCode = generateParentSeedingCode(
+    entity.parents,
+    entity.id
+  );
 
   const firstFieldName = entity.fields[0]?.name ?? "name";
   const firstFieldValid = entity.fields[0]?.valid ?? "updated";
@@ -167,6 +221,8 @@ test.describe(${JSON.stringify(name)}, () => {
     await page.getByTestId("${ids.create}").click();
     await page.waitForURL(/.*\\/${entity.key}\\/new/);
 
+${parentSeedingCode}
+
     // Fill all fields
 ${fieldFillSteps}
 
@@ -197,6 +253,8 @@ ${rowCellAssertions}
     await page.getByTestId("${ids.create}").click();
     await page.waitForURL(/.*\\/${entity.key}\\/new/);
 
+${parentSeedingCode}
+
 ${fieldFillSteps}
 
     await page.getByTestId("${ids.submit}").click();
@@ -223,6 +281,8 @@ ${fieldFillSteps}
 
     await page.getByTestId("${ids.create}").click();
     await page.waitForURL(/.*\\/${entity.key}\\/new/);
+
+${parentSeedingCode}
 
 ${fieldFillSteps}
 
@@ -258,6 +318,8 @@ ${fieldFillSteps}
     // Create a record first
     await page.getByTestId("${ids.create}").click();
     await page.waitForURL(/.*\\/${entity.key}\\/new/);
+
+${parentSeedingCode}
 
 ${fieldFillSteps}
 
@@ -296,8 +358,96 @@ ${negativeBlocks}
 }
 
 /**
+ * Generate a Playwright spec that walks a full dependency chain end-to-end through the UI.
+ * Creates each entity in dependency order, selecting the previously-created parent,
+ * and asserting linkage at each hop.
+ *
+ * Example: Company → Contact → Deal → Activity
+ */
+export function generateChainSpec(spec: IAcceptanceSpec): string {
+  if (spec.entities.length === 0) {
+    return "// No entities to chain";
+  }
+
+  const descTitle = `Full Relational Chain: ${spec.entities.map((e) => e.id).join(" → ")}`;
+  const testSteps: string[] = [];
+
+  for (let i = 0; i < spec.entities.length; i++) {
+    const entity = spec.entities[i];
+
+    if (!entity) {
+      continue;
+    }
+
+    const ids = testIdsFor(entity.key);
+    const isRoot = i === 0;
+
+    const parentSeeding = generateParentSeedingCode(entity.parents, entity.id);
+    const fieldFill = generateFieldFillSteps(entity, ids);
+
+    if (isRoot) {
+      testSteps.push(`  test("create root entity: ${entity.id}", async ({ page, authedPage }) => {
+    await authedPage.dashboard.goto();
+    await page.getByTestId("${ids.nav}").click();
+    await page.waitForURL(/\\/${entity.key}/);
+
+    const initialCount = await page.getByTestId("${ids.row}").count();
+    await page.getByTestId("${ids.create}").click();
+    await page.waitForURL(/.*\\/${entity.key}\\/new/);
+
+${fieldFill}
+
+    await page.getByTestId("${ids.submit}").click();
+    await page.waitForURL(/\\/${entity.key}(?:\\/|$)/);
+
+    const finalCount = await page.getByTestId("${ids.row}").count();
+    if (finalCount <= initialCount) {
+      throw new Error("${entity.id} was not created");
+    }
+  });`);
+    } else {
+      testSteps.push(`  test("create child entity: ${entity.id} with parent linkage", async ({ page, authedPage }) => {
+    await authedPage.dashboard.goto();
+    await page.getByTestId("${ids.nav}").click();
+    await page.waitForURL(/\\/${entity.key}/);
+
+    const initialCount = await page.getByTestId("${ids.row}").count();
+    await page.getByTestId("${ids.create}").click();
+    await page.waitForURL(/.*\\/${entity.key}\\/new/);
+
+${parentSeeding}
+
+${fieldFill}
+
+    await page.getByTestId("${ids.submit}").click();
+    await page.waitForURL(/\\/${entity.key}(?:\\/|$)/);
+
+    const finalCount = await page.getByTestId("${ids.row}").count();
+    if (finalCount <= initialCount) {
+      throw new Error("${entity.id} was not created");
+    }
+  });`);
+    }
+  }
+
+  return `import { expect, test } from "../fixtures/auth";
+
+test.describe(${JSON.stringify(descTitle)}, () => {
+${testSteps.join("\n\n")}
+});
+`;
+}
+
+/**
  * Return the spec file path for an entity within a given cwd.
  */
 export function specPath(cwd: string, key: string): string {
   return `${cwd}/apps/ui/e2e/_acceptance/${key}.spec.ts`;
+}
+
+/**
+ * Return the chain spec file path for a set of entities within a given cwd.
+ */
+export function chainSpecPath(cwd: string): string {
+  return `${cwd}/apps/ui/e2e/_acceptance/chain.spec.ts`;
 }

@@ -2,8 +2,13 @@ import { test, expect, describe } from "bun:test";
 import {
   generateEntitySpec,
   specPath,
+  generateChainSpec,
+  chainSpecPath,
 } from "../src/loop/boringstack/acceptance/e2e-generator";
-import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
+import type {
+  IEntityAcceptance,
+  IAcceptanceSpec,
+} from "../src/loop/acceptance/acceptance.types";
 
 const company: IEntityAcceptance = {
   id: "Company",
@@ -204,5 +209,231 @@ describe("E2E spec generator", () => {
     const rawBad = '.fill("Value with "double quotes"';
 
     expect(spec).not.toContain(rawBad);
+  });
+
+  describe("Relationship-aware spec generation", () => {
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme Corp",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John Doe",
+          invalid: [],
+        },
+        {
+          name: "companyId",
+          type: "string",
+          optional: false,
+          valid: "comp-123",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "company"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    test("generateEntitySpec for child entity includes parent seeding code", () => {
+      const spec = generateEntitySpec(contactEntity);
+
+      expect(spec).toContain("Seed a parent Company record");
+      expect(spec).toContain("/api/v1/companys");
+    });
+
+    test("generateEntitySpec for child entity uses selectOption for FK field", () => {
+      const spec = generateEntitySpec(contactEntity);
+
+      expect(spec).toContain("selectOption(companyId)");
+    });
+
+    test("generateChainSpec generates multi-entity spec with dependency order", () => {
+      const spec = {
+        entities: [companyEntity, contactEntity],
+      };
+
+      const chainSpec = generateChainSpec(spec);
+
+      expect(chainSpec).toContain("Full Relational Chain: Company → Contact");
+      expect(chainSpec).toContain("create root entity: Company");
+      expect(chainSpec).toContain(
+        "create child entity: Contact with parent linkage"
+      );
+      expect(chainSpec).toContain("Seed a parent Company record");
+    });
+
+    test("generateChainSpec for single entity still creates valid spec", () => {
+      const spec = {
+        entities: [companyEntity],
+      };
+
+      const chainSpec = generateChainSpec(spec);
+
+      expect(chainSpec).toContain("Full Relational Chain: Company");
+      expect(chainSpec).toContain("create root entity: Company");
+      expect(chainSpec).not.toContain("create child entity");
+    });
+  });
+});
+
+describe("E2E spec generator - Relationships", () => {
+  test("generateEntitySpec with parent relationship seeds parent via API", () => {
+    const contact: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John Doe",
+          invalid: [],
+        },
+        {
+          name: "email",
+          type: "string",
+          optional: false,
+          valid: "john@example.com",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "email"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [{ field: "name", value: "", why: "name is required" }],
+      acceptanceCheck: "create a contact",
+    };
+
+    const spec = generateEntitySpec(contact);
+
+    // Should seed parent Company via API
+    expect(spec).toContain("Seed a parent Company record");
+    expect(spec).toContain("/api/v1/companys");
+    expect(spec).toContain("Company-for-Contact");
+  });
+
+  test("generateEntitySpec with parent relationship selects parent in form", () => {
+    const contact: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John Doe",
+          invalid: [],
+        },
+        {
+          name: "companyId",
+          type: "string",
+          optional: false,
+          valid: "comp-1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const spec = generateEntitySpec(contact);
+
+    // Should use selectOption for FK field instead of fill
+    expect(spec).toContain("selectOption(companyId)");
+    expect(spec).not.toContain(
+      'page.getByTestId("contact-field-companyId").fill'
+    );
+  });
+
+  test("generateChainSpec creates test for each entity in dependency order", () => {
+    const spec: IAcceptanceSpec = {
+      entities: [
+        company,
+        {
+          ...company,
+          id: "Contact",
+          key: "contact",
+          nav: "Contacts",
+          parents: [
+            { entity: "Company", key: "company", fkField: "companyId" },
+          ],
+        },
+      ],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // Should have both entities
+    expect(chainSpec).toContain("Company → Contact");
+    expect(chainSpec).toContain("create root entity: Company");
+    expect(chainSpec).toContain("create child entity: Contact");
+  });
+
+  test("generateChainSpec includes parent seeding for child entities", () => {
+    const contact: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const spec: IAcceptanceSpec = {
+      entities: [company, contact],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    expect(chainSpec).toContain("Seed a parent");
+  });
+
+  test("chainSpecPath returns correct path", () => {
+    const path = chainSpecPath("/home/user/project");
+
+    expect(path).toBe(
+      "/home/user/project/apps/ui/e2e/_acceptance/chain.spec.ts"
+    );
   });
 });
