@@ -306,7 +306,7 @@ git commit -m "feat(acceptance): plan-derived acceptance spec + testid contract 
 **Files:**
 - Modify: `packages/core/src/loop/boringstack/build.ts` (verify point ~L253-284): after a feature's fast gate is green and before marking verified, run `runner.run(entity, ctx)`; if `infraError` → infra-abort path (#47); if `!ok` → emit `acceptanceSteer` (+ seam wording) and keep the feature unverified so the loop iterates; only mark verified on `ok`.
 - Modify: scope/knip exclusions so `apps/ui/e2e/_acceptance/**` is out of the model's `setScope` and not a knip/fast-gate entry.
-- Add: `TSFORGE_NO_E2E_ACCEPTANCE` flag in the flags module; when set, skip the acceptance run entirely (verify behaves as today).
+- Add: `TSFORGE_NO_E2E_ACCEPTANCE` flag in the flags module; when set, skip the acceptance run entirely AND skip the Task 3 `testIdStage` gate (verify + gate behave byte-identically to today).
 - Test: `packages/core/tests/boringstack-acceptance-wiring.test.ts` + pin-unchanged tests.
 
 - [ ] **Step 1: failing tests** — with a fake runner returning `ok=false`, the feature is NOT marked verified and a steer is emitted; with `ok=true`, verified; with `infraError`, the infra-abort path fires (not a feature red); with the flag set, the runner is never called and verify matches today. Add/confirm tests pinning `unified-escalation`, `steer`, `checkpoint`, `fingerprint`, `session-gate`, and the existing `boringstack-build` behavior unchanged when the flag is off.

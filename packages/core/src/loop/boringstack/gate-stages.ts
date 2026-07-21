@@ -11,8 +11,7 @@ import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
 import { judgeFeature } from "../greenfield/judge";
 import { autofixApps, readResourceCode, rescueFileFor } from "./build";
-import { toCamelCase } from "./case";
-import { testIdsFor } from "../acceptance/acceptance-spec";
+import type { IEntityAcceptance } from "../acceptance/acceptance.types";
 import { checkTestIds } from "./acceptance/testid-contract";
 
 /** Turn one failure signature into an `IErrorItem`. Most signatures are their own
@@ -304,11 +303,10 @@ export function judgeStage(
  * test ID attributes (data-testid) for end-to-end testing. Only runs when a
  * feature's UI files are present.
  */
-export function testIdStage(cwd: string, featureId: string): IStage {
+export function testIdStage(cwd: string, entity: IEntityAcceptance): IStage {
   return {
     async run(): Promise<IValidateResult> {
-      const camel = toCamelCase(featureId);
-      const featureDir = join(cwd, "apps/ui/src/features", camel);
+      const featureDir = join(cwd, "apps/ui/src/features", entity.key);
 
       // Try to read the feature's UI files. If they don't exist yet (e.g., on
       // initial generation), pass silently.
@@ -338,22 +336,21 @@ export function testIdStage(cwd: string, featureId: string): IStage {
       }
 
       // Check for required testids
-      const ids = testIdsFor(camel);
-      const missing = checkTestIds(sources, ids);
+      const missing = checkTestIds(sources, entity);
 
       if (missing.length === 0) {
         return { passed: true, errors: [], output: "all testids present" };
       }
 
       const message =
-        `feature '${featureId}' UI is missing required test hooks: ${missing.join(", ")}. ` +
+        `feature '${entity.id}' UI is missing required test hooks: ${missing.join(", ")}. ` +
         `Add data-testid to the list, form, fields, and row controls so the app is testable.`;
 
       return {
         passed: false,
         errors: [
           {
-            key: `testid:${featureId}`,
+            key: `testid:${entity.id}`,
             rule: "testid-presence",
             message,
           },
@@ -376,16 +373,19 @@ export function composeBoringstackGate(opts: {
   evaluator: IProvider;
   baseline: ReadonlySet<string>;
   feature: IFeature;
+  /** The acceptance spec for this feature's entity (if available).
+   *  Passed to testIdStage to enforce the full per-entity contract. */
+  entity?: IEntityAcceptance;
   /** The OTHER features/entities in this build, so the judge scopes to this
    *  feature's own responsibilities and never demands a link to an unbuilt slice. */
   siblingEntities?: readonly string[];
 }): IGate {
-  const { cwd, exec, evaluator, baseline, feature } = opts;
+  const { cwd, exec, evaluator, baseline, feature, entity } = opts;
 
   return composeGate([
     differentialStage(boringstackCommandStage(cwd, exec), baseline),
     reachabilityStage(cwd, feature.id),
-    testIdStage(cwd, feature.id),
+    ...(entity !== undefined ? [testIdStage(cwd, entity)] : []),
     judgeStage(evaluator, cwd, feature, opts.siblingEntities ?? []),
   ]);
 }
