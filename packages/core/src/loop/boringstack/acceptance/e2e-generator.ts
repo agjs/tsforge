@@ -39,9 +39,11 @@ export function stepTitle(
 
 /**
  * Generate API seeding code for parent entities before form submission.
- * For each parent, creates a record via the API using the parent's valid field values.
- * Uses parent entity's own fields from the spec to build a complete valid payload.
- * Returns TypeScript code that declares parentId variables.
+ * Recursively seeds parents in topologically ordered (DFS post-order) so parent FK
+ * fields reference real seeded IDs rather than placeholders. For a 2+ level chain
+ * (e.g. Deal→Contact→Company), Company is seeded first, then Contact with a real
+ * companyId variable reference, then Deal with a real contactId variable reference.
+ * Returns TypeScript code that declares parentId variables in dependency order.
  */
 function generateParentSeedingCode(
   parents: IParentRef[],
@@ -52,36 +54,30 @@ function generateParentSeedingCode(
     return "";
   }
 
-  return parents
-    .map((parent) => {
-      const parentKey = parent.key;
+  const visited = new Set<string>();
+  const codeBlocks: string[] = [];
+  const maxDepth = 5;
+
+  function emitParentSeeding(
+    parentKey: string,
+    parentEntity: string,
+    depth: number
+  ): void {
+    // Guard: prevent cycles and excessive depth
+    if (visited.has(parentKey) || depth > maxDepth) {
+      return;
+    }
+
+    visited.add(parentKey);
+
+    // Find the parent entity in the spec
+    const parentDef = spec?.entities.find((e) => e.key === parentKey);
+
+    if (!parentDef) {
+      // Fallback: emit a simple seed with name only
       const varName = `${parentKey}Id`;
 
-      // Build seed payload with parent's required fields (from spec if available)
-      const seedPayload: Record<string, string> = {};
-
-      if (spec) {
-        const parentEntity = spec.entities.find((e) => e.key === parentKey);
-
-        if (parentEntity) {
-          // Seed with parent's required field values, INCLUDING required FK fields
-          for (const field of parentEntity.fields) {
-            // Include all required fields (data fields and required foreign keys)
-            if (!field.optional) {
-              seedPayload[field.name] = field.valid;
-            }
-          }
-        }
-      }
-
-      // Fallback: if spec didn't provide fields, use name
-      if (Object.keys(seedPayload).length === 0) {
-        seedPayload.name = `${parent.entity}-for-${entityId}`;
-      }
-
-      const payloadJson = JSON.stringify(seedPayload);
-
-      return `    // Seed a parent ${parent.entity} record with required fields (including required FKs)
+      codeBlocks.push(`    // Seed a parent ${parentEntity} record (no spec available)
     const ${varName} = await (async () => {
       const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
       const res = await fetch(\`\${apiBase}/api/v1/${parentKey}\`, {
@@ -90,21 +86,96 @@ function generateParentSeedingCode(
           "Content-Type": "application/json",
           "Cookie": await page.context().cookies().then(c => c.map(x => \`\${x.name}=\${x.value}\`).join("; ")),
         },
-        body: JSON.stringify(${payloadJson}),
+        body: JSON.stringify({ name: "${parentEntity}-for-${entityId}" }),
       });
       if (!res.ok) {
         const body = await res.text();
-        throw new Error(\`Failed to seed ${parent.entity} (HTTP \${res.status}): \${body}\`);
+        throw new Error(\`Failed to seed ${parentEntity} (HTTP \${res.status}): \${body}\`);
       }
       const data = await res.json();
       const parentId = data.id;
       if (typeof parentId !== "string") {
-        throw new Error(\`Seeded ${parent.entity} but no id in response: \${JSON.stringify(data)}\`);
+        throw new Error(\`Seeded ${parentEntity} but no id in response: \${JSON.stringify(data)}\`);
       }
       return parentId;
-    })();`;
-    })
-    .join("\n");
+    })();`);
+
+      return;
+    }
+
+    // RECURSIVELY emit seeding for THIS parent's parents FIRST (topological order)
+    for (const grandparent of parentDef.parents) {
+      emitParentSeeding(grandparent.key, grandparent.entity, depth + 1);
+    }
+
+    // Now emit THIS parent's seeding
+    const varName = `${parentKey}Id`;
+
+    // Build payload: required fields, with FK fields using var refs
+    const payloadParts: string[] = [];
+
+    for (const field of parentDef.fields) {
+      if (!field.optional) {
+        // Check if this field is an FK field (matches a parent's fkField)
+        const isFkField = parentDef.parents.some(
+          (p) => p.fkField === field.name
+        );
+
+        if (isFkField) {
+          // Use the real seeded var reference
+          const fkParent = parentDef.parents.find(
+            (p) => p.fkField === field.name
+          );
+
+          if (fkParent) {
+            const fkVarName = `${fkParent.key}Id`;
+
+            payloadParts.push(`${field.name}: ${fkVarName}`);
+          }
+        } else {
+          // Use the valid value as a string literal
+          payloadParts.push(`${field.name}: ${JSON.stringify(field.valid)}`);
+        }
+      }
+    }
+
+    // Fallback: if no required fields, add a name
+    if (payloadParts.length === 0) {
+      payloadParts.push(`name: "${parentEntity}-for-${entityId}"`);
+    }
+
+    const payloadCode = `{ ${payloadParts.join(", ")} }`;
+
+    codeBlocks.push(`    // Seed parent ${parentEntity} with required fields and real FK references
+    const ${varName} = await (async () => {
+      const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
+      const res = await fetch(\`\${apiBase}/api/v1/${parentKey}\`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cookie": await page.context().cookies().then(c => c.map(x => \`\${x.name}=\${x.value}\`).join("; ")),
+        },
+        body: JSON.stringify(${payloadCode}),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(\`Failed to seed ${parentEntity} (HTTP \${res.status}): \${body}\`);
+      }
+      const data = await res.json();
+      const parentId = data.id;
+      if (typeof parentId !== "string") {
+        throw new Error(\`Seeded ${parentEntity} but no id in response: \${JSON.stringify(data)}\`);
+      }
+      return parentId;
+    })();`);
+  }
+
+  // Emit seeding for all direct parents (which recursively emits grandparents first)
+  for (const parent of parents) {
+    emitParentSeeding(parent.key, parent.entity, 0);
+  }
+
+  return codeBlocks.join("\n");
 }
 
 /**
@@ -603,6 +674,8 @@ ${fieldFill}
 ${navHelpers}
 
 test.describe(${JSON.stringify(descTitle)}, () => {
+  test.describe.configure({ mode: "serial" });
+
 ${parentTrackingVars.map((v) => `  ${v}`).join("\n")}
 
 ${testSteps.join("\n\n")}

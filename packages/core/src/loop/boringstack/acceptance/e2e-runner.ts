@@ -274,6 +274,19 @@ function processExecResult(
   if (parseResult !== null) {
     // Honor exit code: nonzero means failure even if JSON parsed
     if (result.code !== 0) {
+      // Even with exit code failure, check if it's an infrastructure error
+      // by looking at stderr or top-level report errors
+      const hasInfraError = isInfraError(result.stderr);
+
+      if (hasInfraError) {
+        // Known infra failure pattern — can retry
+        return {
+          outcome: undefined,
+          shouldRetry: true,
+        };
+      }
+
+      // No infra pattern detected — treat as real test failure
       return {
         outcome: {
           ok: false,
@@ -374,7 +387,8 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
   return {
     async run(
       entity: IEntityAcceptance,
-      ctx: IAcceptanceRunCtx
+      ctx: IAcceptanceRunCtx,
+      spec?: IAcceptanceSpec
     ): Promise<IAcceptanceOutcome> {
       const specFilePath = specPath(ctx.cwd, entity.key);
       const authPath = authHelperPath(ctx.cwd);
@@ -386,10 +400,10 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
         mkdirSync(dirname(authPath), { recursive: true });
         writeFileSync(authPath, authHelperCode, "utf-8");
 
-        const spec = generateEntitySpec(entity);
+        const generatedSpec = generateEntitySpec(entity, spec);
 
         mkdirSync(dirname(specFilePath), { recursive: true });
-        writeFileSync(specFilePath, spec, "utf-8");
+        writeFileSync(specFilePath, generatedSpec, "utf-8");
 
         // Require these steps for a single entity run
         const requiredSteps: AcceptStep[] = [

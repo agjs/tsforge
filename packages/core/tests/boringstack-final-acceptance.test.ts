@@ -5,6 +5,10 @@ import type {
   IAcceptanceSpec,
   IEntityAcceptance,
 } from "../src/loop/acceptance/acceptance.types";
+import { runFinalAcceptance } from "../src/loop/boringstack/build";
+import type { Exec } from "../src/loop/boringstack/exec";
+import type { IGreenfieldResult } from "../src/loop/greenfield/greenfield.types";
+import type { IProductPlan } from "../src/loop/planning/plan-types";
 
 /**
  * Tests for final-acceptance verification (called after all features pass fast gate).
@@ -307,4 +311,341 @@ test("final acceptance: skipped/interrupted tests do not count as passed", async
 
   // If any required entity's step did not truly pass, acceptance fails
   expect(outcome.ok).toBe(false);
+});
+
+test("runFinalAcceptance: non-done status → returns input unchanged", async () => {
+  const input: IGreenfieldResult = {
+    status: "stuck",
+    features: [],
+    stuckFeature: "test-feature",
+  };
+
+  const mockExec: Exec = async () => ({
+    code: 0,
+    stdout: "",
+    stderr: "",
+  });
+
+  const minimalPlan: IProductPlan = {
+    product: "Test",
+    slices: [],
+  };
+
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    undefined,
+    minimalPlan,
+    true
+  );
+
+  expect(result.status).toBe("stuck");
+  expect(result.stuckFeature).toBe("test-feature");
+});
+
+test("runFinalAcceptance: gate passes + runChain returns infraError → needs-infra", async () => {
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "test", desc: "test", passes: true, attempts: 1 }],
+  };
+
+  const mockExec: Exec = async () => ({
+    code: 0,
+    stdout: "",
+    stderr: "",
+  });
+
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return {
+        ok: false,
+        results: [],
+        infraError: "ECONNREFUSED: browser connection failed",
+      };
+    },
+  };
+
+  const minimalPlan: IProductPlan = {
+    product: "Test",
+    slices: [],
+  };
+
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    mockRunner,
+    minimalPlan,
+    false
+  );
+
+  expect(result.status).toBe("needs-infra");
+  expect(result.infra).toContain("ECONNREFUSED");
+});
+
+test("runFinalAcceptance: gate passes + runChain returns ok:false → stuck", async () => {
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "test", desc: "test", passes: true, attempts: 1 }],
+  };
+
+  const mockExec: Exec = async () => ({
+    code: 0,
+    stdout: "",
+    stderr: "",
+  });
+
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return {
+        ok: false,
+        results: [],
+        detail: "relationship assertion failed",
+      };
+    },
+  };
+
+  const minimalPlan: IProductPlan = {
+    product: "Test",
+    slices: [],
+  };
+
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    mockRunner,
+    minimalPlan,
+    false
+  );
+
+  expect(result.status).toBe("stuck");
+});
+
+test("runFinalAcceptance: gate passes + runChain returns ok:true → done", async () => {
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "test", desc: "test", passes: true, attempts: 1 }],
+  };
+
+  const mockExec: Exec = async () => ({
+    code: 0,
+    stdout: "",
+    stderr: "",
+  });
+
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return {
+        ok: true,
+        results: [
+          { entity: "company", step: "create", ok: true, detail: "pass" },
+        ],
+      };
+    },
+  };
+
+  const minimalPlan: IProductPlan = {
+    product: "Test",
+    slices: [],
+  };
+
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    mockRunner,
+    minimalPlan,
+    false
+  );
+
+  expect(result.status).toBe("done");
+});
+
+// Tests for the exported runFinalAcceptance function
+const minimalPlan: IProductPlan = {
+  product: "Test",
+  slices: [
+    {
+      entity: {
+        id: "Company",
+        desc: "A company",
+        fields: [{ name: "name", type: "string", optional: false }],
+        rules: [],
+        relationships: [],
+      },
+      ui: {
+        nav: "Companies",
+        shows: ["name"],
+        screens: ["list", "form"],
+        action: "add",
+      },
+      verification: {
+        acceptanceCheck: "create a company",
+        mustRemainTrue: [],
+        mustNotHappen: [],
+      },
+    },
+  ],
+};
+
+test("runFinalAcceptance: non-done result returns unchanged", async () => {
+  const input: IGreenfieldResult = {
+    status: "stuck",
+    features: [],
+  };
+
+  const mockExec: Exec = (): Promise<never> => {
+    throw new Error("exec should not be called");
+  };
+
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    undefined,
+    minimalPlan,
+    false
+  );
+
+  expect(result.status).toBe("stuck");
+  expect(result).toBe(input);
+});
+
+test("runFinalAcceptance: done result with passing gate and successful chain returns done", async () => {
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "f1", desc: "test", passes: true, attempts: 1 }],
+  };
+
+  const mockExec: Exec = async (): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+  }> => {
+    // Respond to all exec calls with success
+    return { code: 0, stdout: "", stderr: "" };
+  };
+
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return {
+        ok: true,
+        results: [
+          { entity: "company", step: "create", ok: true, detail: "ok" },
+        ],
+      };
+    },
+  };
+
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    mockRunner,
+    minimalPlan,
+    false
+  );
+
+  expect(result.status).toBe("done");
+  expect(result.features).toBe(input.features);
+});
+
+test("runFinalAcceptance: chain infra error returns needs-infra", async () => {
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "f1", desc: "test", passes: true, attempts: 1 }],
+  };
+
+  const mockExec: Exec = async (): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+  }> => {
+    return { code: 0, stdout: "", stderr: "" };
+  };
+
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return {
+        ok: false,
+        results: [],
+        infraError: "ECONNREFUSED: API not responding",
+      };
+    },
+  };
+
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    mockRunner,
+    minimalPlan,
+    false
+  );
+
+  expect(result.status).toBe("needs-infra");
+  expect(result.infra).toContain("ECONNREFUSED");
+});
+
+test("runFinalAcceptance: chain assertion failure returns stuck", async () => {
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "f1", desc: "test", passes: true, attempts: 1 }],
+  };
+
+  const mockExec: Exec = async (): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+  }> => {
+    return { code: 0, stdout: "", stderr: "" };
+  };
+
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return {
+        ok: false,
+        results: [
+          {
+            entity: "company",
+            step: "create",
+            ok: false,
+            detail: "form didn't appear",
+          },
+        ],
+        detail: "form failed to load",
+      };
+    },
+  };
+
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    mockRunner,
+    minimalPlan,
+    false
+  );
+
+  expect(result.status).toBe("stuck");
 });

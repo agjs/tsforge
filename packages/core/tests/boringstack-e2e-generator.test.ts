@@ -445,4 +445,111 @@ describe("E2E spec generator - Relationships", () => {
       "/home/user/project/apps/ui/e2e/_acceptance/chain.spec.ts"
     );
   });
+
+  test("generateChainSpec includes serial configure to prevent concurrent test interference", () => {
+    const spec: IAcceptanceSpec = {
+      entities: [company],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    expect(chainSpec).toContain('test.describe.configure({ mode: "serial" });');
+  });
+
+  test("recursive parent seeding: 3-level chain emits Company before Contact, Contact before Deal", () => {
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme Corp",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John Doe",
+          invalid: [],
+        },
+        {
+          name: "companyId",
+          type: "string",
+          optional: false,
+          valid: "company-1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const dealEntity: IEntityAcceptance = {
+      id: "Deal",
+      key: "deal",
+      nav: "Deals",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Test Deal",
+          invalid: [],
+        },
+        {
+          name: "contactId",
+          type: "string",
+          optional: false,
+          valid: "contact-1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Contact", key: "contact", fkField: "contactId" }],
+      negatives: [],
+      acceptanceCheck: "create a deal",
+    };
+
+    const fullSpec: IAcceptanceSpec = {
+      entities: [companyEntity, contactEntity, dealEntity],
+    };
+
+    // Generate spec for Deal (the deepest entity) with full spec context
+    const dealSpec = generateEntitySpec(dealEntity, fullSpec);
+
+    // Verify topological order: Company seed before Contact seed
+    // (both are inside the Deal creation test, so we just verify order within the test)
+    const companySeedIndex = dealSpec.indexOf("Seed parent Company");
+    const contactSeedIndex = dealSpec.indexOf("Seed parent Contact");
+
+    expect(companySeedIndex).toBeGreaterThanOrEqual(0);
+    expect(contactSeedIndex).toBeGreaterThanOrEqual(0);
+    expect(companySeedIndex).toBeLessThan(contactSeedIndex);
+
+    // Verify Contact seed uses a real companyId variable, not a placeholder
+    expect(dealSpec).toContain("companyId: companyId");
+    // Verify it does NOT contain the placeholder string "parent-1"
+    expect(dealSpec).not.toContain('companyId: "parent-1"');
+  });
 });

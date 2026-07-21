@@ -91,7 +91,7 @@ function negativesFor(
   }
 
   // Add negatives from entity's rules (explicit constraints)
-  // ONLY if the constraint maps to an actual field in the entity
+  // ONLY if the constraint maps to an actual REQUIRED field in the entity
   for (const constraint of entity.rules) {
     // Extract common constraint patterns and try to find the field it references
     // Pattern: "fieldName must not be X", "fieldName cannot be Y"
@@ -99,9 +99,11 @@ function negativesFor(
 
     if (match && typeof match[1] === "string") {
       const fieldName = match[1];
-      const fieldExists = fields.some((f) => f.name === fieldName);
+      const field = fields.find((f) => f.name === fieldName);
 
-      if (fieldExists) {
+      // Only add empty-value negative for REQUIRED fields
+      // Optional fields with constraints should not get a blanket empty-value negative
+      if (field && !field.optional) {
         out.push({
           field: fieldName,
           value: "",

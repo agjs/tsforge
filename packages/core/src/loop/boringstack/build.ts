@@ -28,6 +28,7 @@ import type {
   IEntityAcceptance,
   IAcceptanceRunner,
   IAcceptanceRunCtx,
+  IAcceptanceSpec,
 } from "../acceptance/acceptance.types";
 import { acceptanceSteer } from "../acceptance/acceptance-steer";
 import { readHostPorts, hostPortOr } from "../../scaffold";
@@ -227,8 +228,9 @@ async function verifyAcceptance(
   cwd: string,
   entity: IEntityAcceptance | undefined,
   acceptanceRunner: IAcceptanceRunner | undefined,
-  e2eAcceptanceDisabled: boolean
-): Promise<{ done: boolean; handoff?: IHandoff }> {
+  e2eAcceptanceDisabled: boolean,
+  fullSpec?: IAcceptanceSpec
+): Promise<{ done: boolean; handoff?: IHandoff; infra?: string }> {
   // If acceptance is not enabled, return based on fast gate
   if (!(!e2eAcceptanceDisabled && sent.status === "done")) {
     return {
@@ -261,20 +263,19 @@ async function verifyAcceptance(
       uiBase: `http://localhost:${uiPort}`,
     };
 
-    const outcome = await acceptanceRunner.run(entity, ctx);
+    const outcome = await acceptanceRunner.run(entity, ctx, fullSpec);
 
-    // Infrastructure error: per-slice acceptance is best-effort. Warn but do NOT mark done;
-    // acceptance didn't actually pass, so the feature is unverified. Final acceptance will
-    // handle the infra error with proper needs-infra routing.
+    // Infrastructure error: route to needs-infra path; per-slice acceptance is best-effort.
+    // The feature's fast-gate pass is valid, but acceptance verification cannot complete
+    // due to infrastructure. Return infra error to thread it through the outer loop.
     if (outcome.infraError !== undefined) {
       const infraMsg =
         `⚠ per-slice acceptance encountered infrastructure error: ${outcome.infraError}. ` +
-        `Skipping per-slice check; final acceptance will verify once all features pass fast gate.`;
+        `Routing to needs-infra for retry once infrastructure is ready.`;
 
       await host.send(infraMsg);
 
-      // CRITICAL: do NOT return done:true for infra errors — acceptance didn't actually pass
-      return { done: false };
+      return { done: false, infra: outcome.infraError };
     }
 
     // Test assertion failed: emit steer and keep feature unverified
@@ -321,6 +322,10 @@ export function boringstackDeps(opts: {
    *  flag is enabled, features are gated on per-slice acceptance after the fast gate
    *  passes. */
   acceptanceRunner?: IAcceptanceRunner;
+  /** The full plan spec (all entities), used for recursive parent seeding in
+   *  per-slice acceptance. When provided, seeding code can reference parent field
+   *  metadata from the full plan rather than fallback placeholders. */
+  fullSpec?: IAcceptanceSpec;
 }): IGreenfieldDeps {
   const {
     host,
@@ -331,6 +336,7 @@ export function boringstackDeps(opts: {
     generateUi,
     sliceFor,
     acceptanceRunner,
+    fullSpec,
   } = opts;
   const generate = generateFn ?? generateResource;
   const genUi = generateUi ?? generateFeature;
@@ -343,7 +349,7 @@ export function boringstackDeps(opts: {
       feature: IFeature,
       state: IGreenfieldState,
       seed?: { triedLevers: EscalationRung[] }
-    ): Promise<{ done: boolean; handoff?: IHandoff }> {
+    ): Promise<{ done: boolean; handoff?: IHandoff; infra?: string }> {
       // Pre-step: generate the full vertical slice + sync the STUB schema. The
       // model then fills the domain INSIDE the loop, checked by the live gate.
       await generate(cwd, feature.id, exec);
@@ -402,7 +408,8 @@ export function boringstackDeps(opts: {
         cwd,
         entity,
         acceptanceRunner,
-        e2eAcceptanceDisabled
+        e2eAcceptanceDisabled,
+        fullSpec
       );
     },
   };
@@ -485,7 +492,7 @@ export function partitionBaseline(
  * Run the final acceptance gate and chain verification after all features pass the fast gate.
  * Note: approved is guaranteed to be non-null (checked by caller).
  */
-async function runFinalAcceptance(
+export async function runFinalAcceptance(
   result: IGreenfieldResult,
   cwd: string,
   exec: Exec,
@@ -681,6 +688,8 @@ export async function runBoringstackBuild(opts: {
     optsGreenfield.onEvent = onEvent;
   }
 
+  const fullSpec = planToAcceptanceSpec(approved);
+
   const result = await runGreenfield(
     cwd,
     state,
@@ -694,6 +703,7 @@ export async function runBoringstackBuild(opts: {
       generate,
       generateUi,
       acceptanceRunner,
+      fullSpec,
     }),
     optsGreenfield
   );

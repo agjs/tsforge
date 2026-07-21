@@ -597,3 +597,45 @@ test("runChain: cleans up generated chain spec and auth-helper after run", async
   expect(existsSync(chainPath)).toBe(false);
   expect(existsSync(authPath)).toBe(false);
 });
+
+test("runner: nonzero exit with parseable JSON but ECONNREFUSED stderr is retried (infra, not feature-fail)", async () => {
+  let execCallCount = 0;
+
+  const fakeExec: Exec = async () => {
+    execCallCount++;
+
+    // Playwright produces parseable JSON (tests ran) but exits with code 1
+    // AND stderr contains ECONNREFUSED (infrastructure error)
+    return {
+      code: 1,
+      stdout: JSON.stringify({
+        suites: [
+          {
+            title: "e2e/company.spec.ts",
+            specs: [
+              {
+                title: "create Company: form fill, submit, row appears",
+                ok: true,
+                tests: [{ results: [{ status: "passed" }] }],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
+        errors: [],
+      }),
+      stderr: "ECONNREFUSED: Failed to connect to API server",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const ctx = createTestCtx();
+
+  const outcome = await runner.run(testEntity, ctx);
+
+  // Should be classified as infra error, not feature failure
+  expect(outcome.ok).toBe(false);
+  expect(outcome.infraError).toBeDefined();
+  // Infra errors are retried up to 3 times
+  expect(execCallCount).toBe(3);
+});

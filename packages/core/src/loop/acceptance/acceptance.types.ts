@@ -81,9 +81,14 @@ export interface IAcceptanceRunCtx {
 }
 
 export interface IAcceptanceRunner {
+  /** Run acceptance for a single entity.
+   *  Optionally accepts the full spec for recursive parent seeding. When spec is provided,
+   *  parent field metadata can be used to seed parents with real field values instead of
+   *  placeholders. */
   run(
     entity: IEntityAcceptance,
-    ctx: IAcceptanceRunCtx
+    ctx: IAcceptanceRunCtx,
+    spec?: IAcceptanceSpec
   ): Promise<IAcceptanceOutcome>;
   runChain(
     spec: IAcceptanceSpec,

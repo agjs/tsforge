@@ -118,3 +118,61 @@ test("planToAcceptanceSpec: negatives derive missing-required + bad-email", () =
 test("planToAcceptanceSpec: sample values are deterministic across calls", () => {
   expect(planToAcceptanceSpec(plan)).toEqual(planToAcceptanceSpec(plan));
 });
+
+test("planToAcceptanceSpec: rule-based negatives only for REQUIRED fields", () => {
+  // Create a plan with a required field and an optional field, both with rules
+  const planWithOptional: IProductPlan = {
+    product: "CRM",
+    slices: [
+      {
+        entity: {
+          id: "Product",
+          desc: "A product",
+          fields: [
+            { name: "name", type: "string", optional: false }, // required
+            { name: "description", type: "string", optional: true }, // optional
+          ],
+          relationships: [],
+          rules: [
+            "name must not be empty",
+            "description must not be empty when present", // rule on optional field
+          ],
+        },
+        ui: {
+          screens: ["list", "form"],
+          action: "add",
+          shows: ["name", "description"],
+          nav: "Products",
+        },
+        verification: {
+          mustRemainTrue: ["x"],
+          mustNotHappen: [],
+          acceptanceCheck: "create a product",
+        },
+      },
+    ],
+  };
+
+  const spec = planToAcceptanceSpec(planWithOptional);
+  const product = spec.entities[0];
+
+  if (!product) {
+    throw new Error("product entity not found");
+  }
+
+  // Rule-based negative should be added for required "name" field
+  const nameNegatives = product.negatives.filter((n) => n.field === "name");
+
+  expect(nameNegatives.length).toBeGreaterThan(0);
+  expect(nameNegatives.some((n) => n.why.includes("must not be empty"))).toBe(
+    true
+  );
+
+  // NO rule-based negative should be added for optional "description" field
+  // (the rule constraint is present but doesn't apply to optional fields)
+  const descNegatives = product.negatives.filter(
+    (n) => n.field === "description"
+  );
+
+  expect(descNegatives.length).toBe(0);
+});
