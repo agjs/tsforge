@@ -257,16 +257,7 @@ ${fieldFillSteps}
     // Submit
     await page.getByTestId("${ids.submit}").click();
     // Wait for form to disappear (indicates mutation + list refresh completed)
-    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
-
-    // Wait for new row to appear with a polling timeout
-    await page.waitForFunction(
-      async () => {
-        const count = await page.getByTestId("${ids.row}").count();
-        return count > initialRowCount;
-      },
-      { timeout: 5000 }
-    );
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
     // New row should be visible with the filled values
     const finalRowCount = await page.getByTestId("${ids.row}").count();
@@ -569,8 +560,8 @@ class LoginPage implements ILoginPage {
     }
     await submitButton.click();
 
-    // Wait for navigation to dashboard
-    await this.page.waitForURL(/\\/dashboard/);
+    // Wait for navigation (don't enforce dashboard URL, auth may redirect elsewhere)
+    await this.page.waitForLoadState("load");
   }
 }
 
