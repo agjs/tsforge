@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, unlinkSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { URL } from "node:url";
 
@@ -243,6 +243,16 @@ function portFromURL(url: string): string {
 }
 
 /**
+ * Remove generated files from a given directory path if they exist.
+ * Safe to call with non-existent paths.
+ */
+function cleanupFile(filePath: string): void {
+  if (existsSync(filePath)) {
+    unlinkSync(filePath);
+  }
+}
+
+/**
  * Create an IAcceptanceRunner for BoringStack.
  *
  * Writes the entity spec to disk, invokes Playwright via exec, parses the JSON
@@ -257,139 +267,155 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
       entity: IEntityAcceptance,
       ctx: IAcceptanceRunCtx
     ): Promise<IAcceptanceOutcome> {
-      // Write auth helper once (shared by all specs)
-      if (!authHelperWritten) {
-        const authHelperCode = generateAuthHelper();
-        const authPath = authHelperPath(ctx.cwd);
+      const specFilePath = specPath(ctx.cwd, entity.key);
+      const authPath = authHelperPath(ctx.cwd);
 
-        mkdirSync(dirname(authPath), { recursive: true });
-        writeFileSync(authPath, authHelperCode, "utf-8");
-        authHelperWritten = true;
-      }
+      try {
+        // Write auth helper once (shared by all specs)
+        if (!authHelperWritten) {
+          const authHelperCode = generateAuthHelper();
 
-      const spec = generateEntitySpec(entity);
-      const path = specPath(ctx.cwd, entity.key);
+          mkdirSync(dirname(authPath), { recursive: true });
+          writeFileSync(authPath, authHelperCode, "utf-8");
+          authHelperWritten = true;
+        }
 
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, spec, "utf-8");
+        const spec = generateEntitySpec(entity);
 
-      let lastError: string | undefined;
+        mkdirSync(dirname(specFilePath), { recursive: true });
+        writeFileSync(specFilePath, spec, "utf-8");
 
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const uiPort = portFromURL(ctx.uiBase);
-        const env = {
-          ...process.env,
-          PLAYWRIGHT_PORT: uiPort,
-          VITE_API_BASE: ctx.apiBase,
-        };
+        let lastError: string | undefined;
 
-        const result = await exec(
-          [
-            "bunx",
-            "playwright",
-            "test",
-            `_acceptance/${entity.key}.spec.ts`,
-            "--reporter=json",
-          ],
-          {
-            cwd: `${ctx.cwd}/apps/ui`,
-            env,
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const uiPort = portFromURL(ctx.uiBase);
+          const env = {
+            ...process.env,
+            PLAYWRIGHT_PORT: uiPort,
+            VITE_API_BASE: ctx.apiBase,
+          };
+
+          const result = await exec(
+            [
+              "bunx",
+              "playwright",
+              "test",
+              `_acceptance/${entity.key}.spec.ts`,
+              "--reporter=json",
+            ],
+            {
+              cwd: `${ctx.cwd}/apps/ui`,
+              env,
+            }
+          );
+
+          const parseResult = parsePlaywrightJSON(result.stdout, entity);
+
+          if (parseResult !== null) {
+            return summarize(parseResult);
           }
-        );
 
-        const parseResult = parsePlaywrightJSON(result.stdout, entity);
+          lastError = result.stderr;
+          const hasInfraError = isInfraError(result.stderr);
 
-        if (parseResult !== null) {
-          return summarize(parseResult);
+          if (!hasInfraError || attempt === 2) {
+            break;
+          }
         }
 
-        lastError = result.stderr;
-        const hasInfraError = isInfraError(result.stderr);
-
-        if (!hasInfraError || attempt === 2) {
-          break;
-        }
+        return {
+          ok: false,
+          results: [],
+          infraError: lastError ?? "playwright execution failed",
+        };
+      } finally {
+        // Clean up generated spec and auth helper so they don't persist
+        // into the next fast-gate cycle and get flagged as unused by knip.
+        cleanupFile(specFilePath);
+        cleanupFile(authPath);
       }
-
-      return {
-        ok: false,
-        results: [],
-        infraError: lastError ?? "playwright execution failed",
-      };
     },
 
     async runChain(
       spec: IAcceptanceSpec,
       ctx: IAcceptanceRunCtx
     ): Promise<IAcceptanceOutcome> {
-      // Write auth helper (may have been written by run(), but ensure it exists)
-      if (!authHelperWritten) {
-        const authHelperCode = generateAuthHelper();
-        const authPath = authHelperPath(ctx.cwd);
+      const authPath = authHelperPath(ctx.cwd);
+      const chainPath = chainSpecPath(ctx.cwd);
 
-        mkdirSync(dirname(authPath), { recursive: true });
-        writeFileSync(authPath, authHelperCode, "utf-8");
-        authHelperWritten = true;
-      }
+      try {
+        // Write auth helper (may have been written by run(), but ensure it exists)
+        if (!authHelperWritten) {
+          const authHelperCode = generateAuthHelper();
 
-      const chainSpec = generateChainSpec(spec);
-      const path = chainSpecPath(ctx.cwd);
+          mkdirSync(dirname(authPath), { recursive: true });
+          writeFileSync(authPath, authHelperCode, "utf-8");
+          authHelperWritten = true;
+        }
 
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, chainSpec, "utf-8");
+        const chainSpec = generateChainSpec(spec);
 
-      let lastError: string | undefined;
+        mkdirSync(dirname(chainPath), { recursive: true });
+        writeFileSync(chainPath, chainSpec, "utf-8");
 
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const uiPort = portFromURL(ctx.uiBase);
-        const env = {
-          ...process.env,
-          PLAYWRIGHT_PORT: uiPort,
-          VITE_API_BASE: ctx.apiBase,
+        let lastError: string | undefined;
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const uiPort = portFromURL(ctx.uiBase);
+          const env = {
+            ...process.env,
+            PLAYWRIGHT_PORT: uiPort,
+            VITE_API_BASE: ctx.apiBase,
+          };
+
+          const result = await exec(
+            [
+              "bunx",
+              "playwright",
+              "test",
+              "_acceptance/chain.spec.ts",
+              "--reporter=json",
+            ],
+            {
+              cwd: `${ctx.cwd}/apps/ui`,
+              env,
+            }
+          );
+
+          // For chain specs, collect results from all entities
+          const allResults: IAcceptanceResult[] = [];
+
+          for (const entity of spec.entities) {
+            const parseResult = parsePlaywrightJSON(result.stdout, entity);
+
+            if (parseResult !== null) {
+              allResults.push(...parseResult);
+            }
+          }
+
+          if (allResults.length > 0) {
+            return summarize(allResults);
+          }
+
+          lastError = result.stderr;
+          const hasInfraError = isInfraError(result.stderr);
+
+          if (!hasInfraError || attempt === 2) {
+            break;
+          }
+        }
+
+        return {
+          ok: false,
+          results: [],
+          infraError: lastError ?? "playwright chain execution failed",
         };
-
-        const result = await exec(
-          [
-            "bunx",
-            "playwright",
-            "test",
-            "_acceptance/chain.spec.ts",
-            "--reporter=json",
-          ],
-          {
-            cwd: `${ctx.cwd}/apps/ui`,
-            env,
-          }
-        );
-
-        // For chain specs, collect results from all entities
-        const allResults: IAcceptanceResult[] = [];
-
-        for (const entity of spec.entities) {
-          const parseResult = parsePlaywrightJSON(result.stdout, entity);
-
-          if (parseResult !== null) {
-            allResults.push(...parseResult);
-          }
-        }
-
-        if (allResults.length > 0) {
-          return summarize(allResults);
-        }
-
-        lastError = result.stderr;
-        const hasInfraError = isInfraError(result.stderr);
-
-        if (!hasInfraError || attempt === 2) {
-          break;
-        }
+      } finally {
+        // Clean up generated chain spec and auth helper so they don't persist
+        // into the next fast-gate cycle and get flagged as unused by knip.
+        cleanupFile(chainPath);
+        cleanupFile(authPath);
       }
-
-      return {
-        ok: false,
-        results: [],
-        infraError: lastError ?? "playwright chain execution failed",
-      };
     },
   };
 }

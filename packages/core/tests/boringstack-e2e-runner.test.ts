@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -495,4 +495,111 @@ test("runner: extracts port from URL with non-standard ports", async () => {
   await runner.run(testEntity, ctx);
 
   expect(capturedEnv?.PLAYWRIGHT_PORT).toBe("9999");
+});
+
+test("runner: cleans up generated spec and auth-helper after successful run", async () => {
+  const fakeExec: Exec = async () => {
+    return {
+      code: 0,
+      stdout: JSON.stringify({
+        suites: [
+          {
+            title: "e2e/company.spec.ts",
+            specs: [
+              {
+                title: "navigate to company list via sidebar",
+                ok: true,
+                tests: [{ results: [{ status: "passed" }] }],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
+        errors: [],
+      }),
+      stderr: "",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const ctx = createTestCtx();
+
+  const specFilePath = join(ctx.cwd, "apps/ui/e2e/_acceptance/company.spec.ts");
+  const authPath = join(ctx.cwd, "apps/ui/e2e/_acceptance/auth-helper.ts");
+
+  await runner.run(testEntity, ctx);
+
+  // Files should be cleaned up after the run
+  expect(existsSync(specFilePath)).toBe(false);
+  expect(existsSync(authPath)).toBe(false);
+});
+
+test("runner: cleans up generated files even on infra error", async () => {
+  const fakeExec: Exec = async () => {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: "Executable doesn't exist",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const ctx = createTestCtx();
+
+  const specFilePath = join(ctx.cwd, "apps/ui/e2e/_acceptance/company.spec.ts");
+  const authPath = join(ctx.cwd, "apps/ui/e2e/_acceptance/auth-helper.ts");
+
+  // Pre-populate files to simulate previous run
+  mkdirSync(join(ctx.cwd, "apps/ui/e2e/_acceptance"), { recursive: true });
+  writeFileSync(specFilePath, "generated spec");
+  writeFileSync(authPath, "generated auth");
+
+  expect(existsSync(specFilePath)).toBe(true);
+  expect(existsSync(authPath)).toBe(true);
+
+  await runner.run(testEntity, ctx);
+
+  // Files should be cleaned up even after infra error
+  expect(existsSync(specFilePath)).toBe(false);
+  expect(existsSync(authPath)).toBe(false);
+});
+
+test("runChain: cleans up generated chain spec and auth-helper after run", async () => {
+  const fakeExec: Exec = async () => {
+    return {
+      code: 0,
+      stdout: JSON.stringify({
+        suites: [
+          {
+            title: "Full Relational Chain",
+            specs: [
+              {
+                title: "create root entity: Company",
+                ok: true,
+                tests: [{ results: [{ status: "passed" }] }],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
+        errors: [],
+      }),
+      stderr: "",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const spec = {
+    entities: [testEntity],
+  };
+  const ctx = createTestCtx();
+
+  const chainPath = join(ctx.cwd, "apps/ui/e2e/_acceptance/chain.spec.ts");
+  const authPath = join(ctx.cwd, "apps/ui/e2e/_acceptance/auth-helper.ts");
+
+  await runner.runChain(spec, ctx);
+
+  // Files should be cleaned up after the run
+  expect(existsSync(chainPath)).toBe(false);
+  expect(existsSync(authPath)).toBe(false);
 });
