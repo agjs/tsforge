@@ -5,6 +5,10 @@ import {
   isCompletionClass,
   allCompletionClass,
   nextCompletionPhase,
+  errorSetSignature,
+  isNearGreenRotation,
+  isNearGreenStabilized,
+  ROTATION_WINDOW,
   NEAR_GREEN_N,
   NEAR_GREEN_M,
   MAX_NEAR_GREEN_ROLLBACKS,
@@ -138,4 +142,129 @@ test("thresholds are overridable (for config / A/B)", () => {
   expect(shouldCheckpoint(3, true, 4)).toBe(true); // wider ceiling
   expect(shouldRollback(cp(3), 7, 0, 4, 3)).toBe(true); // N=4,M=3 → 3→7 (+4)
   expect(shouldRollback(cp(1), 3, 0, 2, 1)).toBe(true); // M=1 → 1→3 (+2)
+});
+
+// #77: near-green ROTATING-error oscillation — the count stays ≤N but the SPECIFIC error set
+// rotates (jsx-computation → missing-sibling → no-unsafe-call → …), so each single-error fix
+// swaps for a new one and the build never reaches 0 (build17 parked here; build16 crossed by
+// luck). The detector must tell rotation apart from a genuinely stuck single error.
+const rerr = (rule: string, file: string): IErrorItem => ({
+  key: `${file}:1:${rule}`,
+  rule,
+  file,
+  message: rule,
+});
+
+test("errorSetSignature: order- and line-independent, deduped, keyed by rule|file", () => {
+  // Order-independent.
+  expect(
+    errorSetSignature([rerr("no-unsafe-call", "x.ts"), rerr("jsx", "y.tsx")])
+  ).toBe(
+    errorSetSignature([rerr("jsx", "y.tsx"), rerr("no-unsafe-call", "x.ts")])
+  );
+  // Line-independent (the key's line moves as code shifts; the signature must not).
+  expect(
+    errorSetSignature([
+      { key: "x.ts:9:r", rule: "r", file: "x.ts", message: "m" },
+    ])
+  ).toBe(
+    errorSetSignature([
+      { key: "x.ts:1:r", rule: "r", file: "x.ts", message: "m" },
+    ])
+  );
+  // Deduped: two errors sharing rule|file collapse to one.
+  expect(
+    errorSetSignature([
+      rerr("no-unsafe-call", "x.ts"),
+      rerr("no-unsafe-call", "x.ts"),
+    ])
+  ).toBe(errorSetSignature([rerr("no-unsafe-call", "x.ts")]));
+  // A DIFFERENT set has a different signature (so rotation is detectable).
+  expect(errorSetSignature([rerr("jsx", "x.ts")])).not.toBe(
+    errorSetSignature([rerr("no-unsafe-call", "x.ts")])
+  );
+  // rule AND file both absent (custom gates emit key-only errors): fall back to the MESSAGE, not
+  // the key — distinct messages stay distinct …
+  expect(errorSetSignature([{ key: "a", message: "parse error" }])).not.toBe(
+    errorSetSignature([{ key: "b", message: "type error" }])
+  );
+  // … and the SAME logical error whose KEY shifted across an autofix line move reads as UNCHANGED
+  // (the key embeds the line `file:line:rule`; the message doesn't — this is the #3 line-drift fix).
+  expect(errorSetSignature([{ key: "x.ts:1:e", message: "same error" }])).toBe(
+    errorSetSignature([{ key: "x.ts:9:e", message: "same error" }])
+  );
+  // PARTIAL family — file present, rule absent: distinct errors (distinct messages) stay distinct.
+  expect(
+    errorSetSignature([
+      { key: "x.ts:1", file: "x.ts", message: "parse error" },
+      { key: "x.ts:9", file: "x.ts", message: "type error" },
+    ])
+  ).not.toBe(
+    errorSetSignature([{ key: "x.ts:1", file: "x.ts", message: "parse error" }])
+  );
+  // PARTIAL family — rule present, file absent: distinct messages stay distinct.
+  expect(errorSetSignature([{ key: "k1", rule: "r", message: "a" }])).not.toBe(
+    errorSetSignature([{ key: "k2", rule: "r", message: "b" }])
+  );
+});
+
+test("isNearGreenRotation: full window + count PLATEAU + changing signature", () => {
+  // A near-green sample: fixed count 1 and phase 0 unless the test varies them.
+  const s = (
+    sig: string,
+    count = 1,
+    phase = 0
+  ): { count: number; phase: number; sig: string } => ({ count, phase, sig });
+
+  expect(ROTATION_WINDOW).toBe(3);
+  // Fewer than a full window → can't conclude rotation yet.
+  expect(isNearGreenRotation([s("a"), s("a")])).toBe(false);
+  // A full window of the SAME signature = a genuinely stuck single error, NOT rotation
+  // (the escalation ladder/expert handle that; rotation would mis-fire on it).
+  expect(isNearGreenRotation([s("a"), s("a"), s("a")])).toBe(false);
+  // GENUINE per-cycle rotation (identity changes EVERY cycle) = rotation.
+  expect(isNearGreenRotation([s("a"), s("b"), s("c")])).toBe(true);
+  // A 2-cycle RING (A→B→A) is genuine rotation too (no two consecutive equal).
+  expect(isNearGreenRotation([s("a"), s("b"), s("a")])).toBe(true);
+  // A single swap then stable (A,A,B — one identity change) is NOT rotation: it's progress toward
+  // green, not a cycling frontier. Firing here would wrongly disable the WS-B rollback safety net.
+  expect(isNearGreenRotation([s("a"), s("a"), s("b")])).toBe(false);
+  expect(isNearGreenRotation([s("a"), s("b"), s("b")])).toBe(false);
+  // A MOVING count (2→1→1) is progress/regress, NOT rotation — even though the signatures differ,
+  // the window is not a plateau. This is the panel's count-blind false positive.
+  expect(isNearGreenRotation([s("a", 2), s("b", 1), s("c", 1)])).toBe(false);
+  // Same identity, count descends 2→1: not rotation (a plateau requires one count).
+  expect(isNearGreenRotation([s("a", 2), s("a", 1), s("a", 1)])).toBe(false);
+  // A plateau at count 2 that rotates IS rotation (near green isn't only count 1).
+  expect(isNearGreenRotation([s("a", 2), s("b", 2), s("c", 2)])).toBe(true);
+  // A MOVING gate-frontier PHASE is progress, NOT rotation: A@phase1 → B@phase2 → B@phase2 at a
+  // stable count is the short-circuit gate revealing the next phase's work, not a rotating error.
+  expect(isNearGreenRotation([s("a", 1, 1), s("b", 1, 2), s("b", 1, 2)])).toBe(
+    false
+  );
+  // A rotation WITHIN one phase (constant phase, changing sig) still fires.
+  expect(isNearGreenRotation([s("a", 1, 2), s("b", 1, 2), s("c", 1, 2)])).toBe(
+    true
+  );
+  // Only the LAST window matters: an earlier rotation that has since stabilized is not rotation.
+  expect(
+    isNearGreenRotation([s("a"), s("b"), s("c"), s("d"), s("d"), s("d")])
+  ).toBe(false);
+});
+
+test("isNearGreenStabilized: full window of ONE signature = settled (the latch exit)", () => {
+  const s = (sig: string): { count: number; phase: number; sig: string } => ({
+    count: 1,
+    phase: 0,
+    sig,
+  });
+
+  expect(isNearGreenStabilized([s("a"), s("a")])).toBe(false); // short of a window
+  expect(isNearGreenStabilized([s("a"), s("a"), s("a")])).toBe(true); // settled
+  expect(isNearGreenStabilized([s("a"), s("b"), s("c")])).toBe(false); // still rotating
+  expect(isNearGreenStabilized([s("a"), s("b"), s("b")])).toBe(false); // not fully settled
+  // Only the last window matters: earlier churn then a settled tail = stabilized.
+  expect(isNearGreenStabilized([s("a"), s("b"), s("c"), s("c"), s("c")])).toBe(
+    true
+  );
 });

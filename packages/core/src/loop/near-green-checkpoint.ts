@@ -139,3 +139,126 @@ export function shouldRollback(
 
   return checkpoint.errorCount <= n && curr > checkpoint.errorCount + m;
 }
+
+/** #77: near-green ROTATING-error oscillation. At near green the model can clear its single
+ *  remaining error, but the FIX spawns a new one — e.g. it extracts a component, so that
+ *  component's required sibling set + colocated tests are now missing; fixing those creates
+ *  more, etc. The error COUNT stays low while the error SET rotates, so the build never reaches
+ *  0 (build17 parked on this; build16 crossed the same tail by luck). Count-only WS-B can't see
+ *  it (count never sprays past the checkpoint). The window of consecutive near-green cycles over
+ *  which a CHANGING error-set signature counts as rotation rather than a one-off wobble. */
+export const ROTATION_WINDOW = 3;
+
+/** Max CONSECUTIVE spikes (cycles above the near-green ceiling) tolerated between two near-green
+ *  samples before the rotation window is considered STALE and cleared. The rotating pattern is a
+ *  tight fix-one → spray → revert → near-green loop, so real near-green visits sit a handful of
+ *  cycles apart; without a bound, two near-green samples could survive an arbitrarily long
+ *  regression and combine with a much later, unrelated near-green result to fire the steer
+ *  falsely (a fresh near-green episode, not the same rotation). */
+export const MAX_NEAR_GREEN_SPIKE_GAP = 3;
+
+/** A stable, order- and LINE-independent per-error identity token for rotation detection. When the
+ *  error has BOTH a `rule` and a `file` (the eslint/type-aware shape), use the `rule|file` FAMILY —
+ *  line-independent by construction. Otherwise (`rule`/`file` absent — both are OPTIONAL; custom
+ *  gates emit key-only errors) fall back to the `message`, NOT the `key`: the key commonly embeds a
+ *  source location (`file:line:rule`), so the SAME logical error moving from line 1 to line 9 across
+ *  an autofix cycle would mint a new token and FALSELY arm rotation. The message is the error's
+ *  human description and is line-stable, so it keeps a re-emission reading as the same error.
+ *  (Trade-off: two distinct key-only errors that happen to share a message collapse — acceptable
+ *  for rotation identity, and far rarer than autofix line-shift.) */
+function errorToken(e: IErrorItem): string {
+  return e.rule !== undefined && e.file !== undefined
+    ? `${e.rule}|${e.file}`
+    : e.message;
+}
+
+/** A stable, order- and line-independent signature of an error SET: the sorted unique per-error
+ *  identity tokens (see errorToken). Re-emitting the SAME errors at shifted lines reads as
+ *  unchanged; a genuinely different set reads as changed — which is what makes rotation detectable.
+ *  Generic: keyed only on the stack-agnostic rule/file/key fields.
+ *  DELIBERATE trade-off: the token DEDUPES by `rule|file` family and drops multiplicity, so a
+ *  plateau rotating between two DISTINCT instances of the SAME rule in the SAME file (e.g. one
+ *  `no-unsafe-call` in x.ts swapped for another `no-unsafe-call` in x.ts at count 1) reads as
+ *  unchanged and is NOT detected. Distinguishing those needs the line (it's the only differing
+ *  field), and the line is exactly what `autofixApps` (prettier/eslint --fix, run every cycle)
+ *  reflows — so a line-sensitive signature would fire FALSE rotations on every autofix. Line-
+ *  independence is the more important property: the observed failure (build17) rotates across
+ *  DIFFERENT rules, which the family form detects. Same-rule-same-file instance rotation is
+ *  knowingly left to the count-based WS-B checkpoint + escalation ladder. */
+export function errorSetSignature(errors: readonly IErrorItem[]): string {
+  return [...new Set(errors.map(errorToken))].sort().join(";");
+}
+
+/** One recorded near-green cycle: its error COUNT, the gate FRONTIER phase it sits at, and the
+ *  `errorSetSignature` of its error set. Rotation is judged over a trailing window of these — the
+ *  count + phase pin the PLATEAU (a stuck frontier at a stable count), the signature pins the
+ *  changing IDENTITY. */
+export interface INearGreenSample {
+  readonly count: number;
+  readonly phase: number;
+  readonly sig: string;
+}
+
+/** Whether the recent near-green cycles are ROTATING. `samples` is the trailing list captured on
+ *  cycles whose count was near green (the caller only records them there). Rotation requires BOTH:
+ *   • a PLATEAU — the full window of `k` cycles sits at ONE error count AND ONE gate-frontier phase.
+ *     build17's shape (and the 4/4 diagnosis) is "the count stays at best-ever (1) while the
+ *     fingerprint rotates"; a window whose count MOVES (e.g. 2→1→1, a descent, or 1→2, a
+ *     regression) is progress/regress, NOT rotation. A window whose PHASE moves is also progress:
+ *     a short-circuiting composed gate reveals the next phase's errors only after the current
+ *     phase clears, so A@phase1 → B@phase2 at the same count is genuine frontier advancement (the
+ *     convergence logic counts it as progress), NOT rotation — firing the "don't open new
+ *     routes/modules" steer there would fight exactly the downstream work that just became
+ *     reachable. Requiring a constant phase excludes it. (When the gate sets no phase, all samples
+ *     are phase 0 — constant — so this is a no-op there.)
+ *   • GENUINE per-cycle rotation — the signature CHANGES on EVERY cycle of the window (no two
+ *     CONSECUTIVE samples share a signature). This is stricter than "≥2 distinct in the window":
+ *     A,A,B (one error merely replaced once, then stable) is NOT rotation, but A,B,C and the
+ *     2-cycle ring A,B,A both are. The strictness is deliberate and load-bearing: setting
+ *     `nearGreenRotation` DISABLES the WS-B rollback safety net (nearGreenRollbackStep stands down
+ *     so the steered atomic-completion spike isn't reverted). Firing on weak evidence (a single
+ *     error-swap) would disable that net for a build that is merely progressing — so the detector
+ *     must be CONFIDENT the frontier is actually cycling before it fires. A full window of ONE
+ *     signature is a stuck single error (the ladder/expert own it), also not rotation.
+ *  Only the last `k` matter, so a rotation that has since stabilized reads as not-rotating. */
+export function isNearGreenRotation(
+  samples: readonly INearGreenSample[],
+  k: number = ROTATION_WINDOW
+): boolean {
+  if (samples.length < k) {
+    return false;
+  }
+
+  const window = samples.slice(-k);
+  const countPlateau = new Set(window.map((s) => s.count)).size === 1;
+  const phasePlateau = new Set(window.map((s) => s.phase)).size === 1;
+
+  if (!countPlateau || !phasePlateau) {
+    return false;
+  }
+
+  // Genuine rotation: the identity must change on every cycle (no two consecutive equal), not just
+  // once across the window — a single swap (A,A,B) is progress toward green, not a rotating frontier.
+  // KNOWN LIMIT (deliberate, bounded): a plateau of DISTINCT signatures (A,B,C) is treated as
+  // rotation even without a proven return, because that IS build17's shape — each fix spawns the
+  // next error at the same count, so the sequence never repeats. A gate that reports ALL errors
+  // can't fake this (independent fixes DESCEND the count → no plateau); only a FIRST-ERROR-ONLY
+  // gate masks the count and could false-positive here. That exposure is bounded: WS-B re-arms
+  // after MAX_NEAR_GREEN_SPIKE_GAP spike cycles, and the caller LATCHES on this signal (arms once,
+  // never on a within-band wobble). The boringstack gate reports all errors, so it's unaffected.
+  return window.every((s, i) => i === 0 || s.sig !== window[i - 1]?.sig);
+}
+
+/** Whether the recent near-green cycles have STABILIZED on a single stuck error — the full window
+ *  is ONE signature. This is the clean exit for a latched rotation: the frontier stopped rotating
+ *  and settled, so the escalation ladder / expert (not the rotation steer) should own it now. */
+export function isNearGreenStabilized(
+  samples: readonly INearGreenSample[],
+  k: number = ROTATION_WINDOW
+): boolean {
+  if (samples.length < k) {
+    return false;
+  }
+
+  return new Set(samples.slice(-k).map((s) => s.sig)).size === 1;
+}

@@ -425,6 +425,12 @@ export function resetDriveConvergence(state: ILoopState): void {
   delete state.nearGreenBest;
   delete state.nearGreenRollbacks;
   delete state.completionPhase;
+  // #77: the near-green ROTATION window + flag are per-drive too — else a send that ends mid-
+  // rotation leaks the flag into the next send, injecting the completion-only steer with no
+  // evidence from the new drive.
+  delete state.nearGreenSamples;
+  delete state.nearGreenSpikeGap;
+  delete state.nearGreenRotation;
 }
 
 /** How many times a send recovers from a repetition loop before giving up. */
@@ -2451,6 +2457,11 @@ export class Session {
     this.state.nearGreenCheckpoint = undefined;
     this.state.nearGreenBest = undefined;
     this.state.nearGreenRollbacks = 0;
+    // #77: the rotation window + flag are per-drive (a stale flag would inject the completion-only
+    // steer on a fresh drive with no evidence).
+    this.state.nearGreenSamples = undefined;
+    this.state.nearGreenSpikeGap = undefined;
+    this.state.nearGreenRotation = undefined;
 
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       const turnStart = performance.now();
