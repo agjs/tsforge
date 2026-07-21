@@ -67,26 +67,63 @@ const testEntity: IEntityAcceptance = {
   acceptanceCheck: "create a company",
 };
 
-test("runner: fake Exec returning canned JSON report parses correctly", async () => {
+test("runner: fake Exec returning nested Playwright JSON report parses correctly", async () => {
   const report = {
-    testResults: [
+    suites: [
       {
-        testCaseTitle: "navigate to company list via sidebar",
-        title: "navigate to company list via sidebar",
-        ok: true,
-      },
-      {
-        testCaseTitle: "create Company: form fill, submit, row appears",
-        title: "create Company: form fill, submit, row appears",
-        ok: true,
-      },
-      {
-        testCaseTitle: "update Company: edit form, change field, save",
-        title: "update Company: edit form, change field, save",
-        ok: false,
-        error: { message: "row did not update" },
+        title: "e2e/company.spec.ts",
+        suites: [],
+        specs: [
+          {
+            title: "navigate to company list via sidebar",
+            ok: true,
+            tests: [
+              {
+                results: [
+                  {
+                    status: "passed",
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            title: "create Company: form fill, submit, row appears",
+            ok: true,
+            tests: [
+              {
+                results: [
+                  {
+                    status: "passed",
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            title: "update Company: edit form, change field, save",
+            ok: false,
+            tests: [
+              {
+                results: [
+                  {
+                    status: "failed",
+                    error: { message: "row did not update" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
       },
     ],
+    stats: {
+      expected: 3,
+      unexpected: 1,
+      flaky: 0,
+      skipped: 0,
+    },
+    errors: [],
   };
 
   let execCallCount = 0;
@@ -124,34 +161,47 @@ test("runner: fake Exec returning canned JSON report parses correctly", async ()
   expect(execCallCount).toBe(1);
 });
 
-test("runner: all-pass report returns ok=true", async () => {
+test("runner: all-pass nested report returns ok=true", async () => {
   const report = {
-    testResults: [
+    suites: [
       {
-        title: "navigate to company list via sidebar",
-        ok: true,
-      },
-      {
-        title: "company list is present or empty state shown",
-        ok: true,
-      },
-      {
-        title: "create Company: form fill, submit, row appears",
-        ok: true,
-      },
-      {
-        title: "Company persists after page reload",
-        ok: true,
-      },
-      {
-        title: "update Company: edit form, change field, save",
-        ok: true,
-      },
-      {
-        title: "delete Company: row delete, confirm, row gone",
-        ok: true,
+        title: "e2e/company.spec.ts",
+        specs: [
+          {
+            title: "navigate to company list via sidebar",
+            ok: true,
+            tests: [{ results: [{ status: "passed" }] }],
+          },
+          {
+            title: "company list is present or empty state shown",
+            ok: true,
+            tests: [{ results: [{ status: "passed" }] }],
+          },
+          {
+            title: "create Company: form fill, submit, row appears",
+            ok: true,
+            tests: [{ results: [{ status: "passed" }] }],
+          },
+          {
+            title: "Company persists after page reload",
+            ok: true,
+            tests: [{ results: [{ status: "passed" }] }],
+          },
+          {
+            title: "update Company: edit form, change field, save",
+            ok: true,
+            tests: [{ results: [{ status: "passed" }] }],
+          },
+          {
+            title: "delete Company: row delete, confirm, row gone",
+            ok: true,
+            tests: [{ results: [{ status: "passed" }] }],
+          },
+        ],
       },
     ],
+    stats: { expected: 6, unexpected: 0, flaky: 0, skipped: 0 },
+    errors: [],
   };
 
   const fakeExec: Exec = async () => ({
@@ -226,13 +276,29 @@ test("runner: assertion failure is not retried", async () => {
     return {
       code: 1,
       stdout: JSON.stringify({
-        testResults: [
+        suites: [
           {
-            title: "create Company: form fill, submit, row appears",
-            ok: false,
-            error: { message: "Row did not appear" },
+            title: "e2e/company.spec.ts",
+            specs: [
+              {
+                title: "create Company: form fill, submit, row appears",
+                ok: false,
+                tests: [
+                  {
+                    results: [
+                      {
+                        status: "failed",
+                        error: { message: "Row did not appear" },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
           },
         ],
+        stats: { expected: 1, unexpected: 1, flaky: 0, skipped: 0 },
+        errors: [],
       }),
       stderr: "",
     };
@@ -288,27 +354,38 @@ test("runChain: returns summarized outcome across entities", async () => {
     const isCompany = specArg === "company";
 
     const report = {
-      testResults: isCompany
-        ? [
-            {
-              title: "navigate to company list via sidebar",
-              ok: true,
-            },
-            {
-              title: "create Company: form fill, submit, row appears",
-              ok: true,
-            },
-          ]
-        : [
-            {
-              title: "navigate to contact list via sidebar",
-              ok: true,
-            },
-            {
-              title: "create Contact: form fill, submit, row appears",
-              ok: true,
-            },
-          ],
+      suites: [
+        {
+          title: isCompany ? "e2e/company.spec.ts" : "e2e/contact.spec.ts",
+          specs: isCompany
+            ? [
+                {
+                  title: "navigate to company list via sidebar",
+                  ok: true,
+                  tests: [{ results: [{ status: "passed" }] }],
+                },
+                {
+                  title: "create Company: form fill, submit, row appears",
+                  ok: true,
+                  tests: [{ results: [{ status: "passed" }] }],
+                },
+              ]
+            : [
+                {
+                  title: "navigate to contact list via sidebar",
+                  ok: true,
+                  tests: [{ results: [{ status: "passed" }] }],
+                },
+                {
+                  title: "create Contact: form fill, submit, row appears",
+                  ok: true,
+                  tests: [{ results: [{ status: "passed" }] }],
+                },
+              ],
+        },
+      ],
+      stats: { expected: 2, unexpected: 0, flaky: 0, skipped: 0 },
+      errors: [],
     };
 
     return {
@@ -340,12 +417,20 @@ test("runChain: stops on first infra error", async () => {
       return {
         code: 0,
         stdout: JSON.stringify({
-          testResults: [
+          suites: [
             {
-              title: "navigate to company list via sidebar",
-              ok: true,
+              title: "e2e/company.spec.ts",
+              specs: [
+                {
+                  title: "navigate to company list via sidebar",
+                  ok: true,
+                  tests: [{ results: [{ status: "passed" }] }],
+                },
+              ],
             },
           ],
+          stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
+          errors: [],
         }),
         stderr: "",
       };
@@ -373,8 +458,8 @@ test("runChain: stops on first infra error", async () => {
   expect(execCallCount).toBe(1 + 3);
 });
 
-test("runner: passes correct env vars (PLAYWRIGHT_PORT, VITE_API_BASE)", async () => {
-  let capturedEnv: Record<string, string> | undefined;
+test("runner: passes correct env vars (PLAYWRIGHT_PORT, VITE_API_BASE) and inherits process.env", async () => {
+  let capturedEnv: Record<string, string | undefined> | undefined;
 
   const fakeExec: Exec = async (_argv, opts) => {
     capturedEnv = opts.env;
@@ -382,12 +467,20 @@ test("runner: passes correct env vars (PLAYWRIGHT_PORT, VITE_API_BASE)", async (
     return {
       code: 0,
       stdout: JSON.stringify({
-        testResults: [
+        suites: [
           {
-            title: "navigate to company list via sidebar",
-            ok: true,
+            title: "e2e/company.spec.ts",
+            specs: [
+              {
+                title: "navigate to company list via sidebar",
+                ok: true,
+                tests: [{ results: [{ status: "passed" }] }],
+              },
+            ],
           },
         ],
+        stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
+        errors: [],
       }),
       stderr: "",
     };
@@ -401,10 +494,12 @@ test("runner: passes correct env vars (PLAYWRIGHT_PORT, VITE_API_BASE)", async (
   expect(capturedEnv).toBeDefined();
   expect(capturedEnv?.PLAYWRIGHT_PORT).toBe("7331");
   expect(capturedEnv?.VITE_API_BASE).toBe("http://localhost:3000");
+  // Verify that process.env variables are preserved (e.g., PATH)
+  expect(capturedEnv?.PATH).toBeDefined();
 });
 
 test("runner: extracts port from URL with non-standard ports", async () => {
-  let capturedEnv: Record<string, string> | undefined;
+  let capturedEnv: Record<string, string | undefined> | undefined;
 
   const fakeExec: Exec = async (_argv, opts) => {
     capturedEnv = opts.env;
@@ -412,12 +507,20 @@ test("runner: extracts port from URL with non-standard ports", async () => {
     return {
       code: 0,
       stdout: JSON.stringify({
-        testResults: [
+        suites: [
           {
-            title: "navigate to company list via sidebar",
-            ok: true,
+            title: "e2e/company.spec.ts",
+            specs: [
+              {
+                title: "navigate to company list via sidebar",
+                ok: true,
+                tests: [{ results: [{ status: "passed" }] }],
+              },
+            ],
           },
         ],
+        stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
+        errors: [],
       }),
       stderr: "",
     };

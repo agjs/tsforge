@@ -16,23 +16,33 @@ import type {
 import { summarize } from "../../acceptance/acceptance-outcome";
 
 /**
- * Type guard to validate a Playwright JSON report structure.
+ * Type guard to validate a Playwright JSON report structure (nested suites format).
  */
-interface IPlaywrightReportType {
-  testResults: {
-    testCaseTitle: string;
-    title: string;
-    ok: boolean;
-    error?: { message?: string } | null;
+interface IPlaywrightSpec {
+  title: string;
+  ok: boolean;
+  tests?: {
+    results?: { status?: string; error?: { message?: string } }[];
   }[];
+}
+
+interface IPlaywrightSuite {
+  title?: string;
+  suites?: IPlaywrightSuite[];
+  specs?: IPlaywrightSpec[];
+}
+
+interface IPlaywrightReportType {
+  suites?: IPlaywrightSuite[];
+  stats?: Record<string, unknown>;
+  errors?: { message?: string }[];
 }
 
 function isPlaywrightReport(obj: unknown): obj is IPlaywrightReportType {
   return (
     typeof obj === "object" &&
     obj !== null &&
-    "testResults" in obj &&
-    Array.isArray(Object.getOwnPropertyDescriptor(obj, "testResults")?.value)
+    ("suites" in obj || "stats" in obj || "errors" in obj)
   );
 }
 
@@ -104,6 +114,65 @@ function isInfraError(stderr: string): boolean {
 }
 
 /**
+ * Extract the error message from a test result, if present.
+ */
+function extractErrorMessage(test: {
+  results?: { status?: string; error?: { message?: string } }[];
+}): string {
+  const firstResult = test.results?.[0];
+
+  return firstResult?.error?.message ?? "failed";
+}
+
+/**
+ * Process a single spec and add it to the results if it matches a known step.
+ */
+function processSpec(
+  spec: IPlaywrightSpec,
+  entity: IEntityAcceptance,
+  results: IAcceptanceResult[]
+): void {
+  const step = parseStep(spec.title, entity);
+
+  if (step === null) {
+    return;
+  }
+
+  const errorMsg =
+    spec.tests?.[0] !== undefined
+      ? extractErrorMessage(spec.tests[0])
+      : "failed";
+
+  results.push({
+    entity: entity.key,
+    step,
+    ok: spec.ok,
+    detail: spec.ok ? "pass" : errorMsg,
+  });
+}
+
+/**
+ * Recursively walk nested Playwright suites to extract specs and their results.
+ */
+function walkSuites(
+  suite: IPlaywrightSuite,
+  entity: IEntityAcceptance,
+  results: IAcceptanceResult[]
+): void {
+  if (suite.specs !== undefined) {
+    for (const spec of suite.specs) {
+      processSpec(spec, entity, results);
+    }
+  }
+
+  if (suite.suites !== undefined) {
+    for (const nestedSuite of suite.suites) {
+      walkSuites(nestedSuite, entity, results);
+    }
+  }
+}
+
+/**
  * Parse Playwright JSON reporter output into IAcceptanceResult[].
  * Returns null if the output is not valid JSON (infra error case).
  */
@@ -129,20 +198,9 @@ function parsePlaywrightJSON(
 
   const results: IAcceptanceResult[] = [];
 
-  for (const testResult of parsed.testResults) {
-    const title =
-      testResult.title.length > 0 ? testResult.title : testResult.testCaseTitle;
-    const step = parseStep(title, entity);
-
-    if (step !== null) {
-      const errorMsg = testResult.error?.message;
-
-      results.push({
-        entity: entity.key,
-        step,
-        ok: testResult.ok,
-        detail: testResult.ok ? "pass" : (errorMsg ?? "failed"),
-      });
+  if (parsed.suites !== undefined) {
+    for (const suite of parsed.suites) {
+      walkSuites(suite, entity, results);
     }
   }
 
@@ -190,6 +248,7 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
       for (let attempt = 0; attempt < 3; attempt++) {
         const uiPort = portFromURL(ctx.uiBase);
         const env = {
+          ...process.env,
           PLAYWRIGHT_PORT: uiPort,
           VITE_API_BASE: ctx.apiBase,
         };

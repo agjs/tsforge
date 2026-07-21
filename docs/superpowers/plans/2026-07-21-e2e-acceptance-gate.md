@@ -276,6 +276,7 @@ git commit -m "feat(acceptance): plan-derived acceptance spec + testid contract 
 - Modify: `packages/core/src/loop/boringstack/acceptance/e2e-generator.ts` (relationship-aware create: seed parent via API, select it in `{key}-field-{fkField}`, assert linkage cell) + `generateChainSpec(spec)` (Company→Contact→Deal→Activity end-to-end through the UI).
 - Modify: `packages/core/src/loop/boringstack/acceptance/e2e-runner.ts` → implement `runChain`.
 - Test: extend `boringstack-e2e-generator.test.ts` + `boringstack-e2e-runner.test.ts`.
+- **Also resolve the auth-wiring gap (carried from Task 5):** the app's e2e auth fixture hardcodes the API origin (`localhost:7331`), so it won't authenticate against the isolated stack. The runner must NOT depend on the app's hardcoded fixture — generate a self-contained auth setup into `e2e/_acceptance/` (a harness-owned helper/fixture that provisions a user + logs in against `ctx.apiBase`/`ctx.uiBase`), and have the generated specs use it. Prove it with a live run against valbuild19 (Company end-to-end must actually authenticate + pass); this is the prerequisite that makes Task 10's proof possible.
 
 - [ ] **Step 1: failing tests** — `generateEntitySpec(contact)` seeds a Company (API helper) and selects `contact-field-companyId`, asserts `contact-row-company`; `generateChainSpec` output creates all four in dependency order with linkage assertions.
 - [ ] **Step 2: run → FAIL.**
