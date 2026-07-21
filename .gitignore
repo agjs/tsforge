@@ -31,3 +31,7 @@ models.json
 __pycache__/
 .claude/settings.local.json
 packages/core/scripts/gen-plan.ts
+
+# harness-generated acceptance specs + playwright artifacts (never commit)
+apps/*/e2e/_acceptance/
+test-results/
