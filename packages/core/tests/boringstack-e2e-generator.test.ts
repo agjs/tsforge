@@ -45,10 +45,10 @@ const company: IEntityAcceptance = {
 };
 
 describe("E2E spec generator", () => {
-  test("generateEntitySpec includes Playwright @playwright/test import", () => {
+  test("generateEntitySpec includes auth helper import", () => {
     const spec = generateEntitySpec(company);
 
-    expect(spec).toContain('import { expect, test } from "../fixtures/auth"');
+    expect(spec).toContain('import { expect, test } from "./auth-helper"');
   });
 
   test("generateEntitySpec includes fixture usage (authedPage)", () => {

@@ -187,7 +187,7 @@ export function generateEntitySpec(entity: IEntityAcceptance): string {
   const firstFieldName = entity.fields[0]?.name ?? "name";
   const firstFieldValid = entity.fields[0]?.valid ?? "updated";
 
-  return `import { expect, test } from "../fixtures/auth";
+  return `import { expect, test } from "./auth-helper";
 
 test.describe(${JSON.stringify(name)}, () => {
   test(${JSON.stringify(stepTitle("nav", entity.key, entity.id))}, async ({ page, authedPage }) => {
@@ -430,7 +430,7 @@ ${fieldFill}
     }
   }
 
-  return `import { expect, test } from "../fixtures/auth";
+  return `import { expect, test } from "./auth-helper";
 
 test.describe(${JSON.stringify(descTitle)}, () => {
 ${testSteps.join("\n\n")}
@@ -450,4 +450,194 @@ export function specPath(cwd: string, key: string): string {
  */
 export function chainSpecPath(cwd: string): string {
   return `${cwd}/apps/ui/e2e/_acceptance/chain.spec.ts`;
+}
+
+/**
+ * Generate a self-contained auth helper for acceptance specs.
+ * This fixture replicates the app's auth flow but uses VITE_API_BASE
+ * and PLAYWRIGHT_PORT environment variables instead of hardcoded origins.
+ *
+ * Handles: user registration, email verification (via force-verify endpoint),
+ * and login via the page object.
+ */
+export function generateAuthHelper(): string {
+  return `import {
+  type APIRequestContext,
+  test as base,
+  request,
+  expect,
+} from "@playwright/test";
+import { randomUUID } from "node:crypto";
+
+interface ITestUser {
+  readonly email: string;
+  readonly password: string;
+}
+
+interface IDashboardPage {
+  goto(): Promise<void>;
+}
+
+interface ILoginPage {
+  goto(): Promise<void>;
+  loginAs(email: string, password: string): Promise<void>;
+}
+
+/**
+ * Mock DashboardPage for isolated stack testing.
+ * In production, this is loaded from pages/DashboardPage.
+ */
+class DashboardPage implements IDashboardPage {
+  constructor(private page: import("@playwright/test").Page) {}
+
+  async goto() {
+    const uiBase = process.env.PLAYWRIGHT_HOST || "http://localhost";
+    const uiPort = process.env.PLAYWRIGHT_PORT || "7331";
+    const url = \`\${uiBase}:\${uiPort}/dashboard\`;
+    await this.page.goto(url);
+    await this.page.waitForLoadState("networkidle");
+  }
+}
+
+/**
+ * Mock LoginPage for isolated stack testing.
+ * In production, this is loaded from pages/LoginPage.
+ */
+class LoginPage implements ILoginPage {
+  constructor(private page: import("@playwright/test").Page) {}
+
+  async goto() {
+    const uiBase = process.env.PLAYWRIGHT_HOST || "http://localhost";
+    const uiPort = process.env.PLAYWRIGHT_PORT || "7331";
+    const url = \`\${uiBase}:\${uiPort}/login\`;
+    await this.page.goto(url);
+    await this.page.waitForLoadState("networkidle");
+  }
+
+  async loginAs(email: string, password: string) {
+    // Fill email field
+    const emailInput = this.page.locator('input[type="email"], input[placeholder*="email" i]').first();
+    await emailInput.fill(email);
+
+    // Fill password field
+    const passwordInput = this.page.locator('input[type="password"]').first();
+    await passwordInput.fill(password);
+
+    // Click submit button
+    const submitButton = this.page.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first();
+    await submitButton.click();
+
+    // Wait for navigation to dashboard
+    await this.page.waitForURL(/\\/dashboard/);
+  }
+}
+
+const CONSENT_STORAGE_KEY = "bs.cookie-consent.v1";
+const CONSENT_DISMISSED_STATE = {
+  state: {
+    status: "configured",
+    categories: { essential: true, analytics: false, marketing: false },
+    configuredAt: new Date().toISOString(),
+  },
+  version: 0,
+};
+
+export const test = base.extend<
+  {
+    login: ILoginPage;
+    dashboard: IDashboardPage;
+    authedPage: { login: ILoginPage; dashboard: IDashboardPage };
+  },
+  { testUser: ITestUser }
+>({
+  page: async ({ page }, use) => {
+    await page.addInitScript(
+      ({ key, value }: { key: string; value: string }) => {
+        try {
+          window.localStorage.setItem(key, value);
+        } catch {
+          // localStorage unavailable in restricted contexts
+        }
+      },
+      {
+        key: CONSENT_STORAGE_KEY,
+        value: JSON.stringify(CONSENT_DISMISSED_STATE),
+      }
+    );
+
+    await use(page);
+  },
+  testUser: [
+    async ({}, use, workerInfo) => {
+      const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
+      const user: ITestUser = {
+        email: \`e2e-\${String(workerInfo.workerIndex)}-\${randomUUID()}@e2e.test\`,
+        password: "E2EPassword123!",
+      };
+
+      const ctx: APIRequestContext = await request.newContext({
+        baseURL: apiBase,
+      });
+
+      // Register the user
+      const registerRes = await ctx.post("/api/v1/auth/register", {
+        data: {
+          email: user.email,
+          password: user.password,
+          firstName: "E2E",
+          lastName: "User",
+        },
+      });
+
+      if (!registerRes.ok()) {
+        const body = await registerRes.text();
+        throw new Error(
+          \`Failed to register e2e test user (HTTP \${String(registerRes.status())}): \${body}\`
+        );
+      }
+
+      // Force-verify the user (test endpoint)
+      const verifyRes = await ctx.post("/api/v1/auth/__test/force-verify", {
+        data: { email: user.email },
+      });
+
+      if (!verifyRes.ok()) {
+        const body = await verifyRes.text();
+        throw new Error(
+          \`Failed to force-verify e2e test user (HTTP \${String(verifyRes.status())}): \${body}\`
+        );
+      }
+
+      await ctx.dispose();
+
+      await use(user);
+    },
+    { scope: "worker" },
+  ],
+  login: async ({ page }, use) => {
+    await use(new LoginPage(page));
+  },
+  dashboard: async ({ page }, use) => {
+    await use(new DashboardPage(page));
+  },
+  authedPage: async ({ page, testUser }, use) => {
+    const login = new LoginPage(page);
+    const dashboard = new DashboardPage(page);
+
+    await login.goto();
+    await login.loginAs(testUser.email, testUser.password);
+    await page.waitForURL(/\\/dashboard/);
+    await use({ login, dashboard });
+  },
+});
+
+export { expect };
+`;
+}
+
+/**
+ * Return the auth helper file path for the acceptance fixtures.
+ */
+export function authHelperPath(cwd: string): string {
+  return `${cwd}/apps/ui/e2e/_acceptance/auth-helper.ts`;
 }

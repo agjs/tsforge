@@ -9,6 +9,8 @@ import {
   stepTitle,
   generateChainSpec,
   chainSpecPath,
+  generateAuthHelper,
+  authHelperPath,
 } from "./e2e-generator";
 import type {
   AcceptStep,
@@ -248,11 +250,23 @@ function portFromURL(url: string): string {
  * Retries (max 2) on infra failures only.
  */
 export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
+  let authHelperWritten = false;
+
   return {
     async run(
       entity: IEntityAcceptance,
       ctx: IAcceptanceRunCtx
     ): Promise<IAcceptanceOutcome> {
+      // Write auth helper once (shared by all specs)
+      if (!authHelperWritten) {
+        const authHelperCode = generateAuthHelper();
+        const authPath = authHelperPath(ctx.cwd);
+
+        mkdirSync(dirname(authPath), { recursive: true });
+        writeFileSync(authPath, authHelperCode, "utf-8");
+        authHelperWritten = true;
+      }
+
       const spec = generateEntitySpec(entity);
       const path = specPath(ctx.cwd, entity.key);
 
@@ -308,6 +322,16 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
       spec: IAcceptanceSpec,
       ctx: IAcceptanceRunCtx
     ): Promise<IAcceptanceOutcome> {
+      // Write auth helper (may have been written by run(), but ensure it exists)
+      if (!authHelperWritten) {
+        const authHelperCode = generateAuthHelper();
+        const authPath = authHelperPath(ctx.cwd);
+
+        mkdirSync(dirname(authPath), { recursive: true });
+        writeFileSync(authPath, authHelperCode, "utf-8");
+        authHelperWritten = true;
+      }
+
       const chainSpec = generateChainSpec(spec);
       const path = chainSpecPath(ctx.cwd);
 
