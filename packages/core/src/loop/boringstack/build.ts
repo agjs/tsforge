@@ -24,7 +24,14 @@ import { loadApprovedPlan } from "../planning/plan-store";
 import type { ISlice } from "../planning/plan-types";
 import { planToAcceptanceSpec } from "../acceptance/acceptance-spec";
 import { buildTestIdGuide } from "./acceptance/testid-contract";
-import type { IEntityAcceptance } from "../acceptance/acceptance.types";
+import type {
+  IEntityAcceptance,
+  IAcceptanceRunner,
+  IAcceptanceRunCtx,
+} from "../acceptance/acceptance.types";
+import { acceptanceSteer } from "../acceptance/acceptance-steer";
+import { readHostPorts, hostPortOr } from "../../scaffold";
+import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
 /** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
  *  `format` (prettier, canonical formatting) then `lint:fix` (eslint --fix for the
@@ -231,6 +238,10 @@ export function boringstackDeps(opts: {
   /** Look up the plan slice for a feature by its id. Supplied by runBoringstackBuild
    *  when building from an approved plan; undefined when planning ad-hoc. */
   sliceFor?: (id: string) => ISlice | undefined;
+  /** The acceptance runner for per-slice E2E verification. When provided and the
+   *  flag is enabled, features are gated on per-slice acceptance after the fast gate
+   *  passes. */
+  acceptanceRunner?: IAcceptanceRunner;
 }): IGreenfieldDeps {
   const {
     host,
@@ -240,10 +251,13 @@ export function boringstackDeps(opts: {
     generate: generateFn,
     generateUi,
     sliceFor,
+    acceptanceRunner,
   } = opts;
   const generate = generateFn ?? generateResource;
   const genUi = generateUi ?? generateFeature;
   const baseline = opts.baseline ?? new Set<string>();
+  const e2eAcceptanceDisabled =
+    process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
   return {
     async implement(
@@ -302,6 +316,49 @@ export function boringstackDeps(opts: {
       const sent = await host.send(
         refinePrompt(feature, slice) + testIdGuide + revisitGuidance(seed)
       );
+
+      // If the fast gate passed, optionally run acceptance verification
+      if (
+        sent.status === "done" &&
+        !e2eAcceptanceDisabled &&
+        acceptanceRunner &&
+        entity
+      ) {
+        const hostPorts = readHostPorts(cwd);
+        const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
+        const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
+        const ctx: IAcceptanceRunCtx = {
+          cwd,
+          apiBase: `http://localhost:${apiPort}`,
+          uiBase: `http://localhost:${uiPort}`,
+        };
+
+        const outcome = await acceptanceRunner.run(entity, ctx);
+
+        // Infrastructure error: do not mark feature red, surface the error clearly
+        if (outcome.infraError !== undefined) {
+          const infraMsg =
+            `acceptance check encountered an infrastructure error (not a code failure): ` +
+            `${outcome.infraError}. The stack or browser may be down — verify the test ` +
+            `environment is healthy and retry this build.`;
+
+          await host.send(infraMsg);
+
+          return { done: false };
+        }
+
+        // Test assertion failed: emit steer and keep feature unverified
+        if (!outcome.ok) {
+          const steer = acceptanceSteer(entity, outcome);
+
+          await host.send(steer);
+
+          return { done: false };
+        }
+
+        // All checks passed
+        return { done: true };
+      }
 
       return {
         done: sent.status === "done",

@@ -13,6 +13,7 @@ import { judgeFeature } from "../greenfield/judge";
 import { autofixApps, readResourceCode, rescueFileFor } from "./build";
 import type { IEntityAcceptance } from "../acceptance/acceptance.types";
 import { checkTestIds } from "./acceptance/testid-contract";
+import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
 /** Turn one failure signature into an `IErrorItem`. Most signatures are their own
  *  message (the raw gate row). A `knip:unused-file:<path>` signature is enriched
@@ -381,11 +382,15 @@ export function composeBoringstackGate(opts: {
   siblingEntities?: readonly string[];
 }): IGate {
   const { cwd, exec, evaluator, baseline, feature, entity } = opts;
+  const e2eAcceptanceDisabled =
+    process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
   return composeGate([
     differentialStage(boringstackCommandStage(cwd, exec), baseline),
     reachabilityStage(cwd, feature.id),
-    ...(entity !== undefined ? [testIdStage(cwd, entity)] : []),
+    ...(entity !== undefined && !e2eAcceptanceDisabled
+      ? [testIdStage(cwd, entity)]
+      : []),
     judgeStage(evaluator, cwd, feature, opts.siblingEntities ?? []),
   ]);
 }
