@@ -6,5 +6,5 @@ export interface IExecResult {
 
 export type Exec = (
   argv: readonly string[],
-  opts: { cwd: string }
+  opts: { cwd: string; env?: Record<string, string> }
 ) => Promise<IExecResult>;

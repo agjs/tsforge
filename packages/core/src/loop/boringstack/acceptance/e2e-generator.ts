@@ -1,5 +1,39 @@
-import type { IEntityAcceptance } from "../../acceptance/acceptance.types";
+import type {
+  AcceptStep,
+  IEntityAcceptance,
+} from "../../acceptance/acceptance.types";
 import { testIdsFor } from "../../acceptance/acceptance-spec";
+
+/**
+ * Generate a canonical test title for a given acceptance step.
+ * Used by both the spec generator (for test names) and the runner (for parsing results back).
+ * This ensures single-source-of-truth for step title matching.
+ */
+export function stepTitle(
+  step: AcceptStep,
+  entityKey: string,
+  entityId: string
+): string {
+  switch (step) {
+    case "nav":
+      return `navigate to ${entityKey} list via sidebar`;
+    case "list":
+      return `${entityKey} list is present or empty state shown`;
+    case "create":
+      return `create ${entityId}: form fill, submit, row appears`;
+    case "persist":
+      return `${entityId} persists after page reload`;
+    case "update":
+      return `update ${entityId}: edit form, change field, save`;
+    case "delete":
+      return `delete ${entityId}: row delete, confirm, row gone`;
+    case "negative":
+      // Negative titles include field and value; handled separately in generateNegativeBlocks
+      return "negative";
+    case "relationship":
+      return "relationship";
+  }
+}
 
 /**
  * Generate field fill steps for form inputs.
@@ -102,14 +136,14 @@ export function generateEntitySpec(entity: IEntityAcceptance): string {
   return `import { expect, test } from "../fixtures/auth";
 
 test.describe(${JSON.stringify(name)}, () => {
-  test(${JSON.stringify(`navigate to ${entity.key} list via sidebar`)}, async ({ page, authedPage }) => {
+  test(${JSON.stringify(stepTitle("nav", entity.key, entity.id))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await page.getByTestId("${ids.nav}").click();
     await page.waitForURL(/\\/${entity.key}/);
     await expect(page).toHaveURL(/\\/${entity.key}/);
   });
 
-  test(${JSON.stringify(`${entity.key} list is present or empty state shown`)}, async ({ page, authedPage }) => {
+  test(${JSON.stringify(stepTitle("list", entity.key, entity.id))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await page.getByTestId("${ids.nav}").click();
     await page.waitForURL(/\\/${entity.key}/);
@@ -122,7 +156,7 @@ test.describe(${JSON.stringify(name)}, () => {
     }
   });
 
-  test(${JSON.stringify(`create ${name}: form fill, submit, row appears`)}, async ({ page, authedPage }) => {
+  test(${JSON.stringify(stepTitle("create", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await page.getByTestId("${ids.nav}").click();
     await page.waitForURL(/\\/${entity.key}/);
@@ -152,7 +186,7 @@ ${fieldFillSteps}
 ${rowCellAssertions}
   });
 
-  test(${JSON.stringify(`${name} persists after page reload`)}, async ({ page, authedPage }) => {
+  test(${JSON.stringify(stepTitle("persist", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await page.getByTestId("${ids.nav}").click();
     await page.waitForURL(/\\/${entity.key}/);
@@ -179,7 +213,7 @@ ${fieldFillSteps}
     }
   });
 
-  test(${JSON.stringify(`update ${name}: edit form, change field, save`)}, async ({ page, authedPage }) => {
+  test(${JSON.stringify(stepTitle("update", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await page.getByTestId("${ids.nav}").click();
     await page.waitForURL(/\\/${entity.key}/);
@@ -214,7 +248,7 @@ ${fieldFillSteps}
     await expect(updatedRow).toContainText(updatedValue);
   });
 
-  test(${JSON.stringify(`delete ${name}: row delete, confirm, row gone`)}, async ({ page, authedPage }) => {
+  test(${JSON.stringify(stepTitle("delete", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await page.getByTestId("${ids.nav}").click();
     await page.waitForURL(/\\/${entity.key}/);
