@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
 import type { IGate, IStage } from "../../gate/gate-runner";
 import { composeGate, differentialStage } from "../../gate/gate-runner";
 import type { IValidateResult, IErrorItem } from "../../validate";
@@ -10,6 +11,9 @@ import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
 import { judgeFeature } from "../greenfield/judge";
 import { autofixApps, readResourceCode, rescueFileFor } from "./build";
+import { toCamelCase } from "./case";
+import { testIdsFor } from "../acceptance/acceptance-spec";
+import { checkTestIds } from "./acceptance/testid-contract";
 
 /** Turn one failure signature into an `IErrorItem`. Most signatures are their own
  *  message (the raw gate row). A `knip:unused-file:<path>` signature is enriched
@@ -296,10 +300,75 @@ export function judgeStage(
 }
 
 /**
+ * A change-scoped gate stage that ensures a feature's UI includes the required
+ * test ID attributes (data-testid) for end-to-end testing. Only runs when a
+ * feature's UI files are present.
+ */
+export function testIdStage(cwd: string, featureId: string): IStage {
+  return {
+    async run(): Promise<IValidateResult> {
+      const camel = toCamelCase(featureId);
+      const featureDir = join(cwd, "apps/ui/src/features", camel);
+
+      // Try to read the feature's UI files. If they don't exist yet (e.g., on
+      // initial generation), pass silently.
+      const sources = new Map<string, string>();
+
+      try {
+        const files = await readdir(featureDir, { recursive: false });
+        const tsxFiles = files.filter(
+          (f): f is string => typeof f === "string" && f.endsWith(".tsx")
+        );
+
+        for (const file of tsxFiles) {
+          const filePath = join(featureDir, file);
+          const content = await readFile(filePath, "utf-8");
+
+          sources.set(file, content);
+        }
+      } catch {
+        // Directory doesn't exist or can't be read — not an error, feature may
+        // still be initializing.
+        return { passed: true, errors: [], output: "no UI files to check" };
+      }
+
+      // No UI files means nothing to check yet
+      if (sources.size === 0) {
+        return { passed: true, errors: [], output: "no UI files to check" };
+      }
+
+      // Check for required testids
+      const ids = testIdsFor(camel);
+      const missing = checkTestIds(sources, ids);
+
+      if (missing.length === 0) {
+        return { passed: true, errors: [], output: "all testids present" };
+      }
+
+      const message =
+        `feature '${featureId}' UI is missing required test hooks: ${missing.join(", ")}. ` +
+        `Add data-testid to the list, form, fields, and row controls so the app is testable.`;
+
+      return {
+        passed: false,
+        errors: [
+          {
+            key: `testid:${featureId}`,
+            rule: "testid-presence",
+            message,
+          },
+        ],
+        output: message,
+      };
+    },
+  };
+}
+
+/**
  * Compose the full BoringStack gate: differential command (suppress baseline) →
- * reachability → judge. Short-circuited, so the model call (judge) fires only when
- * the code compiles/lints clean AND the feature is reachable. Baseline lives in the
- * differential wrapper's closure — captured once at build start.
+ * reachability → testid → judge. Short-circuited, so the model call (judge) fires
+ * only when the code compiles/lints clean AND the feature is reachable. Baseline
+ * lives in the differential wrapper's closure — captured once at build start.
  */
 export function composeBoringstackGate(opts: {
   cwd: string;
@@ -316,6 +385,7 @@ export function composeBoringstackGate(opts: {
   return composeGate([
     differentialStage(boringstackCommandStage(cwd, exec), baseline),
     reachabilityStage(cwd, feature.id),
+    testIdStage(cwd, feature.id),
     judgeStage(evaluator, cwd, feature, opts.siblingEntities ?? []),
   ]);
 }

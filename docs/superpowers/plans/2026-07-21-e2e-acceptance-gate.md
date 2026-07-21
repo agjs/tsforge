@@ -201,10 +201,10 @@ git commit -m "feat(acceptance): plan-derived acceptance spec + testid contract 
 - Produces:
   - `type AcceptStep = "nav" | "list" | "create" | "persist" | "update" | "delete" | "negative" | "relationship"`
   - `interface IAcceptanceResult { entity: string; step: AcceptStep; ok: boolean; detail: string }`
-  - `interface IAcceptanceOutcome { ok: boolean; results: IAcceptanceResult[]; infraError?: string }` (infraError set → infra-abort, not feature red)
+  - `interface IAcceptanceOutcome { ok: boolean; results: IAcceptanceResult[]; detail?: string; infraError?: string }` (infraError set → infra-abort, not feature red; `detail` = a short top-level summary of why it failed)
   - `interface IAcceptanceRunner { run(entity: IEntityAcceptance, ctx: IAcceptanceRunCtx): Promise<IAcceptanceOutcome>; runChain(spec: IAcceptanceSpec, ctx: IAcceptanceRunCtx): Promise<IAcceptanceOutcome> }`
   - `interface IAcceptanceRunCtx { cwd: string; apiBase: string; uiBase: string }`
-- This task only defines types + a pure `summarize(results): IAcceptanceOutcome` helper (ok = every result ok; first non-ok detail bubbled). Core depends on `IAcceptanceRunner`; the seam implements it (Task 4/5).
+- This task only defines types + a pure `summarize(results): IAcceptanceOutcome` helper: `ok` = every result ok; on failure set `detail` to the FIRST failing result's detail; on EMPTY results set `ok=false` and `detail` to a clear "no acceptance checks ran" message; `detail` undefined when ok; never set `infraError` here. Core depends on `IAcceptanceRunner`; the seam implements it (Task 4/5).
 
 - [ ] **Step 1: failing test** — `summarize` returns ok=false with the first failing step's detail; ok=true on all-pass.
 - [ ] **Step 2: run → FAIL.**

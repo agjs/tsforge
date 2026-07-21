@@ -22,6 +22,8 @@ import { slicesToFeatures } from "./plan-resources";
 import { toCamelCase } from "./case";
 import { loadApprovedPlan } from "../planning/plan-store";
 import type { ISlice } from "../planning/plan-types";
+import { testIdsFor } from "../acceptance/acceptance-spec";
+import { buildTestIdGuide } from "./acceptance/testid-contract";
 
 /** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
  *  `format` (prettier, canonical formatting) then `lint:fix` (eslint --fix for the
@@ -282,8 +284,16 @@ export function boringstackDeps(opts: {
       );
 
       const slice = sliceFor?.(feature.id);
+      const testIdGuide =
+        slice !== undefined
+          ? "\n\n" +
+            buildTestIdGuide(
+              toCamelCase(slice.entity.id),
+              testIdsFor(toCamelCase(slice.entity.id))
+            )
+          : "";
       const sent = await host.send(
-        refinePrompt(feature, slice) + revisitGuidance(seed)
+        refinePrompt(feature, slice) + testIdGuide + revisitGuidance(seed)
       );
 
       return {
