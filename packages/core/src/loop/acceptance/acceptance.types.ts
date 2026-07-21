@@ -48,3 +48,43 @@ export interface ITestIds {
   field(name: string): string;
   rowCell(name: string): string;
 }
+
+export type AcceptStep =
+  | "nav"
+  | "list"
+  | "create"
+  | "persist"
+  | "update"
+  | "delete"
+  | "negative"
+  | "relationship";
+
+export interface IAcceptanceResult {
+  entity: string;
+  step: AcceptStep;
+  ok: boolean;
+  detail: string;
+}
+
+export interface IAcceptanceOutcome {
+  ok: boolean;
+  results: IAcceptanceResult[];
+  infraError?: string;
+}
+
+export interface IAcceptanceRunCtx {
+  cwd: string;
+  apiBase: string;
+  uiBase: string;
+}
+
+export interface IAcceptanceRunner {
+  run(
+    entity: IEntityAcceptance,
+    ctx: IAcceptanceRunCtx
+  ): Promise<IAcceptanceOutcome>;
+  runChain(
+    spec: IAcceptanceSpec,
+    ctx: IAcceptanceRunCtx
+  ): Promise<IAcceptanceOutcome>;
+}
