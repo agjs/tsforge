@@ -16,6 +16,7 @@ import { LOOP_LIMITS, type Reporter } from "../src/loop";
 import { runBoringstackBuild } from "../src/loop/boringstack/build";
 import { createBoringstackHostSession } from "../src/loop/boringstack/build-session";
 import { makeBoringstackBuildGuard } from "../src/loop/boringstack/dual-extension-guard";
+import { makeBoringstackAcceptanceRunner } from "../src/loop/boringstack/acceptance/e2e-runner";
 import type { Exec } from "../src/loop/boringstack/exec";
 import { detectContextWindow } from "../src/cli/model-setup";
 import { renderEvent } from "../src/render";
@@ -258,6 +259,7 @@ async function driveBuild(
     host,
     evaluator: provider,
     exec: boringstackExec,
+    acceptanceRunner: makeBoringstackAcceptanceRunner(boringstackExec),
     onEvent: report,
   });
 
