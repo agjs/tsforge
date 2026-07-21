@@ -221,11 +221,20 @@ test.describe(${JSON.stringify(name)}, () => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const listPresent = await page.getByTestId("${ids.list}").isVisible();
-    const emptyPresent = await page.getByTestId("${ids.empty}").isVisible();
+    // Wait for either list or empty state to appear (with timeout)
+    try {
+      await Promise.race([
+        page.getByTestId("${ids.list}").first().waitFor({ state: "visible", timeout: 5000 }),
+        page.getByTestId("${ids.empty}").waitFor({ state: "visible", timeout: 5000 }),
+      ]);
+    } catch {
+      // If neither appears, just check if they're in the DOM
+      const listPresent = await page.getByTestId("${ids.list}").isVisible().catch(() => false);
+      const emptyPresent = await page.getByTestId("${ids.empty}").isVisible().catch(() => false);
 
-    if (!listPresent && !emptyPresent) {
-      throw new Error("Neither list nor empty state visible");
+      if (!listPresent && !emptyPresent) {
+        throw new Error("Neither list nor empty state visible after 5s");
+      }
     }
   });
 
