@@ -142,6 +142,7 @@ const boringstackExec: Exec = async (argv, opts) => {
       DATABASE_URL:
         process.env.TSFORGE_BORINGSTACK_DATABASE_URL ??
         "postgresql://app:app_dev_password@localhost:5432/app",
+      ...(opts.env ?? {}),
     },
     stdout: "pipe",
     stderr: "pipe",

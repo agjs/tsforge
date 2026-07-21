@@ -10,6 +10,7 @@ import type {
   IGreenfieldState,
 } from "../src/loop/greenfield/greenfield.types";
 import type { Exec } from "../src/loop/boringstack/exec";
+import type { IProvider } from "../src/inference";
 
 // Mock implementations
 const mockFeature: IFeature = {
@@ -84,9 +85,7 @@ class MockHost {
     // Implement IBoringstackHost
   }
 
-  async send(
-    message: string
-  ): Promise<{ status: string; turns: number; handoff?: any }> {
+  async send(message: string): Promise<{ status: string; turns: number }> {
     this.messages.push(message);
 
     return { status: "done", turns: 1 };
@@ -102,6 +101,13 @@ const mockExec: Exec = async () => ({
   stdout: "",
   stderr: "",
 });
+
+const mockEvaluator: IProvider = {
+  complete: async () => ({
+    content: '{"pass": true}',
+    toolCalls: [],
+  }),
+};
 
 test("acceptance: feature passes fast gate and acceptance", async () => {
   const mockRunner: IAcceptanceRunner = {
@@ -128,7 +134,7 @@ test("acceptance: feature passes fast gate and acceptance", async () => {
     host,
     cwd: "/tmp/test",
     exec: mockExec,
-    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    evaluator: mockEvaluator,
     acceptanceRunner: mockRunner,
     generate: async () => {},
     generateUi: async () => {},
@@ -169,7 +175,7 @@ test("acceptance: feature fails acceptance (assertion failure)", async () => {
     host,
     cwd: "/tmp/test",
     exec: mockExec,
-    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    evaluator: mockEvaluator,
     acceptanceRunner: mockRunner,
     generate: async () => {},
     generateUi: async () => {},
@@ -206,7 +212,7 @@ test("acceptance: feature fails with infrastructure error", async () => {
     host,
     cwd: "/tmp/test",
     exec: mockExec,
-    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    evaluator: mockEvaluator,
     acceptanceRunner: mockRunner,
     generate: async () => {},
     generateUi: async () => {},
@@ -246,9 +252,7 @@ test("acceptance: feature passes when flag is disabled (acceptance skipped)", as
       host,
       cwd: "/tmp/test",
       exec: mockExec,
-      evaluator: {
-        complete: async () => ({ content: '{"pass": true}' }),
-      } as any,
+      evaluator: mockEvaluator,
       acceptanceRunner: mockRunner,
       generate: async () => {},
       generateUi: async () => {},
@@ -268,21 +272,29 @@ test("acceptance: feature passes when flag is disabled (acceptance skipped)", as
   }
 });
 
-test("acceptance: feature passes when no runner is provided", async () => {
+test("acceptance: runner missing when flag enabled + entity available → warning", async () => {
   const host = new MockHost();
   const deps = boringstackDeps({
     host,
     cwd: "/tmp/test",
     exec: mockExec,
-    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
-    // no acceptanceRunner provided
+    evaluator: mockEvaluator,
+    sliceFor: (id: string) => (id === "company" ? mockSlice : undefined),
+    // no acceptanceRunner provided, but flag is enabled (default) and entity is available
     generate: async () => {},
     generateUi: async () => {},
   });
 
   const result = await deps.implement(mockFeature, mockState);
 
+  // Should emit warning but still return done=true (based on fast gate)
   expect(result.done).toBe(true);
+  const messages = host.getMessages();
+  const hasWarning = messages.some((msg) =>
+    msg.includes("acceptance verification requested but no runner available")
+  );
+
+  expect(hasWarning).toBe(true);
 });
 
 test("acceptance: feature passes when no entity is available", async () => {
@@ -300,7 +312,7 @@ test("acceptance: feature passes when no entity is available", async () => {
     host,
     cwd: "/tmp/test",
     exec: mockExec,
-    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    evaluator: mockEvaluator,
     acceptanceRunner: mockRunner,
     // No sliceFor, so entity will be undefined
     generate: async () => {},
@@ -326,9 +338,7 @@ test("testIdStage: respects the e2e acceptance flag when disabled", async () => 
     const gate = composeBoringstackGate({
       cwd: "/tmp/test",
       exec: mockExec,
-      evaluator: {
-        complete: async () => ({ content: '{"pass": true}' }),
-      } as any,
+      evaluator: mockEvaluator,
       baseline: new Set(),
       feature: mockFeature,
       entity: mockEntity,
@@ -358,9 +368,7 @@ test("testIdStage: runs when e2e acceptance is enabled", async () => {
     const gate = composeBoringstackGate({
       cwd: "/tmp/test",
       exec: mockExec,
-      evaluator: {
-        complete: async () => ({ content: '{"pass": true}' }),
-      } as any,
+      evaluator: mockEvaluator,
       baseline: new Set(),
       feature: mockFeature,
       entity: mockEntity,
@@ -394,7 +402,7 @@ test("final acceptance: base pass + chain ok → final GREEN", async () => {
     host,
     cwd: "/tmp/test",
     exec: mockExec,
-    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    evaluator: mockEvaluator,
     acceptanceRunner: mockRunner,
     generate: async () => {},
     generateUi: async () => {},
@@ -428,7 +436,7 @@ test("final acceptance: base pass + chain !ok → NOT green with detail", async 
     host,
     cwd: "/tmp/test",
     exec: mockExec,
-    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    evaluator: mockEvaluator,
     acceptanceRunner: mockRunner,
     generate: async () => {},
     generateUi: async () => {},
@@ -459,7 +467,7 @@ test("final acceptance: chain infraError → infra path (not red)", async () => 
     host,
     cwd: "/tmp/test",
     exec: mockExec,
-    evaluator: { complete: async () => ({ content: '{"pass": true}' }) } as any,
+    evaluator: mockEvaluator,
     acceptanceRunner: mockRunner,
     generate: async () => {},
     generateUi: async () => {},
@@ -469,4 +477,15 @@ test("final acceptance: chain infraError → infra path (not red)", async () => 
   const result = await deps.implement(mockFeature, mockState);
 
   expect(result.done).toBe(true); // Per-slice gate still passes
+});
+
+test("testIdStage: passes when no UI files exist yet", async () => {
+  const { testIdStage } = await import("../src/loop/boringstack/gate-stages");
+
+  const stage = testIdStage("/tmp/nonexistent", mockEntity);
+  const result = await stage.run("/tmp/nonexistent");
+
+  // Should pass when no UI files exist (feature may still be initializing)
+  expect(result.passed).toBe(true);
+  expect(result.output).toContain("no UI files");
 });

@@ -178,6 +178,18 @@ ${fieldFillSteps}
 }
 
 /**
+ * Generate a navigation helper function for an entity.
+ * Used by both generateEntitySpec and generateChainSpec to avoid duplication.
+ */
+function generateNavHelper(entity: IEntityAcceptance): string {
+  return `async function navigateTo${entity.id}(page: import("@playwright/test").Page) {
+  const uiBase = process.env.PLAYWRIGHT_HOST || "http://localhost";
+  const uiPort = process.env.PLAYWRIGHT_PORT || "7331";
+  await page.goto(\`\${uiBase}:\${uiPort}/${entity.key}\`, { waitUntil: "domcontentloaded" });
+}`;
+}
+
+/**
  * Generate a Playwright spec text for a single entity's CRUD operations.
  * Returns a `.spec.ts` string ready to write to disk.
  *
@@ -201,11 +213,7 @@ export function generateEntitySpec(entity: IEntityAcceptance): string {
 
   return `import { expect, test } from "./auth-helper";
 
-async function navigateTo${entity.id}(page: import("@playwright/test").Page) {
-  const uiBase = process.env.PLAYWRIGHT_HOST || "http://localhost";
-  const uiPort = process.env.PLAYWRIGHT_PORT || "7331";
-  await page.goto(\`\${uiBase}:\${uiPort}/${entity.key}\`, { waitUntil: "domcontentloaded" });
-}
+${generateNavHelper(entity)}
 
 test.describe(${JSON.stringify(name)}, () => {
   test(${JSON.stringify(stepTitle("nav", entity.key, entity.id))}, async ({ page, authedPage }) => {
@@ -391,7 +399,15 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
     return "// No entities to chain";
   }
 
-  const descTitle = `Full Relational Chain: ${spec.entities.map((e) => e.id).join(" → ")}`;
+  const descTitle = `Full Relational Chain: ${spec.entities
+    .map((e) => e.id)
+    .join(" → ")}`;
+
+  // Generate nav-helpers for all entities in the chain
+  const navHelpers = spec.entities
+    .map((e) => generateNavHelper(e))
+    .join("\n\n");
+
   const testSteps: string[] = [];
 
   for (let i = 0; i < spec.entities.length; i++) {
@@ -449,6 +465,8 @@ ${fieldFill}
   }
 
   return `import { expect, test } from "./auth-helper";
+
+${navHelpers}
 
 test.describe(${JSON.stringify(descTitle)}, () => {
 ${testSteps.join("\n\n")}

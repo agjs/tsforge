@@ -21,7 +21,7 @@ import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 import { slicesToFeatures } from "./plan-resources";
 import { toCamelCase } from "./case";
 import { loadApprovedPlan } from "../planning/plan-store";
-import type { ISlice } from "../planning/plan-types";
+import type { ISlice, IProductPlan } from "../planning/plan-types";
 import { planToAcceptanceSpec } from "../acceptance/acceptance-spec";
 import { buildTestIdGuide } from "./acceptance/testid-contract";
 import type {
@@ -218,6 +218,85 @@ function revisitGuidance(seed?: { triedLevers: EscalationRung[] }): string {
 }
 
 /**
+ * Run acceptance verification for a feature after the fast gate passes.
+ * Returns the done status and optional handoff; handles runner missing, infra errors, and assertion failures.
+ */
+async function verifyAcceptance(
+  sent: { status: string; handoff?: IHandoff },
+  host: IBoringstackHost,
+  cwd: string,
+  entity: IEntityAcceptance | undefined,
+  acceptanceRunner: IAcceptanceRunner | undefined,
+  e2eAcceptanceDisabled: boolean
+): Promise<{ done: boolean; handoff?: IHandoff }> {
+  // If acceptance is not enabled, return based on fast gate
+  if (!(!e2eAcceptanceDisabled && sent.status === "done")) {
+    return {
+      done: sent.status === "done",
+      ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
+    };
+  }
+
+  // Warn if acceptance is enabled but runner is missing (misconfiguration)
+  if (!acceptanceRunner) {
+    if (entity) {
+      await host.send(
+        "⚠ acceptance verification requested but no runner available (misconfiguration): " +
+          "the feature passed the fast gate but acceptance was not verified due to a missing runner."
+      );
+    }
+
+    return {
+      done: true,
+      ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
+    };
+  }
+
+  // Run acceptance only if we have an entity and runner
+  if (entity) {
+    const hostPorts = readHostPorts(cwd);
+    const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
+    const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
+    const ctx: IAcceptanceRunCtx = {
+      cwd,
+      apiBase: `http://localhost:${apiPort}`,
+      uiBase: `http://localhost:${uiPort}`,
+    };
+
+    const outcome = await acceptanceRunner.run(entity, ctx);
+
+    // Infrastructure error: do not mark feature red, surface the error clearly
+    if (outcome.infraError !== undefined) {
+      const infraMsg =
+        `acceptance check encountered an infrastructure error (not a code failure): ` +
+        `${outcome.infraError}. The stack or browser may be down — verify the test ` +
+        `environment is healthy and retry this build.`;
+
+      await host.send(infraMsg);
+
+      return { done: false };
+    }
+
+    // Test assertion failed: emit steer and keep feature unverified
+    if (!outcome.ok) {
+      const steer = acceptanceSteer(entity, outcome);
+
+      await host.send(steer);
+
+      return { done: false };
+    }
+
+    // All checks passed
+    return { done: true };
+  }
+
+  return {
+    done: true,
+    ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
+  };
+}
+
+/**
  * Create the greenfield dependencies for the BoringStack build, composing Tasks 1-6.
  * - `implement` generates the resource, freezes the scope, injects the live composed
  *   gate, and sends the refine prompt. The escalation ladder runs INSIDE settleGate
@@ -317,53 +396,14 @@ export function boringstackDeps(opts: {
         refinePrompt(feature, slice) + testIdGuide + revisitGuidance(seed)
       );
 
-      // If the fast gate passed, optionally run acceptance verification
-      if (
-        sent.status === "done" &&
-        !e2eAcceptanceDisabled &&
-        acceptanceRunner &&
-        entity
-      ) {
-        const hostPorts = readHostPorts(cwd);
-        const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
-        const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
-        const ctx: IAcceptanceRunCtx = {
-          cwd,
-          apiBase: `http://localhost:${apiPort}`,
-          uiBase: `http://localhost:${uiPort}`,
-        };
-
-        const outcome = await acceptanceRunner.run(entity, ctx);
-
-        // Infrastructure error: do not mark feature red, surface the error clearly
-        if (outcome.infraError !== undefined) {
-          const infraMsg =
-            `acceptance check encountered an infrastructure error (not a code failure): ` +
-            `${outcome.infraError}. The stack or browser may be down — verify the test ` +
-            `environment is healthy and retry this build.`;
-
-          await host.send(infraMsg);
-
-          return { done: false };
-        }
-
-        // Test assertion failed: emit steer and keep feature unverified
-        if (!outcome.ok) {
-          const steer = acceptanceSteer(entity, outcome);
-
-          await host.send(steer);
-
-          return { done: false };
-        }
-
-        // All checks passed
-        return { done: true };
-      }
-
-      return {
-        done: sent.status === "done",
-        ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
-      };
+      return verifyAcceptance(
+        sent,
+        host,
+        cwd,
+        entity,
+        acceptanceRunner,
+        e2eAcceptanceDisabled
+      );
     },
   };
 }
@@ -439,6 +479,92 @@ export function partitionBaseline(
   }
 
   return { infra, baseline };
+}
+
+/**
+ * Run the final acceptance gate and chain verification after all features pass the fast gate.
+ * Note: approved is guaranteed to be non-null (checked by caller).
+ */
+async function runFinalAcceptance(
+  result: IGreenfieldResult,
+  cwd: string,
+  exec: Exec,
+  acceptanceRunner: IAcceptanceRunner | undefined,
+  approved: IProductPlan,
+  e2eAcceptanceDisabled: boolean,
+  onEvent?: Reporter
+): Promise<IGreenfieldResult> {
+  if (result.status !== "done") {
+    return result;
+  }
+
+  onEvent?.({
+    kind: "tool",
+    task: "boringstack",
+    message: "final acceptance: full validate + build + size checks…",
+  });
+
+  // GATE PARITY: the per-cycle fast gate applies deterministic auto-fixes
+  // (prettier + eslint --fix) BEFORE it runs, but the full acceptance gate did
+  // not — so a feature could freeze fast-green yet fail final `validate` on
+  // auto-fixable formatting the model was never shown (e.g. a missing `;`).
+  // Apply the SAME auto-fixes here so acceptance and the per-cycle gate agree;
+  // this normalizes formatting a dev gets on save, it does not suppress errors.
+  await autofixApps(cwd, exec);
+
+  const full = await runBoringstackGate(cwd, exec, "full");
+
+  let finalPassed = full.passed;
+  let finalMessage = full.passed
+    ? "✓ final acceptance GREEN — full validate + build + size checks all pass."
+    : "⚠ features passed the fast gate, but the FULL acceptance gate (build / " +
+      "size / coverage / root drift) found issues — review before shipping:\n" +
+      full.output.slice(-1200);
+
+  // After base gate passes, run relational chain acceptance (if available)
+  if (full.passed && !e2eAcceptanceDisabled && acceptanceRunner) {
+    const hostPorts = readHostPorts(cwd);
+    const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
+    const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
+    const ctx: IAcceptanceRunCtx = {
+      cwd,
+      apiBase: `http://localhost:${apiPort}`,
+      uiBase: `http://localhost:${uiPort}`,
+    };
+
+    const spec = planToAcceptanceSpec(approved);
+    const chainOutcome = await acceptanceRunner.runChain(spec, ctx);
+
+    // Infrastructure error: route to infra-abort path, not feature red
+    if (chainOutcome.infraError !== undefined) {
+      const infraMsg = `Acceptance chain: ${chainOutcome.infraError}`;
+
+      return {
+        status: "needs-infra",
+        features: result.features,
+        infra: infraMsg,
+      };
+    }
+
+    // Chain assertion failed: flip final to not-green with detail
+    if (!chainOutcome.ok) {
+      finalPassed = false;
+      finalMessage = `chain acceptance failed: ${chainOutcome.detail ?? "assertion failure in relational flow"}`;
+    }
+  }
+
+  onEvent?.({
+    kind: finalPassed ? "done" : "stuck",
+    task: "boringstack",
+    message: finalMessage,
+  });
+
+  // If the final acceptance chain failed, flip the result status to stuck
+  if (!finalPassed) {
+    return { ...result, status: "stuck" };
+  }
+
+  return result;
 }
 
 /**
@@ -577,68 +703,13 @@ export async function runBoringstackBuild(opts: {
   // coverage, repo-root drift) still run — just once at the end, not every turn.
   // Best-effort + LOUD: it reports issues for a human rather than silently flipping
   // the verdict (a pre-existing scaffold size/build budget must not fail the feature).
-  if (result.status === "done") {
-    onEvent?.({
-      kind: "tool",
-      task: "boringstack",
-      message: "final acceptance: full validate + build + size checks…",
-    });
-
-    // GATE PARITY: the per-cycle fast gate applies deterministic auto-fixes
-    // (prettier + eslint --fix) BEFORE it runs, but the full acceptance gate did
-    // not — so a feature could freeze fast-green yet fail final `validate` on
-    // auto-fixable formatting the model was never shown (e.g. a missing `;`).
-    // Apply the SAME auto-fixes here so acceptance and the per-cycle gate agree;
-    // this normalizes formatting a dev gets on save, it does not suppress errors.
-    await autofixApps(cwd, exec);
-
-    const full = await runBoringstackGate(cwd, exec, "full");
-
-    let finalPassed = full.passed;
-    let finalMessage = full.passed
-      ? "✓ final acceptance GREEN — full validate + build + size checks all pass."
-      : "⚠ features passed the fast gate, but the FULL acceptance gate (build / " +
-        "size / coverage / root drift) found issues — review before shipping:\n" +
-        full.output.slice(-1200);
-
-    // After base gate passes, run relational chain acceptance (if available)
-    if (full.passed && !e2eAcceptanceDisabled && acceptanceRunner) {
-      const hostPorts = readHostPorts(cwd);
-      const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
-      const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
-      const ctx: IAcceptanceRunCtx = {
-        cwd,
-        apiBase: `http://localhost:${apiPort}`,
-        uiBase: `http://localhost:${uiPort}`,
-      };
-
-      const spec = planToAcceptanceSpec(approved);
-      const chainOutcome = await acceptanceRunner.runChain(spec, ctx);
-
-      // Infrastructure error: route to infra-abort path, not feature red
-      if (chainOutcome.infraError !== undefined) {
-        const infraMsg = `Acceptance chain: ${chainOutcome.infraError}`;
-
-        return {
-          status: "needs-infra",
-          features: result.features,
-          infra: infraMsg,
-        };
-      }
-
-      // Chain assertion failed: flip final to not-green with detail
-      if (!chainOutcome.ok) {
-        finalPassed = false;
-        finalMessage = `chain acceptance failed: ${chainOutcome.detail ?? "assertion failure in relational flow"}`;
-      }
-    }
-
-    onEvent?.({
-      kind: finalPassed ? "done" : "stuck",
-      task: "boringstack",
-      message: finalMessage,
-    });
-  }
-
-  return result;
+  return runFinalAcceptance(
+    result,
+    cwd,
+    exec,
+    acceptanceRunner,
+    approved,
+    e2eAcceptanceDisabled,
+    onEvent
+  );
 }

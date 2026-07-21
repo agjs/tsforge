@@ -260,8 +260,6 @@ function cleanupFile(filePath: string): void {
  * Retries (max 2) on infra failures only.
  */
 export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
-  let authHelperWritten = false;
-
   return {
     async run(
       entity: IEntityAcceptance,
@@ -271,14 +269,11 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
       const authPath = authHelperPath(ctx.cwd);
 
       try {
-        // Write auth helper once (shared by all specs)
-        if (!authHelperWritten) {
-          const authHelperCode = generateAuthHelper();
+        // Write auth helper unconditionally (idempotent overwrite for every run)
+        const authHelperCode = generateAuthHelper();
 
-          mkdirSync(dirname(authPath), { recursive: true });
-          writeFileSync(authPath, authHelperCode, "utf-8");
-          authHelperWritten = true;
-        }
+        mkdirSync(dirname(authPath), { recursive: true });
+        writeFileSync(authPath, authHelperCode, "utf-8");
 
         const spec = generateEntitySpec(entity);
 
@@ -313,7 +308,21 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
           const parseResult = parsePlaywrightJSON(result.stdout, entity);
 
           if (parseResult !== null) {
-            return summarize(parseResult);
+            // Require these steps for a single entity run
+            const requiredSteps: AcceptStep[] = [
+              "nav",
+              "list",
+              "create",
+              "persist",
+              "update",
+              "delete",
+            ];
+
+            if (entity.negatives.length > 0) {
+              requiredSteps.push("negative");
+            }
+
+            return summarize(parseResult, requiredSteps);
           }
 
           lastError = result.stderr;
@@ -345,14 +354,11 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
       const chainPath = chainSpecPath(ctx.cwd);
 
       try {
-        // Write auth helper (may have been written by run(), but ensure it exists)
-        if (!authHelperWritten) {
-          const authHelperCode = generateAuthHelper();
+        // Write auth helper unconditionally (idempotent overwrite for every run)
+        const authHelperCode = generateAuthHelper();
 
-          mkdirSync(dirname(authPath), { recursive: true });
-          writeFileSync(authPath, authHelperCode, "utf-8");
-          authHelperWritten = true;
-        }
+        mkdirSync(dirname(authPath), { recursive: true });
+        writeFileSync(authPath, authHelperCode, "utf-8");
 
         const chainSpec = generateChainSpec(spec);
 
@@ -395,7 +401,12 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
           }
 
           if (allResults.length > 0) {
-            return summarize(allResults);
+            // For chain, require create step for each entity in the spec
+            const requiredSteps: AcceptStep[] = spec.entities.map(
+              () => "create"
+            );
+
+            return summarize(allResults, requiredSteps);
           }
 
           lastError = result.stderr;
