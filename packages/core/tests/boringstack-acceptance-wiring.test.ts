@@ -193,7 +193,7 @@ test("acceptance: feature fails acceptance (assertion failure)", async () => {
   expect(messages[messages.length - 1]).toBeTruthy();
 });
 
-test("acceptance: per-slice infra error is best-effort (skipped)", async () => {
+test("acceptance: per-slice infra error marks feature NOT verified", async () => {
   const mockRunner: IAcceptanceRunner = {
     async run(): Promise<IAcceptanceOutcome> {
       return {
@@ -221,8 +221,8 @@ test("acceptance: per-slice infra error is best-effort (skipped)", async () => {
 
   const result = await deps.implement(mockFeature, mockState);
 
-  // Per-slice infra errors are best-effort (skip check, let final acceptance handle it)
-  expect(result.done).toBe(true);
+  // CRITICAL: infraError must NEVER return done:true (feature is NOT verified when acceptance can't run)
+  expect(result.done).toBe(false);
   // Should have sent a warning message
   const messages = host.getMessages();
 

@@ -144,6 +144,7 @@ function extractErrorMessage(test: {
 
 /**
  * Process a single spec and add it to the results if it matches a known step.
+ * Only counts genuinely passed results (status === "passed"); skipped/interrupted are excluded.
  */
 function processSpec(
   spec: IPlaywrightSpec,
@@ -161,11 +162,15 @@ function processSpec(
       ? extractErrorMessage(spec.tests[0])
       : "failed";
 
+  // Only count tests with status "passed" as true passes; skip skipped/interrupted
+  const firstResult = spec.tests?.[0]?.results?.[0];
+  const isGenuinePass = firstResult?.status === "passed" && spec.ok;
+
   results.push({
     entity: entity.key,
     step,
-    ok: spec.ok,
-    detail: spec.ok ? "pass" : errorMsg,
+    ok: isGenuinePass,
+    detail: isGenuinePass ? "pass" : errorMsg,
   });
 }
 
@@ -253,6 +258,112 @@ function cleanupFile(filePath: string): void {
 }
 
 /**
+ * Process a single exec result for entity acceptance testing.
+ * Returns: { outcome, shouldRetry } where outcome is the final result or undefined to continue/retry.
+ */
+function processExecResult(
+  result: { code: number; stdout: string; stderr: string },
+  entity: IEntityAcceptance,
+  requiredSteps: AcceptStep[]
+): {
+  outcome?: IAcceptanceOutcome;
+  shouldRetry: boolean;
+} {
+  const parseResult = parsePlaywrightJSON(result.stdout, entity);
+
+  if (parseResult !== null) {
+    // Honor exit code: nonzero means failure even if JSON parsed
+    if (result.code !== 0) {
+      return {
+        outcome: {
+          ok: false,
+          results: parseResult,
+          detail:
+            result.stderr !== ""
+              ? result.stderr
+              : `playwright exited with code ${result.code}`,
+        },
+        shouldRetry: false,
+      };
+    }
+
+    return {
+      outcome: summarize(parseResult, requiredSteps),
+      shouldRetry: false,
+    };
+  }
+
+  // If Playwright produced no parseable JSON, check if this is an infra error
+  const hasInfraError = isInfraError(result.stderr);
+
+  // CRITICAL: distinguish infra errors from real test failures
+  // If stderr doesn't match a known infra signature, this is a REAL failure
+  if (!hasInfraError) {
+    // Real test failure (not infra) — return as failed, not infraError
+    return {
+      outcome: {
+        ok: false,
+        results: [],
+        detail:
+          result.stderr !== ""
+            ? result.stderr
+            : "playwright produced no valid JSON output (likely test assertion failure)",
+      },
+      shouldRetry: false,
+    };
+  }
+
+  // Infra error: can retry
+  return {
+    outcome: undefined,
+    shouldRetry: true,
+  };
+}
+
+/**
+ * Process chain test results: validate exit code and per-entity coverage.
+ * Returns outcome if complete, undefined if should retry.
+ */
+function processChainResults(
+  result: { code: number; stdout: string; stderr: string },
+  spec: IAcceptanceSpec,
+  allResults: IAcceptanceResult[]
+): IAcceptanceOutcome | undefined {
+  // Honor exit code: nonzero means failure even if JSON parsed
+  if (result.code !== 0) {
+    return {
+      ok: false,
+      results: allResults,
+      detail:
+        result.stderr !== ""
+          ? result.stderr
+          : `playwright exited with code ${result.code}`,
+    };
+  }
+
+  // For chain, verify per-entity coverage: each entity MUST have a passing create result
+  const entityKeysWithCreate = new Set(
+    allResults.filter((r) => r.step === "create" && r.ok).map((r) => r.entity)
+  );
+
+  const requiredEntityKeys = new Set(spec.entities.map((e) => e.key));
+
+  // Check if all entities have a passing create
+  for (const key of requiredEntityKeys) {
+    if (!entityKeysWithCreate.has(key)) {
+      return {
+        ok: false,
+        results: allResults,
+        detail: `acceptance incomplete: entity '${key}' missing create step`,
+      };
+    }
+  }
+
+  // All entities have passing creates, summarize the full results
+  return summarize(allResults);
+}
+
+/**
  * Create an IAcceptanceRunner for BoringStack.
  *
  * Writes the entity spec to disk, invokes Playwright via exec, parses the JSON
@@ -280,6 +391,20 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
         mkdirSync(dirname(specFilePath), { recursive: true });
         writeFileSync(specFilePath, spec, "utf-8");
 
+        // Require these steps for a single entity run
+        const requiredSteps: AcceptStep[] = [
+          "nav",
+          "list",
+          "create",
+          "persist",
+          "update",
+          "delete",
+        ];
+
+        if (entity.negatives.length > 0) {
+          requiredSteps.push("negative");
+        }
+
         let lastError: string | undefined;
 
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -305,30 +430,20 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
             }
           );
 
-          const parseResult = parsePlaywrightJSON(result.stdout, entity);
+          const { outcome, shouldRetry } = processExecResult(
+            result,
+            entity,
+            requiredSteps
+          );
 
-          if (parseResult !== null) {
-            // Require these steps for a single entity run
-            const requiredSteps: AcceptStep[] = [
-              "nav",
-              "list",
-              "create",
-              "persist",
-              "update",
-              "delete",
-            ];
-
-            if (entity.negatives.length > 0) {
-              requiredSteps.push("negative");
-            }
-
-            return summarize(parseResult, requiredSteps);
+          if (outcome !== undefined) {
+            return outcome;
           }
 
           lastError = result.stderr;
-          const hasInfraError = isInfraError(result.stderr);
 
-          if (!hasInfraError || attempt === 2) {
+          // Infra error: retry up to 3 times
+          if (!shouldRetry || attempt === 2) {
             break;
           }
         }
@@ -336,7 +451,8 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
         return {
           ok: false,
           results: [],
-          infraError: lastError ?? "playwright execution failed",
+          infraError:
+            lastError !== "" ? lastError : "playwright execution failed",
         };
       } finally {
         // Clean up generated spec and auth helper so they don't persist
@@ -382,6 +498,7 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
               "test",
               "_acceptance/chain.spec.ts",
               "--reporter=json",
+              "--project=chromium",
             ],
             {
               cwd: `${ctx.cwd}/apps/ui`,
@@ -401,42 +518,44 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
           }
 
           if (allResults.length > 0) {
-            // For chain, verify per-entity coverage: each entity MUST have a passing create result
-            const entityKeysWithCreate = new Set(
-              allResults
-                .filter((r) => r.step === "create" && r.ok)
-                .map((r) => r.entity)
-            );
+            const outcome = processChainResults(result, spec, allResults);
 
-            const requiredEntityKeys = new Set(spec.entities.map((e) => e.key));
-
-            // Check if all entities have a passing create
-            for (const key of requiredEntityKeys) {
-              if (!entityKeysWithCreate.has(key)) {
-                return {
-                  ok: false,
-                  results: allResults,
-                  detail: `acceptance incomplete: entity '${key}' missing create step`,
-                };
-              }
+            if (outcome !== undefined) {
+              return outcome;
             }
-
-            // All entities have passing creates, summarize the full results
-            return summarize(allResults);
           }
 
-          lastError = result.stderr;
+          // If Playwright produced no parseable JSON, check if this is an infra error
           const hasInfraError = isInfraError(result.stderr);
 
-          if (!hasInfraError || attempt === 2) {
-            break;
+          lastError = result.stderr;
+
+          // CRITICAL: distinguish infra errors from real test failures
+          if (!hasInfraError) {
+            // Real test failure (not infra) — return as failed, not infraError
+            return {
+              ok: false,
+              results: [],
+              detail:
+                result.stderr !== ""
+                  ? result.stderr
+                  : "playwright produced no valid JSON output (likely chain test failure)",
+            };
           }
+
+          // Infra error: retry up to 3 times
+          if (attempt < 2) {
+            continue;
+          }
+
+          break;
         }
 
         return {
           ok: false,
           results: [],
-          infraError: lastError ?? "playwright chain execution failed",
+          infraError:
+            lastError !== "" ? lastError : "playwright chain execution failed",
         };
       } finally {
         // Clean up generated chain spec and auth helper so they don't persist

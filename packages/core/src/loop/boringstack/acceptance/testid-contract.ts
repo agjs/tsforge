@@ -96,6 +96,10 @@ Without these test IDs, the feature cannot be validated end-to-end and will not 
 /**
  * Check that a set of UI source files contain the required test ID markers.
  * Returns a list of missing testid values (empty array = all present, pass).
+ *
+ * Note: nav-<key> is NOT checked in the feature directory since it lives in the
+ * shared sidebar. The nav reachability is already proven behaviorally by the E2E nav step.
+ *
  * @param sources - Map of {filePath → source code}
  * @param entity - The entity whose testids must be present
  */
@@ -106,8 +110,14 @@ export function checkTestIds(
   const errors: string[] = [];
   const source = Array.from(sources.values()).join("\n");
   const required = requiredTestIds(entity);
+  const ids = testIdsFor(entity.key);
 
   for (const id of required) {
+    // Skip nav ID check: it lives in shared sidebar, not the feature directory
+    if (id === ids.nav) {
+      continue;
+    }
+
     if (!source.includes(`data-testid="${id}"`)) {
       errors.push(id);
     }

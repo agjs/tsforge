@@ -40,7 +40,7 @@ export function stepTitle(
 /**
  * Generate API seeding code for parent entities before form submission.
  * For each parent, creates a record via the API using the parent's valid field values.
- * Uses parent entity's own fields if available in the spec; falls back to name only.
+ * Uses parent entity's own fields from the spec to build a complete valid payload.
  * Returns TypeScript code that declares parentId variables.
  */
 function generateParentSeedingCode(
@@ -57,30 +57,36 @@ function generateParentSeedingCode(
       const parentKey = parent.key;
       const varName = `${parentKey}Id`;
 
-      // Look up parent entity in spec to get its field values
-      const seedPayload: Record<string, string> = {
-        name: `${parent.entity}-for-${entityId}`,
-      };
+      // Build seed payload with parent's required fields (from spec if available)
+      const seedPayload: Record<string, string> = {};
 
       if (spec) {
         const parentEntity = spec.entities.find((e) => e.key === parentKey);
 
         if (parentEntity) {
-          // Seed with parent's own field values (use the first valid value for each required field)
+          // Seed with parent's required field values
           for (const field of parentEntity.fields) {
-            // Skip FK fields (they're relationships, not data)
-            if (!parentEntity.parents.some((p) => p.fkField === field.name)) {
+            // Skip FK fields (they're relationships, not data) and optional fields
+            const isForeignKey = field.name.endsWith("Id");
+
+            if (!isForeignKey && !field.optional) {
               seedPayload[field.name] = field.valid;
             }
           }
         }
       }
 
+      // Fallback: if spec didn't provide fields, use name
+      if (Object.keys(seedPayload).length === 0) {
+        seedPayload.name = `${parent.entity}-for-${entityId}`;
+      }
+
       const payloadJson = JSON.stringify(seedPayload);
 
       return `    // Seed a parent ${parent.entity} record with required fields
     const ${varName} = await (async () => {
-      const res = await fetch(\`\${new URL(page.url()).origin}/api/v1/${parentKey}\`, {
+      const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
+      const res = await fetch(\`\${apiBase}/api/v1/${parentKey}\`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -161,6 +167,9 @@ function generateRowCellAssertions(
 /**
  * Generate negative test blocks.
  * Safely interpolates field names, invalid values, and entity name using JSON.stringify.
+ *
+ * Negatives work by: submit invalid input, then reload and assert the invalid record is NOT present.
+ * This is robust: it doesn't depend on visible error elements (which may vary) and doesn't swallow timeouts.
  */
 function generateNegativeBlocks(
   entity: IEntityAcceptance,
@@ -186,33 +195,26 @@ function generateNegativeBlocks(
     // Fill form with valid values first
 ${fieldFillSteps}
 
-    // Use unique value in the first field to identify this test's potential row
+    // Use unique value in the first field to identify this test's invalid row attempt
     await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
 
     // Override the target field with invalid value
     await page.getByTestId("${fieldTestId}").clear();
     await page.getByTestId("${fieldTestId}").fill(${JSON.stringify(neg.value)});
 
+    // Submit with invalid input
     await page.getByTestId("${ids.submit}").click();
 
-    // Invalid input must be rejected: either a validation error appears, or
-    // after reload, the row with this unique value must not exist (the record was not saved).
-    try {
-      // Try to find a validation error message
-      const validationError = page.locator('[role="alert"], .error, [class*="error"]').first();
-      await validationError.waitFor({ state: "visible", timeout: 2000 }).catch(() => {
-        // No visible validation error; check via reload
-      });
-    } catch {
-      // No validation error visible — verify the record was not saved by reloading
-      await page.reload();
-      await page.waitForLoadState("domcontentloaded");
+    // Invalid input must be rejected and not saved.
+    // After reload, the row with this unique value must NOT exist in the list.
+    // This is the definitive test: either the API rejected it or the form validation blocked submission.
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
 
-      // The row with this unique value must not exist (it was rejected and not saved)
-      await expect(
-        page.getByTestId("${ids.row}").filter({ hasText: unique })
-      ).toHaveCount(0, { timeout: 5000 });
-    }
+    // The row with this unique value must NOT exist (it was rejected and not saved)
+    await expect(
+      page.getByTestId("${ids.row}").filter({ hasText: unique })
+    ).toHaveCount(0, { timeout: 5000 });
   });
 `;
     })
@@ -452,10 +454,15 @@ ${negativeBlocks}
 
 /**
  * Generate a Playwright spec that walks a full dependency chain end-to-end through the UI.
- * Creates each entity in dependency order, selecting the previously-created parent,
- * and asserting linkage at each hop.
+ * Creates each entity in dependency order through the UI, selecting the previously-UI-created parent.
+ * Threads the parent's unique value across the chain to identify rows and assert linkage.
  *
  * Example: Company → Contact → Deal → Activity
+ * - Company test: create Company via UI with unique value, store it
+ * - Contact test: open Contact create form, select the Company (by its unique value from FK select),
+ *   create Contact, assert Contact row shows Company linkage cell
+ * - Deal test: select Contact (by its unique value), create Deal, assert Deal row shows Contact linkage
+ * - Activity test: select Deal, create Activity, assert Activity row shows Deal linkage
  */
 export function generateChainSpec(spec: IAcceptanceSpec): string {
   if (spec.entities.length === 0) {
@@ -471,7 +478,9 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
     .map((e) => generateNavHelper(e))
     .join("\n\n");
 
+  // Build test steps that thread the parent unique values through the chain
   const testSteps: string[] = [];
+  const parentTrackingVars: string[] = [];
 
   for (let i = 0; i < spec.entities.length; i++) {
     const entity = spec.entities[i];
@@ -482,51 +491,91 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
 
     const ids = testIdsFor(entity.key);
     const isRoot = i === 0;
-
-    const parentSeeding = generateParentSeedingCode(
-      entity.parents,
-      entity.id,
-      spec
-    );
     const fieldFill = generateFieldFillSteps(entity, ids);
+    const firstFieldName = entity.fields[0]?.name ?? "name";
+    const firstFieldValid = entity.fields[0]?.valid ?? "updated";
 
     if (isRoot) {
+      // Root entity: create via UI and store its unique value
+      const varName = `parent${i}Unique`;
+
+      parentTrackingVars.push(`let ${varName}: string;`);
+
       testSteps.push(`  test("create root entity: ${entity.id}", async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const initialCount = await page.getByTestId("${ids.row}").count();
+    // Create unique root entity identifier
+    const unique =
+      ${JSON.stringify(firstFieldValid)} + "-root-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${fieldFill}
+    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialCount + 1, {
-      timeout: 10000,
-    });
+    // Verify the created row is present
+    const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
+    await expect(createdRow).toBeVisible({ timeout: 10000 });
+
+    // Store the unique value for child tests to reuse
+    ${varName} = unique;
   });`);
     } else {
+      // Child entity: select the parent from FK dropdown, then create
+      const parentEntity = spec.entities[i - 1];
+
+      if (!parentEntity) {
+        continue;
+      }
+
+      const parentVarName = `parent${i - 1}Unique`;
+      const currentVarName = `parent${i}Unique`;
+      const parentFK = entity.parents[0];
+
+      if (!parentFK) {
+        continue; // No parent, skip
+      }
+
+      parentTrackingVars.push(`let ${currentVarName}: string;`);
+
+      const parentFieldTestId = ids.field(parentFK.fkField);
+
       testSteps.push(`  test("create child entity: ${entity.id} with parent linkage", async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const initialCount = await page.getByTestId("${ids.row}").count();
+    // Create unique child entity identifier
+    const unique =
+      ${JSON.stringify(firstFieldValid)} + "-child-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
-${parentSeeding}
-
 ${fieldFill}
+
+    // Select the parent (by its unique value in the FK select option)
+    await page.getByTestId("${parentFieldTestId}").selectOption(${parentVarName});
+
+    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialCount + 1, {
-      timeout: 10000,
-    });
+    // Verify the created child row is present
+    const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
+    await expect(createdRow).toBeVisible({ timeout: 10000 });
+
+    // Verify the parent linkage cell is present in this child row
+    // (parent key is one of the child's shows, so it has a rowCell ID)
+    await expect(createdRow.getByTestId("${ids.rowCell(parentFK.key)}")).toContainText(${parentVarName});
+
+    // Store the unique value for subsequent child tests
+    ${currentVarName} = unique;
   });`);
     }
   }
@@ -536,6 +585,8 @@ ${fieldFill}
 ${navHelpers}
 
 test.describe(${JSON.stringify(descTitle)}, () => {
+${parentTrackingVars.map((v) => `  ${v}`).join("\n")}
+
 ${testSteps.join("\n\n")}
 });
 `;

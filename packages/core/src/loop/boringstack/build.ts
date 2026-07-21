@@ -263,9 +263,9 @@ async function verifyAcceptance(
 
     const outcome = await acceptanceRunner.run(entity, ctx);
 
-    // Infrastructure error: per-slice acceptance is best-effort. Warn and skip;
-    // final acceptance (after all features pass the fast gate) will surface the real
-    // infra error with proper needs-infra routing.
+    // Infrastructure error: per-slice acceptance is best-effort. Warn but do NOT mark done;
+    // acceptance didn't actually pass, so the feature is unverified. Final acceptance will
+    // handle the infra error with proper needs-infra routing.
     if (outcome.infraError !== undefined) {
       const infraMsg =
         `⚠ per-slice acceptance encountered infrastructure error: ${outcome.infraError}. ` +
@@ -273,7 +273,8 @@ async function verifyAcceptance(
 
       await host.send(infraMsg);
 
-      return { done: true };
+      // CRITICAL: do NOT return done:true for infra errors — acceptance didn't actually pass
+      return { done: false };
     }
 
     // Test assertion failed: emit steer and keep feature unverified
@@ -535,6 +536,7 @@ async function runFinalAcceptance(
     const chainOutcome = await acceptanceRunner.runChain(spec, ctx);
 
     // Infrastructure error: route to infra-abort path, not feature red
+    // Final acceptance with infra error means build didn't actually complete verification
     if (chainOutcome.infraError !== undefined) {
       const infraMsg = `Acceptance chain: ${chainOutcome.infraError}`;
 

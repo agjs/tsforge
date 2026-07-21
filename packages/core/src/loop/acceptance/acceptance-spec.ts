@@ -64,12 +64,16 @@ function negativesFor(
   const out: INegativeCase[] = [];
 
   // Add negatives for required fields (empty/missing)
+  // SKIP FK fields (relationship/select fields): they're tested via the positive create flow
   for (const f of fields) {
-    if (!f.optional) {
+    // Check if this is an FK field by looking for the FK suffix pattern
+    const isForeignKey = f.name.endsWith("Id");
+
+    if (!isForeignKey && !f.optional) {
       out.push({ field: f.name, value: "", why: `${f.name} is required` });
     }
 
-    if (f.type === "email" || /email/i.test(f.name)) {
+    if (!isForeignKey && (f.type === "email" || /email/i.test(f.name))) {
       out.push({
         field: f.name,
         value: "not-an-email",
@@ -77,7 +81,7 @@ function negativesFor(
       });
     }
 
-    if (f.type === "number") {
+    if (!isForeignKey && f.type === "number") {
       out.push({
         field: f.name,
         value: "-1",

@@ -286,7 +286,11 @@ describe("E2E spec generator", () => {
       expect(chainSpec).toContain(
         "create child entity: Contact with parent linkage"
       );
-      expect(chainSpec).toContain("Seed a parent Company record");
+      // Chain spec creates entities via UI, not API seeding
+      // Root entity is created without parent seeding, child selects parent from UI
+      expect(chainSpec).toContain("selectOption");
+      expect(chainSpec).toContain("parent0Unique");
+      expect(chainSpec).not.toContain("Seed a parent Company record");
     });
 
     test("generateChainSpec for single entity still creates valid spec", () => {
@@ -401,7 +405,7 @@ describe("E2E spec generator - Relationships", () => {
     expect(chainSpec).toContain("create child entity: Contact");
   });
 
-  test("generateChainSpec includes parent seeding for child entities", () => {
+  test("generateChainSpec threads parent selection for child entities", () => {
     const contact: IEntityAcceptance = {
       id: "Contact",
       key: "contact",
@@ -428,7 +432,10 @@ describe("E2E spec generator - Relationships", () => {
 
     const chainSpec = generateChainSpec(spec);
 
-    expect(chainSpec).toContain("Seed a parent");
+    // Chain spec should select parent from UI, not API-seed
+    expect(chainSpec).toContain("selectOption");
+    expect(chainSpec).toContain("parent0Unique");
+    expect(chainSpec).not.toContain("Seed a parent");
   });
 
   test("chainSpecPath returns correct path", () => {

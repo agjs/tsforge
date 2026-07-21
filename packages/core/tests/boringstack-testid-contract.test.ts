@@ -155,7 +155,7 @@ describe("checkTestIds", () => {
     expect(result).toEqual([]);
   });
 
-  test("detects missing nav testid", () => {
+  test("does NOT require nav testid in feature dir (nav lives in shared sidebar)", () => {
     const ids = testIdsFor(contact.key);
     const required = requiredTestIds(contact);
 
@@ -165,7 +165,8 @@ describe("checkTestIds", () => {
 
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
-    expect(result).toContain(ids.nav);
+    // nav should NOT be reported as missing (it's not checked in feature dir)
+    expect(result).not.toContain(ids.nav);
   });
 
   test("detects missing field testid for entity fields", () => {
@@ -207,7 +208,7 @@ describe("checkTestIds", () => {
     expect(result).toContain(ids.rowCell("email"));
   });
 
-  test("reports missing nav testid", () => {
+  test("does NOT report nav testid as missing (nav is in shared sidebar)", () => {
     const ids = testIdsFor(contact.key);
     const source = `
       <div data-testid="${ids.list}">
@@ -228,7 +229,8 @@ describe("checkTestIds", () => {
 
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
-    expect(result).toContain(ids.nav);
+    // nav is not checked in feature dir (it's in the shared sidebar)
+    expect(result).not.toContain(ids.nav);
   });
 
   test("returns empty array when all required testids are present", () => {
