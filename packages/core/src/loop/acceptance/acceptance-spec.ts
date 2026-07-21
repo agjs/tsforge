@@ -91,14 +91,23 @@ function negativesFor(
   }
 
   // Add negatives from entity's rules (explicit constraints)
+  // ONLY if the constraint maps to an actual field in the entity
   for (const constraint of entity.rules) {
-    // Extract common constraint patterns (e.g., "name must not be empty", "age must be positive")
-    if (constraint.includes("must not") || constraint.includes("cannot be")) {
-      out.push({
-        field: "constraint-violation",
-        value: "",
-        why: constraint,
-      });
+    // Extract common constraint patterns and try to find the field it references
+    // Pattern: "fieldName must not be X", "fieldName cannot be Y"
+    const match = /^(\w+)\s+(must not|cannot be)/i.exec(constraint.trim());
+
+    if (match && typeof match[1] === "string") {
+      const fieldName = match[1];
+      const fieldExists = fields.some((f) => f.name === fieldName);
+
+      if (fieldExists) {
+        out.push({
+          field: fieldName,
+          value: "",
+          why: constraint,
+        });
+      }
     }
   }
 

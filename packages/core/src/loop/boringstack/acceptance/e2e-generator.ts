@@ -64,12 +64,10 @@ function generateParentSeedingCode(
         const parentEntity = spec.entities.find((e) => e.key === parentKey);
 
         if (parentEntity) {
-          // Seed with parent's required field values
+          // Seed with parent's required field values, INCLUDING required FK fields
           for (const field of parentEntity.fields) {
-            // Skip FK fields (they're relationships, not data) and optional fields
-            const isForeignKey = field.name.endsWith("Id");
-
-            if (!isForeignKey && !field.optional) {
+            // Include all required fields (data fields and required foreign keys)
+            if (!field.optional) {
               seedPayload[field.name] = field.valid;
             }
           }
@@ -83,7 +81,7 @@ function generateParentSeedingCode(
 
       const payloadJson = JSON.stringify(seedPayload);
 
-      return `    // Seed a parent ${parent.entity} record with required fields
+      return `    // Seed a parent ${parent.entity} record with required fields (including required FKs)
     const ${varName} = await (async () => {
       const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
       const res = await fetch(\`\${apiBase}/api/v1/${parentKey}\`, {
@@ -112,16 +110,23 @@ function generateParentSeedingCode(
 /**
  * Generate field fill steps for form inputs.
  * Each step safely interpolates field.valid using JSON.stringify.
+ * @param skipForeignKeys - if true, skip FK fields (used for chain specs where parent selection is handled separately)
  */
 function generateFieldFillSteps(
   entity: IEntityAcceptance,
-  ids: ReturnType<typeof testIdsFor>
+  ids: ReturnType<typeof testIdsFor>,
+  skipForeignKeys = false
 ): string {
   return entity.fields
     .map((field) => {
       const isFK = entity.parents.some((p) => p.fkField === field.name);
 
       if (isFK) {
+        if (skipForeignKeys) {
+          // Skip FK fields entirely; they'll be selected separately in chain context
+          return "";
+        }
+
         const parent = entity.parents.find((p) => p.fkField === field.name);
 
         if (parent) {
@@ -133,6 +138,7 @@ function generateFieldFillSteps(
 
       return `    await page.getByTestId("${ids.field(field.name)}").fill(${JSON.stringify(field.valid)});`;
     })
+    .filter((line) => line.length > 0)
     .join("\n");
 }
 
@@ -168,16 +174,23 @@ function generateRowCellAssertions(
  * Generate negative test blocks.
  * Safely interpolates field names, invalid values, and entity name using JSON.stringify.
  *
- * Negatives work by: submit invalid input, then reload and assert the invalid record is NOT present.
- * This is robust: it doesn't depend on visible error elements (which may vary) and doesn't swallow timeouts.
+ * Negatives work by:
+ * 1. Record initial row count before creating the form
+ * 2. Open create form and emit parentSeedingCode (so FK variables are declared)
+ * 3. Fill all fields validly
+ * 4. Override ONLY the target field with invalid value
+ * 5. Submit and reload
+ * 6. Assert row count did NOT increase — the invalid record was rejected and not persisted
+ *
+ * This approach is robust: it doesn't depend on visible error elements and reliably
+ * distinguishes API rejection from form validation failures.
  */
 function generateNegativeBlocks(
   entity: IEntityAcceptance,
   ids: ReturnType<typeof testIdsFor>,
-  fieldFillSteps: string
+  fieldFillSteps: string,
+  parentSeedingCode: string
 ): string {
-  const firstFieldName = entity.fields[0]?.name ?? "name";
-
   return entity.negatives
     .map((neg) => {
       const fieldTestId = ids.field(neg.field);
@@ -187,34 +200,33 @@ function generateNegativeBlocks(
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const unique = \`negative-\${${JSON.stringify(neg.field)}}-\${Date.now()}\`;
+    // Record initial row count before attempting to create an invalid record
+    const rowsBefore = await page.getByTestId("${ids.row}").count();
 
+    // Open create form
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
-    // Fill form with valid values first
+    // Emit parent seeding code so FK variables (e.g., companyId) are declared
+${parentSeedingCode}
+
+    // Fill all fields with valid values
 ${fieldFillSteps}
 
-    // Use unique value in the first field to identify this test's invalid row attempt
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
-
-    // Override the target field with invalid value
+    // Override the target field with the invalid value (clear first, then fill)
     await page.getByTestId("${fieldTestId}").clear();
     await page.getByTestId("${fieldTestId}").fill(${JSON.stringify(neg.value)});
 
     // Submit with invalid input
     await page.getByTestId("${ids.submit}").click();
 
-    // Invalid input must be rejected and not saved.
-    // After reload, the row with this unique value must NOT exist in the list.
-    // This is the definitive test: either the API rejected it or the form validation blocked submission.
+    // Reload to ensure the invalid record would persist if accepted by the backend
     await page.reload();
-    await page.waitForLoadState("domcontentloaded");
+    await page.waitForURL(/\\/${entity.key}/);
 
-    // The row with this unique value must NOT exist (it was rejected and not saved)
-    await expect(
-      page.getByTestId("${ids.row}").filter({ hasText: unique })
-    ).toHaveCount(0, { timeout: 5000 });
+    // Assert: the row count did NOT increase — the invalid record was rejected
+    const rowsAfter = await page.getByTestId("${ids.row}").count();
+    await expect(rowsAfter).toBe(rowsBefore, { timeout: 5000 });
   });
 `;
     })
@@ -249,11 +261,16 @@ export function generateEntitySpec(
   const name = entity.id;
   const fieldFillSteps = generateFieldFillSteps(entity, ids);
   const rowCellAssertions = generateRowCellAssertions(entity, ids);
-  const negativeBlocks = generateNegativeBlocks(entity, ids, fieldFillSteps);
   const parentSeedingCode = generateParentSeedingCode(
     entity.parents,
     entity.id,
     spec
+  );
+  const negativeBlocks = generateNegativeBlocks(
+    entity,
+    ids,
+    fieldFillSteps,
+    parentSeedingCode
   );
 
   const firstFieldName = entity.fields[0]?.name ?? "name";
@@ -491,7 +508,8 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
 
     const ids = testIdsFor(entity.key);
     const isRoot = i === 0;
-    const fieldFill = generateFieldFillSteps(entity, ids);
+    // For chain specs, skip FK selection in fieldFill (handled separately below)
+    const fieldFill = generateFieldFillSteps(entity, ids, !isRoot);
     const firstFieldName = entity.fields[0]?.name ?? "name";
     const firstFieldValid = entity.fields[0]?.valid ?? "updated";
 
@@ -558,7 +576,7 @@ ${fieldFill}
 
 ${fieldFill}
 
-    // Select the parent (by its unique value in the FK select option)
+    // Select the parent by its unique value (created in previous test)
     await page.getByTestId("${parentFieldTestId}").selectOption(${parentVarName});
 
     await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);

@@ -27,12 +27,27 @@ export function requiredTestIds(entity: IEntityAcceptance): string[] {
     ids.confirmDelete,
   ];
 
+  // Track which field testids we've added to avoid duplicates
+  const addedFieldTestIds = new Set<string>();
+
   for (const field of entity.fields) {
-    required.push(ids.field(field.name));
+    const fieldTestId = ids.field(field.name);
+
+    if (!addedFieldTestIds.has(fieldTestId)) {
+      required.push(fieldTestId);
+      addedFieldTestIds.add(fieldTestId);
+    }
   }
 
+  // Parent FK fields are already in entity.fields (injected during spec generation),
+  // so this deduplication is implicit. But for clarity, we verify we don't double-add.
   for (const parent of entity.parents) {
-    required.push(ids.field(parent.fkField));
+    const fieldTestId = ids.field(parent.fkField);
+
+    if (!addedFieldTestIds.has(fieldTestId)) {
+      required.push(fieldTestId);
+      addedFieldTestIds.add(fieldTestId);
+    }
   }
 
   for (const show of entity.shows) {
