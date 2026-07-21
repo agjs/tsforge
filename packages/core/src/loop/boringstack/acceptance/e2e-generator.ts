@@ -213,8 +213,9 @@ async function navigateTo${entity.id}(page: import("@playwright/test").Page) {
 test.describe(${JSON.stringify(name)}, () => {
   test(${JSON.stringify(stepTitle("nav", entity.key, entity.id))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
-    await navigateTo${entity.id}(page);
-    await expect(page).toHaveURL(/\\/${entity.key}/);
+    await page.getByTestId("${ids.nav}").click();
+    await page.waitForURL(/${entity.key}(?:\\/|$)/);
+    await expect(page).toHaveURL(/${entity.key}(?:\\/|$)/);
   });
 
   test(${JSON.stringify(stepTitle("list", entity.key, entity.id))}, async ({ page, authedPage }) => {

@@ -98,7 +98,7 @@ describe("E2E spec generator", () => {
     const spec = generateEntitySpec(company);
 
     expect(spec).toContain("navigate to company list via sidebar");
-    expect(spec).toContain("navigateToCompany(page)");
+    expect(spec).toContain('page.getByTestId("nav-company").click()');
   });
 
   test("generateEntitySpec includes create test block", () => {
