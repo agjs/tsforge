@@ -148,4 +148,61 @@ describe("E2E spec generator", () => {
     expect(path).toContain("contact.spec.ts");
     expect(path).toContain("_acceptance");
   });
+
+  test("generateEntitySpec escapes quotes and backticks in field values", () => {
+    const entityWithSpecialChars: IEntityAcceptance = {
+      id: "Product",
+      key: "product",
+      nav: "Products",
+      fields: [
+        {
+          name: 'name"with"quotes',
+          type: "string",
+          optional: false,
+          valid: 'Value with "double quotes" and `backticks`',
+          invalid: [],
+        },
+        {
+          name: "sku",
+          type: "string",
+          optional: false,
+          valid: "SKU-123",
+          invalid: [],
+        },
+      ],
+      shows: ['name"with"quotes', "sku"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        {
+          field: 'name"with"quotes',
+          value: 'Invalid"Value`With`Specials',
+          why: "invalid format",
+        },
+      ],
+      acceptanceCheck: "create a product",
+    };
+
+    const spec = generateEntitySpec(entityWithSpecialChars);
+
+    // Verify escaped double quotes appear in field fill steps
+    expect(spec).toContain(
+      '.fill("Value with \\"double quotes\\" and `backticks`")'
+    );
+
+    // Verify escaped quotes in negative test title
+    expect(spec).toContain(
+      'test("negative: Product rejects name\\"with\\"quotes=Invalid\\"Value`With`Specials"'
+    );
+
+    // Verify escaped quotes in error messages
+    expect(spec).toContain(
+      'throw new Error("Product with invalid name\\"with\\"quotes should not have been created")'
+    );
+
+    // Verify that the raw unescaped version does NOT appear (which would break the spec)
+    const rawBad = '.fill("Value with "double quotes"';
+
+    expect(spec).not.toContain(rawBad);
+  });
 });
