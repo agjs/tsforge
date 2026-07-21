@@ -115,7 +115,9 @@ describe("E2E spec generator", () => {
     expect(spec).toContain(
       'const createdRow = page.getByTestId("company-row").filter({ hasText: unique });'
     );
-    expect(spec).toContain('createdRow.getByTestId("company-row-edit").click()');
+    expect(spec).toContain(
+      'createdRow.getByTestId("company-row-edit").click()'
+    );
   });
 
   test("generateEntitySpec includes delete test block", () => {
@@ -126,7 +128,7 @@ describe("E2E spec generator", () => {
     expect(spec).toContain(
       'createdRow.getByTestId("company-row-delete").click()'
     );
-    expect(spec).toContain(').toHaveCount(0, { timeout: 10000 });');
+    expect(spec).toContain(").toHaveCount(0, { timeout: 10000 });");
   });
 
   test("generateEntitySpec includes negative tests for required and formatted fields", () => {
