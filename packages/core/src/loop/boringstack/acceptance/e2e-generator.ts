@@ -663,7 +663,12 @@ export const test = base.extend<
 
     await login.goto();
     await login.loginAs(testUser.email, testUser.password);
-    await page.waitForURL(/\\/dashboard/);
+    // Auth success = we navigate AWAY from /login. Do NOT hard-wait for a
+    // specific post-login route (the app may land on / or /dashboard); asserting
+    // an exact target here caused false timeouts.
+    await page.waitForURL((url) => !url.pathname.endsWith("/login"), {
+      timeout: 15000,
+    });
     await use({ login, dashboard });
   },
 });
