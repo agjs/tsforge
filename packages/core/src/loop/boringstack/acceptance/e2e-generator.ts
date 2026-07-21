@@ -247,7 +247,8 @@ function generateFieldFillSteps(
 
 /**
  * Generate row cell assertions for created values.
- * For parent references, assert the linkage cell is visible (contains parent's name).
+ * For parent references, assert the linkage cell contains the parent entity's name
+ * (not just visibility — ensures the relationship is actually displayed).
  * For regular fields, assert cell contains the expected value.
  * Safely interpolates field values using JSON.stringify.
  */
@@ -261,7 +262,18 @@ function generateRowCellAssertions(
       const isParent = entity.parents.some((p) => p.key === show);
 
       if (isParent) {
-        // For parent references, assert the cell is visible within THIS row only
+        // For parent references, assert the cell contains CONTENT related to the parent
+        // (e.g., the parent's name/display value), not just visibility.
+        // This ensures the relationship is actually displayed and not an empty cell with the right testid.
+        const parentDef = entity.parents.find((p) => p.key === show);
+
+        if (parentDef) {
+          // The parent's entity name is what we expect to see in the display
+          // E.g., a Contact's company cell should display the company's name field value
+          return `    await expect(row.getByTestId("${ids.rowCell(show)}")).toContainText(${JSON.stringify(parentDef.entity)});`;
+        }
+
+        // Fallback (should not reach here)
         return `    await expect(row.getByTestId("${ids.rowCell(show)}")).toBeVisible();`;
       }
 
@@ -376,8 +388,23 @@ export function generateEntitySpec(
     parentSeedingCode
   );
 
+  // FIX 6: Type-aware unique identity value
+  // Find the first field with a string-like type for the unique marker
+  const stringTypePatterns = ["string", "text", "email"];
+  const identityField =
+    entity.fields.find((f) =>
+      stringTypePatterns.some((type) => f.type.toLowerCase().includes(type))
+    ) ?? entity.fields[0];
+  const identityFieldName = identityField?.name ?? "name";
+  const identityFieldValid = identityField?.valid ?? "updated";
   const firstFieldName = entity.fields[0]?.name ?? "name";
   const firstFieldValid = entity.fields[0]?.valid ?? "updated";
+
+  // Determine if we need to fill the first field separately from the identity field
+  const isFirstFieldIdentity = identityFieldName === firstFieldName;
+  const fillFirstFieldCode = isFirstFieldIdentity
+    ? ""
+    : `    await page.getByTestId("${ids.field(firstFieldName)}").fill(${JSON.stringify(firstFieldValid)});\n`;
 
   return `import { expect, test } from "./auth-helper";
 
@@ -418,8 +445,9 @@ test.describe(${JSON.stringify(name)}, () => {
 
     // Unique value → this test asserts on ITS OWN row (the shared DB accumulates rows
     // across tests/runs, so absolute row counts are unreliable).
+    // Identity field gets the unique marker (type-aware: may not be the first field)
     const unique =
-      ${JSON.stringify(firstFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
 
     // Click create button
     await page.getByTestId("${ids.create}").click();
@@ -428,9 +456,10 @@ test.describe(${JSON.stringify(name)}, () => {
 
 ${parentSeedingCode}
 
-    // Fill all fields, then stamp the first field with the unique value
+    // Fill all fields
 ${fieldFillSteps}
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
+${fillFirstFieldCode}    // Fill identity field with unique value
+    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
 
     // Submit
     await page.getByTestId("${ids.submit}").click();
@@ -450,7 +479,7 @@ ${rowCellAssertions}
     await navigateTo${entity.id}(page);
 
     const unique =
-      ${JSON.stringify(firstFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
 
     // Create a new record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
@@ -459,7 +488,7 @@ ${rowCellAssertions}
 ${parentSeedingCode}
 
 ${fieldFillSteps}
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
+${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
@@ -478,9 +507,9 @@ ${fieldFillSteps}
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    // Create a record stamped with a unique value
+    // Create a record stamped with a unique value (identity field, not first field)
     const unique =
-      ${JSON.stringify(firstFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
     const updatedValue = unique + "-updated";
 
     await page.getByTestId("${ids.create}").click();
@@ -489,7 +518,7 @@ ${fieldFillSteps}
 ${parentSeedingCode}
 
 ${fieldFillSteps}
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
+${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
@@ -501,7 +530,7 @@ ${fieldFillSteps}
 
     // Edit inputs appear — inline in the row OR in a reopened form. Either way the
     // field testid becomes editable (do NOT assume the create form is reused).
-    const editField = page.getByTestId("${ids.field(firstFieldName)}");
+    const editField = page.getByTestId("${ids.field(identityFieldName)}");
     await editField.waitFor({ state: "visible", timeout: 5000 });
     await editField.clear();
     await editField.fill(updatedValue);
@@ -527,7 +556,7 @@ ${fieldFillSteps}
     await navigateTo${entity.id}(page);
 
     const unique =
-      ${JSON.stringify(firstFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
 
     // Create a record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
@@ -536,7 +565,7 @@ ${fieldFillSteps}
 ${parentSeedingCode}
 
 ${fieldFillSteps}
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
+${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
@@ -585,8 +614,21 @@ function generateRootEntityChainTest(
 } {
   const ids = testIdsFor(entity.key);
   const fieldFill = generateFieldFillSteps(entity, ids, false);
+
+  // FIX 6: Type-aware identity for chain tests
+  const stringTypePatterns = ["string", "text", "email"];
+  const identityField =
+    entity.fields.find((f) =>
+      stringTypePatterns.some((type) => f.type.toLowerCase().includes(type))
+    ) ?? entity.fields[0];
+  const identityFieldName = identityField?.name ?? "name";
+  const identityFieldValid = identityField?.valid ?? "updated";
   const firstFieldName = entity.fields[0]?.name ?? "name";
   const firstFieldValid = entity.fields[0]?.valid ?? "updated";
+  const isFirstFieldIdentity = identityFieldName === firstFieldName;
+  const fillFirstFieldCode = isFirstFieldIdentity
+    ? ""
+    : `\n    await page.getByTestId("${ids.field(firstFieldName)}").fill(${JSON.stringify(firstFieldValid)});`;
   const varName = `parent${index}Unique`;
 
   const testStep = `  test("create root entity: ${entity.id}", async ({ page, authedPage }) => {
@@ -595,13 +637,13 @@ function generateRootEntityChainTest(
 
     // Create unique root entity identifier
     const unique =
-      ${JSON.stringify(firstFieldValid)} + "-root-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+      ${JSON.stringify(identityFieldValid)} + "-root-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
-${fieldFill}
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
+${fieldFill}${fillFirstFieldCode}
+    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
@@ -672,8 +714,22 @@ function generateChildEntityChainTest(
 
   const ids = testIdsFor(entity.key);
   const fieldFill = generateFieldFillSteps(entity, ids, true);
+
+  // FIX 6: Type-aware identity for child chain tests
+  const stringTypePatterns = ["string", "text", "email"];
+  const identityField =
+    entity.fields.find((f) =>
+      stringTypePatterns.some((type) => f.type.toLowerCase().includes(type))
+    ) ?? entity.fields[0];
+  const identityFieldName = identityField?.name ?? "name";
+  const identityFieldValid = identityField?.valid ?? "updated";
   const firstFieldName = entity.fields[0]?.name ?? "name";
   const firstFieldValid = entity.fields[0]?.valid ?? "updated";
+  const isFirstFieldIdentity = identityFieldName === firstFieldName;
+  const fillFirstFieldCode = isFirstFieldIdentity
+    ? ""
+    : `\n    await page.getByTestId("${ids.field(firstFieldName)}").fill(${JSON.stringify(firstFieldValid)});`;
+
   const parentVarName = `parent${index - 1}Unique`;
   const currentVarName = `parent${index}Unique`;
   const predecessorFieldTestId = ids.field(predecessorFK.fkField);
@@ -688,15 +744,16 @@ function generateChildEntityChainTest(
 
     // Create unique child entity identifier
     const unique =
-      ${JSON.stringify(firstFieldValid)} + "-child-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+      ${JSON.stringify(identityFieldValid)} + "-child-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${fieldFill}${otherParentsCode}
-    // Select the chain predecessor by its unique value (created in previous test)
-    await page.getByTestId("${predecessorFieldTestId}").selectOption(${parentVarName});${otherSelectCode}
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
+    // Select the chain predecessor by its display label (created in previous test)
+    // FK option values are IDs; the label is the display text (parentVarName)
+    await page.getByTestId("${predecessorFieldTestId}").selectOption({ label: ${parentVarName} });${otherSelectCode}${fillFirstFieldCode}
+    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });

@@ -128,7 +128,6 @@ function isInfraError(text: string): boolean {
     "net::ERR_CONNECTION",
     "error: Browser launch failed",
     "browserType.launch",
-    "Failed to fetch",
   ];
 
   return infraIndicators.some((indicator) => text.includes(indicator));
@@ -136,7 +135,8 @@ function isInfraError(text: string): boolean {
 
 /**
  * Extract error messages from a parsed Playwright JSON report.
- * Collects both top-level report.errors[].message and per-test error.message.
+ * Collects ONLY top-level report.errors[].message (not per-test errors).
+ * Per-test assertion errors must NOT drive suite-wide infra classification.
  * Returns empty string if unparseable or no errors found.
  */
 function extractReportErrorText(rawStdout: string): string {
@@ -158,45 +158,13 @@ function extractReportErrorText(rawStdout: string): string {
 
   const errors: string[] = [];
 
-  // Collect top-level report errors
+  // Collect top-level report errors ONLY
+  // Global setup/launch failures land here; per-test assertion errors do not.
   if (Array.isArray(parsed.errors)) {
     for (const err of parsed.errors) {
       if ("message" in err && typeof err.message === "string") {
         errors.push(err.message);
       }
-    }
-  }
-
-  // Collect per-test errors from nested suites (walk recursively)
-  function collectTestErrors(suite: IPlaywrightSuite): void {
-    if (suite.specs !== undefined) {
-      for (const spec of suite.specs) {
-        const test = spec.tests?.[0];
-
-        if (test?.results?.[0] !== undefined) {
-          const result = test.results[0];
-
-          if (
-            "error" in result &&
-            "message" in (result.error ?? {}) &&
-            typeof result.error?.message === "string"
-          ) {
-            errors.push(result.error.message);
-          }
-        }
-      }
-    }
-
-    if (suite.suites !== undefined) {
-      for (const nested of suite.suites) {
-        collectTestErrors(nested);
-      }
-    }
-  }
-
-  if (parsed.suites !== undefined && Array.isArray(parsed.suites)) {
-    for (const suite of parsed.suites) {
-      collectTestErrors(suite);
     }
   }
 
@@ -332,12 +300,13 @@ function cleanupFile(filePath: string): void {
 /**
  * Classify a nonzero exit: determine if it's infrastructure (should retry) or real failure.
  * Examines both stderr and parsed JSON report errors (if present).
+ * Whenever parseResult is not null, preserves it in the outcome and derives meaningful detail
+ * from the first failing result (the actual assertion text), with fallback to stderr.
  * Returns: { outcome, shouldRetry } where outcome is undefined for retry, or final result for done.
  */
 function classifyNonzeroExit(
   result: { code: number; stdout: string; stderr: string },
-  parseResult: IAcceptanceResult[] | null,
-  requiredSteps?: AcceptStep[]
+  parseResult: IAcceptanceResult[] | null
 ): {
   outcome?: IAcceptanceOutcome;
   shouldRetry: boolean;
@@ -356,21 +325,32 @@ function classifyNonzeroExit(
   }
 
   // No infra pattern detected — treat as real failure
-  if (parseResult !== null && requiredSteps !== undefined) {
+  // ALWAYS preserve parseResult when it's not null (never drop parsed results)
+  if (parseResult !== null) {
+    // Derive meaningful detail: use the first failing result's detail, or fall back to stderr
+    let detail = result.stderr;
+
+    // Find the first failed result to extract its assertion message
+    const firstFailure = parseResult.find((r) => !r.ok);
+
+    if (firstFailure && firstFailure.detail !== "failed") {
+      detail = firstFailure.detail;
+    } else if (detail === "") {
+      // Last resort: use exit code message
+      detail = `playwright exited with code ${result.code}`;
+    }
+
     return {
       outcome: {
         ok: false,
         results: parseResult,
-        detail:
-          result.stderr !== ""
-            ? result.stderr
-            : `playwright exited with code ${result.code}`,
+        detail,
       },
       shouldRetry: false,
     };
   }
 
-  // Unparseable JSON + unknown error text stays a REAL failure (not infra)
+  // Truly unparseable JSON + unknown error text stays a REAL failure (not infra)
   return {
     outcome: {
       ok: false,
@@ -406,7 +386,7 @@ function processExecResult(
   }
 
   // Nonzero exit code: classify as infra or real failure
-  return classifyNonzeroExit(result, parseResult, requiredSteps);
+  return classifyNonzeroExit(result, parseResult);
 }
 
 /**
@@ -420,7 +400,7 @@ function processChainResults(
 ): IAcceptanceOutcome | undefined {
   // Honor exit code: nonzero means failure
   if (result.code !== 0) {
-    // Check if this is an infrastructure error (even if we have some parsed results)
+    // Check if this is an infrastructure error; always pass allResults so results are preserved
     const { outcome, shouldRetry } = classifyNonzeroExit(
       result,
       allResults.length > 0 ? allResults : null
@@ -431,18 +411,16 @@ function processChainResults(
       return undefined;
     }
 
-    // Real failure: return the outcome (or a failure outcome if classify returned undefined)
+    // Real failure: return the outcome from classify
     if (outcome !== undefined) {
       return outcome;
     }
 
+    // Unreachable: classify always returns an outcome when shouldRetry is false
     return {
       ok: false,
       results: allResults,
-      detail:
-        result.stderr !== ""
-          ? result.stderr
-          : `playwright exited with code ${result.code}`,
+      detail: `playwright exited with code ${result.code}`,
     };
   }
 

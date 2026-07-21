@@ -278,13 +278,29 @@ async function verifyAcceptance(
       return { done: false, infra: outcome.infraError };
     }
 
-    // Test assertion failed: emit steer and keep feature unverified
+    // Test assertion failed: emit steer, re-verify, and close over post-steer state
     if (!outcome.ok) {
       const steer = acceptanceSteer(entity, outcome);
 
       await host.send(steer);
 
-      return { done: false };
+      // FIX 9: after sending the steer (which runs the full model loop),
+      // re-run acceptance once to see if the fix worked
+      const reRun = await acceptanceRunner.run(entity, ctx, fullSpec);
+
+      // If the re-run is an infra error, route it through the needs-infra channel
+      if (reRun.infraError !== undefined) {
+        const infraMsg =
+          `⚠ post-steer acceptance encountered infrastructure error: ${reRun.infraError}. ` +
+          `Routing to needs-infra for retry once infrastructure is ready.`;
+
+        await host.send(infraMsg);
+
+        return { done: false, infra: reRun.infraError };
+      }
+
+      // Return the re-run outcome: done if it passed, done:false if it still fails
+      return { done: reRun.ok };
     }
 
     // All checks passed
@@ -396,8 +412,11 @@ export function boringstackDeps(opts: {
         })
       );
 
+      // FIX 7: only include testid guide when acceptance is enabled
       const testIdGuide =
-        entity !== undefined ? "\n\n" + buildTestIdGuide(entity) : "";
+        entity !== undefined && !e2eAcceptanceDisabled
+          ? "\n\n" + buildTestIdGuide(entity)
+          : "";
       const sent = await host.send(
         refinePrompt(feature, slice) + testIdGuide + revisitGuidance(seed)
       );

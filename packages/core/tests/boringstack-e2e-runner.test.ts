@@ -645,3 +645,201 @@ test("runner: nonzero exit with parseable JSON but ECONNREFUSED stderr is retrie
   // Infra errors are retried up to 3 times
   expect(execCallCount).toBe(3);
 });
+
+test("FIX 1: entity code:1 + parseable report with failing assertion preserves results + detail", async () => {
+  const fakeExec: Exec = async () => {
+    return {
+      code: 1,
+      stdout: JSON.stringify({
+        suites: [
+          {
+            title: "e2e/company.spec.ts",
+            specs: [
+              {
+                title: "create Company: form fill, submit, row appears",
+                ok: false,
+                tests: [
+                  {
+                    results: [
+                      {
+                        status: "failed",
+                        error: {
+                          message: "Expected row to appear but timeout",
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 1, unexpected: 1, flaky: 0, skipped: 0 },
+        errors: [],
+      }),
+      stderr: "",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const ctx = createTestCtx();
+
+  const outcome = await runner.run(testEntity, ctx);
+
+  // Should NOT be marked as infra error (no infra indicators)
+  expect(outcome.infraError).toBeUndefined();
+  // Results must be preserved (not empty)
+  expect(outcome.results.length).toBeGreaterThan(0);
+  // Detail must be the assertion message (NOT "exited with code 1")
+  expect(outcome.detail).toContain("Expected row to appear but timeout");
+  expect(outcome.detail).not.toContain("exited with code");
+});
+
+test("FIX 1: chain code:1 + parseable report preserves results + assertion detail", async () => {
+  const secondEntity: IEntityAcceptance = {
+    ...testEntity,
+    id: "Contact",
+    key: "contact",
+    nav: "Contacts",
+    parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+  };
+
+  const fakeExec: Exec = async () => {
+    return {
+      code: 1,
+      stdout: JSON.stringify({
+        suites: [
+          {
+            title: "Full Relational Chain: Company → Contact",
+            specs: [
+              {
+                title: "create root entity: Company",
+                ok: true,
+                tests: [{ results: [{ status: "passed" }] }],
+              },
+              {
+                title: "create child entity: Contact with parent linkage",
+                ok: false,
+                tests: [
+                  {
+                    results: [
+                      {
+                        status: "failed",
+                        error: {
+                          message: "Parent cell did not show parent value",
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 2, unexpected: 1, flaky: 0, skipped: 0 },
+        errors: [],
+      }),
+      stderr: "",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const spec = {
+    entities: [testEntity, secondEntity],
+  };
+  const ctx = createTestCtx();
+
+  const outcome = await runner.runChain(spec, ctx);
+
+  // Should NOT be infra error
+  expect(outcome.infraError).toBeUndefined();
+  // Results must be preserved
+  expect(outcome.results.length).toBeGreaterThan(0);
+  // Detail must contain the assertion message (NOT "no valid JSON output")
+  expect(outcome.detail).toContain("Parent cell did not show parent value");
+  expect(outcome.detail).not.toContain("no valid JSON output");
+});
+
+test("FIX 2: per-test error with net::ERR_CONNECTION is NOT classified as infra (no top-level error)", async () => {
+  let execCallCount = 0;
+
+  const fakeExec: Exec = async () => {
+    execCallCount++;
+
+    // Playwright produces a report with a per-test error containing net::ERR_CONNECTION
+    // but NO top-level errors (so it's a feature failure, not infra)
+    return {
+      code: 1,
+      stdout: JSON.stringify({
+        suites: [
+          {
+            title: "e2e/company.spec.ts",
+            specs: [
+              {
+                title: "create Company: form fill, submit, row appears",
+                ok: false,
+                tests: [
+                  {
+                    results: [
+                      {
+                        status: "failed",
+                        error: {
+                          message:
+                            "net::ERR_CONNECTION_REFUSED connection refused",
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 1, unexpected: 1, flaky: 0, skipped: 0 },
+        errors: [],
+      }),
+      stderr: "",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const ctx = createTestCtx();
+
+  const outcome = await runner.run(testEntity, ctx);
+
+  // Should be classified as REAL failure (feature-red), NOT infra
+  // Per-test errors must NOT trigger infra classification
+  expect(outcome.infraError).toBeUndefined();
+  expect(outcome.ok).toBe(false);
+  // No retry should happen
+  expect(execCallCount).toBe(1);
+});
+
+test("FIX 2: top-level report error is classified as infra", async () => {
+  let execCallCount = 0;
+
+  const fakeExec: Exec = async () => {
+    execCallCount++;
+
+    // Top-level error (global setup failure) — classified as infra
+    return {
+      code: 1,
+      stdout: JSON.stringify({
+        suites: [],
+        stats: { expected: 0, unexpected: 0, flaky: 0, skipped: 0 },
+        errors: [{ message: "ECONNREFUSED: Failed to connect during setup" }],
+      }),
+      stderr: "",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const ctx = createTestCtx();
+
+  const outcome = await runner.run(testEntity, ctx);
+
+  // Top-level ECONNREFUSED → infra error
+  expect(outcome.infraError).toBeDefined();
+  // Should retry
+  expect(execCallCount).toBe(3);
+});

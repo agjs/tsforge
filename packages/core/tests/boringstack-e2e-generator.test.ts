@@ -5,10 +5,13 @@ import {
   generateChainSpec,
   chainSpecPath,
 } from "../src/loop/boringstack/acceptance/e2e-generator";
+import { planToAcceptanceSpec } from "../src/loop/acceptance/acceptance-spec";
 import type {
   IEntityAcceptance,
   IAcceptanceSpec,
+  IAcceptField,
 } from "../src/loop/acceptance/acceptance.types";
+import type { IProductPlan } from "../src/loop/planning/plan-types";
 
 const company: IEntityAcceptance = {
   id: "Company",
@@ -551,5 +554,238 @@ describe("E2E spec generator - Relationships", () => {
     expect(dealSpec).toContain("companyId: companyId");
     // Verify it does NOT contain the placeholder string "parent-1"
     expect(dealSpec).not.toContain('companyId: "parent-1"');
+  });
+
+  test("FIX 11: generateChainSpec picks predecessor-matching FK for multi-parent child at non-zero index", () => {
+    // Multi-parent child: Deal has both Contact and Company as parents
+    // Chain is [Company, Contact, Deal], so Deal's predecessor is Contact (chain index 1)
+    // But Deal's parents array has Company FIRST (parents[0]), Contact SECOND (parents[1])
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme Corp",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John Doe",
+          invalid: [],
+        },
+        {
+          name: "companyId",
+          type: "string",
+          optional: false,
+          valid: "company-1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      // Contact has Company as parent (chain predecessor at index 0)
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    // Deal child: predecessor is Contact (chain index 1)
+    // But parents array has Company FIRST, Contact SECOND (opposite of chain order)
+    const dealEntity: IEntityAcceptance = {
+      id: "Deal",
+      key: "deal",
+      nav: "Deals",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Big Deal",
+          invalid: [],
+        },
+        {
+          name: "companyId",
+          type: "string",
+          optional: false,
+          valid: "company-1",
+          invalid: [],
+        },
+        {
+          name: "contactId",
+          type: "string",
+          optional: false,
+          valid: "contact-1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      // Company first, Contact second (opposite of chain order)
+      parents: [
+        { entity: "Company", key: "company", fkField: "companyId" },
+        { entity: "Contact", key: "contact", fkField: "contactId" },
+      ],
+      negatives: [],
+      acceptanceCheck: "create a deal",
+    };
+
+    const spec: IAcceptanceSpec = {
+      entities: [companyEntity, contactEntity, dealEntity],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // Should select Contact (the predecessor at chain index 1) via selectOption with label
+    // Using { label: parent1Unique } syntax (the second parent in the chain, not the first in parents[])
+    expect(chainSpec).toContain("selectOption({ label: parent1Unique })");
+    // Should also seed+select the OTHER parent (Company) with its own variable
+    expect(chainSpec).toContain("companyId");
+  });
+
+  test("FIX 11: generateChainSpec throws when non-root entity lacks parent matching predecessor", () => {
+    const rootEntity: IEntityAcceptance = {
+      id: "Root",
+      key: "root",
+      nav: "Roots",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Root",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a root",
+    };
+
+    // Child has no parent pointing to Root (the chain predecessor)
+    const childEntity: IEntityAcceptance = {
+      id: "Child",
+      key: "child",
+      nav: "Children",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Child",
+          invalid: [],
+        },
+        {
+          name: "otherId",
+          type: "string",
+          optional: false,
+          valid: "other-1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      // NO parent pointing to root; only has Other
+      parents: [{ entity: "Other", key: "other", fkField: "otherId" }],
+      negatives: [],
+      acceptanceCheck: "create a child",
+    };
+
+    const spec: IAcceptanceSpec = {
+      entities: [rootEntity, childEntity],
+    };
+
+    expect(() => generateChainSpec(spec)).toThrow(
+      /must have a parent FK to its chain predecessor/
+    );
+  });
+});
+
+describe("FIX 11: planToAcceptanceSpec FK dedup", () => {
+  test("a plan already declaring the FK field yields exactly one occurrence", () => {
+    const planWithDeclaredFk: IProductPlan = {
+      product: "CRM",
+      slices: [
+        {
+          entity: {
+            id: "Company",
+            desc: "A company",
+            fields: [{ name: "name", type: "string" } as const],
+            relationships: [],
+            rules: [],
+          },
+          ui: {
+            screens: ["list", "form"],
+            action: "add",
+            shows: ["name"],
+            nav: "Companies",
+          },
+          verification: {
+            mustRemainTrue: [],
+            mustNotHappen: [],
+            acceptanceCheck: "create a company",
+          },
+        },
+        {
+          entity: {
+            id: "Contact",
+            desc: "A contact",
+            fields: [
+              { name: "name", type: "string" },
+              // Plan ALREADY declares the companyId FK field
+              { name: "companyId", type: "string" },
+            ],
+            relationships: ["belongsTo Company"],
+            rules: [],
+          },
+          ui: {
+            screens: ["list", "form"],
+            action: "add",
+            shows: ["name", "company"],
+            nav: "Contacts",
+          },
+          verification: {
+            mustRemainTrue: [],
+            mustNotHappen: [],
+            acceptanceCheck: "create a contact",
+          },
+        },
+      ],
+    };
+
+    const spec = planToAcceptanceSpec(planWithDeclaredFk);
+    const contact = spec.entities[1];
+
+    if (!contact) {
+      throw new Error("contact entity not found");
+    }
+
+    // Count how many fields are named companyId
+    const companyIdFields = contact.fields.filter(
+      (f: IAcceptField) => f.name === "companyId"
+    );
+
+    // Should be exactly one, not duplicated
+    expect(companyIdFields.length).toBe(1);
   });
 });

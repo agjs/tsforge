@@ -59,15 +59,19 @@ function validValue(
 
 function negativesFor(
   entity: IEntitySpec,
-  fields: IAcceptField[]
+  fields: IAcceptField[],
+  parents: IParentRef[] = []
 ): INegativeCase[] {
   const out: INegativeCase[] = [];
+
+  // Collect the authoritative FK field names from parent references
+  const fkFields = new Set(parents.map((p) => p.fkField));
 
   // Add negatives for required fields (empty/missing)
   // SKIP FK fields (relationship/select fields): they're tested via the positive create flow
   for (const f of fields) {
-    // Check if this is an FK field by looking for the FK suffix pattern
-    const isForeignKey = f.name.endsWith("Id");
+    // FIX 10: Use authoritative FK detection from parents, not endsWith('Id')
+    const isForeignKey = fkFields.has(f.name);
 
     if (!isForeignKey && !f.optional) {
       out.push({ field: f.name, value: "", why: `${f.name} is required` });
@@ -161,6 +165,39 @@ export function planToAcceptanceSpec(plan: IProductPlan): IAcceptanceSpec {
       }
     }
 
+    // FIX 8: Derive negatives from entity rules + parents + mustNotHappen constraints
+    const negatives = negativesFor(slice.entity, fields, parents);
+
+    // Add negatives from verification.mustNotHappen constraints
+    // Map supported constraint patterns to negative cases (same shape as rule-derived negatives)
+    for (const constraint of slice.verification.mustNotHappen) {
+      // Extract patterns like "fieldName must not be empty/invalid"
+      // Pattern: "fieldName must not X" or "cannot have fieldName as Y"
+      const match =
+        /^(\w+)\s+(must not|cannot)/i.exec(constraint.trim()) ??
+        /cannot have (\w+)/i.exec(constraint.trim());
+
+      if (match && typeof match[1] === "string") {
+        const fieldName = match[1];
+        const field = fields.find((f) => f.name === fieldName);
+
+        // Only map real fields that exist and are required (optional fields don't get negatives)
+        // For required non-FK fields, add an empty-value negative
+        if (
+          field &&
+          !field.optional &&
+          !parents.some((p) => p.fkField === field.name) &&
+          !negatives.some((n) => n.field === fieldName && n.value === "")
+        ) {
+          negatives.push({
+            field: fieldName,
+            value: "",
+            why: constraint,
+          });
+        }
+      }
+    }
+
     return {
       id: slice.entity.id,
       key: camel(slice.entity.id),
@@ -169,7 +206,7 @@ export function planToAcceptanceSpec(plan: IProductPlan): IAcceptanceSpec {
       shows: [...slice.ui.shows],
       screens: slice.ui.screens,
       parents,
-      negatives: negativesFor(slice.entity, fields),
+      negatives,
       acceptanceCheck: slice.verification.acceptanceCheck,
     };
   });
