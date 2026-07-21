@@ -115,3 +115,41 @@ describe("runBinary with tempfile mode", () => {
     expect(result.stdout).toContain("stdin mode test");
   });
 });
+
+describe("runBinary sandboxes the reviewer's working directory", () => {
+  test("the reviewer runs in a throwaway temp dir, NOT the repo/process cwd", async () => {
+    const result = await runBinary(
+      { argv: ["sh", "-c", "pwd"], input: "stdin", timeoutMs: 5000 },
+      ""
+    );
+    const cwd = result.stdout.trim();
+
+    expect(result.ok).toBe(true);
+    expect(cwd.includes("tsforge-review-sandbox-")).toBe(true);
+    expect(cwd).not.toBe(process.cwd());
+  });
+
+  test("a file the reviewer creates lands in the sandbox (repo untouched) and is cleaned up", async () => {
+    // The exact failure this guards: an agentic reviewer writing into its CWD. If the CWD were the
+    // repo, this probe file would appear in the repo root (the class of pollution that corrupted
+    // main). It must land in the sandbox instead, and the sandbox must be gone after the run.
+    const probeInRepo = join(process.cwd(), "reviewer-pollution-probe.txt");
+    const before = existsSync(probeInRepo);
+
+    const result = await runBinary(
+      {
+        argv: ["sh", "-c", "touch reviewer-pollution-probe.txt && pwd"],
+        input: "stdin",
+        timeoutMs: 5000,
+      },
+      ""
+    );
+    const sandbox = result.stdout.trim();
+
+    expect(result.ok).toBe(true);
+    // The repo cwd is unchanged — the probe did NOT leak into it.
+    expect(existsSync(probeInRepo)).toBe(before);
+    // The sandbox where it actually went is removed after the run.
+    expect(existsSync(sandbox)).toBe(false);
+  });
+});
