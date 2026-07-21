@@ -401,12 +401,28 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
           }
 
           if (allResults.length > 0) {
-            // For chain, require create step for each entity in the spec
-            const requiredSteps: AcceptStep[] = spec.entities.map(
-              () => "create"
+            // For chain, verify per-entity coverage: each entity MUST have a passing create result
+            const entityKeysWithCreate = new Set(
+              allResults
+                .filter((r) => r.step === "create" && r.ok)
+                .map((r) => r.entity)
             );
 
-            return summarize(allResults, requiredSteps);
+            const requiredEntityKeys = new Set(spec.entities.map((e) => e.key));
+
+            // Check if all entities have a passing create
+            for (const key of requiredEntityKeys) {
+              if (!entityKeysWithCreate.has(key)) {
+                return {
+                  ok: false,
+                  results: allResults,
+                  detail: `acceptance incomplete: entity '${key}' missing create step`,
+                };
+              }
+            }
+
+            // All entities have passing creates, summarize the full results
+            return summarize(allResults);
           }
 
           lastError = result.stderr;

@@ -23,9 +23,15 @@ export function acceptanceSteer(
 
   const firstFailure = outcome.results.find((r) => !r.ok);
 
+  // If no failing result but outcome.ok is false, all results passed but required steps are missing.
+  // Use outcome.detail to explain what's missing (set by summarize).
   if (firstFailure === undefined) {
-    // All results ok but outcome.ok is false (shouldn't happen, but handle gracefully)
-    return "";
+    if (typeof outcome.detail === "string" && outcome.detail.length > 0) {
+      return outcome.detail;
+    }
+
+    // Fallback if detail is missing (shouldn't happen)
+    return "acceptance incomplete: missing required steps";
   }
 
   const step = firstFailure.step;

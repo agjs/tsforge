@@ -309,31 +309,73 @@ export function testIdStage(cwd: string, entity: IEntityAcceptance): IStage {
     async run(): Promise<IValidateResult> {
       const featureDir = join(cwd, "apps/ui/src/features", entity.key);
 
-      // Try to read the feature's UI files. If they don't exist yet (e.g., on
-      // initial generation), pass silently.
+      // Scan recursively for ALL UI source files (.tsx and .jsx)
       const sources = new Map<string, string>();
 
       try {
-        const files = await readdir(featureDir, { recursive: false });
-        const tsxFiles = files.filter(
-          (f): f is string => typeof f === "string" && f.endsWith(".tsx")
+        const files = await readdir(featureDir, { recursive: true });
+        const uiFiles = files.filter(
+          (f): f is string =>
+            typeof f === "string" && (f.endsWith(".tsx") || f.endsWith(".jsx"))
         );
 
-        for (const file of tsxFiles) {
+        for (const file of uiFiles) {
           const filePath = join(featureDir, file);
           const content = await readFile(filePath, "utf-8");
 
           sources.set(file, content);
         }
       } catch {
-        // Directory doesn't exist or can't be read — not an error, feature may
-        // still be initializing.
-        return { passed: true, errors: [], output: "no UI files to check" };
+        // Directory doesn't exist or can't be read — check if there's a route for this feature
+        // If the route file doesn't exist yet, the UI hasn't been scaffolded (pass silently).
+        // If it does exist, that's a fatal error — the UI was generated but source is missing.
+        const routeFile = join(cwd, "apps/ui/src/routes", `${entity.key}.tsx`);
+
+        try {
+          await readFile(routeFile, "utf-8");
+
+          // Route exists but feature dir is unreadable/missing — this is an error
+          return {
+            passed: false,
+            errors: [
+              {
+                key: `testid:${entity.id}`,
+                rule: "testid-presence",
+                message: `feature '${entity.id}' has a route but the feature directory is missing or unreadable: ${featureDir}`,
+              },
+            ],
+            output: `route exists but feature dir missing: ${featureDir}`,
+          };
+        } catch {
+          // Route doesn't exist either — UI hasn't been scaffolded yet, pass silently
+          return { passed: true, errors: [], output: "no UI files to check" };
+        }
       }
 
-      // No UI files means nothing to check yet
+      // No UI files found
       if (sources.size === 0) {
-        return { passed: true, errors: [], output: "no UI files to check" };
+        // Check if the route file exists — if so, UI was generated but is empty (error)
+        const routeFile = join(cwd, "apps/ui/src/routes", `${entity.key}.tsx`);
+
+        try {
+          await readFile(routeFile, "utf-8");
+
+          // Route exists but no source files in feature dir — that's suspicious
+          return {
+            passed: false,
+            errors: [
+              {
+                key: `testid:${entity.id}`,
+                rule: "testid-presence",
+                message: `feature '${entity.id}' has a route but no UI source files in ${featureDir}`,
+              },
+            ],
+            output: `route exists but no UI source files`,
+          };
+        } catch {
+          // Route doesn't exist — UI truly hasn't been scaffolded yet, pass silently
+          return { passed: true, errors: [], output: "no UI files to check" };
+        }
       }
 
       // Check for required testids

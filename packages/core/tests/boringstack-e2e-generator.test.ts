@@ -83,7 +83,8 @@ describe("E2E spec generator", () => {
   test("generateEntitySpec asserts row appears with created values", () => {
     const spec = generateEntitySpec(company);
 
-    expect(spec).toContain('page.getByTestId("company-row-name")');
+    // Row assertions are now scoped to the unique row, not the page
+    expect(spec).toContain('row.getByTestId("company-row-name")');
     expect(spec).toContain("toContainText");
   });
 

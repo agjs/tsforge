@@ -193,7 +193,7 @@ test("acceptance: feature fails acceptance (assertion failure)", async () => {
   expect(messages[messages.length - 1]).toBeTruthy();
 });
 
-test("acceptance: feature fails with infrastructure error", async () => {
+test("acceptance: per-slice infra error is best-effort (skipped)", async () => {
   const mockRunner: IAcceptanceRunner = {
     async run(): Promise<IAcceptanceOutcome> {
       return {
@@ -221,8 +221,9 @@ test("acceptance: feature fails with infrastructure error", async () => {
 
   const result = await deps.implement(mockFeature, mockState);
 
-  expect(result.done).toBe(false);
-  // Should have sent an infra error message
+  // Per-slice infra errors are best-effort (skip check, let final acceptance handle it)
+  expect(result.done).toBe(true);
+  // Should have sent a warning message
   const messages = host.getMessages();
 
   expect(messages.length).toBeGreaterThan(0);
@@ -272,7 +273,7 @@ test("acceptance: feature passes when flag is disabled (acceptance skipped)", as
   }
 });
 
-test("acceptance: runner missing when flag enabled + entity available → warning", async () => {
+test("acceptance: runner missing when flag enabled + entity available → fail-closed", async () => {
   const host = new MockHost();
   const deps = boringstackDeps({
     host,
@@ -287,14 +288,14 @@ test("acceptance: runner missing when flag enabled + entity available → warnin
 
   const result = await deps.implement(mockFeature, mockState);
 
-  // Should emit warning but still return done=true (based on fast gate)
-  expect(result.done).toBe(true);
+  // FAIL-CLOSED: runner missing + acceptance enabled + entity present → done=false
+  expect(result.done).toBe(false);
   const messages = host.getMessages();
-  const hasWarning = messages.some((msg) =>
-    msg.includes("acceptance verification requested but no runner available")
+  const hasMessage = messages.some((msg) =>
+    msg.includes("e2e acceptance enabled but no runner injected")
   );
 
-  expect(hasWarning).toBe(true);
+  expect(hasMessage).toBe(true);
 });
 
 test("acceptance: feature passes when no entity is available", async () => {

@@ -237,23 +237,21 @@ async function verifyAcceptance(
     };
   }
 
-  // Warn if acceptance is enabled but runner is missing (misconfiguration)
-  if (!acceptanceRunner) {
-    if (entity) {
-      await host.send(
-        "⚠ acceptance verification requested but no runner available (misconfiguration): " +
-          "the feature passed the fast gate but acceptance was not verified due to a missing runner."
-      );
-    }
+  // FAIL-CLOSED: if acceptance is enabled and entity exists but runner is missing,
+  // this is a misconfiguration — reject the feature until the runner is injected
+  if (entity && !acceptanceRunner) {
+    const msg =
+      "e2e acceptance enabled but no runner injected — cannot verify. " +
+      "The feature passed the fast gate but acceptance verification is required. " +
+      "This is a misconfiguration; the acceptance runner must be provided.";
 
-    return {
-      done: true,
-      ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
-    };
+    await host.send(msg);
+
+    return { done: false };
   }
 
   // Run acceptance only if we have an entity and runner
-  if (entity) {
+  if (entity && acceptanceRunner) {
     const hostPorts = readHostPorts(cwd);
     const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
     const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
@@ -265,16 +263,17 @@ async function verifyAcceptance(
 
     const outcome = await acceptanceRunner.run(entity, ctx);
 
-    // Infrastructure error: do not mark feature red, surface the error clearly
+    // Infrastructure error: per-slice acceptance is best-effort. Warn and skip;
+    // final acceptance (after all features pass the fast gate) will surface the real
+    // infra error with proper needs-infra routing.
     if (outcome.infraError !== undefined) {
       const infraMsg =
-        `acceptance check encountered an infrastructure error (not a code failure): ` +
-        `${outcome.infraError}. The stack or browser may be down — verify the test ` +
-        `environment is healthy and retry this build.`;
+        `⚠ per-slice acceptance encountered infrastructure error: ${outcome.infraError}. ` +
+        `Skipping per-slice check; final acceptance will verify once all features pass fast gate.`;
 
       await host.send(infraMsg);
 
-      return { done: false };
+      return { done: true };
     }
 
     // Test assertion failed: emit steer and keep feature unverified

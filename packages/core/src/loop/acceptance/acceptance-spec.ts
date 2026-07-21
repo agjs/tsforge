@@ -58,11 +58,12 @@ function validValue(
 }
 
 function negativesFor(
-  _entity: IEntitySpec,
+  entity: IEntitySpec,
   fields: IAcceptField[]
 ): INegativeCase[] {
   const out: INegativeCase[] = [];
 
+  // Add negatives for required fields (empty/missing)
   for (const f of fields) {
     if (!f.optional) {
       out.push({ field: f.name, value: "", why: `${f.name} is required` });
@@ -81,6 +82,18 @@ function negativesFor(
         field: f.name,
         value: "-1",
         why: "negative/invalid number must be rejected",
+      });
+    }
+  }
+
+  // Add negatives from entity's rules (explicit constraints)
+  for (const constraint of entity.rules) {
+    // Extract common constraint patterns (e.g., "name must not be empty", "age must be positive")
+    if (constraint.includes("must not") || constraint.includes("cannot be")) {
+      out.push({
+        field: "constraint-violation",
+        value: "",
+        why: constraint,
       });
     }
   }
@@ -114,6 +127,20 @@ export function planToAcceptanceSpec(plan: IProductPlan): IAcceptanceSpec {
       invalid: [],
     }));
 
+    // Parse parent relationships to get FK field names
+    const parents = parseParents(slice.entity.relationships);
+
+    // Add FK fields for each parent relationship (so the generator emits selectOption steps)
+    for (const parent of parents) {
+      fields.push({
+        name: parent.fkField,
+        type: "string",
+        optional: false,
+        valid: `parent-${i + 1}`,
+        invalid: [],
+      });
+    }
+
     return {
       id: slice.entity.id,
       key: camel(slice.entity.id),
@@ -121,7 +148,7 @@ export function planToAcceptanceSpec(plan: IProductPlan): IAcceptanceSpec {
       fields,
       shows: [...slice.ui.shows],
       screens: slice.ui.screens,
-      parents: parseParents(slice.entity.relationships),
+      parents,
       negatives: negativesFor(slice.entity, fields),
       acceptanceCheck: slice.verification.acceptanceCheck,
     };

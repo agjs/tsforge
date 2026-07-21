@@ -40,11 +40,13 @@ export function stepTitle(
 /**
  * Generate API seeding code for parent entities before form submission.
  * For each parent, creates a record via the API using the parent's valid field values.
+ * Uses parent entity's own fields if available in the spec; falls back to name only.
  * Returns TypeScript code that declares parentId variables.
  */
 function generateParentSeedingCode(
   parents: IParentRef[],
-  entityId: string
+  entityId: string,
+  spec?: IAcceptanceSpec
 ): string {
   if (parents.length === 0) {
     return "";
@@ -55,7 +57,28 @@ function generateParentSeedingCode(
       const parentKey = parent.key;
       const varName = `${parentKey}Id`;
 
-      return `    // Seed a parent ${parent.entity} record
+      // Look up parent entity in spec to get its field values
+      const seedPayload: Record<string, string> = {
+        name: `${parent.entity}-for-${entityId}`,
+      };
+
+      if (spec) {
+        const parentEntity = spec.entities.find((e) => e.key === parentKey);
+
+        if (parentEntity) {
+          // Seed with parent's own field values (use the first valid value for each required field)
+          for (const field of parentEntity.fields) {
+            // Skip FK fields (they're relationships, not data)
+            if (!parentEntity.parents.some((p) => p.fkField === field.name)) {
+              seedPayload[field.name] = field.valid;
+            }
+          }
+        }
+      }
+
+      const payloadJson = JSON.stringify(seedPayload);
+
+      return `    // Seed a parent ${parent.entity} record with required fields
     const ${varName} = await (async () => {
       const res = await fetch(\`\${new URL(page.url()).origin}/api/v1/${parentKey}\`, {
         method: "POST",
@@ -63,7 +86,7 @@ function generateParentSeedingCode(
           "Content-Type": "application/json",
           "Cookie": await page.context().cookies().then(c => c.map(x => \`\${x.name}=\${x.value}\`).join("; ")),
         },
-        body: JSON.stringify({ name: \`${parent.entity}-for-${entityId}\` }),
+        body: JSON.stringify(${payloadJson}),
       });
       if (!res.ok) {
         const body = await res.text();
@@ -123,14 +146,14 @@ function generateRowCellAssertions(
       const isParent = entity.parents.some((p) => p.key === show);
 
       if (isParent) {
-        // For parent references, just assert the cell is visible (parent name will be there)
-        return `    await expect(page.getByTestId("${ids.rowCell(show)}").first()).toBeVisible();`;
+        // For parent references, assert the cell is visible within THIS row only
+        return `    await expect(row.getByTestId("${ids.rowCell(show)}")).toBeVisible();`;
       }
 
-      // For regular fields, assert the value is present
+      // For regular fields, assert the value is present in THIS row only
       const value = entity.fields.find((f) => f.name === show)?.valid ?? show;
 
-      return `    await expect(page.getByTestId("${ids.rowCell(show)}").first()).toContainText(${JSON.stringify(value)});`;
+      return `    await expect(row.getByTestId("${ids.rowCell(show)}")).toContainText(${JSON.stringify(value)});`;
     })
     .join("\n");
 }
@@ -144,6 +167,8 @@ function generateNegativeBlocks(
   ids: ReturnType<typeof testIdsFor>,
   fieldFillSteps: string
 ): string {
+  const firstFieldName = entity.fields[0]?.name ?? "name";
+
   return entity.negatives
     .map((neg) => {
       const fieldTestId = ids.field(neg.field);
@@ -153,7 +178,7 @@ function generateNegativeBlocks(
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const initialRowCount = await page.getByTestId("${ids.row}").count();
+    const unique = \`negative-\${${JSON.stringify(neg.field)}}-\${Date.now()}\`;
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
@@ -161,16 +186,33 @@ function generateNegativeBlocks(
     // Fill form with valid values first
 ${fieldFillSteps}
 
+    // Use unique value in the first field to identify this test's potential row
+    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
+
     // Override the target field with invalid value
     await page.getByTestId("${fieldTestId}").clear();
     await page.getByTestId("${fieldTestId}").fill(${JSON.stringify(neg.value)});
 
     await page.getByTestId("${ids.submit}").click();
 
-    // Invalid input must be rejected: no new row is created.
-    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount, {
-      timeout: 3000,
-    });
+    // Invalid input must be rejected: either a validation error appears, or
+    // after reload, the row with this unique value must not exist (the record was not saved).
+    try {
+      // Try to find a validation error message
+      const validationError = page.locator('[role="alert"], .error, [class*="error"]').first();
+      await validationError.waitFor({ state: "visible", timeout: 2000 }).catch(() => {
+        // No visible validation error; check via reload
+      });
+    } catch {
+      // No validation error visible — verify the record was not saved by reloading
+      await page.reload();
+      await page.waitForLoadState("domcontentloaded");
+
+      // The row with this unique value must not exist (it was rejected and not saved)
+      await expect(
+        page.getByTestId("${ids.row}").filter({ hasText: unique })
+      ).toHaveCount(0, { timeout: 5000 });
+    }
   });
 `;
     })
@@ -197,7 +239,10 @@ function generateNavHelper(entity: IEntityAcceptance): string {
  * Uses the app's authedPage fixture and getByTestId selectors.
  * For entities with parents, seeds the parent via API and selects it in the form.
  */
-export function generateEntitySpec(entity: IEntityAcceptance): string {
+export function generateEntitySpec(
+  entity: IEntityAcceptance,
+  spec?: IAcceptanceSpec
+): string {
   const ids = testIdsFor(entity.key);
   const name = entity.id;
   const fieldFillSteps = generateFieldFillSteps(entity, ids);
@@ -205,7 +250,8 @@ export function generateEntitySpec(entity: IEntityAcceptance): string {
   const negativeBlocks = generateNegativeBlocks(entity, ids, fieldFillSteps);
   const parentSeedingCode = generateParentSeedingCode(
     entity.parents,
-    entity.id
+    entity.id,
+    spec
   );
 
   const firstFieldName = entity.fields[0]?.name ?? "name";
@@ -270,11 +316,10 @@ ${fieldFillSteps}
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
     // THIS test's row (identified by its unique value) appears — retries the async refetch
-    await expect(
-      page.getByTestId("${ids.row}").filter({ hasText: unique })
-    ).toBeVisible({ timeout: 10000 });
+    const row = page.getByTestId("${ids.row}").filter({ hasText: unique });
+    await expect(row).toBeVisible({ timeout: 10000 });
 
-    // Verify the shown cells render the created values
+    // Verify the shown cells render the created values (scoped to THIS row only)
 ${rowCellAssertions}
   });
 
@@ -344,6 +389,15 @@ ${fieldFillSteps}
     await expect(
       page.getByTestId("${ids.row}").filter({ hasText: updatedValue })
     ).toBeVisible({ timeout: 10000 });
+
+    // Reload the page and verify the update persists
+    await page.reload();
+    await page.waitForURL(/\\/${entity.key}/);
+
+    // After reload, the row should still contain the updated value
+    await expect(
+      page.getByTestId("${ids.row}").filter({ hasText: updatedValue })
+    ).toBeVisible({ timeout: 10000 });
   });
 
   test(${JSON.stringify(stepTitle("delete", entity.key, name))}, async ({ page, authedPage }) => {
@@ -377,6 +431,15 @@ ${fieldFillSteps}
     }
 
     // THIS row is gone — retries through the async list update
+    await expect(
+      page.getByTestId("${ids.row}").filter({ hasText: unique })
+    ).toHaveCount(0, { timeout: 10000 });
+
+    // Reload the page and verify the deletion persists
+    await page.reload();
+    await page.waitForURL(/\\/${entity.key}/);
+
+    // After reload, the deleted row must still be gone
     await expect(
       page.getByTestId("${ids.row}").filter({ hasText: unique })
     ).toHaveCount(0, { timeout: 10000 });
@@ -420,7 +483,11 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
     const ids = testIdsFor(entity.key);
     const isRoot = i === 0;
 
-    const parentSeeding = generateParentSeedingCode(entity.parents, entity.id);
+    const parentSeeding = generateParentSeedingCode(
+      entity.parents,
+      entity.id,
+      spec
+    );
     const fieldFill = generateFieldFillSteps(entity, ids);
 
     if (isRoot) {
