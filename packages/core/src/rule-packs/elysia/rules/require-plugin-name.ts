@@ -73,14 +73,11 @@ export const requirePluginNameRule = createRule<RuleOptions, MessageIds>({
     };
 
     function checkExpression(expression: TSESTree.Expression): void {
-      let root: TSESTree.Node = expression;
-
-      if (
+      const root: TSESTree.Node =
         expression.type === AST_NODE_TYPES.CallExpression ||
         expression.type === AST_NODE_TYPES.MemberExpression
-      ) {
-        root = getChainRoot(expression);
-      }
+          ? getChainRoot(expression)
+          : expression;
 
       if (!isNewElysiaExpression(root)) {
         return;
