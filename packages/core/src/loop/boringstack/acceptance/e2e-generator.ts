@@ -45,6 +45,116 @@ export function stepTitle(
  * companyId variable reference, then Deal with a real contactId variable reference.
  * Returns TypeScript code that declares parentId variables in dependency order.
  */
+/**
+ * Build the payload object for seeding a parent via API.
+ * Includes required fields with FK fields using var refs, regular fields using valid values.
+ */
+function buildParentPayload(
+  parentDef: IEntityAcceptance,
+  parentEntity: string,
+  entityId: string
+): string {
+  const payloadParts: string[] = [];
+
+  for (const field of parentDef.fields) {
+    if (!field.optional) {
+      // Check if this field is an FK field (matches a parent's fkField)
+      const isFkField = parentDef.parents.some((p) => p.fkField === field.name);
+
+      if (isFkField) {
+        // Use the real seeded var reference
+        const fkParent = parentDef.parents.find(
+          (p) => p.fkField === field.name
+        );
+
+        if (fkParent) {
+          const fkVarName = `${fkParent.key}Id`;
+
+          payloadParts.push(`${field.name}: ${fkVarName}`);
+        }
+      } else {
+        // Use the valid value as a string literal
+        payloadParts.push(`${field.name}: ${JSON.stringify(field.valid)}`);
+      }
+    }
+  }
+
+  // Fallback: if no required fields, add a name
+  if (payloadParts.length === 0) {
+    payloadParts.push(`name: "${parentEntity}-for-${entityId}"`);
+  }
+
+  return `{ ${payloadParts.join(", ")} }`;
+}
+
+/**
+ * Emit seeding code for a parent with fallback handling (no spec available).
+ */
+function emitFallbackParentSeed(
+  parentKey: string,
+  parentEntity: string,
+  entityId: string
+): string {
+  const varName = `${parentKey}Id`;
+
+  return `    // Seed a parent ${parentEntity} record (no spec available)
+    const ${varName} = await (async () => {
+      const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
+      const res = await fetch(\`\${apiBase}/api/v1/${parentKey}\`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cookie": await page.context().cookies().then(c => c.map(x => \`\${x.name}=\${x.value}\`).join("; ")),
+        },
+        body: JSON.stringify({ name: "${parentEntity}-for-${entityId}" }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(\`Failed to seed ${parentEntity} (HTTP \${res.status}): \${body}\`);
+      }
+      const data = await res.json();
+      const parentId = data.id;
+      if (typeof parentId !== "string") {
+        throw new Error(\`Seeded ${parentEntity} but no id in response: \${JSON.stringify(data)}\`);
+      }
+      return parentId;
+    })();`;
+}
+
+/**
+ * Emit seeding code for a parent with full spec (includes FK linking).
+ */
+function emitSpecParentSeed(
+  parentKey: string,
+  parentEntity: string,
+  payloadCode: string
+): string {
+  const varName = `${parentKey}Id`;
+
+  return `    // Seed parent ${parentEntity} with required fields and real FK references
+    const ${varName} = await (async () => {
+      const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
+      const res = await fetch(\`\${apiBase}/api/v1/${parentKey}\`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cookie": await page.context().cookies().then(c => c.map(x => \`\${x.name}=\${x.value}\`).join("; ")),
+        },
+        body: JSON.stringify(${payloadCode}),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(\`Failed to seed ${parentEntity} (HTTP \${res.status}): \${body}\`);
+      }
+      const data = await res.json();
+      const parentId = data.id;
+      if (typeof parentId !== "string") {
+        throw new Error(\`Seeded ${parentEntity} but no id in response: \${JSON.stringify(data)}\`);
+      }
+      return parentId;
+    })();`;
+}
+
 function generateParentSeedingCode(
   parents: IParentRef[],
   entityId: string,
@@ -74,31 +184,9 @@ function generateParentSeedingCode(
     const parentDef = spec?.entities.find((e) => e.key === parentKey);
 
     if (!parentDef) {
-      // Fallback: emit a simple seed with name only
-      const varName = `${parentKey}Id`;
-
-      codeBlocks.push(`    // Seed a parent ${parentEntity} record (no spec available)
-    const ${varName} = await (async () => {
-      const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
-      const res = await fetch(\`\${apiBase}/api/v1/${parentKey}\`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Cookie": await page.context().cookies().then(c => c.map(x => \`\${x.name}=\${x.value}\`).join("; ")),
-        },
-        body: JSON.stringify({ name: "${parentEntity}-for-${entityId}" }),
-      });
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(\`Failed to seed ${parentEntity} (HTTP \${res.status}): \${body}\`);
-      }
-      const data = await res.json();
-      const parentId = data.id;
-      if (typeof parentId !== "string") {
-        throw new Error(\`Seeded ${parentEntity} but no id in response: \${JSON.stringify(data)}\`);
-      }
-      return parentId;
-    })();`);
+      codeBlocks.push(
+        emitFallbackParentSeed(parentKey, parentEntity, entityId)
+      );
 
       return;
     }
@@ -109,65 +197,9 @@ function generateParentSeedingCode(
     }
 
     // Now emit THIS parent's seeding
-    const varName = `${parentKey}Id`;
+    const payloadCode = buildParentPayload(parentDef, parentEntity, entityId);
 
-    // Build payload: required fields, with FK fields using var refs
-    const payloadParts: string[] = [];
-
-    for (const field of parentDef.fields) {
-      if (!field.optional) {
-        // Check if this field is an FK field (matches a parent's fkField)
-        const isFkField = parentDef.parents.some(
-          (p) => p.fkField === field.name
-        );
-
-        if (isFkField) {
-          // Use the real seeded var reference
-          const fkParent = parentDef.parents.find(
-            (p) => p.fkField === field.name
-          );
-
-          if (fkParent) {
-            const fkVarName = `${fkParent.key}Id`;
-
-            payloadParts.push(`${field.name}: ${fkVarName}`);
-          }
-        } else {
-          // Use the valid value as a string literal
-          payloadParts.push(`${field.name}: ${JSON.stringify(field.valid)}`);
-        }
-      }
-    }
-
-    // Fallback: if no required fields, add a name
-    if (payloadParts.length === 0) {
-      payloadParts.push(`name: "${parentEntity}-for-${entityId}"`);
-    }
-
-    const payloadCode = `{ ${payloadParts.join(", ")} }`;
-
-    codeBlocks.push(`    // Seed parent ${parentEntity} with required fields and real FK references
-    const ${varName} = await (async () => {
-      const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
-      const res = await fetch(\`\${apiBase}/api/v1/${parentKey}\`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Cookie": await page.context().cookies().then(c => c.map(x => \`\${x.name}=\${x.value}\`).join("; ")),
-        },
-        body: JSON.stringify(${payloadCode}),
-      });
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(\`Failed to seed ${parentEntity} (HTTP \${res.status}): \${body}\`);
-      }
-      const data = await res.json();
-      const parentId = data.id;
-      if (typeof parentId !== "string") {
-        throw new Error(\`Seeded ${parentEntity} but no id in response: \${JSON.stringify(data)}\`);
-      }
-      return parentId;
-    })();`);
+    codeBlocks.push(emitSpecParentSeed(parentKey, parentEntity, payloadCode));
   }
 
   // Emit seeding for all direct parents (which recursively emits grandparents first)
@@ -541,6 +573,149 @@ ${negativeBlocks}
 }
 
 /**
+ * Generate test code for a root entity in the chain.
+ */
+function generateRootEntityChainTest(
+  entity: IEntityAcceptance,
+  index: number,
+  _spec: IAcceptanceSpec
+): {
+  varName: string;
+  testStep: string;
+} {
+  const ids = testIdsFor(entity.key);
+  const fieldFill = generateFieldFillSteps(entity, ids, false);
+  const firstFieldName = entity.fields[0]?.name ?? "name";
+  const firstFieldValid = entity.fields[0]?.valid ?? "updated";
+  const varName = `parent${index}Unique`;
+
+  const testStep = `  test("create root entity: ${entity.id}", async ({ page, authedPage }) => {
+    await authedPage.dashboard.goto();
+    await navigateTo${entity.id}(page);
+
+    // Create unique root entity identifier
+    const unique =
+      ${JSON.stringify(firstFieldValid)} + "-root-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+
+    await page.getByTestId("${ids.create}").click();
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
+
+${fieldFill}
+    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
+
+    await page.getByTestId("${ids.submit}").click();
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
+
+    // Verify the created row is present
+    const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
+    await expect(createdRow).toBeVisible({ timeout: 10000 });
+
+    // Store the unique value for child tests to reuse
+    ${varName} = unique;
+  });`;
+
+  return { varName, testStep };
+}
+
+/**
+ * Generate test code for a child entity in the chain.
+ */
+function generateChildEntityChainTest(
+  entity: IEntityAcceptance,
+  index: number,
+  spec: IAcceptanceSpec
+): {
+  varName: string;
+  testStep: string;
+} {
+  const predecessorEntity = spec.entities[index - 1];
+
+  if (!predecessorEntity) {
+    throw new Error(
+      `Child entity at index ${index} has no predecessor. Chain must be sequential.`
+    );
+  }
+
+  // Find the parent FK that matches the chain predecessor (by key)
+  const predecessorFK = entity.parents.find(
+    (p) => p.key === predecessorEntity.key
+  );
+
+  if (!predecessorFK) {
+    throw new Error(
+      `Entity '${entity.id}' must have a parent FK to its chain predecessor '${predecessorEntity.id}'. ` +
+        `For multi-parent entities, the predecessor must be one of the required parents.`
+    );
+  }
+
+  // Separate the predecessor FK from other required parents
+  const otherParents = entity.parents.filter(
+    (p) => p.key !== predecessorEntity.key
+  );
+
+  // Generate seeding code for other parents (via API)
+  const otherSeedingCode =
+    otherParents.length > 0
+      ? generateParentSeedingCode(otherParents, entity.id, spec)
+      : "";
+
+  // Generate selectOption statements for other parents
+  const otherSelectSteps = otherParents
+    .map((parent) => {
+      const ids = testIdsFor(entity.key);
+      const fieldTestId = ids.field(parent.fkField);
+      const varName = `${parent.key}Id`;
+
+      return `    await page.getByTestId("${fieldTestId}").selectOption(${varName});`;
+    })
+    .join("\n");
+
+  const ids = testIdsFor(entity.key);
+  const fieldFill = generateFieldFillSteps(entity, ids, true);
+  const firstFieldName = entity.fields[0]?.name ?? "name";
+  const firstFieldValid = entity.fields[0]?.valid ?? "updated";
+  const parentVarName = `parent${index - 1}Unique`;
+  const currentVarName = `parent${index}Unique`;
+  const predecessorFieldTestId = ids.field(predecessorFK.fkField);
+  const otherParentsCode =
+    otherSeedingCode.length > 0 ? `\n${otherSeedingCode}\n` : "";
+  const otherSelectCode =
+    otherSelectSteps.length > 0 ? `\n${otherSelectSteps}\n` : "";
+
+  const testStep = `  test("create child entity: ${entity.id} with parent linkage", async ({ page, authedPage }) => {
+    await authedPage.dashboard.goto();
+    await navigateTo${entity.id}(page);
+
+    // Create unique child entity identifier
+    const unique =
+      ${JSON.stringify(firstFieldValid)} + "-child-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+
+    await page.getByTestId("${ids.create}").click();
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
+
+${fieldFill}${otherParentsCode}
+    // Select the chain predecessor by its unique value (created in previous test)
+    await page.getByTestId("${predecessorFieldTestId}").selectOption(${parentVarName});${otherSelectCode}
+    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
+
+    await page.getByTestId("${ids.submit}").click();
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
+
+    // Verify the created child row is present
+    const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
+    await expect(createdRow).toBeVisible({ timeout: 10000 });
+
+    // Verify the predecessor parent linkage cell is present in this child row
+    await expect(createdRow.getByTestId("${ids.rowCell(predecessorFK.key)}")).toContainText(${parentVarName});
+
+    // Store the unique value for subsequent child tests
+    ${currentVarName} = unique;
+  });`;
+
+  return { varName: currentVarName, testStep };
+}
+
+/**
  * Generate a Playwright spec that walks a full dependency chain end-to-end through the UI.
  * Creates each entity in dependency order through the UI, selecting the previously-UI-created parent.
  * Threads the parent's unique value across the chain to identify rows and assert linkage.
@@ -577,95 +752,26 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
       continue;
     }
 
-    const ids = testIdsFor(entity.key);
-    const isRoot = i === 0;
-    // For chain specs, skip FK selection in fieldFill (handled separately below)
-    const fieldFill = generateFieldFillSteps(entity, ids, !isRoot);
-    const firstFieldName = entity.fields[0]?.name ?? "name";
-    const firstFieldValid = entity.fields[0]?.valid ?? "updated";
-
-    if (isRoot) {
-      // Root entity: create via UI and store its unique value
-      const varName = `parent${i}Unique`;
+    if (i === 0) {
+      // Root entity
+      const { varName, testStep } = generateRootEntityChainTest(
+        entity,
+        i,
+        spec
+      );
 
       parentTrackingVars.push(`let ${varName}: string;`);
-
-      testSteps.push(`  test("create root entity: ${entity.id}", async ({ page, authedPage }) => {
-    await authedPage.dashboard.goto();
-    await navigateTo${entity.id}(page);
-
-    // Create unique root entity identifier
-    const unique =
-      ${JSON.stringify(firstFieldValid)} + "-root-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
-
-    await page.getByTestId("${ids.create}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-${fieldFill}
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
-
-    await page.getByTestId("${ids.submit}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
-
-    // Verify the created row is present
-    const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
-    await expect(createdRow).toBeVisible({ timeout: 10000 });
-
-    // Store the unique value for child tests to reuse
-    ${varName} = unique;
-  });`);
+      testSteps.push(testStep);
     } else {
-      // Child entity: select the parent from FK dropdown, then create
-      const parentEntity = spec.entities[i - 1];
+      // Child entity
+      const { varName, testStep } = generateChildEntityChainTest(
+        entity,
+        i,
+        spec
+      );
 
-      if (!parentEntity) {
-        continue;
-      }
-
-      const parentVarName = `parent${i - 1}Unique`;
-      const currentVarName = `parent${i}Unique`;
-      const parentFK = entity.parents[0];
-
-      if (!parentFK) {
-        continue; // No parent, skip
-      }
-
-      parentTrackingVars.push(`let ${currentVarName}: string;`);
-
-      const parentFieldTestId = ids.field(parentFK.fkField);
-
-      testSteps.push(`  test("create child entity: ${entity.id} with parent linkage", async ({ page, authedPage }) => {
-    await authedPage.dashboard.goto();
-    await navigateTo${entity.id}(page);
-
-    // Create unique child entity identifier
-    const unique =
-      ${JSON.stringify(firstFieldValid)} + "-child-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
-
-    await page.getByTestId("${ids.create}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-${fieldFill}
-
-    // Select the parent by its unique value (created in previous test)
-    await page.getByTestId("${parentFieldTestId}").selectOption(${parentVarName});
-
-    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
-
-    await page.getByTestId("${ids.submit}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
-
-    // Verify the created child row is present
-    const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
-    await expect(createdRow).toBeVisible({ timeout: 10000 });
-
-    // Verify the parent linkage cell is present in this child row
-    // (parent key is one of the child's shows, so it has a rowCell ID)
-    await expect(createdRow.getByTestId("${ids.rowCell(parentFK.key)}")).toContainText(${parentVarName});
-
-    // Store the unique value for subsequent child tests
-    ${currentVarName} = unique;
-  });`);
+      parentTrackingVars.push(`let ${varName}: string;`);
+      testSteps.push(testStep);
     }
   }
 

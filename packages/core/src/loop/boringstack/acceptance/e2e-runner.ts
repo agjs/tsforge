@@ -118,17 +118,89 @@ function parseStep(
 /**
  * Determine if a Playwright error is an infrastructure failure (browser launch,
  * connection timeout, executable missing, etc.) rather than a test assertion.
+ * Text parameter should combine stderr and extracted report error messages.
  */
-function isInfraError(stderr: string): boolean {
+function isInfraError(text: string): boolean {
   const infraIndicators = [
     "Executable doesn't exist",
     "ECONNREFUSED",
+    "net::ERR_CONNECTION_REFUSED",
+    "net::ERR_CONNECTION",
     "error: Browser launch failed",
     "browserType.launch",
     "Failed to fetch",
   ];
 
-  return infraIndicators.some((indicator) => stderr.includes(indicator));
+  return infraIndicators.some((indicator) => text.includes(indicator));
+}
+
+/**
+ * Extract error messages from a parsed Playwright JSON report.
+ * Collects both top-level report.errors[].message and per-test error.message.
+ * Returns empty string if unparseable or no errors found.
+ */
+function extractReportErrorText(rawStdout: string): string {
+  if (rawStdout.trim().length === 0) {
+    return "";
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(rawStdout);
+  } catch {
+    return "";
+  }
+
+  if (!isPlaywrightReport(parsed)) {
+    return "";
+  }
+
+  const errors: string[] = [];
+
+  // Collect top-level report errors
+  if (Array.isArray(parsed.errors)) {
+    for (const err of parsed.errors) {
+      if ("message" in err && typeof err.message === "string") {
+        errors.push(err.message);
+      }
+    }
+  }
+
+  // Collect per-test errors from nested suites (walk recursively)
+  function collectTestErrors(suite: IPlaywrightSuite): void {
+    if (suite.specs !== undefined) {
+      for (const spec of suite.specs) {
+        const test = spec.tests?.[0];
+
+        if (test?.results?.[0] !== undefined) {
+          const result = test.results[0];
+
+          if (
+            "error" in result &&
+            "message" in (result.error ?? {}) &&
+            typeof result.error?.message === "string"
+          ) {
+            errors.push(result.error.message);
+          }
+        }
+      }
+    }
+
+    if (suite.suites !== undefined) {
+      for (const nested of suite.suites) {
+        collectTestErrors(nested);
+      }
+    }
+  }
+
+  if (parsed.suites !== undefined && Array.isArray(parsed.suites)) {
+    for (const suite of parsed.suites) {
+      collectTestErrors(suite);
+    }
+  }
+
+  return errors.join("\n");
 }
 
 /**
@@ -258,6 +330,61 @@ function cleanupFile(filePath: string): void {
 }
 
 /**
+ * Classify a nonzero exit: determine if it's infrastructure (should retry) or real failure.
+ * Examines both stderr and parsed JSON report errors (if present).
+ * Returns: { outcome, shouldRetry } where outcome is undefined for retry, or final result for done.
+ */
+function classifyNonzeroExit(
+  result: { code: number; stdout: string; stderr: string },
+  parseResult: IAcceptanceResult[] | null,
+  requiredSteps?: AcceptStep[]
+): {
+  outcome?: IAcceptanceOutcome;
+  shouldRetry: boolean;
+} {
+  // Combine stderr with extracted report errors to form the complete error text
+  const reportErrorText = extractReportErrorText(result.stdout);
+  const combinedErrorText =
+    result.stderr + (reportErrorText !== "" ? "\n" + reportErrorText : "");
+
+  if (isInfraError(combinedErrorText)) {
+    // Known infra failure pattern — can retry
+    return {
+      outcome: undefined,
+      shouldRetry: true,
+    };
+  }
+
+  // No infra pattern detected — treat as real failure
+  if (parseResult !== null && requiredSteps !== undefined) {
+    return {
+      outcome: {
+        ok: false,
+        results: parseResult,
+        detail:
+          result.stderr !== ""
+            ? result.stderr
+            : `playwright exited with code ${result.code}`,
+      },
+      shouldRetry: false,
+    };
+  }
+
+  // Unparseable JSON + unknown error text stays a REAL failure (not infra)
+  return {
+    outcome: {
+      ok: false,
+      results: [],
+      detail:
+        result.stderr !== ""
+          ? result.stderr
+          : "playwright produced no valid JSON output (likely test assertion failure)",
+    },
+    shouldRetry: false,
+  };
+}
+
+/**
  * Process a single exec result for entity acceptance testing.
  * Returns: { outcome, shouldRetry } where outcome is the final result or undefined to continue/retry.
  */
@@ -271,79 +398,44 @@ function processExecResult(
 } {
   const parseResult = parsePlaywrightJSON(result.stdout, entity);
 
-  if (parseResult !== null) {
-    // Honor exit code: nonzero means failure even if JSON parsed
-    if (result.code !== 0) {
-      // Even with exit code failure, check if it's an infrastructure error
-      // by looking at stderr or top-level report errors
-      const hasInfraError = isInfraError(result.stderr);
-
-      if (hasInfraError) {
-        // Known infra failure pattern — can retry
-        return {
-          outcome: undefined,
-          shouldRetry: true,
-        };
-      }
-
-      // No infra pattern detected — treat as real test failure
-      return {
-        outcome: {
-          ok: false,
-          results: parseResult,
-          detail:
-            result.stderr !== ""
-              ? result.stderr
-              : `playwright exited with code ${result.code}`,
-        },
-        shouldRetry: false,
-      };
-    }
-
+  if (result.code === 0) {
     return {
-      outcome: summarize(parseResult, requiredSteps),
+      outcome: summarize(parseResult ?? [], requiredSteps),
       shouldRetry: false,
     };
   }
 
-  // If Playwright produced no parseable JSON, check if this is an infra error
-  const hasInfraError = isInfraError(result.stderr);
-
-  // CRITICAL: distinguish infra errors from real test failures
-  // If stderr doesn't match a known infra signature, this is a REAL failure
-  if (!hasInfraError) {
-    // Real test failure (not infra) — return as failed, not infraError
-    return {
-      outcome: {
-        ok: false,
-        results: [],
-        detail:
-          result.stderr !== ""
-            ? result.stderr
-            : "playwright produced no valid JSON output (likely test assertion failure)",
-      },
-      shouldRetry: false,
-    };
-  }
-
-  // Infra error: can retry
-  return {
-    outcome: undefined,
-    shouldRetry: true,
-  };
+  // Nonzero exit code: classify as infra or real failure
+  return classifyNonzeroExit(result, parseResult, requiredSteps);
 }
 
 /**
  * Process chain test results: validate exit code and per-entity coverage.
- * Returns outcome if complete, undefined if should retry.
+ * Returns outcome if complete, undefined if should retry (infra error).
  */
 function processChainResults(
   result: { code: number; stdout: string; stderr: string },
   spec: IAcceptanceSpec,
   allResults: IAcceptanceResult[]
 ): IAcceptanceOutcome | undefined {
-  // Honor exit code: nonzero means failure even if JSON parsed
+  // Honor exit code: nonzero means failure
   if (result.code !== 0) {
+    // Check if this is an infrastructure error (even if we have some parsed results)
+    const { outcome, shouldRetry } = classifyNonzeroExit(
+      result,
+      allResults.length > 0 ? allResults : null
+    );
+
+    if (shouldRetry) {
+      // Infra error: signal retry via undefined
+      return undefined;
+    }
+
+    // Real failure: return the outcome (or a failure outcome if classify returned undefined)
+    if (outcome !== undefined) {
+      return outcome;
+    }
+
     return {
       ok: false,
       results: allResults,
@@ -354,7 +446,8 @@ function processChainResults(
     };
   }
 
-  // For chain, verify per-entity coverage: each entity MUST have a passing create result
+  // Exit code 0: verify per-entity coverage
+  // Each entity MUST have a passing create result
   const entityKeysWithCreate = new Set(
     allResults.filter((r) => r.step === "create" && r.ok).map((r) => r.entity)
   );
@@ -531,40 +624,23 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
             }
           }
 
-          if (allResults.length > 0) {
-            const outcome = processChainResults(result, spec, allResults);
+          // Process results: returns outcome (final result) or undefined (should retry on infra)
+          const outcome = processChainResults(result, spec, allResults);
 
-            if (outcome !== undefined) {
-              return outcome;
-            }
+          if (outcome !== undefined) {
+            return outcome;
           }
 
-          // If Playwright produced no parseable JSON, check if this is an infra error
-          const hasInfraError = isInfraError(result.stderr);
-
+          // Infra error signaled via undefined — will retry
           lastError = result.stderr;
 
-          // CRITICAL: distinguish infra errors from real test failures
-          if (!hasInfraError) {
-            // Real test failure (not infra) — return as failed, not infraError
-            return {
-              ok: false,
-              results: [],
-              detail:
-                result.stderr !== ""
-                  ? result.stderr
-                  : "playwright produced no valid JSON output (likely chain test failure)",
-            };
+          if (attempt === 2) {
+            // Max attempts reached on infra error
+            break;
           }
-
-          // Infra error: retry up to 3 times
-          if (attempt < 2) {
-            continue;
-          }
-
-          break;
         }
 
+        // Exhausted retries on infra error
         return {
           ok: false,
           results: [],

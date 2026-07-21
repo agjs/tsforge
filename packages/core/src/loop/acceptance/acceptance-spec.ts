@@ -146,14 +146,19 @@ export function planToAcceptanceSpec(plan: IProductPlan): IAcceptanceSpec {
     const parents = parseParents(slice.entity.relationships);
 
     // Add FK fields for each parent relationship (so the generator emits selectOption steps)
+    // Only add if the field doesn't already exist in the entity's fields
     for (const parent of parents) {
-      fields.push({
-        name: parent.fkField,
-        type: "string",
-        optional: false,
-        valid: `parent-${i + 1}`,
-        invalid: [],
-      });
+      const fieldExists = fields.some((f) => f.name === parent.fkField);
+
+      if (!fieldExists) {
+        fields.push({
+          name: parent.fkField,
+          type: "string",
+          optional: false,
+          valid: `parent-${i + 1}`,
+          invalid: [],
+        });
+      }
     }
 
     return {

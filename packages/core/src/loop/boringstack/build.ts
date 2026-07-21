@@ -528,6 +528,21 @@ export async function runFinalAcceptance(
       "size / coverage / root drift) found issues — review before shipping:\n" +
       full.output.slice(-1200);
 
+  // FAIL-CLOSED: if acceptance is enabled but runner is missing, reject the feature
+  if (full.passed && !e2eAcceptanceDisabled && !acceptanceRunner) {
+    const missingRunnerMsg =
+      "acceptance enabled but no runner injected — cannot verify relational chain. " +
+      "This is a misconfiguration; the acceptance runner must be provided.";
+
+    onEvent?.({
+      kind: "stuck",
+      task: "boringstack",
+      message: missingRunnerMsg,
+    });
+
+    return { ...result, status: "stuck" };
+  }
+
   // After base gate passes, run relational chain acceptance (if available)
   if (full.passed && !e2eAcceptanceDisabled && acceptanceRunner) {
     const hostPorts = readHostPorts(cwd);

@@ -399,8 +399,14 @@ test("runChain: stops on first infra error", async () => {
   };
 
   const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const secondEntity = {
+    ...testEntity,
+    key: "contact",
+    id: "Contact",
+    parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+  };
   const spec = {
-    entities: [testEntity, { ...testEntity, key: "contact", id: "Contact" }],
+    entities: [testEntity, secondEntity],
   };
   const ctx = createTestCtx();
 

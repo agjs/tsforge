@@ -183,17 +183,116 @@ test("final acceptance: chain test infra error → not verified (needs final att
   // Infra errors are retried, not immediately marked as failed
 });
 
-test("final acceptance: runner missing when acceptance enabled → feature not verified", async () => {
+test("final acceptance: runner missing when acceptance enabled → fail-closed (stuck)", async () => {
   // When acceptance is enabled but runner is not available, acceptance cannot run.
   // This is a fail-closed scenario: the feature is NOT verified.
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "f1", desc: "test", passes: true, attempts: 1 }],
+  };
 
-  // If runner is undefined/missing, acceptance cannot proceed
-  const missingRunner: IAcceptanceRunner | undefined = undefined;
+  const mockExec: Exec = async (): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+  }> => {
+    return { code: 0, stdout: "", stderr: "" };
+  };
 
-  // Behavior: if runner is missing, treat acceptance as incomplete (not verified)
-  // This is enforced by the caller: don't mark feature as done unless runner.runChain succeeds
-  expect(missingRunner).toBeUndefined();
-  // Fact: without a runner, acceptance cannot run, so feature should not be marked complete
+  const minimalPlan: IProductPlan = {
+    product: "Test",
+    slices: [
+      {
+        entity: {
+          id: "Company",
+          desc: "A company",
+          fields: [{ name: "name", type: "string", optional: false }],
+          rules: [],
+          relationships: [],
+        },
+        ui: {
+          nav: "Companies",
+          shows: ["name"],
+          screens: ["list", "form"],
+          action: "add",
+        },
+        verification: {
+          acceptanceCheck: "create a company",
+          mustRemainTrue: [],
+          mustNotHappen: [],
+        },
+      },
+    ],
+  };
+
+  // Call with acceptance enabled (false = not disabled) and no runner (undefined)
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    undefined, // no runner
+    minimalPlan,
+    false // acceptance enabled
+  );
+
+  // FAIL-CLOSED: must return stuck status, NOT done
+  expect(result.status).toBe("stuck");
+  expect(result).not.toBe(input);
+});
+
+test("final acceptance: runner missing when acceptance disabled → returns done", async () => {
+  // When acceptance is disabled, missing runner is acceptable.
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "f1", desc: "test", passes: true, attempts: 1 }],
+  };
+
+  const mockExec: Exec = async (): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+  }> => {
+    return { code: 0, stdout: "", stderr: "" };
+  };
+
+  const minimalPlan: IProductPlan = {
+    product: "Test",
+    slices: [
+      {
+        entity: {
+          id: "Company",
+          desc: "A company",
+          fields: [{ name: "name", type: "string", optional: false }],
+          rules: [],
+          relationships: [],
+        },
+        ui: {
+          nav: "Companies",
+          shows: ["name"],
+          screens: ["list", "form"],
+          action: "add",
+        },
+        verification: {
+          acceptanceCheck: "create a company",
+          mustRemainTrue: [],
+          mustNotHappen: [],
+        },
+      },
+    ],
+  };
+
+  // Call with acceptance disabled (true) and no runner
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    undefined, // no runner
+    minimalPlan,
+    true // acceptance disabled
+  );
+
+  // When disabled, missing runner is fine — returns done
+  expect(result.status).toBe("done");
 });
 
 test("final acceptance: per-entity chain coverage required", async () => {

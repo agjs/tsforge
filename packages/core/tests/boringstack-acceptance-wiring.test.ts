@@ -193,13 +193,13 @@ test("acceptance: feature fails acceptance (assertion failure)", async () => {
   expect(messages[messages.length - 1]).toBeTruthy();
 });
 
-test("acceptance: per-slice infra error marks feature NOT verified", async () => {
+test("acceptance: per-slice infra error marks feature NOT verified + sets infra property", async () => {
   const mockRunner: IAcceptanceRunner = {
     async run(): Promise<IAcceptanceOutcome> {
       return {
         ok: false,
         results: [],
-        infraError: "browser launch failed",
+        infraError: "ECONNREFUSED: browser launch failed",
       };
     },
     async runChain(): Promise<IAcceptanceOutcome> {
@@ -223,6 +223,9 @@ test("acceptance: per-slice infra error marks feature NOT verified", async () =>
 
   // CRITICAL: infraError must NEVER return done:true (feature is NOT verified when acceptance can't run)
   expect(result.done).toBe(false);
+  // CRITICAL: infra property must be set so runGreenfield routes to needs-infra
+  expect(result.infra).toBeDefined();
+  expect(result.infra).toContain("ECONNREFUSED");
   // Should have sent a warning message
   const messages = host.getMessages();
 
