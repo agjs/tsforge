@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -133,8 +133,17 @@ export async function runBinary(
     await writeFile(tmpPath, stdin, "utf-8");
   }
 
+  // SANDBOX the reviewer's working directory. The binary reviewers (grok, codex) receive the diff
+  // to review via stdin/tempfile — they never need the real repo as their CWD. But an AGENTIC
+  // reviewer (codex "can read further on its own") will run shell/git in whatever CWD it inherits,
+  // and if that's the repo root it mutates the live checkout: observed corruption included junk
+  // `git commit -m init` fixtures (a.ts/discount.ts) written onto the working branch, `user` reset
+  // to `t/t@t.t`, and `core.bare` flipped true — which then propagated into pushes. Spawning each
+  // reviewer in a throwaway temp dir confines every side effect there; the real repo is untouchable.
+  const sandbox = await mkdtemp(join(tmpdir(), "tsforge-review-sandbox-"));
   const invocation = buildBinaryInvocation(r, stdin, tmpPath);
   const proc = Bun.spawn(invocation.cmd, {
+    cwd: sandbox,
     stdin: invocation.stdinBytes,
     stdout: "pipe",
     stderr: "ignore",
@@ -154,6 +163,8 @@ export async function runBinary(
     if (tmpPath !== undefined) {
       await rm(tmpPath, { force: true });
     }
+
+    await rm(sandbox, { recursive: true, force: true });
   }
 }
 
