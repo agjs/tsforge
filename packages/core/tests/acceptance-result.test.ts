@@ -7,6 +7,7 @@ test("summarize: empty results → ok=false", () => {
 
   expect(outcome.ok).toBe(false);
   expect(outcome.results).toEqual([]);
+  expect(outcome.detail).toBe("no acceptance checks ran");
   expect(outcome.infraError).toBeUndefined();
 });
 
@@ -26,6 +27,7 @@ test("summarize: all passing results → ok=true", () => {
 
   expect(outcome.ok).toBe(true);
   expect(outcome.results).toEqual(results);
+  expect(outcome.detail).toBeUndefined();
   expect(outcome.infraError).toBeUndefined();
 });
 
@@ -45,6 +47,7 @@ test("summarize: first failing result sets ok=false", () => {
 
   expect(outcome.ok).toBe(false);
   expect(outcome.results).toEqual(results);
+  expect(outcome.detail).toBe("create form never appeared");
   expect(outcome.infraError).toBeUndefined();
 });
 
@@ -69,6 +72,7 @@ test("summarize: multiple failures → ok=false, first failure bubbled", () => {
 
   expect(outcome.ok).toBe(false);
   expect(outcome.results).toEqual(results);
+  expect(outcome.detail).toBe("create button not found");
   expect(outcome.infraError).toBeUndefined();
 });
 

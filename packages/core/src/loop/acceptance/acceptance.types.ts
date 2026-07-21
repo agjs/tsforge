@@ -69,6 +69,8 @@ export interface IAcceptanceResult {
 export interface IAcceptanceOutcome {
   ok: boolean;
   results: IAcceptanceResult[];
+  /** Short top-level summary of why acceptance failed. */
+  detail?: string;
   infraError?: string;
 }
 

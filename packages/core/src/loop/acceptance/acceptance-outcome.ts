@@ -12,7 +12,7 @@ export function summarize(results: IAcceptanceResult[]): IAcceptanceOutcome {
     return {
       ok: false,
       results: [],
-      infraError: undefined,
+      detail: "no acceptance checks ran",
     };
   }
 
@@ -22,13 +22,13 @@ export function summarize(results: IAcceptanceResult[]): IAcceptanceOutcome {
     return {
       ok: true,
       results,
-      infraError: undefined,
+      detail: undefined,
     };
   }
 
   return {
     ok: false,
     results,
-    infraError: undefined,
+    detail: firstFailure.detail,
   };
 }
