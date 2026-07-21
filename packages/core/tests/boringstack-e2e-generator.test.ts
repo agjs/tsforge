@@ -111,18 +111,22 @@ describe("E2E spec generator", () => {
     const spec = generateEntitySpec(company);
 
     expect(spec).toContain("update Company: edit form, change field, save");
+    // Edits the row located by its unique value (identity), not by position.
     expect(spec).toContain(
-      'page.getByTestId("company-row-edit").first().click()'
+      'const createdRow = page.getByTestId("company-row").filter({ hasText: unique });'
     );
+    expect(spec).toContain('createdRow.getByTestId("company-row-edit").click()');
   });
 
   test("generateEntitySpec includes delete test block", () => {
     const spec = generateEntitySpec(company);
 
     expect(spec).toContain("delete Company: row delete, confirm, row gone");
+    // Deletes the row located by its unique value (identity), not by position.
     expect(spec).toContain(
-      'page.getByTestId("company-row-delete").last().click()'
+      'createdRow.getByTestId("company-row-delete").click()'
     );
+    expect(spec).toContain(').toHaveCount(0, { timeout: 10000 });');
   });
 
   test("generateEntitySpec includes negative tests for required and formatted fields", () => {

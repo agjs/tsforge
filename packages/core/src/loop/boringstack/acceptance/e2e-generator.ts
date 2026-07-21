@@ -240,7 +240,10 @@ test.describe(${JSON.stringify(name)}, () => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const initialRowCount = await page.getByTestId("${ids.row}").count();
+    // Unique value → this test asserts on ITS OWN row (the shared DB accumulates rows
+    // across tests/runs, so absolute row counts are unreliable).
+    const unique =
+      ${JSON.stringify(firstFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
 
     // Click create button
     await page.getByTestId("${ids.create}").click();
@@ -249,20 +252,21 @@ test.describe(${JSON.stringify(name)}, () => {
 
 ${parentSeedingCode}
 
-    // Fill all fields
+    // Fill all fields, then stamp the first field with the unique value
 ${fieldFillSteps}
+    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
 
     // Submit
     await page.getByTestId("${ids.submit}").click();
     // Wait for form to disappear (indicates mutation + list refresh completed)
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    // New row should appear — web-first assertion retries through the async list refetch
-    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount + 1, {
-      timeout: 10000,
-    });
+    // THIS test's row (identified by its unique value) appears — retries the async refetch
+    await expect(
+      page.getByTestId("${ids.row}").filter({ hasText: unique })
+    ).toBeVisible({ timeout: 10000 });
 
-    // Verify the new row contains the expected values
+    // Verify the shown cells render the created values
 ${rowCellAssertions}
   });
 
@@ -270,35 +274,39 @@ ${rowCellAssertions}
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const initialRowCount = await page.getByTestId("${ids.row}").count();
+    const unique =
+      ${JSON.stringify(firstFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
 
-    // Create a new record
+    // Create a new record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${parentSeedingCode}
 
 ${fieldFillSteps}
+    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
     // Reload the page
     await page.reload();
     await page.waitForURL(/\\/${entity.key}/);
 
-    // The created row survives the reload — retry through the post-reload fetch
-    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount + 1, {
-      timeout: 10000,
-    });
+    // THIS test's row survives the reload
+    await expect(
+      page.getByTestId("${ids.row}").filter({ hasText: unique })
+    ).toBeVisible({ timeout: 10000 });
   });
 
   test(${JSON.stringify(stepTitle("update", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    // Create a record first
-    const initialRowCount = await page.getByTestId("${ids.row}").count();
+    // Create a record stamped with a unique value
+    const unique =
+      ${JSON.stringify(firstFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+    const updatedValue = unique + "-updated";
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
@@ -306,53 +314,52 @@ ${fieldFillSteps}
 ${parentSeedingCode}
 
 ${fieldFillSteps}
+    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    // Now edit the first row
-    await page.getByTestId("${ids.rowEdit}").first().click();
+    // Edit THIS row (located by its unique value, not position)
+    const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
+    await expect(createdRow).toBeVisible({ timeout: 10000 });
+    await createdRow.getByTestId("${ids.rowEdit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-    // Change a field (the first one)
-    const firstField = ${JSON.stringify(firstFieldName)};
-    const updatedValue = ${JSON.stringify(firstFieldValid + "-updated")};
 
     await page.getByTestId("${ids.field(firstFieldName)}").clear();
     await page.getByTestId("${ids.field(firstFieldName)}").fill(updatedValue);
 
     await page.getByTestId("${ids.submit}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    // Verify the change persists in the list
-    const updatedRow = page.getByTestId("${ids.rowCell(entity.shows[0] ?? firstFieldName)}").first();
-    await expect(updatedRow).toContainText(updatedValue);
+    // The updated value is now shown in the list
+    await expect(
+      page.getByTestId("${ids.row}").filter({ hasText: updatedValue })
+    ).toBeVisible({ timeout: 10000 });
   });
 
   test(${JSON.stringify(stepTitle("delete", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const initialRowCount = await page.getByTestId("${ids.row}").count();
+    const unique =
+      ${JSON.stringify(firstFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
 
-    // Create a record first
+    // Create a record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${parentSeedingCode}
 
 ${fieldFillSteps}
+    await page.getByTestId("${ids.field(firstFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    // The create landed before we delete — retry through the async list update
-    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount + 1, {
-      timeout: 10000,
-    });
-
-    // Delete the last row
-    await page.getByTestId("${ids.rowDelete}").last().click();
+    // Locate THIS test's row (by its unique value) and delete it — not by position
+    const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
+    await expect(createdRow).toBeVisible({ timeout: 10000 });
+    await createdRow.getByTestId("${ids.rowDelete}").click();
 
     // Confirm delete if a confirmation control appears
     const confirmButton = page.getByTestId("${ids.confirmDelete}");
@@ -360,10 +367,10 @@ ${fieldFillSteps}
       await confirmButton.first().click();
     }
 
-    // Row is removed — web-first assertion retries through the async list update
-    await expect(page.getByTestId("${ids.row}")).toHaveCount(initialRowCount, {
-      timeout: 10000,
-    });
+    // THIS row is gone — retries through the async list update
+    await expect(
+      page.getByTestId("${ids.row}").filter({ hasText: unique })
+    ).toHaveCount(0, { timeout: 10000 });
   });
 
 ${negativeBlocks}
