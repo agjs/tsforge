@@ -246,7 +246,8 @@ test.describe(${JSON.stringify(name)}, () => {
 
     // Click create button
     await page.getByTestId("${ids.create}").click();
-    await page.waitForURL(/.*\\/${entity.key}\\/new/);
+    // Wait for form to appear (form may be inline, no URL change)
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${parentSeedingCode}
 
@@ -255,9 +256,17 @@ ${fieldFillSteps}
 
     // Submit
     await page.getByTestId("${ids.submit}").click();
+    // Wait for form to disappear (indicates mutation + list refresh completed)
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
 
-    // Should navigate back to list
-    await page.waitForURL(/\\/${entity.key}(?:\\/|$)/);
+    // Wait for new row to appear with a polling timeout
+    await page.waitForFunction(
+      async () => {
+        const count = await page.getByTestId("${ids.row}").count();
+        return count > initialRowCount;
+      },
+      { timeout: 5000 }
+    );
 
     // New row should be visible with the filled values
     const finalRowCount = await page.getByTestId("${ids.row}").count();
@@ -277,14 +286,14 @@ ${rowCellAssertions}
 
     // Create a new record
     await page.getByTestId("${ids.create}").click();
-    await page.waitForURL(/.*\\/${entity.key}\\/new/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${parentSeedingCode}
 
 ${fieldFillSteps}
 
     await page.getByTestId("${ids.submit}").click();
-    await page.waitForURL(/\\/${entity.key}(?:\\/|$)/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
 
     // Reload the page
     await page.reload();
@@ -305,18 +314,18 @@ ${fieldFillSteps}
     const initialRowCount = await page.getByTestId("${ids.row}").count();
 
     await page.getByTestId("${ids.create}").click();
-    await page.waitForURL(/.*\\/${entity.key}\\/new/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${parentSeedingCode}
 
 ${fieldFillSteps}
 
     await page.getByTestId("${ids.submit}").click();
-    await page.waitForURL(/\\/${entity.key}(?:\\/|$)/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
 
     // Now edit the first row
     await page.getByTestId("${ids.rowEdit}").first().click();
-    await page.waitForURL(/.*\\/${entity.key}\\/.*\\/(edit|update)/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
     // Change a field (the first one)
     const firstField = ${JSON.stringify(firstFieldName)};
@@ -326,7 +335,7 @@ ${fieldFillSteps}
     await page.getByTestId("${ids.field(firstFieldName)}").fill(updatedValue);
 
     await page.getByTestId("${ids.submit}").click();
-    await page.waitForURL(/\\/${entity.key}(?:\\/|$)/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
 
     // Verify the change persists in the list
     const updatedRow = page.getByTestId("${ids.rowCell(entity.shows[0] ?? firstFieldName)}").first();
@@ -341,14 +350,14 @@ ${fieldFillSteps}
 
     // Create a record first
     await page.getByTestId("${ids.create}").click();
-    await page.waitForURL(/.*\\/${entity.key}\\/new/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${parentSeedingCode}
 
 ${fieldFillSteps}
 
     await page.getByTestId("${ids.submit}").click();
-    await page.waitForURL(/\\/${entity.key}(?:\\/|$)/);
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 5000 });
 
     const afterCreateRowCount = await page.getByTestId("${ids.row}").count();
 
