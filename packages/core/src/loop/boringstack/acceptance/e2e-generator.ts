@@ -396,13 +396,18 @@ ${fieldFillSteps}
     // Submit with invalid input
     await page.getByTestId("${ids.submit}").click();
 
-    // Reload to ensure the invalid record would persist if accepted by the backend
+    // Let any create mutation reach the server BEFORE we reload, so a slow
+    // accept cannot be missed by reloading before it persists (false pass).
+    await page.waitForLoadState("networkidle").catch(() => {});
+
+    // Reload to read the true persisted state from the backend.
     await page.reload();
     await page.waitForURL(/\\/${entity.key}/);
 
-    // Assert: the row count did NOT increase — the invalid record was rejected
-    const rowsAfter = await page.getByTestId("${ids.row}").count();
-    await expect(rowsAfter).toBe(rowsBefore, { timeout: 5000 });
+    // Assert (web-first, retrying): the row count did NOT increase — the invalid
+    // record was rejected. toHaveCount retries, so a row that persists slightly
+    // after reload still fails the assertion instead of racing a one-shot count().
+    await expect(page.getByTestId("${ids.row}")).toHaveCount(rowsBefore);
   });
 `;
     })

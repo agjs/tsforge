@@ -142,6 +142,19 @@ describe("E2E spec generator", () => {
     expect(spec).toContain("negative: Company rejects website=not-a-url");
   });
 
+  test("negative tests settle then assert non-persistence with a retrying count (no one-shot race)", () => {
+    const spec = generateEntitySpec(company);
+
+    // Let the create mutation reach the server before reloading (no reload-before-persist false pass)
+    expect(spec).toContain('await page.waitForLoadState("networkidle")');
+    // Web-first retrying count assertion against the pre-submit baseline
+    expect(spec).toContain(
+      'await expect(page.getByTestId("company-row")).toHaveCount(rowsBefore)'
+    );
+    // The broken one-shot matcher (a number compared with an ignored timeout) is gone
+    expect(spec).not.toContain("expect(rowsAfter).toBe(rowsBefore");
+  });
+
   test("generateEntitySpec includes empty state check", () => {
     const spec = generateEntitySpec(company);
 

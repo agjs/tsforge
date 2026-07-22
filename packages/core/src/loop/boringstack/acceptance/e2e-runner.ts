@@ -386,18 +386,22 @@ function processExecResult(
 ): {
   outcome?: IAcceptanceOutcome;
   shouldRetry: boolean;
+  parseResult: IAcceptanceResult[] | null;
 } {
+  // Parse ONCE and thread the result back to the caller so the retry path
+  // doesn't re-parse the same stdout (it needs the results for diagnostics).
   const parseResult = parsePlaywrightJSON(result.stdout, entity);
 
   if (result.code === 0) {
     return {
       outcome: summarize(parseResult ?? [], requiredSteps),
       shouldRetry: false,
+      parseResult,
     };
   }
 
   // Nonzero exit code: classify as infra or real failure
-  return classifyNonzeroExit(result, parseResult);
+  return { ...classifyNonzeroExit(result, parseResult), parseResult };
 }
 
 /**
@@ -527,7 +531,7 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
             }
           );
 
-          const { outcome, shouldRetry } = processExecResult(
+          const { outcome, shouldRetry, parseResult } = processExecResult(
             result,
             entity,
             requiredSteps
@@ -537,9 +541,8 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
             return outcome;
           }
 
-          // Preserve parsed results even if classified as infra (for diagnostics)
-          const parseResult = parsePlaywrightJSON(result.stdout, entity);
-
+          // Preserve parsed results even if classified as infra (for diagnostics).
+          // Reuse the parse from processExecResult — do not re-parse the same stdout.
           if (parseResult !== null) {
             lastResults = parseResult;
           }
