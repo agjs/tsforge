@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { test, expect, describe, setDefaultTimeout } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IProvider, IModelResponse } from "../src/inference";
@@ -50,6 +50,16 @@ function scripted(queue: IModelResponse[]): {
 
 // The tsforge repo itself is the read-only workspace under test.
 const REPO = join(import.meta.dir, "..", "..", "..");
+
+// #63: every test here constructs `new AgentRunner(...).run({ cwd: REPO })`, which pays a fixed
+// ~2s startup cost against the real repo (even the immediate-abort / no-op cases). In isolation the
+// file runs ~1.9s/test — well under bun's 5000ms default — but under the FULL suite's 273-file
+// concurrency, CPU contention inflates that startup past 5s and the tests spuriously time out,
+// which false-BLOCKs the harness-review pre-validate gate. Raise the ceiling for THIS FILE ONLY
+// (setDefaultTimeout is module-scoped) so the 5s fail-fast default — and its infinite-loop
+// detection — stays intact for the other 272 files. 15s = generous margin over the real ~2s work
+// under contention, while still failing a genuine hang here.
+setDefaultTimeout(15_000);
 
 describe("parseAgentSpec", () => {
   test("accepts a well-formed spec and keeps only valid fields", () => {
