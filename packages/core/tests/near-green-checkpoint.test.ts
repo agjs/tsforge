@@ -204,12 +204,21 @@ test("errorSetSignature: order- and line-independent, deduped, keyed by rule|fil
 });
 
 test("isNearGreenRotation: full window + count PLATEAU + changing signature", () => {
-  // A near-green sample: fixed count 1 and phase 0 unless the test varies them.
+  // A near-green sample: fixed count 1 and phase 0 unless the test varies them. Each sample gets a
+  // FRESH worktree rev by default (a real edit happened that cycle) — the #77 genuine-rotation
+  // precondition; pass an explicit rev to model an unedited re-run.
+  let revSeq = 0;
   const s = (
     sig: string,
     count = 1,
-    phase = 0
-  ): { count: number; phase: number; sig: string } => ({ count, phase, sig });
+    phase = 0,
+    rev = `rev-${String(revSeq++)}`
+  ): { count: number; phase: number; sig: string; rev: string } => ({
+    count,
+    phase,
+    sig,
+    rev,
+  });
 
   expect(ROTATION_WINDOW).toBe(3);
   // Fewer than a full window → can't conclude rotation yet.
@@ -217,8 +226,18 @@ test("isNearGreenRotation: full window + count PLATEAU + changing signature", ()
   // A full window of the SAME signature = a genuinely stuck single error, NOT rotation
   // (the escalation ladder/expert handle that; rotation would mis-fire on it).
   expect(isNearGreenRotation([s("a"), s("a"), s("a")])).toBe(false);
-  // GENUINE per-cycle rotation (identity changes EVERY cycle) = rotation.
+  // GENUINE per-cycle rotation (identity changes EVERY cycle, under fresh edits) = rotation.
   expect(isNearGreenRotation([s("a"), s("b"), s("c")])).toBe(true);
+  // #77 finding: distinct signatures but a CONSTANT rev (no edit between cycles — a flaky/stateful
+  // gate or the check+settleGate double-run) is NOT rotation. Without the rev guard this fired and
+  // wrongly stood the WS-B rollback net down.
+  expect(
+    isNearGreenRotation([
+      s("a", 1, 0, "r"),
+      s("b", 1, 0, "r"),
+      s("c", 1, 0, "r"),
+    ])
+  ).toBe(false);
   // A 2-cycle RING (A→B→A) is genuine rotation too (no two consecutive equal).
   expect(isNearGreenRotation([s("a"), s("b"), s("a")])).toBe(true);
   // A single swap then stable (A,A,B — one identity change) is NOT rotation: it's progress toward

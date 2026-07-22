@@ -60,8 +60,8 @@ describe("nearGreenBanner (finishing discipline near green)", () => {
     expect(b).not.toContain("UNDO");
   });
 
-  // #77: the rotation caller now SUPPRESSES this banner entirely while rotation is active (the
-  // steer owns the finishing discipline), so nearGreenBanner has no rotation-specific mode — the
-  // earlier `omitLockdown` param was removed. Its behavior is exercised by the injectFeedback
-  // rotation tests in near-green-rotation.test.ts.
+  // #77: nearGreenBanner has no rotation-specific mode — the injectFeedback caller SUPPRESSES this
+  // banner entirely while rotation is active (the steer owns the finishing discipline), so there is
+  // nothing to test on the banner itself for rotation. That suppression is exercised by the
+  // injectFeedback rotation tests in near-green-rotation.test.ts.
 });

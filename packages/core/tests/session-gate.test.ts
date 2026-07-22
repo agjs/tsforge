@@ -58,7 +58,7 @@ test("resetDriveConvergence gives a revisit a fresh ladder while preserving cumu
     nearGreenRollbacks: 3,
     // #77: the rotation window + flag are per-drive too — a stale flag would inject the
     // completion-only steer on a fresh drive with no evidence.
-    nearGreenSamples: [{ count: 1, phase: 0, sig: "a" }],
+    nearGreenSamples: [{ count: 1, phase: 0, sig: "a", rev: "r0" }],
     nearGreenSpikeGap: 2,
     nearGreenRotation: true,
   });

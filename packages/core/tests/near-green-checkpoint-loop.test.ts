@@ -285,8 +285,13 @@ test("#77 INTEGRATION: settleGate wires the rotation detector → 3 rotating nea
       conventionsEnabled: false,
     };
 
+    // A genuine per-cycle edit moves the worktree rev — the #77 precondition for a REAL rotation
+    // (fix-one → spawn-another), distinguishing it from a flaky gate re-run over unchanged files.
+    await Bun.write(join(dir, "feature.ts"), "export const A = 1;\n");
     await settleGate(ctx, state, 1);
+    await Bun.write(join(dir, "feature.ts"), "export const B = 2;\n");
     await settleGate(ctx, state, 2);
+    await Bun.write(join(dir, "feature.ts"), "export const C = 3;\n");
     await settleGate(ctx, state, 3);
 
     // The detector fired through the real harness path …
@@ -431,9 +436,9 @@ test("#77 BACKSTOP: a spike that persists past MAX_NEAR_GREEN_SPIKE_GAP clears r
       nearGreenRollbacks: 0,
       nearGreenRotation: true,
       nearGreenSamples: [
-        { count: 1, phase: 0, sig: "a" },
-        { count: 1, phase: 0, sig: "b" },
-        { count: 1, phase: 0, sig: "c" },
+        { count: 1, phase: 0, sig: "a", rev: "r0" },
+        { count: 1, phase: 0, sig: "b", rev: "r1" },
+        { count: 1, phase: 0, sig: "c", rev: "r2" },
       ],
       nearGreenSpikeGap: 0,
     };

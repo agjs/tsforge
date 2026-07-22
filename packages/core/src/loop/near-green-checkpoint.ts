@@ -187,14 +187,19 @@ export function errorSetSignature(errors: readonly IErrorItem[]): string {
   return [...new Set(errors.map(errorToken))].sort().join(";");
 }
 
-/** One recorded near-green cycle: its error COUNT, the gate FRONTIER phase it sits at, and the
- *  `errorSetSignature` of its error set. Rotation is judged over a trailing window of these — the
- *  count + phase pin the PLATEAU (a stuck frontier at a stable count), the signature pins the
- *  changing IDENTITY. */
+/** One recorded near-green cycle: its error COUNT, the gate FRONTIER phase it sits at, the
+ *  `errorSetSignature` of its error set, and `rev` — an INDEPENDENT worktree revision (a content
+ *  hash of the scope files at gate time; see scopeRevision in turn.ts). Rotation is judged over a
+ *  trailing window of these — the count + phase pin the PLATEAU (a stuck frontier at a stable
+ *  count), the signature pins the changing IDENTITY, and `rev` proves a GENUINE per-cycle EDIT
+ *  happened between two samples: without it, a flaky/stateful gate — or a re-evaluation of the SAME
+ *  unedited files (e.g. the check-tool + settleGate double-run) — could emit A→B→C error signatures
+ *  with no fix-one→spawn-another cycle at all and falsely stand the WS-B rollback net down. */
 export interface INearGreenSample {
   readonly count: number;
   readonly phase: number;
   readonly sig: string;
+  readonly rev: string;
 }
 
 /** Whether the recent near-green cycles are ROTATING. `samples` is the trailing list captured on
@@ -209,15 +214,21 @@ export interface INearGreenSample {
  *     routes/modules" steer there would fight exactly the downstream work that just became
  *     reachable. Requiring a constant phase excludes it. (When the gate sets no phase, all samples
  *     are phase 0 — constant — so this is a no-op there.)
- *   • GENUINE per-cycle rotation — the signature CHANGES on EVERY cycle of the window (no two
- *     CONSECUTIVE samples share a signature). This is stricter than "≥2 distinct in the window":
- *     A,A,B (one error merely replaced once, then stable) is NOT rotation, but A,B,C and the
- *     2-cycle ring A,B,A both are. The strictness is deliberate and load-bearing: setting
- *     `nearGreenRotation` DISABLES the WS-B rollback safety net (nearGreenRollbackStep stands down
- *     so the steered atomic-completion spike isn't reverted). Firing on weak evidence (a single
- *     error-swap) would disable that net for a build that is merely progressing — so the detector
- *     must be CONFIDENT the frontier is actually cycling before it fires. A full window of ONE
- *     signature is a stuck single error (the ladder/expert own it), also not rotation.
+ *   • GENUINE per-cycle rotation — on EVERY cycle of the window the signature CHANGES *and* the
+ *     worktree `rev` CHANGES (no two CONSECUTIVE samples share a signature OR a rev). Requiring the
+ *     rev to move is what makes the rotation genuine rather than merely apparent: a changing
+ *     signature ALONE can come from a flaky/stateful gate or a re-evaluation of the SAME unedited
+ *     files (A,B,C with rev held constant) — there was no fix-one→spawn-another edit, so it must NOT
+ *     fire. Only a signature that rotates BECAUSE the model edited every cycle (rev moves in
+ *     lock-step) is the build17 pattern. This is stricter than "≥2 distinct signatures in the
+ *     window": A,A,B (one error merely replaced once, then stable) is NOT rotation, but A,B,C and
+ *     the 2-cycle ring A,B,A both are (provided each carries a fresh rev). The strictness is
+ *     deliberate and load-bearing: setting `nearGreenRotation` DISABLES the WS-B rollback safety net
+ *     (nearGreenRollbackStep stands down so the steered atomic-completion spike isn't reverted).
+ *     Firing on weak evidence (a single error-swap, or gate flake on unchanged files) would disable
+ *     that net for a build that is merely progressing — so the detector must be CONFIDENT the
+ *     frontier is actually cycling under real edits before it fires. A full window of ONE signature
+ *     is a stuck single error (the ladder/expert own it), also not rotation.
  *  Only the last `k` matter, so a rotation that has since stabilized reads as not-rotating. */
 export function isNearGreenRotation(
   samples: readonly INearGreenSample[],
@@ -235,7 +246,17 @@ export function isNearGreenRotation(
     return false;
   }
 
-  // Genuine rotation: the identity must change on every cycle (no two consecutive equal), not just
-  // once across the window — a single swap (A,A,B) is progress toward green, not a rotating frontier.
-  return window.every((s, i) => i === 0 || s.sig !== window[i - 1]?.sig);
+  // Genuine rotation: on every cycle BOTH the identity and the worktree rev must change (no two
+  // consecutive equal). The sig-change is the rotating frontier; the rev-change proves a real
+  // per-cycle EDIT drove it — so a flaky gate re-emitting different signatures over UNCHANGED files
+  // (rev held constant) reads as not-rotating and leaves the WS-B rollback net engaged.
+  return window.every((s, i) => {
+    if (i === 0) {
+      return true;
+    }
+
+    const prev = window[i - 1];
+
+    return prev !== undefined && s.sig !== prev.sig && s.rev !== prev.rev;
+  });
 }

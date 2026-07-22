@@ -39,22 +39,51 @@ const e = (rule: string, file: string): IErrorItem => ({
   message: rule,
 });
 
+// trackNearGreenRotation now takes a worktree `rev` (see #77 finding: a rotation is only genuine
+// when a real EDIT moved the scope between cycles). These tests model a normal build where the
+// model edits every cycle, so unless a test pins `rev` explicitly, each call gets a FRESH rev —
+// exactly the "an edit happened this cycle" precondition the detector requires.
+let revSeq = 0;
+
+function track(
+  s: ILoopState,
+  count: number,
+  errors: IErrorItem[],
+  rev?: string
+): void {
+  trackNearGreenRotation(s, count, errors, rev ?? `rev-${String(revSeq++)}`);
+}
+
 test("rotating near-green error sets flip nearGreenRotation on after a full window", () => {
   const s = freshState();
 
-  trackNearGreenRotation(s, 1, [e("jsx-computation", "Page.tsx")]);
+  track(s, 1, [e("jsx-computation", "Page.tsx")]);
   expect(s.nearGreenRotation).toBe(false); // 1 sig — not enough
-  trackNearGreenRotation(s, 1, [e("component-folder-structure", "Row.tsx")]);
+  track(s, 1, [e("component-folder-structure", "Row.tsx")]);
   expect(s.nearGreenRotation).toBe(false); // 2 sigs — still short of the window
-  trackNearGreenRotation(s, 1, [e("no-unsafe-call", "queries.ts")]);
+  track(s, 1, [e("no-unsafe-call", "queries.ts")]);
   expect(s.nearGreenRotation).toBe(true); // 3 DISTINCT near-green sigs → rotation
+});
+
+test("a flaky/re-run gate over UNCHANGED files (constant rev) is NOT rotation, even with rotating sigs", () => {
+  const s = freshState();
+
+  // The #77 finding: three DISTINCT near-green signatures at the same count/phase — but the
+  // worktree rev is HELD CONSTANT, i.e. no edit happened between cycles (a flaky/stateful gate, or
+  // the check-tool + settleGate double-run re-evaluating the same files). Without the rev guard this
+  // fired rotation and stood the WS-B rollback net down despite no fix-one→spawn-another cycle.
+  track(s, 1, [e("jsx-computation", "Page.tsx")], "same");
+  track(s, 1, [e("component-folder-structure", "Row.tsx")], "same");
+  track(s, 1, [e("no-unsafe-call", "queries.ts")], "same");
+
+  expect(s.nearGreenRotation).toBe(false);
 });
 
 test("a genuinely stuck single error (same set repeated) is NOT rotation", () => {
   const s = freshState();
 
   for (let i = 0; i < 5; i++) {
-    trackNearGreenRotation(s, 1, [e("no-jsx-computation", "Page.tsx")]);
+    track(s, 1, [e("no-jsx-computation", "Page.tsx")]);
   }
 
   expect(s.nearGreenRotation).toBe(false);
@@ -64,11 +93,11 @@ test("transient spikes above N are IGNORED — they don't reset the rotation win
   const s = freshState();
 
   // build17's real shape: near-green states interleaved with spikes to 3/6.
-  trackNearGreenRotation(s, 1, [e("jsx-computation", "Page.tsx")]);
-  trackNearGreenRotation(s, 6, [e("x", "a.ts"), e("y", "b.ts")]); // spike — ignored
-  trackNearGreenRotation(s, 1, [e("missing-sibling", "Row.tsx")]);
-  trackNearGreenRotation(s, 3, [e("z", "c.ts")]); // spike — ignored
-  trackNearGreenRotation(s, 1, [e("no-unsafe-call", "queries.ts")]);
+  track(s, 1, [e("jsx-computation", "Page.tsx")]);
+  track(s, 6, [e("x", "a.ts"), e("y", "b.ts")]); // spike — ignored
+  track(s, 1, [e("missing-sibling", "Row.tsx")]);
+  track(s, 3, [e("z", "c.ts")]); // spike — ignored
+  track(s, 1, [e("no-unsafe-call", "queries.ts")]);
 
   // Three DISTINCT near-green sigs (all at the same count=1 plateau) accumulated across the
   // spikes → rotation.
@@ -82,9 +111,9 @@ test("a descent (2→1→1) is NOT rotation — a moving count is progress, not 
   // Same file/rule identity, but the COUNT changes 2→1→1. The count-blind version treated the
   // count-driven signature change as rotation (the panel's false positive); the count plateau
   // requirement rejects it.
-  trackNearGreenRotation(s, 2, [e("a", "x.ts"), e("b", "y.ts")]);
-  trackNearGreenRotation(s, 1, [e("a", "x.ts")]);
-  trackNearGreenRotation(s, 1, [e("a", "x.ts")]);
+  track(s, 2, [e("a", "x.ts"), e("b", "y.ts")]);
+  track(s, 1, [e("a", "x.ts")]);
+  track(s, 1, [e("a", "x.ts")]);
 
   expect(s.nearGreenRotation).toBe(false);
 });
@@ -102,9 +131,9 @@ test("a moving gate-frontier PHASE is progress, NOT rotation (short-circuit gate
 
   // Count stays at 1, but the frontier advances phase1 → phase2 (a downstream phase's error only
   // became visible after phase1 cleared). That is progress, so it must NOT read as rotation.
-  trackNearGreenRotation(s, 1, [phased("a", "x.ts", 1)]);
-  trackNearGreenRotation(s, 1, [phased("b", "y.ts", 2)]);
-  trackNearGreenRotation(s, 1, [phased("b", "y.ts", 2)]);
+  track(s, 1, [phased("a", "x.ts", 1)]);
+  track(s, 1, [phased("b", "y.ts", 2)]);
+  track(s, 1, [phased("b", "y.ts", 2)]);
 
   expect(s.nearGreenRotation).toBe(false);
 });
@@ -115,9 +144,9 @@ test("completion-phase cycles are NOT recorded — the window can't pre-fill the
   // While adding the missing UI (completion phase) the error identity legitimately churns. None of
   // it may accumulate toward rotation, else the flag would be set the instant completion ends.
   s.completionPhase = true;
-  trackNearGreenRotation(s, 1, [e("reachability", "Page.tsx")]);
-  trackNearGreenRotation(s, 1, [e("i18n-locale-keys-used", "Page.tsx")]);
-  trackNearGreenRotation(s, 1, [e("no-unsafe-call", "queries.ts")]);
+  track(s, 1, [e("reachability", "Page.tsx")]);
+  track(s, 1, [e("i18n-locale-keys-used", "Page.tsx")]);
+  track(s, 1, [e("no-unsafe-call", "queries.ts")]);
 
   expect(s.nearGreenRotation).toBe(false);
   expect(s.nearGreenSamples).toEqual([]);
@@ -126,15 +155,15 @@ test("completion-phase cycles are NOT recorded — the window can't pre-fill the
 test("kill-switch flipped ON mid-run CLEARS sticky rotation state (authoritative, not just early-return)", () => {
   const s = freshState();
 
-  trackNearGreenRotation(s, 1, [e("a", "x.ts")]);
-  trackNearGreenRotation(s, 1, [e("b", "y.ts")]);
-  trackNearGreenRotation(s, 1, [e("c", "z.ts")]);
+  track(s, 1, [e("a", "x.ts")]);
+  track(s, 1, [e("b", "y.ts")]);
+  track(s, 1, [e("c", "z.ts")]);
   expect(s.nearGreenRotation).toBe(true);
 
   process.env.TSFORGE_NO_NEAR_GREEN_ROTATION = "1";
 
   try {
-    trackNearGreenRotation(s, 1, [e("d", "w.ts")]);
+    track(s, 1, [e("d", "w.ts")]);
     // Disabled mid-run: the sticky flag is cleared, not left set — so injectFeedback stops.
     expect(s.nearGreenRotation).toBe(false);
     expect(s.nearGreenSamples).toEqual([]);
@@ -146,12 +175,12 @@ test("kill-switch flipped ON mid-run CLEARS sticky rotation state (authoritative
 test("green (curr 0) clears the window and the flag", () => {
   const s = freshState();
 
-  trackNearGreenRotation(s, 1, [e("a", "x.ts")]);
-  trackNearGreenRotation(s, 1, [e("b", "y.ts")]);
-  trackNearGreenRotation(s, 1, [e("c", "z.ts")]);
+  track(s, 1, [e("a", "x.ts")]);
+  track(s, 1, [e("b", "y.ts")]);
+  track(s, 1, [e("c", "z.ts")]);
   expect(s.nearGreenRotation).toBe(true);
 
-  trackNearGreenRotation(s, 0, []);
+  track(s, 0, []);
   expect(s.nearGreenRotation).toBe(false);
   expect(s.nearGreenSamples).toEqual([]);
   expect(s.nearGreenSpikeGap).toBe(0);
@@ -335,14 +364,14 @@ test("near-green samples separated by more than the spike-gap bound do NOT combi
   // Two near-green visits, then a LONG regression (more than MAX_NEAR_GREEN_SPIKE_GAP consecutive
   // spikes), then another near-green visit. The stale early samples must be dropped so a fresh,
   // unrelated near-green episode can't combine with them into a false rotation.
-  trackNearGreenRotation(s, 1, [e("a", "x.ts")]);
-  trackNearGreenRotation(s, 1, [e("b", "y.ts")]);
+  track(s, 1, [e("a", "x.ts")]);
+  track(s, 1, [e("b", "y.ts")]);
 
   for (let i = 0; i <= MAX_NEAR_GREEN_SPIKE_GAP; i++) {
-    trackNearGreenRotation(s, 9, [e("spray", `s${String(i)}.ts`)]);
+    track(s, 9, [e("spray", `s${String(i)}.ts`)]);
   }
 
-  trackNearGreenRotation(s, 1, [e("c", "z.ts")]);
+  track(s, 1, [e("c", "z.ts")]);
 
   // The window was cleared by the over-long spike run, so only the last sample survives → not a
   // full window → not rotation.
