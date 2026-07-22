@@ -145,44 +145,6 @@ function isInfraError(text: string): boolean {
 }
 
 /**
- * Extract error messages from Playwright report JSON stdout.
- * Parses the JSON and collects top-level report.errors[].message (not per-test errors).
- * Per-test assertion errors must NOT drive suite-wide infra classification.
- * Returns empty string if no errors found or JSON is invalid.
- */
-function extractReportErrorText(stdout: string): string {
-  const errors: string[] = [];
-
-  if (stdout.trim().length === 0) {
-    return "";
-  }
-
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return "";
-  }
-
-  if (!isPlaywrightReport(parsed)) {
-    return "";
-  }
-
-  // Collect top-level report errors ONLY
-  // Global setup/launch failures land here; per-test assertion errors do not.
-  if (Array.isArray(parsed.errors)) {
-    for (const err of parsed.errors) {
-      if ("message" in err && typeof err.message === "string") {
-        errors.push(err.message);
-      }
-    }
-  }
-
-  return errors.join("\n");
-}
-
-/**
  * Extract the error message from a test result, if present.
  */
 function extractErrorMessage(test: {
@@ -327,8 +289,14 @@ function classifyNonzeroExit(
   shouldRetry: boolean;
 } {
   // Combine stderr with extracted report errors to form the complete error text
+  // Extract top-level report errors from the already-parsed report (no re-parse)
   const reportErrorText =
-    parsedReport !== null ? extractReportErrorText(result.stdout) : "";
+    parsedReport !== null && Array.isArray(parsedReport.errors)
+      ? parsedReport.errors
+          .map((err) => (typeof err.message === "string" ? err.message : ""))
+          .filter((msg) => msg.length > 0)
+          .join("\n")
+      : "";
 
   const combinedErrorText =
     result.stderr + (reportErrorText !== "" ? "\n" + reportErrorText : "");
@@ -385,7 +353,10 @@ function classifyNonzeroExit(
 /**
  * Process a single exec result for entity acceptance testing.
  * Parses Playwright JSON and extracts results.
- * Returns: { outcome, shouldRetry } where outcome is the final result or undefined to continue/retry.
+ * Returns: { outcome, shouldRetry, parseResult, parsed } where outcome is the final result or undefined to continue/retry.
+ * parsed is non-null only when JSON was successfully parsed (even if no specs matched).
+ * This distinction (null vs []) lets the runner preserve stale results from an earlier
+ * successful parse when a later attempt has unparseable JSON.
  */
 export function processExecResult(
   result: { code: number; stdout: string; stderr: string },
@@ -395,6 +366,7 @@ export function processExecResult(
   outcome?: IAcceptanceOutcome;
   shouldRetry: boolean;
   parseResult: IAcceptanceResult[];
+  parsed: IPlaywrightReportType | null;
 } {
   // Parse JSON and extract acceptance results
   const { parsed: parsedReport, results: parseResult } = parsePlaywrightResults(
@@ -407,6 +379,7 @@ export function processExecResult(
       outcome: summarize(parseResult, requiredSteps),
       shouldRetry: false,
       parseResult,
+      parsed: parsedReport,
     };
   }
 
@@ -414,6 +387,7 @@ export function processExecResult(
   return {
     ...classifyNonzeroExit(result, parsedReport, parseResult),
     parseResult,
+    parsed: parsedReport,
   };
 }
 
@@ -557,20 +531,20 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
             }
           );
 
-          const { outcome, shouldRetry, parseResult } = processExecResult(
-            result,
-            entity,
-            requiredSteps
-          );
+          const { outcome, shouldRetry, parseResult, parsed } =
+            processExecResult(result, entity, requiredSteps);
 
           if (outcome !== undefined) {
             return outcome;
           }
 
           // Preserve parsed results even if classified as infra (for diagnostics).
-          // Reuse the parse from processExecResult — do not re-parse the same stdout.
-          // parseResult is always an array (may be empty if JSON was invalid)
-          lastResults = parseResult;
+          // Distinguish unparseable (parsed === null) from valid-empty (parsed !== null, parseResult === []):
+          // - Unparseable (null): keep the previous lastResults from an earlier successful parse
+          // - Valid-empty (parsed !== null): overwrite lastResults with the latest valid parse (even if empty)
+          if (parsed !== null) {
+            lastResults = parseResult;
+          }
 
           lastError = result.stderr;
 

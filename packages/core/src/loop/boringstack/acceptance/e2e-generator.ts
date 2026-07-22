@@ -271,6 +271,78 @@ function renderFieldValue(field: { type: string; valid: string }): string {
 }
 
 /**
+ * Render an invalid override value (for negative tests) to a code literal string.
+ * Type-aware rendering: tests the constraint with bare types (not strings).
+ * Rules:
+ * - empty string "" → stays as "" (tests required-empty constraint)
+ * - numeric field + token round-trips exactly (`String(Number(value)) === value`) →
+ *   bare number (tests numeric constraint); NON-canonical tokens ("01", "1e5", "0x10",
+ *   " 5 ", huge→Infinity) → JSON string (Number() would mutate them / bare "01" is an
+ *   octal SyntaxError in strict mode)
+ * - boolean field + value is EXACTLY "true"/"false" → bare boolean (no trim/case-fold)
+ * - boolean field + other token (incl. " false ", "FALSE") → JSON string (type-rejection)
+ * - everything else → JSON string (default fallback)
+ * Complexity: ≤ 20 (three type checks with normalized matching).
+ */
+function renderInvalidOverride(field: { type: string }, value: string): string {
+  // Empty string: stay as empty string literal to test required-empty constraint
+  if (value === "") {
+    return '""';
+  }
+
+  const normalized = field.type.toLowerCase().trim();
+
+  // Numeric types: bare number for finite values (tests numeric constraint)
+  const numericTypes = new Set([
+    "number",
+    "integer",
+    "int",
+    "float",
+    "double",
+    "decimal",
+    "numeric",
+  ]);
+
+  if (numericTypes.has(normalized)) {
+    // Emit a bare number ONLY when the token ROUND-TRIPS exactly through Number:
+    // `String(Number(value)) === value`. This is the true canonical-literal test —
+    // it accepts "-1"/"1.5" (constraint probes) but rejects tokens Number() would
+    // MUTATE or that are invalid JS: "01"/"00" (would be an octal SyntaxError in the
+    // strict-mode spec, and Number("01")→1), "1e5"→100000, "0x10"→16, " 5 "→5, and
+    // huge digit strings → Infinity. Those fall through to a raw string, which
+    // exercises type-rejection instead of silently testing a different value.
+    const asNumber = Number(value);
+
+    if (Number.isFinite(asNumber) && String(asNumber) === value) {
+      return value;
+    }
+
+    return JSON.stringify(value);
+  }
+
+  // Boolean types: bare boolean ONLY for the exact tokens "true"/"false". Any other
+  // token — including " false " or "FALSE" — is sent as a raw string so we test the
+  // EXACT value the plan specified (type/value rejection), never a folded valid bool.
+  const booleanTypes = new Set(["boolean", "bool"]);
+
+  if (booleanTypes.has(normalized)) {
+    if (value === "true") {
+      return "true";
+    }
+
+    if (value === "false") {
+      return "false";
+    }
+
+    // Non-boolean token (e.g., "notabool") for a boolean field: JSON string to test type-rejection
+    return JSON.stringify(value);
+  }
+
+  // Everything else: JSON string
+  return JSON.stringify(value);
+}
+
+/**
  * Generate field fill steps for form inputs.
  * FIX D: Type-aware field fills (select/checkbox/date/number) instead of blanket .fill().
  * Each step safely interpolates field.valid using JSON.stringify.
@@ -392,13 +464,13 @@ function generateRowCellAssertions(
 /**
  * Generate negative test blocks.
  * B2: Ensures test title and assertions use JSON.stringify for injection-safe escaping.
- * B3: Overrides the invalid field using renderFieldValue (type-aware), except
+ * B3: Overrides the invalid field using renderInvalidOverride (type-aware), except
  *     required-empty "" stays as empty string to test missing-required constraint.
  *
  * Negatives work by:
  * 1. Authenticate and seed parent entities via API
  * 2. Build a payload with all required non-FK fields (valid values) + FK fields (seeded ids)
- * 3. Override the target field with the invalid value (type-rendered, or "" for required-empty)
+ * 3. Override the target field with the invalid value (type-rendered via renderInvalidOverride)
  * 4. POST directly to /api/v1/<entity> and assert a 400 or 422 response (validation error codes)
  *
  * This deterministic API-level check proves validation is enforced without depending on
@@ -432,13 +504,15 @@ function generateNegativeBlocks(
       ].filter((s) => s.length > 0);
       const payloadFields = allAssignments.join(",\n");
 
-      // B3: Render the override value type-aware, except required-empty "" stays as ""
-      const targetFieldType =
-        entity.fields.find((f) => f.name === neg.field)?.type ?? "string";
-      const overrideValue =
-        neg.value === ""
-          ? '""'
-          : renderFieldValue({ type: targetFieldType, valid: neg.value });
+      // B3: Render the override value type-aware via renderInvalidOverride to test the constraint
+      // with bare types (not strings). This ensures invalid numeric values like "-1" render as
+      // bare -1 (testing the constraint), and invalid booleans like "notabool" render as the
+      // string (testing type-rejection).
+      const fieldDef = entity.fields.find((f) => f.name === neg.field);
+      const overrideValue = renderInvalidOverride(
+        fieldDef ?? { type: "string" },
+        neg.value
+      );
 
       // B2: Build error message safely without backtick interpolation of plan data
       const errorMsg = `expected ${entity.key} to reject ${neg.field} with a validation error (400/422)`;

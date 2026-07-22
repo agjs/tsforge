@@ -430,4 +430,51 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("Do NOT run the gate through the shell");
     expect(prompt).not.toContain("Do NOT run the gate yourself");
   });
+
+  it("front-loads BoringStack UI component conventions (makeIdHandler list-row idiom, module split, api-client typed unwrap)", () => {
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // Must teach the UI conventions section.
+    expect(prompt).toContain("BoringStack UI component conventions");
+    // Must teach the #1 jsx-no-bind churn source.
+    expect(prompt).toContain("jsx-no-bind");
+    // Must teach the makeIdHandler curried list-row idiom to avoid arrow functions in JSX.
+    expect(prompt).toContain("makeIdHandler");
+    // Must forbid JSX in .ts files (JSX only compiles in .tsx).
+    expect(prompt).toContain("JSX only compiles in `.tsx`");
+    expect(prompt).toContain("Parsing error: '>' expected");
+    // Must teach module separation (component in .tsx, hooks in .hooks.ts, helpers in .utils.ts).
+    expect(prompt).toContain(".hooks.ts");
+    expect(prompt).toContain(".utils.ts");
+    expect(prompt).toContain(".types.ts");
+    // (api-client data-fetching idiom is taught by the existing data-fetching
+    // section, not the UI-component conventions — no duplicate/contradictory copy here.)
+  });
+
+  it("teaches the reachability contract: register nav + route, ADD-ONLY", () => {
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business the sales team works with",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // Must instruct wiring the feature into BOTH the sidebar and the router so it is reachable.
+    expect(prompt).toContain("AppSidebar");
+    expect(prompt).toContain("routes.tsx");
+    // The sidebar registration is via the scaffold's nav-items array (which renders
+    // the nav-<key> testid the acceptance gate navigates by).
+    expect(prompt).toContain("APP_SIDEBAR_NAV_ITEMS");
+    // Must carry the add-only boundary for those shared files.
+    expect(prompt).toContain("ADD ONLY");
+  });
 });

@@ -1757,7 +1757,7 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
     expect(spec).not.toContain("${code}injection`");
   });
 
-  test("B3: type-render invalid override as bare number (not string)", () => {
+  test("B3: canonical numeric invalid renders as a bare number (tests the constraint)", () => {
     const entityWithNumericNegative: IEntityAcceptance = {
       id: "Product",
       key: "product",
@@ -1789,11 +1789,58 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
 
     const spec = generateEntitySpec(entityWithNumericNegative);
 
-    // B3: Invalid override for numeric field should be bare -1 (not "-1" string)
+    // B3: Invalid override for numeric field renders as bare number (not string)
+    // to exercise the numeric range/constraint, not type-rejection.
+    // "-1" is finite, so it renders as bare -1, testing the constraint.
     expect(spec).toContain('payload["stock"] = -1');
   });
 
-  test("B3: type-render invalid override as bare boolean (not string)", () => {
+  test("B3: NON-canonical numeric invalid stays a raw string (not mutated by Number)", () => {
+    const entity: IEntityAcceptance = {
+      id: "Product",
+      key: "product",
+      nav: "Products",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "P1",
+          invalid: [],
+        },
+        {
+          name: "stock",
+          type: "integer",
+          optional: false,
+          valid: "10",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "stock"],
+      screens: ["list", "form"],
+      parents: [],
+      // "01" does NOT round-trip (Number("01")→1, String(1)!=="01") and a bare `01`
+      // would be an OCTAL SyntaxError in the strict-mode spec — so it must stay a raw
+      // string, testing type-rejection rather than corrupting to a valid `1`.
+      negatives: [
+        {
+          field: "stock",
+          value: "01",
+          why: "leading-zero token is not a valid integer input",
+        },
+      ],
+      acceptanceCheck: "create a product",
+    };
+
+    const spec = generateEntitySpec(entity);
+
+    expect(spec).toContain('payload["stock"] = "01"');
+    // Must NOT emit a bare octal literal (SyntaxError) or a mutated value.
+    expect(spec).not.toContain('payload["stock"] = 01');
+    expect(spec).not.toContain('payload["stock"] = 1;');
+  });
+
+  test("B3: type-render invalid boolean token as string (testing type-rejection)", () => {
     const entityWithBooleanNegative: IEntityAcceptance = {
       id: "Feature",
       key: "feature",
@@ -1825,8 +1872,46 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
 
     const spec = generateEntitySpec(entityWithBooleanNegative);
 
-    // B3: Invalid override for boolean field with invalid value should render as false (fallback)
-    // "notabool" is not "true", so it becomes false
+    // B3: Invalid boolean token (not "true"/"false") renders as JSON string
+    // to exercise type-rejection. "notabool" is not a valid boolean, so it
+    // renders as the string "notabool" to test the type constraint.
+    expect(spec).toContain('payload["active"] = "notabool"');
+  });
+
+  test("B3: type-render valid boolean value as bare boolean", () => {
+    const entityWithValidBooleanNegative: IEntityAcceptance = {
+      id: "Feature",
+      key: "feature",
+      nav: "Features",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Feature1",
+          invalid: [],
+        },
+        {
+          name: "active",
+          type: "bool",
+          optional: false,
+          valid: "true",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "active"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        { field: "active", value: "false", why: "active must be true" },
+      ],
+      acceptanceCheck: "create a feature",
+    };
+
+    const spec = generateEntitySpec(entityWithValidBooleanNegative);
+
+    // B3: Valid boolean value "false" renders as bare false
+    // to exercise the boolean value constraint (not type-rejection).
     expect(spec).toContain('payload["active"] = false');
   });
 
