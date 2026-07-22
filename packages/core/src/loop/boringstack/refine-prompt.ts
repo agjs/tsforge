@@ -178,6 +178,27 @@ Go through \`tests/helpers/db\` for db/schema — never import \`drizzle-orm\` o
 
 ---
 
+## BoringStack UI component conventions — write it RIGHT the first time
+
+The UI eslint (react-component-architecture) is strict; these rules cause the most churn. Copy the scaffold's gate-green example \`apps/ui/src/features/accounts/components/JoinRequestsPage/JoinRequestsPage.tsx\` — a list with per-row actions, exactly the shape your edit/delete rows need.
+
+**No arrow functions or .bind in JSX props (\`jsx-no-bind\` — the #1 churn source).** \`onClick={() => onEdit(row.id)}\` is REJECTED. For per-row actions add a curried helper in \`${camel}.utils.ts\`:
+\`\`\`ts
+export const makeIdHandler =
+  (fn: (id: string) => void) => (id: string) => () => fn(id);
+\`\`\`
+then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \`deleteHandler\`), and in JSX \`onClick={editHandler(row.id)}\`. The prop is a call expression, not a literal arrow, so the rule passes. For a zero-arg handler pass a named function reference (\`onClick={handleSubmit}\`), never an inline arrow.
+
+**Extract computed lists.** Build the rows as a const in the body (\`const renderRows = items.map((row) => (<tr…>…</tr>));\`) or a hook — never inline a complex \`.map()\` with logic in the returned JSX ("Extract this computation into a hook").
+
+**One concern per file.** The \`.tsx\` is presentational only; data/hooks go in \`${camel}.hooks.ts\`, pure helpers in \`${camel}.utils.ts\`, types in \`${camel}.types.ts\`. NEVER put JSX in a \`.ts\` file (JSX only compiles in \`.tsx\`; a \`.ts\` with \`<X>\` throws "Parsing error: '>' expected"). Never mix a hook + component + type in one module.
+
+**api-client is typed — no \`any\`.** \`@/lib/api/client\` (openapi-fetch) returns \`{ data, error }\` and THROWS on non-2xx via \`throwOnError\`. In a query/mutation: \`const { data, error } = await client.GET(...);\` if (error) throw error; return data;\` — \`data\` is fully typed, so \`.map\`/\`.id\`/\`.name\` are safe. Never wrap results in \`any\` or spread an untyped value (that triggers the "Unsafe member access / assignment of an \`any\` value" cascade).
+
+**Every visible string via \`t("features.${camel}.<key>")\`** — no hardcoded JSX text (button labels like "Edit"/"Delete" included).
+
+---
+
 ## Domain-Fill Instructions
 
 - **Persist for real**: every domain field must be a real column on the \`${camel}\` table (see Persistence above) that the service inserts/selects/updates via Drizzle. NEVER hold a field only in memory to satisfy a test — that stores nothing and is a failed implementation.
