@@ -36,6 +36,14 @@ const company: IEntityAcceptance = {
   shows: ["name", "website"],
   screens: ["list", "form"],
   parents: [],
+  negatives: [
+    { field: "name", value: "", why: "name is required" },
+    {
+      field: "website",
+      value: "not-a-url",
+      why: "invalid website format",
+    },
+  ],
   acceptanceCheck: "create a company",
 };
 
@@ -127,6 +135,33 @@ describe("E2E spec generator", () => {
     expect(spec).toContain(").toHaveCount(0, { timeout: 10000 });");
   });
 
+  test("generateEntitySpec includes negative tests for required and formatted fields", () => {
+    const spec = generateEntitySpec(company);
+
+    expect(spec).toContain("negative: Company rejects name=");
+    expect(spec).toContain("negative: Company rejects website=not-a-url");
+  });
+
+  test("negative tests use API-level POST to assert 4xx rejection (deterministic, no browser race)", () => {
+    const spec = generateEntitySpec(company);
+
+    // Should POST directly to /api/v1/company (API-level check, deterministic)
+    expect(spec).toContain("page.request.post");
+    expect(spec).toContain("/api/v1/company");
+    expect(spec).toContain("Content-Type");
+    expect(spec).toContain("application/json");
+    expect(spec).toContain("Cookie");
+    // Should assert 4xx status, not 5xx (client error, not server error)
+    expect(spec).toContain("toBeGreaterThanOrEqual(400)");
+    expect(spec).toContain("toBeLessThan(500)");
+    // Should build payload with valid fields + overridden invalid field
+    expect(spec).toContain("Record<string, unknown>");
+    expect(spec).toContain("payload[");
+    // Old browser-based approach is gone
+    expect(spec).not.toContain(".waitForResponse");
+    expect(spec).not.toContain("const createdOk = await successfulCreate");
+  });
+
   test("generateEntitySpec includes empty state check", () => {
     const spec = generateEntitySpec(company);
 
@@ -173,6 +208,13 @@ describe("E2E spec generator", () => {
       shows: ["name", "sku"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [
+        {
+          field: "name",
+          value: 'Invalid"Value`With`Specials',
+          why: "invalid format",
+        },
+      ],
       acceptanceCheck: "create a product",
     };
 
@@ -181,6 +223,11 @@ describe("E2E spec generator", () => {
     // Verify escaped double quotes appear in field fill steps
     expect(spec).toContain(
       '.fill("Value with \\"double quotes\\" and `backticks`")'
+    );
+
+    // Verify escaped quotes in negative test title (the invalid VALUE carries the specials)
+    expect(spec).toContain(
+      'test("negative: Product rejects name=Invalid\\"Value`With`Specials"'
     );
 
     // Verify that the raw unescaped version does NOT appear (which would break the spec)
@@ -206,6 +253,7 @@ describe("E2E spec generator", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -232,6 +280,7 @@ describe("E2E spec generator", () => {
       shows: ["name", "company"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -297,6 +346,7 @@ describe("E2E spec generator", () => {
         shows: ["name"],
         screens: ["list", "form"],
         parents: [],
+        negatives: [],
         acceptanceCheck: "create a company",
       };
 
@@ -323,6 +373,7 @@ describe("E2E spec generator", () => {
         shows: ["name", "company"],
         screens: ["list", "form"],
         parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+        negatives: [],
         acceptanceCheck: "create a contact",
       };
 
@@ -376,6 +427,7 @@ describe("E2E spec generator - Relationships", () => {
       shows: ["name", "email"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [{ field: "name", value: "", why: "name is required" }],
       acceptanceCheck: "create a contact",
     };
 
@@ -385,6 +437,39 @@ describe("E2E spec generator - Relationships", () => {
     expect(spec).toContain("Seed a parent Company record");
     expect(spec).toContain("/api/v1/company");
     expect(spec).toContain("Company-for-Contact");
+  });
+
+  test("negative tests for child entity include parent seeding in API payload", () => {
+    const contact: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John Doe",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [{ field: "name", value: "", why: "name is required" }],
+      acceptanceCheck: "create a contact",
+    };
+
+    const spec = generateEntitySpec(contact);
+
+    // Negative test should seed parent first (for FK reference in payload)
+    expect(spec).toContain("Seed a parent Company record");
+    // Then POST to API with payload including seeded companyId
+    expect(spec).toContain("page.request.post");
+    expect(spec).toContain("/api/v1/contact");
+    expect(spec).toContain("companyId: companyId");
+    // Negative test title format preserved
+    expect(spec).toContain("negative: Contact rejects name=");
   });
 
   test("generateEntitySpec with parent relationship selects parent in form", () => {
@@ -411,6 +496,7 @@ describe("E2E spec generator - Relationships", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -464,6 +550,7 @@ describe("E2E spec generator - Relationships", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -499,6 +586,7 @@ describe("E2E spec generator - Relationships", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -518,6 +606,7 @@ describe("E2E spec generator - Relationships", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -537,6 +626,7 @@ describe("E2E spec generator - Relationships", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [], // No parent in this chain (independent branch)
+      negatives: [],
       acceptanceCheck: "create a deal",
     };
 
@@ -590,6 +680,7 @@ describe("E2E spec generator - Relationships", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -616,6 +707,7 @@ describe("E2E spec generator - Relationships", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -642,6 +734,7 @@ describe("E2E spec generator - Relationships", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [{ entity: "Contact", key: "contact", fkField: "contactId" }],
+      negatives: [],
       acceptanceCheck: "create a deal",
     };
 
@@ -755,6 +848,7 @@ describe("FIX 1: chain assertion uses bare variable, not JSON-stringified name",
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -774,6 +868,7 @@ describe("FIX 1: chain assertion uses bare variable, not JSON-stringified name",
       shows: ["name", "company"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -809,6 +904,7 @@ describe("FIX B: chain rowCell testid resolves variable, not literal template", 
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -828,6 +924,7 @@ describe("FIX B: chain rowCell testid resolves variable, not literal template", 
       shows: ["name", "company"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -863,6 +960,7 @@ describe("FIX 1: chain linkage assertion uses bare variable, not JSON-stringifie
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -882,6 +980,7 @@ describe("FIX 1: chain linkage assertion uses bare variable, not JSON-stringifie
       shows: ["name", "company"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -917,6 +1016,7 @@ describe("FIX 2: topological sort ensures parents precede children", () => {
       shows: ["name", "company"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -936,6 +1036,7 @@ describe("FIX 2: topological sort ensures parents precede children", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -977,6 +1078,7 @@ describe("FIX C: chain parents resolved by key map, all selected", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -996,6 +1098,7 @@ describe("FIX C: chain parents resolved by key map, all selected", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [], // Independent — no parent in chain
+      negatives: [],
       acceptanceCheck: "create a deal",
     };
 
@@ -1015,6 +1118,7 @@ describe("FIX C: chain parents resolved by key map, all selected", () => {
       shows: ["name", "company"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -1052,6 +1156,7 @@ describe("FIX C: chain parents resolved by key map, all selected", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -1071,6 +1176,7 @@ describe("FIX C: chain parents resolved by key map, all selected", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -1093,6 +1199,7 @@ describe("FIX C: chain parents resolved by key map, all selected", () => {
         { entity: "Company", key: "company", fkField: "companyId" },
         { entity: "Contact", key: "contact", fkField: "contactId" },
       ],
+      negatives: [],
       acceptanceCheck: "create a deal",
     };
 
@@ -1144,6 +1251,7 @@ describe("FIX D: type-aware field fills", () => {
       shows: ["name", "category"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a product",
     };
 
@@ -1179,6 +1287,7 @@ describe("FIX D: type-aware field fills", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a feature",
     };
 
@@ -1216,6 +1325,7 @@ describe("FIX E/FIX 3: identity field excludes email by type and name", () => {
       shows: ["email", "username"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a user",
     };
 
@@ -1258,6 +1368,7 @@ describe("FIX E/FIX 3: identity field excludes email by type and name", () => {
       shows: ["email", "name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 
@@ -1285,6 +1396,7 @@ describe("FIX E/FIX 3: identity field excludes email by type and name", () => {
       shows: ["email"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a subscriber",
     };
 
@@ -1322,6 +1434,7 @@ describe("FIX E/FIX 3: identity field excludes email by type and name", () => {
       shows: ["email"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a subscriber",
     };
 
@@ -1355,6 +1468,7 @@ describe("FIX F: relationship linkage asserted after reload", () => {
       shows: ["name"],
       screens: ["list", "form"],
       parents: [],
+      negatives: [],
       acceptanceCheck: "create a company",
     };
 
@@ -1374,6 +1488,7 @@ describe("FIX F: relationship linkage asserted after reload", () => {
       shows: ["name", "company"],
       screens: ["list", "form"],
       parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
       acceptanceCheck: "create a contact",
     };
 

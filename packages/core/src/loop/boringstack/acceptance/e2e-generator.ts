@@ -29,6 +29,9 @@ export function stepTitle(
       return `update ${entityId}: edit form, change field, save`;
     case "delete":
       return `delete ${entityId}: row delete, confirm, row gone`;
+    case "negative":
+      // Negative titles include field and value; handled separately in generateNegativeBlocks
+      return "negative";
   }
 }
 
@@ -344,6 +347,79 @@ function generateRowCellAssertions(
 }
 
 /**
+ * Generate negative test blocks.
+ * Safely interpolates field names, invalid values, and entity name using JSON.stringify.
+ *
+ * Negatives work by:
+ * 1. Authenticate and seed parent entities via API
+ * 2. Build a payload with all required non-FK fields (valid values) + FK fields (seeded ids)
+ * 3. Override the target field with the invalid value
+ * 4. POST directly to /api/v1/<entity> and assert a 4xx response
+ *
+ * This deterministic API-level check proves validation is enforced without depending on
+ * browser form interaction or visible error elements.
+ */
+function generateNegativeBlocks(
+  entity: IEntityAcceptance,
+  _ids: ReturnType<typeof testIdsFor>,
+  _fieldFillSteps: string,
+  parentSeedingCode: string
+): string {
+  return entity.negatives
+    .map((neg) => {
+      const testTitle = `negative: ${entity.id} rejects ${neg.field}=${neg.value}`;
+
+      // Build valid field assignments (required non-FK fields)
+      const validFieldAssignments = entity.fields
+        .filter((f) => !f.optional)
+        .filter((f) => !entity.parents.some((p) => p.fkField === f.name))
+        .map((f) => `      ${f.name}: ${JSON.stringify(f.valid)}`)
+        .join(",\n");
+
+      // Build FK field assignments
+      const fkFieldAssignments = entity.parents
+        .map((p) => `      ${p.fkField}: ${p.key}Id`)
+        .join(",\n");
+
+      const payloadFields =
+        [validFieldAssignments, fkFieldAssignments]
+          .filter((s) => s.length > 0)
+          .join(",\n") + ",\n";
+
+      return `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
+    await authedPage.dashboard.goto();
+
+${parentSeedingCode}
+
+    const apiBase = process.env.VITE_API_BASE || "http://localhost:7331";
+    const cookieHeader = await page
+      .context()
+      .cookies()
+      .then((cs) => cs.map((c) => \`\${c.name}=\${c.value}\`).join("; "));
+
+    // A payload that is valid EXCEPT for the field under test (overridden with the invalid value).
+    const payload: Record<string, unknown> = {
+${payloadFields}    };
+    payload[${JSON.stringify(neg.field)}] = ${JSON.stringify(neg.value)};
+
+    const res = await page.request.post(\`\${apiBase}/api/v1/${entity.key}\`, {
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      data: payload,
+    });
+
+    // Invalid input MUST be rejected with a client error (4xx), not silently accepted.
+    expect(
+      res.status(),
+      \`expected ${entity.key} to reject ${neg.field}=${JSON.stringify(neg.value)} with a 4xx\`
+    ).toBeGreaterThanOrEqual(400);
+    expect(res.status()).toBeLessThan(500);
+  });
+`;
+    })
+    .join("\n");
+}
+
+/**
  * Generate a navigation helper function for an entity.
  * Used by both generateEntitySpec and generateChainSpec to avoid duplication.
  */
@@ -359,7 +435,7 @@ function generateNavHelper(entity: IEntityAcceptance): string {
  * Generate a Playwright spec text for a single entity's CRUD operations.
  * Returns a `.spec.ts` string ready to write to disk.
  *
- * Covers: nav, list (or empty), create, persist (reload), update, and delete.
+ * Covers: nav, list (or empty), create, persist (reload), update, delete, and negative cases.
  * Uses the app's authedPage fixture and getByTestId selectors.
  * For entities with parents, seeds the parent via API and selects it in the form.
  */
@@ -375,6 +451,12 @@ export function generateEntitySpec(
     entity.parents,
     entity.id,
     spec
+  );
+  const negativeBlocks = generateNegativeBlocks(
+    entity,
+    ids,
+    fieldFillSteps,
+    parentSeedingCode
   );
 
   // FIX E/FIX 3: Type-aware unique identity value
@@ -647,6 +729,8 @@ ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}
       page.getByTestId("${ids.row}").filter({ hasText: unique })
     ).toHaveCount(0, { timeout: 10000 });
   });
+
+${negativeBlocks}
 });
 `;
 }

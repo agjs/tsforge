@@ -12,6 +12,12 @@ export interface IParentRef {
   fkField: string;
 }
 
+export interface INegativeCase {
+  field: string;
+  value: string;
+  why: string;
+}
+
 export interface IEntityAcceptance {
   id: string;
   key: string;
@@ -20,6 +26,7 @@ export interface IEntityAcceptance {
   shows: string[];
   screens: readonly ("list" | "detail" | "form" | "dashboard")[];
   parents: IParentRef[];
+  negatives: INegativeCase[];
   acceptanceCheck: string;
 }
 
@@ -43,7 +50,7 @@ export interface ITestIds {
 }
 
 export type AcceptStep =
-  "nav" | "list" | "create" | "persist" | "update" | "delete";
+  "nav" | "list" | "create" | "persist" | "update" | "delete" | "negative";
 
 export interface IAcceptanceResult {
   entity: string;

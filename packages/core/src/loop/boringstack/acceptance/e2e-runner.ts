@@ -100,6 +100,10 @@ function parseStep(
     return "delete";
   }
 
+  if (testTitle.startsWith("negative: ")) {
+    return "negative";
+  }
+
   // Chain spec titles: match ALL three kinds (root, child, standalone)
   const rootCreateTitle = chainCreateTitle("root", entity.id);
 
@@ -496,6 +500,10 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
           "update",
           "delete",
         ];
+
+        if (entity.negatives.length > 0) {
+          requiredSteps.push("negative");
+        }
 
         let lastError: string | undefined;
         let lastResults: IAcceptanceResult[] = [];
