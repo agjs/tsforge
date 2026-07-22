@@ -376,9 +376,6 @@ function generateNegativeBlocks(
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    // Record initial row count before attempting to create an invalid record
-    const rowsBefore = await page.getByTestId("${ids.row}").count();
-
     // Open create form
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
@@ -386,28 +383,32 @@ function generateNegativeBlocks(
     // Emit parent seeding code so FK variables (e.g., companyId) are declared
 ${parentSeedingCode}
 
-    // Fill all fields with valid values
+    // Fill all fields with valid values, then override the target with the invalid one
 ${fieldFillSteps}
-
-    // Override the target field with the invalid value (clear first, then fill)
     await page.getByTestId("${fieldTestId}").clear();
     await page.getByTestId("${fieldTestId}").fill(${JSON.stringify(neg.value)});
 
-    // Submit with invalid input
+    // Rejection is proven by the ABSENCE of a SUCCESSFUL (2xx) create request — a real
+    // oracle, unlike row counts (immune to pagination, shared-DB accumulation, and
+    // reload-before-persist races). Start listening BEFORE the click to avoid missing
+    // a fast response. A server 4xx (r.ok() === false) or a client-blocked submit (no
+    // request at all) both leave this pending until timeout, so createdOk stays false.
+    const successfulCreate = page
+      .waitForResponse(
+        (r) =>
+          r.url().includes("/api/v1/${entity.key}") &&
+          r.request().method() === "POST" &&
+          r.ok(),
+        { timeout: 5000 }
+      )
+      .then(() => true)
+      .catch(() => false);
+
     await page.getByTestId("${ids.submit}").click();
 
-    // Let any create mutation reach the server BEFORE we reload, so a slow
-    // accept cannot be missed by reloading before it persists (false pass).
-    await page.waitForLoadState("networkidle").catch(() => {});
+    const createdOk = await successfulCreate;
 
-    // Reload to read the true persisted state from the backend.
-    await page.reload();
-    await page.waitForURL(/\\/${entity.key}/);
-
-    // Assert (web-first, retrying): the row count did NOT increase — the invalid
-    // record was rejected. toHaveCount retries, so a row that persists slightly
-    // after reload still fails the assertion instead of racing a one-shot count().
-    await expect(page.getByTestId("${ids.row}")).toHaveCount(rowsBefore);
+    expect(createdOk).toBe(false);
   });
 `;
     })

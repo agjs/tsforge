@@ -142,16 +142,20 @@ describe("E2E spec generator", () => {
     expect(spec).toContain("negative: Company rejects website=not-a-url");
   });
 
-  test("negative tests settle then assert non-persistence with a retrying count (no one-shot race)", () => {
+  test("negative tests prove rejection via absence of a successful create request (no count race)", () => {
     const spec = generateEntitySpec(company);
 
-    // Let the create mutation reach the server before reloading (no reload-before-persist false pass)
-    expect(spec).toContain('await page.waitForLoadState("networkidle")');
-    // Web-first retrying count assertion against the pre-submit baseline
-    expect(spec).toContain(
-      'await expect(page.getByTestId("company-row")).toHaveCount(rowsBefore)'
-    );
-    // The broken one-shot matcher (a number compared with an ignored timeout) is gone
+    // Listens for a 2xx POST to the entity endpoint, started BEFORE the submit click
+    expect(spec).toContain(".waitForResponse(");
+    expect(spec).toContain('r.url().includes("/api/v1/company")');
+    expect(spec).toContain('r.request().method() === "POST"');
+    expect(spec).toContain("r.ok()");
+    // Oracle: no successful create happened → rejection proven
+    expect(spec).toContain("const createdOk = await successfulCreate;");
+    expect(spec).toContain("expect(createdOk).toBe(false);");
+    // The count-based approach (racy under pagination/accumulation/late refetch) is gone
+    expect(spec).not.toContain("toHaveCount(rowsBefore)");
+    expect(spec).not.toContain('waitForLoadState("networkidle")');
     expect(spec).not.toContain("expect(rowsAfter).toBe(rowsBefore");
   });
 

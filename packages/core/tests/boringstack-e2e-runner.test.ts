@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Exec } from "../src/loop/boringstack/exec";
-import { makeBoringstackAcceptanceRunner } from "../src/loop/boringstack/acceptance/e2e-runner";
+import {
+  makeBoringstackAcceptanceRunner,
+  processExecResult,
+} from "../src/loop/boringstack/acceptance/e2e-runner";
 import { chainCreateTitle } from "../src/loop/boringstack/acceptance/e2e-generator";
 import type {
   IEntityAcceptance,
@@ -61,6 +64,72 @@ const testEntity: IEntityAcceptance = {
   negatives: [],
   acceptanceCheck: "create a company",
 };
+
+const CREATE_TITLE = "create Company: form fill, submit, row appears";
+
+function parseableReport(ok: boolean): string {
+  return JSON.stringify({
+    suites: [
+      {
+        title: "e2e/company.spec.ts",
+        suites: [],
+        specs: [
+          {
+            title: CREATE_TITLE,
+            ok,
+            tests: [
+              {
+                results: [
+                  {
+                    status: ok ? "passed" : "failed",
+                    ...(ok ? {} : { error: { message: "boom" } }),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    stats: { expected: 1, unexpected: ok ? 0 : 1, flaky: 0, skipped: 0 },
+    errors: [],
+  });
+}
+
+test("processExecResult threads the parsed results back (exit 0, parseable)", () => {
+  const res = processExecResult(
+    { code: 0, stdout: parseableReport(true), stderr: "" },
+    testEntity,
+    ["create"]
+  );
+
+  // The parse happens once here and is returned so run() need not re-parse.
+  expect(res.parseResult).not.toBeNull();
+  expect(res.parseResult?.some((r) => r.step === "create" && r.ok)).toBe(true);
+  expect(res.outcome).toBeDefined();
+});
+
+test("processExecResult threads parsed results even on a nonzero exit (diagnostics)", () => {
+  const res = processExecResult(
+    { code: 1, stdout: parseableReport(false), stderr: "" },
+    testEntity,
+    ["create"]
+  );
+
+  // Real failure: results are preserved (not discarded) for steer/diagnostics.
+  expect(res.parseResult).not.toBeNull();
+  expect(res.parseResult?.some((r) => r.step === "create")).toBe(true);
+});
+
+test("processExecResult returns null parseResult when stdout is unparseable", () => {
+  const res = processExecResult(
+    { code: 1, stdout: "", stderr: "some error" },
+    testEntity,
+    ["create"]
+  );
+
+  expect(res.parseResult).toBeNull();
+});
 
 test("runner: fake Exec returning nested Playwright JSON report parses correctly", async () => {
   const report = {

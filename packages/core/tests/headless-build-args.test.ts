@@ -6,6 +6,7 @@ import {
   parseHeadlessArgs,
   resolveWorkspaceDir,
   resolveExpertRescueFlag,
+  applyExpertRescueDefault,
 } from "../scripts/headless-build";
 
 describe("resolveExpertRescueFlag", () => {
@@ -19,6 +20,22 @@ describe("resolveExpertRescueFlag", () => {
 
   test("keeps an explicit '1'", () => {
     expect(resolveExpertRescueFlag("1")).toBe("1");
+  });
+});
+
+describe("applyExpertRescueDefault (the env wiring)", () => {
+  test("sets the flag to '1' on an env that has none", () => {
+    const env: { TSFORGE_EXPERT_RESCUE?: string } = {};
+
+    applyExpertRescueDefault(env);
+    expect(env.TSFORGE_EXPERT_RESCUE).toBe("1");
+  });
+
+  test("preserves an explicit opt-out ('0')", () => {
+    const env = { TSFORGE_EXPERT_RESCUE: "0" };
+
+    applyExpertRescueDefault(env);
+    expect(env.TSFORGE_EXPERT_RESCUE).toBe("0");
   });
 });
 

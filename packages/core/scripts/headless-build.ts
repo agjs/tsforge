@@ -94,6 +94,19 @@ export function resolveExpertRescueFlag(current: string | undefined): string {
 }
 
 /**
+ * Apply the expert-rescue default onto an environment object (the wiring around
+ * {@link resolveExpertRescueFlag}). Mutates `env.TSFORGE_EXPERT_RESCUE` in place so
+ * the autonomous builder defaults it on while an explicit value is preserved.
+ */
+export function applyExpertRescueDefault(
+  env: Record<string, string | undefined>
+): void {
+  env.TSFORGE_EXPERT_RESCUE = resolveExpertRescueFlag(
+    env.TSFORGE_EXPERT_RESCUE
+  );
+}
+
+/**
  * Parse headless-build command-line arguments into typed fields.
  * Flags (--log-file, --plan) and positionals (prompt, dir) can appear in any order.
  * Returns an object with undefined fields for missing args.
@@ -365,9 +378,7 @@ async function main(): Promise<void> {
     // This is a real autonomous builder: enable expert rescue by default so a
     // stalled feature is handed to the configured `capabilities.expert` model
     // instead of parking. Explicit env wins (set TSFORGE_EXPERT_RESCUE=0 to opt out).
-    process.env.TSFORGE_EXPERT_RESCUE = resolveExpertRescueFlag(
-      process.env.TSFORGE_EXPERT_RESCUE
-    );
+    applyExpertRescueDefault(process.env);
 
     process.stdout.write(
       `isolated ports → postgres ${String(pgPort)} · api ${String(apiPort)} · valkey ${String(valkeyPort)}\n`

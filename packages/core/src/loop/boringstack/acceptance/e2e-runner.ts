@@ -379,7 +379,7 @@ function classifyNonzeroExit(
  * Process a single exec result for entity acceptance testing.
  * Returns: { outcome, shouldRetry } where outcome is the final result or undefined to continue/retry.
  */
-function processExecResult(
+export function processExecResult(
   result: { code: number; stdout: string; stderr: string },
   entity: IEntityAcceptance,
   requiredSteps: AcceptStep[]
