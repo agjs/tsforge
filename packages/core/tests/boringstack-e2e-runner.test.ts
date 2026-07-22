@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import type { Exec } from "../src/loop/boringstack/exec";
 import { makeBoringstackAcceptanceRunner } from "../src/loop/boringstack/acceptance/e2e-runner";
+import { chainCreateTitle } from "../src/loop/boringstack/acceptance/e2e-generator";
 import type {
   IEntityAcceptance,
   IAcceptanceRunCtx,
@@ -888,4 +889,61 @@ test("FIX 6: infra-classified run with parseable results preserves results and i
     expect(firstResult.step).toBe("nav");
     expect(firstResult.ok).toBe(true);
   }
+});
+
+test("FIX A: chainCreateTitle generates canonical titles for all kinds", () => {
+  const entityId = "Company";
+
+  // All three kinds should generate distinct titles
+  const rootTitle = chainCreateTitle("root", entityId);
+  const childTitle = chainCreateTitle("child", entityId);
+  const standaloneTitle = chainCreateTitle("standalone", entityId);
+
+  expect(rootTitle).toBe("create root entity: Company");
+  expect(childTitle).toBe("create child entity: Company with parent linkage");
+  expect(standaloneTitle).toBe("create entity: Company (no parent linkage)");
+});
+
+test("FIX A: parseStep recognizes all chain-create titles", async () => {
+  const fakeExec: Exec = async () => ({
+    code: 0,
+    stdout: JSON.stringify({
+      suites: [
+        {
+          title: "Full Relational Chain",
+          specs: [
+            {
+              title: chainCreateTitle("root", testEntity.id),
+              ok: true,
+              tests: [{ results: [{ status: "passed" }] }],
+            },
+            {
+              title: chainCreateTitle("child", testEntity.id),
+              ok: true,
+              tests: [{ results: [{ status: "passed" }] }],
+            },
+            {
+              title: chainCreateTitle("standalone", testEntity.id),
+              ok: true,
+              tests: [{ results: [{ status: "passed" }] }],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 3, unexpected: 0, flaky: 0, skipped: 0 },
+      errors: [],
+    }),
+    stderr: "",
+  });
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const spec = { entities: [testEntity] };
+  const ctx = createTestCtx();
+
+  const outcome = await runner.runChain(spec, ctx);
+
+  // All three create steps should be recognized and pass
+  expect(outcome.ok).toBe(true);
+  expect(outcome.results.length).toBe(3);
+  expect(outcome.results.every((r) => r.step === "create")).toBe(true);
 });

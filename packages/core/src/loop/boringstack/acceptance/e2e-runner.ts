@@ -7,6 +7,7 @@ import {
   generateEntitySpec,
   specPath,
   stepTitle,
+  chainCreateTitle,
   generateChainSpec,
   chainSpecPath,
   generateAuthHelper,
@@ -103,12 +104,22 @@ function parseStep(
     return "negative";
   }
 
-  // Chain spec titles: "create root entity: Company" or "create child entity: Contact with parent linkage"
-  if (
-    testTitle.includes(`create ${entity.id}`) ||
-    testTitle.includes(`create root entity: ${entity.id}`) ||
-    testTitle.includes(`create child entity: ${entity.id}`)
-  ) {
+  // Chain spec titles: match ALL three kinds (root, child, standalone)
+  const rootCreateTitle = chainCreateTitle("root", entity.id);
+
+  if (testTitle === rootCreateTitle) {
+    return "create";
+  }
+
+  const childCreateTitle = chainCreateTitle("child", entity.id);
+
+  if (testTitle === childCreateTitle) {
+    return "create";
+  }
+
+  const standaloneCreateTitle = chainCreateTitle("standalone", entity.id);
+
+  if (testTitle === standaloneCreateTitle) {
     return "create";
   }
 

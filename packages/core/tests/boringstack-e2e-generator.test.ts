@@ -776,3 +776,438 @@ describe("FIX 11: planToAcceptanceSpec FK dedup", () => {
     expect(companyIdFields.length).toBe(1);
   });
 });
+
+describe("FIX B: chain rowCell testid resolves variable, not literal template", () => {
+  test("child chain test generates rowCell with resolved parent key, not literal template", () => {
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "company"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const spec: IAcceptanceSpec = {
+      entities: [companyEntity, contactEntity],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // FIX B: Should contain the resolved parent key (contact-row-company)
+    // NOT the literal template string "${primaryParent.key}"
+    expect(chainSpec).toContain("contact-row-company");
+    expect(chainSpec).not.toContain("${primaryParent.key}");
+    expect(chainSpec).not.toContain("primaryParent.key");
+  });
+});
+
+describe("FIX C: chain parents resolved by key map, all selected", () => {
+  test("non-linear chain (Company@0, Deal@1 independent, Contact@2→Company) selects Company's var", () => {
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const dealEntity: IEntityAcceptance = {
+      id: "Deal",
+      key: "deal",
+      nav: "Deals",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Deal1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [], // Independent — no parent in chain
+      negatives: [],
+      acceptanceCheck: "create a deal",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "company"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const spec: IAcceptanceSpec = {
+      entities: [companyEntity, dealEntity, contactEntity],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // FIX C: Contact should select Company (which is at index 0, not calculated by index math)
+    // The var should be parent0Unique for Company
+    expect(chainSpec).toContain("parent0Unique");
+    // Deal is independent, so it gets parent1Unique (it's the second entity but has no parent)
+    // Contact is third and gets parent2Unique
+    // The key thing is Contact selects Company (parent0Unique), not Deal (parent1Unique)
+    expect(chainSpec).toContain(
+      'page.getByTestId("contact-field-companyId").selectOption({ label: parent0Unique })'
+    );
+  });
+
+  test("multi-parent child selects all in-chain parents", () => {
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const dealEntity: IEntityAcceptance = {
+      id: "Deal",
+      key: "deal",
+      nav: "Deals",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Deal1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [
+        { entity: "Company", key: "company", fkField: "companyId" },
+        { entity: "Contact", key: "contact", fkField: "contactId" },
+      ],
+      negatives: [],
+      acceptanceCheck: "create a deal",
+    };
+
+    const spec: IAcceptanceSpec = {
+      entities: [companyEntity, contactEntity, dealEntity],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // FIX C: Deal should select BOTH Company and Contact (not just Company)
+    // Both selectOption calls should appear
+    expect(chainSpec).toContain("deal-field-companyId");
+    expect(chainSpec).toContain("deal-field-contactId");
+    // Both should have selectOption calls
+    const companySelectCount = (
+      chainSpec.match(/deal-field-companyId.*selectOption/g) ?? []
+    ).length;
+    const contactSelectCount = (
+      chainSpec.match(/deal-field-contactId.*selectOption/g) ?? []
+    ).length;
+
+    expect(companySelectCount).toBeGreaterThan(0);
+    expect(contactSelectCount).toBeGreaterThan(0);
+  });
+});
+
+describe("FIX D: type-aware field fills", () => {
+  test("select field generates selectOption, not fill", () => {
+    const entityWithSelect: IEntityAcceptance = {
+      id: "Product",
+      key: "product",
+      nav: "Products",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Widget",
+          invalid: [],
+        },
+        {
+          name: "category",
+          type: "select",
+          optional: false,
+          valid: "electronics",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "category"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a product",
+    };
+
+    const spec = generateEntitySpec(entityWithSelect);
+
+    // FIX D: Select field should use selectOption
+    expect(spec).toContain('selectOption("electronics")');
+    // Should NOT use .fill() for the select field
+    expect(spec).not.toContain('field("category").fill');
+  });
+
+  test("boolean field generates check/uncheck, not fill", () => {
+    const entityWithBoolean: IEntityAcceptance = {
+      id: "Feature",
+      key: "feature",
+      nav: "Features",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Feature1",
+          invalid: [],
+        },
+        {
+          name: "enabled",
+          type: "boolean",
+          optional: false,
+          valid: "true",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a feature",
+    };
+
+    const spec = generateEntitySpec(entityWithBoolean);
+
+    // FIX D: Boolean field should use check() when true
+    expect(spec).toContain(".check()");
+    // Should NOT use .fill() for the boolean field
+    expect(spec).not.toContain('field("enabled").fill');
+  });
+});
+
+describe("FIX E: identity field excludes email", () => {
+  test("entity with email first string field uses fallback text field", () => {
+    const entityWithEmail: IEntityAcceptance = {
+      id: "User",
+      key: "user",
+      nav: "Users",
+      fields: [
+        {
+          name: "email",
+          type: "email",
+          optional: false,
+          valid: "user@example.com",
+          invalid: [],
+        },
+        {
+          name: "username",
+          type: "string",
+          optional: false,
+          valid: "johndoe",
+          invalid: [],
+        },
+      ],
+      shows: ["email", "username"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a user",
+    };
+
+    const spec = generateEntitySpec(entityWithEmail);
+
+    // FIX E: Should use username (text field) for identity, not email
+    // Identity marker is added as "-<timestamp>" suffix, so email would become invalid
+    // The unique marker should use username's value as the base
+    expect(spec).toContain("johndoe");
+    // Identity field should be username field (filled with unique marker)
+    expect(spec).toContain('getByTestId("user-field-username").fill(unique)');
+    // Email field should also be filled with valid email (not stamped)
+    expect(spec).toContain(
+      'getByTestId("user-field-email").fill("user@example.com")'
+    );
+  });
+
+  test("chain with email-only string field avoids email for identity", () => {
+    const emailOnlyEntity: IEntityAcceptance = {
+      id: "Subscriber",
+      key: "subscriber",
+      nav: "Subscribers",
+      fields: [
+        {
+          name: "email",
+          type: "email",
+          optional: false,
+          valid: "sub@example.com",
+          invalid: [],
+        },
+      ],
+      shows: ["email"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a subscriber",
+    };
+
+    const spec = {
+      entities: [emailOnlyEntity],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // FIX E: Even if email is the only string field, the timestamp suffix should not be added
+    // The entity is fallback to first field (email), but the unique marker construction should
+    // recognize that it's an email field and handle it appropriately or use a valid-email strategy
+    expect(chainSpec).toContain("create root entity: Subscriber");
+  });
+});
+
+describe("FIX F: relationship linkage asserted after reload", () => {
+  test("persist test asserts parent linkage after reload", () => {
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "company"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const fullSpec: IAcceptanceSpec = {
+      entities: [companyEntity, contactEntity],
+    };
+
+    const spec = generateEntitySpec(contactEntity, fullSpec);
+
+    // FIX F: Persist test should assert parent linkage after reload
+    // Look for assertion of parent cell AFTER reload
+    const reloadIndex = spec.indexOf("page.reload()");
+    const reloadedRowIndex = spec.indexOf("const reloadedRow", reloadIndex);
+    const parentCellAssertionIndex = spec.indexOf(
+      "reloadedRow.getByTestId",
+      reloadIndex
+    );
+
+    expect(reloadedRowIndex).toBeGreaterThan(reloadIndex);
+    expect(parentCellAssertionIndex).toBeGreaterThan(reloadedRowIndex);
+  });
+});

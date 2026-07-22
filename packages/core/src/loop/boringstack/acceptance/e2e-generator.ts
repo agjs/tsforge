@@ -38,6 +38,25 @@ export function stepTitle(
 }
 
 /**
+ * Generate a canonical test title for chain-create steps (FIX A: single source of truth).
+ * Used by both the spec generator (for test names) and the runner (for parsing results back).
+ * Ensures parseStep recognizes every title the generator emits.
+ */
+export function chainCreateTitle(
+  kind: "root" | "child" | "standalone",
+  entityId: string
+): string {
+  switch (kind) {
+    case "root":
+      return `create root entity: ${entityId}`;
+    case "child":
+      return `create child entity: ${entityId} with parent linkage`;
+    case "standalone":
+      return `create entity: ${entityId} (no parent linkage)`;
+  }
+}
+
+/**
  * Generate API seeding code for parent entities before form submission.
  * Recursively seeds parents in topologically ordered (DFS post-order) so parent FK
  * fields reference real seeded IDs rather than placeholders. For a 2+ level chain
@@ -212,6 +231,7 @@ function generateParentSeedingCode(
 
 /**
  * Generate field fill steps for form inputs.
+ * FIX D: Type-aware field fills (select/checkbox/date/number) instead of blanket .fill().
  * Each step safely interpolates field.valid using JSON.stringify.
  * @param skipForeignKeys - if true, skip FK fields (used for chain specs where parent selection is handled separately)
  */
@@ -239,6 +259,29 @@ function generateFieldFillSteps(
         }
       }
 
+      // FIX D: Type-aware fill based on field.type
+      const fieldType = field.type.toLowerCase();
+
+      // Select/enum/option type
+      if (
+        fieldType.includes("select") ||
+        fieldType.includes("enum") ||
+        fieldType.includes("option")
+      ) {
+        return `    await page.getByTestId("${ids.field(field.name)}").selectOption(${JSON.stringify(field.valid)});`;
+      }
+
+      // Boolean/checkbox type
+      if (fieldType.includes("bool") || fieldType.includes("checkbox")) {
+        // Check if field.valid is truthy (treat non-empty string as truthy)
+        const shouldCheck = field.valid !== "" && field.valid !== "false";
+
+        return `    await page.getByTestId("${ids.field(field.name)}").${
+          shouldCheck ? "check" : "uncheck"
+        }();`;
+      }
+
+      // Everything else (string/text/email/number/date) uses fill
       return `    await page.getByTestId("${ids.field(field.name)}").fill(${JSON.stringify(field.valid)});`;
     })
     .filter((line) => line.length > 0)
@@ -408,13 +451,18 @@ export function generateEntitySpec(
     parentSeedingCode
   );
 
-  // FIX 6: Type-aware unique identity value
-  // Find the first field with a string-like type for the unique marker
-  const stringTypePatterns = ["string", "text", "email"];
+  // FIX E: Type-aware unique identity value
+  // Find the first field with a string/text type (NOT email) for the unique marker
+  // Email fields with timestamp suffix are invalid emails, so we exclude them
   const identityField =
-    entity.fields.find((f) =>
-      stringTypePatterns.some((type) => f.type.toLowerCase().includes(type))
-    ) ?? entity.fields[0];
+    entity.fields.find((f) => {
+      const fieldType = f.type.toLowerCase();
+
+      return (
+        (fieldType.includes("string") || fieldType.includes("text")) &&
+        !fieldType.includes("email")
+      );
+    }) ?? entity.fields[0];
   const identityFieldName = identityField?.name ?? "name";
   const identityFieldValid = identityField?.valid ?? "updated";
   const firstFieldName = entity.fields[0]?.name ?? "name";
@@ -518,9 +566,39 @@ ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}
     await page.waitForURL(/\\/${entity.key}/);
 
     // THIS test's row survives the reload
-    await expect(
-      page.getByTestId("${ids.row}").filter({ hasText: unique })
-    ).toBeVisible({ timeout: 10000 });
+    const reloadedRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
+    await expect(reloadedRow).toBeVisible({ timeout: 10000 });
+
+    // FIX F: Assert relationship linkage after reload (not only optimistic UI)
+${
+  entity.parents.length > 0
+    ? `    // Verify parent linkage persists after reload
+${entity.parents
+  .map((parent) => {
+    const parentDef = spec?.entities.find((e) => e.key === parent.key);
+    let expectedValue = parent.entity; // Fallback: type name
+
+    if (parentDef !== undefined && parentDef.fields.length > 0) {
+      const stringField =
+        parentDef.fields.find((f) => {
+          const ft = f.type.toLowerCase();
+
+          return (
+            (ft.includes("string") || ft.includes("text")) &&
+            !ft.includes("email")
+          );
+        }) ?? parentDef.fields[0];
+
+      if (stringField !== undefined) {
+        expectedValue = stringField.valid;
+      }
+    }
+
+    return `    await expect(reloadedRow.getByTestId("${ids.rowCell(parent.key)}")).toContainText(${JSON.stringify(expectedValue)});`;
+  })
+  .join("\n")}`
+    : ""
+}
   });
 
   test(${JSON.stringify(stepTitle("update", entity.key, name))}, async ({ page, authedPage }) => {
@@ -635,12 +713,16 @@ function generateRootEntityChainTest(
   const ids = testIdsFor(entity.key);
   const fieldFill = generateFieldFillSteps(entity, ids, false);
 
-  // FIX 6: Type-aware identity for chain tests
-  const stringTypePatterns = ["string", "text", "email"];
+  // FIX E: Type-aware identity for chain tests (NOT email)
   const identityField =
-    entity.fields.find((f) =>
-      stringTypePatterns.some((type) => f.type.toLowerCase().includes(type))
-    ) ?? entity.fields[0];
+    entity.fields.find((f) => {
+      const fieldType = f.type.toLowerCase();
+
+      return (
+        (fieldType.includes("string") || fieldType.includes("text")) &&
+        !fieldType.includes("email")
+      );
+    }) ?? entity.fields[0];
   const identityFieldName = identityField?.name ?? "name";
   const identityFieldValid = identityField?.valid ?? "updated";
   const firstFieldName = entity.fields[0]?.name ?? "name";
@@ -650,8 +732,9 @@ function generateRootEntityChainTest(
     ? ""
     : `\n    await page.getByTestId("${ids.field(firstFieldName)}").fill(${JSON.stringify(firstFieldValid)});`;
   const varName = `parent${index}Unique`;
+  const testTitle = chainCreateTitle("root", entity.id);
 
-  const testStep = `  test("create root entity: ${entity.id}", async ({ page, authedPage }) => {
+  const testStep = `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
@@ -685,12 +768,14 @@ ${fieldFill}${fillFirstFieldCode}
  * For each of the entity's parents, selects a parent that was created in an earlier test.
  * If no parents are present in earlier-created entities, generates as standalone.
  * Never throws — handles non-linear plans (branches, independent roots, different order).
+ * FIX C: Uses parentVarMap to resolve parent var names by key, not by index math.
  */
 function generateChildEntityChainTest(
   entity: IEntityAcceptance,
   index: number,
   spec: IAcceptanceSpec,
-  createdKeys: Set<string>
+  createdKeys: Set<string>,
+  parentVarMap: Map<string, string>
 ): {
   varName: string;
   testStep: string;
@@ -707,11 +792,16 @@ function generateChildEntityChainTest(
     const ids = testIdsFor(entity.key);
     const fieldFill = generateFieldFillSteps(entity, ids, false);
 
-    const stringTypePatterns = ["string", "text", "email"];
+    // FIX E: Type-aware identity for standalone child (NOT email)
     const identityField =
-      entity.fields.find((f) =>
-        stringTypePatterns.some((type) => f.type.toLowerCase().includes(type))
-      ) ?? entity.fields[0];
+      entity.fields.find((f) => {
+        const fieldType = f.type.toLowerCase();
+
+        return (
+          (fieldType.includes("string") || fieldType.includes("text")) &&
+          !fieldType.includes("email")
+        );
+      }) ?? entity.fields[0];
     const identityFieldName = identityField?.name ?? "name";
     const identityFieldValid = identityField?.valid ?? "updated";
     const firstFieldName = entity.fields[0]?.name ?? "name";
@@ -722,8 +812,9 @@ function generateChildEntityChainTest(
       : `\n    await page.getByTestId("${ids.field(firstFieldName)}").fill(${JSON.stringify(firstFieldValid)});`;
 
     const varName = `parent${index}Unique`;
+    const testTitle = chainCreateTitle("standalone", entity.id);
 
-    const testStep = `  test("create entity: ${entity.id} (no parent linkage)", async ({ page, authedPage }) => {
+    const testStep = `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
@@ -748,9 +839,8 @@ ${fieldFill}${fillFirstFieldCode}
     return { varName, testStep };
   }
 
-  // Has parent(s) from earlier entities — use the first selectable parent as primary
+  // Has parent(s) from earlier entities — resolve by key, not by index math (FIX C)
   // selectableParents is guaranteed non-empty here (checked earlier in the if above)
-  // Use a local variable to track the primary parent key for template interpolation
   const primaryParent = selectableParents[0];
 
   if (!primaryParent) {
@@ -765,7 +855,26 @@ ${fieldFill}${fillFirstFieldCode}
       ? generateParentSeedingCode(unseededParents, entity.id, spec)
       : "";
 
-  // Seed any parents that are not in the chain
+  // Select ALL in-chain parents (FIX C: not just [0])
+  // Each selectable parent gets its resolved var name from parentVarMap
+  const selectAllParentsCode = selectableParents
+    .map((parent) => {
+      const parentVarName = parentVarMap.get(parent.key);
+
+      if (parentVarName === undefined || parentVarName === "") {
+        // Should not reach here if map is properly populated
+        throw new Error(
+          `Parent ${parent.key} not found in var map when building child test`
+        );
+      }
+
+      const fieldTestId = testIdsFor(entity.key).field(parent.fkField);
+
+      return `    await page.getByTestId("${fieldTestId}").selectOption({ label: ${parentVarName} });`;
+    })
+    .join("\n");
+
+  // Seed any parents that are not in the chain (use API seeding)
   const seedingSteps = unseededParents
     .map((parent) => {
       const varName = `${parent.key}Id`;
@@ -778,11 +887,16 @@ ${fieldFill}${fillFirstFieldCode}
   const ids = testIdsFor(entity.key);
   const fieldFill = generateFieldFillSteps(entity, ids, true);
 
-  const stringTypePatterns = ["string", "text", "email"];
+  // FIX E: Type-aware identity for child (NOT email)
   const identityField =
-    entity.fields.find((f) =>
-      stringTypePatterns.some((type) => f.type.toLowerCase().includes(type))
-    ) ?? entity.fields[0];
+    entity.fields.find((f) => {
+      const fieldType = f.type.toLowerCase();
+
+      return (
+        (fieldType.includes("string") || fieldType.includes("text")) &&
+        !fieldType.includes("email")
+      );
+    }) ?? entity.fields[0];
   const identityFieldName = identityField?.name ?? "name";
   const identityFieldValid = identityField?.valid ?? "updated";
   const firstFieldName = entity.fields[0]?.name ?? "name";
@@ -792,14 +906,13 @@ ${fieldFill}${fillFirstFieldCode}
     ? ""
     : `\n    await page.getByTestId("${ids.field(firstFieldName)}").fill(${JSON.stringify(firstFieldValid)});`;
 
-  const primaryParentVarName = `parent${index - selectableParents.length}Unique`;
+  const testTitle = chainCreateTitle("child", entity.id);
   const currentVarName = `parent${index}Unique`;
-  const primaryParentFieldTestId = ids.field(primaryParent.fkField);
   const otherParentsCode =
     otherSeedingCode.length > 0 ? `\n${otherSeedingCode}\n` : "";
   const seedingCode = seedingSteps.length > 0 ? `\n${seedingSteps}\n` : "";
 
-  const testStep = `  test("create child entity: ${entity.id} with parent linkage", async ({ page, authedPage }) => {
+  const testStep = `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
@@ -810,8 +923,8 @@ ${fieldFill}${fillFirstFieldCode}
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${fieldFill}${otherParentsCode}
-    // Select parent(s) by display label
-    await page.getByTestId("${primaryParentFieldTestId}").selectOption({ label: ${primaryParentVarName} });${seedingCode}${fillFirstFieldCode}
+    // Select all in-chain parents by display label (FIX C)
+${selectAllParentsCode}${seedingCode}${fillFirstFieldCode}
     await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
@@ -820,7 +933,9 @@ ${fieldFill}${otherParentsCode}
     const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
     await expect(createdRow).toBeVisible({ timeout: 10000 });
 
-    await expect(createdRow.getByTestId("${ids.rowCell("${primaryParent.key}")}")).toContainText(${primaryParentVarName});
+    // Assert the primary parent linkage (FIX C: resolved by key)
+    const primaryParentVarName = ${JSON.stringify(parentVarMap.get(primaryParent.key))};
+    await expect(createdRow.getByTestId("${ids.rowCell(primaryParent.key)}")).toContainText(primaryParentVarName);
 
     ${currentVarName} = unique;
   });`;
@@ -839,6 +954,11 @@ ${fieldFill}${otherParentsCode}
  *   create Contact, assert Contact row shows Company linkage cell
  * - Deal test: select Contact (by its unique value), create Deal, assert Deal row shows Contact linkage
  * - Activity test: select Deal, create Activity, assert Activity row shows Deal linkage
+ *
+ * FIX G: Scope note — chain creates ONE entity per relational chain (end-to-end linkage smoke test).
+ * Full CRUD (nav+list+create+persist+update+delete+negative) is run per-entity during the per-slice
+ * acceptance phase (entity-level tests). The chain is NOT expanded to full CRUD per entity to avoid
+ * test count explosion and codegen complexity. Chain = relational linkage verification only.
  */
 export function generateChainSpec(spec: IAcceptanceSpec): string {
   if (spec.entities.length === 0) {
@@ -855,9 +975,11 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
     .join("\n\n");
 
   // Build test steps that thread the parent unique values through the chain
+  // FIX C: Use a map to track entity.key → varName for resolving parents by key
   const testSteps: string[] = [];
   const parentTrackingVars: string[] = [];
   const createdKeys = new Set<string>();
+  const parentVarMap = new Map<string, string>();
 
   for (let i = 0; i < spec.entities.length; i++) {
     const entity = spec.entities[i];
@@ -877,18 +999,21 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
       parentTrackingVars.push(`let ${varName}: string;`);
       testSteps.push(testStep);
       createdKeys.add(entity.key);
+      parentVarMap.set(entity.key, varName);
     } else {
       // Child entity — build linkage from actual parent relationships
       const { varName, testStep } = generateChildEntityChainTest(
         entity,
         i,
         spec,
-        createdKeys
+        createdKeys,
+        parentVarMap
       );
 
       parentTrackingVars.push(`let ${varName}: string;`);
       testSteps.push(testStep);
       createdKeys.add(entity.key);
+      parentVarMap.set(entity.key, varName);
     }
   }
 
