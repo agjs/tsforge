@@ -35,3 +35,8 @@ packages/core/scripts/gen-plan.ts
 # harness-generated acceptance specs + playwright artifacts (never commit)
 apps/*/e2e/_acceptance/
 test-results/
+
+# local build/panel logs (never commit)
+/scratchpad-*.log
+/scratchpad-*.log.stdout
+/scratchpad-*.log*
