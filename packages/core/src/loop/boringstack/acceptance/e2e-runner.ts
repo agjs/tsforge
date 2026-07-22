@@ -353,7 +353,10 @@ function classifyNonzeroExit(
 /**
  * Process a single exec result for entity acceptance testing.
  * Parses Playwright JSON and extracts results.
- * Returns: { outcome, shouldRetry } where outcome is the final result or undefined to continue/retry.
+ * Returns: { outcome, shouldRetry, parseResult, parsed } where outcome is the final result or undefined to continue/retry.
+ * parsed is non-null only when JSON was successfully parsed (even if no specs matched).
+ * This distinction (null vs []) lets the runner preserve stale results from an earlier
+ * successful parse when a later attempt has unparseable JSON.
  */
 export function processExecResult(
   result: { code: number; stdout: string; stderr: string },
@@ -363,6 +366,7 @@ export function processExecResult(
   outcome?: IAcceptanceOutcome;
   shouldRetry: boolean;
   parseResult: IAcceptanceResult[];
+  parsed: IPlaywrightReportType | null;
 } {
   // Parse JSON and extract acceptance results
   const { parsed: parsedReport, results: parseResult } = parsePlaywrightResults(
@@ -375,6 +379,7 @@ export function processExecResult(
       outcome: summarize(parseResult, requiredSteps),
       shouldRetry: false,
       parseResult,
+      parsed: parsedReport,
     };
   }
 
@@ -382,6 +387,7 @@ export function processExecResult(
   return {
     ...classifyNonzeroExit(result, parsedReport, parseResult),
     parseResult,
+    parsed: parsedReport,
   };
 }
 
@@ -525,21 +531,18 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
             }
           );
 
-          const { outcome, shouldRetry, parseResult } = processExecResult(
-            result,
-            entity,
-            requiredSteps
-          );
+          const { outcome, shouldRetry, parseResult, parsed } =
+            processExecResult(result, entity, requiredSteps);
 
           if (outcome !== undefined) {
             return outcome;
           }
 
           // Preserve parsed results even if classified as infra (for diagnostics).
-          // Reuse the parse from processExecResult — do not re-parse the same stdout.
-          // Only overwrite lastResults when parseResult is non-empty; if it's the
-          // empty-array sentinel from unparseable stdout, preserve earlier diagnostics.
-          if (parseResult.length > 0) {
+          // Distinguish unparseable (parsed === null) from valid-empty (parsed !== null, parseResult === []):
+          // - Unparseable (null): keep the previous lastResults from an earlier successful parse
+          // - Valid-empty (parsed !== null): overwrite lastResults with the latest valid parse (even if empty)
+          if (parsed !== null) {
             lastResults = parseResult;
           }
 

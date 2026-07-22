@@ -1016,3 +1016,131 @@ test("FIX A: parseStep recognizes all chain-create titles", async () => {
   expect(outcome.results.length).toBe(3);
   expect(outcome.results.every((r) => r.step === "create")).toBe(true);
 });
+
+test("FIX 1b: runner preserves earlier parsed result when later attempt is unparseable", async () => {
+  let attemptCount = 0;
+
+  const fakeExec: Exec = async () => {
+    attemptCount++;
+
+    if (attemptCount === 1) {
+      // First attempt: parseable JSON with results (infra error in stderr)
+      return {
+        code: 1,
+        stdout: JSON.stringify({
+          suites: [
+            {
+              title: "e2e/company.spec.ts",
+              specs: [
+                {
+                  title: "create Company: form fill, submit, row appears",
+                  ok: false,
+                  tests: [
+                    {
+                      results: [
+                        {
+                          status: "failed",
+                          error: { message: "Row did not appear" },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          stats: { expected: 1, unexpected: 1, flaky: 0, skipped: 0 },
+          errors: [],
+        }),
+        stderr: "ECONNREFUSED: connection timeout",
+      };
+    }
+
+    if (attemptCount === 2) {
+      // Second attempt: still infra error, unparseable (empty stdout)
+      return {
+        code: 1,
+        stdout: "",
+        stderr: "ECONNREFUSED: infrastructure failure",
+      };
+    }
+
+    // Third attempt: still unparseable
+    return {
+      code: 1,
+      stdout: "",
+      stderr: "ECONNREFUSED: final infra failure",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const ctx = createTestCtx();
+
+  const outcome = await runner.run(testEntity, ctx);
+
+  // Must be classified as infra error after 3 attempts
+  expect(outcome.infraError).toBeDefined();
+  // CRITICAL: results from the first (parseable) attempt must be preserved
+  expect(outcome.results.length).toBeGreaterThan(0);
+  expect(outcome.results[0]?.step).toBe("create");
+  expect(outcome.results[0]?.detail).toBe("Row did not appear");
+});
+
+test("FIX 1b: runner overwrites earlier result when later attempt is valid-empty []", async () => {
+  let attemptCount = 0;
+
+  const fakeExec: Exec = async () => {
+    attemptCount++;
+
+    if (attemptCount === 1) {
+      // First attempt: parseable JSON with one result + infra error in stderr
+      return {
+        code: 1,
+        stdout: JSON.stringify({
+          suites: [
+            {
+              title: "e2e/company.spec.ts",
+              specs: [
+                {
+                  title: "create Company: form fill, submit, row appears",
+                  ok: true,
+                  tests: [{ results: [{ status: "passed" }] }],
+                },
+              ],
+            },
+          ],
+          stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
+          errors: [],
+        }),
+        stderr: "ECONNREFUSED: connection timeout",
+      };
+    }
+
+    // Second attempt: parseable JSON but no matching test specs (empty results, still infra error)
+    return {
+      code: 1,
+      stdout: JSON.stringify({
+        suites: [
+          {
+            title: "e2e/company.spec.ts",
+            specs: [],
+          },
+        ],
+        stats: { expected: 0, unexpected: 0, flaky: 0, skipped: 0 },
+        errors: [],
+      }),
+      stderr: "ECONNREFUSED: connection still failing",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const ctx = createTestCtx();
+
+  const outcome = await runner.run(testEntity, ctx);
+
+  // Must be classified as infra error
+  expect(outcome.infraError).toBeDefined();
+  // CRITICAL: results must be the LATEST valid-empty [] parse (empty array from second attempt)
+  // NOT the earlier result with "create" from first attempt
+  expect(outcome.results.length).toBe(0);
+});

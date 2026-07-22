@@ -271,6 +271,69 @@ function renderFieldValue(field: { type: string; valid: string }): string {
 }
 
 /**
+ * Render an invalid override value (for negative tests) to a code literal string.
+ * Type-aware rendering: tests the constraint with bare types (not strings).
+ * Rules:
+ * - empty string "" → stays as "" (tests required-empty constraint)
+ * - numeric field + Number(value) is finite → bare number (tests numeric constraint)
+ * - boolean field + value is "true"/"false" → bare boolean (tests boolean constraint)
+ * - boolean field + other token → JSON string (tests type-rejection)
+ * - everything else → JSON string (default fallback)
+ * Complexity: ≤ 20 (three type checks with normalized matching).
+ */
+function renderInvalidOverride(field: { type: string }, value: string): string {
+  // Empty string: stay as empty string literal to test required-empty constraint
+  if (value === "") {
+    return '""';
+  }
+
+  const normalized = field.type.toLowerCase().trim();
+
+  // Numeric types: bare number for finite values (tests numeric constraint)
+  const numericTypes = new Set([
+    "number",
+    "integer",
+    "int",
+    "float",
+    "double",
+    "decimal",
+    "numeric",
+  ]);
+
+  if (numericTypes.has(normalized)) {
+    const num = Number(value);
+
+    // Only bare number if finite; otherwise JSON string
+    if (Number.isFinite(num)) {
+      return String(num);
+    }
+
+    return JSON.stringify(value);
+  }
+
+  // Boolean types: bare boolean for "true"/"false", JSON string for other tokens
+  const booleanTypes = new Set(["boolean", "bool"]);
+
+  if (booleanTypes.has(normalized)) {
+    const trimmed = value.trim().toLowerCase();
+
+    if (trimmed === "true") {
+      return "true";
+    }
+
+    if (trimmed === "false") {
+      return "false";
+    }
+
+    // Non-boolean token (e.g., "notabool") for a boolean field: JSON string to test type-rejection
+    return JSON.stringify(value);
+  }
+
+  // Everything else: JSON string
+  return JSON.stringify(value);
+}
+
+/**
  * Generate field fill steps for form inputs.
  * FIX D: Type-aware field fills (select/checkbox/date/number) instead of blanket .fill().
  * Each step safely interpolates field.valid using JSON.stringify.
@@ -392,13 +455,13 @@ function generateRowCellAssertions(
 /**
  * Generate negative test blocks.
  * B2: Ensures test title and assertions use JSON.stringify for injection-safe escaping.
- * B3: Overrides the invalid field using renderFieldValue (type-aware), except
+ * B3: Overrides the invalid field using renderInvalidOverride (type-aware), except
  *     required-empty "" stays as empty string to test missing-required constraint.
  *
  * Negatives work by:
  * 1. Authenticate and seed parent entities via API
  * 2. Build a payload with all required non-FK fields (valid values) + FK fields (seeded ids)
- * 3. Override the target field with the invalid value (type-rendered, or "" for required-empty)
+ * 3. Override the target field with the invalid value (type-rendered via renderInvalidOverride)
  * 4. POST directly to /api/v1/<entity> and assert a 400 or 422 response (validation error codes)
  *
  * This deterministic API-level check proves validation is enforced without depending on
@@ -432,10 +495,15 @@ function generateNegativeBlocks(
       ].filter((s) => s.length > 0);
       const payloadFields = allAssignments.join(",\n");
 
-      // B3: Render the override value verbatim via JSON.stringify (except required-empty "")
-      // to ensure invalid values are sent as-is (e.g., "notabool" stays "notabool", not coerced to false).
-      // Only the VALID companion fields get type-rendering; the override does not.
-      const overrideValue = neg.value === "" ? '""' : JSON.stringify(neg.value);
+      // B3: Render the override value type-aware via renderInvalidOverride to test the constraint
+      // with bare types (not strings). This ensures invalid numeric values like "-1" render as
+      // bare -1 (testing the constraint), and invalid booleans like "notabool" render as the
+      // string (testing type-rejection).
+      const fieldDef = entity.fields.find((f) => f.name === neg.field);
+      const overrideValue = renderInvalidOverride(
+        fieldDef ?? { type: "string" },
+        neg.value
+      );
 
       // B2: Build error message safely without backtick interpolation of plan data
       const errorMsg = `expected ${entity.key} to reject ${neg.field} with a validation error (400/422)`;

@@ -187,7 +187,7 @@ The UI eslint (react-component-architecture) is strict; these rules cause the mo
 export const makeIdHandler =
   (fn: (id: string) => void) => (id: string) => () => fn(id);
 \`\`\`
-then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \`deleteHandler\`), and in JSX \`onClick={editHandler(row.id)}\`. The prop is a call expression, not a literal arrow, so the rule passes. For a zero-arg handler pass a named function reference (\`onClick={handleSubmit}\`), never an inline arrow.
+then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \`deleteHandler\`), and in JSX \`onClick={editHandler(row.id)}\`. The prop is a call expression, not a literal arrow, so the rule passes. This curried-helper pattern is the scaffold's own gate-green convention (see JoinRequestsPage example). For a fully stable handler, a per-row child component with a useCallback is an alternative, but the call-expression helper is the established pattern here. For a zero-arg handler pass a named function reference (\`onClick={handleSubmit}\`), never an inline arrow.
 
 **Extract computed lists.** Build the rows as a const in the body (\`const renderRows = items.map((row) => (<tr…>…</tr>));\`) or a hook — never inline a complex \`.map()\` with logic in the returned JSX ("Extract this computation into a hook").
 

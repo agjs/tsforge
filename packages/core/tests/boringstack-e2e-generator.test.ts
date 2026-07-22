@@ -1789,12 +1789,13 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
 
     const spec = generateEntitySpec(entityWithNumericNegative);
 
-    // B3: Invalid override for numeric field should be sent as string "-1" verbatim (not coerced to bare number)
-    // to exercise type validation rejection
-    expect(spec).toContain('payload["stock"] = "-1"');
+    // B3: Invalid override for numeric field renders as bare number (not string)
+    // to exercise the numeric range/constraint, not type-rejection.
+    // "-1" is finite, so it renders as bare -1, testing the constraint.
+    expect(spec).toContain('payload["stock"] = -1');
   });
 
-  test("B3: type-render invalid override as bare boolean (not string)", () => {
+  test("B3: type-render invalid boolean token as string (testing type-rejection)", () => {
     const entityWithBooleanNegative: IEntityAcceptance = {
       id: "Feature",
       key: "feature",
@@ -1826,9 +1827,47 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
 
     const spec = generateEntitySpec(entityWithBooleanNegative);
 
-    // B3: Invalid override for boolean field should send the invalid value verbatim
-    // "notabool" is sent as the string "notabool" (not coerced to false) to exercise validation rejection
+    // B3: Invalid boolean token (not "true"/"false") renders as JSON string
+    // to exercise type-rejection. "notabool" is not a valid boolean, so it
+    // renders as the string "notabool" to test the type constraint.
     expect(spec).toContain('payload["active"] = "notabool"');
+  });
+
+  test("B3: type-render valid boolean value as bare boolean", () => {
+    const entityWithValidBooleanNegative: IEntityAcceptance = {
+      id: "Feature",
+      key: "feature",
+      nav: "Features",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Feature1",
+          invalid: [],
+        },
+        {
+          name: "active",
+          type: "bool",
+          optional: false,
+          valid: "true",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "active"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        { field: "active", value: "false", why: "active must be true" },
+      ],
+      acceptanceCheck: "create a feature",
+    };
+
+    const spec = generateEntitySpec(entityWithValidBooleanNegative);
+
+    // B3: Valid boolean value "false" renders as bare false
+    // to exercise the boolean value constraint (not type-rejection).
+    expect(spec).toContain('payload["active"] = false');
   });
 
   test("B3: required-empty negative keeps empty string as empty string", () => {

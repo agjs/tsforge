@@ -105,13 +105,16 @@ export const LOCALE_GLOB = "apps/ui/src/lib/i18n/locales/**";
 
 /** The shared app sidebar navigation component. Features are unreachable (fail browser
  *  acceptance tests) if the model doesn't register a NavLink for the feature in the
- *  sidebar. It's instructed (refinePrompt) to ADD ONLY its feature's link, never
- *  modify another feature's entry or remove entries. */
+ *  sidebar. ADD-ONLY shared file: the worker adds only its own NavLink, accepted like
+ *  APP_SCHEMA_FILE/LOCALE_GLOB (filesystem scope grants write, differential gate + judge
+ *  catch any regression to another feature's nav). It's instructed (refinePrompt) to ADD
+ *  ONLY its feature's link, never modify another feature's entry or remove entries. */
 export const APP_SIDEBAR_FILE =
   "apps/ui/src/components/core/AppSidebar/AppSidebar.tsx";
 
 /** The shared router configuration file. A feature without a route entry is unreachable
- *  (knip flags the page as unused). The model is instructed (refinePrompt) to ADD ONLY
+ *  (knip flags the page as unused). ADD-ONLY shared file: the worker adds only its own
+ *  route, same trade-off as APP_SIDEBAR_FILE. It's instructed (refinePrompt) to ADD ONLY
  *  its feature's route entry, never modify another feature's route. */
 export const APP_ROUTES_FILE = "apps/ui/src/app/router/routes.tsx";
 

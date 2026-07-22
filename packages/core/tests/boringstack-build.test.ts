@@ -356,6 +356,19 @@ describe("scopeFor", () => {
     expect(scope).toContain(APP_SCHEMA_FILE);
     expect(scope).toContain(LOCALE_GLOB);
   });
+
+  test("includes shared sidebar and router files (add-only, not edit existing entries)", () => {
+    const scope = scopeFor("Company");
+
+    // The sidebar and router are shared UI files. A feature is unreachable (fails
+    // browser acceptance tests) if the model doesn't register a NavLink for the feature
+    // in the sidebar and a route entry in the router. Add-only: the model may ADD its
+    // feature's entry, never modify another feature's entry or remove entries.
+    expect(scope).toContain(
+      "apps/ui/src/components/core/AppSidebar/AppSidebar.tsx"
+    );
+    expect(scope).toContain("apps/ui/src/app/router/routes.tsx");
+  });
 });
 
 describe("rescueFileFor", () => {
