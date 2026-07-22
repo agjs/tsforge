@@ -229,30 +229,41 @@ function generateParentSeedingCode(
 
 /**
  * Render a field value to a code literal string.
- * For numeric types (contains "number"/"int"/"float"/"decimal"), renders as a bare number.
- * For boolean types (contains "bool"), renders as a bare boolean.
+ * For numeric types (exact match), renders as a bare number or falls back to string for NaN.
+ * For boolean types (exact match), renders as a bare boolean.
  * For everything else, renders as a JSON string.
- * Complexity: ≤ 20 (simple field type check and fallback).
+ * Complexity: ≤ 20 (normalized type match with fallback).
  */
 function renderFieldValue(field: { type: string; valid: string }): string {
-  const lowerType = field.type.toLowerCase();
+  const normalized = field.type.toLowerCase().trim();
 
-  // Numeric types: render as a bare number
-  if (
-    lowerType.includes("number") ||
-    lowerType.includes("int") ||
-    lowerType.includes("float") ||
-    lowerType.includes("decimal")
-  ) {
+  // Numeric types: exact match against known numeric type names
+  const numericTypes = new Set([
+    "number",
+    "integer",
+    "int",
+    "float",
+    "double",
+    "decimal",
+    "numeric",
+  ]);
+
+  if (numericTypes.has(normalized)) {
     const num = Number(field.valid);
 
-    // Guard NaN → fall back to 0
-    return Number.isNaN(num) ? "0" : String(num);
+    // Guard NaN → fall back to JSON string
+    if (Number.isNaN(num)) {
+      return JSON.stringify(field.valid);
+    }
+
+    return String(num);
   }
 
-  // Boolean types: render as a bare boolean
-  if (lowerType.includes("bool")) {
-    return field.valid.toLowerCase() === "true" ? "true" : "false";
+  // Boolean types: exact match against known boolean type names
+  const booleanTypes = new Set(["boolean", "bool"]);
+
+  if (booleanTypes.has(normalized)) {
+    return field.valid.trim().toLowerCase() === "true" ? "true" : "false";
   }
 
   // Everything else: JSON string
@@ -380,12 +391,14 @@ function generateRowCellAssertions(
 
 /**
  * Generate negative test blocks.
- * Safely interpolates field names, invalid values, and entity name using JSON.stringify.
+ * B2: Ensures test title and assertions use JSON.stringify for injection-safe escaping.
+ * B3: Overrides the invalid field using renderFieldValue (type-aware), except
+ *     required-empty "" stays as empty string to test missing-required constraint.
  *
  * Negatives work by:
  * 1. Authenticate and seed parent entities via API
  * 2. Build a payload with all required non-FK fields (valid values) + FK fields (seeded ids)
- * 3. Override the target field with the invalid value
+ * 3. Override the target field with the invalid value (type-rendered, or "" for required-empty)
  * 4. POST directly to /api/v1/<entity> and assert a 400 or 422 response (validation error codes)
  *
  * This deterministic API-level check proves validation is enforced without depending on
@@ -398,6 +411,7 @@ function generateNegativeBlocks(
 ): string {
   return entity.negatives
     .map((neg) => {
+      // B2: Test title uses JSON.stringify to escape backticks/interpolation in neg.value
       const testTitle = `negative: ${entity.id} rejects ${neg.field}=${neg.value}`;
 
       // Build valid field assignments (required non-FK fields)
@@ -418,6 +432,17 @@ function generateNegativeBlocks(
       ].filter((s) => s.length > 0);
       const payloadFields = allAssignments.join(",\n");
 
+      // B3: Render the override value type-aware, except required-empty "" stays as ""
+      const targetFieldType =
+        entity.fields.find((f) => f.name === neg.field)?.type ?? "string";
+      const overrideValue =
+        neg.value === ""
+          ? '""'
+          : renderFieldValue({ type: targetFieldType, valid: neg.value });
+
+      // B2: Build error message safely without backtick interpolation of plan data
+      const errorMsg = `expected ${entity.key} to reject ${neg.field} with a validation error (400/422)`;
+
       return `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
 
@@ -433,7 +458,7 @@ ${parentSeedingCode}
     const payload: Record<string, unknown> = {
 ${payloadFields}
     };
-    payload[${JSON.stringify(neg.field)}] = ${JSON.stringify(neg.value)};
+    payload[${JSON.stringify(neg.field)}] = ${overrideValue};
 
     const res = await page.request.post(\`\${apiBase}/api/v1/${entity.key}\`, {
       headers: { "Content-Type": "application/json", Cookie: cookieHeader },
@@ -444,7 +469,7 @@ ${payloadFields}
     // 401/403/404/409 are auth/routing/conflict errors that do not prove field validation.
     expect(
       [400, 422].includes(res.status()),
-      \`expected ${entity.key} to reject ${neg.field}=${JSON.stringify(neg.value)} with a validation error (400/422), got \${res.status()}\`
+      ${JSON.stringify(errorMsg)} + \`, got \${res.status()}\`
     ).toBe(true);
   });
 `;

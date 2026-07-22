@@ -1598,4 +1598,504 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
     // Verify the payload is compilable (no syntax error)
     expect(spec).toContain("payload[");
   });
+
+  test("B1: boolean field renders as bare true/false (no quotes) in valid payload", () => {
+    const entityWithBoolean: IEntityAcceptance = {
+      id: "Feature",
+      key: "feature",
+      nav: "Features",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Feature1",
+          invalid: [],
+        },
+        {
+          name: "enabled",
+          type: "boolean",
+          optional: false,
+          valid: "true",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "enabled"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [{ field: "name", value: "", why: "name is required" }],
+      acceptanceCheck: "create a feature",
+    };
+
+    const spec = generateEntitySpec(entityWithBoolean);
+
+    // B1: Boolean field should render as bare true (not "true")
+    expect(spec).toContain("enabled: true");
+    // Verify the quoted form is NOT present
+    expect(spec).not.toContain('enabled: "true"');
+  });
+
+  test("B1: string field companion stays JSON-quoted next to numeric field", () => {
+    const entityWithStringAndNumeric: IEntityAcceptance = {
+      id: "Item",
+      key: "item",
+      nav: "Items",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Item1",
+          invalid: [],
+        },
+        {
+          name: "price",
+          type: "number",
+          optional: false,
+          valid: "99.99",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "price"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        { field: "price", value: "-1", why: "price must be positive" },
+      ],
+      acceptanceCheck: "create an item",
+    };
+
+    const spec = generateEntitySpec(entityWithStringAndNumeric);
+
+    // B1: String field name should stay JSON-quoted
+    expect(spec).toContain('name: "Item1"');
+    // Numeric field should be bare number
+    expect(spec).toContain("price: 99.99");
+  });
+
+  test("B1: substring-trap type (appointment/interval) treated as string, not numeric", () => {
+    const entityWithTrapType: IEntityAcceptance = {
+      id: "Meeting",
+      key: "meeting",
+      nav: "Meetings",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Meeting1",
+          invalid: [],
+        },
+        {
+          name: "appointment",
+          type: "appointment",
+          optional: false,
+          valid: "2024-01-01T10:00:00Z",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "appointment"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        { field: "appointment", value: "invalid", why: "invalid date" },
+      ],
+      acceptanceCheck: "create a meeting",
+    };
+
+    const spec = generateEntitySpec(entityWithTrapType);
+
+    // B1: "appointment" type should be treated as string (contains "int" but is NOT numeric)
+    // So it should be JSON-quoted
+    expect(spec).toContain('appointment: "2024-01-01T10:00:00Z"');
+  });
+
+  test("B2: injection escaping in negative test title and assertion", () => {
+    const entityWithDangerousData: IEntityAcceptance = {
+      id: "Config",
+      key: "config",
+      nav: "Configs",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Config1",
+          invalid: [],
+        },
+        {
+          name: "value",
+          type: "string",
+          optional: false,
+          valid: "safe",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "value"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        {
+          field: "value",
+          value: "dangerous`${code}injection",
+          why: "test injection",
+        },
+      ],
+      acceptanceCheck: "create a config",
+    };
+
+    const spec = generateEntitySpec(entityWithDangerousData);
+
+    // B2: The dangerous backtick and ${} should appear ESCAPED in the assertion message
+    // NOT as a raw unescaped sequence that could break the spec
+    const testTitleMatch =
+      /test\("negative:[^"]*dangerous.*injection"[^)]*\)/.exec(spec);
+
+    expect(testTitleMatch).toBeTruthy();
+    // The raw dangerous sequence should NOT appear unescaped in the assertion
+    // (it should be escaped as part of JSON.stringify)
+    expect(spec).not.toContain("${code}injection`");
+  });
+
+  test("B3: type-render invalid override as bare number (not string)", () => {
+    const entityWithNumericNegative: IEntityAcceptance = {
+      id: "Product",
+      key: "product",
+      nav: "Products",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Product1",
+          invalid: [],
+        },
+        {
+          name: "stock",
+          type: "integer",
+          optional: false,
+          valid: "10",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "stock"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        { field: "stock", value: "-1", why: "stock must be non-negative" },
+      ],
+      acceptanceCheck: "create a product",
+    };
+
+    const spec = generateEntitySpec(entityWithNumericNegative);
+
+    // B3: Invalid override for numeric field should be bare -1 (not "-1" string)
+    expect(spec).toContain('payload["stock"] = -1');
+  });
+
+  test("B3: type-render invalid override as bare boolean (not string)", () => {
+    const entityWithBooleanNegative: IEntityAcceptance = {
+      id: "Feature",
+      key: "feature",
+      nav: "Features",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Feature1",
+          invalid: [],
+        },
+        {
+          name: "active",
+          type: "bool",
+          optional: false,
+          valid: "true",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "active"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        { field: "active", value: "notabool", why: "invalid boolean" },
+      ],
+      acceptanceCheck: "create a feature",
+    };
+
+    const spec = generateEntitySpec(entityWithBooleanNegative);
+
+    // B3: Invalid override for boolean field with invalid value should render as false (fallback)
+    // "notabool" is not "true", so it becomes false
+    expect(spec).toContain('payload["active"] = false');
+  });
+
+  test("B3: required-empty negative keeps empty string as empty string", () => {
+    const entityWithRequiredEmpty: IEntityAcceptance = {
+      id: "Article",
+      key: "article",
+      nav: "Articles",
+      fields: [
+        {
+          name: "title",
+          type: "string",
+          optional: false,
+          valid: "Article1",
+          invalid: [],
+        },
+      ],
+      shows: ["title"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [{ field: "title", value: "", why: "title is required" }],
+      acceptanceCheck: "create an article",
+    };
+
+    const spec = generateEntitySpec(entityWithRequiredEmpty);
+
+    // B3: Required-empty ("") should stay as empty string literal ""
+    expect(spec).toContain('payload["title"] = ""');
+  });
+
+  test("B3: NaN in numeric field falls back to JSON string", () => {
+    const entityWithNaNValue: IEntityAcceptance = {
+      id: "Measurement",
+      key: "measurement",
+      nav: "Measurements",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Measurement1",
+          invalid: [],
+        },
+        {
+          name: "value",
+          type: "float",
+          optional: false,
+          valid: "notanumber",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "value"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [{ field: "value", value: "invalid", why: "invalid number" }],
+      acceptanceCheck: "create a measurement",
+    };
+
+    const spec = generateEntitySpec(entityWithNaNValue);
+
+    // B1: When valid field is not a number (NaN), fall back to JSON string
+    // "notanumber" becomes "notanumber" (quoted string)
+    expect(spec).toContain('value: "notanumber"');
+  });
+});
+
+describe("PART C: negative check hardening tests", () => {
+  test("C1: boolean field renders as bare true/false (no quotes) in valid payload", () => {
+    const entityWithBoolean: IEntityAcceptance = {
+      id: "Feature",
+      key: "feature",
+      nav: "Features",
+      fields: [
+        {
+          name: "enabled",
+          type: "boolean",
+          optional: false,
+          valid: "true",
+          invalid: [],
+        },
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Feature1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [{ field: "name", value: "", why: "name is required" }],
+      acceptanceCheck: "create a feature",
+    };
+
+    const spec = generateEntitySpec(entityWithBoolean);
+
+    // Boolean field should render as bare true (no quotes)
+    expect(spec).toContain("enabled: true");
+    // Verify the quoted form is NOT present
+    expect(spec).not.toContain('enabled: "true"');
+  });
+
+  test("C2: string companion field stays quoted when paired with numeric", () => {
+    const entityWithNumericAndString: IEntityAcceptance = {
+      id: "Product",
+      key: "product",
+      nav: "Products",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Widget",
+          invalid: [],
+        },
+        {
+          name: "price",
+          type: "number",
+          optional: false,
+          valid: "99.99",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "price"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        { field: "price", value: "-1", why: "price cannot be negative" },
+      ],
+      acceptanceCheck: "create a product",
+    };
+
+    const spec = generateEntitySpec(entityWithNumericAndString);
+
+    // Numeric field should render as bare number
+    expect(spec).toContain("price: 99.99");
+    expect(spec).not.toContain('price: "99.99"');
+    // String field should stay quoted
+    expect(spec).toContain('name: "Widget"');
+  });
+
+  test("C3: substring-trap type (appointment/interval/constraint) treated as string, not number", () => {
+    const entityWithSubstringTrap: IEntityAcceptance = {
+      id: "Meeting",
+      key: "meeting",
+      nav: "Meetings",
+      fields: [
+        {
+          name: "appointmentTime",
+          type: "appointment",
+          optional: false,
+          valid: "2024-01-15T10:00:00Z",
+          invalid: [],
+        },
+        {
+          name: "duration",
+          type: "interval",
+          optional: false,
+          valid: "PT1H",
+          invalid: [],
+        },
+      ],
+      shows: ["appointmentTime"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        {
+          field: "appointmentTime",
+          value: "invalid-time",
+          why: "invalid appointment",
+        },
+      ],
+      acceptanceCheck: "create a meeting",
+    };
+
+    const spec = generateEntitySpec(entityWithSubstringTrap);
+
+    // Both substring-trap types should be quoted (treated as strings, not numbers)
+    expect(spec).toContain('appointmentTime: "2024-01-15T10:00:00Z"');
+    expect(spec).toContain('duration: "PT1H"');
+    // Verify they are NOT rendered as bare numbers
+    expect(spec).not.toContain("appointmentTime: 0");
+    expect(spec).not.toContain("duration: 0");
+  });
+
+  test("C4: injection escaping - backticks and ${ in neg.value are JSON.stringify-escaped", () => {
+    const entityWithInjection: IEntityAcceptance = {
+      id: "Template",
+      key: "template",
+      nav: "Templates",
+      fields: [
+        {
+          name: "content",
+          type: "string",
+          optional: false,
+          valid: "Hello",
+          invalid: [],
+        },
+      ],
+      shows: ["content"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        {
+          field: "content",
+          value: "`inject` and ${evil}",
+          why: "template injection",
+        },
+      ],
+      acceptanceCheck: "create a template",
+    };
+
+    const spec = generateEntitySpec(entityWithInjection);
+
+    // The dangerous sequence should NOT appear unescaped in the spec
+    expect(spec).not.toContain("payload[content] = `inject` and ${evil}");
+    // Instead, it should be JSON.stringify-escaped
+    expect(spec).toContain('payload["content"]');
+    // The value should be properly escaped as a JSON string
+    expect(spec).toContain('"`inject` and ${evil}"');
+  });
+
+  test("C5: negative assertion uses [400, 422].includes() exactly (not fail-open pattern)", () => {
+    const spec = generateEntitySpec(company);
+
+    // Must use strict [400, 422].includes() check
+    expect(spec).toContain("[400, 422].includes(res.status())");
+    // Should NOT use fail-open patterns
+    expect(spec).not.toContain("toBeGreaterThanOrEqual(400)");
+    expect(spec).not.toContain("toBeLessThan(500)");
+    expect(spec).not.toContain(">= 400");
+    expect(spec).not.toContain("< 500");
+  });
+
+  test("C6: required-empty negative keeps empty string literal, not coerced to 0 or null", () => {
+    const entityWithRequired: IEntityAcceptance = {
+      id: "User",
+      key: "user",
+      nav: "Users",
+      fields: [
+        {
+          name: "email",
+          type: "email",
+          optional: false,
+          valid: "user@example.com",
+          invalid: [],
+        },
+      ],
+      shows: ["email"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [
+        {
+          field: "email",
+          value: "",
+          why: "email is required",
+        },
+      ],
+      acceptanceCheck: "create a user",
+    };
+
+    const spec = generateEntitySpec(entityWithRequired);
+
+    // The override for required-empty should be the empty string literal ""
+    expect(spec).toContain('payload["email"] = ""');
+    // Should NOT be coerced to 0, null, or false
+    expect(spec).not.toContain('payload["email"] = 0');
+    expect(spec).not.toContain('payload["email"] = null');
+    expect(spec).not.toContain('payload["email"] = false');
+  });
 });

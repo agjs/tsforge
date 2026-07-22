@@ -145,13 +145,29 @@ function isInfraError(text: string): boolean {
 }
 
 /**
- * Extract error messages from a pre-parsed Playwright report object.
- * Collects ONLY top-level report.errors[].message (not per-test errors).
+ * Extract error messages from Playwright report JSON stdout.
+ * Parses the JSON and collects top-level report.errors[].message (not per-test errors).
  * Per-test assertion errors must NOT drive suite-wide infra classification.
- * Returns empty string if no errors found or report is invalid.
+ * Returns empty string if no errors found or JSON is invalid.
  */
-function extractReportErrorText(parsed: IPlaywrightReportType): string {
+function extractReportErrorText(stdout: string): string {
   const errors: string[] = [];
+
+  if (stdout.trim().length === 0) {
+    return "";
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return "";
+  }
+
+  if (!isPlaywrightReport(parsed)) {
+    return "";
+  }
 
   // Collect top-level report errors ONLY
   // Global setup/launch failures land here; per-test assertion errors do not.
@@ -231,12 +247,10 @@ function walkSuites(
 }
 
 /**
- * Parse Playwright JSON reporter output once, returning both the raw parsed report
- * and the extracted results. Used to avoid double-parsing the same stdout.
- * Returns { parsed, results } where parsed is the report object (or null if invalid JSON),
- * and results are the extracted acceptance results (or empty array if unparseable).
+ * Parse Playwright JSON output and extract acceptance results.
+ * Returns parsed report (or null if invalid JSON) and results array (may be empty).
  */
-function parsePlaywrightOnce(
+function parsePlaywrightResults(
   jsonOut: string,
   entity: IEntityAcceptance
 ): { parsed: IPlaywrightReportType | null; results: IAcceptanceResult[] } {
@@ -298,12 +312,14 @@ function cleanupFile(filePath: string): void {
 /**
  * Classify a nonzero exit: determine if it's infrastructure (should retry) or real failure.
  * Examines both stderr and parsed JSON report errors (if present).
- * Whenever parseResult is not null, preserves it in the outcome and derives meaningful detail
- * from the first failing result (the actual assertion text), with fallback to stderr.
+ * Preserves parseResult when the JSON was successfully parsed (parsedReport !== null),
+ * even if parseResult is empty (no matching tests). Distinguishes between:
+ * - parsedReport !== null: JSON parsed successfully (real test failure or no matches)
+ * - parsedReport === null: JSON unparseable (possibly infra issue)
  * Returns: { outcome, shouldRetry } where outcome is undefined for retry, or final result for done.
  */
 function classifyNonzeroExit(
-  result: { code: number; stderr: string },
+  result: { code: number; stdout: string; stderr: string },
   parsedReport: IPlaywrightReportType | null,
   parseResult: IAcceptanceResult[]
 ): {
@@ -312,7 +328,7 @@ function classifyNonzeroExit(
 } {
   // Combine stderr with extracted report errors to form the complete error text
   const reportErrorText =
-    parsedReport !== null ? extractReportErrorText(parsedReport) : "";
+    parsedReport !== null ? extractReportErrorText(result.stdout) : "";
 
   const combinedErrorText =
     result.stderr + (reportErrorText !== "" ? "\n" + reportErrorText : "");
@@ -326,9 +342,10 @@ function classifyNonzeroExit(
   }
 
   // No infra pattern detected — treat as real failure
-  // ALWAYS preserve parseResult (which may be empty array if JSON was invalid)
-  if (parseResult.length > 0) {
-    // Derive meaningful detail: use the first failing result's detail, or fall back to stderr
+  // Preserve parseResult whenever the JSON parsed successfully (parsedReport !== null)
+  // This includes both successful parses with matches AND successful parses with no matches
+  if (parsedReport !== null) {
+    // JSON parsed successfully: derive meaningful detail from results or stderr
     let detail = result.stderr;
 
     // Find the first failed result to extract its assertion message
@@ -351,7 +368,7 @@ function classifyNonzeroExit(
     };
   }
 
-  // Truly unparseable JSON + unknown error text stays a REAL failure (not infra)
+  // JSON unparseable + unknown error text — stay a REAL failure (not infra)
   return {
     outcome: {
       ok: false,
@@ -367,8 +384,7 @@ function classifyNonzeroExit(
 
 /**
  * Process a single exec result for entity acceptance testing.
- * Parses Playwright JSON once and threads both the parsed object and results
- * to avoid re-parsing the same stdout.
+ * Parses Playwright JSON and extracts results.
  * Returns: { outcome, shouldRetry } where outcome is the final result or undefined to continue/retry.
  */
 export function processExecResult(
@@ -380,9 +396,8 @@ export function processExecResult(
   shouldRetry: boolean;
   parseResult: IAcceptanceResult[];
 } {
-  // Parse ONCE: extract both the raw parsed report and the acceptance results.
-  // Thread both through to avoid re-parsing the same stdout.
-  const { parsed: parsedReport, results: parseResult } = parsePlaywrightOnce(
+  // Parse JSON and extract acceptance results
+  const { parsed: parsedReport, results: parseResult } = parsePlaywrightResults(
     result.stdout,
     entity
   );
@@ -396,7 +411,6 @@ export function processExecResult(
   }
 
   // Nonzero exit code: classify as infra or real failure
-  // Pass parsed report and results separately to avoid re-parsing
   return {
     ...classifyNonzeroExit(result, parsedReport, parseResult),
     parseResult,
@@ -414,14 +428,14 @@ function processChainResults(
 ): IAcceptanceOutcome | undefined {
   // Honor exit code: nonzero means failure
   if (result.code !== 0) {
-    // Parse once to get the report object for error extraction (chain tests don't use per-test results)
-    // Use first entity as representative; we only need the parsed report structure, not entity-specific results
+    // Parse to get the report object for error extraction
+    // Use first entity as representative; we only need the parsed report structure
     const firstEntity = spec.entities[0];
 
     let parsedReport: IPlaywrightReportType | null = null;
 
     if (firstEntity) {
-      const { parsed } = parsePlaywrightOnce(result.stdout, firstEntity);
+      const { parsed } = parsePlaywrightResults(result.stdout, firstEntity);
 
       parsedReport = parsed;
     }
@@ -625,11 +639,10 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
           );
 
           // For chain specs, collect results from all entities
-          // Parse once: reuse the parsed report for all entity result extraction
           const allResults: IAcceptanceResult[] = [];
 
           for (const entity of spec.entities) {
-            const { results: parseResult } = parsePlaywrightOnce(
+            const { results: parseResult } = parsePlaywrightResults(
               result.stdout,
               entity
             );
