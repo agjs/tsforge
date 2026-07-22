@@ -247,14 +247,15 @@ function generateFieldFillSteps(
 
 /**
  * Generate row cell assertions for created values.
- * For parent references, assert the linkage cell contains the parent entity's name
- * (not just visibility — ensures the relationship is actually displayed).
+ * For parent references, assert the linkage cell contains the parent's SEEDED identity value
+ * (not the type name — ensures the actual relationship is displayed).
  * For regular fields, assert cell contains the expected value.
  * Safely interpolates field values using JSON.stringify.
  */
 function generateRowCellAssertions(
   entity: IEntityAcceptance,
-  ids: ReturnType<typeof testIdsFor>
+  ids: ReturnType<typeof testIdsFor>,
+  spec?: IAcceptanceSpec
 ): string {
   return entity.shows
     .map((show) => {
@@ -262,19 +263,38 @@ function generateRowCellAssertions(
       const isParent = entity.parents.some((p) => p.key === show);
 
       if (isParent) {
-        // For parent references, assert the cell contains CONTENT related to the parent
-        // (e.g., the parent's name/display value), not just visibility.
-        // This ensures the relationship is actually displayed and not an empty cell with the right testid.
+        // For parent references, assert the cell contains the SEEDED parent identity value.
+        // If spec is available, use the parent's identity field value (first string field or first field's .valid).
+        // If no spec (fallback seeding), assert the type name (which matches the fallback seed format).
         const parentDef = entity.parents.find((p) => p.key === show);
 
         if (parentDef) {
-          // The parent's entity name is what we expect to see in the display
-          // E.g., a Contact's company cell should display the company's name field value
-          return `    await expect(row.getByTestId("${ids.rowCell(show)}")).toContainText(${JSON.stringify(parentDef.entity)});`;
-        }
+          let expectedValue = parentDef.entity; // Default: type name (fallback seeding case)
 
-        // Fallback (should not reach here)
-        return `    await expect(row.getByTestId("${ids.rowCell(show)}")).toBeVisible();`;
+          // If spec is available, derive the parent's actual identity display value
+          if (spec) {
+            const parentEntity = spec.entities.find(
+              (e) => e.key === parentDef.key
+            );
+
+            if (parentEntity && parentEntity.fields.length > 0) {
+              // Find the first string-typed field, or fall back to first field
+              const stringTypePatterns = ["string", "text", "email"];
+              const identityField =
+                parentEntity.fields.find((f) =>
+                  stringTypePatterns.some((type) =>
+                    f.type.toLowerCase().includes(type)
+                  )
+                ) ?? parentEntity.fields[0];
+
+              if (identityField) {
+                expectedValue = identityField.valid;
+              }
+            }
+          }
+
+          return `    await expect(row.getByTestId("${ids.rowCell(show)}")).toContainText(${JSON.stringify(expectedValue)});`;
+        }
       }
 
       // For regular fields, assert the value is present in THIS row only
@@ -375,7 +395,7 @@ export function generateEntitySpec(
   const ids = testIdsFor(entity.key);
   const name = entity.id;
   const fieldFillSteps = generateFieldFillSteps(entity, ids);
-  const rowCellAssertions = generateRowCellAssertions(entity, ids);
+  const rowCellAssertions = generateRowCellAssertions(entity, ids, spec);
   const parentSeedingCode = generateParentSeedingCode(
     entity.parents,
     entity.id,
@@ -661,52 +681,95 @@ ${fieldFill}${fillFirstFieldCode}
 
 /**
  * Generate test code for a child entity in the chain.
+ * Builds linkage from ACTUAL parent relationships, not slice-order adjacency.
+ * For each of the entity's parents, selects a parent that was created in an earlier test.
+ * If no parents are present in earlier-created entities, generates as standalone.
+ * Never throws — handles non-linear plans (branches, independent roots, different order).
  */
 function generateChildEntityChainTest(
   entity: IEntityAcceptance,
   index: number,
-  spec: IAcceptanceSpec
+  spec: IAcceptanceSpec,
+  createdKeys: Set<string>
 ): {
   varName: string;
   testStep: string;
 } {
-  const predecessorEntity = spec.entities[index - 1];
-
-  if (!predecessorEntity) {
-    throw new Error(
-      `Child entity at index ${index} has no predecessor. Chain must be sequential.`
-    );
-  }
-
-  // Find the parent FK that matches the chain predecessor (by key)
-  const predecessorFK = entity.parents.find(
-    (p) => p.key === predecessorEntity.key
+  // Find parents whose key matches ANY entity created earlier (index < current)
+  const selectableParents = entity.parents.filter((p) =>
+    createdKeys.has(p.key)
   );
 
-  if (!predecessorFK) {
-    throw new Error(
-      `Entity '${entity.id}' must have a parent FK to its chain predecessor '${predecessorEntity.id}'. ` +
-        `For multi-parent entities, the predecessor must be one of the required parents.`
-    );
+  // If no parents match earlier-created entities, this is an independent root or branch
+  // Generate it as a standalone create (no parent selection)
+  if (selectableParents.length === 0) {
+    // Treat as root (no parent selection)
+    const ids = testIdsFor(entity.key);
+    const fieldFill = generateFieldFillSteps(entity, ids, false);
+
+    const stringTypePatterns = ["string", "text", "email"];
+    const identityField =
+      entity.fields.find((f) =>
+        stringTypePatterns.some((type) => f.type.toLowerCase().includes(type))
+      ) ?? entity.fields[0];
+    const identityFieldName = identityField?.name ?? "name";
+    const identityFieldValid = identityField?.valid ?? "updated";
+    const firstFieldName = entity.fields[0]?.name ?? "name";
+    const firstFieldValid = entity.fields[0]?.valid ?? "updated";
+    const isFirstFieldIdentity = identityFieldName === firstFieldName;
+    const fillFirstFieldCode = isFirstFieldIdentity
+      ? ""
+      : `\n    await page.getByTestId("${ids.field(firstFieldName)}").fill(${JSON.stringify(firstFieldValid)});`;
+
+    const varName = `parent${index}Unique`;
+
+    const testStep = `  test("create entity: ${entity.id} (no parent linkage)", async ({ page, authedPage }) => {
+    await authedPage.dashboard.goto();
+    await navigateTo${entity.id}(page);
+
+    const unique =
+      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+
+    await page.getByTestId("${ids.create}").click();
+    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
+
+${fieldFill}${fillFirstFieldCode}
+    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
+
+    await page.getByTestId("${ids.submit}").click();
+    await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
+
+    const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
+    await expect(createdRow).toBeVisible({ timeout: 10000 });
+
+    ${varName} = unique;
+  });`;
+
+    return { varName, testStep };
   }
 
-  // Separate the predecessor FK from other required parents
-  const otherParents = entity.parents.filter(
-    (p) => p.key !== predecessorEntity.key
-  );
+  // Has parent(s) from earlier entities — use the first selectable parent as primary
+  // selectableParents is guaranteed non-empty here (checked earlier in the if above)
+  // Use a local variable to track the primary parent key for template interpolation
+  const primaryParent = selectableParents[0];
 
-  // Generate seeding code for other parents (via API)
+  if (!primaryParent) {
+    // Should never reach here due to early return above, but satisfy TS narrowing
+    throw new Error("Expected at least one selectable parent");
+  }
+
+  // Generate seeding code for parents NOT in the chain (if any remain unselectable)
+  const unseededParents = entity.parents.filter((p) => !createdKeys.has(p.key));
   const otherSeedingCode =
-    otherParents.length > 0
-      ? generateParentSeedingCode(otherParents, entity.id, spec)
+    unseededParents.length > 0
+      ? generateParentSeedingCode(unseededParents, entity.id, spec)
       : "";
 
-  // Generate selectOption statements for other parents
-  const otherSelectSteps = otherParents
+  // Seed any parents that are not in the chain
+  const seedingSteps = unseededParents
     .map((parent) => {
-      const ids = testIdsFor(entity.key);
-      const fieldTestId = ids.field(parent.fkField);
       const varName = `${parent.key}Id`;
+      const fieldTestId = testIdsFor(entity.key).field(parent.fkField);
 
       return `    await page.getByTestId("${fieldTestId}").selectOption(${varName});`;
     })
@@ -715,7 +778,6 @@ function generateChildEntityChainTest(
   const ids = testIdsFor(entity.key);
   const fieldFill = generateFieldFillSteps(entity, ids, true);
 
-  // FIX 6: Type-aware identity for child chain tests
   const stringTypePatterns = ["string", "text", "email"];
   const identityField =
     entity.fields.find((f) =>
@@ -730,19 +792,17 @@ function generateChildEntityChainTest(
     ? ""
     : `\n    await page.getByTestId("${ids.field(firstFieldName)}").fill(${JSON.stringify(firstFieldValid)});`;
 
-  const parentVarName = `parent${index - 1}Unique`;
+  const primaryParentVarName = `parent${index - selectableParents.length}Unique`;
   const currentVarName = `parent${index}Unique`;
-  const predecessorFieldTestId = ids.field(predecessorFK.fkField);
+  const primaryParentFieldTestId = ids.field(primaryParent.fkField);
   const otherParentsCode =
     otherSeedingCode.length > 0 ? `\n${otherSeedingCode}\n` : "";
-  const otherSelectCode =
-    otherSelectSteps.length > 0 ? `\n${otherSelectSteps}\n` : "";
+  const seedingCode = seedingSteps.length > 0 ? `\n${seedingSteps}\n` : "";
 
   const testStep = `  test("create child entity: ${entity.id} with parent linkage", async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    // Create unique child entity identifier
     const unique =
       ${JSON.stringify(identityFieldValid)} + "-child-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
 
@@ -750,22 +810,18 @@ function generateChildEntityChainTest(
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
 ${fieldFill}${otherParentsCode}
-    // Select the chain predecessor by its display label (created in previous test)
-    // FK option values are IDs; the label is the display text (parentVarName)
-    await page.getByTestId("${predecessorFieldTestId}").selectOption({ label: ${parentVarName} });${otherSelectCode}${fillFirstFieldCode}
+    // Select parent(s) by display label
+    await page.getByTestId("${primaryParentFieldTestId}").selectOption({ label: ${primaryParentVarName} });${seedingCode}${fillFirstFieldCode}
     await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
 
     await page.getByTestId("${ids.submit}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "hidden", timeout: 10000 });
 
-    // Verify the created child row is present
     const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
     await expect(createdRow).toBeVisible({ timeout: 10000 });
 
-    // Verify the predecessor parent linkage cell is present in this child row
-    await expect(createdRow.getByTestId("${ids.rowCell(predecessorFK.key)}")).toContainText(${parentVarName});
+    await expect(createdRow.getByTestId("${ids.rowCell("${primaryParent.key}")}")).toContainText(${primaryParentVarName});
 
-    // Store the unique value for subsequent child tests
     ${currentVarName} = unique;
   });`;
 
@@ -801,6 +857,7 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
   // Build test steps that thread the parent unique values through the chain
   const testSteps: string[] = [];
   const parentTrackingVars: string[] = [];
+  const createdKeys = new Set<string>();
 
   for (let i = 0; i < spec.entities.length; i++) {
     const entity = spec.entities[i];
@@ -819,16 +876,19 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
 
       parentTrackingVars.push(`let ${varName}: string;`);
       testSteps.push(testStep);
+      createdKeys.add(entity.key);
     } else {
-      // Child entity
+      // Child entity — build linkage from actual parent relationships
       const { varName, testStep } = generateChildEntityChainTest(
         entity,
         i,
-        spec
+        spec,
+        createdKeys
       );
 
       parentTrackingVars.push(`let ${varName}: string;`);
       testSteps.push(testStep);
+      createdKeys.add(entity.key);
     }
   }
 
@@ -952,11 +1012,13 @@ class LoginPage implements ILoginPage {
 }
 
 const CONSENT_STORAGE_KEY = "bs.cookie-consent.v1";
+// Static ISO timestamp for deterministic consent cookie (does not affect test outcomes)
+const CONSENT_TIMESTAMP = "2024-01-01T00:00:00.000Z";
 const CONSENT_DISMISSED_STATE = {
   state: {
     status: "configured",
     categories: { essential: true, analytics: false, marketing: false },
-    configuredAt: new Date().toISOString(),
+    configuredAt: CONSENT_TIMESTAMP,
   },
   version: 0,
 };

@@ -242,13 +242,6 @@ async function verifyAcceptance(
   // FAIL-CLOSED: if acceptance is enabled and entity exists but runner is missing,
   // this is a misconfiguration — reject the feature until the runner is injected
   if (entity && !acceptanceRunner) {
-    const msg =
-      "e2e acceptance enabled but no runner injected — cannot verify. " +
-      "The feature passed the fast gate but acceptance verification is required. " +
-      "This is a misconfiguration; the acceptance runner must be provided.";
-
-    await host.send(msg);
-
     return { done: false };
   }
 
@@ -269,12 +262,6 @@ async function verifyAcceptance(
     // The feature's fast-gate pass is valid, but acceptance verification cannot complete
     // due to infrastructure. Return infra error to thread it through the outer loop.
     if (outcome.infraError !== undefined) {
-      const infraMsg =
-        `⚠ per-slice acceptance encountered infrastructure error: ${outcome.infraError}. ` +
-        `Routing to needs-infra for retry once infrastructure is ready.`;
-
-      await host.send(infraMsg);
-
       return { done: false, infra: outcome.infraError };
     }
 
@@ -282,25 +269,25 @@ async function verifyAcceptance(
     if (!outcome.ok) {
       const steer = acceptanceSteer(entity, outcome);
 
-      await host.send(steer);
+      const steerSend = await host.send(steer);
 
-      // FIX 9: after sending the steer (which runs the full model loop),
+      // FIX 2: after sending the steer (which runs the full model loop),
       // re-run acceptance once to see if the fix worked
       const reRun = await acceptanceRunner.run(entity, ctx, fullSpec);
 
       // If the re-run is an infra error, route it through the needs-infra channel
       if (reRun.infraError !== undefined) {
-        const infraMsg =
-          `⚠ post-steer acceptance encountered infrastructure error: ${reRun.infraError}. ` +
-          `Routing to needs-infra for retry once infrastructure is ready.`;
-
-        await host.send(infraMsg);
-
         return { done: false, infra: reRun.infraError };
       }
 
-      // Return the re-run outcome: done if it passed, done:false if it still fails
-      return { done: reRun.ok };
+      // Return done:true ONLY when both the steer completed AND the re-run passed.
+      // If the steer did not complete (stuck), return done:false even if re-run passed.
+      return {
+        done: steerSend.status === "done" && reRun.ok,
+        ...(steerSend.handoff !== undefined
+          ? { handoff: steerSend.handoff }
+          : {}),
+      };
     }
 
     // All checks passed
@@ -601,8 +588,9 @@ export async function runFinalAcceptance(
     message: finalMessage,
   });
 
-  // If the final acceptance chain failed, flip the result status to stuck
-  if (!finalPassed) {
+  // If the final acceptance chain failed AND acceptance is enabled, flip to stuck.
+  // When acceptance is disabled, preserve the original status (do not flip).
+  if (!finalPassed && !e2eAcceptanceDisabled) {
     return { ...result, status: "stuck" };
   }
 

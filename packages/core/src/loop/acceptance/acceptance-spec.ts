@@ -136,80 +136,183 @@ function parseParents(relationships: readonly string[]): IParentRef[] {
   return out;
 }
 
-export function planToAcceptanceSpec(plan: IProductPlan): IAcceptanceSpec {
-  const entities: IEntityAcceptance[] = plan.slices.map((slice, i) => {
-    const fields: IAcceptField[] = slice.entity.fields.map((f) => ({
-      name: f.name,
-      type: f.type,
-      optional: f.optional ?? false,
-      valid: validValue(f, i + 1),
-      invalid: [],
-    }));
+/**
+ * Initialize acceptance fields from entity spec.
+ */
+function initializeFields(
+  entityFields: IEntitySpec["fields"],
+  index: number
+): IAcceptField[] {
+  return entityFields.map((f) => ({
+    name: f.name,
+    type: f.type,
+    optional: f.optional ?? false,
+    valid: validValue(f, index + 1),
+    invalid: [],
+  }));
+}
 
-    // Parse parent relationships to get FK field names
-    const parents = parseParents(slice.entity.relationships);
+/**
+ * Add FK fields for parent relationships to ensure selectOption steps are generated.
+ */
+function addParentFkFields(
+  fields: IAcceptField[],
+  parents: IParentRef[],
+  entityIndex: number
+): void {
+  for (const parent of parents) {
+    const fieldExists = fields.some((f) => f.name === parent.fkField);
 
-    // Add FK fields for each parent relationship (so the generator emits selectOption steps)
-    // Only add if the field doesn't already exist in the entity's fields
-    for (const parent of parents) {
-      const fieldExists = fields.some((f) => f.name === parent.fkField);
+    if (!fieldExists) {
+      fields.push({
+        name: parent.fkField,
+        type: "string",
+        optional: false,
+        valid: `parent-${entityIndex + 1}`,
+        invalid: [],
+      });
+    }
+  }
+}
 
-      if (!fieldExists) {
-        fields.push({
-          name: parent.fkField,
-          type: "string",
-          optional: false,
-          valid: `parent-${i + 1}`,
-          invalid: [],
+/**
+ * Derive all negatives for an entity from rules and mustNotHappen constraints.
+ */
+function deriveNegatives(
+  entity: IEntitySpec,
+  fields: IAcceptField[],
+  parents: IParentRef[],
+  mustNotHappenConstraints: readonly string[]
+): INegativeCase[] {
+  const negatives = negativesFor(entity, fields, parents);
+
+  for (const constraint of mustNotHappenConstraints) {
+    addMustNotHappenNegatives(constraint, fields, parents, negatives);
+  }
+
+  return negatives;
+}
+
+/**
+ * Build a single entity acceptance spec from a slice.
+ */
+function buildEntityAcceptance(
+  slice: IProductPlan["slices"][number],
+  index: number
+): IEntityAcceptance {
+  const fields = initializeFields(slice.entity.fields, index);
+  const parents = parseParents(slice.entity.relationships);
+
+  addParentFkFields(fields, parents, index);
+
+  const negatives = deriveNegatives(
+    slice.entity,
+    fields,
+    parents,
+    slice.verification.mustNotHappen
+  );
+
+  return {
+    id: slice.entity.id,
+    key: camel(slice.entity.id),
+    nav: slice.ui.nav,
+    fields,
+    shows: [...slice.ui.shows],
+    screens: slice.ui.screens,
+    parents,
+    negatives,
+    acceptanceCheck: slice.verification.acceptanceCheck,
+  };
+}
+
+/**
+ * Check if a field is mentioned (by exact name or humanized form) in a constraint.
+ */
+function fieldIsMentioned(
+  field: IAcceptField,
+  constraintLower: string
+): boolean {
+  const exactMatch = constraintLower.includes(field.name.toLowerCase());
+  const humanized = field.name
+    .replace(/([A-Z])/g, " $1")
+    .toLowerCase()
+    .trim();
+  const humanizedMatch =
+    humanized.length > 0 && constraintLower.includes(humanized);
+
+  return exactMatch || humanizedMatch;
+}
+
+/**
+ * Add constraint-specific negatives for a field.
+ */
+function addConstraintNegatives(
+  field: IAcceptField,
+  constraint: string,
+  negatives: INegativeCase[]
+): void {
+  if (!field.optional) {
+    const hasEmptyNegative = negatives.some(
+      (n) => n.field === field.name && n.value === ""
+    );
+
+    if (!hasEmptyNegative) {
+      negatives.push({
+        field: field.name,
+        value: "",
+        why: constraint,
+      });
+    }
+  }
+
+  const invalidIndicators = [
+    { pattern: /invalid\s+\w+/i, value: "invalid" },
+    { pattern: /negative\s+\w+/i, value: "-1" },
+  ];
+
+  for (const { pattern, value } of invalidIndicators) {
+    if (pattern.test(constraint)) {
+      const hasValueNegative = negatives.some(
+        (n) => n.field === field.name && n.value === value
+      );
+
+      if (!hasValueNegative) {
+        negatives.push({
+          field: field.name,
+          value,
+          why: constraint,
         });
       }
     }
+  }
+}
 
-    // FIX 8: Derive negatives from entity rules + parents + mustNotHappen constraints
-    const negatives = negativesFor(slice.entity, fields, parents);
+/**
+ * Add negatives from mustNotHappen constraints using field-mention scan.
+ */
+function addMustNotHappenNegatives(
+  constraint: string,
+  fields: IAcceptField[],
+  parents: IParentRef[],
+  negatives: INegativeCase[]
+): void {
+  const constraintLower = constraint.toLowerCase();
 
-    // Add negatives from verification.mustNotHappen constraints
-    // Map supported constraint patterns to negative cases (same shape as rule-derived negatives)
-    for (const constraint of slice.verification.mustNotHappen) {
-      // Extract patterns like "fieldName must not be empty/invalid"
-      // Pattern: "fieldName must not X" or "cannot have fieldName as Y"
-      const match =
-        /^(\w+)\s+(must not|cannot)/i.exec(constraint.trim()) ??
-        /cannot have (\w+)/i.exec(constraint.trim());
-
-      if (match && typeof match[1] === "string") {
-        const fieldName = match[1];
-        const field = fields.find((f) => f.name === fieldName);
-
-        // Only map real fields that exist and are required (optional fields don't get negatives)
-        // For required non-FK fields, add an empty-value negative
-        if (
-          field &&
-          !field.optional &&
-          !parents.some((p) => p.fkField === field.name) &&
-          !negatives.some((n) => n.field === fieldName && n.value === "")
-        ) {
-          negatives.push({
-            field: fieldName,
-            value: "",
-            why: constraint,
-          });
-        }
-      }
+  for (const field of fields) {
+    if (parents.some((p) => p.fkField === field.name)) {
+      continue;
     }
 
-    return {
-      id: slice.entity.id,
-      key: camel(slice.entity.id),
-      nav: slice.ui.nav,
-      fields,
-      shows: [...slice.ui.shows],
-      screens: slice.ui.screens,
-      parents,
-      negatives,
-      acceptanceCheck: slice.verification.acceptanceCheck,
-    };
-  });
+    if (fieldIsMentioned(field, constraintLower)) {
+      addConstraintNegatives(field, constraint, negatives);
+    }
+  }
+}
+
+export function planToAcceptanceSpec(plan: IProductPlan): IAcceptanceSpec {
+  const entities = plan.slices.map((slice, i) =>
+    buildEntityAcceptance(slice, i)
+  );
 
   return { entities };
 }

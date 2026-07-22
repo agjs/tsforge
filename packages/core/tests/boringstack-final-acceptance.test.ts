@@ -748,3 +748,43 @@ test("runFinalAcceptance: chain assertion failure returns stuck", async () => {
 
   expect(result.status).toBe("stuck");
 });
+
+test("FIX 5: when e2e acceptance disabled, preserves original status even if gate fails", async () => {
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "f1", desc: "test", passes: true, attempts: 1 }],
+  };
+
+  const mockExec: Exec = async (): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+  }> => {
+    // Full gate fails (returns non-zero)
+    return { code: 1, stdout: "", stderr: "validation failed" };
+  };
+
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+  };
+
+  // Call with acceptance DISABLED (true)
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    mockRunner,
+    minimalPlan,
+    true // acceptance disabled
+  );
+
+  // FIX 5: when disabled, preserve original status "done" even though gate failed
+  // (previously it would flip to "stuck" regardless of disabled flag)
+  expect(result.status).toBe("done");
+  expect(result).toBe(input); // Should return same object when disabled
+});

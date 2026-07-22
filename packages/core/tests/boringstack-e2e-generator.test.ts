@@ -307,6 +307,78 @@ describe("E2E spec generator", () => {
       expect(chainSpec).toContain("create root entity: Company");
       expect(chainSpec).not.toContain("create child entity");
     });
+
+    test("FIX 1: parent rowCell assertion uses seeded identity value, not type name", () => {
+      // Full spec with parent having first string field "name" with valid "name-1"
+      const companyWithName: IEntityAcceptance = {
+        id: "Company",
+        key: "company",
+        nav: "Companies",
+        fields: [
+          {
+            name: "name",
+            type: "string",
+            optional: false,
+            valid: "name-1",
+            invalid: [],
+          },
+        ],
+        shows: ["name"],
+        screens: ["list", "form"],
+        parents: [],
+        negatives: [],
+        acceptanceCheck: "create a company",
+      };
+
+      const contactWithParent: IEntityAcceptance = {
+        id: "Contact",
+        key: "contact",
+        nav: "Contacts",
+        fields: [
+          {
+            name: "name",
+            type: "string",
+            optional: false,
+            valid: "contact-1",
+            invalid: [],
+          },
+          {
+            name: "companyId",
+            type: "string",
+            optional: false,
+            valid: "comp-123",
+            invalid: [],
+          },
+        ],
+        shows: ["name", "company"],
+        screens: ["list", "form"],
+        parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+        negatives: [],
+        acceptanceCheck: "create a contact",
+      };
+
+      const fullSpec: IAcceptanceSpec = {
+        entities: [companyWithName, contactWithParent],
+      };
+
+      // Generate spec with full spec context (FIX 1 behavior)
+      const specWithFullContext = generateEntitySpec(
+        contactWithParent,
+        fullSpec
+      );
+
+      // Should assert parent rowCell contains the SEEDED value "name-1", not type name "Company"
+      expect(specWithFullContext).toContain('toContainText("name-1")');
+
+      // Should NOT assert the type name "Company" in the parent rowCell
+      expect(specWithFullContext).not.toContain('toContainText("Company")');
+
+      // Generate spec WITHOUT full spec context (fallback behavior)
+      const specWithoutContext = generateEntitySpec(contactWithParent);
+
+      // Without spec, should fall back to type name "Company"
+      expect(specWithoutContext).toContain('toContainText("Company")');
+    });
   });
 });
 
@@ -439,6 +511,85 @@ describe("E2E spec generator - Relationships", () => {
     expect(chainSpec).toContain("selectOption");
     expect(chainSpec).toContain("parent0Unique");
     expect(chainSpec).not.toContain("Seed a parent");
+  });
+
+  test("FIX 4: generateChainSpec handles non-linear plans (branches, independent roots)", () => {
+    // Non-linear plan: Company → Contact, Deal (independent)
+    // Contact's only parent is Company
+    // Deal has no parent in the chain (independent branch)
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "company-1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "contact-1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const dealEntity: IEntityAcceptance = {
+      id: "Deal",
+      key: "deal",
+      nav: "Deals",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "deal-1",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [], // No parent in this chain (independent branch)
+      negatives: [],
+      acceptanceCheck: "create a deal",
+    };
+
+    const spec: IAcceptanceSpec = {
+      entities: [companyEntity, contactEntity, dealEntity],
+    };
+
+    // Should NOT throw, even though Deal has no parent in the chain
+    expect(() => generateChainSpec(spec)).not.toThrow();
+
+    const chainSpec = generateChainSpec(spec);
+
+    // Should generate tests for all entities
+    expect(chainSpec).toContain("create root entity: Company");
+    expect(chainSpec).toContain("create child entity: Contact");
+    expect(chainSpec).toContain("create entity: Deal (no parent linkage)");
   });
 
   test("chainSpecPath returns correct path", () => {

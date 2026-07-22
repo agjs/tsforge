@@ -68,6 +68,8 @@ const mockSlice = {
 
 class MockHost {
   private messages: string[] = [];
+  private sendCount = 0;
+  private statusToReturn = "done";
 
   setScope(): void {
     // Implement IBoringstackHost
@@ -87,12 +89,21 @@ class MockHost {
 
   async send(message: string): Promise<{ status: string; turns: number }> {
     this.messages.push(message);
+    this.sendCount++;
 
-    return { status: "done", turns: 1 };
+    return { status: this.statusToReturn, turns: 1 };
   }
 
   getMessages(): string[] {
     return this.messages;
+  }
+
+  getSendCount(): number {
+    return this.sendCount;
+  }
+
+  setStatusToReturn(status: string): void {
+    this.statusToReturn = status;
   }
 }
 
@@ -292,13 +303,8 @@ test("acceptance: runner missing when flag enabled + entity available → fail-c
   const result = await deps.implement(mockFeature, mockState);
 
   // FAIL-CLOSED: runner missing + acceptance enabled + entity present → done=false
+  // (FIX 3: operator warning is no longer sent via host.send)
   expect(result.done).toBe(false);
-  const messages = host.getMessages();
-  const hasMessage = messages.some((msg) =>
-    msg.includes("e2e acceptance enabled but no runner injected")
-  );
-
-  expect(hasMessage).toBe(true);
 });
 
 test("acceptance: feature passes when no entity is available", async () => {
@@ -492,4 +498,160 @@ test("testIdStage: passes when no UI files exist yet", async () => {
   // Should pass when no UI files exist (feature may still be initializing)
   expect(result.passed).toBe(true);
   expect(result.output).toContain("no UI files");
+});
+
+test("FIX 2: verifyAcceptance returns done:false when steer fails, even if reRun passes", async () => {
+  let runCount = 0;
+  let sendCount = 0;
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      runCount++;
+
+      // First run fails, second run (after steer) passes
+      if (runCount === 1) {
+        return {
+          ok: false,
+          results: [
+            {
+              entity: "company",
+              step: "create",
+              ok: false,
+              detail: "row not visible",
+            },
+          ],
+          detail: "create failed",
+        };
+      }
+
+      // Second run passes
+      return {
+        ok: true,
+        results: [
+          {
+            entity: "company",
+            step: "create",
+            ok: true,
+            detail: "pass",
+          },
+        ],
+      };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+  };
+
+  class MockHostStateful extends MockHost {
+    async send(message: string): Promise<{ status: string; turns: number }> {
+      sendCount++;
+      // First send returns done (fast gate pass), subsequent sends return stuck (steer failure)
+      return { status: sendCount === 1 ? "done" : "stuck", turns: 1 };
+    }
+  }
+
+  const host = new MockHostStateful();
+
+  const deps = boringstackDeps({
+    host,
+    cwd: "/tmp/test",
+    exec: mockExec,
+    evaluator: mockEvaluator,
+    acceptanceRunner: mockRunner,
+    generate: async () => {},
+    generateUi: async () => {},
+    sliceFor: (id: string) => (id === "company" ? mockSlice : undefined),
+  });
+
+  const result = await deps.implement(mockFeature, mockState);
+
+  // CRITICAL: even though reRun.ok is true, steer.status !== "done", so done:false
+  expect(result.done).toBe(false);
+  // Verify run() was called exactly twice: once for initial check, once after steer
+  expect(runCount).toBe(2);
+});
+
+test("FIX 2: verifyAcceptance returns done:true when both steer done AND reRun pass", async () => {
+  let runCount = 0;
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      runCount++;
+
+      if (runCount === 1) {
+        return {
+          ok: false,
+          results: [
+            {
+              entity: "company",
+              step: "create",
+              ok: false,
+              detail: "row not visible",
+            },
+          ],
+          detail: "create failed",
+        };
+      }
+
+      return {
+        ok: true,
+        results: [
+          {
+            entity: "company",
+            step: "create",
+            ok: true,
+            detail: "pass",
+          },
+        ],
+      };
+    },
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+  };
+
+  const host = new MockHost();
+
+  // Set steer to return done status (the fix: both conditions true)
+  host.setStatusToReturn("done");
+
+  const deps = boringstackDeps({
+    host,
+    cwd: "/tmp/test",
+    exec: mockExec,
+    evaluator: mockEvaluator,
+    acceptanceRunner: mockRunner,
+    generate: async () => {},
+    generateUi: async () => {},
+    sliceFor: (id: string) => (id === "company" ? mockSlice : undefined),
+  });
+
+  const result = await deps.implement(mockFeature, mockState);
+
+  // Now both steer.status === "done" AND reRun.ok is true → done:true
+  expect(result.done).toBe(true);
+  expect(runCount).toBe(2);
+});
+
+test("FIX 3: missing runner path does NOT call host.send for operator warning", async () => {
+  const host = new MockHost();
+  const deps = boringstackDeps({
+    host,
+    cwd: "/tmp/test",
+    exec: mockExec,
+    evaluator: mockEvaluator,
+    // No acceptanceRunner provided + flag enabled + entity present → fail-closed
+    sliceFor: (id: string) => (id === "company" ? mockSlice : undefined),
+    generate: async () => {},
+    generateUi: async () => {},
+  });
+
+  const result = await deps.implement(mockFeature, mockState);
+
+  // FIX 3: missing-runner path must NOT call host.send (no operator warning message)
+  expect(result.done).toBe(false);
+  const sendCallsForWarning = host
+    .getMessages()
+    .filter((msg) => msg.includes("runner injected"));
+
+  // Should have NO send calls with the operator warning text
+  expect(sendCallsForWarning.length).toBe(0);
 });

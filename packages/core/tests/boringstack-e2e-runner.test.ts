@@ -843,3 +843,49 @@ test("FIX 2: top-level report error is classified as infra", async () => {
   // Should retry
   expect(execCallCount).toBe(3);
 });
+
+test("FIX 6: infra-classified run with parseable results preserves results and infraError detail", async () => {
+  const fakeExec: Exec = async () => {
+    // Infra failure but with valid parsed results (e.g., some tests ran, then infrastructure failed)
+    return {
+      code: 1,
+      stdout: JSON.stringify({
+        suites: [
+          {
+            title: "Company",
+            specs: [
+              {
+                title: "navigate to company list via sidebar",
+                ok: true,
+                tests: [
+                  {
+                    results: [{ status: "passed" }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 1, unexpected: 0, flaky: 0, skipped: 0 },
+      }),
+      stderr: "ECONNREFUSED: connection timeout after partial execution",
+    };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+  const ctx = createTestCtx();
+
+  const outcome = await runner.run(testEntity, ctx);
+
+  // FIX 6: even though classified as infra, preserve the parsed results
+  expect(outcome.infraError).toBeDefined();
+  expect(outcome.infraError).toContain("ECONNREFUSED");
+  // CRITICAL: results must be preserved (not empty [])
+  expect(outcome.results.length).toBeGreaterThan(0);
+  const firstResult = outcome.results[0];
+
+  if (firstResult) {
+    expect(firstResult.step).toBe("nav");
+    expect(firstResult.ok).toBe(true);
+  }
+});

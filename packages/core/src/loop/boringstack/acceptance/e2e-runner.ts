@@ -491,6 +491,7 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
         }
 
         let lastError: string | undefined;
+        let lastResults: IAcceptanceResult[] = [];
 
         for (let attempt = 0; attempt < 3; attempt++) {
           const uiPort = portFromURL(ctx.uiBase);
@@ -525,6 +526,13 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
             return outcome;
           }
 
+          // Preserve parsed results even if classified as infra (for diagnostics)
+          const parseResult = parsePlaywrightJSON(result.stdout, entity);
+
+          if (parseResult !== null) {
+            lastResults = parseResult;
+          }
+
           lastError = result.stderr;
 
           // Infra error: retry up to 3 times
@@ -535,7 +543,7 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
 
         return {
           ok: false,
-          results: [],
+          results: lastResults,
           infraError:
             lastError !== "" ? lastError : "playwright execution failed",
         };
