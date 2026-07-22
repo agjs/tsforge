@@ -432,13 +432,10 @@ function generateNegativeBlocks(
       ].filter((s) => s.length > 0);
       const payloadFields = allAssignments.join(",\n");
 
-      // B3: Render the override value type-aware, except required-empty "" stays as ""
-      const targetFieldType =
-        entity.fields.find((f) => f.name === neg.field)?.type ?? "string";
-      const overrideValue =
-        neg.value === ""
-          ? '""'
-          : renderFieldValue({ type: targetFieldType, valid: neg.value });
+      // B3: Render the override value verbatim via JSON.stringify (except required-empty "")
+      // to ensure invalid values are sent as-is (e.g., "notabool" stays "notabool", not coerced to false).
+      // Only the VALID companion fields get type-rendering; the override does not.
+      const overrideValue = neg.value === "" ? '""' : JSON.stringify(neg.value);
 
       // B2: Build error message safely without backtick interpolation of plan data
       const errorMsg = `expected ${entity.key} to reject ${neg.field} with a validation error (400/422)`;

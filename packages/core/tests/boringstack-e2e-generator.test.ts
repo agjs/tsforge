@@ -1757,7 +1757,7 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
     expect(spec).not.toContain("${code}injection`");
   });
 
-  test("B3: type-render invalid override as bare number (not string)", () => {
+  test("B3: invalid override sent verbatim as JSON string for numeric type", () => {
     const entityWithNumericNegative: IEntityAcceptance = {
       id: "Product",
       key: "product",
@@ -1789,8 +1789,9 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
 
     const spec = generateEntitySpec(entityWithNumericNegative);
 
-    // B3: Invalid override for numeric field should be bare -1 (not "-1" string)
-    expect(spec).toContain('payload["stock"] = -1');
+    // B3: Invalid override for numeric field should be sent as string "-1" verbatim (not coerced to bare number)
+    // to exercise type validation rejection
+    expect(spec).toContain('payload["stock"] = "-1"');
   });
 
   test("B3: type-render invalid override as bare boolean (not string)", () => {
@@ -1825,9 +1826,9 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
 
     const spec = generateEntitySpec(entityWithBooleanNegative);
 
-    // B3: Invalid override for boolean field with invalid value should render as false (fallback)
-    // "notabool" is not "true", so it becomes false
-    expect(spec).toContain('payload["active"] = false');
+    // B3: Invalid override for boolean field should send the invalid value verbatim
+    // "notabool" is sent as the string "notabool" (not coerced to false) to exercise validation rejection
+    expect(spec).toContain('payload["active"] = "notabool"');
   });
 
   test("B3: required-empty negative keeps empty string as empty string", () => {

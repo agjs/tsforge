@@ -145,44 +145,6 @@ function isInfraError(text: string): boolean {
 }
 
 /**
- * Extract error messages from Playwright report JSON stdout.
- * Parses the JSON and collects top-level report.errors[].message (not per-test errors).
- * Per-test assertion errors must NOT drive suite-wide infra classification.
- * Returns empty string if no errors found or JSON is invalid.
- */
-function extractReportErrorText(stdout: string): string {
-  const errors: string[] = [];
-
-  if (stdout.trim().length === 0) {
-    return "";
-  }
-
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return "";
-  }
-
-  if (!isPlaywrightReport(parsed)) {
-    return "";
-  }
-
-  // Collect top-level report errors ONLY
-  // Global setup/launch failures land here; per-test assertion errors do not.
-  if (Array.isArray(parsed.errors)) {
-    for (const err of parsed.errors) {
-      if ("message" in err && typeof err.message === "string") {
-        errors.push(err.message);
-      }
-    }
-  }
-
-  return errors.join("\n");
-}
-
-/**
  * Extract the error message from a test result, if present.
  */
 function extractErrorMessage(test: {
@@ -327,8 +289,14 @@ function classifyNonzeroExit(
   shouldRetry: boolean;
 } {
   // Combine stderr with extracted report errors to form the complete error text
+  // Extract top-level report errors from the already-parsed report (no re-parse)
   const reportErrorText =
-    parsedReport !== null ? extractReportErrorText(result.stdout) : "";
+    parsedReport !== null && Array.isArray(parsedReport.errors)
+      ? parsedReport.errors
+          .map((err) => (typeof err.message === "string" ? err.message : ""))
+          .filter((msg) => msg.length > 0)
+          .join("\n")
+      : "";
 
   const combinedErrorText =
     result.stderr + (reportErrorText !== "" ? "\n" + reportErrorText : "");
@@ -569,8 +537,11 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
 
           // Preserve parsed results even if classified as infra (for diagnostics).
           // Reuse the parse from processExecResult — do not re-parse the same stdout.
-          // parseResult is always an array (may be empty if JSON was invalid)
-          lastResults = parseResult;
+          // Only overwrite lastResults when parseResult is non-empty; if it's the
+          // empty-array sentinel from unparseable stdout, preserve earlier diagnostics.
+          if (parseResult.length > 0) {
+            lastResults = parseResult;
+          }
 
           lastError = result.stderr;
 

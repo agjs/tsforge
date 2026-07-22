@@ -191,9 +191,11 @@ then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \
 
 **Extract computed lists.** Build the rows as a const in the body (\`const renderRows = items.map((row) => (<tr…>…</tr>));\`) or a hook — never inline a complex \`.map()\` with logic in the returned JSX ("Extract this computation into a hook").
 
-**One concern per file.** The \`.tsx\` is presentational only; data/hooks go in \`${camel}.hooks.ts\`, pure helpers in \`${camel}.utils.ts\`, types in \`${camel}.types.ts\`. NEVER put JSX in a \`.ts\` file (JSX only compiles in \`.tsx\`; a \`.ts\` with \`<X>\` throws "Parsing error: '>' expected"). Never mix a hook + component + type in one module.
+**One concern per file.** The \`.tsx\` is presentational only. Data-fetching hooks live in the generated PascalCase \`${feature.id}.queries.ts\` (list/fetch queries) and \`${feature.id}.mutations.ts\` (create/update/delete mutations) — FILL THESE, do NOT create parallel \`${camel}.hooks.ts\` files. Component view-state hooks go in a co-located \`<Component>.hooks.ts\` next to the component. Pure helpers in \`${camel}.utils.ts\` / \`<Component>.utils.ts\`. Types in \`${camel}.types.ts\`. NEVER put JSX in a \`.ts\` file (JSX only compiles in \`.tsx\`; a \`.ts\` with \`<X>\` throws "Parsing error: '>' expected"). Never mix a hook + component + type in one module.
 
 **Every visible string via \`t("features.${camel}.<key>")\`** — no hardcoded JSX text (button labels like "Edit"/"Delete" included).
+
+**Make the feature reachable.** Add a sidebar link to \`apps/ui/src/components/core/AppSidebar/AppSidebar.tsx\` (add your feature's entry to the \`APP_SIDEBAR_NAV_ITEMS\` array, following the existing format) and register its route in \`apps/ui/src/app/router/routes.tsx\` (add a route pointing at your feature's page component). Both files are in your editable scope — ADD ONLY your feature's entries, never modify another feature's link/route (same rule as the shared schema + locale files). A feature missing from the sidebar or router is unreachable and fails browser acceptance.
 
 ---
 
@@ -211,10 +213,12 @@ then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \
 
 ## Freeze
 
-⚠️ **FREEZE**: Only the files above for the **${feature.id}** resource are editable — that includes adding your entity's columns to the \`${camel}\` table in the app schema. All other files are locked. Do not modify:
+⚠️ **FREEZE**: Only the files above for the **${feature.id}** resource are editable. The shared app schema, locale files, AppSidebar.tsx, and routes.tsx are the explicit ADD-ONLY exceptions: the model may edit them only to add entries for this feature, never to modify other features' entries or remove them. All other files are locked. Do not modify:
 - Any table OTHER than \`${camel}\` in the app schema; no migrations
+- Any locale namespace OTHER than \`features.${camel}\` in the locale files
+- Any sidebar link OTHER than your feature's link; do not modify other features' links
+- Any route OTHER than your feature's route; do not modify other features' routes
 - Root configuration files
-- Routes wiring (already done for this resource)
 - Other resources' files
 
 If you need to make a change elsewhere, the build has already locked it. Rebase this feature once it passes the gate.

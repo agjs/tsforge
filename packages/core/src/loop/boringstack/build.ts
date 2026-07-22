@@ -103,6 +103,18 @@ export const APP_SCHEMA_FILE =
  *  instructed (refinePrompt) to only ADD its feature's keys, never touch others'. */
 export const LOCALE_GLOB = "apps/ui/src/lib/i18n/locales/**";
 
+/** The shared app sidebar navigation component. Features are unreachable (fail browser
+ *  acceptance tests) if the model doesn't register a NavLink for the feature in the
+ *  sidebar. It's instructed (refinePrompt) to ADD ONLY its feature's link, never
+ *  modify another feature's entry or remove entries. */
+export const APP_SIDEBAR_FILE =
+  "apps/ui/src/components/core/AppSidebar/AppSidebar.tsx";
+
+/** The shared router configuration file. A feature without a route entry is unreachable
+ *  (knip flags the page as unused). The model is instructed (refinePrompt) to ADD ONLY
+ *  its feature's route entry, never modify another feature's route. */
+export const APP_ROUTES_FILE = "apps/ui/src/app/router/routes.tsx";
+
 export function scopeFor(name: string): string[] {
   const camel = toCamelCase(name);
 
@@ -116,6 +128,11 @@ export function scopeFor(name: string): string[] {
     // Same story for i18n: any UI string is a locale key, and the keys live in
     // shared locale files — the model must be able to add the keys it references.
     LOCALE_GLOB,
+    // The sidebar and router are shared UI files. A feature is unreachable (fails
+    // browser acceptance) unless the model adds a NavLink to the sidebar and a route
+    // to the router. Add-only: the model may ADD its feature's entry, never modify others'.
+    APP_SIDEBAR_FILE,
+    APP_ROUTES_FILE,
   ];
 }
 
