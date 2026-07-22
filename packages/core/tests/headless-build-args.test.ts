@@ -5,7 +5,22 @@ import { join } from "node:path";
 import {
   parseHeadlessArgs,
   resolveWorkspaceDir,
+  resolveExpertRescueFlag,
 } from "../scripts/headless-build";
+
+describe("resolveExpertRescueFlag", () => {
+  test("defaults to '1' (rescue on) when the flag is unset", () => {
+    expect(resolveExpertRescueFlag(undefined)).toBe("1");
+  });
+
+  test("keeps an explicit '0' (opt-out wins)", () => {
+    expect(resolveExpertRescueFlag("0")).toBe("0");
+  });
+
+  test("keeps an explicit '1'", () => {
+    expect(resolveExpertRescueFlag("1")).toBe("1");
+  });
+});
 
 describe("parseHeadlessArgs", () => {
   test("parses prompt and dir from positional arguments", () => {

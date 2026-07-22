@@ -84,6 +84,16 @@ export function resolveWorkspaceDir(dir: string): string {
 }
 
 /**
+ * The autonomous builder defaults expert rescue ON so a stalled feature is
+ * handed to the configured `capabilities.expert` model instead of parking.
+ * Explicit env wins: a caller that already set TSFORGE_EXPERT_RESCUE (including
+ * "0" to opt out) keeps their value; only an unset flag defaults to "1".
+ */
+export function resolveExpertRescueFlag(current: string | undefined): string {
+  return current ?? "1";
+}
+
+/**
  * Parse headless-build command-line arguments into typed fields.
  * Flags (--log-file, --plan) and positionals (prompt, dir) can appear in any order.
  * Returns an object with undefined fields for missing args.
@@ -355,7 +365,9 @@ async function main(): Promise<void> {
     // This is a real autonomous builder: enable expert rescue by default so a
     // stalled feature is handed to the configured `capabilities.expert` model
     // instead of parking. Explicit env wins (set TSFORGE_EXPERT_RESCUE=0 to opt out).
-    process.env.TSFORGE_EXPERT_RESCUE ??= "1";
+    process.env.TSFORGE_EXPERT_RESCUE = resolveExpertRescueFlag(
+      process.env.TSFORGE_EXPERT_RESCUE
+    );
 
     process.stdout.write(
       `isolated ports → postgres ${String(pgPort)} · api ${String(apiPort)} · valkey ${String(valkeyPort)}\n`
