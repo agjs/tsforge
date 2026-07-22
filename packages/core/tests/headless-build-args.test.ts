@@ -5,7 +5,39 @@ import { join } from "node:path";
 import {
   parseHeadlessArgs,
   resolveWorkspaceDir,
+  resolveExpertRescueFlag,
+  applyExpertRescueDefault,
 } from "../scripts/headless-build";
+
+describe("resolveExpertRescueFlag", () => {
+  test("defaults to '1' (rescue on) when the flag is unset", () => {
+    expect(resolveExpertRescueFlag(undefined)).toBe("1");
+  });
+
+  test("keeps an explicit '0' (opt-out wins)", () => {
+    expect(resolveExpertRescueFlag("0")).toBe("0");
+  });
+
+  test("keeps an explicit '1'", () => {
+    expect(resolveExpertRescueFlag("1")).toBe("1");
+  });
+});
+
+describe("applyExpertRescueDefault (the env wiring)", () => {
+  test("sets the flag to '1' on an env that has none", () => {
+    const env: { TSFORGE_EXPERT_RESCUE?: string } = {};
+
+    applyExpertRescueDefault(env);
+    expect(env.TSFORGE_EXPERT_RESCUE).toBe("1");
+  });
+
+  test("preserves an explicit opt-out ('0')", () => {
+    const env = { TSFORGE_EXPERT_RESCUE: "0" };
+
+    applyExpertRescueDefault(env);
+    expect(env.TSFORGE_EXPERT_RESCUE).toBe("0");
+  });
+});
 
 describe("parseHeadlessArgs", () => {
   test("parses prompt and dir from positional arguments", () => {

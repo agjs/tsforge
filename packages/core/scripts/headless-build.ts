@@ -84,6 +84,29 @@ export function resolveWorkspaceDir(dir: string): string {
 }
 
 /**
+ * The autonomous builder defaults expert rescue ON so a stalled feature is
+ * handed to the configured `capabilities.expert` model instead of parking.
+ * Explicit env wins: a caller that already set TSFORGE_EXPERT_RESCUE (including
+ * "0" to opt out) keeps their value; only an unset flag defaults to "1".
+ */
+export function resolveExpertRescueFlag(current: string | undefined): string {
+  return current ?? "1";
+}
+
+/**
+ * Apply the expert-rescue default onto an environment object (the wiring around
+ * {@link resolveExpertRescueFlag}). Mutates `env.TSFORGE_EXPERT_RESCUE` in place so
+ * the autonomous builder defaults it on while an explicit value is preserved.
+ */
+export function applyExpertRescueDefault(
+  env: Record<string, string | undefined>
+): void {
+  env.TSFORGE_EXPERT_RESCUE = resolveExpertRescueFlag(
+    env.TSFORGE_EXPERT_RESCUE
+  );
+}
+
+/**
  * Parse headless-build command-line arguments into typed fields.
  * Flags (--log-file, --plan) and positionals (prompt, dir) can appear in any order.
  * Returns an object with undefined fields for missing args.
@@ -351,6 +374,11 @@ async function main(): Promise<void> {
     // exactly as DATABASE_URL points at the published Postgres.
     process.env.VALKEY_HOST ??= "localhost";
     process.env.VALKEY_PORT ??= String(valkeyPort);
+
+    // This is a real autonomous builder: enable expert rescue by default so a
+    // stalled feature is handed to the configured `capabilities.expert` model
+    // instead of parking. Explicit env wins (set TSFORGE_EXPERT_RESCUE=0 to opt out).
+    applyExpertRescueDefault(process.env);
 
     process.stdout.write(
       `isolated ports → postgres ${String(pgPort)} · api ${String(apiPort)} · valkey ${String(valkeyPort)}\n`

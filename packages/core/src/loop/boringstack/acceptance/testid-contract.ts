@@ -96,6 +96,7 @@ ${
 - In the table row: \`<td data-testid="${ids.rowCell(entity.shows[0] ?? entity.fields[0]?.name ?? "name")}">{record.${entity.shows[0] ?? entity.fields[0]?.name ?? "name"}}</td>\`
 
 **Where to add them:**
+- **Navigation (IMPORTANT — outside the feature directory):** add \`data-testid="${ids.nav}"\` to the "${entity.id}" link in the SHARED sidebar (\`apps/ui/src/components/core/AppSidebar/\`), NOT in the feature folder. A feature that isn't linked in the sidebar is unreachable and will fail end-to-end acceptance — every feature MUST be added to the sidebar navigation.
 - List page component: add \`data-testid="${ids.list}"\` to the list/table container, \`data-testid="${ids.empty}"\` to the empty state
 - Create button: add \`data-testid="${ids.create}"\` to the button that opens the form
 - Form component: add \`data-testid="${ids.form}"\` to the \`<form>\`, \`data-testid="${ids.submit}"\` to the submit button, and \`data-testid="${ids.field("...")}\` to each input
@@ -133,7 +134,13 @@ export function checkTestIds(
       continue;
     }
 
-    if (!source.includes(`data-testid="${id}"`)) {
+    // Match either quote style: the generated JSX is single-quoted
+    // (`data-testid='x'`) after prettier/eslint, while hand-written examples
+    // often use double quotes. Missing EITHER form means the hook is absent.
+    const hasDouble = source.includes(`data-testid="${id}"`);
+    const hasSingle = source.includes(`data-testid='${id}'`);
+
+    if (!hasDouble && !hasSingle) {
       errors.push(id);
     }
   }
