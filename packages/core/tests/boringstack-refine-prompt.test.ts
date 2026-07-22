@@ -431,11 +431,20 @@ describe("refinePrompt", () => {
     expect(prompt).not.toContain("Do NOT run the gate yourself");
     // #63b: the model must NOT run the browser E2E / dev server itself — that hits the host
     // preflight guard (exit 1) while the dockerized dev server is up and traps it into a park.
-    // Acceptance is harness-owned; the model stops at fast-gate green.
+    // Assert the LOAD-BEARING content (not just the heading): the command prohibitions, the
+    // harness-owned-acceptance statement, and the stop-at-fast-gate-green instruction — the exact
+    // behaviors this root-cause fix depends on, so removing any of them fails the test.
     expect(prompt).toContain(
       "Do NOT run the browser end-to-end acceptance yourself"
     );
     expect(prompt).toContain("preflight-host-dev.sh");
+    // the specific commands the model must not run
+    expect(prompt).toContain("playwright");
+    expect(prompt).toContain("bun run dev");
+    // acceptance is the harness's job, run automatically after the fast gate
+    expect(prompt).toMatch(/harness runs the full browser[\s\S]*AUTOMATICALLY/u);
+    // and the model must STOP at fast-gate green rather than "verify" further
+    expect(prompt).toMatch(/passed: true[\s\S]*you are DONE/u);
   });
 
   it("front-loads BoringStack UI component conventions (makeIdHandler list-row idiom, module split, api-client typed unwrap)", () => {
