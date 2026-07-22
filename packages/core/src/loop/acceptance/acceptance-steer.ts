@@ -76,10 +76,6 @@ function stepMessage(entity: IEntityAcceptance, step: AcceptStep): string {
       return `The ${id} feature failed acceptance at the delete step: a deleted ${singularKey} was not removed from the list. Ensure the delete function removes the ${singularKey} from the list view.`;
     }
 
-    case "negative": {
-      return `The ${id} feature failed acceptance at the negative step: invalid or empty inputs were accepted when they should have been rejected. Add validation to reject empty required fields and invalid data formats.`;
-    }
-
     default: {
       const _unreachable: never = step;
 

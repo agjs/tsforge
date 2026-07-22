@@ -32,7 +32,6 @@ const company: IEntityAcceptance = {
   shows: ["name"],
   screens: ["list", "form"],
   parents: [],
-  negatives: [],
   acceptanceCheck: "create a company",
 };
 
@@ -59,7 +58,6 @@ const contact: IEntityAcceptance = {
   shows: ["name"],
   screens: ["list", "form"],
   parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
-  negatives: [],
   acceptanceCheck: "create a contact",
 };
 

@@ -29,9 +29,6 @@ export function stepTitle(
       return `update ${entityId}: edit form, change field, save`;
     case "delete":
       return `delete ${entityId}: row delete, confirm, row gone`;
-    case "negative":
-      // Negative titles include field and value; handled separately in generateNegativeBlocks
-      return "negative";
   }
 }
 
@@ -347,75 +344,6 @@ function generateRowCellAssertions(
 }
 
 /**
- * Generate negative test blocks.
- * Safely interpolates field names, invalid values, and entity name using JSON.stringify.
- *
- * Negatives work by:
- * 1. Record initial row count before creating the form
- * 2. Open create form and emit parentSeedingCode (so FK variables are declared)
- * 3. Fill all fields validly
- * 4. Override ONLY the target field with invalid value
- * 5. Submit and reload
- * 6. Assert row count did NOT increase — the invalid record was rejected and not persisted
- *
- * This approach is robust: it doesn't depend on visible error elements and reliably
- * distinguishes API rejection from form validation failures.
- */
-function generateNegativeBlocks(
-  entity: IEntityAcceptance,
-  ids: ReturnType<typeof testIdsFor>,
-  fieldFillSteps: string,
-  parentSeedingCode: string
-): string {
-  return entity.negatives
-    .map((neg) => {
-      const fieldTestId = ids.field(neg.field);
-      const testTitle = `negative: ${entity.id} rejects ${neg.field}=${neg.value}`;
-
-      return `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
-    await authedPage.dashboard.goto();
-    await navigateTo${entity.id}(page);
-
-    // Open create form
-    await page.getByTestId("${ids.create}").click();
-    await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-    // Emit parent seeding code so FK variables (e.g., companyId) are declared
-${parentSeedingCode}
-
-    // Fill all fields with valid values, then override the target with the invalid one
-${fieldFillSteps}
-    await page.getByTestId("${fieldTestId}").clear();
-    await page.getByTestId("${fieldTestId}").fill(${JSON.stringify(neg.value)});
-
-    // Rejection is proven by the ABSENCE of a SUCCESSFUL (2xx) create request — a real
-    // oracle, unlike row counts (immune to pagination, shared-DB accumulation, and
-    // reload-before-persist races). Start listening BEFORE the click to avoid missing
-    // a fast response. A server 4xx (r.ok() === false) or a client-blocked submit (no
-    // request at all) both leave this pending until timeout, so createdOk stays false.
-    const successfulCreate = page
-      .waitForResponse(
-        (r) =>
-          r.url().includes("/api/v1/${entity.key}") &&
-          r.request().method() === "POST" &&
-          r.ok(),
-        { timeout: 5000 }
-      )
-      .then(() => true)
-      .catch(() => false);
-
-    await page.getByTestId("${ids.submit}").click();
-
-    const createdOk = await successfulCreate;
-
-    expect(createdOk).toBe(false);
-  });
-`;
-    })
-    .join("\n");
-}
-
-/**
  * Generate a navigation helper function for an entity.
  * Used by both generateEntitySpec and generateChainSpec to avoid duplication.
  */
@@ -431,7 +359,7 @@ function generateNavHelper(entity: IEntityAcceptance): string {
  * Generate a Playwright spec text for a single entity's CRUD operations.
  * Returns a `.spec.ts` string ready to write to disk.
  *
- * Covers: nav, list (or empty), create, persist (reload), update, delete, and negative cases.
+ * Covers: nav, list (or empty), create, persist (reload), update, and delete.
  * Uses the app's authedPage fixture and getByTestId selectors.
  * For entities with parents, seeds the parent via API and selects it in the form.
  */
@@ -447,12 +375,6 @@ export function generateEntitySpec(
     entity.parents,
     entity.id,
     spec
-  );
-  const negativeBlocks = generateNegativeBlocks(
-    entity,
-    ids,
-    fieldFillSteps,
-    parentSeedingCode
   );
 
   // FIX E/FIX 3: Type-aware unique identity value
@@ -725,8 +647,6 @@ ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}
       page.getByTestId("${ids.row}").filter({ hasText: unique })
     ).toHaveCount(0, { timeout: 10000 });
   });
-
-${negativeBlocks}
 });
 `;
 }

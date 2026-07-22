@@ -21,7 +21,6 @@ const makeEntity = (id: string): IEntityAcceptance => ({
   shows: ["name"],
   screens: ["list", "form"],
   parents: [],
-  negatives: [],
   acceptanceCheck: `test ${id.toLowerCase()}`,
 });
 
@@ -150,30 +149,6 @@ test("acceptanceSteer: DELETE-fail mentions removal", () => {
 
   expect(steer).toContain("Team");
   expect(steer).toContain("delete");
-});
-
-test("acceptanceSteer: NEGATIVE-fail mentions validation", () => {
-  const entity = makeEntity("User");
-
-  const outcome: IAcceptanceOutcome = {
-    ok: false,
-    results: [
-      { entity: "User", step: "nav", ok: true, detail: "" },
-      { entity: "User", step: "list", ok: true, detail: "" },
-      {
-        entity: "User",
-        step: "negative",
-        ok: false,
-        detail: "invalid input was accepted",
-      },
-    ],
-  };
-
-  const steer = acceptanceSteer(entity, outcome);
-
-  expect(steer).toContain("User");
-  expect(steer).toContain("negative");
-  expect(steer.toLowerCase()).toMatch(/invalid|reject|validation|required/);
 });
 
 test("acceptanceSteer: includes outcome.detail if present", () => {

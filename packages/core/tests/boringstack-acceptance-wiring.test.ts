@@ -36,7 +36,6 @@ const mockEntity: IEntityAcceptance = {
   shows: ["name"],
   screens: ["list", "form"],
   parents: [],
-  negatives: [],
   acceptanceCheck: "create a company",
 };
 

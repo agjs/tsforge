@@ -61,7 +61,6 @@ const testEntity: IEntityAcceptance = {
   shows: ["name", "website"],
   screens: ["list", "form"],
   parents: [],
-  negatives: [],
   acceptanceCheck: "create a company",
 };
 
