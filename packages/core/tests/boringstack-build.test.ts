@@ -583,7 +583,12 @@ describe("runBoringstackBuild", () => {
   test("gate parity: applies the deterministic auto-fixes right before final acceptance", async () => {
     const dir = await mkdtemp(join(tmpdir(), "bs-"));
 
+    // Disable e2e acceptance for this test (we're testing gate parity, not acceptance)
+    const originalEnv = process.env.TSFORGE_NO_E2E_ACCEPTANCE;
+
     try {
+      process.env.TSFORGE_NO_E2E_ACCEPTANCE = "1";
+
       const plan: IProductPlan = {
         product: "A simple app",
         slices: [
@@ -661,6 +666,13 @@ describe("runBoringstackBuild", () => {
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
+
+      // Restore env var
+      if (originalEnv === undefined) {
+        delete process.env.TSFORGE_NO_E2E_ACCEPTANCE;
+      } else {
+        process.env.TSFORGE_NO_E2E_ACCEPTANCE = originalEnv;
+      }
     }
   });
 });

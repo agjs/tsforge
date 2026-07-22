@@ -11,4 +11,5 @@ export const ENV_FLAG = {
   noDelegation: "TSFORGE_NO_DELEGATION",
   expertRescue: "TSFORGE_EXPERT_RESCUE",
   noNearGreenCheckpoint: "TSFORGE_NO_NEAR_GREEN_CHECKPOINT",
+  noE2eAcceptance: "TSFORGE_NO_E2E_ACCEPTANCE",
 } as const;

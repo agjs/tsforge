@@ -21,7 +21,18 @@ import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 import { slicesToFeatures } from "./plan-resources";
 import { toCamelCase } from "./case";
 import { loadApprovedPlan } from "../planning/plan-store";
-import type { ISlice } from "../planning/plan-types";
+import type { ISlice, IProductPlan } from "../planning/plan-types";
+import { planToAcceptanceSpec } from "../acceptance/acceptance-spec";
+import { buildTestIdGuide } from "./acceptance/testid-contract";
+import type {
+  IEntityAcceptance,
+  IAcceptanceRunner,
+  IAcceptanceRunCtx,
+  IAcceptanceSpec,
+} from "../acceptance/acceptance.types";
+import { acceptanceSteer } from "../acceptance/acceptance-steer";
+import { readHostPorts, hostPortOr } from "../../scaffold";
+import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
 /** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
  *  `format` (prettier, canonical formatting) then `lint:fix` (eslint --fix for the
@@ -208,6 +219,88 @@ function revisitGuidance(seed?: { triedLevers: EscalationRung[] }): string {
 }
 
 /**
+ * Run acceptance verification for a feature after the fast gate passes.
+ * Returns the done status and optional handoff; handles runner missing, infra errors, and assertion failures.
+ */
+async function verifyAcceptance(
+  sent: { status: string; handoff?: IHandoff },
+  host: IBoringstackHost,
+  cwd: string,
+  entity: IEntityAcceptance | undefined,
+  acceptanceRunner: IAcceptanceRunner | undefined,
+  e2eAcceptanceDisabled: boolean,
+  fullSpec?: IAcceptanceSpec
+): Promise<{ done: boolean; handoff?: IHandoff; infra?: string }> {
+  // If acceptance is not enabled, return based on fast gate
+  if (!(!e2eAcceptanceDisabled && sent.status === "done")) {
+    return {
+      done: sent.status === "done",
+      ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
+    };
+  }
+
+  // FAIL-CLOSED: if acceptance is enabled and entity exists but runner is missing,
+  // this is a misconfiguration — reject the feature until the runner is injected
+  if (entity && !acceptanceRunner) {
+    return { done: false };
+  }
+
+  // Run acceptance only if we have an entity and runner
+  if (entity && acceptanceRunner) {
+    const hostPorts = readHostPorts(cwd);
+    const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
+    const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
+    const ctx: IAcceptanceRunCtx = {
+      cwd,
+      apiBase: `http://localhost:${apiPort}`,
+      uiBase: `http://localhost:${uiPort}`,
+    };
+
+    const outcome = await acceptanceRunner.run(entity, ctx, fullSpec);
+
+    // Infrastructure error: route to needs-infra path; per-slice acceptance is best-effort.
+    // The feature's fast-gate pass is valid, but acceptance verification cannot complete
+    // due to infrastructure. Return infra error to thread it through the outer loop.
+    if (outcome.infraError !== undefined) {
+      return { done: false, infra: outcome.infraError };
+    }
+
+    // Test assertion failed: emit steer, re-verify, and close over post-steer state
+    if (!outcome.ok) {
+      const steer = acceptanceSteer(entity, outcome);
+
+      const steerSend = await host.send(steer);
+
+      // FIX 2: after sending the steer (which runs the full model loop),
+      // re-run acceptance once to see if the fix worked
+      const reRun = await acceptanceRunner.run(entity, ctx, fullSpec);
+
+      // If the re-run is an infra error, route it through the needs-infra channel
+      if (reRun.infraError !== undefined) {
+        return { done: false, infra: reRun.infraError };
+      }
+
+      // Return done:true ONLY when both the steer completed AND the re-run passed.
+      // If the steer did not complete (stuck), return done:false even if re-run passed.
+      return {
+        done: steerSend.status === "done" && reRun.ok,
+        ...(steerSend.handoff !== undefined
+          ? { handoff: steerSend.handoff }
+          : {}),
+      };
+    }
+
+    // All checks passed
+    return { done: true };
+  }
+
+  return {
+    done: true,
+    ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
+  };
+}
+
+/**
  * Create the greenfield dependencies for the BoringStack build, composing Tasks 1-6.
  * - `implement` generates the resource, freezes the scope, injects the live composed
  *   gate, and sends the refine prompt. The escalation ladder runs INSIDE settleGate
@@ -228,6 +321,14 @@ export function boringstackDeps(opts: {
   /** Look up the plan slice for a feature by its id. Supplied by runBoringstackBuild
    *  when building from an approved plan; undefined when planning ad-hoc. */
   sliceFor?: (id: string) => ISlice | undefined;
+  /** The acceptance runner for per-slice E2E verification. When provided and the
+   *  flag is enabled, features are gated on per-slice acceptance after the fast gate
+   *  passes. */
+  acceptanceRunner?: IAcceptanceRunner;
+  /** The full plan spec (all entities), used for recursive parent seeding in
+   *  per-slice acceptance. When provided, seeding code can reference parent field
+   *  metadata from the full plan rather than fallback placeholders. */
+  fullSpec?: IAcceptanceSpec;
 }): IGreenfieldDeps {
   const {
     host,
@@ -237,17 +338,21 @@ export function boringstackDeps(opts: {
     generate: generateFn,
     generateUi,
     sliceFor,
+    acceptanceRunner,
+    fullSpec,
   } = opts;
   const generate = generateFn ?? generateResource;
   const genUi = generateUi ?? generateFeature;
   const baseline = opts.baseline ?? new Set<string>();
+  const e2eAcceptanceDisabled =
+    process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
   return {
     async implement(
       feature: IFeature,
       state: IGreenfieldState,
       seed?: { triedLevers: EscalationRung[] }
-    ): Promise<{ done: boolean; handoff?: IHandoff }> {
+    ): Promise<{ done: boolean; handoff?: IHandoff; infra?: string }> {
       // Pre-step: generate the full vertical slice + sync the STUB schema. The
       // model then fills the domain INSIDE the loop, checked by the live gate.
       await generate(cwd, feature.id, exec);
@@ -270,6 +375,18 @@ export function boringstackDeps(opts: {
         .filter((f) => f.id !== feature.id)
         .map((f) => f.id);
 
+      const slice = sliceFor?.(feature.id);
+      let entity: IEntityAcceptance | undefined;
+
+      if (slice !== undefined) {
+        const spec = planToAcceptanceSpec({
+          product: "BoringStack",
+          slices: [slice],
+        });
+
+        entity = spec.entities[0];
+      }
+
       host.setGate(
         composeBoringstackGate({
           cwd,
@@ -277,19 +394,29 @@ export function boringstackDeps(opts: {
           evaluator,
           baseline,
           feature,
+          entity,
           siblingEntities,
         })
       );
 
-      const slice = sliceFor?.(feature.id);
+      // FIX 7: only include testid guide when acceptance is enabled
+      const testIdGuide =
+        entity !== undefined && !e2eAcceptanceDisabled
+          ? "\n\n" + buildTestIdGuide(entity)
+          : "";
       const sent = await host.send(
-        refinePrompt(feature, slice) + revisitGuidance(seed)
+        refinePrompt(feature, slice) + testIdGuide + revisitGuidance(seed)
       );
 
-      return {
-        done: sent.status === "done",
-        ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
-      };
+      return verifyAcceptance(
+        sent,
+        host,
+        cwd,
+        entity,
+        acceptanceRunner,
+        e2eAcceptanceDisabled,
+        fullSpec
+      );
     },
   };
 }
@@ -368,6 +495,109 @@ export function partitionBaseline(
 }
 
 /**
+ * Run the final acceptance gate and chain verification after all features pass the fast gate.
+ * Note: approved is guaranteed to be non-null (checked by caller).
+ */
+export async function runFinalAcceptance(
+  result: IGreenfieldResult,
+  cwd: string,
+  exec: Exec,
+  acceptanceRunner: IAcceptanceRunner | undefined,
+  approved: IProductPlan,
+  e2eAcceptanceDisabled: boolean,
+  onEvent?: Reporter
+): Promise<IGreenfieldResult> {
+  if (result.status !== "done") {
+    return result;
+  }
+
+  onEvent?.({
+    kind: "tool",
+    task: "boringstack",
+    message: "final acceptance: full validate + build + size checks…",
+  });
+
+  // GATE PARITY: the per-cycle fast gate applies deterministic auto-fixes
+  // (prettier + eslint --fix) BEFORE it runs, but the full acceptance gate did
+  // not — so a feature could freeze fast-green yet fail final `validate` on
+  // auto-fixable formatting the model was never shown (e.g. a missing `;`).
+  // Apply the SAME auto-fixes here so acceptance and the per-cycle gate agree;
+  // this normalizes formatting a dev gets on save, it does not suppress errors.
+  await autofixApps(cwd, exec);
+
+  const full = await runBoringstackGate(cwd, exec, "full");
+
+  let finalPassed = full.passed;
+  let finalMessage = full.passed
+    ? "✓ final acceptance GREEN — full validate + build + size checks all pass."
+    : "⚠ features passed the fast gate, but the FULL acceptance gate (build / " +
+      "size / coverage / root drift) found issues — review before shipping:\n" +
+      full.output.slice(-1200);
+
+  // FAIL-CLOSED: if acceptance is enabled but runner is missing, reject the feature
+  if (full.passed && !e2eAcceptanceDisabled && !acceptanceRunner) {
+    const missingRunnerMsg =
+      "acceptance enabled but no runner injected — cannot verify relational chain. " +
+      "This is a misconfiguration; the acceptance runner must be provided.";
+
+    onEvent?.({
+      kind: "stuck",
+      task: "boringstack",
+      message: missingRunnerMsg,
+    });
+
+    return { ...result, status: "stuck" };
+  }
+
+  // After base gate passes, run relational chain acceptance (if available)
+  if (full.passed && !e2eAcceptanceDisabled && acceptanceRunner) {
+    const hostPorts = readHostPorts(cwd);
+    const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
+    const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
+    const ctx: IAcceptanceRunCtx = {
+      cwd,
+      apiBase: `http://localhost:${apiPort}`,
+      uiBase: `http://localhost:${uiPort}`,
+    };
+
+    const spec = planToAcceptanceSpec(approved);
+    const chainOutcome = await acceptanceRunner.runChain(spec, ctx);
+
+    // Infrastructure error: route to infra-abort path, not feature red
+    // Final acceptance with infra error means build didn't actually complete verification
+    if (chainOutcome.infraError !== undefined) {
+      const infraMsg = `Acceptance chain: ${chainOutcome.infraError}`;
+
+      return {
+        status: "needs-infra",
+        features: result.features,
+        infra: infraMsg,
+      };
+    }
+
+    // Chain assertion failed: flip final to not-green with detail
+    if (!chainOutcome.ok) {
+      finalPassed = false;
+      finalMessage = `chain acceptance failed: ${chainOutcome.detail ?? "assertion failure in relational flow"}`;
+    }
+  }
+
+  onEvent?.({
+    kind: finalPassed ? "done" : "stuck",
+    task: "boringstack",
+    message: finalMessage,
+  });
+
+  // If the final acceptance chain failed AND acceptance is enabled, flip to stuck.
+  // When acceptance is disabled, preserve the original status (do not flip).
+  if (!finalPassed && !e2eAcceptanceDisabled) {
+    return { ...result, status: "stuck" };
+  }
+
+  return result;
+}
+
+/**
  * Run the BoringStack build driver: require an approved plan, derive features
  * from its slices, and drive them through the greenfield loop
  * (implement → evaluate → persist).
@@ -381,9 +611,22 @@ export async function runBoringstackBuild(opts: {
   onEvent?: Reporter;
   generate?: (cwd: string, name: string, exec: Exec) => Promise<void>;
   generateUi?: (cwd: string, name: string, exec: Exec) => Promise<void>;
+  acceptanceRunner?: IAcceptanceRunner;
 }): Promise<IGreenfieldResult> {
-  const { cwd, goal, evaluator, exec, host, onEvent, generate, generateUi } =
-    opts;
+  const {
+    cwd,
+    goal,
+    evaluator,
+    exec,
+    host,
+    onEvent,
+    generate,
+    generateUi,
+    acceptanceRunner,
+  } = opts;
+
+  const e2eAcceptanceDisabled =
+    process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
   // Require an approved plan before building
   const approved = await loadApprovedPlan(cwd);
@@ -467,6 +710,8 @@ export async function runBoringstackBuild(opts: {
     optsGreenfield.onEvent = onEvent;
   }
 
+  const fullSpec = planToAcceptanceSpec(approved);
+
   const result = await runGreenfield(
     cwd,
     state,
@@ -479,6 +724,8 @@ export async function runBoringstackBuild(opts: {
       sliceFor,
       generate,
       generateUi,
+      acceptanceRunner,
+      fullSpec,
     }),
     optsGreenfield
   );
@@ -489,33 +736,13 @@ export async function runBoringstackBuild(opts: {
   // coverage, repo-root drift) still run — just once at the end, not every turn.
   // Best-effort + LOUD: it reports issues for a human rather than silently flipping
   // the verdict (a pre-existing scaffold size/build budget must not fail the feature).
-  if (result.status === "done") {
-    onEvent?.({
-      kind: "tool",
-      task: "boringstack",
-      message: "final acceptance: full validate + build + size checks…",
-    });
-
-    // GATE PARITY: the per-cycle fast gate applies deterministic auto-fixes
-    // (prettier + eslint --fix) BEFORE it runs, but the full acceptance gate did
-    // not — so a feature could freeze fast-green yet fail final `validate` on
-    // auto-fixable formatting the model was never shown (e.g. a missing `;`).
-    // Apply the SAME auto-fixes here so acceptance and the per-cycle gate agree;
-    // this normalizes formatting a dev gets on save, it does not suppress errors.
-    await autofixApps(cwd, exec);
-
-    const full = await runBoringstackGate(cwd, exec, "full");
-
-    onEvent?.({
-      kind: full.passed ? "done" : "stuck",
-      task: "boringstack",
-      message: full.passed
-        ? "✓ final acceptance GREEN — full validate + build + size checks all pass."
-        : "⚠ features passed the fast gate, but the FULL acceptance gate (build / " +
-          "size / coverage / root drift) found issues — review before shipping:\n" +
-          full.output.slice(-1200),
-    });
-  }
-
-  return result;
+  return runFinalAcceptance(
+    result,
+    cwd,
+    exec,
+    acceptanceRunner,
+    approved,
+    e2eAcceptanceDisabled,
+    onEvent
+  );
 }

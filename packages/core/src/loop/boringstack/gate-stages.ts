@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
 import type { IGate, IStage } from "../../gate/gate-runner";
 import { composeGate, differentialStage } from "../../gate/gate-runner";
 import type { IValidateResult, IErrorItem } from "../../validate";
@@ -10,6 +11,9 @@ import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
 import { judgeFeature } from "../greenfield/judge";
 import { autofixApps, readResourceCode, rescueFileFor } from "./build";
+import type { IEntityAcceptance } from "../acceptance/acceptance.types";
+import { checkTestIds } from "./acceptance/testid-contract";
+import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
 /** Turn one failure signature into an `IErrorItem`. Most signatures are their own
  *  message (the raw gate row). A `knip:unused-file:<path>` signature is enriched
@@ -296,10 +300,115 @@ export function judgeStage(
 }
 
 /**
+ * A change-scoped gate stage that ensures a feature's UI includes the required
+ * test ID attributes (data-testid) for end-to-end testing. Only runs when a
+ * feature's UI files are present.
+ */
+export function testIdStage(cwd: string, entity: IEntityAcceptance): IStage {
+  return {
+    async run(): Promise<IValidateResult> {
+      const featureDir = join(cwd, "apps/ui/src/features", entity.key);
+
+      // Scan recursively for ALL UI source files (.tsx and .jsx)
+      const sources = new Map<string, string>();
+
+      try {
+        const files = await readdir(featureDir, { recursive: true });
+        const uiFiles = files.filter(
+          (f): f is string =>
+            typeof f === "string" && (f.endsWith(".tsx") || f.endsWith(".jsx"))
+        );
+
+        for (const file of uiFiles) {
+          const filePath = join(featureDir, file);
+          const content = await readFile(filePath, "utf-8");
+
+          sources.set(file, content);
+        }
+      } catch {
+        // Directory doesn't exist or can't be read — check if there's a route for this feature
+        // If the route file doesn't exist yet, the UI hasn't been scaffolded (pass silently).
+        // If it does exist, that's a fatal error — the UI was generated but source is missing.
+        const routeFile = join(cwd, "apps/ui/src/routes", `${entity.key}.tsx`);
+
+        try {
+          await readFile(routeFile, "utf-8");
+
+          // Route exists but feature dir is unreadable/missing — this is an error
+          return {
+            passed: false,
+            errors: [
+              {
+                key: `testid:${entity.id}`,
+                rule: "testid-presence",
+                message: `feature '${entity.id}' has a route but the feature directory is missing or unreadable: ${featureDir}`,
+              },
+            ],
+            output: `route exists but feature dir missing: ${featureDir}`,
+          };
+        } catch {
+          // Route doesn't exist either — UI hasn't been scaffolded yet, pass silently
+          return { passed: true, errors: [], output: "no UI files to check" };
+        }
+      }
+
+      // No UI files found
+      if (sources.size === 0) {
+        // Check if the route file exists — if so, UI was generated but is empty (error)
+        const routeFile = join(cwd, "apps/ui/src/routes", `${entity.key}.tsx`);
+
+        try {
+          await readFile(routeFile, "utf-8");
+
+          // Route exists but no source files in feature dir — that's suspicious
+          return {
+            passed: false,
+            errors: [
+              {
+                key: `testid:${entity.id}`,
+                rule: "testid-presence",
+                message: `feature '${entity.id}' has a route but no UI source files in ${featureDir}`,
+              },
+            ],
+            output: `route exists but no UI source files`,
+          };
+        } catch {
+          // Route doesn't exist — UI truly hasn't been scaffolded yet, pass silently
+          return { passed: true, errors: [], output: "no UI files to check" };
+        }
+      }
+
+      // Check for required testids
+      const missing = checkTestIds(sources, entity);
+
+      if (missing.length === 0) {
+        return { passed: true, errors: [], output: "all testids present" };
+      }
+
+      const message =
+        `feature '${entity.id}' UI is missing required test hooks: ${missing.join(", ")}. ` +
+        `Add data-testid to the list, form, fields, and row controls so the app is testable.`;
+
+      return {
+        passed: false,
+        errors: [
+          {
+            key: `testid:${entity.id}`,
+            rule: "testid-presence",
+            message,
+          },
+        ],
+        output: message,
+      };
+    },
+  };
+}
+
+/**
  * Compose the full BoringStack gate: differential command (suppress baseline) →
- * reachability → judge. Short-circuited, so the model call (judge) fires only when
- * the code compiles/lints clean AND the feature is reachable. Baseline lives in the
- * differential wrapper's closure — captured once at build start.
+ * reachability → testid → judge. Short-circuited, so the model call (judge) fires
+ * only when the code compiles/lints clean AND the feature is reachable. Baseline
+ * lives in the differential wrapper's closure — captured once at build start.
  */
 export function composeBoringstackGate(opts: {
   cwd: string;
@@ -307,15 +416,23 @@ export function composeBoringstackGate(opts: {
   evaluator: IProvider;
   baseline: ReadonlySet<string>;
   feature: IFeature;
+  /** The acceptance spec for this feature's entity (if available).
+   *  Passed to testIdStage to enforce the full per-entity contract. */
+  entity?: IEntityAcceptance;
   /** The OTHER features/entities in this build, so the judge scopes to this
    *  feature's own responsibilities and never demands a link to an unbuilt slice. */
   siblingEntities?: readonly string[];
 }): IGate {
-  const { cwd, exec, evaluator, baseline, feature } = opts;
+  const { cwd, exec, evaluator, baseline, feature, entity } = opts;
+  const e2eAcceptanceDisabled =
+    process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
   return composeGate([
     differentialStage(boringstackCommandStage(cwd, exec), baseline),
     reachabilityStage(cwd, feature.id),
+    ...(entity !== undefined && !e2eAcceptanceDisabled
+      ? [testIdStage(cwd, entity)]
+      : []),
     judgeStage(evaluator, cwd, feature, opts.siblingEntities ?? []),
   ]);
 }

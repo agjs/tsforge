@@ -371,4 +371,48 @@ describe("runGreenfield: outer loop", () => {
     expect(md).toContain("(parked)");
     expect(md).toContain("- [ ] c");
   });
+
+  test("FIX 3: runGreenfield returns needs-infra when implement returns infra error", async () => {
+    const s = state("a", "b");
+    let implementCalls = 0;
+    const eventReports: string[] = [];
+
+    const deps: IGreenfieldDeps = {
+      implement: async (f) => {
+        implementCalls += 1;
+
+        // First feature returns infra error
+        if (f.id === "a") {
+          return {
+            done: false,
+            infra: "API server is not responding (ECONNREFUSED)",
+          };
+        }
+
+        // This should NOT be called
+        return { done: true };
+      },
+    };
+
+    const result = await runGreenfield(dir, s, deps, {
+      onEvent: (ev) => {
+        if (typeof ev.message === "string") {
+          eventReports.push(ev.message);
+        }
+      },
+    });
+
+    // Should return needs-infra status
+    expect(result.status).toBe("needs-infra");
+    // Infra message should be propagated
+    expect(result.infra).toContain("ECONNREFUSED");
+    // Only the first feature should be attempted
+    expect(implementCalls).toBe(1);
+    // No further features should be processed (feature 'b' not attempted)
+    expect(s.features[1]?.passes).toBe(false);
+    // An event should be reported
+    expect(
+      eventReports.some((m) => m.includes("infrastructure unavailable"))
+    ).toBe(true);
+  });
 });

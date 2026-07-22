@@ -77,7 +77,15 @@ export async function runGreenfield(
       break;
     }
 
-    await attemptFeature(cwd, state, feature, deps, say);
+    const infraError = await attemptFeature(cwd, state, feature, deps, say);
+
+    if (infraError !== undefined) {
+      return {
+        status: "needs-infra",
+        features: state.features,
+        infra: infraError,
+      };
+    }
   }
 
   // Revisit pass: retry parked features once, seeding with their saved tried-lever state.
@@ -97,7 +105,22 @@ export async function runGreenfield(
           : undefined
         : undefined;
 
-      await attemptFeature(cwd, state, feature, deps, say, seed);
+      const infraError = await attemptFeature(
+        cwd,
+        state,
+        feature,
+        deps,
+        say,
+        seed
+      );
+
+      if (infraError !== undefined) {
+        return {
+          status: "needs-infra",
+          features: state.features,
+          infra: infraError,
+        };
+      }
     }
   }
 
@@ -149,7 +172,8 @@ export async function runGreenfield(
 }
 
 /** One implement cycle for a single feature (mutates it).
- *  Optionally seeds the implement with prior tried-lever state (for a revisit). */
+ *  Optionally seeds the implement with prior tried-lever state (for a revisit).
+ *  Returns an infra error string if infrastructure is unavailable (e.g., API/browser down). */
 async function attemptFeature(
   cwd: string,
   state: IGreenfieldState,
@@ -157,7 +181,7 @@ async function attemptFeature(
   deps: IGreenfieldDeps,
   say: (message: string) => void,
   seed?: { triedLevers: EscalationRung[] }
-): Promise<void> {
+): Promise<string | undefined> {
   feature.attempts += 1;
   const seedNote = seed ? " (revisit, seeded with tried-levers)" : "";
 
@@ -172,6 +196,15 @@ async function attemptFeature(
   try {
     const result = await deps.implement(feature, state, seed);
 
+    // Infrastructure error: thread it up to the outer loop to return needs-infra
+    if (result.infra !== undefined) {
+      say(
+        `feature '${feature.id}': infrastructure unavailable — cannot verify. Halting build.`
+      );
+
+      return result.infra;
+    }
+
     if (result.done) {
       feature.passes = true;
       delete feature.lastError;
@@ -179,7 +212,7 @@ async function attemptFeature(
       delete feature.handoff;
       say(`feature '${feature.id}': verified ✓`);
 
-      return;
+      return undefined;
     }
 
     // Not done → the shared ladder (R1–R4 + R5) already ran inside the loop and
@@ -191,6 +224,8 @@ async function attemptFeature(
     }
 
     say(`feature '${feature.id}': ladder exhausted, parked — revisit later`);
+
+    return undefined;
   } finally {
     await saveState(cwd, state);
     await writeProgress(cwd, state);
