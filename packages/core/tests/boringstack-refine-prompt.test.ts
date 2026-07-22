@@ -454,8 +454,7 @@ describe("refinePrompt", () => {
     expect(prompt).toContain(".hooks.ts");
     expect(prompt).toContain(".utils.ts");
     expect(prompt).toContain(".types.ts");
-    // Must teach that api-client returns { data, error } and is fully typed (no any).
-    expect(prompt).toContain("@/lib/api/client");
-    expect(prompt).toContain("{ data, error }");
+    // (api-client data-fetching idiom is taught by the existing data-fetching
+    // section, not the UI-component conventions — no duplicate/contradictory copy here.)
   });
 });

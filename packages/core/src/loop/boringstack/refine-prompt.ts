@@ -193,8 +193,6 @@ then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \
 
 **One concern per file.** The \`.tsx\` is presentational only; data/hooks go in \`${camel}.hooks.ts\`, pure helpers in \`${camel}.utils.ts\`, types in \`${camel}.types.ts\`. NEVER put JSX in a \`.ts\` file (JSX only compiles in \`.tsx\`; a \`.ts\` with \`<X>\` throws "Parsing error: '>' expected"). Never mix a hook + component + type in one module.
 
-**api-client is typed — no \`any\`.** \`@/lib/api/client\` (openapi-fetch) returns \`{ data, error }\` and THROWS on non-2xx via \`throwOnError\`. In a query/mutation: \`const { data, error } = await client.GET(...);\` if (error) throw error; return data;\` — \`data\` is fully typed, so \`.map\`/\`.id\`/\`.name\` are safe. Never wrap results in \`any\` or spread an untyped value (that triggers the "Unsafe member access / assignment of an \`any\` value" cascade).
-
 **Every visible string via \`t("features.${camel}.<key>")\`** — no hardcoded JSX text (button labels like "Edit"/"Delete" included).
 
 ---
