@@ -352,6 +352,11 @@ async function main(): Promise<void> {
     process.env.VALKEY_HOST ??= "localhost";
     process.env.VALKEY_PORT ??= String(valkeyPort);
 
+    // This is a real autonomous builder: enable expert rescue by default so a
+    // stalled feature is handed to the configured `capabilities.expert` model
+    // instead of parking. Explicit env wins (set TSFORGE_EXPERT_RESCUE=0 to opt out).
+    process.env.TSFORGE_EXPERT_RESCUE ??= "1";
+
     process.stdout.write(
       `isolated ports → postgres ${String(pgPort)} · api ${String(apiPort)} · valkey ${String(valkeyPort)}\n`
     );

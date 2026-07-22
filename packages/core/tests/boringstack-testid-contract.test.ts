@@ -104,6 +104,16 @@ describe("buildTestIdGuide", () => {
     expect(guide).toContain("Where to add them");
   });
 
+  test("directs the nav testid to the shared sidebar (reachability)", () => {
+    const guide = buildTestIdGuide(contact);
+    const ids = testIdsFor(contact.key);
+
+    // The nav hook lives OUTSIDE the feature dir; the guide must tell the
+    // model to wire it into the sidebar, or features are built unreachable.
+    expect(guide).toContain(ids.nav);
+    expect(guide).toContain("AppSidebar");
+  });
+
   test("guide includes all entity fields as required inputs", () => {
     const guide = buildTestIdGuide(contact);
 
@@ -153,6 +163,32 @@ describe("checkTestIds", () => {
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
     expect(result).toEqual([]);
+  });
+
+  test("accepts SINGLE-quoted testids (prettier/eslint emit data-testid='x')", () => {
+    // Regression: the generated JSX is single-quoted, but the gate previously
+    // matched only double quotes and reported every present testid as missing,
+    // parking every feature. A single-quoted source with ALL testids must pass.
+    const required = requiredTestIds(contact);
+    const source = required.map((id) => `data-testid='${id}'`).join(" ");
+
+    const result = checkTestIds(new Map([["test.tsx", source]]), contact);
+
+    expect(result).toEqual([]);
+  });
+
+  test("still detects a genuinely missing testid in single-quoted source", () => {
+    const ids = testIdsFor(contact.key);
+    const required = requiredTestIds(contact);
+    // single-quoted source missing only the "name" field testid
+    const source = required
+      .filter((id) => id !== ids.field("name"))
+      .map((id) => `data-testid='${id}'`)
+      .join(" ");
+
+    const result = checkTestIds(new Map([["test.tsx", source]]), contact);
+
+    expect(result).toContain(ids.field("name"));
   });
 
   test("does NOT require nav testid in feature dir (nav lives in shared sidebar)", () => {
