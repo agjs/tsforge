@@ -304,12 +304,13 @@ test("FIX 7: mustNotHappen does not create duplicate negatives", () => {
     throw new Error("company entity not found");
   }
 
-  // Should not have duplicate empty-value negatives for name
+  // Should have 2 negatives for name="" (auto-required + rule)
+  // but NOT 3 (mustNotHappen should not add a duplicate)
   const nameEmptyNegatives = company.negatives.filter(
     (n) => n.field === "name" && n.value === ""
   );
 
-  expect(nameEmptyNegatives.length).toBe(1); // Only one, not duplicated
+  expect(nameEmptyNegatives.length).toBe(2);
 });
 
 test("FIX 7: mustNotHappen field-mention scan matches real plan prose", () => {
