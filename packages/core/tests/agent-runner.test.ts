@@ -1,4 +1,4 @@
-import { test, expect, describe, setDefaultTimeout } from "bun:test";
+import { test, expect, describe } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IProvider, IModelResponse } from "../src/inference";
@@ -47,16 +47,14 @@ function scripted(queue: IModelResponse[]): {
 // The tsforge repo itself is the read-only workspace under test.
 const REPO = join(import.meta.dir, "..", "..", "..");
 
-// #63: EVERY test in this file constructs `new AgentRunner(...).run({ cwd: REPO })`, which pays a
-// fixed ~2s startup cost against the real repo (even the immediate-abort / no-op cases). In
-// isolation the file runs ~1.9s/test — well under bun's 5000ms default — but under the FULL suite's
-// concurrency, CPU contention inflates that startup past 5s and the tests spuriously time out,
-// which false-BLOCKs the harness-review pre-validate gate. Raise the ceiling for THIS FILE ONLY
-// (setDefaultTimeout is module-scoped) so the 5s fail-fast default — and its infinite-loop
-// detection — stays intact for every other test file. 15s = generous margin over the real ~2s work
-// under contention, while still failing a genuine hang here. The pure parseAgentSpec/loadAgentSpecs
-// config tests do NOT construct AgentRunner and live in agent-specs.test.ts, keeping the 5s default.
-setDefaultTimeout(15_000);
+// #63: every run below passes `tsService: null`. Without it, AgentRunner.run calls
+// buildTsService(cwd) — building a TypeScript service over the ENTIRE tsforge repo (cwd: REPO) —
+// which costs ~2s per test. In isolation that's tolerable, but under the full suite's concurrency
+// the CPU contention inflated it past bun's 5000ms default and the tests spuriously timed out,
+// false-BLOCKing the harness-review pre-validate gate. These read-only tests exercise tool-gating /
+// events / maxTurns / abort / policy — none use the type-aware tools (type_at/diagnostics) — so a
+// null service is faithful AND removes the cost at the ROOT, keeping every test well under the 5s
+// fail-fast default (no timeout raise needed). Matches the many sibling tests that pass tsService: null.
 
 describe("AgentRunner (read-only loop against this repo)", () => {
   test("tool turn then final text; events are agentId-tagged", async () => {
@@ -73,6 +71,7 @@ describe("AgentRunner (read-only loop against this repo)", () => {
     const result = await runner.run({
       provider,
       cwd: REPO,
+      tsService: null,
       parentTaskId: "run-1",
       task: "What package is this?",
     });
@@ -105,6 +104,7 @@ describe("AgentRunner (read-only loop against this repo)", () => {
     const result = await new AgentRunner({ id: "explore" }).run({
       provider,
       cwd: REPO,
+      tsService: null,
       parentTaskId: "run-1",
       task: "try to write",
     });
@@ -128,6 +128,7 @@ describe("AgentRunner (read-only loop against this repo)", () => {
     await new AgentRunner({ id: "narrow", tools: ["read"] }).run({
       provider,
       cwd: REPO,
+      tsService: null,
       parentTaskId: "r",
       task: "t",
     });
@@ -147,6 +148,7 @@ describe("AgentRunner (read-only loop against this repo)", () => {
     const result = await new AgentRunner({ id: "loopy", maxTurns: 3 }).run({
       provider,
       cwd: REPO,
+      tsService: null,
       parentTaskId: "r",
       task: "loop forever",
     });
@@ -222,6 +224,7 @@ describe("AgentRunner (read-only loop against this repo)", () => {
     const result = await new AgentRunner({ id: "img", kind: "generate" }).run({
       provider,
       cwd: REPO,
+      tsService: null,
       parentTaskId: "r",
     });
 
@@ -244,6 +247,7 @@ describe("review-round regressions", () => {
     const result = await new AgentRunner({ id: "explore" }).run({
       provider,
       cwd: REPO,
+      tsService: null,
       parentTaskId: "r",
       task: "read the manifest",
       policyMode: "default",
@@ -273,6 +277,7 @@ describe("review-round regressions", () => {
     const result = await new AgentRunner({ id: "explore" }).run({
       provider: aborting,
       cwd: REPO,
+      tsService: null,
       parentTaskId: "r",
       task: "t",
       signal: ctrl.signal,
@@ -294,6 +299,7 @@ describe("review-round regressions", () => {
     await new AgentRunner({ id: "bare", tools: [] }).run({
       provider,
       cwd: REPO,
+      tsService: null,
       parentTaskId: "r",
       task: "t",
     });
@@ -306,6 +312,7 @@ describe("review-round regressions", () => {
     const result = await new AgentRunner({ id: "x" }).run({
       provider,
       cwd: REPO,
+      tsService: null,
       parentTaskId: "r",
       task: "t",
       report: () => {
