@@ -228,6 +228,38 @@ function generateParentSeedingCode(
 }
 
 /**
+ * Render a field value to a code literal string.
+ * For numeric types (contains "number"/"int"/"float"/"decimal"), renders as a bare number.
+ * For boolean types (contains "bool"), renders as a bare boolean.
+ * For everything else, renders as a JSON string.
+ * Complexity: ≤ 20 (simple field type check and fallback).
+ */
+function renderFieldValue(field: { type: string; valid: string }): string {
+  const lowerType = field.type.toLowerCase();
+
+  // Numeric types: render as a bare number
+  if (
+    lowerType.includes("number") ||
+    lowerType.includes("int") ||
+    lowerType.includes("float") ||
+    lowerType.includes("decimal")
+  ) {
+    const num = Number(field.valid);
+
+    // Guard NaN → fall back to 0
+    return Number.isNaN(num) ? "0" : String(num);
+  }
+
+  // Boolean types: render as a bare boolean
+  if (lowerType.includes("bool")) {
+    return field.valid.toLowerCase() === "true" ? "true" : "false";
+  }
+
+  // Everything else: JSON string
+  return JSON.stringify(field.valid);
+}
+
+/**
  * Generate field fill steps for form inputs.
  * FIX D: Type-aware field fills (select/checkbox/date/number) instead of blanket .fill().
  * Each step safely interpolates field.valid using JSON.stringify.
@@ -354,15 +386,14 @@ function generateRowCellAssertions(
  * 1. Authenticate and seed parent entities via API
  * 2. Build a payload with all required non-FK fields (valid values) + FK fields (seeded ids)
  * 3. Override the target field with the invalid value
- * 4. POST directly to /api/v1/<entity> and assert a 4xx response
+ * 4. POST directly to /api/v1/<entity> and assert a 400 or 422 response (validation error codes)
  *
  * This deterministic API-level check proves validation is enforced without depending on
- * browser form interaction or visible error elements.
+ * browser form interaction or visible error elements. Only accepting 400/422 prevents
+ * false-positive passes from 401/403/404/409 auth/routing/conflict errors.
  */
 function generateNegativeBlocks(
   entity: IEntityAcceptance,
-  _ids: ReturnType<typeof testIdsFor>,
-  _fieldFillSteps: string,
   parentSeedingCode: string
 ): string {
   return entity.negatives
@@ -373,18 +404,19 @@ function generateNegativeBlocks(
       const validFieldAssignments = entity.fields
         .filter((f) => !f.optional)
         .filter((f) => !entity.parents.some((p) => p.fkField === f.name))
-        .map((f) => `      ${f.name}: ${JSON.stringify(f.valid)}`)
-        .join(",\n");
+        .map((f) => `      ${f.name}: ${renderFieldValue(f)}`);
 
       // Build FK field assignments
-      const fkFieldAssignments = entity.parents
-        .map((p) => `      ${p.fkField}: ${p.key}Id`)
-        .join(",\n");
+      const fkFieldAssignments = entity.parents.map(
+        (p) => `      ${p.fkField}: ${p.key}Id`
+      );
 
-      const payloadFields =
-        [validFieldAssignments, fkFieldAssignments]
-          .filter((s) => s.length > 0)
-          .join(",\n") + ",\n";
+      // Combine all assignments, filtering out empties
+      const allAssignments = [
+        ...validFieldAssignments,
+        ...fkFieldAssignments,
+      ].filter((s) => s.length > 0);
+      const payloadFields = allAssignments.join(",\n");
 
       return `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
@@ -399,7 +431,8 @@ ${parentSeedingCode}
 
     // A payload that is valid EXCEPT for the field under test (overridden with the invalid value).
     const payload: Record<string, unknown> = {
-${payloadFields}    };
+${payloadFields}
+    };
     payload[${JSON.stringify(neg.field)}] = ${JSON.stringify(neg.value)};
 
     const res = await page.request.post(\`\${apiBase}/api/v1/${entity.key}\`, {
@@ -407,12 +440,12 @@ ${payloadFields}    };
       data: payload,
     });
 
-    // Invalid input MUST be rejected with a client error (4xx), not silently accepted.
+    // Invalid input MUST be rejected with a validation error (400 or 422), not any 4xx.
+    // 401/403/404/409 are auth/routing/conflict errors that do not prove field validation.
     expect(
-      res.status(),
-      \`expected ${entity.key} to reject ${neg.field}=${JSON.stringify(neg.value)} with a 4xx\`
-    ).toBeGreaterThanOrEqual(400);
-    expect(res.status()).toBeLessThan(500);
+      [400, 422].includes(res.status()),
+      \`expected ${entity.key} to reject ${neg.field}=${JSON.stringify(neg.value)} with a validation error (400/422), got \${res.status()}\`
+    ).toBe(true);
   });
 `;
     })
@@ -452,12 +485,7 @@ export function generateEntitySpec(
     entity.id,
     spec
   );
-  const negativeBlocks = generateNegativeBlocks(
-    entity,
-    ids,
-    fieldFillSteps,
-    parentSeedingCode
-  );
+  const negativeBlocks = generateNegativeBlocks(entity, parentSeedingCode);
 
   // FIX E/FIX 3: Type-aware unique identity value
   // Find the first field with a string/text type (NOT email by type or name) for the unique marker

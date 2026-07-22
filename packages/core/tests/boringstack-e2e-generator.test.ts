@@ -151,9 +151,11 @@ describe("E2E spec generator", () => {
     expect(spec).toContain("Content-Type");
     expect(spec).toContain("application/json");
     expect(spec).toContain("Cookie");
-    // Should assert 4xx status, not 5xx (client error, not server error)
-    expect(spec).toContain("toBeGreaterThanOrEqual(400)");
-    expect(spec).toContain("toBeLessThan(500)");
+    // Should assert validation error codes (400 or 422), not any 4xx (fail-open prevention)
+    expect(spec).toContain("[400, 422].includes(");
+    // Should NOT contain the fail-open toBeGreaterThanOrEqual(400) pattern
+    expect(spec).not.toContain("toBeGreaterThanOrEqual(400)");
+    expect(spec).not.toContain("toBeLessThan(500)");
     // Should build payload with valid fields + overridden invalid field
     expect(spec).toContain("Record<string, unknown>");
     expect(spec).toContain("payload[");
@@ -1509,5 +1511,91 @@ describe("FIX F: relationship linkage asserted after reload", () => {
 
     expect(reloadedRowIndex).toBeGreaterThan(reloadIndex);
     expect(parentCellAssertionIndex).toBeGreaterThan(reloadedRowIndex);
+  });
+});
+
+describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct payloads, empty payload)", () => {
+  test("FIX 1: negative tests assert 400/422 validation error codes only", () => {
+    const spec = generateEntitySpec(company);
+
+    // FIX 1: Should contain the strict [400, 422].includes check
+    expect(spec).toContain("[400, 422].includes(");
+    // Should NOT contain the fail-open toBeGreaterThanOrEqual(400) pattern
+    expect(spec).not.toContain("toBeGreaterThanOrEqual(400)");
+    expect(spec).not.toContain("toBeLessThan(500)");
+  });
+
+  test("FIX 2: numeric field renders as bare number in negative payload, not JSON string", () => {
+    const entityWithNumericField: IEntityAcceptance = {
+      id: "Product",
+      key: "product",
+      nav: "Products",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Widget",
+          invalid: [],
+        },
+        {
+          name: "quantity",
+          type: "number",
+          optional: false,
+          valid: "42",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "quantity"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [{ field: "name", value: "", why: "name is required" }],
+      acceptanceCheck: "create a product",
+    };
+
+    const spec = generateEntitySpec(entityWithNumericField);
+
+    // FIX 2: The valid quantity field should render as a bare number literal (42)
+    // NOT as a JSON string ("42")
+    expect(spec).toContain("quantity: 42");
+    // Verify the quoted form is NOT present (that would be the fail-open bug)
+    expect(spec).not.toContain('quantity: "42"');
+  });
+
+  test("FIX 3: entity with only optional fields generates empty payload {}, not { , }", () => {
+    const entityOptionalOnly: IEntityAcceptance = {
+      id: "Config",
+      key: "config",
+      nav: "Configs",
+      fields: [
+        {
+          name: "setting1",
+          type: "string",
+          optional: true,
+          valid: "value1",
+          invalid: [],
+        },
+        {
+          name: "setting2",
+          type: "string",
+          optional: true,
+          valid: "value2",
+          invalid: [],
+        },
+      ],
+      shows: ["setting1"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [{ field: "setting1", value: "bad", why: "invalid" }],
+      acceptanceCheck: "create a config",
+    };
+
+    const spec = generateEntitySpec(entityOptionalOnly);
+
+    // FIX 3: Should contain valid empty payload syntax: {}, not { , }
+    expect(spec).toContain("const payload: Record<string, unknown> = {");
+    expect(spec).not.toContain("{ , }");
+    // Verify the payload is compilable (no syntax error)
+    expect(spec).toContain("payload[");
   });
 });

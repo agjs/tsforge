@@ -104,8 +104,8 @@ test("processExecResult threads the parsed results back (exit 0, parseable)", ()
   );
 
   // The parse happens once here and is returned so run() need not re-parse.
-  expect(res.parseResult).not.toBeNull();
-  expect(res.parseResult?.some((r) => r.step === "create" && r.ok)).toBe(true);
+  expect(res.parseResult.length).toBeGreaterThan(0);
+  expect(res.parseResult.some((r) => r.step === "create" && r.ok)).toBe(true);
   expect(res.outcome).toBeDefined();
 });
 
@@ -117,18 +117,18 @@ test("processExecResult threads parsed results even on a nonzero exit (diagnosti
   );
 
   // Real failure: results are preserved (not discarded) for steer/diagnostics.
-  expect(res.parseResult).not.toBeNull();
-  expect(res.parseResult?.some((r) => r.step === "create")).toBe(true);
+  expect(res.parseResult.length).toBeGreaterThan(0);
+  expect(res.parseResult.some((r) => r.step === "create")).toBe(true);
 });
 
-test("processExecResult returns null parseResult when stdout is unparseable", () => {
+test("processExecResult returns empty parseResult when stdout is unparseable", () => {
   const res = processExecResult(
     { code: 1, stdout: "", stderr: "some error" },
     testEntity,
     ["create"]
   );
 
-  expect(res.parseResult).toBeNull();
+  expect(res.parseResult.length).toBe(0);
 });
 
 test("runner: fake Exec returning nested Playwright JSON report parses correctly", async () => {
