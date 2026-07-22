@@ -442,7 +442,9 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("playwright");
     expect(prompt).toContain("bun run dev");
     // acceptance is the harness's job, run automatically after the fast gate
-    expect(prompt).toMatch(/harness runs the full browser[\s\S]*AUTOMATICALLY/u);
+    expect(prompt).toMatch(
+      /harness runs the full browser[\s\S]*AUTOMATICALLY/u
+    );
     // and the model must STOP at fast-gate green rather than "verify" further
     expect(prompt).toMatch(/passed: true[\s\S]*you are DONE/u);
   });
