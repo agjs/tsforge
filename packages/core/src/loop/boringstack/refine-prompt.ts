@@ -240,6 +240,16 @@ WRONG \`tsc\` that prints "This is not the tsc command you are looking for". NEV
 \`npx\`/\`npm\`/\`yarn\` — this stack is bun-only. If you ever must run something else, use
 the project's \`bun run <script>\`.
 
+## Do NOT run the browser end-to-end acceptance yourself
+The harness runs the full browser (Playwright) acceptance AUTOMATICALLY after the fast gate is
+green — it is NOT your job. Do NOT run \`playwright\`/\`bunx playwright test\`, \`bun run dev\`,
+\`vite\`, or \`dev.sh\`. The dockerized dev server is already serving the app; starting a second one
+on the host is HARD-REFUSED by the \`preflight-host-dev.sh\` guard (exit 1) — that is an
+infrastructure guard, NOT a code error, and trying to "fix" it will trap you in a dead loop that
+burns the whole turn budget and parks a feature whose code is already correct. When the \`check\`
+tool returns \`passed: true\` and your required \`data-testid\`s are present, you are DONE — STOP
+there and let the harness verify the browser flow.
+
 ---
 
 Begin implementation now.`;

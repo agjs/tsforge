@@ -429,6 +429,13 @@ describe("refinePrompt", () => {
     // Shell gate execution is still forbidden (check is a tool, not `npx tsc`).
     expect(prompt).toContain("Do NOT run the gate through the shell");
     expect(prompt).not.toContain("Do NOT run the gate yourself");
+    // #63b: the model must NOT run the browser E2E / dev server itself — that hits the host
+    // preflight guard (exit 1) while the dockerized dev server is up and traps it into a park.
+    // Acceptance is harness-owned; the model stops at fast-gate green.
+    expect(prompt).toContain(
+      "Do NOT run the browser end-to-end acceptance yourself"
+    );
+    expect(prompt).toContain("preflight-host-dev.sh");
   });
 
   it("front-loads BoringStack UI component conventions (makeIdHandler list-row idiom, module split, api-client typed unwrap)", () => {
