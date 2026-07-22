@@ -3,10 +3,6 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IProvider, IModelResponse } from "../src/inference";
 import { AgentRunner, AGENT_LIMITS } from "../src/agent/agent-runner";
-import {
-  parseAgentSpec,
-  unrecognizedAgentKeys,
-} from "../src/config/agent-specs";
 
 /** A provider that replays a fixed queue of responses (repeats the last one). */
 function scripted(queue: IModelResponse[]): {
@@ -51,45 +47,16 @@ function scripted(queue: IModelResponse[]): {
 // The tsforge repo itself is the read-only workspace under test.
 const REPO = join(import.meta.dir, "..", "..", "..");
 
-// #63: every test here constructs `new AgentRunner(...).run({ cwd: REPO })`, which pays a fixed
-// ~2s startup cost against the real repo (even the immediate-abort / no-op cases). In isolation the
-// file runs ~1.9s/test — well under bun's 5000ms default — but under the FULL suite's 273-file
+// #63: EVERY test in this file constructs `new AgentRunner(...).run({ cwd: REPO })`, which pays a
+// fixed ~2s startup cost against the real repo (even the immediate-abort / no-op cases). In
+// isolation the file runs ~1.9s/test — well under bun's 5000ms default — but under the FULL suite's
 // concurrency, CPU contention inflates that startup past 5s and the tests spuriously time out,
 // which false-BLOCKs the harness-review pre-validate gate. Raise the ceiling for THIS FILE ONLY
 // (setDefaultTimeout is module-scoped) so the 5s fail-fast default — and its infinite-loop
-// detection — stays intact for the other 272 files. 15s = generous margin over the real ~2s work
-// under contention, while still failing a genuine hang here.
+// detection — stays intact for every other test file. 15s = generous margin over the real ~2s work
+// under contention, while still failing a genuine hang here. The pure parseAgentSpec/loadAgentSpecs
+// config tests do NOT construct AgentRunner and live in agent-specs.test.ts, keeping the 5s default.
 setDefaultTimeout(15_000);
-
-describe("parseAgentSpec", () => {
-  test("accepts a well-formed spec and keeps only valid fields", () => {
-    const spec = parseAgentSpec({
-      id: "explore",
-      description: "map a subsystem",
-      model: "qwen3-coder",
-      kind: "chat",
-      tools: ["read", "search", 42],
-      maxTurns: 6,
-      outputMode: "structured",
-      bogus: true,
-    });
-
-    expect(spec?.id).toBe("explore");
-    expect(spec?.tools).toEqual(["read", "search"]);
-    expect(spec?.maxTurns).toBe(6);
-    expect(spec?.outputMode).toBe("structured");
-    expect(unrecognizedAgentKeys({ id: "x", bogus: true })).toEqual(["bogus"]);
-  });
-
-  test("rejects a missing/non-kebab id and drops invalid enums", () => {
-    expect(parseAgentSpec({ model: "m" })).toBeNull();
-    expect(parseAgentSpec({ id: "Has Space" })).toBeNull();
-    expect(parseAgentSpec({ id: "x", kind: "psychic" })?.kind).toBeUndefined();
-    expect(
-      parseAgentSpec({ id: "x", outputMode: "yaml" })?.outputMode
-    ).toBeUndefined();
-  });
-});
 
 describe("AgentRunner (read-only loop against this repo)", () => {
   test("tool turn then final text; events are agentId-tagged", async () => {
@@ -260,56 +227,6 @@ describe("AgentRunner (read-only loop against this repo)", () => {
 
     expect(result.status).toBe("error");
     expect(result.output).toContain("generate");
-  });
-});
-
-describe("loadAgentSpecs", () => {
-  test("project spec overrides global on id collision", async () => {
-    const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { loadAgentSpecs } = await import("../src/config/agent-specs");
-    const home = await mkdtemp(join(tmpdir(), "tsforge-agents-home-"));
-    const cwd = await mkdtemp(join(tmpdir(), "tsforge-agents-proj-"));
-    const prev = process.env.TSFORGE_HOME;
-
-    try {
-      process.env.TSFORGE_HOME = home;
-      await mkdir(join(home, ".tsforge", "agents"), { recursive: true });
-      await mkdir(join(cwd, ".tsforge", "agents"), { recursive: true });
-      await writeFile(
-        join(home, ".tsforge/agents/explore.json"),
-        JSON.stringify({ id: "explore", model: "global-model" })
-      );
-      await writeFile(
-        join(cwd, ".tsforge/agents/explore.json"),
-        JSON.stringify({ id: "explore", model: "project-model", bogus: 1 })
-      );
-      await writeFile(join(cwd, ".tsforge/agents/broken.json"), "{ nope");
-
-      const reports: string[] = [];
-      const specs = await loadAgentSpecs(cwd, (m) => reports.push(m));
-      const ids = specs.map((s) => s.id);
-
-      // The user's project `explore.json` overrides BOTH the global one and the
-      // built-in of the same id (project wins; built-in < global < project).
-      expect(ids).toContain("explore");
-      expect(specs.find((s) => s.id === "explore")?.model).toBe(
-        "project-model"
-      );
-      // Built-in specialists are always present (delegation works out of the box).
-      expect(ids).toContain("research");
-      expect(reports.some((m) => m.includes("broken.json"))).toBe(true);
-      expect(reports.some((m) => m.includes("bogus"))).toBe(true);
-    } finally {
-      if (prev === undefined) {
-        delete process.env.TSFORGE_HOME;
-      } else {
-        process.env.TSFORGE_HOME = prev;
-      }
-
-      await rm(home, { recursive: true, force: true });
-      await rm(cwd, { recursive: true, force: true });
-    }
   });
 });
 
