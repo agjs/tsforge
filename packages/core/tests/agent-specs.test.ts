@@ -6,8 +6,8 @@ import {
 } from "../src/config/agent-specs";
 
 // Pure agent-SPEC config tests (parse + load). Split out of agent-runner.test.ts (#63): those tests
-// construct AgentRunner against the real repo and need a raised per-file timeout, but these do not —
-// keeping them here preserves bun's 5s fail-fast default for this fast, hermetic config suite.
+// construct AgentRunner against the real repo (slow whole-repo TS-service build, since fixed by
+// passing tsService: null); these pure config tests don't, so they belong in their own fast file.
 
 describe("parseAgentSpec", () => {
   test("accepts a well-formed spec and keeps only valid fields", () => {

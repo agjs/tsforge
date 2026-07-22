@@ -187,7 +187,13 @@ describe("AgentRunner (read-only loop against this repo)", () => {
     const result = await new AgentRunner({
       id: "structured",
       outputMode: "structured",
-    }).run({ provider, cwd: REPO, parentTaskId: "r", task: "t" });
+    }).run({
+      provider,
+      cwd: REPO,
+      tsService: null,
+      parentTaskId: "r",
+      task: "t",
+    });
 
     expect(seenTools()).toContain("agent_result");
     expect(result.status).toBe("done");
@@ -212,7 +218,13 @@ describe("AgentRunner (read-only loop against this repo)", () => {
       id: "structured",
       outputMode: "structured",
       tools: [],
-    }).run({ provider, cwd: REPO, parentTaskId: "r", task: "t" });
+    }).run({
+      provider,
+      cwd: REPO,
+      tsService: null,
+      parentTaskId: "r",
+      task: "t",
+    });
 
     expect(result.status).toBe("done");
     expect(result.output).toBe("answer");
