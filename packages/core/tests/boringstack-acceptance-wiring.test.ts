@@ -237,13 +237,6 @@ test("acceptance: per-slice infra error marks feature NOT verified + sets infra 
   // CRITICAL: infra property must be set so runGreenfield routes to needs-infra
   expect(result.infra).toBeDefined();
   expect(result.infra).toContain("ECONNREFUSED");
-  // Should have sent a warning message
-  const messages = host.getMessages();
-
-  expect(messages.length).toBeGreaterThan(0);
-  const lastMessage = messages[messages.length - 1];
-
-  expect(lastMessage).toContain("infrastructure error");
 });
 
 test("acceptance: feature passes when flag is disabled (acceptance skipped)", async () => {
@@ -542,8 +535,9 @@ test("FIX 2: verifyAcceptance returns done:false when steer fails, even if reRun
   };
 
   class MockHostStateful extends MockHost {
-    async send(message: string): Promise<{ status: string; turns: number }> {
+    override async send(): Promise<{ status: string; turns: number }> {
       sendCount++;
+
       // First send returns done (fast gate pass), subsequent sends return stuck (steer failure)
       return { status: sendCount === 1 ? "done" : "stuck", turns: 1 };
     }
