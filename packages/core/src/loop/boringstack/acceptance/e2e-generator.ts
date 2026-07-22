@@ -301,11 +301,13 @@ function renderInvalidOverride(field: { type: string }, value: string): string {
   ]);
 
   if (numericTypes.has(normalized)) {
-    const num = Number(value);
-
-    // Only bare number if finite; otherwise JSON string
-    if (Number.isFinite(num)) {
-      return String(num);
+    // Emit a bare number ONLY for a canonical decimal literal, so the negative tests
+    // the numeric CONSTRAINT with the exact intended value. Non-canonical tokens
+    // ("01", "0x10", " ", "1e5") would be MUTATED by Number() — turning an
+    // intentionally-invalid value into a different/valid one — so send those as a raw
+    // string, which exercises type-rejection instead. `value` is already the literal.
+    if (/^-?\d+(\.\d+)?$/.test(value)) {
+      return value;
     }
 
     return JSON.stringify(value);

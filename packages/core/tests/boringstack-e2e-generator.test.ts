@@ -1757,7 +1757,7 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
     expect(spec).not.toContain("${code}injection`");
   });
 
-  test("B3: invalid override sent verbatim as JSON string for numeric type", () => {
+  test("B3: canonical numeric invalid renders as a bare number (tests the constraint)", () => {
     const entityWithNumericNegative: IEntityAcceptance = {
       id: "Product",
       key: "product",
@@ -1793,6 +1793,48 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
     // to exercise the numeric range/constraint, not type-rejection.
     // "-1" is finite, so it renders as bare -1, testing the constraint.
     expect(spec).toContain('payload["stock"] = -1');
+  });
+
+  test("B3: NON-canonical numeric invalid stays a raw string (not mutated by Number)", () => {
+    const entity: IEntityAcceptance = {
+      id: "Product",
+      key: "product",
+      nav: "Products",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "P1",
+          invalid: [],
+        },
+        {
+          name: "stock",
+          type: "integer",
+          optional: false,
+          valid: "10",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "stock"],
+      screens: ["list", "form"],
+      parents: [],
+      // "0x10" would become 16 via Number() — sending it verbatim as a string keeps
+      // it a genuinely type-invalid value (tests rejection), not a mutated valid one.
+      negatives: [
+        {
+          field: "stock",
+          value: "0x10",
+          why: "hex is not a valid integer input",
+        },
+      ],
+      acceptanceCheck: "create a product",
+    };
+
+    const spec = generateEntitySpec(entity);
+
+    expect(spec).toContain('payload["stock"] = "0x10"');
+    expect(spec).not.toContain('payload["stock"] = 16');
   });
 
   test("B3: type-render invalid boolean token as string (testing type-rejection)", () => {

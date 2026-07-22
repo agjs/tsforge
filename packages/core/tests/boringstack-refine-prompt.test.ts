@@ -457,4 +457,24 @@ describe("refinePrompt", () => {
     // (api-client data-fetching idiom is taught by the existing data-fetching
     // section, not the UI-component conventions — no duplicate/contradictory copy here.)
   });
+
+  it("teaches the reachability contract: register nav + route, ADD-ONLY", () => {
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business the sales team works with",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // Must instruct wiring the feature into BOTH the sidebar and the router so it is reachable.
+    expect(prompt).toContain("AppSidebar");
+    expect(prompt).toContain("routes.tsx");
+    // The sidebar registration is via the scaffold's nav-items array (which renders
+    // the nav-<key> testid the acceptance gate navigates by).
+    expect(prompt).toContain("APP_SIDEBAR_NAV_ITEMS");
+    // Must carry the add-only boundary for those shared files.
+    expect(prompt).toContain("ADD ONLY");
+  });
 });
