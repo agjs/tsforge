@@ -80,10 +80,6 @@ function stepMessage(entity: IEntityAcceptance, step: AcceptStep): string {
       return `The ${id} feature failed acceptance at the negative step: invalid or empty inputs were accepted when they should have been rejected. Add validation to reject empty required fields and invalid data formats.`;
     }
 
-    case "relationship": {
-      return `The ${id} feature failed acceptance at the relationship step: the ${singularKey} was not properly linked to its parent. Ensure parent selection works and the relationship is correctly saved.`;
-    }
-
     default: {
       const _unreachable: never = step;
 

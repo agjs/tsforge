@@ -32,8 +32,6 @@ export function stepTitle(
     case "negative":
       // Negative titles include field and value; handled separately in generateNegativeBlocks
       return "negative";
-    case "relationship":
-      return "relationship";
   }
 }
 
@@ -451,16 +449,18 @@ export function generateEntitySpec(
     parentSeedingCode
   );
 
-  // FIX E: Type-aware unique identity value
-  // Find the first field with a string/text type (NOT email) for the unique marker
+  // FIX E/FIX 3: Type-aware unique identity value
+  // Find the first field with a string/text type (NOT email by type or name) for the unique marker
   // Email fields with timestamp suffix are invalid emails, so we exclude them
   const identityField =
     entity.fields.find((f) => {
       const fieldType = f.type.toLowerCase();
+      const fieldNameLower = f.name.toLowerCase();
 
       return (
         (fieldType.includes("string") || fieldType.includes("text")) &&
-        !fieldType.includes("email")
+        !fieldType.includes("email") &&
+        !fieldNameLower.includes("email")
       );
     }) ?? entity.fields[0];
   const identityFieldName = identityField?.name ?? "name";
@@ -473,6 +473,27 @@ export function generateEntitySpec(
   const fillFirstFieldCode = isFirstFieldIdentity
     ? ""
     : `    await page.getByTestId("${ids.field(firstFieldName)}").fill(${JSON.stringify(firstFieldValid)});\n`;
+
+  // FIX 3: If identity field is an email, build a unique email with a valid local part
+  const identityFieldType = identityField?.type.toLowerCase() ?? "";
+  const identityFieldNameLower = identityField?.name.toLowerCase() ?? "";
+  const isIdentityEmail =
+    identityFieldType.includes("email") ||
+    identityFieldNameLower.includes("email");
+
+  const uniqueValueConstruction = isIdentityEmail
+    ? `(() => {
+      // For email fields, construct a valid unique email by splitting the valid value and inserting a unique token
+      const match = ${JSON.stringify(identityFieldValid)}.match(/^([^@]+)@(.+)$/);
+      if (match) {
+        const localPart = match[1];
+        const domain = match[2];
+        return localPart + "+" + Date.now() + "-" + Math.floor(Math.random() * 1000000) + "@" + domain;
+      }
+      // Fallback if valid email doesn't have @ (shouldn't happen with valid email field)
+      return ${JSON.stringify(identityFieldValid)} + "-" + Date.now();
+    })()`
+    : `${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000)`;
 
   return `import { expect, test } from "./auth-helper";
 
@@ -514,8 +535,8 @@ test.describe(${JSON.stringify(name)}, () => {
     // Unique value → this test asserts on ITS OWN row (the shared DB accumulates rows
     // across tests/runs, so absolute row counts are unreliable).
     // Identity field gets the unique marker (type-aware: may not be the first field)
-    const unique =
-      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+    // FIX 3: For email fields, construct a valid unique email (not just a timestamp suffix)
+    const unique = ${uniqueValueConstruction};
 
     // Click create button
     await page.getByTestId("${ids.create}").click();
@@ -546,8 +567,7 @@ ${rowCellAssertions}
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const unique =
-      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+    const unique = ${uniqueValueConstruction};
 
     // Create a new record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
@@ -606,9 +626,16 @@ ${entity.parents
     await navigateTo${entity.id}(page);
 
     // Create a record stamped with a unique value (identity field, not first field)
-    const unique =
-      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
-    const updatedValue = unique + "-updated";
+    // FIX 3: For email fields, construct a valid unique email
+    const unique = ${uniqueValueConstruction};
+    const updatedValue = ${
+      isIdentityEmail
+        ? `(() => {
+      const match = unique.match(/^([^@]+)@(.+)$/);
+      return match ? match[1] + "-updated@" + match[2] : unique + "-updated";
+    })()`
+        : `unique + "-updated"`
+    };
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
@@ -653,8 +680,7 @@ ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const unique =
-      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+    const unique = ${uniqueValueConstruction};
 
     // Create a record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
@@ -713,14 +739,16 @@ function generateRootEntityChainTest(
   const ids = testIdsFor(entity.key);
   const fieldFill = generateFieldFillSteps(entity, ids, false);
 
-  // FIX E: Type-aware identity for chain tests (NOT email)
+  // FIX E/FIX 3: Type-aware identity for chain tests (NOT email by type or name)
   const identityField =
     entity.fields.find((f) => {
       const fieldType = f.type.toLowerCase();
+      const fieldNameLower = f.name.toLowerCase();
 
       return (
         (fieldType.includes("string") || fieldType.includes("text")) &&
-        !fieldType.includes("email")
+        !fieldType.includes("email") &&
+        !fieldNameLower.includes("email")
       );
     }) ?? entity.fields[0];
   const identityFieldName = identityField?.name ?? "name";
@@ -734,13 +762,32 @@ function generateRootEntityChainTest(
   const varName = `parent${index}Unique`;
   const testTitle = chainCreateTitle("root", entity.id);
 
+  // FIX 3: If identity field is an email, build a unique email with a valid local part
+  const identityFieldType = identityField?.type.toLowerCase() ?? "";
+  const identityFieldNameLower = identityField?.name.toLowerCase() ?? "";
+  const isIdentityEmail =
+    identityFieldType.includes("email") ||
+    identityFieldNameLower.includes("email");
+
+  const uniqueValueConstruction = isIdentityEmail
+    ? `(() => {
+      const match = ${JSON.stringify(identityFieldValid)}.match(/^([^@]+)@(.+)$/);
+      if (match) {
+        const localPart = match[1];
+        const domain = match[2];
+        return localPart + "-root-" + Date.now() + "-" + Math.floor(Math.random() * 1000000) + "@" + domain;
+      }
+      return ${JSON.stringify(identityFieldValid)} + "-root-" + Date.now();
+    })()`
+    : `${JSON.stringify(identityFieldValid)} + "-root-" + Date.now() + "-" + Math.floor(Math.random() * 1000000)`;
+
   const testStep = `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
     // Create unique root entity identifier
-    const unique =
-      ${JSON.stringify(identityFieldValid)} + "-root-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+    // FIX 3: For email fields, construct a valid unique email
+    const unique = ${uniqueValueConstruction};
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
@@ -792,14 +839,16 @@ function generateChildEntityChainTest(
     const ids = testIdsFor(entity.key);
     const fieldFill = generateFieldFillSteps(entity, ids, false);
 
-    // FIX E: Type-aware identity for standalone child (NOT email)
+    // FIX E/FIX 3: Type-aware identity for standalone child (NOT email by type or name)
     const identityField =
       entity.fields.find((f) => {
         const fieldType = f.type.toLowerCase();
+        const fieldNameLower = f.name.toLowerCase();
 
         return (
           (fieldType.includes("string") || fieldType.includes("text")) &&
-          !fieldType.includes("email")
+          !fieldType.includes("email") &&
+          !fieldNameLower.includes("email")
         );
       }) ?? entity.fields[0];
     const identityFieldName = identityField?.name ?? "name";
@@ -814,12 +863,30 @@ function generateChildEntityChainTest(
     const varName = `parent${index}Unique`;
     const testTitle = chainCreateTitle("standalone", entity.id);
 
+    // FIX 3: If identity field is an email, build a unique email with a valid local part
+    const identityFieldType = identityField?.type.toLowerCase() ?? "";
+    const identityFieldNameLower = identityField?.name.toLowerCase() ?? "";
+    const isIdentityEmail =
+      identityFieldType.includes("email") ||
+      identityFieldNameLower.includes("email");
+
+    const uniqueValueConstruction = isIdentityEmail
+      ? `(() => {
+      const match = ${JSON.stringify(identityFieldValid)}.match(/^([^@]+)@(.+)$/);
+      if (match) {
+        const localPart = match[1];
+        const domain = match[2];
+        return localPart + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000) + "@" + domain;
+      }
+      return ${JSON.stringify(identityFieldValid)} + "-" + Date.now();
+    })()`
+      : `${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000)`;
+
     const testStep = `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const unique =
-      ${JSON.stringify(identityFieldValid)} + "-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+    const unique = ${uniqueValueConstruction};
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
@@ -887,14 +954,16 @@ ${fieldFill}${fillFirstFieldCode}
   const ids = testIdsFor(entity.key);
   const fieldFill = generateFieldFillSteps(entity, ids, true);
 
-  // FIX E: Type-aware identity for child (NOT email)
+  // FIX E/FIX 3: Type-aware identity for child (NOT email by type or name)
   const identityField =
     entity.fields.find((f) => {
       const fieldType = f.type.toLowerCase();
+      const fieldNameLower = f.name.toLowerCase();
 
       return (
         (fieldType.includes("string") || fieldType.includes("text")) &&
-        !fieldType.includes("email")
+        !fieldType.includes("email") &&
+        !fieldNameLower.includes("email")
       );
     }) ?? entity.fields[0];
   const identityFieldName = identityField?.name ?? "name";
@@ -912,12 +981,30 @@ ${fieldFill}${fillFirstFieldCode}
     otherSeedingCode.length > 0 ? `\n${otherSeedingCode}\n` : "";
   const seedingCode = seedingSteps.length > 0 ? `\n${seedingSteps}\n` : "";
 
+  // FIX 3: If identity field is an email, build a unique email with a valid local part
+  const identityFieldType = identityField?.type.toLowerCase() ?? "";
+  const identityFieldNameLower = identityField?.name.toLowerCase() ?? "";
+  const isIdentityEmail =
+    identityFieldType.includes("email") ||
+    identityFieldNameLower.includes("email");
+
+  const uniqueValueConstruction = isIdentityEmail
+    ? `(() => {
+      const match = ${JSON.stringify(identityFieldValid)}.match(/^([^@]+)@(.+)$/);
+      if (match) {
+        const localPart = match[1];
+        const domain = match[2];
+        return localPart + "-child-" + Date.now() + "-" + Math.floor(Math.random() * 1000000) + "@" + domain;
+      }
+      return ${JSON.stringify(identityFieldValid)} + "-child-" + Date.now();
+    })()`
+    : `${JSON.stringify(identityFieldValid)} + "-child-" + Date.now() + "-" + Math.floor(Math.random() * 1000000)`;
+
   const testStep = `  test(${JSON.stringify(testTitle)}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
-    const unique =
-      ${JSON.stringify(identityFieldValid)} + "-child-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+    const unique = ${uniqueValueConstruction};
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
@@ -933,14 +1020,71 @@ ${selectAllParentsCode}${seedingCode}${fillFirstFieldCode}
     const createdRow = page.getByTestId("${ids.row}").filter({ hasText: unique });
     await expect(createdRow).toBeVisible({ timeout: 10000 });
 
-    // Assert the primary parent linkage (FIX C: resolved by key)
-    const primaryParentVarName = ${JSON.stringify(parentVarMap.get(primaryParent.key))};
-    await expect(createdRow.getByTestId("${ids.rowCell(primaryParent.key)}")).toContainText(primaryParentVarName);
+    // Assert the primary parent linkage (FIX 1: bare variable reference, not JSON-stringified)
+    await expect(createdRow.getByTestId("${ids.rowCell(primaryParent.key)}")).toContainText(${(() => {
+      const varName = parentVarMap.get(primaryParent.key);
+
+      if (varName === undefined || varName === "") {
+        throw new Error(
+          `Parent ${primaryParent.key} not found in var map when building assertion`
+        );
+      }
+
+      return varName;
+    })()});
 
     ${currentVarName} = unique;
   });`;
 
   return { varName: currentVarName, testStep };
+}
+
+/**
+ * Sort entities into topological order: each entity's parents (restricted to keys present in the spec)
+ * must come before it. Uses a stable sort that preserves original order for entities with equal priority.
+ * Cycles are broken by original order; the cycle will be detected but not cause infinite loops.
+ */
+function topologicalSort(entities: IEntityAcceptance[]): IEntityAcceptance[] {
+  const keyToIndex = new Map(entities.map((e, i) => [e.key, i]));
+  const visited = new Set<string>();
+  const recStack = new Set<string>();
+  const result: IEntityAcceptance[] = [];
+
+  function visit(entity: IEntityAcceptance): void {
+    if (visited.has(entity.key)) {
+      return;
+    }
+
+    if (recStack.has(entity.key)) {
+      // Cycle detected; break it by using original order
+      return;
+    }
+
+    recStack.add(entity.key);
+
+    // Visit all parents that exist in the spec (those whose key is in keyToIndex)
+    for (const parent of entity.parents) {
+      const parentIndex = keyToIndex.get(parent.key);
+
+      if (parentIndex !== undefined) {
+        const parentEntity = entities[parentIndex];
+
+        if (parentEntity) {
+          visit(parentEntity);
+        }
+      }
+    }
+
+    recStack.delete(entity.key);
+    visited.add(entity.key);
+    result.push(entity);
+  }
+
+  for (const entity of entities) {
+    visit(entity);
+  }
+
+  return result;
 }
 
 /**
@@ -959,18 +1103,24 @@ ${selectAllParentsCode}${seedingCode}${fillFirstFieldCode}
  * Full CRUD (nav+list+create+persist+update+delete+negative) is run per-entity during the per-slice
  * acceptance phase (entity-level tests). The chain is NOT expanded to full CRUD per entity to avoid
  * test count explosion and codegen complexity. Chain = relational linkage verification only.
+ *
+ * FIX 2: Entities are sorted topologically before generation so that parents always precede children,
+ * ensuring real linkage assertions are always emitted (never false-green from skipped linkage).
  */
 export function generateChainSpec(spec: IAcceptanceSpec): string {
   if (spec.entities.length === 0) {
     return "// No entities to chain";
   }
 
-  const descTitle = `Full Relational Chain: ${spec.entities
+  // FIX 2: Sort entities topologically so parents always precede children
+  const sortedEntities = topologicalSort(spec.entities);
+
+  const descTitle = `Full Relational Chain: ${sortedEntities
     .map((e) => e.id)
     .join(" → ")}`;
 
   // Generate nav-helpers for all entities in the chain
-  const navHelpers = spec.entities
+  const navHelpers = sortedEntities
     .map((e) => generateNavHelper(e))
     .join("\n\n");
 
@@ -981,8 +1131,8 @@ export function generateChainSpec(spec: IAcceptanceSpec): string {
   const createdKeys = new Set<string>();
   const parentVarMap = new Map<string, string>();
 
-  for (let i = 0; i < spec.entities.length; i++) {
-    const entity = spec.entities[i];
+  for (let i = 0; i < sortedEntities.length; i++) {
+    const entity = sortedEntities[i];
 
     if (!entity) {
       continue;

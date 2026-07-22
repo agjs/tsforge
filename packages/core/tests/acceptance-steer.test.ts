@@ -176,32 +176,6 @@ test("acceptanceSteer: NEGATIVE-fail mentions validation", () => {
   expect(steer.toLowerCase()).toMatch(/invalid|reject|validation|required/);
 });
 
-test("acceptanceSteer: RELATIONSHIP-fail mentions linkage", () => {
-  const entity = makeEntity("Contact");
-
-  const outcome: IAcceptanceOutcome = {
-    ok: false,
-    results: [
-      { entity: "Contact", step: "nav", ok: true, detail: "" },
-      { entity: "Contact", step: "list", ok: true, detail: "" },
-      { entity: "Contact", step: "create", ok: true, detail: "" },
-      { entity: "Contact", step: "persist", ok: true, detail: "" },
-      {
-        entity: "Contact",
-        step: "relationship",
-        ok: false,
-        detail: "parent not linked",
-      },
-    ],
-  };
-
-  const steer = acceptanceSteer(entity, outcome);
-
-  expect(steer).toContain("Contact");
-  expect(steer).toContain("relationship");
-  expect(steer.toLowerCase()).toMatch(/link|relationship|parent|connect/);
-});
-
 test("acceptanceSteer: includes outcome.detail if present", () => {
   const entity = makeEntity("Product");
 

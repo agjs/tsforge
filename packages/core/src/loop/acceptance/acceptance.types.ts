@@ -50,14 +50,7 @@ export interface ITestIds {
 }
 
 export type AcceptStep =
-  | "nav"
-  | "list"
-  | "create"
-  | "persist"
-  | "update"
-  | "delete"
-  | "negative"
-  | "relationship";
+  "nav" | "list" | "create" | "persist" | "update" | "delete" | "negative";
 
 export interface IAcceptanceResult {
   entity: string;

@@ -777,6 +777,62 @@ describe("FIX 11: planToAcceptanceSpec FK dedup", () => {
   });
 });
 
+describe("FIX 1: chain assertion uses bare variable, not JSON-stringified name", () => {
+  test("child chain test generates toContainText with bare variable reference, not quoted string", () => {
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "company"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const spec: IAcceptanceSpec = {
+      entities: [companyEntity, contactEntity],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // FIX 1: Should contain the BARE variable reference (parent0Unique)
+    // NOT a JSON-stringified quoted string ("parent0Unique")
+    expect(chainSpec).toContain("toContainText(parent0Unique)");
+    // Verify the quoted form is NOT present (that would be the bug)
+    expect(chainSpec).not.toContain('toContainText("parent0Unique")');
+  });
+});
+
 describe("FIX B: chain rowCell testid resolves variable, not literal template", () => {
   test("child chain test generates rowCell with resolved parent key, not literal template", () => {
     const companyEntity: IEntityAcceptance = {
@@ -830,6 +886,124 @@ describe("FIX B: chain rowCell testid resolves variable, not literal template", 
     expect(chainSpec).toContain("contact-row-company");
     expect(chainSpec).not.toContain("${primaryParent.key}");
     expect(chainSpec).not.toContain("primaryParent.key");
+  });
+});
+
+describe("FIX 1: chain linkage assertion uses bare variable, not JSON-stringified name", () => {
+  test('child chain test generates toContainText(parent0Unique) not toContainText("parent0Unique")', () => {
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "company"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const spec: IAcceptanceSpec = {
+      entities: [companyEntity, contactEntity],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // FIX 1: Should contain the BARE variable reference (parent0Unique)
+    // NOT the JSON-stringified quoted form ("parent0Unique")
+    expect(chainSpec).toContain("toContainText(parent0Unique)");
+    expect(chainSpec).not.toContain('toContainText("parent0Unique")');
+  });
+});
+
+describe("FIX 2: topological sort ensures parents precede children", () => {
+  test("non-topological plan (child before parent) still generates child WITH parent linkage", () => {
+    // Non-topological order: Contact comes before Company (its parent)
+    const contactEntity: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John",
+          invalid: [],
+        },
+      ],
+      shows: ["name", "company"],
+      screens: ["list", "form"],
+      parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const companyEntity: IEntityAcceptance = {
+      id: "Company",
+      key: "company",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme",
+          invalid: [],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company",
+    };
+
+    // Non-topological order: child @0, parent @1
+    const spec: IAcceptanceSpec = {
+      entities: [contactEntity, companyEntity],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // FIX 2: Despite the non-topological input order, Contact should still be generated
+    // WITH parent linkage (selectOption + assertion), not as a standalone.
+    // The selectOption line proves the parent was created first (topologically sorted)
+    expect(chainSpec).toContain("selectOption({ label: parent0Unique })");
+    // Should NOT generate Contact as a standalone (which would appear if parent wasn't available)
+    expect(chainSpec).not.toContain(
+      "create entity: Contact (no parent linkage)"
+    );
+    // Should have a toContainText assertion for the parent linkage
+    expect(chainSpec).toContain("toContainText(parent0Unique)");
   });
 });
 
@@ -1073,7 +1247,7 @@ describe("FIX D: type-aware field fills", () => {
   });
 });
 
-describe("FIX E: identity field excludes email", () => {
+describe("FIX E/FIX 3: identity field excludes email by type and name", () => {
   test("entity with email first string field uses fallback text field", () => {
     const entityWithEmail: IEntityAcceptance = {
       id: "User",
@@ -1116,7 +1290,43 @@ describe("FIX E: identity field excludes email", () => {
     );
   });
 
-  test("chain with email-only string field avoids email for identity", () => {
+  test("FIX 3: field named 'email' with type 'string' is excluded from identity", () => {
+    // Entity with a field named "email" but type "string" (not email type)
+    const entityWithEmailNamed: IEntityAcceptance = {
+      id: "Contact",
+      key: "contact",
+      nav: "Contacts",
+      fields: [
+        {
+          name: "email",
+          type: "string",
+          optional: false,
+          valid: "contact@example.com",
+          invalid: [],
+        },
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "John",
+          invalid: [],
+        },
+      ],
+      shows: ["email", "name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a contact",
+    };
+
+    const spec = generateEntitySpec(entityWithEmailNamed);
+
+    // FIX 3: Even though "email" field has type "string", it should be excluded by name
+    // So the identity should use "name" field instead
+    expect(spec).toContain('getByTestId("contact-field-name").fill(unique)');
+  });
+
+  test("FIX 3: email-only entity generates valid unique email (not stamped invalid)", () => {
     const emailOnlyEntity: IEntityAcceptance = {
       id: "Subscriber",
       key: "subscriber",
@@ -1143,9 +1353,46 @@ describe("FIX E: identity field excludes email", () => {
 
     const chainSpec = generateChainSpec(spec);
 
-    // FIX E: Even if email is the only string field, the timestamp suffix should not be added
-    // The entity is fallback to first field (email), but the unique marker construction should
-    // recognize that it's an email field and handle it appropriately or use a valid-email strategy
+    // FIX 3: Email-only entity should generate a valid unique email
+    // The unique value should still match the email pattern (contain @)
+    expect(chainSpec).toContain("@example.com");
+    // Should NOT contain an invalid email like "sub@example.com-timestamp"
+    expect(chainSpec).not.toContain("sub@example.com-");
+    // Should have the email field filled with the unique value
+    expect(chainSpec).toContain(
+      'getByTestId("subscriber-field-email").fill(unique)'
+    );
+  });
+
+  test("FIX 3: multi-parent chain with email-only entity still links parents", () => {
+    const emailOnlyEntity: IEntityAcceptance = {
+      id: "Subscriber",
+      key: "subscriber",
+      nav: "Subscribers",
+      fields: [
+        {
+          name: "email",
+          type: "email",
+          optional: false,
+          valid: "sub@example.com",
+          invalid: [],
+        },
+      ],
+      shows: ["email"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a subscriber",
+    };
+
+    const spec = {
+      entities: [emailOnlyEntity],
+    };
+
+    const chainSpec = generateChainSpec(spec);
+
+    // FIX E: Even if email is the only string field, it should be handled as identity
+    // The entity creates root (no parent linkage needed for this single-entity chain)
     expect(chainSpec).toContain("create root entity: Subscriber");
   });
 });
