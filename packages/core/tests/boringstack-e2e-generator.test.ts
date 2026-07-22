@@ -1819,13 +1819,14 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
       shows: ["name", "stock"],
       screens: ["list", "form"],
       parents: [],
-      // "0x10" would become 16 via Number() — sending it verbatim as a string keeps
-      // it a genuinely type-invalid value (tests rejection), not a mutated valid one.
+      // "01" does NOT round-trip (Number("01")→1, String(1)!=="01") and a bare `01`
+      // would be an OCTAL SyntaxError in the strict-mode spec — so it must stay a raw
+      // string, testing type-rejection rather than corrupting to a valid `1`.
       negatives: [
         {
           field: "stock",
-          value: "0x10",
-          why: "hex is not a valid integer input",
+          value: "01",
+          why: "leading-zero token is not a valid integer input",
         },
       ],
       acceptanceCheck: "create a product",
@@ -1833,8 +1834,10 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
 
     const spec = generateEntitySpec(entity);
 
-    expect(spec).toContain('payload["stock"] = "0x10"');
-    expect(spec).not.toContain('payload["stock"] = 16');
+    expect(spec).toContain('payload["stock"] = "01"');
+    // Must NOT emit a bare octal literal (SyntaxError) or a mutated value.
+    expect(spec).not.toContain('payload["stock"] = 01');
+    expect(spec).not.toContain('payload["stock"] = 1;');
   });
 
   test("B3: type-render invalid boolean token as string (testing type-rejection)", () => {

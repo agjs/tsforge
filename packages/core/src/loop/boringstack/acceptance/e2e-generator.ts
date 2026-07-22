@@ -275,9 +275,12 @@ function renderFieldValue(field: { type: string; valid: string }): string {
  * Type-aware rendering: tests the constraint with bare types (not strings).
  * Rules:
  * - empty string "" → stays as "" (tests required-empty constraint)
- * - numeric field + Number(value) is finite → bare number (tests numeric constraint)
- * - boolean field + value is "true"/"false" → bare boolean (tests boolean constraint)
- * - boolean field + other token → JSON string (tests type-rejection)
+ * - numeric field + token round-trips exactly (`String(Number(value)) === value`) →
+ *   bare number (tests numeric constraint); NON-canonical tokens ("01", "1e5", "0x10",
+ *   " 5 ", huge→Infinity) → JSON string (Number() would mutate them / bare "01" is an
+ *   octal SyntaxError in strict mode)
+ * - boolean field + value is EXACTLY "true"/"false" → bare boolean (no trim/case-fold)
+ * - boolean field + other token (incl. " false ", "FALSE") → JSON string (type-rejection)
  * - everything else → JSON string (default fallback)
  * Complexity: ≤ 20 (three type checks with normalized matching).
  */
@@ -301,29 +304,33 @@ function renderInvalidOverride(field: { type: string }, value: string): string {
   ]);
 
   if (numericTypes.has(normalized)) {
-    // Emit a bare number ONLY for a canonical decimal literal, so the negative tests
-    // the numeric CONSTRAINT with the exact intended value. Non-canonical tokens
-    // ("01", "0x10", " ", "1e5") would be MUTATED by Number() — turning an
-    // intentionally-invalid value into a different/valid one — so send those as a raw
-    // string, which exercises type-rejection instead. `value` is already the literal.
-    if (/^-?\d+(\.\d+)?$/.test(value)) {
+    // Emit a bare number ONLY when the token ROUND-TRIPS exactly through Number:
+    // `String(Number(value)) === value`. This is the true canonical-literal test —
+    // it accepts "-1"/"1.5" (constraint probes) but rejects tokens Number() would
+    // MUTATE or that are invalid JS: "01"/"00" (would be an octal SyntaxError in the
+    // strict-mode spec, and Number("01")→1), "1e5"→100000, "0x10"→16, " 5 "→5, and
+    // huge digit strings → Infinity. Those fall through to a raw string, which
+    // exercises type-rejection instead of silently testing a different value.
+    const asNumber = Number(value);
+
+    if (Number.isFinite(asNumber) && String(asNumber) === value) {
       return value;
     }
 
     return JSON.stringify(value);
   }
 
-  // Boolean types: bare boolean for "true"/"false", JSON string for other tokens
+  // Boolean types: bare boolean ONLY for the exact tokens "true"/"false". Any other
+  // token — including " false " or "FALSE" — is sent as a raw string so we test the
+  // EXACT value the plan specified (type/value rejection), never a folded valid bool.
   const booleanTypes = new Set(["boolean", "bool"]);
 
   if (booleanTypes.has(normalized)) {
-    const trimmed = value.trim().toLowerCase();
-
-    if (trimmed === "true") {
+    if (value === "true") {
       return "true";
     }
 
-    if (trimmed === "false") {
+    if (value === "false") {
       return "false";
     }
 
