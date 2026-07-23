@@ -104,6 +104,19 @@ describe("buildTestIdGuide", () => {
     expect(guide).toContain("Where to add them");
   });
 
+  test("directs the confirm-delete testid to the CONFIRM BUTTON, not the dialog wrapper", () => {
+    const guide = buildTestIdGuide(contact);
+    const ids = testIdsFor(contact.key);
+
+    // The E2E delete step CLICKS confirm-delete to confirm. If the model puts it on the dialog
+    // overlay/wrapper <div> (the natural reading of "confirmation dialog"), the click hits the
+    // backdrop, the delete mutation never fires, the row stays, and delete acceptance fails every
+    // time. The guide must say BUTTON.
+    expect(guide).toContain(ids.confirmDelete);
+    expect(guide.toUpperCase()).toContain("CONFIRM BUTTON");
+    expect(guide).toContain("NOT the dialog");
+  });
+
   test("directs the nav testid to the shared sidebar (reachability)", () => {
     const guide = buildTestIdGuide(contact);
     const ids = testIdsFor(contact.key);

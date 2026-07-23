@@ -54,4 +54,13 @@ export const flags = {
    *  without knowing a flag exists. Kill-switch TSFORGE_NO_NEAR_GREEN_CHECKPOINT=1 disables
    *  it (A/B control / escape hatch). Thresholds N=2, M=3 from Phase 0a. */
   nearGreenCheckpoint: (): boolean => !isOn(ENV_FLAG.noNearGreenCheckpoint),
+  /** WS-B near-green ROTATION steer (#77): when the build sits at a near-green count but the
+   *  SPECIFIC error set rotates for several cycles (the model fixes one error and the fix spawns
+   *  another — e.g. extracts a component → its siblings/tests are now missing), inject a
+   *  completion-only steer ("finish the files that already have errors; don't create new
+   *  files/modules unless the same edit adds their siblings + tests"). This is the last-mile gap
+   *  that made green non-deterministic (build17 parked on it; build16 crossed by luck). Count-only
+   *  WS-B can't see it (the count never sprays). DEFAULT ON, deterministic (no network); kill with
+   *  TSFORGE_NO_NEAR_GREEN_ROTATION=1. Generic — keyed only on rule/file, no stack knowledge. */
+  nearGreenRotation: (): boolean => !isOn(ENV_FLAG.noNearGreenRotation),
 };

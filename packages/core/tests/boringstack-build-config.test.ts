@@ -6,6 +6,8 @@ import type { IProvider } from "../src/inference";
 import { BORINGSTACK_BUILD_SESSION } from "../src/loop/boringstack/build-config";
 import { createBoringstackHostSession } from "../src/loop/boringstack/build-session";
 import { isRecord } from "../src/lib/guards/guards";
+import { classifyAction, evaluatePolicy } from "../src/policy";
+import type { IPolicyContext } from "../src/policy";
 
 // The headless driver must construct its host session THROUGH the tested constructor,
 // or the whole offerCheck wiring is untested — reverting to an inline Session.create
@@ -29,6 +31,33 @@ test("the BoringStack build flags keep offerCheck + convention library + drive-t
   expect(BORINGSTACK_BUILD_SESSION.offerCheck).toBe(true);
   expect(BORINGSTACK_BUILD_SESSION.pullConventions).toBe(true);
   expect(BORINGSTACK_BUILD_SESSION.executionMode).toBe("drive-to-green");
+});
+
+test("the BoringStack build DENIES the model from running the browser E2E / host dev server, but ALLOWS the gate", () => {
+  const rules = BORINGSTACK_BUILD_SESSION.policyRules;
+  const ctx: IPolicyContext = {
+    mode: "default",
+    cwd: "/x",
+    files: ["**/*"],
+    interactive: false,
+    rules,
+  };
+  const decide = (command: string): string =>
+    evaluatePolicy(
+      classifyAction({ id: "1", name: "run", arguments: { command } }, "/x"),
+      ctx
+    ).decision;
+
+  // The commands that trip the host preflight guard and park a green feature — all DENIED,
+  // in every invocation form the model reached for (build22–24).
+  expect(decide("cd apps/ui && npx playwright test")).toBe("deny");
+  expect(decide("bunx playwright test --reporter=list")).toBe("deny");
+  expect(decide("bun run dev")).toBe("deny");
+  expect(decide("bunx vite")).toBe("deny");
+  expect(decide("./scripts/dev/preflight-host-dev.sh && vite")).toBe("deny");
+  // The legitimate gate + test commands MUST still be allowed (the deny is surgical).
+  expect(decide("bun run check")).toBe("allow");
+  expect(decide("bun test packages")).toBe("allow");
 });
 
 test("the boringstack host session actually ADVERTISES check to the model", async () => {

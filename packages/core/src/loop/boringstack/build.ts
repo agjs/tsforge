@@ -118,6 +118,15 @@ export const APP_SIDEBAR_FILE =
  *  its feature's route entry, never modify another feature's route. */
 export const APP_ROUTES_FILE = "apps/ui/src/app/router/routes.tsx";
 
+/** The sidebar's co-located test. It asserts the EXACT number of nav links, so the moment a
+ *  feature adds its NavLink (required for reachability) the count changes and this test fails at
+ *  the FINAL full-project validate (the fast per-feature gate doesn't run the vitest suite, so it
+ *  only surfaces there → a fully-verified feature still leaves the build "stuck"). The scaffold is
+ *  an external clone we can't edit, so the model must keep this test in sync: scope it in and
+ *  instruct (refinePrompt) to bump the expected link count by its one added link — nothing else. */
+export const APP_SIDEBAR_TEST_FILE =
+  "apps/ui/src/components/core/AppSidebar/AppSidebar.test.tsx";
+
 export function scopeFor(name: string): string[] {
   const camel = toCamelCase(name);
 
@@ -136,6 +145,9 @@ export function scopeFor(name: string): string[] {
     // to the router. Add-only: the model may ADD its feature's entry, never modify others'.
     APP_SIDEBAR_FILE,
     APP_ROUTES_FILE,
+    // Co-located sidebar test asserts the exact nav-link count; adding a NavLink changes it, so
+    // the model must be able to bump the count (see APP_SIDEBAR_TEST_FILE).
+    APP_SIDEBAR_TEST_FILE,
   ];
 }
 

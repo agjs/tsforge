@@ -514,6 +514,13 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
             ...process.env,
             PLAYWRIGHT_PORT: uiPort,
             VITE_API_BASE: ctx.apiBase,
+            // The dockerized ui-dev already serves the app on uiPort; Playwright MUST reuse it,
+            // never start its own host dev server. The scaffold's webServer.command is `bun run dev`,
+            // whose preflight-host-dev.sh HARD-EXITS 1 while the container is up — so if reuse is
+            // off (the config gates it on !CI, and a CI=1 build env flips it off) Playwright spawns
+            // that, exits 1 with ZERO tests run, and the harness reads a green feature as a failed
+            // acceptance → park. Forcing reuse ON makes Playwright attach to the running server.
+            PLAYWRIGHT_REUSE_SERVER: "true",
           };
 
           const result = await exec(
@@ -595,6 +602,13 @@ export function makeBoringstackAcceptanceRunner(exec: Exec): IAcceptanceRunner {
             ...process.env,
             PLAYWRIGHT_PORT: uiPort,
             VITE_API_BASE: ctx.apiBase,
+            // The dockerized ui-dev already serves the app on uiPort; Playwright MUST reuse it,
+            // never start its own host dev server. The scaffold's webServer.command is `bun run dev`,
+            // whose preflight-host-dev.sh HARD-EXITS 1 while the container is up — so if reuse is
+            // off (the config gates it on !CI, and a CI=1 build env flips it off) Playwright spawns
+            // that, exits 1 with ZERO tests run, and the harness reads a green feature as a failed
+            // acceptance → park. Forcing reuse ON makes Playwright attach to the running server.
+            PLAYWRIGHT_REUSE_SERVER: "true",
           };
 
           const result = await exec(

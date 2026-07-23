@@ -9,11 +9,15 @@ import type { IGate } from "../src/gate/gate-runner";
 import type { ILoopCtx, ILoopState } from "../src/loop/turn";
 import {
   captureNearGreenCheckpoint,
+  NEAR_GREEN_ROTATION_STEER,
   rollbackNearGreen,
   settleGate,
 } from "../src/loop/turn";
 import type { IValidateResult } from "../src/validate";
-import { MAX_NEAR_GREEN_ROLLBACKS } from "../src/loop/near-green-checkpoint";
+import {
+  MAX_NEAR_GREEN_ROLLBACKS,
+  MAX_NEAR_GREEN_SPIKE_GAP,
+} from "../src/loop/near-green-checkpoint";
 
 // WS-B end-to-end: with the flag ON, a build that reaches near-green (1 error) then SPRAYS
 // (8 errors) must REVERT the scope files to the near-green best; with the flag OFF the path
@@ -206,6 +210,247 @@ test("#61: settleGate does NOT checkpoint a HOLLOW near-green state (all-complet
     // The hollow state was NOT protected: the checkpoint is cleared (no revert target), so
     // the model's next completion edit proceeds forward instead of being reverted to hollow.
     expect(state.nearGreenCheckpoint).toBeUndefined();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("#77 INTEGRATION: settleGate wires the rotation detector → 3 rotating near-green cycles set the flag AND inject the steer", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
+
+    // A DIFFERENT single near-green error each cycle (count stays 1, the identity rotates) — the
+    // build17 shape. Driving settleGate (not the pieces) proves trackNearGreenRotation is wired in
+    // BEFORE injectFeedback: removing/reordering that call would leave this red.
+    const rotating = [
+      {
+        key: "feature.ts:1:jsx-computation",
+        rule: "jsx-computation",
+        file: "feature.ts",
+        message: "a",
+      },
+      {
+        key: "feature.ts:1:component-folder-structure",
+        rule: "component-folder-structure",
+        file: "feature.ts",
+        message: "b",
+      },
+      {
+        key: "feature.ts:1:no-unsafe-call",
+        rule: "no-unsafe-call",
+        file: "feature.ts",
+        message: "c",
+      },
+    ];
+    let cycle = 0;
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["**/*"],
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set(["feature.ts"]) },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => {
+            const err = rotating[Math.min(cycle, rotating.length - 1)];
+
+            cycle += 1;
+
+            return { passed: false, errors: err ? [err] : [], output: "" };
+          },
+        },
+      },
+    };
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: Number.POSITIVE_INFINITY,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: -1,
+      edits: 0,
+      regressions: 0,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      conventionsEnabled: false,
+    };
+
+    // A genuine per-cycle edit moves the worktree rev — the #77 precondition for a REAL rotation
+    // (fix-one → spawn-another), distinguishing it from a flaky gate re-run over unchanged files.
+    await Bun.write(join(dir, "feature.ts"), "export const A = 1;\n");
+    await settleGate(ctx, state, 1);
+    await Bun.write(join(dir, "feature.ts"), "export const B = 2;\n");
+    await settleGate(ctx, state, 2);
+    await Bun.write(join(dir, "feature.ts"), "export const C = 3;\n");
+    await settleGate(ctx, state, 3);
+
+    // The detector fired through the real harness path …
+    expect(state.nearGreenRotation).toBe(true);
+    // … and the completion-only steer reached the model in the injected feedback.
+    const injected = ctx.messages
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .join("\n");
+
+    expect(injected.includes(NEAR_GREEN_ROTATION_STEER)).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("#77: while ROTATING, WS-B rollback STANDS DOWN — the steered atomic-completion spike is NOT reverted", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
+
+    // The rotation steer told the model to complete a file atomically (create its siblings + test
+    // in one edit); that coordinated edit spikes the count. Without the stand-down, WS-B reverts
+    // it — the exact spray→revert loop build17 parked on, steer vs WS-B. With rotation set, the
+    // rollback must NOT fire on this expected spike.
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["**/*"],
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set(["feature.ts"]) },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            // 8 errors — a spray well past N+M that WOULD roll back if rotation weren't set.
+            errors: Array.from({ length: 8 }, (_, i) => ({
+              key: `feature.ts:${String(i)}:r`,
+              rule: "r",
+              file: "feature.ts",
+              message: `e${String(i)}`,
+            })),
+            output: "",
+          }),
+        },
+      },
+    };
+    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "k", rule: "r", file: "feature.ts", message: "near-green" },
+    ]);
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 1,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: 1,
+      edits: 3,
+      regressions: 0,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      conventionsEnabled: false,
+      nearGreenCheckpoint: checkpoint,
+      nearGreenBest: 1,
+      nearGreenRollbacks: 0,
+      nearGreenRotation: true,
+    };
+
+    await settleGate(ctx, state, 5);
+
+    // No rollback fired (the spike was the steered completion, not a spray to revert).
+    expect(state.nearGreenRollbacks).toBe(0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("#77 BACKSTOP: a spike that persists past MAX_NEAR_GREEN_SPIKE_GAP clears rotation and WS-B re-arms to roll back", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
+
+    // A persistent 8-error spray. While rotation is set WS-B stands down (the atomic-completion
+    // grace), but if the spike does NOT resolve back to near green within the gap bound, the
+    // streak is stale: trackNearGreenRotation clears the flag and WS-B rolls the spray back.
+    const ctx: ILoopCtx = {
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["**/*"],
+        context: [],
+      },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set(["feature.ts"]) },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            errors: Array.from({ length: 8 }, (_, i) => ({
+              key: `feature.ts:${String(i)}:r`,
+              rule: "r",
+              file: "feature.ts",
+              message: `e${String(i)}`,
+            })),
+            output: "",
+          }),
+        },
+      },
+    };
+    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "k", rule: "r", file: "feature.ts", message: "near-green" },
+    ]);
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 1,
+      noNewLow: 0,
+      errorAge: new Map(),
+      lastGateCount: 8,
+      edits: 3,
+      regressions: 0,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      conventionsEnabled: false,
+      nearGreenCheckpoint: checkpoint,
+      nearGreenBest: 1,
+      nearGreenRollbacks: 0,
+      nearGreenRotation: true,
+      nearGreenSamples: [
+        { count: 1, phase: 0, sig: "a", rev: "r0" },
+        { count: 1, phase: 0, sig: "b", rev: "r1" },
+        { count: 1, phase: 0, sig: "c", rev: "r2" },
+      ],
+      nearGreenSpikeGap: 0,
+    };
+
+    // Drive one more spike cycle than the gap tolerates → rotation clears, rollback re-arms.
+    for (let i = 0; i <= MAX_NEAR_GREEN_SPIKE_GAP; i += 1) {
+      await settleGate(ctx, state, i + 1);
+    }
+
+    // The stale rotation was dropped and WS-B reverted the persistent spray.
+    expect(state.nearGreenRotation).toBe(false);
+    expect(state.nearGreenRollbacks).toBeGreaterThanOrEqual(1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

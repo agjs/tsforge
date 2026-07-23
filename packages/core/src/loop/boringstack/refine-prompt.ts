@@ -195,7 +195,7 @@ then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \
 
 **Every visible string via \`t("features.${camel}.<key>")\`** — no hardcoded JSX text (button labels like "Edit"/"Delete" included).
 
-**Make the feature reachable.** Add a sidebar link to \`apps/ui/src/components/core/AppSidebar/AppSidebar.tsx\` (add your feature's entry to the \`APP_SIDEBAR_NAV_ITEMS\` array, following the existing format) and register its route in \`apps/ui/src/app/router/routes.tsx\` (add a route pointing at your feature's page component). Both files are in your editable scope — ADD ONLY your feature's entries, never modify another feature's link/route (same rule as the shared schema + locale files). A feature missing from the sidebar or router is unreachable and fails browser acceptance.
+**Make the feature reachable.** Add a sidebar link to \`apps/ui/src/components/core/AppSidebar/AppSidebar.tsx\` (add your feature's entry to the \`APP_SIDEBAR_NAV_ITEMS\` array, following the existing format) and register its route in \`apps/ui/src/app/router/routes.tsx\` (add a route pointing at your feature's page component). Both files are in your editable scope — ADD ONLY your feature's entries, never modify another feature's link/route (same rule as the shared schema + locale files). A feature missing from the sidebar or router is unreachable and fails browser acceptance. **After adding your NavLink, update the sidebar's co-located test \`apps/ui/src/components/core/AppSidebar/AppSidebar.test.tsx\`: it asserts the EXACT number of nav links (e.g. \`toHaveLength(6)\`), so bump that count by exactly one for your added link — otherwise the final full-project validate fails even though your feature is correct.**
 
 ---
 
@@ -239,6 +239,16 @@ tool is the ONLY gate you run; the shell versions waste turns and, via \`npx\`, 
 WRONG \`tsc\` that prints "This is not the tsc command you are looking for". NEVER use
 \`npx\`/\`npm\`/\`yarn\` — this stack is bun-only. If you ever must run something else, use
 the project's \`bun run <script>\`.
+
+## Do NOT run the browser end-to-end acceptance yourself
+The harness runs the full browser (Playwright) acceptance AUTOMATICALLY after the fast gate is
+green — it is NOT your job. Do NOT run \`playwright\`/\`bunx playwright test\`, \`bun run dev\`,
+\`vite\`, or \`dev.sh\`. The dockerized dev server is already serving the app; starting a second one
+on the host is HARD-REFUSED by the \`preflight-host-dev.sh\` guard (exit 1) — that is an
+infrastructure guard, NOT a code error, and trying to "fix" it will trap you in a dead loop that
+burns the whole turn budget and parks a feature whose code is already correct. When the \`check\`
+tool returns \`passed: true\` and your required \`data-testid\`s are present, you are DONE — STOP
+there and let the harness verify the browser flow.
 
 ---
 
