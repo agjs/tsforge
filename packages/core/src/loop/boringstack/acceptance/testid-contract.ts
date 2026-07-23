@@ -77,8 +77,18 @@ Every UI element that end-to-end tests will interact with MUST have a \`data-tes
 - **Create button**: \`data-testid="${ids.create}"\` — the button to open the create form
 - **Form container**: \`data-testid="${ids.form}"\` — the form element for create/edit
 - **Submit button**: \`data-testid="${ids.submit}"\` — the submit button inside the form
-- **Form fields**: Each input field needs \`data-testid\` for each of your entity's fields:
-${entity.fields.map((f) => `  - \`data-testid="${ids.field(f.name)}"\` for the "${f.name}" field`).join("\n")}
+- **Form fields**: Each NON-relationship field needs an \`<input>\` (or type-appropriate control) carrying \`data-testid\`:
+${entity.fields
+  .filter((f) => !entity.parents.some((p) => p.fkField === f.name))
+  .map(
+    (f) =>
+      `  - \`data-testid="${ids.field(f.name)}"\` for the "${f.name}" field`
+  )
+  .join("\n")}${
+    entity.parents.length > 0
+      ? `\n  (Parent foreign-key fields — ${entity.parents.map((p) => `"${p.fkField}"`).join(", ")} — are NOT plain inputs; render them as \`<select>\` per **Relationship selectors** below.)`
+      : ""
+  }
 - **Table row**: \`data-testid="${ids.row}"\` — each row in the list (use this as a prefix, e.g. in a \`data-testid\` attribute on the row container)
 - **Row cells**: Each cell in a row needs \`data-testid\` for each of your entity's shows (${entity.shows.join(", ")}):
 ${entity.shows.map((s) => `  - \`data-testid="${ids.rowCell(s)}"\` for the "${s}" column`).join("\n")}
@@ -87,7 +97,7 @@ ${entity.shows.map((s) => `  - \`data-testid="${ids.rowCell(s)}"\` for the "${s}
 - **Delete confirm button**: \`data-testid="${ids.confirmDelete}"\` — put this on the BUTTON that actually performs the deletion (the one whose click fires the delete mutation), NOT on the dialog container/overlay. End-to-end acceptance CLICKS this testid to confirm the delete; if it sits on a wrapper \`<div>\` the click hits the backdrop, the delete never fires, and the row stays (delete acceptance fails).
 ${
   entity.parents.length > 0
-    ? `- **Relationship selectors**: \`data-testid\` for each parent entity select:\n${entity.parents.map((p) => `  - \`data-testid="${ids.field(p.fkField)}"\` for selecting a ${p.key}`).join("\n")}`
+    ? `- **Relationship selectors (parent foreign keys)**: each parent FK field MUST be a native \`<select>\` element — NOT an \`<input>\`, and not a custom combobox/autocomplete. Populate it with one \`<option>\` per existing parent record, where the option's \`value\` is the parent's \`id\`; fetch the parent list with its list query / api-client and map the rows to options. End-to-end acceptance picks a parent with Playwright \`selectOption\`, which ONLY works on a real \`<select>\` — an \`<input>\` (or non-native control) fails the create step and the feature parks at acceptance.\n${entity.parents.map((p) => `  - \`<select data-testid="${ids.field(p.fkField)}">\` — the "${p.fkField}" field: a list of ${p.key} records (each \`<option value={${p.key}.id}>\`)`).join("\n")}`
     : ""
 }
 

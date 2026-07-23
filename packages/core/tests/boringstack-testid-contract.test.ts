@@ -152,6 +152,29 @@ describe("buildTestIdGuide", () => {
     }
   });
 
+  test("directs a parent FK field to a native <select> (Playwright selectOption), NOT an <input>", () => {
+    // build35 Contact parked: the model built companyId as an <input>, but acceptance uses Playwright
+    // selectOption which only works on a native <select>. The guide must mandate a <select>.
+    const guide = buildTestIdGuide(contact);
+    const ids = testIdsFor(contact.key);
+
+    expect(guide).toContain("native `<select>`");
+    expect(guide).toContain("selectOption");
+    // The FK field's testid appears attached to a <select>, not a plain input.
+    expect(guide).toContain(`<select data-testid="${ids.field("companyId")}">`);
+  });
+
+  test("does NOT list a parent FK field among the plain <input> form fields", () => {
+    // The FK field must not be double-listed as a plain input (which is what led the model to build
+    // an <input>). It's flagged as NOT a plain input and deferred to the relationship selectors.
+    const guide = buildTestIdGuide(contact);
+
+    expect(guide).toContain("are NOT plain inputs");
+    // The non-FK fields ARE still listed as plain inputs.
+    expect(guide).toContain('for the "name" field');
+    expect(guide).toContain('for the "email" field');
+  });
+
   test("guide agreement: contains exactly the required testids", () => {
     const guide = buildTestIdGuide(contact);
     const required = requiredTestIds(contact);
