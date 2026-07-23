@@ -199,6 +199,52 @@ function opaqueGateError(output: string, cwd: string): IErrorItem {
  * becomes an `IErrorItem` whose `key` IS the signature — so the differential
  * wrapper can suppress baseline signatures and `checkStuck` can fingerprint them.
  */
+/**
+ * Pinpoint the ONE file with a real syntax error behind an `eslint-program-unparsable` cascade.
+ * The type-aware ESLint program fails to build off a single broken file yet fans a
+ * `parserOptions.project` parse error across EVERY .tsx, so its output can't say which file is
+ * actually broken — and the model thrashes near-green hunting for it. Transpile each source file
+ * in ISOLATION (Bun's transpiler builds no cross-file program, so only the genuinely-malformed
+ * file throws); return the first broken one (repo-relative) + the parser's first message line.
+ * Best-effort and fast (sub-ms/file, only runs on the rare cascade). Never throws.
+ */
+export async function locateParseError(
+  cwd: string
+): Promise<{ file: string; detail: string } | null> {
+  for (const app of ["apps/api", "apps/ui"]) {
+    const root = join(cwd, app);
+
+    try {
+      const glob = new Bun.Glob("src/**/*.{ts,tsx}");
+
+      for await (const rel of glob.scan({ cwd: root })) {
+        const loader = rel.endsWith(".tsx") ? "tsx" : "ts";
+        let code: string;
+
+        try {
+          code = await Bun.file(join(root, rel)).text();
+        } catch {
+          continue;
+        }
+
+        try {
+          new Bun.Transpiler({ loader }).transformSync(code);
+        } catch (e) {
+          const detail = (e instanceof Error ? e.message : String(e))
+            .split("\n")[0]
+            ?.slice(0, 200);
+
+          return { file: `${app}/${rel}`, detail: detail ?? "syntax error" };
+        }
+      }
+    } catch {
+      // glob/scan failure is non-fatal — the base message still guides the model.
+    }
+  }
+
+  return null;
+}
+
 export function boringstackCommandStage(cwd: string, exec: Exec): IStage {
   return {
     async run(): Promise<IValidateResult> {
@@ -218,6 +264,22 @@ export function boringstackCommandStage(cwd: string, exec: Exec): IStage {
         signatures.length > 0
           ? signatures.map(signatureToError)
           : [opaqueGateError(result.output, cwd)];
+
+      // If the whole type-aware program failed to parse, name the actual broken file (ESLint's
+      // cascade can't) so the model rewrites THAT file instead of thrashing near-green hunting it.
+      const unparsable = errors.find(
+        (e) => e.rule === "eslint-program-unparsable"
+      );
+
+      if (unparsable !== undefined) {
+        const located = await locateParseError(cwd);
+
+        if (located !== null) {
+          unparsable.message +=
+            ` → The broken file is \`${located.file}\` (${located.detail}). ` +
+            `REWRITE \`${located.file}\` IN FULL — do not surgically patch it.`;
+        }
+      }
 
       return { passed: false, errors, output: result.output };
     },

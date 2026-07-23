@@ -1,9 +1,13 @@
 import { test, expect, describe } from "bun:test";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   boringstackCommandStage,
   reachabilityStage,
   judgeStage,
   signatureToError,
+  locateParseError,
 } from "../src/loop/boringstack/gate-stages";
 import type { Exec } from "../src/loop/boringstack/exec";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
@@ -269,5 +273,56 @@ describe("judgeStage", () => {
     const stage = judgeStage(providerWithPass, "/tmp/clone", feature);
 
     expect((await stage.run("/tmp/clone")).passed).toBe(true);
+  });
+});
+
+describe("locateParseError", () => {
+  test("names the ONE file with a real syntax error among good files (disambiguates the cascade)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-parse-"));
+
+    try {
+      await mkdir(join(dir, "apps/ui/src/features/company"), {
+        recursive: true,
+      });
+      await mkdir(join(dir, "apps/api/src"), { recursive: true });
+      // Good files (must NOT be fingered)
+      await writeFile(
+        join(dir, "apps/api/src/ok.ts"),
+        "export const n: number = 1;\n"
+      );
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Good.tsx"),
+        "export const G = () => <div className='x'>hi</div>;\n"
+      );
+      // The ONE broken file — malformed JSX ('>' expected)
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Broken.tsx"),
+        "export const B = () => <div className='x' hi</div>;\n"
+      );
+
+      const located = await locateParseError(dir);
+
+      expect(located).not.toBeNull();
+      expect(located?.file).toBe("apps/ui/src/features/company/Broken.tsx");
+      expect(located?.detail.length).toBeGreaterThan(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns null when every source file parses cleanly", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-parse-ok-"));
+
+    try {
+      await mkdir(join(dir, "apps/ui/src"), { recursive: true });
+      await writeFile(
+        join(dir, "apps/ui/src/Ok.tsx"),
+        "export const G = () => <span>ok</span>;\n"
+      );
+
+      expect(await locateParseError(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
