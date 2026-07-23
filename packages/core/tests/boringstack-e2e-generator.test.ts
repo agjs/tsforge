@@ -60,6 +60,31 @@ describe("E2E spec generator", () => {
     expect(spec).toContain("authedPage.dashboard.goto()");
   });
 
+  test("generateEntitySpec produces UNIQUE test titles even for negatives sharing (field,value)", () => {
+    // Two negatives for name="" with different `why` (auto-required + a mustNotHappen rule) is a
+    // real shape (build27's Company). Playwright HARD-REJECTS a file with duplicate test titles —
+    // the whole spec fails to collect, ZERO tests run, and a GREEN feature false-parks at
+    // acceptance. The generator must disambiguate the titles.
+    const dup: IEntityAcceptance = {
+      ...company,
+      negatives: [
+        { field: "name", value: "", why: "name is required" },
+        {
+          field: "name",
+          value: "",
+          why: "a company must not be saved without a name",
+        },
+      ],
+    };
+    const spec = generateEntitySpec(dup);
+    const titles = [...spec.matchAll(/test\(\s*"((?:[^"\\]|\\.)*)"/gu)].map(
+      (m) => m[1]
+    );
+
+    expect(titles.length).toBeGreaterThan(0);
+    expect(new Set(titles).size).toBe(titles.length);
+  });
+
   test("generateEntitySpec uses getByTestId selector", () => {
     const spec = generateEntitySpec(company);
 
@@ -227,9 +252,10 @@ describe("E2E spec generator", () => {
       '.fill("Value with \\"double quotes\\" and `backticks`")'
     );
 
-    // Verify escaped quotes in negative test title (the invalid VALUE carries the specials)
+    // Verify escaped quotes in negative test title (the invalid VALUE carries the specials).
+    // Titles carry a trailing [index] to stay unique across same-(field,value) negatives.
     expect(spec).toContain(
-      'test("negative: Product rejects name=Invalid\\"Value`With`Specials"'
+      'test("negative: Product rejects name=Invalid\\"Value`With`Specials [0]"'
     );
 
     // Verify that the raw unescaped version does NOT appear (which would break the spec)
@@ -1749,7 +1775,7 @@ describe("FIX 1, 2, 3: negative test hardening (400/422 only, type-correct paylo
     // B2: The dangerous backtick and ${} should appear ESCAPED in the assertion message
     // NOT as a raw unescaped sequence that could break the spec
     const testTitleMatch =
-      /test\("negative:[^"]*dangerous.*injection"[^)]*\)/.exec(spec);
+      /test\("negative:[^"]*dangerous.*injection[^"]*"[^)]*\)/.exec(spec);
 
     expect(testTitleMatch).toBeTruthy();
     // The raw dangerous sequence should NOT appear unescaped in the assertion

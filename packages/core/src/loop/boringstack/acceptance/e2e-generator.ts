@@ -482,9 +482,14 @@ function generateNegativeBlocks(
   parentSeedingCode: string
 ): string {
   return entity.negatives
-    .map((neg) => {
-      // B2: Test title uses JSON.stringify to escape backticks/interpolation in neg.value
-      const testTitle = `negative: ${entity.id} rejects ${neg.field}=${neg.value}`;
+    .map((neg, index) => {
+      // B2: Test title uses JSON.stringify to escape backticks/interpolation in neg.value.
+      // The trailing [index] guarantees a UNIQUE title per negative: two negatives can share the
+      // same (field, value) — e.g. a required-field rule and a "must not be empty" mustNotHappen
+      // both yield name="" — and Playwright HARD-REJECTS a file with duplicate test titles (the
+      // whole spec fails to collect, ZERO tests run, and a green feature false-parks). parseStep
+      // matches on the "negative: " PREFIX, so the suffix does not affect result classification.
+      const testTitle = `negative: ${entity.id} rejects ${neg.field}=${neg.value} [${String(index)}]`;
 
       // Build valid field assignments (required non-FK fields)
       const validFieldAssignments = entity.fields
