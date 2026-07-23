@@ -205,32 +205,57 @@ const PARSE_DETAIL_CAP = 200;
 const PARSE_TRUNCATION_MARKER = "…(truncated)";
 
 /**
- * Report the FIRST genuine syntax error in one source file, or null if it parses.
- * Uses the TypeScript compiler's own parser (`transpileModule`, syntax-only — it does NO
- * type-checking) so this agrees with typescript-eslint's parser: a file that is valid TS is
- * NEVER falsely fingered. Global option diagnostics (no `file`) are ignored — only located,
- * in-file parse errors count. Returns `line L:C — <message>` (truncation-marked, never silent).
+ * Report the FIRST genuine SYNTAX error in one source file, or null if it parses.
+ *
+ * Uses `Program.getSyntacticDiagnostics` — syntax-only BY CONTRACT (no type-checking, no
+ * semantic/`isolatedModules` diagnostics), so it agrees exactly with what typescript-eslint's
+ * parser reports as a "Parsing error". A file that is valid TypeScript — `const enum`,
+ * `import type`, a `<T,>` generic — is NEVER falsely fingered (`transpileModule` would flag
+ * some of these; the parser will not). The program is single-file and in-memory (`noLib` +
+ * `noResolve`), so no lib/type resolution runs. Returns `line L:C — <message>`, truncation-marked.
  */
 function firstSyntaxError(code: string, fileName: string): string | null {
-  const out = ts.transpileModule(code, {
-    reportDiagnostics: true,
+  const scriptKind = fileName.endsWith(".tsx")
+    ? ts.ScriptKind.TSX
+    : ts.ScriptKind.TS;
+  const sourceFile = ts.createSourceFile(
     fileName,
-    compilerOptions: {
+    code,
+    ts.ScriptTarget.Latest,
+    /*setParentNodes*/ true,
+    scriptKind
+  );
+
+  const host: ts.CompilerHost = {
+    getSourceFile: (name) => (name === fileName ? sourceFile : undefined),
+    getDefaultLibFileName: () => "lib.d.ts",
+    writeFile: () => undefined,
+    getCurrentDirectory: () => "",
+    getDirectories: () => [],
+    getCanonicalFileName: (name) => name,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => "\n",
+    fileExists: (name) => name === fileName,
+    readFile: () => undefined,
+  };
+
+  const program = ts.createProgram(
+    [fileName],
+    {
       jsx: ts.JsxEmit.Preserve,
       target: ts.ScriptTarget.Latest,
       module: ts.ModuleKind.ESNext,
-      isolatedModules: true,
+      noLib: true,
+      noResolve: true,
     },
-  });
-
-  const diag = (out.diagnostics ?? []).find(
-    (d) =>
-      d.category === ts.DiagnosticCategory.Error &&
-      d.file !== undefined &&
-      d.start !== undefined
+    host
   );
 
-  if (diag?.file === undefined || diag.start === undefined) {
+  // getSyntacticDiagnostics returns DiagnosticWithLocation (file + start guaranteed) and is
+  // syntax-only by contract — the first entry, if any, is the genuine parse error.
+  const diag = program.getSyntacticDiagnostics(sourceFile)[0];
+
+  if (diag === undefined) {
     return null;
   }
 
@@ -243,6 +268,11 @@ function firstSyntaxError(code: string, fileName: string): string | null {
   return detail.length > PARSE_DETAIL_CAP
     ? `${detail.slice(0, PARSE_DETAIL_CAP)}${PARSE_TRUNCATION_MARKER}`
     : detail;
+}
+
+/** True if `file` (repo-relative) falls under any of the scope globs the model may edit. */
+function fileInScope(file: string, scopeGlobs: readonly string[]): boolean {
+  return scopeGlobs.some((glob) => new Bun.Glob(glob).match(file));
 }
 
 /**
@@ -288,7 +318,44 @@ export async function locateParseError(
   return null;
 }
 
-export function boringstackCommandStage(cwd: string, exec: Exec): IStage {
+/**
+ * Append a located-parse-error pointer to the file-less `eslint-program-unparsable` error.
+ * A file the parser rejects necessarily breaks the SHARED type-aware program (typescript-eslint
+ * parses the same files with the same parser), so naming any real syntax error is a sound fix
+ * target; if none is found — a config/`include` failure, not a syntax cascade — the message is
+ * left unchanged (no fabricated pointer). The guidance is SCOPE-AWARE: an in-scope file is
+ * actionable ("fix it"); a file the model cannot edit is flagged as blocked, never a rewrite
+ * instruction that would bypass ownership.
+ */
+async function enrichUnparsable(
+  unparsable: IErrorItem,
+  cwd: string,
+  scopeGlobs: readonly string[]
+): Promise<void> {
+  const located = await locateParseError(cwd);
+
+  if (located === null) {
+    return;
+  }
+
+  const head = ` → The parse failure is in \`${located.file}\` (${located.detail}).`;
+
+  // No scope info (e.g. a direct caller) OR the file is editable → actionable fix.
+  // A located file outside the model's scope is a shared/scaffold file it cannot edit —
+  // flag it as blocked rather than issuing a rewrite instruction that bypasses ownership.
+  unparsable.message +=
+    scopeGlobs.length === 0 || fileInScope(located.file, scopeGlobs)
+      ? `${head} Fix the syntax error there — rewrite that file in full if the cause is not obvious. ` +
+        `It is the one file blocking the whole type-aware gate.`
+      : `${head} That file is OUTSIDE your editable scope (a shared/scaffold file) — do NOT try to ` +
+        `edit it. Report this as blocked.`;
+}
+
+export function boringstackCommandStage(
+  cwd: string,
+  exec: Exec,
+  scopeGlobs: readonly string[] = []
+): IStage {
   return {
     async run(): Promise<IValidateResult> {
       await autofixApps(cwd, exec);
@@ -315,15 +382,7 @@ export function boringstackCommandStage(cwd: string, exec: Exec): IStage {
       );
 
       if (unparsable !== undefined) {
-        const located = await locateParseError(cwd);
-
-        if (located !== null) {
-          unparsable.message +=
-            ` → The parse failure is in \`${located.file}\` (${located.detail}). ` +
-            `Fix the syntax error there — rewrite that file in full if the cause is not obvious. ` +
-            `This is the one file blocking the whole type-aware gate; if it is outside your ` +
-            `current feature, it is still the file to fix.`;
-        }
+        await enrichUnparsable(unparsable, cwd, scopeGlobs);
       }
 
       return { passed: false, errors, output: result.output };
@@ -529,13 +588,19 @@ export function composeBoringstackGate(opts: {
   /** The OTHER features/entities in this build, so the judge scopes to this
    *  feature's own responsibilities and never demands a link to an unbuilt slice. */
   siblingEntities?: readonly string[];
+  /** The globs the model may edit this feature — so a located parse error outside them is
+   *  flagged as blocked rather than issued as a rewrite instruction that bypasses ownership. */
+  scopeGlobs?: readonly string[];
 }): IGate {
   const { cwd, exec, evaluator, baseline, feature, entity } = opts;
   const e2eAcceptanceDisabled =
     process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
   return composeGate([
-    differentialStage(boringstackCommandStage(cwd, exec), baseline),
+    differentialStage(
+      boringstackCommandStage(cwd, exec, opts.scopeGlobs ?? []),
+      baseline
+    ),
     reachabilityStage(cwd, feature.id),
     ...(entity !== undefined && !e2eAcceptanceDisabled
       ? [testIdStage(cwd, entity)]

@@ -389,7 +389,10 @@ export function boringstackDeps(opts: {
       // model then fills the domain INSIDE the loop, checked by the live gate.
       await generate(cwd, feature.id, exec);
       await genUi(cwd, feature.id, exec);
-      host.setScope(scopeFor(feature.id));
+
+      const scopeGlobs = scopeFor(feature.id);
+
+      host.setScope(scopeGlobs);
       // The editable file the expert repairs if a stall's errors are all out of
       // scope (locked consumers of this feature's types) — its service file.
       host.setExpertRescueTarget((await rescueFileFor(cwd, feature)) ?? "");
@@ -428,6 +431,7 @@ export function boringstackDeps(opts: {
           feature,
           entity,
           siblingEntities,
+          scopeGlobs,
         })
       );
 

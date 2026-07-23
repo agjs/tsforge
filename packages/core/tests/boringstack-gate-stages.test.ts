@@ -71,37 +71,55 @@ describe("boringstackCommandStage", () => {
     expect(error?.phase).toBe(2);
   });
 
-  test("unparsable cascade → enriches the error with the located broken file (integration path)", async () => {
-    // The panel's core finding: the enrichment branch (unparsable signature → locateParseError →
-    // append the real broken file to the message) must be exercised end-to-end against a REAL
-    // filesystem — not just locateParseError in isolation. Here the fake gate emits a genuine
-    // `parserOptions.project` cascade (which extractFailures collapses to eslint-program-unparsable)
-    // while a real temp tree holds one malformed file among healthy siblings.
+  const cascadeFor = (dir: string): string =>
+    [
+      join(dir, "apps/ui/src/features/company/Company.tsx"),
+      "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
+      "",
+      "✖ 1 problem (1 error, 0 warnings)",
+    ].join("\n");
+
+  const COMPANY_SCOPE = [
+    "apps/ui/src/features/company/**",
+    "apps/api/src/api/company/**",
+  ];
+
+  test("unparsable cascade → enriches with the located broken file, IGNORING valid-TS siblings (integration path)", async () => {
+    // The panel's core findings: (1) the enrichment branch must be exercised end-to-end against a
+    // REAL filesystem — not just locateParseError in isolation; (2) the parser replacement must be
+    // proven on the exact valid-TypeScript constructs that a wrong parser (Bun.Transpiler /
+    // transpileModule) mis-flags. Here healthy siblings use `const enum`, `import type`, and a
+    // `<T,>` generic — all valid TS that typescript-eslint parses — and MUST NOT be named.
     const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-"));
 
     try {
       await mkdir(join(dir, "apps/ui/src/features/company"), {
         recursive: true,
       });
-      // Healthy sibling — must NOT be named.
+      // Valid-TS constructs a non-parser tool would wrongly reject — must NOT be fingered.
       await writeFile(
-        join(dir, "apps/ui/src/features/company/Good.tsx"),
-        "export const G = () => <div className='x'>hi</div>;\n"
+        join(dir, "apps/ui/src/features/company/Enum.ts"),
+        "export const enum Status { Open, Closed }\n"
       );
-      // The ONE malformed file the cascade hides ('>' expected).
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Types.ts"),
+        "import type { ReactNode } from 'react';\nexport const render = (n: ReactNode): ReactNode => n;\n"
+      );
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Generic.ts"),
+        "export function identity<T,>(x: T): T {\n  return x;\n}\n"
+      );
+      // The ONE genuinely malformed file the cascade hides ('>' expected).
       await writeFile(
         join(dir, "apps/ui/src/features/company/Company.tsx"),
         "export const B = () => <div className='x' hi</div>;\n"
       );
 
-      const cascade = [
-        join(dir, "apps/ui/src/features/company/Company.tsx"),
-        "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
-        "",
-        "✖ 1 problem (1 error, 0 warnings)",
-      ].join("\n");
-
-      const stage = boringstackCommandStage(dir, execWith(1, cascade));
+      const stage = boringstackCommandStage(
+        dir,
+        execWith(1, cascadeFor(dir)),
+        COMPANY_SCOPE
+      );
       const result = await stage.run(dir);
 
       const unparsable = result.errors.find(
@@ -109,24 +127,63 @@ describe("boringstackCommandStage", () => {
       );
 
       expect(unparsable).toBeDefined();
-      // The enrichment fired: the message now NAMES the real broken file the cascade hid,
+      // The enrichment fired and NAMES the real broken file the cascade hid,
       expect(unparsable?.message).toContain("The parse failure is in");
       expect(unparsable?.message).toContain(
         "apps/ui/src/features/company/Company.tsx"
       );
-      // carries the located line/col detail,
+      // with the located line/col detail,
       expect(unparsable?.message).toContain("line 1:");
-      // and does NOT falsely finger the healthy sibling (same-parser: no false positives).
-      expect(unparsable?.message).not.toContain("Good.tsx");
+      // in-scope → an actionable fix instruction,
+      expect(unparsable?.message).toContain("Fix the syntax error there");
+      // and it did NOT falsely finger ANY valid-TS sibling (the whole point of the parser fix).
+      expect(unparsable?.message).not.toContain("Enum.ts");
+      expect(unparsable?.message).not.toContain("Types.ts");
+      expect(unparsable?.message).not.toContain("Generic.ts");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("located file OUTSIDE the feature scope → flagged as blocked, NOT a rewrite instruction (no scope bypass)", async () => {
+    // Scope-bypass finding: the guidance must never direct the model to edit a file it does not
+    // own. A broken shared/scaffold file gets a 'blocked' note, not 'fix it'.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-oos-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/db"), { recursive: true });
+      // The broken file lives in a SHARED location the company scope does not cover.
+      await writeFile(
+        join(dir, "apps/api/src/db/schema.ts"),
+        "export const table = ;\n"
+      );
+
+      const stage = boringstackCommandStage(
+        dir,
+        execWith(1, cascadeFor(dir)),
+        COMPANY_SCOPE
+      );
+      const result = await stage.run(dir);
+
+      const unparsable = result.errors.find(
+        (e) => e.rule === "eslint-program-unparsable"
+      );
+
+      expect(unparsable).toBeDefined();
+      expect(unparsable?.message).toContain("apps/api/src/db/schema.ts");
+      // Out of scope → blocked note, never a 'fix it / rewrite' directive.
+      expect(unparsable?.message).toContain("OUTSIDE your editable scope");
+      expect(unparsable?.message).toContain("Report this as blocked");
+      expect(unparsable?.message).not.toContain("Fix the syntax error there");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
   test("unparsable cascade with NO locatable broken file → message left unenriched (no false pointer)", async () => {
-    // Guard the honesty case: if locateParseError finds nothing (e.g. the broken file was already
-    // fixed on disk but the stale gate output still shows the cascade), the enrichment must NOT
-    // fabricate a file pointer.
+    // Honesty case: if locateParseError finds nothing (a config/`include` failure, not a syntax
+    // cascade, or the broken file was already fixed on disk), the enrichment must NOT fabricate a
+    // file pointer.
     const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-clean-"));
 
     try {
@@ -138,14 +195,11 @@ describe("boringstackCommandStage", () => {
         "export const G = () => <div className='x'>hi</div>;\n"
       );
 
-      const cascade = [
-        join(dir, "apps/ui/src/features/company/Company.tsx"),
-        "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
-        "",
-        "✖ 1 problem (1 error, 0 warnings)",
-      ].join("\n");
-
-      const stage = boringstackCommandStage(dir, execWith(1, cascade));
+      const stage = boringstackCommandStage(
+        dir,
+        execWith(1, cascadeFor(dir)),
+        COMPANY_SCOPE
+      );
       const result = await stage.run(dir);
 
       const unparsable = result.errors.find(
@@ -406,6 +460,33 @@ describe("locateParseError", () => {
       await writeFile(
         join(dir, "apps/ui/src/Ok.tsx"),
         "export const G = () => <span>ok</span>;\n"
+      );
+
+      expect(await locateParseError(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does NOT false-positive on valid TypeScript a non-parser tool mis-flags (const enum / import type / generic)", async () => {
+    // The exact regression the panel demanded: `ts.transpileModule` (and Bun.Transpiler) report
+    // some of these valid constructs as errors; the parser (getSyntacticDiagnostics) must not.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-parse-validts-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src"), { recursive: true });
+      await mkdir(join(dir, "apps/ui/src"), { recursive: true });
+      await writeFile(
+        join(dir, "apps/api/src/Enum.ts"),
+        "export const enum Level { Low, High }\n"
+      );
+      await writeFile(
+        join(dir, "apps/api/src/Reexport.ts"),
+        "export { type Foo } from './foo';\n"
+      );
+      await writeFile(
+        join(dir, "apps/ui/src/Generic.ts"),
+        "export function first<T,>(xs: readonly T[]): T | undefined {\n  return xs[0];\n}\n"
       );
 
       expect(await locateParseError(dir)).toBeNull();
