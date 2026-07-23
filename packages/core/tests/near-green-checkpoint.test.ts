@@ -82,10 +82,23 @@ test("build34/36 spike (1 dead-locale-key + N missing-test siblings) is ALL comp
   ];
 
   expect(allCompletionClass(spike)).toBe(true);
-  // Entering/staying in the completion phase across the spike (WS-B rollback stood down).
+  // ENTER the completion phase across the spike (WS-B rollback stood down so the added logic
+  // modules + their pending tests are not reverted).
   expect(nextCompletionPhase(false, spike)).toBe(true);
-  // But a genuine code regression mixed in (a broken test) re-arms WS-B — not all add-only.
-  expect(allCompletionClass([...spike, err("no-unsafe-argument")])).toBe(false);
+
+  // Mechanism note (mirrors the i18n/reachability STAY-through-mixed semantics that already exist):
+  // while ANY completion-class error still remains, the phase STAYS true even if a genuine fixable
+  // regression (a broken test) is mixed in — a per-cycle re-arm would flip the rollback + undo
+  // banner mid-add and re-trap the model. So the phase does NOT re-arm here…
+  const mixed = [...spike, err("no-unsafe-argument")];
+
+  expect(allCompletionClass(mixed)).toBe(false);
+  expect(nextCompletionPhase(true, mixed)).toBe(true);
+  // …and it correctly EXITS (re-arms WS-B) only once the completion work is DONE — no test-sibling
+  // (or other add-only) error remains, leaving just the fixable regression to protect against.
+  expect(nextCompletionPhase(true, [err("no-unsafe-argument")])).toBe(false);
+  // Standing WS-B down does NOT relax the GATE: the final validate still runs every rule, so a
+  // broken test can never reach green — the model must fix it (guided by the gate + the ladder).
 });
 
 // WS-B: the pure checkpoint/rollback decision, unit-locked with the Phase 0a thresholds
