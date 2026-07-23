@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   boringstackCommandStage,
+  composeBoringstackGate,
   reachabilityStage,
   judgeStage,
   signatureToError,
   locateParseError,
 } from "../src/loop/boringstack/gate-stages";
+import { scopeFor } from "../src/loop/boringstack/build";
 import type { Exec } from "../src/loop/boringstack/exec";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
 import type { IProvider } from "../src/inference";
@@ -175,6 +177,10 @@ describe("boringstackCommandStage", () => {
       expect(unparsable?.message).toContain("OUTSIDE your editable scope");
       expect(unparsable?.message).toContain("Report this as blocked");
       expect(unparsable?.message).not.toContain("Fix the syntax error there");
+      // The message is REPLACED, so the base "REWRITE IT IN FULL" directive must be GONE — else
+      // the model gets "rewrite this file" AND "do not edit it" (the contradiction the panel flagged).
+      expect(unparsable?.message).not.toContain("REWRITE IT IN FULL");
+      expect(unparsable?.message).not.toContain("rewrite that file in full");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -493,5 +499,127 @@ describe("locateParseError", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("locates a syntax error in an API TEST file (apps/api/tests is editable scope, so it must be scannable)", async () => {
+    // The editable scope includes `apps/api/tests/api/<feature>/**`; a parse error there breaks the
+    // type-aware program the same way, so it must be locatable — not silently missed.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-parse-apitests-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/tests/api/company"), { recursive: true });
+      await writeFile(
+        join(dir, "apps/api/tests/api/company/company.route.test.ts"),
+        "export const bad: = 1;\n"
+      );
+
+      const located = await locateParseError(dir);
+
+      expect(located?.file).toBe(
+        "apps/api/tests/api/company/company.route.test.ts"
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("composeBoringstackGate scope wiring", () => {
+  const passthroughJudge: IProvider = {
+    complete: async () => ({
+      content: '{"pass":true,"notes":"ok"}',
+      toolCalls: [],
+    }),
+  };
+  const cascade = (dir: string): string =>
+    [
+      join(dir, "apps/ui/src/features/company/Company.tsx"),
+      "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
+      "",
+      "✖ 1 problem (1 error, 0 warnings)",
+    ].join("\n");
+
+  const runComposed = async (
+    dir: string,
+    scopeGlobs: readonly string[]
+  ): Promise<string> => {
+    const gate = composeBoringstackGate({
+      cwd: dir,
+      exec: execWith(1, cascade(dir)),
+      evaluator: passthroughJudge,
+      baseline: new Set<string>(),
+      feature,
+      scopeGlobs,
+    });
+    const result = await gate.run(dir);
+    const unparsable = result.errors.find(
+      (e) => e.rule === "eslint-program-unparsable"
+    );
+
+    return unparsable?.message ?? "";
+  };
+
+  test("scopeGlobs flow through composeBoringstackGate → the located file is treated as editable when in scope", async () => {
+    // The panel's wiring finding: forwarding scopeGlobs from composeBoringstackGate into the command
+    // stage must be exercised — otherwise the stage-level tests stay green even if compose stops
+    // forwarding. A REAL scopeFor("company") glob set proves the production path.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-compose-in-"));
+
+    try {
+      await mkdir(join(dir, "apps/ui/src/features/company"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        "export const B = () => <div className='x' hi</div>;\n"
+      );
+
+      const message = await runComposed(dir, scopeFor("company"));
+
+      expect(message).toContain("apps/ui/src/features/company/Company.tsx");
+      expect(message).toContain("Fix the syntax error there");
+      expect(message).not.toContain("OUTSIDE your editable scope");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("scopeGlobs flow through composeBoringstackGate → an out-of-scope located file is flagged blocked", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-compose-out-"));
+
+    try {
+      // A broken file in ANOTHER feature's dir — not covered by scopeFor("company").
+      await mkdir(join(dir, "apps/ui/src/features/contact"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/ui/src/features/contact/Contact.tsx"),
+        "export const B = () => <div className='x' hi</div>;\n"
+      );
+
+      const message = await runComposed(dir, scopeFor("company"));
+
+      expect(message).toContain("apps/ui/src/features/contact/Contact.tsx");
+      expect(message).toContain("OUTSIDE your editable scope");
+      expect(message).not.toContain("Fix the syntax error there");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("scopeFor", () => {
+  test("covers the feature's UI/API source AND its API test dir (so a parse error in either is in-scope)", () => {
+    const globs = scopeFor("company");
+    const inScope = (file: string): boolean =>
+      globs.some((g) => new Bun.Glob(g).match(file));
+
+    expect(inScope("apps/ui/src/features/company/Company.tsx")).toBe(true);
+    expect(inScope("apps/api/src/api/company/company.service.ts")).toBe(true);
+    expect(inScope("apps/api/tests/api/company/company.route.test.ts")).toBe(
+      true
+    );
+    // Another feature's file is NOT in scope.
+    expect(inScope("apps/ui/src/features/contact/Contact.tsx")).toBe(false);
   });
 });

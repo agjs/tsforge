@@ -293,7 +293,10 @@ export async function locateParseError(
     const root = join(cwd, app);
 
     try {
-      const glob = new Bun.Glob("src/**/*.{ts,tsx}");
+      // `src` AND `tests` — the editable scope includes `apps/api/tests/api/<feature>/**`, and
+      // a syntax error in a test file breaks the type-aware program just the same, so it must be
+      // locatable too (else the feature silently falls back to the file-less guidance).
+      const glob = new Bun.Glob("{src,tests}/**/*.{ts,tsx}");
 
       for await (const rel of glob.scan({ cwd: root })) {
         let code: string;
@@ -319,13 +322,15 @@ export async function locateParseError(
 }
 
 /**
- * Append a located-parse-error pointer to the file-less `eslint-program-unparsable` error.
+ * REPLACE the file-less `eslint-program-unparsable` message once the real broken file is located.
  * A file the parser rejects necessarily breaks the SHARED type-aware program (typescript-eslint
  * parses the same files with the same parser), so naming any real syntax error is a sound fix
  * target; if none is found — a config/`include` failure, not a syntax cascade — the message is
- * left unchanged (no fabricated pointer). The guidance is SCOPE-AWARE: an in-scope file is
- * actionable ("fix it"); a file the model cannot edit is flagged as blocked, never a rewrite
- * instruction that would bypass ownership.
+ * left unchanged (no fabricated pointer). The message is REPLACED (not appended) so the base
+ * text's generic "REWRITE IT IN FULL" directive can't contradict the out-of-scope "do NOT edit"
+ * guidance. The guidance is SCOPE-AWARE and FAIL-CLOSED: only a file CONFIRMED in the model's
+ * editable scope gets a rewrite instruction; a file outside scope — or when scope is unknown —
+ * is flagged as blocked, never a rewrite that would bypass ownership.
  */
 async function enrichUnparsable(
   unparsable: IErrorItem,
@@ -338,17 +343,21 @@ async function enrichUnparsable(
     return;
   }
 
-  const head = ` → The parse failure is in \`${located.file}\` (${located.detail}).`;
+  const preamble =
+    "The TypeScript-aware lint could not build its program: ONE file has a real syntax/parse " +
+    "error, which makes ESLint report a `parserOptions.project` error on every file. This is " +
+    "ONE broken file, not many — do NOT chase the per-file parse errors.";
+  const head = `The parse failure is in \`${located.file}\` (${located.detail}).`;
+  const editable =
+    scopeGlobs.length > 0 && fileInScope(located.file, scopeGlobs);
 
-  // No scope info (e.g. a direct caller) OR the file is editable → actionable fix.
-  // A located file outside the model's scope is a shared/scaffold file it cannot edit —
-  // flag it as blocked rather than issuing a rewrite instruction that bypasses ownership.
-  unparsable.message +=
-    scopeGlobs.length === 0 || fileInScope(located.file, scopeGlobs)
-      ? `${head} Fix the syntax error there — rewrite that file in full if the cause is not obvious. ` +
-        `It is the one file blocking the whole type-aware gate.`
-      : `${head} That file is OUTSIDE your editable scope (a shared/scaffold file) — do NOT try to ` +
-        `edit it. Report this as blocked.`;
+  // FAIL-CLOSED: only a CONFIRMED-editable file gets a rewrite instruction. Anything else
+  // (out of scope, or scope unknown) is named as info + flagged blocked — never a rewrite.
+  unparsable.message = editable
+    ? `${preamble} ${head} Fix the syntax error there — rewrite that file in full if the cause ` +
+      `is not obvious. Once it parses, the whole cascade clears at once.`
+    : `${preamble} ${head} That file is OUTSIDE your editable scope (a shared/scaffold file) — ` +
+      `do NOT try to edit it. Report this as blocked.`;
 }
 
 export function boringstackCommandStage(
