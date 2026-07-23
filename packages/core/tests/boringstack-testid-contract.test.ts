@@ -9,6 +9,57 @@ import {
   planToAcceptanceSpec,
   testIdsFor,
 } from "../src/loop/acceptance/acceptance-spec";
+import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
+
+/** Build a minimal entity where the FIRST field is a parent FK (the distinguishing case the
+ *  Contact fixture can't exercise — its first field "name" is already non-FK). */
+const fkFirstEntity: IEntityAcceptance = {
+  id: "Membership",
+  key: "membership",
+  nav: "Memberships",
+  fields: [
+    {
+      name: "userId",
+      type: "string",
+      optional: false,
+      valid: "u1",
+      invalid: [],
+    },
+    {
+      name: "role",
+      type: "string",
+      optional: false,
+      valid: "admin",
+      invalid: [],
+    },
+  ],
+  shows: ["role"],
+  screens: ["list", "form"],
+  parents: [{ entity: "User", key: "user", fkField: "userId" }],
+  negatives: [],
+  acceptanceCheck: "create a membership",
+};
+
+/** An entity whose ONLY field is a parent FK — the all-FK edge (join/link entity). */
+const allFkEntity: IEntityAcceptance = {
+  id: "Link",
+  key: "link",
+  nav: "Links",
+  fields: [
+    {
+      name: "userId",
+      type: "string",
+      optional: false,
+      valid: "u1",
+      invalid: [],
+    },
+  ],
+  shows: [],
+  screens: ["list", "form"],
+  parents: [{ entity: "User", key: "user", fkField: "userId" }],
+  negatives: [],
+  acceptanceCheck: "create a link",
+};
 
 // Create a test entity with fields, shows, and a parent relationship
 const testPlan: IProductPlan = {
@@ -180,6 +231,27 @@ describe("buildTestIdGuide", () => {
     expect(guide).not.toContain(
       `\`data-testid="${ids.field("companyId")}"\` for the "companyId" field`
     );
+  });
+
+  test("Pattern example names a NON-FK field even when the FIRST field IS a parent FK", () => {
+    // Distinguishing case the Contact fixture can't exercise (its fields[0]="name" is already non-FK).
+    // Here fields[0]="userId" IS the FK, so a regression to entity.fields[0] would show the FK as an
+    // <input> — contradicting the <select> mandate. The example must pick "role" (the non-FK field).
+    const guide = buildTestIdGuide(fkFirstEntity);
+    const ids = testIdsFor(fkFirstEntity.key);
+
+    expect(guide).toContain(`<input data-testid="${ids.field("role")}" />`);
+    // The FK is NEVER shown as an <input> in the example.
+    expect(guide).not.toContain(`<input data-testid="${ids.field("userId")}"`);
+  });
+
+  test("all-FK entity: Pattern example shows a <select>, NEVER an <input> of the FK", () => {
+    // Edge: an entity whose only field is a parent FK must not fall back to rendering it as an <input>.
+    const guide = buildTestIdGuide(allFkEntity);
+    const ids = testIdsFor(allFkEntity.key);
+
+    expect(guide).toContain(`<select data-testid="${ids.field("userId")}">`);
+    expect(guide).not.toContain(`<input data-testid="${ids.field("userId")}"`);
   });
 
   test("guide agreement: contains exactly the required testids", () => {

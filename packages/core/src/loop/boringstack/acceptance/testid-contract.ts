@@ -65,12 +65,26 @@ export function buildTestIdGuide(entity: IEntityAcceptance): string {
   const ids = testIdsFor(entity.key);
   const required = requiredTestIds(entity);
   // The <input> Pattern example must use a NON-relationship field — a parent FK renders as a
-  // <select> (see Relationship selectors), so showing one as an <input> would contradict the fix.
-  const exampleField =
-    entity.fields.find((f) => !entity.parents.some((p) => p.fkField === f.name))
-      ?.name ??
-    entity.fields[0]?.name ??
-    "title";
+  // <select> (see Relationship selectors), so it must NEVER show an FK as an <input>. When the
+  // entity has no plain field (all fields are FKs), show the <select> form instead of an <input>.
+  const plainFieldName = entity.fields.find(
+    (f) => !entity.parents.some((p) => p.fkField === f.name)
+  )?.name;
+  const firstParentFk = entity.parents[0]?.fkField;
+  const rowCellField =
+    entity.shows[0] ?? plainFieldName ?? entity.fields[0]?.name ?? "name";
+  const rowExampleLine = `- In the table row: \`<td data-testid="${ids.rowCell(rowCellField)}">{record.${rowCellField}}</td>\``;
+  const patternExample =
+    plainFieldName !== undefined
+      ? `**Pattern example** (for a NON-relationship field named "${plainFieldName}" in a "${entity.key}" feature):
+- In the create/edit form: \`<input data-testid="${ids.field(plainFieldName)}" />\` (a parent FK field is a \`<select>\` instead — see Relationship selectors)
+${rowExampleLine}`
+      : firstParentFk !== undefined
+        ? `**Pattern example** (every field of "${entity.key}" is a parent foreign key — render each as a native \`<select>\`, NEVER an \`<input>\`):
+- In the create/edit form: \`<select data-testid="${ids.field(firstParentFk)}"> … </select>\`
+${rowExampleLine}`
+        : `**Pattern example**: give each form field a \`data-testid\` on its \`<input>\` control.
+${rowExampleLine}`;
 
   return `## Test IDs for "${entity.key}" — Required Test Hooks
 
@@ -108,9 +122,7 @@ ${
     : ""
 }
 
-**Pattern example** (for a NON-relationship field named "${exampleField}" in a "${entity.key}" feature):
-- In the create/edit form: \`<input data-testid="${ids.field(exampleField)}" />\` (a parent FK field is a \`<select>\` instead — see Relationship selectors)
-- In the table row: \`<td data-testid="${ids.rowCell(entity.shows[0] ?? entity.fields[0]?.name ?? "name")}">{record.${entity.shows[0] ?? entity.fields[0]?.name ?? "name"}}</td>\`
+${patternExample}
 
 **Where to add them:**
 - **Navigation (IMPORTANT — outside the feature directory):** add \`data-testid="${ids.nav}"\` to the "${entity.id}" link in the SHARED sidebar (\`apps/ui/src/components/core/AppSidebar/\`), NOT in the feature folder. A feature that isn't linked in the sidebar is unreachable and will fail end-to-end acceptance — every feature MUST be added to the sidebar navigation.
