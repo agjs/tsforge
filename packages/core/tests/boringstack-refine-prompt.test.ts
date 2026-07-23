@@ -518,6 +518,10 @@ describe("refinePrompt", () => {
     // The exceptions the eslint rule + scaffold require MUST be documented (not an over-broad ban).
     expect(prompt).toContain("useTranslation()");
     expect(prompt).toContain("useJoinRequestsPage()");
+    // The default-allowed built-ins are also legal inline — pin them so a regression can't drop them.
+    expect(prompt).toContain("useId");
+    expect(prompt).toContain("useTransition");
+    expect(prompt).toContain("useDeferredValue");
     // makeIdHandler is the no-hook row-handler fix.
     expect(prompt).toContain("NO hook at all");
     // The old trap phrasing must be gone.
