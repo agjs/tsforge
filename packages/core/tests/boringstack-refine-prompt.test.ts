@@ -496,9 +496,10 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("ADD ONLY");
   });
 
-  it("forbids useCallback (any hook) in a component body — hooks live in <Component>.hooks.ts", () => {
+  it("routes PRIMITIVE hooks into a custom hook (body CALLS it) — not a blanket 'no hooks in body' ban", () => {
     // build36 Company ground near-green on "Hook 'useCallback' must be in a custom hook, not in
-    // component body". The old copy even offered a body-useCallback as an 'alternative'; it must not.
+    // component body". The CORRECT rule: React primitive hooks live INSIDE a custom hook; the body
+    // CALLS that custom hook (a blanket "no use* in the body" is impossible — the body must call it).
     const feature: IFeature = {
       id: "Company",
       desc: "A business the sales team works with",
@@ -508,16 +509,20 @@ describe("refinePrompt", () => {
 
     const prompt = refinePrompt(feature);
 
-    expect(prompt).toContain("must be in a custom hook");
-    expect(prompt).toContain("NEVER be called in a component body");
-    // The old trap phrasing (useCallback as an acceptable alternative) must be gone.
-    expect(prompt).not.toContain("useCallback is an alternative");
+    expect(prompt).toContain("PRIMITIVE hooks");
+    expect(prompt).toContain("custom hook");
+    // Compliance is POSSIBLE: the body calls the one custom hook. Not an impossible absolute ban.
+    expect(prompt).toContain("may only CALL that one custom hook");
+    expect(prompt).toContain("NO hook at all");
+    // The old trap phrasing (a body useCallback as an acceptable alternative) must be gone.
     expect(prompt).not.toContain(
       "child component with a useCallback is an alternative"
     );
+    // And it must NOT freeze the over-broad, impossible-to-satisfy ban.
+    expect(prompt).not.toContain("may NEVER be called in a component body");
   });
 
-  it("warns that every NEW component needs the full sibling set → don't extract sub-components", () => {
+  it("warns that every NEW component needs the FULL sibling set → don't extract sub-components", () => {
     // build36 hit component-folder-structure: a new 'CompanyFormField' demanded .hooks/.types/
     // .stories/.test/index siblings. The guide must warn and steer to inline instead.
     const feature: IFeature = {
@@ -531,8 +536,11 @@ describe("refinePrompt", () => {
 
     expect(prompt).toContain("component-folder-structure");
     expect(prompt).toContain("Do NOT create new sub-components");
-    // Names the required sibling set members.
+    // Pin the FULL required sibling set (a partial regression of this list must fail).
+    expect(prompt).toContain(".hooks.ts");
+    expect(prompt).toContain(".types.ts");
     expect(prompt).toContain(".stories.tsx");
+    expect(prompt).toContain(".test.tsx");
     expect(prompt).toContain("index.ts");
   });
 
