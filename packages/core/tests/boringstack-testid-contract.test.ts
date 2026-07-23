@@ -252,6 +252,31 @@ describe("buildTestIdGuide", () => {
 
     expect(guide).toContain(`<select data-testid="${ids.field("userId")}">`);
     expect(guide).not.toContain(`<input data-testid="${ids.field("userId")}"`);
+    // shows=[] → NO row-cell example (rowCell testids exist only for shows; never invent one).
+    expect(guide).not.toContain("In the table row:");
+    expect(guide).not.toContain(ids.rowCell("userId"));
+  });
+
+  test("empty-fields entity: invents NO field name and emits NO row-cell example", () => {
+    // Edge (round-3 finding): with fields=[] and shows=[], the guide must not invent "name" nor
+    // reference record.name / a rowCell testid that isn't in the contract.
+    const emptyEntity: IEntityAcceptance = {
+      id: "Blank",
+      key: "blank",
+      nav: "Blanks",
+      fields: [],
+      shows: [],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a blank",
+    };
+    const guide = buildTestIdGuide(emptyEntity);
+
+    expect(guide).not.toContain("In the table row:");
+    expect(guide).not.toContain("record.name");
+    // Falls to the generic form-field note (no invented field, no <select>/<input> of a fake field).
+    expect(guide).toContain("give each form field a `data-testid`");
   });
 
   test("guide agreement: contains exactly the required testids", () => {

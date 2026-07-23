@@ -71,20 +71,22 @@ export function buildTestIdGuide(entity: IEntityAcceptance): string {
     (f) => !entity.parents.some((p) => p.fkField === f.name)
   )?.name;
   const firstParentFk = entity.parents[0]?.fkField;
-  const rowCellField =
-    entity.shows[0] ?? plainFieldName ?? entity.fields[0]?.name ?? "name";
-  const rowExampleLine = `- In the table row: \`<td data-testid="${ids.rowCell(rowCellField)}">{record.${rowCellField}}</td>\``;
-  const patternExample =
+  // Row-cell example ONLY when a real `shows` column exists — rowCell testids are generated for
+  // entity.shows only, so never invent a field name or reference a non-contract testid here.
+  const firstShow = entity.shows[0];
+  const rowExampleLine =
+    firstShow === undefined
+      ? ""
+      : `\n- In the table row: \`<td data-testid="${ids.rowCell(firstShow)}">{record.${firstShow}}</td>\``;
+  const formExample =
     plainFieldName !== undefined
       ? `**Pattern example** (for a NON-relationship field named "${plainFieldName}" in a "${entity.key}" feature):
-- In the create/edit form: \`<input data-testid="${ids.field(plainFieldName)}" />\` (a parent FK field is a \`<select>\` instead — see Relationship selectors)
-${rowExampleLine}`
+- In the create/edit form: \`<input data-testid="${ids.field(plainFieldName)}" />\` (a parent FK field is a \`<select>\` instead — see Relationship selectors)`
       : firstParentFk !== undefined
         ? `**Pattern example** (every field of "${entity.key}" is a parent foreign key — render each as a native \`<select>\`, NEVER an \`<input>\`):
-- In the create/edit form: \`<select data-testid="${ids.field(firstParentFk)}"> … </select>\`
-${rowExampleLine}`
-        : `**Pattern example**: give each form field a \`data-testid\` on its \`<input>\` control.
-${rowExampleLine}`;
+- In the create/edit form: \`<select data-testid="${ids.field(firstParentFk)}"> … </select>\``
+        : `**Pattern example**: give each form field a \`data-testid\` on its \`<input>\` control.`;
+  const patternExample = `${formExample}${rowExampleLine}`;
 
   return `## Test IDs for "${entity.key}" — Required Test Hooks
 
