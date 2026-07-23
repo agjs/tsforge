@@ -179,7 +179,7 @@ describe("boringstackCommandStage", () => {
       expect(unparsable?.message).not.toContain("A real syntax error is in");
       expect(unparsable?.message).not.toContain("Contact.tsx");
       // The generic base guidance is left untouched (names no specific file → no bypass).
-      expect(unparsable?.message).toContain("ONE broken file");
+      expect(unparsable?.message).toContain("could not build its program");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -256,7 +256,7 @@ describe("boringstackCommandStage", () => {
 
       expect(unparsable).toBeDefined();
       expect(unparsable?.message).not.toContain("A real syntax error is in");
-      expect(unparsable?.message).toContain("ONE broken file");
+      expect(unparsable?.message).toContain("could not build its program");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -285,7 +285,7 @@ describe("boringstackCommandStage", () => {
       );
 
       expect(unparsable?.message).not.toContain("A real syntax error is in");
-      expect(unparsable?.message).toContain("ONE broken file");
+      expect(unparsable?.message).toContain("could not build its program");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -324,6 +324,10 @@ describe("boringstackCommandStage", () => {
       // so it never claims (as the earlier rounds did) that this single file clears the cascade.
       expect(unparsable?.message).toContain("A real syntax error is in");
       expect(unparsable?.message).toContain("there may be more than one");
+      // The COMBINED message (base + append) carries NO false single-file certainty — the base was
+      // rewritten so this contradiction can't hide there (the round-7 finding).
+      expect(unparsable?.message).not.toContain("ONE broken file");
+      expect(unparsable?.message).not.toContain("clears at once");
       // Names one of the two broken company files (whichever the scan hits first).
       const names =
         unparsable?.message.includes("Company.tsx") === true ||
@@ -411,16 +415,23 @@ describe("signatureToError", () => {
     expect(err.message).toContain("Do NOT edit");
   });
 
-  test("the eslint-program-unparsable signature maps to a file-less rewrite-the-broken-file error", () => {
+  test("the eslint-program-unparsable signature maps to a file-less, honest (no false single-file certainty) error", () => {
     const err = signatureToError("eslint-program-unparsable");
 
-    // File-less (model-visible "own" error), phase 2, and steers toward a FULL
-    // rewrite of the one broken file — not chasing the per-file cascade.
+    // File-less (model-visible "own" error), phase 2. The base message steers toward finding the
+    // genuine syntax error(s) in OWNED files — WITHOUT the old false certainty ("ONE broken file",
+    // "the whole cascade clears at once") that contradicted the multi-file enrichment, and WITHOUT
+    // a blanket "REWRITE IT IN FULL" that could direct a wholesale rewrite of a shared file.
     expect(err.rule).toBe("eslint-program-unparsable");
     expect(err.file).toBeUndefined();
     expect(err.phase).toBe(2);
-    expect(err.message).toContain("ONE broken file");
-    expect(err.message).toContain("REWRITE IT IN FULL");
+    expect(err.message).toContain("could not build its program");
+    expect(err.message).toContain("files YOU OWN");
+    expect(err.message).toContain("Do NOT wholesale-rewrite shared files");
+    // No false single-file certainty, no blanket full-rewrite directive.
+    expect(err.message).not.toContain("ONE broken file");
+    expect(err.message).not.toContain("REWRITE IT IN FULL");
+    expect(err.message).not.toContain("clears at once");
   });
 
   test("a discrete PARSE error is steered to a full rewrite (not a surgical patch)", () => {
@@ -797,7 +808,11 @@ describe("composeBoringstackGate scope wiring", () => {
 
       expect(message).not.toContain("A real syntax error is in");
       expect(message).not.toContain("app.schema.ts");
-      expect(message).toContain("ONE broken file");
+      expect(message).toContain("could not build its program");
+      // The base must NOT direct a blanket full rewrite (which could clobber the shared file); it
+      // explicitly warns against wholesale-rewriting shared files.
+      expect(message).not.toContain("REWRITE IT IN FULL");
+      expect(message).toContain("Do NOT wholesale-rewrite shared files");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -823,7 +838,7 @@ describe("composeBoringstackGate scope wiring", () => {
       const message = await runComposed(dir, output);
 
       expect(message).not.toContain("A real syntax error is in");
-      expect(message).toContain("ONE broken file");
+      expect(message).toContain("could not build its program");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

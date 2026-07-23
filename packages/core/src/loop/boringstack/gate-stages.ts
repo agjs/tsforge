@@ -97,13 +97,13 @@ export function signatureToError(sig: string): IErrorItem {
       rule: "eslint-program-unparsable",
       phase: 2,
       message:
-        "The TypeScript-aware lint could not build its program: ONE file has a real " +
-        "syntax/parse error (`Parsing error: … expected`), which makes ESLint report a " +
-        "`parserOptions.project` parse error on EVERY .tsx file. This is ONE broken " +
-        "file, not many separate errors — do NOT chase the per-file parse errors. Find " +
-        "the file with the actual `Parsing error: … expected` and REWRITE IT IN FULL " +
-        "(a surgical patch on an already-broken file usually re-breaks its braces/" +
-        "generics). Once that file parses, the whole cascade clears at once.",
+        "The TypeScript-aware lint could not build its program: one or more source files have a " +
+        "real syntax/parse error (`Parsing error: … expected`), which makes ESLint report a " +
+        "`parserOptions.project` parse error on many files at once — do NOT chase the per-file " +
+        "cascade. Find the genuine syntax error(s) in the files YOU OWN (your feature's own dirs) " +
+        "and fix each cleanly; a `.ts` file that contains JSX must be renamed to `.tsx` (a `.ts` " +
+        "parses `<X>` as a generic and demands `>`). Do NOT wholesale-rewrite shared files. Every " +
+        "broken file must parse before the cascade clears.",
     };
   }
 
