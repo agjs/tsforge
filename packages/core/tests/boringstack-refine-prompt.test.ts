@@ -495,4 +495,60 @@ describe("refinePrompt", () => {
     // Must carry the add-only boundary for those shared files.
     expect(prompt).toContain("ADD ONLY");
   });
+
+  it("forbids useCallback (any hook) in a component body — hooks live in <Component>.hooks.ts", () => {
+    // build36 Company ground near-green on "Hook 'useCallback' must be in a custom hook, not in
+    // component body". The old copy even offered a body-useCallback as an 'alternative'; it must not.
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business the sales team works with",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("must be in a custom hook");
+    expect(prompt).toContain("NEVER be called in a component body");
+    // The old trap phrasing (useCallback as an acceptable alternative) must be gone.
+    expect(prompt).not.toContain("useCallback is an alternative");
+    expect(prompt).not.toContain(
+      "child component with a useCallback is an alternative"
+    );
+  });
+
+  it("warns that every NEW component needs the full sibling set → don't extract sub-components", () => {
+    // build36 hit component-folder-structure: a new 'CompanyFormField' demanded .hooks/.types/
+    // .stories/.test/index siblings. The guide must warn and steer to inline instead.
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("component-folder-structure");
+    expect(prompt).toContain("Do NOT create new sub-components");
+    // Names the required sibling set members.
+    expect(prompt).toContain(".stories.tsx");
+    expect(prompt).toContain("index.ts");
+  });
+
+  it("teaches the test-file extension rule: a test that renders JSX must be .test.tsx", () => {
+    // build33/35 parked on `.hooks.test.ts` files that render JSX → `'>' expected`.
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain(".test.tsx");
+    expect(prompt).toContain("hooks.test.tsx");
+    expect(prompt).toContain("renderHook");
+  });
 });
