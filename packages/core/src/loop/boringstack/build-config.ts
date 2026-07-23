@@ -1,4 +1,25 @@
 import type { ExecutionMode } from "../prompt";
+import type { IPolicyRules } from "../../policy";
+
+/**
+ * Commands the model must NEVER run during a BoringStack build. The browser end-to-end
+ * acceptance is HARNESS-owned (run automatically after the fast gate, with the right port +
+ * server reuse). If the model runs it itself — `playwright`, `bun run dev`, `vite`, `dev.sh` —
+ * it starts a second host dev server that the scaffold's `preflight-host-dev.sh` guard
+ * HARD-EXITS 1 (the dockerized dev server already holds the port). That is an infra guard, not
+ * a code error: the model can't fix it, loops on it, and PARKS a feature whose code is already
+ * green (observed across build22–24, all 4 slices). Guidance alone did not stop it, so this is a
+ * deterministic policy DENY on the model's shell tool. It does NOT affect the harness's own
+ * acceptance run, which uses a separate injected exec, not the policy-gated `run` tool.
+ */
+const NO_BROWSER_E2E_DENY: IPolicyRules = {
+  deny: [
+    {
+      kind: "shell",
+      commandPattern: "playwright|\\bvite\\b|\\bbun\\s+run\\s+dev\\b|dev\\.sh",
+    },
+  ],
+};
 
 /**
  * The BoringStack build's fixed Session flags — spread into `Session.create` by the
@@ -17,6 +38,7 @@ export const BORINGSTACK_BUILD_SESSION: {
   readonly guidance: string;
   readonly pullConventions: true;
   readonly offerCheck: true;
+  readonly policyRules: IPolicyRules;
 } = {
   executionMode: "drive-to-green",
   guidance:
@@ -27,4 +49,5 @@ export const BORINGSTACK_BUILD_SESSION: {
     "is locked.",
   pullConventions: true,
   offerCheck: true,
+  policyRules: NO_BROWSER_E2E_DENY,
 };

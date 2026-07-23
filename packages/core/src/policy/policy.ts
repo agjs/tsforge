@@ -9,11 +9,41 @@ import type {
   IPolicyContext,
   IPolicyEvaluation,
   IPolicyRule,
+  IPolicyRules,
   IProposedAction,
   PolicyDecision,
   PolicyMode,
   RiskLevel,
 } from "./policy.types";
+
+/**
+ * Merge two optional rule sets by APPENDING each list (deny/allow/ask). Returns `undefined`
+ * only when BOTH are absent, preserving the "no rules" fast path. Deny-first evaluation means
+ * an appended deny still wins over a base allow — so a backend can inject a hard prohibition
+ * on top of the user's config without editing it. Empty result lists are omitted.
+ */
+export function mergePolicyRules(
+  base: IPolicyRules | undefined,
+  extra: IPolicyRules | undefined
+): IPolicyRules | undefined {
+  if (base === undefined) {
+    return extra;
+  }
+
+  if (extra === undefined) {
+    return base;
+  }
+
+  const deny = [...(base.deny ?? []), ...(extra.deny ?? [])];
+  const allow = [...(base.allow ?? []), ...(extra.allow ?? [])];
+  const ask = [...(base.ask ?? []), ...(extra.ask ?? [])];
+
+  return {
+    ...(deny.length > 0 ? { deny } : {}),
+    ...(allow.length > 0 ? { allow } : {}),
+    ...(ask.length > 0 ? { ask } : {}),
+  };
+}
 
 /** Every valid policy mode — the single source for config/CLI validation. */
 export const POLICY_MODES: readonly PolicyMode[] = [

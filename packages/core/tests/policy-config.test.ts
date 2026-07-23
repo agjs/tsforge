@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadTsforgeConfig } from "../src/config";
 import { Session } from "../src/loop";
+import { mergePolicyRules } from "../src/policy";
+import type { IPolicyRules } from "../src/policy";
 import type { IProvider } from "../src/inference";
 
 async function withConfig<T>(
@@ -150,5 +152,36 @@ describe("policy config → session enforcement", () => {
 
       expect(existsSync(join(dir, "x.ts"))).toBe(true);
     });
+  });
+});
+
+describe("mergePolicyRules", () => {
+  test("returns the other set when one is undefined (no-rules fast path preserved)", () => {
+    const rules: IPolicyRules = { deny: [{ toolName: "read" }] };
+
+    expect(mergePolicyRules(undefined, undefined)).toBeUndefined();
+    expect(mergePolicyRules(rules, undefined)).toBe(rules);
+    expect(mergePolicyRules(undefined, rules)).toBe(rules);
+  });
+
+  test("APPENDS each list so an injected deny is added on top of config rules", () => {
+    const base: IPolicyRules = {
+      deny: [{ toolName: "read" }],
+      allow: [{ toolName: "edit" }],
+    };
+    const extra: IPolicyRules = {
+      deny: [{ kind: "shell", commandPattern: "playwright" }],
+    };
+    const merged = mergePolicyRules(base, extra);
+
+    expect(merged?.deny).toHaveLength(2);
+    expect(merged?.deny?.[0]).toEqual({ toolName: "read" });
+    expect(merged?.deny?.[1]).toEqual({
+      kind: "shell",
+      commandPattern: "playwright",
+    });
+    // config's allow is preserved; ask stays absent (empty lists omitted).
+    expect(merged?.allow).toHaveLength(1);
+    expect(merged?.ask).toBeUndefined();
   });
 });
