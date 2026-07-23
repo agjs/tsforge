@@ -275,89 +275,129 @@ function fileInScope(file: string, scopeGlobs: readonly string[]): boolean {
   return scopeGlobs.some((glob) => new Bun.Glob(glob).match(file));
 }
 
+/** First syntax error in one file, or null — swallowing ANY throw (unreadable file, parser/program
+ *  error) so a single bad file skips ONLY itself and the scan keeps going to later files. */
+async function safeFirstSyntaxError(
+  absPath: string,
+  fileName: string
+): Promise<string | null> {
+  try {
+    return firstSyntaxError(await Bun.file(absPath).text(), fileName);
+  } catch {
+    return null;
+  }
+}
+
+/** Which app section(s) of the composed-gate output actually show the `parserOptions.project`
+ *  cascade — so the locator scans the app that FAILED, not blindly apps/api then apps/ui. The
+ *  output echoes `::tsforge-app <app>::` before each app's stages (see gate.ts). Empty when no
+ *  section matches → the caller falls back to scanning both. */
+function appsWithParseCascade(output: string): string[] {
+  const parts = output.split(/::tsforge-app (\S+)::/u);
+  const apps: string[] = [];
+
+  // split with a capture group yields [pre, app1, body1, app2, body2, …].
+  for (let i = 1; i + 1 < parts.length; i += 2) {
+    const app = parts[i] ?? "";
+    const body = parts[i + 1] ?? "";
+
+    if (
+      (app === "apps/api" || app === "apps/ui") &&
+      /parserOptions\.project|ESLint was configured to run on/u.test(body)
+    ) {
+      apps.push(app);
+    }
+  }
+
+  return apps;
+}
+
 /**
  * Pinpoint the ONE file with a real syntax error behind an `eslint-program-unparsable` cascade.
  * The type-aware ESLint program fails to build off a single broken file yet fans a
- * `parserOptions.project` parse error across EVERY .tsx, so its output can't say which file is
+ * `parserOptions.project` parse error across EVERY file, so its output can't say which file is
  * actually broken — and the model thrashes near-green hunting for it. Re-parse each source file
  * in ISOLATION with the TypeScript parser (`firstSyntaxError`) and return the first genuinely
  * malformed one (repo-relative) + its located message. Same parser as the lint, so it cannot
- * mis-name a healthy file. Because there are no false positives, the apps/api-before-ui scan
- * order is harmless — if both apps hold a real syntax error, either is a correct thing to fix.
- * Best-effort and fast (only runs on the rare cascade). Never throws.
+ * mis-name a healthy file. `appsToScan` is the app(s) whose gate section actually showed the
+ * cascade — so a UI cascade is never mis-attributed to an unrelated API syntax error. Scans
+ * `{src,tests}` (the editable scope includes `apps/api/tests/…`). Best-effort; never throws.
  */
 export async function locateParseError(
-  cwd: string
+  cwd: string,
+  appsToScan: readonly string[]
 ): Promise<{ file: string; detail: string } | null> {
-  for (const app of ["apps/api", "apps/ui"]) {
+  for (const app of appsToScan) {
     const root = join(cwd, app);
 
     try {
-      // `src` AND `tests` — the editable scope includes `apps/api/tests/api/<feature>/**`, and
-      // a syntax error in a test file breaks the type-aware program just the same, so it must be
-      // locatable too (else the feature silently falls back to the file-less guidance).
       const glob = new Bun.Glob("{src,tests}/**/*.{ts,tsx}");
 
       for await (const rel of glob.scan({ cwd: root })) {
-        let code: string;
-
-        try {
-          code = await Bun.file(join(root, rel)).text();
-        } catch {
-          continue;
-        }
-
-        const detail = firstSyntaxError(code, rel);
+        const detail = await safeFirstSyntaxError(join(root, rel), rel);
 
         if (detail !== null) {
           return { file: `${app}/${rel}`, detail };
         }
       }
     } catch {
-      // glob/scan failure is non-fatal — the base message still guides the model.
+      // glob/scan setup failure is non-fatal — enrichUnparsable still fails safe below.
     }
   }
 
   return null;
 }
 
+const UNPARSABLE_PREAMBLE =
+  "The TypeScript-aware lint could not build its program: ONE file has a real syntax/parse " +
+  "error, which makes ESLint report a `parserOptions.project` error on every file. This is " +
+  "ONE broken file, not many — do NOT chase the per-file parse errors.";
+
 /**
- * REPLACE the file-less `eslint-program-unparsable` message once the real broken file is located.
- * A file the parser rejects necessarily breaks the SHARED type-aware program (typescript-eslint
- * parses the same files with the same parser), so naming any real syntax error is a sound fix
- * target; if none is found — a config/`include` failure, not a syntax cascade — the message is
- * left unchanged (no fabricated pointer). The message is REPLACED (not appended) so the base
- * text's generic "REWRITE IT IN FULL" directive can't contradict the out-of-scope "do NOT edit"
- * guidance. The guidance is SCOPE-AWARE and FAIL-CLOSED: only a file CONFIRMED in the model's
- * editable scope gets a rewrite instruction; a file outside scope — or when scope is unknown —
- * is flagged as blocked, never a rewrite that would bypass ownership.
+ * REPLACE the file-less `eslint-program-unparsable` message with precise, non-contradictory
+ * guidance. The message is REPLACED (never appended) so the base text's generic "REWRITE IT IN
+ * FULL" can't co-exist with an out-of-scope "do NOT edit". FAIL-CLOSED in every branch — a rewrite
+ * instruction is issued ONLY for a file CONFIRMED in the model's editable scope:
+ *   • located + in scope → fix that file (and set `.file` so stuck-file/expert consumers agree);
+ *   • located + out of scope → named as info + flagged blocked, never a rewrite;
+ *   • NOT located (incl. a swallowed scan failure) → no in-scope rewrite target is asserted; the
+ *     model is told to check the files it just edited, else report blocked.
+ * A file the parser rejects necessarily breaks the SHARED type-aware program (same parser as the
+ * lint), so naming any real syntax error in the failing app is a sound fix target.
  */
 async function enrichUnparsable(
   unparsable: IErrorItem,
   cwd: string,
-  scopeGlobs: readonly string[]
+  scopeGlobs: readonly string[],
+  appsToScan: readonly string[]
 ): Promise<void> {
-  const located = await locateParseError(cwd);
+  const located = await locateParseError(cwd, appsToScan);
 
   if (located === null) {
+    unparsable.message =
+      `${UNPARSABLE_PREAMBLE} It could not be pinpointed automatically — inspect the files you ` +
+      `edited this cycle for an unterminated brace/generic/JSX and rewrite the offending file ` +
+      `cleanly. If you cannot find it among files you own, report this as blocked.`;
+
     return;
   }
 
-  const preamble =
-    "The TypeScript-aware lint could not build its program: ONE file has a real syntax/parse " +
-    "error, which makes ESLint report a `parserOptions.project` error on every file. This is " +
-    "ONE broken file, not many — do NOT chase the per-file parse errors.";
   const head = `The parse failure is in \`${located.file}\` (${located.detail}).`;
-  const editable =
-    scopeGlobs.length > 0 && fileInScope(located.file, scopeGlobs);
 
-  // FAIL-CLOSED: only a CONFIRMED-editable file gets a rewrite instruction. Anything else
-  // (out of scope, or scope unknown) is named as info + flagged blocked — never a rewrite.
-  unparsable.message = editable
-    ? `${preamble} ${head} Fix the syntax error there — rewrite that file in full if the cause ` +
-      `is not obvious. Once it parses, the whole cascade clears at once.`
-    : `${preamble} ${head} That file is OUTSIDE your editable scope (a shared/scaffold file) — ` +
-      `do NOT try to edit it. Report this as blocked.`;
+  if (scopeGlobs.length > 0 && fileInScope(located.file, scopeGlobs)) {
+    unparsable.message =
+      `${UNPARSABLE_PREAMBLE} ${head} Fix the syntax error there — rewrite that file in full if ` +
+      `the cause is not obvious. Once it parses, the whole cascade clears at once.`;
+    // Structured consumers (stuck-file/expert/phase) now agree with the prose. Safe because the
+    // file is CONFIRMED in scope — an out-of-scope file stays file-less so it can't be hidden.
+    unparsable.file = located.file;
+
+    return;
+  }
+
+  unparsable.message =
+    `${UNPARSABLE_PREAMBLE} ${head} That file is OUTSIDE your editable scope (a shared/scaffold ` +
+    `file) — do NOT try to edit it. Report this as blocked.`;
 }
 
 export function boringstackCommandStage(
@@ -391,7 +431,13 @@ export function boringstackCommandStage(
       );
 
       if (unparsable !== undefined) {
-        await enrichUnparsable(unparsable, cwd, scopeGlobs);
+        // Scan only the app(s) whose gate section showed the cascade — never mis-attribute a UI
+        // cascade to an unrelated API syntax error. Fall back to both if the section is unclear.
+        const failing = appsWithParseCascade(result.output);
+        const appsToScan =
+          failing.length > 0 ? failing : ["apps/api", "apps/ui"];
+
+        await enrichUnparsable(unparsable, cwd, scopeGlobs, appsToScan);
       }
 
       return { passed: false, errors, output: result.output };
@@ -597,9 +643,10 @@ export function composeBoringstackGate(opts: {
   /** The OTHER features/entities in this build, so the judge scopes to this
    *  feature's own responsibilities and never demands a link to an unbuilt slice. */
   siblingEntities?: readonly string[];
-  /** The globs the model may edit this feature — so a located parse error outside them is
-   *  flagged as blocked rather than issued as a rewrite instruction that bypasses ownership. */
-  scopeGlobs?: readonly string[];
+  /** The globs the model may edit for this feature — so a located parse error outside them is
+   *  flagged as blocked rather than issued as a rewrite instruction that bypasses ownership.
+   *  REQUIRED: dropping it at the call site is a compile error, not a silently-green test. */
+  scopeGlobs: readonly string[];
 }): IGate {
   const { cwd, exec, evaluator, baseline, feature, entity } = opts;
   const e2eAcceptanceDisabled =
@@ -607,7 +654,7 @@ export function composeBoringstackGate(opts: {
 
   return composeGate([
     differentialStage(
-      boringstackCommandStage(cwd, exec, opts.scopeGlobs ?? []),
+      boringstackCommandStage(cwd, exec, opts.scopeGlobs),
       baseline
     ),
     reachabilityStage(cwd, feature.id),

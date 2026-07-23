@@ -73,9 +73,12 @@ describe("boringstackCommandStage", () => {
     expect(error?.phase).toBe(2);
   });
 
-  const cascadeFor = (dir: string): string =>
+  // A realistic cascade: the composed gate echoes `::tsforge-app <app>::` before each app's
+  // stages, and the parserOptions.project error lands inside that app's section.
+  const cascadeFor = (dir: string, app = "apps/ui"): string =>
     [
-      join(dir, "apps/ui/src/features/company/Company.tsx"),
+      `::tsforge-app ${app}::`,
+      join(dir, `${app}/src/features/company/Company.tsx`),
       "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
       "",
       "✖ 1 problem (1 error, 0 warnings)",
@@ -149,15 +152,16 @@ describe("boringstackCommandStage", () => {
 
   test("located file OUTSIDE the feature scope → flagged as blocked, NOT a rewrite instruction (no scope bypass)", async () => {
     // Scope-bypass finding: the guidance must never direct the model to edit a file it does not
-    // own. A broken shared/scaffold file gets a 'blocked' note, not 'fix it'.
+    // own. A broken file in ANOTHER feature's dir (same failing app) gets a 'blocked' note, not 'fix it'.
     const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-oos-"));
 
     try {
-      await mkdir(join(dir, "apps/api/src/db"), { recursive: true });
-      // The broken file lives in a SHARED location the company scope does not cover.
+      await mkdir(join(dir, "apps/ui/src/features/contact"), {
+        recursive: true,
+      });
       await writeFile(
-        join(dir, "apps/api/src/db/schema.ts"),
-        "export const table = ;\n"
+        join(dir, "apps/ui/src/features/contact/Contact.tsx"),
+        "export const B = () => <div className='x' hi</div>;\n"
       );
 
       const stage = boringstackCommandStage(
@@ -172,7 +176,9 @@ describe("boringstackCommandStage", () => {
       );
 
       expect(unparsable).toBeDefined();
-      expect(unparsable?.message).toContain("apps/api/src/db/schema.ts");
+      expect(unparsable?.message).toContain(
+        "apps/ui/src/features/contact/Contact.tsx"
+      );
       // Out of scope → blocked note, never a 'fix it / rewrite' directive.
       expect(unparsable?.message).toContain("OUTSIDE your editable scope");
       expect(unparsable?.message).toContain("Report this as blocked");
@@ -186,10 +192,55 @@ describe("boringstackCommandStage", () => {
     }
   });
 
-  test("unparsable cascade with NO locatable broken file → message left unenriched (no false pointer)", async () => {
-    // Honesty case: if locateParseError finds nothing (a config/`include` failure, not a syntax
-    // cascade, or the broken file was already fixed on disk), the enrichment must NOT fabricate a
-    // file pointer.
+  test("correlation: a UI cascade is NOT mis-attributed to an unrelated broken API file", async () => {
+    // The panel's deep finding: the locator must scan the app whose section actually shows the
+    // cascade. Here the cascade is in apps/ui, an in-scope UI file is broken, AND an unrelated
+    // out-of-scope API file is ALSO broken. The API file must be ignored (different app), so the
+    // in-scope UI file is named and the feature is NOT wrongly marked blocked.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-corr-"));
+
+    try {
+      await mkdir(join(dir, "apps/ui/src/features/company"), {
+        recursive: true,
+      });
+      await mkdir(join(dir, "apps/api/src/api/other"), { recursive: true });
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        "export const B = () => <div className='x' hi</div>;\n"
+      );
+      // Unrelated broken API file — must be ignored because the cascade is in apps/ui.
+      await writeFile(
+        join(dir, "apps/api/src/api/other/other.service.ts"),
+        "export const bad: = 1;\n"
+      );
+
+      const stage = boringstackCommandStage(
+        dir,
+        execWith(1, cascadeFor(dir, "apps/ui")),
+        COMPANY_SCOPE
+      );
+      const result = await stage.run(dir);
+
+      const unparsable = result.errors.find(
+        (e) => e.rule === "eslint-program-unparsable"
+      );
+
+      expect(unparsable?.message).toContain(
+        "apps/ui/src/features/company/Company.tsx"
+      );
+      expect(unparsable?.message).toContain("Fix the syntax error there");
+      // The unrelated API file was NOT scanned, so it is neither named nor treated as the blocker.
+      expect(unparsable?.message).not.toContain("other.service.ts");
+      expect(unparsable?.message).not.toContain("OUTSIDE your editable scope");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unparsable cascade with NO locatable broken file → FAIL-CLOSED message (no in-scope rewrite target asserted)", async () => {
+    // Honesty + fail-closed: if locateParseError finds nothing (a config/`include` failure, or the
+    // broken file was already fixed on disk), the message must NOT claim a specific file NOR direct
+    // an unconfirmed in-scope rewrite — it points the model at its own recent edits, else blocked.
     const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-clean-"));
 
     try {
@@ -214,6 +265,37 @@ describe("boringstackCommandStage", () => {
 
       expect(unparsable).toBeDefined();
       expect(unparsable?.message).not.toContain("The parse failure is in");
+      expect(unparsable?.message).toContain("could not be pinpointed");
+      // FAIL-CLOSED: no unconfirmed rewrite directive.
+      expect(unparsable?.message).not.toContain("Fix the syntax error there");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("empty scopeGlobs (default) is FAIL-CLOSED → a located file is treated as blocked, never rewritable", async () => {
+    // Round-3 minor: an unknown/empty scope must not fail OPEN (command a rewrite of any file).
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-noscope-"));
+
+    try {
+      await mkdir(join(dir, "apps/ui/src/features/company"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        "export const B = () => <div className='x' hi</div>;\n"
+      );
+
+      // No scopeGlobs passed → default [].
+      const stage = boringstackCommandStage(dir, execWith(1, cascadeFor(dir)));
+      const result = await stage.run(dir);
+
+      const unparsable = result.errors.find(
+        (e) => e.rule === "eslint-program-unparsable"
+      );
+
+      expect(unparsable?.message).toContain("OUTSIDE your editable scope");
+      expect(unparsable?.message).not.toContain("Fix the syntax error there");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -448,7 +530,7 @@ describe("locateParseError", () => {
         "export const B = () => <div className='x' hi</div>;\n"
       );
 
-      const located = await locateParseError(dir);
+      const located = await locateParseError(dir, ["apps/api", "apps/ui"]);
 
       expect(located).not.toBeNull();
       expect(located?.file).toBe("apps/ui/src/features/company/Broken.tsx");
@@ -468,7 +550,7 @@ describe("locateParseError", () => {
         "export const G = () => <span>ok</span>;\n"
       );
 
-      expect(await locateParseError(dir)).toBeNull();
+      expect(await locateParseError(dir, ["apps/api", "apps/ui"])).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -495,7 +577,7 @@ describe("locateParseError", () => {
         "export function first<T,>(xs: readonly T[]): T | undefined {\n  return xs[0];\n}\n"
       );
 
-      expect(await locateParseError(dir)).toBeNull();
+      expect(await locateParseError(dir, ["apps/api", "apps/ui"])).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -513,7 +595,7 @@ describe("locateParseError", () => {
         "export const bad: = 1;\n"
       );
 
-      const located = await locateParseError(dir);
+      const located = await locateParseError(dir, ["apps/api", "apps/ui"]);
 
       expect(located?.file).toBe(
         "apps/api/tests/api/company/company.route.test.ts"
@@ -533,6 +615,7 @@ describe("composeBoringstackGate scope wiring", () => {
   };
   const cascade = (dir: string): string =>
     [
+      "::tsforge-app apps/ui::",
       join(dir, "apps/ui/src/features/company/Company.tsx"),
       "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
       "",
