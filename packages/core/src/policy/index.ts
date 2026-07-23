@@ -11,6 +11,7 @@ export type {
 } from "./policy.types";
 export {
   evaluatePolicy,
+  mergePolicyRules,
   POLICY_MODES,
   isPolicyMode,
   ACTION_KINDS,

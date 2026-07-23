@@ -17,7 +17,8 @@ import {
 } from "../agent";
 import type { IAgentSpec } from "../agent/agent-spec";
 import type { SpawnAgentFn, IToolContext, EditGuard } from "./tools";
-import type { PolicyMode } from "../policy";
+import type { PolicyMode, IPolicyRules } from "../policy";
+import { mergePolicyRules } from "../policy";
 import type { ProfileId } from "../config/profiles";
 import {
   buildMetaRuleContext,
@@ -137,6 +138,12 @@ export interface ISessionConfig {
   /** Base policy mode (from `--policy-mode`/config). Plan mode overrides it with
    *  `"plan"`; absent ⇒ `"default"`. */
   policyMode?: PolicyMode;
+  /** Extra deny/allow/ask rules injected by a build BACKEND, MERGED with (appended to)
+   *  the project config's `policy.rules`. Lets a stack forbid commands the model must
+   *  never run (e.g. BoringStack blocks the model from starting the browser E2E / host
+   *  dev server itself — that trips a host preflight guard and traps the drive). Kept
+   *  generic here; the specific rules live in the backend (loop/boringstack). */
+  policyRules?: IPolicyRules;
   /** Resume from a saved conversation (incl. its system message) instead of
    *  starting fresh — used by `--continue`. */
   history?: IChatMessage[];
@@ -853,7 +860,13 @@ export class Session {
     // config file's `policy.mode`, else `"default"`. Plan mode overrides this
     // base at runtime (setPlanMode).
     const baseMode = cfg.policyMode ?? projectConfig.policy?.mode ?? "default";
-    const policyRules = projectConfig.policy?.rules;
+    // Config rules (tsforge.config.json) + rules INJECTED by the build backend, appended so
+    // both apply (deny-first evaluation means an injected deny still wins). A backend can thus
+    // forbid commands the model must never run without editing the user's config.
+    const policyRules = mergePolicyRules(
+      projectConfig.policy?.rules,
+      cfg.policyRules
+    );
     const activePacks = resolveActivePacks(detected.packs, projectConfig);
     // Opt-in: load rule packs from external plugins and fold their ids into the
     // active packs so the gate runs them. loadAndRegisterPlugins never throws.
