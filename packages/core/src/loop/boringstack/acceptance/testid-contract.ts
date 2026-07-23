@@ -84,7 +84,7 @@ ${entity.fields.map((f) => `  - \`data-testid="${ids.field(f.name)}"\` for the "
 ${entity.shows.map((s) => `  - \`data-testid="${ids.rowCell(s)}"\` for the "${s}" column`).join("\n")}
 - **Row edit button**: \`data-testid="${ids.rowEdit}"\` — the edit action on each row
 - **Row delete button**: \`data-testid="${ids.rowDelete}"\` — the delete action on each row
-- **Delete confirmation dialog**: \`data-testid="${ids.confirmDelete}"\` — the confirmation prompt when deleting a record
+- **Delete confirm button**: \`data-testid="${ids.confirmDelete}"\` — put this on the BUTTON that actually performs the deletion (the one whose click fires the delete mutation), NOT on the dialog container/overlay. End-to-end acceptance CLICKS this testid to confirm the delete; if it sits on a wrapper \`<div>\` the click hits the backdrop, the delete never fires, and the row stays (delete acceptance fails).
 ${
   entity.parents.length > 0
     ? `- **Relationship selectors**: \`data-testid\` for each parent entity select:\n${entity.parents.map((p) => `  - \`data-testid="${ids.field(p.fkField)}"\` for selecting a ${p.key}`).join("\n")}`
@@ -101,7 +101,7 @@ ${
 - Create button: add \`data-testid="${ids.create}"\` to the button that opens the form
 - Form component: add \`data-testid="${ids.form}"\` to the \`<form>\`, \`data-testid="${ids.submit}"\` to the submit button, and \`data-testid="${ids.field("...")}\` to each input
 - Table rows: add \`data-testid="${ids.row}"\` to each row container, \`data-testid="${ids.rowCell("...")}\` to data cells, \`data-testid="${ids.rowEdit}"\` and \`data-testid="${ids.rowDelete}"\` to action buttons
-- Delete confirmation: add \`data-testid="${ids.confirmDelete}"\` to the confirmation dialog
+- Delete confirmation: add \`data-testid="${ids.confirmDelete}"\` to the CONFIRM BUTTON inside the delete dialog — the button whose \`onClick\` fires the delete mutation. NOT the dialog wrapper/overlay \`<div>\`: acceptance CLICKS this testid to confirm, and clicking a wrapper hits the backdrop, so the delete never runs and the row is never removed.
 
 **Complete contract** (${required.length} required IDs):
 ${required.map((id) => `- \`${id}\``).join("\n")}
