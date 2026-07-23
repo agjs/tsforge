@@ -168,11 +168,18 @@ describe("buildTestIdGuide", () => {
     // The FK field must not be double-listed as a plain input (which is what led the model to build
     // an <input>). It's flagged as NOT a plain input and deferred to the relationship selectors.
     const guide = buildTestIdGuide(contact);
+    const ids = testIdsFor(contact.key);
 
     expect(guide).toContain("are NOT plain inputs");
     // The non-FK fields ARE still listed as plain inputs.
     expect(guide).toContain('for the "name" field');
     expect(guide).toContain('for the "email" field');
+    // CRITICAL (regression the park was caused by): companyId must NOT appear as a plain-input
+    // form-field bullet. The plain-field bullets read `data-testid="…" for the "<field>" field`;
+    // assert that exact phrasing is absent for companyId (it lives in the <select> section instead).
+    expect(guide).not.toContain(
+      `\`data-testid="${ids.field("companyId")}"\` for the "companyId" field`
+    );
   });
 
   test("guide agreement: contains exactly the required testids", () => {

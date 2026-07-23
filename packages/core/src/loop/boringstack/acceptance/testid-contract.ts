@@ -64,6 +64,13 @@ export function requiredTestIds(entity: IEntityAcceptance): string[] {
 export function buildTestIdGuide(entity: IEntityAcceptance): string {
   const ids = testIdsFor(entity.key);
   const required = requiredTestIds(entity);
+  // The <input> Pattern example must use a NON-relationship field — a parent FK renders as a
+  // <select> (see Relationship selectors), so showing one as an <input> would contradict the fix.
+  const exampleField =
+    entity.fields.find((f) => !entity.parents.some((p) => p.fkField === f.name))
+      ?.name ??
+    entity.fields[0]?.name ??
+    "title";
 
   return `## Test IDs for "${entity.key}" — Required Test Hooks
 
@@ -101,15 +108,15 @@ ${
     : ""
 }
 
-**Pattern example** (for a field named "${entity.fields[0]?.name ?? "title"}" in a "${entity.key}" feature):
-- In the create/edit form: \`<input data-testid="${ids.field(entity.fields[0]?.name ?? "title")}" />\`
+**Pattern example** (for a NON-relationship field named "${exampleField}" in a "${entity.key}" feature):
+- In the create/edit form: \`<input data-testid="${ids.field(exampleField)}" />\` (a parent FK field is a \`<select>\` instead — see Relationship selectors)
 - In the table row: \`<td data-testid="${ids.rowCell(entity.shows[0] ?? entity.fields[0]?.name ?? "name")}">{record.${entity.shows[0] ?? entity.fields[0]?.name ?? "name"}}</td>\`
 
 **Where to add them:**
 - **Navigation (IMPORTANT — outside the feature directory):** add \`data-testid="${ids.nav}"\` to the "${entity.id}" link in the SHARED sidebar (\`apps/ui/src/components/core/AppSidebar/\`), NOT in the feature folder. A feature that isn't linked in the sidebar is unreachable and will fail end-to-end acceptance — every feature MUST be added to the sidebar navigation.
 - List page component: add \`data-testid="${ids.list}"\` to the list/table container, \`data-testid="${ids.empty}"\` to the empty state
 - Create button: add \`data-testid="${ids.create}"\` to the button that opens the form
-- Form component: add \`data-testid="${ids.form}"\` to the \`<form>\`, \`data-testid="${ids.submit}"\` to the submit button, and \`data-testid="${ids.field("...")}\` to each input
+- Form component: add \`data-testid="${ids.form}"\` to the \`<form>\`, \`data-testid="${ids.submit}"\` to the submit button, and \`data-testid="${ids.field("...")}\` to each field's control — an \`<input>\` for plain fields, a native \`<select>\` for a parent foreign-key field
 - Table rows: add \`data-testid="${ids.row}"\` to each row container, \`data-testid="${ids.rowCell("...")}\` to data cells, \`data-testid="${ids.rowEdit}"\` and \`data-testid="${ids.rowDelete}"\` to action buttons
 - Delete confirmation: add \`data-testid="${ids.confirmDelete}"\` to the CONFIRM BUTTON inside the delete dialog — the button whose \`onClick\` fires the delete mutation. NOT the dialog wrapper/overlay \`<div>\`: acceptance CLICKS this testid to confirm, and clicking a wrapper hits the backdrop, so the delete never runs and the row is never removed.
 
