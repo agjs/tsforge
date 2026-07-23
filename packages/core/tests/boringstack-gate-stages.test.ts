@@ -10,7 +10,7 @@ import {
   signatureToError,
   locateParseError,
 } from "../src/loop/boringstack/gate-stages";
-import { scopeFor } from "../src/loop/boringstack/build";
+import { scopeFor, featureOwnedGlobs } from "../src/loop/boringstack/build";
 import type { Exec } from "../src/loop/boringstack/exec";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
 import type { IProvider } from "../src/inference";
@@ -133,13 +133,12 @@ describe("boringstackCommandStage", () => {
 
       expect(unparsable).toBeDefined();
       // The enrichment appended a hint that NAMES the real broken file the cascade hid,
-      expect(unparsable?.message).toContain("A real syntax error was found in");
+      expect(unparsable?.message).toContain("A real syntax error is in");
       expect(unparsable?.message).toContain(
         "apps/ui/src/features/company/Company.tsx"
       );
       // with the located line/col detail and the fix framing,
       expect(unparsable?.message).toContain("line 1:");
-      expect(unparsable?.message).toContain("ONE file to rewrite");
       // and it did NOT falsely finger ANY valid-TS sibling (the whole point of the parser fix).
       expect(unparsable?.message).not.toContain("Enum.ts");
       expect(unparsable?.message).not.toContain("Types.ts");
@@ -177,9 +176,7 @@ describe("boringstackCommandStage", () => {
 
       expect(unparsable).toBeDefined();
       // No append: the out-of-scope file is never named nor directed for a rewrite.
-      expect(unparsable?.message).not.toContain(
-        "A real syntax error was found in"
-      );
+      expect(unparsable?.message).not.toContain("A real syntax error is in");
       expect(unparsable?.message).not.toContain("Contact.tsx");
       // The generic base guidance is left untouched (names no specific file → no bypass).
       expect(unparsable?.message).toContain("ONE broken file");
@@ -224,7 +221,7 @@ describe("boringstackCommandStage", () => {
       expect(unparsable?.message).toContain(
         "apps/ui/src/features/company/Company.tsx"
       );
-      expect(unparsable?.message).toContain("A real syntax error was found in");
+      expect(unparsable?.message).toContain("A real syntax error is in");
       // The unrelated API file was NOT scanned, so it is neither named nor treated as the blocker.
       expect(unparsable?.message).not.toContain("other.service.ts");
     } finally {
@@ -258,9 +255,7 @@ describe("boringstackCommandStage", () => {
       );
 
       expect(unparsable).toBeDefined();
-      expect(unparsable?.message).not.toContain(
-        "A real syntax error was found in"
-      );
+      expect(unparsable?.message).not.toContain("A real syntax error is in");
       expect(unparsable?.message).toContain("ONE broken file");
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -289,10 +284,95 @@ describe("boringstackCommandStage", () => {
         (e) => e.rule === "eslint-program-unparsable"
       );
 
-      expect(unparsable?.message).not.toContain(
-        "A real syntax error was found in"
-      );
+      expect(unparsable?.message).not.toContain("A real syntax error is in");
       expect(unparsable?.message).toContain("ONE broken file");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("TWO broken feature-owned files → names one, WITHOUT a false 'only file / cascade clears' claim", async () => {
+    // Round-6 finding: with 2+ broken files, claiming the named one is THE file that clears the
+    // cascade mis-steers. The message must name one owned file and admit there may be more.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-multi-"));
+
+    try {
+      await mkdir(join(dir, "apps/ui/src/features/company"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        "export const A = () => <div<;\n"
+      );
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Company.form.tsx"),
+        "export const B = () => <span<;\n"
+      );
+
+      const stage = boringstackCommandStage(
+        dir,
+        execWith(1, cascadeFor(dir)),
+        COMPANY_SCOPE
+      );
+      const result = await stage.run(dir);
+
+      const unparsable = result.errors.find(
+        (e) => e.rule === "eslint-program-unparsable"
+      );
+
+      // The APPENDED pointer names an owned broken file AND admits there may be more than one —
+      // so it never claims (as the earlier rounds did) that this single file clears the cascade.
+      expect(unparsable?.message).toContain("A real syntax error is in");
+      expect(unparsable?.message).toContain("there may be more than one");
+      // Names one of the two broken company files (whichever the scan hits first).
+      const names =
+        unparsable?.message.includes("Company.tsx") === true ||
+        unparsable?.message.includes("Company.form.tsx") === true;
+
+      expect(names).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an out-of-scope broken file does NOT suppress a later in-scope broken file (scope filter applied DURING scan)", async () => {
+    // Round-6 finding: scope must be checked during the scan, not on a single first hit — else a
+    // broken out-of-scope file encountered first makes enrichment a no-op despite a broken owned file.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-order-"));
+
+    try {
+      await mkdir(join(dir, "apps/ui/src/features/contact"), {
+        recursive: true,
+      });
+      await mkdir(join(dir, "apps/ui/src/features/company"), {
+        recursive: true,
+      });
+      // Out of company scope (encountered in whatever Bun.Glob order):
+      await writeFile(
+        join(dir, "apps/ui/src/features/contact/Contact.tsx"),
+        "export const A = () => <div<;\n"
+      );
+      // In company scope — MUST be the one named regardless of walk order:
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        "export const B = () => <span<;\n"
+      );
+
+      const stage = boringstackCommandStage(
+        dir,
+        execWith(1, cascadeFor(dir)),
+        COMPANY_SCOPE
+      );
+      const result = await stage.run(dir);
+
+      const unparsable = result.errors.find(
+        (e) => e.rule === "eslint-program-unparsable"
+      );
+
+      expect(unparsable?.message).toContain(
+        "apps/ui/src/features/company/Company.tsx"
+      );
+      expect(unparsable?.message).not.toContain("Contact.tsx");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -527,7 +607,11 @@ describe("locateParseError", () => {
         "export const B = () => <div className='x' hi</div>;\n"
       );
 
-      const located = await locateParseError(dir, ["apps/api", "apps/ui"]);
+      const located = await locateParseError(
+        dir,
+        ["apps/api", "apps/ui"],
+        () => true
+      );
 
       expect(located).not.toBeNull();
       expect(located?.file).toBe("apps/ui/src/features/company/Broken.tsx");
@@ -547,7 +631,9 @@ describe("locateParseError", () => {
         "export const G = () => <span>ok</span>;\n"
       );
 
-      expect(await locateParseError(dir, ["apps/api", "apps/ui"])).toBeNull();
+      expect(
+        await locateParseError(dir, ["apps/api", "apps/ui"], () => true)
+      ).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -574,7 +660,9 @@ describe("locateParseError", () => {
         "export function first<T,>(xs: readonly T[]): T | undefined {\n  return xs[0];\n}\n"
       );
 
-      expect(await locateParseError(dir, ["apps/api", "apps/ui"])).toBeNull();
+      expect(
+        await locateParseError(dir, ["apps/api", "apps/ui"], () => true)
+      ).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -592,7 +680,11 @@ describe("locateParseError", () => {
         "export const bad: = 1;\n"
       );
 
-      const located = await locateParseError(dir, ["apps/api", "apps/ui"]);
+      const located = await locateParseError(
+        dir,
+        ["apps/api", "apps/ui"],
+        () => true
+      );
 
       expect(located?.file).toBe(
         "apps/api/tests/api/company/company.route.test.ts"
@@ -610,118 +702,127 @@ describe("composeBoringstackGate scope wiring", () => {
       toolCalls: [],
     }),
   };
-  const cascade = (dir: string): string =>
+  // composeBoringstackGate derives the rewritable globs from feature.id ("note") via
+  // featureOwnedGlobs — there is NO scopeGlobs param to forget, so the wiring is exercised here.
+  const noteCascade = (dir: string): string =>
     [
       "::tsforge-app apps/ui::",
-      join(dir, "apps/ui/src/features/company/Company.tsx"),
+      join(dir, "apps/ui/src/features/note/Note.tsx"),
       "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
       "",
       "✖ 1 problem (1 error, 0 warnings)",
     ].join("\n");
 
-  const runComposed = async (
-    dir: string,
-    scopeGlobs: readonly string[]
-  ): Promise<string> => {
+  const runComposed = async (dir: string, output: string): Promise<string> => {
     const gate = composeBoringstackGate({
       cwd: dir,
-      exec: execWith(1, cascade(dir)),
+      exec: execWith(1, output),
       evaluator: passthroughJudge,
       baseline: new Set<string>(),
       feature,
-      scopeGlobs,
     });
     const result = await gate.run(dir);
-    const unparsable = result.errors.find(
-      (e) => e.rule === "eslint-program-unparsable"
-    );
 
-    return unparsable?.message ?? "";
+    return (
+      result.errors.find((e) => e.rule === "eslint-program-unparsable")
+        ?.message ?? ""
+    );
   };
 
-  test("scopeGlobs flow through composeBoringstackGate → the located file is treated as editable when in scope", async () => {
-    // The panel's wiring finding: forwarding scopeGlobs from composeBoringstackGate into the command
-    // stage must be exercised — otherwise the stage-level tests stay green even if compose stops
-    // forwarding. A REAL scopeFor("company") glob set proves the production path.
+  test("wiring: composeBoringstackGate derives the feature's OWN dirs → names an in-scope broken file", async () => {
+    // The recurring wiring finding: the rewritable scope must reach the command stage. composeBoringstackGate
+    // derives featureOwnedGlobs(feature.id) internally (feature = "note"), so this exercises the real path
+    // with NO scopeGlobs to pass — a broken file in the note feature dir is named.
     const dir = await mkdtemp(join(tmpdir(), "tsforge-compose-in-"));
 
     try {
-      await mkdir(join(dir, "apps/ui/src/features/company"), {
-        recursive: true,
-      });
+      await mkdir(join(dir, "apps/ui/src/features/note"), { recursive: true });
       await writeFile(
-        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        join(dir, "apps/ui/src/features/note/Note.tsx"),
         "export const B = () => <div className='x' hi</div>;\n"
       );
 
-      const message = await runComposed(dir, scopeFor("company"));
+      const message = await runComposed(dir, noteCascade(dir));
 
-      expect(message).toContain("apps/ui/src/features/company/Company.tsx");
-      expect(message).toContain("A real syntax error was found in");
+      expect(message).toContain("apps/ui/src/features/note/Note.tsx");
+      expect(message).toContain("A real syntax error is in");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("scopeGlobs flow through composeBoringstackGate → an out-of-scope located file gets NO append", async () => {
+  test("wiring: a broken file OUTSIDE the feature's own dirs gets NO append", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-compose-out-"));
 
     try {
-      // A broken file in ANOTHER feature's dir — not covered by scopeFor("company").
-      await mkdir(join(dir, "apps/ui/src/features/contact"), {
-        recursive: true,
-      });
+      // A broken file in ANOTHER feature's dir — not covered by featureOwnedGlobs("note").
+      await mkdir(join(dir, "apps/ui/src/features/other"), { recursive: true });
       await writeFile(
-        join(dir, "apps/ui/src/features/contact/Contact.tsx"),
+        join(dir, "apps/ui/src/features/other/Other.tsx"),
         "export const B = () => <div className='x' hi</div>;\n"
       );
 
-      const message = await runComposed(dir, scopeFor("company"));
+      const message = await runComposed(dir, noteCascade(dir));
 
-      // Out of scope → no pointer appended; the file is never named.
-      expect(message).not.toContain("A real syntax error was found in");
-      expect(message).not.toContain("Contact.tsx");
+      expect(message).not.toContain("A real syntax error is in");
+      expect(message).not.toContain("Other.tsx");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("wiring: a SHARED add-only file (app.schema.ts) is NEVER named for rewrite even when broken", async () => {
+    // scope-bypass finding: scopeFor grants edit access to shared add-only files, but the locator
+    // must use featureOwnedGlobs (feature dirs only), so a broken shared file is not named.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-compose-shared-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        "export const bad: = 1;\n"
+      );
+
+      // Cascade attributed to apps/api; only the shared schema file is broken.
+      const output = [
+        "::tsforge-app apps/api::",
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        "  1:14 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
+        "✖ 1 problem (1 error, 0 warnings)",
+      ].join("\n");
+
+      const message = await runComposed(dir, output);
+
+      expect(message).not.toContain("A real syntax error is in");
+      expect(message).not.toContain("app.schema.ts");
+      expect(message).toContain("ONE broken file");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
   test("a cascade with NO ::tsforge-app section → NO append (unattributed, we don't guess)", async () => {
-    // The round-4 finding: no both-apps fallback. If the cascade can't be attributed to an app,
-    // enrichUnparsable is a silent no-op even when a broken in-scope file exists on disk.
+    // No both-apps fallback: an unattributed cascade is a silent no-op even with a broken file on disk.
     const dir = await mkdtemp(join(tmpdir(), "tsforge-compose-nosection-"));
 
     try {
-      await mkdir(join(dir, "apps/ui/src/features/company"), {
-        recursive: true,
-      });
+      await mkdir(join(dir, "apps/ui/src/features/note"), { recursive: true });
       await writeFile(
-        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        join(dir, "apps/ui/src/features/note/Note.tsx"),
         "export const B = () => <div className='x' hi</div>;\n"
       );
 
-      // Cascade text WITHOUT the ::tsforge-app marker → appsWithParseCascade returns [].
-      const gate = composeBoringstackGate({
-        cwd: dir,
-        exec: execWith(
-          1,
-          [
-            join(dir, "apps/ui/src/features/company/Company.tsx"),
-            "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
-            "✖ 1 problem (1 error, 0 warnings)",
-          ].join("\n")
-        ),
-        evaluator: passthroughJudge,
-        baseline: new Set<string>(),
-        feature,
-        scopeGlobs: scopeFor("company"),
-      });
-      const result = await gate.run(dir);
-      const message =
-        result.errors.find((e) => e.rule === "eslint-program-unparsable")
-          ?.message ?? "";
+      const output = [
+        join(dir, "apps/ui/src/features/note/Note.tsx"),
+        "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
+        "✖ 1 problem (1 error, 0 warnings)",
+      ].join("\n");
 
-      expect(message).not.toContain("A real syntax error was found in");
+      const message = await runComposed(dir, output);
+
+      expect(message).not.toContain("A real syntax error is in");
       expect(message).toContain("ONE broken file");
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -742,5 +843,29 @@ describe("scopeFor", () => {
     );
     // Another feature's file is NOT in scope.
     expect(inScope("apps/ui/src/features/contact/Contact.tsx")).toBe(false);
+  });
+});
+
+describe("featureOwnedGlobs", () => {
+  test("covers the feature's own dirs but EXCLUDES the shared add-only files (no wholesale-rewrite target)", () => {
+    const globs = featureOwnedGlobs("company");
+    const owned = (file: string): boolean =>
+      globs.some((g) => new Bun.Glob(g).match(file));
+
+    // Feature-exclusive dirs — safe to name for a full rewrite.
+    expect(owned("apps/ui/src/features/company/Company.tsx")).toBe(true);
+    expect(owned("apps/api/src/api/company/company.service.ts")).toBe(true);
+    expect(owned("apps/api/tests/api/company/company.route.test.ts")).toBe(
+      true
+    );
+    // Shared ADD-ONLY files scopeFor grants edit access to must NOT be owned (never rewrite them).
+    expect(owned("apps/api/src/clients/postgres/schema/app.schema.ts")).toBe(
+      false
+    );
+    expect(owned("apps/ui/src/lib/i18n/locales/en.json")).toBe(false);
+    expect(owned("apps/ui/src/components/core/AppSidebar/AppSidebar.tsx")).toBe(
+      false
+    );
+    expect(owned("apps/ui/src/app/router/routes.tsx")).toBe(false);
   });
 });

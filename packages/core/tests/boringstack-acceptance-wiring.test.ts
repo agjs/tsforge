@@ -345,7 +345,6 @@ test("testIdStage: respects the e2e acceptance flag when disabled", async () => 
       baseline: new Set(),
       feature: mockFeature,
       entity: mockEntity,
-      scopeGlobs: [],
     });
 
     // Gate should exist but testIdStage should not be included
@@ -376,7 +375,6 @@ test("testIdStage: runs when e2e acceptance is enabled", async () => {
       baseline: new Set(),
       feature: mockFeature,
       entity: mockEntity,
-      scopeGlobs: [],
     });
 
     // Gate should exist

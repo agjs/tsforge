@@ -11,7 +11,12 @@ import { runBoringstackGate } from "./gate";
 import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
 import { judgeFeature } from "../greenfield/judge";
-import { autofixApps, readResourceCode, rescueFileFor } from "./build";
+import {
+  autofixApps,
+  featureOwnedGlobs,
+  readResourceCode,
+  rescueFileFor,
+} from "./build";
 import type { IEntityAcceptance } from "../acceptance/acceptance.types";
 import { checkTestIds } from "./acceptance/testid-contract";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
@@ -291,7 +296,8 @@ async function safeFirstSyntaxError(
 /** Which app section(s) of the composed-gate output actually show the `parserOptions.project`
  *  cascade — so the locator scans the app that FAILED, not blindly apps/api then apps/ui. The
  *  output echoes `::tsforge-app <app>::` before each app's stages (see gate.ts). Empty when no
- *  section matches → the caller falls back to scanning both. */
+ *  section matches → enrichUnparsable stays a silent no-op (there is NO both-apps fallback: we do
+ *  not guess an app the output didn't implicate). */
 function appsWithParseCascade(output: string): string[] {
   const parts = output.split(/::tsforge-app (\S+)::/u);
   const apps: string[] = [];
@@ -318,14 +324,17 @@ function appsWithParseCascade(output: string): string[] {
  * `parserOptions.project` parse error across EVERY file, so its output can't say which file is
  * actually broken — and the model thrashes near-green hunting for it. Re-parse each source file
  * in ISOLATION with the TypeScript parser (`firstSyntaxError`) and return the first genuinely
- * malformed one (repo-relative) + its located message. Same parser as the lint, so it cannot
- * mis-name a healthy file. `appsToScan` is the app(s) whose gate section actually showed the
- * cascade — so a UI cascade is never mis-attributed to an unrelated API syntax error. Scans
- * `{src,tests}` (the editable scope includes `apps/api/tests/…`). Best-effort; never throws.
+ * malformed one that PASSES `isRewritable` (repo-relative) + its located message. Same parser as
+ * the lint, so it cannot mis-name a healthy file. `appsToScan` is the app(s) whose gate section
+ * actually showed the cascade — so a UI cascade is never mis-attributed to an unrelated API syntax
+ * error. `isRewritable` is applied DURING the scan (not to a single first hit): a broken file the
+ * model can't rewrite is skipped and the scan continues, so a later rewritable broken file is still
+ * found. Scans `{src,tests}` (feature scope includes `apps/api/tests/…`). Best-effort; never throws.
  */
 export async function locateParseError(
   cwd: string,
-  appsToScan: readonly string[]
+  appsToScan: readonly string[],
+  isRewritable: (repoRelPath: string) => boolean
 ): Promise<{ file: string; detail: string } | null> {
   for (const app of appsToScan) {
     const root = join(cwd, app);
@@ -334,10 +343,16 @@ export async function locateParseError(
       const glob = new Bun.Glob("{src,tests}/**/*.{ts,tsx}");
 
       for await (const rel of glob.scan({ cwd: root })) {
+        const file = `${app}/${rel}`;
+
+        if (!isRewritable(file)) {
+          continue;
+        }
+
         const detail = await safeFirstSyntaxError(join(root, rel), rel);
 
         if (detail !== null) {
-          return { file: `${app}/${rel}`, detail };
+          return { file, detail };
         }
       }
     } catch {
@@ -353,40 +368,44 @@ export async function locateParseError(
  * a high-confidence one. We do NOT try to reconstruct ESLint's project graph; we add a hint only
  * when all of these hold, otherwise we stay silent and leave the (generic) base message intact:
  *   • the cascade was attributed to a specific failing app (`appsToScan` non-empty), AND
- *   • a file in that app has a GENUINE syntax error (getSyntacticDiagnostics — never a config/
- *     inclusion error, so a `parserOptions.project` message that is really a TSConfig problem is
- *     never mis-labelled a syntax error), AND
- *   • that file is in the model's editable scope.
+ *   • a FEATURE-OWNED file (a dir the model may fully rewrite — never a shared add-only file) in
+ *     that app has a GENUINE syntax error (getSyntacticDiagnostics — never a config/inclusion
+ *     error, so a `parserOptions.project` message that is really a TSConfig problem is never
+ *     mis-labelled a syntax error).
  * The hint is APPEND-ONLY and AGREES with the base ("find the broken file and rewrite it"), so it
- * can never contradict it; it never names an out-of-scope file (no ownership bypass); and it never
- * mutates `.file`/phase (no file-vs-phase disagreement for downstream stuck/frontier logic). When
- * any condition fails the base message stands unchanged — a safe, silent no-op.
+ * can never contradict it; it names only a feature-owned file (no ownership bypass, no shared-file
+ * clobber); it never mutates `.file`/phase (no file-vs-phase disagreement). The wording makes NO
+ * "this is the only broken file / the cascade will fully clear" claim — with two or more broken
+ * files that would mis-steer — it states the true, useful fact: this owned file has a real syntax
+ * error and must be fixed (and there may be more). When any condition fails, the base stands.
  */
 async function enrichUnparsable(
   unparsable: IErrorItem,
   cwd: string,
-  scopeGlobs: readonly string[],
+  rewritableGlobs: readonly string[],
   appsToScan: readonly string[]
 ): Promise<void> {
-  if (appsToScan.length === 0 || scopeGlobs.length === 0) {
+  if (appsToScan.length === 0 || rewritableGlobs.length === 0) {
     return;
   }
 
-  const located = await locateParseError(cwd, appsToScan);
+  const located = await locateParseError(cwd, appsToScan, (file) =>
+    fileInScope(file, rewritableGlobs)
+  );
 
-  if (located === null || !fileInScope(located.file, scopeGlobs)) {
+  if (located === null) {
     return;
   }
 
   unparsable.message +=
-    ` → A real syntax error was found in \`${located.file}\` (${located.detail}) — that is the ` +
-    `ONE file to rewrite; once it parses, the whole cascade clears at once.`;
+    ` → A real syntax error is in \`${located.file}\` (${located.detail}), a file you own — fix ` +
+    `it (there may be more than one broken file; every one must parse before the cascade clears).`;
 }
 
 export function boringstackCommandStage(
   cwd: string,
   exec: Exec,
-  scopeGlobs: readonly string[] = []
+  rewritableGlobs: readonly string[] = []
 ): IStage {
   return {
     async run(): Promise<IValidateResult> {
@@ -421,7 +440,7 @@ export function boringstackCommandStage(
         await enrichUnparsable(
           unparsable,
           cwd,
-          scopeGlobs,
+          rewritableGlobs,
           appsWithParseCascade(result.output)
         );
       }
@@ -629,18 +648,19 @@ export function composeBoringstackGate(opts: {
   /** The OTHER features/entities in this build, so the judge scopes to this
    *  feature's own responsibilities and never demands a link to an unbuilt slice. */
   siblingEntities?: readonly string[];
-  /** The globs the model may edit for this feature — so a located parse error outside them is
-   *  flagged as blocked rather than issued as a rewrite instruction that bypasses ownership.
-   *  REQUIRED: dropping it at the call site is a compile error, not a silently-green test. */
-  scopeGlobs: readonly string[];
 }): IGate {
   const { cwd, exec, evaluator, baseline, feature, entity } = opts;
   const e2eAcceptanceDisabled =
     process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
+  // The parse-error locator may only name a file the model can FULLY rewrite — its feature-owned
+  // dirs, NOT the shared add-only files (schema/locale/sidebar/routes). Derived here from the
+  // feature (no wiring to forget, no shared-file clobber).
+  const rewritableGlobs = featureOwnedGlobs(feature.id);
+
   return composeGate([
     differentialStage(
-      boringstackCommandStage(cwd, exec, opts.scopeGlobs),
+      boringstackCommandStage(cwd, exec, rewritableGlobs),
       baseline
     ),
     reachabilityStage(cwd, feature.id),
