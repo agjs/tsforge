@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { readdir, readFile } from "node:fs/promises";
+import ts from "typescript";
 import type { IGate, IStage } from "../../gate/gate-runner";
 import { composeGate, differentialStage } from "../../gate/gate-runner";
 import type { IValidateResult, IErrorItem } from "../../validate";
@@ -199,14 +200,61 @@ function opaqueGateError(output: string, cwd: string): IErrorItem {
  * becomes an `IErrorItem` whose `key` IS the signature — so the differential
  * wrapper can suppress baseline signatures and `checkStuck` can fingerprint them.
  */
+/** Cap the pinpoint detail; longer messages get an explicit truncation marker (never silent). */
+const PARSE_DETAIL_CAP = 200;
+const PARSE_TRUNCATION_MARKER = "…(truncated)";
+
+/**
+ * Report the FIRST genuine syntax error in one source file, or null if it parses.
+ * Uses the TypeScript compiler's own parser (`transpileModule`, syntax-only — it does NO
+ * type-checking) so this agrees with typescript-eslint's parser: a file that is valid TS is
+ * NEVER falsely fingered. Global option diagnostics (no `file`) are ignored — only located,
+ * in-file parse errors count. Returns `line L:C — <message>` (truncation-marked, never silent).
+ */
+function firstSyntaxError(code: string, fileName: string): string | null {
+  const out = ts.transpileModule(code, {
+    reportDiagnostics: true,
+    fileName,
+    compilerOptions: {
+      jsx: ts.JsxEmit.Preserve,
+      target: ts.ScriptTarget.Latest,
+      module: ts.ModuleKind.ESNext,
+      isolatedModules: true,
+    },
+  });
+
+  const diag = (out.diagnostics ?? []).find(
+    (d) =>
+      d.category === ts.DiagnosticCategory.Error &&
+      d.file !== undefined &&
+      d.start !== undefined
+  );
+
+  if (diag?.file === undefined || diag.start === undefined) {
+    return null;
+  }
+
+  const { line, character } = diag.file.getLineAndCharacterOfPosition(
+    diag.start
+  );
+  const message = ts.flattenDiagnosticMessageText(diag.messageText, " ");
+  const detail = `line ${line + 1}:${character + 1} — ${message}`;
+
+  return detail.length > PARSE_DETAIL_CAP
+    ? `${detail.slice(0, PARSE_DETAIL_CAP)}${PARSE_TRUNCATION_MARKER}`
+    : detail;
+}
+
 /**
  * Pinpoint the ONE file with a real syntax error behind an `eslint-program-unparsable` cascade.
  * The type-aware ESLint program fails to build off a single broken file yet fans a
  * `parserOptions.project` parse error across EVERY .tsx, so its output can't say which file is
- * actually broken — and the model thrashes near-green hunting for it. Transpile each source file
- * in ISOLATION (Bun's transpiler builds no cross-file program, so only the genuinely-malformed
- * file throws); return the first broken one (repo-relative) + the parser's first message line.
- * Best-effort and fast (sub-ms/file, only runs on the rare cascade). Never throws.
+ * actually broken — and the model thrashes near-green hunting for it. Re-parse each source file
+ * in ISOLATION with the TypeScript parser (`firstSyntaxError`) and return the first genuinely
+ * malformed one (repo-relative) + its located message. Same parser as the lint, so it cannot
+ * mis-name a healthy file. Because there are no false positives, the apps/api-before-ui scan
+ * order is harmless — if both apps hold a real syntax error, either is a correct thing to fix.
+ * Best-effort and fast (only runs on the rare cascade). Never throws.
  */
 export async function locateParseError(
   cwd: string
@@ -218,7 +266,6 @@ export async function locateParseError(
       const glob = new Bun.Glob("src/**/*.{ts,tsx}");
 
       for await (const rel of glob.scan({ cwd: root })) {
-        const loader = rel.endsWith(".tsx") ? "tsx" : "ts";
         let code: string;
 
         try {
@@ -227,14 +274,10 @@ export async function locateParseError(
           continue;
         }
 
-        try {
-          new Bun.Transpiler({ loader }).transformSync(code);
-        } catch (e) {
-          const detail = (e instanceof Error ? e.message : String(e))
-            .split("\n")[0]
-            ?.slice(0, 200);
+        const detail = firstSyntaxError(code, rel);
 
-          return { file: `${app}/${rel}`, detail: detail ?? "syntax error" };
+        if (detail !== null) {
+          return { file: `${app}/${rel}`, detail };
         }
       }
     } catch {
@@ -276,8 +319,10 @@ export function boringstackCommandStage(cwd: string, exec: Exec): IStage {
 
         if (located !== null) {
           unparsable.message +=
-            ` → The broken file is \`${located.file}\` (${located.detail}). ` +
-            `REWRITE \`${located.file}\` IN FULL — do not surgically patch it.`;
+            ` → The parse failure is in \`${located.file}\` (${located.detail}). ` +
+            `Fix the syntax error there — rewrite that file in full if the cause is not obvious. ` +
+            `This is the one file blocking the whole type-aware gate; if it is outside your ` +
+            `current feature, it is still the file to fix.`;
         }
       }
 

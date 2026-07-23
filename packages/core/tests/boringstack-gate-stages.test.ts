@@ -71,6 +71,94 @@ describe("boringstackCommandStage", () => {
     expect(error?.phase).toBe(2);
   });
 
+  test("unparsable cascade → enriches the error with the located broken file (integration path)", async () => {
+    // The panel's core finding: the enrichment branch (unparsable signature → locateParseError →
+    // append the real broken file to the message) must be exercised end-to-end against a REAL
+    // filesystem — not just locateParseError in isolation. Here the fake gate emits a genuine
+    // `parserOptions.project` cascade (which extractFailures collapses to eslint-program-unparsable)
+    // while a real temp tree holds one malformed file among healthy siblings.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-"));
+
+    try {
+      await mkdir(join(dir, "apps/ui/src/features/company"), {
+        recursive: true,
+      });
+      // Healthy sibling — must NOT be named.
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Good.tsx"),
+        "export const G = () => <div className='x'>hi</div>;\n"
+      );
+      // The ONE malformed file the cascade hides ('>' expected).
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        "export const B = () => <div className='x' hi</div>;\n"
+      );
+
+      const cascade = [
+        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
+        "",
+        "✖ 1 problem (1 error, 0 warnings)",
+      ].join("\n");
+
+      const stage = boringstackCommandStage(dir, execWith(1, cascade));
+      const result = await stage.run(dir);
+
+      const unparsable = result.errors.find(
+        (e) => e.rule === "eslint-program-unparsable"
+      );
+
+      expect(unparsable).toBeDefined();
+      // The enrichment fired: the message now NAMES the real broken file the cascade hid,
+      expect(unparsable?.message).toContain("The parse failure is in");
+      expect(unparsable?.message).toContain(
+        "apps/ui/src/features/company/Company.tsx"
+      );
+      // carries the located line/col detail,
+      expect(unparsable?.message).toContain("line 1:");
+      // and does NOT falsely finger the healthy sibling (same-parser: no false positives).
+      expect(unparsable?.message).not.toContain("Good.tsx");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("unparsable cascade with NO locatable broken file → message left unenriched (no false pointer)", async () => {
+    // Guard the honesty case: if locateParseError finds nothing (e.g. the broken file was already
+    // fixed on disk but the stale gate output still shows the cascade), the enrichment must NOT
+    // fabricate a file pointer.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-cmd-parse-clean-"));
+
+    try {
+      await mkdir(join(dir, "apps/ui/src/features/company"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        "export const G = () => <div className='x'>hi</div>;\n"
+      );
+
+      const cascade = [
+        join(dir, "apps/ui/src/features/company/Company.tsx"),
+        "  1:29 error Parsing error: parserOptions.project has been set for @typescript-eslint/parser",
+        "",
+        "✖ 1 problem (1 error, 0 warnings)",
+      ].join("\n");
+
+      const stage = boringstackCommandStage(dir, execWith(1, cascade));
+      const result = await stage.run(dir);
+
+      const unparsable = result.errors.find(
+        (e) => e.rule === "eslint-program-unparsable"
+      );
+
+      expect(unparsable).toBeDefined();
+      expect(unparsable?.message).not.toContain("The parse failure is in");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("unknown failure format preserves the final failing app, not the healthy output head", async () => {
     const out = `::tsforge-app apps/api::
 healthy API output that used to consume the first 500 characters
