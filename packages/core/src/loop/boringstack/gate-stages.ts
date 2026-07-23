@@ -348,22 +348,19 @@ export async function locateParseError(
   return null;
 }
 
-const UNPARSABLE_PREAMBLE =
-  "The TypeScript-aware lint could not build its program: ONE file has a real syntax/parse " +
-  "error, which makes ESLint report a `parserOptions.project` error on every file. This is " +
-  "ONE broken file, not many — do NOT chase the per-file parse errors.";
-
 /**
- * REPLACE the file-less `eslint-program-unparsable` message with precise, non-contradictory
- * guidance. The message is REPLACED (never appended) so the base text's generic "REWRITE IT IN
- * FULL" can't co-exist with an out-of-scope "do NOT edit". FAIL-CLOSED in every branch — a rewrite
- * instruction is issued ONLY for a file CONFIRMED in the model's editable scope:
- *   • located + in scope → fix that file (and set `.file` so stuck-file/expert consumers agree);
- *   • located + out of scope → named as info + flagged blocked, never a rewrite;
- *   • NOT located (incl. a swallowed scan failure) → no in-scope rewrite target is asserted; the
- *     model is told to check the files it just edited, else report blocked.
- * A file the parser rejects necessarily breaks the SHARED type-aware program (same parser as the
- * lint), so naming any real syntax error in the failing app is a sound fix target.
+ * APPEND a high-confidence pointer to the file-less `eslint-program-unparsable` message — and ONLY
+ * a high-confidence one. We do NOT try to reconstruct ESLint's project graph; we add a hint only
+ * when all of these hold, otherwise we stay silent and leave the (generic) base message intact:
+ *   • the cascade was attributed to a specific failing app (`appsToScan` non-empty), AND
+ *   • a file in that app has a GENUINE syntax error (getSyntacticDiagnostics — never a config/
+ *     inclusion error, so a `parserOptions.project` message that is really a TSConfig problem is
+ *     never mis-labelled a syntax error), AND
+ *   • that file is in the model's editable scope.
+ * The hint is APPEND-ONLY and AGREES with the base ("find the broken file and rewrite it"), so it
+ * can never contradict it; it never names an out-of-scope file (no ownership bypass); and it never
+ * mutates `.file`/phase (no file-vs-phase disagreement for downstream stuck/frontier logic). When
+ * any condition fails the base message stands unchanged — a safe, silent no-op.
  */
 async function enrichUnparsable(
   unparsable: IErrorItem,
@@ -371,33 +368,19 @@ async function enrichUnparsable(
   scopeGlobs: readonly string[],
   appsToScan: readonly string[]
 ): Promise<void> {
+  if (appsToScan.length === 0 || scopeGlobs.length === 0) {
+    return;
+  }
+
   const located = await locateParseError(cwd, appsToScan);
 
-  if (located === null) {
-    unparsable.message =
-      `${UNPARSABLE_PREAMBLE} It could not be pinpointed automatically — inspect the files you ` +
-      `edited this cycle for an unterminated brace/generic/JSX and rewrite the offending file ` +
-      `cleanly. If you cannot find it among files you own, report this as blocked.`;
-
+  if (located === null || !fileInScope(located.file, scopeGlobs)) {
     return;
   }
 
-  const head = `The parse failure is in \`${located.file}\` (${located.detail}).`;
-
-  if (scopeGlobs.length > 0 && fileInScope(located.file, scopeGlobs)) {
-    unparsable.message =
-      `${UNPARSABLE_PREAMBLE} ${head} Fix the syntax error there — rewrite that file in full if ` +
-      `the cause is not obvious. Once it parses, the whole cascade clears at once.`;
-    // Structured consumers (stuck-file/expert/phase) now agree with the prose. Safe because the
-    // file is CONFIRMED in scope — an out-of-scope file stays file-less so it can't be hidden.
-    unparsable.file = located.file;
-
-    return;
-  }
-
-  unparsable.message =
-    `${UNPARSABLE_PREAMBLE} ${head} That file is OUTSIDE your editable scope (a shared/scaffold ` +
-    `file) — do NOT try to edit it. Report this as blocked.`;
+  unparsable.message +=
+    ` → A real syntax error was found in \`${located.file}\` (${located.detail}) — that is the ` +
+    `ONE file to rewrite; once it parses, the whole cascade clears at once.`;
 }
 
 export function boringstackCommandStage(
@@ -431,13 +414,16 @@ export function boringstackCommandStage(
       );
 
       if (unparsable !== undefined) {
-        // Scan only the app(s) whose gate section showed the cascade — never mis-attribute a UI
-        // cascade to an unrelated API syntax error. Fall back to both if the section is unclear.
-        const failing = appsWithParseCascade(result.output);
-        const appsToScan =
-          failing.length > 0 ? failing : ["apps/api", "apps/ui"];
-
-        await enrichUnparsable(unparsable, cwd, scopeGlobs, appsToScan);
+        // Scan ONLY the app(s) whose gate section showed the cascade — never mis-attribute a UI
+        // cascade to an unrelated API syntax error. If we can't attribute it to an app, we do NOT
+        // guess (no both-apps fallback): enrichUnparsable stays a silent no-op and the base
+        // guidance stands.
+        await enrichUnparsable(
+          unparsable,
+          cwd,
+          scopeGlobs,
+          appsWithParseCascade(result.output)
+        );
       }
 
       return { passed: false, errors, output: result.output };
