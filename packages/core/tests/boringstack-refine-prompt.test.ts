@@ -496,10 +496,11 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("ADD ONLY");
   });
 
-  it("routes PRIMITIVE hooks into a custom hook (body CALLS it) — not a blanket 'no hooks in body' ban", () => {
-    // build36 Company ground near-green on "Hook 'useCallback' must be in a custom hook, not in
-    // component body". The CORRECT rule: React primitive hooks live INSIDE a custom hook; the body
-    // CALLS that custom hook (a blanket "no use* in the body" is impossible — the body must call it).
+  it("bans STATE-primitive hooks in the JSX body but ALLOWS custom hooks / useTranslation inline", () => {
+    // build36 Company ground near-green on "must be in a custom hook (.hooks.ts), not in component
+    // body". The rule bans only the STATE primitives directly in a JSX-returning body; custom hooks,
+    // useTranslation(), and useId/useTransition/useDeferredValue are legal in the body (the scaffold's
+    // JoinRequestsPage body calls both useTranslation() and useJoinRequestsPage()).
     const feature: IFeature = {
       id: "Company",
       desc: "A business the sales team works with",
@@ -509,17 +510,23 @@ describe("refinePrompt", () => {
 
     const prompt = refinePrompt(feature);
 
-    expect(prompt).toContain("PRIMITIVE hooks");
-    expect(prompt).toContain("custom hook");
-    // Compliance is POSSIBLE: the body calls the one custom hook. Not an impossible absolute ban.
-    expect(prompt).toContain("may only CALL that one custom hook");
+    expect(prompt).toContain("STATE-PRIMITIVE hooks");
+    // The exact eslint message (accurate, not a paraphrase).
+    expect(prompt).toContain(
+      "must be in a custom hook (.hooks.ts), not in component body"
+    );
+    // The exceptions the eslint rule + scaffold require MUST be documented (not an over-broad ban).
+    expect(prompt).toContain("useTranslation()");
+    expect(prompt).toContain("useJoinRequestsPage()");
+    // makeIdHandler is the no-hook row-handler fix.
     expect(prompt).toContain("NO hook at all");
-    // The old trap phrasing (a body useCallback as an acceptable alternative) must be gone.
+    // The old trap phrasing must be gone.
     expect(prompt).not.toContain(
       "child component with a useCallback is an alternative"
     );
-    // And it must NOT freeze the over-broad, impossible-to-satisfy ban.
+    // And it must NOT freeze either over-broad/impossible wording from earlier rounds.
     expect(prompt).not.toContain("may NEVER be called in a component body");
+    expect(prompt).not.toContain("may only CALL that one custom hook");
   });
 
   it("warns that every NEW component needs the FULL sibling set → don't extract sub-components", () => {
