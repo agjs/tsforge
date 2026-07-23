@@ -195,7 +195,7 @@ then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \
 
 **Every visible string via \`t("features.${camel}.<key>")\`** — no hardcoded JSX text (button labels like "Edit"/"Delete" included).
 
-**Make the feature reachable.** Add a sidebar link to \`apps/ui/src/components/core/AppSidebar/AppSidebar.tsx\` (add your feature's entry to the \`APP_SIDEBAR_NAV_ITEMS\` array, following the existing format) and register its route in \`apps/ui/src/app/router/routes.tsx\` (add a route pointing at your feature's page component). Both files are in your editable scope — ADD ONLY your feature's entries, never modify another feature's link/route (same rule as the shared schema + locale files). A feature missing from the sidebar or router is unreachable and fails browser acceptance.
+**Make the feature reachable.** Add a sidebar link to \`apps/ui/src/components/core/AppSidebar/AppSidebar.tsx\` (add your feature's entry to the \`APP_SIDEBAR_NAV_ITEMS\` array, following the existing format) and register its route in \`apps/ui/src/app/router/routes.tsx\` (add a route pointing at your feature's page component). Both files are in your editable scope — ADD ONLY your feature's entries, never modify another feature's link/route (same rule as the shared schema + locale files). A feature missing from the sidebar or router is unreachable and fails browser acceptance. **After adding your NavLink, update the sidebar's co-located test \`apps/ui/src/components/core/AppSidebar/AppSidebar.test.tsx\`: it asserts the EXACT number of nav links (e.g. \`toHaveLength(6)\`), so bump that count by exactly one for your added link — otherwise the final full-project validate fails even though your feature is correct.**
 
 ---
 

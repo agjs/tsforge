@@ -369,6 +369,15 @@ describe("scopeFor", () => {
     );
     expect(scope).toContain("apps/ui/src/app/router/routes.tsx");
   });
+
+  test("includes the sidebar's co-located test so the model can bump its nav-link count", () => {
+    // Adding a NavLink (required for reachability) changes the count AppSidebar.test.tsx asserts;
+    // if the model can't edit that test, the FINAL full-project validate fails even though the
+    // feature is verified. The test file must be in scope.
+    expect(scopeFor("Company")).toContain(
+      "apps/ui/src/components/core/AppSidebar/AppSidebar.test.tsx"
+    );
+  });
 });
 
 describe("rescueFileFor", () => {
