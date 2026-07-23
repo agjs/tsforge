@@ -225,6 +225,33 @@ test("runner: fake Exec returning nested Playwright JSON report parses correctly
   expect(execCallCount).toBe(1);
 });
 
+test("runner: forces PLAYWRIGHT_REUSE_SERVER=true so Playwright reuses the dockerized ui-dev, never self-spawns", async () => {
+  // The scaffold gates reuse on `!CI`; a CI=1 build env flips it OFF, so Playwright tries to
+  // start its own host dev server, collides with the running container on the UI port, and exits
+  // with ZERO tests run ("port already used") — the harness then reads a GREEN feature as a failed
+  // acceptance and parks it (build22–26). Forcing reuse ON in the runner's env prevents the spawn.
+  let capturedEnv: Record<string, string> | undefined;
+  const passReport = {
+    suites: [],
+    stats: { expected: 0, unexpected: 0, flaky: 0, skipped: 0 },
+    errors: [],
+  };
+
+  const fakeExec: Exec = async (_argv, opts) => {
+    capturedEnv = opts.env;
+
+    return { code: 0, stdout: JSON.stringify(passReport), stderr: "" };
+  };
+
+  const runner = makeBoringstackAcceptanceRunner(fakeExec);
+
+  await runner.run(testEntity, createTestCtx());
+
+  expect(capturedEnv?.PLAYWRIGHT_REUSE_SERVER).toBe("true");
+  // still points Playwright at the dockerized UI port (from ctx.uiBase), not a new server.
+  expect(capturedEnv?.PLAYWRIGHT_PORT).toBe("7331");
+});
+
 test("runner: all-pass nested report returns ok=true", async () => {
   const report = {
     suites: [
