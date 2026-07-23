@@ -674,6 +674,28 @@ test.describe(${JSON.stringify(name)}, () => {
     await authedPage.dashboard.goto();
     await navigateTo${entity.id}(page);
 
+    // Capture WHY a create can silently fail: the api client throws on non-2xx and React Query
+    // swallows it into the mutation's error state, so the row just never appears with no clue.
+    // Record failed /api/ responses + console errors and append them to the assertion failure,
+    // turning "row not found" into the actual cause (e.g. "POST /api/v1/${entity.key} -> 422 ...").
+    const apiFailures${entity.id} = [];
+    page.on("response", (r) => {
+      const u = r.url();
+      const method = r.request().method();
+      // Record every mutation (so we can tell "POST fired -> 201 but row didn't render" from
+      // "no POST fired at all"), plus any non-2xx.
+      const isMutation = method === "POST" || method === "PATCH" || method === "DELETE";
+      if (u.includes("/api/") && (r.status() > 399 || isMutation)) {
+        void r
+          .text()
+          .then((b) => apiFailures${entity.id}.push(method + " " + new URL(u).pathname + " -> " + r.status() + " " + b.slice(0, 200)))
+          .catch(() => apiFailures${entity.id}.push(method + " " + new URL(u).pathname + " -> " + r.status()));
+      }
+    });
+    page.on("console", (m) => {
+      if (m.type() === "error") apiFailures${entity.id}.push("console.error: " + m.text().slice(0, 200));
+    });
+
     // Unique value → this test asserts on ITS OWN row (the shared DB accumulates rows
     // across tests/runs, so absolute row counts are unreliable).
     // Identity field gets the unique marker (type-aware: may not be the first field)
@@ -699,7 +721,14 @@ ${fillFirstFieldCode}    // Fill identity field with unique value
 
     // THIS test's row (identified by its unique value) appears — retries the async refetch
     const row = page.getByTestId("${ids.row}").filter({ hasText: unique });
-    await expect(row).toBeVisible({ timeout: 10000 });
+    try {
+      await expect(row).toBeVisible({ timeout: 10000 });
+    } catch (e) {
+      const cause = apiFailures${entity.id}.length > 0
+        ? "\\n\\nAPI activity + console during create (root-cause clue — if the POST is 2xx but the row is missing, the LIST/row render is the bug; if the POST is 4xx or absent, the mutation/form is):\\n" + apiFailures${entity.id}.join("\\n")
+        : "\\n\\n(No API mutation fired at all — the create form's submit is not wired to the create mutation, or the row renders without the unique text / without data-testid='${ids.row}'.)";
+      throw new Error((e instanceof Error ? e.message : String(e)) + cause);
+    }
 
     // Verify the shown cells render the created values (scoped to THIS row only)
 ${rowCellAssertions}
