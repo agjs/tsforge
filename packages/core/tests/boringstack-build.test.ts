@@ -12,6 +12,7 @@ import {
   scopeFor,
   readResourceCode,
   verifyAcceptance,
+  e2eParkReason,
   APP_SCHEMA_FILE,
   LOCALE_GLOB,
 } from "../src/loop/boringstack/build";
@@ -1135,6 +1136,40 @@ describe("verifyAcceptance — truthful park reason on done:false", () => {
     expect(result.reason).toContain("the create form never submitted");
   });
 
+  test("steer incomplete but re-run PASSED parks WITHOUT blaming e2e assertions", async () => {
+    // The subtle case: browser acceptance failed, the steer ran, the re-run PASSED, but the
+    // steer itself did not complete cleanly → done:false. The reason must NOT report a stale
+    // "assertions failing" (the app verified); it must name the steer stall.
+    const failing: IAcceptanceOutcome = {
+      ok: false,
+      results: [
+        { entity: "Company", step: "list", ok: false, detail: "empty" },
+      ],
+      detail: "list was empty before the fix",
+    };
+    const passing: IAcceptanceOutcome = { ok: true, results: [] };
+    const stuckHost = {
+      ...createHost(),
+      send: async () => ({ status: "stuck", turns: 1 }),
+    };
+    const result = await verifyAcceptance(
+      { status: "done" },
+      stuckHost,
+      "/tmp/does-not-exist",
+      acceptanceEntity(),
+      stubRunner([failing, passing]),
+      false,
+      undefined
+    );
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toContain("passed on re-run");
+    expect(result.reason).toContain("the fix steer did not complete");
+    // Must NOT surface the obsolete pre-steer failure detail.
+    expect(result.reason).not.toContain("list was empty before the fix");
+    expect(result.reason).not.toContain("still failing");
+  });
+
   test("all checks passing reports done with no reason", async () => {
     const passing: IAcceptanceOutcome = { ok: true, results: [] };
     const result = await verifyAcceptance(
@@ -1149,5 +1184,53 @@ describe("verifyAcceptance — truthful park reason on done:false", () => {
 
     expect(result.done).toBe(true);
     expect(result.reason).toBeUndefined();
+  });
+});
+
+describe("e2eParkReason — the pure reason composer", () => {
+  const fail = (detail?: string): IAcceptanceOutcome => ({
+    ok: false,
+    results: [],
+    ...(detail !== undefined ? { detail } : {}),
+  });
+  const pass: IAcceptanceOutcome = { ok: true, results: [] };
+
+  test("re-run still failing after a completed steer → 'after the fix steer'", () => {
+    const reason = e2eParkReason(true, fail("orig"), fail("still red"));
+
+    expect(reason).toContain("still failing after the fix steer");
+    expect(reason).toContain("still red");
+  });
+
+  test("re-run still failing AND steer incomplete → names both", () => {
+    const reason = e2eParkReason(false, fail("orig"), fail("still red"));
+
+    expect(reason).toContain(
+      "still failing AND the fix steer did not complete"
+    );
+    expect(reason).toContain("still red");
+  });
+
+  test("re-run PASSED but steer incomplete → steer-stall reason, NO stale detail", () => {
+    const reason = e2eParkReason(false, fail("orig failure"), pass);
+
+    expect(reason).toContain("passed on re-run");
+    expect(reason).toContain("the fix steer did not complete");
+    expect(reason).not.toContain("orig failure");
+  });
+
+  test("uses a re-run failing-step detail when the top-level detail is absent", () => {
+    const reRun: IAcceptanceOutcome = {
+      ok: false,
+      results: [
+        { entity: "Company", step: "list", ok: true, detail: "ok" },
+        { entity: "Company", step: "create", ok: false, detail: "STEP_DETAIL" },
+      ],
+    };
+    const reason = e2eParkReason(true, fail("pre-steer"), reRun);
+
+    // Prefers the CURRENT re-run's failing-step detail over the obsolete pre-steer one.
+    expect(reason).toContain("STEP_DETAIL");
+    expect(reason).not.toContain("pre-steer");
   });
 });
