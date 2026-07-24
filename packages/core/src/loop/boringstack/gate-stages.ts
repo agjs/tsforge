@@ -18,7 +18,7 @@ import {
   rescueFileFor,
 } from "./build";
 import type { IEntityAcceptance } from "../acceptance/acceptance.types";
-import { checkTestIds } from "./acceptance/testid-contract";
+import { checkTestIds, checkWiring } from "./acceptance/testid-contract";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
 /** Turn one failure signature into an `IErrorItem`. Most signatures are their own
@@ -542,7 +542,8 @@ export function testIdStage(cwd: string, entity: IEntityAcceptance): IStage {
         const files = await readdir(featureDir, { recursive: true });
         const uiFiles = files.filter(
           (f): f is string =>
-            typeof f === "string" && (f.endsWith(".tsx") || f.endsWith(".jsx"))
+            typeof f === "string" &&
+            (f.endsWith(".tsx") || f.endsWith(".jsx") || f.endsWith(".ts"))
         );
 
         for (const file of uiFiles) {
@@ -607,24 +608,53 @@ export function testIdStage(cwd: string, entity: IEntityAcceptance): IStage {
       // Check for required testids
       const missing = checkTestIds(sources, entity);
 
-      if (missing.length === 0) {
-        return { passed: true, errors: [], output: "all testids present" };
+      if (missing.length > 0) {
+        const message =
+          `feature '${entity.id}' UI is missing required test hooks: ${missing.join(", ")}. ` +
+          `Add data-testid to the list, form, fields, and row controls so the app is testable.`;
+
+        return {
+          passed: false,
+          errors: [
+            { key: `testid:${entity.id}`, rule: "testid-presence", message },
+          ],
+          output: message,
+        };
       }
 
-      const message =
-        `feature '${entity.id}' UI is missing required test hooks: ${missing.join(", ")}. ` +
-        `Add data-testid to the list, form, fields, and row controls so the app is testable.`;
+      // Testids present — now reject a HOLLOW shell: the CRUD hooks must be WIRED
+      // into the UI, not just defined. (build49 shipped every testid with dead
+      // useCreate/Update/Delete and hardcoded rows — a false-green the fast gate took.)
+      const deadHooks = checkWiring(sources, entity);
+
+      if (deadHooks.length === 0) {
+        return {
+          passed: true,
+          errors: [],
+          output: "all testids present + wired",
+        };
+      }
+
+      const wiringMessage =
+        `feature '${entity.id}' is a HOLLOW shell: the CRUD hook(s) ${deadHooks.join(", ")} are ` +
+        `defined but NEVER wired into the UI (each appears only in its own definition file, not in ` +
+        `the page component or its view hook). The testids exist but connect to nothing — no create/` +
+        `edit/delete actually runs and the list shows no fetched data. WIRE each hook into the ` +
+        `feature: call \`use${entity.id}\` in the page (or its \`.hooks.ts\` view) and render the fetched ` +
+        `rows with \`.map\`; call \`useCreate/useUpdate/useDelete${entity.id}\` from the form submit and the ` +
+        `row edit/delete actions (the scaffold's \`view.onSubmit\` idiom). A feature whose hooks are ` +
+        `dead is INCOMPLETE and must not pass.`;
 
       return {
         passed: false,
         errors: [
           {
-            key: `testid:${entity.id}`,
-            rule: "testid-presence",
-            message,
+            key: `wiring:${entity.id}`,
+            rule: "feature-wiring",
+            message: wiringMessage,
           },
         ],
-        output: message,
+        output: wiringMessage,
       };
     },
   };

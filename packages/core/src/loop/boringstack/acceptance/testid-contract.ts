@@ -150,6 +150,54 @@ Without these test IDs, the feature cannot be validated end-to-end and will not 
  * @param sources - Map of {filePath → source code}
  * @param entity - The entity whose testids must be present
  */
+/**
+ * Detect a HOLLOW feature: the required test hooks are all present, but the CRUD
+ * hooks are never wired into the UI — a static shell that satisfies the testid
+ * contract while doing nothing (observed live: build49 Contact shipped every
+ * `data-testid` with hardcoded `-` rows, no `onSubmit`, and `useCreate/Update/Delete`
+ * defined but never called — a false-green the fast gate accepted).
+ *
+ * A hook is considered WIRED if its name (word-boundary matched, so `useContact`
+ * does not match `useContactPage`) appears in at least TWO non-test feature files:
+ * its own definition file PLUS at least one consumer (the page `.tsx` OR a view
+ * `<Component>.hooks.ts` that the page calls). A hook that appears in only ONE
+ * non-test file is just its own definition — dead, i.e. the feature can't perform
+ * that operation. This is pattern-agnostic: it passes both a direct call in the
+ * `.tsx` and the scaffold's handler-from-the-hook idiom (`view.onSubmit`).
+ *
+ * @param files - Map of {relPath → source} for the feature's .ts + .tsx sources
+ * @param entity - The entity whose CRUD hooks must be wired
+ */
+export function checkWiring(
+  files: Map<string, string>,
+  entity: IEntityAcceptance
+): string[] {
+  const errors: string[] = [];
+  const isTest = (p: string): boolean =>
+    /\.(test|spec|stories)\.[jt]sx?$/u.test(p);
+  const prod = Array.from(files.entries()).filter(([p]) => !isTest(p));
+
+  // The full-CRUD contract: the list query + the three mutation hooks the guide
+  // mandates (list/create/update/delete). PascalCase feature id → hook names.
+  const hooks = [
+    `use${entity.id}`,
+    `useCreate${entity.id}`,
+    `useUpdate${entity.id}`,
+    `useDelete${entity.id}`,
+  ];
+
+  for (const hook of hooks) {
+    const re = new RegExp(`\\b${hook}\\b`, "u");
+    const filesWithHook = prod.filter(([, src]) => re.test(src)).length;
+
+    if (filesWithHook < 2) {
+      errors.push(hook);
+    }
+  }
+
+  return errors;
+}
+
 export function checkTestIds(
   sources: Map<string, string>,
   entity: IEntityAcceptance
