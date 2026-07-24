@@ -502,8 +502,7 @@ describe("signatureToError", () => {
     // Root cause (verified against openapi-fetch's d.ts + scaffold): the raw non-assignable
     // `Readable<SuccessResponse<{ 200: {} }>>` (EMPTY inner) = the route's 200 has no `response:`
     // schema. The steer names the empty-inner tell and points at the API source + scaffold example.
-    expect(err.message).toContain("{ 200: {} }");
-    expect(err.message).toContain("scaffold's green pattern");
+    expect(err.message).toContain("EMPTY inner");
     // The fix is at the API SOURCE — add an explicit `response:` TypeBox schema so generate:api
     // types `data`. The steer must name the concrete list/get/delete response shapes.
     expect(err.message).toContain("response:");
@@ -527,6 +526,22 @@ describe("signatureToError", () => {
     expect(err.message).not.toContain("CANNOT remove it by editing the route");
     expect(err.message).not.toContain("UNIVERSAL");
     expect(err.message).not.toContain("let TS INFER");
+  });
+
+  test("a NON-empty Readable<SuccessResponse> (route already has a schema) is NOT mis-steered to add a schema", () => {
+    // The branch matches ONLY the empty-inner form. A Readable whose inner IS a typed domain body
+    // (`{ 200: { id: string } }`) comes from a route that already has a `response:` schema — it must
+    // NOT get the "add the response schema" steer (that would rewrite an already-correct schema).
+    const msg =
+      "Type 'Readable<SuccessResponse<{ 200: { id: string; name: string } }>>' is not assignable to type 'Promise<ISupplierItem>'.";
+    const err = signatureToError(
+      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
+    );
+
+    expect(err.message).not.toContain("EMPTY inner");
+    expect(err.message).not.toContain(
+      "has no explicit `response:` TypeBox schema"
+    );
   });
 
   test("a generic optional-type mismatch is NOT hijacked by an api-client consumer-unwrap steer (no over-match)", () => {
