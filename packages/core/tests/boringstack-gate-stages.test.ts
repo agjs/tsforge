@@ -492,72 +492,30 @@ describe("signatureToError", () => {
     expect(plain.message).not.toContain("call site");
   });
 
-  test("a Readable<SuccessResponse> error steers to the API `response:` schema (the source generate:api reads), not a consumer annotation", () => {
+  test("the REAL abbreviated `Readable<SuccessResponse<...>>` not-assignable error steers to the scaffold unwrap (direct vs `{ data }` envelope), never a cast or infer", () => {
+    // Ground truth from build logs: tsc prints the ABBREVIATED form with a literal `...`, e.g.
+    // `Type 'Readable<SuccessResponse<...>>' is not assignable to type 'ICompanyItem[]'` — NOT an
+    // expanded `{ 200: {} }`. The steer must fire on that real string and give the scaffold's
+    // route-shape-dependent unwrap.
     const msg =
-      "Type 'Readable<SuccessResponse<{ 200: {} }>>' is not assignable to type 'Promise<ISupplierItem>'.";
+      "Type 'Readable<SuccessResponse<...>>' is not assignable to type 'ICompanyItem[]'.";
     const err = signatureToError(
-      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
+      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fcompany%2FCompany.queries.ts:14:no-unsafe:${encodeURIComponent(msg)}`
     );
 
-    // Root cause (verified against openapi-fetch's d.ts + scaffold): the raw non-assignable
-    // `Readable<SuccessResponse<{ 200: {} }>>` (EMPTY inner) = the route's 200 has no `response:`
-    // schema. The steer names the empty-inner tell and points at the API source + scaffold example.
-    expect(err.message).toContain("EMPTY inner");
-    // The fix is at the API SOURCE — add an explicit `response:` TypeBox schema so generate:api
-    // types `data`. The steer must name the concrete list/get/delete response shapes.
-    expect(err.message).toContain("response:");
-    expect(err.message).toContain("t.Array(<ItemSchema>)");
-    expect(err.message).toContain("t.Null()");
-    // The fixture path is a `*.mutations.ts` (create/update), so the steer must ALSO name the
-    // create/update response shape — not only list/get/delete — or a mutation Readable has no form.
-    expect(err.message).toContain("get-one/create/update");
-    expect(err.message).toContain("generate:api");
-    // The post-fix consumer unwrap is ROUTE-KIND-dependent (fixture is a mutations file): the steer
-    // must give create/update the GUARD-then-return item shape and delete the void shape — not only
-    // the list `?? []` idiom.
-    expect(err.message).toContain("if (!data) throw new ApiError");
+    // It fires on the real abbreviated string and explains the wrapper.
+    expect(err.message).toContain("openapi-fetch's response wrapper");
+    // Both unwrap shapes, keyed to the route's `response:` schema (direct value vs `{ data }` envelope).
+    expect(err.message).toContain("return data ?? []");
+    expect(err.message).toContain("return data.data");
+    expect(err.message).toContain("if (!data?.data) throw new ApiError");
+    // Keeps the annotations; forbids the two dead ends the model kept trying (cast / drop annotation).
     expect(err.message).toContain("UseMutationResult<void, unknown, string>");
-    // It must state the TS mechanic the panel flagged: a return annotation checks the returned
-    // expression, it does NOT retype the destructured `data` — so a consumer-only fix can't work.
-    expect(err.message).toContain("does NOT retype");
-    // NEVER an `as`-cast, and it must NOT resurrect the (false) "can't fix via the response schema"
-    // or "just annotate the consumer / let TS INFER" advice that fed the near-green oscillation.
     expect(err.message).toContain("NEVER `as`");
-    expect(err.message).not.toContain("CANNOT remove it by editing the route");
+    expect(err.message.toLowerCase()).toContain("remove the annotation");
+    // Must NOT resurrect the fabricated empty-inner / missing-schema-only framing.
+    expect(err.message).not.toContain("EMPTY inner");
     expect(err.message).not.toContain("UNIVERSAL");
-    expect(err.message).not.toContain("let TS INFER");
-  });
-
-  test("a NON-empty Readable<SuccessResponse> (route already has a schema) is NOT mis-steered to add a schema", () => {
-    // The branch matches ONLY the empty-inner form. A Readable whose inner IS a typed domain body
-    // (`{ 200: { id: string } }`) comes from a route that already has a `response:` schema — it must
-    // NOT get the "add the response schema" steer (that would rewrite an already-correct schema).
-    const msg =
-      "Type 'Readable<SuccessResponse<{ 200: { id: string; name: string } }>>' is not assignable to type 'Promise<ISupplierItem>'.";
-    const err = signatureToError(
-      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
-    );
-
-    expect(err.message).not.toContain("EMPTY inner");
-    expect(err.message).not.toContain(
-      "has no explicit `response:` TypeBox schema"
-    );
-  });
-
-  test("a multi-status Readable whose empty entry is NOT the whole map is NOT treated as missing-schema", () => {
-    // Edge case: `{ 200: {}; 201: { id } }` — the 200 is empty but 201 is typed, so the route DOES
-    // have a schema. The regex requires the empty `{}` to CLOSE the map (`{} }>`), so this must NOT
-    // fire the add-schema steer.
-    const msg =
-      "Type 'Readable<SuccessResponse<{ 200: {}; 201: { id: string } }>>' is not assignable to type 'Promise<ISupplierItem>'.";
-    const err = signatureToError(
-      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
-    );
-
-    expect(err.message).not.toContain("EMPTY inner");
-    expect(err.message).not.toContain(
-      "has no explicit `response:` TypeBox schema"
-    );
   });
 
   test("a generic optional-type mismatch is NOT hijacked by an api-client consumer-unwrap steer (no over-match)", () => {

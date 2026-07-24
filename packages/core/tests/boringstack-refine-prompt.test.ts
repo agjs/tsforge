@@ -525,31 +525,27 @@ describe("refinePrompt", () => {
     // delete returns nothing (`t.Null()` route) — it must be typed `void`, never the item type.
     expect(prompt).toContain("UseMutationResult<void, unknown, string>");
     expect(prompt).toContain("response: t.Null()");
-    // Two DIFFERENT errors, two DIFFERENT fixes — must NOT lump the optional-`data` "not assignable"
-    // error under "add the missing schema" (that reopens oscillation: model rewrites correct schemas).
+    // Two DIFFERENT errors, two DIFFERENT fixes. (a) `Readable<SuccessResponse<...>>` not-assignable =
+    // you haven't UNWRAPPED the wrapper (tsc prints the abbreviated `<...>` — the REAL string); the
+    // fix is the route-shape unwrap (`data ?? []` direct / `data.data` envelope), NOT a cast/infer.
     expect(prompt).toContain("Two DIFFERENT errors");
-    expect(prompt.toLowerCase()).toContain(
-      "rewriting an already-correct schema"
-    );
-    // The guide must state the TRUE source of `data`'s type — the API route's `response:` schema
-    // via generate:api — NOT the (false) claim that the consumer annotation retypes `data`.
-    expect(prompt).toContain("response:");
-    expect(prompt).toContain("generate:api");
-    expect(prompt).toContain("t.Array(<ItemSchema>)");
-    // And it must POSITIVELY state the TS mechanic (annotation checks the returned expression, it
-    // does NOT retype the destructured `data`) — the reason a consumer-only fix can't clear Readable.
-    expect(prompt.toLowerCase()).toContain("does not retype");
+    expect(prompt).toContain("Readable<SuccessResponse<...>>");
+    expect(prompt).toContain("return data.data");
+    // (b) `T | undefined not assignable` = unwrapped but optional; the guard/`?? []` fixes it.
     expect(prompt).toContain("const { data } = await apiClient.GET");
-    // It must not resurrect the panel-flagged falsehoods that the annotation is the fix.
+    expect(prompt).toContain("generate:api");
+    // It must not resurrect the panel-flagged falsehoods (annotation-is-the-fix, or the fabricated
+    // empty-inner `{ 200: {} }` = missing-schema tell that tsc never actually prints).
     expect(prompt).not.toContain("the domain annotation does all the work");
-    expect(prompt).not.toContain(
-      "this is what kills the near-green `Readable<SuccessResponse>`"
-    );
-    // Never Readable, never `as` (pin BOTH halves so the anti-`as` guidance can't regress silently).
+    expect(prompt).not.toContain("{ 200: {} }");
+    // Never Readable-annotate, never `as`-cast, never drop the annotation (the two dead ends).
     expect(prompt).toContain(
-      "NEVER annotate with `Readable<SuccessResponse<…>>`"
+      "annotate a hook with `Readable<SuccessResponse<…>>`"
     );
-    expect(prompt).toContain("NEVER reach for `as`");
+    expect(prompt).toContain("`as`-cast");
+    expect(prompt.toLowerCase()).toContain(
+      "remove the annotation and let ts infer"
+    );
   });
 
   it("teaches query keys as constants in *.constants.ts (never an inline string-array queryKey)", () => {
