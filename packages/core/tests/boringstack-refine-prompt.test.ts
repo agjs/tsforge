@@ -496,6 +496,33 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("ADD ONLY");
   });
 
+  it("teaches the scaffold's api-client hook typing: annotate the DOMAIN type, never Readable/as (kills the near-green cluster)", () => {
+    // build44/45 oscillated on the api-client response cluster (Readable<SuccessResponse> / no-as /
+    // Unnecessary ?? / not-assignable). The scaffold's green hooks ANNOTATE with the domain type;
+    // the guide must teach that exact shape (and must not tell the model to drop annotations).
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // Query hook annotated with the domain type + the correct `data ?? []` unwrap.
+    expect(prompt).toContain("UseQueryResult<ICompanyItem[]>");
+    expect(prompt).toContain("Promise<ICompanyItem[]>");
+    expect(prompt).toContain("return data ?? []");
+    // Mutation hook annotated with the domain type (3-generic form).
+    expect(prompt).toContain(
+      "UseMutationResult<ICompanyItem, unknown, CompanyCreateInput>"
+    );
+    // Never Readable, never `as`.
+    expect(prompt).toContain(
+      "NEVER annotate with `Readable<SuccessResponse<…>>`"
+    );
+  });
+
   it("teaches query keys as constants in *.constants.ts (never an inline string-array queryKey)", () => {
     // build42 Contact parked partly on nonConstantQueryKey: `queryKey: ["contact", id]` (an array
     // literal starting with a string) is rejected; keys must be a constant from *.constants.ts.

@@ -492,25 +492,29 @@ describe("signatureToError", () => {
     expect(plain.message).not.toContain("call site");
   });
 
-  test("a Readable<SuccessResponse> error steers to the CONSUMER unwrap, not a route/schema fix (build15 wall)", () => {
+  test("a Readable<SuccessResponse> error steers to ANNOTATE-with-the-domain-type (scaffold idiom), not a route/schema fix", () => {
     const msg =
       "Type 'Readable<SuccessResponse<{ 200: {} }>>' is not assignable to type 'Promise<ISupplierItem>'.";
     const err = signatureToError(
       `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
     );
 
-    // Steer names it universal/expected and points at the consumer fix (infer, then unwrap).
+    // Steer names it universal/expected and must NOT send the model to the route/schema.
     expect(err.message).toContain("UNIVERSAL");
-    expect(err.message).toContain("CONSUMER");
-    // Universal move is infer-don't-annotate; unwrap is shape-conditional (not blind .data).
-    expect(err.message).toContain("let TS INFER");
-    expect(err.message).toContain("don't blindly add");
-    // Steer must name BOTH annotation sites — the fn AND the useMutation/useQuery HOOK generic
-    // (build16 oscillated on the hook one; guide + steer must agree).
-    expect(err.message).toContain("UseMutationResult<Readable");
-    expect(err.message).toContain("HOOK generic");
-    // Must NOT tell the model to fix the route/schema for this.
     expect(err.message).toContain("CANNOT remove it by editing the route");
+    // The fix is ANNOTATE the hook + fn with the DOMAIN type (the scaffold's green idiom) — the
+    // steer must show the concrete UseQueryResult/UseMutationResult<domain> annotations, NOT the
+    // old (wrong, scaffold-contradicting) "remove the annotation / let TS INFER" advice that fed the
+    // near-green oscillation (the scaffold's own hooks ARE annotated with the domain type).
+    expect(err.message).toContain("UseQueryResult<IXItem[]>");
+    expect(err.message).toContain(
+      "UseMutationResult<IXItem, unknown, XCreateInput>"
+    );
+    expect(err.message).toContain("Promise<IXItem[]>");
+    expect(err.message).toContain("don't blindly add");
+    // Must NOT resurrect the infer-don't-annotate steer that contradicted the scaffold.
+    expect(err.message).not.toContain("let TS INFER");
+    expect(err.message).not.toContain("REMOVE the annotation");
   });
 
   test("a `'>' expected` in a .ts flags the JSX-must-be-.tsx cause; other .ts parse errors do NOT", () => {
