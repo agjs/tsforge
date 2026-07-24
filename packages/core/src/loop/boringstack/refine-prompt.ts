@@ -125,6 +125,15 @@ The generated feature is a HOLLOW starting point — a list-only page plus STUB 
 - **Mutations** (\`${feature.id}.mutations.ts\` — PascalCase file in \`apps/ui/src/features/${camel}/\`): implement real \`useCreate${feature.id}\`, \`useUpdate${feature.id}\`, and \`useDelete${feature.id}\` — each calls \`@/lib/api/client\` (\`apiClient.POST/PATCH/DELETE\`). **The client's \`throwOnError\` middleware THROWS an \`ApiError\` on any non-2xx — it does NOT return an error to check.** So \`error\` is typed \`undefined\`: writing \`if (error) throw error\` is a DEAD \`no-unnecessary-condition\` (error can't be truthy) AND \`only-throw-error\` (you'd be throwing \`undefined\`). Just read \`data\`: \`const { data } = await apiClient.POST(…); return data;\`. React Query catches the thrown ApiError, so invalidate the list query in \`onSuccess\` and surface failures in \`onError\` — never guard \`error\`. Do NOT leave the stub that returns its input.
   (Use the REAL domain fields of ${feature.id} — ${domainFields} — NOT a single placeholder \`name\`.)
 - **List query** (\`${feature.id}.queries.ts\` — PascalCase file): implement \`use${feature.id}\` to actually fetch via \`apiClient.GET\` (the scaffold stub returns \`[]\`, so the list is permanently empty and create→appears-in-list is impossible until you do this). Same throwing-client rule as mutations: the queryFn just \`const { data } = await apiClient.GET(…); return data;\` — do NOT check \`error\` (it is typed \`undefined\`; the \`throwOnError\` middleware already throws and React Query catches it into the query's error state).
+- **Query keys are CONSTANTS, never inline arrays.** A \`useQuery\`/\`useMutation\` \`queryKey\`/\`mutationKey\` whose value is an array literal STARTING with a string (e.g. \`queryKey: ["${camel}", id]\`) is REJECTED: "queryKey must be a constant — define it in *.constants.ts". Define the keys ONCE in \`${feature.id}.constants.ts\` and reference them:
+\`\`\`ts
+export const ${camel.toUpperCase()}_QUERY_KEYS = {
+  all: ["${camel}"] as const,
+  list: () => [...${camel.toUpperCase()}_QUERY_KEYS.all, "list"] as const,
+  detail: (id: string) => [...${camel.toUpperCase()}_QUERY_KEYS.all, id] as const,
+};
+\`\`\`
+then \`useQuery({ queryKey: ${camel.toUpperCase()}_QUERY_KEYS.list(), … })\`. The mutations' \`onSuccess\` MUST invalidate with the SAME constant (\`queryClient.invalidateQueries({ queryKey: ${camel.toUpperCase()}_QUERY_KEYS.all })\`) so create/edit/delete actually refresh the list. (The rule only trips on an array literal whose first element is a bare string — a spread of the constant is fine.)
 - **List**: render the fetched records (not just an empty state) — one row per record showing those domain fields, each row with **Edit** and **Delete** actions.
 - **Create/Edit form**: one input per domain field. Validate with Zod; on submit call the create/update mutation; on error render \`t("features.${camel}.<action>Error")\`.
 - **Delete**: a confirmation using \`t("features.${camel}.confirmDelete")\` that calls \`useDelete${feature.id}\`.

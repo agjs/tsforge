@@ -495,4 +495,23 @@ describe("refinePrompt", () => {
     // Must carry the add-only boundary for those shared files.
     expect(prompt).toContain("ADD ONLY");
   });
+
+  it("teaches query keys as constants in *.constants.ts (never an inline string-array queryKey)", () => {
+    // build42 Contact parked partly on nonConstantQueryKey: `queryKey: ["contact", id]` (an array
+    // literal starting with a string) is rejected; keys must be a constant from *.constants.ts.
+    const feature: IFeature = {
+      id: "Contact",
+      desc: "A contact",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("Query keys are CONSTANTS");
+    expect(prompt).toContain("CONTACT_QUERY_KEYS");
+    expect(prompt).toContain("Contact.constants.ts");
+    // The onSuccess invalidation must reuse the same constant (so the list refreshes).
+    expect(prompt).toContain("invalidateQueries");
+  });
 });
