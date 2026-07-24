@@ -508,6 +508,9 @@ describe("signatureToError", () => {
     expect(err.message).toContain("response:");
     expect(err.message).toContain("t.Array(<ItemSchema>)");
     expect(err.message).toContain("t.Null()");
+    // The fixture path is a `*.mutations.ts` (create/update), so the steer must ALSO name the
+    // create/update response shape — not only list/get/delete — or a mutation Readable has no form.
+    expect(err.message).toContain("get-one/create/update");
     expect(err.message).toContain("generate:api");
     // It must state the TS mechanic the panel flagged: a return annotation checks the returned
     // expression, it does NOT retype the destructured `data` — so a consumer-only fix can't work.

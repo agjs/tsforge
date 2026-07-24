@@ -374,12 +374,13 @@ describe("refinePrompt", () => {
     });
 
     // The boringstack client's throwOnError middleware THROWS on non-2xx and types
-    // `error` as undefined — so mutations/queries must just read `data`, never guard
-    // `error`. The prompt names the old "if (error) throw error" idiom only to forbid
-    // it (calling it a DEAD no-unnecessary-condition / only-throw-error).
+    // `error` as undefined — so mutations/queries must never guard `error`. The prompt
+    // names the old "if (error) throw error" idiom only to forbid it (calling it a DEAD
+    // no-unnecessary-condition / only-throw-error). Because `data` is typed OPTIONAL, the
+    // create/update return is GUARD-then-return (not a bare `return data`).
     expect(p).toContain("throwOnError");
     expect(p).toContain(
-      "const { data } = await apiClient.POST(…); return data;"
+      "const { data } = await apiClient.POST(…, { body: input }); if (!data) throw new ApiError"
     );
     expect(p).toContain("no-unnecessary-condition");
     expect(p).toContain("only-throw-error");
@@ -517,6 +518,13 @@ describe("refinePrompt", () => {
     expect(prompt).toContain(
       "UseMutationResult<ICompanyItem, unknown, CompanyCreateInput>"
     );
+    // create/update: the client types `data` OPTIONAL, so bare `return data` fails — the scaffold's
+    // idiom is GUARD-then-return (the guard narrows `IItem | undefined` → `IItem`).
+    expect(prompt).toContain("GUARD, then return");
+    expect(prompt).toContain("if (!data) throw new ApiError");
+    // delete returns nothing (`t.Null()` route) — it must be typed `void`, never the item type.
+    expect(prompt).toContain("UseMutationResult<void, unknown, string>");
+    expect(prompt).toContain("response: t.Null()");
     // The guide must state the TRUE source of `data`'s type — the API route's `response:` schema
     // via generate:api — NOT the (false) claim that the consumer annotation retypes `data`.
     expect(prompt).toContain("response:");
