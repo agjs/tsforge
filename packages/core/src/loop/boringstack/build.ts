@@ -29,6 +29,7 @@ import type {
   IAcceptanceRunner,
   IAcceptanceRunCtx,
   IAcceptanceSpec,
+  IAcceptanceOutcome,
 } from "../acceptance/acceptance.types";
 import { acceptanceSteer } from "../acceptance/acceptance-steer";
 import { readHostPorts, hostPortOr } from "../../scaffold";
@@ -448,21 +449,50 @@ async function runE2eAcceptance(
 
   // done:true ONLY when both the steer completed AND the re-run passed.
   const done = steerSend.status === "done" && reRun.ok;
-  // A truthful reason: the fast gate WAS green here — the block is e2e acceptance, not the
-  // lint/type ladder. Distinguish "the steer stalled" from "steer ran but browser assertions
-  // still fail", carrying the failing-step detail when we have it.
-  const detail =
-    reRun.detail ?? outcome.detail ?? "browser acceptance assertions failed";
-  const reason =
-    steerSend.status !== "done"
-      ? `fast gate green but e2e acceptance failed; the fix steer did not complete: ${detail}`
-      : `fast gate green but e2e acceptance still failing after the fix steer: ${detail}`;
 
   return {
     done,
     ...(steerSend.handoff !== undefined ? { handoff: steerSend.handoff } : {}),
-    ...(done ? {} : { reason }),
+    ...(done
+      ? {}
+      : {
+          reason: e2eParkReason(steerSend.status === "done", outcome, reRun),
+        }),
   };
+}
+
+/**
+ * Compose the truthful park reason for a feature whose fast gate was GREEN but e2e
+ * acceptance did not confirm. Pure + unit-tested. The three done:false shapes:
+ *  - re-run still failing (steer complete)   → still failing after the steer
+ *  - re-run still failing (steer incomplete) → still failing AND the steer stalled
+ *  - re-run PASSED but steer incomplete      → the app verified; only the steer stalled
+ *    (crucially NOT a stale "assertions failed" — that was the pre-steer state).
+ * Prefers the CURRENT (post-steer) failing detail; falls back to the pre-steer detail only
+ * when the re-run itself surfaced none.
+ */
+export function e2eParkReason(
+  steerComplete: boolean,
+  outcome: IAcceptanceOutcome,
+  reRun: IAcceptanceOutcome
+): string {
+  const failingDetail = (o: IAcceptanceOutcome): string | undefined =>
+    o.detail ?? o.results.find((r) => !r.ok)?.detail;
+
+  if (!reRun.ok) {
+    const detail =
+      failingDetail(reRun) ??
+      outcome.detail ??
+      "browser acceptance assertions failed";
+
+    return steerComplete
+      ? `fast gate green but e2e acceptance still failing after the fix steer: ${detail}`
+      : `fast gate green but e2e acceptance still failing AND the fix steer did not complete: ${detail}`;
+  }
+
+  // The re-run PASSED — the app verified. Parked only because the steer itself stalled;
+  // report exactly that, never a stale assertion failure.
+  return "fast gate green and e2e acceptance passed on re-run, but the fix steer did not complete cleanly";
 }
 
 /**

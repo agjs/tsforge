@@ -225,7 +225,11 @@ async function attemptFeature(
       feature.handoff = result.handoff;
     }
 
-    const why = result.reason ?? "escalation ladder exhausted";
+    // Every non-infra done:false from the boringstack impl carries a reason (fast-gate
+    // exhaustion / e2e failure / misconfig). The fallback is deliberately NEUTRAL, never a
+    // fabricated "ladder exhausted": if a future impl returns done:false without a reason,
+    // an honest "no reason reported" surfaces the gap instead of a plausible-but-wrong cause.
+    const why = result.reason ?? "no reason reported";
 
     say(`feature '${feature.id}': parked (${why}) — revisit later`);
 
