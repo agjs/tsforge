@@ -1106,6 +1106,35 @@ describe("verifyAcceptance — truthful park reason on done:false", () => {
     expect(result.reason).not.toContain("ladder exhausted");
   });
 
+  test("e2e failed AND the fix steer did not complete reports the steer-incomplete reason", async () => {
+    // The other done:false e2e branch: the browser assertions failed and the steer itself
+    // stalled (host.send returns a non-"done" status). The reason must name the steer stall.
+    const failing: IAcceptanceOutcome = {
+      ok: false,
+      results: [
+        { entity: "Company", step: "create", ok: false, detail: "no submit" },
+      ],
+      detail: "the create form never submitted",
+    };
+    const stuckHost = {
+      ...createHost(),
+      send: async () => ({ status: "stuck", turns: 1 }),
+    };
+    const result = await verifyAcceptance(
+      { status: "done" },
+      stuckHost,
+      "/tmp/does-not-exist",
+      acceptanceEntity(),
+      stubRunner([failing, failing]),
+      false,
+      undefined
+    );
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toContain("the fix steer did not complete");
+    expect(result.reason).toContain("the create form never submitted");
+  });
+
   test("all checks passing reports done with no reason", async () => {
     const passing: IAcceptanceOutcome = { ok: true, results: [] };
     const result = await verifyAcceptance(
