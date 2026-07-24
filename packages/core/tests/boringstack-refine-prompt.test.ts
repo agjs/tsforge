@@ -469,7 +469,14 @@ describe("refinePrompt", () => {
     // (`view.onSubmit` from `<Component>.hooks.ts`), NOT a body-local `const handleSubmit = () => {}`.
     expect(prompt).toContain("onSubmit={view.onSubmit}");
     expect(prompt).toContain("LoginPage.tsx");
-    expect(prompt).toContain("const handleSubmit = () => { … }");
+    // Pin the REQUIREMENT (not just that the anti-pattern string occurs): body-local const arrow
+    // forbidden, and the handler must be defined in the hook — not inline in the component body.
+    expect(prompt).toContain(
+      "Do NOT define it as a body-local `const handleSubmit = () => { … }`"
+    );
+    expect(prompt).toContain(
+      "must not DEFINE a handler inline in the component body"
+    );
     // Must forbid JSX in .ts files (JSX only compiles in .tsx).
     expect(prompt).toContain("JSX only compiles in `.tsx`");
     expect(prompt).toContain("Parsing error: '>' expected");
