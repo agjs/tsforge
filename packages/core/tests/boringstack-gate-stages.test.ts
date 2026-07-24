@@ -531,23 +531,20 @@ describe("signatureToError", () => {
     expect(err.message).not.toContain("let TS INFER");
   });
 
-  test("an optional-`data` not-assignable error (NO Readable) steers to the CONSUMER unwrap, never a schema rewrite", () => {
-    // The distinct OPTIONAL-data signature: schema is already correct, `data` is just optional. This
-    // has its OWN steer branch — it must NOT fall through unenriched, and must NOT tell the model to
-    // touch the API `response:` schema (that reopens near-green schema-thrash).
+  test("a generic optional-type mismatch is NOT hijacked by an api-client consumer-unwrap steer (no over-match)", () => {
+    // Guard against the reverted over-broad branch: a plain `string | undefined not assignable`
+    // (e.g. a PathsWithMethod call-site arg, or any generic optional error) must NOT be steered to
+    // "unwrap api-client data / do NOT rewrite the schema" — that mis-directs unrelated errors.
     const msg =
-      "Type 'IContactItem[] | undefined' is not assignable to type 'IContactItem[]'.";
+      "Argument of type 'string | undefined' is not assignable to parameter of type 'PathsWithMethod<paths, \"post\">'.";
     const err = signatureToError(
-      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fcontact%2FContact.queries.ts:14:no-unsafe:${encodeURIComponent(msg)}`
+      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fcontact%2FContact.mutations.ts:14:no-unsafe:${encodeURIComponent(msg)}`
     );
 
-    // It IS enriched (branch fires) with the consumer-unwrap guidance…
-    expect(err.message).toContain("value typed OPTIONAL");
-    expect(err.message).toContain("return data ?? []");
-    expect(err.message).toContain("do NOT rewrite the schema");
-    // …and it is NOT mis-steered to the API source (that is the Readable branch's job, not this one).
-    expect(err.message).not.toContain("FIX IT AT THE API SOURCE");
-    expect(err.message).not.toContain("UNTYPED-BODY FALLBACK");
+    // It routes to the PathsWithMethod steer (call-site path/verb), NOT an api-client unwrap steer.
+    expect(err.message).toContain("PathsWithMethod");
+    expect(err.message).not.toContain("do NOT rewrite the schema");
+    expect(err.message).not.toContain("value typed OPTIONAL");
   });
 
   test("a `'>' expected` in a .ts flags the JSX-must-be-.tsx cause; other .ts parse errors do NOT", () => {
