@@ -12,6 +12,11 @@ import {
 } from "../src/loop/acceptance/acceptance-spec";
 import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
 
+/** Wrap testids as REAL JSX attributes (a fragment of self-closing elements) so the
+ *  AST-based checkTestIds sees genuine JsxAttributes, not bare strings. */
+const asJsx = (ids: string[]): string =>
+  `<>${ids.map((id) => `<i data-testid="${id}" />`).join("")}</>;`;
+
 /** Build a minimal entity where the FIRST field is a parent FK (the distinguishing case the
  *  Contact fixture can't exercise — its first field "name" is already non-FK). */
 const fkFirstEntity: IEntityAcceptance = {
@@ -299,7 +304,7 @@ describe("checkTestIds", () => {
   test("agreement: enforces exactly the required testids", () => {
     // Build a source with ALL required testids
     const required = requiredTestIds(contact);
-    const source = required.map((id) => `data-testid="${id}"`).join(" ");
+    const source = asJsx(required);
 
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
@@ -311,7 +316,7 @@ describe("checkTestIds", () => {
     // matched only double quotes and reported every present testid as missing,
     // parking every feature. A single-quoted source with ALL testids must pass.
     const required = requiredTestIds(contact);
-    const source = required.map((id) => `data-testid='${id}'`).join(" ");
+    const source = asJsx(required);
 
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
@@ -322,10 +327,7 @@ describe("checkTestIds", () => {
     const ids = testIdsFor(contact.key);
     const required = requiredTestIds(contact);
     // single-quoted source missing only the "name" field testid
-    const source = required
-      .filter((id) => id !== ids.field("name"))
-      .map((id) => `data-testid='${id}'`)
-      .join(" ");
+    const source = asJsx(required.filter((id) => id !== ids.field("name")));
 
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
@@ -338,7 +340,7 @@ describe("checkTestIds", () => {
 
     // Build source with all IDs EXCEPT nav
     const otherIds = required.filter((id) => !id.includes("nav"));
-    const source = otherIds.map((id) => `data-testid="${id}"`).join(" ");
+    const source = asJsx(otherIds);
 
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
@@ -352,7 +354,7 @@ describe("checkTestIds", () => {
 
     // Build source missing the "name" field testid
     const otherIds = required.filter((id) => id !== ids.field("name"));
-    const source = otherIds.map((id) => `data-testid="${id}"`).join(" ");
+    const source = asJsx(otherIds);
 
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
@@ -365,7 +367,7 @@ describe("checkTestIds", () => {
 
     // Build source missing the "companyId" field testid (parent FK)
     const otherIds = required.filter((id) => id !== ids.field("companyId"));
-    const source = otherIds.map((id) => `data-testid="${id}"`).join(" ");
+    const source = asJsx(otherIds);
 
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
@@ -378,7 +380,7 @@ describe("checkTestIds", () => {
 
     // Build source missing the "email" row cell testid
     const otherIds = required.filter((id) => id !== ids.rowCell("email"));
-    const source = otherIds.map((id) => `data-testid="${id}"`).join(" ");
+    const source = asJsx(otherIds);
 
     const result = checkTestIds(new Map([["test.tsx", source]]), contact);
 
@@ -770,5 +772,73 @@ describe("checkWiring — comment/string mentions do NOT count as wiring (panel 
 
     // useContact IS genuinely called (not hidden by the URL's //) → not dead.
     expect(checkWiring(files, ce)).not.toContain("useContact");
+  });
+});
+
+describe("checkWiring — AST robustness (regex-literal bypass + generics)", () => {
+  const ce: IEntityAcceptance = {
+    id: "Contact",
+    key: "contact",
+    nav: "Contacts",
+    fields: [
+      {
+        name: "name",
+        type: "string",
+        optional: false,
+        valid: "A",
+        invalid: [],
+      },
+    ],
+    shows: ["name"],
+    screens: ["list", "form"],
+    parents: [],
+    negatives: [],
+    acceptanceCheck: "create a contact",
+  };
+  const defs: [string, string][] = [
+    ["Contact.queries.ts", "export function useContact() { return []; }"],
+    [
+      "Contact.mutations.ts",
+      "export function useCreateContact() {} export function useUpdateContact() {} export function useDeleteContact() {}",
+    ],
+  ];
+
+  test("hook names inside REGEX LITERALS are NOT wiring (the round-2 critical bypass)", () => {
+    const files = new Map<string, string>([
+      ...defs,
+      [
+        "components/ContactPage/ContactPage.tsx",
+        `export const ContactPage = () => {
+           void [/useContact()/, /useCreateContact()/, /useUpdateContact()/, /useDeleteContact()/];
+           return <main data-testid='contact-list'>-</main>;
+         };`,
+      ],
+    ]);
+    const dead = checkWiring(files, ce);
+
+    expect(dead).toContain("useContact");
+    expect(dead).toContain("useCreateContact");
+    expect(dead).toContain("useUpdateContact");
+    expect(dead).toContain("useDeleteContact");
+  });
+
+  test("a call WITH explicit generics counts as wired (AST matches, regex would miss)", () => {
+    const files = new Map<string, string>([
+      ...defs,
+      [
+        "components/ContactPage/ContactPage.tsx",
+        `import { useContact } from "../../Contact.queries";
+         import { useCreateContact, useUpdateContact, useDeleteContact } from "../../Contact.mutations";
+         export const ContactPage = () => {
+           const rows = useContact();
+           const c = useCreateContact<never>();
+           const u = useUpdateContact<never>();
+           const d = useDeleteContact<never>();
+           return <div>{rows.length}{String(c)}{String(u)}{String(d)}</div>;
+         };`,
+      ],
+    ]);
+
+    expect(checkWiring(files, ce)).toEqual([]);
   });
 });
