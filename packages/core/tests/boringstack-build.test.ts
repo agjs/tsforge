@@ -10,6 +10,7 @@ import {
   rescueFileFor,
   runBoringstackBuild,
   scopeFor,
+  readResourceCode,
   APP_SCHEMA_FILE,
   LOCALE_GLOB,
 } from "../src/loop/boringstack/build";
@@ -698,6 +699,59 @@ describe("runBoringstackBuild", () => {
       } else {
         process.env.TSFORGE_NO_E2E_ACCEPTANCE = originalEnv;
       }
+    }
+  });
+});
+
+describe("readResourceCode — feeds the completeness judge", () => {
+  test("includes .tsx COMPONENTS (not just .ts) and excludes test/story files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-"));
+
+    try {
+      const uiComp = join(
+        dir,
+        "apps/ui/src/features/company/components/CompanyPage"
+      );
+
+      await mkdir(uiComp, { recursive: true });
+      await mkdir(join(dir, "apps/api/src/api/company"), { recursive: true });
+
+      await writeFile(
+        join(dir, "apps/api/src/api/company/company.service.ts"),
+        "export const companyService = 1;\n"
+      );
+      // The React component the judge must see — a .tsx, previously dropped by the .ts-only filter.
+      await writeFile(
+        join(uiComp, "CompanyPage.tsx"),
+        "export const CompanyPage = () => <main>COMPONENT_MARKER</main>;\n"
+      );
+      await writeFile(
+        join(uiComp, "CompanyPage.hooks.ts"),
+        "export const useCompanyPage = () => HOOK_MARKER;\n"
+      );
+      // A test + story that must NOT eat the judge's budget.
+      await writeFile(
+        join(uiComp, "CompanyPage.test.tsx"),
+        "// TEST_MARKER should be excluded\n"
+      );
+      await writeFile(
+        join(uiComp, "CompanyPage.stories.tsx"),
+        "// STORY_MARKER should be excluded\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      // The .tsx component is now included (the core fix).
+      expect(code).toContain("COMPONENT_MARKER");
+      expect(code).toContain("CompanyPage.tsx");
+      // .ts logic still included; API still included.
+      expect(code).toContain("HOOK_MARKER");
+      expect(code).toContain("companyService");
+      // Test + story files are excluded (they don't help completeness judging + waste budget).
+      expect(code).not.toContain("TEST_MARKER");
+      expect(code).not.toContain("STORY_MARKER");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

@@ -185,7 +185,12 @@ export async function readResourceCode(
 ): Promise<string> {
   const camel = toCamelCase(name);
   const blocks: string[] = [];
-  const maxChars = 16000;
+  // Budget must fit a full feature (API + UI components + hooks) so the completeness
+  // JUDGE actually sees the code. 16000 truncated real features mid-UI, which made the
+  // judge reject a code-green feature forever ("component truncated, cannot verify") —
+  // an unfixable-by-the-model wall. The models here carry ≥1M-token context, so a
+  // generous char budget is safe.
+  const maxChars = 96000;
   let totalLen = 0;
 
   // Read API resource files (apps/api/src/api/<camel>/)
@@ -220,9 +225,23 @@ export async function readResourceCode(
 
     try {
       const uiFiles = await readdir(uiDir, { recursive: true });
-      const tsFiles = uiFiles.filter(
-        (f): f is string => typeof f === "string" && f.endsWith(".ts")
-      );
+      // Include .tsx/.jsx — the React COMPONENTS (Page/Form) live in .tsx. The old
+      // `.ts`-only filter dropped every component, so the completeness judge never saw
+      // the UI it was asked to verify and rejected the feature as "component not shown".
+      // Sort so components (.tsx) come BEFORE co-located tests, so the judge sees the
+      // real UI first if the budget is ever tight.
+      const tsFiles = uiFiles
+        .filter(
+          (f): f is string =>
+            typeof f === "string" &&
+            (f.endsWith(".ts") || f.endsWith(".tsx") || f.endsWith(".jsx")) &&
+            !/\.(test|spec|stories)\.[jt]sx?$/u.test(f)
+        )
+        .sort((a, b) => {
+          const rank = (f: string): number => (f.endsWith("x") ? 0 : 1);
+
+          return rank(a) - rank(b);
+        });
 
       for (const file of tsFiles) {
         const relPath = `apps/ui/src/features/${camel}/${file}`;
