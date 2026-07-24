@@ -127,13 +127,26 @@ export const APP_ROUTES_FILE = "apps/ui/src/app/router/routes.tsx";
 export const APP_SIDEBAR_TEST_FILE =
   "apps/ui/src/components/core/AppSidebar/AppSidebar.test.tsx";
 
-export function scopeFor(name: string): string[] {
+/**
+ * The feature-EXCLUSIVE directories the model may FULLY REWRITE — its own API resource, its API
+ * tests, and its UI feature. These are safe rewrite targets because no other feature owns them.
+ * Distinct from the shared ADD-ONLY files (schema/locale/sidebar/routes/sidebar-test) that
+ * `scopeFor` also grants edit access to: those are add-only and must NEVER be named for a wholesale
+ * rewrite (it would clobber sibling features), so the parse-error locator uses ONLY these globs.
+ */
+export function featureOwnedGlobs(name: string): string[] {
   const camel = toCamelCase(name);
 
   return [
     `apps/api/src/api/${camel}/**`,
     `apps/api/tests/api/${camel}/**`,
     `apps/ui/src/features/${camel}/**`,
+  ];
+}
+
+export function scopeFor(name: string): string[] {
+  return [
+    ...featureOwnedGlobs(name),
     // The entity's table + columns live in the shared app schema (not the resource
     // dir), so a greenfield build must let the model add its domain columns there.
     APP_SCHEMA_FILE,
@@ -389,6 +402,7 @@ export function boringstackDeps(opts: {
       // model then fills the domain INSIDE the loop, checked by the live gate.
       await generate(cwd, feature.id, exec);
       await genUi(cwd, feature.id, exec);
+
       host.setScope(scopeFor(feature.id));
       // The editable file the expert repairs if a stall's errors are all out of
       // scope (locked consumers of this feature's types) — its service file.
