@@ -9,6 +9,57 @@ import {
   planToAcceptanceSpec,
   testIdsFor,
 } from "../src/loop/acceptance/acceptance-spec";
+import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
+
+/** Build a minimal entity where the FIRST field is a parent FK (the distinguishing case the
+ *  Contact fixture can't exercise — its first field "name" is already non-FK). */
+const fkFirstEntity: IEntityAcceptance = {
+  id: "Membership",
+  key: "membership",
+  nav: "Memberships",
+  fields: [
+    {
+      name: "userId",
+      type: "string",
+      optional: false,
+      valid: "u1",
+      invalid: [],
+    },
+    {
+      name: "role",
+      type: "string",
+      optional: false,
+      valid: "admin",
+      invalid: [],
+    },
+  ],
+  shows: ["role"],
+  screens: ["list", "form"],
+  parents: [{ entity: "User", key: "user", fkField: "userId" }],
+  negatives: [],
+  acceptanceCheck: "create a membership",
+};
+
+/** An entity whose ONLY field is a parent FK — the all-FK edge (join/link entity). */
+const allFkEntity: IEntityAcceptance = {
+  id: "Link",
+  key: "link",
+  nav: "Links",
+  fields: [
+    {
+      name: "userId",
+      type: "string",
+      optional: false,
+      valid: "u1",
+      invalid: [],
+    },
+  ],
+  shows: [],
+  screens: ["list", "form"],
+  parents: [{ entity: "User", key: "user", fkField: "userId" }],
+  negatives: [],
+  acceptanceCheck: "create a link",
+};
 
 // Create a test entity with fields, shows, and a parent relationship
 const testPlan: IProductPlan = {
@@ -150,6 +201,82 @@ describe("buildTestIdGuide", () => {
       expect(guide).toContain(parent.key);
       expect(guide).toContain(parent.fkField);
     }
+  });
+
+  test("directs a parent FK field to a native <select> (Playwright selectOption), NOT an <input>", () => {
+    // build35 Contact parked: the model built companyId as an <input>, but acceptance uses Playwright
+    // selectOption which only works on a native <select>. The guide must mandate a <select>.
+    const guide = buildTestIdGuide(contact);
+    const ids = testIdsFor(contact.key);
+
+    expect(guide).toContain("native `<select>`");
+    expect(guide).toContain("selectOption");
+    // The FK field's testid appears attached to a <select>, not a plain input.
+    expect(guide).toContain(`<select data-testid="${ids.field("companyId")}">`);
+  });
+
+  test("does NOT list a parent FK field among the plain <input> form fields", () => {
+    // The FK field must not be double-listed as a plain input (which is what led the model to build
+    // an <input>). It's flagged as NOT a plain input and deferred to the relationship selectors.
+    const guide = buildTestIdGuide(contact);
+    const ids = testIdsFor(contact.key);
+
+    expect(guide).toContain("are NOT plain inputs");
+    // The non-FK fields ARE still listed as plain inputs.
+    expect(guide).toContain('for the "name" field');
+    expect(guide).toContain('for the "email" field');
+    // CRITICAL (regression the park was caused by): companyId must NOT appear as a plain-input
+    // form-field bullet. The plain-field bullets read `data-testid="…" for the "<field>" field`;
+    // assert that exact phrasing is absent for companyId (it lives in the <select> section instead).
+    expect(guide).not.toContain(
+      `\`data-testid="${ids.field("companyId")}"\` for the "companyId" field`
+    );
+  });
+
+  test("Pattern example names a NON-FK field even when the FIRST field IS a parent FK", () => {
+    // Distinguishing case the Contact fixture can't exercise (its fields[0]="name" is already non-FK).
+    // Here fields[0]="userId" IS the FK, so a regression to entity.fields[0] would show the FK as an
+    // <input> — contradicting the <select> mandate. The example must pick "role" (the non-FK field).
+    const guide = buildTestIdGuide(fkFirstEntity);
+    const ids = testIdsFor(fkFirstEntity.key);
+
+    expect(guide).toContain(`<input data-testid="${ids.field("role")}" />`);
+    // The FK is NEVER shown as an <input> in the example.
+    expect(guide).not.toContain(`<input data-testid="${ids.field("userId")}"`);
+  });
+
+  test("all-FK entity: Pattern example shows a <select>, NEVER an <input> of the FK", () => {
+    // Edge: an entity whose only field is a parent FK must not fall back to rendering it as an <input>.
+    const guide = buildTestIdGuide(allFkEntity);
+    const ids = testIdsFor(allFkEntity.key);
+
+    expect(guide).toContain(`<select data-testid="${ids.field("userId")}">`);
+    expect(guide).not.toContain(`<input data-testid="${ids.field("userId")}"`);
+    // shows=[] → NO row-cell example (rowCell testids exist only for shows; never invent one).
+    expect(guide).not.toContain("In the table row:");
+    expect(guide).not.toContain(ids.rowCell("userId"));
+  });
+
+  test("empty-fields entity: invents NO field name and emits NO row-cell example", () => {
+    // Edge (round-3 finding): with fields=[] and shows=[], the guide must not invent "name" nor
+    // reference record.name / a rowCell testid that isn't in the contract.
+    const emptyEntity: IEntityAcceptance = {
+      id: "Blank",
+      key: "blank",
+      nav: "Blanks",
+      fields: [],
+      shows: [],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a blank",
+    };
+    const guide = buildTestIdGuide(emptyEntity);
+
+    expect(guide).not.toContain("In the table row:");
+    expect(guide).not.toContain("record.name");
+    // Falls to the generic form-field note (no invented field, no <select>/<input> of a fake field).
+    expect(guide).toContain("give each form field a `data-testid`");
   });
 
   test("guide agreement: contains exactly the required testids", () => {

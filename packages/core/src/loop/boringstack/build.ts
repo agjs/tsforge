@@ -35,11 +35,13 @@ import { readHostPorts, hostPortOr } from "../../scaffold";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
 /** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
- *  `format` (prettier, canonical formatting) then `lint:fix` (eslint --fix for the
- *  auto-fixable lint rules prettier can't touch — padding-line, import order, etc.).
- *  Neither changes logic, so neither should ever cost the model a gate attempt — a
- *  dev gets both on save. Best-effort: a missing script or non-zero exit is ignored;
- *  the gate stays the source of truth. */
+ *  `lint:fix` (eslint --fix for the auto-fixable lint rules — padding-line, import order, etc.)
+ *  then `format` (prettier, canonical formatting) — in THAT order, prettier LAST. Neither changes
+ *  logic, so neither should ever cost the model a gate attempt — a dev gets both on save. The
+ *  order is load-bearing: prettier must run after eslint --fix so the gate's `format:check`
+ *  always converges (if prettier ran first, eslint --fix could re-format after it and format:check
+ *  would then fail with nothing left to fix it — see the ORDER MATTERS note in the body).
+ *  Best-effort: a missing script or non-zero exit is ignored; the gate stays the source of truth. */
 export async function autofixApps(cwd: string, exec: Exec): Promise<void> {
   for (const app of ["apps/api", "apps/ui"]) {
     const appCwd = join(cwd, app);
@@ -53,8 +55,16 @@ export async function autofixApps(cwd: string, exec: Exec): Promise<void> {
     // acceptance — a gate-parity hole (4/4 panel). `lint:fix` re-populates a fresh cache
     // for this cycle right after, so the later `check` → `lint` read stays fast AND sound.
     await exec(["rm", "-f", ".eslintcache"], { cwd: appCwd });
-    await exec(["bun", "run", "format"], { cwd: appCwd });
+    // ORDER MATTERS: `lint:fix` (eslint --fix) BEFORE `format` (prettier --write) — prettier must
+    // be the LAST formatter. If prettier runs first and eslint --fix then re-formats (import order,
+    // etc.), the gate's later `format:check` (prettier --check) fails on what eslint --fix changed,
+    // and since prettier --write already ran there's nothing left to converge it — the build burns
+    // cycles on a format error autofix can't clear (live: build44 Contact hit `format:check` on
+    // ContactPage.types.ts every cycle → opaqueGateError). Running prettier LAST gives it the final
+    // say, so `format:check` is always clean. (Prettier changing a file after lint:fix invalidates
+    // only that file's eslint-cache entry, which the gate then re-lints — still sound.)
     await exec(["bun", "run", "lint:fix"], { cwd: appCwd });
+    await exec(["bun", "run", "format"], { cwd: appCwd });
   }
 }
 
@@ -127,13 +137,26 @@ export const APP_ROUTES_FILE = "apps/ui/src/app/router/routes.tsx";
 export const APP_SIDEBAR_TEST_FILE =
   "apps/ui/src/components/core/AppSidebar/AppSidebar.test.tsx";
 
-export function scopeFor(name: string): string[] {
+/**
+ * The feature-EXCLUSIVE directories the model may FULLY REWRITE — its own API resource, its API
+ * tests, and its UI feature. These are safe rewrite targets because no other feature owns them.
+ * Distinct from the shared ADD-ONLY files (schema/locale/sidebar/routes/sidebar-test) that
+ * `scopeFor` also grants edit access to: those are add-only and must NEVER be named for a wholesale
+ * rewrite (it would clobber sibling features), so the parse-error locator uses ONLY these globs.
+ */
+export function featureOwnedGlobs(name: string): string[] {
   const camel = toCamelCase(name);
 
   return [
     `apps/api/src/api/${camel}/**`,
     `apps/api/tests/api/${camel}/**`,
     `apps/ui/src/features/${camel}/**`,
+  ];
+}
+
+export function scopeFor(name: string): string[] {
+  return [
+    ...featureOwnedGlobs(name),
     // The entity's table + columns live in the shared app schema (not the resource
     // dir), so a greenfield build must let the model add its domain columns there.
     APP_SCHEMA_FILE,
@@ -389,6 +412,7 @@ export function boringstackDeps(opts: {
       // model then fills the domain INSIDE the loop, checked by the live gate.
       await generate(cwd, feature.id, exec);
       await genUi(cwd, feature.id, exec);
+
       host.setScope(scopeFor(feature.id));
       // The editable file the expert repairs if a stall's errors are all out of
       // scope (locked consumers of this feature's types) — its service file.

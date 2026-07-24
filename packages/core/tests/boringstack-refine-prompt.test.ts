@@ -526,4 +526,100 @@ describe("refinePrompt", () => {
     expect(prompt).not.toContain("a spread of the constant is fine");
     expect(prompt).not.toContain("QUERY_KEYS.list()");
   });
+
+  it("bans STATE-primitive hooks in the JSX body but ALLOWS custom hooks / useTranslation inline", () => {
+    // build36 Company ground near-green on "must be in a custom hook (.hooks.ts), not in component
+    // body". The rule bans only the STATE primitives directly in a JSX-returning body; custom hooks,
+    // useTranslation(), and useId/useTransition/useDeferredValue are legal in the body (the scaffold's
+    // JoinRequestsPage body calls both useTranslation() and useJoinRequestsPage()).
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business the sales team works with",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("STATE-PRIMITIVE hooks");
+    // The exact eslint message (accurate, not a paraphrase).
+    expect(prompt).toContain(
+      "must be in a custom hook (.hooks.ts), not in component body"
+    );
+    // The exceptions the eslint rule + scaffold require MUST be documented (not an over-broad ban).
+    expect(prompt).toContain("useTranslation()");
+    expect(prompt).toContain("useJoinRequestsPage()");
+    // The default-allowed built-ins are also legal inline — pin them so a regression can't drop them.
+    expect(prompt).toContain("useId");
+    expect(prompt).toContain("useTransition");
+    expect(prompt).toContain("useDeferredValue");
+    // makeIdHandler is the no-hook row-handler fix.
+    expect(prompt).toContain("NO hook at all");
+    // The old trap phrasing must be gone.
+    expect(prompt).not.toContain(
+      "child component with a useCallback is an alternative"
+    );
+    // And it must NOT freeze either over-broad/impossible wording from earlier rounds.
+    expect(prompt).not.toContain("may NEVER be called in a component body");
+    expect(prompt).not.toContain("may only CALL that one custom hook");
+  });
+
+  it("teaches the exact no-jsx-computation idiom (const list + bare identifier; warns the declare-but-inline rotation)", () => {
+    // build38 Contact parked here: the model declared `const companyOptions = companies.map(...)` but
+    // ALSO inlined `{companies.map(...)}` in the <select> → no-jsx-computation (inline map) +
+    // no-unused-vars (ignored const), which rotate. The guide must name the exact rule + fix + trap.
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("no-jsx-computation");
+    // The compliant idiom: reference the bare identifier in JSX, never inline the array method.
+    expect(prompt).toContain("{renderRows}");
+    expect(prompt).toContain("never inline the");
+    // The rotation trap is called out explicitly (declare const + inline map → two rotating errors).
+    expect(prompt).toContain("no-unused-vars");
+  });
+
+  it("warns that every NEW component needs the FULL sibling set → don't extract sub-components", () => {
+    // build36 hit component-folder-structure: a new 'CompanyFormField' demanded .hooks/.types/
+    // .stories/.test/index siblings. The guide must warn and steer to inline instead.
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("component-folder-structure");
+    expect(prompt).toContain("Do NOT create new sub-components");
+    // Pin the FULL required sibling set (a partial regression of this list must fail).
+    expect(prompt).toContain(".hooks.ts");
+    expect(prompt).toContain(".types.ts");
+    expect(prompt).toContain(".stories.tsx");
+    expect(prompt).toContain(".test.tsx");
+    expect(prompt).toContain("index.ts");
+  });
+
+  it("teaches the test-file extension rule: a test that renders JSX must be .test.tsx", () => {
+    // build33/35 parked on `.hooks.test.ts` files that render JSX → `'>' expected`.
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain(".test.tsx");
+    expect(prompt).toContain("hooks.test.tsx");
+    expect(prompt).toContain("renderHook");
+  });
 });

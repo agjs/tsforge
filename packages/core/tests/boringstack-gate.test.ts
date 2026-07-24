@@ -53,7 +53,7 @@ describe("runBoringstackGate", () => {
     // the feature tests — the stage ends with `&& bun run test -- run src/features)`.
     expect(cmd).toContain("cd apps/ui && bun run generate:api &&");
     expect(cmd).toContain(
-      "&& bun run check && bun run test -- run src/features)"
+      "&& bun run check && bun run test -- run src/features src/components/core/AppSidebar)"
     );
     // The slow acceptance-only work must NOT be in the per-cycle gate.
     expect(cmd).not.toContain("bun run validate");
@@ -74,6 +74,12 @@ describe("runBoringstackGate", () => {
     expect(cmd).toContain("bun run test -- run src/features");
     expect(cmd.indexOf("bun run test -- run src/features")).toBeGreaterThan(
       cmd.indexOf("cd apps/ui")
+    );
+    // …AND the AppSidebar test dir (gate-parity: every nav-adding feature breaks its exact-count
+    // assertion, but it lives outside src/features so it only failed at FINAL acceptance — build39
+    // shipped a fast-gate-green feature that then failed the sidebar count. It must be an in-loop error.
+    expect(cmd).toContain(
+      "bun run test -- run src/features src/components/core/AppSidebar"
     );
   });
 

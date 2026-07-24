@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { readdir, readFile } from "node:fs/promises";
+import ts from "typescript";
 import type { IGate, IStage } from "../../gate/gate-runner";
 import { composeGate, differentialStage } from "../../gate/gate-runner";
 import type { IValidateResult, IErrorItem } from "../../validate";
@@ -10,7 +11,12 @@ import { runBoringstackGate } from "./gate";
 import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
 import { judgeFeature } from "../greenfield/judge";
-import { autofixApps, readResourceCode, rescueFileFor } from "./build";
+import {
+  autofixApps,
+  featureOwnedGlobs,
+  readResourceCode,
+  rescueFileFor,
+} from "./build";
 import type { IEntityAcceptance } from "../acceptance/acceptance.types";
 import { checkTestIds } from "./acceptance/testid-contract";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
@@ -91,13 +97,13 @@ export function signatureToError(sig: string): IErrorItem {
       rule: "eslint-program-unparsable",
       phase: 2,
       message:
-        "The TypeScript-aware lint could not build its program: ONE file has a real " +
-        "syntax/parse error (`Parsing error: … expected`), which makes ESLint report a " +
-        "`parserOptions.project` parse error on EVERY .tsx file. This is ONE broken " +
-        "file, not many separate errors — do NOT chase the per-file parse errors. Find " +
-        "the file with the actual `Parsing error: … expected` and REWRITE IT IN FULL " +
-        "(a surgical patch on an already-broken file usually re-breaks its braces/" +
-        "generics). Once that file parses, the whole cascade clears at once.",
+        "The TypeScript-aware lint could not build its program: one or more source files have a " +
+        "real syntax/parse error (`Parsing error: … expected`), which makes ESLint report a " +
+        "`parserOptions.project` parse error on many files at once — do NOT chase the per-file " +
+        "cascade. Find the genuine syntax error(s) in the files YOU OWN (your feature's own dirs) " +
+        "and fix each cleanly; a `.ts` file that contains JSX must be renamed to `.tsx` (a `.ts` " +
+        "parses `<X>` as a generic and demands `>`). Do NOT wholesale-rewrite shared files. Every " +
+        "broken file must parse before the cascade clears.",
     };
   }
 
@@ -199,7 +205,208 @@ function opaqueGateError(output: string, cwd: string): IErrorItem {
  * becomes an `IErrorItem` whose `key` IS the signature — so the differential
  * wrapper can suppress baseline signatures and `checkStuck` can fingerprint them.
  */
-export function boringstackCommandStage(cwd: string, exec: Exec): IStage {
+/** Cap the pinpoint detail; longer messages get an explicit truncation marker (never silent). */
+const PARSE_DETAIL_CAP = 200;
+const PARSE_TRUNCATION_MARKER = "…(truncated)";
+
+/**
+ * Report the FIRST genuine SYNTAX error in one source file, or null if it parses.
+ *
+ * Uses `Program.getSyntacticDiagnostics` — syntax-only BY CONTRACT (no type-checking, no
+ * semantic/`isolatedModules` diagnostics), so it agrees exactly with what typescript-eslint's
+ * parser reports as a "Parsing error". A file that is valid TypeScript — `const enum`,
+ * `import type`, a `<T,>` generic — is NEVER falsely fingered (`transpileModule` would flag
+ * some of these; the parser will not). The program is single-file and in-memory (`noLib` +
+ * `noResolve`), so no lib/type resolution runs. Returns `line L:C — <message>`, truncation-marked.
+ */
+function firstSyntaxError(code: string, fileName: string): string | null {
+  const scriptKind = fileName.endsWith(".tsx")
+    ? ts.ScriptKind.TSX
+    : ts.ScriptKind.TS;
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    code,
+    ts.ScriptTarget.Latest,
+    /*setParentNodes*/ true,
+    scriptKind
+  );
+
+  const host: ts.CompilerHost = {
+    getSourceFile: (name) => (name === fileName ? sourceFile : undefined),
+    getDefaultLibFileName: () => "lib.d.ts",
+    writeFile: () => undefined,
+    getCurrentDirectory: () => "",
+    getDirectories: () => [],
+    getCanonicalFileName: (name) => name,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => "\n",
+    fileExists: (name) => name === fileName,
+    readFile: () => undefined,
+  };
+
+  const program = ts.createProgram(
+    [fileName],
+    {
+      jsx: ts.JsxEmit.Preserve,
+      target: ts.ScriptTarget.Latest,
+      module: ts.ModuleKind.ESNext,
+      noLib: true,
+      noResolve: true,
+    },
+    host
+  );
+
+  // getSyntacticDiagnostics returns DiagnosticWithLocation (file + start guaranteed) and is
+  // syntax-only by contract — the first entry, if any, is the genuine parse error.
+  const diag = program.getSyntacticDiagnostics(sourceFile)[0];
+
+  if (diag === undefined) {
+    return null;
+  }
+
+  const { line, character } = diag.file.getLineAndCharacterOfPosition(
+    diag.start
+  );
+  const message = ts.flattenDiagnosticMessageText(diag.messageText, " ");
+  const detail = `line ${line + 1}:${character + 1} — ${message}`;
+
+  return detail.length > PARSE_DETAIL_CAP
+    ? `${detail.slice(0, PARSE_DETAIL_CAP)}${PARSE_TRUNCATION_MARKER}`
+    : detail;
+}
+
+/** True if `file` (repo-relative) falls under any of the scope globs the model may edit. */
+function fileInScope(file: string, scopeGlobs: readonly string[]): boolean {
+  return scopeGlobs.some((glob) => new Bun.Glob(glob).match(file));
+}
+
+/** First syntax error in one file, or null — swallowing ANY throw (unreadable file, parser/program
+ *  error) so a single bad file skips ONLY itself and the scan keeps going to later files. */
+async function safeFirstSyntaxError(
+  absPath: string,
+  fileName: string
+): Promise<string | null> {
+  try {
+    return firstSyntaxError(await Bun.file(absPath).text(), fileName);
+  } catch {
+    return null;
+  }
+}
+
+/** Which app section(s) of the composed-gate output actually show the `parserOptions.project`
+ *  cascade — so the locator scans the app that FAILED, not blindly apps/api then apps/ui. The
+ *  output echoes `::tsforge-app <app>::` before each app's stages (see gate.ts). Empty when no
+ *  section matches → enrichUnparsable stays a silent no-op (there is NO both-apps fallback: we do
+ *  not guess an app the output didn't implicate). */
+function appsWithParseCascade(output: string): string[] {
+  const parts = output.split(/::tsforge-app (\S+)::/u);
+  const apps: string[] = [];
+
+  // split with a capture group yields [pre, app1, body1, app2, body2, …].
+  for (let i = 1; i + 1 < parts.length; i += 2) {
+    const app = parts[i] ?? "";
+    const body = parts[i + 1] ?? "";
+
+    if (
+      (app === "apps/api" || app === "apps/ui") &&
+      /parserOptions\.project|ESLint was configured to run on/u.test(body)
+    ) {
+      apps.push(app);
+    }
+  }
+
+  return apps;
+}
+
+/**
+ * Pinpoint the ONE file with a real syntax error behind an `eslint-program-unparsable` cascade.
+ * The type-aware ESLint program fails to build off a single broken file yet fans a
+ * `parserOptions.project` parse error across EVERY file, so its output can't say which file is
+ * actually broken — and the model thrashes near-green hunting for it. Re-parse each source file
+ * in ISOLATION with the TypeScript parser (`firstSyntaxError`) and return the first genuinely
+ * malformed one that PASSES `isRewritable` (repo-relative) + its located message. Same parser as
+ * the lint, so it cannot mis-name a healthy file. `appsToScan` is the app(s) whose gate section
+ * actually showed the cascade — so a UI cascade is never mis-attributed to an unrelated API syntax
+ * error. `isRewritable` is applied DURING the scan (not to a single first hit): a broken file the
+ * model can't rewrite is skipped and the scan continues, so a later rewritable broken file is still
+ * found. Scans `{src,tests}` (feature scope includes `apps/api/tests/…`). Best-effort; never throws.
+ */
+export async function locateParseError(
+  cwd: string,
+  appsToScan: readonly string[],
+  isRewritable: (repoRelPath: string) => boolean
+): Promise<{ file: string; detail: string } | null> {
+  for (const app of appsToScan) {
+    const root = join(cwd, app);
+
+    try {
+      const glob = new Bun.Glob("{src,tests}/**/*.{ts,tsx}");
+
+      for await (const rel of glob.scan({ cwd: root })) {
+        const file = `${app}/${rel}`;
+
+        if (!isRewritable(file)) {
+          continue;
+        }
+
+        const detail = await safeFirstSyntaxError(join(root, rel), rel);
+
+        if (detail !== null) {
+          return { file, detail };
+        }
+      }
+    } catch {
+      // glob/scan setup failure is non-fatal — enrichUnparsable still fails safe below.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * APPEND a high-confidence pointer to the file-less `eslint-program-unparsable` message — and ONLY
+ * a high-confidence one. We do NOT try to reconstruct ESLint's project graph; we add a hint only
+ * when all of these hold, otherwise we stay silent and leave the (generic) base message intact:
+ *   • the cascade was attributed to a specific failing app (`appsToScan` non-empty), AND
+ *   • a FEATURE-OWNED file (a dir the model may fully rewrite — never a shared add-only file) in
+ *     that app has a GENUINE syntax error (getSyntacticDiagnostics — never a config/inclusion
+ *     error, so a `parserOptions.project` message that is really a TSConfig problem is never
+ *     mis-labelled a syntax error).
+ * The hint is APPEND-ONLY and AGREES with the base ("find the broken file and rewrite it"), so it
+ * can never contradict it; it names only a feature-owned file (no ownership bypass, no shared-file
+ * clobber); it never mutates `.file`/phase (no file-vs-phase disagreement). The wording makes NO
+ * "this is the only broken file / the cascade will fully clear" claim — with two or more broken
+ * files that would mis-steer — it states the true, useful fact: this owned file has a real syntax
+ * error and must be fixed (and there may be more). When any condition fails, the base stands.
+ */
+async function enrichUnparsable(
+  unparsable: IErrorItem,
+  cwd: string,
+  rewritableGlobs: readonly string[],
+  appsToScan: readonly string[]
+): Promise<void> {
+  if (appsToScan.length === 0 || rewritableGlobs.length === 0) {
+    return;
+  }
+
+  const located = await locateParseError(cwd, appsToScan, (file) =>
+    fileInScope(file, rewritableGlobs)
+  );
+
+  if (located === null) {
+    return;
+  }
+
+  unparsable.message +=
+    ` → A real syntax error is in \`${located.file}\` (${located.detail}), a file you own — fix ` +
+    `it (there may be more than one broken file; every one must parse before the cascade clears).`;
+}
+
+export function boringstackCommandStage(
+  cwd: string,
+  exec: Exec,
+  rewritableGlobs: readonly string[] = []
+): IStage {
   return {
     async run(): Promise<IValidateResult> {
       await autofixApps(cwd, exec);
@@ -218,6 +425,25 @@ export function boringstackCommandStage(cwd: string, exec: Exec): IStage {
         signatures.length > 0
           ? signatures.map(signatureToError)
           : [opaqueGateError(result.output, cwd)];
+
+      // If the whole type-aware program failed to parse, name the actual broken file (ESLint's
+      // cascade can't) so the model rewrites THAT file instead of thrashing near-green hunting it.
+      const unparsable = errors.find(
+        (e) => e.rule === "eslint-program-unparsable"
+      );
+
+      if (unparsable !== undefined) {
+        // Scan ONLY the app(s) whose gate section showed the cascade — never mis-attribute a UI
+        // cascade to an unrelated API syntax error. If we can't attribute it to an app, we do NOT
+        // guess (no both-apps fallback): enrichUnparsable stays a silent no-op and the base
+        // guidance stands.
+        await enrichUnparsable(
+          unparsable,
+          cwd,
+          rewritableGlobs,
+          appsWithParseCascade(result.output)
+        );
+      }
 
       return { passed: false, errors, output: result.output };
     },
@@ -427,8 +653,16 @@ export function composeBoringstackGate(opts: {
   const e2eAcceptanceDisabled =
     process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
+  // The parse-error locator may only name a file the model can FULLY rewrite — its feature-owned
+  // dirs, NOT the shared add-only files (schema/locale/sidebar/routes). Derived here from the
+  // feature (no wiring to forget, no shared-file clobber).
+  const rewritableGlobs = featureOwnedGlobs(feature.id);
+
   return composeGate([
-    differentialStage(boringstackCommandStage(cwd, exec), baseline),
+    differentialStage(
+      boringstackCommandStage(cwd, exec, rewritableGlobs),
+      baseline
+    ),
     reachabilityStage(cwd, feature.id),
     ...(entity !== undefined && !e2eAcceptanceDisabled
       ? [testIdStage(cwd, entity)]
