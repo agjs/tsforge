@@ -56,9 +56,18 @@ const eslintJson = (app: string): string =>
 // run src/features`: the app's own `test` script is vitest (WATCH by default — it would
 // hang a gate), and passing `run` switches it to a single non-watch run via the LOCAL
 // vitest (no `bunx` network/install risk), scoped to the feature tests.
+//
+// ALSO run the AppSidebar test dir. A feature MUST add its NavLink to the shared
+// `src/components/core/AppSidebar` (reachability), and that component's co-located test asserts the
+// EXACT nav-link count — so every nav-adding feature breaks it until the model bumps the count. It
+// lives OUTSIDE `src/features`, so without this it only failed at the FINAL acceptance gate, AFTER
+// the feature was already "verified" — build39 shipped a feature the fast gate called green, then
+// final acceptance failed on `AppSidebar.test` (expected 6, got 7) with no in-loop feedback (the
+// guide asks the model to bump the count, but nothing GATES it, so compliance was stochastic). One
+// tiny extra test file (~negligible) closes the parity gap so the count mismatch is an in-loop error.
 const FAST_GATE =
   `echo '::tsforge-app apps/api::' && (cd apps/api && ${eslintJson("apps/api")} && bun run check && bun run test) && ` +
-  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson("apps/ui")} && bun run check && bun run test -- run src/features)`;
+  `echo '::tsforge-app apps/ui::' && (cd apps/ui && bun run generate:api && ${eslintJson("apps/ui")} && bun run check && bun run test -- run src/features src/components/core/AppSidebar)`;
 
 /**
  * FULL acceptance gate — run ONCE, when every feature has passed the fast gate. The
