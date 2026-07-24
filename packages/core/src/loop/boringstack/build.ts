@@ -35,11 +35,13 @@ import { readHostPorts, hostPortOr } from "../../scaffold";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
 /** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
- *  `format` (prettier, canonical formatting) then `lint:fix` (eslint --fix for the
- *  auto-fixable lint rules prettier can't touch — padding-line, import order, etc.).
- *  Neither changes logic, so neither should ever cost the model a gate attempt — a
- *  dev gets both on save. Best-effort: a missing script or non-zero exit is ignored;
- *  the gate stays the source of truth. */
+ *  `lint:fix` (eslint --fix for the auto-fixable lint rules — padding-line, import order, etc.)
+ *  then `format` (prettier, canonical formatting) — in THAT order, prettier LAST. Neither changes
+ *  logic, so neither should ever cost the model a gate attempt — a dev gets both on save. The
+ *  order is load-bearing: prettier must run after eslint --fix so the gate's `format:check`
+ *  always converges (if prettier ran first, eslint --fix could re-format after it and format:check
+ *  would then fail with nothing left to fix it — see the ORDER MATTERS note in the body).
+ *  Best-effort: a missing script or non-zero exit is ignored; the gate stays the source of truth. */
 export async function autofixApps(cwd: string, exec: Exec): Promise<void> {
   for (const app of ["apps/api", "apps/ui"]) {
     const appCwd = join(cwd, app);
@@ -53,8 +55,16 @@ export async function autofixApps(cwd: string, exec: Exec): Promise<void> {
     // acceptance — a gate-parity hole (4/4 panel). `lint:fix` re-populates a fresh cache
     // for this cycle right after, so the later `check` → `lint` read stays fast AND sound.
     await exec(["rm", "-f", ".eslintcache"], { cwd: appCwd });
-    await exec(["bun", "run", "format"], { cwd: appCwd });
+    // ORDER MATTERS: `lint:fix` (eslint --fix) BEFORE `format` (prettier --write) — prettier must
+    // be the LAST formatter. If prettier runs first and eslint --fix then re-formats (import order,
+    // etc.), the gate's later `format:check` (prettier --check) fails on what eslint --fix changed,
+    // and since prettier --write already ran there's nothing left to converge it — the build burns
+    // cycles on a format error autofix can't clear (live: build44 Contact hit `format:check` on
+    // ContactPage.types.ts every cycle → opaqueGateError). Running prettier LAST gives it the final
+    // say, so `format:check` is always clean. (Prettier changing a file after lint:fix invalidates
+    // only that file's eslint-cache entry, which the gate then re-lints — still sound.)
     await exec(["bun", "run", "lint:fix"], { cwd: appCwd });
+    await exec(["bun", "run", "format"], { cwd: appCwd });
   }
 }
 

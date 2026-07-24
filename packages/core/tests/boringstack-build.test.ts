@@ -668,23 +668,26 @@ describe("runBoringstackBuild", () => {
       expect(full).toBeGreaterThan(0);
 
       // …and the SIX exec calls immediately before it are the full autofixApps
-      // contract — clear eslint cache + format + lint:fix for BOTH apps — proving
+      // contract — clear eslint cache + lint:fix + format for BOTH apps — proving
       // acceptance is preceded by the same deterministic auto-fixes the per-cycle gate
       // applies. The `rm -f .eslintcache` FIRST is the type-aware-lint soundness fix:
       // eslint --cache can return a stale-clean result for a file whose content is
       // unchanged but whose cross-file types changed, so the cache is cleared each cycle.
-      // Dropping the cache clear, `format`, or the api half must fail this.
+      // ORDER: `lint:fix` (eslint --fix) BEFORE `format` (prettier --write) — prettier LAST so the
+      // gate's `format:check` always converges (else eslint --fix re-formats after prettier and
+      // format:check fails on it with nothing left to fix it — build44 Contact opaqueGateError).
+      // Dropping the cache clear, `format`, the ordering, or the api half must fail this.
       const before = execCalls
         .slice(full - 6, full)
         .map((c) => `${c.argv.join(" ")} @ ${c.cwd.replace(dir, "")}`);
 
       expect(before).toEqual([
         "rm -f .eslintcache @ /apps/api",
-        "bun run format @ /apps/api",
         "bun run lint:fix @ /apps/api",
+        "bun run format @ /apps/api",
         "rm -f .eslintcache @ /apps/ui",
-        "bun run format @ /apps/ui",
         "bun run lint:fix @ /apps/ui",
+        "bun run format @ /apps/ui",
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
