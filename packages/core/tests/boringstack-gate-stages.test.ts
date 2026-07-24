@@ -499,11 +499,11 @@ describe("signatureToError", () => {
       `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
     );
 
-    // Root cause (verified against openapi-fetch's d.ts): `Readable<SuccessResponse<…>>` is the
-    // NORMAL response wrapper (strips writeOnly fields); it only surfaces as a raw non-assignable
-    // type when the INNER body is EMPTY (`SuccessResponse<{ 200: {} }>`) = missing `response:` schema.
-    expect(err.message).toContain("NORMAL response wrapper");
+    // Root cause (verified against openapi-fetch's d.ts + scaffold): the raw non-assignable
+    // `Readable<SuccessResponse<{ 200: {} }>>` (EMPTY inner) = the route's 200 has no `response:`
+    // schema. The steer names the empty-inner tell and points at the API source + scaffold example.
     expect(err.message).toContain("{ 200: {} }");
+    expect(err.message).toContain("scaffold's green pattern");
     // The fix is at the API SOURCE — add an explicit `response:` TypeBox schema so generate:api
     // types `data`. The steer must name the concrete list/get/delete response shapes.
     expect(err.message).toContain("response:");
