@@ -512,6 +512,11 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("CONTACT_QUERY_KEYS");
     expect(prompt).toContain("Contact.constants.ts");
     // The onSuccess invalidation must reuse the same constant (so the list refreshes).
-    expect(prompt).toContain("invalidateQueries");
+    expect(prompt).toContain(
+      "invalidateQueries({ queryKey: CONTACT_QUERY_KEYS.all })"
+    );
+    // Must NOT teach the inline-spread loophole at the call site (rule-passing but re-scatters the key).
+    expect(prompt).toContain("never an inline array");
+    expect(prompt).toContain("single source of truth");
   });
 });

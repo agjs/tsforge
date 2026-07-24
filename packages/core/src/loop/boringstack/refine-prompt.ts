@@ -133,7 +133,7 @@ export const ${camel.toUpperCase()}_QUERY_KEYS = {
   detail: (id: string) => [...${camel.toUpperCase()}_QUERY_KEYS.all, id] as const,
 };
 \`\`\`
-then \`useQuery({ queryKey: ${camel.toUpperCase()}_QUERY_KEYS.list(), … })\`. The mutations' \`onSuccess\` MUST invalidate with the SAME constant (\`queryClient.invalidateQueries({ queryKey: ${camel.toUpperCase()}_QUERY_KEYS.all })\`) so create/edit/delete actually refresh the list. (The rule only trips on an array literal whose first element is a bare string — a spread of the constant is fine.)
+then \`useQuery({ queryKey: ${camel.toUpperCase()}_QUERY_KEYS.list(), … })\`. The mutations' \`onSuccess\` MUST invalidate with the SAME constant (\`queryClient.invalidateQueries({ queryKey: ${camel.toUpperCase()}_QUERY_KEYS.all })\`) so create/edit/delete actually refresh the list. At the CALL SITE always reference the constant (\`${camel.toUpperCase()}_QUERY_KEYS.list()\` / \`.detail(id)\`) — never an inline array, not even \`queryKey: [...${camel.toUpperCase()}_QUERY_KEYS.all, id]\`: that would pass the lint but re-scatter the key, so keep the single source of truth in \`${feature.id}.constants.ts\` where the \`detail(id)\` factory owns the spread.
 - **List**: render the fetched records (not just an empty state) — one row per record showing those domain fields, each row with **Edit** and **Delete** actions.
 - **Create/Edit form**: one input per domain field. Validate with Zod; on submit call the create/update mutation; on error render \`t("features.${camel}.<action>Error")\`.
 - **Delete**: a confirmation using \`t("features.${camel}.confirmDelete")\` that calls \`useDelete${feature.id}\`.
