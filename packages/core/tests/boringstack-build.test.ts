@@ -797,6 +797,38 @@ describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
     }
   });
 
+  test("truncates content beyond the ~96k cap (proves the cap is bounded, not removed)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-trunc-"));
+
+    try {
+      const uiComp = join(dir, "apps/ui/src/features/company/components");
+
+      await mkdir(uiComp, { recursive: true });
+
+      // Four ~30k components (sorted by path Comp1..Comp4) → ~120k total, exceeding the cap.
+      // The reader must stop before Comp4, so its marker is DROPPED. This is the upper-bound
+      // guard the ~85k lower-bound test can't give: if the cap were raised substantially or
+      // removed, Comp4 would be included and this fails.
+      const bulk = (n: number, marker: string): string =>
+        `export const Comp${n} = () => <main>${marker}</main>;\n${`// pad ${n}\n`.repeat(3300)}`;
+
+      await writeFile(join(uiComp, "Comp1.tsx"), bulk(1, "FIRST_MARKER"));
+      await writeFile(join(uiComp, "Comp2.tsx"), bulk(2, "bulk2"));
+      await writeFile(join(uiComp, "Comp3.tsx"), bulk(3, "bulk3"));
+      await writeFile(join(uiComp, "Comp4.tsx"), bulk(4, "TRUNCATED_MARKER"));
+
+      const code = await readResourceCode(dir, "Company");
+
+      // Early content included, late content dropped, total bounded below the cap.
+      expect(code).toContain("FIRST_MARKER");
+      expect(code).toContain("[truncated]");
+      expect(code).not.toContain("TRUNCATED_MARKER");
+      expect(code.length).toBeLessThan(96000);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("orders a UI component BEFORE an API service (global component-first, cross-app)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-global-"));
 

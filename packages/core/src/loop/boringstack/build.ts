@@ -250,16 +250,17 @@ export async function readResourceCode(
   }
 
   // Components (.tsx/.jsx) first, GLOBALLY — a large API must not starve the judge of the
-  // UI. Stable within a rank, so API .ts stays before UI .ts and the order is deterministic.
-  const rank = (relPath: string): number => (relPath.endsWith("x") ? 0 : 1);
-  const ordered = candidates
-    .map((c, i) => ({ c, i }))
-    .sort((a, b) => {
-      const byRank = rank(a.c.relPath) - rank(b.c.relPath);
+  // UI. Same-rank files are then ordered by path so the selection is DETERMINISTIC: readdir
+  // returns entries in an unspecified, filesystem-dependent order, so tiebreaking on
+  // insertion order would let truncation include different files across machines/runs and
+  // give the judge inconsistent context. A lexicographic path tiebreak fixes the order.
+  const rank = (relPath: string): number =>
+    relPath.endsWith(".tsx") || relPath.endsWith(".jsx") ? 0 : 1;
+  const ordered = [...candidates].sort((a, b) => {
+    const byRank = rank(a.relPath) - rank(b.relPath);
 
-      return byRank === 0 ? a.i - b.i : byRank;
-    })
-    .map((e) => e.c);
+    return byRank === 0 ? a.relPath.localeCompare(b.relPath) : byRank;
+  });
 
   const blocks: string[] = [];
   let totalLen = 0;
