@@ -35,11 +35,13 @@ import { readHostPorts, hostPortOr } from "../../scaffold";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
 /** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
- *  `format` (prettier, canonical formatting) then `lint:fix` (eslint --fix for the
- *  auto-fixable lint rules prettier can't touch — padding-line, import order, etc.).
- *  Neither changes logic, so neither should ever cost the model a gate attempt — a
- *  dev gets both on save. Best-effort: a missing script or non-zero exit is ignored;
- *  the gate stays the source of truth. */
+ *  `lint:fix` (eslint --fix for the auto-fixable lint rules — padding-line, import order, etc.)
+ *  then `format` (prettier, canonical formatting) — in THAT order, prettier LAST. Neither changes
+ *  logic, so neither should ever cost the model a gate attempt — a dev gets both on save. The
+ *  order is load-bearing: prettier must run after eslint --fix so the gate's `format:check`
+ *  always converges (if prettier ran first, eslint --fix could re-format after it and format:check
+ *  would then fail with nothing left to fix it — see the ORDER MATTERS note in the body).
+ *  Best-effort: a missing script or non-zero exit is ignored; the gate stays the source of truth. */
 export async function autofixApps(cwd: string, exec: Exec): Promise<void> {
   for (const app of ["apps/api", "apps/ui"]) {
     const appCwd = join(cwd, app);
