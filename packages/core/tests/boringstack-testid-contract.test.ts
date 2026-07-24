@@ -3,6 +3,7 @@ import type { IProductPlan } from "../src/loop/planning/plan-types";
 import {
   buildTestIdGuide,
   checkTestIds,
+  checkWiring,
   requiredTestIds,
 } from "../src/loop/boringstack/acceptance/testid-contract";
 import {
@@ -484,5 +485,203 @@ describe("checkTestIds", () => {
 
     // Should fail because we specifically look for data-testid= (not dataTestId)
     expect(result).toContain(ids.list);
+  });
+});
+
+describe("checkWiring — reject a hollow shell (build49 false-green)", () => {
+  const contactEntity: IEntityAcceptance = {
+    id: "Contact",
+    key: "contact",
+    nav: "Contacts",
+    fields: [
+      {
+        name: "name",
+        type: "string",
+        optional: false,
+        valid: "A",
+        invalid: [],
+      },
+    ],
+    shows: ["name"],
+    screens: ["list", "form"],
+    parents: [],
+    negatives: [],
+    acceptanceCheck: "create a contact",
+  };
+
+  // The exact build49 shape: hooks DEFINED in their own file + referenced ONLY by
+  // their test, never wired into the page. Must flag all four as dead.
+  test("flags a hollow feature whose CRUD hooks are defined but never wired", () => {
+    const files = new Map<string, string>([
+      ["Contact.queries.ts", "export function useContact() { return []; }"],
+      [
+        "Contact.mutations.ts",
+        "export function useCreateContact() {} export function useUpdateContact() {} export function useDeleteContact() {}",
+      ],
+      ["Contact.queries.test.tsx", "useContact();"],
+      [
+        "Contact.mutations.test.tsx",
+        "useCreateContact(); useUpdateContact(); useDeleteContact();",
+      ],
+      [
+        "components/ContactPage/ContactPage.tsx",
+        "export const ContactPage = () => (<main data-testid='contact-list'><tr data-testid='contact-row'><td>-</td></tr></main>);",
+      ],
+    ]);
+
+    const dead = checkWiring(files, contactEntity);
+
+    expect(dead).toContain("useContact");
+    expect(dead).toContain("useCreateContact");
+    expect(dead).toContain("useUpdateContact");
+    expect(dead).toContain("useDeleteContact");
+  });
+
+  test("passes when hooks are wired DIRECTLY in the page component", () => {
+    const files = new Map<string, string>([
+      ["Contact.queries.ts", "export function useContact() { return []; }"],
+      [
+        "Contact.mutations.ts",
+        "export function useCreateContact() {} export function useUpdateContact() {} export function useDeleteContact() {}",
+      ],
+      [
+        "components/ContactPage/ContactPage.tsx",
+        `import { useContact } from "../../Contact.queries";
+         import { useCreateContact, useUpdateContact, useDeleteContact } from "../../Contact.mutations";
+         export const ContactPage = () => {
+           const rows = useContact();
+           const create = useCreateContact(); const update = useUpdateContact(); const del = useDeleteContact();
+           return <div>{rows.map((r) => r.name)}</div>;
+         };`,
+      ],
+    ]);
+
+    expect(checkWiring(files, contactEntity)).toEqual([]);
+  });
+
+  test("passes when hooks are wired via the view hook (.hooks.ts), the scaffold idiom", () => {
+    const files = new Map<string, string>([
+      ["Contact.queries.ts", "export function useContact() { return []; }"],
+      [
+        "Contact.mutations.ts",
+        "export function useCreateContact() {} export function useUpdateContact() {} export function useDeleteContact() {}",
+      ],
+      [
+        "components/ContactPage/ContactPage.hooks.ts",
+        `import { useContact } from "../../Contact.queries";
+         import { useCreateContact, useUpdateContact, useDeleteContact } from "../../Contact.mutations";
+         export function useContactPage() {
+           const rows = useContact();
+           return { rows, onSubmit: useCreateContact(), onEdit: useUpdateContact(), onDelete: useDeleteContact() };
+         }`,
+      ],
+      [
+        "components/ContactPage/ContactPage.tsx",
+        "export const ContactPage = () => { const view = useContactPage(); return <div />; };",
+      ],
+    ]);
+
+    expect(checkWiring(files, contactEntity)).toEqual([]);
+  });
+
+  test("word-boundary: useContact is not satisfied by useContactPage alone", () => {
+    const files = new Map<string, string>([
+      ["Contact.queries.ts", "export function useContact() { return []; }"],
+      [
+        "components/ContactPage/ContactPage.tsx",
+        "export const ContactPage = () => { useContactPage(); return <div/>; };",
+      ],
+    ]);
+
+    // useContact appears only in its definition file (useContactPage does NOT count) → dead.
+    expect(checkWiring(files, contactEntity)).toContain("useContact");
+  });
+});
+
+describe("checkWiring — the bypasses must NOT pass (a mention is not a call)", () => {
+  const ce: IEntityAcceptance = {
+    id: "Contact",
+    key: "contact",
+    nav: "Contacts",
+    fields: [
+      {
+        name: "name",
+        type: "string",
+        optional: false,
+        valid: "A",
+        invalid: [],
+      },
+    ],
+    shows: ["name"],
+    screens: ["list", "form"],
+    parents: [],
+    negatives: [],
+    acceptanceCheck: "create a contact",
+  };
+  const defs: [string, string][] = [
+    ["Contact.queries.ts", "export function useContact() { return []; }"],
+    [
+      "Contact.mutations.ts",
+      "export function useCreateContact() {} export function useUpdateContact() {} export function useDeleteContact() {}",
+    ],
+  ];
+
+  test("IMPORT-only (hooks imported but never invoked) is still HOLLOW", () => {
+    const files = new Map<string, string>([
+      ...defs,
+      [
+        "components/ContactPage/ContactPage.tsx",
+        `import { useContact } from "../../Contact.queries";
+         import { useCreateContact, useUpdateContact, useDeleteContact } from "../../Contact.mutations";
+         export const ContactPage = () => <main data-testid='contact-list'>-</main>;`,
+      ],
+    ]);
+    // Names appear in a 2nd file, but with NO call paren → must all be flagged dead.
+    const dead = checkWiring(files, ce);
+
+    expect(dead).toContain("useContact");
+    expect(dead).toContain("useCreateContact");
+    expect(dead).toContain("useUpdateContact");
+    expect(dead).toContain("useDeleteContact");
+  });
+
+  test("RE-EXPORT barrel (export { useX }) is not wiring", () => {
+    const files = new Map<string, string>([
+      ...defs,
+      [
+        "index.ts",
+        `export { useContact } from "./Contact.queries";
+         export { useCreateContact, useUpdateContact, useDeleteContact } from "./Contact.mutations";`,
+      ],
+    ]);
+
+    expect(checkWiring(files, ce).sort()).toEqual(
+      [
+        "useContact",
+        "useCreateContact",
+        "useDeleteContact",
+        "useUpdateContact",
+      ].sort()
+    );
+  });
+
+  test("a comment / type mention that names the hook is not wiring", () => {
+    const files = new Map<string, string>([
+      ...defs,
+      [
+        "components/ContactPage/ContactPage.tsx",
+        `// TODO: wire useCreateContact here later
+         type X = typeof useUpdateContact;
+         export const ContactPage = () => { const rows = useContact(); const d = useDeleteContact(); return <div>{rows.map(String)}</div>; };`,
+      ],
+    ]);
+    // useContact + useDeleteContact are CALLED → ok; useCreateContact (comment) + useUpdateContact
+    // (type ref) are only mentioned → dead.
+    const dead = checkWiring(files, ce);
+
+    expect(dead).toContain("useCreateContact");
+    expect(dead).toContain("useUpdateContact");
+    expect(dead).not.toContain("useContact");
+    expect(dead).not.toContain("useDeleteContact");
   });
 });
