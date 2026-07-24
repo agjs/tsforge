@@ -465,6 +465,11 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("jsx-no-bind");
     // Must teach the makeIdHandler curried list-row idiom to avoid arrow functions in JSX.
     expect(prompt).toContain("makeIdHandler");
+    // build47's dominant tail: form/submit handlers. Must teach the scaffold's from-the-hook idiom
+    // (`view.onSubmit` from `<Component>.hooks.ts`), NOT a body-local `const handleSubmit = () => {}`.
+    expect(prompt).toContain("onSubmit={view.onSubmit}");
+    expect(prompt).toContain("LoginPage.tsx");
+    expect(prompt).toContain("const handleSubmit = () => { … }");
     // Must forbid JSX in .ts files (JSX only compiles in .tsx).
     expect(prompt).toContain("JSX only compiles in `.tsx`");
     expect(prompt).toContain("Parsing error: '>' expected");
