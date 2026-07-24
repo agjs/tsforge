@@ -20,10 +20,13 @@ import type { IFileSnapshot } from "../src/loop/file-snapshot";
 // reachability, judge) must NOT be checkpointed, or WS-B reverts the demanded completion edit.
 const err = (rule: string): IErrorItem => ({ key: rule, rule, message: rule });
 
-test("isCompletionClass: only reliable add-code rules (reachability/i18n-locale-keys-used), bare or prefixed", () => {
+test("isCompletionClass: reliable add-code rules (reachability/i18n-locale-keys-used/test-sibling), bare or prefixed", () => {
   expect(isCompletionClass(err("reachability"))).toBe(true);
   expect(isCompletionClass(err("i18n-locale-keys-used"))).toBe(true);
   expect(isCompletionClass(err("plugin/i18n-locale-keys-used"))).toBe(true);
+  // #61/#65: a missing colocated test clears ONLY by ADDING the test file — reliably add-only, so
+  // WS-B must not revert the logic modules the model just added (build34/36 ground on this).
+  expect(isCompletionClass(err("logic-files-require-test-sibling"))).toBe(true);
   // `judge` is EXCLUDED — it can reject defects in existing code, not only hollowness, so it
   // isn't a reliable add-only signal (would falsely disable WS-B on a fixable judge rejection).
   expect(isCompletionClass(err("judge"))).toBe(false);
@@ -63,6 +66,39 @@ test("allCompletionClass: true only when EVERY error is completion-class; empty 
     allCompletionClass([err("i18n-locale-keys-used"), err("no-console")])
   ).toBe(false);
   expect(allCompletionClass([])).toBe(false);
+});
+
+test("build34/36 spike (1 dead-locale-key + N missing-test siblings) is ALL completion-class → WS-B stands down", () => {
+  // The exact live spike that trapped build34/36: fixing near-green, the model added logic modules
+  // (each needs a test) + declared an i18n key not yet wired. All add-only → the count jump is
+  // legitimate completion work, not a spray, so allCompletionClass is true (WS-B must NOT revert).
+  const spike = [
+    err("i18n-locale-keys-used"),
+    err("logic-files-require-test-sibling"),
+    err("logic-files-require-test-sibling"),
+    err("logic-files-require-test-sibling"),
+    err("logic-files-require-test-sibling"),
+    err("logic-files-require-test-sibling"),
+  ];
+
+  expect(allCompletionClass(spike)).toBe(true);
+  // ENTER the completion phase across the spike (WS-B rollback stood down so the added logic
+  // modules + their pending tests are not reverted).
+  expect(nextCompletionPhase(false, spike)).toBe(true);
+
+  // Mechanism note (mirrors the i18n/reachability STAY-through-mixed semantics that already exist):
+  // while ANY completion-class error still remains, the phase STAYS true even if a genuine fixable
+  // regression (a broken test) is mixed in — a per-cycle re-arm would flip the rollback + undo
+  // banner mid-add and re-trap the model. So the phase does NOT re-arm here…
+  const mixed = [...spike, err("no-unsafe-argument")];
+
+  expect(allCompletionClass(mixed)).toBe(false);
+  expect(nextCompletionPhase(true, mixed)).toBe(true);
+  // …and it correctly EXITS (re-arms WS-B) only once the completion work is DONE — no test-sibling
+  // (or other add-only) error remains, leaving just the fixable regression to protect against.
+  expect(nextCompletionPhase(true, [err("no-unsafe-argument")])).toBe(false);
+  // Standing WS-B down does NOT relax the GATE: the final validate still runs every rule, so a
+  // broken test can never reach green — the model must fix it (guided by the gate + the ladder).
 });
 
 // WS-B: the pure checkpoint/rollback decision, unit-locked with the Phase 0a thresholds

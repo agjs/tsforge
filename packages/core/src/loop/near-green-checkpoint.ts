@@ -53,18 +53,25 @@ export interface INearGreenCheckpoint {
 
 /** Gate errors that in THIS stack clear ONLY by ADDING code — wiring the i18n keys the feature
  *  declared (`i18n-locale-keys-used`; the i18n-destructive-delete guard forbids the removal
- *  shortcut, so the model MUST add the UI that references them), or making the feature reachable
- *  (`reachability`; add the route/mount). A near-green state whose remaining errors are all of
- *  this class is a HOLLOW state (e.g. a list-only page with unused create/edit/delete
- *  translations): reaching green REQUIRES the model to add the form + buttons + toasts, which
- *  transiently spikes the error count. WS-B's count-only spray detection can't tell that
- *  legitimate completion edit from a bad convention spray, so checkpointing this state and
- *  reverting to it traps the model in the hollow app. NOTE: `judge` is deliberately EXCLUDED —
- *  the quality judge can reject defects in EXISTING code (fixable in place), not only
- *  hollowness, so it is not a reliable add-only signal. */
+ *  shortcut, so the model MUST add the UI that references them), making the feature reachable
+ *  (`reachability`; add the route/mount), or writing the required colocated test for a logic
+ *  module (`logic-files-require-test-sibling`; every `*.{hooks,queries,mutations,store,schemas,
+ *  service,utils}.ts` module the model adds demands a `.test.ts(x)` sibling — cleared ONLY by
+ *  ADDING that test file). A near-green state whose remaining errors are all of this class is a
+ *  HOLLOW/INCOMPLETE state (a list-only page with unused create/edit/delete translations, or fresh
+ *  logic modules still awaiting their tests): reaching green REQUIRES the model to ADD the form +
+ *  buttons + toasts + test siblings, which transiently spikes the error count. WS-B's count-only
+ *  spray detection can't tell that legitimate completion work from a bad convention spray, so
+ *  checkpointing this state and reverting to it TRAPS the model — it deletes the logic modules the
+ *  model just added, so it can never accumulate the N tests it needs (live: build34/36 ground
+ *  near-green reverting exactly this). NOTE: `judge` is deliberately EXCLUDED — the quality judge
+ *  can reject defects in EXISTING code (fixable in place), not only hollowness, so it is not a
+ *  reliable add-only signal. `logic-files-require-test-sibling` IS reliable: it has no fix-in-place
+ *  form — the only non-destructive resolution is to add the test. */
 const COMPLETION_CLASS_RULES: ReadonlySet<string> = new Set([
   "reachability",
   "i18n-locale-keys-used",
+  "logic-files-require-test-sibling",
 ]);
 
 /** Whether a gate error clears only by adding code (see COMPLETION_CLASS_RULES). Matches the
