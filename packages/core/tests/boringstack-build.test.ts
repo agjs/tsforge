@@ -770,24 +770,34 @@ describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
       await mkdir(apiDir, { recursive: true });
       await mkdir(uiComp, { recursive: true });
 
-      // ~18k of API .ts (would alone blow the OLD 16000 budget before UI is even read).
-      const filler = "// filler line to consume budget\n".repeat(560);
+      // Three API files that EACH fit individually (~4500 chars) → all three are included,
+      // pushing cumulative totalLen to ~13.5k. Because each is accepted (not atomically
+      // rejected), the budget is genuinely consumed — unlike one oversized file that would
+      // be skipped without growing totalLen.
+      const block = (n: number): string =>
+        `export const f${n} = 1;\n${`// pad ${n} line to consume budget\n`.repeat(220)}`;
+
+      await writeFile(join(apiDir, "a.service.ts"), block(1));
+      await writeFile(join(apiDir, "b.service.ts"), block(2));
+      await writeFile(join(apiDir, "c.service.ts"), block(3));
+
+      // A ~3.5k UI component carrying the marker. Read AFTER the ~13.5k of API, its block
+      // pushes cumulative past 16000 — so under the OLD 16000 cap it is truncated and the
+      // marker is ABSENT; under 96000 it is included and PRESENT.
+      const pad = "// pad component line\n".repeat(260);
 
       await writeFile(
-        join(apiDir, "company.service.ts"),
-        `export const svc = 1;\n${filler}`
-      );
-      // The component carries a UNIQUE marker near its end — only visible if the budget
-      // is large enough to include the UI after ~18k of API text.
-      await writeFile(
         join(uiComp, "CompanyPage.tsx"),
-        "export const CompanyPage = () => <main>BUDGET_MARKER_TSX</main>;\n"
+        `${pad}export const CompanyPage = () => <main>BUDGET_MARKER_TSX</main>;\n`
       );
 
       const code = await readResourceCode(dir, "Company");
 
-      // Under the old 16000 cap this would have truncated before the UI → marker absent.
+      // Marker present AND >16000 chars of content included together prove the budget was
+      // raised: the marker sits beyond the old 16000 boundary, so the old cap would have
+      // truncated before reaching it.
       expect(code).toContain("BUDGET_MARKER_TSX");
+      expect(code.length).toBeGreaterThan(16000);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
