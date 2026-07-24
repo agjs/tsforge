@@ -150,20 +150,26 @@ Without these test IDs, the feature cannot be validated end-to-end and will not 
  * @param sources - Map of {filePath → source code}
  * @param entity - The entity whose testids must be present
  */
+/** Escape a string for safe use as a literal inside a RegExp. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 /**
  * Detect a HOLLOW feature: the required test hooks are all present, but the CRUD
- * hooks are never wired into the UI — a static shell that satisfies the testid
+ * hooks are never CALLED from the UI — a static shell that satisfies the testid
  * contract while doing nothing (observed live: build49 Contact shipped every
  * `data-testid` with hardcoded `-` rows, no `onSubmit`, and `useCreate/Update/Delete`
  * defined but never called — a false-green the fast gate accepted).
  *
- * A hook is considered WIRED if its name (word-boundary matched, so `useContact`
- * does not match `useContactPage`) appears in at least TWO non-test feature files:
- * its own definition file PLUS at least one consumer (the page `.tsx` OR a view
- * `<Component>.hooks.ts` that the page calls). A hook that appears in only ONE
- * non-test file is just its own definition — dead, i.e. the feature can't perform
- * that operation. This is pattern-agnostic: it passes both a direct call in the
- * `.tsx` and the scaffold's handler-from-the-hook idiom (`view.onSubmit`).
+ * A hook is WIRED only when it is actually INVOKED — `useX(` — in a non-test file
+ * that is NOT its own definition file. Requiring the call paren defeats the trivial
+ * bypasses (a bare `import { useX }`, a re-export barrel `export { useX }`, a type
+ * reference, or a comment all mention the name WITHOUT the `(` and so do NOT count).
+ * Requiring a NON-definition file rules out the `export function useX(` definition
+ * site itself. Word-boundary matched, so `useContact(` never matches `useContactPage(`.
+ * Pattern-agnostic: passes both a direct call in the page `.tsx` and the scaffold's
+ * handler-from-the-hook idiom (the call living in a view `<Component>.hooks.ts`).
  *
  * @param files - Map of {relPath → source} for the feature's .ts + .tsx sources
  * @param entity - The entity whose CRUD hooks must be wired
@@ -187,10 +193,15 @@ export function checkWiring(
   ];
 
   for (const hook of hooks) {
-    const re = new RegExp(`\\b${hook}\\b`, "u");
-    const filesWithHook = prod.filter(([, src]) => re.test(src)).length;
+    const h = escapeRegExp(hook);
+    // Definition site: `function useX` / `const useX =` / `const useX:` (the file that OWNS the hook).
+    const defRe = new RegExp(`(?:function|const)\\s+${h}\\b`, "u");
+    // A genuine CALL: the hook name immediately followed by `(` (allowing whitespace).
+    const callRe = new RegExp(`\\b${h}\\s*\\(`, "u");
 
-    if (filesWithHook < 2) {
+    const wired = prod.some(([, src]) => !defRe.test(src) && callRe.test(src));
+
+    if (!wired) {
       errors.push(hook);
     }
   }
