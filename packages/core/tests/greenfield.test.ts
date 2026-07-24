@@ -333,6 +333,39 @@ describe("runGreenfield: outer loop", () => {
     expect(s.features[0]?.parked).toBe(true); // still parked after revisit
   });
 
+  test("the park message carries implement's reason, not a hardcoded 'ladder exhausted'", async () => {
+    // Guards the ONLY place reason becomes user-facing (run.ts `parked (${why})`). A
+    // regression that dropped result.reason would silently reintroduce the build52 mislabel
+    // (fast gate green, e2e failed, but logged as ladder exhaustion) — the verifyAcceptance
+    // unit tests would still pass, so this end-to-end assertion is the real guard.
+    const s = state("a");
+    const messages: string[] = [];
+    const deps: IGreenfieldDeps = {
+      implement: async () => ({
+        done: false,
+        reason:
+          "fast gate green but e2e acceptance still failing after the fix steer: row not found",
+      }),
+    };
+
+    await runGreenfield(dir, s, deps, {
+      onEvent: (ev) => {
+        if (typeof ev.message === "string") {
+          messages.push(ev.message);
+        }
+      },
+    });
+
+    const parkMsgs = messages.filter((m) => m.includes("parked"));
+
+    expect(parkMsgs.length).toBeGreaterThan(0);
+    expect(
+      parkMsgs.some((m) => m.includes("e2e acceptance still failing"))
+    ).toBe(true);
+    // The reason was supplied, so the hardcoded-fallback phrase must NOT appear.
+    expect(parkMsgs.every((m) => !m.includes("ladder exhausted"))).toBe(true);
+  });
+
   test("parked + handoff round-trip through saveState + loadState", async () => {
     const s = state("a");
 
