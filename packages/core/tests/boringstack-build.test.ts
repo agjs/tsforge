@@ -754,6 +754,67 @@ describe("readResourceCode — feeds the completeness judge", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("excludes API test files too (same budget hygiene as the UI side)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-apitest-"));
+
+    try {
+      const apiDir = join(dir, "apps/api/src/api/company");
+
+      await mkdir(apiDir, { recursive: true });
+
+      await writeFile(
+        join(apiDir, "company.service.ts"),
+        "export const svc = 'API_SVC_MARKER';\n"
+      );
+      // API co-located test — must NOT reach the judge (wastes budget), same as UI.
+      await writeFile(
+        join(apiDir, "company.service.test.ts"),
+        "// API_TEST_MARKER should be excluded\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code).toContain("API_SVC_MARKER");
+      expect(code).not.toContain("API_TEST_MARKER");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("excludes singular .story files and __tests__ directories", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-exclforms-"));
+
+    try {
+      const uiDir = join(dir, "apps/ui/src/features/company");
+
+      await mkdir(join(uiDir, "components"), { recursive: true });
+      await mkdir(join(uiDir, "__tests__"), { recursive: true });
+
+      await writeFile(
+        join(uiDir, "components", "CompanyPage.tsx"),
+        "export const CompanyPage = () => <main>REAL_COMPONENT</main>;\n"
+      );
+      // Singular `.story.tsx` (not just `.stories.tsx`) must be excluded.
+      await writeFile(
+        join(uiDir, "components", "CompanyPage.story.tsx"),
+        "// SINGULAR_STORY_MARKER should be excluded\n"
+      );
+      // Anything under a __tests__ directory must be excluded.
+      await writeFile(
+        join(uiDir, "__tests__", "helpers.tsx"),
+        "// TESTS_DIR_MARKER should be excluded\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code).toContain("REAL_COMPONENT");
+      expect(code).not.toContain("SINGULAR_STORY_MARKER");
+      expect(code).not.toContain("TESTS_DIR_MARKER");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
@@ -772,7 +833,9 @@ describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
 
       // Five ~17k COMPONENTS (.tsx). Under global component-first ordering these are read
       // BEFORE any API file, and each fits individually, so all five are accepted and push
-      // cumulative length to ~85k.
+      // cumulative length to ~86k — a comfortable ~10k under the 96k cap. Block size derives
+      // ONLY from the fixed relPath + fixed pad (NOT the tmpdir prefix, which never appears in
+      // the emitted blocks), so the total is constant across runs — no boundary flakiness.
       const bulk = (n: number): string =>
         `export const Comp${n} = () => <main>bulk ${n}</main>;\n${`// pad ${n}\n`.repeat(1900)}`;
 

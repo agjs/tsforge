@@ -200,6 +200,19 @@ export async function readResourceCode(
   // shown" false-rejection this budget was raised to prevent.
   const candidates: { relPath: string; fullPath: string }[] = [];
 
+  // Normalize the OS path separator to "/" so relPath (and therefore the codepoint
+  // ordering below) is IDENTICAL on POSIX and Windows — a recursive readdir yields
+  // "a\b.tsx" on Windows vs "a/b.tsx" on POSIX, and "\" (0x5C) vs "/" (0x2F) sort
+  // differently against other chars, which would make the truncation boundary
+  // machine-dependent.
+  const norm = (f: string): string => f.replaceAll("\\", "/");
+  // Co-located test/story files are not part of the feature under review — they waste
+  // the judge's budget (and could expose test-only behavior as production context).
+  // Applied to BOTH apps. Covers .test/.spec/.story/.stories suffixes AND __tests__ dirs.
+  const isTestFile = (rel: string): boolean =>
+    /\.(test|spec|stor(?:y|ies))\.[jt]sx?$/u.test(rel) ||
+    /(?:^|\/)__tests__\//u.test(rel);
+
   const apiDir = join(cwd, "apps/api/src/api", camel);
 
   try {
@@ -210,8 +223,14 @@ export async function readResourceCode(
         continue;
       }
 
+      const rel = norm(file);
+
+      if (isTestFile(rel)) {
+        continue;
+      }
+
       candidates.push({
-        relPath: `apps/api/src/api/${camel}/${file}`,
+        relPath: `apps/api/src/api/${camel}/${rel}`,
         fullPath: join(apiDir, file),
       });
     }
@@ -227,21 +246,26 @@ export async function readResourceCode(
     for (const file of uiFiles) {
       // Include .tsx/.jsx — the React COMPONENTS (Page/Form) live in .tsx. A `.ts`-only
       // filter dropped every component, so the completeness judge never saw the UI it was
-      // asked to verify. Exclude co-located test/story files (not part of the feature UI).
+      // asked to verify.
       if (
         typeof file !== "string" ||
         !(
           file.endsWith(".ts") ||
           file.endsWith(".tsx") ||
           file.endsWith(".jsx")
-        ) ||
-        /\.(test|spec|stories)\.[jt]sx?$/u.test(file)
+        )
       ) {
         continue;
       }
 
+      const rel = norm(file);
+
+      if (isTestFile(rel)) {
+        continue;
+      }
+
       candidates.push({
-        relPath: `apps/ui/src/features/${camel}/${file}`,
+        relPath: `apps/ui/src/features/${camel}/${rel}`,
         fullPath: join(uiDir, file),
       });
     }
