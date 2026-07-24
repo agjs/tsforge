@@ -533,6 +533,27 @@ describe("refinePrompt", () => {
     expect(prompt).not.toContain("may only CALL that one custom hook");
   });
 
+  it("teaches the exact no-jsx-computation idiom (const list + bare identifier; warns the declare-but-inline rotation)", () => {
+    // build38 Contact parked here: the model declared `const companyOptions = companies.map(...)` but
+    // ALSO inlined `{companies.map(...)}` in the <select> → no-jsx-computation (inline map) +
+    // no-unused-vars (ignored const), which rotate. The guide must name the exact rule + fix + trap.
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("no-jsx-computation");
+    // The compliant idiom: reference the bare identifier in JSX, never inline the array method.
+    expect(prompt).toContain("{renderRows}");
+    expect(prompt).toContain("never inline the");
+    // The rotation trap is called out explicitly (declare const + inline map → two rotating errors).
+    expect(prompt).toContain("no-unused-vars");
+  });
+
   it("warns that every NEW component needs the FULL sibling set → don't extract sub-components", () => {
     // build36 hit component-folder-structure: a new 'CompanyFormField' demanded .hooks/.types/
     // .stories/.test/index siblings. The guide must warn and steer to inline instead.
