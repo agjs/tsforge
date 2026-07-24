@@ -757,7 +757,7 @@ describe("readResourceCode — feeds the completeness judge", () => {
 });
 
 describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
-  test("a >16k component survives (proves the budget raise, not the old 16000 cap)", async () => {
+  test("a marker only reachable after ~85k of content survives (proves the cap is ~96k, not a small regression)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-budget-"));
 
     try {
@@ -770,34 +770,65 @@ describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
       await mkdir(apiDir, { recursive: true });
       await mkdir(uiComp, { recursive: true });
 
-      // Three API files that EACH fit individually (~4500 chars) → all three are included,
-      // pushing cumulative totalLen to ~13.5k. Because each is accepted (not atomically
-      // rejected), the budget is genuinely consumed — unlike one oversized file that would
-      // be skipped without growing totalLen.
-      const block = (n: number): string =>
-        `export const f${n} = 1;\n${`// pad ${n} line to consume budget\n`.repeat(220)}`;
+      // Five ~17k COMPONENTS (.tsx). Under global component-first ordering these are read
+      // BEFORE any API file, and each fits individually, so all five are accepted and push
+      // cumulative length to ~85k.
+      const bulk = (n: number): string =>
+        `export const Comp${n} = () => <main>bulk ${n}</main>;\n${`// pad ${n}\n`.repeat(1900)}`;
 
-      await writeFile(join(apiDir, "a.service.ts"), block(1));
-      await writeFile(join(apiDir, "b.service.ts"), block(2));
-      await writeFile(join(apiDir, "c.service.ts"), block(3));
+      for (let n = 1; n <= 5; n += 1) {
+        await writeFile(join(uiComp, `Comp${n}.tsx`), bulk(n));
+      }
 
-      // A ~3.5k UI component carrying the marker. Read AFTER the ~13.5k of API, its block
-      // pushes cumulative past 16000 — so under the OLD 16000 cap it is truncated and the
-      // marker is ABSENT; under 96000 it is included and PRESENT.
-      const pad = "// pad component line\n".repeat(260);
-
+      // The marker lives in a plain API .ts (rank-1) → read AFTER all five components, i.e.
+      // only reachable once cumulative length has passed ~85k. Present ⟺ the cap genuinely
+      // exceeds ~85k. A regression to a small cap (e.g. 30000) truncates before the marker.
       await writeFile(
-        join(uiComp, "CompanyPage.tsx"),
-        `${pad}export const CompanyPage = () => <main>BUDGET_MARKER_TSX</main>;\n`
+        join(apiDir, "company.service.ts"),
+        `export const svc = 'BUDGET_MARKER_DEEP';\n`
       );
 
       const code = await readResourceCode(dir, "Company");
 
-      // Marker present AND >16000 chars of content included together prove the budget was
-      // raised: the marker sits beyond the old 16000 boundary, so the old cap would have
-      // truncated before reaching it.
-      expect(code).toContain("BUDGET_MARKER_TSX");
-      expect(code.length).toBeGreaterThan(16000);
+      expect(code).toContain("BUDGET_MARKER_DEEP");
+      expect(code.length).toBeGreaterThan(70000);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("orders a UI component BEFORE an API service (global component-first, cross-app)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-global-"));
+
+    try {
+      const apiDir = join(dir, "apps/api/src/api/company");
+      const uiComp = join(
+        dir,
+        "apps/ui/src/features/company/components/CompanyPage"
+      );
+
+      await mkdir(apiDir, { recursive: true });
+      await mkdir(uiComp, { recursive: true });
+
+      // API service is discovered first (API dir is read before the UI dir), but the .tsx
+      // component must still be emitted ahead of it — proving the ordering is GLOBAL, not
+      // merely within the UI file list.
+      await writeFile(
+        join(apiDir, "company.service.ts"),
+        "export const svc = 'API_SVC_MARKER';\n"
+      );
+      await writeFile(
+        join(uiComp, "CompanyPage.tsx"),
+        "export const CompanyPage = () => <main>UI_COMPONENT_MARKER</main>;\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code).toContain("UI_COMPONENT_MARKER");
+      expect(code).toContain("API_SVC_MARKER");
+      expect(code.indexOf("UI_COMPONENT_MARKER")).toBeLessThan(
+        code.indexOf("API_SVC_MARKER")
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

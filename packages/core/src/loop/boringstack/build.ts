@@ -176,91 +176,105 @@ export function scopeFor(name: string): string[] {
 
 /**
  * Read the generated resource code from the filesystem for the completeness judge.
- * Concatenates the API resource (.ts) and UI feature (.ts/.tsx/.jsx, components first,
- * test/story files excluded) source, capped at ~96000 characters. Returns empty string
- * if directories don't exist.
+ * Concatenates the API resource (.ts) and UI feature (.ts/.tsx/.jsx, test/story files
+ * excluded) source, capped at ~96000 characters. React components (.tsx/.jsx) are ordered
+ * FIRST across both apps so a large API can't exhaust the budget before the judge sees the
+ * UI. Returns empty string if directories don't exist.
  */
 export async function readResourceCode(
   cwd: string,
   name: string
 ): Promise<string> {
   const camel = toCamelCase(name);
-  const blocks: string[] = [];
   // Budget must fit a full feature (API + UI components + hooks) so the completeness
   // JUDGE actually sees the code. 16000 truncated real features mid-UI, which made the
   // judge reject a code-green feature forever ("component truncated, cannot verify") —
   // an unfixable-by-the-model wall. The models here carry ≥1M-token context, so a
   // generous char budget is safe.
   const maxChars = 96000;
-  let totalLen = 0;
 
-  // Read API resource files (apps/api/src/api/<camel>/)
+  // Gather every candidate file (API + UI) BEFORE truncating, so ordering is global.
+  // A React COMPONENT (.tsx/.jsx) is what the judge most needs to verify the UI, so
+  // components come FIRST regardless of app — otherwise a large API resource could
+  // exhaust the budget before any component is read, reproducing the "component not
+  // shown" false-rejection this budget was raised to prevent.
+  const candidates: { relPath: string; fullPath: string }[] = [];
+
   const apiDir = join(cwd, "apps/api/src/api", camel);
 
   try {
     const apiFiles = await readdir(apiDir, { recursive: false });
-    const tsFiles = apiFiles.filter(
-      (f): f is string => typeof f === "string" && f.endsWith(".ts")
-    );
 
-    for (const file of tsFiles) {
-      const relPath = `apps/api/src/api/${camel}/${file}`;
-      const content = await readFile(join(apiDir, file), "utf-8");
-      const block = `// ${relPath}\n${content}\n`;
-
-      if (totalLen + block.length > maxChars) {
-        blocks.push(`\n…[truncated]`);
-        break;
+    for (const file of apiFiles) {
+      if (typeof file !== "string" || !file.endsWith(".ts")) {
+        continue;
       }
 
-      blocks.push(block);
-      totalLen += block.length;
+      candidates.push({
+        relPath: `apps/api/src/api/${camel}/${file}`,
+        fullPath: join(apiDir, file),
+      });
     }
   } catch {
     // Directory doesn't exist, skip
   }
 
-  // Read UI feature files (apps/ui/src/features/<camel>/, recursively)
-  if (totalLen < maxChars) {
-    const uiDir = join(cwd, "apps/ui/src/features", camel);
+  const uiDir = join(cwd, "apps/ui/src/features", camel);
 
-    try {
-      const uiFiles = await readdir(uiDir, { recursive: true });
-      // Include .tsx/.jsx — the React COMPONENTS (Page/Form) live in .tsx. The old
-      // `.ts`-only filter dropped every component, so the completeness judge never saw
-      // the UI it was asked to verify and rejected the feature as "component not shown".
-      // Sort so components (.tsx) come BEFORE co-located tests, so the judge sees the
-      // real UI first if the budget is ever tight.
-      const tsFiles = uiFiles
-        .filter(
-          (f): f is string =>
-            typeof f === "string" &&
-            (f.endsWith(".ts") || f.endsWith(".tsx") || f.endsWith(".jsx")) &&
-            !/\.(test|spec|stories)\.[jt]sx?$/u.test(f)
-        )
-        .sort((a, b) => {
-          const rank = (f: string): number => (f.endsWith("x") ? 0 : 1);
+  try {
+    const uiFiles = await readdir(uiDir, { recursive: true });
 
-          return rank(a) - rank(b);
-        });
-
-      for (const file of tsFiles) {
-        const relPath = `apps/ui/src/features/${camel}/${file}`;
-        const fullPath = join(uiDir, file);
-        const content = await readFile(fullPath, "utf-8");
-        const block = `// ${relPath}\n${content}\n`;
-
-        if (totalLen + block.length > maxChars) {
-          blocks.push(`\n…[truncated]`);
-          break;
-        }
-
-        blocks.push(block);
-        totalLen += block.length;
+    for (const file of uiFiles) {
+      // Include .tsx/.jsx — the React COMPONENTS (Page/Form) live in .tsx. A `.ts`-only
+      // filter dropped every component, so the completeness judge never saw the UI it was
+      // asked to verify. Exclude co-located test/story files (not part of the feature UI).
+      if (
+        typeof file !== "string" ||
+        !(
+          file.endsWith(".ts") ||
+          file.endsWith(".tsx") ||
+          file.endsWith(".jsx")
+        ) ||
+        /\.(test|spec|stories)\.[jt]sx?$/u.test(file)
+      ) {
+        continue;
       }
-    } catch {
-      // Directory doesn't exist, skip
+
+      candidates.push({
+        relPath: `apps/ui/src/features/${camel}/${file}`,
+        fullPath: join(uiDir, file),
+      });
     }
+  } catch {
+    // Directory doesn't exist, skip
+  }
+
+  // Components (.tsx/.jsx) first, GLOBALLY — a large API must not starve the judge of the
+  // UI. Stable within a rank, so API .ts stays before UI .ts and the order is deterministic.
+  const rank = (relPath: string): number => (relPath.endsWith("x") ? 0 : 1);
+  const ordered = candidates
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => {
+      const byRank = rank(a.c.relPath) - rank(b.c.relPath);
+
+      return byRank === 0 ? a.i - b.i : byRank;
+    })
+    .map((e) => e.c);
+
+  const blocks: string[] = [];
+  let totalLen = 0;
+
+  for (const { relPath, fullPath } of ordered) {
+    const content = await readFile(fullPath, "utf-8");
+    const block = `// ${relPath}\n${content}\n`;
+
+    if (totalLen + block.length > maxChars) {
+      blocks.push(`\n…[truncated]`);
+      break;
+    }
+
+    blocks.push(block);
+    totalLen += block.length;
   }
 
   return blocks.join("");
