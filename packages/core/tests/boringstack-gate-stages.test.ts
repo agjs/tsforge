@@ -505,10 +505,13 @@ describe("signatureToError", () => {
 
     // It fires on the real abbreviated string and explains the wrapper.
     expect(err.message).toContain("openapi-fetch's response wrapper");
-    // Both unwrap shapes, keyed to the route's `response:` schema (direct value vs `{ data }` envelope).
+    // The KEY correction: Readable means `data` didn't RESOLVE to the domain type → fix UPSTREAM
+    // (schema/path); `?? []`/guard/`as` cannot convert the wrapper. Not a consumer-unwrap fix.
+    expect(err.message.toLowerCase()).toContain("did not resolve");
+    expect(err.message).toContain("FIX UPSTREAM");
+    // The green consumer shapes (for once `data` resolves), keyed to the route.
     expect(err.message).toContain("return data ?? []");
     expect(err.message).toContain("return data.data");
-    expect(err.message).toContain("if (!data?.data) throw new ApiError");
     // Keeps the annotations; forbids the two dead ends the model kept trying (cast / drop annotation).
     expect(err.message).toContain("UseMutationResult<void, unknown, string>");
     expect(err.message).toContain("NEVER `as`");
