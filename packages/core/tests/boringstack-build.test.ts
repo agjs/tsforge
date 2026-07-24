@@ -11,9 +11,15 @@ import {
   runBoringstackBuild,
   scopeFor,
   readResourceCode,
+  verifyAcceptance,
   APP_SCHEMA_FILE,
   LOCALE_GLOB,
 } from "../src/loop/boringstack/build";
+import type {
+  IAcceptanceRunner,
+  IAcceptanceOutcome,
+  IEntityAcceptance,
+} from "../src/loop/acceptance/acceptance.types";
 import type { IProvider } from "../src/inference";
 import type { IGate } from "../src/gate/gate-runner";
 import { writePlan } from "../src/loop/planning/plan-store";
@@ -994,5 +1000,125 @@ describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("verifyAcceptance — truthful park reason on done:false", () => {
+  function acceptanceEntity(): IEntityAcceptance {
+    return {
+      id: "Company",
+      key: "name",
+      nav: "Companies",
+      fields: [
+        {
+          name: "name",
+          type: "string",
+          optional: false,
+          valid: "Acme",
+          invalid: [""],
+        },
+      ],
+      shows: ["name"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "create a company and see it in the list",
+    };
+  }
+
+  function stubRunner(outcomes: IAcceptanceOutcome[]): IAcceptanceRunner {
+    let i = 0;
+
+    return {
+      run: async () => {
+        const idx = Math.min(i, outcomes.length - 1);
+
+        i += 1;
+
+        const out = outcomes[idx];
+
+        if (out === undefined) {
+          throw new Error("stubRunner: no outcome configured");
+        }
+
+        return out;
+      },
+      runChain: async () => ({ ok: true, results: [] }),
+    };
+  }
+
+  test("fast-gate failure (no e2e) reports the fast-gate reason, not e2e", async () => {
+    const result = await verifyAcceptance(
+      { status: "stuck" },
+      createHost(),
+      "/tmp/does-not-exist",
+      undefined,
+      undefined,
+      true,
+      undefined
+    );
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toContain("fast gate not green");
+  });
+
+  test("acceptance enabled but runner missing reports a misconfiguration reason", async () => {
+    const result = await verifyAcceptance(
+      { status: "done" },
+      createHost(),
+      "/tmp/does-not-exist",
+      acceptanceEntity(),
+      undefined,
+      false,
+      undefined
+    );
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toContain("misconfiguration");
+  });
+
+  test("fast-gate-green-but-e2e-failed reports the e2e reason with detail (NOT 'ladder exhausted')", async () => {
+    // The build52 case: the fast gate passed, but the browser acceptance still fails after
+    // the steer. The reason must say so — the old code parked this as "ladder exhausted".
+    const failing: IAcceptanceOutcome = {
+      ok: false,
+      results: [
+        { entity: "Company", step: "list", ok: false, detail: "row not found" },
+      ],
+      detail: "the created company did not appear in the list",
+    };
+    // host.send returns done → the steer completed; the re-run still fails.
+    const result = await verifyAcceptance(
+      { status: "done" },
+      createHost(),
+      "/tmp/does-not-exist",
+      acceptanceEntity(),
+      stubRunner([failing, failing]),
+      false,
+      undefined
+    );
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toContain("e2e acceptance");
+    expect(result.reason).toContain(
+      "the created company did not appear in the list"
+    );
+    expect(result.reason).not.toContain("ladder exhausted");
+  });
+
+  test("all checks passing reports done with no reason", async () => {
+    const passing: IAcceptanceOutcome = { ok: true, results: [] };
+    const result = await verifyAcceptance(
+      { status: "done" },
+      createHost(),
+      "/tmp/does-not-exist",
+      acceptanceEntity(),
+      stubRunner([passing]),
+      false,
+      undefined
+    );
+
+    expect(result.done).toBe(true);
+    expect(result.reason).toBeUndefined();
   });
 });

@@ -215,15 +215,19 @@ async function attemptFeature(
       return undefined;
     }
 
-    // Not done → the shared ladder (R1–R4 + R5) already ran inside the loop and
-    // exhausted. Park on its structured handoff for the revisit pass.
+    // Not done → park on the structured handoff for the revisit pass. The reason
+    // names the ACTUAL block (fast-gate ladder exhaustion vs e2e-acceptance failure vs
+    // misconfiguration) so the log doesn't always claim "ladder exhausted" when the fast
+    // gate was green and it was e2e acceptance that failed.
     feature.parked = true;
 
     if (result.handoff !== undefined) {
       feature.handoff = result.handoff;
     }
 
-    say(`feature '${feature.id}': ladder exhausted, parked — revisit later`);
+    const why = result.reason ?? "escalation ladder exhausted";
+
+    say(`feature '${feature.id}': parked (${why}) — revisit later`);
 
     return undefined;
   } finally {
