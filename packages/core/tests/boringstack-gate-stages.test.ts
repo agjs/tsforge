@@ -544,6 +544,22 @@ describe("signatureToError", () => {
     );
   });
 
+  test("a multi-status Readable whose empty entry is NOT the whole map is NOT treated as missing-schema", () => {
+    // Edge case: `{ 200: {}; 201: { id } }` — the 200 is empty but 201 is typed, so the route DOES
+    // have a schema. The regex requires the empty `{}` to CLOSE the map (`{} }>`), so this must NOT
+    // fire the add-schema steer.
+    const msg =
+      "Type 'Readable<SuccessResponse<{ 200: {}; 201: { id: string } }>>' is not assignable to type 'Promise<ISupplierItem>'.";
+    const err = signatureToError(
+      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
+    );
+
+    expect(err.message).not.toContain("EMPTY inner");
+    expect(err.message).not.toContain(
+      "has no explicit `response:` TypeBox schema"
+    );
+  });
+
   test("a generic optional-type mismatch is NOT hijacked by an api-client consumer-unwrap steer (no over-match)", () => {
     // Guard against the reverted over-broad branch: a plain `string | undefined not assignable`
     // (e.g. a PathsWithMethod call-site arg, or any generic optional error) must NOT be steered to
