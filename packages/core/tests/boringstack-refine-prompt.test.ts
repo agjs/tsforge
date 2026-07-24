@@ -522,8 +522,15 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("response:");
     expect(prompt).toContain("generate:api");
     expect(prompt).toContain("t.Array(<ItemSchema>)");
-    // And it must not resurrect the panel-flagged falsehood that the annotation "does all the work".
+    // And it must POSITIVELY state the TS mechanic (annotation checks the returned expression, it
+    // does NOT retype the destructured `data`) — the reason a consumer-only fix can't clear Readable.
+    expect(prompt.toLowerCase()).toContain("does not retype");
+    expect(prompt).toContain("const { data } = await apiClient.GET");
+    // It must not resurrect the panel-flagged falsehoods that the annotation is the fix.
     expect(prompt).not.toContain("the domain annotation does all the work");
+    expect(prompt).not.toContain(
+      "this is what kills the near-green `Readable<SuccessResponse>`"
+    );
     // Never Readable, never `as` (pin BOTH halves so the anti-`as` guidance can't regress silently).
     expect(prompt).toContain(
       "NEVER annotate with `Readable<SuccessResponse<…>>`"
