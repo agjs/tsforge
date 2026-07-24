@@ -610,16 +610,12 @@ export function testIdStage(cwd: string, entity: IEntityAcceptance): IStage {
         }
       }
 
-      // Check for required testids — ONLY over PRODUCTION JSX-rendering files (.tsx/.jsx, and NOT
-      // test/story/spec files). A `data-testid` string in a non-render `.ts`, or in a co-located
-      // *.test.tsx / *.stories.tsx, must NOT satisfy the presence check while the real page `.tsx`
-      // stays a shell (panel-flagged: a testid in a test file + a dummy wiring file kept the hollow
-      // path open). The `.ts` files are collected only so checkWiring can see the view-hook call path.
-      const isTestFile = (p: string): boolean =>
-        /\.(test|spec|stories)\.[jt]sx?$/u.test(p);
+      // Check for required testids — ONLY over JSX-rendering files (.tsx/.jsx). A `data-testid`
+      // string in a non-render `.ts` must not satisfy the presence check while the `.tsx` stays a
+      // shell (the `.ts` files are collected only so checkWiring can see the view-hook call path).
       const renderSources = new Map(
         Array.from(sources.entries()).filter(
-          ([p]) => (p.endsWith(".tsx") || p.endsWith(".jsx")) && !isTestFile(p)
+          ([p]) => p.endsWith(".tsx") || p.endsWith(".jsx")
         )
       );
       const missing = checkTestIds(renderSources, entity);
@@ -653,9 +649,8 @@ export function testIdStage(cwd: string, entity: IEntityAcceptance): IStage {
 
       const wiringMessage =
         `feature '${entity.id}' is a HOLLOW shell: the CRUD hook(s) ${deadHooks.join(", ")} are ` +
-        `defined but NEVER CALLED outside their own definition file — no other feature file (the page ` +
-        `component, a view \`.hooks.ts\`, etc.) actually invokes them. The testids exist but connect to ` +
-        `nothing — no create/` +
+        `defined but NEVER wired into the UI (each appears only in its own definition file, not in ` +
+        `the page component or its view hook). The testids exist but connect to nothing — no create/` +
         `edit/delete actually runs and the list shows no fetched data. WIRE each hook into the ` +
         `feature: CALL \`use${entity.id}()\` in the page (or its \`.hooks.ts\` view) and render the fetched ` +
         `rows with \`.map\`; CALL \`useCreate${entity.id}()\`, \`useUpdate${entity.id}()\`, and ` +

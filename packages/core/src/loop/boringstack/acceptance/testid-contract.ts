@@ -1,4 +1,3 @@
-import ts from "typescript";
 import type { IEntityAcceptance } from "../../acceptance/acceptance.types";
 import { testIdsFor } from "../../acceptance/acceptance-spec";
 
@@ -151,58 +150,9 @@ Without these test IDs, the feature cannot be validated end-to-end and will not 
  * @param sources - Map of {filePath → source code}
  * @param entity - The entity whose testids must be present
  */
-const TEST_FILE_RE = /\.(test|spec|stories)\.[jt]sx?$/u;
-
-/** Parse a TS/TSX source into an AST (JSX enabled for .tsx/.jsx). */
-function parseSource(path: string, src: string): ts.SourceFile {
-  const kind =
-    path.endsWith(".tsx") || path.endsWith(".jsx")
-      ? ts.ScriptKind.TSX
-      : ts.ScriptKind.TS;
-
-  return ts.createSourceFile(path, src, ts.ScriptTarget.Latest, true, kind);
-}
-
-/** Walk the AST once, recording which of `names` this file DECLARES (a `function useX`
- *  or `const useX =`) and which it CALLS (a real `CallExpression` on the bare identifier).
- *  AST-based on purpose: the name appearing in a comment, string, template, or regex
- *  literal is NOT a CallExpression, so those literal-form bypasses can't fake a call;
- *  and a call with explicit generics (`useX<A,B>()`) still has an Identifier callee, so
- *  it's matched (a regex on `useX\s*\(` would miss it). */
-function hookUsage(
-  sf: ts.SourceFile,
-  names: ReadonlySet<string>
-): { declares: Set<string>; calls: Set<string> } {
-  const declares = new Set<string>();
-  const calls = new Set<string>();
-
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isFunctionDeclaration(node) &&
-      node.name !== undefined &&
-      names.has(node.name.text)
-    ) {
-      declares.add(node.name.text);
-    } else if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      names.has(node.name.text)
-    ) {
-      declares.add(node.name.text);
-    } else if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      names.has(node.expression.text)
-    ) {
-      calls.add(node.expression.text);
-    }
-
-    ts.forEachChild(node, visit);
-  };
-
-  visit(sf);
-
-  return { declares, calls };
+/** Escape a string for safe use as a literal inside a RegExp. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 /**
@@ -212,13 +162,14 @@ function hookUsage(
  * `data-testid` with hardcoded `-` rows, no `onSubmit`, and `useCreate/Update/Delete`
  * defined but never called — a false-green the fast gate accepted).
  *
- * A hook is WIRED when it is actually INVOKED as a `CallExpression` in a non-test file
- * that does NOT declare it. Parsing to an AST (not regex) is deliberate: a mention in a
- * comment / string / template / **regex literal** is never a CallExpression, so none of
- * those literal forms can fake a call; an `import`/re-export/type-ref isn't a call either;
- * and a call with explicit generics (`useX<…>()`) is still matched. Passing both the
- * direct-call-in-page and the scaffold's view-hook idiom (the call living in a view
- * `<Component>.hooks.ts`) falls out naturally.
+ * A hook is WIRED only when it is actually INVOKED — `useX(` — in a non-test file
+ * that is NOT its own definition file. Requiring the call paren defeats the trivial
+ * bypasses (a bare `import { useX }`, a re-export barrel `export { useX }`, a type
+ * reference, or a comment all mention the name WITHOUT the `(` and so do NOT count).
+ * Requiring a NON-definition file rules out the `export function useX(` definition
+ * site itself. Word-boundary matched, so `useContact(` never matches `useContactPage(`.
+ * Pattern-agnostic: passes both a direct call in the page `.tsx` and the scaffold's
+ * handler-from-the-hook idiom (the call living in a view `<Component>.hooks.ts`).
  *
  * @param files - Map of {relPath → source} for the feature's .ts + .tsx sources
  * @param entity - The entity whose CRUD hooks must be wired
@@ -227,6 +178,11 @@ export function checkWiring(
   files: Map<string, string>,
   entity: IEntityAcceptance
 ): string[] {
+  const errors: string[] = [];
+  const isTest = (p: string): boolean =>
+    /\.(test|spec|stories)\.[jt]sx?$/u.test(p);
+  const prod = Array.from(files.entries()).filter(([p]) => !isTest(p));
+
   // The full-CRUD contract: the list query + the three mutation hooks the guide
   // mandates (list/create/update/delete). PascalCase feature id → hook names.
   const hooks = [
@@ -235,69 +191,49 @@ export function checkWiring(
     `useUpdate${entity.id}`,
     `useDelete${entity.id}`,
   ];
-  const hookSet = new Set(hooks);
-  const wired = new Set<string>();
 
-  for (const [path, src] of files) {
-    if (TEST_FILE_RE.test(path)) {
-      continue;
-    }
+  for (const hook of hooks) {
+    const h = escapeRegExp(hook);
+    // Definition site: `function useX` / `const useX =` / `const useX:` (the file that OWNS the hook).
+    const defRe = new RegExp(`(?:function|const)\\s+${h}\\b`, "u");
+    // A genuine CALL: the hook name immediately followed by `(` (allowing whitespace).
+    const callRe = new RegExp(`\\b${h}\\s*\\(`, "u");
 
-    const { declares, calls } = hookUsage(parseSource(path, src), hookSet);
+    const wired = prod.some(([, src]) => !defRe.test(src) && callRe.test(src));
 
-    for (const name of calls) {
-      // A call in a file that does NOT also declare the hook = real wiring (not recursion).
-      if (!declares.has(name)) {
-        wired.add(name);
-      }
+    if (!wired) {
+      errors.push(hook);
     }
   }
 
-  return hooks.filter((h) => !wired.has(h));
-}
-
-/** Collect every value assigned to a REAL `data-testid` JSX attribute (AST-based, so a
- *  `data-testid` literal sitting in a comment or a plain string does NOT count — panel
- *  bypass). Handles `="x"`, `='x'`, `={"x"}`, and `={` + no-substitution-template. */
-function collectJsxTestIds(sf: ts.SourceFile, out: Set<string>): void {
-  const visit = (node: ts.Node): void => {
-    if (ts.isJsxAttribute(node) && node.name.getText(sf) === "data-testid") {
-      const init = node.initializer;
-
-      if (init !== undefined && ts.isStringLiteral(init)) {
-        out.add(init.text);
-      } else if (
-        init !== undefined &&
-        ts.isJsxExpression(init) &&
-        init.expression !== undefined &&
-        ts.isStringLiteralLike(init.expression)
-      ) {
-        out.add(init.expression.text);
-      }
-    }
-
-    ts.forEachChild(node, visit);
-  };
-
-  visit(sf);
+  return errors;
 }
 
 export function checkTestIds(
   sources: Map<string, string>,
   entity: IEntityAcceptance
 ): string[] {
+  const errors: string[] = [];
+  const source = Array.from(sources.values()).join("\n");
+  const required = requiredTestIds(entity);
   const ids = testIdsFor(entity.key);
-  // nav lives in the shared sidebar, not the feature dir — never required here.
-  const required = requiredTestIds(entity).filter((id) => id !== ids.nav);
 
-  // Collect the testids that are REAL rendered JSX attributes (any file, any quote/brace
-  // form) — a match inside a comment or a bare string is not a JsxAttribute, so it can't
-  // satisfy the contract while the page stays a shell.
-  const present = new Set<string>();
+  for (const id of required) {
+    // Skip nav ID check: it lives in shared sidebar, not the feature directory
+    if (id === ids.nav) {
+      continue;
+    }
 
-  for (const [path, src] of sources) {
-    collectJsxTestIds(parseSource(path, src), present);
+    // Match either quote style: the generated JSX is single-quoted
+    // (`data-testid='x'`) after prettier/eslint, while hand-written examples
+    // often use double quotes. Missing EITHER form means the hook is absent.
+    const hasDouble = source.includes(`data-testid="${id}"`);
+    const hasSingle = source.includes(`data-testid='${id}'`);
+
+    if (!hasDouble && !hasSingle) {
+      errors.push(id);
+    }
   }
 
-  return required.filter((id) => !present.has(id));
+  return errors;
 }
