@@ -866,6 +866,43 @@ describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
     }
   });
 
+  test("sorts SAME-RANK files by path, independent of discovery/creation order", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-samerank-"));
+
+    try {
+      const apiDir = join(dir, "apps/api/src/api/company");
+
+      await mkdir(apiDir, { recursive: true });
+
+      // Three same-rank (.ts, non-component) files CREATED in reverse-path order. An
+      // implementation that kept discovery/insertion order (readdir order tracks creation
+      // order on some filesystems) would emit z→m→a; the path tiebreak must emit a→m→z.
+      await writeFile(
+        join(apiDir, "zebra.service.ts"),
+        "export const z = 'Z';\n"
+      );
+      await writeFile(
+        join(apiDir, "mango.service.ts"),
+        "export const m = 'M';\n"
+      );
+      await writeFile(
+        join(apiDir, "alpha.service.ts"),
+        "export const a = 'A';\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code.indexOf("alpha.service.ts")).toBeLessThan(
+        code.indexOf("mango.service.ts")
+      );
+      expect(code.indexOf("mango.service.ts")).toBeLessThan(
+        code.indexOf("zebra.service.ts")
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("includes .jsx components and orders components before non-component .ts", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-jsx-"));
 

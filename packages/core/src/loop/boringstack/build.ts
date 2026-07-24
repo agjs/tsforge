@@ -256,10 +256,15 @@ export async function readResourceCode(
   // give the judge inconsistent context. A lexicographic path tiebreak fixes the order.
   const rank = (relPath: string): number =>
     relPath.endsWith(".tsx") || relPath.endsWith(".jsx") ? 0 : 1;
+  // Codepoint comparison (NOT localeCompare) for the same-rank tiebreak: localeCompare
+  // depends on the runtime locale + ICU build, so it can order paths differently across
+  // machines — which would reintroduce the non-determinism this tiebreak exists to remove.
+  // A plain codepoint `<`/`>` is identical everywhere.
+  const byPath = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
   const ordered = [...candidates].sort((a, b) => {
     const byRank = rank(a.relPath) - rank(b.relPath);
 
-    return byRank === 0 ? a.relPath.localeCompare(b.relPath) : byRank;
+    return byRank === 0 ? byPath(a.relPath, b.relPath) : byRank;
   });
 
   const blocks: string[] = [];
