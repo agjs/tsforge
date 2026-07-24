@@ -495,25 +495,49 @@ describe("signatureToError", () => {
     expect(plain.message).not.toContain("call site");
   });
 
-  test("a Readable<SuccessResponse> error steers to the CONSUMER unwrap, not a route/schema fix (build15 wall)", () => {
+  test("the REAL abbreviated `Readable<SuccessResponse<...>>` not-assignable error steers to the scaffold unwrap (direct vs `{ data }` envelope), never a cast or infer", () => {
+    // Ground truth from build logs: tsc prints the ABBREVIATED form with a literal `...`, e.g.
+    // `Type 'Readable<SuccessResponse<...>>' is not assignable to type 'ICompanyItem[]'` — NOT an
+    // expanded `{ 200: {} }`. The steer must fire on that real string and give the scaffold's
+    // route-shape-dependent unwrap.
     const msg =
-      "Type 'Readable<SuccessResponse<{ 200: {} }>>' is not assignable to type 'Promise<ISupplierItem>'.";
+      "Type 'Readable<SuccessResponse<...>>' is not assignable to type 'ICompanyItem[]'.";
     const err = signatureToError(
-      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
+      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fcompany%2FCompany.queries.ts:14:no-unsafe:${encodeURIComponent(msg)}`
     );
 
-    // Steer names it universal/expected and points at the consumer fix (infer, then unwrap).
-    expect(err.message).toContain("UNIVERSAL");
-    expect(err.message).toContain("CONSUMER");
-    // Universal move is infer-don't-annotate; unwrap is shape-conditional (not blind .data).
-    expect(err.message).toContain("let TS INFER");
-    expect(err.message).toContain("don't blindly add");
-    // Steer must name BOTH annotation sites — the fn AND the useMutation/useQuery HOOK generic
-    // (build16 oscillated on the hook one; guide + steer must agree).
-    expect(err.message).toContain("UseMutationResult<Readable");
-    expect(err.message).toContain("HOOK generic");
-    // Must NOT tell the model to fix the route/schema for this.
-    expect(err.message).toContain("CANNOT remove it by editing the route");
+    // It fires on the real abbreviated string and explains the wrapper.
+    expect(err.message).toContain("openapi-fetch's response wrapper");
+    // The KEY correction: Readable means `data` didn't RESOLVE to the domain type → fix UPSTREAM
+    // (schema/path); `?? []`/guard/`as` cannot convert the wrapper. Not a consumer-unwrap fix.
+    expect(err.message.toLowerCase()).toContain("did not resolve");
+    expect(err.message).toContain("FIX UPSTREAM");
+    // The green consumer shapes (for once `data` resolves), keyed to the route.
+    expect(err.message).toContain("return data ?? []");
+    expect(err.message).toContain("return data.data");
+    // Keeps the annotations; forbids the two dead ends the model kept trying (cast / drop annotation).
+    expect(err.message).toContain("UseMutationResult<void, unknown, string>");
+    expect(err.message).toContain("NEVER `as`");
+    expect(err.message.toLowerCase()).toContain("remove the annotation");
+    // Must NOT resurrect the fabricated empty-inner / missing-schema-only framing.
+    expect(err.message).not.toContain("EMPTY inner");
+    expect(err.message).not.toContain("UNIVERSAL");
+  });
+
+  test("a generic optional-type mismatch is NOT hijacked by an api-client consumer-unwrap steer (no over-match)", () => {
+    // Guard against the reverted over-broad branch: a plain `string | undefined not assignable`
+    // (e.g. a PathsWithMethod call-site arg, or any generic optional error) must NOT be steered to
+    // "unwrap api-client data / do NOT rewrite the schema" — that mis-directs unrelated errors.
+    const msg =
+      "Argument of type 'string | undefined' is not assignable to parameter of type 'PathsWithMethod<paths, \"post\">'.";
+    const err = signatureToError(
+      `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fcontact%2FContact.mutations.ts:14:no-unsafe:${encodeURIComponent(msg)}`
+    );
+
+    // It routes to the PathsWithMethod steer (call-site path/verb), NOT an api-client unwrap steer.
+    expect(err.message).toContain("PathsWithMethod");
+    expect(err.message).not.toContain("do NOT rewrite the schema");
+    expect(err.message).not.toContain("value typed OPTIONAL");
   });
 
   test("a `'>' expected` in a .ts flags the JSX-must-be-.tsx cause; other .ts parse errors do NOT", () => {

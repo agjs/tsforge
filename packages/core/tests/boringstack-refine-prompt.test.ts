@@ -374,12 +374,13 @@ describe("refinePrompt", () => {
     });
 
     // The boringstack client's throwOnError middleware THROWS on non-2xx and types
-    // `error` as undefined — so mutations/queries must just read `data`, never guard
-    // `error`. The prompt names the old "if (error) throw error" idiom only to forbid
-    // it (calling it a DEAD no-unnecessary-condition / only-throw-error).
+    // `error` as undefined — so mutations/queries must never guard `error`. The prompt
+    // names the old "if (error) throw error" idiom only to forbid it (calling it a DEAD
+    // no-unnecessary-condition / only-throw-error). Because `data` is typed OPTIONAL, the
+    // create/update return is GUARD-then-return (not a bare `return data`).
     expect(p).toContain("throwOnError");
     expect(p).toContain(
-      "const { data } = await apiClient.POST(…); return data;"
+      "const { data } = await apiClient.POST(…, { body: input }); if (!data) throw new ApiError"
     );
     expect(p).toContain("no-unnecessary-condition");
     expect(p).toContain("only-throw-error");
@@ -494,6 +495,62 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("APP_SIDEBAR_NAV_ITEMS");
     // Must carry the add-only boundary for those shared files.
     expect(prompt).toContain("ADD ONLY");
+  });
+
+  it("teaches the scaffold's api-client hook typing: annotate the DOMAIN type, never Readable/as (kills the near-green cluster)", () => {
+    // build44/45 oscillated on the api-client response cluster (Readable<SuccessResponse> / no-as /
+    // Unnecessary ?? / not-assignable). The scaffold's green hooks ANNOTATE with the domain type;
+    // the guide must teach that exact shape (and must not tell the model to drop annotations).
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // Query hook annotated with the domain type + the correct `data ?? []` unwrap.
+    expect(prompt).toContain("UseQueryResult<ICompanyItem[]>");
+    expect(prompt).toContain("Promise<ICompanyItem[]>");
+    expect(prompt).toContain("return data ?? []");
+    // Mutation hook annotated with the domain type (3-generic form).
+    expect(prompt).toContain(
+      "UseMutationResult<ICompanyItem, unknown, CompanyCreateInput>"
+    );
+    // create/update: the client types `data` OPTIONAL, so bare `return data` fails — the scaffold's
+    // idiom is GUARD-then-return (the guard narrows `IItem | undefined` → `IItem`).
+    expect(prompt).toContain("GUARD, then return");
+    expect(prompt).toContain("if (!data) throw new ApiError");
+    // delete returns nothing (`t.Null()` route) — it must be typed `void`, never the item type.
+    expect(prompt).toContain("UseMutationResult<void, unknown, string>");
+    expect(prompt).toContain("response: t.Null()");
+    // Two DIFFERENT errors. (a) `Readable<SuccessResponse<...>>` not-assignable (tsc prints the
+    // abbreviated `<...>` — the REAL string) = `data` did NOT RESOLVE to the domain type: the fix is
+    // UPSTREAM (the route's `response:` schema must match the item type; stale schema regenerates via
+    // generate:api). `?? []`/guard/`as` CANNOT convert the wrapper — so this is NOT a consumer-unwrap
+    // fix. (b) `T | undefined not assignable` = data resolved but optional; THAT is the `?? []`/guard.
+    expect(prompt).toContain("Two DIFFERENT errors");
+    expect(prompt).toContain("Readable<SuccessResponse<...>>");
+    // Pin the round-14 core claim for (a): did-not-resolve + upstream, and that the tricks can't convert.
+    expect(prompt.toLowerCase()).toContain("did not resolve");
+    expect(prompt.toLowerCase()).toContain("upstream");
+    expect(prompt.toLowerCase()).toContain("none converts the wrapper");
+    expect(prompt).toContain("return data.data");
+    expect(prompt).toContain("const { data } = await apiClient.GET");
+    expect(prompt).toContain("generate:api");
+    // It must not resurrect the panel-flagged falsehoods (annotation-is-the-fix, or the fabricated
+    // empty-inner `{ 200: {} }` = missing-schema tell that tsc never actually prints).
+    expect(prompt).not.toContain("the domain annotation does all the work");
+    expect(prompt).not.toContain("{ 200: {} }");
+    // Never Readable-annotate, never `as`-cast, never drop the annotation (the two dead ends).
+    expect(prompt).toContain(
+      "annotate a hook with `Readable<SuccessResponse<…>>`"
+    );
+    expect(prompt).toContain("`as`-cast");
+    expect(prompt.toLowerCase()).toContain(
+      "remove the annotation and let ts infer"
+    );
   });
 
   it("teaches query keys as constants in *.constants.ts (never an inline string-array queryKey)", () => {
