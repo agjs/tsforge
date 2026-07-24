@@ -499,10 +499,11 @@ describe("signatureToError", () => {
       `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
     );
 
-    // Root cause (verified against the scaffold): `Readable` is openapi-fetch's UNTYPED-BODY
-    // fallback — it is absent from the green generated types, so it is NOT normal/universal.
-    expect(err.message).toContain("UNTYPED-BODY FALLBACK");
-    expect(err.message).toContain("NOT the normal");
+    // Root cause (verified against openapi-fetch's d.ts): `Readable<SuccessResponse<…>>` is the
+    // NORMAL response wrapper (strips writeOnly fields); it only surfaces as a raw non-assignable
+    // type when the INNER body is EMPTY (`SuccessResponse<{ 200: {} }>`) = missing `response:` schema.
+    expect(err.message).toContain("NORMAL response wrapper");
+    expect(err.message).toContain("{ 200: {} }");
     // The fix is at the API SOURCE — add an explicit `response:` TypeBox schema so generate:api
     // types `data`. The steer must name the concrete list/get/delete response shapes.
     expect(err.message).toContain("response:");
@@ -517,9 +518,6 @@ describe("signatureToError", () => {
     // the list `?? []` idiom.
     expect(err.message).toContain("if (!data) throw new ApiError");
     expect(err.message).toContain("UseMutationResult<void, unknown, string>");
-    // And it must NOT conflate the optional-`data` error with a missing schema (anti-oscillation):
-    // a "not assignable" WITHOUT `Readable` is schema-fine and only needs the unwrap.
-    expect(err.message).toContain("do NOT rewrite a correct schema");
     // It must state the TS mechanic the panel flagged: a return annotation checks the returned
     // expression, it does NOT retype the destructured `data` — so a consumer-only fix can't work.
     expect(err.message).toContain("does NOT retype");
