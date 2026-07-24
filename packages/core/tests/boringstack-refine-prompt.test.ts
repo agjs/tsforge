@@ -525,13 +525,18 @@ describe("refinePrompt", () => {
     // delete returns nothing (`t.Null()` route) — it must be typed `void`, never the item type.
     expect(prompt).toContain("UseMutationResult<void, unknown, string>");
     expect(prompt).toContain("response: t.Null()");
-    // Two DIFFERENT errors, two DIFFERENT fixes. (a) `Readable<SuccessResponse<...>>` not-assignable =
-    // you haven't UNWRAPPED the wrapper (tsc prints the abbreviated `<...>` — the REAL string); the
-    // fix is the route-shape unwrap (`data ?? []` direct / `data.data` envelope), NOT a cast/infer.
+    // Two DIFFERENT errors. (a) `Readable<SuccessResponse<...>>` not-assignable (tsc prints the
+    // abbreviated `<...>` — the REAL string) = `data` did NOT RESOLVE to the domain type: the fix is
+    // UPSTREAM (the route's `response:` schema must match the item type; stale schema regenerates via
+    // generate:api). `?? []`/guard/`as` CANNOT convert the wrapper — so this is NOT a consumer-unwrap
+    // fix. (b) `T | undefined not assignable` = data resolved but optional; THAT is the `?? []`/guard.
     expect(prompt).toContain("Two DIFFERENT errors");
     expect(prompt).toContain("Readable<SuccessResponse<...>>");
+    // Pin the round-14 core claim for (a): did-not-resolve + upstream, and that the tricks can't convert.
+    expect(prompt.toLowerCase()).toContain("did not resolve");
+    expect(prompt.toLowerCase()).toContain("upstream");
+    expect(prompt.toLowerCase()).toContain("none converts the wrapper");
     expect(prompt).toContain("return data.data");
-    // (b) `T | undefined not assignable` = unwrapped but optional; the guard/`?? []` fixes it.
     expect(prompt).toContain("const { data } = await apiClient.GET");
     expect(prompt).toContain("generate:api");
     // It must not resurrect the panel-flagged falsehoods (annotation-is-the-fix, or the fabricated
