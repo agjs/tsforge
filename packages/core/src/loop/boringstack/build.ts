@@ -283,7 +283,10 @@ export async function readResourceCode(
   // Codepoint comparison (NOT localeCompare) for the same-rank tiebreak: localeCompare
   // depends on the runtime locale + ICU build, so it can order paths differently across
   // machines — which would reintroduce the non-determinism this tiebreak exists to remove.
-  // A plain codepoint `<`/`>` is identical everywhere.
+  // A plain `<`/`>` is identical everywhere for these paths. (It compares UTF-16 units,
+  // not code points, and the separator normalization above assumes no literal backslash in
+  // a POSIX filename — both are non-issues here: boringstack feature files are generated
+  // with ASCII kebab/camel names, never astral chars or embedded backslashes.)
   const byPath = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
   const ordered = [...candidates].sort((a, b) => {
     const byRank = rank(a.relPath) - rank(b.relPath);
