@@ -517,10 +517,18 @@ describe("refinePrompt", () => {
     expect(prompt).toContain(
       "UseMutationResult<ICompanyItem, unknown, CompanyCreateInput>"
     );
-    // Never Readable, never `as`.
+    // The guide must state the TRUE source of `data`'s type — the API route's `response:` schema
+    // via generate:api — NOT the (false) claim that the consumer annotation retypes `data`.
+    expect(prompt).toContain("response:");
+    expect(prompt).toContain("generate:api");
+    expect(prompt).toContain("t.Array(<ItemSchema>)");
+    // And it must not resurrect the panel-flagged falsehood that the annotation "does all the work".
+    expect(prompt).not.toContain("the domain annotation does all the work");
+    // Never Readable, never `as` (pin BOTH halves so the anti-`as` guidance can't regress silently).
     expect(prompt).toContain(
       "NEVER annotate with `Readable<SuccessResponse<…>>`"
     );
+    expect(prompt).toContain("NEVER reach for `as`");
   });
 
   it("teaches query keys as constants in *.constants.ts (never an inline string-array queryKey)", () => {

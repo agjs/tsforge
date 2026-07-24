@@ -492,29 +492,32 @@ describe("signatureToError", () => {
     expect(plain.message).not.toContain("call site");
   });
 
-  test("a Readable<SuccessResponse> error steers to ANNOTATE-with-the-domain-type (scaffold idiom), not a route/schema fix", () => {
+  test("a Readable<SuccessResponse> error steers to the API `response:` schema (the source generate:api reads), not a consumer annotation", () => {
     const msg =
       "Type 'Readable<SuccessResponse<{ 200: {} }>>' is not assignable to type 'Promise<ISupplierItem>'.";
     const err = signatureToError(
       `failure:apps%2Fui%2Fsrc%2Ffeatures%2Fsupplier%2FSupplier.mutations.ts:20:no-unsafe:${encodeURIComponent(msg)}`
     );
 
-    // Steer names it universal/expected and must NOT send the model to the route/schema.
-    expect(err.message).toContain("UNIVERSAL");
-    expect(err.message).toContain("CANNOT remove it by editing the route");
-    // The fix is ANNOTATE the hook + fn with the DOMAIN type (the scaffold's green idiom) — the
-    // steer must show the concrete UseQueryResult/UseMutationResult<domain> annotations, NOT the
-    // old (wrong, scaffold-contradicting) "remove the annotation / let TS INFER" advice that fed the
-    // near-green oscillation (the scaffold's own hooks ARE annotated with the domain type).
-    expect(err.message).toContain("UseQueryResult<IXItem[]>");
-    expect(err.message).toContain(
-      "UseMutationResult<IXItem, unknown, XCreateInput>"
-    );
-    expect(err.message).toContain("Promise<IXItem[]>");
-    expect(err.message).toContain("don't blindly add");
-    // Must NOT resurrect the infer-don't-annotate steer that contradicted the scaffold.
+    // Root cause (verified against the scaffold): `Readable` is openapi-fetch's UNTYPED-BODY
+    // fallback — it is absent from the green generated types, so it is NOT normal/universal.
+    expect(err.message).toContain("UNTYPED-BODY FALLBACK");
+    expect(err.message).toContain("NOT the normal");
+    // The fix is at the API SOURCE — add an explicit `response:` TypeBox schema so generate:api
+    // types `data`. The steer must name the concrete list/get/delete response shapes.
+    expect(err.message).toContain("response:");
+    expect(err.message).toContain("t.Array(<ItemSchema>)");
+    expect(err.message).toContain("t.Null()");
+    expect(err.message).toContain("generate:api");
+    // It must state the TS mechanic the panel flagged: a return annotation checks the returned
+    // expression, it does NOT retype the destructured `data` — so a consumer-only fix can't work.
+    expect(err.message).toContain("does NOT retype");
+    // NEVER an `as`-cast, and it must NOT resurrect the (false) "can't fix via the response schema"
+    // or "just annotate the consumer / let TS INFER" advice that fed the near-green oscillation.
+    expect(err.message).toContain("NEVER `as`");
+    expect(err.message).not.toContain("CANNOT remove it by editing the route");
+    expect(err.message).not.toContain("UNIVERSAL");
     expect(err.message).not.toContain("let TS INFER");
-    expect(err.message).not.toContain("REMOVE the annotation");
   });
 
   test("a `'>' expected` in a .ts flags the JSX-must-be-.tsx cause; other .ts parse errors do NOT", () => {
