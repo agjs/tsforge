@@ -508,15 +508,22 @@ describe("refinePrompt", () => {
 
     const prompt = refinePrompt(feature);
 
-    expect(prompt).toContain("Query keys are CONSTANTS");
+    expect(prompt).toContain("USE the generated constant");
     expect(prompt).toContain("CONTACT_QUERY_KEYS");
     expect(prompt).toContain("Contact.constants.ts");
-    // The onSuccess invalidation must reuse the same constant (so the list refreshes).
+    // Must match the SCAFFOLD's shape: a static tuple accessed as a PROPERTY (.list), not a call —
+    // the reviewer flagged that inventing all/list()/detail() factories fights the generated files.
+    expect(prompt).toContain('list: ["contact", "list"] as const');
+    expect(prompt).toContain("queryKey: CONTACT_QUERY_KEYS.list, ");
+    // Invalidate with the SAME property key (so the list refreshes).
     expect(prompt).toContain(
-      "invalidateQueries({ queryKey: CONTACT_QUERY_KEYS.all })"
+      "invalidateQueries({ queryKey: CONTACT_QUERY_KEYS.list })"
     );
-    // Must NOT teach the inline-spread loophole at the call site (rule-passing but re-scatters the key).
-    expect(prompt).toContain("never an inline array");
-    expect(prompt).toContain("single source of truth");
+    // A factory is taught ONLY for a parameterized key (detail(id)), never rewriting the static list.
+    expect(prompt).toContain("detail: (id: string) =>");
+    expect(prompt).toContain("Do NOT rewrite the existing static");
+    // Lock out BOTH earlier mis-teachings: the inline-spread loophole AND the factory .list() rewrite.
+    expect(prompt).not.toContain("a spread of the constant is fine");
+    expect(prompt).not.toContain("QUERY_KEYS.list()");
   });
 });
