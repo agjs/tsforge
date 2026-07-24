@@ -150,6 +150,65 @@ Without these test IDs, the feature cannot be validated end-to-end and will not 
  * @param sources - Map of {filePath → source code}
  * @param entity - The entity whose testids must be present
  */
+/** Escape a string for safe use as a literal inside a RegExp. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * Detect a HOLLOW feature: the required test hooks are all present, but the CRUD
+ * hooks are never CALLED from the UI — a static shell that satisfies the testid
+ * contract while doing nothing (observed live: build49 Contact shipped every
+ * `data-testid` with hardcoded `-` rows, no `onSubmit`, and `useCreate/Update/Delete`
+ * defined but never called — a false-green the fast gate accepted).
+ *
+ * A hook is WIRED only when it is actually INVOKED — `useX(` — in a non-test file
+ * that is NOT its own definition file. Requiring the call paren defeats the trivial
+ * bypasses (a bare `import { useX }`, a re-export barrel `export { useX }`, a type
+ * reference, or a comment all mention the name WITHOUT the `(` and so do NOT count).
+ * Requiring a NON-definition file rules out the `export function useX(` definition
+ * site itself. Word-boundary matched, so `useContact(` never matches `useContactPage(`.
+ * Pattern-agnostic: passes both a direct call in the page `.tsx` and the scaffold's
+ * handler-from-the-hook idiom (the call living in a view `<Component>.hooks.ts`).
+ *
+ * @param files - Map of {relPath → source} for the feature's .ts + .tsx sources
+ * @param entity - The entity whose CRUD hooks must be wired
+ */
+export function checkWiring(
+  files: Map<string, string>,
+  entity: IEntityAcceptance
+): string[] {
+  const errors: string[] = [];
+  const isTest = (p: string): boolean =>
+    /\.(test|spec|stories)\.[jt]sx?$/u.test(p);
+  const prod = Array.from(files.entries()).filter(([p]) => !isTest(p));
+
+  // The full-CRUD contract: the list query + the three mutation hooks the guide
+  // mandates (list/create/update/delete). PascalCase feature id → hook names.
+  const hooks = [
+    `use${entity.id}`,
+    `useCreate${entity.id}`,
+    `useUpdate${entity.id}`,
+    `useDelete${entity.id}`,
+  ];
+
+  for (const hook of hooks) {
+    const h = escapeRegExp(hook);
+    // Definition site: `function useX` / `const useX =` / `const useX:` (the file that OWNS the hook).
+    const defRe = new RegExp(`(?:function|const)\\s+${h}\\b`, "u");
+    // A genuine CALL: the hook name immediately followed by `(` (allowing whitespace).
+    const callRe = new RegExp(`\\b${h}\\s*\\(`, "u");
+
+    const wired = prod.some(([, src]) => !defRe.test(src) && callRe.test(src));
+
+    if (!wired) {
+      errors.push(hook);
+    }
+  }
+
+  return errors;
+}
+
 export function checkTestIds(
   sources: Map<string, string>,
   entity: IEntityAcceptance

@@ -9,8 +9,11 @@ import {
   judgeStage,
   signatureToError,
   locateParseError,
+  testIdStage,
 } from "../src/loop/boringstack/gate-stages";
 import { scopeFor, featureOwnedGlobs } from "../src/loop/boringstack/build";
+import { testIdsFor } from "../src/loop/acceptance/acceptance-spec";
+import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
 import type { Exec } from "../src/loop/boringstack/exec";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
 import type { IProvider } from "../src/inference";
@@ -882,5 +885,124 @@ describe("featureOwnedGlobs", () => {
       false
     );
     expect(owned("apps/ui/src/app/router/routes.tsx")).toBe(false);
+  });
+});
+
+describe("testIdStage — hollow-shell wiring gate (integration, real filesystem)", () => {
+  const entity: IEntityAcceptance = {
+    id: "Contact",
+    key: "contact",
+    nav: "Contacts",
+    fields: [
+      {
+        name: "name",
+        type: "string",
+        optional: false,
+        valid: "A",
+        invalid: [],
+      },
+    ],
+    shows: ["name"],
+    screens: ["list", "form"],
+    parents: [],
+    negatives: [],
+    acceptanceCheck: "create a contact",
+  };
+
+  // Every required testid (checkTestIds skips nav) rendered on a real element.
+  const ids = testIdsFor(entity.key);
+  const allTestIds = [
+    ids.list,
+    ids.empty,
+    ids.create,
+    ids.form,
+    ids.submit,
+    ids.row,
+    ids.rowEdit,
+    ids.rowDelete,
+    ids.confirmDelete,
+    ids.field("name"),
+    ids.rowCell("name"),
+  ];
+  const pageWithTestIds = `export const ContactPage = () => (<main>${allTestIds
+    .map((t) => `<div data-testid='${t}'></div>`)
+    .join("")}</main>);`;
+
+  const QUERIES = "export function useContact() { return []; }";
+  const MUTATIONS =
+    "export function useCreateContact() {} export function useUpdateContact() {} export function useDeleteContact() {}";
+
+  async function writeFeature(files: Record<string, string>): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-wiring-"));
+
+    for (const [rel, src] of Object.entries(files)) {
+      const full = join(dir, "apps/ui/src/features/contact", rel);
+
+      await mkdir(join(full, ".."), { recursive: true });
+      await writeFile(full, src);
+    }
+
+    return dir;
+  }
+
+  test("all testids present but hooks NEVER called → HOLLOW → stage fails (feature-wiring)", async () => {
+    const dir = await writeFeature({
+      "Contact.queries.ts": QUERIES,
+      "Contact.mutations.ts": MUTATIONS,
+      "components/ContactPage/ContactPage.tsx": pageWithTestIds,
+    });
+
+    try {
+      const result = await testIdStage(dir, entity).run(dir);
+
+      expect(result.passed).toBe(false);
+      expect(result.errors[0]?.rule).toBe("feature-wiring");
+      expect(result.errors[0]?.message).toContain("HOLLOW");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("testids present AND hooks called in the page → passes", async () => {
+    const wiredPage = `import { useContact } from "../../Contact.queries";
+      import { useCreateContact, useUpdateContact, useDeleteContact } from "../../Contact.mutations";
+      export const ContactPage = () => {
+        const rows = useContact();
+        const c = useCreateContact(); const u = useUpdateContact(); const d = useDeleteContact();
+        return (<main>${allTestIds.map((t) => `<div data-testid='${t}'>{rows.map(String)}</div>`).join("")}</main>);
+      };`;
+    const dir = await writeFeature({
+      "Contact.queries.ts": QUERIES,
+      "Contact.mutations.ts": MUTATIONS,
+      "components/ContactPage/ContactPage.tsx": wiredPage,
+    });
+
+    try {
+      const result = await testIdStage(dir, entity).run(dir);
+
+      expect(result.passed).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a data-testid in a NON-render .ts does NOT satisfy the testid presence check", async () => {
+    // Regression for the gate-relaxed finding: testids must be proven over .tsx, not any .ts.
+    const dir = await writeFeature({
+      "Contact.queries.ts": `${QUERIES}\n// data-testid='${ids.list}' data-testid='${ids.form}'`,
+      "Contact.mutations.ts": MUTATIONS,
+      // The .tsx renders NOTHING → testids missing there even though the .ts "contains" them.
+      "components/ContactPage/ContactPage.tsx":
+        "export const ContactPage = () => <main />;",
+    });
+
+    try {
+      const result = await testIdStage(dir, entity).run(dir);
+
+      expect(result.passed).toBe(false);
+      expect(result.errors[0]?.rule).toBe("testid-presence");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
