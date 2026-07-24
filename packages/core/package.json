@@ -43,10 +43,10 @@
     "eslint-plugin-sonarjs": "4.2.0",
     "fast-check": "4.9.0",
     "jsdom": "^29.1.1",
-    "prettier": "3.9.5",
+    "prettier": "3.9.6",
     "turndown": "^7.2.4",
     "@typescript/native": "npm:typescript@7.0.2",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "typescript-eslint": "8.65.0"
   },
   "devDependencies": {
