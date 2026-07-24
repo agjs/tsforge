@@ -496,6 +496,37 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("ADD ONLY");
   });
 
+  it("teaches query keys as constants in *.constants.ts (never an inline string-array queryKey)", () => {
+    // build42 Contact parked partly on nonConstantQueryKey: `queryKey: ["contact", id]` (an array
+    // literal starting with a string) is rejected; keys must be a constant from *.constants.ts.
+    const feature: IFeature = {
+      id: "Contact",
+      desc: "A contact",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    expect(prompt).toContain("USE the generated constant");
+    expect(prompt).toContain("CONTACT_QUERY_KEYS");
+    expect(prompt).toContain("Contact.constants.ts");
+    // Must match the SCAFFOLD's shape: a static tuple accessed as a PROPERTY (.list), not a call —
+    // the reviewer flagged that inventing all/list()/detail() factories fights the generated files.
+    expect(prompt).toContain('list: ["contact", "list"] as const');
+    expect(prompt).toContain("queryKey: CONTACT_QUERY_KEYS.list, ");
+    // Invalidate with the SAME property key (so the list refreshes).
+    expect(prompt).toContain(
+      "invalidateQueries({ queryKey: CONTACT_QUERY_KEYS.list })"
+    );
+    // A factory is taught ONLY for a parameterized key (detail(id)), never rewriting the static list.
+    expect(prompt).toContain("detail: (id: string) =>");
+    expect(prompt).toContain("Do NOT rewrite the existing static");
+    // Lock out BOTH earlier mis-teachings: the inline-spread loophole AND the factory .list() rewrite.
+    expect(prompt).not.toContain("a spread of the constant is fine");
+    expect(prompt).not.toContain("QUERY_KEYS.list()");
+  });
+
   it("bans STATE-primitive hooks in the JSX body but ALLOWS custom hooks / useTranslation inline", () => {
     // build36 Company ground near-green on "must be in a custom hook (.hooks.ts), not in component
     // body". The rule bans only the STATE primitives directly in a JSX-returning body; custom hooks,
