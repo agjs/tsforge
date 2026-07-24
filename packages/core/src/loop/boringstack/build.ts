@@ -175,9 +175,10 @@ export function scopeFor(name: string): string[] {
 }
 
 /**
- * Read the generated resource code from the filesystem.
- * Concatenates TypeScript files from both the API resource and UI feature directories,
- * capped at ~16000 characters. Returns empty string if directories don't exist.
+ * Read the generated resource code from the filesystem for the completeness judge.
+ * Concatenates the API resource (.ts) and UI feature (.ts/.tsx/.jsx, components first,
+ * test/story files excluded) source, capped at ~96000 characters. Returns empty string
+ * if directories don't exist.
  */
 export async function readResourceCode(
   cwd: string,

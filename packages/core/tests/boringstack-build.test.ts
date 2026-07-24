@@ -755,3 +755,71 @@ describe("readResourceCode — feeds the completeness judge", () => {
     }
   });
 });
+
+describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
+  test("a >16k component survives (proves the budget raise, not the old 16000 cap)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-budget-"));
+
+    try {
+      const apiDir = join(dir, "apps/api/src/api/company");
+      const uiComp = join(
+        dir,
+        "apps/ui/src/features/company/components/CompanyPage"
+      );
+
+      await mkdir(apiDir, { recursive: true });
+      await mkdir(uiComp, { recursive: true });
+
+      // ~18k of API .ts (would alone blow the OLD 16000 budget before UI is even read).
+      const filler = "// filler line to consume budget\n".repeat(560);
+
+      await writeFile(
+        join(apiDir, "company.service.ts"),
+        `export const svc = 1;\n${filler}`
+      );
+      // The component carries a UNIQUE marker near its end — only visible if the budget
+      // is large enough to include the UI after ~18k of API text.
+      await writeFile(
+        join(uiComp, "CompanyPage.tsx"),
+        "export const CompanyPage = () => <main>BUDGET_MARKER_TSX</main>;\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      // Under the old 16000 cap this would have truncated before the UI → marker absent.
+      expect(code).toContain("BUDGET_MARKER_TSX");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("includes .jsx components and orders components before non-component .ts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-jsx-"));
+
+    try {
+      const uiDir = join(dir, "apps/ui/src/features/company");
+
+      await mkdir(join(uiDir, "components"), { recursive: true });
+
+      await writeFile(
+        join(uiDir, "components", "CompanyPage.jsx"),
+        "export const CompanyPage = () => 'JSX_COMPONENT_MARKER';\n"
+      );
+      await writeFile(
+        join(uiDir, "Company.queries.ts"),
+        "export const useCompany = () => 'TS_LOGIC_MARKER';\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code).toContain("JSX_COMPONENT_MARKER");
+      expect(code).toContain("TS_LOGIC_MARKER");
+      // Component (.jsx) is emitted before the plain .ts logic (component-first ordering).
+      expect(code.indexOf("JSX_COMPONENT_MARKER")).toBeLessThan(
+        code.indexOf("TS_LOGIC_MARKER")
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

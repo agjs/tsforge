@@ -685,3 +685,90 @@ describe("checkWiring — the bypasses must NOT pass (a mention is not a call)",
     expect(dead).not.toContain("useDeleteContact");
   });
 });
+
+describe("checkWiring — comment/string mentions do NOT count as wiring (panel bypass)", () => {
+  const ce: IEntityAcceptance = {
+    id: "Contact",
+    key: "contact",
+    nav: "Contacts",
+    fields: [
+      {
+        name: "name",
+        type: "string",
+        optional: false,
+        valid: "A",
+        invalid: [],
+      },
+    ],
+    shows: ["name"],
+    screens: ["list", "form"],
+    parents: [],
+    negatives: [],
+    acceptanceCheck: "create a contact",
+  };
+  const defs: [string, string][] = [
+    ["Contact.queries.ts", "export function useContact() { return []; }"],
+    [
+      "Contact.mutations.ts",
+      "export function useCreateContact() {} export function useUpdateContact() {} export function useDeleteContact() {}",
+    ],
+  ];
+
+  test("a call inside a // line comment is NOT wiring", () => {
+    const files = new Map<string, string>([
+      ...defs,
+      [
+        "components/ContactPage/ContactPage.tsx",
+        `export const ContactPage = () => {
+           // useContact(); useCreateContact(); useUpdateContact(); useDeleteContact();
+           return <main data-testid='contact-list'>-</main>;
+         };`,
+      ],
+    ]);
+    // All four are only mentioned in a comment → still dead.
+    const dead = checkWiring(files, ce);
+
+    expect(dead).toContain("useContact");
+    expect(dead).toContain("useCreateContact");
+    expect(dead).toContain("useUpdateContact");
+    expect(dead).toContain("useDeleteContact");
+  });
+
+  test("a call inside a string / block comment is NOT wiring", () => {
+    const files = new Map<string, string>([
+      ...defs,
+      [
+        "components/ContactPage/ContactPage.tsx",
+        `export const ContactPage = () => {
+           const doc = "call useContact() then useCreateContact()";
+           /* useUpdateContact(); useDeleteContact(); */
+           return <main>{doc}</main>;
+         };`,
+      ],
+    ]);
+
+    expect(checkWiring(files, ce).sort()).toEqual(
+      [
+        "useContact",
+        "useCreateContact",
+        "useDeleteContact",
+        "useUpdateContact",
+      ].sort()
+    );
+  });
+
+  test("a `//` inside a real string does NOT hide a following real call", () => {
+    // Regression for the stripper: `"http://x"` must not be treated as a line comment
+    // that swallows the genuine useContact() after it on the same line.
+    const files = new Map<string, string>([
+      ...defs,
+      [
+        "components/ContactPage/ContactPage.tsx",
+        `export const ContactPage = () => { const u = "http://x"; const rows = useContact(); return <div>{rows.length}{u}</div>; };`,
+      ],
+    ]);
+
+    // useContact IS genuinely called (not hidden by the URL's //) → not dead.
+    expect(checkWiring(files, ce)).not.toContain("useContact");
+  });
+});

@@ -156,6 +156,23 @@ function escapeRegExp(s: string): string {
 }
 
 /**
+ * Blank out comments and string/template literals so a hook name that appears ONLY
+ * inside a comment (`// useContact()`) or a string (`"useContact()"`) is NOT counted
+ * as real wiring (the panel-flagged bypass). Single-pass alternation: whichever token
+ * STARTS first at a position is consumed whole, so a `//` inside a string
+ * (`"http://x"`) is eaten by the string rule — not misread as a line comment that
+ * would swallow the real code after it. Each match is replaced by same-length spaces
+ * so byte offsets and line structure are preserved. Not a full parser (regex literals
+ * aren't tracked), but it closes the comment/string false-positive for TS/TSX sources.
+ */
+function stripCommentsAndStrings(src: string): string {
+  const token =
+    /\/\*[\s\S]*?\*\/|\/\/[^\n]*|'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/gu;
+
+  return src.replace(token, (m) => " ".repeat(m.length));
+}
+
+/**
  * Detect a HOLLOW feature: the required test hooks are all present, but the CRUD
  * hooks are never CALLED from the UI — a static shell that satisfies the testid
  * contract while doing nothing (observed live: build49 Contact shipped every
@@ -163,10 +180,11 @@ function escapeRegExp(s: string): string {
  * defined but never called — a false-green the fast gate accepted).
  *
  * A hook is WIRED only when it is actually INVOKED — `useX(` — in a non-test file
- * that is NOT its own definition file. Requiring the call paren defeats the trivial
- * bypasses (a bare `import { useX }`, a re-export barrel `export { useX }`, a type
- * reference, or a comment all mention the name WITHOUT the `(` and so do NOT count).
- * Requiring a NON-definition file rules out the `export function useX(` definition
+ * that is NOT its own definition file, AFTER comments and string/template literals are
+ * blanked (so `// useContact()` or `"useContact()"` can't fake it). Requiring the call
+ * paren defeats a bare `import { useX }`, a re-export barrel `export { useX }`, and type
+ * references (no `(`); the strip defeats comment/string mentions (have `(` but aren't
+ * code). Requiring a NON-definition file rules out the `export function useX(` definition
  * site itself. Word-boundary matched, so `useContact(` never matches `useContactPage(`.
  * Pattern-agnostic: passes both a direct call in the page `.tsx` and the scaffold's
  * handler-from-the-hook idiom (the call living in a view `<Component>.hooks.ts`).
@@ -181,7 +199,11 @@ export function checkWiring(
   const errors: string[] = [];
   const isTest = (p: string): boolean =>
     /\.(test|spec|stories)\.[jt]sx?$/u.test(p);
-  const prod = Array.from(files.entries()).filter(([p]) => !isTest(p));
+  // Strip comments + string/template literals so a hook name inside `// useContact()`
+  // or `"useContact()"` can't fake wiring (panel-flagged bypass).
+  const prod = Array.from(files.entries())
+    .filter(([p]) => !isTest(p))
+    .map(([p, src]): [string, string] => [p, stripCommentsAndStrings(src)]);
 
   // The full-CRUD contract: the list query + the three mutation hooks the guide
   // mandates (list/create/update/delete). PascalCase feature id → hook names.
