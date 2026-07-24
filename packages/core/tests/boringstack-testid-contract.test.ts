@@ -638,6 +638,7 @@ describe("checkWiring — the bypasses must NOT pass (a mention is not a call)",
     ]);
     // Names appear in a 2nd file, but with NO call paren → must all be flagged dead.
     const dead = checkWiring(files, ce);
+
     expect(dead).toContain("useContact");
     expect(dead).toContain("useCreateContact");
     expect(dead).toContain("useUpdateContact");
@@ -653,6 +654,7 @@ describe("checkWiring — the bypasses must NOT pass (a mention is not a call)",
          export { useCreateContact, useUpdateContact, useDeleteContact } from "./Contact.mutations";`,
       ],
     ]);
+
     expect(checkWiring(files, ce).sort()).toEqual(
       [
         "useContact",
@@ -676,6 +678,7 @@ describe("checkWiring — the bypasses must NOT pass (a mention is not a call)",
     // useContact + useDeleteContact are CALLED → ok; useCreateContact (comment) + useUpdateContact
     // (type ref) are only mentioned → dead.
     const dead = checkWiring(files, ce);
+
     expect(dead).toContain("useCreateContact");
     expect(dead).toContain("useUpdateContact");
     expect(dead).not.toContain("useContact");

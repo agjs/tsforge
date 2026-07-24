@@ -934,11 +934,14 @@ describe("testIdStage — hollow-shell wiring gate (integration, real filesystem
 
   async function writeFeature(files: Record<string, string>): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-wiring-"));
+
     for (const [rel, src] of Object.entries(files)) {
       const full = join(dir, "apps/ui/src/features/contact", rel);
+
       await mkdir(join(full, ".."), { recursive: true });
       await writeFile(full, src);
     }
+
     return dir;
   }
 
@@ -976,6 +979,7 @@ describe("testIdStage — hollow-shell wiring gate (integration, real filesystem
 
     try {
       const result = await testIdStage(dir, entity).run(dir);
+
       expect(result.passed).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -994,6 +998,7 @@ describe("testIdStage — hollow-shell wiring gate (integration, real filesystem
 
     try {
       const result = await testIdStage(dir, entity).run(dir);
+
       expect(result.passed).toBe(false);
       expect(result.errors[0]?.rule).toBe("testid-presence");
     } finally {
