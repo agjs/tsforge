@@ -525,6 +525,12 @@ describe("refinePrompt", () => {
     // delete returns nothing (`t.Null()` route) — it must be typed `void`, never the item type.
     expect(prompt).toContain("UseMutationResult<void, unknown, string>");
     expect(prompt).toContain("response: t.Null()");
+    // Two DIFFERENT errors, two DIFFERENT fixes — must NOT lump the optional-`data` "not assignable"
+    // error under "add the missing schema" (that reopens oscillation: model rewrites correct schemas).
+    expect(prompt).toContain("Two DIFFERENT errors");
+    expect(prompt.toLowerCase()).toContain(
+      "rewriting an already-correct schema"
+    );
     // The guide must state the TRUE source of `data`'s type — the API route's `response:` schema
     // via generate:api — NOT the (false) claim that the consumer annotation retypes `data`.
     expect(prompt).toContain("response:");

@@ -512,6 +512,14 @@ describe("signatureToError", () => {
     // create/update response shape — not only list/get/delete — or a mutation Readable has no form.
     expect(err.message).toContain("get-one/create/update");
     expect(err.message).toContain("generate:api");
+    // The post-fix consumer unwrap is ROUTE-KIND-dependent (fixture is a mutations file): the steer
+    // must give create/update the GUARD-then-return item shape and delete the void shape — not only
+    // the list `?? []` idiom.
+    expect(err.message).toContain("if (!data) throw new ApiError");
+    expect(err.message).toContain("UseMutationResult<void, unknown, string>");
+    // And it must NOT conflate the optional-`data` error with a missing schema (anti-oscillation):
+    // a "not assignable" WITHOUT `Readable` is schema-fine and only needs the unwrap.
+    expect(err.message).toContain("do NOT rewrite a correct schema");
     // It must state the TS mechanic the panel flagged: a return annotation checks the returned
     // expression, it does NOT retype the destructured `data` — so a consumer-only fix can't work.
     expect(err.message).toContain("does NOT retype");
