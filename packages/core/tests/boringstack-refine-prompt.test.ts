@@ -642,6 +642,63 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("no-unused-vars");
   });
 
+  it("teaches the exact form-submit idiom (void handleSubmit → no-misused-promises + jsx-no-bind)", () => {
+    // build53 Company parked here: the model wrote `onSubmit={createForm.handleSubmit((v) => …)}`,
+    // whose attribute value is a CALL EXPRESSION → @typescript-eslint/no-misused-promises only
+    // ("Promise-returning function provided to attribute where a void return was expected"); the
+    // log shows NO jsx-no-bind hit (a call expression passes jsx-no-bind, per the row-handler rule).
+    // The model then fumbled BaseSyntheticEvent and couldn't close. The green idiom (scaffold
+    // LoginPage.hooks.ts): a hook-owned void-returning `submit` used as a bare ref.
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // Names the exact rule the inline handleSubmit trips.
+    expect(prompt).toContain("no-misused-promises");
+    // The form-submit guidance co-locates BOTH rules it satisfies (not just row-handler jsx-no-bind).
+    expect(prompt).toContain("`no-misused-promises` + `jsx-no-bind` idiom");
+    // LOCK the corrected distinction (consistent with the guide's own row-handler rule): the
+    // direct call expression is NOT a jsx-no-bind violation; only the inline-arrow variant is.
+    // These fail if the old dual-rule claim ("call expression trips both") is ever restored.
+    expect(prompt).toContain(
+      "a call expression, so `jsx-no-bind` is NOT the issue here"
+    );
+    expect(prompt).toContain(
+      "an inline arrow `onSubmit={(e) => form.handleSubmit(onValid)(e)}` trips `jsx-no-bind`"
+    );
+    // Teaches the void-operator wrap that makes the handler return void.
+    expect(prompt).toContain("void handleSubmit(onSubmit)(event)");
+    // The submit handler uses fire-and-forget `mutate` (errors → onError), NOT `mutateAsync`
+    // which would reject and make the `void` wrapper discard a rejected promise.
+    expect(prompt).toContain("createMutation.mutate(input)");
+    expect(prompt).toContain("unhandled rejection");
+    // Must steer AWAY from copying LoginPage verbatim (it uses mutateAsync+try/catch to
+    // navigate on the result) so the model doesn't paste mutateAsync into the void wrapper.
+    expect(prompt).toContain("never `mutateAsync` here");
+    // Must NOT make the false blanket claim that the void wrapper can't leak a rejection.
+    expect(prompt).not.toContain("can't reject, so");
+    // Points at the scaffold's green reference form hook.
+    expect(prompt).toContain(
+      "apps/ui/src/features/auth/components/LoginPage/LoginPage.hooks.ts"
+    );
+    // The form JSX passes the bare hook reference, never handleSubmit inline.
+    expect(prompt).toContain("onSubmit={view.submit}");
+    // Pins the scaffold's ACTUAL create-input token (no I- prefix; the item type has one,
+    // the input does not) so the idiom can't drift back to the invented ICompanyCreateInput
+    // that caused build53's rename churn.
+    expect(prompt).toContain("CompanyCreateInput");
+    expect(prompt).not.toContain("ICompanyCreateInput");
+    // The useCallback depends on the STABLE `mutate`, not the unstable mutation result object,
+    // so the handler stays referentially stable (avoids TanStack's no-unstable-deps).
+    expect(prompt).toContain("[createMutation.mutate]");
+    expect(prompt).toContain("no-unstable-deps");
+  });
+
   it("warns that every NEW component needs the FULL sibling set → don't extract sub-components", () => {
     // build36 hit component-folder-structure: a new 'CompanyFormField' demanded .hooks/.types/
     // .stories/.test/index siblings. The guide must warn and steer to inline instead.
