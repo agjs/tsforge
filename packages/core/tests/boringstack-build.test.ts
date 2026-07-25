@@ -10,6 +10,7 @@ import {
   rescueFileFor,
   runBoringstackBuild,
   scopeFor,
+  readResourceCode,
   APP_SCHEMA_FILE,
   LOCALE_GLOB,
 } from "../src/loop/boringstack/build";
@@ -698,6 +699,300 @@ describe("runBoringstackBuild", () => {
       } else {
         process.env.TSFORGE_NO_E2E_ACCEPTANCE = originalEnv;
       }
+    }
+  });
+});
+
+describe("readResourceCode — feeds the completeness judge", () => {
+  test("includes .tsx COMPONENTS (not just .ts) and excludes test/story files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-"));
+
+    try {
+      const uiComp = join(
+        dir,
+        "apps/ui/src/features/company/components/CompanyPage"
+      );
+
+      await mkdir(uiComp, { recursive: true });
+      await mkdir(join(dir, "apps/api/src/api/company"), { recursive: true });
+
+      await writeFile(
+        join(dir, "apps/api/src/api/company/company.service.ts"),
+        "export const companyService = 1;\n"
+      );
+      // The React component the judge must see — a .tsx, previously dropped by the .ts-only filter.
+      await writeFile(
+        join(uiComp, "CompanyPage.tsx"),
+        "export const CompanyPage = () => <main>COMPONENT_MARKER</main>;\n"
+      );
+      await writeFile(
+        join(uiComp, "CompanyPage.hooks.ts"),
+        "export const useCompanyPage = () => HOOK_MARKER;\n"
+      );
+      // A test + story that must NOT eat the judge's budget.
+      await writeFile(
+        join(uiComp, "CompanyPage.test.tsx"),
+        "// TEST_MARKER should be excluded\n"
+      );
+      await writeFile(
+        join(uiComp, "CompanyPage.stories.tsx"),
+        "// STORY_MARKER should be excluded\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      // The .tsx component is now included (the core fix).
+      expect(code).toContain("COMPONENT_MARKER");
+      expect(code).toContain("CompanyPage.tsx");
+      // .ts logic still included; API still included.
+      expect(code).toContain("HOOK_MARKER");
+      expect(code).toContain("companyService");
+      // Test + story files are excluded (they don't help completeness judging + waste budget).
+      expect(code).not.toContain("TEST_MARKER");
+      expect(code).not.toContain("STORY_MARKER");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("excludes API test files too (same budget hygiene as the UI side)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-apitest-"));
+
+    try {
+      const apiDir = join(dir, "apps/api/src/api/company");
+
+      await mkdir(apiDir, { recursive: true });
+
+      await writeFile(
+        join(apiDir, "company.service.ts"),
+        "export const svc = 'API_SVC_MARKER';\n"
+      );
+      // API co-located test — must NOT reach the judge (wastes budget), same as UI.
+      await writeFile(
+        join(apiDir, "company.service.test.ts"),
+        "// API_TEST_MARKER should be excluded\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code).toContain("API_SVC_MARKER");
+      expect(code).not.toContain("API_TEST_MARKER");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("excludes singular .story files and __tests__ directories", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-exclforms-"));
+
+    try {
+      const uiDir = join(dir, "apps/ui/src/features/company");
+
+      await mkdir(join(uiDir, "components"), { recursive: true });
+      await mkdir(join(uiDir, "__tests__"), { recursive: true });
+
+      await writeFile(
+        join(uiDir, "components", "CompanyPage.tsx"),
+        "export const CompanyPage = () => <main>REAL_COMPONENT</main>;\n"
+      );
+      // Singular `.story.tsx` (not just `.stories.tsx`) must be excluded.
+      await writeFile(
+        join(uiDir, "components", "CompanyPage.story.tsx"),
+        "// SINGULAR_STORY_MARKER should be excluded\n"
+      );
+      // Anything under a __tests__ directory must be excluded.
+      await writeFile(
+        join(uiDir, "__tests__", "helpers.tsx"),
+        "// TESTS_DIR_MARKER should be excluded\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code).toContain("REAL_COMPONENT");
+      expect(code).not.toContain("SINGULAR_STORY_MARKER");
+      expect(code).not.toContain("TESTS_DIR_MARKER");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("readResourceCode — budget + ordering (root-cause coverage)", () => {
+  test("a marker only reachable after ~85k of content survives (proves the cap is ~96k, not a small regression)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-budget-"));
+
+    try {
+      const apiDir = join(dir, "apps/api/src/api/company");
+      const uiComp = join(
+        dir,
+        "apps/ui/src/features/company/components/CompanyPage"
+      );
+
+      await mkdir(apiDir, { recursive: true });
+      await mkdir(uiComp, { recursive: true });
+
+      // Five ~17k COMPONENTS (.tsx). Under global component-first ordering these are read
+      // BEFORE any API file, and each fits individually, so all five are accepted and push
+      // cumulative length to ~86k — a comfortable ~10k under the 96k cap. Block size derives
+      // ONLY from the fixed relPath + fixed pad (NOT the tmpdir prefix, which never appears in
+      // the emitted blocks), so the total is constant across runs — no boundary flakiness.
+      const bulk = (n: number): string =>
+        `export const Comp${n} = () => <main>bulk ${n}</main>;\n${`// pad ${n}\n`.repeat(1900)}`;
+
+      for (let n = 1; n <= 5; n += 1) {
+        await writeFile(join(uiComp, `Comp${n}.tsx`), bulk(n));
+      }
+
+      // The marker lives in a plain API .ts (rank-1) → read AFTER all five components, i.e.
+      // only reachable once cumulative length has passed ~85k. Present ⟺ the cap genuinely
+      // exceeds ~85k. A regression to a small cap (e.g. 30000) truncates before the marker.
+      await writeFile(
+        join(apiDir, "company.service.ts"),
+        `export const svc = 'BUDGET_MARKER_DEEP';\n`
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code).toContain("BUDGET_MARKER_DEEP");
+      expect(code.length).toBeGreaterThan(70000);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("truncates content beyond the ~96k cap (proves the cap is bounded, not removed)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-trunc-"));
+
+    try {
+      const uiComp = join(dir, "apps/ui/src/features/company/components");
+
+      await mkdir(uiComp, { recursive: true });
+
+      // Four ~30k components (sorted by path Comp1..Comp4) → ~120k total, exceeding the cap.
+      // The reader must stop before Comp4, so its marker is DROPPED. This is the upper-bound
+      // guard the ~85k lower-bound test can't give: if the cap were raised substantially or
+      // removed, Comp4 would be included and this fails.
+      const bulk = (n: number, marker: string): string =>
+        `export const Comp${n} = () => <main>${marker}</main>;\n${`// pad ${n}\n`.repeat(3300)}`;
+
+      await writeFile(join(uiComp, "Comp1.tsx"), bulk(1, "FIRST_MARKER"));
+      await writeFile(join(uiComp, "Comp2.tsx"), bulk(2, "bulk2"));
+      await writeFile(join(uiComp, "Comp3.tsx"), bulk(3, "bulk3"));
+      await writeFile(join(uiComp, "Comp4.tsx"), bulk(4, "TRUNCATED_MARKER"));
+
+      const code = await readResourceCode(dir, "Company");
+
+      // Early content included, late content dropped, total bounded below the cap.
+      expect(code).toContain("FIRST_MARKER");
+      expect(code).toContain("[truncated]");
+      expect(code).not.toContain("TRUNCATED_MARKER");
+      expect(code.length).toBeLessThan(96000);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("orders a UI component BEFORE an API service (global component-first, cross-app)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-global-"));
+
+    try {
+      const apiDir = join(dir, "apps/api/src/api/company");
+      const uiComp = join(
+        dir,
+        "apps/ui/src/features/company/components/CompanyPage"
+      );
+
+      await mkdir(apiDir, { recursive: true });
+      await mkdir(uiComp, { recursive: true });
+
+      // API service is discovered first (API dir is read before the UI dir), but the .tsx
+      // component must still be emitted ahead of it — proving the ordering is GLOBAL, not
+      // merely within the UI file list.
+      await writeFile(
+        join(apiDir, "company.service.ts"),
+        "export const svc = 'API_SVC_MARKER';\n"
+      );
+      await writeFile(
+        join(uiComp, "CompanyPage.tsx"),
+        "export const CompanyPage = () => <main>UI_COMPONENT_MARKER</main>;\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code).toContain("UI_COMPONENT_MARKER");
+      expect(code).toContain("API_SVC_MARKER");
+      expect(code.indexOf("UI_COMPONENT_MARKER")).toBeLessThan(
+        code.indexOf("API_SVC_MARKER")
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("sorts SAME-RANK files by path, independent of discovery/creation order", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-samerank-"));
+
+    try {
+      const apiDir = join(dir, "apps/api/src/api/company");
+
+      await mkdir(apiDir, { recursive: true });
+
+      // Three same-rank (.ts, non-component) files CREATED in reverse-path order. An
+      // implementation that kept discovery/insertion order (readdir order tracks creation
+      // order on some filesystems) would emit z→m→a; the path tiebreak must emit a→m→z.
+      await writeFile(
+        join(apiDir, "zebra.service.ts"),
+        "export const z = 'Z';\n"
+      );
+      await writeFile(
+        join(apiDir, "mango.service.ts"),
+        "export const m = 'M';\n"
+      );
+      await writeFile(
+        join(apiDir, "alpha.service.ts"),
+        "export const a = 'A';\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code.indexOf("alpha.service.ts")).toBeLessThan(
+        code.indexOf("mango.service.ts")
+      );
+      expect(code.indexOf("mango.service.ts")).toBeLessThan(
+        code.indexOf("zebra.service.ts")
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("includes .jsx components and orders components before non-component .ts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-jsx-"));
+
+    try {
+      const uiDir = join(dir, "apps/ui/src/features/company");
+
+      await mkdir(join(uiDir, "components"), { recursive: true });
+
+      await writeFile(
+        join(uiDir, "components", "CompanyPage.jsx"),
+        "export const CompanyPage = () => 'JSX_COMPONENT_MARKER';\n"
+      );
+      await writeFile(
+        join(uiDir, "Company.queries.ts"),
+        "export const useCompany = () => 'TS_LOGIC_MARKER';\n"
+      );
+
+      const code = await readResourceCode(dir, "Company");
+
+      expect(code).toContain("JSX_COMPONENT_MARKER");
+      expect(code).toContain("TS_LOGIC_MARKER");
+      // Component (.jsx) is emitted before the plain .ts logic (component-first ordering).
+      expect(code.indexOf("JSX_COMPONENT_MARKER")).toBeLessThan(
+        code.indexOf("TS_LOGIC_MARKER")
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

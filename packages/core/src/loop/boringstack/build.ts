@@ -175,72 +175,139 @@ export function scopeFor(name: string): string[] {
 }
 
 /**
- * Read the generated resource code from the filesystem.
- * Concatenates TypeScript files from both the API resource and UI feature directories,
- * capped at ~16000 characters. Returns empty string if directories don't exist.
+ * Read the generated resource code from the filesystem for the completeness judge.
+ * Concatenates the API resource (.ts) and UI feature (.ts/.tsx/.jsx, test/story files
+ * excluded) source, capped at ~96000 characters. React components (.tsx/.jsx) are ordered
+ * FIRST across both apps so a large API can't exhaust the budget before the judge sees the
+ * UI. Returns empty string if directories don't exist.
  */
 export async function readResourceCode(
   cwd: string,
   name: string
 ): Promise<string> {
   const camel = toCamelCase(name);
-  const blocks: string[] = [];
-  const maxChars = 16000;
-  let totalLen = 0;
+  // Budget must fit a full feature (API + UI components + hooks) so the completeness
+  // JUDGE actually sees the code. 16000 truncated real features mid-UI, which made the
+  // judge reject a code-green feature forever ("component truncated, cannot verify") —
+  // an unfixable-by-the-model wall. The models here carry ≥1M-token context, so a
+  // generous char budget is safe.
+  const maxChars = 96000;
 
-  // Read API resource files (apps/api/src/api/<camel>/)
+  // Gather every candidate file (API + UI) BEFORE truncating, so ordering is global.
+  // A React COMPONENT (.tsx/.jsx) is what the judge most needs to verify the UI, so
+  // components come FIRST regardless of app — otherwise a large API resource could
+  // exhaust the budget before any component is read, reproducing the "component not
+  // shown" false-rejection this budget was raised to prevent.
+  const candidates: { relPath: string; fullPath: string }[] = [];
+
+  // Normalize the OS path separator to "/" so relPath (and therefore the codepoint
+  // ordering below) is IDENTICAL on POSIX and Windows — a recursive readdir yields
+  // "a\b.tsx" on Windows vs "a/b.tsx" on POSIX, and "\" (0x5C) vs "/" (0x2F) sort
+  // differently against other chars, which would make the truncation boundary
+  // machine-dependent.
+  const norm = (f: string): string => f.replaceAll("\\", "/");
+  // Co-located test/story files are not part of the feature under review — they waste
+  // the judge's budget (and could expose test-only behavior as production context).
+  // Applied to BOTH apps. Covers .test/.spec/.story/.stories suffixes AND __tests__ dirs.
+  const isTestFile = (rel: string): boolean =>
+    /\.(test|spec|stor(?:y|ies))\.[jt]sx?$/u.test(rel) ||
+    /(?:^|\/)__tests__\//u.test(rel);
+
   const apiDir = join(cwd, "apps/api/src/api", camel);
 
   try {
     const apiFiles = await readdir(apiDir, { recursive: false });
-    const tsFiles = apiFiles.filter(
-      (f): f is string => typeof f === "string" && f.endsWith(".ts")
-    );
 
-    for (const file of tsFiles) {
-      const relPath = `apps/api/src/api/${camel}/${file}`;
-      const content = await readFile(join(apiDir, file), "utf-8");
-      const block = `// ${relPath}\n${content}\n`;
-
-      if (totalLen + block.length > maxChars) {
-        blocks.push(`\n…[truncated]`);
-        break;
+    for (const file of apiFiles) {
+      if (typeof file !== "string" || !file.endsWith(".ts")) {
+        continue;
       }
 
-      blocks.push(block);
-      totalLen += block.length;
+      const rel = norm(file);
+
+      if (isTestFile(rel)) {
+        continue;
+      }
+
+      candidates.push({
+        relPath: `apps/api/src/api/${camel}/${rel}`,
+        fullPath: join(apiDir, file),
+      });
     }
   } catch {
     // Directory doesn't exist, skip
   }
 
-  // Read UI feature files (apps/ui/src/features/<camel>/, recursively)
-  if (totalLen < maxChars) {
-    const uiDir = join(cwd, "apps/ui/src/features", camel);
+  const uiDir = join(cwd, "apps/ui/src/features", camel);
 
-    try {
-      const uiFiles = await readdir(uiDir, { recursive: true });
-      const tsFiles = uiFiles.filter(
-        (f): f is string => typeof f === "string" && f.endsWith(".ts")
-      );
+  try {
+    const uiFiles = await readdir(uiDir, { recursive: true });
 
-      for (const file of tsFiles) {
-        const relPath = `apps/ui/src/features/${camel}/${file}`;
-        const fullPath = join(uiDir, file);
-        const content = await readFile(fullPath, "utf-8");
-        const block = `// ${relPath}\n${content}\n`;
-
-        if (totalLen + block.length > maxChars) {
-          blocks.push(`\n…[truncated]`);
-          break;
-        }
-
-        blocks.push(block);
-        totalLen += block.length;
+    for (const file of uiFiles) {
+      // Include .tsx/.jsx — the React COMPONENTS (Page/Form) live in .tsx. A `.ts`-only
+      // filter dropped every component, so the completeness judge never saw the UI it was
+      // asked to verify.
+      if (
+        typeof file !== "string" ||
+        !(
+          file.endsWith(".ts") ||
+          file.endsWith(".tsx") ||
+          file.endsWith(".jsx")
+        )
+      ) {
+        continue;
       }
-    } catch {
-      // Directory doesn't exist, skip
+
+      const rel = norm(file);
+
+      if (isTestFile(rel)) {
+        continue;
+      }
+
+      candidates.push({
+        relPath: `apps/ui/src/features/${camel}/${rel}`,
+        fullPath: join(uiDir, file),
+      });
     }
+  } catch {
+    // Directory doesn't exist, skip
+  }
+
+  // Components (.tsx/.jsx) first, GLOBALLY — a large API must not starve the judge of the
+  // UI. Same-rank files are then ordered by path so the selection is DETERMINISTIC: readdir
+  // returns entries in an unspecified, filesystem-dependent order, so tiebreaking on
+  // insertion order would let truncation include different files across machines/runs and
+  // give the judge inconsistent context. A lexicographic path tiebreak fixes the order.
+  const rank = (relPath: string): number =>
+    relPath.endsWith(".tsx") || relPath.endsWith(".jsx") ? 0 : 1;
+  // Codepoint comparison (NOT localeCompare) for the same-rank tiebreak: localeCompare
+  // depends on the runtime locale + ICU build, so it can order paths differently across
+  // machines — which would reintroduce the non-determinism this tiebreak exists to remove.
+  // A plain `<`/`>` is identical everywhere for these paths. (It compares UTF-16 units,
+  // not code points, and the separator normalization above assumes no literal backslash in
+  // a POSIX filename — both are non-issues here: boringstack feature files are generated
+  // with ASCII kebab/camel names, never astral chars or embedded backslashes.)
+  const byPath = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+  const ordered = [...candidates].sort((a, b) => {
+    const byRank = rank(a.relPath) - rank(b.relPath);
+
+    return byRank === 0 ? byPath(a.relPath, b.relPath) : byRank;
+  });
+
+  const blocks: string[] = [];
+  let totalLen = 0;
+
+  for (const { relPath, fullPath } of ordered) {
+    const content = await readFile(fullPath, "utf-8");
+    const block = `// ${relPath}\n${content}\n`;
+
+    if (totalLen + block.length > maxChars) {
+      blocks.push(`\n…[truncated]`);
+      break;
+    }
+
+    blocks.push(block);
+    totalLen += block.length;
   }
 
   return blocks.join("");
