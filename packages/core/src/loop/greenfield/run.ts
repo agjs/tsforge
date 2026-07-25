@@ -215,15 +215,23 @@ async function attemptFeature(
       return undefined;
     }
 
-    // Not done → the shared ladder (R1–R4 + R5) already ran inside the loop and
-    // exhausted. Park on its structured handoff for the revisit pass.
+    // Not done → park on the structured handoff for the revisit pass. The reason
+    // names the ACTUAL block (fast-gate ladder exhaustion vs e2e-acceptance failure vs
+    // misconfiguration) so the log doesn't always claim "ladder exhausted" when the fast
+    // gate was green and it was e2e acceptance that failed.
     feature.parked = true;
 
     if (result.handoff !== undefined) {
       feature.handoff = result.handoff;
     }
 
-    say(`feature '${feature.id}': ladder exhausted, parked — revisit later`);
+    // Every non-infra done:false from the boringstack impl carries a reason (fast-gate
+    // exhaustion / e2e failure / misconfig). The fallback is deliberately NEUTRAL, never a
+    // fabricated "ladder exhausted": if a future impl returns done:false without a reason,
+    // an honest "no reason reported" surfaces the gap instead of a plausible-but-wrong cause.
+    const why = result.reason ?? "no reason reported";
+
+    say(`feature '${feature.id}': parked (${why}) — revisit later`);
 
     return undefined;
   } finally {

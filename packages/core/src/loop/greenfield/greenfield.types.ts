@@ -60,16 +60,24 @@ export interface IGreenfieldResult {
 export interface IGreenfieldDeps {
   /** Implement one feature with the internal escalation ladder. Returns {done: true}
    *  when the feature passes all gates and is ready to ship; {done: false, handoff}
-   *  when the ladder is exhausted and the feature is parked for later; {done: false, infra}
+   *  when it can't be marked done and is parked for later; {done: false, infra}
    *  when infrastructure is unavailable (browser/API down) and verification cannot proceed.
    *  The handoff carries the try-lever history for a revisit pass to seed a different tack.
+   *  `reason` (present on any {done:false} that isn't infra) names WHY it can't be marked
+   *  done — fast-gate ladder exhaustion vs e2e-acceptance failure vs misconfiguration — so
+   *  the outer loop's park message is truthful rather than always "ladder exhausted".
    *  Optionally accepts seeded tried-lever state (from a prior handoff.resume) to
    *  skip levers already tried in a revisit. */
   implement(
     feature: IFeature,
     state: IGreenfieldState,
     seed?: { triedLevers: EscalationRung[] }
-  ): Promise<{ done: boolean; handoff?: IHandoff; infra?: string }>;
+  ): Promise<{
+    done: boolean;
+    handoff?: IHandoff;
+    infra?: string;
+    reason?: string;
+  }>;
 }
 
 export interface IGreenfieldOptions {

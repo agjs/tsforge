@@ -29,6 +29,7 @@ import type {
   IAcceptanceRunner,
   IAcceptanceRunCtx,
   IAcceptanceSpec,
+  IAcceptanceOutcome,
 } from "../acceptance/acceptance.types";
 import { acceptanceSteer } from "../acceptance/acceptance-steer";
 import { readHostPorts, hostPortOr } from "../../scaffold";
@@ -343,8 +344,11 @@ function revisitGuidance(seed?: { triedLevers: EscalationRung[] }): string {
 /**
  * Run acceptance verification for a feature after the fast gate passes.
  * Returns the done status and optional handoff; handles runner missing, infra errors, and assertion failures.
+ * On any `done:false` it also returns a `reason` naming WHY the feature can't be marked done, so the
+ * outer loop's park message is truthful (fast-gate ladder exhaustion vs e2e-acceptance failure vs
+ * misconfiguration) instead of always claiming "ladder exhausted". Exported for unit testing.
  */
-async function verifyAcceptance(
+export async function verifyAcceptance(
   sent: { status: string; handoff?: IHandoff },
   host: IBoringstackHost,
   cwd: string,
@@ -352,74 +356,152 @@ async function verifyAcceptance(
   acceptanceRunner: IAcceptanceRunner | undefined,
   e2eAcceptanceDisabled: boolean,
   fullSpec?: IAcceptanceSpec
-): Promise<{ done: boolean; handoff?: IHandoff; infra?: string }> {
+): Promise<{
+  done: boolean;
+  handoff?: IHandoff;
+  infra?: string;
+  reason?: string;
+}> {
   // If acceptance is not enabled, return based on fast gate
   if (!(!e2eAcceptanceDisabled && sent.status === "done")) {
+    const done = sent.status === "done";
+
     return {
-      done: sent.status === "done",
+      done,
       ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
+      ...(done
+        ? {}
+        : { reason: "fast gate not green after the escalation ladder" }),
     };
   }
 
   // FAIL-CLOSED: if acceptance is enabled and entity exists but runner is missing,
   // this is a misconfiguration — reject the feature until the runner is injected
   if (entity && !acceptanceRunner) {
-    return { done: false };
+    return {
+      done: false,
+      reason:
+        "e2e acceptance enabled but no runner configured (harness misconfiguration)",
+    };
   }
 
   // Run acceptance only if we have an entity and runner
   if (entity && acceptanceRunner) {
-    const hostPorts = readHostPorts(cwd);
-    const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
-    const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
-    const ctx: IAcceptanceRunCtx = {
-      cwd,
-      apiBase: `http://localhost:${apiPort}`,
-      uiBase: `http://localhost:${uiPort}`,
-    };
-
-    const outcome = await acceptanceRunner.run(entity, ctx, fullSpec);
-
-    // Infrastructure error: route to needs-infra path; per-slice acceptance is best-effort.
-    // The feature's fast-gate pass is valid, but acceptance verification cannot complete
-    // due to infrastructure. Return infra error to thread it through the outer loop.
-    if (outcome.infraError !== undefined) {
-      return { done: false, infra: outcome.infraError };
-    }
-
-    // Test assertion failed: emit steer, re-verify, and close over post-steer state
-    if (!outcome.ok) {
-      const steer = acceptanceSteer(entity, outcome);
-
-      const steerSend = await host.send(steer);
-
-      // FIX 2: after sending the steer (which runs the full model loop),
-      // re-run acceptance once to see if the fix worked
-      const reRun = await acceptanceRunner.run(entity, ctx, fullSpec);
-
-      // If the re-run is an infra error, route it through the needs-infra channel
-      if (reRun.infraError !== undefined) {
-        return { done: false, infra: reRun.infraError };
-      }
-
-      // Return done:true ONLY when both the steer completed AND the re-run passed.
-      // If the steer did not complete (stuck), return done:false even if re-run passed.
-      return {
-        done: steerSend.status === "done" && reRun.ok,
-        ...(steerSend.handoff !== undefined
-          ? { handoff: steerSend.handoff }
-          : {}),
-      };
-    }
-
-    // All checks passed
-    return { done: true };
+    return runE2eAcceptance(host, cwd, entity, acceptanceRunner, fullSpec);
   }
 
   return {
     done: true,
     ...(sent.handoff !== undefined ? { handoff: sent.handoff } : {}),
   };
+}
+
+/**
+ * Drive the per-slice browser acceptance for a feature whose fast gate is already green:
+ * run it, on failure emit the steer + re-run once, and report done + a truthful `reason`.
+ * Split out of verifyAcceptance to keep each function's cognitive complexity in bounds.
+ */
+async function runE2eAcceptance(
+  host: IBoringstackHost,
+  cwd: string,
+  entity: IEntityAcceptance,
+  acceptanceRunner: IAcceptanceRunner,
+  fullSpec?: IAcceptanceSpec
+): Promise<{
+  done: boolean;
+  handoff?: IHandoff;
+  infra?: string;
+  reason?: string;
+}> {
+  const hostPorts = readHostPorts(cwd);
+  const apiPort = hostPortOr(hostPorts, "API_HOST_PORT");
+  const uiPort = hostPortOr(hostPorts, "UI_HOST_PORT");
+  const ctx: IAcceptanceRunCtx = {
+    cwd,
+    apiBase: `http://localhost:${apiPort}`,
+    uiBase: `http://localhost:${uiPort}`,
+  };
+
+  const outcome = await acceptanceRunner.run(entity, ctx, fullSpec);
+
+  // Infrastructure error: route to needs-infra path; per-slice acceptance is best-effort.
+  // The feature's fast-gate pass is valid, but acceptance verification cannot complete
+  // due to infrastructure. Return infra error to thread it through the outer loop.
+  if (outcome.infraError !== undefined) {
+    return { done: false, infra: outcome.infraError };
+  }
+
+  // All checks passed on the first run.
+  if (outcome.ok) {
+    return { done: true };
+  }
+
+  // Test assertion failed: emit steer, re-verify, and close over post-steer state.
+  const steerSend = await host.send(acceptanceSteer(entity, outcome));
+
+  // Re-run acceptance once to see if the fix worked.
+  const reRun = await acceptanceRunner.run(entity, ctx, fullSpec);
+
+  // If the re-run is an infra error, route it through the needs-infra channel.
+  if (reRun.infraError !== undefined) {
+    return { done: false, infra: reRun.infraError };
+  }
+
+  // done:true ONLY when both the steer completed AND the re-run passed.
+  const done = steerSend.status === "done" && reRun.ok;
+
+  return {
+    done,
+    ...(steerSend.handoff !== undefined ? { handoff: steerSend.handoff } : {}),
+    ...(done
+      ? {}
+      : {
+          reason: e2eParkReason(steerSend.status === "done", outcome, reRun),
+        }),
+  };
+}
+
+/**
+ * Compose the truthful park reason for a feature whose fast gate was GREEN but e2e
+ * acceptance did not confirm. Pure + unit-tested. The three done:false shapes:
+ *  - re-run still failing (steer complete)   → still failing after the steer
+ *  - re-run still failing (steer incomplete) → still failing AND the steer stalled
+ *  - re-run PASSED but steer incomplete      → the app verified; only the steer stalled
+ *    (crucially NOT a stale "assertions failed" — that was the pre-steer state).
+ * Prefers the CURRENT (post-steer) failing detail; falls back to the pre-steer detail only
+ * when the re-run itself surfaced none.
+ */
+export function e2eParkReason(
+  steerComplete: boolean,
+  outcome: IAcceptanceOutcome,
+  reRun: IAcceptanceOutcome
+): string {
+  const nonEmpty = (s: string | undefined): string | undefined =>
+    s !== undefined && s.length > 0 ? s : undefined;
+  const failingDetail = (o: IAcceptanceOutcome): string | undefined =>
+    // Prefer the top-level detail (but treat a BLANK top-level detail as absent — `"" ?? x`
+    // keeps "", which would suppress a real step detail), then the first failing result that
+    // actually carries a non-empty detail — not merely the first failing result, whose detail
+    // may be blank while a later failing step holds the real diagnostic.
+    nonEmpty(o.detail) ??
+    o.results.find((r) => !r.ok && r.detail.length > 0)?.detail;
+
+  if (!reRun.ok) {
+    // Prefer the CURRENT (post-steer) diagnostic; only if the re-run surfaced none fall back
+    // to the pre-steer outcome — including ITS step details, not just its top-level detail.
+    const detail =
+      failingDetail(reRun) ??
+      failingDetail(outcome) ??
+      "browser acceptance assertions failed";
+
+    return steerComplete
+      ? `fast gate green but e2e acceptance still failing after the fix steer: ${detail}`
+      : `fast gate green but e2e acceptance still failing AND the fix steer did not complete: ${detail}`;
+  }
+
+  // The re-run PASSED — the app verified. Parked only because the steer itself stalled;
+  // report exactly that, never a stale assertion failure.
+  return "fast gate green and e2e acceptance passed on re-run, but the fix steer did not complete cleanly";
 }
 
 /**
@@ -474,7 +556,12 @@ export function boringstackDeps(opts: {
       feature: IFeature,
       state: IGreenfieldState,
       seed?: { triedLevers: EscalationRung[] }
-    ): Promise<{ done: boolean; handoff?: IHandoff; infra?: string }> {
+    ): Promise<{
+      done: boolean;
+      handoff?: IHandoff;
+      infra?: string;
+      reason?: string;
+    }> {
       // Pre-step: generate the full vertical slice + sync the STUB schema. The
       // model then fills the domain INSIDE the loop, checked by the live gate.
       await generate(cwd, feature.id, exec);
