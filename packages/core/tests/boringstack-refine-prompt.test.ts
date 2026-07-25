@@ -124,6 +124,10 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("no-deprecated");
     // Explicitly warns off the deprecated string method the model reached for.
     expect(prompt).toContain("z.string().url(msg)");
+    // Also covers uuid (another top-level validator the guide names).
+    expect(prompt).toContain("z.uuid(");
+    // The optional-URL-allowing-empty expression (the exact shape Company's website field needs).
+    expect(prompt).toContain('z.url(msg).optional().or(z.literal(""))');
     // Points at the scaffold's green reference schema.
     expect(prompt).toContain("apps/ui/src/features/auth/Auth.schemas.ts");
   });
