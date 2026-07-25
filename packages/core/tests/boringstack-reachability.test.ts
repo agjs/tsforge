@@ -65,6 +65,24 @@ describe("checkFeatureReachable", () => {
     expect(r.problems.join("\n")).toMatch(/API route missing/u);
   });
 
+  test("a `$`-prefixed sibling identifier is NOT accepted (JS `$` is an identifier char)", () => {
+    // `$` is a valid JS IdentifierPart that `\p{ID_Continue}` omits, so `$countRoutes`
+    // is a DISTINCT identifier — it must not satisfy `count`'s reachability.
+    const r = checkFeatureReachable("Count", {
+      uiRoutes:
+        'const CountPage = lazy(() => import("@/features/count/components/CountPage/CountPage"));',
+      apiRoutes: "export const routes = {\n  meta: $countRoutes,\n};",
+      localeJsons: [
+        JSON.stringify({
+          features: { count: { title: "Counts", empty: "None." } },
+        }),
+      ],
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.problems.join("\n")).toMatch(/API route missing/u);
+  });
+
   test("a whole-identifier API match is accepted even next to a superstring sibling", () => {
     // Both `count` and `account` are registered: `count` must be seen as reachable
     // (its own whole-word `countRoutes` is present), not masked by `accountRoutes`.
