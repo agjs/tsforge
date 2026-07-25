@@ -25,6 +25,8 @@ import type { IProvider } from "../src/inference";
 import type { IGate } from "../src/gate/gate-runner";
 import { writePlan } from "../src/loop/planning/plan-store";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
+import { OPENAPI_UNREACHABLE_MARKER } from "../src/loop/boringstack/gate-stages";
+import type { IHandoff } from "../src/loop/loop.types";
 
 function feature(id: string) {
   return { id, desc: `Build ${id} resource`, passes: false, attempts: 0 };
@@ -1060,6 +1062,61 @@ describe("verifyAcceptance — truthful park reason on done:false", () => {
     );
 
     expect(result.done).toBe(false);
+    expect(result.reason).toContain("fast gate not green");
+  });
+
+  test("#47: a fast-gate park carrying the openapi-unreachable signal HALTS to needs-infra, not an ordinary park", async () => {
+    // The API died mid-build → every fast-gate cycle fails with openapi-unreachable → the ladder
+    // parks. That is infra the model can't fix, so it must route to `infra` (the outer loop
+    // halts) rather than grind. Detected via the harness-authored marker in the park handoff.
+    const handoff: IHandoff = {
+      block: "note",
+      rungHistory: [],
+      errors: [
+        `generate:api ${OPENAPI_UNREACHABLE_MARKER} (connection-refused). The API is not serving /swagger/json.`,
+      ],
+      ask: "help",
+      resumable: true,
+      resume: { triedLevers: [] },
+    };
+    const result = await verifyAcceptance(
+      { status: "stuck", handoff },
+      createHost(),
+      "/tmp/does-not-exist",
+      undefined,
+      undefined,
+      true,
+      undefined
+    );
+
+    expect(result.done).toBe(false);
+    expect(result.infra).toBeDefined();
+    expect(result.infra).toContain("dev.sh up");
+    // NOT an ordinary ladder-exhaustion park.
+    expect(result.reason).toBeUndefined();
+  });
+
+  test("#47: a fast-gate park with ordinary (non-infra) errors stays an ordinary park — no false infra", async () => {
+    const handoff: IHandoff = {
+      block: "note",
+      rungHistory: [],
+      errors: ["error TS2322: type mismatch in Note.service.ts"],
+      ask: "help",
+      resumable: true,
+      resume: { triedLevers: [] },
+    };
+    const result = await verifyAcceptance(
+      { status: "stuck", handoff },
+      createHost(),
+      "/tmp/does-not-exist",
+      undefined,
+      undefined,
+      true,
+      undefined
+    );
+
+    expect(result.done).toBe(false);
+    expect(result.infra).toBeUndefined();
     expect(result.reason).toContain("fast gate not green");
   });
 

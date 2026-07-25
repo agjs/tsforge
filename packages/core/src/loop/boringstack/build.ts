@@ -16,7 +16,10 @@ import { extractFailures } from "./extract-failures";
 import { resolveStuckFile } from "../expert-handoff";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield } from "../greenfield/run";
-import { composeBoringstackGate } from "./gate-stages";
+import {
+  composeBoringstackGate,
+  OPENAPI_UNREACHABLE_MARKER,
+} from "./gate-stages";
 import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 import { slicesToFeatures } from "./plan-resources";
 import { toCamelCase } from "./case";
@@ -364,9 +367,31 @@ export async function verifyAcceptance(
   infra?: string;
   reason?: string;
 }> {
-  // If acceptance is not enabled, return based on fast gate
+  // If acceptance is not enabled OR the fast gate didn't pass, decide from the fast gate.
   if (!(!e2eAcceptanceDisabled && sent.status === "done")) {
     const done = sent.status === "done";
+
+    // #47 — mid-build infra HARD-ABORT: a fast-gate PARK whose errors carry the
+    // openapi-unreachable signal is NOT a code failure the model can fix (the API stopped
+    // serving its OpenAPI spec, so generate:api fails every cycle). Route it to needs-infra
+    // (the outer loop halts on `infra`) instead of an ordinary park, so the build stops
+    // grinding on unfixable infra. Reliable: the marker is harness-authored (not user text),
+    // and a GREEN fast gate never carries it — this only fires on a non-done park. (Infra at
+    // BASELINE and at ACCEPTANCE was already handled; this closes the mid-build fast-gate gap.)
+    if (
+      !done &&
+      (sent.handoff?.errors ?? []).some((e) =>
+        e.includes(OPENAPI_UNREACHABLE_MARKER)
+      )
+    ) {
+      return {
+        done: false,
+        infra:
+          "the BoringStack API stopped serving its OpenAPI spec mid-build (generate:api " +
+          "can't fetch it) — bring the stack up (dev.sh up). This is an infra precondition, " +
+          "not a code fix.",
+      };
+    }
 
     return {
       done,

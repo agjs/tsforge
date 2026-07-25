@@ -21,6 +21,13 @@ import type { IEntityAcceptance } from "../acceptance/acceptance.types";
 import { checkTestIds, checkWiring } from "./acceptance/testid-contract";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
+/** A stable, harness-authored marker embedded in the openapi-unreachable error MESSAGE.
+ *  The structured `rule: "openapi-unreachable"` is flattened to a plain string by the time a
+ *  parked feature's `handoff.errors` reaches the boringstack layer, so the mid-build infra
+ *  detector (build.ts `verifyAcceptance`, #47) matches THIS marker rather than re-parsing. It's
+ *  the single source of truth: the message below is built from it, so the two can't drift. */
+export const OPENAPI_UNREACHABLE_MARKER = "could not fetch the OpenAPI spec";
+
 /** Turn one failure signature into an `IErrorItem`. Most signatures are their own
  *  message (the raw gate row). A `knip:unused-file:<path>` signature is enriched
  *  into an ACTIONABLE error naming the file + the fix — because the wall that
@@ -79,7 +86,7 @@ export function signatureToError(sig: string): IErrorItem {
       rule: "openapi-unreachable",
       phase: 2,
       message:
-        `generate:api could not fetch the OpenAPI spec (${failureClass}). The API ` +
+        `generate:api ${OPENAPI_UNREACHABLE_MARKER} (${failureClass}). The API ` +
         `is not serving /swagger/json. This is an INFRA PRECONDITION, not something ` +
         `to fix in code — the BoringStack stack must be running (bring it up with ` +
         `dev.sh up). If the stack IS up, your apps/api changes may have broken the ` +
