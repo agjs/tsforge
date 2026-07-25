@@ -476,16 +476,22 @@ export function e2eParkReason(
   outcome: IAcceptanceOutcome,
   reRun: IAcceptanceOutcome
 ): string {
+  const nonEmpty = (s: string | undefined): string | undefined =>
+    s !== undefined && s.length > 0 ? s : undefined;
   const failingDetail = (o: IAcceptanceOutcome): string | undefined =>
-    // Prefer the top-level detail, then the FIRST failing result that actually carries a
-    // (non-empty) detail — not merely the first failing result, whose detail may be blank
-    // while a later failing step holds the real diagnostic.
-    o.detail ?? o.results.find((r) => !r.ok && r.detail.length > 0)?.detail;
+    // Prefer the top-level detail (but treat a BLANK top-level detail as absent — `"" ?? x`
+    // keeps "", which would suppress a real step detail), then the first failing result that
+    // actually carries a non-empty detail — not merely the first failing result, whose detail
+    // may be blank while a later failing step holds the real diagnostic.
+    nonEmpty(o.detail) ??
+    o.results.find((r) => !r.ok && r.detail.length > 0)?.detail;
 
   if (!reRun.ok) {
+    // Prefer the CURRENT (post-steer) diagnostic; only if the re-run surfaced none fall back
+    // to the pre-steer outcome — including ITS step details, not just its top-level detail.
     const detail =
       failingDetail(reRun) ??
-      outcome.detail ??
+      failingDetail(outcome) ??
       "browser acceptance assertions failed";
 
     return steerComplete
