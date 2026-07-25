@@ -643,10 +643,12 @@ describe("refinePrompt", () => {
   });
 
   it("teaches the exact form-submit idiom (void handleSubmit → no-misused-promises + jsx-no-bind)", () => {
-    // build53 Company parked here: the model wrote `onSubmit={createForm.handleSubmit((v) => …)}`
-    // inline → @typescript-eslint/no-misused-promises ("Promise-returning function provided to
-    // attribute where a void return was expected") + jsx-no-bind, then fumbled BaseSyntheticEvent.
-    // The green idiom (scaffold LoginPage.hooks.ts): a hook-owned void-returning `submit` used bare.
+    // build53 Company parked here: the model wrote `onSubmit={createForm.handleSubmit((v) => …)}`,
+    // whose attribute value is a CALL EXPRESSION → @typescript-eslint/no-misused-promises only
+    // ("Promise-returning function provided to attribute where a void return was expected"); the
+    // log shows NO jsx-no-bind hit (a call expression passes jsx-no-bind, per the row-handler rule).
+    // The model then fumbled BaseSyntheticEvent and couldn't close. The green idiom (scaffold
+    // LoginPage.hooks.ts): a hook-owned void-returning `submit` used as a bare ref.
     const feature: IFeature = {
       id: "Company",
       desc: "A business",
@@ -660,6 +662,15 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("no-misused-promises");
     // The form-submit guidance co-locates BOTH rules it satisfies (not just row-handler jsx-no-bind).
     expect(prompt).toContain("`no-misused-promises` + `jsx-no-bind` idiom");
+    // LOCK the corrected distinction (consistent with the guide's own row-handler rule): the
+    // direct call expression is NOT a jsx-no-bind violation; only the inline-arrow variant is.
+    // These fail if the old dual-rule claim ("call expression trips both") is ever restored.
+    expect(prompt).toContain(
+      "a call expression, so `jsx-no-bind` is NOT the issue here"
+    );
+    expect(prompt).toContain(
+      "an inline arrow `onSubmit={(e) => form.handleSubmit(onValid)(e)}` trips `jsx-no-bind`"
+    );
     // Teaches the void-operator wrap that makes the handler return void.
     expect(prompt).toContain("void handleSubmit(onSubmit)(event)");
     // The submit handler uses fire-and-forget `mutate` (errors → onError), NOT `mutateAsync`
