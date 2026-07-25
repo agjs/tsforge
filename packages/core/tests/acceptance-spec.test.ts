@@ -92,6 +92,63 @@ test("planToAcceptanceSpec: relationships parse to parent + fkField", () => {
   ]);
 });
 
+test("planToAcceptanceSpec: 'belongs to a User' (implicit auth owner) yields NO parent — not a phantom `aId`/`userId` select/seed", () => {
+  const spec = planToAcceptanceSpec({
+    product: "p",
+    slices: [
+      {
+        entity: {
+          id: "Bookmark",
+          desc: "d",
+          fields: [{ name: "title", type: "string" }],
+          relationships: ["belongs to a User"],
+          rules: [],
+        },
+        ui: { screens: ["list"], action: "a", shows: [], nav: "Bookmarks" },
+        verification: {
+          mustRemainTrue: [],
+          mustNotHappen: ["x"],
+          acceptanceCheck: "x",
+        },
+      },
+    ],
+  });
+
+  // The article "a" is NOT captured as a phantom parent, and the auth owner "User" is excluded —
+  // so no parent select/seed (which parked valbuild23 with `POST /api/v1/a` → 404).
+  expect(spec.entities[0]?.parents).toEqual([]);
+  expect(spec.entities[0]?.fields.some((f) => f.name.endsWith("Id"))).toBe(
+    false
+  );
+});
+
+test("planToAcceptanceSpec: 'belongs to a Company' (leading article) parses to Company, not the article", () => {
+  const spec = planToAcceptanceSpec({
+    product: "p",
+    slices: [
+      {
+        entity: {
+          id: "Deal",
+          desc: "d",
+          fields: [{ name: "name", type: "string" }],
+          relationships: ["belongs to a Company"],
+          rules: [],
+        },
+        ui: { screens: ["list"], action: "a", shows: [], nav: "Deals" },
+        verification: {
+          mustRemainTrue: [],
+          mustNotHappen: ["x"],
+          acceptanceCheck: "x",
+        },
+      },
+    ],
+  });
+
+  expect(spec.entities[0]?.parents).toEqual([
+    { entity: "Company", key: "company", fkField: "companyId" },
+  ]);
+});
+
 test("planToAcceptanceSpec: negatives derive missing-required + bad-email", () => {
   const spec = planToAcceptanceSpec(plan);
   const company = spec.entities[0];
