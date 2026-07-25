@@ -130,11 +130,13 @@ export const APP_SIDEBAR_FILE =
 export const APP_ROUTES_FILE = "apps/ui/src/app/router/routes.tsx";
 
 /** The sidebar's co-located test. It asserts the EXACT number of nav links, so the moment a
- *  feature adds its NavLink (required for reachability) the count changes and this test fails at
- *  the FINAL full-project validate (the fast per-feature gate doesn't run the vitest suite, so it
- *  only surfaces there → a fully-verified feature still leaves the build "stuck"). The scaffold is
- *  an external clone we can't edit, so the model must keep this test in sync: scope it in and
- *  instruct (refinePrompt) to bump the expected link count by its one added link — nothing else. */
+ *  feature adds its NavLink (required for reachability) the count changes and this test fails.
+ *  The fast per-feature gate RUNS this test — the boringstack gate appends `bun run test -- run
+ *  … src/components/core/AppSidebar` (see gate.ts), added so a stale count surfaces IN-LOOP with
+ *  feedback rather than only at the FINAL full-project validate (where a fully-verified feature
+ *  would otherwise leave the build "stuck"). The scaffold is an external clone we can't edit, so
+ *  the model must keep this test in sync: scope it in and instruct (refinePrompt) to bump the
+ *  expected link count by its one added link — nothing else. */
 export const APP_SIDEBAR_TEST_FILE =
   "apps/ui/src/components/core/AppSidebar/AppSidebar.test.tsx";
 
