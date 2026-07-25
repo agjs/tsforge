@@ -726,8 +726,10 @@ function baselinePath(cwd: string): string {
 }
 
 /** Load the persisted pristine baseline, or null if none exists / it's unreadable / it's
- *  the wrong shape (→ the caller re-captures rather than trust a corrupt file). Requires the
- *  `{ passed, signatures }` object shape with a string[] `signatures`; anything else is null. */
+ *  the wrong shape — never trust a corrupt file. What the caller does with null depends on
+ *  the tree: a genuine FRESH build (no greenfield checklist) re-captures + persists; a RESUME
+ *  (checklist present) grades STRICT and does NOT re-capture (the tree is no longer pristine).
+ *  Requires the `{ passed, signatures }` object shape with a string[] `signatures`; else null. */
 export async function loadBaseline(
   cwd: string
 ): Promise<IPersistedBaseline | null> {
@@ -979,11 +981,20 @@ export async function runBoringstackBuild(opts: {
   //    (empty baseline — every failure counts, only ever over-strict, never a false-green)
   //    and warn; do NOT freeze the contaminated capture in.
   const persisted = await loadBaseline(cwd);
-  const priorState = await loadState(cwd);
-  const isResume = priorState !== null && priorState.features.length > 0;
+  // A resume is ANY prior greenfield checklist on disk — `loadState !== null`. build.ts
+  // never writes the checklist before this point, so a genuine fresh build has none here;
+  // its mere PRESENCE (even with an empty feature array) means the tree is no longer
+  // pristine. Do NOT additionally require `features.length > 0`: that would treat a
+  // loaded-but-empty checklist as fresh and persist a CONTAMINATED capture. Erring toward
+  // "resume" is only ever over-strict, never a false-green.
+  const isResume = (await loadState(cwd)) !== null;
 
   let baseline: ReadonlySet<string>;
   let baselinePassed: boolean;
+  // The RED-unparseable / GREEN / RED-with-signatures report describes a PRISTINE capture.
+  // The strict fallback below has no pristine result (missing baseline.json on a non-pristine
+  // resume), so it must NOT emit that report — it emits its own warning instead.
+  let hasPristineReport = true;
 
   if (persisted !== null) {
     baseline = persisted.signatures;
@@ -1003,6 +1014,7 @@ export async function runBoringstackBuild(opts: {
   } else {
     baseline = new Set<string>();
     baselinePassed = false;
+    hasPristineReport = false;
     onEvent?.({
       kind: "stuck",
       task: "boringstack",
@@ -1013,13 +1025,15 @@ export async function runBoringstackBuild(opts: {
     });
   }
 
-  const report = describeBaseline(baselinePassed, baseline.size);
+  if (hasPristineReport) {
+    const report = describeBaseline(baselinePassed, baseline.size);
 
-  onEvent?.({
-    kind: report.kind,
-    task: "boringstack",
-    message: report.message,
-  });
+    onEvent?.({
+      kind: report.kind,
+      task: "boringstack",
+      message: report.message,
+    });
+  }
 
   // Capture the PRISTINE meta-rule baseline too (workflow perms, lockfile, etc. that
   // the model is frozen out of). The command baseline above only covers the command

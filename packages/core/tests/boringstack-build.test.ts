@@ -1451,4 +1451,83 @@ describe("baseline persistence — resume-safe differential grading", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("runBoringstackBuild grades STRICT on a resume whose baseline.json was lost — no crash, no contaminated re-capture persisted", async () => {
+    // The safety-critical fallback branch: a greenfield checklist EXISTS (it's a resume) but
+    // the persisted baseline is gone (older build / deleted file). The tree is non-pristine, so
+    // this invocation's gate capture is CONTAMINATED. The build must fall back to STRICT grading
+    // (empty baseline, nothing excluded — only ever over-strict, never a false-green) and must
+    // NOT persist that contaminated capture as a new baseline. Assert: it runs without crashing
+    // and loadBaseline stays null (the contaminated capture was never frozen in).
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-strict-"));
+
+    try {
+      const plan: IProductPlan = {
+        product: "A simple app",
+        slices: [
+          {
+            entity: {
+              id: "Invoice",
+              desc: "A billable unit",
+              fields: [{ name: "amount", type: "number" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list"],
+              action: "create invoices",
+              shows: ["amount"],
+              nav: "Invoices",
+            },
+            verification: {
+              mustRemainTrue: ["auth required"],
+              mustNotHappen: ["unauthenticated access"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      // First run establishes the greenfield checklist (making the next run a RESUME) and a
+      // persisted baseline.
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec: createExec(0),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(await loadBaseline(dir)).not.toBeNull();
+
+      // Simulate a LOST baseline.json — the checklist survives, the baseline doesn't.
+      await rm(join(dir, ".tsforge", "greenfield", "baseline.json"), {
+        force: true,
+      });
+      expect(await loadBaseline(dir)).toBeNull();
+
+      // RESUME with a now-FAILING (contaminated) gate. The strict fallback must engage.
+      const res = await runBoringstackBuild({
+        cwd: dir,
+        goal: "app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec: createExec(1),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      // It did not crash…
+      expect(res.status).toBeDefined();
+      // …and the contaminated capture was NOT persisted as a baseline (strict fallback, not
+      // a re-capture that would later EXCLUDE this feature's own failures from grading).
+      expect(await loadBaseline(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
