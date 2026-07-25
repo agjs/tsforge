@@ -477,7 +477,10 @@ export function e2eParkReason(
   reRun: IAcceptanceOutcome
 ): string {
   const failingDetail = (o: IAcceptanceOutcome): string | undefined =>
-    o.detail ?? o.results.find((r) => !r.ok)?.detail;
+    // Prefer the top-level detail, then the FIRST failing result that actually carries a
+    // (non-empty) detail — not merely the first failing result, whose detail may be blank
+    // while a later failing step holds the real diagnostic.
+    o.detail ?? o.results.find((r) => !r.ok && r.detail.length > 0)?.detail;
 
   if (!reRun.ok) {
     const detail =

@@ -366,6 +366,31 @@ describe("runGreenfield: outer loop", () => {
     expect(parkMsgs.every((m) => !m.includes("ladder exhausted"))).toBe(true);
   });
 
+  test("a done:false with NO reason parks as 'no reason reported', never a fabricated cause", async () => {
+    // Guards the neutral fallback: if a future impl returns done:false without a reason, the
+    // log must surface the gap honestly, NOT re-introduce a plausible-but-wrong "ladder
+    // exhausted" that this whole change exists to eliminate.
+    const s = state("a");
+    const messages: string[] = [];
+    const deps: IGreenfieldDeps = {
+      implement: async () => ({ done: false }),
+    };
+
+    await runGreenfield(dir, s, deps, {
+      onEvent: (ev) => {
+        if (typeof ev.message === "string") {
+          messages.push(ev.message);
+        }
+      },
+    });
+
+    const parkMsgs = messages.filter((m) => m.includes("parked"));
+
+    expect(parkMsgs.length).toBeGreaterThan(0);
+    expect(parkMsgs.some((m) => m.includes("no reason reported"))).toBe(true);
+    expect(parkMsgs.every((m) => !m.includes("ladder exhausted"))).toBe(true);
+  });
+
   test("parked + handoff round-trip through saveState + loadState", async () => {
     const s = state("a");
 
