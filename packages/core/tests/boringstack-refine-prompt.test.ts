@@ -105,6 +105,33 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("await screen.findByText");
   });
 
+  it("steers to Zod v4 top-level format validators (z.url/z.email), not the deprecated string methods", () => {
+    // build54 Company parked partly on @typescript-eslint/no-deprecated: it wrote
+    // `z.string().url(...)` for the website field. Zod v4 deprecated the string methods for
+    // top-level `z.url()`/`z.email()` (the scaffold's Auth.schemas.ts uses `z.email(...)`).
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // Teaches the top-level validators + names the rule.
+    expect(prompt).toContain("z.url(");
+    expect(prompt).toContain("z.email(");
+    expect(prompt).toContain("no-deprecated");
+    // Explicitly warns off the deprecated string method the model reached for.
+    expect(prompt).toContain("z.string().url(msg)");
+    // Also covers uuid (another top-level validator the guide names).
+    expect(prompt).toContain("z.uuid(");
+    // The optional-URL-allowing-empty expression (the exact shape Company's website field needs).
+    expect(prompt).toContain('z.url(msg).optional().or(z.literal(""))');
+    // Points at the scaffold's green reference schema.
+    expect(prompt).toContain("apps/ui/src/features/auth/Auth.schemas.ts");
+  });
+
   it("UI contract has NO dangling 'above' references on the no-slice path", () => {
     const feature: IFeature = {
       id: "Invoice",
