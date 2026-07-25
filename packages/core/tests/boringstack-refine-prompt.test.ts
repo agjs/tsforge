@@ -75,6 +75,36 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("features/invoice/");
   });
 
+  it("teaches the UI test async idiom (avoid require-await: mutateAsync+await in act, sync when no await)", () => {
+    // build54 Company parked here: 9 @typescript-eslint/require-await errors — the model wrote
+    // `await act(async () => { result.current.mutate(input); })` (mutate, no await → async callback
+    // with no await) and `it("…", async () => { render(…); /* sync asserts */ })`. The green idiom
+    // (JoinRequests.mutations.test.tsx) awaits mutateAsync inside act.
+    const feature: IFeature = {
+      id: "Invoice",
+      desc: "Customer billing record",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // Names the exact rule + the green mutation-test shape (await mutateAsync inside act + waitFor).
+    expect(prompt).toContain("require-await");
+    expect(prompt).toContain(
+      "await act(async () => { await result.current.mutateAsync(input); });"
+    );
+    expect(prompt).toContain("await waitFor(");
+    // References the scaffold's gate-green mutation test.
+    expect(prompt).toContain(
+      "apps/ui/src/features/accounts/JoinRequests.mutations.test.tsx"
+    );
+    // Calls out the deliberate component(mutate)-vs-test(mutateAsync) divergence.
+    expect(prompt).toContain("fire-and-forget");
+    // Component render tests: async ONLY when the body awaits (findByText/waitFor), else sync.
+    expect(prompt).toContain("await screen.findByText");
+  });
+
   it("UI contract has NO dangling 'above' references on the no-slice path", () => {
     const feature: IFeature = {
       id: "Invoice",
