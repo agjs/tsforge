@@ -477,6 +477,51 @@ describe("runBoringstackBuild", () => {
     }
   });
 
+  test("throws a clear error when an entity id is not a PascalCase identifier", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bs-"));
+
+    try {
+      const plan: IProductPlan = {
+        product: "A simple app",
+        slices: [
+          {
+            entity: {
+              id: "Purchase Order", // space → not an identifier-safe id
+              desc: "x",
+              fields: [],
+              relationships: [],
+              rules: [],
+            },
+            ui: { screens: ["list"], action: "x", shows: [], nav: "x" },
+            verification: {
+              mustRemainTrue: [],
+              mustNotHappen: ["x"],
+              acceptanceCheck: "x",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      // Fail fast with an actionable message BEFORE any generation, rather than
+      // breaking opaquely downstream on the malformed <camel>Routes/path/i18n id.
+      await expect(
+        runBoringstackBuild({
+          cwd: dir,
+          goal: "x",
+          host: createHost(),
+          evaluator: createEvaluator(),
+          exec: createExec(),
+          generate: async () => undefined,
+          generateUi: async () => undefined,
+        })
+      ).rejects.toThrow(/invalid entity id.*Purchase Order.*PascalCase/su);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("derives features from plan slices and passes slice to refinePrompt", async () => {
     const dir = await mkdtemp(join(tmpdir(), "bs-"));
 

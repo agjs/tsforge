@@ -3,8 +3,20 @@ import {
   planResources,
   parseResources,
   dedupeLayerVariants,
+  invalidEntityIds,
 } from "../src/loop/boringstack/plan-resources";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
+import type { ISlice } from "../src/loop/planning/plan-types";
+
+const slice = (id: string): ISlice => ({
+  entity: { id, desc: `${id} desc`, fields: [], relationships: [], rules: [] },
+  ui: { screens: ["list"], action: "view", shows: [], nav: id },
+  verification: {
+    mustRemainTrue: [],
+    mustNotHappen: ["x"],
+    acceptanceCheck: "x",
+  },
+});
 
 const feat = (id: string): IFeature => ({
   id,
@@ -94,5 +106,39 @@ describe("dedupeLayerVariants", () => {
     );
 
     expect(parsed?.map((f) => f.id)).toEqual(["Order"]);
+  });
+});
+
+describe("invalidEntityIds", () => {
+  test("returns [] when every entity id is a PascalCase identifier", () => {
+    expect(
+      invalidEntityIds([slice("Invoice"), slice("PurchaseOrder"), slice("A1")])
+    ).toEqual([]);
+  });
+
+  test("flags ids that break the identifier contract, preserving order", () => {
+    // Each of these becomes file paths / the <camel>Routes identifier / i18n keys, so a
+    // non-PascalCase-identifier id (space, hyphen, leading-lowercase, leading digit,
+    // symbol) must be rejected up front rather than breaking generation downstream.
+    const bad = invalidEntityIds([
+      slice("Purchase Order"),
+      slice("Good"),
+      slice("purchase-order"),
+      slice("invoice"),
+      slice("2Fast"),
+      slice("Wei$rd"),
+    ]);
+
+    expect(bad).toEqual([
+      "Purchase Order",
+      "purchase-order",
+      "invoice",
+      "2Fast",
+      "Wei$rd",
+    ]);
+  });
+
+  test("returns [] for an empty slice list", () => {
+    expect(invalidEntityIds([])).toEqual([]);
   });
 });
