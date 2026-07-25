@@ -2269,7 +2269,8 @@ export async function captureNearGreenCheckpoint(
 export async function rollbackNearGreen(
   ctx: ILoopCtx,
   state: ILoopState,
-  sprayCount: number
+  sprayCount: number,
+  sprayErrors: readonly IErrorItem[] = []
 ): Promise<void> {
   const cp = state.nearGreenCheckpoint;
 
@@ -2348,13 +2349,28 @@ export async function rollbackNearGreen(
     .map((e) => `  - ${e.message}`)
     .join("\n");
 
+  // Show the model the NEW errors its reverted change INTRODUCED (the spray delta), not just the
+  // errors it was already at — otherwise it's a blind random walk: it can't learn which pattern to
+  // avoid because the evidence was just reverted off disk. Keyed diff against the checkpoint so
+  // only genuinely-new errors show. (4-model panel: hiding the spray was a core reason it circled.)
+  const cpKeys = new Set(cp.errors.map((e) => e.key));
+  const introduced = sprayErrors.filter((e) => !cpKeys.has(e.key));
+  const introducedNote =
+    introduced.length > 0
+      ? `\n\nThose reverted edits INTRODUCED these new error(s) — do NOT re-introduce them:\n${introduced
+          .slice(0, 20)
+          .map((e) => `  - ${e.message}`)
+          .join("\n")}`
+      : "";
+
   ctx.messages.push({
     role: "user",
     content:
       `Your last change made things WORSE — the gate went from ${String(cp.errorCount)} ` +
       `to ${String(sprayCount)} error(s) — so I reverted those edits back to your best ` +
       `state (${String(cp.errorCount)} error(s) left). Do NOT rewrite files or start over. ` +
-      `Make a SMALL, targeted fix for ONLY these remaining errors, one at a time:\n${errorList}`,
+      `Make a SMALL, targeted fix for ONLY these remaining errors, one at a time:\n${errorList}` +
+      introducedNote,
   });
 }
 
@@ -2365,7 +2381,8 @@ export async function rollbackNearGreen(
 async function nearGreenRollbackStep(
   ctx: ILoopCtx,
   state: ILoopState,
-  curr: number
+  curr: number,
+  gateErrors: readonly IErrorItem[]
 ): Promise<boolean> {
   if (!flags.nearGreenCheckpoint()) {
     return false;
@@ -2400,7 +2417,7 @@ async function nearGreenRollbackStep(
       state.nearGreenRollbacks ?? 0
     )
   ) {
-    await rollbackNearGreen(ctx, state, curr);
+    await rollbackNearGreen(ctx, state, curr, gateErrors);
 
     return true;
   }
@@ -2671,7 +2688,7 @@ export async function settleGate(
 
   // WS-B: revert a count spray to the best on-disk near-green state (returning BEFORE
   // checkStuck — a revert must not advance the ladder).
-  if (await nearGreenRollbackStep(ctx, state, curr)) {
+  if (await nearGreenRollbackStep(ctx, state, curr, gateErrors)) {
     return null;
   }
 

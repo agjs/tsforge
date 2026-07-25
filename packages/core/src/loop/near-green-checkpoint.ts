@@ -72,6 +72,15 @@ const COMPLETION_CLASS_RULES: ReadonlySet<string> = new Set([
   "reachability",
   "i18n-locale-keys-used",
   "logic-files-require-test-sibling",
+  // A near-green state whose sole remaining error is a MISSING required test-id or an UNWIRED
+  // feature is the same hollow trap: the only non-destructive fix is to ADD the create/edit/
+  // delete UI (form + buttons + testids), which transiently spikes the count. Count-only WS-B
+  // reverted exactly this and parked the model at 1 (live: valbuild23 stuck on testid-presence
+  // → sprayed adding the UI → rolled back ×3 → parked). 4-model panel confirmed this is THE
+  // trap, not the taste rules. These IDs are emitted by gate-stages.ts (the e2e testid contract
+  // + the feature-wiring check).
+  "testid-presence",
+  "feature-wiring",
 ]);
 
 /** Whether a gate error clears only by adding code (see COMPLETION_CLASS_RULES). Matches the

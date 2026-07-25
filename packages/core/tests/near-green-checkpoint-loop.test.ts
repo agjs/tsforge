@@ -634,6 +634,123 @@ test("rollbackNearGreen resets the convergence guards + tombstones, without touc
   }
 });
 
+test("rollbackNearGreen SHOWS the model the new errors its reverted change introduced (spray delta), not just the ones it was already at", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
+    const ctx: ILoopCtx = {
+      task: { id: "t", intent: "test", accept: "", files: ["**/*"], context: [] },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set(["a.ts"]) },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            errors: [],
+            output: "",
+          }),
+        },
+      },
+    };
+    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "cp1", message: "the one remaining testid error" },
+    ]);
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 5,
+      noNewLow: 0,
+      redGates: 0,
+      errorAge: new Map(),
+      lastGateCount: 5,
+      edits: 0,
+      regressions: 1,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      conventionsEnabled: false,
+      plateauBest: 1,
+      nearGreenCheckpoint: checkpoint,
+      nearGreenRollbacks: 0,
+    };
+
+    // The spray still carries the original cp error PLUS two it just introduced.
+    await rollbackNearGreen(ctx, state, 5, [
+      { key: "cp1", message: "the one remaining testid error" },
+      { key: "n1", message: "JSX props should not use arrow functions", rule: "react/jsx-no-bind" },
+      { key: "n2", message: "unsafe argument of type any", rule: "no-unsafe-argument" },
+    ]);
+
+    const msg = ctx.messages.at(-1)?.content ?? "";
+    // The remaining error is still shown…
+    expect(msg).toContain("the one remaining testid error");
+    // …AND the model is told exactly what it broke (the delta vs the checkpoint), framed as introduced.
+    expect(msg).toContain("INTRODUCED");
+    expect(msg).toContain("JSX props should not use arrow functions");
+    expect(msg).toContain("unsafe argument of type any");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("rollbackNearGreen with NO spray errors passed omits the 'introduced' section (backward-compatible)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
+
+  try {
+    await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
+    const ctx: ILoopCtx = {
+      task: { id: "t", intent: "test", accept: "", files: ["**/*"], context: [] },
+      cwd: dir,
+      tsService: null,
+      report: () => undefined,
+      messages: [],
+      tool: { touched: new Set() },
+      gate: {
+        parse: undefined,
+        runner: {
+          run: async (): Promise<IValidateResult> => ({
+            passed: false,
+            errors: [],
+            output: "",
+          }),
+        },
+      },
+    };
+    const checkpoint = await captureNearGreenCheckpoint(ctx, 1, [
+      { key: "cp1", message: "the one remaining error" },
+    ]);
+    const state: ILoopState = {
+      prevGateErrors: [],
+      gateNoProgress: 0,
+      bestErrorCount: 5,
+      noNewLow: 0,
+      redGates: 0,
+      errorAge: new Map(),
+      lastGateCount: 5,
+      edits: 0,
+      regressions: 1,
+      ttsrInterrupts: 0,
+      steerLevel: 0,
+      conventionsEnabled: false,
+      plateauBest: 1,
+      nearGreenCheckpoint: checkpoint,
+      nearGreenRollbacks: 0,
+    };
+
+    await rollbackNearGreen(ctx, state, 5);
+
+    const msg = ctx.messages.at(-1)?.content ?? "";
+    expect(msg).toContain("the one remaining error");
+    expect(msg).not.toContain("INTRODUCED");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("rollbackNearGreen reverts OUT-OF-SCOPE package.json + binary lockfile (ROLLBACK_EXTRA_FILES)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-nearg-"));
 
