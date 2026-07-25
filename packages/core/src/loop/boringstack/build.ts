@@ -16,7 +16,7 @@ import { extractFailures } from "./extract-failures";
 import { resolveStuckFile } from "../expert-handoff";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield } from "../greenfield/run";
-import { greenfieldDir, loadState } from "../greenfield/state";
+import { greenfieldDir, hasState } from "../greenfield/state";
 import { composeBoringstackGate } from "./gate-stages";
 import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 import { slicesToFeatures } from "./plan-resources";
@@ -981,16 +981,22 @@ export async function runBoringstackBuild(opts: {
   //    (empty baseline — every failure counts, only ever over-strict, never a false-green)
   //    and warn; do NOT freeze the contaminated capture in.
   const persisted = await loadBaseline(cwd);
-  // A resume is ANY prior greenfield checklist on disk — `loadState !== null`. build.ts
-  // never writes the checklist before this point, so a genuine fresh build has none here;
-  // its mere PRESENCE (even with an empty feature array) means the tree is no longer
-  // pristine. Do NOT additionally require `features.length > 0`: that would treat a
-  // loaded-but-empty checklist as fresh and persist a CONTAMINATED capture. Erring toward
+  // A resume is ANY prior greenfield checklist ON DISK — detected by FILE PRESENCE
+  // (`hasState`), NOT by `loadState !== null`. `loadState` returns null for a missing
+  // file AND for a present-but-corrupt one, so using it would treat a corrupt-state
+  // resume (whose tree WAS already built into) as a fresh start and persist a
+  // CONTAMINATED baseline (a false-green). build.ts never writes the checklist before
+  // this point, so a genuine fresh build has no file here; mere PRESENCE (even an empty
+  // or unparseable checklist) means the tree is no longer pristine. Erring toward
   // "resume" is only ever over-strict, never a false-green.
-  const isResume = (await loadState(cwd)) !== null;
+  const isResume = await hasState(cwd);
 
   let baseline: ReadonlySet<string>;
   let baselinePassed: boolean;
+  // Whether THIS invocation is on the pristine tree (the fresh capture). Only then may we
+  // trust the tree for the differential command baseline AND the meta-rule baseline; on a
+  // resume both are reused-or-strict, never re-captured from the contaminated tree.
+  let isFreshCapture = false;
   // The RED-unparseable / GREEN / RED-with-signatures report describes a PRISTINE capture.
   // The strict fallback below has no pristine result (missing baseline.json on a non-pristine
   // resume), so it must NOT emit that report — it emits its own warning instead.
@@ -1007,6 +1013,7 @@ export async function runBoringstackBuild(opts: {
   } else if (!isResume) {
     baseline = fresh.baseline;
     baselinePassed = baseRun.passed;
+    isFreshCapture = true;
     await saveBaseline(cwd, {
       passed: baseRun.passed,
       signatures: fresh.baseline,
@@ -1036,9 +1043,17 @@ export async function runBoringstackBuild(opts: {
   }
 
   // Capture the PRISTINE meta-rule baseline too (workflow perms, lockfile, etc. that
-  // the model is frozen out of). The command baseline above only covers the command
-  // gate; meta violations are subtracted separately, via the session, every cycle.
-  host.captureMetaBaseline();
+  // the model is frozen out of) — but ONLY on a fresh capture, for the SAME reason the
+  // command baseline is only captured fresh. `captureMetaBaseline` reads the CURRENT
+  // tree; on a resume that tree is contaminated, so re-capturing would sweep meta
+  // violations introduced before the interruption into the baseline and EXCLUDE them
+  // from grading — the same contaminated-resume false-green, for the meta gate. On a
+  // resume the session's meta-baseline stays unset ⇒ STRICT (nothing subtracted), which
+  // is the safe direction and makes the strict-fallback warning above truthful. (Meta
+  // violations on a clean scaffold are empty anyway, so the common case is unchanged.)
+  if (isFreshCapture) {
+    host.captureMetaBaseline();
+  }
 
   // Create a lookup function that maps feature ids to their plan slices
   const sliceFor = (id: string): ISlice | undefined =>

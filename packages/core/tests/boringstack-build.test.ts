@@ -26,6 +26,7 @@ import type {
 import type { IProvider } from "../src/inference";
 import type { IGate } from "../src/gate/gate-runner";
 import { writePlan } from "../src/loop/planning/plan-store";
+import { saveState } from "../src/loop/greenfield/state";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
 
 function feature(id: string) {
@@ -83,6 +84,35 @@ function createEvaluator(): IProvider {
       content: '{"pass":true,"notes":"quality approved"}',
       toolCalls: [],
     }),
+  };
+}
+
+/** A minimal single-slice approved plan, shared by the baseline-persistence tests. */
+function invoicePlan(): IProductPlan {
+  return {
+    product: "A simple app",
+    slices: [
+      {
+        entity: {
+          id: "Invoice",
+          desc: "A billable unit",
+          fields: [{ name: "amount", type: "number" }],
+          relationships: [],
+          rules: [],
+        },
+        ui: {
+          screens: ["list"],
+          action: "create invoices",
+          shows: ["amount"],
+          nav: "Invoices",
+        },
+        verification: {
+          mustRemainTrue: ["auth required"],
+          mustNotHappen: ["unauthenticated access"],
+          acceptanceCheck: "bun test",
+        },
+      },
+    ],
   };
 }
 
@@ -1526,6 +1556,116 @@ describe("baseline persistence — resume-safe differential grading", () => {
       // …and the contaminated capture was NOT persisted as a baseline (strict fallback, not
       // a re-capture that would later EXCLUDE this feature's own failures from grading).
       expect(await loadBaseline(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a FRESH build captures the meta-rule baseline exactly once AND persists the command baseline", async () => {
+    // Positive control for the two resume-safety fixes: on the pristine tree we DO capture
+    // the meta baseline and DO persist the command baseline. The resume tests below assert
+    // the negatives (neither happens on a resume).
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-fresh-"));
+
+    try {
+      await writePlan(dir, invoicePlan(), "approved");
+      const host = createHost();
+
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "app",
+        host,
+        evaluator: createEvaluator(),
+        exec: createExec(0),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(host.metaBaselineCaptures.count).toBe(1);
+      expect(await loadBaseline(dir)).not.toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a resume does NOT re-capture the meta baseline and emits NO false pristine-baseline report — only the strict warning", async () => {
+    // The critical scope-bypass fix: on a resume the tree is contaminated, so re-capturing
+    // the meta baseline would sweep pre-interruption meta violations (workflow/lockfile/
+    // root-drift) into the baseline and EXCLUDE them — the same false-green, for the meta
+    // gate. On a resume the meta baseline must NOT be captured (→ STRICT), and the strict
+    // fallback must NOT emit the "RED … did NOT parse" pristine-baseline report (which would
+    // contradict its own warning).
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-resume-meta-"));
+
+    try {
+      await writePlan(dir, invoicePlan(), "approved");
+      // A checklist exists (→ RESUME) but no baseline.json (→ strict fallback).
+      await saveState(dir, { goal: "app", features: [] });
+      expect(await loadBaseline(dir)).toBeNull();
+
+      const host = createHost();
+      const events: string[] = [];
+
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "app",
+        host,
+        evaluator: createEvaluator(),
+        exec: createExec(1),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+        onEvent: (e) => {
+          events.push(e.message);
+        },
+      });
+
+      // Meta baseline NOT captured on a resume (strict), so the "nothing excluded" warning is true.
+      expect(host.metaBaselineCaptures.count).toBe(0);
+      // The strict-fallback warning IS emitted…
+      expect(events.some((m) => m.includes("falls back to STRICT"))).toBe(true);
+      // …and the false "RED … did NOT parse" pristine-baseline report is NOT (it describes a
+      // pristine capture that does not exist on this path).
+      expect(events.some((m) => m.includes("did NOT parse"))).toBe(false);
+      // The contaminated tree was never frozen in as a baseline.
+      expect(await loadBaseline(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a CORRUPT features.json is treated as a RESUME (strict), never a fresh start — no contaminated capture persisted", async () => {
+    // The gate-relaxed fix: `loadState` returns null for a corrupt file just as for a missing
+    // one, so detecting a fresh start via loadState would treat a corrupt-state resume (whose
+    // tree WAS already built into) as pristine and persist a CONTAMINATED baseline. Presence
+    // (`hasState`) is the correct signal: a corrupt checklist still means "resume → strict".
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-corrupt-"));
+
+    try {
+      await writePlan(dir, invoicePlan(), "approved");
+      // A present-but-unparseable checklist — loadState() would see null (looks fresh),
+      // hasState() sees the file (correctly: resume).
+      await mkdir(join(dir, ".tsforge", "greenfield"), { recursive: true });
+      await writeFile(
+        join(dir, ".tsforge", "greenfield", "features.json"),
+        "{ this is not valid json"
+      );
+
+      const host = createHost();
+
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "app",
+        host,
+        evaluator: createEvaluator(),
+        exec: createExec(1),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      // Treated as a resume: strict fallback, so NO fresh baseline was persisted from the
+      // contaminated tree, and the meta baseline was NOT captured.
+      expect(await loadBaseline(dir)).toBeNull();
+      expect(host.metaBaselineCaptures.count).toBe(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
