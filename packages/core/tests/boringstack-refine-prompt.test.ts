@@ -693,6 +693,10 @@ describe("refinePrompt", () => {
     // that caused build53's rename churn.
     expect(prompt).toContain("CompanyCreateInput");
     expect(prompt).not.toContain("ICompanyCreateInput");
+    // The useCallback depends on the STABLE `mutate`, not the unstable mutation result object,
+    // so the handler stays referentially stable (avoids TanStack's no-unstable-deps).
+    expect(prompt).toContain("[createMutation.mutate]");
+    expect(prompt).toContain("no-unstable-deps");
   });
 
   it("warns that every NEW component needs the FULL sibling set → don't extract sub-components", () => {

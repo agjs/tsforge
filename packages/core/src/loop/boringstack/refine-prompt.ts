@@ -216,7 +216,8 @@ const onSubmit = useCallback(
     // then discard a rejected promise → an unhandled rejection.
     createMutation.mutate(input);
   },
-  [createMutation]
+  [createMutation.mutate] // depend on the STABLE \`mutate\` (React Query guarantees it),
+  // NOT the whole \`createMutation\` result object, which is recreated every render.
 );
 const submit = useCallback(
   (event: React.BaseSyntheticEvent): void => {
@@ -230,7 +231,7 @@ const submit = useCallback(
 // in the form .tsx — a BARE reference, no arrow, no handleSubmit in JSX:
 <form onSubmit={view.submit}>
 \`\`\`
-\`void handleSubmit(onSubmit)(event)\` makes \`submit\` return \`void\` (the \`void\` operator is exactly typescript-eslint's sanctioned fix for \`no-misused-promises\` on a form's \`onSubmit\`), and \`submit\` is a stable \`useCallback\` reference (satisfies \`jsx-no-bind\`). Keep the onValid handler (\`onSubmit\`) itself non-rejecting — use \`mutate\` as above so mutation failures route to the mutation's \`onError\`, not into this discarded promise. NEVER call \`handleSubmit\` inside JSX.
+\`void handleSubmit(onSubmit)(event)\` makes \`submit\` return \`void\` (the \`void\` operator is exactly typescript-eslint's sanctioned fix for \`no-misused-promises\` on a form's \`onSubmit\`). \`<form onSubmit={view.submit}>\` passes \`jsx-no-bind\` because it's a BARE identifier reference, not an inline arrow — and depending each \`useCallback\` on stable refs only (\`createMutation.mutate\`, \`handleSubmit\`) keeps \`submit\` referentially stable across renders (avoids TanStack's \`no-unstable-deps\`). Keep the onValid handler (\`onSubmit\`) itself non-rejecting — use \`mutate\` as above so mutation failures route to the mutation's \`onError\`, not into this discarded promise. NEVER call \`handleSubmit\` inside JSX.
 
 **Extract computed lists — the exact \`no-jsx-computation\` idiom.** The rule rejects ANY array method (\`.map\`/\`.filter\`/\`.reduce\`/\`.sort\`/\`.find\`) or arithmetic (\`+\`/\`-\`/\`*\`/\`/\`) called DIRECTLY inside JSX braces — e.g. \`<tbody>{items.map(…)}</tbody>\` or \`<select>{companies.map(…)}</select>\` → "Extract this computation into a hook or helper function". Compute EVERY list/derived value as a \`const\` in the component body, then reference the BARE identifier in JSX:
 \`\`\`tsx
