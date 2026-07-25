@@ -209,7 +209,7 @@ then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \
 \`\`\`ts
 // in <Component>.hooks.ts (a custom hook — NEVER call useCallback in the component body):
 const onSubmit = useCallback(
-  async (input: I${feature.id}CreateInput): Promise<void> => {
+  async (input: ${feature.id}CreateInput): Promise<void> => {
     await createMutation.mutateAsync(input);
   },
   [createMutation]

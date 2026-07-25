@@ -658,6 +658,8 @@ describe("refinePrompt", () => {
 
     // Names the exact rule the inline handleSubmit trips.
     expect(prompt).toContain("no-misused-promises");
+    // The form-submit guidance co-locates BOTH rules it satisfies (not just row-handler jsx-no-bind).
+    expect(prompt).toContain("`no-misused-promises` + `jsx-no-bind` idiom");
     // Teaches the void-operator wrap that makes the handler return void.
     expect(prompt).toContain("void handleSubmit(onSubmit)(event)");
     // Points at the scaffold's green reference form hook.
@@ -666,6 +668,11 @@ describe("refinePrompt", () => {
     );
     // The form JSX passes the bare hook reference, never handleSubmit inline.
     expect(prompt).toContain("onSubmit={view.submit}");
+    // Pins the scaffold's ACTUAL create-input token (no I- prefix; the item type has one,
+    // the input does not) so the idiom can't drift back to the invented ICompanyCreateInput
+    // that caused build53's rename churn.
+    expect(prompt).toContain("CompanyCreateInput");
+    expect(prompt).not.toContain("ICompanyCreateInput");
   });
 
   it("warns that every NEW component needs the FULL sibling set → don't extract sub-components", () => {
