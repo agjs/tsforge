@@ -642,6 +642,32 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("no-unused-vars");
   });
 
+  it("teaches the exact form-submit idiom (void handleSubmit → no-misused-promises + jsx-no-bind)", () => {
+    // build53 Company parked here: the model wrote `onSubmit={createForm.handleSubmit((v) => …)}`
+    // inline → @typescript-eslint/no-misused-promises ("Promise-returning function provided to
+    // attribute where a void return was expected") + jsx-no-bind, then fumbled BaseSyntheticEvent.
+    // The green idiom (scaffold LoginPage.hooks.ts): a hook-owned void-returning `submit` used bare.
+    const feature: IFeature = {
+      id: "Company",
+      desc: "A business",
+      passes: false,
+      attempts: 0,
+    };
+
+    const prompt = refinePrompt(feature);
+
+    // Names the exact rule the inline handleSubmit trips.
+    expect(prompt).toContain("no-misused-promises");
+    // Teaches the void-operator wrap that makes the handler return void.
+    expect(prompt).toContain("void handleSubmit(onSubmit)(event)");
+    // Points at the scaffold's green reference form hook.
+    expect(prompt).toContain(
+      "apps/ui/src/features/auth/components/LoginPage/LoginPage.hooks.ts"
+    );
+    // The form JSX passes the bare hook reference, never handleSubmit inline.
+    expect(prompt).toContain("onSubmit={view.submit}");
+  });
+
   it("warns that every NEW component needs the FULL sibling set → don't extract sub-components", () => {
     // build36 hit component-folder-structure: a new 'CompanyFormField' demanded .hooks/.types/
     // .stories/.test/index siblings. The guide must warn and steer to inline instead.
