@@ -1219,18 +1219,61 @@ describe("e2eParkReason — the pure reason composer", () => {
     expect(reason).not.toContain("orig failure");
   });
 
-  test("uses a re-run failing-step detail when the top-level detail is absent", () => {
+  test("skips a failing step whose detail is BLANK for a later failing step that has one", () => {
+    // Distinguishing: the FIRST failing step has an empty detail; the real diagnostic is on a
+    // LATER failing step. `find(r => !r.ok)` (the old predicate) would pick the blank one and
+    // fall through to the pre-steer detail; the non-empty filter picks the real later one.
     const reRun: IAcceptanceOutcome = {
       ok: false,
       results: [
-        { entity: "Company", step: "list", ok: true, detail: "ok" },
-        { entity: "Company", step: "create", ok: false, detail: "STEP_DETAIL" },
+        { entity: "Company", step: "list", ok: false, detail: "" },
+        {
+          entity: "Company",
+          step: "create",
+          ok: false,
+          detail: "LATER_STEP_DETAIL",
+        },
+      ],
+    };
+    const reason = e2eParkReason(true, fail("pre-steer detail"), reRun);
+
+    expect(reason).toContain("LATER_STEP_DETAIL");
+    expect(reason).not.toContain("pre-steer detail");
+  });
+
+  test("treats a BLANK top-level re-run detail as absent and uses a failing-step detail", () => {
+    // `"" ?? x` keeps "", so a blank top-level detail must be normalized to absent, else it
+    // suppresses the real step diagnostic and emits an empty reason.
+    const reRun: IAcceptanceOutcome = {
+      ok: false,
+      detail: "",
+      results: [
+        { entity: "Company", step: "create", ok: false, detail: "STEP_REAL" },
       ],
     };
     const reason = e2eParkReason(true, fail("pre-steer"), reRun);
 
-    // Prefers the CURRENT re-run's failing-step detail over the obsolete pre-steer one.
-    expect(reason).toContain("STEP_DETAIL");
-    expect(reason).not.toContain("pre-steer");
+    expect(reason).toContain("STEP_REAL");
+  });
+
+  test("falls back to the pre-steer outcome's failing-STEP detail, not only its top-level", () => {
+    // The re-run surfaced no usable detail at all; the pre-steer outcome's detail lives only
+    // on a failing step, so `outcome.detail` alone would drop it in favor of the generic text.
+    const reRun: IAcceptanceOutcome = { ok: false, results: [] };
+    const outcome: IAcceptanceOutcome = {
+      ok: false,
+      results: [
+        {
+          entity: "Company",
+          step: "create",
+          ok: false,
+          detail: "PRE_STEP_DETAIL",
+        },
+      ],
+    };
+    const reason = e2eParkReason(true, outcome, reRun);
+
+    expect(reason).toContain("PRE_STEP_DETAIL");
+    expect(reason).not.toContain("browser acceptance assertions failed");
   });
 });
