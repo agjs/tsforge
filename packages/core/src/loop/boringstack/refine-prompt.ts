@@ -209,14 +209,18 @@ then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \
 \`\`\`ts
 // in <Component>.hooks.ts (a custom hook — NEVER call useCallback in the component body):
 const onSubmit = useCallback(
-  async (input: ${feature.id}CreateInput): Promise<void> => {
-    await createMutation.mutateAsync(input);
+  (input: ${feature.id}CreateInput): void => {
+    // Use \`mutate\` (fire-and-forget), NOT \`mutateAsync\`: the mutation's onSuccess
+    // invalidates the list and onError surfaces failures, so this handler never awaits
+    // and never rejects. \`mutateAsync\` would REJECT on failure and the \`void\` below would
+    // then discard a rejected promise → an unhandled rejection.
+    createMutation.mutate(input);
   },
   [createMutation]
 );
 const submit = useCallback(
   (event: React.BaseSyntheticEvent): void => {
-    void handleSubmit(onSubmit)(event); // the \`void\` operator discards the promise
+    void handleSubmit(onSubmit)(event); // onSubmit can't reject, so \`void\` is safe here
   },
   [handleSubmit, onSubmit]
 );

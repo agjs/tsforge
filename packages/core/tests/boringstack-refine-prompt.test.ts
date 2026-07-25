@@ -662,6 +662,10 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("`no-misused-promises` + `jsx-no-bind` idiom");
     // Teaches the void-operator wrap that makes the handler return void.
     expect(prompt).toContain("void handleSubmit(onSubmit)(event)");
+    // The submit handler uses fire-and-forget `mutate` (errors → onError), NOT `mutateAsync`
+    // which would reject and make the `void` wrapper discard a rejected promise.
+    expect(prompt).toContain("createMutation.mutate(input)");
+    expect(prompt).toContain("unhandled rejection");
     // Points at the scaffold's green reference form hook.
     expect(prompt).toContain(
       "apps/ui/src/features/auth/components/LoginPage/LoginPage.hooks.ts"
