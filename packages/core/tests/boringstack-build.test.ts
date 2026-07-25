@@ -506,17 +506,33 @@ describe("runBoringstackBuild", () => {
 
       // Fail fast with an actionable message BEFORE any generation, rather than
       // breaking opaquely downstream on the malformed <camel>Routes/path/i18n id.
+      const host = createHost();
+      let generateCalls = 0;
+      let generateUiCalls = 0;
+
       await expect(
         runBoringstackBuild({
           cwd: dir,
           goal: "x",
-          host: createHost(),
+          host,
           evaluator: createEvaluator(),
           exec: createExec(),
-          generate: async () => undefined,
-          generateUi: async () => undefined,
+          generate: async () => {
+            generateCalls += 1;
+          },
+          generateUi: async () => {
+            generateUiCalls += 1;
+          },
         })
       ).rejects.toThrow(/invalid entity id.*Purchase Order.*PascalCase/su);
+
+      // The guarantee is fail-fast BEFORE any side effect: no code generated, no
+      // baseline captured, no model turn dispatched. A regression that moved the
+      // check after generation/baseline would still throw but break these.
+      expect(generateCalls).toBe(0);
+      expect(generateUiCalls).toBe(0);
+      expect(host.metaBaselineCaptures.count).toBe(0);
+      expect(host.sent).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
