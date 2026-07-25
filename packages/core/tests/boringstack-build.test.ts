@@ -13,6 +13,8 @@ import {
   readResourceCode,
   verifyAcceptance,
   e2eParkReason,
+  loadBaseline,
+  saveBaseline,
   APP_SCHEMA_FILE,
   LOCALE_GLOB,
 } from "../src/loop/boringstack/build";
@@ -1275,5 +1277,70 @@ describe("e2eParkReason — the pure reason composer", () => {
 
     expect(reason).toContain("PRE_STEP_DETAIL");
     expect(reason).not.toContain("browser acceptance assertions failed");
+  });
+});
+
+describe("baseline persistence — resume-safe differential grading", () => {
+  test("saveBaseline → loadBaseline round-trips the signature set", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-"));
+
+    try {
+      const sigs = new Set([
+        "failure:a.ts:1:no-unused-vars:msg",
+        "failure:b.ts:2:react-hooks%2Fexhaustive-deps:msg2",
+      ]);
+
+      await saveBaseline(dir, sigs);
+      const loaded = await loadBaseline(dir);
+
+      expect(loaded).not.toBeNull();
+      expect([...(loaded ?? [])].sort()).toEqual([...sigs].sort());
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("loadBaseline returns null when none is persisted (→ a FRESH build captures)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-none-"));
+
+    try {
+      expect(await loadBaseline(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a GREEN pristine baseline persists as an EMPTY set, NOT null (so a resume REUSES it, not re-captures)", async () => {
+    // The load-bearing case: build55's pristine scaffold was GREEN → empty baseline. It must
+    // round-trip as an empty Set (present), so a resume reuses it and does NOT re-capture from
+    // the contaminated tree. If it round-tripped as null, the resume would re-capture → the
+    // false-green this fix prevents.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-green-"));
+
+    try {
+      await saveBaseline(dir, new Set<string>());
+      const loaded = await loadBaseline(dir);
+
+      expect(loaded).not.toBeNull();
+      expect(loaded?.size).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("loadBaseline returns null on corrupt JSON (re-capture, never crash)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-corrupt-"));
+
+    try {
+      await mkdir(join(dir, ".tsforge/greenfield"), { recursive: true });
+      await writeFile(
+        join(dir, ".tsforge/greenfield/baseline.json"),
+        "{not valid json"
+      );
+
+      expect(await loadBaseline(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
