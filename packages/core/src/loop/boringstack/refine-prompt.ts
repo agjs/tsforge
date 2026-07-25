@@ -205,7 +205,7 @@ export const makeIdHandler =
 \`\`\`
 then in the component body \`const editHandler = makeIdHandler(onEdit);\` (and \`deleteHandler\`), and in JSX \`onClick={editHandler(row.id)}\`. The prop is a call expression, not a literal arrow, so the rule passes. This curried-helper pattern is the scaffold's own gate-green convention (see JoinRequestsPage example). Do NOT call \`useCallback\` in the component body to stabilise the handler. react-component-architecture forbids React's STATE-PRIMITIVE hooks (\`useState\`/\`useReducer\`/\`useEffect\`/\`useLayoutEffect\`/\`useMemo\`/\`useCallback\`/\`useRef\`) from being called DIRECTLY in a component that returns JSX — those must live inside a custom hook in a co-located \`<Component>.hooks.ts\` (else "must be in a custom hook (.hooks.ts), not in component body"). The body MAY still call other hooks inline: your own custom hook(s) (e.g. \`use${feature.id}Page()\`), \`useTranslation()\`, and \`useId\`/\`useTransition\`/\`useDeferredValue\` are all allowed there — the scaffold's JoinRequestsPage body itself calls both \`useTranslation()\` and \`useJoinRequestsPage()\`. The \`makeIdHandler\` call-expression helper needs NO hook at all, so it's the simplest fix for a row handler — use it rather than adding a \`useCallback\`. For a zero-arg handler pass a named function reference (\`onClick={handleSubmit}\`), never an inline arrow.
 
-**Form submit — the exact \`no-misused-promises\` + \`jsx-no-bind\` idiom.** react-hook-form's \`handleSubmit(onValid)\` returns a PROMISE-returning function, so putting it in JSX — \`<form onSubmit={form.handleSubmit(onValid)}>\` or an inline \`onSubmit={(e) => form.handleSubmit(onValid)(e)}\` — is REJECTED by BOTH \`@typescript-eslint/no-misused-promises\` ("Promise-returning function provided to attribute where a void return was expected") AND \`jsx-no-bind\`. Do NOT try to patch it by typing the event \`BaseSyntheticEvent\` inline — the fix is structural. Copy the scaffold's gate-green idiom (\`apps/ui/src/features/auth/components/LoginPage/LoginPage.hooks.ts\`): the custom hook owns a stable, VOID-returning submit handler; the form JSX passes the bare reference.
+**Form submit — the exact \`no-misused-promises\` + \`jsx-no-bind\` idiom.** react-hook-form's \`handleSubmit(onValid)\` returns a PROMISE-returning function, so putting it in JSX — \`<form onSubmit={form.handleSubmit(onValid)}>\` or an inline \`onSubmit={(e) => form.handleSubmit(onValid)(e)}\` — is REJECTED by BOTH \`@typescript-eslint/no-misused-promises\` ("Promise-returning function provided to attribute where a void return was expected") AND \`jsx-no-bind\`. Do NOT try to patch it by typing the event \`BaseSyntheticEvent\` inline — the fix is STRUCTURAL: the custom hook owns a stable, VOID-returning submit handler and the form JSX passes the bare reference. The scaffold's \`apps/ui/src/features/auth/components/LoginPage/LoginPage.hooks.ts\` shows this STRUCTURE (a \`useCallback\` submit that calls \`void handleSubmit(onValid)(event)\`) — but do NOT copy it verbatim: LoginPage uses \`mutateAsync\` inside a \`try/catch\` because it needs the result to navigate. A plain CRUD form needs no result, so use fire-and-forget \`mutate\` (below) and NO try/catch — never \`mutateAsync\` here.
 \`\`\`ts
 // in <Component>.hooks.ts (a custom hook — NEVER call useCallback in the component body):
 const onSubmit = useCallback(
@@ -220,7 +220,7 @@ const onSubmit = useCallback(
 );
 const submit = useCallback(
   (event: React.BaseSyntheticEvent): void => {
-    void handleSubmit(onSubmit)(event); // onSubmit can't reject, so \`void\` is safe here
+    void handleSubmit(onSubmit)(event); // \`void\` = the eslint-sanctioned no-misused-promises fix
   },
   [handleSubmit, onSubmit]
 );
@@ -230,7 +230,7 @@ const submit = useCallback(
 // in the form .tsx — a BARE reference, no arrow, no handleSubmit in JSX:
 <form onSubmit={view.submit}>
 \`\`\`
-\`void handleSubmit(onSubmit)(event)\` makes \`submit\` return \`void\` (satisfies \`no-misused-promises\`), and \`submit\` is a stable \`useCallback\` reference (satisfies \`jsx-no-bind\`). NEVER call \`handleSubmit\` inside JSX.
+\`void handleSubmit(onSubmit)(event)\` makes \`submit\` return \`void\` (the \`void\` operator is exactly typescript-eslint's sanctioned fix for \`no-misused-promises\` on a form's \`onSubmit\`), and \`submit\` is a stable \`useCallback\` reference (satisfies \`jsx-no-bind\`). Keep the onValid handler (\`onSubmit\`) itself non-rejecting — use \`mutate\` as above so mutation failures route to the mutation's \`onError\`, not into this discarded promise. NEVER call \`handleSubmit\` inside JSX.
 
 **Extract computed lists — the exact \`no-jsx-computation\` idiom.** The rule rejects ANY array method (\`.map\`/\`.filter\`/\`.reduce\`/\`.sort\`/\`.find\`) or arithmetic (\`+\`/\`-\`/\`*\`/\`/\`) called DIRECTLY inside JSX braces — e.g. \`<tbody>{items.map(…)}</tbody>\` or \`<select>{companies.map(…)}</select>\` → "Extract this computation into a hook or helper function". Compute EVERY list/derived value as a \`const\` in the component body, then reference the BARE identifier in JSX:
 \`\`\`tsx

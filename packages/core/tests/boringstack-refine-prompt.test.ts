@@ -666,6 +666,11 @@ describe("refinePrompt", () => {
     // which would reject and make the `void` wrapper discard a rejected promise.
     expect(prompt).toContain("createMutation.mutate(input)");
     expect(prompt).toContain("unhandled rejection");
+    // Must steer AWAY from copying LoginPage verbatim (it uses mutateAsync+try/catch to
+    // navigate on the result) so the model doesn't paste mutateAsync into the void wrapper.
+    expect(prompt).toContain("never `mutateAsync` here");
+    // Must NOT make the false blanket claim that the void wrapper can't leak a rejection.
+    expect(prompt).not.toContain("can't reject, so");
     // Points at the scaffold's green reference form hook.
     expect(prompt).toContain(
       "apps/ui/src/features/auth/components/LoginPage/LoginPage.hooks.ts"
