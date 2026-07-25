@@ -1281,7 +1281,7 @@ describe("e2eParkReason — the pure reason composer", () => {
 });
 
 describe("baseline persistence — resume-safe differential grading", () => {
-  test("saveBaseline → loadBaseline round-trips the signature set", async () => {
+  test("saveBaseline → loadBaseline round-trips passed + the signature set", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-"));
 
     try {
@@ -1290,11 +1290,12 @@ describe("baseline persistence — resume-safe differential grading", () => {
         "failure:b.ts:2:react-hooks%2Fexhaustive-deps:msg2",
       ]);
 
-      await saveBaseline(dir, sigs);
+      await saveBaseline(dir, { passed: false, signatures: sigs });
       const loaded = await loadBaseline(dir);
 
       expect(loaded).not.toBeNull();
-      expect([...(loaded ?? [])].sort()).toEqual([...sigs].sort());
+      expect(loaded?.passed).toBe(false);
+      expect([...(loaded?.signatures ?? [])].sort()).toEqual([...sigs].sort());
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1310,19 +1311,56 @@ describe("baseline persistence — resume-safe differential grading", () => {
     }
   });
 
-  test("a GREEN pristine baseline persists as an EMPTY set, NOT null (so a resume REUSES it, not re-captures)", async () => {
+  test("a GREEN pristine baseline persists as passed:true + empty set, NOT null (so a resume REUSES it)", async () => {
     // The load-bearing case: build55's pristine scaffold was GREEN → empty baseline. It must
-    // round-trip as an empty Set (present), so a resume reuses it and does NOT re-capture from
-    // the contaminated tree. If it round-tripped as null, the resume would re-capture → the
-    // false-green this fix prevents.
+    // round-trip as PRESENT (passed:true, empty set), so a resume reuses it and does NOT
+    // re-capture from the contaminated tree. If it round-tripped as null, the resume would
+    // re-capture → the false-green this fix prevents.
     const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-green-"));
 
     try {
-      await saveBaseline(dir, new Set<string>());
+      await saveBaseline(dir, { passed: true, signatures: new Set<string>() });
       const loaded = await loadBaseline(dir);
 
       expect(loaded).not.toBeNull();
-      expect(loaded?.size).toBe(0);
+      expect(loaded?.passed).toBe(true);
+      expect(loaded?.signatures.size).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a RED-but-unparseable baseline persists passed:FALSE + empty set — never re-inferred GREEN from size", async () => {
+    // The critical bug the panel caught: a RED pristine gate whose output did NOT parse into
+    // known signatures is ALSO `signatures: []`. The passed bit MUST be stored separately, or a
+    // resume with `size === 0` would announce it GREEN — the exact false-green this file fixes.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-redunparsed-"));
+
+    try {
+      await saveBaseline(dir, { passed: false, signatures: new Set<string>() });
+      const loaded = await loadBaseline(dir);
+
+      expect(loaded).not.toBeNull();
+      expect(loaded?.passed).toBe(false);
+      expect(loaded?.signatures.size).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("loadBaseline returns null on a wrong-shape file (e.g. the OLD bare-array format)", async () => {
+    // A bare array (no passed bit) must be rejected → re-capture, not silently treated as a
+    // valid passed:false/true baseline. Guards against loading a pre-format-change file.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-shape-"));
+
+    try {
+      await mkdir(join(dir, ".tsforge/greenfield"), { recursive: true });
+      await writeFile(
+        join(dir, ".tsforge/greenfield/baseline.json"),
+        JSON.stringify(["failure:a.ts:1:rule:msg"])
+      );
+
+      expect(await loadBaseline(dir)).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1339,6 +1377,76 @@ describe("baseline persistence — resume-safe differential grading", () => {
       );
 
       expect(await loadBaseline(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("runBoringstackBuild persists on a FRESH build and REUSES on resume (not re-captured from the contaminated tree)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-e2e-"));
+
+    try {
+      const plan: IProductPlan = {
+        product: "A simple app",
+        slices: [
+          {
+            entity: {
+              id: "Invoice",
+              desc: "A billable unit",
+              fields: [{ name: "amount", type: "number" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list"],
+              action: "create invoices",
+              shows: ["amount"],
+              nav: "Invoices",
+            },
+            verification: {
+              mustRemainTrue: ["auth required"],
+              mustNotHappen: ["unauthenticated access"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      // FRESH build: the baseline gate passes (createExec(0)) → a passed:true baseline is
+      // captured and PERSISTED.
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec: createExec(0),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      const afterFresh = await loadBaseline(dir);
+
+      expect(afterFresh).not.toBeNull();
+      expect(afterFresh?.passed).toBe(true);
+
+      // RESUME (greenfield state now exists): even though the gate now FAILS (createExec(1)),
+      // the persisted GREEN baseline is REUSED — NOT re-captured from the non-pristine tree —
+      // so it stays passed:true. A re-capture would have overwritten it to passed:false.
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec: createExec(1),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      const afterResume = await loadBaseline(dir);
+
+      expect(afterResume?.passed).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
