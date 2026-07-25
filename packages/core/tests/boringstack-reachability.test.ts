@@ -46,6 +46,43 @@ describe("checkFeatureReachable", () => {
     expect(r.problems.join("\n")).toMatch(/API route missing/u);
   });
 
+  test("a substring-only API match is NOT accepted (no false green off a sibling slice)", () => {
+    // `count`'s own `countRoutes` is absent, but a prior slice registered
+    // `accountRoutes` — which CONTAINS "countRoutes". A bare `.includes` would wrongly
+    // pass `count` as reachable; the whole-identifier check must still flag it.
+    const r = checkFeatureReachable("Count", {
+      uiRoutes:
+        'const CountPage = lazy(() => import("@/features/count/components/CountPage/CountPage"));',
+      apiRoutes: "export const routes = {\n  account: accountRoutes,\n};",
+      localeJsons: [
+        JSON.stringify({
+          features: { count: { title: "Counts", empty: "None." } },
+        }),
+      ],
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.problems.join("\n")).toMatch(/API route missing/u);
+  });
+
+  test("a whole-identifier API match is accepted even next to a superstring sibling", () => {
+    // Both `count` and `account` are registered: `count` must be seen as reachable
+    // (its own whole-word `countRoutes` is present), not masked by `accountRoutes`.
+    const r = checkFeatureReachable("Count", {
+      uiRoutes:
+        'const CountPage = lazy(() => import("@/features/count/components/CountPage/CountPage"));',
+      apiRoutes:
+        "export const routes = {\n  account: accountRoutes,\n  count: countRoutes,\n};",
+      localeJsons: [
+        JSON.stringify({
+          features: { count: { title: "Counts", empty: "None." } },
+        }),
+      ],
+    });
+
+    expect(r.ok).toBe(true);
+  });
+
   test("flags missing i18n keys (page would show raw keys)", () => {
     const r = checkFeatureReachable("Bookmark", {
       ...wiredInputs(),
