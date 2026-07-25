@@ -391,6 +391,90 @@ describe("runGreenfield: outer loop", () => {
     expect(parkMsgs.every((m) => !m.includes("ladder exhausted"))).toBe(true);
   });
 
+  test("a park persists its handoff errors as lastError (revisit isn't blind)", async () => {
+    // Regression guard: lastError was NEVER set on a park, so refinePrompt's "PREVIOUS attempt
+    // FAILED — FIX THESE ERRORS" block never fired on a revisit and the model rebuilt blind.
+    const s = state("a");
+    const deps: IGreenfieldDeps = {
+      implement: async () => ({
+        done: false,
+        handoff: {
+          block: "b",
+          rungHistory: [],
+          errors: [
+            "src/x.test.ts:1  require-await",
+            "src/y.ts:2  no-unused-vars",
+          ],
+          ask: "help",
+          resumable: true,
+          resume: { triedLevers: [] },
+        },
+      }),
+    };
+
+    await runGreenfield(dir, s, deps);
+
+    const onDisk = await loadState(dir);
+    const parked = onDisk?.features.find((f) => f.id === "a");
+
+    expect(parked?.lastError).toContain("require-await");
+    expect(parked?.lastError).toContain("no-unused-vars");
+  });
+
+  test("the revisit's implement RECEIVES the parked feature's lastError", async () => {
+    // The round-trip that matters: attempt 1 parks with errors → the revisit (attempt 2) sees
+    // them on `feature.lastError` so refinePrompt can lead with the specific failures.
+    const s = state("a");
+    const seenLastErrors: (string | undefined)[] = [];
+    let call = 0;
+    const deps: IGreenfieldDeps = {
+      implement: async (f) => {
+        seenLastErrors.push(f.lastError);
+        call += 1;
+
+        if (call === 1) {
+          return {
+            done: false,
+            handoff: {
+              block: "b",
+              rungHistory: [],
+              errors: ["ERR_LINE_MARKER"],
+              ask: "help",
+              resumable: true,
+              resume: { triedLevers: [] },
+            },
+          };
+        }
+
+        return { done: true };
+      },
+    };
+
+    await runGreenfield(dir, s, deps);
+
+    expect(seenLastErrors[0]).toBeUndefined();
+    expect(seenLastErrors[1]).toContain("ERR_LINE_MARKER");
+  });
+
+  test("a park with NO handoff falls back to the reason as lastError", async () => {
+    const s = state("a");
+    const deps: IGreenfieldDeps = {
+      implement: async () => ({
+        done: false,
+        reason: "fast gate not green after the escalation ladder",
+      }),
+    };
+
+    await runGreenfield(dir, s, deps);
+
+    const onDisk = await loadState(dir);
+    const parked = onDisk?.features.find((f) => f.id === "a");
+
+    expect(parked?.lastError).toBe(
+      "fast gate not green after the escalation ladder"
+    );
+  });
+
   test("parked + handoff round-trip through saveState + loadState", async () => {
     const s = state("a");
 

@@ -225,6 +225,22 @@ async function attemptFeature(
       feature.handoff = result.handoff;
     }
 
+    // Carry the failing errors into the revisit. refinePrompt leads the next attempt with
+    // `feature.lastError` ("⚠️ PREVIOUS attempt FAILED — FIX THESE ERRORS FIRST"), but nothing
+    // ever set lastError on a park, so every revisit rebuilt BLIND and re-parked on the same
+    // errors. Prefer the handoff's structured error list (the specific failing rules/files);
+    // fall back to the reason summary when the park carried no handoff. saveState (in the
+    // `finally`) serializes it, so the revisit's implement reads it back.
+    const handoffErrors = result.handoff?.errors;
+    const errorText =
+      handoffErrors !== undefined && handoffErrors.length > 0
+        ? handoffErrors.join("\n")
+        : result.reason;
+
+    if (errorText !== undefined && errorText.length > 0) {
+      feature.lastError = errorText;
+    }
+
     // Every non-infra done:false from the boringstack impl carries a reason (fast-gate
     // exhaustion / e2e failure / misconfig). The fallback is deliberately NEUTRAL, never a
     // fabricated "ladder exhausted": if a future impl returns done:false without a reason,
