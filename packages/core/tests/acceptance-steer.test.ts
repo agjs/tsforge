@@ -245,3 +245,57 @@ test("acceptanceSteer: CREATE step message mentions form submission", () => {
   expect(steer).toContain("Issue");
   expect(steer).toContain("create");
 });
+
+test("acceptanceSteer: form-didn't-close failure steers at closing the form on success, NOT at opening/persistence", () => {
+  const entity = makeEntity("Bookmark");
+
+  // Real Playwright signature when the create form submits but never hides: the
+  // failure is classified "create" (the hidden-assert lives in the create test),
+  // but the true fix is closing the form on success — not opening it or fixing persistence.
+  const outcome: IAcceptanceOutcome = {
+    ok: false,
+    results: [
+      { entity: "Bookmark", step: "nav", ok: true, detail: "" },
+      { entity: "Bookmark", step: "list", ok: true, detail: "" },
+      {
+        entity: "Bookmark",
+        step: "create",
+        ok: false,
+        detail:
+          'TimeoutError: locator.waitFor: Timeout 10000ms exceeded.\nCall log:\n  - waiting for getByTestId(\'bookmark-form\') to be hidden\n    24 × locator resolved to visible <form novalidate="" data-testid="bookmark-form">…</form>',
+      },
+    ],
+  };
+
+  const steer = acceptanceSteer(entity, outcome);
+
+  expect(steer).toContain("Bookmark");
+  expect(steer).toContain("did not close");
+  expect(steer).toContain("onSuccess");
+  // Must NOT emit the misleading generic create-step message that tells the model the
+  // form failed to OPEN — that opposite steer is the whole bug being fixed here.
+  expect(steer).not.toContain("was not visible");
+});
+
+test("acceptanceSteer: a genuine form-didn't-OPEN create failure still uses the generic create message", () => {
+  const entity = makeEntity("Bookmark");
+
+  // No "to be hidden"/"resolved to visible" signature → NOT a form-close failure;
+  // the detail-aware branch must fall through to the generic create-step message.
+  const outcome: IAcceptanceOutcome = {
+    ok: false,
+    results: [
+      {
+        entity: "Bookmark",
+        step: "create",
+        ok: false,
+        detail: "getByTestId('bookmark-create') not found",
+      },
+    ],
+  };
+
+  const steer = acceptanceSteer(entity, outcome);
+
+  expect(steer).toContain("was not visible");
+  expect(steer).not.toContain("did not close");
+});
