@@ -3,7 +3,9 @@ import type { IProductPlan } from "../src/loop/planning/plan-types";
 import {
   planToAcceptanceSpec,
   testIdsFor,
+  fieldIsMentioned,
 } from "../src/loop/acceptance/acceptance-spec";
+import type { IAcceptField } from "../src/loop/acceptance/acceptance.types";
 
 const plan: IProductPlan = {
   product: "CRM",
@@ -451,4 +453,33 @@ test("FIX 7: mustNotHappen does not duplicate negatives when field already has o
 
   // Should NOT have duplicates — only ONE negative for name=""
   expect(nameEmptyNegatives.length).toBe(1);
+});
+
+function acceptField(name: string): IAcceptField {
+  return { name, type: "string", optional: false, valid: "x", invalid: [] };
+}
+
+test("fieldIsMentioned matches on WORD BOUNDARIES, not raw substring", () => {
+  // Positive: the field name (or its humanized form) appears as a whole word.
+  expect(
+    fieldIsMentioned(acceptField("email"), "a valid email is required")
+  ).toBe(true);
+  expect(fieldIsMentioned(acceptField("name"), "name must be unique")).toBe(
+    true
+  );
+  // Humanized: camelCase field, spaced constraint.
+  expect(
+    fieldIsMentioned(acceptField("firstName"), "the first name is required")
+  ).toBe(true);
+
+  // Negative (the bug): a short field name must NOT match a longer word that contains it —
+  // `id` inside `valid`, `age` inside `manage` — which would fabricate a spurious negative.
+  expect(fieldIsMentioned(acceptField("id"), "must be a valid email")).toBe(
+    false
+  );
+  expect(fieldIsMentioned(acceptField("age"), "manage the records")).toBe(
+    false
+  );
+  // And it isn't tripped by an unrelated word either.
+  expect(fieldIsMentioned(acceptField("name"), "the total amount")).toBe(false);
 });
