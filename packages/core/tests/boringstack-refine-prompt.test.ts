@@ -731,8 +731,12 @@ describe("refinePrompt", () => {
     // Teaches the void-operator wrap that makes the handler return void.
     expect(prompt).toContain("void handleSubmit(onSubmit)(event)");
     // The submit handler uses fire-and-forget `mutate` (errors → onError), NOT `mutateAsync`
-    // which would reject and make the `void` wrapper discard a rejected promise.
-    expect(prompt).toContain("createMutation.mutate(input)");
+    // which would reject and make the `void` wrapper discard a rejected promise — AND it
+    // closes the form on success via a per-call onSuccess (the deterministic acceptance wall
+    // both A/B control builds parked on: form submits but never hides).
+    expect(prompt).toContain(
+      "createMutation.mutate(input, { onSuccess: closeForm })"
+    );
     expect(prompt).toContain("unhandled rejection");
     // Must steer AWAY from copying LoginPage verbatim (it uses mutateAsync+try/catch to
     // navigate on the result) so the model doesn't paste mutateAsync into the void wrapper.
@@ -750,10 +754,20 @@ describe("refinePrompt", () => {
     // that caused build53's rename churn.
     expect(prompt).toContain("CompanyCreateInput");
     expect(prompt).not.toContain("ICompanyCreateInput");
-    // The useCallback depends on the STABLE `mutate`, not the unstable mutation result object,
-    // so the handler stays referentially stable (avoids TanStack's no-unstable-deps).
-    expect(prompt).toContain("[createMutation.mutate]");
+    // The useCallback depends on the STABLE `mutate` (+ the stable `closeForm`), not the
+    // unstable mutation result object, so the handler stays referentially stable
+    // (avoids TanStack's no-unstable-deps).
+    expect(prompt).toContain("[createMutation.mutate, closeForm]");
     expect(prompt).toContain("no-unstable-deps");
+    // Close-on-success is taught as a REQUIRED behaviour, not optional polish — this is the
+    // fix for the form-doesn't-hide acceptance wall. Lock the idiom's key pieces.
+    expect(prompt).toContain("Close the create/edit form on SUCCESS");
+    expect(prompt).toContain("waits for the form to DISAPPEAR");
+    expect(prompt).toContain("closeForm");
+    expect(prompt).toContain("openCreate");
+    expect(prompt).toContain("view.showForm");
+    // Must NOT teach optimistic pre-resolve closing (would hide the form on a failed create).
+    expect(prompt).toContain("close it ONLY in `onSuccess`");
   });
 
   it("warns that every NEW component needs the FULL sibling set → don't extract sub-components", () => {
