@@ -166,3 +166,17 @@ export function slicesToFeatures(slices: readonly ISlice[]): IFeature[] {
     attempts: 0,
   }));
 }
+
+/**
+ * Entity ids in the plan that are NOT valid PascalCase identifiers. The build turns
+ * each id directly into generated file paths (`features/<camel>/…`), the `<camel>Routes`
+ * mount identifier, i18n keys, and test ids — all of which require an identifier-safe
+ * token. The planner is only PROMPTED for PascalCase and the plan validator checks
+ * merely non-empty (`plan-store.ts isEntitySpec`), so a malformed id like `"Purchase Order"`
+ * slips through and breaks generation opaquely downstream. Returned (not thrown) so the
+ * caller can fail fast with one clear message. Reuses the same `isResourceId` contract the
+ * resource-planner path already enforces. Pure — unit-tested.
+ */
+export function invalidEntityIds(slices: readonly ISlice[]): string[] {
+  return slices.map((s) => s.entity.id).filter((id) => !isResourceId(id));
+}

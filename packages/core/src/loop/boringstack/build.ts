@@ -19,7 +19,7 @@ import { runGreenfield } from "../greenfield/run";
 import { greenfieldDir, hasState } from "../greenfield/state";
 import { composeBoringstackGate } from "./gate-stages";
 import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
-import { slicesToFeatures } from "./plan-resources";
+import { slicesToFeatures, invalidEntityIds } from "./plan-resources";
 import { toCamelCase } from "./case";
 import { loadApprovedPlan } from "../planning/plan-store";
 import type { ISlice, IProductPlan } from "../planning/plan-types";
@@ -911,6 +911,22 @@ export async function runBoringstackBuild(opts: {
 
   if (approved === null) {
     return { status: "needs-plan", features: [] };
+  }
+
+  // Fail fast on a malformed entity id BEFORE any generation: each id becomes file
+  // paths, the `<camel>Routes` mount identifier, i18n keys, and test ids, so a
+  // non-identifier id (e.g. "Purchase Order") otherwise breaks generation deep
+  // downstream with an opaque error. The planner is only prompted for PascalCase and
+  // the plan validator checks merely non-empty, so enforce the identifier contract here.
+  const badIds = invalidEntityIds(approved.slices);
+
+  if (badIds.length > 0) {
+    throw new Error(
+      `Plan has invalid entity id(s): ${badIds.map((id) => JSON.stringify(id)).join(", ")}. ` +
+        `Each entity id must be a PascalCase identifier — letter-first, alphanumeric only ` +
+        `(e.g. "Invoice", "PurchaseOrder") — because it becomes generated file paths, the ` +
+        `<id>Routes mount identifier, i18n keys, and test ids. Fix the plan's entity id(s) and retry.`
+    );
   }
 
   // Derive features from the plan's slices
