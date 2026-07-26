@@ -13,6 +13,12 @@ export interface IBoringstackHostDeps {
   maxTurns: number;
   report: Reporter;
   editGuard: EditGuard;
+  /** Sampling temperature for the build session. Omitted → the session default
+   *  (DEFAULT_TEMPERATURE, 0.2). DeepSeek's thinking mode wants ~1.0 to avoid CoT
+   *  collapse / repetitive reasoning loops; exposed so the headless driver can set it
+   *  (e.g. from TSFORGE_BUILD_TEMPERATURE) for the temperature A/B on the near-green
+   *  rotation without touching the loop. */
+  temperature?: number;
 }
 
 /**
@@ -32,6 +38,9 @@ export function createBoringstackHostSession(
     contextWindow: deps.contextWindow,
     maxTurns: deps.maxTurns,
     ...BORINGSTACK_BUILD_SESSION,
+    ...(deps.temperature === undefined
+      ? {}
+      : { temperature: deps.temperature }),
     editGuard: deps.editGuard,
     report: deps.report,
   });
