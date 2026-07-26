@@ -640,7 +640,13 @@ test("rollbackNearGreen SHOWS the model the new errors its reverted change intro
   try {
     await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
     const ctx: ILoopCtx = {
-      task: { id: "t", intent: "test", accept: "", files: ["**/*"], context: [] },
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["**/*"],
+        context: [],
+      },
       cwd: dir,
       tsService: null,
       report: () => undefined,
@@ -681,11 +687,20 @@ test("rollbackNearGreen SHOWS the model the new errors its reverted change intro
     // The spray still carries the original cp error PLUS two it just introduced.
     await rollbackNearGreen(ctx, state, 5, [
       { key: "cp1", message: "the one remaining testid error" },
-      { key: "n1", message: "JSX props should not use arrow functions", rule: "react/jsx-no-bind" },
-      { key: "n2", message: "unsafe argument of type any", rule: "no-unsafe-argument" },
+      {
+        key: "n1",
+        message: "JSX props should not use arrow functions",
+        rule: "react/jsx-no-bind",
+      },
+      {
+        key: "n2",
+        message: "unsafe argument of type any",
+        rule: "no-unsafe-argument",
+      },
     ]);
 
     const msg = ctx.messages.at(-1)?.content ?? "";
+
     // The remaining error is still shown…
     expect(msg).toContain("the one remaining testid error");
     // …AND the model is told exactly what it broke (the delta vs the checkpoint), framed as introduced.
@@ -703,7 +718,13 @@ test("rollbackNearGreen with NO spray errors passed omits the 'introduced' secti
   try {
     await Bun.write(join(dir, "feature.ts"), "export const GOOD = 1;\n");
     const ctx: ILoopCtx = {
-      task: { id: "t", intent: "test", accept: "", files: ["**/*"], context: [] },
+      task: {
+        id: "t",
+        intent: "test",
+        accept: "",
+        files: ["**/*"],
+        context: [],
+      },
       cwd: dir,
       tsService: null,
       report: () => undefined,
@@ -744,6 +765,7 @@ test("rollbackNearGreen with NO spray errors passed omits the 'introduced' secti
     await rollbackNearGreen(ctx, state, 5);
 
     const msg = ctx.messages.at(-1)?.content ?? "";
+
     expect(msg).toContain("the one remaining error");
     expect(msg).not.toContain("INTRODUCED");
   } finally {
