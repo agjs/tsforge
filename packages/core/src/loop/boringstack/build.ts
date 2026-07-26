@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   IGreenfieldDeps,
@@ -16,6 +16,7 @@ import { extractFailures } from "./extract-failures";
 import { resolveStuckFile } from "../expert-handoff";
 import { refinePrompt } from "./refine-prompt";
 import { runGreenfield } from "../greenfield/run";
+import { greenfieldDir, hasState } from "../greenfield/state";
 import { composeBoringstackGate } from "./gate-stages";
 import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 import { slicesToFeatures } from "./plan-resources";
@@ -706,6 +707,71 @@ export function partitionBaseline(
   return { infra, baseline };
 }
 
+/** The persisted pristine baseline: the differential gate's reference. `signatures` are
+ *  the failure signatures already present on the PRISTINE scaffold, which feature grading
+ *  EXCLUDES (the model is judged only on failures it introduces). `passed` is whether the
+ *  pristine gate itself was GREEN — persisted SEPARATELY, never inferred from an empty
+ *  signature set: a RED gate whose output didn't parse into known signatures is ALSO
+ *  `signatures: []` but `passed: false`, and must NOT be re-announced GREEN on resume. */
+export interface IPersistedBaseline {
+  readonly passed: boolean;
+  readonly signatures: ReadonlySet<string>;
+}
+
+/** Where the pristine-scaffold baseline is persisted — beside the greenfield checklist,
+ *  so a fresh build's reset (which clears `.tsforge/greenfield`) also drops it, while a
+ *  RESUME keeps it. */
+function baselinePath(cwd: string): string {
+  return join(greenfieldDir(cwd), "baseline.json");
+}
+
+/** Load the persisted pristine baseline, or null if none exists / it's unreadable / it's
+ *  the wrong shape — never trust a corrupt file. What the caller does with null depends on
+ *  the tree: a genuine FRESH build (no greenfield checklist) re-captures + persists; a RESUME
+ *  (checklist present) grades STRICT and does NOT re-capture (the tree is no longer pristine).
+ *  Requires the `{ passed, signatures }` object shape with a string[] `signatures`; else null. */
+export async function loadBaseline(
+  cwd: string
+): Promise<IPersistedBaseline | null> {
+  try {
+    const raw = await readFile(baselinePath(cwd), "utf-8");
+    const parsed: unknown = JSON.parse(raw);
+
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("passed" in parsed) ||
+      !("signatures" in parsed) ||
+      typeof parsed.passed !== "boolean" ||
+      !Array.isArray(parsed.signatures) ||
+      !parsed.signatures.every((s) => typeof s === "string")
+    ) {
+      return null;
+    }
+
+    return { passed: parsed.passed, signatures: new Set(parsed.signatures) };
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the pristine baseline so a later RESUME reuses it instead of re-capturing.
+ *  Re-capturing on resume is the bug this fixes: the resume tree is NON-pristine (it holds
+ *  the in-progress feature's code), so a fresh capture sweeps that feature's OWN failures
+ *  into the baseline and EXCLUDES them from grading — a false-green (feature verified while
+ *  it still fails its own gate). Persisting the FIRST (pristine) capture — BOTH its passed
+ *  bit and its signatures — and reusing it keeps grading honest across resumes. */
+export async function saveBaseline(
+  cwd: string,
+  baseline: IPersistedBaseline
+): Promise<void> {
+  await mkdir(greenfieldDir(cwd), { recursive: true });
+  await writeFile(
+    baselinePath(cwd),
+    `${JSON.stringify({ passed: baseline.passed, signatures: [...baseline.signatures] }, null, 2)}\n`
+  );
+}
+
 /**
  * Run the final acceptance gate and chain verification after all features pass the fast gate.
  * Note: approved is guaranteed to be non-null (checked by caller).
@@ -859,21 +925,27 @@ export async function runBoringstackBuild(opts: {
     features,
   };
 
-  // Capture the BASELINE gate on the pristine scaffold (before any resource is
-  // generated) so feature grading is differential — the model is judged only on
-  // failures IT introduces, never on pre-existing base-suite/scaffold defects it's
-  // frozen out of. A red baseline is surfaced LOUDLY (not silently tolerated): it
-  // means the scaffold itself doesn't pass its own gate and should be fixed.
+  // Capture the BASELINE gate for differential feature grading — the model is judged only
+  // on failures IT introduces, never on pre-existing scaffold defects it's frozen out of.
+  // The baseline MUST come from the PRISTINE tree; it is captured ONCE on a fresh build and
+  // PERSISTED (with its pass/fail bit), and a RESUME reuses it. Re-capturing on a resume
+  // runs the gate on the ALREADY-MODIFIED tree and sweeps the in-progress feature's OWN
+  // failures into the baseline (then EXCLUDES them from grading) — a false-green where a
+  // feature "verifies" while still failing its own gate (live-observed). The gate STILL runs
+  // every invocation — it is the fail-closed needs-infra check below — but on a resume its
+  // captured signatures are DISCARDED in favour of the persisted ones.
   onEvent?.({
     kind: "tool",
     task: "boringstack",
-    message: "capturing baseline gate on the pristine scaffold…",
+    message: "running the baseline gate (infra check + pristine capture)…",
   });
 
   const baseRun = await runBoringstackGate(cwd, exec);
-  const { infra, baseline } = baseRun.passed
+  const fresh: IBaselinePartition = baseRun.passed
     ? { infra: [], baseline: new Set<string>() }
     : partitionBaseline(extractFailures(baseRun.output, cwd));
+
+  const infra = fresh.infra;
 
   // FAIL CLOSED on an unmet infra precondition. If the pristine gate can't reach the
   // API's OpenAPI spec, the UI's generate:api will fail EVERY cycle — driving the
@@ -898,18 +970,90 @@ export async function runBoringstackBuild(opts: {
     return { status: "needs-infra", features: [], infra: message };
   }
 
-  const report = describeBaseline(baseRun.passed, baseline.size);
+  // Choose the GRADING baseline (infra is healthy here — the fail-closed above returned):
+  //  - a persisted baseline exists → REUSE it (the pristine capture; carries its own passed
+  //    bit — NEVER inferred from an empty set, which would re-announce a RED-unparseable
+  //    pristine gate as GREEN).
+  //  - else a genuine FRESH start (no greenfield checklist yet ⇒ pristine tree) → use THIS
+  //    capture and persist it.
+  //  - else a RESUME with no persisted baseline (a build started before this shipped, or a
+  //    lost file) → the tree is NON-pristine, so this capture is CONTAMINATED. Grade STRICTLY
+  //    (empty baseline — every failure counts, only ever over-strict, never a false-green)
+  //    and warn; do NOT freeze the contaminated capture in.
+  const persisted = await loadBaseline(cwd);
+  // A resume is ANY prior greenfield checklist ON DISK — detected by FILE PRESENCE
+  // (`hasState`), NOT by `loadState !== null`. `loadState` returns null for a missing
+  // file AND for a present-but-corrupt one, so using it would treat a corrupt-state
+  // resume (whose tree WAS already built into) as a fresh start and persist a
+  // CONTAMINATED baseline (a false-green). build.ts never writes the checklist before
+  // this point, so a genuine fresh build has no file here; mere PRESENCE (even an empty
+  // or unparseable checklist) means the tree is no longer pristine. Erring toward
+  // "resume" is only ever over-strict, never a false-green.
+  const isResume = await hasState(cwd);
 
-  onEvent?.({
-    kind: report.kind,
-    task: "boringstack",
-    message: report.message,
-  });
+  let baseline: ReadonlySet<string>;
+  let baselinePassed: boolean;
+  // Whether THIS invocation is on the pristine tree (the fresh capture). Only then may we
+  // trust the tree for the differential command baseline AND the meta-rule baseline; on a
+  // resume both are reused-or-strict, never re-captured from the contaminated tree.
+  let isFreshCapture = false;
+  // The RED-unparseable / GREEN / RED-with-signatures report describes a PRISTINE capture.
+  // The strict fallback below has no pristine result (missing baseline.json on a non-pristine
+  // resume), so it must NOT emit that report — it emits its own warning instead.
+  let hasPristineReport = true;
+
+  if (persisted !== null) {
+    baseline = persisted.signatures;
+    baselinePassed = persisted.passed;
+    onEvent?.({
+      kind: "tool",
+      task: "boringstack",
+      message: `reusing the persisted pristine baseline (${String(persisted.signatures.size)} signature(s), ${persisted.passed ? "GREEN" : "RED"}) — resume, NOT re-captured`,
+    });
+  } else if (!isResume) {
+    baseline = fresh.baseline;
+    baselinePassed = baseRun.passed;
+    isFreshCapture = true;
+    await saveBaseline(cwd, {
+      passed: baseRun.passed,
+      signatures: fresh.baseline,
+    });
+  } else {
+    baseline = new Set<string>();
+    baselinePassed = false;
+    hasPristineReport = false;
+    onEvent?.({
+      kind: "stuck",
+      task: "boringstack",
+      message:
+        "⚠ resuming without a persisted pristine baseline (older build or lost baseline.json) — " +
+        "the tree is no longer pristine, so grading falls back to STRICT (nothing excluded). " +
+        "Reset + rebuild to restore a clean differential baseline.",
+    });
+  }
+
+  if (hasPristineReport) {
+    const report = describeBaseline(baselinePassed, baseline.size);
+
+    onEvent?.({
+      kind: report.kind,
+      task: "boringstack",
+      message: report.message,
+    });
+  }
 
   // Capture the PRISTINE meta-rule baseline too (workflow perms, lockfile, etc. that
-  // the model is frozen out of). The command baseline above only covers the command
-  // gate; meta violations are subtracted separately, via the session, every cycle.
-  host.captureMetaBaseline();
+  // the model is frozen out of) — but ONLY on a fresh capture, for the SAME reason the
+  // command baseline is only captured fresh. `captureMetaBaseline` reads the CURRENT
+  // tree; on a resume that tree is contaminated, so re-capturing would sweep meta
+  // violations introduced before the interruption into the baseline and EXCLUDE them
+  // from grading — the same contaminated-resume false-green, for the meta gate. On a
+  // resume the session's meta-baseline stays unset ⇒ STRICT (nothing subtracted), which
+  // is the safe direction and makes the strict-fallback warning above truthful. (Meta
+  // violations on a clean scaffold are empty anyway, so the common case is unchanged.)
+  if (isFreshCapture) {
+    host.captureMetaBaseline();
+  }
 
   // Create a lookup function that maps feature ids to their plan slices
   const sliceFor = (id: string): ISlice | undefined =>

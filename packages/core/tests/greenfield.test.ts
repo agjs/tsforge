@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   runGreenfield,
   loadState,
+  hasState,
   saveState,
   renderProgress,
   greenfieldDir,
@@ -56,6 +57,25 @@ describe("greenfield state", () => {
     await mkdir(greenfieldDir(dir), { recursive: true });
     await writeFile(join(greenfieldDir(dir), "features.json"), "{not json");
     expect(await loadState(dir)).toBeNull();
+  });
+
+  test("hasState keys off FILE PRESENCE, not parseability — so a corrupt checklist is still a resume", async () => {
+    // The distinction loadState can't make: a caller deciding "fresh vs resume" must use
+    // presence, because loadState collapses missing AND corrupt to null. hasState stays true
+    // for a present-but-unparseable file, so a corrupt-state resume is never mistaken for a
+    // pristine fresh start (which would let it re-capture a contaminated baseline).
+    expect(await hasState(dir)).toBe(false);
+
+    await mkdir(greenfieldDir(dir), { recursive: true });
+    await writeFile(join(greenfieldDir(dir), "features.json"), "{not json");
+
+    expect(await hasState(dir)).toBe(true);
+    // loadState still can't read it — the two diverge exactly here.
+    expect(await loadState(dir)).toBeNull();
+
+    // An empty but well-formed checklist is also a resume.
+    await saveState(dir, { goal: "g", features: [] });
+    expect(await hasState(dir)).toBe(true);
   });
 
   test("loadState drops malformed feature entries without crashing", async () => {
