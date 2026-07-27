@@ -95,6 +95,28 @@ describe("gatherChange", () => {
     }
   });
 
+  test("reuses a provided validateSummary instead of running validate again (validate runs once per invocation)", async () => {
+    let validateCalls = 0;
+    const deps: IGatherDeps = {
+      git: git({
+        "diff --name-only": "x.ts",
+        diff: "diff --git a/x b/x\n+code",
+      }),
+      validate: async () => {
+        validateCalls += 1;
+
+        return { passed: true, failCount: 0, firstErrors: [] };
+      },
+    };
+    const r = await gatherChange(deps, {
+      ...opts,
+      validateSummary: { passed: true, failCount: 0, firstErrors: [] },
+    });
+
+    expect(r.kind).toBe("request");
+    expect(validateCalls).toBe(0); // the caller's fresh summary was reused
+  });
+
   test("attaches the changed files' current (HEAD) contents as review context", async () => {
     const deps: IGatherDeps = {
       git: git({

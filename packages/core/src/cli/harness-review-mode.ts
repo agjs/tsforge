@@ -21,6 +21,7 @@ import {
   honorCachedVerdict,
   resolveReviewInputs,
   reviewPlan,
+  resolveVerdict,
 } from "../reviewers/harness-review";
 import { parseVerdict, type IVerdict } from "../reviewers/aggregate";
 
@@ -316,39 +317,44 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   // the diff was unfingerprintable (git failed) → neither read nor write the cache.
   const plan = reviewPlan(resolved, { quick: args.quick, panelHash });
 
-  // ONE review path for both --ci and interactive runs. --ci never READS the cache (CI
-  // always re-reviews) but still WRITES it, so a later interactive run with an identical
-  // diff can reuse it.
-  let verdict: IVerdict | null =
-    !args.ci && plan.cacheKey !== null
-      ? await readCachedVerdict(plan.cacheKey)
-      : null;
+  // Run validate FRESH, once, before consulting the cache. The verdict cache short-circuits
+  // only the expensive model panel — never the gate: a cached PASS is trusted only when the
+  // current worktree is still green (resolveVerdict gates the cache read on this summary),
+  // and the summary is threaded into the review so validate never runs twice. This is P4's
+  // core requirement — re-run validate before trusting a cached verdict.
+  const validateSummary = await validateRunner();
 
-  if (verdict !== null) {
-    process.stdout.write("harness-review: cache hit, reusing verdict\n");
-  } else {
-    verdict = await runHarnessReview(
-      {
-        git: gitRunner,
-        validate: validateRunner,
-        makeProvider,
-        runBinary,
-        panel: effective,
-        identity: `${active.name}/${active.entry.model}`,
-      },
-      {
-        base: plan.reviewBase,
-        intent: plan.reviewIntent,
-        maxFiles: DEFAULT_MAX_FILES,
-        maxChars: DEFAULT_MAX_CHARS,
-      }
+  const { verdict, cacheHit } = await resolveVerdict(
+    {
+      readCache: readCachedVerdict,
+      runReview: (base, intent, summary) =>
+        runHarnessReview(
+          {
+            git: gitRunner,
+            validate: validateRunner,
+            makeProvider,
+            runBinary,
+            panel: effective,
+            identity: `${active.name}/${active.entry.model}`,
+          },
+          {
+            base,
+            intent,
+            maxFiles: DEFAULT_MAX_FILES,
+            maxChars: DEFAULT_MAX_CHARS,
+            validateSummary: summary,
+          }
+        ),
+      persist: (v, cacheKey) =>
+        persistVerdict(v, cacheKey, treeHash, panelHash),
+    },
+    { ci: args.ci, plan, validateSummary }
+  );
+
+  if (cacheHit) {
+    process.stdout.write(
+      "harness-review: cache hit (validate re-run green), reusing verdict\n"
     );
-
-    // persistVerdict caches ONLY a real panel verdict (a pre-review gate block is transient).
-    // Skip persistence when the diff was unfingerprintable — there is no sound key to store under.
-    if (plan.cacheKey !== null) {
-      await persistVerdict(verdict, plan.cacheKey, treeHash, panelHash);
-    }
   }
 
   process.stdout.write(`${formatVerdict(verdict)}\n`);

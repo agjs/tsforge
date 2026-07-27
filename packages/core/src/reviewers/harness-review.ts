@@ -35,6 +35,10 @@ export interface IGatherOptions {
   intent?: string;
   maxFiles: number;
   maxChars: number;
+  /** A validate summary already computed by the caller. When present, gatherChange REUSES
+   *  it instead of running validate again — so validate runs exactly once per invocation
+   *  even when the caller re-ran it to decide whether to trust the verdict cache. */
+  validateSummary?: IValidateSummary;
 }
 
 export type GatherResult =
@@ -45,14 +49,21 @@ async function resolveBase(
   git: IGitRunner,
   explicit: string | undefined
 ): Promise<string> {
-  if (explicit !== undefined && explicit.length > 0) {
-    return explicit;
-  }
-
-  const res = await git(["merge-base", "main", "HEAD"]);
+  const ref = explicit !== undefined && explicit.length > 0 ? explicit : "main";
+  // Pin to the merge-base SHA, not the ref. The diff is `${base}...HEAD` (three-dot), whose
+  // true origin is merge-base(ref, HEAD); returning that immutable SHA means the bytes the
+  // fingerprint hashes and the bytes the review diffs are ONE snapshot even if `ref` moves
+  // between the two in-process git calls (and a rebase that shifts the merge-base changes it).
+  const res = await git(["merge-base", ref, "HEAD"]);
   const base = res.stdout.trim();
 
-  return base.length > 0 ? base : "HEAD~1";
+  if (base.length > 0) {
+    return base;
+  }
+
+  // merge-base failed (e.g. no `main`): fall back to the ref itself (or HEAD~1 when omitted).
+  // Cache safety does not rest on this — an unresolvable diff yields diffHash=null downstream.
+  return explicit !== undefined && explicit.length > 0 ? explicit : "HEAD~1";
 }
 
 async function resolveIntent(
@@ -128,7 +139,7 @@ export async function gatherChange(
   deps: IGatherDeps,
   opts: IGatherOptions
 ): Promise<GatherResult> {
-  const validateSummary = await deps.validate();
+  const validateSummary = opts.validateSummary ?? (await deps.validate());
 
   if (!validateSummary.passed) {
     return {
@@ -346,6 +357,64 @@ export function reviewPlan(
     reviewBase: resolved.base,
     reviewIntent: resolved.intent ?? undefined,
   };
+}
+
+export interface IVerdictDecisionDeps {
+  /** Read a cached verdict by key (already applies the pre-review guard); null = miss. */
+  readCache: (cacheKey: string) => Promise<IVerdict | null>;
+  /** Run the live panel review for the resolved base/intent, REUSING the given validate
+   *  summary so validate is not run a second time. */
+  runReview: (
+    base: string,
+    intent: string | undefined,
+    validateSummary: IValidateSummary
+  ) => Promise<IVerdict>;
+  /** Persist a verdict under the key (the real impl guards against caching pre-review blocks). */
+  persist: (verdict: IVerdict, cacheKey: string) => Promise<void>;
+}
+
+/**
+ * Decide the verdict for one review invocation, orchestrating the cache against a FRESH
+ * validate. Extracted from the CLI so the wiring is unit-testable (the panel required an
+ * integration test for cache-hit reuse, keyed writes, and the CI write-not-read path).
+ *
+ * The cache short-circuits ONLY the expensive model panel — NEVER validate. The caller runs
+ * validate fresh and passes the summary in; a cached verdict is trusted only when the
+ * current gate is green (`validateSummary.passed`). This closes the staleness gap the panel
+ * found: keying purely on the committed `${base}...HEAD` diff (dropping treeHash) removed
+ * the accidental index-invalidation that used to force validate to re-run, so without a live
+ * validate check a cached PASS could be reused over a currently-red worktree. Validate is now
+ * live every time, so the key only needs to identify the reviewed diff.
+ *
+ * `--ci` never READS the cache (CI always re-reviews) but still WRITES it, so a later
+ * interactive run with an identical diff can reuse it. A null `cacheKey` (unfingerprintable
+ * diff — git failed) neither reads nor writes: there is no sound key.
+ */
+export async function resolveVerdict(
+  deps: IVerdictDecisionDeps,
+  opts: { ci: boolean; plan: IReviewPlan; validateSummary: IValidateSummary }
+): Promise<{ verdict: IVerdict; cacheHit: boolean }> {
+  const { plan } = opts;
+
+  if (!opts.ci && plan.cacheKey !== null && opts.validateSummary.passed) {
+    const cached = await deps.readCache(plan.cacheKey);
+
+    if (cached !== null) {
+      return { verdict: cached, cacheHit: true };
+    }
+  }
+
+  const verdict = await deps.runReview(
+    plan.reviewBase,
+    plan.reviewIntent,
+    opts.validateSummary
+  );
+
+  if (plan.cacheKey !== null) {
+    await deps.persist(verdict, plan.cacheKey);
+  }
+
+  return { verdict, cacheHit: false };
 }
 
 /** The caching decision, isolated so it is unit-testable without the filesystem.

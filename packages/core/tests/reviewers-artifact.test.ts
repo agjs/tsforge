@@ -6,6 +6,7 @@ import {
   honorCachedVerdict,
   resolveReviewInputs,
   reviewPlan,
+  resolveVerdict,
   CACHE_VERSION,
 } from "../src/reviewers/harness-review";
 import { RUBRIC_VERSION } from "../src/reviewers/schema";
@@ -102,9 +103,11 @@ describe("artifact + cache", () => {
     };
   };
 
-  test("resolveReviewInputs hashes the ACTUAL `${base}...HEAD` diff and returns the same base for the review", async () => {
-    // The invariant that makes key and review inseparable: the hash is taken over exactly
-    // the range the review will diff, and the SAME base is returned to hand to the review.
+  test("resolveReviewInputs pins the base to the merge-base SHA and hashes the ACTUAL `${sha}...HEAD` diff (named ref → immutable snapshot)", async () => {
+    // The invariant that makes key and review inseparable: the named ref `main` is resolved
+    // to merge-base(main, HEAD) — an immutable SHA — so the range the hash covers and the
+    // range the review diffs are one snapshot even if `main` moves mid-run, and that SAME
+    // base is returned to hand to the review.
     const seen: string[][] = [];
     const r = await resolveReviewInputs(
       gitScript({ diffOut: "some diff", seenDiffArgs: seen, subject: "fix" }),
@@ -112,8 +115,8 @@ describe("artifact + cache", () => {
       "fix"
     );
 
-    expect(seen).toContainEqual(["diff", "main...HEAD"]);
-    expect(r.base).toBe("main");
+    expect(seen).toContainEqual(["diff", "mergebasesha...HEAD"]);
+    expect(r.base).toBe("mergebasesha");
     expect(r.diffHash).toBe(
       createHash("sha256").update("some diff").digest("hex")
     );
@@ -224,6 +227,135 @@ describe("artifact + cache", () => {
     });
 
     expect(plan.reviewIntent).toBeUndefined();
+  });
+
+  // A resolveVerdict harness: records which seams fired so the CLI wiring can be asserted
+  // without spawning the process. runReview returns a distinct verdict so a cache hit
+  // (which must NOT run the review) is distinguishable from a miss.
+  const reviewVerdict: IVerdict = { ...v, reason: "fresh review" };
+  const cachedVerdict: IVerdict = { ...v, reason: "from cache" };
+
+  const decisionHarness = (opts: {
+    cached: IVerdict | null;
+    passed?: boolean;
+  }) => {
+    const calls = { read: 0, review: 0, persist: [] as string[] };
+    const deps = {
+      readCache: async (key: string) => {
+        calls.read += 1;
+        void key;
+
+        return opts.cached;
+      },
+      runReview: async () => {
+        calls.review += 1;
+
+        return reviewVerdict;
+      },
+      persist: async (_verdict: IVerdict, key: string) => {
+        calls.persist.push(key);
+      },
+    };
+    const summary = {
+      passed: opts.passed ?? true,
+      failCount: 0,
+      firstErrors: [],
+    };
+
+    return { calls, deps, summary };
+  };
+
+  const planWith = (cacheKey: string | null): IResolvedReviewInputs =>
+    resolvedInputs({ diffHash: cacheKey === null ? null : "d1" });
+
+  test("resolveVerdict: cache HIT (interactive, keyed, validate green) reuses the cached verdict — no review, no write", async () => {
+    const { calls, deps, summary } = decisionHarness({ cached: cachedVerdict });
+    const plan = reviewPlan(planWith("k"), { quick: false, panelHash: "p1" });
+
+    const r = await resolveVerdict(deps, {
+      ci: false,
+      plan,
+      validateSummary: summary,
+    });
+
+    expect(r.cacheHit).toBe(true);
+    expect(r.verdict.reason).toBe("from cache");
+    expect(calls.review).toBe(0);
+    expect(calls.persist).toHaveLength(0);
+  });
+
+  test("resolveVerdict: cache MISS runs the review and WRITES under the plan's key", async () => {
+    const { calls, deps, summary } = decisionHarness({ cached: null });
+    const plan = reviewPlan(planWith("k"), { quick: false, panelHash: "p1" });
+
+    const r = await resolveVerdict(deps, {
+      ci: false,
+      plan,
+      validateSummary: summary,
+    });
+
+    expect(r.cacheHit).toBe(false);
+    expect(r.verdict.reason).toBe("fresh review");
+    expect(calls.review).toBe(1);
+    expect(calls.persist).toEqual(
+      plan.cacheKey === null ? [] : [plan.cacheKey]
+    );
+  });
+
+  test("resolveVerdict: --ci WRITES but never READS the cache (CI always re-reviews)", async () => {
+    const { calls, deps, summary } = decisionHarness({ cached: cachedVerdict });
+    const plan = reviewPlan(planWith("k"), { quick: false, panelHash: "p1" });
+
+    const r = await resolveVerdict(deps, {
+      ci: true,
+      plan,
+      validateSummary: summary,
+    });
+
+    expect(calls.read).toBe(0); // never reads on CI, even though a cache entry exists
+    expect(calls.review).toBe(1);
+    expect(calls.persist).toEqual(
+      plan.cacheKey === null ? [] : [plan.cacheKey]
+    );
+    expect(r.cacheHit).toBe(false);
+  });
+
+  test("resolveVerdict: a RED validate skips the cache read and re-reviews (cache never short-circuits the gate — P4 core)", async () => {
+    // The staleness fix: with the current worktree failing validate, a cached PASS for the
+    // same committed diff must NOT be reused. The review is re-run with the failing summary.
+    const { calls, deps, summary } = decisionHarness({
+      cached: cachedVerdict,
+      passed: false,
+    });
+    const plan = reviewPlan(planWith("k"), { quick: false, panelHash: "p1" });
+
+    const r = await resolveVerdict(deps, {
+      ci: false,
+      plan,
+      validateSummary: summary,
+    });
+
+    expect(calls.read).toBe(0); // validate red → cache not even consulted
+    expect(calls.review).toBe(1);
+    expect(r.cacheHit).toBe(false);
+  });
+
+  test("resolveVerdict: a null cacheKey (unfingerprintable diff) neither reads nor writes, but still reviews", async () => {
+    const { calls, deps, summary } = decisionHarness({ cached: cachedVerdict });
+    const plan = reviewPlan(planWith(null), { quick: false, panelHash: "p1" });
+
+    expect(plan.cacheKey).toBeNull();
+
+    const r = await resolveVerdict(deps, {
+      ci: false,
+      plan,
+      validateSummary: summary,
+    });
+
+    expect(calls.read).toBe(0);
+    expect(calls.persist).toHaveLength(0);
+    expect(calls.review).toBe(1);
+    expect(r.verdict.reason).toBe("fresh review");
   });
 
   test("honorCachedVerdict drops a cached pre-review block, passes a real verdict through", () => {
