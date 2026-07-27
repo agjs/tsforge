@@ -11,11 +11,16 @@ const SAFE_IDENT = /^[A-Za-z][A-Za-z0-9_]*$/;
  * domain columns (e.g. bookmarks: `title` + `url`, no `name`), drizzle-kit cannot
  * tell "rename `name`→`title`?" from "drop `name`, add `title`/`url`" and PROMPTS.
  * In the headless build (no TTY) that prompt throws "Interactive prompts require a
- * TTY terminal" and exits non-zero — and `--force` does NOT cover it (that flag only
- * auto-approves data-LOSS statements). The DB then never migrates: every runtime
- * query 500s (`column "title" does not exist`), create fails, and the feature is
- * hollow at runtime while the gate can false-green. Detect that specific failure so
- * we recover ONLY from it and never mask a genuinely broken schema.
+ * TTY terminal" — and `--force` does NOT cover it (that flag only auto-approves
+ * data-LOSS statements). The DB then never migrates: every runtime query 500s
+ * (`column "title" does not exist`), create fails, and the feature is hollow at
+ * runtime while the gate false-greens.
+ *
+ * CRUCIALLY, `bun run db:push` exits 0 on this crash (the drizzle-kit rejection is
+ * async and never propagates to the exit code — the same swallow that made the gate
+ * false-green in the first place), so this MUST be detected by the output signature,
+ * NOT the exit code. Detect that specific failure so we recover ONLY from it and
+ * never mask a genuinely broken schema.
  */
 function isRenamePromptFailure(r: IExecResult): boolean {
   const text = `${r.stdout}\n${r.stderr}`;
@@ -67,10 +72,10 @@ export async function dbPushForce(
     cwd: apiCwd,
   });
 
-  if (first.code === 0) {
-    return first;
-  }
-
+  // Detect the crash by its OUTPUT, not the exit code: `bun run db:push` exits 0
+  // even when drizzle-kit died at the interactive prompt (async rejection swallowed).
+  // Only recover from THIS signature — any other outcome (real success, or a genuine
+  // schema error the model must fix) is returned untouched.
   if (
     entityTable === undefined ||
     !SAFE_IDENT.test(entityTable) ||

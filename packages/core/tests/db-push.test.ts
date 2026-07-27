@@ -4,9 +4,12 @@ import type { Exec, IExecResult } from "../src/loop/boringstack/exec";
 
 const ok: IExecResult = { code: 0, stdout: "Changes applied", stderr: "" };
 
-/** The exact drizzle-kit failure a name-less plan triggers headlessly. */
+/** The exact drizzle-kit failure a name-less plan triggers headlessly. NOTE the
+ *  `code: 0` — `bun run db:push` exits ZERO on this crash (async rejection is
+ *  swallowed), so the signature must be detected from the OUTPUT, not the exit code.
+ *  This is the regression the fix exists for. */
 const RENAME_PROMPT_FAIL: IExecResult = {
-  code: 1,
+  code: 0,
   stdout: "[✓] Pulling schema from database...",
   stderr:
     "Error: Interactive prompts require a TTY terminal (process.stdin.isTTY " +
@@ -76,12 +79,14 @@ test("dbPushForce: failure that is NOT the rename prompt → NOT masked (no drop
   expect(calls).toHaveLength(1);
 });
 
-test("dbPushForce: rename-prompt failure but NO entityTable → cannot recover, returns the failure", async () => {
+test("dbPushForce: rename-prompt crash but NO entityTable → cannot recover, no drop/retry", async () => {
   const { exec, calls } = recordingExec([RENAME_PROMPT_FAIL]);
 
   const res = await dbPushForce("/api", exec);
 
-  expect(res.code).toBe(1);
+  // The crash exits 0, so the returned result still carries the signature — the
+  // point is that NO recovery was attempted (a single push, no drop).
+  expect(res.stderr).toContain("Interactive prompts require a TTY");
   expect(calls).toHaveLength(1);
 });
 
@@ -90,7 +95,7 @@ test("dbPushForce: an unsafe (non-identifier) entityTable is never interpolated 
 
   const res = await dbPushForce("/api", exec, "bookmark; DROP TABLE users;--");
 
-  // Rejected by the identifier guard → no drop, no retry; the failure is returned.
-  expect(res.code).toBe(1);
+  // Rejected by the identifier guard → no drop, no retry.
+  expect(res.stderr).toContain("Interactive prompts require a TTY");
   expect(calls).toHaveLength(1);
 });
