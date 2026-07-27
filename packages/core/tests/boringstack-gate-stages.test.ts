@@ -15,6 +15,7 @@ import { scopeFor, featureOwnedGlobs } from "../src/loop/boringstack/build";
 import { testIdsFor } from "../src/loop/acceptance/acceptance-spec";
 import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
 import type { Exec } from "../src/loop/boringstack/exec";
+import type { SpecFetcher } from "../src/loop/boringstack/openapi-routes";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
 import type { IProvider } from "../src/inference";
 
@@ -860,11 +861,45 @@ describe("signatureToError", () => {
 });
 
 describe("reachabilityStage", () => {
+  // An unreachable-spec fetcher → the runtime route probe is INCONCLUSIVE (non-blocking),
+  // so these tests exercise ONLY the static reachability behavior, deterministically.
+  const specDown: SpecFetcher = async () => {
+    throw new Error("no server");
+  };
+
   test("when feature directory doesn't exist → skips gracefully (no reachability errors)", async () => {
-    const stage = reachabilityStage("/nonexistent", "note");
+    const stage = reachabilityStage("/nonexistent", "note", specDown);
     const r = await stage.run("/nonexistent");
 
     // Without the router/API files present, the check can't prove it's unreachable, so it passes
+    expect(r.passed).toBe(true);
+  });
+
+  test("runtime route-presence: routes ABSENT from the live spec → NOT reachable (kills the #202 source-only false-green)", async () => {
+    // Static files absent (so the static check is silent), but the running API's spec does
+    // NOT serve the feature's routes → the resource isn't mounted → fail.
+    const servesOtherOnly: SpecFetcher = async () => ({
+      openapi: "3.0.0",
+      info: { title: "x", version: "1" },
+      paths: { "/api/v1/other/": {}, "/api/v1/other/{id}": {} },
+    });
+    const stage = reachabilityStage("/nonexistent", "note", servesOtherOnly);
+    const r = await stage.run("/nonexistent");
+
+    expect(r.passed).toBe(false);
+    expect(r.errors[0]?.rule).toBe("reachability");
+    expect(r.errors[0]?.message).toContain("/api/v1/note/");
+  });
+
+  test("runtime route-presence: routes PRESENT in the live spec → reachable", async () => {
+    const servesNote: SpecFetcher = async () => ({
+      openapi: "3.0.0",
+      info: { title: "x", version: "1" },
+      paths: { "/api/v1/note/": {}, "/api/v1/note/{id}": {} },
+    });
+    const stage = reachabilityStage("/nonexistent", "note", servesNote);
+    const r = await stage.run("/nonexistent");
+
     expect(r.passed).toBe(true);
   });
 });
