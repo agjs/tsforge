@@ -7,6 +7,8 @@ import type { IValidateResult, IErrorItem } from "../../validate";
 import type { IProvider } from "../../inference";
 import type { IFeature } from "../greenfield/greenfield.types";
 import type { Exec } from "./exec";
+import { dbPushForce } from "./db-push";
+import { toCamelCase } from "./case";
 import { runBoringstackGate } from "./gate";
 import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
@@ -410,14 +412,19 @@ async function enrichUnparsable(
 export function boringstackCommandStage(
   cwd: string,
   exec: Exec,
-  rewritableGlobs: readonly string[] = []
+  rewritableGlobs: readonly string[] = [],
+  entityTable?: string
 ): IStage {
   return {
     async run(): Promise<IValidateResult> {
       await autofixApps(cwd, exec);
-      await exec(["bun", "run", "db:push", "--", "--force"], {
-        cwd: join(cwd, "apps/api"),
-      });
+      // db:push with headless recovery: when a name-less plan drops the scaffold's
+      // stub `name` column, drizzle-kit's interactive rename prompt crashes in the
+      // no-TTY build (`--force` doesn't cover it) → the DB never migrates → the
+      // feature is hollow at runtime while the gate false-greens. dbPushForce drops
+      // the (disposable) entity table and retries as a clean CREATE on exactly that
+      // failure. See db-push.ts.
+      await dbPushForce(join(cwd, "apps/api"), exec, entityTable);
 
       const result = await runBoringstackGate(cwd, exec);
 
@@ -703,7 +710,12 @@ export function composeBoringstackGate(opts: {
 
   return composeGate([
     differentialStage(
-      boringstackCommandStage(cwd, exec, rewritableGlobs),
+      boringstackCommandStage(
+        cwd,
+        exec,
+        rewritableGlobs,
+        toCamelCase(feature.id)
+      ),
       baseline
     ),
     reachabilityStage(cwd, feature.id),

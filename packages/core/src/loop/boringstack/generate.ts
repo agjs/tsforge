@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 
 import { wireResource, wireUiFeature } from "./wire-resource";
 import { toCamelCase } from "./case";
+import { dbPushForce } from "./db-push";
 import type { Exec } from "./exec";
 
 function makeErrorWithStderr(stderr: string): Error {
@@ -51,11 +52,16 @@ export async function generateResource(
   // just-formatted output would then FAIL the gate's format check.
   await execOrThrow(exec, ["bun", "run", "format"], apiCwd);
 
-  // `--force` auto-approves drizzle-kit's data-loss statements so `db:push` never
-  // blocks on its interactive confirmation prompt (which hangs forever in the
-  // harness's non-TTY exec). Safe here: the build DB holds no real data, and when
-  // the model iterates on a schema the drop/recreate MUST proceed unattended.
-  await execOrThrow(exec, ["bun", "run", "db:push", "--", "--force"], apiCwd);
+  // `--force` auto-approves drizzle-kit's data-LOSS statements — but NOT its
+  // interactive column-RENAME resolver, which a name-less plan triggers by dropping
+  // the scaffold's stub `name` column and adding real ones. That prompt crashes in
+  // the non-TTY build, so `dbPushForce` drops the (disposable) entity table and
+  // retries as a clean CREATE on exactly that failure. See db-push.ts.
+  const push = await dbPushForce(apiCwd, exec, camel);
+
+  if (push.code !== 0) {
+    throw makeErrorWithStderr(push.stderr);
+  }
 }
 
 /** Poll the running API's OpenAPI spec until it responds. After `new:resource` +

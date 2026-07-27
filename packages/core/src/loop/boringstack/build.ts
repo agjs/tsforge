@@ -11,6 +11,7 @@ import type { IProvider } from "../../inference";
 import type { IGate } from "../../gate/gate-runner";
 import type { Exec } from "./exec";
 import { generateResource, generateFeature } from "./generate";
+import { dbPushForce } from "./db-push";
 import { runBoringstackGate } from "./gate";
 import { extractFailures } from "./extract-failures";
 import { resolveStuckFile } from "../expert-handoff";
@@ -573,9 +574,10 @@ export function boringstackDeps(opts: {
       // The editable file the expert repairs if a stall's errors are all out of
       // scope (locked consumers of this feature's types) — its service file.
       host.setExpertRescueTarget((await rescueFileFor(cwd, feature)) ?? "");
-      await exec(["bun", "run", "db:push", "--", "--force"], {
-        cwd: join(cwd, "apps/api"),
-      });
+      // Same headless-safe push as the gate: recover from drizzle-kit's interactive
+      // rename prompt (name-less plan dropping the stub `name` column) by dropping the
+      // disposable entity table and retrying a clean CREATE. See db-push.ts.
+      await dbPushForce(join(cwd, "apps/api"), exec, toCamelCase(feature.id));
 
       // Inject THIS feature's composed gate (differential command + reachability +
       // judge). Now settleGate runs it every cycle and the shared ladder escalates
