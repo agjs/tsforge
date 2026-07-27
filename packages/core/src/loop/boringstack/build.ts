@@ -868,9 +868,14 @@ export async function runFinalAcceptance(
     message: finalMessage,
   });
 
-  // If the final acceptance chain failed AND acceptance is enabled, flip to stuck.
-  // When acceptance is disabled, preserve the original status (do not flip).
-  if (!finalPassed && !e2eAcceptanceDisabled) {
+  // A failed FINAL acceptance is ALWAYS terminal — never downgraded to a green pass.
+  // `finalPassed` is false only when (a) the FULL gate (validate/build/size/root-drift)
+  // failed, or (b) the browser CHAIN acceptance failed. Case (b) can only occur when
+  // acceptance is enabled (the chain is skipped otherwise), so when the flag is set the
+  // only way here is (a) — a real full-gate red. `TSFORGE_NO_E2E_ACCEPTANCE` must skip
+  // ONLY the browser/chain e2e; it must NOT make the full gate advisory (that was a
+  // gate-relaxation false-green: a failed full gate returned "done" — 4-model panel P0a).
+  if (!finalPassed) {
     return { ...result, status: "stuck" };
   }
 
