@@ -12,7 +12,21 @@ function git(map: Record<string, string>): IGatherDeps["git"] {
     const key = args.join(" ");
     const hit = Object.entries(map).find(([k]) => key.includes(k));
 
-    return { stdout: hit?.[1] ?? "", code: 0 };
+    if (hit) {
+      return { stdout: hit[1], code: 0 };
+    }
+
+    // Defaults so the HEAD pin + base resolve to SHAs unless a test overrides them (the pin
+    // now REQUIRES a real SHA — an empty rev-parse would block).
+    if (args[0] === "rev-parse") {
+      return { stdout: "HEADSHA", code: 0 };
+    }
+
+    if (args[0] === "merge-base") {
+      return { stdout: "MBSHA", code: 0 };
+    }
+
+    return { stdout: "", code: 0 };
   };
 }
 
@@ -117,10 +131,20 @@ describe("gatherChange", () => {
     // The false-green the panel flagged: if git errors and returns empty stdout, an
     // unguarded gather would build a 0-file, empty-diff request that the panel green-lights
     // and caches. Honoring the exit code turns that into a block.
-    const failingGit: IGatherDeps["git"] = async (args) =>
-      args.includes("--name-only")
+    const failingGit: IGatherDeps["git"] = async (args) => {
+      if (args[0] === "rev-parse") {
+        return { stdout: "HEADSHA", code: 0 };
+      }
+
+      if (args[0] === "merge-base") {
+        return { stdout: "MBSHA", code: 0 };
+      }
+
+      return args.includes("--name-only")
         ? { stdout: "", code: 128 }
         : { stdout: "", code: 0 };
+    };
+
     const r = await gatherChange(
       { git: failingGit, validate: cleanValidate },
       opts
@@ -135,6 +159,14 @@ describe("gatherChange", () => {
 
   test("a failing `git diff` (content) BLOCKS even when the name list succeeded", async () => {
     const git2: IGatherDeps["git"] = async (args) => {
+      if (args[0] === "rev-parse") {
+        return { stdout: "HEADSHA", code: 0 };
+      }
+
+      if (args[0] === "merge-base") {
+        return { stdout: "MBSHA", code: 0 };
+      }
+
       if (args.includes("--name-only")) {
         return { stdout: "x.ts", code: 0 };
       }
@@ -160,6 +192,14 @@ describe("gatherChange", () => {
     // git anomaly / name-only↔diff disagreement (a REAL rename/mode change is non-empty). The
     // guard blocks it rather than build+cache a 0-byte review the panel would green-light.
     const git2: IGatherDeps["git"] = async (args) => {
+      if (args[0] === "rev-parse") {
+        return { stdout: "HEADSHA", code: 0 };
+      }
+
+      if (args[0] === "merge-base") {
+        return { stdout: "MBSHA", code: 0 };
+      }
+
       if (args.includes("--name-only")) {
         return { stdout: "renamed.ts", code: 0 };
       }
@@ -239,13 +279,21 @@ describe("gatherChange", () => {
     expect(seen.some((k) => k.includes("show HEADSHA:x.ts"))).toBe(true);
   });
 
-  test("resolveBase merge-base failure falls back to the ref and still diffs (shallow/odd repos)", async () => {
-    // merge-base returns empty (failure); gather must still resolve a range and produce a
-    // request rather than throw. Records the range actually diffed.
+  test("resolveBase merge-base failure falls back to the ref resolved to a SHA (shallow/odd repos), still one snapshot", async () => {
+    // merge-base fails; the fallback base must be PINNED (rev-parse'd to a SHA), NOT the movable
+    // ref — else the name-only/content diffs could observe different commits mid-gather. Prove
+    // the range is <baseSHA>...<headSHA>, both immutable.
     const seen: string[] = [];
 
     const fallbackGit: IGatherDeps["git"] = async (args) => {
       const key = args.join(" ");
+
+      if (args[0] === "rev-parse") {
+        // HEAD → HEADSHA; the fallback base ref "featureX" → FEATURESHA.
+        return args[1] === "HEAD"
+          ? { stdout: "HEADSHA", code: 0 }
+          : { stdout: "FEATURESHA", code: 0 };
+      }
 
       if (args[0] === "merge-base") {
         return { stdout: "", code: 1 }; // no merge-base
@@ -268,8 +316,56 @@ describe("gatherChange", () => {
     );
 
     expect(r.kind).toBe("request");
-    // explicit ref given → falls back to that ref (not HEAD~1) for the diff range
-    expect(seen.some((k) => k.includes("featureX...HEAD"))).toBe(true);
+    // Both ends are pinned SHAs — a moving ref would have shown "featureX...HEAD" (and would
+    // still pass on a broken pin), which this now rejects.
+    expect(seen.some((k) => k.includes("FEATURESHA...HEADSHA"))).toBe(true);
+  });
+
+  test("a merge-base failure whose fallback ref ALSO can't be pinned BLOCKS (never diff a movable ref)", async () => {
+    const unpinnable: IGatherDeps["git"] = async (args) => {
+      if (args[0] === "rev-parse") {
+        // HEAD pins, but the fallback base ref cannot be resolved.
+        return args[1] === "HEAD"
+          ? { stdout: "HEADSHA", code: 0 }
+          : { stdout: "", code: 128 };
+      }
+
+      if (args[0] === "merge-base") {
+        return { stdout: "", code: 1 };
+      }
+
+      return { stdout: "", code: 0 };
+    };
+
+    const r = await gatherChange(
+      { git: unpinnable, validate: cleanValidate },
+      { ...opts, base: "ghost" }
+    );
+
+    expect(r.kind).toBe("block");
+
+    if (r.kind === "block") {
+      expect(r.reason).toMatch(/could not resolve the diff base/iu);
+    }
+  });
+
+  test("rev-parse HEAD succeeds but returns EMPTY stdout → still BLOCKS (an empty SHA is not a valid pin)", async () => {
+    // The subtle soft-fallback the panel flagged: code 0 + empty output must NOT become the
+    // movable "HEAD" ref. It blocks like a hard rev-parse failure.
+    const emptyHead: IGatherDeps["git"] = async (args) =>
+      args[0] === "rev-parse"
+        ? { stdout: "\n", code: 0 }
+        : { stdout: "", code: 0 };
+    const r = await gatherChange(
+      { git: emptyHead, validate: cleanValidate },
+      opts
+    );
+
+    expect(r.kind).toBe("block");
+
+    if (r.kind === "block") {
+      expect(r.reason).toMatch(/could not resolve HEAD/iu);
+    }
   });
 
   test("attaches the changed files' current (HEAD) contents as review context", async () => {
@@ -277,7 +373,8 @@ describe("gatherChange", () => {
       git: git({
         "diff --name-only": "src/x.ts",
         diff: "diff --git a/src/x.ts b/src/x.ts\n+code",
-        "show HEAD:src/x.ts":
+        // head is pinned to a SHA (default HEADSHA), so context reads `show <sha>:file`.
+        "show HEADSHA:src/x.ts":
           "export function realCode(): number {\n  return 42;\n}",
       }),
       validate: cleanValidate,

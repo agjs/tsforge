@@ -54,7 +54,7 @@ function makeInput(over: { quick?: boolean; ci?: boolean }) {
   return {
     log,
     input: {
-      effective,
+      panel: effective,
       identity: "local/flash",
       quick: over.quick ?? false,
       ci: over.ci ?? false,
@@ -127,6 +127,43 @@ describe("buildReviewFlowDeps (CLI wiring)", () => {
     const deps = buildReviewFlowDeps(input);
 
     expect(deps.rosterHash).toBe(panelIdentityHash(effective, "local/flash"));
+  });
+
+  test("quick mode slices the roster to 1 reviewer — rosterHash uses the SLICED roster (a quick verdict can't satisfy a full review)", () => {
+    const twoReviewers: IPanel = {
+      reviewers: [
+        {
+          kind: "model",
+          id: "r1",
+          entry: { baseUrl: "http://x/v1", model: "MODEL-X" },
+        },
+        {
+          kind: "model",
+          id: "r2",
+          entry: { baseUrl: "http://y/v1", model: "MODEL-Y" },
+        },
+      ],
+      minReviewers: 1,
+      skipped: [],
+    };
+    const full = buildReviewFlowDeps({
+      ...makeInput({}).input,
+      panel: twoReviewers,
+      quick: false,
+    });
+    const quick = buildReviewFlowDeps({
+      ...makeInput({}).input,
+      panel: twoReviewers,
+      quick: true,
+    });
+
+    expect(quick.rosterHash).not.toBe(full.rosterHash);
+    expect(quick.rosterHash).toBe(
+      panelIdentityHash(
+        { ...twoReviewers, reviewers: twoReviewers.reviewers.slice(0, 1) },
+        "local/flash"
+      )
+    );
   });
 
   test("mode maps from --quick and ci maps from --ci", () => {

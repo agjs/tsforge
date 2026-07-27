@@ -279,14 +279,15 @@ export function formatVerdict(v: IVerdict): string {
 }
 
 /**
- * Wire the resolved CLI pieces (effective roster, args, git/validate, providers, cache
- * seams) into the runReviewFlow deps — exported so the CLI's central wiring is unit-tested:
- * the cache key's rosterHash is derived from the EFFECTIVE roster (not cfg), the review
- * targets the effective panel, mode/ci come from the args, and gather reads args.base/intent.
- * A miswire (cfg roster, hardcoded ci, wrong panel) is caught here rather than only in prod.
+ * Wire the resolved CLI pieces (full panel + quick flag, args, git/validate, providers, cache
+ * seams) into the runReviewFlow deps — exported so the CLI's central wiring is unit-tested.
+ * The EFFECTIVE roster is derived HERE (quick mode → a 1-reviewer slice), so the cache key's
+ * rosterHash and the review both target that effective roster — a `quick` run can't reuse a
+ * full-panel verdict, or vice versa. mode/ci come from the args; gather reads args.base/intent.
+ * A miswire (cfg roster, hardcoded ci, wrong panel, un-sliced quick roster) is caught here.
  */
 export function buildReviewFlowDeps(input: {
-  effective: IPanel;
+  panel: IPanel;
   identity: string;
   quick: boolean;
   ci: boolean;
@@ -303,7 +304,12 @@ export function buildReviewFlowDeps(input: {
     rosterHash: string
   ) => Promise<void>;
 }): IReviewFlowDeps {
-  const rosterHash = panelIdentityHash(input.effective, input.identity);
+  // `quick` reviews with a REDUCED roster (the first reviewer only). The effective roster
+  // feeds BOTH the cache key and the review, so its verdict never satisfies a full review.
+  const effective: IPanel = input.quick
+    ? { ...input.panel, reviewers: input.panel.reviewers.slice(0, 1) }
+    : input.panel;
+  const rosterHash = panelIdentityHash(effective, input.identity);
 
   return {
     gather: () =>
@@ -325,7 +331,7 @@ export function buildReviewFlowDeps(input: {
       reviewRequest(request, {
         makeProvider: input.makeProvider,
         runBinary: input.runBinary,
-        panel: input.effective,
+        panel: effective,
         identity: input.identity,
       }),
     persist: (v, key) => input.persistArtifact(v, key, rosterHash),
@@ -351,10 +357,6 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
     process.stdout.write(`skipped reviewer ${s.id}: ${s.reason}\n`);
   }
 
-  const effective = args.quick
-    ? { ...panel, reviewers: panel.reviewers.slice(0, 1) }
-    : panel;
-
   const treeHashRes = await gitRunner(["write-tree"]);
   const treeHash = treeHashRes.stdout.trim();
   const identity = `${active.name}/${active.entry.model}`;
@@ -362,11 +364,11 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   // runReviewFlow enforces the wiring invariant: GATHER (validate runs fresh inside) BEFORE
   // any cache access, and a gather block never touches the cache. The gathered request is
   // keyed from its OWN bytes, so key and review can't diverge. --ci writes but never reads.
-  // buildReviewFlowDeps constructs the deps (roster hash from the EFFECTIVE panel etc.) and
-  // is unit-tested for that wiring.
+  // buildReviewFlowDeps derives the EFFECTIVE roster (quick-slice) and the roster hash, and is
+  // unit-tested for that wiring.
   const { verdict, cacheHit } = await runReviewFlow(
     buildReviewFlowDeps({
-      effective,
+      panel,
       identity,
       quick: args.quick,
       ci: args.ci,

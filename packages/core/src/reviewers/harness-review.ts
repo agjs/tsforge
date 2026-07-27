@@ -41,28 +41,42 @@ export type GatherResult =
   | { kind: "request"; request: IReviewRequest }
   | { kind: "block"; reason: string };
 
+/** Resolve a commit-ish to an immutable SHA, or null if it can't be resolved. A pin must be a
+ *  real SHA: rev-parse succeeding with EMPTY stdout (or a nonzero exit) is NOT a valid pin —
+ *  returning the movable ref instead would re-open the mid-gather TOCTOU this exists to close. */
+async function resolveSha(
+  git: IGitRunner,
+  ref: string
+): Promise<string | null> {
+  const res = await git(["rev-parse", ref]);
+  const sha = res.stdout.trim();
+
+  return res.code === 0 && sha.length > 0 ? sha : null;
+}
+
 async function resolveBase(
   git: IGitRunner,
   explicit: string | undefined,
   head: string
-): Promise<string> {
+): Promise<string | null> {
   const ref = explicit !== undefined && explicit.length > 0 ? explicit : "main";
-  // Pin to the merge-base SHA against the PINNED head, not the ref. The diff is
-  // `${base}...${head}` (three-dot), whose true origin is merge-base(ref, head); returning
-  // that immutable SHA means the bytes the fingerprint hashes and the bytes the review diffs
-  // are ONE snapshot even if `ref` moves (and a rebase that shifts the merge-base changes it).
+  // Pin to the merge-base SHA against the PINNED head. The diff is `${base}...${head}`
+  // (three-dot), whose true origin is merge-base(ref, head); an immutable SHA means the bytes
+  // the fingerprint hashes and the bytes the review diffs are ONE snapshot even if `ref` moves.
   const res = await git(["merge-base", ref, head]);
   const base = res.stdout.trim();
 
-  if (base.length > 0) {
-    return base;
+  if (res.code === 0 && base.length > 0) {
+    return base; // merge-base output IS a SHA
   }
 
-  // merge-base failed (e.g. no `main`): fall back to the ref itself (or HEAD~1 when omitted).
-  // Cache safety does not rest on this — if the resulting `${base}...${head}` diff can't be
-  // computed, gatherChange blocks (git-exit / empty-diff guards) rather than caching a
-  // vacuous review.
-  return explicit !== undefined && explicit.length > 0 ? explicit : "HEAD~1";
+  // merge-base failed (e.g. shallow clone, no `main`): pin the fallback ref to a SHA too —
+  // NEVER diff against a movable ref, or the name-only / content diffs could observe different
+  // commits if the ref moves mid-gather. `head` is a SHA, so `${head}~1` is a stable target.
+  return resolveSha(
+    git,
+    explicit !== undefined && explicit.length > 0 ? explicit : `${head}~1`
+  );
 }
 
 async function resolveIntent(
@@ -85,21 +99,19 @@ export async function gatherChange(
 ): Promise<GatherResult> {
   // Pin HEAD to an immutable SHA FIRST — before validate and every diff — so the whole gather
   // references one snapshot (a HEAD move mid-gather can't mix file names, diff, and context
-  // from different commits into one request). Honor rev-parse's exit code like every other git
-  // step: a failed pin BLOCKS (a soft fallback to the movable "HEAD" ref would re-open the
-  // TOCTOU). (Reviewing an arbitrary pushed OID — validating THAT commit's tree rather than the
-  // working tree — is a separate review-targeting concern, tracked apart from cache integrity.)
-  const headRes = await deps.git(["rev-parse", "HEAD"]);
+  // from different commits into one request). A pin that isn't a real SHA BLOCKS: no soft
+  // fallback to the movable "HEAD" ref, which would re-open the TOCTOU. (Reviewing an arbitrary
+  // pushed OID — validating THAT commit's tree, not the working tree — is a separate
+  // review-targeting concern, tracked apart from cache integrity.)
+  const head = await resolveSha(deps.git, "HEAD");
 
-  if (headRes.code !== 0) {
+  if (head === null) {
     return {
       kind: "block",
-      reason: `could not resolve HEAD (git rev-parse exited ${String(headRes.code)}) — cannot review`,
+      reason:
+        "could not resolve HEAD to a commit (git rev-parse) — cannot review",
     };
   }
-
-  const head =
-    headRes.stdout.trim().length > 0 ? headRes.stdout.trim() : "HEAD";
 
   const validateSummary = await deps.validate();
 
@@ -111,6 +123,15 @@ export async function gatherChange(
   }
 
   const base = await resolveBase(deps.git, opts.base, head);
+
+  if (base === null) {
+    return {
+      kind: "block",
+      reason:
+        "could not resolve the diff base to a commit (git merge-base/rev-parse) — cannot review",
+    };
+  }
+
   const intent = await resolveIntent(deps.git, opts.intent, head);
 
   if (intent === null) {
