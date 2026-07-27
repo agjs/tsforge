@@ -15,10 +15,8 @@ import { resolvePanel } from "../reviewers/registry";
 import {
   gatherChange,
   reviewRequest,
-  blockedVerdict,
-  reviewRequestKey,
+  runReviewFlow,
   panelIdentityHash,
-  decideVerdict,
   DEFAULT_MAX_FILES,
   DEFAULT_MAX_CHARS,
   artifactBody,
@@ -302,57 +300,38 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   const treeHashRes = await gitRunner(["write-tree"]);
   const treeHash = treeHashRes.stdout.trim();
   const identity = `${active.name}/${active.entry.model}`;
+  // Fingerprint the EFFECTIVE roster (the reviewers actually used after skips/quick-slice/
+  // active-model exclusion) + the builder — reused for both the cache key and the artifact.
+  const rosterHash = panelIdentityHash(effective, identity);
 
-  // GATHER the review request FIRST — gatherChange runs validate FRESH (blocking, never
-  // cached, when the gate is red), resolves the base to an immutable merge-base SHA, and
-  // builds the exact request (diff + contextFiles) the reviewers will judge. A cache hit is
-  // therefore only ever reached when the gate currently passes — P4's "re-run validate
-  // before trusting the cache" requirement, satisfied by construction.
-  const gathered = await gatherChange(
-    { git: gitRunner, validate: validateRunner },
-    {
-      base: args.base,
-      intent: args.intent,
-      maxFiles: DEFAULT_MAX_FILES,
-      maxChars: DEFAULT_MAX_CHARS,
-    }
-  );
-
-  let verdict: IVerdict;
-  let cacheHit = false;
-
-  if (gathered.kind === "block") {
-    // A pre-review gate/precondition block — never cached (a transient block must not reject
-    // every later push).
-    verdict = blockedVerdict(gathered.reason, identity);
-  } else {
-    // Key on a fingerprint of the ACTUAL gathered request (diff + full contextFiles + intent
-    // + rubric) plus the EFFECTIVE roster (the reviewers actually used, after skips/quick-
-    // slice/active-model exclusion) and mode. The same request object is handed to the
-    // review, so key and review hash the same bytes — no second read to diverge from.
-    const rosterHash = panelIdentityHash(effective, identity);
-    const key = reviewRequestKey(gathered.request, {
-      rosterHash,
-      mode: args.quick ? "quick" : "full",
-    });
-    const decided = await decideVerdict(
-      {
-        readCache: readCachedVerdict,
-        review: () =>
-          reviewRequest(gathered.request, {
-            makeProvider,
-            runBinary,
-            panel: effective,
-            identity,
-          }),
-        persist: (v, k) => persistVerdict(v, k, treeHash, rosterHash),
-      },
-      { ci: args.ci, key }
-    );
-
-    verdict = decided.verdict;
-    cacheHit = decided.cacheHit;
-  }
+  // runReviewFlow enforces the wiring invariant: GATHER (validate runs fresh inside) BEFORE
+  // any cache access, and a gather block never touches the cache. The gathered request is
+  // keyed from its OWN bytes, so key and review can't diverge. --ci writes but never reads.
+  const { verdict, cacheHit } = await runReviewFlow({
+    gather: () =>
+      gatherChange(
+        { git: gitRunner, validate: validateRunner },
+        {
+          base: args.base,
+          intent: args.intent,
+          maxFiles: DEFAULT_MAX_FILES,
+          maxChars: DEFAULT_MAX_CHARS,
+        }
+      ),
+    identity,
+    rosterHash,
+    mode: args.quick ? "quick" : "full",
+    ci: args.ci,
+    readCache: readCachedVerdict,
+    review: (request) =>
+      reviewRequest(request, {
+        makeProvider,
+        runBinary,
+        panel: effective,
+        identity,
+      }),
+    persist: (v, key) => persistVerdict(v, key, treeHash, rosterHash),
+  });
 
   if (cacheHit) {
     process.stdout.write("harness-review: cache hit, reusing verdict\n");

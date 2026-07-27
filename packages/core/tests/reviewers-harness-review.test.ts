@@ -1,10 +1,9 @@
 import { test, expect, describe } from "bun:test";
 import {
   gatherChange,
-  runHarnessReview,
+  reviewRequest,
   shouldCacheVerdict,
   type IGatherDeps,
-  type IRunDeps,
 } from "../src/reviewers/harness-review";
 import type { IPanel } from "../src/reviewers/registry";
 
@@ -137,9 +136,10 @@ describe("gatherChange", () => {
     }
   });
 
-  test("files listed but an EMPTY content diff (rename/mode-only) → block, not a vacuous cached green", async () => {
-    // The false-green the panel flagged: `--name-only` reports a file, but `git diff` exits 0
-    // with empty stdout. Without the empty-diff guard a 0-byte review would be built + cached.
+  test("files listed but an EMPTY content diff → block (defense in depth), not a vacuous cached green", async () => {
+    // `--name-only` reports a file, but the content `git diff` exits 0 with empty stdout — a
+    // git anomaly / name-only↔diff disagreement (a REAL rename/mode change is non-empty). The
+    // guard blocks it rather than build+cache a 0-byte review the panel would green-light.
     const git2: IGatherDeps["git"] = async (args) => {
       if (args.includes("--name-only")) {
         return { stdout: "renamed.ts", code: 0 };
@@ -231,41 +231,50 @@ describe("gatherChange", () => {
   });
 });
 
-describe("runHarnessReview", () => {
-  test("a blocked gather short-circuits to a blocked verdict without invoking reviewers", async () => {
-    let invoked = false;
-    const panel: IPanel = { reviewers: [], minReviewers: 2, skipped: [] };
-    const deps: IRunDeps = {
-      git: git({ "diff --name-only": "x.ts", diff: "+x" }),
-      validate: async () => ({
-        passed: false,
-        failCount: 1,
-        firstErrors: ["boom"],
-      }),
+describe("reviewRequest (success path: invoke the panel on a gathered request → aggregate)", () => {
+  test("invokes the reviewers and returns their aggregated verdict", async () => {
+    const request = {
+      title: "add x",
+      intent: "add x",
+      diff: "diff --git a/x b/x\n+code",
+      validateSummary: { passed: true, failCount: 0, firstErrors: [] },
+      contextFiles: [],
+      rubricVersion: "1",
+    };
+    // A single approving model reviewer; aggregate should return an unblocked verdict.
+    const panel: IPanel = {
+      reviewers: [
+        {
+          kind: "model",
+          id: "r1",
+          entry: { baseUrl: "http://x/v1", model: "m" },
+        },
+      ],
+      minReviewers: 1,
+      skipped: [],
+    };
+    let invoked = 0;
+    const v = await reviewRequest(request, {
       makeProvider: () => {
-        invoked = true;
+        invoked += 1;
 
         return {
           async complete() {
-            return { content: "", toolCalls: [] };
+            return {
+              content: '{"decision":"approve","findings":[]}',
+              toolCalls: [],
+            };
           },
         };
       },
-      runBinary: async () => {
-        invoked = true;
-
-        return { ok: true, stdout: "" };
-      },
+      runBinary: async () => ({ ok: true, stdout: "" }),
       panel,
       identity: "local/flash",
-    };
-    const v = await runHarnessReview(deps, opts);
+    });
 
-    expect(v.blocked).toBe(true);
-    expect(invoked).toBe(false);
-    // Marked as a PRE-REVIEW gate block so the caller never caches it — a transient
-    // validate flake under load must not poison the tree-hash for every later push.
-    expect(v.preReview).toBe(true);
+    expect(invoked).toBe(1); // the panel actually ran (not short-circuited)
+    expect(v.identity).toBe("local/flash");
+    expect(v.preReview).not.toBe(true); // a real panel verdict, cacheable
   });
 });
 

@@ -144,12 +144,13 @@ export async function gatherChange(
   const diff = diffRes.stdout;
 
   if (diff.length === 0) {
-    // Files are listed but the CONTENT diff is empty (a rename- or mode-only change, or a
-    // git quirk): there is nothing textual for the reviewers to judge, so a PASS would be
-    // vacuous. Block rather than build+cache an empty review.
+    // Defense in depth: files were listed but the CONTENT diff came back empty. (A real
+    // rename/mode-only change is NOT empty — git emits `similarity index` / `old mode` etc.
+    // — so this is an anomaly: a git quirk, or a `--name-only`/`diff` disagreement.) There is
+    // nothing for the reviewers to judge, so block rather than build+cache a vacuous review.
     return {
       kind: "block",
-      reason: `the diff between ${base} and HEAD is empty (rename/mode-only change?) — nothing to review`,
+      reason: `the diff between ${base} and HEAD is empty despite listed changes — nothing to review`,
     };
   }
 
@@ -216,12 +217,7 @@ async function gatherContext(
   return blocks;
 }
 
-export interface IRunDeps extends IGatherDeps, IInvokeDeps {
-  panel: IPanel;
-  identity: string;
-}
-
-/** A pre-review gate/precondition block (validate red, empty intent, diff too large,
+/** A pre-review gate/precondition block (validate red, empty intent, empty/oversized diff,
  *  git failure). The panel did NOT run. Marked `preReview` so it is never cached — a
  *  transient block must not poison the cache and reject every later push. Exported so the
  *  CLI produces it directly (it gathers the request itself, then reviews). */
@@ -243,9 +239,9 @@ export interface IReviewDeps extends IInvokeDeps {
 }
 
 /** Run the panel on an ALREADY-GATHERED request (validate + diff + context already built).
- *  Split out from runHarnessReview so the CLI can fingerprint the exact request for the
- *  cache key BEFORE deciding whether to invoke the models — key and review then hash the
- *  same bytes by construction. */
+ *  Split from the gather step so the CLI can fingerprint the exact request for the cache
+ *  key BEFORE deciding whether to invoke the models — key and review then hash the same
+ *  bytes by construction. */
 export async function reviewRequest(
   request: IReviewRequest,
   deps: IReviewDeps
@@ -261,24 +257,40 @@ export async function reviewRequest(
   });
 }
 
-export async function runHarnessReview(
-  deps: IRunDeps,
-  opts: IGatherOptions
-): Promise<IVerdict> {
-  const gathered = await gatherChange(deps, opts);
-
-  if (gathered.kind === "block") {
-    return blockedVerdict(gathered.reason, deps.identity);
-  }
-
-  return reviewRequest(gathered.request, deps);
-}
-
 /** Verdict-cache schema version. Bump to invalidate ALL previously written cache
  *  artifacts in one shot. Bumped to "3" when the key changed from a diff-hash to a full
  *  request fingerprint (below): legacy artifacts key on incomparable inputs, so the bump
  *  retires them rather than risk a stale-input collision. */
 export const CACHE_VERSION = "3";
+
+/** Deterministic JSON: recursively sort object keys so equal CONTENT hashes equally
+ *  regardless of construction/insertion order. A cache key must not thrash — or, if a
+ *  second request-construction path ever appears, diverge — because two equal requests
+ *  serialized their keys in a different order. Exported so the cache-key pin test can
+ *  recompute the exact digest (and catch an accidental drop of CACHE_VERSION from the key). */
+export function canonicalJson(value: unknown): string {
+  const canon = (v: unknown): unknown => {
+    if (Array.isArray(v)) {
+      return v.map(canon);
+    }
+
+    if (typeof v === "object" && v !== null) {
+      const out: Record<string, unknown> = {};
+
+      for (const [k, val] of Object.entries(v).sort(([a], [b]) =>
+        a < b ? -1 : a > b ? 1 : 0
+      )) {
+        out[k] = canon(val);
+      }
+
+      return out;
+    }
+
+    return v;
+  };
+
+  return JSON.stringify(canon(value));
+}
 
 /**
  * Fingerprint the EXACT review request the reviewers will judge, plus the roster identity
@@ -290,84 +302,106 @@ export const CACHE_VERSION = "3";
  * including its `firstErrors`/`failCount`, which the panel reads) is in the key. Selecting a
  * subset was unsound — e.g. `validateRunner` can return `passed:true` with a non-empty
  * `firstErrors`, so two runs with an identical diff but different validate diagnostics feed
- * the reviewers different bytes; omitting the summary from the key would false-reuse across
- * them. Keying on a diff hash alone likewise missed `contextFiles` (a rebase can yield
- * identical patch bytes over different surrounding file contents).
+ * the reviewers different bytes; omitting the summary would false-reuse across them.
+ * Serialized canonically (key-sorted) so equal content always yields the same digest.
  */
 export function reviewRequestKey(
   request: IReviewRequest,
   opts: { rosterHash: string; mode: string }
 ): string {
-  // JSON array (unforgeable: escaped + delimited). `request` is built with a fixed field
-  // order in gatherChange, so its serialization is deterministic for identical content.
   return createHash("sha256")
-    .update(
-      JSON.stringify([request, opts.rosterHash, opts.mode, CACHE_VERSION])
-    )
+    .update(canonicalJson([request, opts.rosterHash, opts.mode, CACHE_VERSION]))
     .digest("hex");
 }
 
 /**
- * Identity of the roster that ACTUALLY reviewed — the resolved reviewer ids (after skips,
- * quick-slicing, and active-model exclusion), the quorum, and the builder. A verdict from a
- * different roster (a reviewer added/dropped, a different builder whose independence differs)
- * must not be reused, so this feeds the cache key. Keying on the raw config instead would
- * miss all of those, which the panel flagged.
+ * Identity of the roster that ACTUALLY reviewed. Hashes the FULL resolved reviewer objects
+ * (kind, id, model `entry`, binary argv/input mode, endpoint, timeout — every field), not
+ * just their ids: retargeting the SAME id to a different model/endpoint/binary yields a
+ * different reviewer IMPLEMENTATION whose verdict must not be reused. Plus the quorum and
+ * the builder identity (independence differs per builder). Sorted by id so resolution order
+ * doesn't churn the key. This feeds the cache key; keying on ids alone (or the raw config)
+ * missed reviewer-implementation changes, which the panel flagged.
  */
 export function panelIdentityHash(
   panel: { reviewers: readonly { id: string }[]; minReviewers: number },
   builderIdentity: string
 ): string {
-  const roster = panel.reviewers.map((r) => r.id).sort();
+  const roster = [...panel.reviewers].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  );
 
   return createHash("sha256")
-    .update(JSON.stringify([roster, panel.minReviewers, builderIdentity]))
+    .update(canonicalJson([roster, panel.minReviewers, builderIdentity]))
     .digest("hex");
 }
 
-export interface IDecideDeps {
+export interface IReviewFlowDeps {
+  /** Gather the review request — runs validate FRESH and builds the request (or blocks). */
+  gather: () => Promise<GatherResult>;
+  identity: string;
+  /** Fingerprint of the effective roster + builder (panelIdentityHash). */
+  rosterHash: string;
+  /** "quick" | "full". */
+  mode: string;
+  ci: boolean;
   /** Read a cached verdict by key (already applies the pre-review guard); null = miss. */
   readCache: (key: string) => Promise<IVerdict | null>;
-  /** Run the live panel (only reached on a miss or --ci). */
-  review: () => Promise<IVerdict>;
+  /** Run the live panel on the gathered request (only reached on a miss or --ci). */
+  review: (request: IReviewRequest) => Promise<IVerdict>;
   /** Persist the verdict under the key (the real impl guards against caching a pre-review block). */
   persist: (verdict: IVerdict, key: string) => Promise<void>;
 }
 
 /**
- * Decide a verdict for an already-gathered, already-keyed request: reuse the cache when
- * possible, else run the panel and persist. Extracted from the CLI so the wiring is
- * unit-testable (the panel required proof that a cache hit is reused, a miss writes under
- * the key, and --ci writes but never reads).
+ * The end-to-end review flow, injectable so the CLI wiring's CENTRAL INVARIANT is directly
+ * testable rather than only implied by the units: the request is GATHERED (validate runs
+ * inside gather) BEFORE any cache access, and a gather block (validate red / precondition)
+ * yields a blocked verdict WITHOUT reading OR writing the cache. Only a gathered request is
+ * keyed — from its own bytes — then reused-or-reviewed. A future reordering or bypass in the
+ * CLI that read the cache before validating, or reused a verdict across a red gate, breaks a
+ * test here (which unit tests for gather + the cache decision separately cannot catch).
  *
- * Validate freshness is NOT this function's concern: the caller gathers the request first
- * (gatherChange runs validate fresh and blocks — never reaching here — when the gate is red),
- * so a cache hit implies the gate currently passes. --ci never READS the cache (CI always
- * re-reviews) but still WRITES it, seeding a later interactive run with the identical request.
+ * `--ci` never READS the cache (CI always re-reviews) but still WRITES it, seeding a later
+ * interactive run with the identical request.
  */
-export async function decideVerdict(
-  deps: IDecideDeps,
-  opts: { ci: boolean; key: string }
+export async function runReviewFlow(
+  deps: IReviewFlowDeps
 ): Promise<{ verdict: IVerdict; cacheHit: boolean }> {
-  if (!opts.ci) {
-    const cached = await deps.readCache(opts.key);
+  const gathered = await deps.gather();
+
+  if (gathered.kind === "block") {
+    // Validate red / precondition — never touch the cache.
+    return {
+      verdict: blockedVerdict(gathered.reason, deps.identity),
+      cacheHit: false,
+    };
+  }
+
+  const key = reviewRequestKey(gathered.request, {
+    rosterHash: deps.rosterHash,
+    mode: deps.mode,
+  });
+
+  if (!deps.ci) {
+    const cached = await deps.readCache(key);
 
     if (cached !== null) {
       return { verdict: cached, cacheHit: true };
     }
   }
 
-  const verdict = await deps.review();
+  const verdict = await deps.review(gathered.request);
 
-  await deps.persist(verdict, opts.key);
+  await deps.persist(verdict, key);
 
   return { verdict, cacheHit: false };
 }
 
 /** The caching decision, isolated so it is unit-testable without the filesystem.
  *  ONLY a real panel verdict is cached. A pre-review gate/precondition block
- *  (validate failed, empty intent, diff too large) is transient — caching one
- *  poisons the tree-hash so a flaky validate under load blocks every later push. */
+ *  (validate failed, empty intent, empty/oversized diff) is transient — caching one
+ *  would re-serve as a permanent block for that request, so it is skipped. */
 export function shouldCacheVerdict(verdict: IVerdict): boolean {
   return verdict.preReview !== true;
 }
