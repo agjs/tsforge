@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { isRecord } from "../lib/guards";
 import { OpenAICompatibleProvider, type IProvider } from "../inference";
@@ -13,15 +13,17 @@ import {
 } from "../models-config";
 import { resolvePanel } from "../reviewers/registry";
 import {
-  runHarnessReview,
+  gatherChange,
+  reviewRequest,
+  blockedVerdict,
+  reviewRequestKey,
+  panelIdentityHash,
+  decideVerdict,
   DEFAULT_MAX_FILES,
   DEFAULT_MAX_CHARS,
   artifactBody,
   shouldCacheVerdict,
   honorCachedVerdict,
-  resolveReviewInputs,
-  reviewPlan,
-  resolveVerdict,
 } from "../reviewers/harness-review";
 import { parseVerdict, type IVerdict } from "../reviewers/aggregate";
 
@@ -200,10 +202,6 @@ async function validateRunner(): Promise<{
   return { passed: code === 0, failCount: firstErrors.length, firstErrors };
 }
 
-function computePanelHash(panel: object): string {
-  return createHash("sha256").update(JSON.stringify(panel)).digest("hex");
-}
-
 export const CACHE_DIR = join(".tsforge", "harness-review");
 
 async function readCachedVerdict(
@@ -303,58 +301,61 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
 
   const treeHashRes = await gitRunner(["write-tree"]);
   const treeHash = treeHashRes.stdout.trim();
-  const panelHash = computePanelHash(cfg.reviewPanel ?? {});
-  // Resolve base + intent AND fingerprint the exact reviewed diff BEFORE keying. Keying on
-  // the raw flags — or even a base SHA — is unsound: a moving `main`, an amended message,
-  // or a REBASE that shifts merge-base(base, HEAD) all change the reviewed diff
-  // (`${base}...HEAD`, three-dot) with the flags, tree, and subject unchanged. Hashing the
-  // diff bytes the reviewers actually see captures every one of those (4-model panel
-  // finding). The SAME resolved base feeds the review below, so key and review can't diverge.
-  const resolved = await resolveReviewInputs(gitRunner, args.base, args.intent);
-  // reviewPlan binds the cache key AND the review request to the SAME resolved inputs — so
-  // the diff the key fingerprints and the diff the review reads can't diverge, on either the
-  // --ci or the interactive path (the CI-parity hole the panel found). A null cacheKey means
-  // the diff was unfingerprintable (git failed) → neither read nor write the cache.
-  const plan = reviewPlan(resolved, { quick: args.quick, panelHash });
+  const identity = `${active.name}/${active.entry.model}`;
 
-  // Run validate FRESH, once, before consulting the cache. The verdict cache short-circuits
-  // only the expensive model panel — never the gate: a cached PASS is trusted only when the
-  // current worktree is still green (resolveVerdict gates the cache read on this summary),
-  // and the summary is threaded into the review so validate never runs twice. This is P4's
-  // core requirement — re-run validate before trusting a cached verdict.
-  const validateSummary = await validateRunner();
-
-  const { verdict, cacheHit } = await resolveVerdict(
+  // GATHER the review request FIRST — gatherChange runs validate FRESH (blocking, never
+  // cached, when the gate is red), resolves the base to an immutable merge-base SHA, and
+  // builds the exact request (diff + contextFiles) the reviewers will judge. A cache hit is
+  // therefore only ever reached when the gate currently passes — P4's "re-run validate
+  // before trusting the cache" requirement, satisfied by construction.
+  const gathered = await gatherChange(
+    { git: gitRunner, validate: validateRunner },
     {
-      readCache: readCachedVerdict,
-      runReview: (base, intent, summary) =>
-        runHarnessReview(
-          {
-            git: gitRunner,
-            validate: validateRunner,
+      base: args.base,
+      intent: args.intent,
+      maxFiles: DEFAULT_MAX_FILES,
+      maxChars: DEFAULT_MAX_CHARS,
+    }
+  );
+
+  let verdict: IVerdict;
+  let cacheHit = false;
+
+  if (gathered.kind === "block") {
+    // A pre-review gate/precondition block — never cached (a transient block must not reject
+    // every later push).
+    verdict = blockedVerdict(gathered.reason, identity);
+  } else {
+    // Key on a fingerprint of the ACTUAL gathered request (diff + full contextFiles + intent
+    // + rubric) plus the EFFECTIVE roster (the reviewers actually used, after skips/quick-
+    // slice/active-model exclusion) and mode. The same request object is handed to the
+    // review, so key and review hash the same bytes — no second read to diverge from.
+    const rosterHash = panelIdentityHash(effective, identity);
+    const key = reviewRequestKey(gathered.request, {
+      rosterHash,
+      mode: args.quick ? "quick" : "full",
+    });
+    const decided = await decideVerdict(
+      {
+        readCache: readCachedVerdict,
+        review: () =>
+          reviewRequest(gathered.request, {
             makeProvider,
             runBinary,
             panel: effective,
-            identity: `${active.name}/${active.entry.model}`,
-          },
-          {
-            base,
-            intent,
-            maxFiles: DEFAULT_MAX_FILES,
-            maxChars: DEFAULT_MAX_CHARS,
-            validateSummary: summary,
-          }
-        ),
-      persist: (v, cacheKey) =>
-        persistVerdict(v, cacheKey, treeHash, panelHash),
-    },
-    { ci: args.ci, plan, validateSummary }
-  );
+            identity,
+          }),
+        persist: (v, k) => persistVerdict(v, k, treeHash, rosterHash),
+      },
+      { ci: args.ci, key }
+    );
+
+    verdict = decided.verdict;
+    cacheHit = decided.cacheHit;
+  }
 
   if (cacheHit) {
-    process.stdout.write(
-      "harness-review: cache hit (validate re-run green), reusing verdict\n"
-    );
+    process.stdout.write("harness-review: cache hit, reusing verdict\n");
   }
 
   process.stdout.write(`${formatVerdict(verdict)}\n`);

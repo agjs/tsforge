@@ -95,26 +95,93 @@ describe("gatherChange", () => {
     }
   });
 
-  test("reuses a provided validateSummary instead of running validate again (validate runs once per invocation)", async () => {
-    let validateCalls = 0;
-    const deps: IGatherDeps = {
-      git: git({
-        "diff --name-only": "x.ts",
-        diff: "diff --git a/x b/x\n+code",
-      }),
-      validate: async () => {
-        validateCalls += 1;
+  test("a failing `git diff --name-only` BLOCKS instead of building an empty review (exit code honored)", async () => {
+    // The false-green the panel flagged: if git errors and returns empty stdout, an
+    // unguarded gather would build a 0-file, empty-diff request that the panel green-lights
+    // and caches. Honoring the exit code turns that into a block.
+    const failingGit: IGatherDeps["git"] = async (args) =>
+      args.includes("--name-only")
+        ? { stdout: "", code: 128 }
+        : { stdout: "", code: 0 };
+    const r = await gatherChange(
+      { git: failingGit, validate: cleanValidate },
+      opts
+    );
 
-        return { passed: true, failCount: 0, firstErrors: [] };
-      },
+    expect(r.kind).toBe("block");
+
+    if (r.kind === "block") {
+      expect(r.reason).toMatch(/could not compute the changed-file list/iu);
+    }
+  });
+
+  test("a failing `git diff` (content) BLOCKS even when the name list succeeded", async () => {
+    const git2: IGatherDeps["git"] = async (args) => {
+      if (args.includes("--name-only")) {
+        return { stdout: "x.ts", code: 0 };
+      }
+
+      if (args[0] === "diff") {
+        return { stdout: "", code: 129 }; // the content diff fails
+      }
+
+      return { stdout: "", code: 0 };
     };
-    const r = await gatherChange(deps, {
-      ...opts,
-      validateSummary: { passed: true, failCount: 0, firstErrors: [] },
-    });
+
+    const r = await gatherChange({ git: git2, validate: cleanValidate }, opts);
+
+    expect(r.kind).toBe("block");
+
+    if (r.kind === "block") {
+      expect(r.reason).toMatch(/could not compute the diff/iu);
+    }
+  });
+
+  test("no changed files between base and HEAD → block (nothing to review, never a vacuous green)", async () => {
+    const deps: IGatherDeps = {
+      git: git({ "diff --name-only": "", diff: "" }),
+      validate: cleanValidate,
+    };
+    const r = await gatherChange(deps, opts);
+
+    expect(r.kind).toBe("block");
+
+    if (r.kind === "block") {
+      expect(r.reason).toMatch(/no changes/iu);
+    }
+  });
+
+  test("resolveBase merge-base failure falls back to the ref and still diffs (shallow/odd repos)", async () => {
+    // merge-base returns empty (failure); gather must still resolve a range and produce a
+    // request rather than throw. Records the range actually diffed.
+    const seen: string[] = [];
+
+    const fallbackGit: IGatherDeps["git"] = async (args) => {
+      const key = args.join(" ");
+
+      if (args[0] === "merge-base") {
+        return { stdout: "", code: 1 }; // no merge-base
+      }
+
+      if (args[0] === "diff") {
+        seen.push(key);
+
+        return key.includes("--name-only")
+          ? { stdout: "x.ts", code: 0 }
+          : { stdout: "diff --git a/x b/x\n+code", code: 0 };
+      }
+
+      return { stdout: "", code: 0 };
+    };
+
+    const r = await gatherChange(
+      { git: fallbackGit, validate: cleanValidate },
+      { ...opts, base: "featureX" }
+    );
 
     expect(r.kind).toBe("request");
-    expect(validateCalls).toBe(0); // the caller's fresh summary was reused
+    // explicit ref given → falls back to that ref (not HEAD~1) for the diff range
+    expect(seen.some((k) => k.includes("featureX...HEAD"))).toBe(true);
   });
 
   test("attaches the changed files' current (HEAD) contents as review context", async () => {
