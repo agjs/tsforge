@@ -821,6 +821,10 @@ export function composeBoringstackGate(opts: {
   /** The OTHER features/entities in this build, so the judge scopes to this
    *  feature's own responsibilities and never demands a link to an unbuilt slice. */
   siblingEntities?: readonly string[];
+  /** OpenAPI-spec fetcher for the reachability runtime route-presence probe. Omitted →
+   *  the default live `fetch`; injected by the gate-honesty suite (and available for
+   *  future callers) so the probe is deterministically testable. */
+  specFetcher?: SpecFetcher;
 }): IGate {
   const { cwd, exec, evaluator, baseline, feature, entity } = opts;
   const e2eAcceptanceDisabled =
@@ -842,7 +846,7 @@ export function composeBoringstackGate(opts: {
       ),
       baseline
     ),
-    reachabilityStage(cwd, feature.id),
+    reachabilityStage(cwd, feature.id, opts.specFetcher),
     ...(entity !== undefined && !e2eAcceptanceDisabled
       ? [testIdStage(cwd, entity)]
       : []),
