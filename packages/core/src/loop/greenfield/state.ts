@@ -178,6 +178,16 @@ export async function loadState(cwd: string): Promise<IGreenfieldState | null> {
   return { goal: parsed.goal, features };
 }
 
+/** Whether a greenfield checklist EXISTS on disk — regardless of whether it parses.
+ *  This is the true "is this a RESUME?" signal. `loadState` returns null for BOTH a
+ *  missing AND a present-but-corrupt file, so it must NOT be used to detect a fresh
+ *  start: a corrupt features.json on a tree that was already built into would look
+ *  "fresh" and let a caller re-capture a CONTAMINATED baseline (a false-green). Err
+ *  toward resume — presence ⇒ resume, only true absence ⇒ fresh. */
+export async function hasState(cwd: string): Promise<boolean> {
+  return Bun.file(featuresPath(cwd)).exists();
+}
+
 /** Persist the feature checklist as pretty JSON (diff-friendly, model-resistant). */
 export async function saveState(
   cwd: string,

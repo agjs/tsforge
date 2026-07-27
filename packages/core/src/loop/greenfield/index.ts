@@ -1,6 +1,7 @@
 export { runGreenfield, prepareState } from "./run";
 export {
   loadState,
+  hasState,
   saveState,
   writeSpec,
   writeProgress,

@@ -56,10 +56,7 @@ export function checkFeatureReachable(
   }
 
   // 2. API registration: the resource must be mounted in the API route table.
-  if (
-    inputs.apiRoutes !== null &&
-    !inputs.apiRoutes.includes(`${camel}Routes`)
-  ) {
+  if (inputs.apiRoutes !== null && !registersRoutes(inputs.apiRoutes, camel)) {
     problems.push(
       `API route missing: ${camel}Routes is not registered in ` +
         `config/routes/routes.ts — the endpoints would be unreachable.`
@@ -78,6 +75,29 @@ export function checkFeatureReachable(
   }
 
   return { ok: problems.length === 0, problems };
+}
+
+/**
+ * True when `apiRoutes` mounts `<camel>Routes` as a WHOLE identifier, not merely as a
+ * substring of a longer name. A bare `.includes("countRoutes")` matches an unrelated
+ * slice's `accountRoutes` (`account` ⊃ `count`), so a `count` feature whose own
+ * `countRoutes` is genuinely absent would be reported reachable — a false green in the
+ * one check meant to catch unregistered (hollow) features. The `\p{ID_Continue}`
+ * lookarounds (the canonical Unicode "identifier continue" set — same idiom as
+ * `fieldIsMentioned`) reject a match glued to an adjacent identifier char on either
+ * side, while still matching every real mount idiom (`count: countRoutes`,
+ * `.use(countRoutes)`, `[countRoutes]`), whose delimiter before the name is not an
+ * identifier char. `$` is added to the class because it is a JS IdentifierPart that
+ * `\p{ID_Continue}` omits — so `$countRoutes` is a distinct identifier, not a match.
+ * (`_`, ZWJ, and ZWNJ are already in `\p{ID_Continue}`, verified at runtime.)
+ */
+function registersRoutes(apiRoutes: string, camel: string): boolean {
+  const boundary = "[\\p{ID_Continue}$]";
+  const ident = `${camel}Routes`.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+
+  return new RegExp(`(?<!${boundary})${ident}(?!${boundary})`, "u").test(
+    apiRoutes
+  );
 }
 
 /** True when a locale JSON string has non-empty `features.<lower>.title` + `.empty`. */

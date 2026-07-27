@@ -25,23 +25,51 @@ const feature: IFeature = {
   attempts: 0,
 };
 
-// db:push (and the drop-table `bun -e`) are SEPARATE commands from the gate — they
-// succeed independently, so the mock returns 0 for them and the simulated (code,
-// stdout) only for the actual gate command. Without this, a test simulating a red
-// gate would also make db:push "fail" and trip the command stage's db:push
-// short-circuit before the gate ever runs.
+// The command stage runs setup steps (eslint-cache clear, lint:fix, format, db:push, and the
+// db-push recovery's `bun -e` drop) BEFORE the gate. Those succeed independently; only the GATE
+// returns the test's code/stdout. Modelling that here keeps a RED-gate test (code 1) exercising
+// the gate path, not the db:push short-circuit.
 const execWith =
   (code: number, stdout: string): Exec =>
   async (argv) => {
-    const isDbPush = argv[1] === "run" && argv[2] === "db:push";
+    const cmd = argv.join(" ");
     const isDrop = argv[1] === "-e";
 
-    if (isDbPush || isDrop) {
+    if (
+      isDrop ||
+      /lint:fix|(?:^|\s)format(?:\s|$)|db:push|eslintcache/u.test(cmd)
+    ) {
       return { code: 0, stdout: "", stderr: "" };
     }
 
     return { code, stdout, stderr: "" };
   };
+
+// An exec whose db:push FAILS with the given output (everything else succeeds / gate is green),
+// to drive the command stage's db:push-failure path. Records every command it's asked to run
+// (into `calls`, when provided) so a test can PROVE the gate was never invoked afterward.
+const execDbPushFails =
+  (pushOutput: string, calls: string[] = []): Exec =>
+  async (argv) => {
+    const cmd = argv.join(" ");
+
+    calls.push(cmd);
+
+    if (cmd.includes("db:push")) {
+      return { code: 1, stdout: pushOutput, stderr: "" };
+    }
+
+    return { code: 0, stdout: "all good", stderr: "" };
+  };
+
+// Every real `bun run db:push` failure begins with this drizzle-kit preamble (it mentions
+// `drizzle.config.ts` and "database"). The db:push tests prepend it so they run against
+// production-shaped output rather than bare one-line errors.
+const DRIZZLE_PREAMBLE =
+  "No config path provided, using default 'drizzle.config.ts'\n" +
+  "Reading config file '/app/apps/api/drizzle.config.ts'\n" +
+  "Using 'pg' driver for database querying\n" +
+  "[i] pulling schema from database...\n";
 
 describe("boringstackCommandStage", () => {
   test("green gate → passed, no errors", async () => {
@@ -74,7 +102,8 @@ describe("boringstackCommandStage", () => {
     const r = await stage.run("/tmp/clone");
 
     expect(r.passed).toBe(false);
-    expect(r.errors[0]?.rule).toBe("db-push-failed");
+    // Surfaced via #60's db:push error reporter (fingerprinted key, schema-vs-infra guidance).
+    expect(r.errors[0]?.rule).toBe("db-push");
     expect(r.errors[0]?.message).toContain("column");
   });
 
@@ -435,6 +464,182 @@ UNFAMILIAR TOOL FAILURE: the useful downstream detail`;
     expect(error?.phase).toBe(2);
     expect(error?.message).toContain("useful downstream detail");
     expect(error?.message).not.toContain("healthy API output");
+  });
+
+  test("a failed db:push is SURFACED (not swallowed) and the gate is NOT run against a stale DB", async () => {
+    // #60: db:push's exit code used to be discarded, so a schema-sync failure was silent and
+    // the gate ran against an out-of-sync DB. A non-zero push now short-circuits to a gate
+    // failure carrying the push output, WITHOUT running the gate.
+    const push =
+      'Error: column "amount" cannot be cast automatically to type integer';
+    const calls: string[] = [];
+    const stage = boringstackCommandStage(
+      "/tmp/clone",
+      execDbPushFails(push, calls)
+    );
+    const r = await stage.run("/tmp/clone");
+
+    expect(r.passed).toBe(false);
+    expect(r.errors).toHaveLength(1);
+
+    const err = r.errors[0];
+
+    expect(err?.rule).toBe("db-push");
+    // The key derives from the failure fingerprint, never a constant — so a DIFFERENT error isn't
+    // mistaken for "no progress" by stuck detection.
+    expect(err?.key.startsWith("db-push:")).toBe(true);
+    expect(err?.message).toContain("db:push failed");
+    // The raw push output is preserved so the real cause is visible.
+    expect(err?.message).toContain("cannot be cast automatically");
+
+    // PROVE the gate was never invoked after the push failed. The command stage runs its setup
+    // steps (autofix, then db:push) and, on a push failure, returns immediately — so db:push
+    // must be the LAST command executed. Asserting "nothing ran after db:push" is robust to the
+    // gate's exact argv shape (a brittle `bash -lc` match would silently pass if that changed).
+    expect(calls.some((c) => c.includes("db:push"))).toBe(true);
+    expect(calls.at(-1)).toContain("db:push");
+  });
+
+  test("does NOT auto-classify schema vs infra — surfaces the raw error + a decision rule, no guessed file", async () => {
+    // Repeated review proved schema-vs-infra CANNOT be reliably inferred from the text: Postgres
+    // echoes arbitrary identifiers AND unquoted data in error detail — `column "epipe"`, a
+    // `DETAIL: Key (name)=(socket hang up) …`, `Failing row contains (1, EPIPE)` — so any token
+    // matcher mis-steers real schema/data failures toward "infra / do NOT edit the schema" (the
+    // stuck-inducing direction). So the error instead carries the raw output + a decision rule
+    // naming BOTH levers and lets the model choose, and sets NO file (guessing app.schema.ts would
+    // be wrong for a genuine infra failure).
+    const outputs = [
+      DRIZZLE_PREAMBLE + 'error: column "amount" does not exist', // schema-shaped
+      "Error: connect ECONNREFUSED 127.0.0.1:5432", // infra-shaped
+      // Adversarial: a data value that any substring classifier would have flipped to "infra".
+      DRIZZLE_PREAMBLE +
+        "error: duplicate key value violates unique constraint\n" +
+        "DETAIL:  Key (name)=(socket hang up) already exists.",
+    ];
+
+    for (const out of outputs) {
+      const r = await boringstackCommandStage(
+        "/tmp/clone",
+        execDbPushFails(out)
+      ).run("/tmp/clone");
+      const err = r.errors[0];
+
+      expect(err?.key.startsWith("db-push:")).toBe(true);
+      // No guessed file — classification is the model's call, from the raw error.
+      expect(err?.file).toBeUndefined();
+      // The decision rule names BOTH levers (the schema file AND the infra action) every time.
+      expect(err?.message).toContain("app.schema.ts");
+      expect(err?.message).toContain("dev.sh up");
+    }
+  });
+
+  test("the key can't be forged by sliding a byte between stdout and stderr (unambiguous serialization)", async () => {
+    // Different (stdout, stderr) pairs that would serialize identically under a single-delimiter
+    // join must still key differently — otherwise a genuinely different failure reads as "no
+    // progress". JSON.stringify([stdout, stderr]) is unforgeable because it escapes EVERY byte.
+    const NUL = String.fromCharCode(0);
+
+    const keyFor = async (stdout: string, stderr: string): Promise<string> => {
+      const exec: Exec = async (argv) =>
+        argv.join(" ").includes("db:push")
+          ? { code: 1, stdout, stderr }
+          : { code: 0, stdout: "all good", stderr: "" };
+      const r = await boringstackCommandStage("/tmp/clone", exec).run(
+        "/tmp/clone"
+      );
+
+      return r.errors[0]?.key ?? "";
+    };
+
+    // A '\n' join collides on these; a NUL join collides on the NUL-carrying pair below.
+    expect(await keyFor("a\n", "b")).not.toBe(await keyFor("a", "\nb"));
+    // The streams THEMSELVES contain NUL: `a\0`+`b` and `a`+`\0b` both become `a\0\0b` under a
+    // NUL join. They must still key differently.
+    expect(await keyFor(`a${NUL}`, "b")).not.toBe(await keyFor("a", `${NUL}b`));
+  });
+
+  test("the surfaced output is raw (cwd not stripped) and failures differing only by a cwd path stay DISTINCT", async () => {
+    // Regression: stripping every `cwd` occurrence collapsed `value=<cwd>` and `value=` to one key
+    // and mangled the displayed error. The raw output must be preserved and both key distinctly.
+    const cwd = "/tmp/clone";
+
+    const keyAndMsg = async (
+      out: string
+    ): Promise<{ key: string; message: string }> => {
+      const r = await boringstackCommandStage(cwd, execDbPushFails(out)).run(
+        cwd
+      );
+
+      return {
+        key: r.errors[0]?.key ?? "",
+        message: r.errors[0]?.message ?? "",
+      };
+    };
+
+    const withPath = await keyAndMsg(`error: bad default value=${cwd}/x`);
+    const withoutPath = await keyAndMsg("error: bad default value=");
+
+    // The cwd is preserved in the surfaced message (raw, not stripped)…
+    expect(withPath.message).toContain(cwd);
+    // …and the two outputs, which differ ONLY by the cwd occurrence, key differently.
+    expect(withPath.key).not.toBe(withoutPath.key);
+  });
+
+  test("distinct db:push failures get DISTINCT keys even behind a shared preamble; the same failure is stable", async () => {
+    // Stuck detection keys on the error. Real drizzle-kit output opens with a long shared
+    // preamble and the distinguishing error is in the TAIL — so a prefix-based key would
+    // collapse different failures to "no progress". The key must hash the WHOLE output.
+    const preamble =
+      "No config path provided, using default 'drizzle.config.ts'\n" +
+      "Reading config file '/app/apps/api/drizzle.config.ts'\n" +
+      "Using 'pg' driver for database querying\n" +
+      "[i] pulling schema from database...\n" +
+      "Applying migration to Postgres at postgres://localhost:5432/app ...\n";
+
+    const run = async (out: string): Promise<string> => {
+      const r = await boringstackCommandStage(
+        "/tmp/clone",
+        execDbPushFails(out)
+      ).run("/tmp/clone");
+
+      return r.errors[0]?.key ?? "";
+    };
+
+    // Two DIFFERENT schema errors sharing the (well over 120-char) preamble.
+    const errA =
+      preamble + 'PostgreSQL error: column "amount" cannot be cast to integer';
+    const errB =
+      preamble + 'PostgreSQL error: relation "invoice" already exists';
+
+    const keyA1 = await run(errA);
+    const keyA2 = await run(errA);
+    const keyB = await run(errB);
+
+    expect(preamble.length).toBeGreaterThan(120); // the exact collision the head-slice caused
+    expect(keyA1).toBe(keyA2); // same failure → stable key
+    expect(keyA1).not.toBe(keyB); // different failure (only the tail differs) → different key
+
+    // Failures differing ONLY in a digit are genuinely distinct (identifier suffix, type size)
+    // and must NOT collapse — masking digits would make them share a key and hide progress.
+    const keyD1 = await run(preamble + 'error: column "value1" does not exist');
+    const keyD2 = await run(preamble + 'error: column "value2" does not exist');
+    const keyV20 = await run(preamble + "error: type varchar(20) too small");
+    const keyV30 = await run(preamble + "error: type varchar(30) too small");
+
+    expect(keyD1).not.toBe(keyD2);
+    expect(keyV20).not.toBe(keyV30);
+
+    // Postgres quoted identifiers are CASE-SENSITIVE: "value" and "Value" are different
+    // columns, so their failures must key differently (a lowercasing normalization collapsed
+    // them). The raw-bytes hash preserves case.
+    const keyLower = await run(
+      preamble + 'error: column "value" does not exist'
+    );
+    const keyUpper = await run(
+      preamble + 'error: column "Value" does not exist'
+    );
+
+    expect(keyLower).not.toBe(keyUpper);
   });
 });
 

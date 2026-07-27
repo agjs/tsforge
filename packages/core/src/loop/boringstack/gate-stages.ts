@@ -409,28 +409,55 @@ async function enrichUnparsable(
     `it (there may be more than one broken file; every one must parse before the cascade clears).`;
 }
 
-/** Combined push output, trimmed to a readable excerpt for the gate error. */
-function pushOutput(push: IExecResult): string {
-  return `${push.stdout}\n${push.stderr}`.trim().slice(-3_000);
-}
+/** `db:push` applies the Drizzle schema to Postgres every cycle (what a dev gets on save).
+ *  Its exit code used to be DISCARDED, so a failed push — a broken schema, or the DB not
+ *  reachable — was swallowed and the gate then ran against a stale/out-of-sync DB, surfacing
+ *  confusing downstream errors instead of the real cause. Turn the failure into a gate error
+ *  carrying the raw output + a decision rule.
+ *
+ *  We do NOT auto-classify schema-vs-infra from the text. Repeated review proved that
+ *  unwinnable: Postgres echoes ARBITRARY user identifiers AND unquoted DATA in error text
+ *  (`column "epipe"`, `DETAIL: Key (name)=(socket hang up) …`, `Failing row contains (1, EPIPE)`),
+ *  so any substring token — even quote-blanked or word-bounded — can match a genuine schema/data
+ *  failure and mis-steer the model to "bring the stack up / do NOT edit the schema" (the
+ *  stuck-inducing direction). Instead we hand the model the raw error and let IT decide, and set
+ *  no `file` (guessing app.schema.ts would be wrong for a real infra failure). A clean infra
+ *  HARD-abort belongs to the settleGate seam — #47. */
+function dbPushError(result: IExecResult): IErrorItem {
+  const raw = `${result.stdout}\n${result.stderr}`.trim();
+  const excerpt =
+    raw.length <= 3_000
+      ? raw
+      : `${raw.slice(0, 1_800)}\n… output truncated …\n${raw.slice(-1_000)}`;
 
-/** An actionable gate error for a db:push that did not migrate the DB. The dominant
- *  case is drizzle-kit's interactive column-rename prompt crashing headlessly (a
- *  name-less plan removed the scaffold's stub column); recovery needs the entity table
- *  name + a reachable DATABASE_URL. Any other push failure (a genuinely broken schema)
- *  is surfaced verbatim so the model can fix it. */
-function dbPushError(push: IExecResult): IErrorItem {
+  // The key drives stuck-detection (and differential suppression). It MUST reflect the specific
+  // failure, not a constant: a constant key makes a DIFFERENT failure look like "no progress"
+  // (and could suppress a genuinely new one). Hash the (stdout, stderr) pair VERBATIM — no
+  // lowercasing/whitespace-collapsing/digit-masking/trimming (none is semantics-preserving for
+  // Postgres output; `value1` vs `value2` are distinct), and NO cwd stripping (that would collapse
+  // `value=<cwd>` and `value=` to the same key). `JSON.stringify([stdout, stderr])` is an
+  // UNFORGEABLE serialization: it escapes every byte (incl. NUL) and encodes the array boundary,
+  // so a byte can't slide between the two streams to forge a collision (`["a ","b"]` !==
+  // `["a"," b"]`) — unlike any single-delimiter join, since the streams can contain the
+  // delimiter too. A db:push FAILURE is deterministic, so this is a stable key across cycles for
+  // the same error while ANY real difference changes it.
+  const fingerprint = Bun.hash(
+    JSON.stringify([result.stdout, result.stderr])
+  ).toString(36);
+
+  const guidance =
+    "Read the error above and decide: a column/table/type/constraint/data problem means your " +
+    "SCHEMA is wrong — fix `apps/api/src/clients/postgres/schema/app.schema.ts` (the DB is now " +
+    "out of sync, so the rest of the gate is unreliable until this passes). A connection / auth / " +
+    "TLS / `database (or role) does not exist` / `too many clients` problem is INFRASTRUCTURE, " +
+    "not a code fix — bring the BoringStack stack up (dev.sh up) and check the DB environment; do " +
+    "NOT edit the schema for it.";
+
   return {
-    key: "boringstack:db-push-failed",
-    rule: "db-push-failed",
+    key: `db-push:${fingerprint}`,
+    rule: "db-push",
     phase: 1,
-    message:
-      "db:push failed to migrate the database, so the API would 500 at runtime " +
-      '(`column "…" does not exist`) and the feature would be hollow. Do NOT treat ' +
-      "the gate as green. If this is drizzle-kit's interactive rename prompt " +
-      "(`Interactive prompts require a TTY`), the schema change is a column rename the " +
-      "headless push can't resolve — align the entity table with the plan's columns. " +
-      `Raw db:push output:\n${pushOutput(push)}`,
+    message: `bun run db:push failed (exit ${String(result.code)}):\n${excerpt}\n\n${guidance}`,
   };
 }
 
@@ -443,22 +470,22 @@ export function boringstackCommandStage(
   return {
     async run(): Promise<IValidateResult> {
       await autofixApps(cwd, exec);
-      // db:push with headless recovery: when a name-less plan drops the scaffold's
-      // stub `name` column, drizzle-kit's interactive rename prompt crashes in the
-      // no-TTY build (`--force` doesn't cover it) → the DB never migrates → the
-      // feature is hollow at runtime while the gate false-greens. dbPushForce drops
-      // the (disposable) entity table and retries as a clean CREATE on exactly that
-      // failure, and returns an HONEST code (a swallowed crash → non-zero). See db-push.ts.
+
+      // db:push with headless recovery: a name-less plan drops the scaffold's stub `name`
+      // column, so drizzle-kit's interactive rename prompt crashes in the no-TTY build
+      // (`--force` doesn't cover it) and — because `bun run db:push` exits 0 on that crash —
+      // the DB silently never migrates and the gate false-greens. dbPushForce detects that
+      // by OUTPUT signature, drops the (disposable) entity table, retries a clean CREATE,
+      // and returns an HONEST code (a swallowed/persistent crash → non-zero). The exit-code
+      // check below then surfaces ANY unrecovered db:push failure via dbPushError (#60), so
+      // the gate never runs against a stale schema. See db-push.ts.
       const push = await dbPushForce(join(cwd, "apps/api"), exec, entityTable);
 
-      // If the migration genuinely failed (couldn't recover), SHORT-CIRCUIT: the gate
-      // must NOT run against a stale schema and report green (the false-green this whole
-      // fix exists to kill). Surface it as an actionable gate error instead.
       if (push.code !== 0) {
         return {
           passed: false,
           errors: [dbPushError(push)],
-          output: pushOutput(push),
+          output: `${push.stdout}\n${push.stderr}`,
         };
       }
 

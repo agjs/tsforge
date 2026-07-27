@@ -242,22 +242,29 @@ function buildEntityAcceptance(
   };
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 /**
  * Check if a field is mentioned (by exact name or humanized form) in a constraint.
+ * Matches on WORD BOUNDARIES, not raw substring: a short field name like `id`/`age` must not
+ * match a longer word that merely contains it (`valid`, `manage`), which would wrongly
+ * associate the field with an unrelated constraint and fabricate a spurious negative test.
  */
-function fieldIsMentioned(
+export function fieldIsMentioned(
   field: IAcceptField,
   constraintLower: string
 ): boolean {
-  const exactMatch = constraintLower.includes(field.name.toLowerCase());
+  const mentions = (needle: string): boolean =>
+    needle.length > 0 &&
+    new RegExp(`\\b${escapeRegExp(needle)}\\b`, "u").test(constraintLower);
   const humanized = field.name
     .replace(/([A-Z])/g, " $1")
     .toLowerCase()
     .trim();
-  const humanizedMatch =
-    humanized.length > 0 && constraintLower.includes(humanized);
 
-  return exactMatch || humanizedMatch;
+  return mentions(field.name.toLowerCase()) || mentions(humanized);
 }
 
 /**

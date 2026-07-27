@@ -552,6 +552,13 @@ describe("refinePrompt", () => {
     expect(prompt).toContain("APP_SIDEBAR_NAV_ITEMS");
     // Must carry the add-only boundary for those shared files.
     expect(prompt).toContain("ADD ONLY");
+    // Post-#183 the FAST per-feature gate runs the sidebar's co-located nav-count test, so the
+    // guidance must tell the model a stale count fails THIS cycle — not merely the final validate
+    // (understating the urgency lets the model defer the count bump and spray the fast gate).
+    expect(prompt).toContain("per-feature gate fails THIS cycle");
+    expect(prompt).not.toContain(
+      "otherwise the final full-project validate fails"
+    );
   });
 
   it("teaches the scaffold's api-client hook typing: annotate the DOMAIN type, never Readable/as (kills the near-green cluster)", () => {
