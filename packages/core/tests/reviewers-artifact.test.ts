@@ -10,6 +10,7 @@ import {
   CACHE_VERSION,
 } from "../src/reviewers/harness-review";
 import type { GatherResult } from "../src/reviewers/harness-review";
+import type { ResolvedReviewer } from "../src/reviewers/registry";
 import type { IReviewRequest } from "../src/reviewers/schema";
 import type { IVerdict } from "../src/reviewers/aggregate";
 
@@ -92,6 +93,24 @@ describe("reviewRequestKey (cache key = fingerprint of the ACTUAL review request
     );
   });
 
+  test("canonical (key-sorted) serialization: SAME content in a different key insertion order hashes equally (no thrash / divergence)", () => {
+    // A second construction path (or a JS engine detail) that emits the request's keys in a
+    // different order must not change the digest, or the cache would thrash / a re-gather
+    // could miss. The recursive key-sort guarantees content-equality ⇒ digest-equality.
+    const reordered: IReviewRequest = {
+      rubricVersion: request.rubricVersion,
+      contextFiles: request.contextFiles,
+      validateSummary: request.validateSummary,
+      diff: request.diff,
+      intent: request.intent,
+      title: request.title,
+    };
+
+    expect(reviewRequestKey(reordered, rosterOpts)).toBe(
+      reviewRequestKey(request, rosterOpts)
+    );
+  });
+
   test("CACHE_VERSION is mixed into the key — bumping it retires ALL legacy artifacts in one shot", () => {
     // The ONLY lever that invalidates every already-on-disk artifact (e.g. legacy diff-hash
     // keys, or a poisoned pre-review block). If a regression dropped CACHE_VERSION from the
@@ -127,12 +146,19 @@ describe("reviewRequestKey (cache key = fingerprint of the ACTUAL review request
 });
 
 describe("panelIdentityHash (the roster that ACTUALLY reviewed keys the cache)", () => {
-  const grok = {
+  const grok: ResolvedReviewer = {
     kind: "model",
     id: "grok",
     entry: { baseUrl: "http://a", model: "g1" },
   };
-  const codex = { kind: "binary", id: "codex", argv: ["codex"] };
+  const codex: ResolvedReviewer = {
+    kind: "binary",
+    id: "codex",
+    argv: ["codex"],
+    input: "stdin",
+    timeoutMs: 1000,
+    parse: "raw",
+  };
   const panel = { reviewers: [grok, codex], minReviewers: 2 };
 
   test("stable and order-independent (roster is sorted by id before hashing)", () => {
@@ -159,7 +185,7 @@ describe("panelIdentityHash (the roster that ACTUALLY reviewed keys the cache)",
   test("RETARGETING the same id to a different model/endpoint/binary changes the key (reviewer implementation is pinned, not just its id)", () => {
     // The panel finding: hashing ids alone would reuse a verdict produced by a DIFFERENT
     // reviewer implementation. Full config is hashed, so same-id-different-model differs.
-    const grokRetargeted = {
+    const grokRetargeted: ResolvedReviewer = {
       kind: "model",
       id: "grok",
       entry: { baseUrl: "http://a", model: "g2-DIFFERENT" },
@@ -183,16 +209,28 @@ describe("runReviewFlow (the CLI wiring invariant: gather-before-cache, block-ne
     read: number;
     review: number;
     persist: string[];
+    /** Ordered log of every seam as it fires, so call ORDER (not just counts) is asserted. */
+    order: string[];
+    /** The key readCache was called with (null if never). */
+    readKey: string | null;
   }
 
   // A flow harness: `gathered` is what gather() returns (block or request); records the
   // order/counts so the wiring invariant can be asserted, and captures the key each cache
   // op received (to prove it derives from the gathered request).
   const harness = (gathered: GatherResult, cached: IVerdict | null) => {
-    const calls: ICalls = { gather: 0, read: 0, review: 0, persist: [] };
+    const calls: ICalls = {
+      gather: 0,
+      read: 0,
+      review: 0,
+      persist: [],
+      order: [],
+      readKey: null,
+    };
     const deps = {
       gather: async () => {
         calls.gather += 1;
+        calls.order.push("gather");
 
         return gathered;
       },
@@ -202,16 +240,19 @@ describe("runReviewFlow (the CLI wiring invariant: gather-before-cache, block-ne
       ci: false,
       readCache: async (key: string) => {
         calls.read += 1;
-        void key;
+        calls.order.push("read");
+        calls.readKey = key;
 
         return cached;
       },
       review: async (_request: IReviewRequest) => {
         calls.review += 1;
+        calls.order.push("review");
 
         return reviewVerdict;
       },
       persist: async (_verdict: IVerdict, key: string) => {
+        calls.order.push("persist");
         calls.persist.push(key);
       },
     };
@@ -239,29 +280,31 @@ describe("runReviewFlow (the CLI wiring invariant: gather-before-cache, block-ne
     expect(calls.persist).toHaveLength(0);
   });
 
-  test("gather runs BEFORE any cache access, and the cache key is derived from the gathered request", async () => {
+  test("gather runs strictly BEFORE any cache access, and the READ + WRITE keys are exactly reviewRequestKey(gathered request)", async () => {
     const { calls, deps } = harness(requestResult, null);
 
     await runReviewFlow(deps);
 
-    // The key the cache saw is exactly reviewRequestKey(gathered.request, roster/mode).
     const expectedKey = reviewRequestKey(request, {
       rosterHash: "roster-1",
       mode: "full",
     });
 
-    expect(calls.gather).toBe(1);
+    // ORDER, not just counts: gather precedes the read, which precedes review+persist.
+    expect(calls.order).toEqual(["gather", "read", "review", "persist"]);
+    // Both cache ops keyed the gathered request (not the raw flags / a different base).
+    expect(calls.readKey).toBe(expectedKey);
     expect(calls.persist).toEqual([expectedKey]);
   });
 
-  test("cache HIT reuses the cached verdict — gather ran, but no review, no write", async () => {
+  test("cache HIT reuses the cached verdict — gather ran BEFORE the read, then no review, no write", async () => {
     const { calls, deps } = harness(requestResult, cachedVerdict);
 
     const r = await runReviewFlow(deps);
 
     expect(r.cacheHit).toBe(true);
     expect(r.verdict.reason).toBe("from cache");
-    expect(calls.gather).toBe(1);
+    expect(calls.order).toEqual(["gather", "read"]); // gathered first, then read, then stop
     expect(calls.review).toBe(0);
     expect(calls.persist).toHaveLength(0);
   });

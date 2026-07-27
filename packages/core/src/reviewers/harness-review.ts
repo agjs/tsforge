@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { IPanel } from "./registry";
+import type { IPanel, ResolvedReviewer } from "./registry";
 import { reviewerInvoke, type IInvokeDeps } from "./invoke";
 import { aggregate, type IVerdict } from "./aggregate";
 import {
@@ -41,16 +41,29 @@ export type GatherResult =
   | { kind: "request"; request: IReviewRequest }
   | { kind: "block"; reason: string };
 
+/** Pin HEAD to an immutable commit SHA once, so every subsequent read in a gather (the diff,
+ *  the file list, the context `show`, the subject `log`) references the SAME snapshot. If
+ *  HEAD moves mid-gather, an unpinned gather would combine file names, diff, and context from
+ *  DIFFERENT commits — the gate would then approve a scope that isn't the commit being pushed
+ *  (a TOCTOU the panel flagged). Falls back to the literal "HEAD" only if rev-parse fails. */
+async function resolveHead(git: IGitRunner): Promise<string> {
+  const res = await git(["rev-parse", "HEAD"]);
+  const head = res.stdout.trim();
+
+  return head.length > 0 ? head : "HEAD";
+}
+
 async function resolveBase(
   git: IGitRunner,
-  explicit: string | undefined
+  explicit: string | undefined,
+  head: string
 ): Promise<string> {
   const ref = explicit !== undefined && explicit.length > 0 ? explicit : "main";
-  // Pin to the merge-base SHA, not the ref. The diff is `${base}...HEAD` (three-dot), whose
-  // true origin is merge-base(ref, HEAD); returning that immutable SHA means the bytes the
-  // fingerprint hashes and the bytes the review diffs are ONE snapshot even if `ref` moves
-  // between the two in-process git calls (and a rebase that shifts the merge-base changes it).
-  const res = await git(["merge-base", ref, "HEAD"]);
+  // Pin to the merge-base SHA against the PINNED head, not the ref. The diff is
+  // `${base}...${head}` (three-dot), whose true origin is merge-base(ref, head); returning
+  // that immutable SHA means the bytes the fingerprint hashes and the bytes the review diffs
+  // are ONE snapshot even if `ref` moves (and a rebase that shifts the merge-base changes it).
+  const res = await git(["merge-base", ref, head]);
   const base = res.stdout.trim();
 
   if (base.length > 0) {
@@ -58,7 +71,7 @@ async function resolveBase(
   }
 
   // merge-base failed (e.g. no `main`): fall back to the ref itself (or HEAD~1 when omitted).
-  // Cache safety does not rest on this — if the resulting `${base}...HEAD` diff can't be
+  // Cache safety does not rest on this — if the resulting `${base}...${head}` diff can't be
   // computed, gatherChange blocks (git-exit / empty-diff guards) rather than caching a
   // vacuous review.
   return explicit !== undefined && explicit.length > 0 ? explicit : "HEAD~1";
@@ -66,13 +79,14 @@ async function resolveBase(
 
 async function resolveIntent(
   git: IGitRunner,
-  explicit: string | undefined
+  explicit: string | undefined,
+  head: string
 ): Promise<string | null> {
   if (explicit !== undefined && explicit.trim().length > 0) {
     return explicit.trim();
   }
 
-  const subject = (await git(["log", "-1", "--format=%s"])).stdout.trim();
+  const subject = (await git(["log", "-1", "--format=%s", head])).stdout.trim();
 
   return GENERIC_INTENTS.has(subject.toLowerCase()) ? null : subject;
 }
@@ -90,8 +104,11 @@ export async function gatherChange(
     };
   }
 
-  const base = await resolveBase(deps.git, opts.base);
-  const intent = await resolveIntent(deps.git, opts.intent);
+  // Pin HEAD to a SHA ONCE, then read the file list, diff, subject, and context all against
+  // that same snapshot — so a HEAD move mid-gather can't mix commits into one request.
+  const head = await resolveHead(deps.git);
+  const base = await resolveBase(deps.git, opts.base, head);
+  const intent = await resolveIntent(deps.git, opts.intent, head);
 
   if (intent === null) {
     return {
@@ -104,7 +121,7 @@ export async function gatherChange(
   // Read the changed-file list AND check git's exit code. Ignoring it lets a failed diff
   // (empty stdout on error) build an EMPTY review that the panel green-lights, then caches
   // under the real request's key — a false green. A failure blocks instead.
-  const namesRes = await deps.git(["diff", "--name-only", `${base}...HEAD`]);
+  const namesRes = await deps.git(["diff", "--name-only", `${base}...${head}`]);
 
   if (namesRes.code !== 0) {
     return {
@@ -121,7 +138,7 @@ export async function gatherChange(
   if (files.length === 0) {
     return {
       kind: "block",
-      reason: `no changes between ${base} and HEAD to review`,
+      reason: `no changes between ${base} and ${head} to review`,
     };
   }
 
@@ -132,7 +149,7 @@ export async function gatherChange(
     };
   }
 
-  const diffRes = await deps.git(["diff", `${base}...HEAD`]);
+  const diffRes = await deps.git(["diff", `${base}...${head}`]);
 
   if (diffRes.code !== 0) {
     return {
@@ -150,7 +167,7 @@ export async function gatherChange(
     // nothing for the reviewers to judge, so block rather than build+cache a vacuous review.
     return {
       kind: "block",
-      reason: `the diff between ${base} and HEAD is empty despite listed changes — nothing to review`,
+      reason: `the diff between ${base} and ${head} is empty despite listed changes — nothing to review`,
     };
   }
 
@@ -161,7 +178,12 @@ export async function gatherChange(
     };
   }
 
-  const contextFiles = await gatherContext(deps.git, files, opts.maxChars);
+  const contextFiles = await gatherContext(
+    deps.git,
+    files,
+    head,
+    opts.maxChars
+  );
 
   return {
     kind: "request",
@@ -184,6 +206,7 @@ export async function gatherChange(
 async function gatherContext(
   git: IGatherDeps["git"],
   files: string[],
+  head: string,
   budget: number
 ): Promise<string[]> {
   const blocks: string[] = [];
@@ -191,10 +214,10 @@ async function gatherContext(
   let omitted = 0;
 
   for (const file of files) {
-    const res = await git(["show", `HEAD:${file}`]);
+    const res = await git(["show", `${head}:${file}`]);
 
     if (res.code !== 0) {
-      continue; // deleted/renamed/binary — not readable at HEAD, skip
+      continue; // deleted/renamed/binary — not readable at this commit, skip
     }
 
     const block = `=== ${file} ===\n${res.stdout}`;
@@ -324,7 +347,7 @@ export function reviewRequestKey(
  * missed reviewer-implementation changes, which the panel flagged.
  */
 export function panelIdentityHash(
-  panel: { reviewers: readonly { id: string }[]; minReviewers: number },
+  panel: { reviewers: readonly ResolvedReviewer[]; minReviewers: number },
   builderIdentity: string
 ): string {
   const roster = [...panel.reviewers].sort((a, b) =>

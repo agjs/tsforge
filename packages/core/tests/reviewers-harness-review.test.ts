@@ -175,6 +175,51 @@ describe("gatherChange", () => {
     }
   });
 
+  test("resolveBase SUCCESS path: diffs merge-base-SHA...HEAD-SHA (both pinned to immutable commits, not movable refs)", async () => {
+    // The happy path the panel flagged as untested: merge-base returns a real SHA and HEAD is
+    // pinned via rev-parse, so every read is against one snapshot. Deleting the pin would make
+    // this fail (the range would reference `main`/`HEAD` refs, not the SHAs).
+    const seen: string[] = [];
+
+    const pinnedGit: IGatherDeps["git"] = async (args) => {
+      const key = args.join(" ");
+
+      if (args[0] === "rev-parse") {
+        return { stdout: "HEADSHA\n", code: 0 };
+      }
+
+      if (args[0] === "merge-base") {
+        return { stdout: "MBSHA\n", code: 0 };
+      }
+
+      if (args[0] === "diff") {
+        seen.push(key);
+
+        return key.includes("--name-only")
+          ? { stdout: "x.ts", code: 0 }
+          : { stdout: "diff --git a/x b/x\n+code", code: 0 };
+      }
+
+      if (args[0] === "show") {
+        seen.push(key);
+
+        return { stdout: "file content", code: 0 };
+      }
+
+      return { stdout: "", code: 0 };
+    };
+
+    const r = await gatherChange(
+      { git: pinnedGit, validate: cleanValidate },
+      { ...opts, base: "main" }
+    );
+
+    expect(r.kind).toBe("request");
+    // The diff range and the context `show` both reference the pinned SHAs.
+    expect(seen.some((k) => k.includes("MBSHA...HEADSHA"))).toBe(true);
+    expect(seen.some((k) => k.includes("show HEADSHA:x.ts"))).toBe(true);
+  });
+
   test("resolveBase merge-base failure falls back to the ref and still diffs (shallow/odd repos)", async () => {
     // merge-base returns empty (failure); gather must still resolve a range and produce a
     // request rather than throw. Records the range actually diffed.

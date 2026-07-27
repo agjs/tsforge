@@ -11,7 +11,7 @@ import {
   type IModelEntry,
   type BinaryInputMode,
 } from "../models-config";
-import { resolvePanel } from "../reviewers/registry";
+import { resolvePanel, type IPanel } from "../reviewers/registry";
 import {
   gatherChange,
   reviewRequest,
@@ -22,6 +22,10 @@ import {
   artifactBody,
   shouldCacheVerdict,
   honorCachedVerdict,
+  type IReviewFlowDeps,
+  type IReviewDeps,
+  type IGitRunner,
+  type IValidateRunner,
 } from "../reviewers/harness-review";
 import { parseVerdict, type IVerdict } from "../reviewers/aggregate";
 
@@ -274,6 +278,60 @@ export function formatVerdict(v: IVerdict): string {
   return lines.join("\n");
 }
 
+/**
+ * Wire the resolved CLI pieces (effective roster, args, git/validate, providers, cache
+ * seams) into the runReviewFlow deps — exported so the CLI's central wiring is unit-tested:
+ * the cache key's rosterHash is derived from the EFFECTIVE roster (not cfg), the review
+ * targets the effective panel, mode/ci come from the args, and gather reads args.base/intent.
+ * A miswire (cfg roster, hardcoded ci, wrong panel) is caught here rather than only in prod.
+ */
+export function buildReviewFlowDeps(input: {
+  effective: IPanel;
+  identity: string;
+  quick: boolean;
+  ci: boolean;
+  base: string | undefined;
+  intent: string | undefined;
+  git: IGitRunner;
+  validate: IValidateRunner;
+  makeProvider: IReviewDeps["makeProvider"];
+  runBinary: IReviewDeps["runBinary"];
+  readCache: (key: string) => Promise<IVerdict | null>;
+  persistArtifact: (
+    verdict: IVerdict,
+    key: string,
+    rosterHash: string
+  ) => Promise<void>;
+}): IReviewFlowDeps {
+  const rosterHash = panelIdentityHash(input.effective, input.identity);
+
+  return {
+    gather: () =>
+      gatherChange(
+        { git: input.git, validate: input.validate },
+        {
+          base: input.base,
+          intent: input.intent,
+          maxFiles: DEFAULT_MAX_FILES,
+          maxChars: DEFAULT_MAX_CHARS,
+        }
+      ),
+    identity: input.identity,
+    rosterHash,
+    mode: input.quick ? "quick" : "full",
+    ci: input.ci,
+    readCache: input.readCache,
+    review: (request) =>
+      reviewRequest(request, {
+        makeProvider: input.makeProvider,
+        runBinary: input.runBinary,
+        panel: input.effective,
+        identity: input.identity,
+      }),
+    persist: (v, key) => input.persistArtifact(v, key, rosterHash),
+  };
+}
+
 export async function harnessReviewMode(argv: string[]): Promise<number> {
   const args = parse(argv);
 
@@ -300,38 +358,29 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   const treeHashRes = await gitRunner(["write-tree"]);
   const treeHash = treeHashRes.stdout.trim();
   const identity = `${active.name}/${active.entry.model}`;
-  // Fingerprint the EFFECTIVE roster (the reviewers actually used after skips/quick-slice/
-  // active-model exclusion) + the builder — reused for both the cache key and the artifact.
-  const rosterHash = panelIdentityHash(effective, identity);
 
   // runReviewFlow enforces the wiring invariant: GATHER (validate runs fresh inside) BEFORE
   // any cache access, and a gather block never touches the cache. The gathered request is
   // keyed from its OWN bytes, so key and review can't diverge. --ci writes but never reads.
-  const { verdict, cacheHit } = await runReviewFlow({
-    gather: () =>
-      gatherChange(
-        { git: gitRunner, validate: validateRunner },
-        {
-          base: args.base,
-          intent: args.intent,
-          maxFiles: DEFAULT_MAX_FILES,
-          maxChars: DEFAULT_MAX_CHARS,
-        }
-      ),
-    identity,
-    rosterHash,
-    mode: args.quick ? "quick" : "full",
-    ci: args.ci,
-    readCache: readCachedVerdict,
-    review: (request) =>
-      reviewRequest(request, {
-        makeProvider,
-        runBinary,
-        panel: effective,
-        identity,
-      }),
-    persist: (v, key) => persistVerdict(v, key, treeHash, rosterHash),
-  });
+  // buildReviewFlowDeps constructs the deps (roster hash from the EFFECTIVE panel etc.) and
+  // is unit-tested for that wiring.
+  const { verdict, cacheHit } = await runReviewFlow(
+    buildReviewFlowDeps({
+      effective,
+      identity,
+      quick: args.quick,
+      ci: args.ci,
+      base: args.base,
+      intent: args.intent,
+      git: gitRunner,
+      validate: validateRunner,
+      makeProvider,
+      runBinary,
+      readCache: readCachedVerdict,
+      persistArtifact: (v, key, rosterHash) =>
+        persistVerdict(v, key, treeHash, rosterHash),
+    })
+  );
 
   if (cacheHit) {
     process.stdout.write("harness-review: cache hit, reusing verdict\n");
