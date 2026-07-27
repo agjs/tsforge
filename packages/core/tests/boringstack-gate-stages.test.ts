@@ -107,6 +107,65 @@ describe("boringstackCommandStage", () => {
     expect(r.errors[0]?.message).toContain("column");
   });
 
+  test("DB oracle: db:push exits 0 but the live table lacks a plan column → stage FAILS (db-schema-mismatch)", async () => {
+    // The #204/#200 shape: push "succeeds" but the DB never got `url`. The oracle queries
+    // information_schema and must red BEFORE the gate runs on a stale schema.
+    const bookmark: IEntityAcceptance = {
+      id: "Bookmark",
+      key: "bookmark",
+      nav: "Bookmarks",
+      fields: [
+        {
+          name: "title",
+          type: "string",
+          optional: false,
+          valid: "t",
+          invalid: [],
+        },
+        {
+          name: "url",
+          type: "string",
+          optional: false,
+          valid: "u",
+          invalid: [],
+        },
+      ],
+      shows: ["title", "url"],
+      screens: ["list", "form"],
+      parents: [],
+      negatives: [],
+      acceptanceCheck: "test bookmark",
+    };
+
+    const exec: Exec = async (argv) => {
+      // The oracle's information_schema probe: DB has the stub `name`, NOT `url`.
+      if (argv[1] === "-e") {
+        return {
+          code: 0,
+          stdout:
+            '__ORACLE__["id","user_id","name","title","created_at","updated_at"]',
+          stderr: "",
+        };
+      }
+
+      // db:push and the gate itself both report clean.
+      return { code: 0, stdout: "all good", stderr: "" };
+    };
+
+    const stage = boringstackCommandStage(
+      "/tmp/clone",
+      exec,
+      [],
+      "bookmark",
+      bookmark
+    );
+    const r = await stage.run("/tmp/clone");
+
+    expect(r.passed).toBe(false);
+    expect(r.errors[0]?.rule).toBe("db-schema-mismatch");
+    expect(r.errors[0]?.message).toContain("url");
+  });
+
   test("red gate → each failure signature becomes an IErrorItem (key = signature)", async () => {
     const out = "1:1 error Unexpected  no-console\nerror TS2322: bad";
     const stage = boringstackCommandStage("/tmp/clone", execWith(1, out));
