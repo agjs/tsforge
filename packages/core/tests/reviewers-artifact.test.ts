@@ -16,28 +16,21 @@ const v: IVerdict = {
 };
 
 describe("artifact + cache", () => {
-  test("cache key is stable for the same inputs and changes with the tree hash", () => {
-    const a = verdictCacheKey({
-      treeHash: "t1",
-      panelHash: "p1",
-      rubricVersion: "1",
-      cacheVersion: "2",
-    });
-    const b = verdictCacheKey({
-      treeHash: "t1",
-      panelHash: "p1",
-      rubricVersion: "1",
-      cacheVersion: "2",
-    });
-    const c = verdictCacheKey({
-      treeHash: "t2",
-      panelHash: "p1",
-      rubricVersion: "1",
-      cacheVersion: "2",
-    });
+  const key = {
+    treeHash: "t1",
+    panelHash: "p1",
+    rubricVersion: "1",
+    cacheVersion: "2",
+    base: "main",
+    intent: "fix the widget",
+    mode: "full",
+  };
 
-    expect(a).toBe(b);
-    expect(a).not.toBe(c);
+  test("cache key is stable for the same inputs and changes with the tree hash", () => {
+    expect(verdictCacheKey({ ...key })).toBe(verdictCacheKey({ ...key }));
+    expect(verdictCacheKey({ ...key })).not.toBe(
+      verdictCacheKey({ ...key, treeHash: "t2" })
+    );
   });
 
   test("cacheVersion is mixed into the key — bumping it retires ALL legacy artifacts", () => {
@@ -45,10 +38,31 @@ describe("artifact + cache", () => {
     // (they carry no preReview flag, so the read-side guard can't reject them). If a
     // regression dropped it from the hash, legacy poison would be re-served and every
     // other test would still pass — so pin it here.
-    const base = { treeHash: "t1", panelHash: "p1", rubricVersion: "1" };
+    expect(verdictCacheKey({ ...key, cacheVersion: "1" })).not.toBe(
+      verdictCacheKey({ ...key, cacheVersion: "2" })
+    );
+  });
 
-    expect(verdictCacheKey({ ...base, cacheVersion: "1" })).not.toBe(
-      verdictCacheKey({ ...base, cacheVersion: "2" })
+  test("base, intent, and mode each change the key — a verdict can't be reused across a different review request (P4)", () => {
+    // The whole request identity, not just the tree, keys the cache: a review vs a
+    // different base (different diff), a different intent (different context), or quick
+    // vs full (reduced roster) MUST miss the cache and force a fresh review.
+    expect(verdictCacheKey({ ...key })).not.toBe(
+      verdictCacheKey({ ...key, base: "HEAD~3" })
+    );
+    expect(verdictCacheKey({ ...key })).not.toBe(
+      verdictCacheKey({ ...key, intent: "something else" })
+    );
+    expect(verdictCacheKey({ ...key, mode: "quick" })).not.toBe(
+      verdictCacheKey({ ...key, mode: "full" })
+    );
+  });
+
+  test("unforgeable key: a space slid between fields can't collide two distinct requests", () => {
+    // A space-join would make (base 'a', intent 'b c') and (base 'a b', intent 'c')
+    // collide; the JSON serialization keeps them distinct.
+    expect(verdictCacheKey({ ...key, base: "a", intent: "b c" })).not.toBe(
+      verdictCacheKey({ ...key, base: "a b", intent: "c" })
     );
   });
 

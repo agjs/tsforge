@@ -228,10 +228,30 @@ export function verdictCacheKey(input: {
   panelHash: string;
   rubricVersion: string;
   cacheVersion: string;
+  /** The diff base ref — a review vs a DIFFERENT base is a different diff, so it must
+   *  not reuse this verdict. */
+  base: string;
+  /** The review intent — different context ⇒ a different review. */
+  intent: string;
+  /** "quick" | "full". `quick` reviews with a REDUCED roster (1 reviewer); its verdict
+   *  must never satisfy a full review, and vice versa. */
+  mode: string;
 }): string {
+  // JSON-serialize the fields (unforgeable: escapes + array delimiting) rather than a
+  // space-join — a value containing a space (e.g. an intent string) could otherwise slide
+  // across the boundary and forge a key collision, reusing a verdict for a different
+  // request. Same lesson as the db:push fingerprint.
   return createHash("sha256")
     .update(
-      `${input.treeHash} ${input.panelHash} ${input.rubricVersion} ${input.cacheVersion}`
+      JSON.stringify([
+        input.treeHash,
+        input.panelHash,
+        input.rubricVersion,
+        input.cacheVersion,
+        input.base,
+        input.intent,
+        input.mode,
+      ])
     )
     .digest("hex");
 }

@@ -309,6 +309,12 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
     panelHash,
     rubricVersion: RUBRIC_VERSION,
     cacheVersion: CACHE_VERSION,
+    // The verdict is only valid for THIS review request: a different base (different diff),
+    // intent (different context), or mode (quick = reduced roster) must MISS the cache and
+    // force a fresh review — otherwise a verdict from one request false-reuses for another.
+    base: args.base ?? "",
+    intent: args.intent ?? "",
+    mode: args.quick ? "quick" : "full",
   });
 
   let verdict: IVerdict;
