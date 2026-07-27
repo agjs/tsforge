@@ -215,7 +215,7 @@ describe("boringstackDeps.implement", () => {
     expect(seen.join("\n")).not.toContain("separate slices");
   });
 
-  test("syncs DB after generation but before sending to the model", async () => {
+  test("delegates the DB sync to generate — no redundant, result-ignoring harness-level db:push", async () => {
     const host = createHost();
     const execCalls: { argv: string[]; cwd: string }[] = [];
 
@@ -225,25 +225,33 @@ describe("boringstackDeps.implement", () => {
       return { code: 0, stdout: "", stderr: "" };
     };
 
+    let generateCalled = false;
+
     const deps = boringstackDeps({
       host,
       cwd: "/repo",
       exec,
       evaluator: createEvaluator(),
-      generate: async () => undefined,
+      generate: async () => {
+        generateCalled = true;
+      },
       generateUi: async () => undefined,
     });
 
     await deps.implement(feature("Invoice"), state());
 
-    const forCmd = (cmd: string): string[] =>
-      execCalls
-        .filter((c) => c.argv.join(" ") === cmd)
-        .map((c) => c.cwd)
-        .sort();
+    // The DB sync is `generate`'s responsibility: the real generateResource runs the
+    // headless-safe dbPushForce (recover-or-throw) — proven in boringstack-generate +
+    // db-push tests. The harness delegates to it…
+    expect(generateCalled).toBe(true);
+    // …and issues NO db:push of its own. A second harness-level push would be
+    // redundant, and (since its result was ignored) could re-introduce the
+    // swallowed-failure false-green the db:push fix removes.
+    const harnessPushes = execCalls.filter(
+      (c) => c.argv.join(" ") === "bun run db:push -- --force"
+    );
 
-    // db:push is called to sync the STUB schema before the model gets the prompt
-    expect(forCmd("bun run db:push -- --force")).toContain("/repo/apps/api");
+    expect(harnessPushes).toHaveLength(0);
   });
 
   test("a revisit tells the model which escalation approaches were already exhausted", async () => {
