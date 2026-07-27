@@ -34,13 +34,21 @@ const request: IReviewRequest = {
   rubricVersion: "1",
 };
 
+interface ILog {
+  validated: number;
+  gitArgs: string[][];
+  providerModels: string[];
+  readKeys: string[];
+  persisted: { key: string; rosterHash: string }[];
+}
+
 function makeInput(over: { quick?: boolean; ci?: boolean }) {
-  const log = {
+  const log: ILog = {
     validated: 0,
-    gitArgs: [] as string[][],
-    providerModels: [] as string[],
-    readKeys: [] as string[],
-    persisted: [] as { key: string; rosterHash: string }[],
+    gitArgs: [],
+    providerModels: [],
+    readKeys: [],
+    persisted: [],
   };
 
   return {
@@ -50,19 +58,22 @@ function makeInput(over: { quick?: boolean; ci?: boolean }) {
       identity: "local/flash",
       quick: over.quick ?? false,
       ci: over.ci ?? false,
-      base: "main",
-      intent: "do the thing",
+      // Distinctive base/intent so a wiring that drops or overrides them is caught.
+      base: "customBase",
+      intent: "DISTINCT-INTENT",
+      head: undefined as string | undefined,
       git: async (args: string[]) => {
         log.gitArgs.push(args);
 
         // Enough for gatherChange to build a request: rev-parse/merge-base SHAs, a file +
-        // a non-empty diff, readable context.
+        // a non-empty diff, readable context. merge-base ECHOES its ref arg so the diff range
+        // proves WHICH base was used (a dropped base would echo "main", not "customBase").
         if (args[0] === "rev-parse") {
           return { stdout: "HEADSHA\n", code: 0 };
         }
 
         if (args[0] === "merge-base") {
-          return { stdout: "MBSHA\n", code: 0 };
+          return { stdout: `mb-${String(args[1])}\n`, code: 0 };
         }
 
         if (args[0] === "diff") {
@@ -130,7 +141,7 @@ describe("buildReviewFlowDeps (CLI wiring)", () => {
     expect(buildReviewFlowDeps(makeInput({ ci: false }).input).ci).toBe(false);
   });
 
-  test("gather runs validate FRESH and diffs the pinned base against HEAD", async () => {
+  test("gather runs validate FRESH and uses args.base + args.intent (a dropped base or frozen intent is caught)", async () => {
     const { log, input } = makeInput({});
     const deps = buildReviewFlowDeps(input);
 
@@ -138,8 +149,16 @@ describe("buildReviewFlowDeps (CLI wiring)", () => {
 
     expect(gathered.kind).toBe("request");
     expect(log.validated).toBe(1); // validate ran inside gather
+
+    if (gathered.kind === "request") {
+      // args.intent flowed through (not frozen to some other string).
+      expect(gathered.request.intent).toBe("DISTINCT-INTENT");
+    }
+
+    // The diff range proves the CONFIGURED base ("customBase") was used — merge-base echoes
+    // its ref, so a dropped base would show "mb-main...HEADSHA" and fail this.
     expect(
-      log.gitArgs.some((a) => a.join(" ").includes("MBSHA...HEADSHA"))
+      log.gitArgs.some((a) => a.join(" ").includes("mb-customBase...HEADSHA"))
     ).toBe(true);
   });
 

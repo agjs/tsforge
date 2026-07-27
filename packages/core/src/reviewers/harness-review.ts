@@ -33,6 +33,10 @@ export interface IGatherDeps {
 export interface IGatherOptions {
   base?: string;
   intent?: string;
+  /** The commit to review (a SHA/ref). Defaults to HEAD. The pre-push hook passes the ACTUAL
+   *  pushed local OID here, so an explicit refspec pushing a non-HEAD ref is reviewed as what
+   *  is being pushed — not whatever HEAD happens to be. */
+  head?: string;
   maxFiles: number;
   maxChars: number;
 }
@@ -40,18 +44,6 @@ export interface IGatherOptions {
 export type GatherResult =
   | { kind: "request"; request: IReviewRequest }
   | { kind: "block"; reason: string };
-
-/** Pin HEAD to an immutable commit SHA once, so every subsequent read in a gather (the diff,
- *  the file list, the context `show`, the subject `log`) references the SAME snapshot. If
- *  HEAD moves mid-gather, an unpinned gather would combine file names, diff, and context from
- *  DIFFERENT commits — the gate would then approve a scope that isn't the commit being pushed
- *  (a TOCTOU the panel flagged). Falls back to the literal "HEAD" only if rev-parse fails. */
-async function resolveHead(git: IGitRunner): Promise<string> {
-  const res = await git(["rev-parse", "HEAD"]);
-  const head = res.stdout.trim();
-
-  return head.length > 0 ? head : "HEAD";
-}
 
 async function resolveBase(
   git: IGitRunner,
@@ -95,6 +87,25 @@ export async function gatherChange(
   deps: IGatherDeps,
   opts: IGatherOptions
 ): Promise<GatherResult> {
+  // Pin the review target (opts.head, default HEAD) to an immutable SHA FIRST — before
+  // validate and every diff — so the whole gather references one snapshot and validate's
+  // result is attributed to a fixed commit. Guard the exit code like every other git step: a
+  // failed pin BLOCKS (a soft fallback to the movable "HEAD" would silently re-open the
+  // TOCTOU). (Validate still runs against the working tree; for the pre-push gate that tree is
+  // the pinned commit — an unstaged divergence from it is the caller's responsibility.)
+  const target = opts.head ?? "HEAD";
+  const headRes = await deps.git(["rev-parse", target]);
+
+  if (headRes.code !== 0) {
+    return {
+      kind: "block",
+      reason: `could not resolve the review target (git rev-parse ${target} exited ${String(headRes.code)}) — cannot review`,
+    };
+  }
+
+  const head =
+    headRes.stdout.trim().length > 0 ? headRes.stdout.trim() : target;
+
   const validateSummary = await deps.validate();
 
   if (!validateSummary.passed) {
@@ -104,9 +115,6 @@ export async function gatherChange(
     };
   }
 
-  // Pin HEAD to a SHA ONCE, then read the file list, diff, subject, and context all against
-  // that same snapshot — so a HEAD move mid-gather can't mix commits into one request.
-  const head = await resolveHead(deps.git);
   const base = await resolveBase(deps.git, opts.base, head);
   const intent = await resolveIntent(deps.git, opts.intent, head);
 
