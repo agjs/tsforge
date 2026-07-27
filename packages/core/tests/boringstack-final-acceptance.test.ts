@@ -749,7 +749,7 @@ test("runFinalAcceptance: chain assertion failure returns stuck", async () => {
   expect(result.status).toBe("stuck");
 });
 
-test("FIX 5: when e2e acceptance disabled, preserves original status even if gate fails", async () => {
+test("P0a: a failed FULL gate is terminal even when e2e acceptance is disabled (no gate-relaxation)", async () => {
   const input: IGreenfieldResult = {
     status: "done",
     features: [{ id: "f1", desc: "test", passes: true, attempts: 1 }],
@@ -760,7 +760,7 @@ test("FIX 5: when e2e acceptance disabled, preserves original status even if gat
     stdout: string;
     stderr: string;
   }> => {
-    // Full gate fails (returns non-zero)
+    // Full gate FAILS (validate/build/size/root-drift returns non-zero).
     return { code: 1, stdout: "", stderr: "validation failed" };
   };
 
@@ -773,18 +773,60 @@ test("FIX 5: when e2e acceptance disabled, preserves original status even if gat
     },
   };
 
-  // Call with acceptance DISABLED (true)
+  // Call with e2e acceptance DISABLED (true).
   const result = await runFinalAcceptance(
     input,
     "/tmp/test",
     mockExec,
     mockRunner,
     minimalPlan,
-    true // acceptance disabled
+    true // e2e acceptance disabled — must skip ONLY the browser chain, NOT the full gate
   );
 
-  // FIX 5: when disabled, preserve original status "done" even though gate failed
-  // (previously it would flip to "stuck" regardless of disabled flag)
+  // The flag skips the browser/chain e2e only; a failed full gate must STILL be terminal.
+  // (Was the #204-class false-green: the flag silently downgraded a real full-gate red to
+  // "done". 4-model panel P0a.)
+  expect(result.status).toBe("stuck");
+});
+
+test("P0a: e2e disabled + full gate PASSES → done, chain skipped (returns the input unchanged)", async () => {
+  const input: IGreenfieldResult = {
+    status: "done",
+    features: [{ id: "f1", desc: "test", passes: true, attempts: 1 }],
+  };
+
+  const mockExec: Exec = async (): Promise<{
+    code: number;
+    stdout: string;
+    stderr: string;
+  }> => {
+    // Full gate PASSES.
+    return { code: 0, stdout: "", stderr: "" };
+  };
+
+  const mockRunner: IAcceptanceRunner = {
+    async run(): Promise<IAcceptanceOutcome> {
+      return { ok: true, results: [] };
+    },
+    // Would fail IF invoked — proves the chain is skipped when disabled.
+    async runChain(): Promise<IAcceptanceOutcome> {
+      return {
+        ok: false,
+        results: [],
+        detail: "chain must not run when disabled",
+      };
+    },
+  };
+
+  const result = await runFinalAcceptance(
+    input,
+    "/tmp/test",
+    mockExec,
+    mockRunner,
+    minimalPlan,
+    true // e2e acceptance disabled
+  );
+
   expect(result.status).toBe("done");
-  expect(result).toBe(input); // Should return same object when disabled
+  expect(result).toBe(input); // unchanged object when nothing failed and chain skipped
 });
