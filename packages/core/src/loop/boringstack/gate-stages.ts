@@ -9,6 +9,13 @@ import type { IFeature } from "../greenfield/greenfield.types";
 import type { Exec, IExecResult } from "./exec";
 import { dbPushForce } from "./db-push";
 import { checkEntitySchema, schemaMismatchError } from "./db-oracle";
+import { resolveOpenApiUrl } from "./openapi-preflight";
+import {
+  fetchServedPaths,
+  checkRoutesServed,
+  type SpecFetcher,
+} from "./openapi-routes";
+import { readHostPorts, hostPortOr } from "../../scaffold";
 import { toCamelCase } from "./case";
 import { runBoringstackGate } from "./gate";
 import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
@@ -553,18 +560,48 @@ export function boringstackCommandStage(
  * usable. This stage runs the static reachability check (route wired, API mounted,
  * i18n keys present); a failure becomes one gate error the loop can escalate on.
  */
-export function reachabilityStage(cwd: string, featureId: string): IStage {
+export function reachabilityStage(
+  cwd: string,
+  featureId: string,
+  fetcher?: SpecFetcher
+): IStage {
   return {
     async run(): Promise<IValidateResult> {
       const reach = await verifyFeatureReachable(cwd, featureId);
+      const problems = [...reach.problems];
 
-      if (reach.ok) {
+      // RUNTIME route-presence (P1): the static check above proves the resource NAME
+      // appears in routes.ts — a proxy #202 false-greened. Confirm the running API
+      // ACTUALLY serves the feature's CRUD routes by querying its public OpenAPI spec
+      // (/swagger/json, no auth — the same spec generate:api consumes). A route in source
+      // but absent from the live spec means the resource isn't mounted → 404 at runtime.
+      // INCONCLUSIVE (spec unreachable) is non-blocking (build-start pre-flight fail-closes
+      // a genuinely down API; a transient blip must not red a feature).
+      const apiPort = hostPortOr(readHostPorts(cwd), "API_HOST_PORT");
+      const served = await fetchServedPaths(
+        resolveOpenApiUrl(process.env.OPENAPI_URL, apiPort),
+        fetcher
+      );
+
+      if (served !== null) {
+        const routes = checkRoutesServed(served, toCamelCase(featureId));
+
+        if (!routes.ok) {
+          problems.push(
+            `API routes NOT served by the running API — present in routes.ts source but ` +
+              `ABSENT from the live /swagger/json: ${routes.missing.join(", ")}. The resource ` +
+              `isn't actually mounted, so its create/list/edit/delete would 404 at runtime. ` +
+              `Register + mount the resource so these paths appear in the served spec.`
+          );
+        }
+      }
+
+      if (problems.length === 0) {
         return { passed: true, errors: [], output: "reachable" };
       }
 
       const message =
-        `"${featureId}" is not reachable/usable:\n- ` +
-        reach.problems.join("\n- ");
+        `"${featureId}" is not reachable/usable:\n- ` + problems.join("\n- ");
 
       return {
         passed: false,
