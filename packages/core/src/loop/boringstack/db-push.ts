@@ -51,7 +51,29 @@ async function dropEntityTable(
     `try{await sql.unsafe('DROP TABLE IF EXISTS "app"."${table}" CASCADE');}` +
     `finally{await sql.end();}`;
 
-  await exec(["bun", "-e", script], { cwd: apiCwd });
+  // A failed drop is NOT fatal here: the follow-up push will simply hit the same
+  // rename crash again, which {@link normalize} turns into a surfaced failure. So
+  // swallow a throwing exec and let the retry be the single source of truth.
+  try {
+    await exec(["bun", "-e", script], { cwd: apiCwd });
+  } catch {
+    // ignore — the retry push reports the real outcome
+  }
+}
+
+/**
+ * A `db:push` that "exits 0" but whose output still carries the interactive-rename
+ * crash did NOT migrate the DB — the async rejection was swallowed. Force such a
+ * result to a non-zero code so callers (and the gate) can NEVER read it as success
+ * and false-green on a stale DB. A clean result (no crash signature) is returned
+ * unchanged; a result already non-zero stays non-zero.
+ */
+function normalize(r: IExecResult): IExecResult {
+  if (isRenamePromptFailure(r) && r.code === 0) {
+    return { ...r, code: 1 };
+  }
+
+  return r;
 }
 
 /**
@@ -62,6 +84,12 @@ async function dropEntityTable(
  * column. Without `entityTable`, or for ANY other failure, this behaves exactly like
  * a plain push, so the caller's downstream gate still surfaces a genuinely broken
  * schema (the model's own compile error) instead of it being masked.
+ *
+ * The returned result's `code` is ALWAYS honest: a swallowed rename crash (code 0 +
+ * signature) — whether on the first push with no recovery available, or on a retry
+ * that STILL crashed (e.g. the drop was a no-op because DATABASE_URL was unset) — is
+ * {@link normalize}d to a non-zero code, so a failed migration can never pass as
+ * success.
  */
 export async function dbPushForce(
   apiCwd: string,
@@ -75,16 +103,21 @@ export async function dbPushForce(
   // Detect the crash by its OUTPUT, not the exit code: `bun run db:push` exits 0
   // even when drizzle-kit died at the interactive prompt (async rejection swallowed).
   // Only recover from THIS signature — any other outcome (real success, or a genuine
-  // schema error the model must fix) is returned untouched.
+  // schema error the model must fix) is returned untouched (but still normalized so a
+  // non-recoverable swallowed crash surfaces).
   if (
     entityTable === undefined ||
     !SAFE_IDENT.test(entityTable) ||
     !isRenamePromptFailure(first)
   ) {
-    return first;
+    return normalize(first);
   }
 
   await dropEntityTable(apiCwd, exec, entityTable);
 
-  return exec(["bun", "run", "db:push", "--", "--force"], { cwd: apiCwd });
+  const retry = await exec(["bun", "run", "db:push", "--", "--force"], {
+    cwd: apiCwd,
+  });
+
+  return normalize(retry);
 }

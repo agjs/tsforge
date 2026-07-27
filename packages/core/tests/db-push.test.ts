@@ -79,23 +79,60 @@ test("dbPushForce: failure that is NOT the rename prompt → NOT masked (no drop
   expect(calls).toHaveLength(1);
 });
 
-test("dbPushForce: rename-prompt crash but NO entityTable → cannot recover, no drop/retry", async () => {
+test("dbPushForce: rename-prompt crash but NO entityTable → cannot recover, surfaces as non-zero (never false-green)", async () => {
   const { exec, calls } = recordingExec([RENAME_PROMPT_FAIL]);
 
   const res = await dbPushForce("/api", exec);
 
-  // The crash exits 0, so the returned result still carries the signature — the
-  // point is that NO recovery was attempted (a single push, no drop).
+  // The crash exits 0, but a non-recoverable swallowed crash MUST be normalized to a
+  // non-zero code so the caller/gate can never read it as success.
+  expect(res.code).not.toBe(0);
   expect(res.stderr).toContain("Interactive prompts require a TTY");
   expect(calls).toHaveLength(1);
 });
 
-test("dbPushForce: an unsafe (non-identifier) entityTable is never interpolated into SQL", async () => {
+test("dbPushForce: an unsafe (non-identifier) entityTable is never interpolated into SQL, and surfaces as non-zero", async () => {
   const { exec, calls } = recordingExec([RENAME_PROMPT_FAIL]);
 
   const res = await dbPushForce("/api", exec, "bookmark; DROP TABLE users;--");
 
-  // Rejected by the identifier guard → no drop, no retry.
+  // Rejected by the identifier guard → no drop, no retry — but still surfaced.
+  expect(res.code).not.toBe(0);
   expect(res.stderr).toContain("Interactive prompts require a TTY");
   expect(calls).toHaveLength(1);
+});
+
+test("dbPushForce: retry STILL crashes (e.g. drop was a no-op) → surfaces as non-zero, never false-green", async () => {
+  // First push crashes → drop → retry ALSO crashes (DATABASE_URL unset so the drop
+  // no-op'd). The persistent swallowed crash must be normalized to non-zero.
+  const { exec, calls } = recordingExec([
+    RENAME_PROMPT_FAIL,
+    ok, // the drop exec
+    RENAME_PROMPT_FAIL, // retry still crashes
+  ]);
+
+  const res = await dbPushForce("/api", exec, "bookmark");
+
+  expect(res.code).not.toBe(0);
+  expect(res.stderr).toContain("Interactive prompts require a TTY");
+  expect(calls).toHaveLength(3);
+});
+
+test("dbPushForce: a throwing drop exec does not reject — the retry is the source of truth", async () => {
+  let call = 0;
+
+  const exec: Exec = (argv) => {
+    call += 1;
+
+    if (argv[1] === "-e") {
+      return Promise.reject(new Error("drop connection refused"));
+    }
+
+    // push #1 crashes, retry (#2 push) succeeds cleanly
+    return Promise.resolve(call === 1 ? RENAME_PROMPT_FAIL : ok);
+  };
+
+  const res = await dbPushForce("/api", exec, "bookmark");
+
+  expect(res.code).toBe(0);
 });

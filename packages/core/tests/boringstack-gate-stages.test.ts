@@ -25,9 +25,23 @@ const feature: IFeature = {
   attempts: 0,
 };
 
+// db:push (and the drop-table `bun -e`) are SEPARATE commands from the gate — they
+// succeed independently, so the mock returns 0 for them and the simulated (code,
+// stdout) only for the actual gate command. Without this, a test simulating a red
+// gate would also make db:push "fail" and trip the command stage's db:push
+// short-circuit before the gate ever runs.
 const execWith =
   (code: number, stdout: string): Exec =>
-  async () => ({ code, stdout, stderr: "" });
+  async (argv) => {
+    const isDbPush = argv[1] === "run" && argv[2] === "db:push";
+    const isDrop = argv[1] === "-e";
+
+    if (isDbPush || isDrop) {
+      return { code: 0, stdout: "", stderr: "" };
+    }
+
+    return { code, stdout, stderr: "" };
+  };
 
 describe("boringstackCommandStage", () => {
   test("green gate → passed, no errors", async () => {
@@ -39,6 +53,29 @@ describe("boringstackCommandStage", () => {
 
     expect(r.passed).toBe(true);
     expect(r.errors).toEqual([]);
+  });
+
+  test("db:push that never migrates (rename crash survives recovery) → stage FAILS, never false-greens", async () => {
+    // db:push always emits the headless rename crash (exits 0 but never migrated);
+    // the gate command itself would be "green". The stage must short-circuit on the
+    // failed migration and NOT report the green gate.
+    const crash =
+      "Error: Interactive prompts require a TTY terminal\n at promptColumnsConflicts";
+
+    const exec: Exec = async (argv) => {
+      if (argv[1] === "run" && argv[2] === "db:push") {
+        return { code: 0, stdout: "", stderr: crash };
+      }
+
+      return { code: 0, stdout: "all good", stderr: "" };
+    };
+
+    const stage = boringstackCommandStage("/tmp/clone", exec, [], "bookmark");
+    const r = await stage.run("/tmp/clone");
+
+    expect(r.passed).toBe(false);
+    expect(r.errors[0]?.rule).toBe("db-push-failed");
+    expect(r.errors[0]?.message).toContain("column");
   });
 
   test("red gate → each failure signature becomes an IErrorItem (key = signature)", async () => {

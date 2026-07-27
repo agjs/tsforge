@@ -6,7 +6,7 @@ import { composeGate, differentialStage } from "../../gate/gate-runner";
 import type { IValidateResult, IErrorItem } from "../../validate";
 import type { IProvider } from "../../inference";
 import type { IFeature } from "../greenfield/greenfield.types";
-import type { Exec } from "./exec";
+import type { Exec, IExecResult } from "./exec";
 import { dbPushForce } from "./db-push";
 import { toCamelCase } from "./case";
 import { runBoringstackGate } from "./gate";
@@ -409,6 +409,31 @@ async function enrichUnparsable(
     `it (there may be more than one broken file; every one must parse before the cascade clears).`;
 }
 
+/** Combined push output, trimmed to a readable excerpt for the gate error. */
+function pushOutput(push: IExecResult): string {
+  return `${push.stdout}\n${push.stderr}`.trim().slice(-3_000);
+}
+
+/** An actionable gate error for a db:push that did not migrate the DB. The dominant
+ *  case is drizzle-kit's interactive column-rename prompt crashing headlessly (a
+ *  name-less plan removed the scaffold's stub column); recovery needs the entity table
+ *  name + a reachable DATABASE_URL. Any other push failure (a genuinely broken schema)
+ *  is surfaced verbatim so the model can fix it. */
+function dbPushError(push: IExecResult): IErrorItem {
+  return {
+    key: "boringstack:db-push-failed",
+    rule: "db-push-failed",
+    phase: 1,
+    message:
+      "db:push failed to migrate the database, so the API would 500 at runtime " +
+      '(`column "…" does not exist`) and the feature would be hollow. Do NOT treat ' +
+      "the gate as green. If this is drizzle-kit's interactive rename prompt " +
+      "(`Interactive prompts require a TTY`), the schema change is a column rename the " +
+      "headless push can't resolve — align the entity table with the plan's columns. " +
+      `Raw db:push output:\n${pushOutput(push)}`,
+  };
+}
+
 export function boringstackCommandStage(
   cwd: string,
   exec: Exec,
@@ -423,8 +448,19 @@ export function boringstackCommandStage(
       // no-TTY build (`--force` doesn't cover it) → the DB never migrates → the
       // feature is hollow at runtime while the gate false-greens. dbPushForce drops
       // the (disposable) entity table and retries as a clean CREATE on exactly that
-      // failure. See db-push.ts.
-      await dbPushForce(join(cwd, "apps/api"), exec, entityTable);
+      // failure, and returns an HONEST code (a swallowed crash → non-zero). See db-push.ts.
+      const push = await dbPushForce(join(cwd, "apps/api"), exec, entityTable);
+
+      // If the migration genuinely failed (couldn't recover), SHORT-CIRCUIT: the gate
+      // must NOT run against a stale schema and report green (the false-green this whole
+      // fix exists to kill). Surface it as an actionable gate error instead.
+      if (push.code !== 0) {
+        return {
+          passed: false,
+          errors: [dbPushError(push)],
+          output: pushOutput(push),
+        };
+      }
 
       const result = await runBoringstackGate(cwd, exec);
 
