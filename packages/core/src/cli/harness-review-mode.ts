@@ -20,6 +20,7 @@ import {
   artifactBody,
   shouldCacheVerdict,
   honorCachedVerdict,
+  resolveReviewInputs,
   CACHE_VERSION,
 } from "../reviewers/harness-review";
 import { RUBRIC_VERSION } from "../reviewers/schema";
@@ -304,16 +305,22 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   const treeHashRes = await gitRunner(["write-tree"]);
   const treeHash = treeHashRes.stdout.trim();
   const panelHash = computePanelHash(cfg.reviewPanel ?? {});
+  // Resolve base + intent to their CONCRETE values (base ref → sha, omitted intent →
+  // commit subject) BEFORE keying — keying on the raw flags is unsound: a moving `main`,
+  // a rebase, or an amended message changes the real diff/intent with an unchanged
+  // treeHash and unchanged flags (4-model panel finding). The SAME resolved values feed
+  // the review below, so the key and the review can never diverge.
+  const resolved = await resolveReviewInputs(gitRunner, args.base, args.intent);
   const cacheKey = verdictCacheKey({
     treeHash,
     panelHash,
     rubricVersion: RUBRIC_VERSION,
     cacheVersion: CACHE_VERSION,
-    // The verdict is only valid for THIS review request: a different base (different diff),
-    // intent (different context), or mode (quick = reduced roster) must MISS the cache and
-    // force a fresh review — otherwise a verdict from one request false-reuses for another.
-    base: args.base ?? "",
-    intent: args.intent ?? "",
+    // The verdict is only valid for THIS review request: a different resolved base
+    // (different diff), intent (different context), or mode (quick = reduced roster) must
+    // MISS the cache and force a fresh review — otherwise one request's verdict false-reuses.
+    base: resolved.baseSha,
+    intent: resolved.intent ?? "",
     mode: args.quick ? "quick" : "full",
   });
 
@@ -336,8 +343,9 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
           identity: `${active.name}/${active.entry.model}`,
         },
         {
-          base: args.base,
-          intent: args.intent,
+          // Same resolved inputs the cache key used — the review can't diverge from the key.
+          base: resolved.baseSha,
+          intent: resolved.intent ?? undefined,
           maxFiles: DEFAULT_MAX_FILES,
           maxChars: DEFAULT_MAX_CHARS,
         }

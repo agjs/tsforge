@@ -3,7 +3,9 @@ import {
   verdictCacheKey,
   artifactBody,
   honorCachedVerdict,
+  resolveReviewInputs,
 } from "../src/reviewers/harness-review";
+import type { IGitRunner } from "../src/reviewers/harness-review";
 import type { IVerdict } from "../src/reviewers/aggregate";
 
 const v: IVerdict = {
@@ -64,6 +66,66 @@ describe("artifact + cache", () => {
     expect(verdictCacheKey({ ...key, base: "a", intent: "b c" })).not.toBe(
       verdictCacheKey({ ...key, base: "a b", intent: "c" })
     );
+  });
+
+  // A git runner where `rev-parse <ref>` returns `mainSha` (simulating a moved ref),
+  // merge-base returns a fixed sha, and the commit subject is `subject`.
+  const gitWith =
+    (mainSha: string, subject: string): IGitRunner =>
+    async (argv) => {
+      if (argv[0] === "rev-parse") {
+        return { code: 0, stdout: `${mainSha}\n` };
+      }
+
+      if (argv[0] === "merge-base") {
+        return { code: 0, stdout: "mergebasesha\n" };
+      }
+
+      if (argv[0] === "log") {
+        return { code: 0, stdout: `${subject}\n` };
+      }
+
+      return { code: 0, stdout: "" };
+    };
+
+  test("resolveReviewInputs: a named base ref resolves to a concrete sha → a moved ref changes the key (P4 panel finding)", async () => {
+    // `--base main` with `main` moved: same flags, same treeHash, but a DIFFERENT diff.
+    // Resolving the ref to a sha makes the key change so it can't reuse the stale verdict.
+    const before = await resolveReviewInputs(
+      gitWith("sha_A", "fix"),
+      "main",
+      "fix"
+    );
+    const after = await resolveReviewInputs(
+      gitWith("sha_B", "fix"),
+      "main",
+      "fix"
+    );
+
+    expect(before.baseSha).toBe("sha_A");
+    expect(after.baseSha).toBe("sha_B");
+
+    const keyFor = (baseSha: string): string =>
+      verdictCacheKey({ ...key, base: baseSha });
+
+    expect(keyFor(before.baseSha)).not.toBe(keyFor(after.baseSha));
+  });
+
+  test("resolveReviewInputs: omitted intent falls back to the commit subject (so an amend changes the key)", async () => {
+    const a = await resolveReviewInputs(
+      gitWith("sha", "first subject"),
+      undefined,
+      undefined
+    );
+    const b = await resolveReviewInputs(
+      gitWith("sha", "amended subject"),
+      undefined,
+      undefined
+    );
+
+    expect(a.intent).toBe("first subject");
+    expect(b.intent).toBe("amended subject");
+    expect(a.intent).not.toBe(b.intent);
   });
 
   test("honorCachedVerdict drops a cached pre-review block, passes a real verdict through", () => {

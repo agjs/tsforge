@@ -68,6 +68,32 @@ async function resolveIntent(
   return GENERIC_INTENTS.has(subject.toLowerCase()) ? null : subject;
 }
 
+/**
+ * Resolve the review's base and intent to their CONCRETE values — what the diff is
+ * actually taken against and the actual intent text — so the verdict cache can key on
+ * them. Keying on the raw flags is unsound: an omitted `--base` resolves to
+ * `merge-base main HEAD` and a named ref like `main` is resolved at review time, so the
+ * SAME flags can denote a DIFFERENT diff after `main` moves or a rebase; an omitted
+ * `--intent` comes from the commit subject, which an amend changes — all with an
+ * unchanged treeHash. Resolving the base to a SHA (via rev-parse) and the intent to its
+ * text makes the cache key reflect the real review inputs, so those cases MISS the cache.
+ * The same resolved values are then handed to the review, so the key and the review can
+ * never diverge.
+ */
+export async function resolveReviewInputs(
+  git: IGitRunner,
+  base: string | undefined,
+  intent: string | undefined
+): Promise<{ baseSha: string; intent: string | null }> {
+  const baseRef = await resolveBase(git, base);
+  const revParsed = (await git(["rev-parse", baseRef])).stdout.trim();
+
+  return {
+    baseSha: revParsed.length > 0 ? revParsed : baseRef,
+    intent: await resolveIntent(git, intent),
+  };
+}
+
 async function changedFiles(git: IGitRunner, base: string): Promise<string[]> {
   const res = await git(["diff", "--name-only", `${base}...HEAD`]);
 
