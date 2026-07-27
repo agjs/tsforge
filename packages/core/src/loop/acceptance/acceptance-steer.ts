@@ -35,7 +35,8 @@ export function acceptanceSteer(
   }
 
   const step = firstFailure.step;
-  const baseMessage = stepMessage(entity, step);
+  const baseMessage =
+    formCloseMessage(entity, firstFailure.detail) ?? stepMessage(entity, step);
   let detailSuffix = "";
 
   if (typeof outcome.detail === "string" && outcome.detail.length > 0) {
@@ -45,6 +46,36 @@ export function acceptanceSteer(
   }
 
   return baseMessage + detailSuffix;
+}
+
+/**
+ * The e2e create/update flow submits the form then waits for it to go HIDDEN
+ * (`getByTestId('<key>-form').waitFor({ state: "hidden" })`) as the signal the
+ * mutation + list refresh completed, BEFORE it asserts the new row. A form that
+ * submits correctly but never closes fails HERE — Playwright reports
+ * "waiting for … to be hidden … N × locator resolved to visible <form …>". The
+ * failing step is then classified "create", whose generic message ("ensure the
+ * create form OPENS") is the exact OPPOSITE of the real fix (it opened fine — it
+ * won't CLOSE), which misdirects the model into chasing a non-existent
+ * open/persist bug. Detect that signature from the raw detail and steer at the
+ * true cause: close the form on a SUCCESSFUL mutation. Returns null when the
+ * detail is not a form-didn't-close failure (caller falls back to stepMessage).
+ */
+function formCloseMessage(
+  entity: IEntityAcceptance,
+  detail: string
+): string | null {
+  const isFormStillVisible =
+    /to be hidden/i.test(detail) && /resolved to visible/i.test(detail);
+
+  if (!isFormStillVisible) {
+    return null;
+  }
+
+  const { id, key } = entity;
+  const singularKey = key.toLowerCase();
+
+  return `The ${id} feature failed acceptance because the create/edit form did not close after a successful submit: the browser filled and submitted the form, but the form stayed visible (the e2e waits for it to disappear as the signal the mutation completed). The mutation itself is likely fine — the fix is to CLOSE the form on SUCCESS: hide it from the mutation's onSuccess, e.g. \`createMutation.mutate(input, { onSuccess: () => { closeForm(); } })\` where the page's view-state hook owns the \`showForm\` flag and \`closeForm\` sets it false. Do the same for the edit form. Do NOT re-work persistence — the new ${singularKey} will appear in the list once the form closes and the list refetches.`;
 }
 
 function stepMessage(entity: IEntityAcceptance, step: AcceptStep): string {

@@ -96,6 +96,33 @@ describe("generateResource", () => {
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  test("throws when db:push cannot migrate (headless rename crash) — never proceeds on a stale DB", async () => {
+    // Everything succeeds EXCEPT db:push, which emits drizzle-kit's interactive rename
+    // crash on every attempt (exits 0 — the swallow). dbPushForce cannot recover, so it
+    // must surface a non-zero result and generateResource must THROW (not proceed to
+    // generate:api against a DB that never got the new columns → runtime 500s).
+    const tmpDir = await createTestEnv();
+
+    try {
+      const crash =
+        "Error: Interactive prompts require a TTY terminal\n at promptColumnsConflicts";
+
+      const exec = async (argv: readonly string[]) => {
+        if (argv[1] === "run" && argv[2] === "db:push") {
+          return { code: 0, stdout: "", stderr: crash };
+        }
+
+        return { code: 0, stdout: "", stderr: "" };
+      };
+
+      await expect(generateResource(tmpDir, "Invoice", exec)).rejects.toThrow(
+        /Interactive prompts require a TTY/
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("generateResource idempotency (retry-safe)", () => {

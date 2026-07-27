@@ -120,17 +120,34 @@ function negativesFor(
   return out;
 }
 
+/** The implicit auth owner every boringstack entity gets via automatic `userId` scoping. A
+ *  "belongs to a User" relationship documents OWNERSHIP — it is NOT a user-selectable parent FK,
+ *  so it must never become a parent `<select>` or an e2e parent-seed (that seeds a nonexistent
+ *  `POST /api/v1/user` → 404 → acceptance park). The planner's own worked example teaches
+ *  "belongs to a User" for every entity (propose-plan.ts), so without this EVERY build parks. */
+const OWNER_ENTITIES: ReadonlySet<string> = new Set(["user"]);
+
 function parseParents(relationships: readonly string[]): IParentRef[] {
   const out: IParentRef[] = [];
 
   for (const r of relationships) {
-    const m = /^belongs\s*to\s+(\w+)/i.exec(r.trim());
+    // Skip an optional leading article ("belongs to a User" / "an Order" / "the Company"). Without
+    // this, `(\w+)` captures the ARTICLE ("a") as the entity → a phantom `aId` parent whose seed
+    // `POST /api/v1/a` 404s and parks the build (live: valbuild23).
+    const m = /^belongs\s*to\s+(?:(?:an?|the)\s+)?(\w+)/i.exec(r.trim());
 
-    if (m !== null && typeof m[1] === "string") {
-      const entity = m[1];
-
-      out.push({ entity, key: camel(entity), fkField: `${camel(entity)}Id` });
+    if (m === null || typeof m[1] !== "string") {
+      continue;
     }
+
+    const entity = m[1];
+
+    // The auth owner is implicit (userId), not a parent FK — never emit a select/seed for it.
+    if (OWNER_ENTITIES.has(entity.toLowerCase())) {
+      continue;
+    }
+
+    out.push({ entity, key: camel(entity), fkField: `${camel(entity)}Id` });
   }
 
   return out;

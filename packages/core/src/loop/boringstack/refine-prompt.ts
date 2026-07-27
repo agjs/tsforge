@@ -218,10 +218,13 @@ const onSubmit = useCallback(
     // invalidates the list and onError surfaces failures, so this handler never awaits
     // and never rejects. \`mutateAsync\` would REJECT on failure and the \`void\` below would
     // then discard a rejected promise → an unhandled rejection.
-    createMutation.mutate(input);
+    // CLOSE THE FORM ON SUCCESS (see the close-on-success rule below): pass a per-call
+    // \`onSuccess\` that hides the form. It runs ALONGSIDE the mutation's own list-invalidating
+    // onSuccess (React Query fires both), so the list refetches AND the form disappears.
+    createMutation.mutate(input, { onSuccess: closeForm });
   },
-  [createMutation.mutate] // depend on the STABLE \`mutate\` (React Query guarantees it),
-  // NOT the whole \`createMutation\` result object, which is recreated every render.
+  [createMutation.mutate, closeForm] // STABLE \`mutate\` (React Query guarantees it) + the
+  // stable \`closeForm\` setter — NOT the whole \`createMutation\` object (recreated every render).
 );
 const submit = useCallback(
   (event: React.BaseSyntheticEvent): void => {
@@ -236,6 +239,16 @@ const submit = useCallback(
 <form onSubmit={view.submit}>
 \`\`\`
 \`void handleSubmit(onSubmit)(event)\` makes \`submit\` return \`void\` (the \`void\` operator is exactly typescript-eslint's sanctioned fix for \`no-misused-promises\` on a form's \`onSubmit\`). \`<form onSubmit={view.submit}>\` passes \`jsx-no-bind\` because it's a BARE identifier reference, not an inline arrow — and depending each \`useCallback\` on stable refs only (\`createMutation.mutate\`, \`handleSubmit\`) keeps \`submit\` referentially stable across renders (avoids TanStack's \`no-unstable-deps\`). Keep the onValid handler (\`onSubmit\`) itself non-rejecting — use \`mutate\` as above so mutation failures route to the mutation's \`onError\`, not into this discarded promise. NEVER call \`handleSubmit\` inside JSX.
+
+**Close the create/edit form on SUCCESS — a REQUIRED behaviour, not optional polish.** Browser acceptance opens the create form, fills it, submits, then **waits for the form to DISAPPEAR** as the signal the mutation + list refresh completed, and only THEN checks the new row. A form that submits correctly but stays open FAILS acceptance (\`waiting for …-form to be hidden … N × resolved to visible <form>\`) even though persistence works — so wiring the mutation is NOT enough; you MUST hide the form on success. Own an open/closed flag in the page's view-state hook and pass \`closeForm\` into the submit's per-call \`onSuccess\` (as shown above):
+\`\`\`ts
+// in <Page>.hooks.ts (view-state — a custom hook, NEVER useState in the component body):
+const [showForm, setShowForm] = useState(false);
+const openCreate = useCallback((): void => { setShowForm(true); }, []);
+const closeForm = useCallback((): void => { setShowForm(false); }, []); // stable → safe onSuccess dep
+// …expose \`showForm\`, \`openCreate\`, \`closeForm\`, and \`submit\` on the view object.
+\`\`\`
+The create button opens it (\`onClick={view.openCreate}\`), the form renders only when \`view.showForm\`, and \`createMutation.mutate(input, { onSuccess: closeForm })\` (and the edit mutation likewise) closes it. \`closeForm\` is a \`useCallback\` with an empty dep array so it's referentially stable — safe as both a \`useCallback\` dep and an \`onSuccess\` handler. A Cancel button also calls \`closeForm\`. Do NOT close the form optimistically before the mutation resolves (a failed create would hide the form with the row never appearing) — close it ONLY in \`onSuccess\`.
 
 **Extract computed lists — the exact \`no-jsx-computation\` idiom.** The rule rejects ANY array method (\`.map\`/\`.filter\`/\`.reduce\`/\`.sort\`/\`.find\`) or arithmetic (\`+\`/\`-\`/\`*\`/\`/\`) called DIRECTLY inside JSX braces — e.g. \`<tbody>{items.map(…)}</tbody>\` or \`<select>{companies.map(…)}</select>\` → "Extract this computation into a hook or helper function". Compute EVERY list/derived value as a \`const\` in the component body, then reference the BARE identifier in JSX:
 \`\`\`tsx

@@ -7,6 +7,8 @@ import type { IValidateResult, IErrorItem } from "../../validate";
 import type { IProvider } from "../../inference";
 import type { IFeature } from "../greenfield/greenfield.types";
 import type { Exec, IExecResult } from "./exec";
+import { dbPushForce } from "./db-push";
+import { toCamelCase } from "./case";
 import { runBoringstackGate } from "./gate";
 import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
 import { verifyFeatureReachable } from "./reachability";
@@ -462,18 +464,22 @@ function dbPushError(result: IExecResult): IErrorItem {
 export function boringstackCommandStage(
   cwd: string,
   exec: Exec,
-  rewritableGlobs: readonly string[] = []
+  rewritableGlobs: readonly string[] = [],
+  entityTable?: string
 ): IStage {
   return {
     async run(): Promise<IValidateResult> {
       await autofixApps(cwd, exec);
 
-      // db:push syncs the Drizzle schema to Postgres. Its exit code is NOT discarded: a failed
-      // push means the DB is out of sync, so running the gate against it would produce confusing
-      // downstream errors instead of the real cause. Surface it and stop here.
-      const push = await exec(["bun", "run", "db:push", "--", "--force"], {
-        cwd: join(cwd, "apps/api"),
-      });
+      // db:push with headless recovery: a name-less plan drops the scaffold's stub `name`
+      // column, so drizzle-kit's interactive rename prompt crashes in the no-TTY build
+      // (`--force` doesn't cover it) and — because `bun run db:push` exits 0 on that crash —
+      // the DB silently never migrates and the gate false-greens. dbPushForce detects that
+      // by OUTPUT signature, drops the (disposable) entity table, retries a clean CREATE,
+      // and returns an HONEST code (a swallowed/persistent crash → non-zero). The exit-code
+      // check below then surfaces ANY unrecovered db:push failure via dbPushError (#60), so
+      // the gate never runs against a stale schema. See db-push.ts.
+      const push = await dbPushForce(join(cwd, "apps/api"), exec, entityTable);
 
       if (push.code !== 0) {
         return {
@@ -767,7 +773,12 @@ export function composeBoringstackGate(opts: {
 
   return composeGate([
     differentialStage(
-      boringstackCommandStage(cwd, exec, rewritableGlobs),
+      boringstackCommandStage(
+        cwd,
+        exec,
+        rewritableGlobs,
+        toCamelCase(feature.id)
+      ),
       baseline
     ),
     reachabilityStage(cwd, feature.id),

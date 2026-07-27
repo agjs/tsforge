@@ -27,6 +27,11 @@ test("isCompletionClass: reliable add-code rules (reachability/i18n-locale-keys-
   // #61/#65: a missing colocated test clears ONLY by ADDING the test file — reliably add-only, so
   // WS-B must not revert the logic modules the model just added (build34/36 ground on this).
   expect(isCompletionClass(err("logic-files-require-test-sibling"))).toBe(true);
+  // #61/panel: a missing required test-id or an unwired feature clears ONLY by ADDING the create/
+  // edit/delete UI (a hollow list-only page) — reliably add-only, so WS-B must not revert the UI
+  // the model just added (valbuild23 parked on testid-presence exactly this way).
+  expect(isCompletionClass(err("testid-presence"))).toBe(true);
+  expect(isCompletionClass(err("feature-wiring"))).toBe(true);
   // `judge` is EXCLUDED — it can reject defects in existing code, not only hollowness, so it
   // isn't a reliable add-only signal (would falsely disable WS-B on a fixable judge rejection).
   expect(isCompletionClass(err("judge"))).toBe(false);

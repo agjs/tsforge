@@ -25,15 +25,20 @@ const feature: IFeature = {
   attempts: 0,
 };
 
-// The command stage runs setup steps (eslint-cache clear, lint:fix, format, db:push) BEFORE
-// the gate. Those succeed; only the GATE returns the test's code/stdout. Modelling that here
-// keeps a RED-gate test (code 1) exercising the gate path, not the new db:push short-circuit.
+// The command stage runs setup steps (eslint-cache clear, lint:fix, format, db:push, and the
+// db-push recovery's `bun -e` drop) BEFORE the gate. Those succeed independently; only the GATE
+// returns the test's code/stdout. Modelling that here keeps a RED-gate test (code 1) exercising
+// the gate path, not the db:push short-circuit.
 const execWith =
   (code: number, stdout: string): Exec =>
   async (argv) => {
     const cmd = argv.join(" ");
+    const isDrop = argv[1] === "-e";
 
-    if (/lint:fix|(?:^|\s)format(?:\s|$)|db:push|eslintcache/u.test(cmd)) {
+    if (
+      isDrop ||
+      /lint:fix|(?:^|\s)format(?:\s|$)|db:push|eslintcache/u.test(cmd)
+    ) {
       return { code: 0, stdout: "", stderr: "" };
     }
 
@@ -76,6 +81,30 @@ describe("boringstackCommandStage", () => {
 
     expect(r.passed).toBe(true);
     expect(r.errors).toEqual([]);
+  });
+
+  test("db:push that never migrates (rename crash survives recovery) → stage FAILS, never false-greens", async () => {
+    // db:push always emits the headless rename crash (exits 0 but never migrated);
+    // the gate command itself would be "green". The stage must short-circuit on the
+    // failed migration and NOT report the green gate.
+    const crash =
+      "Error: Interactive prompts require a TTY terminal\n at promptColumnsConflicts";
+
+    const exec: Exec = async (argv) => {
+      if (argv[1] === "run" && argv[2] === "db:push") {
+        return { code: 0, stdout: "", stderr: crash };
+      }
+
+      return { code: 0, stdout: "all good", stderr: "" };
+    };
+
+    const stage = boringstackCommandStage("/tmp/clone", exec, [], "bookmark");
+    const r = await stage.run("/tmp/clone");
+
+    expect(r.passed).toBe(false);
+    // Surfaced via #60's db:push error reporter (fingerprinted key, schema-vs-infra guidance).
+    expect(r.errors[0]?.rule).toBe("db-push");
+    expect(r.errors[0]?.message).toContain("column");
   });
 
   test("red gate → each failure signature becomes an IErrorItem (key = signature)", async () => {

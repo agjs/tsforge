@@ -262,12 +262,33 @@ async function driveBuild(
   // flags (drive-to-green, guidance, pull_conventions, the WS-G `check` tool) and is
   // unit-tested to advertise `check`, so this wiring can't silently regress. The i18n
   // editGuard is stateful (one per build) so it's supplied here, not in the flags.
+  // A/B lever (near-green rotation): DeepSeek's thinking mode wants temp ~1.0 to avoid
+  // CoT collapse → repetitive loops; the build otherwise falls through to 0.2. Set
+  // TSFORGE_BUILD_TEMPERATURE to run the treatment arm. Unset/invalid → session default.
+  const rawBuildTemp = process.env.TSFORGE_BUILD_TEMPERATURE;
+  const parsedBuildTemp =
+    rawBuildTemp === undefined || rawBuildTemp === ""
+      ? Number.NaN
+      : Number(rawBuildTemp);
+  const buildTemperature = Number.isFinite(parsedBuildTemp)
+    ? parsedBuildTemp
+    : undefined;
+
+  if (buildTemperature !== undefined) {
+    report({
+      kind: "tool",
+      task: "boringstack",
+      message: `⚙ build temperature override: ${String(buildTemperature)} (TSFORGE_BUILD_TEMPERATURE)`,
+    });
+  }
+
   const host = await createBoringstackHostSession({
     provider,
     cwd: dir,
     contextWindow,
     maxTurns: LOOP_LIMITS.webMaxTurns,
     report,
+    temperature: buildTemperature,
     // BoringStack overlays (composed, see makeBoringstackBuildGuard): (1) veto
     // deletion of a feature translation key the model authored earlier this build;
     // (2) veto creating a same-basename .test.ts + .test.tsx twin that orphans the
