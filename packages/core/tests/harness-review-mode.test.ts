@@ -61,7 +61,6 @@ function makeInput(over: { quick?: boolean; ci?: boolean }) {
       // Distinctive base/intent so a wiring that drops or overrides them is caught.
       base: "customBase",
       intent: "DISTINCT-INTENT",
-      head: undefined as string | undefined,
       git: async (args: string[]) => {
         log.gitArgs.push(args);
 

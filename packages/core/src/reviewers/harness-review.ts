@@ -33,10 +33,6 @@ export interface IGatherDeps {
 export interface IGatherOptions {
   base?: string;
   intent?: string;
-  /** The commit to review (a SHA/ref). Defaults to HEAD. The pre-push hook passes the ACTUAL
-   *  pushed local OID here, so an explicit refspec pushing a non-HEAD ref is reviewed as what
-   *  is being pushed — not whatever HEAD happens to be. */
-  head?: string;
   maxFiles: number;
   maxChars: number;
 }
@@ -87,24 +83,23 @@ export async function gatherChange(
   deps: IGatherDeps,
   opts: IGatherOptions
 ): Promise<GatherResult> {
-  // Pin the review target (opts.head, default HEAD) to an immutable SHA FIRST — before
-  // validate and every diff — so the whole gather references one snapshot and validate's
-  // result is attributed to a fixed commit. Guard the exit code like every other git step: a
-  // failed pin BLOCKS (a soft fallback to the movable "HEAD" would silently re-open the
-  // TOCTOU). (Validate still runs against the working tree; for the pre-push gate that tree is
-  // the pinned commit — an unstaged divergence from it is the caller's responsibility.)
-  const target = opts.head ?? "HEAD";
-  const headRes = await deps.git(["rev-parse", target]);
+  // Pin HEAD to an immutable SHA FIRST — before validate and every diff — so the whole gather
+  // references one snapshot (a HEAD move mid-gather can't mix file names, diff, and context
+  // from different commits into one request). Honor rev-parse's exit code like every other git
+  // step: a failed pin BLOCKS (a soft fallback to the movable "HEAD" ref would re-open the
+  // TOCTOU). (Reviewing an arbitrary pushed OID — validating THAT commit's tree rather than the
+  // working tree — is a separate review-targeting concern, tracked apart from cache integrity.)
+  const headRes = await deps.git(["rev-parse", "HEAD"]);
 
   if (headRes.code !== 0) {
     return {
       kind: "block",
-      reason: `could not resolve the review target (git rev-parse ${target} exited ${String(headRes.code)}) — cannot review`,
+      reason: `could not resolve HEAD (git rev-parse exited ${String(headRes.code)}) — cannot review`,
     };
   }
 
   const head =
-    headRes.stdout.trim().length > 0 ? headRes.stdout.trim() : target;
+    headRes.stdout.trim().length > 0 ? headRes.stdout.trim() : "HEAD";
 
   const validateSummary = await deps.validate();
 

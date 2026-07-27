@@ -94,7 +94,7 @@ describe("gatherChange", () => {
     }
   });
 
-  test("a failing `git rev-parse` of the review target BLOCKS (no soft fallback to a moving HEAD)", async () => {
+  test("a failing `git rev-parse HEAD` BLOCKS (no soft fallback to a moving HEAD ref)", async () => {
     // The pin must be honest: on rev-parse failure, block — do NOT silently review the movable
     // "HEAD" ref (which would re-open the TOCTOU the pin exists to close).
     const failingHead: IGatherDeps["git"] = async (args) =>
@@ -109,7 +109,7 @@ describe("gatherChange", () => {
     expect(r.kind).toBe("block");
 
     if (r.kind === "block") {
-      expect(r.reason).toMatch(/could not resolve the review target/iu);
+      expect(r.reason).toMatch(/could not resolve HEAD/iu);
     }
   });
 

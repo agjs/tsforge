@@ -32,8 +32,6 @@ import { parseVerdict, type IVerdict } from "../reviewers/aggregate";
 interface IArgs {
   base: string | undefined;
   intent: string | undefined;
-  /** The commit to review — the pre-push hook passes the actual pushed local OID. Default HEAD. */
-  head: string | undefined;
   quick: boolean;
   ci: boolean;
   installHook: boolean;
@@ -43,7 +41,6 @@ function parse(argv: string[]): IArgs {
   const out: IArgs = {
     base: undefined,
     intent: undefined,
-    head: undefined,
     quick: false,
     ci: false,
     installHook: false,
@@ -64,9 +61,6 @@ function parse(argv: string[]): IArgs {
     } else if (a === "--base") {
       i += 1;
       out.base = argv[i];
-    } else if (a === "--head") {
-      i += 1;
-      out.head = argv[i];
     }
   }
 
@@ -298,7 +292,6 @@ export function buildReviewFlowDeps(input: {
   ci: boolean;
   base: string | undefined;
   intent: string | undefined;
-  head: string | undefined;
   git: IGitRunner;
   validate: IValidateRunner;
   makeProvider: IReviewDeps["makeProvider"];
@@ -319,7 +312,6 @@ export function buildReviewFlowDeps(input: {
         {
           base: input.base,
           intent: input.intent,
-          head: input.head,
           maxFiles: DEFAULT_MAX_FILES,
           maxChars: DEFAULT_MAX_CHARS,
         }
@@ -380,7 +372,6 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
       ci: args.ci,
       base: args.base,
       intent: args.intent,
-      head: args.head,
       git: gitRunner,
       validate: validateRunner,
       makeProvider,
