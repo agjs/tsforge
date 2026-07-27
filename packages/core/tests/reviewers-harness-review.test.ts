@@ -137,6 +137,30 @@ describe("gatherChange", () => {
     }
   });
 
+  test("files listed but an EMPTY content diff (rename/mode-only) → block, not a vacuous cached green", async () => {
+    // The false-green the panel flagged: `--name-only` reports a file, but `git diff` exits 0
+    // with empty stdout. Without the empty-diff guard a 0-byte review would be built + cached.
+    const git2: IGatherDeps["git"] = async (args) => {
+      if (args.includes("--name-only")) {
+        return { stdout: "renamed.ts", code: 0 };
+      }
+
+      if (args[0] === "diff") {
+        return { stdout: "", code: 0 }; // exit 0, but empty content
+      }
+
+      return { stdout: "", code: 0 };
+    };
+
+    const r = await gatherChange({ git: git2, validate: cleanValidate }, opts);
+
+    expect(r.kind).toBe("block");
+
+    if (r.kind === "block") {
+      expect(r.reason).toMatch(/empty/iu);
+    }
+  });
+
   test("no changed files between base and HEAD → block (nothing to review, never a vacuous green)", async () => {
     const deps: IGatherDeps = {
       git: git({ "diff --name-only": "", diff: "" }),

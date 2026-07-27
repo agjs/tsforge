@@ -58,7 +58,9 @@ async function resolveBase(
   }
 
   // merge-base failed (e.g. no `main`): fall back to the ref itself (or HEAD~1 when omitted).
-  // Cache safety does not rest on this — an unresolvable diff yields diffHash=null downstream.
+  // Cache safety does not rest on this — if the resulting `${base}...HEAD` diff can't be
+  // computed, gatherChange blocks (git-exit / empty-diff guards) rather than caching a
+  // vacuous review.
   return explicit !== undefined && explicit.length > 0 ? explicit : "HEAD~1";
 }
 
@@ -140,6 +142,16 @@ export async function gatherChange(
   }
 
   const diff = diffRes.stdout;
+
+  if (diff.length === 0) {
+    // Files are listed but the CONTENT diff is empty (a rename- or mode-only change, or a
+    // git quirk): there is nothing textual for the reviewers to judge, so a PASS would be
+    // vacuous. Block rather than build+cache an empty review.
+    return {
+      kind: "block",
+      reason: `the diff between ${base} and HEAD is empty (rename/mode-only change?) — nothing to review`,
+    };
+  }
 
   if (diff.length > opts.maxChars) {
     return {
@@ -269,34 +281,28 @@ export async function runHarnessReview(
 export const CACHE_VERSION = "3";
 
 /**
- * Fingerprint the EXACT review request the reviewers will judge — the diff AND the full
- * `contextFiles` (the changed files' HEAD contents) AND the intent AND the rubric — plus
- * the roster identity and mode. This is the cache key.
+ * Fingerprint the EXACT review request the reviewers will judge, plus the roster identity
+ * and mode. This is the cache key.
  *
- * Keying on a diff hash alone is unsound: reviewers also see `contextFiles`, so a rebase
- * onto a different base can yield identical patch bytes while the surrounding file contents
- * (and thus the review input) differ — a false reuse. Hashing the request object itself,
- * the same object handed to `reviewRequest`, makes the key and the review provably one
- * input: there is no second git read to diverge from.
+ * It hashes the WHOLE `request` object — the same object handed to `reviewRequest` — not a
+ * hand-picked subset. That makes key and review provably one input: any byte a reviewer
+ * sees (diff, the full `contextFiles`, intent, rubricVersion, AND the `validateSummary`
+ * including its `firstErrors`/`failCount`, which the panel reads) is in the key. Selecting a
+ * subset was unsound — e.g. `validateRunner` can return `passed:true` with a non-empty
+ * `firstErrors`, so two runs with an identical diff but different validate diagnostics feed
+ * the reviewers different bytes; omitting the summary from the key would false-reuse across
+ * them. Keying on a diff hash alone likewise missed `contextFiles` (a rebase can yield
+ * identical patch bytes over different surrounding file contents).
  */
 export function reviewRequestKey(
   request: IReviewRequest,
   opts: { rosterHash: string; mode: string }
 ): string {
-  // JSON array (unforgeable: escaped + delimited) over the reviewer-visible content. The
-  // validate summary is NOT keyed — validate is re-run fresh every invocation (a request
-  // only exists when it currently passes), so it is a live precondition, not a cache axis.
+  // JSON array (unforgeable: escaped + delimited). `request` is built with a fixed field
+  // order in gatherChange, so its serialization is deterministic for identical content.
   return createHash("sha256")
     .update(
-      JSON.stringify([
-        request.diff,
-        request.contextFiles ?? [],
-        request.intent,
-        request.rubricVersion,
-        opts.rosterHash,
-        opts.mode,
-        CACHE_VERSION,
-      ])
+      JSON.stringify([request, opts.rosterHash, opts.mode, CACHE_VERSION])
     )
     .digest("hex");
 }

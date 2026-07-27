@@ -1,10 +1,12 @@
 import { test, expect, describe } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   reviewRequestKey,
   panelIdentityHash,
   decideVerdict,
   artifactBody,
   honorCachedVerdict,
+  CACHE_VERSION,
 } from "../src/reviewers/harness-review";
 import type { IReviewRequest } from "../src/reviewers/schema";
 import type { IVerdict } from "../src/reviewers/aggregate";
@@ -36,7 +38,7 @@ describe("reviewRequestKey (cache key = fingerprint of the ACTUAL review request
     );
   });
 
-  test("every reviewer-visible dimension changes the key — diff, contextFiles, intent, rubric, roster, mode", () => {
+  test("every reviewer-visible dimension changes the key — diff, contextFiles, intent, rubric, validateSummary, roster, mode", () => {
     const base = reviewRequestKey(request, rosterOpts);
 
     expect(
@@ -56,6 +58,21 @@ describe("reviewRequestKey (cache key = fingerprint of the ACTUAL review request
     expect(
       reviewRequestKey({ ...request, rubricVersion: "2" }, rosterOpts)
     ).not.toBe(base);
+    // validateSummary is part of the request the reviewers read (firstErrors can differ even
+    // on a passing run), so a different summary MUST change the key — no false reuse.
+    expect(
+      reviewRequestKey(
+        {
+          ...request,
+          validateSummary: {
+            passed: true,
+            failCount: 0,
+            firstErrors: ["a stray 'error' line"],
+          },
+        },
+        rosterOpts
+      )
+    ).not.toBe(base);
     expect(
       reviewRequestKey(request, { ...rosterOpts, rosterHash: "r2" })
     ).not.toBe(base);
@@ -73,12 +90,37 @@ describe("reviewRequestKey (cache key = fingerprint of the ACTUAL review request
     );
   });
 
-  test("a missing contextFiles hashes the same as an explicit empty list (no undefined/[] ambiguity)", () => {
-    const { contextFiles: _drop, ...noCtx } = request;
+  test("CACHE_VERSION is mixed into the key — bumping it retires ALL legacy artifacts in one shot", () => {
+    // The ONLY lever that invalidates every already-on-disk artifact (e.g. legacy diff-hash
+    // keys, or a poisoned pre-review block). If a regression dropped CACHE_VERSION from the
+    // hashed array, one-shot invalidation would silently break while every other test stayed
+    // green — so pin it by recomputing the exact key WITH it and asserting equality.
+    const expected = createHash("sha256")
+      .update(
+        JSON.stringify([
+          request,
+          rosterOpts.rosterHash,
+          rosterOpts.mode,
+          CACHE_VERSION,
+        ])
+      )
+      .digest("hex");
 
-    expect(reviewRequestKey(noCtx, rosterOpts)).toBe(
-      reviewRequestKey({ ...noCtx, contextFiles: [] }, rosterOpts)
-    );
+    expect(reviewRequestKey(request, rosterOpts)).toBe(expected);
+
+    // And a different CACHE_VERSION would produce a different key (the invalidation itself).
+    const otherVersion = createHash("sha256")
+      .update(
+        JSON.stringify([
+          request,
+          rosterOpts.rosterHash,
+          rosterOpts.mode,
+          "OTHER",
+        ])
+      )
+      .digest("hex");
+
+    expect(reviewRequestKey(request, rosterOpts)).not.toBe(otherVersion);
   });
 });
 
