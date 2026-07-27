@@ -8,6 +8,7 @@ import type { IProvider } from "../../inference";
 import type { IFeature } from "../greenfield/greenfield.types";
 import type { Exec, IExecResult } from "./exec";
 import { dbPushForce } from "./db-push";
+import { checkEntitySchema, schemaMismatchError } from "./db-oracle";
 import { toCamelCase } from "./case";
 import { runBoringstackGate } from "./gate";
 import { extractFailures, ESLINT_PROGRAM_UNPARSABLE } from "./extract-failures";
@@ -465,7 +466,8 @@ export function boringstackCommandStage(
   cwd: string,
   exec: Exec,
   rewritableGlobs: readonly string[] = [],
-  entityTable?: string
+  entityTable?: string,
+  entity?: IEntityAcceptance
 ): IStage {
   return {
     async run(): Promise<IValidateResult> {
@@ -487,6 +489,27 @@ export function boringstackCommandStage(
           errors: [dbPushError(push)],
           output: `${push.stdout}\n${push.stderr}`,
         };
+      }
+
+      // DB BOUNDARY ORACLE (P0b): db:push exiting 0 proves the command RAN, not that
+      // Postgres actually holds the plan's schema. Query information_schema and assert the
+      // plan's columns are physically present — the observable end-state, not the migration's
+      // story. Non-blocking when the DB read is inconclusive (see db-oracle.ts). Runs on the
+      // model-editable schema every cycle; a genuinely-missing plan column is always a real red.
+      if (entity !== undefined) {
+        const schema = await checkEntitySchema(
+          join(cwd, "apps/api"),
+          exec,
+          entity
+        );
+
+        if (!schema.ok) {
+          return {
+            passed: false,
+            errors: [schemaMismatchError(entity, schema)],
+            output: `missing columns: ${schema.missing.join(", ")}`,
+          };
+        }
       }
 
       const result = await runBoringstackGate(cwd, exec);
@@ -777,7 +800,8 @@ export function composeBoringstackGate(opts: {
         cwd,
         exec,
         rewritableGlobs,
-        toCamelCase(feature.id)
+        toCamelCase(feature.id),
+        entity
       ),
       baseline
     ),
