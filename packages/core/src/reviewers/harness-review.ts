@@ -68,30 +68,51 @@ async function resolveIntent(
   return GENERIC_INTENTS.has(subject.toLowerCase()) ? null : subject;
 }
 
+export interface IResolvedReviewInputs {
+  /** The base to hand `runHarnessReview` so its diff matches what `diffHash` hashed. */
+  base: string;
+  /** The resolved intent text (commit subject when the flag is omitted), or null when
+   *  empty/generic (the review will block on it). */
+  intent: string | null;
+  /** sha256 of the ACTUAL reviewed diff (`${base}...HEAD`), or null when the diff could
+   *  NOT be computed (git failed). A null hash means the caller MUST skip the cache
+   *  entirely — never key on a movable ref as a fallback (that is the very bug this
+   *  resolver exists to kill). */
+  diffHash: string | null;
+}
+
 /**
- * Resolve the review's base and intent to their CONCRETE values — what the diff is
- * actually taken against and the actual intent text — so the verdict cache can key on
- * them. Keying on the raw flags is unsound: an omitted `--base` resolves to
- * `merge-base main HEAD` and a named ref like `main` is resolved at review time, so the
- * SAME flags can denote a DIFFERENT diff after `main` moves or a rebase; an omitted
- * `--intent` comes from the commit subject, which an amend changes — all with an
- * unchanged treeHash. Resolving the base to a SHA (via rev-parse) and the intent to its
- * text makes the cache key reflect the real review inputs, so those cases MISS the cache.
- * The same resolved values are then handed to the review, so the key and the review can
- * never diverge.
+ * Resolve the review's base + intent AND fingerprint the exact diff the reviewers will
+ * see, so the verdict cache can key on the real review inputs. Keying on the raw flags is
+ * unsound: an omitted `--base` resolves to `merge-base main HEAD` and a named ref like
+ * `main` is resolved at review time, so the SAME flags can denote a DIFFERENT diff after
+ * `main` moves; an omitted `--intent` comes from the commit subject, which an amend
+ * changes.
+ *
+ * Keying on a base SHA is NOT enough either: the diff is `${base}...HEAD` (three-dot, a
+ * merge-base diff), so a rebase that shifts `merge-base(base, HEAD)` changes the reviewed
+ * diff while the base ref, the final tree, and the subject all stay identical. The only
+ * fingerprint that captures every one of those is a hash of the reviewed diff itself —
+ * exactly the bytes the reviewers judge. The same resolved `base` is handed to the review,
+ * so the diff the key hashed and the diff the review reads are the same command.
+ *
+ * If the diff cannot be computed (git error), `diffHash` is null and the caller skips the
+ * cache — a failure must never silently fall back to keying on the movable ref.
  */
 export async function resolveReviewInputs(
   git: IGitRunner,
   base: string | undefined,
   intent: string | undefined
-): Promise<{ baseSha: string; intent: string | null }> {
+): Promise<IResolvedReviewInputs> {
   const baseRef = await resolveBase(git, base);
-  const revParsed = (await git(["rev-parse", baseRef])).stdout.trim();
+  const intentText = await resolveIntent(git, intent);
+  const diff = await git(["diff", `${baseRef}...HEAD`]);
+  const diffHash =
+    diff.code === 0
+      ? createHash("sha256").update(diff.stdout).digest("hex")
+      : null;
 
-  return {
-    baseSha: revParsed.length > 0 ? revParsed : baseRef,
-    intent: await resolveIntent(git, intent),
-  };
+  return { base: baseRef, intent: intentText, diffHash };
 }
 
 async function changedFiles(git: IGitRunner, base: string): Promise<string[]> {
@@ -250,14 +271,17 @@ export async function runHarnessReview(
 export const CACHE_VERSION = "2";
 
 export function verdictCacheKey(input: {
-  treeHash: string;
+  /** sha256 of the ACTUAL reviewed diff (`${base}...HEAD`, three-dot). This is what the
+   *  reviewers see, so it captures the true merge-base: a moved base ref, a rebase that
+   *  shifts the merge-base, or any tree change all produce a different diff → a different
+   *  key. (Keying on a base SHA alone cannot — a rebase moves the merge-base with the ref
+   *  and tree unchanged.) */
+  diffHash: string;
   panelHash: string;
   rubricVersion: string;
   cacheVersion: string;
-  /** The diff base ref — a review vs a DIFFERENT base is a different diff, so it must
-   *  not reuse this verdict. */
-  base: string;
-  /** The review intent — different context ⇒ a different review. */
+  /** The resolved review intent (commit subject when the flag is omitted) — different
+   *  context ⇒ a different review; an amend that changes the subject changes this. */
   intent: string;
   /** "quick" | "full". `quick` reviews with a REDUCED roster (1 reviewer); its verdict
    *  must never satisfy a full review, and vice versa. */
@@ -270,16 +294,58 @@ export function verdictCacheKey(input: {
   return createHash("sha256")
     .update(
       JSON.stringify([
-        input.treeHash,
+        input.diffHash,
         input.panelHash,
         input.rubricVersion,
         input.cacheVersion,
-        input.base,
         input.intent,
         input.mode,
       ])
     )
     .digest("hex");
+}
+
+export interface IReviewPlan {
+  /** Cache key, or null when the diff was unfingerprintable (git failed) — a null key means
+   *  the caller must NEITHER read nor write the cache (no sound key exists). */
+  cacheKey: string | null;
+  /** Base to hand `runHarnessReview` — identical to the base the cache key's diff was taken
+   *  against, so the review reads exactly the diff the key fingerprinted. */
+  reviewBase: string;
+  /** Intent to hand `runHarnessReview` — the same resolved intent the key used. */
+  reviewIntent: string | undefined;
+}
+
+/**
+ * Bind the resolved review inputs to BOTH the cache key and the review request from a
+ * SINGLE source, so the diff the key fingerprints and the diff the review reads can never
+ * diverge. This closes the CI-parity hole the panel found: previously the `--ci` path
+ * reviewed the raw flags while the key was built from the resolved values, so a verdict
+ * could be stored under one request's key for another request's diff. Now both paths take
+ * `reviewBase`/`reviewIntent` from here (the `--ci` path simply never reads the cache).
+ * Pure and injectable so this wiring is unit-tested without spawning the CLI.
+ */
+export function reviewPlan(
+  resolved: IResolvedReviewInputs,
+  opts: { quick: boolean; panelHash: string }
+): IReviewPlan {
+  const cacheKey =
+    resolved.diffHash === null
+      ? null
+      : verdictCacheKey({
+          diffHash: resolved.diffHash,
+          panelHash: opts.panelHash,
+          rubricVersion: RUBRIC_VERSION,
+          cacheVersion: CACHE_VERSION,
+          intent: resolved.intent ?? "",
+          mode: opts.quick ? "quick" : "full",
+        });
+
+  return {
+    cacheKey,
+    reviewBase: resolved.base,
+    reviewIntent: resolved.intent ?? undefined,
+  };
 }
 
 /** The caching decision, isolated so it is unit-testable without the filesystem.

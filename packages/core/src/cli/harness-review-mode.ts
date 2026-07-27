@@ -16,14 +16,12 @@ import {
   runHarnessReview,
   DEFAULT_MAX_FILES,
   DEFAULT_MAX_CHARS,
-  verdictCacheKey,
   artifactBody,
   shouldCacheVerdict,
   honorCachedVerdict,
   resolveReviewInputs,
-  CACHE_VERSION,
+  reviewPlan,
 } from "../reviewers/harness-review";
-import { RUBRIC_VERSION } from "../reviewers/schema";
 import { parseVerdict, type IVerdict } from "../reviewers/aggregate";
 
 interface IArgs {
@@ -305,57 +303,29 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
   const treeHashRes = await gitRunner(["write-tree"]);
   const treeHash = treeHashRes.stdout.trim();
   const panelHash = computePanelHash(cfg.reviewPanel ?? {});
-  // Resolve base + intent to their CONCRETE values (base ref → sha, omitted intent →
-  // commit subject) BEFORE keying — keying on the raw flags is unsound: a moving `main`,
-  // a rebase, or an amended message changes the real diff/intent with an unchanged
-  // treeHash and unchanged flags (4-model panel finding). The SAME resolved values feed
-  // the review below, so the key and the review can never diverge.
+  // Resolve base + intent AND fingerprint the exact reviewed diff BEFORE keying. Keying on
+  // the raw flags — or even a base SHA — is unsound: a moving `main`, an amended message,
+  // or a REBASE that shifts merge-base(base, HEAD) all change the reviewed diff
+  // (`${base}...HEAD`, three-dot) with the flags, tree, and subject unchanged. Hashing the
+  // diff bytes the reviewers actually see captures every one of those (4-model panel
+  // finding). The SAME resolved base feeds the review below, so key and review can't diverge.
   const resolved = await resolveReviewInputs(gitRunner, args.base, args.intent);
-  const cacheKey = verdictCacheKey({
-    treeHash,
-    panelHash,
-    rubricVersion: RUBRIC_VERSION,
-    cacheVersion: CACHE_VERSION,
-    // The verdict is only valid for THIS review request: a different resolved base
-    // (different diff), intent (different context), or mode (quick = reduced roster) must
-    // MISS the cache and force a fresh review — otherwise one request's verdict false-reuses.
-    base: resolved.baseSha,
-    intent: resolved.intent ?? "",
-    mode: args.quick ? "quick" : "full",
-  });
+  // reviewPlan binds the cache key AND the review request to the SAME resolved inputs — so
+  // the diff the key fingerprints and the diff the review reads can't diverge, on either the
+  // --ci or the interactive path (the CI-parity hole the panel found). A null cacheKey means
+  // the diff was unfingerprintable (git failed) → neither read nor write the cache.
+  const plan = reviewPlan(resolved, { quick: args.quick, panelHash });
 
-  let verdict: IVerdict;
+  // ONE review path for both --ci and interactive runs. --ci never READS the cache (CI
+  // always re-reviews) but still WRITES it, so a later interactive run with an identical
+  // diff can reuse it.
+  let verdict: IVerdict | null =
+    !args.ci && plan.cacheKey !== null
+      ? await readCachedVerdict(plan.cacheKey)
+      : null;
 
-  if (!args.ci) {
-    const cached = await readCachedVerdict(cacheKey);
-
-    if (cached !== null) {
-      process.stdout.write("harness-review: cache hit, reusing verdict\n");
-      verdict = cached;
-    } else {
-      verdict = await runHarnessReview(
-        {
-          git: gitRunner,
-          validate: validateRunner,
-          makeProvider,
-          runBinary,
-          panel: effective,
-          identity: `${active.name}/${active.entry.model}`,
-        },
-        {
-          // Same resolved inputs the cache key used — the review can't diverge from the key.
-          base: resolved.baseSha,
-          intent: resolved.intent ?? undefined,
-          maxFiles: DEFAULT_MAX_FILES,
-          maxChars: DEFAULT_MAX_CHARS,
-        }
-      );
-
-      // persistVerdict caches ONLY a real panel verdict. A pre-review gate block
-      // (validate flake, empty intent, diff too large) is transient — caching one
-      // poisons the tree-hash so a flaky validate under load blocks every future push.
-      await persistVerdict(verdict, cacheKey, treeHash, panelHash);
-    }
+  if (verdict !== null) {
+    process.stdout.write("harness-review: cache hit, reusing verdict\n");
   } else {
     verdict = await runHarnessReview(
       {
@@ -367,14 +337,18 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
         identity: `${active.name}/${active.entry.model}`,
       },
       {
-        base: args.base,
-        intent: args.intent,
+        base: plan.reviewBase,
+        intent: plan.reviewIntent,
         maxFiles: DEFAULT_MAX_FILES,
         maxChars: DEFAULT_MAX_CHARS,
       }
     );
 
-    await persistVerdict(verdict, cacheKey, treeHash, panelHash);
+    // persistVerdict caches ONLY a real panel verdict (a pre-review gate block is transient).
+    // Skip persistence when the diff was unfingerprintable — there is no sound key to store under.
+    if (plan.cacheKey !== null) {
+      await persistVerdict(verdict, plan.cacheKey, treeHash, panelHash);
+    }
   }
 
   process.stdout.write(`${formatVerdict(verdict)}\n`);
