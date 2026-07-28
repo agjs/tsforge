@@ -2224,23 +2224,26 @@ describe("PART C: negative check hardening tests", () => {
 
 describe("child-entity acceptance: parent-FK <select> ordering (Contact belongsTo Company)", () => {
   // A child entity whose form has a company parent-FK rendered as a native <select>.
+  // Field order mirrors a real derived spec: domain fields first, FK appended LAST
+  // (planToAcceptanceSpec's addParentFkFields pushes FK fields to the end), so the identity
+  // field resolves to `name` and the generated create test fills `name` (not the FK <select>).
   const contact: IEntityAcceptance = {
     id: "Contact",
     key: "contact",
     nav: "Contacts",
     fields: [
       {
-        name: "companyId",
-        type: "string",
-        optional: false,
-        valid: "",
-        invalid: [],
-      },
-      {
         name: "name",
         type: "string",
         optional: false,
         valid: "Jane",
+        invalid: [],
+      },
+      {
+        name: "companyId",
+        type: "string",
+        optional: false,
+        valid: "",
         invalid: [],
       },
     ],
@@ -2251,17 +2254,69 @@ describe("child-entity acceptance: parent-FK <select> ordering (Contact belongsT
     acceptanceCheck: "create a contact under a company",
   };
 
-  test("seeds the parent via API BEFORE opening the create form (so the async company <select> already contains it)", () => {
+  // Extract one test block by a substring of its title, up to the next top-level `  test(`.
+  const extractBlock = (spec: string, titleMarker: string): string => {
+    const start = spec.indexOf(titleMarker);
+
+    if (start === -1) {
+      return "";
+    }
+
+    const rest = spec.slice(start);
+    const next = rest.indexOf("\n  test(", 1);
+
+    return next === -1 ? rest : rest.slice(0, next);
+  };
+
+  // Every test that navigates to the child page and fills its parent-FK <select>.
+  const formDrivenMarkers = [
+    "create Contact: form fill",
+    "Contact persists after page reload",
+    "update Contact: edit form",
+    "delete Contact: row delete",
+  ];
+
+  test("EVERY form-driven test seeds the parent via API BEFORE navigating to the child page (per-test, not just the first block)", () => {
     // The bug this guards: seeding AFTER navigation left the child page's already-fetched
     // company list without the seed, so the <option value={seededId}> never appeared and
-    // selectOption timed out (30s) → false park. The seed POST must precede the form-open.
+    // selectOption timed out (30s) → false park. Asserting only the first spec-wide occurrence
+    // would miss a persist/update/delete block that still seeds late — so check each block.
     const spec = generateEntitySpec(contact);
-    const seedIdx = spec.indexOf("/api/v1/company");
-    const formOpenIdx = spec.indexOf('getByTestId("contact-create")');
 
-    expect(seedIdx).toBeGreaterThan(-1);
-    expect(formOpenIdx).toBeGreaterThan(-1);
-    expect(seedIdx).toBeLessThan(formOpenIdx);
+    for (const marker of formDrivenMarkers) {
+      const block = extractBlock(spec, marker);
+
+      expect(block, `missing test block: ${marker}`).not.toBe("");
+
+      const seedIdx = block.indexOf("/api/v1/company");
+      const navIdx = block.indexOf("navigateToContact(page)");
+
+      expect(seedIdx, `${marker}: no parent seed`).toBeGreaterThan(-1);
+      expect(navIdx, `${marker}: no navigateToContact`).toBeGreaterThan(-1);
+      expect(
+        seedIdx,
+        `${marker}: parent seed must precede navigateToContact`
+      ).toBeLessThan(navIdx);
+    }
+  });
+
+  test("the parent-<select> rationale note appears in form-driven tests but NOT in the API-only negative block (which still seeds the parent)", () => {
+    const spec = generateEntitySpec(contact);
+    const note = "async parent-<select>";
+
+    // Present in the form-driven seeding (child page navigates + selects the <select>).
+    expect(spec).toContain(note);
+
+    // The negative block POSTs directly (no navigation, no <select>): it must still seed the
+    // parent for the FK payload, but omit the misleading <select> note.
+    const negIdx = spec.indexOf("negative: Contact rejects");
+
+    expect(negIdx).toBeGreaterThan(-1);
+
+    const negBlock = spec.slice(negIdx);
+
+    expect(negBlock).toContain("/api/v1/company"); // still seeds the parent for the FK payload
+    expect(negBlock).not.toContain(note); // but no misleading <select> rationale
   });
 
   test("waits for the seeded <option> to attach before selectOption (no async-fetch race)", () => {

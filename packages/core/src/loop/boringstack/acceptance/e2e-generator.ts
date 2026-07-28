@@ -175,7 +175,11 @@ function emitSpecParentSeed(
 function generateParentSeedingCode(
   parents: IParentRef[],
   entityId: string,
-  spec?: IAcceptanceSpec
+  spec?: IAcceptanceSpec,
+  // Prepend the "seed before navigate" rationale. Only the form-driven tests navigate to the
+  // child page and select from its async <select>; the API-only negative blocks POST directly
+  // and never render a select, so the <select> note would be misleading there → opt-out.
+  withSelectNote = true
 ): string {
   if (parents.length === 0) {
     return "";
@@ -226,6 +230,10 @@ function generateParentSeedingCode(
 
   if (codeBlocks.length === 0) {
     return "";
+  }
+
+  if (!withSelectNote) {
+    return codeBlocks.join("\n");
   }
 
   // Callers place this BEFORE navigating to the child page: the child's parent <select> is
@@ -606,7 +614,18 @@ export function generateEntitySpec(
     entity.id,
     spec
   );
-  const negativeBlocks = generateNegativeBlocks(entity, parentSeedingCode);
+  // Negatives POST directly to the API (no navigation, no parent <select>), so seed without the
+  // form-oriented "<select>" rationale note — it would be misleading in an API-only block.
+  const negativeParentSeedingCode = generateParentSeedingCode(
+    entity.parents,
+    entity.id,
+    spec,
+    false
+  );
+  const negativeBlocks = generateNegativeBlocks(
+    entity,
+    negativeParentSeedingCode
+  );
 
   // FIX E/FIX 3: Type-aware unique identity value
   // Find the first field with a string/text type (NOT email by type or name) for the unique marker
