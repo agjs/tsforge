@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { isRecord } from "../lib/guards";
 import { OpenAICompatibleProvider, type IProvider } from "../inference";
@@ -11,18 +11,22 @@ import {
   type IModelEntry,
   type BinaryInputMode,
 } from "../models-config";
-import { resolvePanel } from "../reviewers/registry";
+import { resolvePanel, type IPanel } from "../reviewers/registry";
 import {
-  runHarnessReview,
+  gatherChange,
+  reviewRequest,
+  runReviewFlow,
+  panelIdentityHash,
   DEFAULT_MAX_FILES,
   DEFAULT_MAX_CHARS,
-  verdictCacheKey,
   artifactBody,
   shouldCacheVerdict,
   honorCachedVerdict,
-  CACHE_VERSION,
+  type IReviewFlowDeps,
+  type IReviewDeps,
+  type IGitRunner,
+  type IValidateRunner,
 } from "../reviewers/harness-review";
-import { RUBRIC_VERSION } from "../reviewers/schema";
 import { parseVerdict, type IVerdict } from "../reviewers/aggregate";
 
 interface IArgs {
@@ -200,10 +204,6 @@ async function validateRunner(): Promise<{
   return { passed: code === 0, failCount: firstErrors.length, firstErrors };
 }
 
-function computePanelHash(panel: object): string {
-  return createHash("sha256").update(JSON.stringify(panel)).digest("hex");
-}
-
 export const CACHE_DIR = join(".tsforge", "harness-review");
 
 async function readCachedVerdict(
@@ -278,6 +278,66 @@ export function formatVerdict(v: IVerdict): string {
   return lines.join("\n");
 }
 
+/**
+ * Wire the resolved CLI pieces (full panel + quick flag, args, git/validate, providers, cache
+ * seams) into the runReviewFlow deps — exported so the CLI's central wiring is unit-tested.
+ * The EFFECTIVE roster is derived HERE (quick mode → a 1-reviewer slice), so the cache key's
+ * rosterHash and the review both target that effective roster — a `quick` run can't reuse a
+ * full-panel verdict, or vice versa. mode/ci come from the args; gather reads args.base/intent.
+ * A miswire (cfg roster, hardcoded ci, wrong panel, un-sliced quick roster) is caught here.
+ */
+export function buildReviewFlowDeps(input: {
+  panel: IPanel;
+  identity: string;
+  quick: boolean;
+  ci: boolean;
+  base: string | undefined;
+  intent: string | undefined;
+  git: IGitRunner;
+  validate: IValidateRunner;
+  makeProvider: IReviewDeps["makeProvider"];
+  runBinary: IReviewDeps["runBinary"];
+  readCache: (key: string) => Promise<IVerdict | null>;
+  persistArtifact: (
+    verdict: IVerdict,
+    key: string,
+    rosterHash: string
+  ) => Promise<void>;
+}): IReviewFlowDeps {
+  // `quick` reviews with a REDUCED roster (the first reviewer only). The effective roster
+  // feeds BOTH the cache key and the review, so its verdict never satisfies a full review.
+  const effective: IPanel = input.quick
+    ? { ...input.panel, reviewers: input.panel.reviewers.slice(0, 1) }
+    : input.panel;
+  const rosterHash = panelIdentityHash(effective, input.identity);
+
+  return {
+    gather: () =>
+      gatherChange(
+        { git: input.git, validate: input.validate },
+        {
+          base: input.base,
+          intent: input.intent,
+          maxFiles: DEFAULT_MAX_FILES,
+          maxChars: DEFAULT_MAX_CHARS,
+        }
+      ),
+    identity: input.identity,
+    rosterHash,
+    mode: input.quick ? "quick" : "full",
+    ci: input.ci,
+    readCache: input.readCache,
+    review: (request) =>
+      reviewRequest(request, {
+        makeProvider: input.makeProvider,
+        runBinary: input.runBinary,
+        panel: effective,
+        identity: input.identity,
+      }),
+    persist: (v, key) => input.persistArtifact(v, key, rosterHash),
+  };
+}
+
 export async function harnessReviewMode(argv: string[]): Promise<number> {
   const args = parse(argv);
 
@@ -297,70 +357,35 @@ export async function harnessReviewMode(argv: string[]): Promise<number> {
     process.stdout.write(`skipped reviewer ${s.id}: ${s.reason}\n`);
   }
 
-  const effective = args.quick
-    ? { ...panel, reviewers: panel.reviewers.slice(0, 1) }
-    : panel;
-
   const treeHashRes = await gitRunner(["write-tree"]);
   const treeHash = treeHashRes.stdout.trim();
-  const panelHash = computePanelHash(cfg.reviewPanel ?? {});
-  const cacheKey = verdictCacheKey({
-    treeHash,
-    panelHash,
-    rubricVersion: RUBRIC_VERSION,
-    cacheVersion: CACHE_VERSION,
-  });
+  const identity = `${active.name}/${active.entry.model}`;
 
-  let verdict: IVerdict;
+  // runReviewFlow enforces the wiring invariant: GATHER (validate runs fresh inside) BEFORE
+  // any cache access, and a gather block never touches the cache. The gathered request is
+  // keyed from its OWN bytes, so key and review can't diverge. --ci writes but never reads.
+  // buildReviewFlowDeps derives the EFFECTIVE roster (quick-slice) and the roster hash, and is
+  // unit-tested for that wiring.
+  const { verdict, cacheHit } = await runReviewFlow(
+    buildReviewFlowDeps({
+      panel,
+      identity,
+      quick: args.quick,
+      ci: args.ci,
+      base: args.base,
+      intent: args.intent,
+      git: gitRunner,
+      validate: validateRunner,
+      makeProvider,
+      runBinary,
+      readCache: readCachedVerdict,
+      persistArtifact: (v, key, rosterHash) =>
+        persistVerdict(v, key, treeHash, rosterHash),
+    })
+  );
 
-  if (!args.ci) {
-    const cached = await readCachedVerdict(cacheKey);
-
-    if (cached !== null) {
-      process.stdout.write("harness-review: cache hit, reusing verdict\n");
-      verdict = cached;
-    } else {
-      verdict = await runHarnessReview(
-        {
-          git: gitRunner,
-          validate: validateRunner,
-          makeProvider,
-          runBinary,
-          panel: effective,
-          identity: `${active.name}/${active.entry.model}`,
-        },
-        {
-          base: args.base,
-          intent: args.intent,
-          maxFiles: DEFAULT_MAX_FILES,
-          maxChars: DEFAULT_MAX_CHARS,
-        }
-      );
-
-      // persistVerdict caches ONLY a real panel verdict. A pre-review gate block
-      // (validate flake, empty intent, diff too large) is transient — caching one
-      // poisons the tree-hash so a flaky validate under load blocks every future push.
-      await persistVerdict(verdict, cacheKey, treeHash, panelHash);
-    }
-  } else {
-    verdict = await runHarnessReview(
-      {
-        git: gitRunner,
-        validate: validateRunner,
-        makeProvider,
-        runBinary,
-        panel: effective,
-        identity: `${active.name}/${active.entry.model}`,
-      },
-      {
-        base: args.base,
-        intent: args.intent,
-        maxFiles: DEFAULT_MAX_FILES,
-        maxChars: DEFAULT_MAX_CHARS,
-      }
-    );
-
-    await persistVerdict(verdict, cacheKey, treeHash, panelHash);
+  if (cacheHit) {
+    process.stdout.write("harness-review: cache hit, reusing verdict\n");
   }
 
   process.stdout.write(`${formatVerdict(verdict)}\n`);
