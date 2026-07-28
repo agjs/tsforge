@@ -175,7 +175,11 @@ function emitSpecParentSeed(
 function generateParentSeedingCode(
   parents: IParentRef[],
   entityId: string,
-  spec?: IAcceptanceSpec
+  spec?: IAcceptanceSpec,
+  // Prepend the "seed before navigate" rationale. Only the form-driven tests navigate to the
+  // child page and select from its async <select>; the API-only negative blocks POST directly
+  // and never render a select, so the <select> note would be misleading there → opt-out.
+  withSelectNote = true
 ): string {
   if (parents.length === 0) {
     return "";
@@ -224,7 +228,22 @@ function generateParentSeedingCode(
     emitParentSeeding(parent.key, parent.entity, 0);
   }
 
-  return codeBlocks.join("\n");
+  if (codeBlocks.length === 0) {
+    return "";
+  }
+
+  if (!withSelectNote) {
+    return codeBlocks.join("\n");
+  }
+
+  // Callers place this BEFORE navigating to the child page: the child's parent <select> is
+  // filled by an async list query on mount, so seeding first means that fetch already includes
+  // the parents. An API seed AFTER navigation isn't reflected in the fetched list, so the
+  // <option> never appears and selectOption times out (30s) → false park.
+  const note =
+    "    // Seed parent(s) up front so the child page's async parent-<select> lists them.";
+
+  return [note, ...codeBlocks].join("\n");
 }
 
 /**
@@ -367,8 +386,14 @@ function generateFieldFillSteps(
 
         if (parent) {
           const varName = `${parent.key}Id`;
+          const sel = `page.getByTestId("${ids.field(field.name)}")`;
 
-          return `    await page.getByTestId("${ids.field(field.name)}").selectOption(${varName});`;
+          // The parent <select> is populated by an ASYNC list query (the child page fetches its
+          // parents). Wait for the SEEDED option to attach before selecting — otherwise
+          // selectOption races the in-flight fetch and Playwright waits the full 30s for an
+          // <option value="{seededId}"> that isn't in the DOM yet → timeout → false park.
+          return `    await ${sel}.locator(\`option[value="\${${varName}}"]\`).waitFor({ state: "attached", timeout: 10000 });
+    await ${sel}.selectOption(${varName});`;
         }
       }
 
@@ -589,7 +614,18 @@ export function generateEntitySpec(
     entity.id,
     spec
   );
-  const negativeBlocks = generateNegativeBlocks(entity, parentSeedingCode);
+  // Negatives POST directly to the API (no navigation, no parent <select>), so seed without the
+  // form-oriented "<select>" rationale note — it would be misleading in an API-only block.
+  const negativeParentSeedingCode = generateParentSeedingCode(
+    entity.parents,
+    entity.id,
+    spec,
+    false
+  );
+  const negativeBlocks = generateNegativeBlocks(
+    entity,
+    negativeParentSeedingCode
+  );
 
   // FIX E/FIX 3: Type-aware unique identity value
   // Find the first field with a string/text type (NOT email by type or name) for the unique marker
@@ -672,6 +708,7 @@ test.describe(${JSON.stringify(name)}, () => {
 
   test(${JSON.stringify(stepTitle("create", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
+${parentSeedingCode}
     await navigateTo${entity.id}(page);
 
     // Capture WHY a create can silently fail: the api client throws on non-2xx and React Query
@@ -707,9 +744,7 @@ test.describe(${JSON.stringify(name)}, () => {
     // Wait for form to appear (form may be inline, no URL change)
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
-${parentSeedingCode}
-
-    // Fill all fields
+    // Fill all fields (parents were seeded before navigation, above)
 ${fieldFillSteps}
 ${fillFirstFieldCode}    // Fill identity field with unique value
     await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
@@ -736,6 +771,7 @@ ${rowCellAssertions}
 
   test(${JSON.stringify(stepTitle("persist", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
+${parentSeedingCode}
     await navigateTo${entity.id}(page);
 
     const unique = ${uniqueValueConstruction};
@@ -743,8 +779,6 @@ ${rowCellAssertions}
     // Create a new record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-${parentSeedingCode}
 
 ${fieldFillSteps}
 ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
@@ -794,6 +828,7 @@ ${entity.parents
 
   test(${JSON.stringify(stepTitle("update", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
+${parentSeedingCode}
     await navigateTo${entity.id}(page);
 
     // Create a record stamped with a unique value (identity field, not first field)
@@ -810,8 +845,6 @@ ${entity.parents
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-${parentSeedingCode}
 
 ${fieldFillSteps}
 ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
@@ -849,6 +882,7 @@ ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}
 
   test(${JSON.stringify(stepTitle("delete", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
+${parentSeedingCode}
     await navigateTo${entity.id}(page);
 
     const unique = ${uniqueValueConstruction};
@@ -856,8 +890,6 @@ ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}
     // Create a record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-${parentSeedingCode}
 
 ${fieldFillSteps}
 ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
