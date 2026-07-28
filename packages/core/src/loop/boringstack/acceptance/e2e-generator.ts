@@ -224,7 +224,18 @@ function generateParentSeedingCode(
     emitParentSeeding(parent.key, parent.entity, 0);
   }
 
-  return codeBlocks.join("\n");
+  if (codeBlocks.length === 0) {
+    return "";
+  }
+
+  // Callers place this BEFORE navigating to the child page: the child's parent <select> is
+  // filled by an async list query on mount, so seeding first means that fetch already includes
+  // the parents. An API seed AFTER navigation isn't reflected in the fetched list, so the
+  // <option> never appears and selectOption times out (30s) → false park.
+  const note =
+    "    // Seed parent(s) up front so the child page's async parent-<select> lists them.";
+
+  return [note, ...codeBlocks].join("\n");
 }
 
 /**
@@ -367,8 +378,14 @@ function generateFieldFillSteps(
 
         if (parent) {
           const varName = `${parent.key}Id`;
+          const sel = `page.getByTestId("${ids.field(field.name)}")`;
 
-          return `    await page.getByTestId("${ids.field(field.name)}").selectOption(${varName});`;
+          // The parent <select> is populated by an ASYNC list query (the child page fetches its
+          // parents). Wait for the SEEDED option to attach before selecting — otherwise
+          // selectOption races the in-flight fetch and Playwright waits the full 30s for an
+          // <option value="{seededId}"> that isn't in the DOM yet → timeout → false park.
+          return `    await ${sel}.locator(\`option[value="\${${varName}}"]\`).waitFor({ state: "attached", timeout: 10000 });
+    await ${sel}.selectOption(${varName});`;
         }
       }
 
@@ -672,6 +689,7 @@ test.describe(${JSON.stringify(name)}, () => {
 
   test(${JSON.stringify(stepTitle("create", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
+${parentSeedingCode}
     await navigateTo${entity.id}(page);
 
     // Capture WHY a create can silently fail: the api client throws on non-2xx and React Query
@@ -707,9 +725,7 @@ test.describe(${JSON.stringify(name)}, () => {
     // Wait for form to appear (form may be inline, no URL change)
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
 
-${parentSeedingCode}
-
-    // Fill all fields
+    // Fill all fields (parents were seeded before navigation, above)
 ${fieldFillSteps}
 ${fillFirstFieldCode}    // Fill identity field with unique value
     await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
@@ -736,6 +752,7 @@ ${rowCellAssertions}
 
   test(${JSON.stringify(stepTitle("persist", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
+${parentSeedingCode}
     await navigateTo${entity.id}(page);
 
     const unique = ${uniqueValueConstruction};
@@ -743,8 +760,6 @@ ${rowCellAssertions}
     // Create a new record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-${parentSeedingCode}
 
 ${fieldFillSteps}
 ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
@@ -794,6 +809,7 @@ ${entity.parents
 
   test(${JSON.stringify(stepTitle("update", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
+${parentSeedingCode}
     await navigateTo${entity.id}(page);
 
     // Create a record stamped with a unique value (identity field, not first field)
@@ -810,8 +826,6 @@ ${entity.parents
 
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-${parentSeedingCode}
 
 ${fieldFillSteps}
 ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);
@@ -849,6 +863,7 @@ ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}
 
   test(${JSON.stringify(stepTitle("delete", entity.key, name))}, async ({ page, authedPage }) => {
     await authedPage.dashboard.goto();
+${parentSeedingCode}
     await navigateTo${entity.id}(page);
 
     const unique = ${uniqueValueConstruction};
@@ -856,8 +871,6 @@ ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}
     // Create a record stamped with the unique value
     await page.getByTestId("${ids.create}").click();
     await page.getByTestId("${ids.form}").waitFor({ state: "visible", timeout: 5000 });
-
-${parentSeedingCode}
 
 ${fieldFillSteps}
 ${fillFirstFieldCode}    await page.getByTestId("${ids.field(identityFieldName)}").fill(unique);

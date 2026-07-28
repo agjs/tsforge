@@ -2221,3 +2221,63 @@ describe("PART C: negative check hardening tests", () => {
     expect(spec).not.toContain('payload["email"] = false');
   });
 });
+
+describe("child-entity acceptance: parent-FK <select> ordering (Contact belongsTo Company)", () => {
+  // A child entity whose form has a company parent-FK rendered as a native <select>.
+  const contact: IEntityAcceptance = {
+    id: "Contact",
+    key: "contact",
+    nav: "Contacts",
+    fields: [
+      {
+        name: "companyId",
+        type: "string",
+        optional: false,
+        valid: "",
+        invalid: [],
+      },
+      {
+        name: "name",
+        type: "string",
+        optional: false,
+        valid: "Jane",
+        invalid: [],
+      },
+    ],
+    shows: ["name", "company"],
+    screens: ["list", "form"],
+    parents: [{ entity: "Company", key: "company", fkField: "companyId" }],
+    negatives: [{ field: "name", value: "", why: "name is required" }],
+    acceptanceCheck: "create a contact under a company",
+  };
+
+  test("seeds the parent via API BEFORE opening the create form (so the async company <select> already contains it)", () => {
+    // The bug this guards: seeding AFTER navigation left the child page's already-fetched
+    // company list without the seed, so the <option value={seededId}> never appeared and
+    // selectOption timed out (30s) → false park. The seed POST must precede the form-open.
+    const spec = generateEntitySpec(contact);
+    const seedIdx = spec.indexOf("/api/v1/company");
+    const formOpenIdx = spec.indexOf('getByTestId("contact-create")');
+
+    expect(seedIdx).toBeGreaterThan(-1);
+    expect(formOpenIdx).toBeGreaterThan(-1);
+    expect(seedIdx).toBeLessThan(formOpenIdx);
+  });
+
+  test("waits for the seeded <option> to attach before selectOption (no async-fetch race)", () => {
+    const spec = generateEntitySpec(contact);
+    const waitIdx = spec.indexOf('option[value="${companyId}"]');
+    const selectIdx = spec.indexOf(".selectOption(companyId)");
+
+    expect(waitIdx).toBeGreaterThan(-1);
+    expect(selectIdx).toBeGreaterThan(-1);
+    expect(waitIdx).toBeLessThan(selectIdx);
+  });
+
+  test("a single-entity slice (no parents) emits no FK <select> wait/selection — the fix is scoped to relational children", () => {
+    const spec = generateEntitySpec(company); // company has parents: []
+
+    expect(spec).not.toContain('option[value="${'); // no FK option-attached wait
+    expect(spec).not.toContain(".selectOption("); // no parent-FK selection at all
+  });
+});
