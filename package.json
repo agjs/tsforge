@@ -60,7 +60,7 @@
     "globals": "17.7.0",
     "playwright": "^1.60.0",
     "prettier": "3.9.5",
-    "react": "^19.2.7",
+    "react": "^19.2.8",
     "react-dom": "^19.2.7",
     "typescript": "6.0.3",
     "typescript-eslint": "8.65.0"
