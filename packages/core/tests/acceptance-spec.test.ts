@@ -581,8 +581,11 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
             { name: "dueDate", type: "date" },
             { name: "startsAt", type: "datetime" },
             { name: "loggedAt", type: "timestamp" },
-            // Name matches the email heuristic but the TYPE is a date — type must win.
-            { name: "emailVerifiedAt", type: "timestamp" },
+            // Name matches the email heuristic but the TYPE is a date — type must win, in BOTH
+            // the positive sample (validValue) and the negatives (no "not-an-email").
+            { name: "emailVerifiedAt", type: "timestamp", optional: true },
+            // A genuine email field — positive control: it SHOULD get the not-an-email negative.
+            { name: "contactEmail", type: "email", optional: true },
           ],
           relationships: [],
           rules: ["title is required"],
@@ -616,4 +619,15 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
     // A real, valid calendar date (what a timestamp column accepts) — not a normalized impossible one.
     expect(isRealCalendarDate(field?.valid ?? "")).toBe(true);
   }
+
+  // Negatives must apply the SAME type-precedence: a date-typed field named like an email gets
+  // NO "not-an-email" negative (that value would 500 a timestamp insert, not 400/422 → false park),
+  // while a genuinely email-typed field DOES.
+  const emailNegs = (fieldName: string): boolean =>
+    (task?.negatives ?? []).some(
+      (n) => n.field === fieldName && n.value === "not-an-email"
+    );
+
+  expect(emailNegs("emailVerifiedAt")).toBe(false);
+  expect(emailNegs("contactEmail")).toBe(true);
 });
