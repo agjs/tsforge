@@ -116,10 +116,11 @@ test("the new design-system topics are in both the guide registry and the pull e
     "accessibility",
     "components-ui",
   ]) {
-    // `.some` (not `.toContain`) so the string literal compares cleanly against the typed
-    // ConventionTopic[] / enum tuple without a cast.
-    expect(registry.includes(topic)).toBe(true);
-    expect(enumTopics.includes(topic)).toBe(true);
+    // A Set<string> membership test compares the string cleanly against the typed
+    // ConventionTopic[] / enum tuple — no cast, and eslint won't rewrite it into a
+    // type-narrowing `.includes()` (which fails typecheck: string vs the topic union).
+    expect(new Set<string>(registry).has(topic)).toBe(true);
+    expect(new Set<string>(enumTopics).has(topic)).toBe(true);
   }
 });
 
