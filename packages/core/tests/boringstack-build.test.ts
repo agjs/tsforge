@@ -1348,6 +1348,39 @@ describe("readResourceCode — feeds the completeness judge", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("an oversized schema is itself bounded (never returns unbounded evidence)", async () => {
+    // The schema gets first claim on the budget, but must still respect the ~96000-char cap — a
+    // many-entity app accretes a table per feature into app.schema.ts, so it can't be pushed
+    // unchecked. If the schema alone overflows, it's truncated rather than dropped or unbounded.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-bigschema-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/api/task"), { recursive: true });
+      await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
+        recursive: true,
+      });
+      // ~130k-char schema — larger than the whole budget on its own.
+      await writeFile(
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        `// SCHEMA_HEAD_MARKER\n${"s".repeat(130000)}\n`
+      );
+      await writeFile(
+        join(dir, "apps/api/src/api/task/task.service.ts"),
+        "export const svc = 'FEATURE_MARKER';\n"
+      );
+
+      const code = await readResourceCode(dir, "Task");
+
+      // Bounded: total stays within cap + the truncation marker (a small constant).
+      expect(code.length).toBeLessThan(96000 + 100);
+      // The head of the schema (where its own table/FK sits) is preserved.
+      expect(code).toContain("SCHEMA_HEAD_MARKER");
+      expect(code).toContain("…[truncated]");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("readResourceCode — budget + ordering (root-cause coverage)", () => {

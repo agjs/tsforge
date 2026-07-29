@@ -316,7 +316,13 @@ export async function readResourceCode(
   // yet generated) simply has no such file and the judge sees the feature code alone, as before.
   try {
     const schema = await readFile(join(cwd, APP_SCHEMA_FILE), "utf-8");
-    const block = `// ${APP_SCHEMA_FILE}\n${schema}\n`;
+    const raw = `// ${APP_SCHEMA_FILE}\n${schema}\n`;
+    // Bound the schema block by the same cap as everything else — a pathologically large schema
+    // (a many-entity app accretes one table per feature here) must not return unbounded evidence.
+    // The schema is priority evidence, so it gets first claim on the budget; if it alone overflows,
+    // truncate it (the FK we care about is near its own table, not at the very end) rather than drop it.
+    const block =
+      raw.length > maxChars ? `${raw.slice(0, maxChars)}\n…[truncated]` : raw;
 
     blocks.push(block);
     totalLen += block.length;
