@@ -1410,12 +1410,49 @@ describe("sliceSchemaForJudge — windows a large schema around the feature's ow
     expect(out.length).toBeLessThanOrEqual(1000 + 40);
   });
 
-  test("falls back to a bounded head when the table export can't be located", () => {
+  test("returns empty on a table-export miss in an oversized schema (caller then omits it)", () => {
+    // Under the accretion model, if the feature's table export isn't found, an arbitrary head slice
+    // cannot contain it anyway — so we return "" and let the caller give the whole budget to code.
     const schema = "y".repeat(5000);
-    const out = sliceSchemaForJudge(schema, "missing", 1000);
 
-    expect(out.length).toBeLessThanOrEqual(1000 + 40);
-    expect(out).toContain("…[truncated]");
+    expect(sliceSchemaForJudge(schema, "missing", 1000)).toBe("");
+  });
+});
+
+describe("readResourceCode — dual pressure (oversized schema AND sizeable feature code)", () => {
+  test("an oversized schema keeps its window AND leaves room for real-sized feature code", async () => {
+    // The case the schema-reserve exists for: schema takes ~half the budget (windowed to its table),
+    // and a sizeable-but-realistic feature file must still be admitted from the other half. Neither
+    // the FK evidence nor the implementation may be starved.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-dual-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/api/task"), { recursive: true });
+      await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
+        recursive: true,
+      });
+      const earlier = `// early tables\n${"e".repeat(130000)}\n`;
+      const taskTable =
+        'export const task = app.table("task", { projectId: uuid().references(() => project.id) }); // DUAL_FK_MARKER\n';
+
+      await writeFile(
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        `${earlier}${taskTable}`
+      );
+      // ~30k of feature code — comfortably inside the ~48k left after the schema takes its half.
+      await writeFile(
+        join(dir, "apps/api/src/api/task/task.service.ts"),
+        `// DUAL_FEATURE_MARKER\n${"c".repeat(30000)}\n`
+      );
+
+      const code = await readResourceCode(dir, "Task");
+
+      expect(code).toContain("DUAL_FK_MARKER"); // FK evidence survives (windowed to the tail)
+      expect(code).toContain("DUAL_FEATURE_MARKER"); // feature code is NOT starved
+      expect(code.length).toBeLessThan(96000 + 200); // still bounded
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

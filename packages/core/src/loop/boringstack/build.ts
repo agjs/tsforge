@@ -185,8 +185,11 @@ export function scopeFor(name: string): string[] {
  * per feature into the shared schema in build order, so the feature under review — and its
  * `belongsTo` FOREIGN KEY, which is declared inside its own table block — typically sits near the
  * END; naive head-first truncation would drop the exact FK evidence the judge needs. When the
- * schema fits the budget it's returned whole; otherwise a window is centered on the feature's table
- * (falling back to the head only if the table export can't be located). Pure — unit-testable.
+ * schema fits the budget it's returned whole; otherwise a window is centered on the feature's table.
+ * If the table export can't be located in an oversized schema, returns "" (the caller then omits
+ * the schema entirely rather than burning budget on an arbitrary head slice that — under the
+ * accretion model — cannot contain this feature's table anyway; feature code keeps the full budget).
+ * Pure — unit-testable.
  */
 export function sliceSchemaForJudge(
   schema: string,
@@ -200,7 +203,7 @@ export function sliceSchemaForJudge(
   const anchor = schema.indexOf(`export const ${tableExport} `);
 
   if (anchor < 0) {
-    return `${schema.slice(0, budget)}\n…[truncated]`;
+    return "";
   }
 
   // Center the window on the table: keep a third of the budget of context before it (its imports /
@@ -354,10 +357,15 @@ export async function readResourceCode(
   try {
     const schema = await readFile(join(cwd, APP_SCHEMA_FILE), "utf-8");
     const sliced = sliceSchemaForJudge(schema, camel, Math.floor(maxChars / 2));
-    const block = `// ${APP_SCHEMA_FILE}\n${sliced}\n`;
 
-    blocks.push(block);
-    totalLen += block.length;
+    // Empty slice = oversized schema whose table window couldn't be located → omit it so the
+    // feature implementation keeps the whole budget (rather than burn half on irrelevant tables).
+    if (sliced.length > 0) {
+      const block = `// ${APP_SCHEMA_FILE}\n${sliced}\n`;
+
+      blocks.push(block);
+      totalLen += block.length;
+    }
   } catch {
     // No shared schema present — skip (judge falls back to feature-only code).
   }
