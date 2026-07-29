@@ -139,3 +139,48 @@ test("the strict-lint rules map to the lint-gotchas guide", () => {
     expect(topicForRule(rule)).toBe("lint-gotchas");
   }
 });
+
+// Spec 1A — the design-system guides codify BoringStack's existing tokens/ShadCN/theming/responsive/
+// a11y so the model leans on them instead of reinventing. Lock the load-bearing content of each so a
+// future edit can't hollow a guide out.
+test("the design-system guides carry their load-bearing rules", () => {
+  const tokens = conventionGuide("design-tokens");
+
+  expect(tokens).toContain("NEVER hardcode a color");
+  expect(tokens).toContain("text-muted-foreground");
+
+  const theming = conventionGuide("theming");
+
+  expect(theming).toContain("data-theme");
+  expect(theming).toContain("dark:"); // teaches that dark: variants are banned
+
+  const responsive = conventionGuide("responsive");
+
+  expect(responsive).toContain("Mobile-first");
+  expect(responsive).toContain("Sheet");
+
+  const a11y = conventionGuide("accessibility");
+
+  expect(a11y).toContain("aria-label");
+  expect(a11y).toContain("aria-hidden");
+  expect(a11y).toContain("jsx-a11y");
+
+  const ui = conventionGuide("components-ui");
+
+  expect(ui).toContain("@/components/ui/");
+  expect(ui).toContain("cn(");
+});
+
+// Accessibility is the one design-system topic with a reactive rule mapping: the jsx-a11y rules the
+// gate runs as ERRORS must route to the accessibility guide (bare names, jsx-a11y/ prefix stripped),
+// so unseenGuidesForErrors pushes it the moment the model trips one.
+test("jsx-a11y rules map to the accessibility guide", () => {
+  for (const rule of [
+    "jsx-a11y/no-static-element-interactions",
+    "jsx-a11y/click-events-have-key-events",
+    "jsx-a11y/label-has-associated-control",
+    "jsx-a11y/aria-role",
+  ]) {
+    expect(topicForRule(rule)).toBe("accessibility");
+  }
+});
