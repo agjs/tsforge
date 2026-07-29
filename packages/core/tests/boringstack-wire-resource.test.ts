@@ -1,4 +1,7 @@
 import { test, expect, describe } from "bun:test";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   wireRoutesFile,
   wireAppFile,
@@ -7,6 +10,7 @@ import {
   wireUiRouteFile,
   addFeatureI18nKeys,
   wireHomeRedirect,
+  applyHomeRedirect,
 } from "../src/loop/boringstack/wire-resource";
 
 /** A minimal stand-in for boringstack's SPA router, carrying the anchors the
@@ -266,5 +270,44 @@ describe("wireHomeRedirect", () => {
     expect(() => wireHomeRedirect("export const OTHER = 1;", "/task")).toThrow(
       "DEFAULT_REDIRECT_TO not found"
     );
+  });
+});
+
+describe("applyHomeRedirect (fs wrapper)", () => {
+  const CONSTS_REL =
+    "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts";
+
+  test("rewrites the scaffold LoginPage constants at the home route", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-redirect-"));
+
+    try {
+      await mkdir(join(dir, CONSTS_REL, ".."), { recursive: true });
+      await writeFile(
+        join(dir, CONSTS_REL),
+        'export const DEFAULT_REDIRECT_TO = "/dashboard";\n',
+        "utf-8"
+      );
+
+      await applyHomeRedirect(dir, "/task");
+
+      expect(await readFile(join(dir, CONSTS_REL), "utf-8")).toBe(
+        'export const DEFAULT_REDIRECT_TO = "/task";\n'
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("THROWS (not a silent skip) when the login constants file is absent", async () => {
+    // Silently skipping would leave the landing at /dashboard while the build goes green.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-redirect-"));
+
+    try {
+      await expect(applyHomeRedirect(dir, "/task")).rejects.toThrow(
+        "not found"
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

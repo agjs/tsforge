@@ -10,12 +10,11 @@ export interface IEntitySpec {
   readonly rules: readonly string[];
 }
 
-/** The modern-layout archetypes the harness understands. The set is intentionally broad so a
- *  plan is never locked into too few options; v1 IMPLEMENTS `app-sidebar` (the default) and
- *  `settings`, and the rest are schema-valid but fall back to `app-sidebar` + guidance until a
- *  build needs them (see the layout wiring in refine-prompt). */
-/** Single source of truth for the archetypes: the tuple drives BOTH the `LayoutArchetype` type
- *  and the runtime validation list (plan-store), so the two can never diverge (no `as` cast). */
+/** The modern-layout archetypes the harness understands. Intentionally broad so a plan is never
+ *  locked into too few options; v1 IMPLEMENTS `app-sidebar` (the default) and `settings`, and the
+ *  rest are schema-valid but fall back to `app-sidebar` + guidance until a build needs them (see
+ *  the layout wiring in refine-prompt). Single source of truth: this tuple drives BOTH the
+ *  `LayoutArchetype` type and the runtime validation list (plan-store), so they can't diverge. */
 export const LAYOUT_ARCHETYPES = [
   "app-sidebar", // left sidebar + header content shell (default SaaS look)
   "app-topnav", // horizontal top-nav + content

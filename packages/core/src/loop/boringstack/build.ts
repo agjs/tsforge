@@ -526,6 +526,9 @@ export function boringstackDeps(opts: {
   baseline?: ReadonlySet<string>;
   generate?: (cwd: string, name: string, exec: Exec) => Promise<void>;
   generateUi?: (cwd: string, name: string, exec: Exec) => Promise<void>;
+  /** Wire the post-login redirect for the plan's `home` slice. Injectable so the implement()
+   *  wiring is unit-testable; defaults to the real filesystem writer. */
+  applyHomeRedirect?: (cwd: string, route: string) => Promise<void>;
   /** Look up the plan slice for a feature by its id. Supplied by runBoringstackBuild
    *  when building from an approved plan; undefined when planning ad-hoc. */
   sliceFor?: (id: string) => ISlice | undefined;
@@ -545,12 +548,14 @@ export function boringstackDeps(opts: {
     evaluator,
     generate: generateFn,
     generateUi,
+    applyHomeRedirect: applyHomeRedirectFn,
     sliceFor,
     acceptanceRunner,
     fullSpec,
   } = opts;
   const generate = generateFn ?? generateResource;
   const genUi = generateUi ?? generateFeature;
+  const wireHomeRedirectFor = applyHomeRedirectFn ?? applyHomeRedirect;
   const baseline = opts.baseline ?? new Set<string>();
   const e2eAcceptanceDisabled =
     process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
@@ -575,7 +580,7 @@ export function boringstackDeps(opts: {
       // `ui.home`) — harness-owned, NOT model-prompted, so the landing can't silently stay
       // `/dashboard` and slip past the gate (a false-green). No-op for non-home features.
       if (sliceFor?.(feature.id)?.ui.home === true) {
-        await applyHomeRedirect(cwd, `/${toCamelCase(feature.id)}`);
+        await wireHomeRedirectFor(cwd, `/${toCamelCase(feature.id)}`);
       }
 
       host.setScope(scopeFor(feature.id));

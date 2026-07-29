@@ -258,8 +258,11 @@ export function wireHomeRedirect(src: string, route: string): string {
   return src.replace(anchor, `export const DEFAULT_REDIRECT_TO = "${route}";`);
 }
 
-/** Apply {@link wireHomeRedirect} to the scaffold's LoginPage constants. Guarded by existence so a
- *  boringstack variant without this exact file skips cleanly (the app still builds). */
+/** Apply {@link wireHomeRedirect} to the scaffold's LoginPage constants. Called ONLY for a plan's
+ *  `home` slice, so a MISSING file is a real failure, not something to skip: silently returning
+ *  would leave the landing at `/dashboard` while the build goes green — the exact false-green this
+ *  determinism exists to prevent. So it THROWS rather than no-op'ing. (The boringstack scaffold
+ *  always ships this file; a variant that doesn't must be handled explicitly, not silently.) */
 export async function applyHomeRedirect(
   cwd: string,
   route: string
@@ -270,7 +273,10 @@ export async function applyHomeRedirect(
   );
 
   if (!existsSync(path)) {
-    return;
+    throw new Error(
+      `applyHomeRedirect: LoginPage.constants.ts not found at ${path} — cannot wire the home ` +
+        "landing, and skipping would silently leave the redirect at /dashboard (a false-green)."
+    );
   }
 
   const src = await readFile(path, "utf-8");
