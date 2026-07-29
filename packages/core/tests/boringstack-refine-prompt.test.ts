@@ -528,6 +528,42 @@ describe("refinePrompt", () => {
     expect(p).not.toContain("DEFAULT_REDIRECT_TO");
   });
 
+  it("falls a deferred archetype (app-topnav) back to app-sidebar with a build-as note", () => {
+    const feature: IFeature = {
+      id: "Report",
+      desc: "a report",
+      passes: false,
+      attempts: 0,
+    };
+    const slice: ISlice = {
+      entity: {
+        id: "Report",
+        desc: "a report",
+        fields: [{ name: "title", type: "string" }],
+        relationships: ["belongsTo User"],
+        rules: ["title required"],
+      },
+      ui: {
+        screens: ["list"],
+        action: "view reports",
+        shows: ["title"],
+        nav: "Reports",
+        layout: "app-topnav",
+      },
+      verification: {
+        mustRemainTrue: ["auth"],
+        mustNotHappen: ["x"],
+        acceptanceCheck: "bun test",
+      },
+    };
+    const p = refinePrompt(feature, slice);
+
+    // v1 has no distinct top-nav shell — the model builds it as app-sidebar for now.
+    expect(p).toContain("app-topnav");
+    expect(p).toContain("no distinct shell yet");
+    expect(p).toContain("primary app nav group");
+  });
+
   it("refinePrompt without a slice is unchanged (contains id + desc)", () => {
     const p = refinePrompt({
       id: "Bookmark",

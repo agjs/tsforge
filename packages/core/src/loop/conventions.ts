@@ -114,6 +114,8 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
       "role-has-required-aria-props",
       "role-supports-aria-props",
       "no-redundant-roles",
+      "anchor-is-valid",
+      "img-redundant-alt",
     ],
     "components-ui": [],
   };

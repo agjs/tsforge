@@ -526,9 +526,6 @@ export function boringstackDeps(opts: {
   baseline?: ReadonlySet<string>;
   generate?: (cwd: string, name: string, exec: Exec) => Promise<void>;
   generateUi?: (cwd: string, name: string, exec: Exec) => Promise<void>;
-  /** Wire the post-login redirect for the plan's `home` slice. Injectable so the implement()
-   *  wiring is unit-testable; defaults to the real filesystem writer. */
-  applyHomeRedirect?: (cwd: string, route: string) => Promise<void>;
   /** Look up the plan slice for a feature by its id. Supplied by runBoringstackBuild
    *  when building from an approved plan; undefined when planning ad-hoc. */
   sliceFor?: (id: string) => ISlice | undefined;
@@ -548,14 +545,12 @@ export function boringstackDeps(opts: {
     evaluator,
     generate: generateFn,
     generateUi,
-    applyHomeRedirect: applyHomeRedirectFn,
     sliceFor,
     acceptanceRunner,
     fullSpec,
   } = opts;
   const generate = generateFn ?? generateResource;
   const genUi = generateUi ?? generateFeature;
-  const wireHomeRedirectFor = applyHomeRedirectFn ?? applyHomeRedirect;
   const baseline = opts.baseline ?? new Set<string>();
   const e2eAcceptanceDisabled =
     process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
@@ -575,13 +570,6 @@ export function boringstackDeps(opts: {
       // model then fills the domain INSIDE the loop, checked by the live gate.
       await generate(cwd, feature.id, exec);
       await genUi(cwd, feature.id, exec);
-
-      // Deterministically point the post-login landing at the app "home" feature's route (plan
-      // `ui.home`) — harness-owned, NOT model-prompted, so the landing can't silently stay
-      // `/dashboard` and slip past the gate (a false-green). No-op for non-home features.
-      if (sliceFor?.(feature.id)?.ui.home === true) {
-        await wireHomeRedirectFor(cwd, `/${toCamelCase(feature.id)}`);
-      }
 
       host.setScope(scopeFor(feature.id));
       // The editable file the expert repairs if a stall's errors are all out of
@@ -896,6 +884,20 @@ export async function runFinalAcceptance(
 }
 
 /**
+ * The post-login landing route for a plan: the `/${camel}` route of the slice marked `ui.home`,
+ * or null when none is marked (login keeps the scaffold default `/dashboard`). Derived from the
+ * PLAN so the redirect is wired ONCE per build at the plan level (see runBoringstackBuild) —
+ * resume-safe: a resumed build that skips an already-passing home feature still re-applies it,
+ * unlike per-feature implement() wiring (which resume skips → the redirect would silently stay
+ * /dashboard, a false-green). At most one home is enforced by plan validation.
+ */
+export function homeRouteForPlan(plan: IProductPlan): string | null {
+  const home = plan.slices.find((s) => s.ui.home === true);
+
+  return home ? `/${toCamelCase(home.entity.id)}` : null;
+}
+
+/**
  * Run the BoringStack build driver: require an approved plan, derive features
  * from its slices, and drive them through the greenfield loop
  * (implement → evaluate → persist).
@@ -954,6 +956,17 @@ export async function runBoringstackBuild(opts: {
 
   if (features.length === 0) {
     return { status: "done", features: [] };
+  }
+
+  // Wire the post-login landing at the PLAN level — ONCE per build, resume-safe. A resumed build
+  // skips already-passing features, so doing this inside implement() could leave DEFAULT_REDIRECT_TO
+  // at /dashboard while final acceptance goes green (a false-green). applyHomeRedirect is idempotent
+  // and throws if the login constants are missing (never a silent skip). No home slice → no-op
+  // (login keeps the scaffold default).
+  const homeRoute = homeRouteForPlan(approved);
+
+  if (homeRoute !== null) {
+    await applyHomeRedirect(cwd, homeRoute);
   }
 
   const state: IGreenfieldState = {

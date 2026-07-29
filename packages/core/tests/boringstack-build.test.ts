@@ -17,6 +17,7 @@ import {
   saveBaseline,
   APP_SCHEMA_FILE,
   LOCALE_GLOB,
+  homeRouteForPlan,
 } from "../src/loop/boringstack/build";
 import type {
   IAcceptanceRunner,
@@ -116,6 +117,41 @@ function invoicePlan(): IProductPlan {
   };
 }
 
+describe("homeRouteForPlan", () => {
+  const mkSlice = (id: string, home: boolean): ISlice => ({
+    entity: {
+      id,
+      desc: "d",
+      fields: [{ name: "title", type: "string" }],
+      relationships: ["belongsTo User"],
+      rules: ["title required"],
+    },
+    ui: {
+      screens: ["list", "form"],
+      action: "a",
+      shows: ["title"],
+      nav: id,
+      home,
+    },
+    verification: {
+      mustRemainTrue: ["auth"],
+      mustNotHappen: ["no title"],
+      acceptanceCheck: "bun test",
+    },
+  });
+  const plan = (slices: ISlice[]): IProductPlan => ({ product: "p", slices });
+
+  test("returns the /camel route of the slice marked home", () => {
+    expect(
+      homeRouteForPlan(plan([mkSlice("Note", false), mkSlice("Task", true)]))
+    ).toBe("/task");
+  });
+
+  test("returns null when no slice is home (login keeps the /dashboard default)", () => {
+    expect(homeRouteForPlan(plan([mkSlice("Note", false)]))).toBeNull();
+  });
+});
+
 describe("boringstackDeps.implement", () => {
   test("calls injected generate with feature id, then freezes scope and sends refine prompt", async () => {
     const host = createHost();
@@ -156,54 +192,6 @@ describe("boringstackDeps.implement", () => {
     expect(host.gates.length).toBe(1);
     expect(host.sent.length).toBe(1);
     expect(host.sent[0]).toContain("Invoice");
-  });
-
-  test("wires the post-login redirect for the home slice, skips a non-home slice", async () => {
-    const calls: { cwd: string; route: string }[] = [];
-
-    const mkSlice = (id: string, home: boolean): ISlice => ({
-      entity: {
-        id,
-        desc: "d",
-        fields: [{ name: "title", type: "string" }],
-        relationships: ["belongsTo User"],
-        rules: ["title required"],
-      },
-      ui: {
-        screens: ["list", "form"],
-        action: "a",
-        shows: ["title"],
-        nav: id,
-        layout: "app-sidebar",
-        home,
-      },
-      verification: {
-        mustRemainTrue: ["auth"],
-        mustNotHappen: ["no title"],
-        acceptanceCheck: "bun test",
-      },
-    });
-
-    const deps = boringstackDeps({
-      host: createHost(),
-      cwd: "/repo",
-      exec: createExec(),
-      evaluator: createEvaluator(),
-      generate: async () => {},
-      generateUi: async () => {},
-      applyHomeRedirect: async (cwd: string, route: string) => {
-        calls.push({ cwd, route });
-      },
-      sliceFor: (id: string) => mkSlice(id, id === "Task"),
-    });
-
-    await deps.implement(feature("Task"), state());
-    // The home slice's route becomes the post-login landing.
-    expect(calls).toEqual([{ cwd: "/repo", route: "/task" }]);
-
-    await deps.implement(feature("Note"), state());
-    // The non-home slice adds no redirect call.
-    expect(calls).toEqual([{ cwd: "/repo", route: "/task" }]);
   });
 
   test("hands the OTHER features to the judge as siblings, derived from state", async () => {

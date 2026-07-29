@@ -247,7 +247,10 @@ export async function wireUiFeature(cwd: string, name: string): Promise<void> {
  * than silently no-op'ing (which would re-introduce the false-green).
  */
 export function wireHomeRedirect(src: string, route: string): string {
-  const anchor = /export const DEFAULT_REDIRECT_TO\s*=\s*"[^"]*";/;
+  // Anchored to line-start (`^…/m`) so a COMMENTED-OUT `// export const DEFAULT_REDIRECT_TO …`
+  // can't be matched before the live declaration (which would update the comment and leave the
+  // real redirect at /dashboard — a silent false-green).
+  const anchor = /^export const DEFAULT_REDIRECT_TO\s*=\s*"[^"]*";/m;
 
   if (!anchor.test(src)) {
     throw new Error(

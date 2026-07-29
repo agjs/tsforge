@@ -30,6 +30,8 @@ export const PLANNER_EXAMPLE = {
         action: "create, complete, and delete tasks",
         shows: ["title", "done", "dueDate"],
         nav: "Tasks",
+        layout: "app-sidebar",
+        home: true,
       },
       verification: {
         mustRemainTrue: ["only the owner can see or change a task"],
@@ -48,7 +50,7 @@ export const PLANNER_EXAMPLE = {
  * a model invent its own keys (primaryAction/navigationLabel/screen objects)
  * that the strict parser then rejects.
  */
-const PLANNER_SYSTEM = `You are a product architect. From the product description and any mockups, propose a domain model as feature slices (one per entity). Respond with ONLY a JSON object — no prose, no markdown fences — matching this schema EXACTLY. Use these exact key names and value shapes; do not add, rename, or nest differently.
+export const PLANNER_SYSTEM = `You are a product architect. From the product description and any mockups, propose a domain model as feature slices (one per entity). Respond with ONLY a JSON object — no prose, no markdown fences — matching this schema EXACTLY. Use these exact key names and value shapes; do not add, rename, or nest differently.
 
 Schema:
 {
@@ -66,7 +68,9 @@ Schema:
         "screens": [ <any of "list", "detail", "form", "dashboard" — these EXACT lowercase words only, nothing else> ],
         "action": "<the primary thing a user does, one line>",
         "shows": [ "<field or thing shown on screen>" ],
-        "nav": "<navigation label, e.g. Bookmarks>"
+        "nav": "<navigation label, e.g. Bookmarks>",
+        "layout": "<OPTIONAL: one of app-sidebar (default) | app-topnav | settings | focused | public — where this feature lives in the app shell>",
+        "home": <OPTIONAL boolean: true on the ONE feature that is the app's main landing page after login (omit on the rest)>
       },
       "verification": {
         "mustRemainTrue": [ "<invariant that must always hold>" ],
@@ -83,6 +87,7 @@ Rules for the JSON:
 - "fields" uses "optional" (boolean), never "required".
 - Use "desc" (not "description"), "action" (not "primaryAction"), "nav" (not "navigationLabel"), "acceptanceCheck" (not "acceptanceCheckCommand").
 - "mustNotHappen" must have at least one entry.
+- LAYOUT: give the app a real shape. Mark the ONE primary feature the user should land in with "home": true and "layout": "app-sidebar" (the app opens there, not on a generic dashboard). Put configuration/account features (profile, preferences, billing) at "layout": "settings" so they're grouped as a demoted settings area, not the main app. Most product features are "app-sidebar" (the default — you may omit "layout"). Use "home"/"layout" only from the allowed set above; never invent other values.
 
 Complete example (follow this shape precisely):
 ${JSON.stringify(PLANNER_EXAMPLE, null, 2)}`;
