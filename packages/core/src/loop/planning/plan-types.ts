@@ -10,11 +10,11 @@ export interface IEntitySpec {
   readonly rules: readonly string[];
 }
 
-/** The modern-layout archetypes the harness understands. Intentionally broad so a plan is never
- *  locked into too few options; v1 IMPLEMENTS `app-sidebar` (the default) and `settings`, and the
- *  rest are schema-valid but fall back to `app-sidebar` + guidance until a build needs them (see
- *  the layout wiring in refine-prompt). Single source of truth: this tuple drives BOTH the
- *  `LayoutArchetype` type and the runtime validation list (plan-store), so they can't diverge. */
+/** The modern-layout archetype VOCABULARY (roadmap) — intentionally broad so the model isn't
+ *  locked into too few options. This tuple drives the `LayoutArchetype` type. It is NOT the set a
+ *  plan may declare: plan validation gates on IMPLEMENTED_LAYOUT_ARCHETYPES (below), so a
+ *  not-yet-built archetype is REJECTED, never silently accepted or fallen-back. Move an entry's
+ *  behaviour into the wiring, add it to IMPLEMENTED_LAYOUT_ARCHETYPES, then plans can use it. */
 export const LAYOUT_ARCHETYPES = [
   "app-sidebar", // left sidebar + header content shell (default SaaS look)
   "app-topnav", // horizontal top-nav + content
@@ -24,6 +24,17 @@ export const LAYOUT_ARCHETYPES = [
 ] as const;
 
 export type LayoutArchetype = (typeof LAYOUT_ARCHETYPES)[number];
+
+/** The archetypes the harness actually IMPLEMENTS today — this drives PLAN VALIDATION. The full
+ *  LAYOUT_ARCHETYPES set above is the roadmap/vocabulary; a plan may only DECLARE an implemented
+ *  one. A not-yet-built archetype is rejected rather than silently mis-built — critically `public`
+ *  implies UNAUTHENTICATED, but routing wraps every feature in ProtectedRoute+AppShell, so a
+ *  silently-accepted `public` feature would be authenticated (wrong). Grow this set as archetypes
+ *  ship. */
+export const IMPLEMENTED_LAYOUT_ARCHETYPES = [
+  "app-sidebar",
+  "settings",
+] as const;
 
 export interface IUiIntent {
   readonly screens: readonly ("list" | "detail" | "form" | "dashboard")[];

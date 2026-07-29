@@ -10,6 +10,8 @@ function layoutGuidance(slice: ISlice): string {
   const route = `/${toCamelCase(slice.entity.id)}`;
   const lines: string[] = [];
 
+  // Plan validation only admits the IMPLEMENTED archetypes (app-sidebar | settings), so those are
+  // the only values that reach here; anything else is treated as the app-sidebar default.
   if (layout === "settings") {
     lines.push(
       "**Layout**: `settings` — a DEMOTED config area. Add this feature's sidebar link to a " +
@@ -17,16 +19,9 @@ function layoutGuidance(slice: ISlice): string {
         "links, below the primary app nav), NOT the primary app nav group."
     );
   } else {
-    const fallback =
-      layout === "app-sidebar"
-        ? ""
-        : ` (\`${layout}\` has no distinct shell yet — build it as \`app-sidebar\` for now)`;
-
     lines.push(
-      "**Layout**: `app-sidebar` — a PRIMARY app view" +
-        fallback +
-        ". Add its sidebar link to the primary app nav group at the TOP of `AppSidebar`, above the " +
-        "Settings/account links."
+      "**Layout**: `app-sidebar` — a PRIMARY app view. Add its sidebar link to the primary app " +
+        "nav group at the TOP of `AppSidebar`, above the Settings/account links."
     );
   }
 

@@ -978,12 +978,6 @@ export async function runBoringstackBuild(opts: {
     return { status: "done", features: [] };
   }
 
-  // Wire the post-login landing at the PLAN level — ONCE per build, resume-safe. A resumed build
-  // skips already-passing features, so doing this inside implement() could leave DEFAULT_REDIRECT_TO
-  // at /dashboard while final acceptance goes green (a false-green). Idempotent; throws (never a
-  // silent skip) if the login constants are missing; no-op when no slice is home.
-  await wireHomeRedirectForPlan(cwd, approved);
-
   const state: IGreenfieldState = {
     goal,
     features,
@@ -1033,6 +1027,14 @@ export async function runBoringstackBuild(opts: {
 
     return { status: "needs-infra", features: [], infra: message };
   }
+
+  // Wire the post-login landing at the PLAN level — ONCE per build, resume-safe (a resumed build
+  // that skips an already-passing home feature still applies it; it is NOT in implement()). Placed
+  // AFTER the pristine-baseline capture + infra fail-closed, so this harness mutation is never
+  // swept into the "pristine" baseline and an infra-aborted build never mutates the clone. A home
+  // slice → its route (throws if the login constants are missing — never a silent skip); no home
+  // → no-op (a fresh scaffold already defaults to /dashboard).
+  await wireHomeRedirectForPlan(cwd, approved);
 
   // Choose the GRADING baseline (infra is healthy here — the fail-closed above returned):
   //  - a persisted baseline exists → REUSE it (the pristine capture; carries its own passed

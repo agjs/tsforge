@@ -8,7 +8,7 @@ import type {
   IUiIntent,
   IVerificationContract,
 } from "./plan-types";
-import { LAYOUT_ARCHETYPES } from "./plan-types";
+import { IMPLEMENTED_LAYOUT_ARCHETYPES } from "./plan-types";
 
 /**
  * Serialize a plan to YAML frontmatter + fenced JSON format.
@@ -144,10 +144,11 @@ function isUiIntent(value: unknown): value is IUiIntent {
     return false;
   }
 
-  // Optional layout archetype: if present it must be one the harness knows. The valid set is
-  // the shared LAYOUT_ARCHETYPES tuple (single source with the LayoutArchetype type) so a new
-  // archetype can't be added to the type yet silently rejected here.
-  const validLayouts: readonly string[] = LAYOUT_ARCHETYPES;
+  // Optional layout archetype: if present it must be one the harness IMPLEMENTS. Validation gates
+  // on IMPLEMENTED_LAYOUT_ARCHETYPES (a subset of the LayoutArchetype vocabulary) — a not-yet-built
+  // archetype (e.g. `public`, which implies unauthenticated but would be wrapped in ProtectedRoute)
+  // is REJECTED rather than silently mis-built.
+  const validLayouts: readonly string[] = IMPLEMENTED_LAYOUT_ARCHETYPES;
 
   if (
     value.layout !== undefined &&

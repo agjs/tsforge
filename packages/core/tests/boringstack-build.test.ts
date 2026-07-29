@@ -153,8 +153,9 @@ describe("homeRouteForPlan", () => {
   });
 
   test("wireHomeRedirectForPlan APPLIES the redirect for a home plan, skips a home-less one", async () => {
-    // Guards that the plan-level wiring actually FIRES (deleting the runBoringstackBuild call would
-    // otherwise leave validate green while restoring the resume false-green). Injected applier.
+    // Unit-tests the helper's route/skip LOGIC (via an injected applier). That runBoringstackBuild
+    // actually CALLS it — including on resume — is proven by the two observable-outcome tests in the
+    // runBoringstackBuild describe (which rewrite a real LoginPage.constants), not here.
     const calls: { cwd: string; route: string }[] = [];
 
     const apply = async (cwd: string, route: string): Promise<void> => {
@@ -758,6 +759,79 @@ describe("runBoringstackBuild", () => {
       };
 
       await writePlan(dir, plan, "approved");
+
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "todo app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec: createExec(),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(await readFile(constsPath, "utf-8")).toContain(
+        'export const DEFAULT_REDIRECT_TO = "/task";'
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("wires the redirect on RESUME too — home feature already passing (plan-level, not implement-gated)", async () => {
+    // The specific resume false-green: an already-passing home feature → implement() is SKIPPED. If
+    // the wiring lived in implement() it would never run and the landing would stay /dashboard while
+    // the build is green. This test pre-marks the home feature passing; the plan-level wiring must
+    // still fire. (Moving the wiring back into implement() would make THIS test fail.)
+    const dir = await mkdtemp(join(tmpdir(), "bs-home-resume-"));
+
+    try {
+      const constsPath = join(
+        dir,
+        "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts"
+      );
+
+      await mkdir(join(constsPath, ".."), { recursive: true });
+      await writeFile(
+        constsPath,
+        'export const DEFAULT_REDIRECT_TO = "/dashboard";\n',
+        "utf-8"
+      );
+
+      const plan: IProductPlan = {
+        product: "A todo app",
+        slices: [
+          {
+            entity: {
+              id: "Task",
+              desc: "a task",
+              fields: [{ name: "title", type: "string" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list", "form"],
+              action: "add a task",
+              shows: ["title"],
+              nav: "Today",
+              layout: "app-sidebar",
+              home: true,
+            },
+            verification: {
+              mustRemainTrue: ["auth"],
+              mustNotHappen: ["no title"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+      // RESUME: the home feature is already passing → its implement() is skipped.
+      await saveState(dir, {
+        goal: "todo app",
+        features: [{ id: "Task", desc: "a task", passes: true, attempts: 1 }],
+      });
 
       await runBoringstackBuild({
         cwd: dir,

@@ -119,6 +119,15 @@ test("parsePlan rejects an unknown layout archetype", () => {
   ).toBeNull();
 });
 
+test("parsePlan rejects a roadmap-only archetype not yet implemented (public/app-topnav/focused)", () => {
+  // These are in the LayoutArchetype vocabulary but NOT implemented; accepting them would silently
+  // mis-build — critically `public` implies unauthenticated but routing wraps everything in
+  // ProtectedRoute, so it'd be authenticated. Validation gates on IMPLEMENTED_LAYOUT_ARCHETYPES.
+  for (const layout of ["public", "app-topnav", "focused"]) {
+    expect(parsePlan(planText([sliceJson("Task", { layout })]))).toBeNull();
+  }
+});
+
 test("parsePlan rejects more than one home slice", () => {
   expect(
     parsePlan(

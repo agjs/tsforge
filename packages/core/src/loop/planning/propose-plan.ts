@@ -69,7 +69,7 @@ Schema:
         "action": "<the primary thing a user does, one line>",
         "shows": [ "<field or thing shown on screen>" ],
         "nav": "<navigation label, e.g. Bookmarks>",
-        "layout": "<OPTIONAL: one of app-sidebar (default) | app-topnav | settings | focused | public — where this feature lives in the app shell>",
+        "layout": "<OPTIONAL: app-sidebar (default) | settings — where this feature lives in the app shell. These are the only accepted values right now; other archetypes are roadmap-only and rejected>",
         "home": <OPTIONAL boolean: true on the ONE feature that is the app's main landing page after login (omit on the rest)>
       },
       "verification": {
