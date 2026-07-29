@@ -546,6 +546,29 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
   // "${name}-${seed}" sample (e.g. "dueDate-2"). That passes z.string()/t.String() but the app
   // inserts it into a timestamptz column, where Postgres throws "invalid input syntax for type
   // timestamp" → the create 500s and the form never closes → false e2e park.
+  // A strict calendar-date check: rejects impossible dates that `new Date()` would silently
+  // normalize (e.g. "2024-02-31" rolls to 2024-03-02, which a naive !isNaN check would accept).
+  const isRealCalendarDate = (s: string): boolean => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+
+    if (!m) {
+      return false;
+    }
+
+    const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const dt = new Date(Date.UTC(year, month - 1, day));
+
+    return (
+      dt.getUTCFullYear() === year &&
+      dt.getUTCMonth() === month - 1 &&
+      dt.getUTCDate() === day
+    );
+  };
+
+  // Sanity-check the checker itself: it must reject a normalized-impossible date.
+  expect(isRealCalendarDate("2024-02-31")).toBe(false);
+  expect(isRealCalendarDate("2024-06-15")).toBe(true);
+
   const datePlan: IProductPlan = {
     product: "Tracker",
     slices: [
@@ -557,6 +580,7 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
             { name: "title", type: "string" },
             { name: "dueDate", type: "date" },
             { name: "startsAt", type: "datetime" },
+            { name: "loggedAt", type: "timestamp" },
           ],
           relationships: [],
           rules: ["title is required"],
@@ -578,14 +602,14 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
 
   const task = planToAcceptanceSpec(datePlan).entities[0];
 
-  for (const name of ["dueDate", "startsAt"]) {
+  // Cover every date-ish type the production branch handles: date, datetime, timestamp.
+  for (const name of ["dueDate", "startsAt", "loggedAt"]) {
     const field = task?.fields.find((f) => f.name === name);
 
     expect(field, `expected field ${name}`).toBeDefined();
     // NOT the generic garbage sample.
     expect(field?.valid).not.toContain(`${name}-`);
-    // A real, parseable YYYY-MM-DD date (what a timestamp column accepts).
-    expect(field?.valid).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(Number.isNaN(new Date(field?.valid ?? "").getTime())).toBe(false);
+    // A real, valid calendar date (what a timestamp column accepts) — not a normalized impossible one.
+    expect(isRealCalendarDate(field?.valid ?? "")).toBe(true);
   }
 });
