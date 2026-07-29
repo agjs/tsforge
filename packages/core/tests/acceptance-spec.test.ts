@@ -540,3 +540,110 @@ test("fieldIsMentioned matches on WORD BOUNDARIES, not raw substring", () => {
   // And it isn't tripped by an unrelated word either.
   expect(fieldIsMentioned(acceptField("name"), "the total amount")).toBe(false);
 });
+
+test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (not a `${name}-${seed}` string a timestamp column rejects)", () => {
+  // Regression: a `date`/`datetime`/`timestamp` field used to fall through to the generic
+  // "${name}-${seed}" sample (e.g. "dueDate-2"). That passes z.string()/t.String() but the app
+  // inserts it into a timestamptz column, where Postgres throws "invalid input syntax for type
+  // timestamp" → the create 500s and the form never closes → false e2e park.
+  // A strict calendar-date check: rejects impossible dates that `new Date()` would silently
+  // normalize (e.g. "2024-02-31" rolls to 2024-03-02, which a naive !isNaN check would accept).
+  const isRealCalendarDate = (s: string): boolean => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+
+    if (!m) {
+      return false;
+    }
+
+    const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const dt = new Date(Date.UTC(year, month - 1, day));
+
+    return (
+      dt.getUTCFullYear() === year &&
+      dt.getUTCMonth() === month - 1 &&
+      dt.getUTCDate() === day
+    );
+  };
+
+  // Sanity-check the checker itself: it must reject a normalized-impossible date.
+  expect(isRealCalendarDate("2024-02-31")).toBe(false);
+  expect(isRealCalendarDate("2024-06-15")).toBe(true);
+
+  const datePlan: IProductPlan = {
+    product: "Tracker",
+    slices: [
+      {
+        entity: {
+          id: "Task",
+          desc: "t",
+          fields: [
+            { name: "title", type: "string" },
+            { name: "dueDate", type: "date" },
+            { name: "startsAt", type: "datetime" },
+            { name: "loggedAt", type: "timestamp" },
+            // Name matches the email heuristic but the TYPE is a date — type must win, in BOTH
+            // the positive sample (validValue) and the negatives (no "not-an-email").
+            { name: "emailVerifiedAt", type: "timestamp", optional: true },
+            // A genuine email field — positive control: it SHOULD get the not-an-email negative.
+            { name: "contactEmail", type: "email", optional: true },
+            // Number type whose name matches the email heuristic — type must win here too: a
+            // numeric sample + the negative-number negative, never an email value/negative.
+            { name: "emailCount", type: "number", optional: true },
+          ],
+          relationships: [],
+          rules: ["title is required"],
+        },
+        ui: {
+          screens: ["list", "form"],
+          action: "add",
+          shows: ["title", "dueDate"],
+          nav: "Tasks",
+        },
+        verification: {
+          mustRemainTrue: ["x"],
+          mustNotHappen: ["a task can be saved without a title"],
+          acceptanceCheck: "create a task",
+        },
+      },
+    ],
+  };
+
+  const task = planToAcceptanceSpec(datePlan).entities[0];
+
+  // Cover every date-ish type the production branch handles, incl. a date field whose name
+  // matches the email heuristic (emailVerifiedAt) — TYPE must take precedence over name.
+  for (const name of ["dueDate", "startsAt", "loggedAt", "emailVerifiedAt"]) {
+    const field = task?.fields.find((f) => f.name === name);
+
+    expect(field, `expected field ${name}`).toBeDefined();
+    // NOT the generic garbage sample, and NOT an email (the name-precedence trap).
+    expect(field?.valid).not.toContain(`${name}-`);
+    expect(field?.valid).not.toContain("@");
+    // A real, valid calendar date (what a timestamp column accepts) — not a normalized impossible one.
+    expect(isRealCalendarDate(field?.valid ?? "")).toBe(true);
+  }
+
+  // Negatives must apply the SAME type-precedence: a date-typed field named like an email gets
+  // NO "not-an-email" negative (that value would 500 a timestamp insert, not 400/422 → false park),
+  // while a genuinely email-typed field DOES.
+  const emailNegs = (fieldName: string): boolean =>
+    (task?.negatives ?? []).some(
+      (n) => n.field === fieldName && n.value === "not-an-email"
+    );
+
+  expect(emailNegs("emailVerifiedAt")).toBe(false);
+  expect(emailNegs("contactEmail")).toBe(true);
+
+  // A NUMBER field named like an email must also resolve by type, not name: numeric valid sample
+  // (no "@"), and the negative-number negative — never a not-an-email negative.
+  const emailCount = task?.fields.find((f) => f.name === "emailCount");
+
+  expect(emailCount?.valid).not.toContain("@");
+  expect(emailCount?.valid).toMatch(/^\d+$/);
+  expect(emailNegs("emailCount")).toBe(false);
+  expect(
+    (task?.negatives ?? []).some(
+      (n) => n.field === "emailCount" && n.value === "-1"
+    )
+  ).toBe(true);
+});

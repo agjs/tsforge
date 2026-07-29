@@ -35,19 +35,48 @@ export function testIdsFor(key: string): ITestIds {
   };
 }
 
+function isDateType(type: string): boolean {
+  return type === "date" || type === "datetime" || type === "timestamp";
+}
+
+// Whether a field should be treated as an email. Explicit TYPE wins over the name heuristic: a
+// `date`/`number`-typed field named like an email (e.g. `emailVerifiedAt`) is NOT an email — else
+// both the positive sample and the invalid-email negative feed a non-string value into a
+// date/number column and 500 the insert (a false park). Shared by validValue AND negativesFor so
+// the two can never disagree about whether a field is an email.
+function isEmailField(field: { name: string; type: string }): boolean {
+  if (field.type === "email") {
+    return true;
+  }
+
+  if (field.type === "number" || isDateType(field.type)) {
+    return false;
+  }
+
+  return /email/i.test(field.name);
+}
+
 // Deterministic valid sample per field, seeded off (entityIndex, fieldName) — no Date/random.
 function validValue(
   field: { name: string; type: string },
   seed: number
 ): string {
-  const isEmail = field.type === "email" || /email/i.test(field.name);
-
-  if (isEmail) {
+  // Explicit TYPE wins over name heuristics (see isEmailField).
+  if (isEmailField(field)) {
     return `user${seed}@example.com`;
   }
 
   if (field.type === "number") {
     return String(seed + 1);
+  }
+
+  if (isDateType(field.type)) {
+    // A real calendar date. Date-typed fields land in a DB date/timestamp column, so the generic
+    // `${name}-${seed}` sample would pass string-level validation (Zod z.string / TypeBox t.String)
+    // yet throw at the insert ("invalid input syntax for type timestamp") → the create 500s and the
+    // form never closes → false e2e park. Date-only ("YYYY-MM-DD") so it stays a substring of
+    // whatever timestamp representation the row cell renders back for the shows assertion.
+    return "2024-06-15";
   }
 
   if (/url|website/i.test(field.name)) {
@@ -77,7 +106,10 @@ function negativesFor(
       out.push({ field: f.name, value: "", why: `${f.name} is required` });
     }
 
-    if (!isForeignKey && (f.type === "email" || /email/i.test(f.name))) {
+    // Use the SAME email determination as validValue (type wins over name), so a date/number
+    // field named like an email (emailVerifiedAt) never gets a "not-an-email" negative — that
+    // value would reach a timestamp/number column and 500 (not the expected 400/422) → false park.
+    if (!isForeignKey && isEmailField(f)) {
       out.push({
         field: f.name,
         value: "not-an-email",
