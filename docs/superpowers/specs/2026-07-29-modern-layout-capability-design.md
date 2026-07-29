@@ -23,7 +23,7 @@
 
 **Routing (audit 1):** BoringStack routes are already flat/top-level (`/task`, not `/dashboard/task`). The shell is `AppShell` (sidebar + header) at `apps/ui/src/components/core/AppShell/`. Post-login redirect is `DEFAULT_REDIRECT_TO = "/dashboard"` (`apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts`). The harness hardcodes every feature → `ProtectedRoute → AppShell → sidebar entry → nav-testid → sidebar-nav e2e` (`wire-resource.ts` `wireUiRouteFile` ~L133-187 `path:"/${camel}"`; `build.ts` `scopeFor` ~L161-179; `refine-prompt.ts` ~L269; `acceptance/testid-contract.ts` ~L130; `acceptance/e2e-generator.ts` nav test ~L681-686).
 
-**Design system (audit 2):** Tokens in `apps/ui/src/assets/css/tailwind.css` (`:root` + `:root[data-theme="dark"]`, mapped via Tailwind `@theme`): colors `background/foreground/primary(+strong/low/ink/foreground)/secondary/muted(+foreground/strong)/accent(+cyan/pink)/destructive/success/border(+strong)/input/ring/card/panel(+strong)/popover`, `--radius*`, `--font-sans` (Inter) / `--font-mono`, `--animate-*`. Components in `apps/ui/src/components/ui/`: Button, Card, Dialog, DropdownMenu, Form, Input, Label, Popover, ScrollArea, Sheet, Skeleton, Sonner, Switch, Tabs (cva + `cn()` + tailwind-merge + Radix + lucide). Theme via `useTheme()` + `data-theme` attribute (NO `dark:` classes; `AGENT_CONTRACT.md` forbids them). Responsive = mobile-first Tailwind + Sheet drawer (`hidden md:flex` sidebar). A11y = `eslint-plugin-jsx-a11y` 14 rules as ERRORS + Radix + semantic HTML + skip link. Harness `conventions.ts` has 12 topic guides but **nothing on styling/theming/responsive/a11y/composition**.
+**Design system (audit 2):** Tokens in `apps/ui/src/assets/css/tailwind.css` (`:root` + `:root[data-theme="dark"]`, mapped via Tailwind `@theme`): colors `background/foreground/primary(+strong/low/ink/foreground)/secondary/muted(+foreground/strong)/accent(+cyan/pink)/destructive/success/border(+strong)/input/ring/card/panel(+strong)/popover`, `--radius*`, `--font-sans` (Inter) / `--font-mono`, `--animate-*`. Components in `apps/ui/src/components/ui/`: Button, Card, Dialog, DropdownMenu, Form, Input, Label, Popover, ScrollArea, Sheet, Skeleton, Sonner, Switch, Tabs (cva + `cn()` + tailwind-merge + Radix + lucide). Theme via `useTheme()` + `data-theme` attribute (NO `dark:` classes; `AGENT_CONTRACT.md` forbids them). Responsive = mobile-first Tailwind + Sheet drawer (`hidden md:flex` sidebar). A11y = `eslint-plugin-jsx-a11y` (16 rules) as ERRORS + Radix + semantic HTML + skip link. Harness `conventions.ts` has 12 topic guides but **nothing on styling/theming/responsive/a11y/composition**.
 
 ---
 
@@ -45,14 +45,16 @@ Wire these into the topic registry + surface at the same points as existing guid
 **Plan schema (broad).** Extend `IUiIntent` (`packages/core/src/loop/planning/plan-types.ts`):
 ```ts
 layout?: "app-sidebar" | "app-topnav" | "settings" | "focused" | "public"; // default "app-sidebar"
-home?: boolean;   // this feature's route is the post-login landing (exactly one per plan)
+home?: boolean;   // this feature's route is the post-login landing (AT MOST one per plan; none → /dashboard)
 ```
 `nav` (existing description) stays. The enum is intentionally broad (anti-lock-in); **v1 implements `app-sidebar` + `settings`**; `app-topnav`/`public`/`focused` are schema-valid and fall back to `app-sidebar`+guidance for now (documented), so the todos app isn't blocked and the vocabulary is future-proof.
 
 **Wiring (implement narrow):** In `packages/core/src/loop/boringstack/`:
 - **Sidebar grouping** — the harness's sidebar wiring/guidance groups nav into a **primary app group** (`layout: app-sidebar`) and a demoted **Settings group** (`layout: settings`, plus the scaffold's existing account/profile/notification links). AppSidebar edit stays in feature scope; the refine-prompt tells the model which group to add to based on `layout`.
-- **Home landing** — the feature with `home: true` sets `DEFAULT_REDIRECT_TO` to its route. Add `LoginPage.constants.ts` to that feature's scope; the refine-prompt instructs the redirect change. Exactly one home per plan (validated).
+- **Home landing** — the harness writes `DEFAULT_REDIRECT_TO` DETERMINISTICALLY for the `home` slice's route (`wireHomeRedirectForPlan` → `applyHomeRedirect`, called ONCE at the plan level in `runBoringstackBuild` — resume-safe). It is NOT model-edited and `LoginPage.constants` is deliberately NOT in feature scope; the refine-prompt tells the model not to touch it. At most one home (validated); none → login keeps `/dashboard`.
 - **Route/layout** — keep `ProtectedRoute → AppShell` for `app-sidebar` and `settings` (both are authenticated app areas; "settings" is a grouping + optional sub-nav, not a separate auth boundary in v1). `wireUiRouteFile` stays; only grouping + home differ. (Distinct SettingsLayout / public-unauth shells are **designed-for** via the enum but **deferred** — YAGNI until a build needs them.)
+
+**Sidebar grouping is guide-only (cosmetic)** — a mis-grouped nav link still works, so it is not gate-verified (deferred). The home landing IS verified by an observable outcome test (runBoringstackBuild rewrites the live redirect). Accepted limitations: a no-home plan leaves the redirect untouched (fresh scaffolds default to `/dashboard`); the redirect regex assumes a plain constants file (line-anchored, not a full parser).
 
 **Acceptance (unchanged contract, role-aware only where safe):** Every feature remains reachable + e2e-tested via its nav testid — `role` only changes *which sidebar group* the nav link lives in, not whether it exists. This deliberately preserves the proven acceptance machinery (no gate relaxation). Smart-view filtering (Spec 2) is verified as UI within the Task feature, not as new entities.
 
@@ -74,7 +76,7 @@ home?: boolean;   // this feature's route is the post-login landing (exactly one
 
 - `packages/core/src/loop/conventions.ts` — register + author the 5 design-system topics (Part A).
 - `packages/core/src/loop/planning/plan-types.ts` — `IUiIntent.layout` + `home` (Part B schema).
-- `packages/core/src/loop/boringstack/wire-resource.ts` / `build.ts` / `refine-prompt.ts` — sidebar grouping, home-redirect wiring, `LoginPage.constants` scope (Part B wiring).
+- `packages/core/src/loop/boringstack/wire-resource.ts` (`wireHomeRedirect`/`applyHomeRedirect`) + `build.ts` (`homeRouteForPlan`/`wireHomeRedirectForPlan`, called in `runBoringstackBuild`) — deterministic home redirect. `refine-prompt.ts` — sidebar-group GUIDANCE (cosmetic; not gate-verified) + a note telling the model the redirect is auto-wired. `propose-plan.ts` — planner emits `layout`/`home`. NO `LoginPage.constants` in feature scope.
 - `packages/core/src/loop/boringstack/acceptance/testid-contract.ts` — keep nav contract; document role→group only.
 - Plan validation (where `isEntitySpec`/plan is validated) — exactly-one-home + valid `layout`.
 - Tests alongside each.

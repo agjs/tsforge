@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Exec } from "../src/loop/boringstack/exec";
@@ -705,6 +705,73 @@ describe("runBoringstackBuild", () => {
       expect(host.metaBaselineCaptures.count).toBe(1);
       // The per-feature expert rescue target was set (Invoice's service file).
       expect(host.rescueTargets.length).toBeGreaterThan(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("repoints the LIVE post-login redirect at the home route (observable, resume-safe)", async () => {
+    // The OUTCOME test the pure-helper unit tests can't give: prove runBoringstackBuild itself
+    // rewrites LoginPage.constants for a home plan. Deleting the plan-level wireHomeRedirectForPlan
+    // call leaves this at /dashboard → this test fails (closing the resume false-green for real).
+    const dir = await mkdtemp(join(tmpdir(), "bs-home-"));
+
+    try {
+      const constsPath = join(
+        dir,
+        "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts"
+      );
+
+      await mkdir(join(constsPath, ".."), { recursive: true });
+      await writeFile(
+        constsPath,
+        'export const DEFAULT_REDIRECT_TO = "/dashboard";\n',
+        "utf-8"
+      );
+
+      const plan: IProductPlan = {
+        product: "A todo app",
+        slices: [
+          {
+            entity: {
+              id: "Task",
+              desc: "a task",
+              fields: [{ name: "title", type: "string" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list", "form"],
+              action: "add a task",
+              shows: ["title"],
+              nav: "Today",
+              layout: "app-sidebar",
+              home: true,
+            },
+            verification: {
+              mustRemainTrue: ["auth"],
+              mustNotHappen: ["no title"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "todo app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec: createExec(),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(await readFile(constsPath, "utf-8")).toContain(
+        'export const DEFAULT_REDIRECT_TO = "/task";'
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
