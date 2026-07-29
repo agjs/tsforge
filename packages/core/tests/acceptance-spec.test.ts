@@ -586,6 +586,9 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
             { name: "emailVerifiedAt", type: "timestamp", optional: true },
             // A genuine email field — positive control: it SHOULD get the not-an-email negative.
             { name: "contactEmail", type: "email", optional: true },
+            // Number type whose name matches the email heuristic — type must win here too: a
+            // numeric sample + the negative-number negative, never an email value/negative.
+            { name: "emailCount", type: "number", optional: true },
           ],
           relationships: [],
           rules: ["title is required"],
@@ -630,4 +633,17 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
 
   expect(emailNegs("emailVerifiedAt")).toBe(false);
   expect(emailNegs("contactEmail")).toBe(true);
+
+  // A NUMBER field named like an email must also resolve by type, not name: numeric valid sample
+  // (no "@"), and the negative-number negative — never a not-an-email negative.
+  const emailCount = task?.fields.find((f) => f.name === "emailCount");
+
+  expect(emailCount?.valid).not.toContain("@");
+  expect(emailCount?.valid).toMatch(/^\d+$/);
+  expect(emailNegs("emailCount")).toBe(false);
+  expect(
+    (task?.negatives ?? []).some(
+      (n) => n.field === "emailCount" && n.value === "-1"
+    )
+  ).toBe(true);
 });
