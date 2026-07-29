@@ -8,6 +8,7 @@ import type {
   IUiIntent,
   IVerificationContract,
 } from "./plan-types";
+import { IMPLEMENTED_LAYOUT_ARCHETYPES } from "./plan-types";
 
 /**
  * Serialize a plan to YAML frontmatter + fenced JSON format.
@@ -143,6 +144,24 @@ function isUiIntent(value: unknown): value is IUiIntent {
     return false;
   }
 
+  // Optional layout archetype: if present it must be one the harness IMPLEMENTS. Validation gates
+  // on IMPLEMENTED_LAYOUT_ARCHETYPES (a subset of the LayoutArchetype vocabulary) — a not-yet-built
+  // archetype (e.g. `public`, which implies unauthenticated but would be wrapped in ProtectedRoute)
+  // is REJECTED rather than silently mis-built.
+  const validLayouts: readonly string[] = IMPLEMENTED_LAYOUT_ARCHETYPES;
+
+  if (
+    value.layout !== undefined &&
+    !(typeof value.layout === "string" && validLayouts.includes(value.layout))
+  ) {
+    return false;
+  }
+
+  // Optional home flag: post-login landing marker.
+  if (value.home !== undefined && typeof value.home !== "boolean") {
+    return false;
+  }
+
   return true;
 }
 
@@ -226,6 +245,16 @@ export function isProductPlan(value: unknown): value is IProductPlan {
   }
 
   if (!value.slices.every(isSlice)) {
+    return false;
+  }
+
+  // At most ONE slice may be the app home (the post-login landing). isRecord guards keep this
+  // cast-free even though `value.slices` is still `unknown[]` at this point.
+  const homeCount = value.slices.filter(
+    (s) => isRecord(s) && isRecord(s.ui) && s.ui.home === true
+  ).length;
+
+  if (homeCount > 1) {
     return false;
   }
 

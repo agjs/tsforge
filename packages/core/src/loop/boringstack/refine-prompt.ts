@@ -2,6 +2,41 @@ import type { IFeature } from "../greenfield/greenfield.types";
 import type { ISlice } from "../planning/plan-types";
 import { toCamelCase } from "./case";
 
+/** Per-slice layout wiring: where the feature's nav link goes (primary app group vs a demoted
+ *  Settings group) and, if it's the app home, the post-login redirect. v1 implements app-sidebar
+ *  + settings; the other archetypes build as app-sidebar for now (the enum is broad on purpose). */
+function layoutGuidance(slice: ISlice): string {
+  const layout = slice.ui.layout ?? "app-sidebar";
+  const route = `/${toCamelCase(slice.entity.id)}`;
+  const lines: string[] = [];
+
+  // Plan validation only admits the IMPLEMENTED archetypes (app-sidebar | settings), so those are
+  // the only values that reach here; anything else is treated as the app-sidebar default.
+  if (layout === "settings") {
+    lines.push(
+      "**Layout**: `settings` — a DEMOTED config area. Add this feature's sidebar link to a " +
+        "secondary **Settings** group in `AppSidebar` (grouped with the account/profile/settings " +
+        "links, below the primary app nav), NOT the primary app nav group."
+    );
+  } else {
+    lines.push(
+      "**Layout**: `app-sidebar` — a PRIMARY app view. Add its sidebar link to the primary app " +
+        "nav group at the TOP of `AppSidebar`, above the Settings/account links."
+    );
+  }
+
+  if (slice.ui.home === true) {
+    lines.push(
+      "**Home**: this feature is the app's landing view — the harness AUTOMATICALLY points the " +
+        `post-login redirect (\`DEFAULT_REDIRECT_TO\`) at its route (\`${route}\`). Do NOT edit ` +
+        "the login page or that constant yourself; just build this feature well as the primary " +
+        "app view the user lands in."
+    );
+  }
+
+  return lines.join("\n\n");
+}
+
 function productContextSection(slice: ISlice): string {
   const fieldsList = slice.entity.fields
     .map((f) => {
@@ -51,6 +86,8 @@ ${rulesList}
 **Display**: ${showsList}
 
 **Navigation**: ${slice.ui.nav}
+
+${layoutGuidance(slice)}
 
 ### Verification Contract
 

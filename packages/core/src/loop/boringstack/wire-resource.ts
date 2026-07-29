@@ -239,6 +239,55 @@ export async function wireUiFeature(cwd: string, name: string): Promise<void> {
 }
 
 /**
+ * Point the login page's `DEFAULT_REDIRECT_TO` at `route` (the plan `home` feature's route), so a
+ * signed-in user lands INTO the app instead of the generic `/dashboard`. The harness writes this
+ * DETERMINISTICALLY — it is NOT left to the model + a prompt — so the landing can't silently stay
+ * `/dashboard` and slip past the gate (a false-green). Pure + idempotent + self-healing: it
+ * matches the export regardless of the current value, and throws if the anchor is missing rather
+ * than silently no-op'ing (which would re-introduce the false-green).
+ */
+export function wireHomeRedirect(src: string, route: string): string {
+  // Anchored to line-start (`^…/m`) so a COMMENTED-OUT `// export const DEFAULT_REDIRECT_TO …`
+  // can't be matched before the live declaration (which would update the comment and leave the
+  // real redirect at /dashboard — a silent false-green).
+  const anchor = /^export const DEFAULT_REDIRECT_TO\s*=\s*"[^"]*";/m;
+
+  if (!anchor.test(src)) {
+    throw new Error(
+      "wireHomeRedirect: DEFAULT_REDIRECT_TO not found in LoginPage.constants"
+    );
+  }
+
+  return src.replace(anchor, `export const DEFAULT_REDIRECT_TO = "${route}";`);
+}
+
+/** Apply {@link wireHomeRedirect} to the scaffold's LoginPage constants. Called ONLY for a plan's
+ *  `home` slice, so a MISSING file is a real failure, not something to skip: silently returning
+ *  would leave the landing at `/dashboard` while the build goes green — the exact false-green this
+ *  determinism exists to prevent. So it THROWS rather than no-op'ing. (The boringstack scaffold
+ *  always ships this file; a variant that doesn't must be handled explicitly, not silently.) */
+export async function applyHomeRedirect(
+  cwd: string,
+  route: string
+): Promise<void> {
+  const path = join(
+    cwd,
+    "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts"
+  );
+
+  if (!existsSync(path)) {
+    throw new Error(
+      `applyHomeRedirect: LoginPage.constants.ts not found at ${path} — cannot wire the home ` +
+        "landing, and skipping would silently leave the redirect at /dashboard (a false-green)."
+    );
+  }
+
+  const src = await readFile(path, "utf-8");
+
+  await writeFile(path, wireHomeRedirect(src, route), "utf-8");
+}
+
+/**
  * Seed the i18n keys the generated feature page renders (`features.<lower>.title`
  * and `.empty`) into every locale's `common.json`. new:feature emits the page using
  * those keys but adds no translations, and the i18n lint rule only flags UNUSED

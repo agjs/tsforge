@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Exec } from "../src/loop/boringstack/exec";
@@ -11,12 +12,15 @@ import {
   runBoringstackBuild,
   scopeFor,
   readResourceCode,
+  sliceSchemaForJudge,
   verifyAcceptance,
   e2eParkReason,
   loadBaseline,
   saveBaseline,
   APP_SCHEMA_FILE,
   LOCALE_GLOB,
+  homeRouteForPlan,
+  wireHomeRedirectForPlan,
 } from "../src/loop/boringstack/build";
 import type {
   IAcceptanceRunner,
@@ -27,7 +31,7 @@ import type { IProvider } from "../src/inference";
 import type { IGate } from "../src/gate/gate-runner";
 import { writePlan } from "../src/loop/planning/plan-store";
 import { saveState } from "../src/loop/greenfield/state";
-import type { IProductPlan } from "../src/loop/planning/plan-types";
+import type { IProductPlan, ISlice } from "../src/loop/planning/plan-types";
 
 function feature(id: string) {
   return { id, desc: `Build ${id} resource`, passes: false, attempts: 0 };
@@ -115,6 +119,67 @@ function invoicePlan(): IProductPlan {
     ],
   };
 }
+
+describe("homeRouteForPlan", () => {
+  const mkSlice = (id: string, home: boolean): ISlice => ({
+    entity: {
+      id,
+      desc: "d",
+      fields: [{ name: "title", type: "string" }],
+      relationships: ["belongsTo User"],
+      rules: ["title required"],
+    },
+    ui: {
+      screens: ["list", "form"],
+      action: "a",
+      shows: ["title"],
+      nav: id,
+      home,
+    },
+    verification: {
+      mustRemainTrue: ["auth"],
+      mustNotHappen: ["no title"],
+      acceptanceCheck: "bun test",
+    },
+  });
+  const plan = (slices: ISlice[]): IProductPlan => ({ product: "p", slices });
+
+  test("returns the /camel route of the slice marked home", () => {
+    expect(
+      homeRouteForPlan(plan([mkSlice("Note", false), mkSlice("Task", true)]))
+    ).toBe("/task");
+  });
+
+  test("returns null when no slice is home (login keeps the /dashboard default)", () => {
+    expect(homeRouteForPlan(plan([mkSlice("Note", false)]))).toBeNull();
+  });
+
+  test("wireHomeRedirectForPlan APPLIES the redirect for a home plan, skips a home-less one", async () => {
+    // Unit-tests the helper's route/skip LOGIC (via an injected applier). That runBoringstackBuild
+    // actually CALLS it — including on resume — is proven by the two observable-outcome tests in the
+    // runBoringstackBuild describe (which rewrite a real LoginPage.constants), not here.
+    const calls: { cwd: string; route: string }[] = [];
+
+    const apply = async (cwd: string, route: string): Promise<void> => {
+      calls.push({ cwd, route });
+    };
+
+    await wireHomeRedirectForPlan(
+      "/repo",
+      plan([mkSlice("Note", false), mkSlice("Task", true)]),
+      apply
+    );
+    expect(calls).toEqual([{ cwd: "/repo", route: "/task" }]);
+
+    await wireHomeRedirectForPlan(
+      "/repo",
+      plan([mkSlice("Note", false)]),
+      apply
+    );
+    // No home slice → no additional call.
+    expect(calls).toEqual([{ cwd: "/repo", route: "/task" }]);
+  });
+});
 
 describe("boringstackDeps.implement", () => {
   test("calls injected generate with feature id, then freezes scope and sends refine prompt", async () => {
@@ -648,6 +713,305 @@ describe("runBoringstackBuild", () => {
     }
   });
 
+  test("repoints the LIVE post-login redirect at the home route (observable, resume-safe)", async () => {
+    // The OUTCOME test the pure-helper unit tests can't give: prove runBoringstackBuild itself
+    // rewrites LoginPage.constants for a home plan. Deleting the plan-level wireHomeRedirectForPlan
+    // call leaves this at /dashboard → this test fails (closing the resume false-green for real).
+    const dir = await mkdtemp(join(tmpdir(), "bs-home-"));
+
+    try {
+      const constsPath = join(
+        dir,
+        "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts"
+      );
+
+      await mkdir(join(constsPath, ".."), { recursive: true });
+      await writeFile(
+        constsPath,
+        'export const DEFAULT_REDIRECT_TO = "/dashboard";\n',
+        "utf-8"
+      );
+
+      const plan: IProductPlan = {
+        product: "A todo app",
+        slices: [
+          {
+            entity: {
+              id: "Task",
+              desc: "a task",
+              fields: [{ name: "title", type: "string" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list", "form"],
+              action: "add a task",
+              shows: ["title"],
+              nav: "Today",
+              layout: "app-sidebar",
+              home: true,
+            },
+            verification: {
+              mustRemainTrue: ["auth"],
+              mustNotHappen: ["no title"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "todo app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec: createExec(),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(await readFile(constsPath, "utf-8")).toContain(
+        'export const DEFAULT_REDIRECT_TO = "/task";'
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("wires the redirect on RESUME too — home feature already passing (plan-level, not implement-gated)", async () => {
+    // The specific resume false-green: an already-passing home feature → implement() is SKIPPED. If
+    // the wiring lived in implement() it would never run and the landing would stay /dashboard while
+    // the build is green. This test pre-marks the home feature passing; the plan-level wiring must
+    // still fire. (Moving the wiring back into implement() would make THIS test fail.)
+    const dir = await mkdtemp(join(tmpdir(), "bs-home-resume-"));
+
+    try {
+      const constsPath = join(
+        dir,
+        "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts"
+      );
+
+      await mkdir(join(constsPath, ".."), { recursive: true });
+      await writeFile(
+        constsPath,
+        'export const DEFAULT_REDIRECT_TO = "/dashboard";\n',
+        "utf-8"
+      );
+
+      const plan: IProductPlan = {
+        product: "A todo app",
+        slices: [
+          {
+            entity: {
+              id: "Task",
+              desc: "a task",
+              fields: [{ name: "title", type: "string" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list", "form"],
+              action: "add a task",
+              shows: ["title"],
+              nav: "Today",
+              layout: "app-sidebar",
+              home: true,
+            },
+            verification: {
+              mustRemainTrue: ["auth"],
+              mustNotHappen: ["no title"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+      // RESUME: the home feature is already passing → its implement() is skipped.
+      await saveState(dir, {
+        goal: "todo app",
+        features: [{ id: "Task", desc: "a task", passes: true, attempts: 1 }],
+      });
+
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "todo app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec: createExec(),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(await readFile(constsPath, "utf-8")).toContain(
+        'export const DEFAULT_REDIRECT_TO = "/task";'
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an infra-aborted build with a home slice leaves LoginPage.constants UNMUTATED", async () => {
+    // Locks ONE ordering edge: the wiring runs AFTER the infra fail-closed return (an infra abort
+    // never reaches captureMetaBaseline, so this test does NOT speak to the meta-baseline ordering —
+    // the "wires the redirect AFTER the pristine meta-baseline is captured" test below locks that).
+    // Moving the wiring back above the infra return would rewrite the file here → this test fails.
+    const dir = await mkdtemp(join(tmpdir(), "bs-home-infra-"));
+
+    try {
+      const constsPath = join(
+        dir,
+        "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts"
+      );
+      const original = 'export const DEFAULT_REDIRECT_TO = "/dashboard";\n';
+
+      await mkdir(join(constsPath, ".."), { recursive: true });
+      await writeFile(constsPath, original, "utf-8");
+
+      const plan: IProductPlan = {
+        product: "A todo app",
+        slices: [
+          {
+            entity: {
+              id: "Task",
+              desc: "a task",
+              fields: [{ name: "title", type: "string" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list", "form"],
+              action: "add a task",
+              shows: ["title"],
+              nav: "Today",
+              layout: "app-sidebar",
+              home: true,
+            },
+            verification: {
+              mustRemainTrue: ["auth"],
+              mustNotHappen: ["no title"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      // Pristine gate RED because generate:api can't reach the API → needs-infra abort.
+      const exec: Exec = async () => ({
+        code: 1,
+        stdout:
+          "::tsforge-app apps/ui::\n" +
+          "[generate:api] FAILED: fetch failed (ECONNREFUSED)",
+        stderr: "",
+      });
+
+      const res = await runBoringstackBuild({
+        cwd: dir,
+        goal: "todo app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec,
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(res.status).toBe("needs-infra");
+      // The clone was NOT mutated by the aborted build.
+      expect(await readFile(constsPath, "utf-8")).toBe(original);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("wires the redirect AFTER the pristine meta-baseline is captured (ordering lock)", async () => {
+    // The meta-baseline must be a PRISTINE snapshot of the clone; if the redirect were rewritten
+    // BEFORE captureMetaBaseline, the baseline would bake in the mutation (a false-green class). We
+    // observe the file AT capture time via an instrumented host: it must still read /dashboard then,
+    // and only be repointed to /task by the end. Moving the wiring above captureMetaBaseline flips
+    // the at-capture assertion → this test fails.
+    const dir = await mkdtemp(join(tmpdir(), "bs-home-order-"));
+
+    try {
+      const constsPath = join(
+        dir,
+        "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts"
+      );
+
+      await mkdir(join(constsPath, ".."), { recursive: true });
+      await writeFile(
+        constsPath,
+        'export const DEFAULT_REDIRECT_TO = "/dashboard";\n',
+        "utf-8"
+      );
+
+      const plan: IProductPlan = {
+        product: "A todo app",
+        slices: [
+          {
+            entity: {
+              id: "Task",
+              desc: "a task",
+              fields: [{ name: "title", type: "string" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list", "form"],
+              action: "add a task",
+              shows: ["title"],
+              nav: "Today",
+              layout: "app-sidebar",
+              home: true,
+            },
+            verification: {
+              mustRemainTrue: ["auth"],
+              mustNotHappen: ["no title"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      const base = createHost();
+      let atMetaCapture = "";
+      const host = {
+        ...base,
+        captureMetaBaseline: () => {
+          atMetaCapture = readFileSync(constsPath, "utf-8");
+          base.captureMetaBaseline();
+        },
+      };
+
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "todo app",
+        host,
+        evaluator: createEvaluator(),
+        exec: createExec(),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      // The meta-baseline saw the PRISTINE redirect (wiring had not run yet).
+      expect(atMetaCapture).toContain(
+        'export const DEFAULT_REDIRECT_TO = "/dashboard";'
+      );
+      // And the wiring DID run afterwards, repointing the live redirect.
+      expect(await readFile(constsPath, "utf-8")).toContain(
+        'export const DEFAULT_REDIRECT_TO = "/task";'
+      );
+      expect(base.metaBaselineCaptures.count).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("fails CLOSED (needs-infra) when the pristine gate can't reach the API's OpenAPI spec", async () => {
     const dir = await mkdtemp(join(tmpdir(), "bs-"));
 
@@ -919,6 +1283,173 @@ describe("readResourceCode — feeds the completeness judge", () => {
       expect(code).toContain("REAL_COMPONENT");
       expect(code).not.toContain("SINGULAR_STORY_MARKER");
       expect(code).not.toContain("TESTS_DIR_MARKER");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("includes the shared Drizzle schema so the judge can verify belongsTo FKs", async () => {
+    // The live todos build false-PARKED: the judge was asked to verify Task "belongs to a project"
+    // but readResourceCode only gathered the feature dirs — the FK lives in the SHARED schema, which
+    // the judge never saw, so it rejected a correct feature ("schema not shown"). The schema must be
+    // in the judged code.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-schema-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/api/task"), { recursive: true });
+      await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/api/src/api/task/task.service.ts"),
+        "export const taskService = 'TASK_SVC';\n"
+      );
+      // The FK the judge needs to see, in the shared schema (outside the feature dir).
+      await writeFile(
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        'export const task = pgTable("task", { projectId: uuid().references(() => project.id) }); // FK_MARKER\n'
+      );
+
+      const code = await readResourceCode(dir, "Task");
+
+      expect(code).toContain("FK_MARKER");
+      expect(code).toContain("app.schema.ts");
+      expect(code).toContain("TASK_SVC");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the shared schema survives truncation even when the feature code is huge", async () => {
+    // The schema is the FK evidence — it must never be the block that gets truncated away. Emit a
+    // feature file large enough to blow the ~96000-char budget on its own and assert the schema
+    // (added first, counted up front) is still present.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-schematrunc-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/api/task"), { recursive: true });
+      await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        "// SCHEMA_FK_MARKER\n"
+      );
+      // ~120k chars of feature code — larger than the whole budget.
+      await writeFile(
+        join(dir, "apps/api/src/api/task/task.service.ts"),
+        `// HUGE\n${"x".repeat(120000)}\n`
+      );
+
+      const code = await readResourceCode(dir, "Task");
+
+      expect(code).toContain("SCHEMA_FK_MARKER");
+      expect(code).toContain("…[truncated]");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an oversized schema is bounded AND still surfaces THIS feature's FK + feature code", async () => {
+    // The realistic large-schema shape: tables accrete in build order, so the feature under review
+    // sits near the END. The schema must (a) stay bounded, (b) NOT starve the feature code, and
+    // (c) still surface the feature's own table + FK (not be truncated head-first). This is the
+    // exact regression the naive head-cap introduced and the panel caught.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-bigschema-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/api/task"), { recursive: true });
+      await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
+        recursive: true,
+      });
+      // A huge schema with MANY earlier tables, and THIS feature's table (with its FK) at the very
+      // end — where accretion puts it. Head-first truncation would drop TASK_FK_MARKER.
+      const earlierTables = `// early tables\n${"e".repeat(130000)}\n`;
+      const taskTable =
+        'export const task = app.table("task", { projectId: uuid().references(() => project.id) }); // TASK_FK_MARKER\n';
+
+      await writeFile(
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        `${earlierTables}${taskTable}`
+      );
+      await writeFile(
+        join(dir, "apps/api/src/api/task/task.service.ts"),
+        "export const svc = 'FEATURE_MARKER';\n"
+      );
+
+      const code = await readResourceCode(dir, "Task");
+
+      // (a) Bounded — schema is capped at half the budget, so total stays well within the cap.
+      expect(code.length).toBeLessThan(96000 + 200);
+      // (b) Feature implementation is NOT starved — the judge still sees the code it must evaluate.
+      expect(code).toContain("FEATURE_MARKER");
+      // (c) THIS feature's table + FK survive despite living at the tail of a huge schema.
+      expect(code).toContain("TASK_FK_MARKER");
+      expect(code).toContain("…[truncated]");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("sliceSchemaForJudge — windows a large schema around the feature's own table", () => {
+  test("returns the whole schema unchanged when it fits the budget", () => {
+    const schema = 'export const task = app.table("task", {});\n';
+
+    expect(sliceSchemaForJudge(schema, "task", 96000)).toBe(schema);
+  });
+
+  test("windows around the feature's table (near the end) instead of head-truncating", () => {
+    const filler = "x".repeat(50000);
+    const schema = `${filler}\nexport const task = app.table("task", { FK_HERE });\n`;
+    const out = sliceSchemaForJudge(schema, "task", 1000);
+
+    // The FK region is kept; the (irrelevant) head is dropped with a marker.
+    expect(out).toContain("FK_HERE");
+    expect(out.startsWith("…[truncated]")).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(1000 + 40);
+  });
+
+  test("returns empty on a table-export miss in an oversized schema (caller then omits it)", () => {
+    // Under the accretion model, if the feature's table export isn't found, an arbitrary head slice
+    // cannot contain it anyway — so we return "" and let the caller give the whole budget to code.
+    const schema = "y".repeat(5000);
+
+    expect(sliceSchemaForJudge(schema, "missing", 1000)).toBe("");
+  });
+});
+
+describe("readResourceCode — dual pressure (oversized schema AND sizeable feature code)", () => {
+  test("an oversized schema keeps its window AND leaves room for real-sized feature code", async () => {
+    // The case the schema-reserve exists for: schema takes ~half the budget (windowed to its table),
+    // and a sizeable-but-realistic feature file must still be admitted from the other half. Neither
+    // the FK evidence nor the implementation may be starved.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-dual-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/api/task"), { recursive: true });
+      await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
+        recursive: true,
+      });
+      const earlier = `// early tables\n${"e".repeat(130000)}\n`;
+      const taskTable =
+        'export const task = app.table("task", { projectId: uuid().references(() => project.id) }); // DUAL_FK_MARKER\n';
+
+      await writeFile(
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        `${earlier}${taskTable}`
+      );
+      // ~30k of feature code — comfortably inside the ~48k left after the schema takes its half.
+      await writeFile(
+        join(dir, "apps/api/src/api/task/task.service.ts"),
+        `// DUAL_FEATURE_MARKER\n${"c".repeat(30000)}\n`
+      );
+
+      const code = await readResourceCode(dir, "Task");
+
+      expect(code).toContain("DUAL_FK_MARKER"); // FK evidence survives (windowed to the tail)
+      expect(code).toContain("DUAL_FEATURE_MARKER"); // feature code is NOT starved
+      expect(code.length).toBeLessThan(96000 + 200); // still bounded
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

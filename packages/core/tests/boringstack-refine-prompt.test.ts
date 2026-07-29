@@ -411,6 +411,123 @@ describe("refinePrompt", () => {
     expect(p).toContain("**Display** list is for rendering only");
   });
 
+  it("wires the app-home landing redirect + primary-nav placement when the slice is app-sidebar + home", () => {
+    const feature: IFeature = {
+      id: "Task",
+      desc: "a task",
+      passes: false,
+      attempts: 0,
+    };
+    const slice: ISlice = {
+      entity: {
+        id: "Task",
+        desc: "a task",
+        fields: [{ name: "title", type: "string" }],
+        relationships: ["belongsTo User"],
+        rules: ["title required"],
+      },
+      ui: {
+        screens: ["list", "form"],
+        action: "add → list",
+        shows: ["title"],
+        nav: "Tasks",
+        layout: "app-sidebar",
+        home: true,
+      },
+      verification: {
+        mustRemainTrue: ["auth"],
+        mustNotHappen: ["no title"],
+        acceptanceCheck: "bun test",
+      },
+    };
+    const p = refinePrompt(feature, slice);
+
+    // Home → the note references the auto-wired redirect at THIS feature's route (/task) and tells
+    // the model NOT to edit it (the harness owns DEFAULT_REDIRECT_TO deterministically).
+    expect(p).toContain("DEFAULT_REDIRECT_TO");
+    expect(p).toContain("/task");
+    expect(p).toContain("AUTOMATICALLY");
+    expect(p).toContain("Do NOT edit");
+    // The model is NOT told to hand-edit the login constants file (deterministic wiring).
+    expect(p).not.toContain("LoginPage.constants.ts");
+    // Primary app view → its nav link goes to the top-of-sidebar app group.
+    expect(p).toContain("primary app nav group");
+  });
+
+  it("defaults a slice with no layout field to app-sidebar (primary nav, no home note) — backward compatible", () => {
+    const feature: IFeature = {
+      id: "Bookmark",
+      desc: "a link",
+      passes: false,
+      attempts: 0,
+    };
+    const slice: ISlice = {
+      entity: {
+        id: "Bookmark",
+        desc: "a link",
+        fields: [{ name: "url", type: "string" }],
+        relationships: ["belongsTo User"],
+        rules: ["url required"],
+      },
+      ui: {
+        // No `layout`, no `home` — the common backward-compatible case.
+        screens: ["list", "form"],
+        action: "save → list",
+        shows: ["url"],
+        nav: "Bookmarks",
+      },
+      verification: {
+        mustRemainTrue: ["auth"],
+        mustNotHappen: ["no url"],
+        acceptanceCheck: "bun test",
+      },
+    };
+    const p = refinePrompt(feature, slice);
+
+    // Treated as the default app-sidebar primary view.
+    expect(p).toContain("primary app nav group");
+    // No home → no landing note (phrase unique to the home block).
+    expect(p).not.toContain("post-login redirect");
+    // Not a settings feature.
+    expect(p).not.toContain("DEMOTED config area");
+  });
+
+  it("puts a settings-layout feature in the demoted Settings group and emits no home redirect", () => {
+    const feature: IFeature = {
+      id: "NotificationPrefs",
+      desc: "prefs",
+      passes: false,
+      attempts: 0,
+    };
+    const slice: ISlice = {
+      entity: {
+        id: "NotificationPrefs",
+        desc: "prefs",
+        fields: [{ name: "emailEnabled", type: "boolean" }],
+        relationships: ["belongsTo User"],
+        rules: ["belongs to a user"],
+      },
+      ui: {
+        screens: ["form"],
+        action: "save prefs",
+        shows: ["emailEnabled"],
+        nav: "Notification Preferences",
+        layout: "settings",
+      },
+      verification: {
+        mustRemainTrue: ["auth"],
+        mustNotHappen: ["prefs without a user"],
+        acceptanceCheck: "bun test",
+      },
+    };
+    const p = refinePrompt(feature, slice);
+
+    expect(p).toContain("DEMOTED config area");
+    expect(p).toContain("**Settings** group");
+    // Not the app home → no redirect rewrite instruction.
+    expect(p).not.toContain("DEFAULT_REDIRECT_TO");
+  });
+
   it("refinePrompt without a slice is unchanged (contains id + desc)", () => {
     const p = refinePrompt({
       id: "Bookmark",

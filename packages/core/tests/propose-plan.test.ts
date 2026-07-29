@@ -4,6 +4,7 @@ import {
   parsePlanJson,
   stripReservedSlices,
   PLANNER_EXAMPLE,
+  PLANNER_SYSTEM,
 } from "../src/loop/planning/propose-plan";
 import {
   BORINGSTACK_PLANNER_GUIDANCE,
@@ -386,4 +387,25 @@ test("PLANNER_EXAMPLE (the shape shown to the model) is itself a valid plan", ()
   // the worked example must round-trip through the same strict guard.
   expect(isProductPlan(PLANNER_EXAMPLE)).toBe(true);
   expect(parsePlanJson(JSON.stringify(PLANNER_EXAMPLE))).not.toBeNull();
+});
+
+test("the planner contract surfaces layout + home so plans can actually use the capability", () => {
+  // The layout capability is inert unless the PLANNER emits layout/home. The contract (schema doc
+  // + rules) must document them, and the worked example must DEMONSTRATE the app-home pattern —
+  // otherwise applyHomeRedirect never runs on planner-generated plans and the landing silently
+  // stays /dashboard while the capability "looks" implemented.
+  expect(PLANNER_SYSTEM).toContain('"layout"');
+  expect(PLANNER_SYSTEM).toContain('"home"');
+  expect(PLANNER_SYSTEM).toContain("app-sidebar");
+  expect(PLANNER_SYSTEM).toContain("settings");
+
+  // Exactly one home in the worked example, and it's an app-sidebar primary view. Widen to
+  // IProductPlan first: PLANNER_EXAMPLE's concrete literal type narrows `home` to `true`, which
+  // eslint flags as an always-truthy condition; the interface type restores `boolean | undefined`.
+  const example: IProductPlan = PLANNER_EXAMPLE;
+  const homeCount = example.slices.filter((s) => s.ui.home === true).length;
+  const home = example.slices.find((s) => s.ui.home === true);
+
+  expect(homeCount).toBe(1);
+  expect(home?.ui.layout).toBe("app-sidebar");
 });

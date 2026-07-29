@@ -11,6 +11,7 @@ import type { IProvider } from "../../inference";
 import type { IGate } from "../../gate/gate-runner";
 import type { Exec } from "./exec";
 import { generateResource, generateFeature } from "./generate";
+import { applyHomeRedirect } from "./wire-resource";
 import { runBoringstackGate } from "./gate";
 import { extractFailures } from "./extract-failures";
 import { resolveStuckFile } from "../expert-handoff";
@@ -179,11 +180,51 @@ export function scopeFor(name: string): string[] {
 }
 
 /**
+ * Reduce the shared Drizzle schema to at most `budget` chars for the judge, KEEPING the region
+ * around THIS feature's own table (`export const <camel> =`). A many-entity app accretes one table
+ * per feature into the shared schema in build order, so the feature under review — and its
+ * `belongsTo` FOREIGN KEY, which is declared inside its own table block — typically sits near the
+ * END; naive head-first truncation would drop the exact FK evidence the judge needs. When the
+ * schema fits the budget it's returned whole; otherwise a window is centered on the feature's table.
+ * If the table export can't be located in an oversized schema, returns "" (the caller then omits
+ * the schema entirely rather than burning budget on an arbitrary head slice that — under the
+ * accretion model — cannot contain this feature's table anyway; feature code keeps the full budget).
+ * Pure — unit-testable.
+ */
+export function sliceSchemaForJudge(
+  schema: string,
+  tableExport: string,
+  budget: number
+): string {
+  if (schema.length <= budget) {
+    return schema;
+  }
+
+  const anchor = schema.indexOf(`export const ${tableExport} `);
+
+  if (anchor < 0) {
+    return "";
+  }
+
+  // Center the window on the table: keep a third of the budget of context before it (its imports /
+  // referenced tables) and the rest from the table onward (its columns + FK).
+  const start = Math.max(0, anchor - Math.floor(budget / 3));
+  const end = Math.min(schema.length, start + budget);
+  const head = start > 0 ? "…[truncated]\n" : "";
+  const tail = end < schema.length ? "\n…[truncated]" : "";
+
+  return `${head}${schema.slice(start, end)}${tail}`;
+}
+
+/**
  * Read the generated resource code from the filesystem for the completeness judge.
- * Concatenates the API resource (.ts) and UI feature (.ts/.tsx/.jsx, test/story files
- * excluded) source, capped at ~96000 characters. React components (.tsx/.jsx) are ordered
- * FIRST across both apps so a large API can't exhaust the budget before the judge sees the
- * UI. Returns empty string if directories don't exist.
+ * Concatenates the shared Drizzle schema (so the judge can see the feature's table + FKs and
+ * verify `belongsTo` relationships), the API resource (.ts), and the UI feature (.ts/.tsx/.jsx,
+ * test/story files excluded) source, capped at ~96000 characters. The schema is emitted FIRST but
+ * bounded to at most HALF the budget (`sliceSchemaForJudge`, windowed around this feature's table)
+ * so it can never starve the implementation the judge must evaluate; React components (.tsx/.jsx)
+ * are ordered ahead of other feature files so a large API can't exhaust the budget before the judge
+ * sees the UI. Returns empty string if nothing exists.
  */
 export async function readResourceCode(
   cwd: string,
@@ -300,6 +341,34 @@ export async function readResourceCode(
 
   const blocks: string[] = [];
   let totalLen = 0;
+
+  // The entity's table + FOREIGN KEYS live in the SHARED Drizzle schema, not the feature
+  // dir — so a `belongsTo` relationship (the FK definition) is invisible to the feature-scoped
+  // candidates gathered above. Without it the completeness judge is asked to verify e.g.
+  // "belongs to a project" but cannot see the FK, so it false-REJECTS a fully-correct feature
+  // ("schema not shown, relationship cannot be verified") — parking a built resource the model
+  // can't fix because there is nothing to fix (observed live: the todos Project/Task build, where
+  // the DB table + task_project_id_fkey existed and worked, yet the judge parked it). Emit the
+  // schema FIRST, but bounded to at most HALF the budget and WINDOWED around this feature's own
+  // table (sliceSchemaForJudge) — so the FK reaches the judge without either (a) being truncated
+  // head-first away when the schema is large, or (b) starving the feature implementation the judge
+  // must also see. Best-effort: a non-boringstack layout (or a schema not yet generated) simply has
+  // no such file and the judge sees the feature code alone, as before.
+  try {
+    const schema = await readFile(join(cwd, APP_SCHEMA_FILE), "utf-8");
+    const sliced = sliceSchemaForJudge(schema, camel, Math.floor(maxChars / 2));
+
+    // Empty slice = oversized schema whose table window couldn't be located → omit it so the
+    // feature implementation keeps the whole budget (rather than burn half on irrelevant tables).
+    if (sliced.length > 0) {
+      const block = `// ${APP_SCHEMA_FILE}\n${sliced}\n`;
+
+      blocks.push(block);
+      totalLen += block.length;
+    }
+  } catch {
+    // No shared schema present — skip (judge falls back to feature-only code).
+  }
 
   for (const { relPath, fullPath } of ordered) {
     const content = await readFile(fullPath, "utf-8");
@@ -883,6 +952,40 @@ export async function runFinalAcceptance(
 }
 
 /**
+ * The post-login landing route for a plan: the `/${camel}` route of the slice marked `ui.home`,
+ * or null when none is marked (login keeps the scaffold default `/dashboard`). Derived from the
+ * PLAN so the redirect is wired ONCE per build at the plan level (see runBoringstackBuild) —
+ * resume-safe: a resumed build that skips an already-passing home feature still re-applies it,
+ * unlike per-feature implement() wiring (which resume skips → the redirect would silently stay
+ * /dashboard, a false-green). At most one home is enforced by plan validation.
+ */
+export function homeRouteForPlan(plan: IProductPlan): string | null {
+  const home = plan.slices.find((s) => s.ui.home === true);
+
+  return home ? `/${toCamelCase(home.entity.id)}` : null;
+}
+
+/**
+ * Wire the plan's post-login landing once per build: if a slice is `home`, point
+ * DEFAULT_REDIRECT_TO at its route. Called from runBoringstackBuild at the plan level (resume-safe
+ * — a resumed build that skips an already-passing home feature still applies it). `apply` is
+ * injectable so the "the wiring actually fires" behaviour is unit-testable without touching the
+ * real filesystem; it defaults to the FS writer, which throws (never silently skips) on a missing
+ * login-constants file. No home slice → no-op (login keeps the scaffold default).
+ */
+export async function wireHomeRedirectForPlan(
+  cwd: string,
+  plan: IProductPlan,
+  apply: (cwd: string, route: string) => Promise<void> = applyHomeRedirect
+): Promise<void> {
+  const route = homeRouteForPlan(plan);
+
+  if (route !== null) {
+    await apply(cwd, route);
+  }
+}
+
+/**
  * Run the BoringStack build driver: require an approved plan, derive features
  * from its slices, and drive them through the greenfield loop
  * (implement → evaluate → persist).
@@ -1077,6 +1180,15 @@ export async function runBoringstackBuild(opts: {
   if (isFreshCapture) {
     host.captureMetaBaseline();
   }
+
+  // Wire the post-login landing at the PLAN level — ONCE per build, resume-safe (a resumed build
+  // that skips an already-passing home feature still applies it; it is NOT in implement()). Placed
+  // AFTER BOTH pristine captures — the command baseline (runBoringstackGate above) AND the meta
+  // baseline (captureMetaBaseline just above) — and after the infra fail-closed, so this harness
+  // mutation is never swept into either baseline and an infra-aborted build never mutates the
+  // clone. A home slice → its route (throws if the login constants are missing — never a silent
+  // skip); no home → no-op (a fresh scaffold already defaults to /dashboard).
+  await wireHomeRedirectForPlan(cwd, approved);
 
   // Create a lookup function that maps feature ids to their plan slices
   const sliceFor = (id: string): ISlice | undefined =>

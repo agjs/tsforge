@@ -26,6 +26,11 @@ const TOPICS = [
   "testing",
   "api-service",
   "i18n",
+  "design-tokens",
+  "theming",
+  "responsive",
+  "accessibility",
+  "components-ui",
 ] as const;
 
 export type ConventionTopic = (typeof TOPICS)[number];
@@ -87,6 +92,32 @@ export const TOPIC_RULES: Readonly<Record<ConventionTopic, readonly string[]>> =
     // so EITHER pushes the guide: `i18n-locale-keys-used` (defined→used, the dead-key trap) and
     // `static-translation-key-exists` (used→defined, a `t()` whose key isn't in the locale files).
     i18n: ["i18n-locale-keys-used", "static-translation-key-exists"],
+    // Styling/theming/responsive/composition have no dedicated lint rule — they're front-loaded
+    // via buildConventionGuides (like api-service), so an empty rule list here.
+    "design-tokens": [],
+    theming: [],
+    responsive: [],
+    // Accessibility maps to the eslint-plugin-jsx-a11y rules the gate runs as ERRORS, so the guide
+    // PUSHes the moment the model trips one (bare names — topicForRule strips the jsx-a11y/ prefix).
+    accessibility: [
+      "no-static-element-interactions",
+      "click-events-have-key-events",
+      "no-noninteractive-element-interactions",
+      "label-has-associated-control",
+      "interactive-supports-focus",
+      "alt-text",
+      "anchor-has-content",
+      "heading-has-content",
+      "aria-props",
+      "aria-role",
+      "aria-unsupported-elements",
+      "role-has-required-aria-props",
+      "role-supports-aria-props",
+      "no-redundant-roles",
+      "anchor-is-valid",
+      "img-redundant-alt",
+    ],
+    "components-ui": [],
   };
 
 const GUIDES: Readonly<Record<ConventionTopic, string>> = {
@@ -303,6 +334,53 @@ const GUIDES: Readonly<Record<ConventionTopic, string>> = {
     "functionality the feature needs (a hollow list-only page), it's pure churn you'll re-add, and the " +
     "build's i18n edit-guard VETOES a net deletion of session-authored keys anyway. (Removal is only for " +
     "a genuinely obsolete pre-existing key, or a balanced rename that adds the replacement in the same edit.)",
+  "design-tokens":
+    "DESIGN TOKENS (boringstack). NEVER hardcode a color — no hex/rgb, no named colors, no arbitrary " +
+    "`bg-[#…]`. Every color is a CSS-variable design token exposed as a BARE Tailwind class; pick the " +
+    "token whose ROLE matches: `bg-background`/`text-foreground` (page), `bg-card`/`bg-panel` " +
+    "(containers/surfaces), `text-muted-foreground` (secondary/de-emphasized text), `border-border` and " +
+    "`border-border-strong/40` (dividers — the `/40` opacity variant for subtlety), " +
+    "`bg-primary text-primary-ink hover:bg-primary-strong` (primary CTA), `bg-secondary`/`bg-accent` " +
+    "(secondary / highlight), `bg-destructive text-destructive-foreground` (delete/danger), `text-success` " +
+    "(success), `ring-ring` (focus ring), `rounded-md`/`rounded-xl` (the `--radius` scale), `font-sans` " +
+    "(Inter — the default) / `font-mono`. Spacing/sizing use the normal Tailwind scale. A raw color value " +
+    "is a design-system violation — there is a token for every role.",
+  theming:
+    "THEMING (boringstack). Light/dark is DATA-ATTRIBUTE driven: tokens flip on " +
+    '`<html data-theme="dark">`, so a token class (`bg-background`, `text-foreground`, `bg-card`) is ' +
+    "AUTOMATICALLY correct in BOTH themes. NEVER write a `dark:` Tailwind variant (`dark:bg-…`) — it is " +
+    "banned (AGENT_CONTRACT) and redundant; the token already switches. Do not read or set the theme " +
+    "yourself — the `useTheme()` hook + the existing ThemeToggle own it. To test both themes, toggle " +
+    '`document.documentElement.setAttribute("data-theme", "dark")` and assert token-classed elements ' +
+    "still render; never assert a literal color value.",
+  responsive:
+    "RESPONSIVE (boringstack). Mobile-first: an UNPREFIXED class is the MOBILE style; add `sm:`/`md:`/`lg:` " +
+    "for larger screens (`px-4 lg:px-6`, `grid-cols-1 md:grid-cols-2`, `flex-col md:flex-row`). `md:` is the " +
+    "primary layout breakpoint. Every page MUST be usable at 375px wide — never fix a px width that " +
+    "overflows small screens; use `w-full`/`max-w-*` + breakpoint prefixes. NAV pattern: the sidebar is " +
+    '`hidden md:flex` on desktop with a `Sheet` drawer (`@/components/ui/sheet`, `side="left"`) for mobile ' +
+    "— REUSE that, don't invent a nav. For layout INSIDE a component, container queries (`@container`) are " +
+    "available (see the Card header).",
+  accessibility:
+    "ACCESSIBILITY (boringstack). The gate runs `eslint-plugin-jsx-a11y` as ERRORS — satisfy it on the " +
+    "first draft, don't discover it at the gate. An icon-only button needs an `aria-label`; a DECORATIVE " +
+    'icon (lucide) needs `aria-hidden="true"`; screen-reader-only text is `className="sr-only"`; every ' +
+    "heading/anchor must have content; a `<label>` must link its control (`htmlFor`+`id`, or use the " +
+    "`Label`+`Form` primitives). NEVER attach `onClick` to a `<div>`/`<span>` (no-static-element-" +
+    'interactions / click-events-have-key-events) — use `<button type="button">` or the `Button` ' +
+    "primitive so keyboard + focus come for free. STRUCTURE with semantic landmarks — `<nav aria-label=…>`, " +
+    '`<main>`, `<header>`, `<section>` — and mark the active nav link `aria-current="page"`. Prefer Radix ' +
+    "primitives (Dialog/Tabs/DropdownMenu/Switch) over hand-rolled widgets: they ship focus-trap, roles, " +
+    "and keyboard handling already.",
+  "components-ui":
+    "COMPONENTS (boringstack). Prefer the ready primitives in `@/components/ui/` — Button, Input, Label, " +
+    "Form (react-hook-form), Card (+Header/Title/Content/Footer), Dialog, Sheet, DropdownMenu, Popover, " +
+    "Tabs, Switch, ScrollArea, Skeleton, Sonner (toast) — over hand-built markup: they are already " +
+    "accessible (Radix) and themed (tokens). Compose classNames with the `cn()` helper (tailwind-merge + " +
+    "clsx) — NEVER string-concatenate or ternary a className. Add a VARIANT to a primitive via its `cva` " +
+    "config; do not fork it. `asChild` renders a primitive AS another element (e.g. `<Button asChild>` " +
+    "wrapping a router `Link`). These `src/components/ui/` primitives are EXEMPT from component-anatomy — " +
+    "import them, never recreate them under a feature.",
 };
 
 /** The guide for a topic (the exact string pushed or pulled). */
