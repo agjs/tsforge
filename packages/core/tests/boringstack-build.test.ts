@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Exec } from "../src/loop/boringstack/exec";
@@ -852,9 +853,10 @@ describe("runBoringstackBuild", () => {
   });
 
   test("an infra-aborted build with a home slice leaves LoginPage.constants UNMUTATED", async () => {
-    // The redirect wiring runs AFTER the infra fail-closed + both pristine-baseline captures.
-    // So an infra-aborted build must NOT have mutated the clone. Moving the wiring back above the
-    // infra return (or above captureMetaBaseline) would rewrite the file here → this test fails.
+    // Locks ONE ordering edge: the wiring runs AFTER the infra fail-closed return (an infra abort
+    // never reaches captureMetaBaseline, so this test does NOT speak to the meta-baseline ordering —
+    // the "wires the redirect AFTER the pristine meta-baseline is captured" test below locks that).
+    // Moving the wiring back above the infra return would rewrite the file here → this test fails.
     const dir = await mkdtemp(join(tmpdir(), "bs-home-infra-"));
 
     try {
@@ -919,6 +921,91 @@ describe("runBoringstackBuild", () => {
       expect(res.status).toBe("needs-infra");
       // The clone was NOT mutated by the aborted build.
       expect(await readFile(constsPath, "utf-8")).toBe(original);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("wires the redirect AFTER the pristine meta-baseline is captured (ordering lock)", async () => {
+    // The meta-baseline must be a PRISTINE snapshot of the clone; if the redirect were rewritten
+    // BEFORE captureMetaBaseline, the baseline would bake in the mutation (a false-green class). We
+    // observe the file AT capture time via an instrumented host: it must still read /dashboard then,
+    // and only be repointed to /task by the end. Moving the wiring above captureMetaBaseline flips
+    // the at-capture assertion → this test fails.
+    const dir = await mkdtemp(join(tmpdir(), "bs-home-order-"));
+
+    try {
+      const constsPath = join(
+        dir,
+        "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts"
+      );
+
+      await mkdir(join(constsPath, ".."), { recursive: true });
+      await writeFile(
+        constsPath,
+        'export const DEFAULT_REDIRECT_TO = "/dashboard";\n',
+        "utf-8"
+      );
+
+      const plan: IProductPlan = {
+        product: "A todo app",
+        slices: [
+          {
+            entity: {
+              id: "Task",
+              desc: "a task",
+              fields: [{ name: "title", type: "string" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list", "form"],
+              action: "add a task",
+              shows: ["title"],
+              nav: "Today",
+              layout: "app-sidebar",
+              home: true,
+            },
+            verification: {
+              mustRemainTrue: ["auth"],
+              mustNotHappen: ["no title"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      const base = createHost();
+      let atMetaCapture = "";
+      const host = {
+        ...base,
+        captureMetaBaseline: () => {
+          atMetaCapture = readFileSync(constsPath, "utf-8");
+          base.captureMetaBaseline();
+        },
+      };
+
+      await runBoringstackBuild({
+        cwd: dir,
+        goal: "todo app",
+        host,
+        evaluator: createEvaluator(),
+        exec: createExec(),
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      // The meta-baseline saw the PRISTINE redirect (wiring had not run yet).
+      expect(atMetaCapture).toContain(
+        'export const DEFAULT_REDIRECT_TO = "/dashboard";'
+      );
+      // And the wiring DID run afterwards, repointing the live redirect.
+      expect(await readFile(constsPath, "utf-8")).toContain(
+        'export const DEFAULT_REDIRECT_TO = "/task";'
+      );
+      expect(base.metaBaselineCaptures.count).toBe(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
