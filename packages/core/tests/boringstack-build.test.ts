@@ -1286,6 +1286,68 @@ describe("readResourceCode — feeds the completeness judge", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("includes the shared Drizzle schema so the judge can verify belongsTo FKs", async () => {
+    // The live todos build false-PARKED: the judge was asked to verify Task "belongs to a project"
+    // but readResourceCode only gathered the feature dirs — the FK lives in the SHARED schema, which
+    // the judge never saw, so it rejected a correct feature ("schema not shown"). The schema must be
+    // in the judged code.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-schema-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/api/task"), { recursive: true });
+      await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/api/src/api/task/task.service.ts"),
+        "export const taskService = 'TASK_SVC';\n"
+      );
+      // The FK the judge needs to see, in the shared schema (outside the feature dir).
+      await writeFile(
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        'export const task = pgTable("task", { projectId: uuid().references(() => project.id) }); // FK_MARKER\n'
+      );
+
+      const code = await readResourceCode(dir, "Task");
+
+      expect(code).toContain("FK_MARKER");
+      expect(code).toContain("app.schema.ts");
+      expect(code).toContain("TASK_SVC");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the shared schema survives truncation even when the feature code is huge", async () => {
+    // The schema is the FK evidence — it must never be the block that gets truncated away. Emit a
+    // feature file large enough to blow the ~96000-char budget on its own and assert the schema
+    // (added first, counted up front) is still present.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-schematrunc-"));
+
+    try {
+      await mkdir(join(dir, "apps/api/src/api/task"), { recursive: true });
+      await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
+        "// SCHEMA_FK_MARKER\n"
+      );
+      // ~120k chars of feature code — larger than the whole budget.
+      await writeFile(
+        join(dir, "apps/api/src/api/task/task.service.ts"),
+        `// HUGE\n${"x".repeat(120000)}\n`
+      );
+
+      const code = await readResourceCode(dir, "Task");
+
+      expect(code).toContain("SCHEMA_FK_MARKER");
+      expect(code).toContain("…[truncated]");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("readResourceCode — budget + ordering (root-cause coverage)", () => {

@@ -181,10 +181,12 @@ export function scopeFor(name: string): string[] {
 
 /**
  * Read the generated resource code from the filesystem for the completeness judge.
- * Concatenates the API resource (.ts) and UI feature (.ts/.tsx/.jsx, test/story files
- * excluded) source, capped at ~96000 characters. React components (.tsx/.jsx) are ordered
- * FIRST across both apps so a large API can't exhaust the budget before the judge sees the
- * UI. Returns empty string if directories don't exist.
+ * Concatenates the shared Drizzle schema (so the judge can see the feature's table + FKs and
+ * verify `belongsTo` relationships), the API resource (.ts), and the UI feature (.ts/.tsx/.jsx,
+ * test/story files excluded) source, capped at ~96000 characters. The schema is emitted FIRST and
+ * counted against the budget up front so it is never truncated; React components (.tsx/.jsx) are
+ * ordered ahead of other feature files so a large API can't exhaust the budget before the judge
+ * sees the UI. Returns empty string if nothing exists.
  */
 export async function readResourceCode(
   cwd: string,
@@ -301,6 +303,26 @@ export async function readResourceCode(
 
   const blocks: string[] = [];
   let totalLen = 0;
+
+  // The entity's table + FOREIGN KEYS live in the SHARED Drizzle schema, not the feature
+  // dir — so a `belongsTo` relationship (the FK definition) is invisible to the feature-scoped
+  // candidates gathered above. Without it the completeness judge is asked to verify e.g.
+  // "belongs to a project" but cannot see the FK, so it false-REJECTS a fully-correct feature
+  // ("schema not shown, relationship cannot be verified") — parking a built resource the model
+  // can't fix because there is nothing to fix (observed live: the todos Project/Task build, where
+  // the DB table + task_project_id_fkey existed and worked, yet the judge parked it). Show the
+  // schema FIRST and count it against the budget up front so it is NEVER truncated away — the FK
+  // evidence must always reach the judge. Best-effort: a non-boringstack layout (or a schema not
+  // yet generated) simply has no such file and the judge sees the feature code alone, as before.
+  try {
+    const schema = await readFile(join(cwd, APP_SCHEMA_FILE), "utf-8");
+    const block = `// ${APP_SCHEMA_FILE}\n${schema}\n`;
+
+    blocks.push(block);
+    totalLen += block.length;
+  } catch {
+    // No shared schema present — skip (judge falls back to feature-only code).
+  }
 
   for (const { relPath, fullPath } of ordered) {
     const content = await readFile(fullPath, "utf-8");
