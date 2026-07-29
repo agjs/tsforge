@@ -40,9 +40,10 @@ function validValue(
   field: { name: string; type: string },
   seed: number
 ): string {
-  const isEmail = field.type === "email" || /email/i.test(field.name);
-
-  if (isEmail) {
+  // Explicit TYPE wins over name heuristics. A date-typed field must get a real date even when its
+  // name matches the email heuristic (e.g. `emailVerifiedAt`, `lastEmailSentAt`) — otherwise it gets
+  // an email string that 500s the timestamp-column insert, the exact false-park this branch fixes.
+  if (field.type === "email") {
     return `user${seed}@example.com`;
   }
 
@@ -61,6 +62,11 @@ function validValue(
     // form never closes → false e2e park. Date-only ("YYYY-MM-DD") so it stays a substring of
     // whatever timestamp representation the row cell renders back for the shows assertion.
     return "2024-06-15";
+  }
+
+  // Name-based heuristics for otherwise-untyped (string) fields.
+  if (/email/i.test(field.name)) {
+    return `user${seed}@example.com`;
   }
 
   if (/url|website/i.test(field.name)) {

@@ -581,6 +581,8 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
             { name: "dueDate", type: "date" },
             { name: "startsAt", type: "datetime" },
             { name: "loggedAt", type: "timestamp" },
+            // Name matches the email heuristic but the TYPE is a date — type must win.
+            { name: "emailVerifiedAt", type: "timestamp" },
           ],
           relationships: [],
           rules: ["title is required"],
@@ -602,13 +604,15 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
 
   const task = planToAcceptanceSpec(datePlan).entities[0];
 
-  // Cover every date-ish type the production branch handles: date, datetime, timestamp.
-  for (const name of ["dueDate", "startsAt", "loggedAt"]) {
+  // Cover every date-ish type the production branch handles, incl. a date field whose name
+  // matches the email heuristic (emailVerifiedAt) — TYPE must take precedence over name.
+  for (const name of ["dueDate", "startsAt", "loggedAt", "emailVerifiedAt"]) {
     const field = task?.fields.find((f) => f.name === name);
 
     expect(field, `expected field ${name}`).toBeDefined();
-    // NOT the generic garbage sample.
+    // NOT the generic garbage sample, and NOT an email (the name-precedence trap).
     expect(field?.valid).not.toContain(`${name}-`);
+    expect(field?.valid).not.toContain("@");
     // A real, valid calendar date (what a timestamp column accepts) — not a normalized impossible one.
     expect(isRealCalendarDate(field?.valid ?? "")).toBe(true);
   }
