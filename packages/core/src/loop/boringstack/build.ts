@@ -1028,14 +1028,6 @@ export async function runBoringstackBuild(opts: {
     return { status: "needs-infra", features: [], infra: message };
   }
 
-  // Wire the post-login landing at the PLAN level — ONCE per build, resume-safe (a resumed build
-  // that skips an already-passing home feature still applies it; it is NOT in implement()). Placed
-  // AFTER the pristine-baseline capture + infra fail-closed, so this harness mutation is never
-  // swept into the "pristine" baseline and an infra-aborted build never mutates the clone. A home
-  // slice → its route (throws if the login constants are missing — never a silent skip); no home
-  // → no-op (a fresh scaffold already defaults to /dashboard).
-  await wireHomeRedirectForPlan(cwd, approved);
-
   // Choose the GRADING baseline (infra is healthy here — the fail-closed above returned):
   //  - a persisted baseline exists → REUSE it (the pristine capture; carries its own passed
   //    bit — NEVER inferred from an empty set, which would re-announce a RED-unparseable
@@ -1120,6 +1112,15 @@ export async function runBoringstackBuild(opts: {
   if (isFreshCapture) {
     host.captureMetaBaseline();
   }
+
+  // Wire the post-login landing at the PLAN level — ONCE per build, resume-safe (a resumed build
+  // that skips an already-passing home feature still applies it; it is NOT in implement()). Placed
+  // AFTER BOTH pristine captures — the command baseline (runBoringstackGate above) AND the meta
+  // baseline (captureMetaBaseline just above) — and after the infra fail-closed, so this harness
+  // mutation is never swept into either baseline and an infra-aborted build never mutates the
+  // clone. A home slice → its route (throws if the login constants are missing — never a silent
+  // skip); no home → no-op (a fresh scaffold already defaults to /dashboard).
+  await wireHomeRedirectForPlan(cwd, approved);
 
   // Create a lookup function that maps feature ids to their plan slices
   const sliceFor = (id: string): ISlice | undefined =>

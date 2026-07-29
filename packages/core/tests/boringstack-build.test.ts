@@ -851,6 +851,79 @@ describe("runBoringstackBuild", () => {
     }
   });
 
+  test("an infra-aborted build with a home slice leaves LoginPage.constants UNMUTATED", async () => {
+    // The redirect wiring runs AFTER the infra fail-closed + both pristine-baseline captures.
+    // So an infra-aborted build must NOT have mutated the clone. Moving the wiring back above the
+    // infra return (or above captureMetaBaseline) would rewrite the file here → this test fails.
+    const dir = await mkdtemp(join(tmpdir(), "bs-home-infra-"));
+
+    try {
+      const constsPath = join(
+        dir,
+        "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts"
+      );
+      const original = 'export const DEFAULT_REDIRECT_TO = "/dashboard";\n';
+
+      await mkdir(join(constsPath, ".."), { recursive: true });
+      await writeFile(constsPath, original, "utf-8");
+
+      const plan: IProductPlan = {
+        product: "A todo app",
+        slices: [
+          {
+            entity: {
+              id: "Task",
+              desc: "a task",
+              fields: [{ name: "title", type: "string" }],
+              relationships: [],
+              rules: [],
+            },
+            ui: {
+              screens: ["list", "form"],
+              action: "add a task",
+              shows: ["title"],
+              nav: "Today",
+              layout: "app-sidebar",
+              home: true,
+            },
+            verification: {
+              mustRemainTrue: ["auth"],
+              mustNotHappen: ["no title"],
+              acceptanceCheck: "bun test",
+            },
+          },
+        ],
+      };
+
+      await writePlan(dir, plan, "approved");
+
+      // Pristine gate RED because generate:api can't reach the API → needs-infra abort.
+      const exec: Exec = async () => ({
+        code: 1,
+        stdout:
+          "::tsforge-app apps/ui::\n" +
+          "[generate:api] FAILED: fetch failed (ECONNREFUSED)",
+        stderr: "",
+      });
+
+      const res = await runBoringstackBuild({
+        cwd: dir,
+        goal: "todo app",
+        host: createHost(),
+        evaluator: createEvaluator(),
+        exec,
+        generate: async () => undefined,
+        generateUi: async () => undefined,
+      });
+
+      expect(res.status).toBe("needs-infra");
+      // The clone was NOT mutated by the aborted build.
+      expect(await readFile(constsPath, "utf-8")).toBe(original);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("fails CLOSED (needs-infra) when the pristine gate can't reach the API's OpenAPI spec", async () => {
     const dir = await mkdtemp(join(tmpdir(), "bs-"));
 
