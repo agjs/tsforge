@@ -50,6 +50,19 @@ function validValue(
     return String(seed + 1);
   }
 
+  if (
+    field.type === "date" ||
+    field.type === "datetime" ||
+    field.type === "timestamp"
+  ) {
+    // A real calendar date. Date-typed fields land in a DB date/timestamp column, so the generic
+    // `${name}-${seed}` sample would pass string-level validation (Zod z.string / TypeBox t.String)
+    // yet throw at the insert ("invalid input syntax for type timestamp") → the create 500s and the
+    // form never closes → false e2e park. Date-only ("YYYY-MM-DD") so it stays a substring of
+    // whatever timestamp representation the row cell renders back for the shows assertion.
+    return "2024-06-15";
+  }
+
   if (/url|website/i.test(field.name)) {
     return `https://example${seed}.com`;
   }

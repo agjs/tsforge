@@ -540,3 +540,52 @@ test("fieldIsMentioned matches on WORD BOUNDARIES, not raw substring", () => {
   // And it isn't tripped by an unrelated word either.
   expect(fieldIsMentioned(acceptField("name"), "the total amount")).toBe(false);
 });
+
+test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (not a `${name}-${seed}` string a timestamp column rejects)", () => {
+  // Regression: a `date`/`datetime`/`timestamp` field used to fall through to the generic
+  // "${name}-${seed}" sample (e.g. "dueDate-2"). That passes z.string()/t.String() but the app
+  // inserts it into a timestamptz column, where Postgres throws "invalid input syntax for type
+  // timestamp" → the create 500s and the form never closes → false e2e park.
+  const datePlan: IProductPlan = {
+    product: "Tracker",
+    slices: [
+      {
+        entity: {
+          id: "Task",
+          desc: "t",
+          fields: [
+            { name: "title", type: "string" },
+            { name: "dueDate", type: "date" },
+            { name: "startsAt", type: "datetime" },
+          ],
+          relationships: [],
+          rules: ["title is required"],
+        },
+        ui: {
+          screens: ["list", "form"],
+          action: "add",
+          shows: ["title", "dueDate"],
+          nav: "Tasks",
+        },
+        verification: {
+          mustRemainTrue: ["x"],
+          mustNotHappen: ["a task can be saved without a title"],
+          acceptanceCheck: "create a task",
+        },
+      },
+    ],
+  };
+
+  const task = planToAcceptanceSpec(datePlan).entities[0];
+
+  for (const name of ["dueDate", "startsAt"]) {
+    const field = task?.fields.find((f) => f.name === name);
+
+    expect(field, `expected field ${name}`).toBeDefined();
+    // NOT the generic garbage sample.
+    expect(field?.valid).not.toContain(`${name}-`);
+    // A real, parseable YYYY-MM-DD date (what a timestamp column accepts).
+    expect(field?.valid).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(Number.isNaN(new Date(field?.valid ?? "").getTime())).toBe(false);
+  }
+});
