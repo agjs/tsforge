@@ -18,6 +18,7 @@ import {
   APP_SCHEMA_FILE,
   LOCALE_GLOB,
   homeRouteForPlan,
+  wireHomeRedirectForPlan,
 } from "../src/loop/boringstack/build";
 import type {
   IAcceptanceRunner,
@@ -149,6 +150,31 @@ describe("homeRouteForPlan", () => {
 
   test("returns null when no slice is home (login keeps the /dashboard default)", () => {
     expect(homeRouteForPlan(plan([mkSlice("Note", false)]))).toBeNull();
+  });
+
+  test("wireHomeRedirectForPlan APPLIES the redirect for a home plan, skips a home-less one", async () => {
+    // Guards that the plan-level wiring actually FIRES (deleting the runBoringstackBuild call would
+    // otherwise leave validate green while restoring the resume false-green). Injected applier.
+    const calls: { cwd: string; route: string }[] = [];
+
+    const apply = async (cwd: string, route: string): Promise<void> => {
+      calls.push({ cwd, route });
+    };
+
+    await wireHomeRedirectForPlan(
+      "/repo",
+      plan([mkSlice("Note", false), mkSlice("Task", true)]),
+      apply
+    );
+    expect(calls).toEqual([{ cwd: "/repo", route: "/task" }]);
+
+    await wireHomeRedirectForPlan(
+      "/repo",
+      plan([mkSlice("Note", false)]),
+      apply
+    );
+    // No home slice → no additional call.
+    expect(calls).toEqual([{ cwd: "/repo", route: "/task" }]);
   });
 });
 

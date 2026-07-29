@@ -898,6 +898,26 @@ export function homeRouteForPlan(plan: IProductPlan): string | null {
 }
 
 /**
+ * Wire the plan's post-login landing once per build: if a slice is `home`, point
+ * DEFAULT_REDIRECT_TO at its route. Called from runBoringstackBuild at the plan level (resume-safe
+ * — a resumed build that skips an already-passing home feature still applies it). `apply` is
+ * injectable so the "the wiring actually fires" behaviour is unit-testable without touching the
+ * real filesystem; it defaults to the FS writer, which throws (never silently skips) on a missing
+ * login-constants file. No home slice → no-op (login keeps the scaffold default).
+ */
+export async function wireHomeRedirectForPlan(
+  cwd: string,
+  plan: IProductPlan,
+  apply: (cwd: string, route: string) => Promise<void> = applyHomeRedirect
+): Promise<void> {
+  const route = homeRouteForPlan(plan);
+
+  if (route !== null) {
+    await apply(cwd, route);
+  }
+}
+
+/**
  * Run the BoringStack build driver: require an approved plan, derive features
  * from its slices, and drive them through the greenfield loop
  * (implement → evaluate → persist).
@@ -960,14 +980,9 @@ export async function runBoringstackBuild(opts: {
 
   // Wire the post-login landing at the PLAN level — ONCE per build, resume-safe. A resumed build
   // skips already-passing features, so doing this inside implement() could leave DEFAULT_REDIRECT_TO
-  // at /dashboard while final acceptance goes green (a false-green). applyHomeRedirect is idempotent
-  // and throws if the login constants are missing (never a silent skip). No home slice → no-op
-  // (login keeps the scaffold default).
-  const homeRoute = homeRouteForPlan(approved);
-
-  if (homeRoute !== null) {
-    await applyHomeRedirect(cwd, homeRoute);
-  }
+  // at /dashboard while final acceptance goes green (a false-green). Idempotent; throws (never a
+  // silent skip) if the login constants are missing; no-op when no slice is home.
+  await wireHomeRedirectForPlan(cwd, approved);
 
   const state: IGreenfieldState = {
     goal,

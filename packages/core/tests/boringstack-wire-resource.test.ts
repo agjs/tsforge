@@ -271,6 +271,21 @@ describe("wireHomeRedirect", () => {
       "DEFAULT_REDIRECT_TO not found"
     );
   });
+
+  test("rewrites the LIVE export, not a commented-out one before it (the anchor's whole point)", () => {
+    // The line-start anchor exists so a `// export const DEFAULT_REDIRECT_TO …` comment can't be
+    // rewritten while the real export stays /dashboard — the exact silent false-green.
+    const src =
+      '// export const DEFAULT_REDIRECT_TO = "/old-idea";\n' +
+      'export const DEFAULT_REDIRECT_TO = "/dashboard";\n';
+    const out = wireHomeRedirect(src, "/task");
+
+    // The commented line is untouched…
+    expect(out).toContain('// export const DEFAULT_REDIRECT_TO = "/old-idea";');
+    // …and the LIVE export is the one repointed.
+    expect(out).toContain('export const DEFAULT_REDIRECT_TO = "/task";');
+    expect(out).not.toContain('DEFAULT_REDIRECT_TO = "/dashboard"');
+  });
 });
 
 describe("applyHomeRedirect (fs wrapper)", () => {
