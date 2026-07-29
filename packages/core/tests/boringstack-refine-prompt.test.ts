@@ -442,12 +442,54 @@ describe("refinePrompt", () => {
     };
     const p = refinePrompt(feature, slice);
 
-    // Home → the post-login redirect points at THIS feature's route (/task).
+    // Home → the note references the auto-wired redirect at THIS feature's route (/task) and tells
+    // the model NOT to edit it (the harness owns DEFAULT_REDIRECT_TO deterministically).
     expect(p).toContain("DEFAULT_REDIRECT_TO");
-    expect(p).toContain('"/task"');
-    expect(p).toContain("LoginPage.constants.ts");
+    expect(p).toContain("/task");
+    expect(p).toContain("AUTOMATICALLY");
+    expect(p).toContain("Do NOT edit");
+    // The model is NOT told to hand-edit the login constants file (deterministic wiring).
+    expect(p).not.toContain("LoginPage.constants.ts");
     // Primary app view → its nav link goes to the top-of-sidebar app group.
     expect(p).toContain("primary app nav group");
+  });
+
+  it("defaults a slice with no layout field to app-sidebar (primary nav, no home note) — backward compatible", () => {
+    const feature: IFeature = {
+      id: "Bookmark",
+      desc: "a link",
+      passes: false,
+      attempts: 0,
+    };
+    const slice: ISlice = {
+      entity: {
+        id: "Bookmark",
+        desc: "a link",
+        fields: [{ name: "url", type: "string" }],
+        relationships: ["belongsTo User"],
+        rules: ["url required"],
+      },
+      ui: {
+        // No `layout`, no `home` — the common backward-compatible case.
+        screens: ["list", "form"],
+        action: "save → list",
+        shows: ["url"],
+        nav: "Bookmarks",
+      },
+      verification: {
+        mustRemainTrue: ["auth"],
+        mustNotHappen: ["no url"],
+        acceptanceCheck: "bun test",
+      },
+    };
+    const p = refinePrompt(feature, slice);
+
+    // Treated as the default app-sidebar primary view.
+    expect(p).toContain("primary app nav group");
+    // No home → no landing note (phrase unique to the home block).
+    expect(p).not.toContain("post-login redirect");
+    // Not a settings feature.
+    expect(p).not.toContain("DEMOTED config area");
   });
 
   it("puts a settings-layout feature in the demoted Settings group and emits no home redirect", () => {

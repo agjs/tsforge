@@ -135,6 +135,25 @@ test("parsePlan accepts exactly one home slice", () => {
   expect(parsed).not.toBeNull();
 });
 
+test("parsePlan rejects a non-boolean home value", () => {
+  expect(parsePlan(planText([sliceJson("A", { home: "true" })]))).toBeNull();
+  expect(parsePlan(planText([sliceJson("A", { home: 1 })]))).toBeNull();
+});
+
+test("parsePlan accepts zero home slices (login falls back to the scaffold default)", () => {
+  expect(
+    parsePlan(planText([sliceJson("A", {}), sliceJson("B", {})]))
+  ).not.toBeNull();
+});
+
+test("parsePlan accepts a slice omitting both layout and home (backward compatible)", () => {
+  const parsed = parsePlan(planText([sliceJson("A", {})]));
+
+  expect(parsed).not.toBeNull();
+  expect(parsed?.plan.slices[0]?.ui.layout).toBeUndefined();
+  expect(parsed?.plan.slices[0]?.ui.home).toBeUndefined();
+});
+
 test("a malformed artifact parses to null (reject-by-default)", () => {
   expect(parsePlan("not a plan")).toBeNull();
 });

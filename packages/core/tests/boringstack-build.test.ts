@@ -17,7 +17,6 @@ import {
   saveBaseline,
   APP_SCHEMA_FILE,
   LOCALE_GLOB,
-  AUTH_REDIRECT_FILE,
 } from "../src/loop/boringstack/build";
 import type {
   IAcceptanceRunner,
@@ -426,15 +425,6 @@ describe("scopeFor", () => {
     expect(scopeFor("Company")).toContain(
       "apps/ui/src/components/core/AppSidebar/AppSidebar.test.tsx"
     );
-  });
-
-  test("scopes in the login redirect ONLY for the app-home feature", () => {
-    // The home feature (plan `ui.home`) repoints DEFAULT_REDIRECT_TO at its own route, so it —
-    // and only it — gets LoginPage.constants in scope. Non-home features must not touch the landing.
-    expect(scopeFor("Task", true)).toContain(AUTH_REDIRECT_FILE);
-    expect(scopeFor("Task", false)).not.toContain(AUTH_REDIRECT_FILE);
-    // Default (no flag) is non-home — backward compatible with every existing caller/plan.
-    expect(scopeFor("Task")).not.toContain(AUTH_REDIRECT_FILE);
   });
 });
 

@@ -32,10 +32,10 @@ function layoutGuidance(slice: ISlice): string {
 
   if (slice.ui.home === true) {
     lines.push(
-      "**Home**: this feature is the app's landing view. Set `DEFAULT_REDIRECT_TO` to " +
-        `\`"${route}"\` in ` +
-        "`apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts` so a signed-in " +
-        "user lands here instead of `/dashboard`. ONLY this (home) feature edits that file."
+      "**Home**: this feature is the app's landing view — the harness AUTOMATICALLY points the " +
+        `post-login redirect (\`DEFAULT_REDIRECT_TO\`) at its route (\`${route}\`). Do NOT edit ` +
+        "the login page or that constant yourself; just build this feature well as the primary " +
+        "app view the user lands in."
     );
   }
 

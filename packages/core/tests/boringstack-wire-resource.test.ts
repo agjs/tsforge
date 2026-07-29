@@ -6,6 +6,7 @@ import {
   wireTestHelperFile,
   wireUiRouteFile,
   addFeatureI18nKeys,
+  wireHomeRedirect,
 } from "../src/loop/boringstack/wire-resource";
 
 /** A minimal stand-in for boringstack's SPA router, carrying the anchors the
@@ -235,5 +236,35 @@ export type { IUser } from "../../src/api/users/users.types";
     expect(() =>
       wireTestHelperFile("export {} from 'elsewhere';", "X")
     ).toThrow("Anchor not found");
+  });
+});
+
+describe("wireHomeRedirect", () => {
+  test("repoints DEFAULT_REDIRECT_TO at the home feature's route", () => {
+    const src = 'export const DEFAULT_REDIRECT_TO = "/dashboard";\n';
+
+    expect(wireHomeRedirect(src, "/task")).toBe(
+      'export const DEFAULT_REDIRECT_TO = "/task";\n'
+    );
+  });
+
+  test("is idempotent + self-healing regardless of the current value", () => {
+    const already = 'export const DEFAULT_REDIRECT_TO = "/task";';
+
+    expect(wireHomeRedirect(already, "/task")).toBe(already);
+    // A different current value is corrected, not appended.
+    expect(
+      wireHomeRedirect(
+        'export const DEFAULT_REDIRECT_TO = "/project";',
+        "/task"
+      )
+    ).toBe('export const DEFAULT_REDIRECT_TO = "/task";');
+  });
+
+  test("throws (never silently no-ops) if the anchor is missing", () => {
+    // A silent no-op would leave the landing at /dashboard — the false-green this determinism fixes.
+    expect(() => wireHomeRedirect("export const OTHER = 1;", "/task")).toThrow(
+      "DEFAULT_REDIRECT_TO not found"
+    );
   });
 });

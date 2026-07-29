@@ -101,6 +101,28 @@ test("PULL_CONVENTIONS_TOOL enum stays in sync with conventionTopics()", () => {
   expect([...enumTopics].sort()).toEqual([...conventionTopics()].sort());
 });
 
+// Explicit, diff-visible guard for the 5 design-system topics this change added: each must be
+// pullable — present in BOTH the runtime guide registry and the hand-maintained pull-tool enum —
+// so validate can't stay green while the tool schema and registry diverge for these topics.
+test("the new design-system topics are in both the guide registry and the pull enum", () => {
+  const enumTopics =
+    PULL_CONVENTIONS_TOOL.function.parameters.properties.topic.enum;
+  const registry = conventionTopics();
+
+  for (const topic of [
+    "design-tokens",
+    "theming",
+    "responsive",
+    "accessibility",
+    "components-ui",
+  ]) {
+    // `.some` (not `.toContain`) so the string literal compares cleanly against the typed
+    // ConventionTopic[] / enum tuple without a cast.
+    expect(registry.includes(topic)).toBe(true);
+    expect(enumTopics.includes(topic)).toBe(true);
+  }
+});
+
 // The STATE guide must NOT tell the model to use raw fetch (it contradicts DATA-FETCHING's
 // fetch ban) — the aggregate front-load test can't catch this because the data-fetching guide
 // separately contains the api-client string.
