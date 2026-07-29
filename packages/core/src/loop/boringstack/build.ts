@@ -141,6 +141,13 @@ export const APP_ROUTES_FILE = "apps/ui/src/app/router/routes.tsx";
 export const APP_SIDEBAR_TEST_FILE =
   "apps/ui/src/components/core/AppSidebar/AppSidebar.test.tsx";
 
+/** The login page's constants, which hold `DEFAULT_REDIRECT_TO` (the post-login landing route).
+ *  Scoped in ONLY for the feature marked `ui.home` in the plan, so it can point the redirect at
+ *  its own route (the app "home") instead of the scaffold default `/dashboard`. Non-home features
+ *  never get this in scope, so they can't touch the landing. */
+export const AUTH_REDIRECT_FILE =
+  "apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts";
+
 /**
  * The feature-EXCLUSIVE directories the model may FULLY REWRITE — its own API resource, its API
  * tests, and its UI feature. These are safe rewrite targets because no other feature owns them.
@@ -158,9 +165,12 @@ export function featureOwnedGlobs(name: string): string[] {
   ];
 }
 
-export function scopeFor(name: string): string[] {
+export function scopeFor(name: string, isHome = false): string[] {
   return [
     ...featureOwnedGlobs(name),
+    // The app "home" feature (plan `ui.home`) may repoint the post-login redirect at its own
+    // route; only it gets the login constants in scope (see AUTH_REDIRECT_FILE).
+    ...(isHome ? [AUTH_REDIRECT_FILE] : []),
     // The entity's table + columns live in the shared app schema (not the resource
     // dir), so a greenfield build must let the model add its domain columns there.
     APP_SCHEMA_FILE,
@@ -570,7 +580,9 @@ export function boringstackDeps(opts: {
       await generate(cwd, feature.id, exec);
       await genUi(cwd, feature.id, exec);
 
-      host.setScope(scopeFor(feature.id));
+      host.setScope(
+        scopeFor(feature.id, sliceFor?.(feature.id)?.ui.home === true)
+      );
       // The editable file the expert repairs if a stall's errors are all out of
       // scope (locked consumers of this feature's types) — its service file.
       host.setExpertRescueTarget((await rescueFileFor(cwd, feature)) ?? "");

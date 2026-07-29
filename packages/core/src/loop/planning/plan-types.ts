@@ -10,11 +10,29 @@ export interface IEntitySpec {
   readonly rules: readonly string[];
 }
 
+/** The modern-layout archetypes the harness understands. The set is intentionally broad so a
+ *  plan is never locked into too few options; v1 IMPLEMENTS `app-sidebar` (the default) and
+ *  `settings`, and the rest are schema-valid but fall back to `app-sidebar` + guidance until a
+ *  build needs them (see the layout wiring in refine-prompt). */
+export type LayoutArchetype =
+  | "app-sidebar" // left sidebar + header content shell (default SaaS look)
+  | "app-topnav" // horizontal top-nav + content
+  | "settings" // demoted secondary/config area (profile, account, prefs)
+  | "focused" // centered single-column (auth, onboarding)
+  | "public"; // unauthenticated marketing/landing
+
 export interface IUiIntent {
   readonly screens: readonly ("list" | "detail" | "form" | "dashboard")[];
   readonly action: string; // primary user action → observable result
   readonly shows: readonly string[];
   readonly nav: string;
+  /** Which layout archetype this feature's UI uses. Default `app-sidebar`. Drives sidebar
+   *  grouping (primary app nav vs a demoted Settings group) — NOT a separate auth boundary in
+   *  v1 (both stay ProtectedRoute + AppShell). */
+  readonly layout?: LayoutArchetype;
+  /** This feature's route is the post-login landing (the app "home"). At most ONE per plan; if
+   *  none is marked, login falls back to the scaffold default (`/dashboard`). */
+  readonly home?: boolean;
 }
 
 export interface IVerificationContract {

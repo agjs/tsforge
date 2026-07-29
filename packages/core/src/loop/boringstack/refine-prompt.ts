@@ -2,6 +2,46 @@ import type { IFeature } from "../greenfield/greenfield.types";
 import type { ISlice } from "../planning/plan-types";
 import { toCamelCase } from "./case";
 
+/** Per-slice layout wiring: where the feature's nav link goes (primary app group vs a demoted
+ *  Settings group) and, if it's the app home, the post-login redirect. v1 implements app-sidebar
+ *  + settings; the other archetypes build as app-sidebar for now (the enum is broad on purpose). */
+function layoutGuidance(slice: ISlice): string {
+  const layout = slice.ui.layout ?? "app-sidebar";
+  const route = `/${toCamelCase(slice.entity.id)}`;
+  const lines: string[] = [];
+
+  if (layout === "settings") {
+    lines.push(
+      "**Layout**: `settings` — a DEMOTED config area. Add this feature's sidebar link to a " +
+        "secondary **Settings** group in `AppSidebar` (grouped with the account/profile/settings " +
+        "links, below the primary app nav), NOT the primary app nav group."
+    );
+  } else {
+    const fallback =
+      layout === "app-sidebar"
+        ? ""
+        : ` (\`${layout}\` has no distinct shell yet — build it as \`app-sidebar\` for now)`;
+
+    lines.push(
+      "**Layout**: `app-sidebar` — a PRIMARY app view" +
+        fallback +
+        ". Add its sidebar link to the primary app nav group at the TOP of `AppSidebar`, above the " +
+        "Settings/account links."
+    );
+  }
+
+  if (slice.ui.home === true) {
+    lines.push(
+      "**Home**: this feature is the app's landing view. Set `DEFAULT_REDIRECT_TO` to " +
+        `\`"${route}"\` in ` +
+        "`apps/ui/src/features/auth/components/LoginPage/LoginPage.constants.ts` so a signed-in " +
+        "user lands here instead of `/dashboard`. ONLY this (home) feature edits that file."
+    );
+  }
+
+  return lines.join("\n\n");
+}
+
 function productContextSection(slice: ISlice): string {
   const fieldsList = slice.entity.fields
     .map((f) => {
@@ -51,6 +91,8 @@ ${rulesList}
 **Display**: ${showsList}
 
 **Navigation**: ${slice.ui.nav}
+
+${layoutGuidance(slice)}
 
 ### Verification Contract
 

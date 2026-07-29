@@ -411,6 +411,81 @@ describe("refinePrompt", () => {
     expect(p).toContain("**Display** list is for rendering only");
   });
 
+  it("wires the app-home landing redirect + primary-nav placement when the slice is app-sidebar + home", () => {
+    const feature: IFeature = {
+      id: "Task",
+      desc: "a task",
+      passes: false,
+      attempts: 0,
+    };
+    const slice: ISlice = {
+      entity: {
+        id: "Task",
+        desc: "a task",
+        fields: [{ name: "title", type: "string" }],
+        relationships: ["belongsTo User"],
+        rules: ["title required"],
+      },
+      ui: {
+        screens: ["list", "form"],
+        action: "add → list",
+        shows: ["title"],
+        nav: "Tasks",
+        layout: "app-sidebar",
+        home: true,
+      },
+      verification: {
+        mustRemainTrue: ["auth"],
+        mustNotHappen: ["no title"],
+        acceptanceCheck: "bun test",
+      },
+    };
+    const p = refinePrompt(feature, slice);
+
+    // Home → the post-login redirect points at THIS feature's route (/task).
+    expect(p).toContain("DEFAULT_REDIRECT_TO");
+    expect(p).toContain('"/task"');
+    expect(p).toContain("LoginPage.constants.ts");
+    // Primary app view → its nav link goes to the top-of-sidebar app group.
+    expect(p).toContain("primary app nav group");
+  });
+
+  it("puts a settings-layout feature in the demoted Settings group and emits no home redirect", () => {
+    const feature: IFeature = {
+      id: "NotificationPrefs",
+      desc: "prefs",
+      passes: false,
+      attempts: 0,
+    };
+    const slice: ISlice = {
+      entity: {
+        id: "NotificationPrefs",
+        desc: "prefs",
+        fields: [{ name: "emailEnabled", type: "boolean" }],
+        relationships: ["belongsTo User"],
+        rules: ["belongs to a user"],
+      },
+      ui: {
+        screens: ["form"],
+        action: "save prefs",
+        shows: ["emailEnabled"],
+        nav: "Notification Preferences",
+        layout: "settings",
+      },
+      verification: {
+        mustRemainTrue: ["auth"],
+        mustNotHappen: ["prefs without a user"],
+        acceptanceCheck: "bun test",
+      },
+    };
+    const p = refinePrompt(feature, slice);
+
+    expect(p).toContain("DEMOTED config area");
+    expect(p).toContain("**Settings** group");
+    // Not the app home → no redirect rewrite instruction.
+    expect(p).not.toContain("DEFAULT_REDIRECT_TO");
+  });
+
   it("refinePrompt without a slice is unchanged (contains id + desc)", () => {
     const p = refinePrompt({
       id: "Bookmark",
