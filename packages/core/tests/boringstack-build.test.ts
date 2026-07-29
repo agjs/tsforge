@@ -12,6 +12,7 @@ import {
   runBoringstackBuild,
   scopeFor,
   readResourceCode,
+  sliceSchemaForJudge,
   verifyAcceptance,
   e2eParkReason,
   loadBaseline,
@@ -1349,10 +1350,11 @@ describe("readResourceCode — feeds the completeness judge", () => {
     }
   });
 
-  test("an oversized schema is itself bounded (never returns unbounded evidence)", async () => {
-    // The schema gets first claim on the budget, but must still respect the ~96000-char cap — a
-    // many-entity app accretes a table per feature into app.schema.ts, so it can't be pushed
-    // unchecked. If the schema alone overflows, it's truncated rather than dropped or unbounded.
+  test("an oversized schema is bounded AND still surfaces THIS feature's FK + feature code", async () => {
+    // The realistic large-schema shape: tables accrete in build order, so the feature under review
+    // sits near the END. The schema must (a) stay bounded, (b) NOT starve the feature code, and
+    // (c) still surface the feature's own table + FK (not be truncated head-first). This is the
+    // exact regression the naive head-cap introduced and the panel caught.
     const dir = await mkdtemp(join(tmpdir(), "tsforge-rrc-bigschema-"));
 
     try {
@@ -1360,10 +1362,15 @@ describe("readResourceCode — feeds the completeness judge", () => {
       await mkdir(join(dir, "apps/api/src/clients/postgres/schema"), {
         recursive: true,
       });
-      // ~130k-char schema — larger than the whole budget on its own.
+      // A huge schema with MANY earlier tables, and THIS feature's table (with its FK) at the very
+      // end — where accretion puts it. Head-first truncation would drop TASK_FK_MARKER.
+      const earlierTables = `// early tables\n${"e".repeat(130000)}\n`;
+      const taskTable =
+        'export const task = app.table("task", { projectId: uuid().references(() => project.id) }); // TASK_FK_MARKER\n';
+
       await writeFile(
         join(dir, "apps/api/src/clients/postgres/schema/app.schema.ts"),
-        `// SCHEMA_HEAD_MARKER\n${"s".repeat(130000)}\n`
+        `${earlierTables}${taskTable}`
       );
       await writeFile(
         join(dir, "apps/api/src/api/task/task.service.ts"),
@@ -1372,14 +1379,43 @@ describe("readResourceCode — feeds the completeness judge", () => {
 
       const code = await readResourceCode(dir, "Task");
 
-      // Bounded: total stays within cap + the truncation marker (a small constant).
-      expect(code.length).toBeLessThan(96000 + 100);
-      // The head of the schema (where its own table/FK sits) is preserved.
-      expect(code).toContain("SCHEMA_HEAD_MARKER");
+      // (a) Bounded — schema is capped at half the budget, so total stays well within the cap.
+      expect(code.length).toBeLessThan(96000 + 200);
+      // (b) Feature implementation is NOT starved — the judge still sees the code it must evaluate.
+      expect(code).toContain("FEATURE_MARKER");
+      // (c) THIS feature's table + FK survive despite living at the tail of a huge schema.
+      expect(code).toContain("TASK_FK_MARKER");
       expect(code).toContain("…[truncated]");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("sliceSchemaForJudge — windows a large schema around the feature's own table", () => {
+  test("returns the whole schema unchanged when it fits the budget", () => {
+    const schema = 'export const task = app.table("task", {});\n';
+
+    expect(sliceSchemaForJudge(schema, "task", 96000)).toBe(schema);
+  });
+
+  test("windows around the feature's table (near the end) instead of head-truncating", () => {
+    const filler = "x".repeat(50000);
+    const schema = `${filler}\nexport const task = app.table("task", { FK_HERE });\n`;
+    const out = sliceSchemaForJudge(schema, "task", 1000);
+
+    // The FK region is kept; the (irrelevant) head is dropped with a marker.
+    expect(out).toContain("FK_HERE");
+    expect(out.startsWith("…[truncated]")).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(1000 + 40);
+  });
+
+  test("falls back to a bounded head when the table export can't be located", () => {
+    const schema = "y".repeat(5000);
+    const out = sliceSchemaForJudge(schema, "missing", 1000);
+
+    expect(out.length).toBeLessThanOrEqual(1000 + 40);
+    expect(out).toContain("…[truncated]");
   });
 });
 

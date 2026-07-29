@@ -180,12 +180,47 @@ export function scopeFor(name: string): string[] {
 }
 
 /**
+ * Reduce the shared Drizzle schema to at most `budget` chars for the judge, KEEPING the region
+ * around THIS feature's own table (`export const <camel> =`). A many-entity app accretes one table
+ * per feature into the shared schema in build order, so the feature under review — and its
+ * `belongsTo` FOREIGN KEY, which is declared inside its own table block — typically sits near the
+ * END; naive head-first truncation would drop the exact FK evidence the judge needs. When the
+ * schema fits the budget it's returned whole; otherwise a window is centered on the feature's table
+ * (falling back to the head only if the table export can't be located). Pure — unit-testable.
+ */
+export function sliceSchemaForJudge(
+  schema: string,
+  tableExport: string,
+  budget: number
+): string {
+  if (schema.length <= budget) {
+    return schema;
+  }
+
+  const anchor = schema.indexOf(`export const ${tableExport} `);
+
+  if (anchor < 0) {
+    return `${schema.slice(0, budget)}\n…[truncated]`;
+  }
+
+  // Center the window on the table: keep a third of the budget of context before it (its imports /
+  // referenced tables) and the rest from the table onward (its columns + FK).
+  const start = Math.max(0, anchor - Math.floor(budget / 3));
+  const end = Math.min(schema.length, start + budget);
+  const head = start > 0 ? "…[truncated]\n" : "";
+  const tail = end < schema.length ? "\n…[truncated]" : "";
+
+  return `${head}${schema.slice(start, end)}${tail}`;
+}
+
+/**
  * Read the generated resource code from the filesystem for the completeness judge.
  * Concatenates the shared Drizzle schema (so the judge can see the feature's table + FKs and
  * verify `belongsTo` relationships), the API resource (.ts), and the UI feature (.ts/.tsx/.jsx,
- * test/story files excluded) source, capped at ~96000 characters. The schema is emitted FIRST and
- * counted against the budget up front so it is never truncated; React components (.tsx/.jsx) are
- * ordered ahead of other feature files so a large API can't exhaust the budget before the judge
+ * test/story files excluded) source, capped at ~96000 characters. The schema is emitted FIRST but
+ * bounded to at most HALF the budget (`sliceSchemaForJudge`, windowed around this feature's table)
+ * so it can never starve the implementation the judge must evaluate; React components (.tsx/.jsx)
+ * are ordered ahead of other feature files so a large API can't exhaust the budget before the judge
  * sees the UI. Returns empty string if nothing exists.
  */
 export async function readResourceCode(
@@ -310,19 +345,16 @@ export async function readResourceCode(
   // "belongs to a project" but cannot see the FK, so it false-REJECTS a fully-correct feature
   // ("schema not shown, relationship cannot be verified") — parking a built resource the model
   // can't fix because there is nothing to fix (observed live: the todos Project/Task build, where
-  // the DB table + task_project_id_fkey existed and worked, yet the judge parked it). Show the
-  // schema FIRST and count it against the budget up front so it is NEVER truncated away — the FK
-  // evidence must always reach the judge. Best-effort: a non-boringstack layout (or a schema not
-  // yet generated) simply has no such file and the judge sees the feature code alone, as before.
+  // the DB table + task_project_id_fkey existed and worked, yet the judge parked it). Emit the
+  // schema FIRST, but bounded to at most HALF the budget and WINDOWED around this feature's own
+  // table (sliceSchemaForJudge) — so the FK reaches the judge without either (a) being truncated
+  // head-first away when the schema is large, or (b) starving the feature implementation the judge
+  // must also see. Best-effort: a non-boringstack layout (or a schema not yet generated) simply has
+  // no such file and the judge sees the feature code alone, as before.
   try {
     const schema = await readFile(join(cwd, APP_SCHEMA_FILE), "utf-8");
-    const raw = `// ${APP_SCHEMA_FILE}\n${schema}\n`;
-    // Bound the schema block by the same cap as everything else — a pathologically large schema
-    // (a many-entity app accretes one table per feature here) must not return unbounded evidence.
-    // The schema is priority evidence, so it gets first claim on the budget; if it alone overflows,
-    // truncate it (the FK we care about is near its own table, not at the very end) rather than drop it.
-    const block =
-      raw.length > maxChars ? `${raw.slice(0, maxChars)}\n…[truncated]` : raw;
+    const sliced = sliceSchemaForJudge(schema, camel, Math.floor(maxChars / 2));
+    const block = `// ${APP_SCHEMA_FILE}\n${sliced}\n`;
 
     blocks.push(block);
     totalLen += block.length;
