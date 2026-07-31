@@ -596,6 +596,15 @@ function taskContract(files: string[], accept: string | undefined): string {
     .join("\n");
 }
 
+/** Whether `pull_conventions` is OFFERED — advertised in the system prompt AND exposed by
+ *  `toolsFor`. Both must read this ONE predicate or they drift: the tool is offered only when
+ *  the capability flag is on AND a provider is actually injected (a knowledge tool with no
+ *  provider always returns "no convention library"). Keeping the prompt inventory and the
+ *  advertised tool list in lockstep is the flag↔prompt invariant. */
+function conventionsOffered(cfg: ISessionConfig): boolean {
+  return cfg.pullConventions === true && cfg.conventions !== undefined;
+}
+
 /** The STATIC system policy (identity, tools, conventions, workspace map, guidance) +
  *  the initial dynamic task contract. Base framing is mode-driven: `drive-to-green`
  *  (autonomous builds) gets the strict expert-TS implement contract; `chat` (default)
@@ -611,7 +620,7 @@ function systemPrompt(
       ? buildDriveToGreenSystem(
           conventions,
           cfg.offerCheck === true,
-          cfg.pullConventions === true
+          conventionsOffered(cfg)
         )
       : buildChatSystem(conventions);
 
@@ -634,10 +643,9 @@ function systemPrompt(
   // topic is in the prompt UP FRONT, so the model writes it right the FIRST time — the Bucket-1
   // fix. The reactive PUSH (unseenGuidesForErrors) and `pull_conventions` remain as fallbacks
   // for reinforcement and the long tail, not the primary teaching.
-  const conv =
-    cfg.pullConventions === true
-      ? `${cfg.conventions?.buildGuides() ?? ""}\n\n`
-      : "";
+  const conv = conventionsOffered(cfg)
+    ? `${cfg.conventions?.buildGuides() ?? ""}\n\n`
+    : "";
 
   const contract = taskContract(cfg.files ?? [], cfg.accept);
 
@@ -806,15 +814,16 @@ export class Session {
     // and its free-form schema falsely implies unknown topics return valid ones. The
     // topic enum is then built from the injected provider's real topics() at offer
     // time (stack-agnostic — core carries no topic literal).
-    const conventionProvider =
-      cfg.pullConventions === true ? cfg.conventions : undefined;
+    const offerConventions = conventionsOffered(cfg);
     const conventionTopics =
-      conventionProvider !== undefined ? conventionProvider.topics() : [];
+      offerConventions && cfg.conventions !== undefined
+        ? cfg.conventions.topics()
+        : [];
 
     this.tools = toolsFor(
       false,
       {},
-      conventionProvider !== undefined,
+      offerConventions,
       offerCheck,
       cfg.interactive === true,
       conventionTopics

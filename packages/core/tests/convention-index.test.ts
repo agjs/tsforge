@@ -384,10 +384,17 @@ test("Session does NOT advertise pull_conventions when the capability is on but 
   // convention library" and the schema would falsely promise a topic listing. So the tool is
   // offered only when a provider is actually present — pullConventions alone is not enough.
   const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-noprov-"));
-  const captured: { names: readonly string[] } = { names: [] };
+  const captured: { names: readonly string[]; system: string } = {
+    names: [],
+    system: "",
+  };
 
   const provider: IProvider = {
-    async complete(_messages: IChatMessage[], opts) {
+    async complete(messages: IChatMessage[], opts) {
+      const sys = messages.find((m) => m.role === "system");
+
+      captured.system = typeof sys?.content === "string" ? sys.content : "";
+
       const tools = opts?.tools ?? [];
 
       captured.names = tools.map((t) =>
@@ -418,7 +425,14 @@ test("Session does NOT advertise pull_conventions when the capability is on but 
 
     await s.send("go");
 
-    expect(captured.names).not.toContain("pull_conventions");
+    // Non-vacuous: the provider WAS called with a real tool list (base tools present), so the
+    // absence of pull_conventions is a genuine observation, not an empty captured.names.
+    expect(captured.names).toContain(TOOL_NAME.read);
+    expect(captured.names).not.toContain(TOOL_NAME.pullConventions);
+
+    // The flag↔prompt invariant: the system prompt's tool inventory must NOT advertise
+    // pull_conventions either — otherwise the model is told about a tool the tools list omits.
+    expect(captured.system).not.toContain("pull_conventions");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

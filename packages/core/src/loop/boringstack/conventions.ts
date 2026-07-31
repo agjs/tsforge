@@ -465,9 +465,8 @@ export function unseenGuidesForErrors(
  * seam. The core loop (system-prompt front-load, reactive push, `pull_conventions`
  * tool) depends only on the INTERFACE — injected via `ISessionConfig.conventions` /
  * `ILoopCtx.tool.conventions`; this concrete provider is the BoringStack CONTENT,
- * supplied by the boringstack adapter (`build-config.ts`). No core file outside the
- * adapter imports it. (Residual: this module still physically lives under `loop/`;
- * relocating it into `loop/boringstack/` is the last step of WS1.)
+ * supplied by the boringstack adapter (`build-config.ts`). This module lives under
+ * `loop/boringstack/`, so no core file outside the adapter imports it.
  */
 export const boringstackConventionProvider: IConventionProvider = {
   buildGuides: buildConventionGuides,
