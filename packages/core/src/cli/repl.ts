@@ -204,6 +204,31 @@ export function greenfieldConstraints(
   });
 }
 
+/**
+ * Route ONE input line: if a registered stack adapter claims the project (fresh + unplanned)
+ * hand the RESOLVED adapter to `onGreenfield`; otherwise fall through to `onSend` (the normal
+ * agent turn). EXACTLY ONE of the two runs. This encapsulates the interception BRANCH so its
+ * behavior — the resolved stack controls the planning path, and an unmatched/already-planned
+ * project falls through to the normal send — is unit-tested, not merely source-probed.
+ */
+export async function greenfieldOrSend(
+  dir: string,
+  adapters: readonly IStackAdapter[],
+  hasApprovedPlan: (dir: string) => Promise<boolean>,
+  onGreenfield: (stack: IStackAdapter) => Promise<void>,
+  onSend: () => Promise<void>
+): Promise<void> {
+  const stack = await resolveGreenfieldStack(dir, adapters, hasApprovedPlan);
+
+  if (stack !== null) {
+    await onGreenfield(stack);
+
+    return;
+  }
+
+  await onSend();
+}
+
 /** The greenfield planning flow (description → proposed plan → human
  *  approve/revise/cancel → approved plan on disk). Extracted from the line handler
  *  to keep its cognitive complexity down; the resolved stack adapter supplies the
@@ -918,33 +943,27 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    // GREENFIELD INTERCEPTION: a fresh project a stack adapter claims, with no approved
-    // plan, routes into planning first. Detection AND the planner constraints come from
-    // the SAME resolved adapter, so there is no gap where a project is planned by a stack
-    // but not given its reserved-slice rule.
-    const stack = await resolveGreenfieldStack(
+    // GREENFIELD INTERCEPTION vs NORMAL SEND. A fresh project a stack adapter claims, with
+    // no approved plan, routes into planning first (detection AND the planner constraints
+    // from the SAME resolved adapter — no gap). Otherwise the AGENT decides: it calls
+    // `scaffold_web` itself for a from-scratch web app, and just answers/edits otherwise (so
+    // "render a table in the CLI" is no longer mis-scaffolded as a Vite app). The branch
+    // itself is greenfieldOrSend (unit-tested); this only supplies the two continuations.
+    await greenfieldOrSend(
       args.dir,
       STACK_ADAPTERS,
-      async (d) => (await loadApprovedPlan(d)) !== null
+      async (d) => (await loadApprovedPlan(d)) !== null,
+      (stack) =>
+        runGreenfieldPlanning(
+          args.dir,
+          line,
+          echo,
+          rl,
+          activeModelEntry,
+          stack
+        ),
+      () => runSend(line)
     );
-
-    if (stack !== null) {
-      await runGreenfieldPlanning(
-        args.dir,
-        line,
-        echo,
-        rl,
-        activeModelEntry,
-        stack
-      );
-
-      return;
-    }
-
-    // No up-front classifier: the AGENT decides. It calls `scaffold_web` itself
-    // when the request is a from-scratch web app, and just answers/edits otherwise
-    // (so "render a table in the CLI" is no longer mis-scaffolded as a Vite app).
-    await runSend(line);
   };
 
   // Placeholder declarations; defined after runLine / editorControl are available.
