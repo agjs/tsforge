@@ -1,4 +1,7 @@
 import { test, expect, describe } from "bun:test";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   resolveStackAdapter,
   type IStackAdapter,
@@ -71,5 +74,24 @@ describe("boringstackStackAdapter", () => {
     expect(
       await boringstackStackAdapter.detect("/definitely/not/a/project")
     ).toBe(false);
+  });
+
+  test("detect is TRUE through the adapter method for a real boringstack scaffold receipt", async () => {
+    // The true path THROUGH boringstackStackAdapter.detect (not just isBoringstackProject) —
+    // so a detect stub that always returned false would fail here, catching a broken wiring
+    // that kills greenfield interception.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-detect-"));
+
+    try {
+      await mkdir(join(dir, ".tsforge"), { recursive: true });
+      await writeFile(
+        join(dir, ".tsforge", "scaffold.json"),
+        JSON.stringify({ archetype: "boringstack" })
+      );
+
+      expect(await boringstackStackAdapter.detect(dir)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

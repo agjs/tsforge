@@ -16,7 +16,13 @@ export interface IStackAdapter {
   readonly id: string;
   /** Whether this adapter owns the project at `dir` (authoritative, no false positives). */
   detect(dir: string): Promise<boolean>;
-  /** The stack's planner constraints; `onStripped` surfaces every dropped entity id. */
+  /**
+   * The stack's planner constraints. `IPlanConstraints` is fail-closed at the TYPE level:
+   * `reservedEntities` can only be set together with SOME `onStripped`, so a strip is never
+   * silently dropped. The type cannot force an adapter to forward the CALLER's `onStripped`
+   * (an adapter could attach its own) — that it forwards the passed reporter to the caller's
+   * sink is the adapter's contract, verified per-adapter by test (see stack-adapter.test.ts).
+   */
   planConstraints(
     onStripped: (droppedEntityIds: readonly string[]) => void
   ): IPlanConstraints;

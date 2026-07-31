@@ -43,6 +43,7 @@ import {
   type ILoopEvent,
 } from "../loop";
 import { runPlanning } from "../loop/planning/run-planning";
+import type { IPlanConstraints } from "../loop/planning/plan-types";
 import {
   resolveStackAdapter,
   type IStackAdapter,
@@ -164,6 +165,45 @@ export function parseReviewResponse(
  *  registration here, not a change to the planning logic. */
 const STACK_ADAPTERS: readonly IStackAdapter[] = [boringstackStackAdapter];
 
+/**
+ * The greenfield-planning DECISION: which registered stack adapter (if any) should
+ * intercept `dir` for planning. Returns the adapter to plan with — a stack detected the
+ * project AND it has no approved plan yet — or null to proceed normally (no stack detected,
+ * or already planned). Detection and the planner constraints then come from this SAME
+ * returned adapter, so there is no gap. Pure + injectable (`hasApprovedPlan`) so the
+ * interception rule is unit-testable without driving the REPL.
+ */
+export async function resolveGreenfieldStack(
+  dir: string,
+  adapters: readonly IStackAdapter[],
+  hasApprovedPlan: (dir: string) => Promise<boolean>
+): Promise<IStackAdapter | null> {
+  const stack = await resolveStackAdapter(dir, adapters);
+
+  if (stack === null) {
+    return null;
+  }
+
+  return (await hasApprovedPlan(dir)) ? null : stack;
+}
+
+/**
+ * Build the planner constraints for the greenfield flow from the RESOLVED stack adapter,
+ * wiring its drop reporter to `echo` so every stripped slice is surfaced to the user. Kept
+ * separate + exported so the "resolved adapter supplies the constraints, and drops reach
+ * the echo sink" wiring is testable without running the whole planner.
+ */
+export function greenfieldConstraints(
+  stack: IStackAdapter,
+  echo: (s: string) => void
+): IPlanConstraints {
+  return stack.planConstraints((dropped) => {
+    echo(
+      `▸ dropped slice(s) the ${stack.id} starter already provides: ${dropped.join(", ")}\n`
+    );
+  });
+}
+
 /** The greenfield planning flow (description → proposed plan → human
  *  approve/revise/cancel → approved plan on disk). Extracted from the line handler
  *  to keep its cognitive complexity down; the resolved stack adapter supplies the
@@ -188,11 +228,7 @@ async function runGreenfieldPlanning(
     planner: plannerProvider,
     // We only reach here when this stack adapter detected the project, so its
     // reserved-slice rule always applies (no gap) and every drop is surfaced.
-    constraints: stack.planConstraints((dropped) => {
-      echo(
-        `▸ dropped slice(s) the ${stack.id} starter already provides: ${dropped.join(", ")}\n`
-      );
-    }),
+    constraints: greenfieldConstraints(stack, echo),
     describe: async () => {
       await Promise.resolve();
 
@@ -886,9 +922,13 @@ export async function repl(args: ICliArgs): Promise<number> {
     // plan, routes into planning first. Detection AND the planner constraints come from
     // the SAME resolved adapter, so there is no gap where a project is planned by a stack
     // but not given its reserved-slice rule.
-    const stack = await resolveStackAdapter(args.dir, STACK_ADAPTERS);
+    const stack = await resolveGreenfieldStack(
+      args.dir,
+      STACK_ADAPTERS,
+      async (d) => (await loadApprovedPlan(d)) !== null
+    );
 
-    if (stack !== null && (await loadApprovedPlan(args.dir)) === null) {
+    if (stack !== null) {
       await runGreenfieldPlanning(
         args.dir,
         line,
