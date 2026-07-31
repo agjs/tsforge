@@ -93,6 +93,31 @@ test("the convention guides are in the system prompt with pullConventions, absen
   }
 });
 
+test("front-loaded guides come from the INJECTED provider, not a static import", async () => {
+  // Locks the WS1a seam: with pullConventions on but NO provider injected, the guides must be
+  // ABSENT. A revert to session.ts importing buildConventionGuides directly would re-inject the
+  // BoringStack text here and fail — proving the core no longer sources the content itself.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-seam-"));
+
+  try {
+    const cap = { system: "" };
+    const s = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+    });
+
+    await s.send("go");
+
+    expect(cap.system).not.toContain("HOW THIS STACK WRITES CODE");
+    expect(cap.system).not.toContain("@/lib/api/client");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // The pull_conventions tool enum is a hand-maintained duplicate of TOPICS — this locks it to
 // conventionTopics() so a new topic (or a dropped one, like data-fetching was) can't silently
 // diverge, leaving a guide the model can't actually pull.

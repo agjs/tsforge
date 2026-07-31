@@ -177,9 +177,10 @@ export interface ISessionConfig {
    *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
   pullConventions?: boolean;
   /** The build ADAPTER's convention library, injected as a generic provider (see
-   *  `IConventionProvider`). Present ⇒ the front-loaded guides + reactive push + the
-   *  `pull_conventions` tool draw from it; absent ⇒ no stack conventions (a plain or
-   *  non-web build). Keeps stack-specific CONTENT out of the core loop. */
+   *  `IConventionProvider`), so the core no longer imports stack-specific CONTENT for
+   *  the system prompt. WS1a: the FRONT-LOADED guides come from here (gated, with
+   *  `pullConventions`, on a backend that ships a library). The reactive push + the
+   *  `pull_conventions` tool still read the library directly until WS1b migrates them. */
   conventions?: IConventionProvider;
   /** Offer the callable, structured `check` tool (WS-G) — set by a build BACKEND
    *  whose gate is authoritative (e.g. boringstack, which injects its gate per-slice
@@ -634,7 +635,9 @@ function systemPrompt(
   // fix. The reactive PUSH (unseenGuidesForErrors) and `pull_conventions` remain as fallbacks
   // for reinforcement and the long tail, not the primary teaching.
   const conv =
-    cfg.conventions !== undefined ? `${cfg.conventions.buildGuides()}\n\n` : "";
+    cfg.pullConventions === true
+      ? `${cfg.conventions?.buildGuides() ?? ""}\n\n`
+      : "";
 
   const contract = taskContract(cfg.files ?? [], cfg.accept);
 
