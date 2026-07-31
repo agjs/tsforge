@@ -36,7 +36,7 @@ import {
   type ErrorSet,
 } from "../validate";
 import { ruleHelp } from "./feedback";
-import { buildConventionGuides } from "./conventions";
+import type { IConventionProvider } from "./conventions-provider";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -176,6 +176,11 @@ export interface ISessionConfig {
    *  a convention library (e.g. boringstack) so the model can fetch its how-to
    *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
   pullConventions?: boolean;
+  /** The build ADAPTER's convention library, injected as a generic provider (see
+   *  `IConventionProvider`). Present ⇒ the front-loaded guides + reactive push + the
+   *  `pull_conventions` tool draw from it; absent ⇒ no stack conventions (a plain or
+   *  non-web build). Keeps stack-specific CONTENT out of the core loop. */
+  conventions?: IConventionProvider;
   /** Offer the callable, structured `check` tool (WS-G) — set by a build BACKEND
    *  whose gate is authoritative (e.g. boringstack, which injects its gate per-slice
    *  via `setGate`). The tool runs the SAME full evaluation `settleGate` does
@@ -629,7 +634,7 @@ function systemPrompt(
   // fix. The reactive PUSH (unseenGuidesForErrors) and `pull_conventions` remain as fallbacks
   // for reinforcement and the long tail, not the primary teaching.
   const conv =
-    cfg.pullConventions === true ? `${buildConventionGuides()}\n\n` : "";
+    cfg.conventions !== undefined ? `${cfg.conventions.buildGuides()}\n\n` : "";
 
   const contract = taskContract(cfg.files ?? [], cfg.accept);
 

@@ -7,6 +7,7 @@ import {
   conventionGuide,
   conventionTopics,
   topicForRule,
+  boringstackConventionProvider,
 } from "../src/loop/conventions";
 import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
 import type { IProvider, IChatMessage } from "../src/inference";
@@ -67,6 +68,7 @@ test("the convention guides are in the system prompt with pullConventions, absen
       files: ["**/*"],
       executionMode: "drive-to-green",
       pullConventions: true,
+      conventions: boringstackConventionProvider,
     });
 
     await on.send("go");

@@ -1,5 +1,7 @@
 import type { ExecutionMode } from "../prompt";
 import type { IPolicyRules } from "../../policy";
+import type { IConventionProvider } from "../conventions-provider";
+import { boringstackConventionProvider } from "../conventions";
 
 /**
  * Commands the model must NEVER run during a BoringStack build. The browser end-to-end
@@ -30,6 +32,9 @@ const NO_BROWSER_E2E_DENY: IPolicyRules = {
  * - `executionMode`: the strict expert-TS drive-to-green contract from the first token.
  * - `guidance`: the per-resource framing (edit only the named files; real domain logic).
  * - `pullConventions`: offer the convention library the model can fetch on demand.
+ * - `conventions`: INJECT the BoringStack convention library as the generic
+ *   `IConventionProvider` seam, so the core loop draws the front-loaded guides from
+ *   here instead of importing stack-specific content (core↔adapter seam).
  * - `offerCheck`: offer the callable, structured `check` tool (WS-G) — the per-slice
  *   gate is injected via setGate, and check runs THAT gate mid-turn.
  */
@@ -37,6 +42,7 @@ export const BORINGSTACK_BUILD_SESSION: {
   readonly executionMode: ExecutionMode;
   readonly guidance: string;
   readonly pullConventions: true;
+  readonly conventions: IConventionProvider;
   readonly offerCheck: true;
   readonly policyRules: IPolicyRules;
 } = {
@@ -48,6 +54,7 @@ export const BORINGSTACK_BUILD_SESSION: {
     "(never an `as` cast), and write the required test siblings. Everything else " +
     "is locked.",
   pullConventions: true,
+  conventions: boringstackConventionProvider,
   offerCheck: true,
   policyRules: NO_BROWSER_E2E_DENY,
 };
