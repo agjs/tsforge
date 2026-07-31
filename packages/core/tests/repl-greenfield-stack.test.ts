@@ -184,34 +184,56 @@ describe("greenfieldOrSend (the interception branch)", () => {
 // The remaining glue — the readline line handler CALLING greenfieldOrSend with the
 // composition-root registry and the two real continuations — lives inside repl()'s readline
 // closure, which is not unit-reachable (the same class the /clear + --continue wiring is
-// source-guarded for; see repl-ask-user-wiring.test.ts). A SINGLE bound regex over
-// comment-stripped source proves the pieces are wired TOGETHER (not independent presence
-// probes): greenfieldOrSend(args.dir, STACK_ADAPTERS, <hasPlan>, <onGreenfield=…
-// runGreenfieldPlanning…>, <onSend=…runSend(line)…>). Removing the interception or swapping a
-// callback breaks the single match.
+// source-guarded for; see repl-ask-user-wiring.test.ts).
+//
+// SCOPE, stated honestly: this is a WIRING guard, NOT a purity proof. A regex cannot prove a
+// continuation is side-effect-free — a determined author can always chain a send (`.finally`,
+// `.then`, comma operator, …). What it CAN do is pin the EXACT current wiring shape, so any
+// deviation — block body, a send chained onto runGreenfieldPlanning(...), a trailing send, a
+// changed registry or arg list — fails the match and forces a reviewer to look. The SEMANTIC
+// proof that the branch plans XOR sends is the greenfieldOrSend behavioral test above; this
+// only guards that the handler actually routes through that branch with the real callbacks.
+//
+// WIRED pins: greenfieldOrSend(args.dir, STACK_ADAPTERS, <hasPlan>, onGreenfield being EXACTLY
+// `(stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack)`
+// terminated by `),` (so nothing — no `.finally(send)` — can sit between that `)` and the `,`),
+// onSend `() => runSend(line)`, and the call as the handler's TERMINAL statement (`) ; }`).
+const WIRED =
+  /greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,[^;]*?\(stack\)\s*=>\s*runGreenfieldPlanning\(\s*args\.dir,\s*line,\s*echo,\s*rl,\s*activeModelEntry,\s*stack\s*\)\s*,\s*\(\)\s*=>\s*runSend\(line\)\s*\)\s*;\s*\}/;
+
+/** Strip line + block comments so a matching phrase in prose can't satisfy the guard. */
+const stripComments = (s: string): string =>
+  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
 describe("the REPL line handler wires greenfieldOrSend (source guard)", () => {
-  test("dispatch calls greenfieldOrSend with STACK_ADAPTERS and both real continuations", async () => {
+  test("the real handler source matches the exact wiring shape", async () => {
     const raw = await Bun.file(
       join(import.meta.dir, "..", "src", "cli", "repl.ts")
     ).text();
 
-    // Strip comments so a matching phrase in prose can't satisfy the guard.
-    const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect(stripComments(raw)).toMatch(WIRED);
+  });
 
-    // One structurally-bound match that closes BOTH plan-THEN-send bypasses at the source
-    // level (a strengthening, not a relaxation, of the deleted negative guard):
-    //   • `[^;]` throughout — the match cannot cross the `);` that ends the call, so it stays
-    //     inside a single statement.
-    //   • onGreenfield is a BRACE-LESS arrow: `(stack) => runGreenfieldPlanning(` (no `{`), so
-    //     it is a single expression and cannot itself contain a trailing `runSend(line)`
-    //     (the ASI block-body bypass `stack => { plan; send }`).
-    //   • onSend is `() => runSend(line)` and the call is the handler's TERMINAL statement —
-    //     `) ; }` immediately after — so no bare `runSend(line)` can trail the call.
-    // A wrong registry, define-but-never-call, swapped branch, block-body plan-then-send, or a
-    // trailing send all break the single match.
-    const wired =
-      /greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,[^;]*?\(stack\)\s*=>\s*runGreenfieldPlanning\([^;]*?\(\)\s*=>\s*runSend\(line\)\s*\)\s*;\s*\}/;
+  // Regression-test the guard's NEGATIVE guarantees in-file (not just out of band): each
+  // plan-THEN-send bypass the reviewers raised must FAIL the same WIRED regex.
+  test("the guard rejects a block-body onGreenfield that plans then sends", () => {
+    const bypass =
+      "greenfieldOrSend( args.dir, STACK_ADAPTERS, h, (stack) => { runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack); runSend(line); }, () => runSend(line) ); }";
 
-    expect(src).toMatch(wired);
+    expect(stripComments(bypass)).not.toMatch(WIRED);
+  });
+
+  test("the guard rejects a send chained onto runGreenfieldPlanning (.finally)", () => {
+    const bypass =
+      "greenfieldOrSend( args.dir, STACK_ADAPTERS, h, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack).finally(() => runSend(line)), () => runSend(line) ); }";
+
+    expect(stripComments(bypass)).not.toMatch(WIRED);
+  });
+
+  test("the guard rejects a bare runSend(line) trailing the greenfieldOrSend call", () => {
+    const bypass =
+      "greenfieldOrSend( args.dir, STACK_ADAPTERS, h, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); await runSend(line); }";
+
+    expect(stripComments(bypass)).not.toMatch(WIRED);
   });
 });
