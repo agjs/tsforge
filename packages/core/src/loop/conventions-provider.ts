@@ -21,6 +21,4 @@ export interface IConventionProvider {
   guide(topic: string): string | null;
   /** The valid topic ids (for the `pull_conventions` tool's help text). */
   topics(): readonly string[];
-  /** Whether a string is a known topic. */
-  isTopic(s: string): boolean;
 }

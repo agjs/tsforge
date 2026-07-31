@@ -461,18 +461,17 @@ export function unseenGuidesForErrors(
 }
 
 /**
- * The BoringStack front-loaded guides packaged as the generic `IConventionProvider`
- * seam. The core session's system prompt depends on the INTERFACE (injected via
- * `ISessionConfig.conventions`); this concrete provider — the BoringStack CONTENT —
- * is supplied by the boringstack adapter (`build-config.ts`), so the session no longer
- * imports `buildConventionGuides` directly. (WS1a scope: the reactive push + the
- * `pull_conventions` tool still import this module directly — they migrate to the
- * provider, and this module relocates into `loop/boringstack/`, in WS1b.)
+ * The BoringStack convention library packaged as the generic `IConventionProvider`
+ * seam. The core loop (system-prompt front-load, reactive push, `pull_conventions`
+ * tool) depends only on the INTERFACE — injected via `ISessionConfig.conventions` /
+ * `ILoopCtx.tool.conventions`; this concrete provider is the BoringStack CONTENT,
+ * supplied by the boringstack adapter (`build-config.ts`). No core file outside the
+ * adapter imports it. (Residual: this module still physically lives under `loop/`;
+ * relocating it into `loop/boringstack/` is the last step of WS1.)
  */
 export const boringstackConventionProvider: IConventionProvider = {
   buildGuides: buildConventionGuides,
   unseenForErrors: unseenGuidesForErrors,
   guide: (topic) => (isConventionTopic(topic) ? conventionGuide(topic) : null),
   topics: conventionTopics,
-  isTopic: isConventionTopic,
 };

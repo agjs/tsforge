@@ -404,4 +404,20 @@ describe("convention PUSH delivery (the guide actually reaches the model + is ob
       events.some((e) => e.kind === "tool" && e.message.includes("📐 pushed"))
     ).toBe(false);
   });
+
+  test("conventionsEnabled ON but NO provider injected ⇒ no push (WS1b provider gate)", async () => {
+    // The new push guard is `conventionsEnabled && ctx.tool.conventions !== undefined`. With the
+    // flag on but the provider absent (no adapter injected it), the push must be silent — proving
+    // the guides come from the injected provider, not a lingering static import.
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+
+    ctx.tool = {};
+
+    await injectFeedback(ctx, { ...freshState() }, [asCastError], [], []);
+
+    expect(ctx.messages.at(-1)?.content ?? "").not.toContain(
+      "HOW TO WRITE THIS RIGHT"
+    );
+  });
 });

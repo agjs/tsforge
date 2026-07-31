@@ -21,7 +21,6 @@ const fakeConventions = (guides: string): IConventionProvider => ({
   unseenForErrors: () => [],
   guide: () => null,
   topics: () => [],
-  isTopic: () => false,
 });
 
 // WS-A1: front-load the actual convention GUIDES (the compliant patterns), not merely a
