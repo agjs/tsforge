@@ -952,10 +952,13 @@ export class Session {
         // path) and co-pilot presence must not loosen policy verdicts.
         ...(cfg.interactive === true ? { humanPresent: true } : {}),
         // The adapter's convention library — spread into every IToolContext (so
-        // `pull_conventions` reads its guides) and read by the reactive push.
-        ...(cfg.conventions === undefined
-          ? {}
-          : { conventions: cfg.conventions }),
+        // `pull_conventions` reads its guides) and read by the reactive push. Gated on
+        // `pullConventions` (the same flag that OFFERS the tool + enables the push), so a
+        // hallucinated pull_conventions call when the feature is off finds no provider
+        // (returns "not configured"), never a withheld-capability that still executes.
+        ...(cfg.pullConventions === true && cfg.conventions !== undefined
+          ? { conventions: cfg.conventions }
+          : {}),
       },
       gate: {
         parse: cfg.parse,

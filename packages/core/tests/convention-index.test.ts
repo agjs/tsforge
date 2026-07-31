@@ -334,6 +334,60 @@ test("Session threads cfg.conventions into the pull_conventions tool (real dispa
   }
 });
 
+test("a hallucinated pull_conventions call with pullConventions OFF gets no provider (no withheld-capability leak)", async () => {
+  // The provider is threaded into the tool context ONLY when pullConventions is on (the flag that
+  // offers the tool). With the flag off, a hallucinated pull_conventions call executes (read-only,
+  // policy-allowed) but finds no provider → "not configured", never the injected guides.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-withheld-"));
+  const captured: { result: string | null } = { result: null };
+  let turn = 0;
+
+  const provider: IProvider = {
+    async complete(messages: IChatMessage[]) {
+      turn += 1;
+
+      if (turn === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            { id: "1", name: "pull_conventions", arguments: { topic: "x" } },
+          ],
+        };
+      }
+
+      const toolMsg = [...messages].reverse().find((m) => m.role === "tool");
+
+      captured.result =
+        typeof toolMsg?.content === "string" ? toolMsg.content : null;
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      // pullConventions OFF — but a provider is still on the config.
+      conventions: {
+        buildGuides: () => "",
+        unseenForErrors: () => [],
+        guide: () => "TOOL_THREAD_SENTINEL",
+        topics: () => ["x"],
+      },
+    });
+
+    await s.send("go");
+
+    expect(captured.result ?? "").not.toContain("TOOL_THREAD_SENTINEL");
+    expect(captured.result ?? "").toContain("no convention library");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // The pull_conventions tool enum is a hand-maintained duplicate of TOPICS — this locks it to
 // conventionTopics() so a new topic (or a dropped one, like data-fetching was) can't silently
 // diverge, leaving a guide the model can't actually pull.

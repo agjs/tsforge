@@ -13,3 +13,27 @@ test("boringstackConventionProvider satisfies IConventionProvider with real guid
   expect(guides.length).toBeGreaterThan(0);
   expect(guides).toContain("HOW THIS STACK WRITES CODE");
 });
+
+test("the provider's guide/topics/unseenForErrors return real content (not stubs)", () => {
+  const provider: IConventionProvider = boringstackConventionProvider;
+
+  // topics() lists real topics; guide() returns the pattern for one of them.
+  const topics = provider.topics();
+
+  expect(topics).toContain("no-casts");
+  expect(provider.guide("no-casts")).toContain("TYPE GUARD");
+  expect(provider.guide("nope-not-a-topic")).toBeNull();
+
+  // unseenForErrors() maps a gate error's rule to its guide, deduping via `seen`.
+  const seen = new Set<string>();
+  const first = provider.unseenForErrors(
+    [{ rule: "no-restricted-syntax" }],
+    seen
+  );
+
+  expect(first.length).toBeGreaterThan(0);
+  // Same rule again ⇒ deduped (already seen this run).
+  expect(
+    provider.unseenForErrors([{ rule: "no-restricted-syntax" }], seen)
+  ).toEqual([]);
+});
