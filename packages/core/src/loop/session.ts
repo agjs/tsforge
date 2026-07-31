@@ -800,12 +800,22 @@ export class Session {
     const offerCheck =
       cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 
+    // The pull_conventions topic enum is built from the injected provider's real
+    // topics at offer time (stack-agnostic — core carries no topic literal). Gated
+    // on pullConventions to match the capability-bypass guard below: no capability,
+    // no topics.
+    const conventionTopics =
+      cfg.pullConventions === true && cfg.conventions !== undefined
+        ? cfg.conventions.topics()
+        : [];
+
     this.tools = toolsFor(
       false,
       {},
       cfg.pullConventions === true,
       offerCheck,
-      cfg.interactive === true
+      cfg.interactive === true,
+      conventionTopics
     );
 
     this.ctx = ctx;

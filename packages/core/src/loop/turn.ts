@@ -83,7 +83,7 @@ import {
   WEB_BROWSE_TOOL,
   PACKAGE_INFO_TOOL,
   PACKAGE_DOCS_TOOL,
-  PULL_CONVENTIONS_TOOL,
+  buildPullConventionsTool,
   SCRIPT_TOOL,
   GIT_CONTEXT_TOOL,
   READ_IMAGE_TOOL,
@@ -140,7 +140,7 @@ type AdvertisedTool =
   | typeof WEB_BROWSE_TOOL
   | typeof PACKAGE_INFO_TOOL
   | typeof PACKAGE_DOCS_TOOL
-  | typeof PULL_CONVENTIONS_TOOL
+  | ReturnType<typeof buildPullConventionsTool>
   | typeof SCRIPT_TOOL
   | typeof GIT_CONTEXT_TOOL
   | typeof READ_IMAGE_TOOL
@@ -200,7 +200,8 @@ export function toolsFor(
   caps: ICapabilityFlags = {},
   offerConventions = false,
   offerCheck = false,
-  offerAskUser = false
+  offerAskUser = false,
+  conventionTopics: readonly string[] = []
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
@@ -227,7 +228,7 @@ export function toolsFor(
   // minimal (tools-gating). Decoupled from the web flag on purpose — the conventions
   // are the stack's, not "web".
   const conventions: AdvertisedTool[] = offerConventions
-    ? [PULL_CONVENTIONS_TOOL]
+    ? [buildPullConventionsTool(conventionTopics)]
     : [];
 
   if (flags.noLspTools() || !hasExistingCode) {

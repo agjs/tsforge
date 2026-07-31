@@ -14,6 +14,8 @@ import type { IConventionProvider } from "../src/loop/conventions-provider";
 import type { IGate } from "../src/gate/gate-runner";
 import type { IValidateResult } from "../src/validate";
 import { Session } from "../src/loop";
+import { toolsFor } from "../src/loop/turn";
+import { buildPullConventionsTool, TOOL_NAME } from "../src/agent";
 
 /** A gate that always reports one error, so the drive loop hits a failure after the model's edit
  *  and fires the reactive convention PUSH. */
@@ -403,6 +405,54 @@ test("the design-system topics are in the convention registry (pullable)", () =>
   ]) {
     expect(registry.has(topic)).toBe(true);
   }
+});
+
+// The pull_conventions topic enum is now built AT OFFER TIME from whatever topics are passed —
+// it is NOT a literal baked into core. These pin that contract: the enum mirrors the injected
+// topics exactly (any list, not a hardcoded BoringStack one), and an empty provider degrades to
+// a free-form string rather than an empty/illegal enum.
+test("buildPullConventionsTool builds the topic enum from the injected topics (no core literal)", () => {
+  // Arbitrary topics — proves the enum is whatever you inject, so core carries no topic literal.
+  const arbitrary = buildPullConventionsTool(["alpha", "beta"]);
+
+  expect(arbitrary.function.name).toBe(TOOL_NAME.pullConventions);
+  expect(arbitrary.function.parameters.properties.topic.enum).toEqual([
+    "alpha",
+    "beta",
+  ]);
+
+  // With the real BoringStack topics, the enum equals the provider's registry — the only place
+  // the concrete topic list lives is the adapter's provider, not this tool.
+  const real = buildPullConventionsTool(boringstackConventionProvider.topics());
+
+  expect(real.function.parameters.properties.topic.enum).toEqual([
+    ...boringstackConventionProvider.topics(),
+  ]);
+});
+
+test("buildPullConventionsTool omits the enum for an empty provider (free-form fallback)", () => {
+  const tool = buildPullConventionsTool([]);
+  const { topic } = tool.function.parameters.properties;
+
+  expect(topic.type).toBe("string");
+  expect(topic.enum).toBeUndefined();
+});
+
+// The offer path (session → toolsFor) must PUBLISH the provider's topics in the advertised tool
+// schema — the model sees exactly the pullable topics, and only when the capability is offered.
+test("toolsFor publishes the injected topics as the pull_conventions enum when conventions are offered", () => {
+  const offered = toolsFor(false, {}, true, false, false, ["x", "y"]);
+
+  // The advertised tool is byte-equal to building it directly with those topics — the offer
+  // path threaded the injected topics straight into the published schema.
+  expect(offered).toContainEqual(buildPullConventionsTool(["x", "y"]));
+
+  // Capability off ⇒ the tool isn't advertised at all (no topic surface to leak).
+  const withheld = toolsFor(false, {}, false, false, false, ["x", "y"]);
+
+  expect(
+    withheld.find((t) => t.function.name === TOOL_NAME.pullConventions)
+  ).toBeUndefined();
 });
 
 // The STATE guide must NOT tell the model to use raw fetch (it contradicts DATA-FETCHING's

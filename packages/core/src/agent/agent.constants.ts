@@ -352,25 +352,63 @@ export const PACKAGE_INFO_TOOL = {
  * string, not a hardcoded enum. The available topics are enumerated in the front-loaded guides
  * already in the model's system prompt.
  */
-export const PULL_CONVENTIONS_TOOL = {
-  type: "function",
-  function: {
-    name: TOOL_NAME.pullConventions,
-    description:
-      "Re-fetch the stack's HOW-TO guide for a convention topic on demand. The guides are ALREADY front-loaded in your system prompt — use this to re-read one you need again, or for a rule you're still unsure how to satisfy. Returns the exact pattern the gate enforces.",
-    parameters: {
-      type: "object",
-      properties: {
-        topic: {
-          type: "string",
+/**
+ * The pull_conventions tool, built per-offer so its `topic` enum carries the
+ * injected convention provider's REAL topics — the same enum-at-offer pattern
+ * `buildSpawnAgentTool` uses for `subagent_type`. Core stays stack-agnostic: the
+ * topic list comes from the adapter's provider (`IConventionProvider.topics()`)
+ * at offer time, never a hardcoded literal here. With an enum the model gets
+ * structured guidance and can't waste a turn on an invalid topic; the handler's
+ * miss→listing recovery still guards a hallucinated topic. With no topics (an
+ * empty provider) the enum is omitted so the tool stays usable as a free-form
+ * lookup.
+ */
+export function buildPullConventionsTool(topics: readonly string[]): {
+  readonly type: "function";
+  readonly function: {
+    readonly name: typeof TOOL_NAME.pullConventions;
+    readonly description: string;
+    readonly parameters: {
+      readonly type: "object";
+      readonly properties: {
+        readonly topic: {
+          readonly type: "string";
+          readonly description: string;
+          readonly enum?: readonly string[];
+        };
+      };
+      readonly required: readonly ["topic"];
+    };
+  };
+} {
+  const topic =
+    topics.length > 0
+      ? {
+          type: "string" as const,
+          description:
+            "which convention guide to fetch — one of the enumerated topics.",
+          enum: topics,
+        }
+      : {
+          type: "string" as const,
           description:
             "which convention guide to fetch — one of the topics listed in the front-loaded guides in your system prompt. An unknown topic returns the list of valid ones.",
-        },
+        };
+
+  return {
+    type: "function",
+    function: {
+      name: TOOL_NAME.pullConventions,
+      description:
+        "Re-fetch the stack's HOW-TO guide for a convention topic on demand. The guides are ALREADY front-loaded in your system prompt — use this to re-read one you need again, or for a rule you're still unsure how to satisfy. Returns the exact pattern the gate enforces.",
+      parameters: {
+        type: "object",
+        properties: { topic },
+        required: ["topic"],
       },
-      required: ["topic"],
     },
-  },
-} as const;
+  };
+}
 
 export const PACKAGE_DOCS_TOOL = {
   type: "function",
