@@ -279,6 +279,61 @@ test("Session threads cfg.conventions to the reactive PUSH (real drive loop)", a
   }
 });
 
+test("Session threads cfg.conventions into the pull_conventions tool (real dispatch)", async () => {
+  // The PULL half through the real dispatcher: the model calls pull_conventions and gets back the
+  // INJECTED provider's guide (a sentinel), proving cfg.conventions → ctx.tool.conventions →
+  // doPullConventions. Requires pull_conventions to survive the policy layer (classify.ts).
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-pull-"));
+  const captured: { result: string | null } = { result: null };
+  let turn = 0;
+
+  const provider: IProvider = {
+    async complete(messages: IChatMessage[]) {
+      turn += 1;
+
+      if (turn === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            { id: "1", name: "pull_conventions", arguments: { topic: "x" } },
+          ],
+        };
+      }
+
+      const toolMsg = [...messages].reverse().find((m) => m.role === "tool");
+
+      captured.result =
+        typeof toolMsg?.content === "string" ? toolMsg.content : null;
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  const fakeConv: IConventionProvider = {
+    buildGuides: () => "",
+    unseenForErrors: () => [],
+    guide: () => "TOOL_THREAD_SENTINEL",
+    topics: () => ["x"],
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      conventions: fakeConv,
+    });
+
+    await s.send("go");
+
+    expect(captured.result).toContain("TOOL_THREAD_SENTINEL");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // The pull_conventions tool enum is a hand-maintained duplicate of TOPICS — this locks it to
 // conventionTopics() so a new topic (or a dropped one, like data-fetching was) can't silently
 // diverge, leaving a guide the model can't actually pull.

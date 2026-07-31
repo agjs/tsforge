@@ -177,10 +177,10 @@ export interface ISessionConfig {
    *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
   pullConventions?: boolean;
   /** The build ADAPTER's convention library, injected as a generic provider (see
-   *  `IConventionProvider`), so the core no longer imports stack-specific CONTENT for
-   *  the system prompt. WS1a: the FRONT-LOADED guides come from here (gated, with
-   *  `pullConventions`, on a backend that ships a library). The reactive push + the
-   *  `pull_conventions` tool still read the library directly until WS1b migrates them. */
+   *  `IConventionProvider`), so the core no longer imports stack-specific CONTENT. ALL
+   *  three delivery paths draw from it: the FRONT-LOADED guides in the system prompt
+   *  (gated with `pullConventions`), the reactive PUSH, and the `pull_conventions` tool
+   *  (both via `ILoopCtx.tool.conventions`). Absent ⇒ no stack conventions. */
   conventions?: IConventionProvider;
   /** Offer the callable, structured `check` tool (WS-G) — set by a build BACKEND
    *  whose gate is authoritative (e.g. boringstack, which injects its gate per-slice
