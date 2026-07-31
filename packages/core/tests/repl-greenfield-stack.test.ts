@@ -100,79 +100,81 @@ describe("greenfieldConstraints (resolved adapter supplies the constraints)", ()
 // unmatched/already-planned project falls through to the normal send — without driving the
 // whole REPL. EXACTLY ONE continuation runs.
 describe("greenfieldOrSend (the interception branch)", () => {
-  test("a detected+unplanned project runs onGreenfield with the EXACT stack, never onSend", async () => {
-    const detected = stub("boringstack", true);
-    const captured: { stack: IStackAdapter | null; sent: boolean } = {
-      stack: null,
-      sent: false,
+  /** Counts each continuation's invocations, so tests assert exactly-once cardinality (not just
+   *  exclusivity — calling the selected branch twice must also fail). Records the stack the
+   *  planning branch received. */
+  const spy = (): {
+    greenfield: number;
+    send: number;
+    stack: IStackAdapter | null;
+    onGreenfield: (s: IStackAdapter) => Promise<void>;
+    onSend: () => Promise<void>;
+  } => {
+    const s = {
+      greenfield: 0,
+      send: 0,
+      stack: null as IStackAdapter | null,
+      onGreenfield: (adapter: IStackAdapter): Promise<void> => {
+        s.greenfield += 1;
+        s.stack = adapter;
+
+        return Promise.resolve();
+      },
+      onSend: (): Promise<void> => {
+        s.send += 1;
+
+        return Promise.resolve();
+      },
     };
+
+    return s;
+  };
+
+  test("a detected+unplanned project runs onGreenfield EXACTLY once with the EXACT stack, never onSend", async () => {
+    const detected = stub("boringstack", true);
+    const s = spy();
 
     await greenfieldOrSend(
       "/dir",
       [stub("other", false), detected],
       noApprovedPlan,
-      (s) => {
-        captured.stack = s;
-
-        return Promise.resolve();
-      },
-      () => {
-        captured.sent = true;
-
-        return Promise.resolve();
-      }
+      s.onGreenfield,
+      s.onSend
     );
 
-    expect(captured.stack).toBe(detected);
-    expect(captured.sent).toBe(false);
+    expect(s.greenfield).toBe(1);
+    expect(s.send).toBe(0);
+    expect(s.stack).toBe(detected);
   });
 
-  test("an undetected project runs onSend, never onGreenfield", async () => {
-    let planned = false;
-    let sent = false;
+  test("an undetected project runs onSend EXACTLY once, never onGreenfield", async () => {
+    const s = spy();
 
     await greenfieldOrSend(
       "/dir",
       [stub("a", false)],
       noApprovedPlan,
-      () => {
-        planned = true;
-
-        return Promise.resolve();
-      },
-      () => {
-        sent = true;
-
-        return Promise.resolve();
-      }
+      s.onGreenfield,
+      s.onSend
     );
 
-    expect(sent).toBe(true);
-    expect(planned).toBe(false);
+    expect(s.send).toBe(1);
+    expect(s.greenfield).toBe(0);
   });
 
-  test("a detected but ALREADY-planned project runs onSend, never onGreenfield", async () => {
-    let planned = false;
-    let sent = false;
+  test("a detected but ALREADY-planned project runs onSend EXACTLY once, never onGreenfield", async () => {
+    const s = spy();
 
     await greenfieldOrSend(
       "/dir",
       [stub("boringstack", true)],
       hasApprovedPlan,
-      () => {
-        planned = true;
-
-        return Promise.resolve();
-      },
-      () => {
-        sent = true;
-
-        return Promise.resolve();
-      }
+      s.onGreenfield,
+      s.onSend
     );
 
-    expect(sent).toBe(true);
-    expect(planned).toBe(false);
+    expect(s.send).toBe(1);
+    expect(s.greenfield).toBe(0);
   });
 });
 
@@ -193,12 +195,19 @@ describe("the REPL line handler wires greenfieldOrSend (source guard)", () => {
     // Strip comments so a matching phrase in prose can't satisfy the guard.
     const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 
-    // One bound match: greenfieldOrSend(args.dir, STACK_ADAPTERS, … runGreenfieldPlanning …
-    // runSend(line) …). The order (planning continuation before the send continuation) and
-    // the shared call mean a define-but-never-call, wrong registry, or swapped branch fails.
+    // A SINGLE-STATEMENT bound match: `[^;]` cannot cross the `);` that ends the
+    // greenfieldOrSend call, so a later unconditional `runSend(line)` statement (the bypass
+    // where planning THEN sends) can't satisfy the guard — runSend(line) must be INSIDE this
+    // call, as the onSend arrow continuation. The registry is bound into the call and the
+    // planning continuation must precede the send continuation.
     const wired =
-      /greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,[\s\S]*?runGreenfieldPlanning\([\s\S]*?runSend\(line\)[\s\S]*?\)/;
+      /greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,[^;]*?runGreenfieldPlanning\([^;]*?\(\)\s*=>\s*runSend\(line\)[^;]*?\)/;
 
     expect(src).toMatch(wired);
+
+    // Defense-in-depth against the "send AFTER planning" bypass: runSend(line) must not appear
+    // as a bare statement right before the handler closes (it belongs only as the onSend
+    // continuation). Guards the exact regression the reviewer described.
+    expect(src).not.toMatch(/;\s*await runSend\(line\);\s*\}/);
   });
 });
