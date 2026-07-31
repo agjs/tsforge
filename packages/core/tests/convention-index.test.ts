@@ -9,7 +9,6 @@ import {
   topicForRule,
   boringstackConventionProvider,
 } from "../src/loop/conventions";
-import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
 import type { IProvider, IChatMessage } from "../src/inference";
 import type { IConventionProvider } from "../src/loop/conventions-provider";
 import type { IGate } from "../src/gate/gate-runner";
@@ -388,23 +387,12 @@ test("a hallucinated pull_conventions call with pullConventions OFF gets no prov
   }
 });
 
-// The pull_conventions tool enum is a hand-maintained duplicate of TOPICS — this locks it to
-// conventionTopics() so a new topic (or a dropped one, like data-fetching was) can't silently
-// diverge, leaving a guide the model can't actually pull.
-test("PULL_CONVENTIONS_TOOL enum stays in sync with conventionTopics()", () => {
-  const enumTopics =
-    PULL_CONVENTIONS_TOOL.function.parameters.properties.topic.enum;
-
-  expect([...enumTopics].sort()).toEqual([...conventionTopics()].sort());
-});
-
-// Explicit, diff-visible guard for the 5 design-system topics this change added: each must be
-// pullable — present in BOTH the runtime guide registry and the hand-maintained pull-tool enum —
-// so validate can't stay green while the tool schema and registry diverge for these topics.
-test("the new design-system topics are in both the guide registry and the pull enum", () => {
-  const enumTopics =
-    PULL_CONVENTIONS_TOOL.function.parameters.properties.topic.enum;
-  const registry = conventionTopics();
+// The pull_conventions tool no longer carries a hardcoded topic enum (topics come from the
+// injected provider at runtime, listed in the front-loaded guides) — so the old enum↔registry
+// duplicate is gone. What still matters: every design-system topic the guides added is present
+// in the runtime registry, so it's actually PULLABLE via the provider.
+test("the design-system topics are in the convention registry (pullable)", () => {
+  const registry = new Set<string>(conventionTopics());
 
   for (const topic of [
     "design-tokens",
@@ -413,11 +401,7 @@ test("the new design-system topics are in both the guide registry and the pull e
     "accessibility",
     "components-ui",
   ]) {
-    // A Set<string> membership test compares the string cleanly against the typed
-    // ConventionTopic[] / enum tuple — no cast, and eslint won't rewrite it into a
-    // type-narrowing `.includes()` (which fails typecheck: string vs the topic union).
-    expect(new Set<string>(registry).has(topic)).toBe(true);
-    expect(new Set<string>(enumTopics).has(topic)).toBe(true);
+    expect(registry.has(topic)).toBe(true);
   }
 });
 

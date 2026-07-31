@@ -345,38 +345,26 @@ export const PACKAGE_INFO_TOOL = {
   },
 };
 
+/**
+ * The `pull_conventions` tool schema. STACK-AGNOSTIC by design: the valid topics come from
+ * the injected convention provider at RUNTIME (the tool validates the topic and lists the
+ * valid ones on a miss), so core carries no adapter-specific topic list — `topic` is a plain
+ * string, not a hardcoded enum. The available topics are enumerated in the front-loaded guides
+ * already in the model's system prompt.
+ */
 export const PULL_CONVENTIONS_TOOL = {
   type: "function",
   function: {
     name: TOOL_NAME.pullConventions,
     description:
-      "Re-fetch the boringstack HOW-TO guide for a topic on demand. The core guides are ALREADY front-loaded in your system prompt — use this to re-read one you need again, or for a rule you're still unsure how to satisfy. Returns the exact pattern the gate enforces.",
+      "Re-fetch the stack's HOW-TO guide for a convention topic on demand. The guides are ALREADY front-loaded in your system prompt — use this to re-read one you need again, or for a rule you're still unsure how to satisfy. Returns the exact pattern the gate enforces.",
     parameters: {
       type: "object",
       properties: {
         topic: {
           type: "string",
-          enum: [
-            "component-anatomy",
-            "file-layout",
-            "jsx",
-            "state",
-            "no-casts",
-            "routing",
-            "forms",
-            "data-fetching",
-            "lint-gotchas",
-            "testing",
-            "api-service",
-            "i18n",
-            "design-tokens",
-            "theming",
-            "responsive",
-            "accessibility",
-            "components-ui",
-          ],
           description:
-            'which guide: component-anatomy (where a component lives + one-per-file), file-layout (no inline types/constants/helpers), jsx (no computation in markup), state (hooks, not component body), no-casts (type guards instead of `as`/`!`), routing (thin route files), forms, data-fetching (api-client, never raw fetch), lint-gotchas (await promises, no void-expr values, no stringified errors, no duplicate strings), testing (.test.ts vs .test.tsx, the vi.hoisted api-client mock, createApp/app.handle route tests, enforced test rules), api-service (mutating service methods record an audit event; throw ApiError), i18n (add a locale key only when you reference it via t("key") — never pre-declare, or it\'s a dead-key error), design-tokens (never hardcode colors; use CSS-variable Tailwind tokens by role), theming (data-theme-driven, never dark: variants), responsive (mobile-first breakpoints + Sheet mobile drawer), accessibility (satisfy jsx-a11y up front: aria-label/aria-hidden/sr-only, no interactive div, semantic landmarks), components-ui (use @/components/ui Radix primitives, cn() + cva, asChild).',
+            "which convention guide to fetch — one of the topics listed in the front-loaded guides in your system prompt. An unknown topic returns the list of valid ones.",
         },
       },
       required: ["topic"],

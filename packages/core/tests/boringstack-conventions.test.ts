@@ -8,7 +8,6 @@ import {
   unseenGuidesForErrors,
   boringstackConventionProvider,
 } from "../src/loop/conventions";
-import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
 import { injectFeedback, type ILoopCtx } from "../src/loop/turn";
 import type { ILoopState, ILoopEvent } from "../src/loop";
 import type { IErrorItem } from "../src/validate";
@@ -95,17 +94,13 @@ describe("convention registry", () => {
     expect(g).toContain("BYPASSES validation");
   });
 
-  test("i18n is a first-class pullable topic — registry AND pull_conventions enum agree (no drift)", () => {
-    // The three hand-maintained surfaces for a topic must all carry `i18n`, or the model
-    // hits a live guide it can't `pull_conventions` for (enum reject) — the exact drift the
-    // reviewers flagged. convention-index.test.ts locks the full enum↔topics parity; this pins
-    // the NEW topic explicitly in its own change so the guard is visible beside the addition.
+  test("i18n is a first-class pullable topic — present in the runtime registry", () => {
+    // `i18n` must be in the topic registry, or the model hits a live guide it can't
+    // `pull_conventions` for. The pull tool no longer carries a hardcoded enum (topics come
+    // from the injected provider at runtime), so registry membership is the single surface
+    // that makes a topic pullable — this pins the NEW topic beside its addition.
     expect(conventionTopics()).toContain("i18n");
     expect(isConventionTopic("i18n")).toBe(true);
-    const enumTopics =
-      PULL_CONVENTIONS_TOOL.function.parameters.properties.topic.enum;
-
-    expect(enumTopics).toContain("i18n");
   });
 
   test("forms guide steers away from the invented FormEvent + deprecated z.string().email() (live-build residuals)", () => {
