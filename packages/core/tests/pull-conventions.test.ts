@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { doPullConventions } from "../src/loop/tools/pull-conventions";
-import { boringstackConventionProvider } from "../src/loop/conventions";
+import { boringstackConventionProvider } from "../src/loop/boringstack/conventions";
 
 // The tool reads the convention library from the injected provider (ctx.conventions), so a real
 // call supplies the BoringStack provider — the same one the adapter injects at runtime.

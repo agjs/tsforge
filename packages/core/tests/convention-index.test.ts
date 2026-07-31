@@ -8,7 +8,7 @@ import {
   conventionTopics,
   topicForRule,
   boringstackConventionProvider,
-} from "../src/loop/conventions";
+} from "../src/loop/boringstack/conventions";
 import type { IProvider, IChatMessage } from "../src/inference";
 import type { IConventionProvider } from "../src/loop/conventions-provider";
 import type { IGate } from "../src/gate/gate-runner";
@@ -374,6 +374,51 @@ test("Session advertises pull_conventions with the provider's topics as the enum
     // The advertised set carries EXACTLY the tool built from the provider's topics — not the
     // empty-provider free-form fallback, proving the topics were threaded (not dropped to []).
     expect(captured.tools).toContainEqual(buildPullConventionsTool(topics));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Session does NOT advertise pull_conventions when the capability is on but no provider is injected", async () => {
+  // A knowledge tool with no knowledge base is incoherent: dispatch would always return "no
+  // convention library" and the schema would falsely promise a topic listing. So the tool is
+  // offered only when a provider is actually present — pullConventions alone is not enough.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-noprov-"));
+  const captured: { names: readonly string[] } = { names: [] };
+
+  const provider: IProvider = {
+    async complete(_messages: IChatMessage[], opts) {
+      const tools = opts?.tools ?? [];
+
+      captured.names = tools.map((t) =>
+        t !== null &&
+        typeof t === "object" &&
+        "function" in t &&
+        t.function !== null &&
+        typeof t.function === "object" &&
+        "name" in t.function &&
+        typeof t.function.name === "string"
+          ? t.function.name
+          : ""
+      );
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      // no `conventions` provider injected
+    });
+
+    await s.send("go");
+
+    expect(captured.names).not.toContain("pull_conventions");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

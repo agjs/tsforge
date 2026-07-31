@@ -7,7 +7,7 @@ import {
   topicForRule,
   unseenGuidesForErrors,
   boringstackConventionProvider,
-} from "../src/loop/conventions";
+} from "../src/loop/boringstack/conventions";
 import { injectFeedback, type ILoopCtx } from "../src/loop/turn";
 import type { ILoopState, ILoopEvent } from "../src/loop";
 import type { IErrorItem } from "../src/validate";

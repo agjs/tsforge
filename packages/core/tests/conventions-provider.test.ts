@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import type { IConventionProvider } from "../src/loop/conventions-provider";
-import { boringstackConventionProvider } from "../src/loop/conventions";
+import { boringstackConventionProvider } from "../src/loop/boringstack/conventions";
 
 // Mirrored test for the IConventionProvider seam (loop/conventions-provider.ts). The interface is
 // type-only, so this pins its CONTRACT via the concrete BoringStack implementation: assignability

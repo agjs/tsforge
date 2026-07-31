@@ -11,7 +11,7 @@
  * wall. Each guide maps 1:1 to the rules that reject its violation.
  */
 
-import type { IConventionProvider } from "./conventions-provider";
+import type { IConventionProvider } from "../conventions-provider";
 
 /** The convention topics the model can be handed or pull. Single source of truth:
  *  the const tuple drives both the type and the runtime list (no `as` cast). */

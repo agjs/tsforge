@@ -1,7 +1,7 @@
 import type { ExecutionMode } from "../prompt";
 import type { IPolicyRules } from "../../policy";
 import type { IConventionProvider } from "../conventions-provider";
-import { boringstackConventionProvider } from "../conventions";
+import { boringstackConventionProvider } from "./conventions";
 
 /**
  * Commands the model must NEVER run during a BoringStack build. The browser end-to-end

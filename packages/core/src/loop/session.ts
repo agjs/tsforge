@@ -800,19 +800,21 @@ export class Session {
     const offerCheck =
       cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 
-    // The pull_conventions topic enum is built from the injected provider's real
-    // topics at offer time (stack-agnostic — core carries no topic literal). Gated
-    // on pullConventions to match the capability-bypass guard below: no capability,
-    // no topics.
+    // pull_conventions is offered only when the capability is on AND a provider is
+    // actually injected — advertising a knowledge tool with no knowledge base would
+    // promise a topic listing the dispatch can't deliver ("no convention library"),
+    // and its free-form schema falsely implies unknown topics return valid ones. The
+    // topic enum is then built from the injected provider's real topics() at offer
+    // time (stack-agnostic — core carries no topic literal).
+    const conventionProvider =
+      cfg.pullConventions === true ? cfg.conventions : undefined;
     const conventionTopics =
-      cfg.pullConventions === true && cfg.conventions !== undefined
-        ? cfg.conventions.topics()
-        : [];
+      conventionProvider !== undefined ? conventionProvider.topics() : [];
 
     this.tools = toolsFor(
       false,
       {},
-      cfg.pullConventions === true,
+      conventionProvider !== undefined,
       offerCheck,
       cfg.interactive === true,
       conventionTopics
