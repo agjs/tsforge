@@ -346,13 +346,6 @@ export const PACKAGE_INFO_TOOL = {
 };
 
 /**
- * The `pull_conventions` tool schema. STACK-AGNOSTIC by design: the valid topics come from
- * the injected convention provider at RUNTIME (the tool validates the topic and lists the
- * valid ones on a miss), so core carries no adapter-specific topic list — `topic` is a plain
- * string, not a hardcoded enum. The available topics are enumerated in the front-loaded guides
- * already in the model's system prompt.
- */
-/**
  * The pull_conventions tool, built per-offer so its `topic` enum carries the
  * injected convention provider's REAL topics — the same enum-at-offer pattern
  * `buildSpawnAgentTool` uses for `subagent_type`. Core stays stack-agnostic: the

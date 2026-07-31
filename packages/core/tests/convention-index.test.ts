@@ -335,6 +335,50 @@ test("Session threads cfg.conventions into the pull_conventions tool (real dispa
   }
 });
 
+test("Session advertises pull_conventions with the provider's topics as the enum (offer-time threading)", async () => {
+  // Observes the SCHEMA the Session actually advertises to the model: the tools handed to
+  // provider.complete must contain a pull_conventions tool whose enum is the injected provider's
+  // topics(). This is the end-to-end guard for session.ts threading cfg.conventions.topics()
+  // through toolsFor — swapping that for [] would drop the enum and fail this deep-equal.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-schema-"));
+  const captured: { tools: readonly unknown[] | null } = { tools: null };
+
+  const provider: IProvider = {
+    async complete(_messages: IChatMessage[], opts) {
+      captured.tools = opts?.tools ?? [];
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  const topics = ["ADVERTISED_TOPIC_A", "ADVERTISED_TOPIC_B"];
+  const fakeConv: IConventionProvider = {
+    buildGuides: () => "",
+    unseenForErrors: () => [],
+    guide: () => null,
+    topics: () => topics,
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      conventions: fakeConv,
+    });
+
+    await s.send("go");
+
+    // The advertised set carries EXACTLY the tool built from the provider's topics — not the
+    // empty-provider free-form fallback, proving the topics were threaded (not dropped to []).
+    expect(captured.tools).toContainEqual(buildPullConventionsTool(topics));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("a hallucinated pull_conventions call with pullConventions OFF gets no provider (no withheld-capability leak)", async () => {
   // The provider is threaded into the tool context ONLY when pullConventions is on (the flag that
   // offers the tool). With the flag off, a hallucinated pull_conventions call executes (read-only,
