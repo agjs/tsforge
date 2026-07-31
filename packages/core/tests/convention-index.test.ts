@@ -118,6 +118,55 @@ test("front-loaded guides come from the INJECTED provider, not a static import",
   }
 });
 
+test("the INJECTED provider's guide content reaches the prompt — not a static import", async () => {
+  // The decisive seam test: a FAKE provider returns a sentinel. If session.ts sourced the guides
+  // itself (static import) the sentinel would be ABSENT and the BoringStack text PRESENT. So we
+  // assert the sentinel IS present and the real BoringStack lib is NOT — content is injected.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-inject-"));
+
+  try {
+    const cap = { system: "" };
+    const s = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      conventions: { buildGuides: () => "FAKE_GUIDE_SENTINEL_9Z" },
+    });
+
+    await s.send("go");
+
+    expect(cap.system).toContain("FAKE_GUIDE_SENTINEL_9Z");
+    expect(cap.system).not.toContain("HOW THIS STACK WRITES CODE");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the pullConventions gate still governs — a provider WITHOUT the flag does not front-load", async () => {
+  // Independently verifies the OTHER half: provider present, but pullConventions omitted ⇒ no
+  // front-load. Guards against a regression to gating on provider-presence alone.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-gate-"));
+
+  try {
+    const cap = { system: "" };
+    const s = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      conventions: { buildGuides: () => "FAKE_GUIDE_SENTINEL_9Z" },
+    });
+
+    await s.send("go");
+
+    expect(cap.system).not.toContain("FAKE_GUIDE_SENTINEL_9Z");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // The pull_conventions tool enum is a hand-maintained duplicate of TOPICS — this locks it to
 // conventionTopics() so a new topic (or a dropped one, like data-fetching was) can't silently
 // diverge, leaving a guide the model can't actually pull.

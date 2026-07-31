@@ -33,8 +33,10 @@ test("the BoringStack build flags keep offerCheck + convention library + drive-t
   // The convention library is INJECTED as the generic provider seam (core no longer
   // imports the stack-specific content); dropping it un-front-loads the guides.
   expect(BORINGSTACK_BUILD_SESSION.conventions).toBeDefined();
-  expect(typeof BORINGSTACK_BUILD_SESSION.conventions.buildGuides()).toBe(
-    "string"
+  // Assert REAL guide content, not merely a string — an empty/stub provider would silently
+  // un-front-load the guides on the live host path (createBoringstackHostSession spreads this).
+  expect(BORINGSTACK_BUILD_SESSION.conventions.buildGuides()).toContain(
+    "HOW THIS STACK WRITES CODE"
   );
   expect(BORINGSTACK_BUILD_SESSION.executionMode).toBe("drive-to-green");
 });
