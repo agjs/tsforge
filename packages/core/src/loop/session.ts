@@ -951,6 +951,11 @@ export class Session {
         // `humanPresent`, NOT `interactive` — the latter is a POLICY signal (approval
         // path) and co-pilot presence must not loosen policy verdicts.
         ...(cfg.interactive === true ? { humanPresent: true } : {}),
+        // The adapter's convention library — spread into every IToolContext (so
+        // `pull_conventions` reads its guides) and read by the reactive push.
+        ...(cfg.conventions === undefined
+          ? {}
+          : { conventions: cfg.conventions }),
       },
       gate: {
         parse: cfg.parse,

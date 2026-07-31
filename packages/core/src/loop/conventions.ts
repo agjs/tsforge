@@ -471,4 +471,8 @@ export function unseenGuidesForErrors(
  */
 export const boringstackConventionProvider: IConventionProvider = {
   buildGuides: buildConventionGuides,
+  unseenForErrors: unseenGuidesForErrors,
+  guide: (topic) => (isConventionTopic(topic) ? conventionGuide(topic) : null),
+  topics: conventionTopics,
+  isTopic: isConventionTopic,
 };

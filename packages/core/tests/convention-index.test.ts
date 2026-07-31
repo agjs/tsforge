@@ -11,7 +11,18 @@ import {
 } from "../src/loop/conventions";
 import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
 import type { IProvider, IChatMessage } from "../src/inference";
+import type { IConventionProvider } from "../src/loop/conventions-provider";
 import { Session } from "../src/loop";
+
+/** A minimal fake convention provider returning fixed guide text (the rest of the seam
+ *  surface is stubbed — these tests only exercise front-loading). */
+const fakeConventions = (guides: string): IConventionProvider => ({
+  buildGuides: () => guides,
+  unseenForErrors: () => [],
+  guide: () => null,
+  topics: () => [],
+  isTopic: () => false,
+});
 
 // WS-A1: front-load the actual convention GUIDES (the compliant patterns), not merely a
 // topic index — so the model writes it right the FIRST time (Bucket 1) instead of pulling
@@ -132,7 +143,7 @@ test("the INJECTED provider's guide content reaches the prompt — not a static 
       files: ["**/*"],
       executionMode: "drive-to-green",
       pullConventions: true,
-      conventions: { buildGuides: () => "FAKE_GUIDE_SENTINEL_9Z" },
+      conventions: fakeConventions("FAKE_GUIDE_SENTINEL_9Z"),
     });
 
     await s.send("go");
@@ -156,7 +167,7 @@ test("the pullConventions gate still governs — a provider WITHOUT the flag doe
       cwd: dir,
       files: ["**/*"],
       executionMode: "drive-to-green",
-      conventions: { buildGuides: () => "FAKE_GUIDE_SENTINEL_9Z" },
+      conventions: fakeConventions("FAKE_GUIDE_SENTINEL_9Z"),
     });
 
     await s.send("go");

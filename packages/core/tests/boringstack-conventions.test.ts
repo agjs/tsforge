@@ -6,6 +6,7 @@ import {
   isConventionTopic,
   topicForRule,
   unseenGuidesForErrors,
+  boringstackConventionProvider,
 } from "../src/loop/conventions";
 import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
 import { injectFeedback, type ILoopCtx } from "../src/loop/turn";
@@ -306,7 +307,9 @@ describe("convention PUSH delivery (the guide actually reaches the model + is ob
         events.push(e);
       },
       messages: [],
-      tool: {},
+      // The reactive PUSH reads its guides from the injected provider (ctx.tool.conventions) —
+      // the adapter sets this on the live build; the test supplies the same BoringStack provider.
+      tool: { conventions: boringstackConventionProvider },
       gate: {
         parse: undefined,
         runner: commandGate(
