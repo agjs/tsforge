@@ -198,13 +198,19 @@ describe("the REPL line handler wires greenfieldOrSend (source guard)", () => {
     // Strip comments so a matching phrase in prose can't satisfy the guard.
     const src = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 
-    // A SINGLE-STATEMENT bound match: `[^;]` cannot cross the `);` that ends the
-    // greenfieldOrSend call, so a later unconditional `runSend(line)` statement (the bypass
-    // where planning THEN sends) can't satisfy the guard — runSend(line) must be INSIDE this
-    // call, as the onSend arrow continuation. The registry is bound into the call and the
-    // planning continuation must precede the send continuation.
+    // One structurally-bound match that closes BOTH plan-THEN-send bypasses at the source
+    // level (a strengthening, not a relaxation, of the deleted negative guard):
+    //   • `[^;]` throughout — the match cannot cross the `);` that ends the call, so it stays
+    //     inside a single statement.
+    //   • onGreenfield is a BRACE-LESS arrow: `(stack) => runGreenfieldPlanning(` (no `{`), so
+    //     it is a single expression and cannot itself contain a trailing `runSend(line)`
+    //     (the ASI block-body bypass `stack => { plan; send }`).
+    //   • onSend is `() => runSend(line)` and the call is the handler's TERMINAL statement —
+    //     `) ; }` immediately after — so no bare `runSend(line)` can trail the call.
+    // A wrong registry, define-but-never-call, swapped branch, block-body plan-then-send, or a
+    // trailing send all break the single match.
     const wired =
-      /greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,[^;]*?runGreenfieldPlanning\([^;]*?\(\)\s*=>\s*runSend\(line\)[^;]*?\)/;
+      /greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,[^;]*?\(stack\)\s*=>\s*runGreenfieldPlanning\([^;]*?\(\)\s*=>\s*runSend\(line\)\s*\)\s*;\s*\}/;
 
     expect(src).toMatch(wired);
   });
