@@ -12,7 +12,27 @@ import {
 import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
 import type { IProvider, IChatMessage } from "../src/inference";
 import type { IConventionProvider } from "../src/loop/conventions-provider";
+import type { IGate } from "../src/gate/gate-runner";
+import type { IValidateResult } from "../src/validate";
 import { Session } from "../src/loop";
+
+/** A gate that always reports one error, so the drive loop hits a failure after the model's edit
+ *  and fires the reactive convention PUSH. */
+const redGate: IGate = {
+  run: async (): Promise<IValidateResult> => ({
+    passed: false,
+    errors: [
+      {
+        key: "a",
+        file: "a.ts",
+        line: 1,
+        rule: "no-casts",
+        message: "no as",
+      },
+    ],
+    output: "",
+  }),
+};
 
 /** A minimal fake convention provider returning fixed guide text (the rest of the seam
  *  surface is stubbed — these tests only exercise front-loading). */
@@ -172,6 +192,88 @@ test("the pullConventions gate still governs — a provider WITHOUT the flag doe
     await s.send("go");
 
     expect(cap.system).not.toContain("FAKE_GUIDE_SENTINEL_9Z");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Session threads cfg.conventions to the reactive PUSH (real drive loop)", async () => {
+  // The Session-wiring proof: a real drive-to-green session — the model makes an edit, the RED gate
+  // fires, and the reactive push must inject the INJECTED provider's guide (a sentinel) into the
+  // next message the model sees. Deleting session.ts's `ctx.tool.conventions = cfg.conventions`
+  // spread makes the push find no provider ⇒ the sentinel never appears ⇒ this fails.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-push-"));
+
+  await Bun.write(join(dir, "a.ts"), "export const x = 1;\n");
+
+  const seen = { sentinel: false };
+  let turn = 0;
+
+  const provider: IProvider = {
+    async complete(messages: IChatMessage[]) {
+      turn += 1;
+
+      if (
+        messages.some(
+          (m) =>
+            typeof m.content === "string" &&
+            m.content.includes("PUSH_THREAD_SENTINEL")
+        )
+      ) {
+        seen.sentinel = true;
+      }
+
+      if (turn === 1) {
+        // An in-scope edit so the drive loop runs the gate (→ RED → reactive push next turn).
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "1",
+              name: "edit",
+              arguments: {
+                file: "a.ts",
+                oldString: "const x = 1;",
+                newString: "const x = 2;",
+              },
+            },
+          ],
+        };
+      }
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  const fakeConv: IConventionProvider = {
+    buildGuides: () => "",
+    unseenForErrors: (errors, seenSet) => {
+      if (errors.length === 0 || seenSet.has("x")) {
+        return [];
+      }
+
+      seenSet.add("x");
+
+      return ["PUSH_THREAD_SENTINEL"];
+    },
+    guide: () => null,
+    topics: () => [],
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      conventions: fakeConv,
+      gate: redGate,
+    });
+
+    await s.send("build it");
+
+    expect(seen.sentinel).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
