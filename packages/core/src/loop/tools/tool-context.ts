@@ -95,8 +95,8 @@ export function composeGuards(...guards: readonly EditGuard[]): EditGuard {
 export interface IToolContext {
   cwd: string;
   /** The build ADAPTER's convention library (injected seam) — the `pull_conventions`
-   *  tool reads its `guide`/`topics`/`isTopic` from here instead of importing stack
-   *  content. Absent ⇒ no convention library (the tool isn't offered). */
+   *  tool reads its `guide`/`topics` from here instead of importing stack content.
+   *  Absent ⇒ `pull_conventions` returns a "not configured" message. */
   conventions?: IConventionProvider;
   /** Editable scope — `edit`/`create` outside it are rejected. */
   files: string[];
