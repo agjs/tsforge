@@ -1,4 +1,5 @@
 import { test, expect, describe } from "bun:test";
+import { join } from "node:path";
 import { resolveGreenfieldStack, greenfieldConstraints } from "../src/cli/repl";
 import type { IStackAdapter } from "../src/loop/planning/stack-adapter";
 
@@ -87,5 +88,30 @@ describe("greenfieldConstraints (resolved adapter supplies the constraints)", ()
 
     expect(out).toContain("boringstack");
     expect(out).toContain("user, auth");
+  });
+});
+
+// The interception itself lives inside the REPL's readline line handler (a closure in
+// `repl()`), which is not unit-reachable — the same class the /clear + --continue wiring is
+// source-guarded for (see repl-ask-user-wiring.test.ts). Without this, removing the
+// interception block or routing a greenfield line straight to runSend would leave every
+// behavioral test above green. This locks that the dispatch is WIRED to the extracted seams.
+describe("the REPL line handler is wired to the greenfield seams (source guard)", () => {
+  test("dispatch calls resolveGreenfieldStack, routes to planning, and uses greenfieldConstraints", async () => {
+    const src = await Bun.file(
+      join(import.meta.dir, "..", "src", "cli", "repl.ts")
+    ).text();
+
+    // resolveGreenfieldStack appears TWICE — its definition AND its call in the line handler
+    // (so a definition with no call would fail this).
+    expect(
+      (src.match(/resolveGreenfieldStack\(/g) ?? []).length
+    ).toBeGreaterThanOrEqual(2);
+    // A resolved stack routes into planning, not the normal send path.
+    expect(src).toContain("runGreenfieldPlanning(");
+    // …and the planner constraints come from the resolved adapter via greenfieldConstraints.
+    expect(src).toContain("greenfieldConstraints(stack, echo)");
+    // The registry the dispatch resolves against is the composition-root adapter list.
+    expect(src).toContain("STACK_ADAPTERS");
   });
 });
