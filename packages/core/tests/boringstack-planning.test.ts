@@ -4,7 +4,7 @@ import {
   boringstackPlanConstraints,
   BORINGSTACK_PLANNER_GUIDANCE,
   BORINGSTACK_RESERVED_ENTITY_IDS,
-} from "../src/loop/planning/boringstack-planning";
+} from "../src/loop/boringstack/planning";
 
 describe("isBoringstackProject (authoritative scaffold-receipt detection)", () => {
   test("true only when the receipt records archetype boringstack", async () => {

@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isRecord } from "../../lib/guards";
-import type { IPlanConstraints } from "./plan-types";
+import type { IPlanConstraints } from "../planning/plan-types";
+import type { IStackAdapter } from "../planning/stack-adapter";
 
 /** STACK-SPECIFIC planner guidance for BoringStack (kept OUT of the generic
  *  planner). Appended to the system prompt only for a BoringStack project. The
@@ -80,3 +81,15 @@ export function boringstackPlanConstraints(
     onStripped,
   };
 }
+
+/**
+ * The BoringStack stack adapter as the generic greenfield flow sees it (`IStackAdapter`).
+ * This is the single registration point the composition root (the CLI) imports; the core
+ * planning logic depends only on the interface, never on `isBoringstackProject` /
+ * `boringstackPlanConstraints` directly.
+ */
+export const boringstackStackAdapter: IStackAdapter = {
+  id: "boringstack",
+  detect: (dir) => isBoringstackProject(dir),
+  planConstraints: boringstackPlanConstraints,
+};

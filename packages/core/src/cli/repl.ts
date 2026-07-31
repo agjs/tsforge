@@ -44,9 +44,10 @@ import {
 } from "../loop";
 import { runPlanning } from "../loop/planning/run-planning";
 import {
-  isBoringstackProject,
-  boringstackPlanConstraints,
-} from "../loop/planning/boringstack-planning";
+  resolveStackAdapter,
+  type IStackAdapter,
+} from "../loop/planning/stack-adapter";
+import { boringstackStackAdapter } from "../loop/boringstack/planning";
 import { loadApprovedPlan } from "../loop/planning/plan-store";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
@@ -158,17 +159,23 @@ export function parseReviewResponse(
   return { action: "revise", note: response };
 }
 
-/** The greenfield BoringStack planning flow (description → proposed plan → human
+/** The stack adapters the CLI (composition root) registers. The generic planner/CLI
+ *  flow resolves the matching one per project; adding a stack (Phaser next) is a one-line
+ *  registration here, not a change to the planning logic. */
+const STACK_ADAPTERS: readonly IStackAdapter[] = [boringstackStackAdapter];
+
+/** The greenfield planning flow (description → proposed plan → human
  *  approve/revise/cancel → approved plan on disk). Extracted from the line handler
- *  to keep its cognitive complexity down; the stack detection + planner constraints
- *  live in the tested boringstack-planning module, and this only glues them to the
- *  interactive prompt. */
+ *  to keep its cognitive complexity down; the resolved stack adapter supplies the
+ *  planner constraints (guidance + reserved-entity stripping) and this only glues them
+ *  to the interactive prompt — it names no concrete stack. */
 async function runGreenfieldPlanning(
   dir: string,
   description: string,
   echo: (s: string) => void,
   rl: ReturnType<typeof createInterface> | null,
-  activeModelEntry: IModelEntry
+  activeModelEntry: IModelEntry,
+  stack: IStackAdapter
 ): Promise<void> {
   echo("▸ planning your product first...\n");
 
@@ -179,11 +186,11 @@ async function runGreenfieldPlanning(
 
   const result = await runPlanning(dir, {
     planner: plannerProvider,
-    // We only reach here when looksLikeBoringstack is true, so the BoringStack
+    // We only reach here when this stack adapter detected the project, so its
     // reserved-slice rule always applies (no gap) and every drop is surfaced.
-    constraints: boringstackPlanConstraints((dropped) => {
+    constraints: stack.planConstraints((dropped) => {
       echo(
-        `▸ dropped auth slice(s) BoringStack already provides: ${dropped.join(", ")}\n`
+        `▸ dropped slice(s) the ${stack.id} starter already provides: ${dropped.join(", ")}\n`
       );
     }),
     describe: async () => {
@@ -875,15 +882,21 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    // GREENFIELD BORINGSTACK INTERCEPTION: a fresh boringstack project with no
-    // approved plan routes into planning first. Detection + planner constraints
-    // share ONE structural signal (looksLikeBoringstack) so there is no gap where a
-    // project is planned as boringstack but not given the reserved-slice rule.
-    if (
-      (await isBoringstackProject(args.dir)) &&
-      (await loadApprovedPlan(args.dir)) === null
-    ) {
-      await runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry);
+    // GREENFIELD INTERCEPTION: a fresh project a stack adapter claims, with no approved
+    // plan, routes into planning first. Detection AND the planner constraints come from
+    // the SAME resolved adapter, so there is no gap where a project is planned by a stack
+    // but not given its reserved-slice rule.
+    const stack = await resolveStackAdapter(args.dir, STACK_ADAPTERS);
+
+    if (stack !== null && (await loadApprovedPlan(args.dir)) === null) {
+      await runGreenfieldPlanning(
+        args.dir,
+        line,
+        echo,
+        rl,
+        activeModelEntry,
+        stack
+      );
 
       return;
     }

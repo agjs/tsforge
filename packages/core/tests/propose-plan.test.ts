@@ -9,7 +9,7 @@ import {
 import {
   BORINGSTACK_PLANNER_GUIDANCE,
   BORINGSTACK_RESERVED_ENTITY_IDS,
-} from "../src/loop/planning/boringstack-planning";
+} from "../src/loop/boringstack/planning";
 import type { IProductPlan, ISlice } from "../src/loop/planning/plan-types";
 import { isProductPlan } from "../src/loop/planning/plan-store";
 import type { IProvider } from "../src/inference";
