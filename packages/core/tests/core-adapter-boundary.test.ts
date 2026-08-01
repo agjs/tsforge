@@ -86,6 +86,8 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
       'export async function load() {\n  return import("../boringstack/plan-extension");\n}\n',
     "leak-dynamic-template.ts":
       "export async function load() {\n  return import(`../boringstack/plan-extension`);\n}\n",
+    "leak-require.ts":
+      'import { createRequire } from "node:module";\n\nexport const m = createRequire(import.meta.url)("../boringstack/plan-extension");\n',
     "enum.ts": "export enum Color {\n  Red,\n  Blue,\n}\n",
     "core-ok.ts":
       'import { isProductPlan } from "../planning/plan-store";\n\nexport const b = isProductPlan;\n',
@@ -102,6 +104,10 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
   // A TEMPLATED dynamic import (`import(`../boringstack/x`)`) is caught by the TemplateElement
   // selector — the string-Literal-only form a prior round could evade is closed.
   expect(results.get("leak-dynamic-template.ts")).toContain(SYNTAX_RULE);
+  // An immediately-invoked createRequire(...)("../boringstack/x") (CommonJS-interop runtime load)
+  // is caught too — no-restricted-imports only sees the permitted `node:module` import, so the
+  // ban lives in the no-restricted-syntax createRequire selector.
+  expect(results.get("leak-require.ts")).toContain(SYNTAX_RULE);
   // The boundary block REPLACES the base no-restricted-syntax for loop files, re-including the
   // enum ban. Prove that ban still fires here, so a future edit dropping the TSEnumDeclaration
   // selector can't silently relax the gate for the whole core loop.

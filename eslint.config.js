@@ -260,18 +260,23 @@ export default tseslint.config(
           ],
         },
       ],
-      // no-restricted-imports covers STATIC import/export declarations but NOT a dynamic
-      // `import("../boringstack/x")` (an ImportExpression) — which would otherwise reach the adapter
-      // and bypass the boundary. Close every statically-analyzable dynamic form with AST selectors on
-      // the import() argument: any string Literal naming a boringstack segment ANYWHERE in the
-      // argument (covers `import("../boringstack/x")`, a ternary, and `import("../boringstack/" + n)`),
-      // and any template-literal quasi naming it (covers `import(`../boringstack/x`)`). INHERENT
-      // LIMIT (documented, not a gap to chase): a FULLY-COMPUTED path — `import(runtimeVar)` or a
-      // segment-splitting concat `import("../bor" + "ingstack/x")` where no single node contains the
-      // segment — is beyond static AST matching for ANY lint rule; it is also not how a known module
-      // is ever imported. NOTE: this whole rule REPLACES the base `no-restricted-syntax` (the enum
-      // ban) for loop files — flat config overrides a rule wholesale per key — so the enum selector
-      // is re-included here (and a test asserts it still fires in loop files).
+      // no-restricted-imports covers STATIC import/export declarations but NOT runtime module loads
+      // — a dynamic `import("../boringstack/x")` (ImportExpression) or a `createRequire(...)(...)`
+      // (CommonJS interop) — which would otherwise reach the adapter and bypass the boundary. Close
+      // every form whose target path is a STATIC STRING somewhere in the AST, via selectors on the
+      // loader argument: (1) any string Literal naming a boringstack segment ANYWHERE in an
+      // import() argument (covers `import("../boringstack/x")`, a ternary, and
+      // `import("../boringstack/" + n)`); (2) any template-literal quasi naming it (covers
+      // `import(`../boringstack/x`)`); (3) an immediately-invoked `createRequire(...)("...boringstack...")`.
+      // DOCUMENTED INHERENT LIMIT (not a gap to chase — the WS2 lesson: close what's statically
+      // matchable, document the rest): a path assembled at RUNTIME is beyond static AST matching for
+      // ANY lint rule — `import(runtimeVar)`, a segment-splitting concat `"../bor" + "ingstack/x"`
+      // where no single node holds the segment, or a require function ALIASED to a variable first
+      // (`const r = createRequire(u); r("../boringstack/x")`). None of these is how a known module is
+      // ever loaded; they are adversarial, and this is a pure-ESM codebase with zero `createRequire`
+      // use. NOTE: this whole rule REPLACES the base `no-restricted-syntax` (the enum ban) for loop
+      // files — flat config overrides a rule wholesale per key — so the enum selector is re-included
+      // here (and a test asserts it still fires in loop files).
       "no-restricted-syntax": [
         "error",
         {
@@ -289,6 +294,12 @@ export default tseslint.config(
             "ImportExpression TemplateElement[value.cooked=/(^|\\u002F)boringstack($|\\u002F)/]",
           message:
             "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a templated dynamic import(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+        },
+        {
+          selector:
+            'CallExpression[callee.callee.name="createRequire"] > Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]',
+          message:
+            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
         },
       ],
     },
