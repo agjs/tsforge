@@ -219,5 +219,43 @@ export default tseslint.config(
       "@typescript-eslint/naming-convention": "off",
       "@typescript-eslint/no-unnecessary-condition": "off",
     },
+  },
+  {
+    /*
+     * MECHANICAL core↔adapter boundary (the law made enforceable, WS4). The generic core loop
+     * — everything under `loop/**` EXCEPT the BoringStack adapter itself — must never import the
+     * adapter (`loop/boringstack/**`). WS1–WS3 reclaimed the leaks (conventions, stack-adapter,
+     * plan spine) by hand; this rule keeps them reclaimed: any future core-loop file that reaches
+     * back into `loop/boringstack/**` fails `bun run validate`, not code review.
+     *
+     * The rule's SCOPE is the definition of "core loop": this config block applies to every
+     * `.ts` under `loop/` except the `loop/boringstack/` subtree, so the exemptions fall out of the tree with no
+     * hand-maintained allow-list — the composition roots that legitimately wire the adapter in
+     * (`cli.ts`, `cli/**`), the scripts, and the tests all live OUTSIDE `loop/**` and are never
+     * subject to it; the adapter's own intra-`boringstack` imports are excluded via `ignores`.
+     * `no-restricted-paths` resolves PHYSICAL paths, so it catches every relative form
+     * (`../boringstack/x`, `./boringstack/x`, …), which a specifier glob cannot.
+     */
+    files: ["packages/core/src/loop/**/*.ts"],
+    ignores: ["packages/core/src/loop/boringstack/**"],
+    rules: {
+      // `@typescript-eslint/no-restricted-imports` (a superset of core no-restricted-imports that
+      // ALSO catches `import type`) matches the import SPECIFIER — no path resolver needed. From
+      // within `loop/`, the only way to reach the adapter is a relative specifier that names the
+      // `boringstack/` path segment (`../boringstack/x`, `./boringstack/x`, `../../boringstack/x`),
+      // so the two globs below (the bare dir index + anything under it) catch every form.
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/boringstack", "**/boringstack/**"],
+              message:
+                "Core loop must not import the BoringStack adapter (loop/boringstack/**). Core stays stack-agnostic — inject the adapter behind its seam (IConventionProvider / IStackAdapter / IPlanSchema) and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+            },
+          ],
+        },
+      ],
+    },
   }
 );
