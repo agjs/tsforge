@@ -212,18 +212,15 @@ const STRICT =
   "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
 
 interface IMatch {
-  text: string;
   endByte: number;
 }
 
-/** Parse one ast-grep JSON match into {text, endByte}, FAILING CLOSED on any unexpected shape
+/** The end byte offset of one ast-grep JSON match, FAILING CLOSED on any unexpected shape
  *  (never masking a schema change as an empty match). No `as` casts (house rule). */
 const toMatch = (m: unknown): IMatch => {
   if (
     m !== null &&
     typeof m === "object" &&
-    "text" in m &&
-    typeof m.text === "string" &&
     "range" in m &&
     m.range !== null &&
     typeof m.range === "object" &&
@@ -233,12 +230,10 @@ const toMatch = (m: unknown): IMatch => {
     "end" in m.range.byteOffset &&
     typeof m.range.byteOffset.end === "number"
   ) {
-    return { text: m.text, endByte: m.range.byteOffset.end };
+    return { endByte: m.range.byteOffset.end };
   }
 
-  throw new Error(
-    "ast-grep match missing string `text` / numeric range.byteOffset.end"
-  );
+  throw new Error("ast-grep match missing numeric range.byteOffset.end");
 };
 
 /** Structurally match `pattern` over `file` via ast-grep. ast-grep exits 0 when it finds
@@ -289,10 +284,15 @@ const strictOn = async (source: string): Promise<IMatch[]> => {
   }
 };
 
-/** True iff the greenfieldOrSend call ending at `endByte` is a TERMINAL statement — only `;`
- *  and the closing `}` follow. A trailing `await runSend(line)` (plan-THEN-send) breaks this. */
-const isTerminalStatement = (source: string, endByte: number): boolean =>
-  /^\s*;\s*\}/.test(
+/** True iff the greenfieldOrSend call ending at `endByte` is the terminal statement of the
+ *  runLine HANDLER ARROW — followed by only `;` `}` `;` (statement terminator, the arrow body's
+ *  closing brace, and the `const runLine = … => {…}` assignment's semicolon). Anchoring to the
+ *  handler close rejects not just a sequential trailing send but a call hidden in an INNER block
+ *  that still sends in the outer handler: `if (false) { call; } await runSend(line);` and
+ *  `try { call; } finally { runSend(line); }` are each followed by `}` + MORE code (not `};`), so
+ *  they fail — closing the nested/unreachable-block class. */
+const isHandlerTerminal = (source: string, endByte: number): boolean =>
+  /^\s*;\s*\}\s*;/.test(
     Buffer.from(source, "utf8").subarray(endByte).toString("utf8")
   );
 
@@ -305,14 +305,18 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
     // hasPlan predicate, and both continuations at the AST level.
     expect(matches.length).toBe(1);
 
-    // …and it is the handler's terminal statement, so nothing sends after it (plan-THEN-send).
-    expect(isTerminalStatement(src, matches[0]?.endByte ?? -1)).toBe(true);
+    // …and it is the terminal statement of the runLine handler arrow, so nothing sends after it.
+    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(true);
   });
 
   // NEGATIVE regression tests — each plan-THEN-send / decoy the reviewers raised must yield ZERO
-  // STRICT matches (or fail the terminal check), proving the guard actually rejects it.
+  // STRICT matches (or fail the handler-terminal check), proving the guard actually rejects it.
   const wrap = (call: string): string =>
     `async function h() {\n  ${call};\n}\n`;
+  // The real handler's shape (`const runLine = … => {…};`), so the handler-terminal check can be
+  // exercised against enclosing-scope decoys exactly as it runs against real repl.ts.
+  const wrapArrow = (body: string): string =>
+    `const runLine = async (line: string): Promise<void> => {\n  ${body}\n};\n`;
   const CORRECT_CALL =
     "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
 
@@ -347,13 +351,43 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
     expect((await strictOn(asTemplate)).length).toBe(0);
   });
 
-  test("rejects a trailing runSend after the correct call (fails the terminal check)", async () => {
-    const src = `async function h() {\n  ${CORRECT_CALL};\n  await runSend(line);\n}\n`;
+  // Enclosing-scope decoys: STRICT still matches the (correct) call node, but the call is NOT the
+  // handler arrow's terminal statement — a send happens elsewhere in the handler — so
+  // isHandlerTerminal rejects each. Sanity: the correct arrow shape PASSES the terminal check.
+  test("the handler-terminal check passes for the correct arrow shape", async () => {
+    const src = wrapArrow(`${CORRECT_CALL};`);
     const matches = await strictOn(src);
 
-    // The call node itself still matches (it IS correct) …
     expect(matches.length).toBe(1);
-    // … but it is NOT the terminal statement — a send follows — so the guard rejects it here.
-    expect(isTerminalStatement(src, matches[0]?.endByte ?? -1)).toBe(false);
+    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(true);
+  });
+
+  test("rejects a sequential trailing runSend after the correct call", async () => {
+    const src = wrapArrow(`${CORRECT_CALL};\n  await runSend(line);`);
+    const matches = await strictOn(src);
+
+    expect(matches.length).toBe(1);
+    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(false);
+  });
+
+  test("rejects the correct call in an inner dead block with an outer send", async () => {
+    const src = wrapArrow(
+      `if (false) { ${CORRECT_CALL}; }\n  await runSend(line);`
+    );
+    const matches = await strictOn(src);
+
+    // The call node still matches — but it is nested, not the handler's terminal statement.
+    expect(matches.length).toBe(1);
+    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(false);
+  });
+
+  test("rejects the correct call in a try whose finally sends", async () => {
+    const src = wrapArrow(
+      `try { ${CORRECT_CALL}; } finally { await runSend(line); }`
+    );
+    const matches = await strictOn(src);
+
+    expect(matches.length).toBe(1);
+    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(false);
   });
 });
