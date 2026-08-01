@@ -201,9 +201,11 @@ describe("greenfieldOrSend (the interception branch)", () => {
 // call. The real handler legitimately contains conditional `runSend(line)` in earlier branches
 // that `return` first (plan-discuss/approval), so a blanket "reject any preceding send" would
 // reject the real handler — telling an unconditional preceding send from a return-guarded one is
-// control-flow analysis, not pattern matching. That routing/ordering property is what the
-// greenfieldOrSend behavioral test (plan XOR send) and the real build/e2e path cover; this guard
-// pins the wiring's shape and terminal position, not the handler's full control flow.
+// control-flow analysis, not pattern matching. NOTE the greenfieldOrSend behavioral test does NOT
+// cover this either: it proves the two continuations are mutually exclusive INSIDE greenfieldOrSend,
+// but never sees a `runSend(line)` the caller runs BEFORE invoking it. Only the real build/e2e path
+// (which executes the actual handler) — or full control-flow analysis — exercises a preceding
+// send. This guard pins the wiring's shape and terminal position, not the handler's control flow.
 const AST_GREP = join(
   import.meta.dir,
   "..",
@@ -358,8 +360,9 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
   // DOCUMENTED LIMIT (pinned so the boundary is explicit, not silent): a send BEFORE the call is
   // NOT rejected — the call is still the arrow's last statement. This is inherent: the real
   // handler has conditional runSend in earlier return-guarded branches, so a preceding send can't
-  // be blanket-rejected without control-flow analysis. Ordering/routing is covered by the
-  // greenfieldOrSend behavioral test + build/e2e, not this structural wiring guard.
+  // be blanket-rejected without control-flow analysis. It is NOT covered by the greenfieldOrSend
+  // behavioral test either (that test cannot see a send the caller runs before invoking it) — only
+  // the real build/e2e path, which runs the actual handler, exercises this ordering.
   test("does NOT reject a preceding send (documented static-analysis limit)", async () => {
     expect(
       await countOn(wrapArrow(`await runSend(line);\n  ${CORRECT_CALL};`))
