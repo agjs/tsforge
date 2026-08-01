@@ -36,9 +36,10 @@ export interface IProductPlan<TUi = unknown> {
 
 /**
  * The STACK-SPECIFIC plan schema the generic planner + parser depend on, injected by the adapter
- * (BoringStack today). Core's `proposePlan` teaches `system` to the model, uses `example` to pin
- * the exact output shape, validates each slice's `ui` with `validateUi` at the parse boundary, and
- * applies the optional cross-slice `extraCheck`. This is what keeps the WEB plan shape (screens,
+ * (BoringStack today). Core's `proposePlan` teaches `system` to the model (the adapter embeds any
+ * worked example INTO that string — there is no separate `example` field), validates each slice's
+ * `ui` with `validateUi` at the parse boundary, and applies the optional cross-slice `extraCheck`.
+ * This is what keeps the WEB plan shape (screens,
  * nav, layout, home) OUT of core — a Phaser adapter would supply its own schema, or a UI-less one
  * a trivial pass-through.
  */

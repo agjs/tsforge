@@ -40,6 +40,32 @@ describe("resolveGreenfieldStack (the REPL interception decision)", () => {
     expect(resolved).toBe(detected);
   });
 
+  test("consults hasApprovedPlan with the DIR and the EXACT resolved adapter (its schema drives the check)", async () => {
+    // The approved-plan check must run against the RESOLVED adapter's plan schema, not a fixed one
+    // — so resolveGreenfieldStack must hand hasApprovedPlan (dir, detectedAdapter). Capture the
+    // args and assert identity; a regression that drops the stack arg or passes the wrong adapter
+    // (so a second stack's plans would be validated by boringstack's schema) fails here.
+    const detected = stub("boringstack", true);
+    // Capture into an array (not a reassigned local) so the compiler doesn't flow-narrow the
+    // closure-mutated value to `never` at the assertion site.
+    const calls: { dir: string; stack: IStackAdapter }[] = [];
+
+    const resolved = await resolveGreenfieldStack(
+      "/dir",
+      [stub("other", false), detected],
+      (dir, stack) => {
+        calls.push({ dir, stack });
+
+        return Promise.resolve(false);
+      }
+    );
+
+    expect(resolved).toBe(detected);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.dir).toBe("/dir");
+    expect(calls[0]?.stack).toBe(detected);
+  });
+
   test("a detected project that is ALREADY planned → null (bypass, no re-planning)", async () => {
     const resolved = await resolveGreenfieldStack(
       "/dir",

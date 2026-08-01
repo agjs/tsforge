@@ -5,8 +5,9 @@ import type { IProvider } from "../../inference";
 
 export interface IPlanningDeps<TUi> {
   planner: IProvider;
-  /** The stack's plan schema (prompt + example + UI validator + cross-slice rule), injected by the
-   *  caller from the resolved stack adapter — this is what keeps the web plan shape out of core. */
+  /** The stack's plan schema (system prompt + UI validator + optional cross-slice rule), injected
+   *  by the caller from the resolved stack adapter — this is what keeps the web plan shape out of
+   *  core. */
   schema: IPlanSchema<TUi>;
   /** OPT-IN stack-specific planning constraints (guidance + reserved entities).
    *  Omitted → the planner is stack-agnostic. The BoringStack path supplies the
