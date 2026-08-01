@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatFiles } from "../src/gate";
 import { resolveProjectPrettierArgv } from "../src/gate/linter";
+import { isWin32 } from "../src/lib/platform";
 
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "tsforge-format-scope-"));
@@ -97,7 +98,7 @@ test("formatFiles refuses a path that escapes cwd (../outside)", async () => {
 // stands in for the project's prettier and proves it was invoked with the file args.
 // POSIX-only: on win32 the project bin isn't shell-lessly spawnable, so the
 // implementation deliberately uses bundled prettier (covered by the fallback test).
-test.skipIf(process.platform === "win32")(
+test.skipIf(isWin32())(
   "formatFiles spawns the project's own prettier binary directly",
   async () => {
     const dir = await tempDir();
@@ -106,6 +107,12 @@ test.skipIf(process.platform === "win32")(
       const binDir = join(dir, "node_modules", ".bin");
 
       await mkdir(binDir, { recursive: true });
+      // prettier must be a real installed package (manifest present), not just a .bin shim.
+      await mkdir(join(dir, "node_modules", "prettier"), { recursive: true });
+      await writeFile(
+        join(dir, "node_modules", "prettier", "package.json"),
+        JSON.stringify({ name: "prettier", version: "3.9.6" })
+      );
       // Fake prettier: appends a marker to each non-flag arg, proving it ran with the
       // file list and that the argv had no leading "bun".
       await writeFile(
@@ -260,7 +267,59 @@ test("resolveProjectPrettierArgv falls back to the bundled prettier when the pro
   }
 });
 
-test.skipIf(process.platform === "win32")(
+// Security: a lone `.bin/prettier` shim WITHOUT an installed prettier package (no
+// node_modules/prettier/package.json) must NOT be auto-executed — fall back to bundled.
+test.skipIf(isWin32())(
+  "resolveProjectPrettierArgv ignores a lone .bin/prettier shim with no installed package",
+  async () => {
+    const dir = await tempDir();
+
+    try {
+      const binDir = join(dir, "node_modules", ".bin");
+
+      await mkdir(binDir, { recursive: true });
+      await writeFile(join(binDir, "prettier"), "#!/bin/sh\nexit 0\n");
+      // NOTE: no node_modules/prettier/package.json — the shim is not a real install.
+
+      const argv = await resolveProjectPrettierArgv(dir);
+
+      expect(argv[0]).toBe("bun"); // bundled, not the planted shim
+      expect(argv).toHaveLength(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+);
+
+// POSIX: a backslash is a legal filename character. formatFiles must NOT normalize `a\b.ts`
+// to `a/b.ts` — doing so would retarget a DIFFERENT file. The safety guarantee is that the
+// distinct `a/b.ts` is never formatted as a side effect (under the buggy normalize path it
+// WOULD be). Whether the odd backslash file itself formats is moot — the tools' glob layer
+// escapes backslashes — so we assert only the no-retarget property.
+test.skipIf(isWin32())(
+  "formatFiles does not normalize a POSIX backslash into a retargeted sibling",
+  async () => {
+    const dir = await tempDir();
+
+    try {
+      const messy = "export  const   x=1";
+
+      await writeFile(join(dir, "a\\b.ts"), messy); // literal backslash in the name
+      await mkdir(join(dir, "a"), { recursive: true });
+      await writeFile(join(dir, "a", "b.ts"), messy); // the distinct a/b.ts
+
+      await formatFiles(dir, ["a\\b.ts"]);
+
+      // a/b.ts — the file `\`→`/` normalization would have hit — is left untouched.
+      expect(await readFile(join(dir, "a", "b.ts"), "utf8")).toBe(messy);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+  30_000
+);
+
+test.skipIf(isWin32())(
   "resolveProjectPrettierArgv prefers the project's own prettier binary when present",
   async () => {
     const dir = await tempDir();
@@ -269,6 +328,11 @@ test.skipIf(process.platform === "win32")(
       const binDir = join(dir, "node_modules", ".bin");
 
       await mkdir(binDir, { recursive: true });
+      await mkdir(join(dir, "node_modules", "prettier"), { recursive: true });
+      await writeFile(
+        join(dir, "node_modules", "prettier", "package.json"),
+        JSON.stringify({ name: "prettier", version: "3.9.6" })
+      );
       const projectBin = join(binDir, "prettier");
 
       await writeFile(projectBin, "#!/usr/bin/env node\n");
@@ -287,7 +351,7 @@ test.skipIf(process.platform === "win32")(
 // Symlink escape: a symlink UNDER cwd that points to a file OUTSIDE the workspace must
 // not let a formatter rewrite the external target. realpath-based containment resolves
 // the link and drops it.
-test.skipIf(process.platform === "win32")(
+test.skipIf(isWin32())(
   "formatFiles refuses an in-workspace symlink that points outside cwd",
   async () => {
     const parent = await tempDir();

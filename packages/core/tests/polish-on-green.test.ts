@@ -266,6 +266,43 @@ test("polishOnGreen with whole-repo scope drops ONLY the touched file, not sibli
   }
 }, 30_000);
 
+// When a spec-provided task.fix is set, the revert snapshot must ALSO cover the resolved
+// scope (task.fix is an arbitrary command that can edit an in-scope sibling outside
+// touched). On a failed re-gate, that sibling mutation must roll back too. A regression to
+// snapshotting only touched would leave the fix's damage on disk.
+test("polishOnGreen rolls back a task.fix mutation to a NON-touched sibling on a failed re-gate", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
+
+  try {
+    const originalSibling = "const sibling = 1;\n";
+
+    await Bun.write(join(dir, "a.ts"), SOURCE); // touched + droppable → polish proceeds
+    await Bun.write(join(dir, "sibling.ts"), originalSibling);
+
+    const { ctx: base } = ctxWith(dir, false); // gate RED → recheck fails → revert
+    const ctx: ILoopCtx = {
+      ...base,
+      task: {
+        ...base.task,
+        files: ["**/*"],
+        // The fix mutates a sibling the model never wrote (not in touched).
+        fix: "printf 'const sibling = 999;\\n' > sibling.ts",
+      },
+      tool: { touched: new Set(["a.ts"]) },
+    };
+
+    await polishOnGreen(ctx);
+
+    // The failed re-gate rolled EVERYTHING back — including the fix's sibling mutation.
+    expect(await Bun.file(join(dir, "sibling.ts")).text()).toBe(
+      originalSibling
+    );
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe(SOURCE);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("polishOnGreen with coreFormat on formats the TOUCHED file after the drop", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
 

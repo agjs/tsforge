@@ -5,6 +5,7 @@ import { runArgvCommand } from "../lib/fs/process";
 import { conventionOverrideRules } from "../infer-rules/eslint-conventions";
 import type { IConventions } from "../infer-rules/conventions.types";
 import { trace } from "../lib/trace";
+import { isWin32 } from "../lib/platform";
 import { ESLINT_BIN, PRETTIER_BIN, STRICT_CONFIG } from "./tool-paths";
 import type { FileLinter } from "./types";
 
@@ -226,10 +227,19 @@ export async function resolveProjectPrettierArgv(
   // spawn — so on win32 we always use the bundled prettier (spawned via `bun`), which
   // still resolves a project `.prettierrc`. Preferring the project binary is a POSIX
   // fidelity win, not a correctness requirement.
-  if (process.platform !== "win32") {
+  if (!isWin32()) {
     const projectBin = join(cwd, "node_modules", ".bin", "prettier");
+    // Trust the project bin only when prettier is actually INSTALLED as a package here
+    // (its manifest exists) — not a lone `.bin/prettier` shim someone dropped in. tsforge
+    // already runs the project's own scripts/binaries in the gate, so this is the same
+    // "only point tsforge at repos you trust" boundary, narrowed to "prettier is a real
+    // dependency of this project".
+    const manifest = join(cwd, "node_modules", "prettier", "package.json");
 
-    if (await Bun.file(projectBin).exists()) {
+    if (
+      (await Bun.file(projectBin).exists()) &&
+      (await Bun.file(manifest).exists())
+    ) {
       return [projectBin];
     }
   }
@@ -257,12 +267,16 @@ export async function formatFiles(
   files: readonly string[],
   opts: { signal?: AbortSignal; timeoutMs?: number } = {}
 ): Promise<void> {
-  // Normalize path separators ONLY on Windows. On POSIX a backslash is a legal
-  // filename character, so rewriting `dir\file.ts` → `dir/file.ts` would redirect the
-  // formatter at a different, untouched file — breaking the touched-only guarantee.
-  const norm = (f: string): string =>
-    process.platform === "win32" ? f.replaceAll("\\", "/") : f;
-  const rels = [...new Set(files.map(norm).filter((f) => f.length > 0))];
+  // Do NOT normalize separators. On POSIX a backslash is a legal filename character, so
+  // rewriting `dir\file.ts` → `dir/file.ts` would retarget a different, untouched file.
+  // But we also can't safely resolve such a path: macOS `realpath("…/a\b.ts")` itself
+  // normalizes the backslash and returns `…/a/b.ts`. So on POSIX, DROP any input path
+  // containing a backslash up front — before resolve/realpath can retarget it. Real
+  // touched paths are already forward-slashed (recordTouched), so this only guards a
+  // pathological input.
+  const rels = [...new Set(files.filter((f) => f.length > 0))].filter(
+    (f) => isWin32() || !f.includes("\\")
+  );
 
   if (rels.length === 0) {
     return;
