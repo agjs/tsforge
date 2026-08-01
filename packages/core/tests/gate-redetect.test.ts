@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAutoGate, resolveGate } from "../src/cli/gate-setup";
 import { parseArgs } from "../src/cli";
-import type { ISessionRecord } from "../src/session-store";
+import { autoGateCarry } from "../src/cli/repl";
+import {
+  saveSession,
+  loadSession,
+  type ISessionRecord,
+} from "../src/session-store";
 import type { IProvider } from "../src/inference";
 import type { IStackProfile } from "../src/stack-detection";
 import { Session } from "../src/loop";
@@ -30,7 +35,9 @@ test("auto-gate re-detects: generic-ts on an empty dir, react pack once package.
       JSON.stringify({ name: "x", dependencies: { react: "19.0.0" } })
     );
 
-    // Cycle 2: the SAME resolver now enables the React pack — no session restart.
+    // A fresh resolution now enables the React pack — detection reads the CURRENT
+    // package.json each call (two independent resolutions here model two session starts;
+    // the WITHIN-session monotonic accumulation is covered by its own test below).
     const withReact = await resolveAutoGate(dir, "", true);
 
     expect(withReact.command).toContain("react-component-architecture");
@@ -215,5 +222,162 @@ test("resume: auto re-attaches the resolver, manual/off keep their stored gate",
     expect(legacy.accept).toBe("bun x");
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A second gate-relaxation vector: re-running buildGate every cycle re-discovers the test
+// command, so deleting the project's tests mid-build would drop the test gate. The test
+// command is monotonic too — once discovered, it sticks even if the tests disappear.
+test("auto-gate keeps the test command after the project's tests are deleted", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-tests-monotonic-"));
+  const pkg = join(dir, "package.json");
+
+  try {
+    await writeFile(
+      pkg,
+      JSON.stringify({ name: "x", scripts: { test: "vitest run" } })
+    );
+
+    const resolved = await resolveGate({ ...parseArgs([]), dir }, null);
+    const resolver = resolved.autoGate;
+
+    expect(resolver).toBeDefined();
+
+    if (resolver === undefined) {
+      throw new Error("expected an auto-gate resolver for a fresh project");
+    }
+
+    // Cycle 1: a real test script → the gate runs the project's tests.
+    const first = await resolver();
+
+    expect(first.command).toContain("bun run test");
+
+    // The model deletes its test script…
+    await writeFile(pkg, JSON.stringify({ name: "x" }));
+
+    // Cycle 2: the test gate MUST persist — the subject can't relax it by removing tests.
+    const second = await resolver();
+
+    expect(second.command).toContain("bun run test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The /clear rebuild path (the stated purpose of the autoGateActive plumbing): a rebuilt
+// Session re-attaches the auto resolver ONLY while it is still active. After a manual
+// /gate (autoGateActive false) the rebuild must NOT re-arm the auto gate over the user's
+// command. Exercised through `autoGateCarry` — the exact guard the /clear spread uses.
+test("/clear re-arms the auto gate only while active; a manual override survives the rebuild", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-clear-"));
+
+  const stackProfile: IStackProfile = {
+    name: "test",
+    packs: ["generic-ts"],
+    confidence: "guess",
+    reason: "test",
+  };
+
+  let calls = 0;
+
+  const resolver = async () => {
+    calls += 1;
+
+    return { command: "auto-cmd", stackProfile };
+  };
+
+  const makeProvider = (): IProvider => {
+    let turn = 0;
+
+    return {
+      async complete() {
+        turn += 1;
+
+        if (turn === 1) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "1",
+                name: "create",
+                arguments: { file: "a.ts", content: "export const a = 1;\n" },
+              },
+            ],
+          };
+        }
+
+        return { content: "done", toolCalls: [] };
+      },
+    };
+  };
+
+  try {
+    // /clear WHILE ACTIVE: autoGateCarry attaches the resolver, so the rebuild keeps
+    // re-detecting (the resolver runs and drives the gate command).
+    const active = await Session.create({
+      provider: makeProvider(),
+      cwd: dir,
+      files: ["**/*"],
+      accept: "seed",
+      ...autoGateCarry(resolver, true),
+    });
+
+    await active.send("go");
+
+    expect(calls).toBeGreaterThan(0);
+    expect(active.gate).toBe("auto-cmd");
+
+    // /clear AFTER a manual /gate: autoGateActive is false, so autoGateCarry WITHHOLDS the
+    // resolver. The rebuilt session keeps the manual command and never re-arms the auto gate.
+    const callsBeforeRebuild = calls;
+    const manual = await Session.create({
+      provider: makeProvider(),
+      cwd: dir,
+      files: ["**/*"],
+      accept: "exit 0",
+      ...autoGateCarry(resolver, false),
+    });
+
+    await manual.send("go");
+
+    expect(manual.gate).toBe("exit 0");
+    expect(calls).toBe(callsBeforeRebuild);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+// The persistence boundary: the `auto` flag must round-trip through saveSession/loadSession
+// (the real --continue path), else baseGate can't tell an auto session from a manual one.
+test("the session record round-trips the `auto` flag through save/load", async () => {
+  const prevHome = process.env.TSFORGE_HOME;
+  const home = await mkdtemp(join(tmpdir(), "tsforge-home-"));
+
+  process.env.TSFORGE_HOME = home;
+
+  const base: Omit<ISessionRecord, "id" | "auto"> = {
+    cwd: "/x",
+    accept: "eslint .",
+    files: [],
+    updatedAt: 1,
+    messages: [],
+  };
+
+  try {
+    await saveSession({ ...base, id: "auto-on", auto: true });
+    await saveSession({ ...base, id: "auto-off", auto: false });
+    await saveSession({ ...base, id: "legacy" });
+
+    expect((await loadSession("auto-on"))?.auto).toBe(true);
+    expect((await loadSession("auto-off"))?.auto).toBe(false);
+    expect((await loadSession("legacy"))?.auto).toBeUndefined();
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.TSFORGE_HOME;
+    } else {
+      process.env.TSFORGE_HOME = prevHome;
+    }
+
+    await rm(home, { recursive: true, force: true });
   }
 });

@@ -27,6 +27,11 @@ export async function buildGate(
   options?: {
     enableTypeAware?: boolean;
     includeTests?: boolean;
+    /** An explicit test command to use instead of re-discovering one. `undefined`
+     *  discovers from the project (default); a string or `null` is used verbatim.
+     *  The auto-gate resolver passes a MONOTONIC command here so deleting the project's
+     *  tests mid-build can't drop the test gate (a relaxation the subject must not have). */
+    testCommand?: string | null;
     conventions?: IConventions;
   }
 ): Promise<IGateSpec> {
@@ -66,7 +71,10 @@ export async function buildGate(
   // fast without paying for a test run. Only appended when the project actually
   // has tests to run — a strict-floor-only run, or a project with none, skips it.
   if (options?.includeTests === true) {
-    const test = await discoverTestCommand(cwd);
+    const test =
+      options.testCommand === undefined
+        ? await discoverTestCommand(cwd)
+        : options.testCommand;
 
     if (test !== null) {
       parts.push(test);

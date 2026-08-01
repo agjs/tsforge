@@ -3,7 +3,12 @@
  *  (with the per-write lint moat). */
 import type { ICliArgs } from "./args";
 import type { ISessionRecord } from "../session-store";
-import { buildGate, makeFileLinter, type FileLinter } from "../gate";
+import {
+  buildGate,
+  discoverTestCommand,
+  makeFileLinter,
+  type FileLinter,
+} from "../gate";
 import type { IStackProfile } from "../stack-detection";
 import type { IConventions } from "../infer-rules/conventions.types";
 import type { ITsforgeProjectConfig } from "../config/tsforge-config";
@@ -100,10 +105,14 @@ function overridesOrUndef(
   return Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined;
 }
 
-/** Build the eslint gate command + label for a fixed pack-set under a frozen policy. */
+/** Build the eslint gate command + label for a fixed pack-set under a frozen policy.
+ *  `testCommand` is the (monotonic) test command to run; `undefined` lets buildGate
+ *  discover it from the project (the initial resolution), a string/`null` is used as-is
+ *  (the resolver passes its sticky command so deleting tests can't drop the test gate). */
 async function eslintFor(
   policy: IGatePolicy,
-  activePacks: readonly string[]
+  activePacks: readonly string[],
+  testCommand?: string | null
 ): Promise<{ command: string; label: string }> {
   const auto = await buildGate(
     policy.dir,
@@ -112,14 +121,21 @@ async function eslintFor(
     {
       enableTypeAware: policy.profile === "strict",
       // "Green" should mean the strict floor AND the project's own tests pass —
-      // not just that it type-checks and lints. discoverTestCommand appends them
-      // only when the project actually has tests; --strict-floor-only opts out.
+      // not just that it type-checks and lints. Tests run only when the project has
+      // them; --strict-floor-only opts out.
       includeTests: !policy.strictFloorOnly,
+      ...(testCommand === undefined ? {} : { testCommand }),
       conventions: policy.conventions,
     }
   );
 
   return { command: auto.command, label: auto.label };
+}
+
+/** The project's current test command, or null — but only when the auto gate runs tests
+ *  at all (`--strict-floor-only` skips them, so discovery would be wasted). */
+async function detectTestCommand(policy: IGatePolicy): Promise<string | null> {
+  return policy.strictFloorOnly ? null : discoverTestCommand(policy.dir);
 }
 
 /** Build the per-write lint moat for a pack-set under a frozen policy. */
@@ -163,8 +179,15 @@ export async function resolveAutoGate(
  *  cycle) activated is never dropped, so the subject can make the gate stricter by
  *  adding a framework but can NEVER relax it by deleting a dependency. Rule overrides,
  *  profile, and conventions stay frozen (captured once) for the same reason. */
-function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
+function makeAutoGateResolver(
+  policy: IGatePolicy,
+  initialTestCommand: string | null
+): AutoGateResolver {
   const activePacks = new Set<string>(policy.baselinePacks);
+  // Monotonic too: a test command, once discovered, is never dropped — deleting the
+  // project's tests mid-build cannot strip the test gate (a relaxation the subject
+  // must not be able to perform).
+  let testCommand = initialTestCommand;
 
   return async () => {
     const { detectStack } = await import("../stack-detection");
@@ -176,8 +199,14 @@ function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
       activePacks.add(pack);
     }
 
+    const discovered = await detectTestCommand(policy);
+
+    if (discovered !== null) {
+      testCommand = discovered;
+    }
+
     const packs = Array.from(activePacks).sort();
-    const auto = await eslintFor(policy, packs);
+    const auto = await eslintFor(policy, packs, testCommand);
 
     return {
       command: auto.command,
@@ -198,12 +227,17 @@ async function autoGateBranch(args: ICliArgs): Promise<IResolvedGate> {
     args.profile,
     args.strictFloorOnly
   );
-  const initial = await eslintFor(policy, policy.baselinePacks);
+  const initialTestCommand = await detectTestCommand(policy);
+  const initial = await eslintFor(
+    policy,
+    policy.baselinePacks,
+    initialTestCommand
+  );
 
   return {
     accept: initial.command,
     gateLabel: initial.label,
-    autoGate: makeAutoGateResolver(policy),
+    autoGate: makeAutoGateResolver(policy, initialTestCommand),
     lintFile: lintFileFor(policy, policy.baselinePacks),
   };
 }

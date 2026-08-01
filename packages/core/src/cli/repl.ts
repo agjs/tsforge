@@ -520,7 +520,7 @@ async function initReplSession(args: ICliArgs): Promise<{
  *  it is present AND still driving (`active`). Kept module-level so the `/clear` handler
  *  stays branch-free: after a manual `/gate` override the resolver is withheld, so the
  *  rebuild never silently re-arms the auto gate over the user's command. */
-function autoGateCarry(
+export function autoGateCarry(
   autoGate: AutoGateResolver | undefined,
   active: boolean
 ): { autoGate?: AutoGateResolver } {
