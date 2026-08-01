@@ -118,7 +118,7 @@ import {
   printHeader,
   maybePrintNoConfigHint,
 } from "./banner";
-import { resolveGate } from "./gate-setup";
+import { resolveGate, type AutoGateResolver } from "./gate-setup";
 import {
   printSessions,
   turnsToGreenLine,
@@ -389,6 +389,7 @@ async function initReplSession(args: ICliArgs): Promise<{
   resumed: ISessionRecord | null;
   files: string[];
   activeModelEntry: IModelEntry;
+  autoGate?: AutoGateResolver;
 }> {
   const activeModel = await modelForRun(args);
   const provider = makeProvider(activeModel.entry);
@@ -412,7 +413,10 @@ async function initReplSession(args: ICliArgs): Promise<{
   }
 
   const id = resumed?.id ?? newSessionId();
-  const { accept, gateLabel, lintFile } = await resolveGate(args, resumed);
+  const { accept, gateLabel, lintFile, autoGate } = await resolveGate(
+    args,
+    resumed
+  );
   const files = resumed !== null ? resumed.files : scopeOf(args);
   const logFile = resolveLogPath(id, args.log);
 
@@ -456,6 +460,10 @@ async function initReplSession(args: ICliArgs): Promise<{
     // PER-WRITE lint moat (eslint rules per file as it's written), so violations
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
+    // The DYNAMIC auto-gate: re-detects the stack every cycle so a greenfield build
+    // enables framework rule-packs (React, etc.) as soon as the model writes them,
+    // instead of staying on the empty-dir `generic-ts` fallback. Absent ⇒ commandGate.
+    ...(autoGate === undefined ? {} : { autoGate }),
     ...(resumed === null ? {} : { history: resumed.messages }),
     // Opt into the SCOPED format janitor (replaces the old whole-repo `fix`): the loop's
     // autoFixStep runs a strict eslint --fix + prettier over the files the model wrote
@@ -504,6 +512,7 @@ async function initReplSession(args: ICliArgs): Promise<{
     resumed,
     files,
     activeModelEntry: activeModel.entry,
+    ...(autoGate === undefined ? {} : { autoGate }),
   };
 }
 
@@ -525,6 +534,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     resumed,
     files,
     activeModelEntry,
+    autoGate,
   } = await initReplSession(args);
 
   // Load delegation inputs HERE — before readline is created below. Any `await`
@@ -1019,6 +1029,10 @@ export async function repl(args: ICliArgs): Promise<number> {
           // Keep the SCOPED format janitor on across /clear — else the rebuilt session
           // silently reverts to no formatting for the rest of the session.
           coreFormat: true,
+          // Keep the AUTO gate re-detecting across /clear — else the rebuild freezes on
+          // the last static command and stops picking up new framework packs. Passed
+          // directly (optional field): undefined simply means "no auto gate".
+          autoGate,
           // Plain boolean (no branch): the constructor only seeds the flag when true.
           pausedWithEdit: carryDeferredGate,
           ...(profile === undefined ? {} : { profile }),
