@@ -204,8 +204,12 @@ describe("greenfieldOrSend (the interception branch)", () => {
 // line, echo, rl, activeModelEntry, stack)` terminated by `),`, `() => runSend(line)`, and the
 // call as the handler's TERMINAL statement (`) ; }`). Semantic plan-XOR-send is proven by the
 // greenfieldOrSend behavioral test above.
+// `(?<![.\w])` anchors the callee: it must be a bare `greenfieldOrSend(`, not a member-call
+// decoy like `shim.greenfieldOrSend(` or a word-prefixed name. (A regex over source can't
+// exclude every conceivable decoy — a nested dead block or template-literal copy is out of
+// scope; that is what the greenfieldOrSend BEHAVIORAL test covers.)
 const WIRED =
-  /greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,\s*async\s*\(d\)\s*=>\s*\(await loadApprovedPlan\(d\)\)\s*!==\s*null\s*,\s*\(stack\)\s*=>\s*runGreenfieldPlanning\(\s*args\.dir,\s*line,\s*echo,\s*rl,\s*activeModelEntry,\s*stack\s*\)\s*,\s*\(\)\s*=>\s*runSend\(line\)\s*\)\s*;\s*\}/;
+  /(?<![.\w])greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,\s*async\s*\(d\)\s*=>\s*\(await loadApprovedPlan\(d\)\)\s*!==\s*null\s*,\s*\(stack\)\s*=>\s*runGreenfieldPlanning\(\s*args\.dir,\s*line,\s*echo,\s*rl,\s*activeModelEntry,\s*stack\s*\)\s*,\s*\(\)\s*=>\s*runSend\(line\)\s*\)\s*;\s*\}/;
 
 /** Strip line + block comments so a matching phrase in prose can't satisfy the guard. */
 const stripComments = (s: string): string =>
@@ -224,21 +228,21 @@ describe("the REPL line handler wires greenfieldOrSend (source guard)", () => {
   // plan-THEN-send bypass the reviewers raised must FAIL the same WIRED regex.
   test("the guard rejects a block-body onGreenfield that plans then sends", () => {
     const bypass =
-      "greenfieldOrSend( args.dir, STACK_ADAPTERS, h, (stack) => { runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack); runSend(line); }, () => runSend(line) ); }";
+      "greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => { runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack); runSend(line); }, () => runSend(line) ); }";
 
     expect(stripComments(bypass)).not.toMatch(WIRED);
   });
 
   test("the guard rejects a send chained onto runGreenfieldPlanning (.finally)", () => {
     const bypass =
-      "greenfieldOrSend( args.dir, STACK_ADAPTERS, h, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack).finally(() => runSend(line)), () => runSend(line) ); }";
+      "greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack).finally(() => runSend(line)), () => runSend(line) ); }";
 
     expect(stripComments(bypass)).not.toMatch(WIRED);
   });
 
   test("the guard rejects a bare runSend(line) trailing the greenfieldOrSend call", () => {
     const bypass =
-      "greenfieldOrSend( args.dir, STACK_ADAPTERS, h, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); await runSend(line); }";
+      "greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); await runSend(line); }";
 
     expect(stripComments(bypass)).not.toMatch(WIRED);
   });
@@ -250,5 +254,14 @@ describe("the REPL line handler wires greenfieldOrSend (source guard)", () => {
       "greenfieldOrSend( args.dir, STACK_ADAPTERS, () => runSend(line).then(() => false), (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); }";
 
     expect(stripComments(bypass)).not.toMatch(WIRED);
+  });
+
+  test("the guard rejects a member-call decoy (shim.greenfieldOrSend) via the callee anchor", () => {
+    // An otherwise-perfectly-shaped call on a DIFFERENT object must not satisfy the guard —
+    // the `(?<![.\w])` anchor requires a bare `greenfieldOrSend(`, not `shim.greenfieldOrSend(`.
+    const decoy =
+      "shim.greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); }";
+
+    expect(stripComments(decoy)).not.toMatch(WIRED);
   });
 });
