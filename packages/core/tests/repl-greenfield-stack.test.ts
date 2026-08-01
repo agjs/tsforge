@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import {
   resolveGreenfieldStack,
   greenfieldConstraints,
@@ -185,13 +186,15 @@ describe("greenfieldOrSend (the interception branch)", () => {
 // The remaining glue — the readline line handler CALLING greenfieldOrSend with the
 // composition-root registry and both continuations — lives inside repl()'s readline closure,
 // which is not unit-reachable. A source-TEXT guard (regex over the file) cannot distinguish
-// executable code from a string / comment / template / unreachable-block copy of the same shape;
-// the reviewers demonstrated each such class in turn. So this guard matches the AST STRUCTURALLY
-// via ast-grep (the repo's own tool — see loop/astgrep-fix.ts): the pattern matches ONLY a real
-// `await greenfieldOrSend(...)` CALL-EXPRESSION node — a string/comment/template copy is simply
-// not a call node and can never satisfy it. Semantic plan-XOR-send is proven by the
-// greenfieldOrSend behavioral test above; this proves the handler routes through that branch
-// with the real registry and continuations.
+// executable code from a string / comment / template / unreachable copy of the same shape. So
+// this guard matches the AST STRUCTURALLY via ast-grep (the repo's own tool — see
+// loop/astgrep-fix.ts): the pattern is the EXACT wiring, and ast-grep matches it only as a real
+// call-expression node. This closes BOTH classes the reviewers raised: (a) code-vs-literal — a
+// string/comment/template copy is not a call node, so it can never match; (b) shape bypasses —
+// the pattern pins ALL THREE arguments, so a sending hasPlan, a block-body onGreenfield, or a
+// send chained onto planning is a DIFFERENT AST node and fails. The one thing outside the call
+// node is a trailing send AFTER it; the terminal-statement check closes that. Plan-XOR-send
+// SEMANTICS are proven by the greenfieldOrSend behavioral test above.
 const AST_GREP = join(
   import.meta.dir,
   "..",
@@ -203,19 +206,46 @@ const AST_GREP = join(
 );
 const REPL_TS = join(import.meta.dir, "..", "src", "cli", "repl.ts");
 
-/** The `text` of an ast-grep JSON match node, read without an `as` cast (house rule). */
-const matchText = (m: unknown): string =>
-  m !== null &&
-  typeof m === "object" &&
-  "text" in m &&
-  typeof m.text === "string"
-    ? m.text
-    : "";
+// The EXACT wiring, as an ast-grep pattern (all args pinned, no metavariables). A match is a
+// real call-expression node with this precise shape.
+const STRICT =
+  "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
 
-/** Structurally match `pattern` over repl.ts via ast-grep, returning each matched code node's
- *  text. Because it matches the AST, string / comment / template / prose copies (which are NOT
- *  call-expression nodes) can never match — the class no source regex could exclude. */
-const astMatches = (pattern: string): string[] => {
+interface IMatch {
+  text: string;
+  endByte: number;
+}
+
+/** Parse one ast-grep JSON match into {text, endByte}, FAILING CLOSED on any unexpected shape
+ *  (never masking a schema change as an empty match). No `as` casts (house rule). */
+const toMatch = (m: unknown): IMatch => {
+  if (
+    m !== null &&
+    typeof m === "object" &&
+    "text" in m &&
+    typeof m.text === "string" &&
+    "range" in m &&
+    m.range !== null &&
+    typeof m.range === "object" &&
+    "byteOffset" in m.range &&
+    m.range.byteOffset !== null &&
+    typeof m.range.byteOffset === "object" &&
+    "end" in m.range.byteOffset &&
+    typeof m.range.byteOffset.end === "number"
+  ) {
+    return { text: m.text, endByte: m.range.byteOffset.end };
+  }
+
+  throw new Error(
+    "ast-grep match missing string `text` / numeric range.byteOffset.end"
+  );
+};
+
+/** Structurally match `pattern` over `file` via ast-grep. ast-grep exits 0 when it finds
+ *  matches and 1 when it finds NONE (both print valid JSON — `[…]` / `[]`), so success is
+ *  "stdout parses to a JSON array", not the exit code. Throws (never silently passes) if
+ *  ast-grep is absent or errors — its stdout won't be a JSON array — so the guard cannot vanish. */
+const astFind = (pattern: string, file: string): IMatch[] => {
   const proc = Bun.spawnSync([
     AST_GREP,
     "run",
@@ -224,40 +254,106 @@ const astMatches = (pattern: string): string[] => {
     "-l",
     "ts",
     "--json",
-    REPL_TS,
+    file,
   ]);
 
-  if (proc.exitCode !== 0) {
-    throw new Error(`ast-grep failed: ${proc.stderr.toString()}`);
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(proc.stdout.toString());
+  } catch {
+    throw new Error(
+      `ast-grep produced no JSON (exit ${proc.exitCode}) on ${file}: ${proc.stderr.toString()}`
+    );
   }
 
-  const parsed: unknown = JSON.parse(proc.stdout.toString());
+  if (!Array.isArray(parsed)) {
+    throw new Error(`ast-grep did not return a JSON array on ${file}`);
+  }
 
-  return Array.isArray(parsed) ? parsed.map(matchText) : [];
+  return parsed.map(toMatch);
 };
 
+/** Run STRICT over an arbitrary source string (via a temp file), for negative decoys. */
+const strictOn = async (source: string): Promise<IMatch[]> => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-guard-"));
+
+  try {
+    const file = join(dir, "decoy.ts");
+
+    await writeFile(file, source);
+
+    return astFind(STRICT, file);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+/** True iff the greenfieldOrSend call ending at `endByte` is a TERMINAL statement — only `;`
+ *  and the closing `}` follow. A trailing `await runSend(line)` (plan-THEN-send) breaks this. */
+const isTerminalStatement = (source: string, endByte: number): boolean =>
+  /^\s*;\s*\}/.test(
+    Buffer.from(source, "utf8").subarray(endByte).toString("utf8")
+  );
+
 describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guard)", () => {
-  test("ast-grep is available — the guard must not silently vanish", () => {
-    expect(existsSync(AST_GREP)).toBe(true);
-  });
+  test("exactly one call node with the EXACT wiring, as the terminal statement", async () => {
+    const src = await Bun.file(REPL_TS).text();
+    const matches = astFind(STRICT, REPL_TS);
 
-  test("exactly one real greenfieldOrSend(args.dir, STACK_ADAPTERS, …) CALL NODE is wired", () => {
-    const matches = astMatches(
-      "await greenfieldOrSend(args.dir, STACK_ADAPTERS, $$$REST)"
-    );
-
-    // Exactly ONE real call node. A string/comment/template copy is not a call node, so it can
-    // neither inflate this count nor stand in for a deleted real call (the whole decoy class the
-    // reviewers raised — string, comment, template — is closed at the AST level).
+    // Exactly ONE real call node matching the full pinned shape — pins the registry, the
+    // hasPlan predicate, and both continuations at the AST level.
     expect(matches.length).toBe(1);
 
-    // The matched region is REAL code, so text checks WITHIN it are immune to the decoy class:
-    // both continuations are wired — the branch plans via runGreenfieldPlanning and, for a
-    // non-detected/already-planned project, sends via runSend(line). Plan-XOR-send SEMANTICS are
-    // proven by the greenfieldOrSend behavioral test; this pins the real wiring.
-    const call = matches.join("");
+    // …and it is the handler's terminal statement, so nothing sends after it (plan-THEN-send).
+    expect(isTerminalStatement(src, matches[0]?.endByte ?? -1)).toBe(true);
+  });
 
-    expect(call).toContain("runGreenfieldPlanning(");
-    expect(call).toContain("runSend(line)");
+  // NEGATIVE regression tests — each plan-THEN-send / decoy the reviewers raised must yield ZERO
+  // STRICT matches (or fail the terminal check), proving the guard actually rejects it.
+  const wrap = (call: string): string =>
+    `async function h() {\n  ${call};\n}\n`;
+  const CORRECT_CALL =
+    "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
+
+  test("rejects a block-body onGreenfield that plans then sends (different AST node)", async () => {
+    const bypass =
+      "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => { runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack); runSend(line); }, () => runSend(line))";
+
+    expect((await strictOn(wrap(bypass))).length).toBe(0);
+  });
+
+  test("rejects a send chained onto runGreenfieldPlanning (.finally)", async () => {
+    const bypass =
+      "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack).finally(() => runSend(line)), () => runSend(line))";
+
+    expect((await strictOn(wrap(bypass))).length).toBe(0);
+  });
+
+  test("rejects a hasApprovedPlan predicate that sends (different AST node)", async () => {
+    const bypass =
+      "await greenfieldOrSend(args.dir, STACK_ADAPTERS, () => runSend(line).then(() => false), (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
+
+    expect((await strictOn(wrap(bypass))).length).toBe(0);
+  });
+
+  test("rejects string / comment / template copies of the exact call (not call nodes)", async () => {
+    const asString = `const a = ${JSON.stringify(CORRECT_CALL)};`;
+    const asComment = `// ${CORRECT_CALL}`;
+    const asTemplate = "const b = `" + CORRECT_CALL + "`;";
+
+    expect((await strictOn(asString)).length).toBe(0);
+    expect((await strictOn(asComment)).length).toBe(0);
+    expect((await strictOn(asTemplate)).length).toBe(0);
+  });
+
+  test("rejects a trailing runSend after the correct call (fails the terminal check)", async () => {
+    const src = `async function h() {\n  ${CORRECT_CALL};\n  await runSend(line);\n}\n`;
+    const matches = await strictOn(src);
+
+    // The call node itself still matches (it IS correct) …
+    expect(matches.length).toBe(1);
+    // … but it is NOT the terminal statement — a send follows — so the guard rejects it here.
+    expect(isTerminalStatement(src, matches[0]?.endByte ?? -1)).toBe(false);
   });
 });
