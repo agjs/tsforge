@@ -7,8 +7,8 @@ import { writeFileSync, rmSync, mkdirSync } from "node:fs";
 // reclaimed the leaks by hand; this test proves the rule that keeps them reclaimed is LIVE — a
 // leak fails `bun run validate`, not just review. It lints throwaway fixtures placed on the CORE
 // side of the boundary (under `loop/`, NOT under `loop/boringstack/`) and asserts the rule fires
-// on an adapter import and stays silent on a core import. One eslint spawn (one TS-program load)
-// over all three fixtures; the fixture dir is always removed.
+// on static / type-only / dynamic (literal + templated) adapter imports and stays silent on a core
+// import. One eslint spawn (one TS-program load) over all fixtures; the fixture dir is always removed.
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const ESLINT = join(ROOT, "node_modules", ".bin", "eslint");
 // Suffix the fixture dir with the worker PID so concurrent bun-test processes never share (and
@@ -36,13 +36,14 @@ interface IFileResult {
 const lintFixtures = (
   files: Record<string, string>
 ): Map<string, (string | null)[]> => {
-  mkdirSync(FIXTURE_DIR, { recursive: true });
-
-  for (const [name, source] of Object.entries(files)) {
-    writeFileSync(join(FIXTURE_DIR, name), source);
-  }
-
   try {
+    // Create + write INSIDE the try so the finally cleanup runs even if mkdir/write throws.
+    mkdirSync(FIXTURE_DIR, { recursive: true });
+
+    for (const [name, source] of Object.entries(files)) {
+      writeFileSync(join(FIXTURE_DIR, name), source);
+    }
+
     const proc = Bun.spawnSync([ESLINT, "--format", "json", FIXTURE_DIR], {
       cwd: ROOT,
     });
@@ -83,6 +84,9 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
       'import type { IUiIntent } from "../boringstack/plan-extension";\n\nexport type A = IUiIntent;\n',
     "leak-dynamic.ts":
       'export async function load() {\n  return import("../boringstack/plan-extension");\n}\n',
+    "leak-dynamic-template.ts":
+      "export async function load() {\n  return import(`../boringstack/plan-extension`);\n}\n",
+    "enum.ts": "export enum Color {\n  Red,\n  Blue,\n}\n",
     "core-ok.ts":
       'import { isProductPlan } from "../planning/plan-store";\n\nexport const b = isProductPlan;\n',
   });
@@ -95,6 +99,13 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
   // A DYNAMIC import() of the adapter is caught too — by the no-restricted-syntax ImportExpression
   // selector (no-restricted-imports doesn't see dynamic imports), so the boundary has no escape hatch.
   expect(results.get("leak-dynamic.ts")).toContain(SYNTAX_RULE);
+  // A TEMPLATED dynamic import (`import(`../boringstack/x`)`) is caught by the TemplateElement
+  // selector — the string-Literal-only form a prior round could evade is closed.
+  expect(results.get("leak-dynamic-template.ts")).toContain(SYNTAX_RULE);
+  // The boundary block REPLACES the base no-restricted-syntax for loop files, re-including the
+  // enum ban. Prove that ban still fires here, so a future edit dropping the TSEnumDeclaration
+  // selector can't silently relax the gate for the whole core loop.
+  expect(results.get("enum.ts")).toContain(SYNTAX_RULE);
   // Importing another CORE module is allowed — the rule targets only the adapter subtree, so it
   // is a real boundary, not a blanket ban that would also block legitimate intra-core imports.
   // Assert the control file was ACTUALLY linted first (a missing entry — ignored / mis-scoped /
@@ -103,4 +114,5 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
 
   expect(coreOk).toBeDefined();
   expect(coreOk).not.toContain(RULE);
+  expect(coreOk).not.toContain(SYNTAX_RULE);
 }, 30000);

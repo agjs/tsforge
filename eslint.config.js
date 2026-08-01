@@ -262,9 +262,16 @@ export default tseslint.config(
       ],
       // no-restricted-imports covers STATIC import/export declarations but NOT a dynamic
       // `import("../boringstack/x")` (an ImportExpression) — which would otherwise reach the adapter
-      // and bypass the boundary. Close that with an AST selector on the dynamic-import argument.
-      // NOTE: this REPLACES the base `no-restricted-syntax` (the enum ban) for loop files — flat
-      // config overrides the whole rule per key — so the enum selector is re-included here.
+      // and bypass the boundary. Close every statically-analyzable dynamic form with AST selectors on
+      // the import() argument: any string Literal naming a boringstack segment ANYWHERE in the
+      // argument (covers `import("../boringstack/x")`, a ternary, and `import("../boringstack/" + n)`),
+      // and any template-literal quasi naming it (covers `import(`../boringstack/x`)`). INHERENT
+      // LIMIT (documented, not a gap to chase): a FULLY-COMPUTED path — `import(runtimeVar)` or a
+      // segment-splitting concat `import("../bor" + "ingstack/x")` where no single node contains the
+      // segment — is beyond static AST matching for ANY lint rule; it is also not how a known module
+      // is ever imported. NOTE: this whole rule REPLACES the base `no-restricted-syntax` (the enum
+      // ban) for loop files — flat config overrides a rule wholesale per key — so the enum selector
+      // is re-included here (and a test asserts it still fires in loop files).
       "no-restricted-syntax": [
         "error",
         {
@@ -273,9 +280,15 @@ export default tseslint.config(
         },
         {
           selector:
-            "ImportExpression > Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]",
+            "ImportExpression Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]",
           message:
             "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via dynamic import(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+        },
+        {
+          selector:
+            "ImportExpression TemplateElement[value.cooked=/(^|\\u002F)boringstack($|\\u002F)/]",
+          message:
+            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a templated dynamic import(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
         },
       ],
     },
