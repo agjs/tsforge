@@ -963,12 +963,14 @@ async function recheckAfterPolish(
 export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   const { task, cwd, report } = ctx;
 
-  // Scope the DROP + FORMAT to the files the model WROTE this session (`ctx.tool.touched`)
-  // — NOT task.files, which defaults to the whole repo in the interactive REPL.
-  // dropRedundantAnnotations mutates each file (stripping the dropped annotation's
-  // semicolon), so scanning the whole tree would rewrite files the model never touched —
-  // the exact thing #103 forbids.
-  const files = [...(ctx.tool.touched ?? [])];
+  // Scope the DROP + FORMAT to the files the model WROTE this session that are STILL in
+  // the editable scope (`touchedInScope`) — NOT task.files, which defaults to the whole
+  // repo in the interactive REPL. dropRedundantAnnotations mutates each file (stripping
+  // the dropped annotation's semicolon), so scanning the whole tree would rewrite files
+  // the model never touched (the exact thing #103 forbids), and a session-lifetime
+  // `touched` could drop annotations in a file `/files` has since removed from scope,
+  // which the re-gate wouldn't cover.
+  const files = touchedInScope(ctx);
 
   // The revert SNAPSHOT must cover everything polish could mutate, so a failed re-gate
   // rolls back cleanly. The drop/format only touch `files`, but a spec-provided `task.fix`
@@ -1000,7 +1002,7 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   }
 
   if (ctx.gate.coreFormat === true) {
-    await formatFiles(cwd, [...(ctx.tool.touched ?? [])], {
+    await formatFiles(cwd, files, {
       timeoutMs: JANITOR_TIMEOUT_MS,
       ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
     });
@@ -1276,6 +1278,17 @@ export function persistDetail(e: IErrorItem): string {
  *  files), where a per-write path formats exactly one. */
 const JANITOR_TIMEOUT_MS = 120_000;
 
+/** The files the model WROTE this session that are ALSO still in the editable scope.
+ *  `ctx.tool.touched` is session-lifetime, but `/files` can narrow `task.files`
+ *  mid-session — so the janitor/polish intersect the two: only mutate files the model
+ *  wrote AND that the gate (scoped to task.files) will re-validate, never a now-out-of-
+ *  scope leftover. With the default whole-repo glob scope this is just `touched`. */
+function touchedInScope(ctx: ILoopCtx): string[] {
+  return [...(ctx.tool.touched ?? [])].filter((f) =>
+    isInScope(f, ctx.task.files)
+  );
+}
+
 /** STEP 1 — deterministic auto-fix: run the janitor fixers (TS quick-fixes,
  *  ast-grep, the optional `task.fix` command, then a scoped eslint --fix + prettier)
  *  and return which files they changed, so the model is told exactly what moved under
@@ -1304,7 +1317,7 @@ export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
   // own prettier. Opt-in (the CLI sets it) so a bare test/eval loop doesn't spawn a
   // formatter every turn.
   if (ctx.gate.coreFormat === true) {
-    await formatFiles(cwd, [...(ctx.tool.touched ?? [])], {
+    await formatFiles(cwd, touchedInScope(ctx), {
       timeoutMs: JANITOR_TIMEOUT_MS,
       ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
     });

@@ -330,6 +330,36 @@ describe("autoFixStep", () => {
     // exactly as it was. This is the guarantee #103 is about.
     expect(readFileSync(join(dir, "sibling.ts"), "utf8")).toBe(messy);
   }, 30_000);
+
+  // touched is session-lifetime, but /files can NARROW task.files mid-session. The janitor
+  // must intersect the two (touchedInScope): a file the model wrote earlier but that is no
+  // longer in the editable scope must NOT be formatted (the re-gate wouldn't cover it).
+  test("coreFormat on → does not format a touched file now OUTSIDE the scope", async () => {
+    const events: ILoopEvent[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
+    const messy = "export  const   x=1";
+
+    writeFileSync(join(dir, "a.ts"), messy);
+    writeFileSync(join(dir, "out.ts"), messy);
+
+    const base = makeCtx(events, dir);
+    const ctx: ILoopCtx = {
+      ...base,
+      // Scope narrowed (e.g. via /files) to a.ts only — out.ts was touched earlier.
+      task: { ...base.task, files: ["a.ts"] },
+      tool: { touched: new Set(["a.ts", "out.ts"]) },
+      gate: { ...base.gate, coreFormat: true },
+    };
+
+    await autoFixStep(ctx);
+
+    // In-scope touched file is formatted…
+    expect(readFileSync(join(dir, "a.ts"), "utf8")).toBe(
+      "export const x = 1;\n"
+    );
+    // …the now-out-of-scope touched file is left exactly as it was.
+    expect(readFileSync(join(dir, "out.ts"), "utf8")).toBe(messy);
+  }, 30_000);
 });
 
 describe("relentless-loop escalation-ladder centerpiece (fixes A/B/C)", () => {
