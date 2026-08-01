@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkStuck, autoFixStep, type ILoopCtx } from "../src/loop/turn";
@@ -253,6 +253,48 @@ describe("autoFixStep", () => {
     expect(tool[0]?.message).toContain("auto-fixed 1 file(s)");
     // Generous timeout: the fix command sleeps 1s to move mtime forward, and a
     // loaded machine can stretch the spawn well past bun's 5s default.
+  }, 30_000);
+
+  // Regression guard: the scoped format janitor must be OPT-IN. It was briefly made
+  // unconditional, which spawned eslint+prettier every turn and blew the 5s budget of
+  // the real-drive-loop tests. With coreFormat off (the default), autoFixStep runs NO
+  // formatter — a messy scoped file is left exactly as written.
+  test("coreFormat off (default) → autoFixStep does not format the scope", async () => {
+    const events: ILoopEvent[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
+    const messy = "export  const   x=1";
+
+    writeFileSync(join(dir, "m.ts"), messy);
+
+    const base = makeCtx(events, dir);
+    const ctx: ILoopCtx = {
+      ...base,
+      task: { ...base.task, files: ["m.ts"] },
+    };
+
+    await autoFixStep(ctx);
+
+    expect(readFileSync(join(dir, "m.ts"), "utf8")).toBe(messy);
+  });
+
+  test("coreFormat on → autoFixStep formats the scoped file (scoped janitor)", async () => {
+    const events: ILoopEvent[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
+
+    writeFileSync(join(dir, "m.ts"), "export  const   x=1");
+
+    const base = makeCtx(events, dir);
+    const ctx: ILoopCtx = {
+      ...base,
+      task: { ...base.task, files: ["m.ts"] },
+      gate: { ...base.gate, coreFormat: true },
+    };
+
+    await autoFixStep(ctx);
+
+    expect(readFileSync(join(dir, "m.ts"), "utf8")).toBe(
+      "export const x = 1;\n"
+    );
   }, 30_000);
 });
 

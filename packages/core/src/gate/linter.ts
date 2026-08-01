@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, isAbsolute, extname } from "node:path";
 import { ESLint } from "eslint";
 import { runArgvCommand } from "../lib/fs/process";
 import { conventionOverrideRules } from "../infer-rules/eslint-conventions";
@@ -131,39 +131,122 @@ export function makeFileLinter(
   };
 }
 
+/** Extensions the strict ESLint config actually has rules for. Handing eslint an
+ *  explicit path outside this set (a `.json`/`.md`/`.css`) only makes it emit
+ *  "File ignored" noise and burn the timeout parsing a file it can't lint — so the
+ *  scoped fix filters its eslint targets to code files and lets prettier (with
+ *  `--ignore-unknown`) handle everything else. */
+const ESLINT_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
+
+/** Keep only the paths that still exist on disk — a file the model created and
+ *  then deleted in the same turn is in the touched set but must not be handed to a
+ *  formatter (eslint/prettier error on a missing path). */
+async function filterExisting(absFiles: readonly string[]): Promise<string[]> {
+  const checks = await Promise.all(
+    absFiles.map(async (f) => ((await Bun.file(f).exists()) ? f : null))
+  );
+
+  return checks.filter((f): f is string => f !== null);
+}
+
+/** Choose which prettier to run in `cwd`. When the target ships its OWN prettier
+ *  (a local `node_modules/.bin/prettier`), run THAT binary: it carries the project's
+ *  prettier VERSION and can resolve a shared/extended config that lives in the
+ *  project's own `node_modules` (e.g. `"prettier": "@acme/prettier-config"`) — which
+ *  tsforge's bundled prettier cannot see. So a file tsforge edits comes out formatted
+ *  exactly as the project's own `prettier` / CI would format it, and an
+ *  already-correct file is left byte-unchanged. Only when the project has no prettier
+ *  of its own do we fall back to tsforge's bundled prettier, which still resolves a
+ *  project `.prettierrc` if one exists and otherwise applies the tsforge default
+ *  written by `bringConstitution`. */
+export async function resolveProjectPrettierArgv(
+  cwd: string
+): Promise<string[]> {
+  const projectBin = join(cwd, "node_modules", ".bin", "prettier");
+
+  if (await Bun.file(projectBin).exists()) {
+    return [projectBin];
+  }
+
+  return ["bun", PRETTIER_BIN];
+}
+
 /**
- * Auto-format ONE just-written file in place: `eslint --fix` (squashes the
- * auto-fixable mechanical rules — padding-line, curly, prefer-template, quotes)
- * then `prettier --write` (whitespace/quotes/width). Run at WRITE time (in the
- * write guard) so the model never sees — nor hand-chases — formatting noise.
- * Deferring all of this to the settle-time gate let the model self-run eslint
- * mid-build, see the un-squashed mechanical lint, and spiral fixing blank lines
- * and braces by hand to the turn cap. Best-effort + per-file (cheap): any failure
- * is swallowed and the settle gate stays the authority.
+ * Apply the strict eslint autofix + prettier to an EXPLICIT list of files — never
+ * the whole tree. This is the scoping guarantee behind tsforge's formatting: it only
+ * rewrites files it actually touched (each write via `formatFile`, and the
+ * end-of-turn janitor over `ctx.tool.touched`), so running a build inside someone's
+ * repo never reformats thousands of files it never edited. The file list is passed
+ * in, so this is git-independent — it works the same in a fresh, non-git directory.
+ *
+ * Prettier defers to the project's own config and version (see
+ * `resolveProjectPrettierArgv`); the eslint `--fix` keeps tsforge's strictness moat
+ * (the `no-as` ban, `I`-prefix, …) on the files tsforge writes.
+ *
+ * Best-effort, like the rest of the format path: `runArgvCommand` never throws and a
+ * non-zero exit / timeout is ignored — the settle gate stays the authority.
  */
-export async function formatFile(cwd: string, file: string): Promise<void> {
-  const abs = join(cwd, file);
+export async function formatFiles(
+  cwd: string,
+  files: readonly string[],
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {}
+): Promise<void> {
+  const rels = [
+    ...new Set(
+      files.map((f) => f.replaceAll("\\", "/")).filter((f) => f.length > 0)
+    ),
+  ];
+
+  if (rels.length === 0) {
+    return;
+  }
+
+  const abs = rels.map((f) => (isAbsolute(f) ? f : join(cwd, f)));
+  const present = await filterExisting(abs);
+
+  if (present.length === 0) {
+    return;
+  }
+
+  const timeoutMs = opts.timeoutMs ?? FORMAT_TIMEOUT_MS;
+  const signalOpt = opts.signal === undefined ? {} : { signal: opts.signal };
 
   // Route through the shared runner so a hung eslint/prettier is killed by the
-  // timeout instead of wedging this per-write path (it runs inside the write-guard).
-  // runArgvCommand never throws and captures output, so this stays best-effort: a
-  // non-zero exit or timeout is ignored — the settle gate is still the authority.
+  // timeout instead of wedging the caller (this runs inside the write-guard hot
+  // path AND the end-of-turn janitor). Order mirrors the app pipeline: eslint --fix
+  // first, prettier LAST, so prettier has the final say on formatting.
+  const eslintTargets = present.filter((f) => ESLINT_EXTS.has(extname(f)));
+
+  if (eslintTargets.length > 0) {
+    await runArgvCommand(
+      cwd,
+      [
+        "bun",
+        ESLINT_BIN,
+        "--no-config-lookup",
+        "-c",
+        STRICT_CONFIG,
+        "--fix",
+        ...eslintTargets,
+      ],
+      { timeoutMs, ...signalOpt }
+    );
+  }
+
+  const prettierArgv = await resolveProjectPrettierArgv(cwd);
+
   await runArgvCommand(
     cwd,
-    [
-      "bun",
-      ESLINT_BIN,
-      "--no-config-lookup",
-      "-c",
-      STRICT_CONFIG,
-      "--fix",
-      abs,
-    ],
-    { timeoutMs: FORMAT_TIMEOUT_MS }
+    [...prettierArgv, "--write", "--ignore-unknown", ...present],
+    { timeoutMs, ...signalOpt }
   );
-  await runArgvCommand(cwd, ["bun", PRETTIER_BIN, "--write", abs], {
-    timeoutMs: FORMAT_TIMEOUT_MS,
-  });
+}
+
+/** Format a single file — the per-write path (write-guard). Thin wrapper over
+ *  `formatFiles` so the per-write and janitor paths share one prettier-fidelity and
+ *  eslint-moat implementation. */
+export async function formatFile(cwd: string, file: string): Promise<void> {
+  await formatFiles(cwd, [file]);
 }
 
 /** The bundled `prettier --write` command. Prepended to the EVAL gate so the

@@ -118,6 +118,11 @@ export interface ISessionConfig {
   accept?: string;
   /** Auto-fix command run before re-validating (e.g. `eslint --fix`). */
   fix?: string;
+  /** Opt into the core format janitor: a strict `eslint --fix` + prettier over the
+   *  task's SCOPED files (never the whole tree), deferring to the project's own
+   *  prettier. The interactive CLI sets this; bare test/eval loops leave it off so
+   *  they don't pay per-turn formatter subprocess latency. Independent of `fix`. */
+  coreFormat?: boolean;
   /** Read-only context files. */
   context?: string[];
   parse?: ErrorParser;
@@ -984,6 +989,7 @@ export class Session {
       gate: {
         parse: cfg.parse,
         stackProfile,
+        ...(cfg.coreFormat === true ? { coreFormat: true } : {}),
         ...(lintFile === undefined ? {} : { lintFile }),
         ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
         ...(cfg.metaBaseline === undefined

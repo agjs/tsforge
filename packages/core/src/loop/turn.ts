@@ -94,6 +94,7 @@ import {
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
 import type { FileLinter } from "../gate";
+import { formatFiles } from "../gate";
 import type { IGate } from "../gate/gate-runner";
 import {
   buildMetaRuleContext,
@@ -336,6 +337,11 @@ export interface ILoopCtxGate {
   /** Write-time single-file linter (the gate's eslint rules, applied per write so
    *  moat violations tsc can't see surface inline). Omitted ⇒ type-only guard. */
   lintFile?: FileLinter;
+  /** Opt into the SCOPED format janitor in the auto-fix step: a strict eslint --fix +
+   *  prettier over the task's resolved scope, deferring to the project's own prettier.
+   *  Set by the interactive CLI. Off ⇒ no formatter subprocess per turn (bare test/eval
+   *  loops stay fast). */
+  coreFormat?: boolean;
   /** Detected stack profile — determines which rule packs are enabled. */
   stackProfile?: IStackProfile;
   /** Rule severity overrides from tsforge.config.json (maps rule ID to "error" | "warn" | "off"). */
@@ -982,13 +988,22 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
     return;
   }
 
-  // Re-format (the drop strips trailing semicolons) before re-gating.
+  // Re-format (the drop strips trailing semicolons) before re-gating. Scoped to the
+  // polished files, deferring to the project's own prettier — same guarantee as the
+  // auto-fix janitor. A spec-provided `task.fix` still runs too.
   if (task.fix !== undefined && task.fix.length > 0) {
     await runAccept(
       { ...task, accept: task.fix },
       cwd,
       ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
     );
+  }
+
+  if (ctx.gate.coreFormat === true) {
+    await formatFiles(cwd, files, {
+      timeoutMs: JANITOR_TIMEOUT_MS,
+      ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
+    });
   }
 
   const { passed, abortErr } = await recheckAfterPolish(ctx, cwd);
@@ -1257,10 +1272,16 @@ export function persistDetail(e: IErrorItem): string {
  * optional fix command, validate, and return a terminal result (done/stuck) or
  * null to keep going (having fed the failures back into the conversation).
  */
+/** Timeout for the scoped format janitor. Higher than the per-write ceiling
+ *  (`FORMAT_TIMEOUT_MS`, 30s) because it may format a whole task scope at once (many
+ *  files), where a per-write path formats exactly one. */
+const JANITOR_TIMEOUT_MS = 120_000;
+
 /** STEP 1 — deterministic auto-fix: run the janitor fixers (TS quick-fixes,
- *  ast-grep, the optional `task.fix` command) and return which files they changed,
- *  so the model is told exactly what moved under it (else it re-fixes already-
- *  fixed style and edits now-stale text → rejects). Exported for unit tests. */
+ *  ast-grep, the optional `task.fix` command, then a scoped eslint --fix + prettier)
+ *  and return which files they changed, so the model is told exactly what moved under
+ *  it (else it re-fixes already-fixed style and edits now-stale text → rejects).
+ *  Exported for unit tests. */
 export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
   const { task, cwd, report } = ctx;
   const beforeFix = await snapshotMtimes(cwd, task.files);
@@ -1273,6 +1294,20 @@ export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
       cwd,
       ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
     );
+  }
+
+  // Scoped format janitor: strict eslint --fix + prettier over THIS task's scope
+  // only — never the whole tree. The old whole-repo `prettier --write .` reformatted
+  // thousands of untouched files (and with tsforge's bundled prettier, not the
+  // project's), producing huge spurious diffs in real repos. `formatFiles` scopes to
+  // the resolved scope and defers to the project's own prettier. Globs are resolved
+  // so a glob scope is formatted, not silently skipped. Opt-in (the CLI sets it) so a
+  // bare test/eval loop doesn't spawn a formatter every turn.
+  if (ctx.gate.coreFormat === true) {
+    await formatFiles(cwd, await resolveScopeFiles(cwd, task.files), {
+      timeoutMs: JANITOR_TIMEOUT_MS,
+      ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
+    });
   }
 
   const autoFixed = changedSince(
