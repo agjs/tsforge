@@ -240,6 +240,58 @@ test("formatFiles formats a contained file whose name starts with '..'", async (
   }
 }, 30_000);
 
+// .mts / .cts are TypeScript source — the strict eslint --fix moat must run on them too,
+// not just prettier. curly braces are the tell (prettier never adds them).
+test("formatFiles applies the eslint moat to a .mts file", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "g.mts"),
+      "export function f(x: boolean) {\n  if (x) return 1;\n  return 2;\n}\n"
+    );
+
+    await formatFiles(dir, ["g.mts"]);
+
+    expect(await readFile(join(dir, "g.mts"), "utf8")).toContain("if (x) {");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+// Monorepo: a package subdir with prettier hoisted to the workspace root's node_modules
+// must resolve the hoisted binary (Node module resolution), not fall back to bundled.
+test.skipIf(isWin32())(
+  "resolveProjectPrettierArgv finds a workspace-hoisted prettier from a package subdir",
+  async () => {
+    const root = await tempDir();
+
+    try {
+      // prettier installed only at the workspace ROOT.
+      const rootBinDir = join(root, "node_modules", ".bin");
+
+      await mkdir(rootBinDir, { recursive: true });
+      await writeFile(join(rootBinDir, "prettier"), "#!/usr/bin/env node\n");
+      await mkdir(join(root, "node_modules", "prettier"), { recursive: true });
+      await writeFile(
+        join(root, "node_modules", "prettier", "package.json"),
+        JSON.stringify({ name: "prettier", version: "3.9.6" })
+      );
+
+      // The package subdir has no prettier of its own.
+      const pkg = join(root, "packages", "app");
+
+      await mkdir(pkg, { recursive: true });
+
+      const argv = await resolveProjectPrettierArgv(pkg);
+
+      expect(argv).toEqual([join(rootBinDir, "prettier")]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+);
+
 test("formatFiles is a no-op on an empty list and skips a missing path", async () => {
   const dir = await tempDir();
 

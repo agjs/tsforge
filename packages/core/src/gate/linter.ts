@@ -1,4 +1,4 @@
-import { join, extname, resolve, relative, sep } from "node:path";
+import { join, extname, resolve, relative, dirname, sep } from "node:path";
 import { realpath, stat } from "node:fs/promises";
 import { ESLint } from "eslint";
 import { runArgvCommand } from "../lib/fs/process";
@@ -138,7 +138,16 @@ export function makeFileLinter(
  *  "File ignored" noise and burn the timeout parsing a file it can't lint — so the
  *  scoped fix filters its eslint targets to code files and lets prettier (with
  *  `--ignore-unknown`) handle everything else. */
-const ESLINT_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
+const ESLINT_EXTS = new Set([
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+]);
 
 /** Canonical absolute path with symlinks resolved, or null if it does not exist
  *  (or can't be resolved). Used both to prove a target still exists and to make the
@@ -228,19 +237,32 @@ export async function resolveProjectPrettierArgv(
   // still resolves a project `.prettierrc`. Preferring the project binary is a POSIX
   // fidelity win, not a correctness requirement.
   if (!isWin32()) {
-    const projectBin = join(cwd, "node_modules", ".bin", "prettier");
-    // Trust the project bin only when prettier is actually INSTALLED as a package here
-    // (its manifest exists) — not a lone `.bin/prettier` shim someone dropped in. tsforge
-    // already runs the project's own scripts/binaries in the gate, so this is the same
-    // "only point tsforge at repos you trust" boundary, narrowed to "prettier is a real
-    // dependency of this project".
-    const manifest = join(cwd, "node_modules", "prettier", "package.json");
+    // Walk up from cwd like Node's module resolution: in a monorepo a package subdir may
+    // have prettier hoisted to the workspace root's node_modules. At each level trust the
+    // bin only when prettier is actually INSTALLED as a package there (its manifest
+    // exists) — not a lone `.bin/prettier` shim someone dropped in. tsforge already runs
+    // the project's own scripts/binaries in the gate, so this is the same "only point
+    // tsforge at repos you trust" boundary, narrowed to "prettier is a real dependency".
+    let dir = resolve(cwd);
 
-    if (
-      (await Bun.file(projectBin).exists()) &&
-      (await Bun.file(manifest).exists())
-    ) {
-      return [projectBin];
+    for (;;) {
+      const projectBin = join(dir, "node_modules", ".bin", "prettier");
+      const manifest = join(dir, "node_modules", "prettier", "package.json");
+
+      if (
+        (await Bun.file(projectBin).exists()) &&
+        (await Bun.file(manifest).exists())
+      ) {
+        return [projectBin];
+      }
+
+      const parent = dirname(dir);
+
+      if (parent === dir) {
+        break;
+      }
+
+      dir = parent;
     }
   }
 
