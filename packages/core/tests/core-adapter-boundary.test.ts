@@ -32,7 +32,10 @@ const SYNTAX_RULE = "no-restricted-syntax";
 
 interface IFileResult {
   readonly filePath: string;
-  readonly messages: readonly { readonly ruleId: string | null }[];
+  readonly messages: readonly {
+    readonly ruleId: string | null;
+    readonly message: string;
+  }[];
 }
 
 /** Write `core` fixtures under CORE_DIR and `adapter` fixtures under ADAPTER_DIR, lint both dirs in
@@ -173,4 +176,49 @@ test("the mechanical core↔adapter boundary rejects core-loop adapter imports (
   expect(adapterInternal).toBeDefined();
   expect(adapterInternal).not.toContain(RULE);
   expect(adapterInternal).not.toContain(SYNTAX_RULE);
+}, 30000);
+
+test("the fixture dirs are GLOBALLY IGNORED (crash-orphan safety): a leak there is skipped by a normal lint", () => {
+  // The main test lints with `--no-ignore`, so it never proves the global ignore actually works. A
+  // broken/ineffective ignore pattern would leave an orphaned crash fixture linted by every later
+  // `eslint packages` — a real footgun. Here we lint a fixture WITHOUT `--no-ignore` (as validate
+  // does) and assert eslint reports it as IGNORED, not as a boundary violation.
+  if (!existsSync(ESLINT)) {
+    throw new Error(`eslint binary not found at ${ESLINT}`);
+  }
+
+  const file = join(CORE_DIR, "orphan-leak.ts");
+
+  try {
+    mkdirSync(CORE_DIR, { recursive: true });
+    writeFileSync(
+      file,
+      'import { boringstackPlanSchema } from "../boringstack/plan-extension";\n\nexport const a = boringstackPlanSchema;\n'
+    );
+
+    const proc = Bun.spawnSync([ESLINT, "--format", "json", file], {
+      cwd: ROOT,
+    });
+    let parsed: IFileResult[];
+
+    try {
+      parsed = JSON.parse(proc.stdout.toString());
+    } catch {
+      throw new Error(
+        `eslint did not emit a JSON report (exit ${proc.exitCode}). stderr: ${proc.stderr.toString()} | stdout: ${proc.stdout.toString()}`
+      );
+    }
+
+    const messages = parsed.flatMap((r) => r.messages);
+    const ruleIds = messages.map((m) => m.ruleId);
+
+    // The boundary rules must NOT have run (the file was ignored, not linted)…
+    expect(ruleIds).not.toContain(RULE);
+    expect(ruleIds).not.toContain(SYNTAX_RULE);
+    // …and eslint must positively report it as ignored, proving the ignore PATTERN matched (a clean
+    // file with no messages could also satisfy the negative asserts above — this rules that out).
+    expect(messages.some((m) => m.message.includes("ignored"))).toBe(true);
+  } finally {
+    rmSync(CORE_DIR, { recursive: true, force: true });
+  }
 }, 30000);

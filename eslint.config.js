@@ -21,10 +21,11 @@ export default tseslint.config(
       "**/dist/**",
       "**/.astro/**",
       "apps/**",
-      // Throwaway fixture dirs the core↔adapter boundary test writes under the source tree. Globally
-      // ignored so an ORPHAN (left by a SIGKILL/crash mid-test) can never break a later `eslint
-      // packages` run; the test itself lints them with `--no-ignore` to override this.
-      "**/__adapter_boundary_*/**",
+      // Throwaway fixture dirs the core↔adapter boundary test writes under `loop/`. Ignored so an
+      // ORPHAN (left by a SIGKILL/crash mid-test) can never break a later `eslint packages` run; the
+      // test itself lints them with `--no-ignore` to override this. SCOPED to the exact test location
+      // (not a bare `**/…` glob) so it can't shadow real code that happens to share the sentinel name.
+      "packages/core/src/loop/**/__adapter_boundary_*/**",
     ],
   },
   {
