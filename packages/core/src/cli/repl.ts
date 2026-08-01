@@ -1015,6 +1015,9 @@ export async function repl(args: ICliArgs): Promise<number> {
           // on the TTY like the init session, so a piped REPL doesn't advertise a pause
           // nobody can answer.
           interactive: humanAtKeyboard(),
+          // Keep the SCOPED format janitor on across /clear — else the rebuilt session
+          // silently reverts to no formatting for the rest of the session.
+          coreFormat: true,
           // Plain boolean (no branch): the constructor only seeds the flag when true.
           pausedWithEdit: carryDeferredGate,
           ...(profile === undefined ? {} : { profile }),

@@ -989,8 +989,9 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   }
 
   // Re-format (the drop strips trailing semicolons) before re-gating. Scoped to the
-  // polished files, deferring to the project's own prettier — same guarantee as the
-  // auto-fix janitor. A spec-provided `task.fix` still runs too.
+  // files the model wrote (`ctx.tool.touched`), deferring to the project's own
+  // prettier — same guarantee as the auto-fix janitor. A spec-provided `task.fix`
+  // still runs too.
   if (task.fix !== undefined && task.fix.length > 0) {
     await runAccept(
       { ...task, accept: task.fix },
@@ -1000,7 +1001,7 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   }
 
   if (ctx.gate.coreFormat === true) {
-    await formatFiles(cwd, files, {
+    await formatFiles(cwd, [...(ctx.tool.touched ?? [])], {
       timeoutMs: JANITOR_TIMEOUT_MS,
       ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
     });
@@ -1296,15 +1297,16 @@ export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
     );
   }
 
-  // Scoped format janitor: strict eslint --fix + prettier over THIS task's scope
-  // only — never the whole tree. The old whole-repo `prettier --write .` reformatted
-  // thousands of untouched files (and with tsforge's bundled prettier, not the
-  // project's), producing huge spurious diffs in real repos. `formatFiles` scopes to
-  // the resolved scope and defers to the project's own prettier. Globs are resolved
-  // so a glob scope is formatted, not silently skipped. Opt-in (the CLI sets it) so a
-  // bare test/eval loop doesn't spawn a formatter every turn.
+  // Scoped format janitor: strict eslint --fix + prettier over the files the model
+  // ACTUALLY wrote this session (`ctx.tool.touched`) — never the whole tree, and NOT
+  // `task.files`, which in the interactive REPL defaults to the whole repo (`["**/*"]`)
+  // and would re-expand to it. The old whole-repo `prettier --write .` reformatted
+  // thousands of untouched files (with tsforge's bundled prettier, not the project's),
+  // producing huge spurious diffs in real repos. `formatFiles` defers to the project's
+  // own prettier. Opt-in (the CLI sets it) so a bare test/eval loop doesn't spawn a
+  // formatter every turn.
   if (ctx.gate.coreFormat === true) {
-    await formatFiles(cwd, await resolveScopeFiles(cwd, task.files), {
+    await formatFiles(cwd, [...(ctx.tool.touched ?? [])], {
       timeoutMs: JANITOR_TIMEOUT_MS,
       ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
     });

@@ -230,3 +230,34 @@ test("polishOnGreen KEEPS the drop when the injected gate stays green", async ()
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("polishOnGreen with coreFormat on formats the TOUCHED file after the drop", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
+
+  try {
+    // Messy AND has a droppable `: number` annotation, so polish proceeds past the
+    // drop guard; the scoped format janitor should then clean the messiness.
+    await Bun.write(
+      join(dir, "a.ts"),
+      "const  cents=1;\nconst abs: number = Math.abs(cents);\n"
+    );
+
+    const { ctx: base } = ctxWith(dir, true);
+    const ctx: ILoopCtx = {
+      ...base,
+      // The model wrote a.ts, so it is the janitor's target (NOT task.files scope).
+      tool: { touched: new Set(["a.ts"]) },
+      gate: { ...base.gate, coreFormat: true },
+    };
+
+    await polishOnGreen(ctx);
+
+    const out = await Bun.file(join(dir, "a.ts")).text();
+
+    // Dropped (`: number` gone) AND formatted (`const  cents=1` → `const cents = 1;`).
+    expect(out).not.toContain(": number");
+    expect(out).toContain("const cents = 1;");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);

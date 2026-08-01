@@ -258,8 +258,8 @@ describe("autoFixStep", () => {
   // Regression guard: the scoped format janitor must be OPT-IN. It was briefly made
   // unconditional, which spawned eslint+prettier every turn and blew the 5s budget of
   // the real-drive-loop tests. With coreFormat off (the default), autoFixStep runs NO
-  // formatter — a messy scoped file is left exactly as written.
-  test("coreFormat off (default) → autoFixStep does not format the scope", async () => {
+  // formatter — a touched-but-messy file is left exactly as written.
+  test("coreFormat off (default) → autoFixStep does not format touched files", async () => {
     const events: ILoopEvent[] = [];
     const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
     const messy = "export  const   x=1";
@@ -270,6 +270,7 @@ describe("autoFixStep", () => {
     const ctx: ILoopCtx = {
       ...base,
       task: { ...base.task, files: ["m.ts"] },
+      tool: { touched: new Set(["m.ts"]) },
     };
 
     await autoFixStep(ctx);
@@ -277,7 +278,7 @@ describe("autoFixStep", () => {
     expect(readFileSync(join(dir, "m.ts"), "utf8")).toBe(messy);
   });
 
-  test("coreFormat on → autoFixStep formats the scoped file (scoped janitor)", async () => {
+  test("coreFormat on → autoFixStep formats a TOUCHED file", async () => {
     const events: ILoopEvent[] = [];
     const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
 
@@ -287,6 +288,7 @@ describe("autoFixStep", () => {
     const ctx: ILoopCtx = {
       ...base,
       task: { ...base.task, files: ["m.ts"] },
+      tool: { touched: new Set(["m.ts"]) },
       gate: { ...base.gate, coreFormat: true },
     };
 
@@ -295,6 +297,38 @@ describe("autoFixStep", () => {
     expect(readFileSync(join(dir, "m.ts"), "utf8")).toBe(
       "export const x = 1;\n"
     );
+  }, 30_000);
+
+  // THE #103 regression: in the interactive REPL, task.files defaults to the WHOLE
+  // repo (["**/*"]). Scoping the janitor to the resolved scope would still rewrite the
+  // whole tree. It must scope to ctx.tool.touched — the files the model actually wrote.
+  // Here only m.ts is touched; a whole-repo scope must leave the untouched sibling
+  // byte-identical.
+  test("coreFormat on + whole-repo scope → formats only TOUCHED, sibling untouched", async () => {
+    const events: ILoopEvent[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
+    const messy = "export  const   x=1";
+
+    writeFileSync(join(dir, "m.ts"), messy);
+    writeFileSync(join(dir, "sibling.ts"), messy);
+
+    const base = makeCtx(events, dir);
+    const ctx: ILoopCtx = {
+      ...base,
+      task: { ...base.task, files: ["**/*"] },
+      tool: { touched: new Set(["m.ts"]) },
+      gate: { ...base.gate, coreFormat: true },
+    };
+
+    await autoFixStep(ctx);
+
+    // The touched file is formatted…
+    expect(readFileSync(join(dir, "m.ts"), "utf8")).toBe(
+      "export const x = 1;\n"
+    );
+    // …and the untouched sibling — in scope, but never written by the model — is left
+    // exactly as it was. This is the guarantee #103 is about.
+    expect(readFileSync(join(dir, "sibling.ts"), "utf8")).toBe(messy);
   }, 30_000);
 });
 

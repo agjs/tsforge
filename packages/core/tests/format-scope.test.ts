@@ -1,5 +1,12 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import {
+  mkdtemp,
+  rm,
+  writeFile,
+  readFile,
+  mkdir,
+  chmod,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatFiles } from "../src/gate";
@@ -55,6 +62,56 @@ test("formatFiles honors the project's prettier config over tsforge defaults", a
     expect(await readFile(join(dir, "f.ts"), "utf8")).toBe(
       "export const greeting = 'hi'\n"
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Containment: formatFiles invokes mutating formatters directly, so a caller that
+// hands it an absolute path or a `../` traversal must NOT be able to rewrite files
+// outside cwd. A path that escapes cwd is dropped, not formatted.
+test("formatFiles refuses a path that escapes cwd (../outside)", async () => {
+  const parent = await tempDir();
+
+  try {
+    const dir = join(parent, "workspace");
+
+    await mkdir(dir, { recursive: true });
+    const messy = "export  const   x=1";
+
+    // A sibling of the workspace, reachable only by escaping cwd.
+    await writeFile(join(parent, "outside.ts"), messy);
+
+    await formatFiles(dir, ["../outside.ts"]);
+
+    expect(await readFile(join(parent, "outside.ts"), "utf8")).toBe(messy);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+// Exercises the project-prettier spawn path: when node_modules/.bin/prettier exists,
+// formatFiles spawns [projectBin, ...] directly (NO "bun" prefix). A fake executable
+// stands in for the project's prettier and proves it was invoked with the file args.
+test("formatFiles spawns the project's own prettier binary directly", async () => {
+  const dir = await tempDir();
+
+  try {
+    const binDir = join(dir, "node_modules", ".bin");
+
+    await mkdir(binDir, { recursive: true });
+    // Fake prettier: appends a marker to each non-flag arg, proving it ran with the
+    // file list and that the argv had no leading "bun".
+    await writeFile(
+      join(binDir, "prettier"),
+      '#!/bin/sh\nfor a in "$@"; do case "$a" in --*) ;; *) printf "/*fmt*/\\n" >> "$a";; esac; done\n'
+    );
+    await chmod(join(binDir, "prettier"), 0o755);
+    await writeFile(join(dir, "f.ts"), "export const x = 1;\n");
+
+    await formatFiles(dir, ["f.ts"]);
+
+    expect(await readFile(join(dir, "f.ts"), "utf8")).toContain("/*fmt*/");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

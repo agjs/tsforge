@@ -1,4 +1,4 @@
-import { join, isAbsolute, extname } from "node:path";
+import { join, extname, resolve, sep } from "node:path";
 import { ESLint } from "eslint";
 import { runArgvCommand } from "../lib/fs/process";
 import { conventionOverrideRules } from "../infer-rules/eslint-conventions";
@@ -162,10 +162,20 @@ async function filterExisting(absFiles: readonly string[]): Promise<string[]> {
 export async function resolveProjectPrettierArgv(
   cwd: string
 ): Promise<string[]> {
-  const projectBin = join(cwd, "node_modules", ".bin", "prettier");
+  const binDir = join(cwd, "node_modules", ".bin");
+  // On Windows npm writes `prettier.cmd` (the extensionless file is a POSIX shell
+  // script cmd.exe can't spawn directly); everywhere else it's `prettier`. Prefer the
+  // `.cmd` on win32 so the project binary is actually executable, else the fidelity
+  // goal silently falls back to the bundled prettier.
+  const candidates =
+    process.platform === "win32"
+      ? [join(binDir, "prettier.cmd"), join(binDir, "prettier")]
+      : [join(binDir, "prettier")];
 
-  if (await Bun.file(projectBin).exists()) {
-    return [projectBin];
+  for (const bin of candidates) {
+    if (await Bun.file(bin).exists()) {
+      return [bin];
+    }
   }
 
   return ["bun", PRETTIER_BIN];
@@ -201,8 +211,14 @@ export async function formatFiles(
     return;
   }
 
-  const abs = rels.map((f) => (isAbsolute(f) ? f : join(cwd, f)));
-  const present = await filterExisting(abs);
+  // Containment guard: these argv reach mutating formatters directly, so a caller that
+  // passes an absolute path or a `../` traversal must NOT be able to rewrite files
+  // outside the workspace. Keep only paths that resolve under `cwd`.
+  const root = resolve(cwd);
+  const contained = rels
+    .map((f) => resolve(cwd, f))
+    .filter((f) => f === root || f.startsWith(root + sep));
+  const present = await filterExisting(contained);
 
   if (present.length === 0) {
     return;
