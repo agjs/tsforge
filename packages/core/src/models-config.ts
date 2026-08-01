@@ -9,7 +9,7 @@ import type { ReasoningStyle } from "./inference/inference.types";
  * The model registry — `~/.tsforge/models.json`, the central place a user
  * configures N model endpoints and switches between them with `/model`. Mirrors
  * the sessions/logs layout (under `$TSFORGE_HOME` if set, else the home dir).
- * Loading is read-only and falls back to the built-in local-qwen default when no
+ * Loading is read-only and falls back to the built-in local default when no
  * file exists, so behaviour is identical to the env-driven path until the user
  * writes a registry.
  */
@@ -103,9 +103,10 @@ export interface IReviewPanel {
   reviewers: IReviewer[];
 }
 
-/** The built-in local-qwen entry — matches PROVIDER_DEFAULTS so an absent
- *  registry behaves exactly like the current env-default path. */
-const QWEN_LOCAL: IModelEntry = {
+/** The built-in local default entry — matches PROVIDER_DEFAULTS so an absent
+ *  registry behaves exactly like the current env-default path. The reasoning
+ *  dialect is auto-detected from the model name (see request.ts). */
+const LOCAL_DEFAULT: IModelEntry = {
   baseUrl: PROVIDER_DEFAULTS.baseUrl,
   model: PROVIDER_DEFAULTS.model,
   thinking: true,
@@ -113,7 +114,7 @@ const QWEN_LOCAL: IModelEntry = {
 
 /** The default registry used when no models.json exists yet. */
 export function defaultModelsConfig(): IModelsConfig {
-  return { active: "qwen-local", models: { "qwen-local": QWEN_LOCAL } };
+  return { active: "local", models: { local: LOCAL_DEFAULT } };
 }
 
 /** The registry path: `$TSFORGE_HOME`/.tsforge/models.json, else under home. */
@@ -454,7 +455,7 @@ export async function resolveActiveModel(): Promise<{
 
   const cfg = await loadModelsConfig();
 
-  return { name: cfg.active, entry: cfg.models[cfg.active] ?? QWEN_LOCAL };
+  return { name: cfg.active, entry: cfg.models[cfg.active] ?? LOCAL_DEFAULT };
 }
 
 /** Resolve a model by its registry name, falling back to the active model when
@@ -479,7 +480,7 @@ export async function resolveModelByName(
   const entry = cfg.models[name];
 
   return entry === undefined
-    ? { name: cfg.active, entry: cfg.models[cfg.active] ?? QWEN_LOCAL }
+    ? { name: cfg.active, entry: cfg.models[cfg.active] ?? LOCAL_DEFAULT }
     : { name, entry };
 }
 

@@ -14,12 +14,11 @@ Always on.
 ```
 ✓ edited src/foo.ts
 
-Type diagnostics (src/foo.ts):
-  L12:5 TS2322: Type 'string' is not assignable to type 'number'.
-  …and 3 more
+⚠ write-check: 1 type + 0 lint issue(s) in foo.ts:
+  L12: Type 'string' is not assignable to type 'number'. (TS2322)
 ```
 
-At most **5** errors are shown; extra ones are summarized as `…and N more`.
+Up to **200** issues are surfaced per write (a runaway backstop); beyond that they are summarized as `…and N more`.
 
 Write diagnostics do not replace the gate. They shorten the feedback loop.
 

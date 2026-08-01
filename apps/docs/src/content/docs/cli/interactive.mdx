@@ -13,10 +13,10 @@ Most users run `tsforge` and stay in the interactive session.
 
 | Mode | How | When |
 | --- | --- | --- |
-| **Interactive** | `tsforge` | default — open-ended tasks, steering, exploration |
+| **Interactive** | `tsforge` | default: open-ended tasks, steering, exploration |
 | **One-shot** | `tsforge "task" --accept "gate cmd"` | drive a single task to green and exit |
 | **New app** | `tsforge scaffold` | stand up a full-stack [BoringStack](/scaffold/boringstack/) project, then build it with the [greenfield loop](/loop/greenfield/) |
-| **Plan mode** | default — **Shift+Tab** or `/plan` to switch | read-only exploration before implementing — see [Plan mode](/cli/plan-mode/) |
+| **Plan mode** | default: **Shift+Tab** or `/plan` to switch | read-only exploration before implementing. See [Plan mode](/cli/plan-mode/). |
 
 ## Flags
 
@@ -27,20 +27,21 @@ Most users run `tsforge` and stay in the interactive session.
 | `--accept` / `--gate <cmd>` | gate command for one-shot mode |
 | `--no-gate` | skip auto gate detection |
 | `--browser <html>` | append headless render check to gate |
-| `--plan` | force plan mode on for an interactive session — plan is the default anyway, so this only matters to override a repo that configured an autonomous `policy.mode`; ignored by one-shot/headless |
+| `--plan` | force plan mode on for an interactive session. Plan is the default anyway, so this only matters to override a repo that configured an autonomous `policy.mode`; ignored by one-shot/headless |
 | `--continue` / `-c` | resume latest saved session for this dir |
 | `--resume <id>` | resume a specific session |
 | `--log` | append JSONL event stream to `~/.tsforge/logs/` |
 
-Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environment variables](/reference/flags/).
+Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL`. See [Environment variables](/reference/flags/).
 
 ## Slash commands
 
 | Command | Action |
 | --- | --- |
 | `/help` | list commands |
+| `/scaffold` | create a new full-stack project here (BoringStack / Astro) via the wizard |
 | `/plan` | toggle plan mode (on by default) |
-| `/config` | settings hub — model (switch/add), mode, gate, editable scope, and tools (web, TDD); each with a description + live value |
+| `/config` | settings hub: model (switch/add), mode, gate, editable scope, and tools (web, TDD); each with a description + live value |
 | `/gate <cmd>` | set gate command (`/gate` alone clears) |
 | `/files <globs>` | set editable scope |
 | `/review [base]` | review your current change (logic, regressions, edge cases) |
@@ -62,17 +63,17 @@ Anything else is sent to the agent. While it runs, type to **steer** the next tu
 
 ## Status bar
 
-On a real terminal, a status bar stays **pinned to the bottom** while output scrolls above it — always in view, never scrolled away:
+On a real terminal, a status bar stays **pinned to the bottom** while output scrolls above it, always in view and never scrolled away:
 
 ```
-  ⎯ qwen3.6-27b · ◆ plan · ctx ~8k/32k 25% · 2 turns · 12s · 48 tok/s · done · src/**
+  ⎯ deepseek-v4-flash · ◆ plan · ctx ~8k/32k 25% · 2 turns · 12s · 48 tok/s · done · src/**
 ```
 
-It shows the active model, the current mode chip (`◆ plan` / `◆ normal`), real context-window usage, the last turn's count + elapsed, the current generation rate, the last outcome, and the editable scope. It **ticks live while the model works** — tokens/sec and the context meter update mid-turn (the status reads `● working`), settling to `✓ done` / `✗ stuck` when the turn ends — and it survives terminal resizes. When stdout isn't a TTY (piped output, `--log`, a tiny window) the bar is skipped and the same line prints inline above each prompt instead, so logs and pipes stay clean.
+It shows the active model, the current mode chip (`◆ plan` / `◆ normal`), real context-window usage, the last turn's count + elapsed, the current generation rate, the last outcome, and the editable scope. It **ticks live while the model works**: tokens/sec and the context meter update mid-turn (the status reads `● working`), settling to `✓ done` / `✗ stuck` when the turn ends, and it survives terminal resizes. When stdout isn't a TTY (piped output, `--log`, a tiny window) the bar is skipped and the same line prints inline above each prompt instead, so logs and pipes stay clean.
 
 ## Live metrics
 
-The status bar shows the last call's generation rate (`tok/s`) next to the context gauge. `/metrics` prints the running totals for the session — model calls, input/output tokens, and both the last and average output rate:
+The status bar shows the last call's generation rate (`tok/s`) next to the context gauge. `/metrics` prints the running totals for the session: model calls, input/output tokens, and both the last and average output rate:
 
 ```
   4 call(s) · 8120 in / 1540 out · 47 tok/s last · 44 tok/s avg
@@ -86,11 +87,11 @@ Full guide, including log analysis: [Token metrics & tokens/sec](/observability/
 
 On start you see:
 
-- **cwd** — target project
-- **scope** — editable file globs
-- **gate** — acceptance command (auto-detected or set)
-- **model** — active entry from `~/.tsforge/models.json`
-- **session** — new or resumed id
+- **cwd**: target project
+- **scope**: editable file globs
+- **gate**: acceptance command (auto-detected or set)
+- **model**: active entry from `~/.tsforge/models.json`
+- **session**: new or resumed id
 
 Gate auto-detection is described in [How the gate is built](/loop/gate-floor/).
 
@@ -100,6 +101,6 @@ Models live in `~/.tsforge/models.json`. Use `/model` to hot-swap without restar
 
 ## Run logs
 
-`--log` writes every loop event (tool calls, gate verdicts, repairs) as JSONL under `~/.tsforge/logs/`. Use this for eval analysis — see [A/B testing](/eval/ab-testing/).
+`--log` writes every loop event (tool calls, gate verdicts, repairs) as JSONL under `~/.tsforge/logs/`. Use this for eval analysis. See [A/B testing](/eval/ab-testing/).
 
 → [Quickstart](/quickstart/) · [Plan mode](/cli/plan-mode/) · [Model adapter](/inference/adapter/)

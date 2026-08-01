@@ -3,7 +3,7 @@ title: Environment variables
 description: Canonical list of every TSFORGE_* environment variable.
 ---
 
-## Behavior & tools — configure in `/config`
+## Behavior & tools: configure in `/config`
 
 Feature toggles are configured **inside the harness**, not through env vars. Run
 [`/config`](/cli/interactive/) in an interactive session: every setting shows a
@@ -12,7 +12,7 @@ there:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Web tools | on (interactive) | keyless `web_fetch` + `web_search` (DuckDuckGo); off in one-shot/eval for offline determinism — see [Web access](/integrations/web-tools/) |
+| Web tools | on (interactive) | keyless `web_fetch` + `web_search` (DuckDuckGo); off in one-shot/eval for offline determinism. See [Web access](/integrations/web-tools/) |
 | TDD enforcement | on | test-first guidance + `test-sibling-required` as an error on changed logic files |
 
 `/config` also sets the model, interactive mode, gate command, and editable scope.
@@ -22,29 +22,29 @@ explicit value always wins over the interactive default) and `TSFORGE_TDD`
 (`0` to opt out).
 
 Only genuine human choices live in `/config`. The rest run unconditionally: the
-**update check** always happens in an interactive, non-CI session — set the
+**update check** always happens in an interactive, non-CI session. Set the
 cross-tool `NO_UPDATE_NOTIFIER=1` (note: not a `TSFORGE_*` variable) to suppress
-it; [programmatic tool calling](/agent/model-agent/), LSP navigation,
+it. [Programmatic tool calling](/agent/model-agent/), LSP navigation,
 `git_context`, hashline, TTSR, and write diagnostics are always on.
 
 The variables listed below the fold are **endpoint, tuning, and operational** knobs
-(model endpoint, timeouts, eval/test harness) — not user-facing feature switches.
+(model endpoint, timeouts, eval/test harness), not user-facing feature switches.
 
 ### Eval / CI knobs (not in `/config`)
 
 The always-on tools can be withheld via env only for eval sweeps or non-git /
-headless environments — never something you'd change interactively:
+headless environments. Never change these interactively:
 
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `TSFORGE_NO_LSP_TOOLS` | off | withhold the LSP navigation tools (`=1`) |
 | `TSFORGE_NO_GIT_TOOL` | off | withhold the `git_context` tool (`=1`) |
 | `TSFORGE_NO_SCRIPT` | off | withhold the `script` (programmatic tool calling) tool (`=1`) |
-| `TSFORGE_NO_DELEGATION` | off | withhold `spawn_agent` — run single-stream with no subagents (`=1`); see [delegation](/agent/delegation/) |
+| `TSFORGE_NO_DELEGATION` | off | withhold `spawn_agent`: run single-stream with no subagents (`=1`). See [delegation](/agent/delegation/) |
 
 ## Git context
 
-On existing-code runs tsforge offers `git_context` — a read-only tool giving the model structured, token-bounded access to repo state, so it can scope a review or a fix to **what actually changed** instead of shelling out to raw `git`. Ops: `diff`, `changed_files`, `log` (incl. a line range's history), `blame`, and `show`. It wraps the `git` binary via an explicit argv (no shell), validates the `sha`, and rejects shell metacharacters / option injection in `ref`/`path`; output is char-capped (`maxChars` to raise it).
+On existing-code runs tsforge offers `git_context`, a read-only tool giving the model structured, token-bounded access to repo state, so it can scope a review or a fix to **what actually changed** instead of shelling out to raw `git`. Ops: `diff`, `changed_files`, `log` (incl. a line range's history), `blame`, and `show`. It wraps the `git` binary via an explicit argv (no shell), validates the `sha`, and rejects shell metacharacters / option injection in `ref`/`path`; output is char-capped (`maxChars` to raise it).
 
 Offered only when there is existing code to inspect (greenfield scratch builds have no history), and it is independent of `TSFORGE_NO_LSP_TOOLS` since it is not an LSP tool. Being read-only, it is available in [plan mode](/cli/plan-mode/) too. For eval/headless runs it can be withheld with `TSFORGE_NO_GIT_TOOL=1`.
 
@@ -60,7 +60,7 @@ Opt-in, free, and no required service keys. Turn on **Web tools** in [`/config`]
 
 ## Image capabilities (vision, generation)
 
-When the chat model is text-only, route **reading** and **generating** images to a separate backend — configured in [`models.json` `capabilities`](/inference/models-json/#extra-capabilities-vision-image-generation) or the env vars below. Each capability is off unless configured; when on, it enables the `read_image` / `generate_image` tools and the drag / paste / `@` attachment UX ([interactive](/cli/interactive/)). The env trio is an ad-hoc backend without editing the file; a `_MODEL` alone (no `_BASE_URL`) names an existing registry entry.
+When the chat model is text-only, route **reading** and **generating** images to a separate backend. Configure it in [`models.json` `capabilities`](/inference/models-json/#extra-capabilities-vision-image-generation) or the env vars below. Each capability is off unless configured; when on, it enables the `read_image` / `generate_image` tools and the drag / paste / `@` attachment UX ([interactive](/cli/interactive/)). The env trio is an ad-hoc backend without editing the file; a `_MODEL` alone (no `_BASE_URL`) names an existing registry entry.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -69,7 +69,7 @@ When the chat model is text-only, route **reading** and **generating** images to
 | `TSFORGE_IMAGE_API` | `chat-modalities` | image-gen wire shape: `chat-modalities` or `images-generations` |
 | `TSFORGE_IMAGE_PROTOCOL` | auto | inline preview of generated images: `iterm2` to force, `off`/`none` to disable (auto-detects iTerm2, disabled under tmux) |
 
-Generated images are saved under `.tsforge/images/`. Pasting an image is **Ctrl+V** (a terminal app can't receive Cmd+V); identical images are described once (no duplicate cost). Model IDs + costs: OpenRouter runs everything through `/chat/completions` (no `/images` endpoint) — e.g. `google/gemini-2.5-flash-lite` (read) and `google/gemini-3.1-flash-lite-image` (generate).
+Generated images are saved under `.tsforge/images/`. Pasting an image is **Ctrl+V** (a terminal app can't receive Cmd+V); identical images are described once (no duplicate cost). Model IDs + costs: OpenRouter runs everything through `/chat/completions` (no `/images` endpoint). For example, `google/gemini-2.5-flash-lite` (read) and `google/gemini-3.1-flash-lite-image` (generate).
 
 ## Opt-in gate oracles
 
@@ -86,7 +86,7 @@ Extra gate steps (default off; each skips cleanly when nothing applies). See [Ho
 | Variable | Default | Toggles |
 | --- | --- | --- |
 | `TSFORGE_BASE_URL` | `http://localhost:8000/v1` | API endpoint |
-| `TSFORGE_MODEL` | `qwen3.6-27b` | model name |
+| `TSFORGE_MODEL` | `deepseek-v4-flash` | model name |
 | `TSFORGE_API_KEY` | unset | API key |
 | `TSFORGE_MAX_TOKENS` | `16384` | max output tokens |
 | `TSFORGE_REPETITION_PENALTY` | off | vLLM repetition penalty |
@@ -123,7 +123,7 @@ Extra gate steps (default off; each skips cleanly when nothing applies). See [Ho
 | --- | --- |
 | `TSFORGE_PACKS` | comma-separated pack IDs |
 | `TSFORGE_RULE_OVERRIDES` | JSON severity map |
-| `TSFORGE_CONVENTIONS` | JSON conventions block (interface naming / enums) — rebuilds the bundled rule options; written by [`tsforge setup`](/cli/setup/) |
+| `TSFORGE_CONVENTIONS` | JSON conventions block (interface naming / enums): rebuilds the bundled rule options. Written by [`tsforge setup`](/cli/setup/) |
 
 ## Eval scripts
 
@@ -148,7 +148,7 @@ On by default; withhold with `TSFORGE_NO_SCRIPT=1` (above). Tuning knobs:
 
 | Variable | Set by | Meaning |
 | --- | --- | --- |
-| `TSFORGE_STATUS` | tsforge (for your `--notify` command) | the run outcome (e.g. `greenfield done 7/7`) — read it in the notifier script |
+| `TSFORGE_STATUS` | tsforge (for your `--notify` command) | the run outcome (e.g. `greenfield done 7/7`). Read it in the notifier script |
 
 ## Debug & tracing
 

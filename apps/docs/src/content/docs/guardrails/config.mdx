@@ -16,11 +16,11 @@ Add **`tsforge.config.json`** at your repo root when you want to override what t
 | `packs.include` | string[] | Add packs after detection |
 | `packs.exclude` | string[] | Remove packs after detection |
 | `rules` | object | Per-rule severity: `"error"`, `"warn"`, or `"off"` (overrides profile defaults) |
-| `conventions` | object | Project taste tsforge adapts to: `interfaces`, `enums`, `tests`, `componentFolders` — written by [`tsforge setup`](/cli/setup/) |
+| `conventions` | object | Project taste tsforge adapts to: `interfaces`, `enums`, `tests`, `componentFolders` (written by [`tsforge setup`](/cli/setup/)) |
 | `plugins` | object[] | External modules providing extra rule packs (see below) |
 | `mcpServers` | object | External [MCP servers](/integrations/mcp/) whose tools the agent can call |
-| `policy` | object | Permission `mode` + deny/allow/ask `rules` for tool actions — see [Permissions & policy](/guardrails/policy/) |
-| `agents.concurrency` | number | Multiagent cap, integer 1–16 (default `1` = sequential). Bounds how many subagents run at once — both [delegated `spawn_agent` calls](/agent/delegation/) and `tsforge review`'s parallel find/verify passes (fresh provider per unit, live `agents:` progress). Leave at 1 for a local endpoint that serializes requests anyway |
+| `policy` | object | Permission `mode` + deny/allow/ask `rules` for tool actions. See [Permissions & policy](/guardrails/policy/) |
+| `agents.concurrency` | number | Multiagent cap, integer 1–16 (default `1` = sequential). Bounds how many subagents run at once: both [delegated `spawn_agent` calls](/agent/delegation/) and `tsforge review`'s parallel find/verify passes (fresh provider per unit, live `agents:` progress). Leave at 1 for a local endpoint that serializes requests anyway |
 
 Resolution order: detect from the repo → apply **`profile`** (packs + default severities) → apply `stack` → apply `include` → apply `exclude` → add external plugin packs → dedupe → merge `rules` overrides (user wins).
 
@@ -28,7 +28,7 @@ If the file is missing, tsforge uses detection with the **`recommended`** profil
 
 ## Profiles
 
-Profiles control which **extra packs** load and which **default severities** apply. They do not replace stack detection — they layer on top.
+Profiles control which **extra packs** load and which **default severities** apply. They do not replace stack detection; they layer on top.
 
 | Profile | What it adds |
 | --- | --- |
@@ -36,10 +36,10 @@ Profiles control which **extra packs** load and which **default severities** app
 | `strict` | `recommended` + `typescript-core` pack, CI/supply-chain meta-rules at **error**, optional type-aware async ESLint when `tsconfig.json` exists |
 | `security` | `recommended` + experimental **`authorization`** heuristics (mutating routes/actions without authz calls) |
 | `frontend` | `recommended` with React/Next effect and image rules at **warn** |
-| `backend` | `recommended` — stack detection adds Fastify/Elysia/Drizzle/BullMQ as usual |
+| `backend` | `recommended`. Stack detection adds Fastify/Elysia/Drizzle/BullMQ as usual |
 | `opinionated` | Full house-style architecture rules (component folder structure, hooks layout, early returns at **error**) |
 
-Every rule in the [Rule catalog](/reference/rules-catalog/) is tagged by **tier** (safety, framework, architecture, experimental). Profiles are the ergonomic switch — you rarely need to tune individual rules.
+Every rule in the [Rule catalog](/reference/rules-catalog/) is tagged by **tier** (safety, framework, architecture, experimental). Profiles are the ergonomic switch. You rarely need to tune individual rules.
 
 ```json
 {
@@ -94,6 +94,6 @@ Ship your own rule packs without recompiling tsforge. Each `plugins` entry names
 }
 ```
 
-A module that fails to import is reported on stderr and skipped — a broken plugin never blocks a run.
+A module that fails to import is reported on stderr and skipped. A broken plugin never blocks a run.
 
 → [Stack detection](/guardrails/stack-detection/) · [Rule packs](/guardrails/rule-packs/) · [MCP servers](/integrations/mcp/) · [Environment variables](/reference/flags/)

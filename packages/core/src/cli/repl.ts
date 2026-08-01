@@ -469,7 +469,7 @@ async function initReplSession(args: ICliArgs): Promise<{
     ...(isPolicyMode(args.policyMode) ? { policyMode: args.policyMode } : {}),
     ...(profile === undefined ? {} : { profile }),
     // Thinking OFF for interactive replies so they STREAM immediately instead of
-    // stalling on a long hidden chain-of-thought (qwen-local defaults thinking on).
+    // stalling on a long hidden chain-of-thought (the local default has thinking on).
     // The session still flips thinking ON automatically while repairing gate errors.
     enableThinking: false,
   };

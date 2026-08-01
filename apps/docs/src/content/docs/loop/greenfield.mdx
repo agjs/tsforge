@@ -1,6 +1,6 @@
 ---
 title: Greenfield builds
-description: Build a whole app feature-by-feature with a filesystem-tracked checklist, a planner/generator/evaluator split, and the same gate + browser + judge verification used everywhere else.
+description: Build a whole app feature-by-feature with a filesystem-tracked checklist, a planner/generator/evaluator split, and the same gate + reachability + judge verification used everywhere else.
 ---
 
 Most of tsforge drives **one change to green**. Greenfield mode drives a **whole build to green**, one feature at a time, keeping its state on disk so a long run can be interrupted and resumed without losing the plot.
@@ -11,27 +11,27 @@ tsforge --greenfield "build a kanban board" --accept "bun run build"
 
 ## How it works
 
-1. **Plan** — a planner model turns your one-line goal into a high-level spec and a flat feature checklist (sprints, not file-level steps). Written to `.tsforge/greenfield/`.
-2. **Loop** — for the first unfinished feature: the work model implements it, then the **layered evaluator** verifies it. On success the feature is ticked; the loop moves on.
-3. **Stop** — when every feature is verified (`done`), or a single feature exhausts its attempts (`stuck`) so a non-converging feature can't wedge the whole build.
+1. **Plan**: a planner model turns your one-line goal into a high-level spec and a flat feature checklist (sprints, not file-level steps). Written to `.tsforge/greenfield/`.
+2. **Loop**: for the first unfinished feature, the work model implements it, then the **layered evaluator** verifies it. On success the feature is ticked; the loop moves on.
+3. **Stop**: when every feature is verified (`done`), or a single feature exhausts its attempts (`stuck`) so a non-converging feature can't wedge the whole build.
 
 The state lives in the repo, not the model's context:
 
 | File | Purpose |
 | --- | --- |
 | `.tsforge/greenfield/spec.md` | The planner's high-level spec |
-| `.tsforge/greenfield/features.json` | The checklist (`{id, desc, passes, attempts}`) — the source of truth |
+| `.tsforge/greenfield/features.json` | The checklist (`{id, desc, passes, attempts}`). The source of truth. |
 | `.tsforge/greenfield/progress.md` | Human-readable status |
 
 Because `features.json` is the source of truth, re-running the same command **resumes** from the last verified feature.
 
 ## The layered evaluator
 
-Each feature passes only if all three layers agree, checked cheapest-first and short-circuiting on the first failure:
+Each feature passes only if every stage agrees, checked cheapest-first and short-circuiting on the first failure:
 
-1. **Gate** — the deterministic build gate (`--accept`: tsc / eslint / tests). The authority for "done".
-2. **Browser** — optional per-feature interaction steps via the Playwright oracle (skipped gracefully when Playwright isn't installed, so it never blocks).
-3. **Judge** — a harsh, reject-by-default quality review that sees **only the built code**, never how it was produced.
+1. **Gate**: the deterministic build gate (`--accept`: tsc / eslint / tests / build). The authority for "done".
+2. **Reachability**: for a web build (BoringStack), the feature's route must actually be served (an HTTP fetch), and its required test ids must be present in the code (a static contract check). No headless browser is run.
+3. **Judge**: a harsh, reject-by-default quality review that sees **only the built code**, never how it was produced.
 
 That last point is a deliberate rule: the evaluator never sees the generator's reasoning or tool trace, so it judges the result, not the persuasion behind it.
 
@@ -40,14 +40,14 @@ That last point is a deliberate rule: the evaluator never sees the generator's r
 A web app scaffolded with [`tsforge scaffold`](/scaffold/boringstack/) rides this same
 loop, with one resource (entity) per feature and a clear division of labor:
 
-- **The harness runs the generators + wiring** — `bun run new:resource` / `new:feature`,
+- **The harness runs the generators + wiring**: `bun run new:resource` / `new:feature`,
   the deterministic edits that wire the resource into the route tree, app, swagger, and
   the test-helper's schema re-export, then `db:push` to sync the schema.
-- **The model fills the domain** — real fields, service logic, and the required test
+- **The model fills the domain**: real fields, service logic, and the required test
   siblings, scoped to just that resource's files and frozen once it passes.
 
 The gate is BoringStack's own `validate`, run **baseline-aware and differential** with a
-prettier + `eslint --fix` auto-fix pass first — see
+prettier + `eslint --fix` auto-fix pass first. See
 [How tsforge builds the gate](/loop/gate-floor/#full-stack-boringstack-builds-use-the-projects-own-gate).
 
 ## Role-based model routing
@@ -71,7 +71,7 @@ tsforge run kanban "build a kanban board"
 
 ## Unattended runs & scheduling
 
-Greenfield runs are long and headless-friendly. There's no built-in scheduler — wire one with your OS:
+Greenfield runs are long and headless-friendly. There's no built-in scheduler; wire one with your OS:
 
 ```bash
 # nightly build attempt, pinging you when it finishes or gets stuck

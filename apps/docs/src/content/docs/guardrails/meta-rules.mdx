@@ -49,7 +49,7 @@ Tune meta-rule severity in [tsforge.config.json](/guardrails/config/) the same w
 | `no-eslint-disable-comments` | no inline disables |
 | `no-ts-suppressions` | no `@ts-ignore` / `@ts-expect-error` / `@ts-nocheck` |
 
-Both scan every hand-written `.ts`/`.tsx` under `src/`, `tests/`, and `scripts/`. Generated `*.gen.ts` files are **skipped** — codegen output (e.g. TanStack's route tree) legitimately ships with `/* eslint-disable */` + `@ts-nocheck`, and the model can't write `*.gen.ts` anyway (it's [vendored/read-only](/edit/engine/#vendored--read-only-scope)), so the ban stays airtight everywhere the model actually writes.
+Both scan every hand-written `.ts`/`.tsx` under `src/`, `tests/`, and `scripts/`. Generated `*.gen.ts` files are **skipped**. Codegen output (e.g. TanStack's route tree) legitimately ships with `/* eslint-disable */` + `@ts-nocheck`, and the model can't write `*.gen.ts` anyway (it's [vendored/read-only](/edit/engine/#vendored--read-only-scope)), so the ban stays airtight everywhere the model actually writes.
 
 ### Config
 
@@ -66,7 +66,7 @@ Both scan every hand-written `.ts`/`.tsx` under `src/`, `tests/`, and `scripts/`
 
 | ID | Checks |
 | --- | --- |
-| `test-sibling-required` | a logic file (one exporting a function/class) the agent changes has a test — co-located `*.test.ts` or mirrored under `tests/`. **Error** when [TDD mode](/reference/flags/) is on (the default), warn when off. Scoped to changed files, so it never blocks on pre-existing untested code. |
+| `test-sibling-required` | a logic file (one exporting a function/class) the agent changes has a test: co-located `*.test.ts` or mirrored under `tests/`. **Error** when [TDD mode](/reference/flags/) is on (the default), warn when off. Scoped to changed files, so it never blocks on pre-existing untested code. |
 
 ### CI
 
@@ -86,17 +86,17 @@ Per-file ESLint can't see the module graph; this builds it from the project's ow
 
 | ID | Checks |
 | --- | --- |
-| `no-circular-imports` | no import cycle (A → B → A) — they cause partial-initialization bugs and defeat tree-shaking |
+| `no-circular-imports` | no import cycle (A → B → A). They cause partial-initialization bugs and defeat tree-shaking |
 
 ### Container
 
-Active whenever a `Dockerfile` (`Dockerfile`, `Dockerfile.*`, or `*.Dockerfile`) exists at the project root or one level down — no-op otherwise.
+Active whenever a `Dockerfile` (`Dockerfile`, `Dockerfile.*`, or `*.Dockerfile`) exists at the project root or one level down. No-op otherwise.
 
 | ID | Checks |
 | --- | --- |
 | `dockerfile-base-image-pinned` | every `FROM` pins an explicit non-`latest` tag (or `@sha256:` digest); build-stage refs and `scratch` are exempt |
 | `dockerfile-non-root-user` | a non-root `USER` is declared so the container does not run as root |
-| `dockerfile-no-secrets-in-env-arg` | no secret-looking `ENV`/`ARG` literal (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`) — inject at runtime |
+| `dockerfile-no-secrets-in-env-arg` | no secret-looking `ENV`/`ARG` literal (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`): inject at runtime |
 
 ## Severity
 

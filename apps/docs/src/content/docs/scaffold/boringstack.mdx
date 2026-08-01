@@ -14,11 +14,11 @@ committed in the BoringStack repo, which tsforge reads after cloning.
 | Archetype | What you get | Gate |
 | --- | --- | --- |
 | `boringstack` | The full stack: Bun + Elysia + Drizzle API (`apps/api`) + Vite/React UI (`apps/ui`), Postgres + Valkey, and whatever observability/billing/auth services your toggles enable | `cd apps/api && bun run validate` · `cd apps/ui && bun run validate` · `bun run check` |
-| `astro` | The Astro Starlight static site (`apps/docs`) — no API, no Docker, no `.env` | `bun run build` |
+| `astro` | The Astro Starlight static site (`apps/docs`); no API, no Docker, no `.env` | `bun run build` |
 
 ## When it runs
 
-Greenfield only. Editing an existing repo never scaffolds — tsforge auto-detects the
+Greenfield only. Editing an existing repo never scaffolds; tsforge auto-detects the
 gate and patches in place. The wizard is its own subcommand so its flags don't collide
 with the harness flags:
 
@@ -35,8 +35,8 @@ blocking cross-rule violation. Off a TTY, it uses flags directly.
 
 1. **Clone** BoringStack at the manifest's `defaultRef`, resolving the exact commit
    SHA into `<project>/.tsforge/scaffold.json` for replay.
-2. **Configure** by driving BoringStack's own scripts — `scripts/rename-project.sh`,
-   then `setup.sh` (which bootstraps `compose/.env` and generates a GlitchTip secret) —
+2. **Configure** by driving BoringStack's own scripts: `scripts/rename-project.sh`,
+   then `setup.sh` (which bootstraps `compose/.env` and generates a GlitchTip secret),
    then writing your toggle/provider answers into the right `.env` file (infra toggles
    → `infra/compose/compose/.env`; app features → `infra/compose/compose/api.<stack>.env`).
    Prod-only secrets (`JWT_SECRET`, `MFA_ENCRYPTION_KEY`, `VALKEY_PASSWORD`) are
@@ -44,7 +44,7 @@ blocking cross-rule violation. Off a TTY, it uses flags directly.
 3. **Boot** the stack with `setup.sh --up` and health-poll the API + UI (skip with
    `--no-boot` / `STACK=smoke`). Boot is a one-time scaffold-step, not part of the
    per-edit gate.
-4. **Hand off** — prints the exact command to start building features against the
+4. **Hand off**: prints the exact command to start building features against the
    scaffolded project (its own `bun run validate` becomes the gate).
 
 ## Flags
@@ -54,8 +54,8 @@ blocking cross-rule violation. Off a TTY, it uses flags directly.
 | `--dest <dir>` | Where to create the project (required) |
 | `--archetype <boringstack\|astro>` | Default `boringstack` |
 | `--stack <dev\|prod\|smoke>` | Default `dev` |
-| `--set KEY=VALUE` | Set a toggle/provider answer (repeatable) — e.g. `--set WITH_OBSERVABILITY=0` |
-| `--multi KEY=a,b` | Set a multi-select answer — e.g. `--multi OAUTH_PROVIDERS=google,github` |
+| `--set KEY=VALUE` | Set a toggle/provider answer (repeatable). For example: `--set WITH_OBSERVABILITY=0` |
+| `--multi KEY=a,b` | Set a multi-select answer. For example: `--multi OAUTH_PROVIDERS=google,github` |
 | `--ref <git-ref>` | Override the manifest's clone ref |
 | `--no-boot` | Clone + configure, but don't start Docker |
 
@@ -72,13 +72,13 @@ tsforge models none of BoringStack's surface itself. `.tsforge/scaffold-manifest
 services each toggle spawns, cross-rules (OAuth ⇒ Valkey, `EMAIL_PROVIDER=smtp` ⇒
 `WITH_MAILPIT`, OTel-vs-Sentry exclusion), and which `.env` file each value targets.
 tsforge reads it post-clone and a **completeness alarm** fails the build if a watched
-`WITH_*`/`*_ENABLED` toggle in BoringStack's `.env.example` isn't modelled — so the
+`WITH_*`/`*_ENABLED` toggle in BoringStack's `.env.example` isn't modelled. The
 wizard can never silently drop a capability. Evolving BoringStack means editing that
 manifest, not tsforge.
 
 ## How to test it
 
-**Unit (fast, no clone/Docker)** — the planner, manifest parser, wizard flow, env
+**Unit (fast, no clone/Docker)**: the planner, manifest parser, wizard flow, env
 apply, and completeness alarm are pure and fully covered:
 
 ```bash
@@ -89,7 +89,7 @@ This includes a snapshot of BoringStack's real `.env.example` files asserting th
 bundled manifest has zero coverage gaps, plus an exhaustive on/off matrix for every
 toggle and provider.
 
-**Real clone + configure (opt-in, needs a local BoringStack checkout)** — runs git +
+**Real clone + configure (opt-in, needs a local BoringStack checkout)**: runs git +
 BoringStack's actual `setup.sh`, no Docker boot:
 
 ```bash
@@ -97,7 +97,7 @@ TSFORGE_SCAFFOLD_E2E=1 BORINGSTACK_REPO=/path/to/boringstack \
   bun test packages/core/tests/scaffold-clone-configure.e2e.test.ts
 ```
 
-**End-to-end by hand** — drive the whole flow against a local checkout (the
+**End-to-end by hand**: drive the whole flow against a local checkout (the
 `BORINGSTACK_REPO` override avoids hitting GitHub):
 
 ```bash

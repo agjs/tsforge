@@ -5,21 +5,21 @@ description: Read-only exploration before the model is allowed to edit files.
 
 Plan mode is a safety rail for ambiguous work. The model can **read** your repo and **propose** a plan, but it cannot **edit** until you say go.
 
-**It is the default for a fresh interactive session** — tsforge explores, asks the few clarifying questions that matter, and proposes a plan before it writes anything. The status bar shows the current mode as a `◆ plan` / `◆ normal` chip.
+**It is the default for a fresh interactive session.** tsforge explores, asks the few clarifying questions that matter, and proposes a plan before it writes anything. The status bar shows the current mode as a `◆ plan` / `◆ normal` chip.
 
 ## Switching modes
 
 - Press **Shift+Tab** to cycle the mode (plan → normal → …), or type **`/plan`** to toggle it
-- When the plan looks right, reply **`approve`**, **`go`**, or **`lgtm`** — the model implements it
+- When the plan looks right, reply **`approve`**, **`go`**, or **`lgtm`**. The model implements it
 
-There is no disable *flag*: it's a mode you cycle with Shift+Tab. (`tsforge --plan` forces plan mode on for an interactive session even in a repo that configured an autonomous `policy.mode` — one-shot and headless runs are autonomous regardless.)
+There is no disable *flag*: it's a mode you cycle with Shift+Tab. (`tsforge --plan` forces plan mode on for an interactive session even in a repo that configured an autonomous `policy.mode`. One-shot and headless runs are autonomous regardless.)
 
 ## What the model can do in plan mode
 
 Read tools only:
 
 - `read`, `search`, and LSP navigation (`symbol_search`, `find_references`, `type_at`, `diagnostics`)
-- `git_context` — structured, read-only repo history/diffs (see [Git context](/reference/flags/#git-context))
+- `git_context`: structured, read-only repo history/diffs (see [Git context](/reference/flags/#git-context))
 - `run` for **read-only** shell commands (no installs, no writes)
 
 Blocked until approval: `edit`, `create`, `edit_lines`, scaffolders.
@@ -35,13 +35,13 @@ After approval, tsforge switches to the normal implement loop with full write to
 Plan mode is for **exploring and approving a change** in a repo. Building a *new*
 app from scratch is a different flow: [`tsforge scaffold`](/scaffold/boringstack/)
 stands up BoringStack, then the [greenfield loop](/loop/greenfield/) drives the app
-to green one resource at a time — the harness runs the generators + wiring and the
+to green one resource at a time. The harness runs the generators + wiring and the
 model fills the domain, each feature verified and frozen before the next. That loop
 plans and checkpoints per feature on its own, so it doesn't need plan mode.
 
 ## Leaving plan mode
 
 - **Shift+Tab** (or `/plan`) drops to normal mode for hands-on edits in a repo you know
-- One-shot runs (`tsforge "task" --accept …`) and headless/eval runs are autonomous already — plan mode is interactive-only, since it needs a human to approve
+- One-shot runs (`tsforge "task" --accept …`) and headless/eval runs are autonomous already. Plan mode is interactive-only, since it needs a human to approve
 
 → [Greenfield scaffolding](/scaffold/boringstack/) · [Interactive CLI](/cli/interactive/)

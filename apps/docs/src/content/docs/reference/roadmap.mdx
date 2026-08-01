@@ -3,24 +3,24 @@ title: Roadmap
 description: What's shipped through 0.27, the path to 1.0, and candidate work.
 ---
 
-TypeScript coding harness for web projects — `packages/core` for the loop and gate, [tsforge.dev](https://tsforge.dev) for docs.
+TypeScript coding harness for web projects: `packages/core` for the loop and gate, [tsforge.dev](https://tsforge.dev) for docs.
 
 ## Shipped through 0.27
 
 **Strictness & the gate**
 - Stack detection → **21 ESLint rule packs (122 rules)** + a **31-rule meta-rule engine** (config, CI, supply chain, container, testing, structure). See [Rule packs](/guardrails/rule-packs/) · [Meta-rules](/guardrails/meta-rules/).
 - **6 profiles** (recommended → strict / security / frontend / backend / opinionated); a type-aware ESLint overlay; progress-based loop termination (no blunt turn cap). See [When the gate fails](/loop/validation/).
-- **Tests by default** — `test-sibling-required` is an error on changed logic files. **Opt-in gate oracles** (coverage, boot smoke, property tests). See [Tests by default](/quality/tests/) · [the gate](/loop/gate-floor/).
+- **Tests by default**: `test-sibling-required` is an error on changed logic files. **Opt-in gate oracles** (coverage, boot smoke, property tests). See [Tests by default](/quality/tests/) · [the gate](/loop/gate-floor/).
 
 **Adapt to your repo**
-- **`tsforge setup`** — a conventions wizard that scans the repo and writes `tsforge.config.json` (interface naming, enums, test layout, component folders) without weakening the safety floor. See [Set up a repo](/cli/setup/).
+- **`tsforge setup`**: a conventions wizard that scans the repo and writes `tsforge.config.json` (interface naming, enums, test layout, component folders) without weakening the safety floor. See [Set up a repo](/cli/setup/).
 - `tsforge.config.json` overrides + **external plugin packs**. See [config](/guardrails/config/).
 
 **The agent surface**
 - **Functional review** (`tsforge review`, gate-aware) · **workspace map** (`tsforge map`) · **pre-edit scout** · **declarative recipes** (`tsforge run`) · **plan mode** · **cross-session memory**.
-- **Permissions & policy** — 6 modes, deny-first config rules, and a run **ledger** summarized by `tsforge trace`. See [Permissions & policy](/guardrails/policy/) · [Trace a run](/observability/trace/).
-- **Keyless web research** — opt-in package metadata/docs, search, fetch, and local browser reads with no required API key. See [Web access](/integrations/web-tools/).
-- **Greenfield scaffolding** — stands up the full BoringStack stack and builds it resource-by-resource against BoringStack's own gate. See [Greenfield scaffolding](/scaffold/boringstack/).
+- **Permissions & policy**: 6 modes, deny-first config rules, and a run **ledger** summarized by `tsforge trace`. See [Permissions & policy](/guardrails/policy/) · [Trace a run](/observability/trace/).
+- **Keyless web research**: opt-in package metadata/docs, search, fetch, and local browser reads with no required API key. See [Web access](/integrations/web-tools/).
+- **Greenfield scaffolding**: stands up the full BoringStack stack and builds it resource-by-resource against BoringStack's own gate. See [Greenfield scaffolding](/scaffold/boringstack/).
 
 **Models & observability**
 - **Provider-agnostic** `~/.tsforge/models.json` (any OpenAI-compatible API; `qwen`/`deepseek`/`openai` reasoning dialects, DeepSeek auto-detected). See [models.json](/inference/models-json/).
