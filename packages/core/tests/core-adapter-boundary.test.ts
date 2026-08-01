@@ -53,7 +53,7 @@ const lintFixtures = (
       parsed = JSON.parse(stdout);
     } catch {
       throw new Error(
-        `eslint did not emit a JSON report (exit ${proc.exitCode}). stderr: ${proc.stderr.toString().slice(0, 800)} | stdout: ${stdout.slice(0, 200)}`
+        `eslint did not emit a JSON report (exit ${proc.exitCode}). stderr: ${proc.stderr.toString()} | stdout: ${stdout}`
       );
     }
 
@@ -89,5 +89,10 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
   expect(results.get("leak-type.ts")).toContain(RULE);
   // Importing another CORE module is allowed — the rule targets only the adapter subtree, so it
   // is a real boundary, not a blanket ban that would also block legitimate intra-core imports.
-  expect(results.get("core-ok.ts") ?? []).not.toContain(RULE);
+  // Assert the control file was ACTUALLY linted first (a missing entry — ignored / mis-scoped /
+  // basename mismatch — must fail, not green-wash the negative case via a `?? []` default).
+  const coreOk = results.get("core-ok.ts");
+
+  expect(coreOk).toBeDefined();
+  expect(coreOk).not.toContain(RULE);
 }, 30000);
