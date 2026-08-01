@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { join } from "node:path";
-import { writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 
 // WS4 — the core↔adapter law made MECHANICAL. eslint.config.js forbids the generic core loop
 // (`loop/**` except `loop/boringstack/**`) from importing the BoringStack adapter. WS1–WS3
@@ -36,6 +36,12 @@ interface IFileResult {
 const lintFixtures = (
   files: Record<string, string>
 ): Map<string, (string | null)[]> => {
+  // Fail loudly + specifically if the eslint binary isn't where this repo puts it, rather than
+  // letting a failed spawn surface as an opaque empty-stdout JSON error.
+  if (!existsSync(ESLINT)) {
+    throw new Error(`eslint binary not found at ${ESLINT}`);
+  }
+
   try {
     // Create + write INSIDE the try so the finally cleanup runs even if mkdir/write throws.
     mkdirSync(FIXTURE_DIR, { recursive: true });
@@ -82,12 +88,20 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
       'import { boringstackPlanSchema } from "../boringstack/plan-extension";\n\nexport const a = boringstackPlanSchema;\n',
     "leak-type.ts":
       'import type { IUiIntent } from "../boringstack/plan-extension";\n\nexport type A = IUiIntent;\n',
+    "leak-reexport.ts":
+      'export { boringstackPlanSchema } from "../boringstack/plan-extension";\n',
     "leak-dynamic.ts":
       'export async function load() {\n  return import("../boringstack/plan-extension");\n}\n',
     "leak-dynamic-template.ts":
       "export async function load() {\n  return import(`../boringstack/plan-extension`);\n}\n",
+    "leak-dynamic-concat.ts":
+      'export async function load() {\n  return import("../boringstack/" + "plan-extension");\n}\n',
+    "leak-dynamic-ternary.ts":
+      'export async function load(b: boolean) {\n  return import(b ? "../boringstack/plan-extension" : "../planning/plan-store");\n}\n',
     "leak-require.ts":
       'import { createRequire } from "node:module";\n\nexport const m = createRequire(import.meta.url)("../boringstack/plan-extension");\n',
+    "leak-require-template.ts":
+      'import { createRequire } from "node:module";\n\nexport const m = createRequire(import.meta.url)(`../boringstack/plan-extension`);\n',
     "enum.ts": "export enum Color {\n  Red,\n  Blue,\n}\n",
     "core-ok.ts":
       'import { isProductPlan } from "../planning/plan-store";\n\nexport const b = isProductPlan;\n',
@@ -98,16 +112,20 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
   // A TYPE-ONLY import of the adapter fires it too — the @typescript-eslint superset of
   // no-restricted-imports catches `import type`, which core no-restricted-imports would miss.
   expect(results.get("leak-type.ts")).toContain(RULE);
-  // A DYNAMIC import() of the adapter is caught too — by the no-restricted-syntax ImportExpression
-  // selector (no-restricted-imports doesn't see dynamic imports), so the boundary has no escape hatch.
+  // A static RE-EXPORT (`export { x } from "../boringstack/y"`) is a restricted import too.
+  expect(results.get("leak-reexport.ts")).toContain(RULE);
+  // DYNAMIC import() forms are caught by the no-restricted-syntax selectors (no-restricted-imports
+  // doesn't see dynamic imports): plain string, templated, string CONCAT, and a TERNARY arg — each
+  // a form a narrower selector could evade.
   expect(results.get("leak-dynamic.ts")).toContain(SYNTAX_RULE);
-  // A TEMPLATED dynamic import (`import(`../boringstack/x`)`) is caught by the TemplateElement
-  // selector — the string-Literal-only form a prior round could evade is closed.
   expect(results.get("leak-dynamic-template.ts")).toContain(SYNTAX_RULE);
-  // An immediately-invoked createRequire(...)("../boringstack/x") (CommonJS-interop runtime load)
-  // is caught too — no-restricted-imports only sees the permitted `node:module` import, so the
-  // ban lives in the no-restricted-syntax createRequire selector.
+  expect(results.get("leak-dynamic-concat.ts")).toContain(SYNTAX_RULE);
+  expect(results.get("leak-dynamic-ternary.ts")).toContain(SYNTAX_RULE);
+  // An immediately-invoked createRequire(...)(...) (CommonJS-interop runtime load) is caught too —
+  // no-restricted-imports only sees the permitted `node:module` import, so the ban lives in the
+  // no-restricted-syntax selectors, which cover the string AND templated createRequire forms.
   expect(results.get("leak-require.ts")).toContain(SYNTAX_RULE);
+  expect(results.get("leak-require-template.ts")).toContain(SYNTAX_RULE);
   // The boundary block REPLACES the base no-restricted-syntax for loop files, re-including the
   // enum ban. Prove that ban still fires here, so a future edit dropping the TSEnumDeclaration
   // selector can't silently relax the gate for the whole core loop.

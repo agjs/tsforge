@@ -284,22 +284,22 @@ export default tseslint.config(
           message: "Use 'as const' object literals instead of enums.",
         },
         {
+          // Any boringstack string Literal ANYWHERE in a runtime-loader argument — a dynamic
+          // `import(...)` OR an immediately-invoked `createRequire(...)(...)`. Descendant match, so
+          // it covers the string, a `"../boringstack/" + n` concat, and a ternary arg uniformly for
+          // BOTH loaders.
           selector:
-            "ImportExpression Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]",
+            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"]) Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]',
           message:
-            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via dynamic import(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a dynamic import() or createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
         },
         {
+          // The templated form of either loader (`import(`../boringstack/x`)` /
+          // `createRequire(u)(`../boringstack/x`)`).
           selector:
-            "ImportExpression TemplateElement[value.cooked=/(^|\\u002F)boringstack($|\\u002F)/]",
+            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"]) TemplateElement[value.cooked=/(^|\\u002F)boringstack($|\\u002F)/]',
           message:
-            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a templated dynamic import(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
-        },
-        {
-          selector:
-            'CallExpression[callee.callee.name="createRequire"] > Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]',
-          message:
-            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a templated dynamic import() or createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
         },
       ],
     },
