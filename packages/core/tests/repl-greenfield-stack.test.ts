@@ -185,19 +185,25 @@ describe("greenfieldOrSend (the interception branch)", () => {
 
 // The remaining glue — the readline line handler CALLING greenfieldOrSend with the
 // composition-root registry and both continuations — lives inside repl()'s readline closure,
-// which is not unit-reachable. A source-TEXT guard (regex over the file) cannot distinguish
-// executable code from a string/comment/template copy, nor prove the call is reachable rather
-// than nested in a dead block. So this guard matches the AST STRUCTURALLY via ast-grep (the
-// repo's own tool — see loop/astgrep-fix.ts) with ONE pattern that pins the call as the FINAL
-// statement of the runLine handler arrow (matched by its exact signature). That single structural
-// fact closes every class the reviewers raised:
+// which is not unit-reachable. This guard matches the AST STRUCTURALLY via ast-grep (the repo's
+// own tool — see loop/astgrep-fix.ts) with ONE pattern that pins the exact call as the FINAL
+// statement of an `async (line: string): Promise<void> => {…}` arrow (the runLine handler's
+// signature).
+//
+// WHAT IT GUARANTEES (each verified by a committed negative below):
 //   - code-vs-literal: a string/comment/template copy is not a call node → no match;
-//   - shape bypasses: all three args are pinned, so a sending hasPlan / block-body onGreenfield /
+//   - shape: all three args are pinned literal, so a sending hasPlan / block-body onGreenfield /
 //     send chained onto planning is a DIFFERENT node → no match;
-//   - reachability/nesting: the call must be the arrow body's LAST statement, so a call in an
-//     inner if/try/arrow, or with ANY statement after it in the handler (a trailing send), is not
-//     the last statement → no match. (Verified against real repl.ts and each decoy.)
-// Plan-XOR-send SEMANTICS are proven by the greenfieldOrSend behavioral test above.
+//   - nothing sends AFTER it: the call is the arrow body's LAST statement, so a call nested in an
+//     inner if/try/arrow, or with any statement after it (a trailing send), is not last → no match.
+//
+// WHAT IT DOES NOT (and cannot, statically) guarantee: that no UNCONDITIONAL send runs BEFORE the
+// call. The real handler legitimately contains conditional `runSend(line)` in earlier branches
+// that `return` first (plan-discuss/approval), so a blanket "reject any preceding send" would
+// reject the real handler — telling an unconditional preceding send from a return-guarded one is
+// control-flow analysis, not pattern matching. That routing/ordering property is what the
+// greenfieldOrSend behavioral test (plan XOR send) and the real build/e2e path cover; this guard
+// pins the wiring's shape and terminal position, not the handler's full control flow.
 const AST_GREP = join(
   import.meta.dir,
   "..",
@@ -347,5 +353,16 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
         )
       )
     ).toBe(0);
+  });
+
+  // DOCUMENTED LIMIT (pinned so the boundary is explicit, not silent): a send BEFORE the call is
+  // NOT rejected — the call is still the arrow's last statement. This is inherent: the real
+  // handler has conditional runSend in earlier return-guarded branches, so a preceding send can't
+  // be blanket-rejected without control-flow analysis. Ordering/routing is covered by the
+  // greenfieldOrSend behavioral test + build/e2e, not this structural wiring guard.
+  test("does NOT reject a preceding send (documented static-analysis limit)", async () => {
+    expect(
+      await countOn(wrapArrow(`await runSend(line);\n  ${CORRECT_CALL};`))
+    ).toBe(1);
   });
 });
