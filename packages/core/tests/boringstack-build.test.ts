@@ -32,6 +32,7 @@ import type { IGate } from "../src/gate/gate-runner";
 import { writePlan } from "../src/loop/planning/plan-store";
 import { saveState } from "../src/loop/greenfield/state";
 import type { IProductPlan, ISlice } from "../src/loop/planning/plan-types";
+import { type IUiIntent } from "../src/loop/boringstack/plan-extension";
 
 function feature(id: string) {
   return { id, desc: `Build ${id} resource`, passes: false, attempts: 0 };
@@ -92,7 +93,7 @@ function createEvaluator(): IProvider {
 }
 
 /** A minimal single-slice approved plan, shared by the baseline-persistence tests. */
-function invoicePlan(): IProductPlan {
+function invoicePlan(): IProductPlan<IUiIntent> {
   return {
     product: "A simple app",
     slices: [
@@ -121,7 +122,7 @@ function invoicePlan(): IProductPlan {
 }
 
 describe("homeRouteForPlan", () => {
-  const mkSlice = (id: string, home: boolean): ISlice => ({
+  const mkSlice = (id: string, home: boolean): ISlice<IUiIntent> => ({
     entity: {
       id,
       desc: "d",
@@ -142,7 +143,10 @@ describe("homeRouteForPlan", () => {
       acceptanceCheck: "bun test",
     },
   });
-  const plan = (slices: ISlice[]): IProductPlan => ({ product: "p", slices });
+  const plan = (slices: ISlice<IUiIntent>[]): IProductPlan<IUiIntent> => ({
+    product: "p",
+    slices,
+  });
 
   test("returns the /camel route of the slice marked home", () => {
     expect(
@@ -594,7 +598,7 @@ describe("runBoringstackBuild", () => {
     const dir = await mkdtemp(join(tmpdir(), "bs-"));
 
     try {
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A simple app",
         slices: [
           {
@@ -656,7 +660,7 @@ describe("runBoringstackBuild", () => {
 
     try {
       // Write an approved plan
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A simple app",
         slices: [
           {
@@ -732,7 +736,7 @@ describe("runBoringstackBuild", () => {
         "utf-8"
       );
 
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A todo app",
         slices: [
           {
@@ -800,7 +804,7 @@ describe("runBoringstackBuild", () => {
         "utf-8"
       );
 
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A todo app",
         slices: [
           {
@@ -870,7 +874,7 @@ describe("runBoringstackBuild", () => {
       await mkdir(join(constsPath, ".."), { recursive: true });
       await writeFile(constsPath, original, "utf-8");
 
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A todo app",
         slices: [
           {
@@ -948,7 +952,7 @@ describe("runBoringstackBuild", () => {
         "utf-8"
       );
 
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A todo app",
         slices: [
           {
@@ -1016,7 +1020,7 @@ describe("runBoringstackBuild", () => {
     const dir = await mkdtemp(join(tmpdir(), "bs-"));
 
     try {
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A simple app",
         slices: [
           {
@@ -1084,7 +1088,7 @@ describe("runBoringstackBuild", () => {
     try {
       process.env.TSFORGE_NO_E2E_ACCEPTANCE = "1";
 
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A simple app",
         slices: [
           {
@@ -2016,7 +2020,7 @@ describe("baseline persistence — resume-safe differential grading", () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-e2e-"));
 
     try {
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A simple app",
         slices: [
           {
@@ -2092,7 +2096,7 @@ describe("baseline persistence — resume-safe differential grading", () => {
     const dir = await mkdtemp(join(tmpdir(), "tsforge-baseline-strict-"));
 
     try {
-      const plan: IProductPlan = {
+      const plan: IProductPlan<IUiIntent> = {
         product: "A simple app",
         slices: [
           {

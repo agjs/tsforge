@@ -12,6 +12,10 @@ import type {
   IAcceptField,
 } from "../src/loop/acceptance/acceptance.types";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
+import {
+  boringstackUiFields,
+  type IUiIntent,
+} from "../src/loop/boringstack/plan-extension";
 
 const company: IEntityAcceptance = {
   id: "Company",
@@ -802,7 +806,7 @@ describe("E2E spec generator - Relationships", () => {
 
 describe("FIX 11: planToAcceptanceSpec FK dedup", () => {
   test("a plan already declaring the FK field yields exactly one occurrence", () => {
-    const planWithDeclaredFk: IProductPlan = {
+    const planWithDeclaredFk: IProductPlan<IUiIntent> = {
       product: "CRM",
       slices: [
         {
@@ -852,7 +856,7 @@ describe("FIX 11: planToAcceptanceSpec FK dedup", () => {
       ],
     };
 
-    const spec = planToAcceptanceSpec(planWithDeclaredFk);
+    const spec = planToAcceptanceSpec(planWithDeclaredFk, boringstackUiFields);
     const contact = spec.entities[1];
 
     if (!contact) {

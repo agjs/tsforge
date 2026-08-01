@@ -3,16 +3,38 @@ import {
   proposePlan,
   parsePlanJson,
   stripReservedSlices,
-  PLANNER_EXAMPLE,
-  PLANNER_SYSTEM,
 } from "../src/loop/planning/propose-plan";
 import {
   BORINGSTACK_PLANNER_GUIDANCE,
   BORINGSTACK_RESERVED_ENTITY_IDS,
 } from "../src/loop/boringstack/planning";
-import type { IProductPlan, ISlice } from "../src/loop/planning/plan-types";
+import {
+  boringstackPlanSchema,
+  isBoringstackUiIntent,
+  PLANNER_EXAMPLE,
+  PLANNER_SYSTEM,
+  type IUiIntent,
+} from "../src/loop/boringstack/plan-extension";
+import type {
+  IProductPlan,
+  ISlice,
+  IPlanConstraints,
+} from "../src/loop/planning/plan-types";
 import { isProductPlan } from "../src/loop/planning/plan-store";
 import type { IProvider } from "../src/inference";
+
+// The BoringStack plan schema specializes the generic planner/parser to the web UI intent — these
+// thin wrappers inject it so each call site reads like the pre-generic API.
+const runPropose = (
+  deps: { planner: IProvider },
+  input: { description: string; mockups?: readonly string[] },
+  constraints?: IPlanConstraints
+): Promise<IProductPlan<IUiIntent> | null> =>
+  proposePlan(deps, input, boringstackPlanSchema, constraints);
+const runParse = (raw: string): IProductPlan<IUiIntent> | null =>
+  parsePlanJson(raw, isBoringstackUiIntent, boringstackPlanSchema.extraCheck);
+const isPlan = (value: unknown): value is IProductPlan<IUiIntent> =>
+  isProductPlan(value, isBoringstackUiIntent, boringstackPlanSchema.extraCheck);
 
 const bookmarkSlice = {
   entity: {
@@ -33,12 +55,12 @@ const bookmarkSlice = {
     mustNotHappen: ["no url"],
     acceptanceCheck: "bun test",
   },
-} satisfies ISlice;
+} satisfies ISlice<IUiIntent>;
 
 const mockPlan = {
   product: "A bookmarking app.",
   slices: [bookmarkSlice],
-} satisfies IProductPlan;
+} satisfies IProductPlan<IUiIntent>;
 
 test("proposePlan turns a product description into a structured plan", async () => {
   const planner: IProvider = {
@@ -48,7 +70,7 @@ test("proposePlan turns a product description into a structured plan", async () 
     }),
   };
 
-  const plan = await proposePlan(
+  const plan = await runPropose(
     { planner },
     { description: "a bookmarking app" }
   );
@@ -61,7 +83,7 @@ test("a non-JSON planner reply yields null", async () => {
     complete: async () => ({ content: "sorry", toolCalls: [] }),
   };
 
-  expect(await proposePlan({ planner: bad }, { description: "x" })).toBeNull();
+  expect(await runPropose({ planner: bad }, { description: "x" })).toBeNull();
 });
 
 test("validation failure triggers retry with higher temperature, succeeding on second reply", async () => {
@@ -83,7 +105,7 @@ test("validation failure triggers retry with higher temperature, succeeding on s
     },
   };
 
-  const plan = await proposePlan(
+  const plan = await runPropose(
     { planner: retryingPlanner },
     { description: "test" }
   );
@@ -102,7 +124,7 @@ test("validation failure on both attempts yields null", async () => {
     },
   };
 
-  const plan = await proposePlan(
+  const plan = await runPropose(
     { planner: failingPlanner },
     { description: "test" }
   );
@@ -128,7 +150,7 @@ test("proposePlan includes mockup refs in user message", async () => {
     },
   };
 
-  await proposePlan(
+  await runPropose(
     { planner: capturingPlanner },
     {
       description: "test app",
@@ -144,19 +166,19 @@ test("parsePlanJson extracts JSON from fenced code blocks", () => {
   const fenced = `\`\`\`json
 ${JSON.stringify(mockPlan)}
 \`\`\``;
-  const result = parsePlanJson(fenced);
+  const result = runParse(fenced);
 
   expect(result?.slices[0]?.entity.id).toBe("Bookmark");
 });
 
 test("parsePlanJson rejects invalid plan shape", () => {
   const invalid = JSON.stringify({ product: "test" }); // missing slices
-  const result = parsePlanJson(invalid);
+  const result = runParse(invalid);
 
   expect(result).toBeNull();
 });
 
-function authSlice(id: string): ISlice {
+function authSlice(id: string): ISlice<IUiIntent> {
   return {
     entity: {
       id,
@@ -180,7 +202,7 @@ function authSlice(id: string): ISlice {
 }
 
 /** Build a planner that returns exactly the given slices. */
-function plannerOf(slices: ISlice[]): IProvider {
+function plannerOf(slices: ISlice<IUiIntent>[]): IProvider {
   return {
     complete: async () => ({
       content: JSON.stringify({ product: "p", slices }),
@@ -235,7 +257,7 @@ test("STACK-AGNOSTIC: with NO constraints, proposePlan does NOT strip a User sli
   // The generic planner must never assume a stack ships auth. A plain build that
   // legitimately needs a User entity keeps it — the bug that leaked BoringStack
   // assumptions into the core planner.
-  const plan = await proposePlan(
+  const plan = await runPropose(
     { planner: plannerOf([authSlice("User"), bookmarkSlice]) },
     { description: "an app with real users" }
   );
@@ -253,7 +275,7 @@ test("STACK-AGNOSTIC: the base system prompt says nothing about auth being provi
     },
   };
 
-  await proposePlan({ planner }, { description: "x" }); // no constraints
+  await runPropose({ planner }, { description: "x" }); // no constraints
 
   expect(system).not.toContain("ALREADY PROVIDES authentication");
   expect(system).not.toContain("auth surface");
@@ -262,7 +284,7 @@ test("STACK-AGNOSTIC: the base system prompt says nothing about auth being provi
 test("stripping is SURFACED via onStripped, not silent", async () => {
   const dropped: string[][] = [];
 
-  await proposePlan(
+  await runPropose(
     { planner: plannerOf([authSlice("User"), bookmarkSlice]) },
     { description: "bookmarks" },
     { ...BS, onStripped: (ids) => dropped.push([...ids]) }
@@ -272,7 +294,7 @@ test("stripping is SURFACED via onStripped, not silent", async () => {
 });
 
 test("BoringStack opt-in strips a redundant User slice (the live bookmark-app collision)", async () => {
-  const plan = await proposePlan(
+  const plan = await runPropose(
     { planner: plannerOf([authSlice("User"), bookmarkSlice]) },
     { description: "bookmarks" },
     BS
@@ -291,7 +313,7 @@ test("BoringStack opt-in appends its auth guidance to the system prompt", async 
     },
   };
 
-  await proposePlan({ planner }, { description: "x" }, BS);
+  await runPropose({ planner }, { description: "x" }, BS);
 
   expect(system).toContain("BoringStack");
   expect(system).toContain("ALREADY PROVIDES authentication");
@@ -313,7 +335,7 @@ test("BoringStack opt-in: an all-auth plan on BOTH attempts strips to NULL (fini
     },
   };
 
-  const plan = await proposePlan({ planner }, { description: "just auth" }, BS);
+  const plan = await runPropose({ planner }, { description: "just auth" }, BS);
 
   expect(plan).toBeNull();
   // An all-auth first attempt is retried once (a fresh try may yield real slices).
@@ -341,7 +363,7 @@ test("BoringStack opt-in: an all-auth first attempt RETRIES and recovers a real 
     },
   };
 
-  const plan = await proposePlan({ planner }, { description: "bookmarks" }, BS);
+  const plan = await runPropose({ planner }, { description: "bookmarks" }, BS);
 
   expect(calls).toBe(2);
   expect(plan?.slices.map((s) => s.entity.id)).toEqual(["Bookmark"]);
@@ -366,7 +388,7 @@ test("BoringStack opt-in: stripping also applies on the temperature-0.7 retry pa
     },
   };
 
-  const plan = await proposePlan({ planner }, { description: "bookmarks" }, BS);
+  const plan = await runPropose({ planner }, { description: "bookmarks" }, BS);
 
   expect(call).toBe(2);
   expect(plan?.slices.map((s) => s.entity.id)).toEqual(["Bookmark"]);
@@ -385,8 +407,8 @@ test("PLANNER_EXAMPLE (the shape shown to the model) is itself a valid plan", ()
   // example's shape, the contract we advertise diverges from what the parser
   // accepts — and the live model dutifully copies the broken shape. Guard it:
   // the worked example must round-trip through the same strict guard.
-  expect(isProductPlan(PLANNER_EXAMPLE)).toBe(true);
-  expect(parsePlanJson(JSON.stringify(PLANNER_EXAMPLE))).not.toBeNull();
+  expect(isPlan(PLANNER_EXAMPLE)).toBe(true);
+  expect(runParse(JSON.stringify(PLANNER_EXAMPLE))).not.toBeNull();
 });
 
 test("the planner contract surfaces layout + home so plans can actually use the capability", () => {
@@ -402,7 +424,7 @@ test("the planner contract surfaces layout + home so plans can actually use the 
   // Exactly one home in the worked example, and it's an app-sidebar primary view. Widen to
   // IProductPlan first: PLANNER_EXAMPLE's concrete literal type narrows `home` to `true`, which
   // eslint flags as an always-truthy condition; the interface type restores `boolean | undefined`.
-  const example: IProductPlan = PLANNER_EXAMPLE;
+  const example: IProductPlan<IUiIntent> = PLANNER_EXAMPLE;
   const homeCount = example.slices.filter((s) => s.ui.home === true).length;
   const home = example.slices.find((s) => s.ui.home === true);
 

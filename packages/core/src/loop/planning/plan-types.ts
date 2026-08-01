@@ -10,61 +10,47 @@ export interface IEntitySpec {
   readonly rules: readonly string[];
 }
 
-/** The modern-layout archetype VOCABULARY (roadmap) — intentionally broad so the model isn't
- *  locked into too few options. This tuple drives the `LayoutArchetype` type. It is NOT the set a
- *  plan may declare: plan validation gates on IMPLEMENTED_LAYOUT_ARCHETYPES (below), so a
- *  not-yet-built archetype is REJECTED, never silently accepted or fallen-back. Move an entry's
- *  behaviour into the wiring, add it to IMPLEMENTED_LAYOUT_ARCHETYPES, then plans can use it. */
-export const LAYOUT_ARCHETYPES = [
-  "app-sidebar", // left sidebar + header content shell (default SaaS look)
-  "app-topnav", // horizontal top-nav + content
-  "settings", // demoted secondary/config area (profile, account, prefs)
-  "focused", // centered single-column (auth, onboarding)
-  "public", // unauthenticated marketing/landing
-] as const;
-
-export type LayoutArchetype = (typeof LAYOUT_ARCHETYPES)[number];
-
-/** The archetypes the harness actually IMPLEMENTS today — this drives PLAN VALIDATION. The full
- *  LAYOUT_ARCHETYPES set above is the roadmap/vocabulary; a plan may only DECLARE an implemented
- *  one. A not-yet-built archetype is rejected rather than silently mis-built — critically `public`
- *  implies UNAUTHENTICATED, but routing wraps every feature in ProtectedRoute+AppShell, so a
- *  silently-accepted `public` feature would be authenticated (wrong). Grow this set as archetypes
- *  ship. */
-export const IMPLEMENTED_LAYOUT_ARCHETYPES = [
-  "app-sidebar",
-  "settings",
-] as const;
-
-export interface IUiIntent {
-  readonly screens: readonly ("list" | "detail" | "form" | "dashboard")[];
-  readonly action: string; // primary user action → observable result
-  readonly shows: readonly string[];
-  readonly nav: string;
-  /** Which layout archetype this feature's UI uses. Default `app-sidebar`. Drives sidebar
-   *  grouping (primary app nav vs a demoted Settings group) — NOT a separate auth boundary in
-   *  v1 (both stay ProtectedRoute + AppShell). */
-  readonly layout?: LayoutArchetype;
-  /** This feature's route is the post-login landing (the app "home"). At most ONE per plan; if
-   *  none is marked, login falls back to the scaffold default (`/dashboard`). */
-  readonly home?: boolean;
-}
-
 export interface IVerificationContract {
   readonly mustRemainTrue: readonly string[];
   readonly mustNotHappen: readonly string[]; // ≥1
   readonly acceptanceCheck: string; // runnable command, outcome-oriented
 }
 
-export interface ISlice {
+/**
+ * A plan slice: a domain entity + its verification contract + a stack-specific UI intent. The core
+ * spine is GENERIC over the UI-intent type `TUi` — core never names a concrete UI shape (screens,
+ * nav, layout are WEB concepts). A stack adapter supplies the concrete `TUi` (BoringStack's
+ * `IUiIntent`) and the schema that validates it (see `IPlanSchema`). `TUi = unknown` by default,
+ * so a UI-agnostic caller sees `ui` as opaque rather than a hardcoded web shape.
+ */
+export interface ISlice<TUi = unknown> {
   readonly entity: IEntitySpec;
-  readonly ui: IUiIntent;
+  readonly ui: TUi;
   readonly verification: IVerificationContract;
 }
 
-export interface IProductPlan {
+export interface IProductPlan<TUi = unknown> {
   readonly product: string; // one-paragraph purpose
-  readonly slices: readonly ISlice[];
+  readonly slices: readonly ISlice<TUi>[];
+}
+
+/**
+ * The STACK-SPECIFIC plan schema the generic planner + parser depend on, injected by the adapter
+ * (BoringStack today). Core's `proposePlan` teaches `system` to the model, uses `example` to pin
+ * the exact output shape, validates each slice's `ui` with `validateUi` at the parse boundary, and
+ * applies the optional cross-slice `extraCheck`. This is what keeps the WEB plan shape (screens,
+ * nav, layout, home) OUT of core — a Phaser adapter would supply its own schema, or a UI-less one
+ * a trivial pass-through.
+ */
+export interface IPlanSchema<TUi> {
+  /** System-prompt text teaching the model this stack's exact plan/UI shape. */
+  readonly system: string;
+  /** A complete, valid example plan (serialized into the prompt) pinning the output shape. */
+  readonly example: IProductPlan<TUi>;
+  /** Validates a slice's `ui` field at the parse boundary (reject-by-default). */
+  readonly validateUi: (value: unknown) => value is TUi;
+  /** Optional cross-slice rule (e.g. "≤1 home"); returns false to reject the plan. */
+  readonly extraCheck?: (plan: IProductPlan<TUi>) => boolean;
 }
 
 /** OPT-IN, stack-specific planning constraints for proposePlan. Absent → the

@@ -1,6 +1,10 @@
 import { test, expect, describe } from "bun:test";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
 import {
+  boringstackUiFields,
+  type IUiIntent,
+} from "../src/loop/boringstack/plan-extension";
+import {
   buildTestIdGuide,
   checkTestIds,
   checkWiring,
@@ -63,7 +67,7 @@ const allFkEntity: IEntityAcceptance = {
 };
 
 // Create a test entity with fields, shows, and a parent relationship
-const testPlan: IProductPlan = {
+const testPlan: IProductPlan<IUiIntent> = {
   product: "Test",
   slices: [
     {
@@ -92,7 +96,7 @@ const testPlan: IProductPlan = {
   ],
 };
 
-const spec = planToAcceptanceSpec(testPlan);
+const spec = planToAcceptanceSpec(testPlan, boringstackUiFields);
 const contact = spec.entities[0];
 
 if (!contact) {

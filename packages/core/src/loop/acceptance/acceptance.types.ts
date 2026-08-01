@@ -24,7 +24,9 @@ export interface IEntityAcceptance {
   nav: string;
   fields: IAcceptField[];
   shows: string[];
-  screens: readonly ("list" | "detail" | "form" | "dashboard")[];
+  // Screen ids the stack's UI intent declares — kept as opaque strings so core acceptance stays
+  // generic over the UI shape (the web `list|detail|form|dashboard` values live in the adapter).
+  screens: readonly string[];
   parents: IParentRef[];
   negatives: INegativeCase[];
   acceptanceCheck: string;

@@ -9,6 +9,7 @@ import { runFinalAcceptance } from "../src/loop/boringstack/build";
 import type { Exec } from "../src/loop/boringstack/exec";
 import type { IGreenfieldResult } from "../src/loop/greenfield/greenfield.types";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
+import { type IUiIntent } from "../src/loop/boringstack/plan-extension";
 
 /**
  * Tests for final-acceptance verification (called after all features pass fast gate).
@@ -199,7 +200,7 @@ test("final acceptance: runner missing when acceptance enabled → fail-closed (
     return { code: 0, stdout: "", stderr: "" };
   };
 
-  const minimalPlan: IProductPlan = {
+  const minimalPlan: IProductPlan<IUiIntent> = {
     product: "Test",
     slices: [
       {
@@ -255,7 +256,7 @@ test("final acceptance: runner missing when acceptance disabled → returns done
     return { code: 0, stdout: "", stderr: "" };
   };
 
-  const minimalPlan: IProductPlan = {
+  const minimalPlan: IProductPlan<IUiIntent> = {
     product: "Test",
     slices: [
       {
@@ -425,7 +426,7 @@ test("runFinalAcceptance: non-done status → returns input unchanged", async ()
     stderr: "",
   });
 
-  const minimalPlan: IProductPlan = {
+  const minimalPlan: IProductPlan<IUiIntent> = {
     product: "Test",
     slices: [],
   };
@@ -468,7 +469,7 @@ test("runFinalAcceptance: gate passes + runChain returns infraError → needs-in
     },
   };
 
-  const minimalPlan: IProductPlan = {
+  const minimalPlan: IProductPlan<IUiIntent> = {
     product: "Test",
     slices: [],
   };
@@ -511,7 +512,7 @@ test("runFinalAcceptance: gate passes + runChain returns ok:false → stuck", as
     },
   };
 
-  const minimalPlan: IProductPlan = {
+  const minimalPlan: IProductPlan<IUiIntent> = {
     product: "Test",
     slices: [],
   };
@@ -554,7 +555,7 @@ test("runFinalAcceptance: gate passes + runChain returns ok:true → done", asyn
     },
   };
 
-  const minimalPlan: IProductPlan = {
+  const minimalPlan: IProductPlan<IUiIntent> = {
     product: "Test",
     slices: [],
   };
@@ -572,7 +573,7 @@ test("runFinalAcceptance: gate passes + runChain returns ok:true → done", asyn
 });
 
 // Tests for the exported runFinalAcceptance function
-const minimalPlan: IProductPlan = {
+const minimalPlan: IProductPlan<IUiIntent> = {
   product: "Test",
   slices: [
     {

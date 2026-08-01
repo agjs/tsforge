@@ -24,6 +24,11 @@ import { slicesToFeatures, invalidEntityIds } from "./plan-resources";
 import { toCamelCase } from "./case";
 import { loadApprovedPlan } from "../planning/plan-store";
 import type { ISlice, IProductPlan } from "../planning/plan-types";
+import {
+  boringstackPlanSchema,
+  boringstackUiFields,
+  type IUiIntent,
+} from "./plan-extension";
 import { planToAcceptanceSpec } from "../acceptance/acceptance-spec";
 import { buildTestIdGuide } from "./acceptance/testid-contract";
 import type {
@@ -36,6 +41,10 @@ import type {
 import { acceptanceSteer } from "../acceptance/acceptance-steer";
 import { readHostPorts, hostPortOr } from "../../scaffold";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
+
+/** BoringStack builds a concrete web plan — the generic spine specialized to IUiIntent. */
+type BsPlan = IProductPlan<IUiIntent>;
+type BsSlice = ISlice<IUiIntent>;
 
 /** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
  *  `lint:fix` (eslint --fix for the auto-fixable lint rules — padding-line, import order, etc.)
@@ -596,7 +605,7 @@ export function boringstackDeps(opts: {
   generateUi?: (cwd: string, name: string, exec: Exec) => Promise<void>;
   /** Look up the plan slice for a feature by its id. Supplied by runBoringstackBuild
    *  when building from an approved plan; undefined when planning ad-hoc. */
-  sliceFor?: (id: string) => ISlice | undefined;
+  sliceFor?: (id: string) => BsSlice | undefined;
   /** The acceptance runner for per-slice E2E verification. When provided and the
    *  flag is enabled, features are gated on per-slice acceptance after the fast gate
    *  passes. */
@@ -663,10 +672,13 @@ export function boringstackDeps(opts: {
       let entity: IEntityAcceptance | undefined;
 
       if (slice !== undefined) {
-        const spec = planToAcceptanceSpec({
-          product: "BoringStack",
-          slices: [slice],
-        });
+        const spec = planToAcceptanceSpec(
+          {
+            product: "BoringStack",
+            slices: [slice],
+          },
+          boringstackUiFields
+        );
 
         entity = spec.entities[0];
       }
@@ -852,7 +864,7 @@ export async function runFinalAcceptance(
   cwd: string,
   exec: Exec,
   acceptanceRunner: IAcceptanceRunner | undefined,
-  approved: IProductPlan,
+  approved: BsPlan,
   e2eAcceptanceDisabled: boolean,
   onEvent?: Reporter
 ): Promise<IGreenfieldResult> {
@@ -909,7 +921,7 @@ export async function runFinalAcceptance(
       uiBase: `http://localhost:${uiPort}`,
     };
 
-    const spec = planToAcceptanceSpec(approved);
+    const spec = planToAcceptanceSpec(approved, boringstackUiFields);
     const chainOutcome = await acceptanceRunner.runChain(spec, ctx);
 
     // Infrastructure error: route to infra-abort path, not feature red
@@ -959,7 +971,7 @@ export async function runFinalAcceptance(
  * unlike per-feature implement() wiring (which resume skips → the redirect would silently stay
  * /dashboard, a false-green). At most one home is enforced by plan validation.
  */
-export function homeRouteForPlan(plan: IProductPlan): string | null {
+export function homeRouteForPlan(plan: BsPlan): string | null {
   const home = plan.slices.find((s) => s.ui.home === true);
 
   return home ? `/${toCamelCase(home.entity.id)}` : null;
@@ -975,7 +987,7 @@ export function homeRouteForPlan(plan: IProductPlan): string | null {
  */
 export async function wireHomeRedirectForPlan(
   cwd: string,
-  plan: IProductPlan,
+  plan: BsPlan,
   apply: (cwd: string, route: string) => Promise<void> = applyHomeRedirect
 ): Promise<void> {
   const route = homeRouteForPlan(plan);
@@ -1017,7 +1029,7 @@ export async function runBoringstackBuild(opts: {
     process.env[ENV_FLAG.noE2eAcceptance] === FLAG_ON;
 
   // Require an approved plan before building
-  const approved = await loadApprovedPlan(cwd);
+  const approved = await loadApprovedPlan(cwd, boringstackPlanSchema);
 
   if (approved === null) {
     return { status: "needs-plan", features: [] };
@@ -1191,7 +1203,7 @@ export async function runBoringstackBuild(opts: {
   await wireHomeRedirectForPlan(cwd, approved);
 
   // Create a lookup function that maps feature ids to their plan slices
-  const sliceFor = (id: string): ISlice | undefined =>
+  const sliceFor = (id: string): BsSlice | undefined =>
     approved.slices.find((slice) => slice.entity.id === id);
 
   // Run the greenfield loop with BoringStack-specific dependencies
@@ -1201,7 +1213,7 @@ export async function runBoringstackBuild(opts: {
     optsGreenfield.onEvent = onEvent;
   }
 
-  const fullSpec = planToAcceptanceSpec(approved);
+  const fullSpec = planToAcceptanceSpec(approved, boringstackUiFields);
 
   const result = await runGreenfield(
     cwd,

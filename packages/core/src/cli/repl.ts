@@ -49,6 +49,7 @@ import {
   type IStackAdapter,
 } from "../loop/planning/stack-adapter";
 import { boringstackStackAdapter } from "../loop/boringstack/planning";
+import { boringstackPlanSchema } from "../loop/boringstack/plan-extension";
 import { loadApprovedPlan } from "../loop/planning/plan-store";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
@@ -251,6 +252,8 @@ async function runGreenfieldPlanning(
 
   const result = await runPlanning(dir, {
     planner: plannerProvider,
+    // The stack's plan schema (web UI shape, prompt, validator) — BoringStack today.
+    schema: boringstackPlanSchema,
     // We only reach here when this stack adapter detected the project, so its
     // reserved-slice rule always applies (no gap) and every drop is surfaced.
     constraints: greenfieldConstraints(stack, echo),
@@ -952,7 +955,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     await greenfieldOrSend(
       args.dir,
       STACK_ADAPTERS,
-      async (d) => (await loadApprovedPlan(d)) !== null,
+      async (d) => (await loadApprovedPlan(d, boringstackPlanSchema)) !== null,
       (stack) =>
         runGreenfieldPlanning(
           args.dir,
