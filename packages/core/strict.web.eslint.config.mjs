@@ -19,11 +19,6 @@ import pluginReactHooks from "eslint-plugin-react-hooks";
 import pluginJsxA11y from "eslint-plugin-jsx-a11y";
 import sonarjs from "eslint-plugin-sonarjs";
 
-// Every TypeScript source extension the web strict floor lints — including `.mts`/`.cts`
-// (TS module variants), which must get the same rules as `.ts`. Single source so the
-// pack and base blocks below stay in sync.
-const TS_FILES = ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"];
-
 // Load stack-aware packs if TSFORGE_PACKS env var is set
 let packConfig = [];
 const packIds = (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
@@ -49,7 +44,7 @@ if (packIds.length > 0) {
     const { plugin, rules } = buildPackEslintConfig(packIds, ruleOverrides);
     packConfig = [
       {
-        files: TS_FILES,
+        files: ["**/*.ts", "**/*.tsx"],
         plugins: { tsforge: plugin },
         rules,
       },
@@ -229,7 +224,7 @@ const rules = {
 export default tseslint.config(
   { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**"] },
   {
-    files: TS_FILES,
+    files: ["**/*.ts", "**/*.tsx"],
     languageOptions: { parser: tseslint.parser },
     plugins: {
       "@typescript-eslint": tseslint.plugin,

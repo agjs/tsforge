@@ -133,21 +133,14 @@ export function makeFileLinter(
   };
 }
 
-/** Extensions the strict ESLint config actually has rules for. Handing eslint an
- *  explicit path outside this set (a `.json`/`.md`/`.css`) only makes it emit
- *  "File ignored" noise and burn the timeout parsing a file it can't lint — so the
- *  scoped fix filters its eslint targets to code files and lets prettier (with
- *  `--ignore-unknown`) handle everything else. */
-const ESLINT_EXTS = new Set([
-  ".ts",
-  ".tsx",
-  ".mts",
-  ".cts",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".cjs",
-]);
+/** Extensions the strict ESLint config actually has rules for. It must mirror the
+ *  `TS_FILES` globs in `strict.eslint.config.mjs` (the config `formatFiles` runs via
+ *  `STRICT_CONFIG`) — the flat config only applies rules to TypeScript
+ *  (`.ts/.tsx/.mts/.cts`). Handing eslint any other path (a `.js`, or a `.json`/`.md`/`.css`)
+ *  just makes it emit "File ignored" and burn the timeout on a file it won't lint — so the
+ *  scoped fix filters eslint's targets to these, and lets prettier (with `--ignore-unknown`)
+ *  format everything else. */
+const ESLINT_EXTS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 
 /** Canonical absolute path with symlinks resolved, or null if it does not exist
  *  (or can't be resolved). Used both to prove a target still exists and to make the
