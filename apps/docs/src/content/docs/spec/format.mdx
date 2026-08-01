@@ -74,10 +74,10 @@ Specs are consumed by the loop's `runSpec()` — used in eval scripts and benchm
 bun run eval:spec
 
 # Multi-seed sweep (benchmark harness)
-TSFORGE_SEED=money bun run eval:sweep
+TSFORGE_SEED=math bun run eval:sweep
 ```
 
-Benchmark seeds ship as `<seed>.spec.md` under [`seeds/`](https://github.com/agjs/tsforge/tree/main/seeds) (e.g. `seeds/money/`, `seeds/orders/`); the harness copies a seed into a fresh run directory under `evals/` for each run. See [Spec runner](/loop/spec-runner/) and [A/B testing](/eval/ab-testing/).
+Benchmark seeds ship as `<seed>.spec.md` under [`evals/corpus/`](https://github.com/agjs/tsforge/tree/main/evals/corpus) (e.g. `evals/corpus/math/`, `evals/corpus/auth/`); the harness copies a seed into a fresh run directory under `evals/` for each run. See [Spec runner](/loop/spec-runner/) and [A/B testing](/eval/ab-testing/).
 
 ## Related tools
 

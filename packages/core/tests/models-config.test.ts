@@ -90,12 +90,12 @@ test("resolveModelByName: known name, unknown name, and unset all resolve", asyn
   expect((await resolveModelByName("")).entry.model).toBe("work-model");
 });
 
-test("missing registry → the built-in local-qwen default (no file written)", async () => {
+test("missing registry → the built-in local default (no file written)", async () => {
   const cfg = await loadModelsConfig();
 
-  expect(cfg.active).toBe("qwen-local");
-  expect(cfg.models["qwen-local"]?.model).toBe(
-    defaultModelsConfig().models["qwen-local"]?.model
+  expect(cfg.active).toBe("local");
+  expect(cfg.models.local?.model).toBe(
+    defaultModelsConfig().models.local?.model
   );
   // load is read-only: it must NOT create the file as a side effect.
   expect(await Bun.file(modelsConfigPath()).exists()).toBe(false);

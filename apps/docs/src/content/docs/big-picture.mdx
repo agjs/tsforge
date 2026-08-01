@@ -1,9 +1,7 @@
 ---
 title: Big picture
-description: What tsforge is, how the loop works, and where each doc section fits.
+description: What tsforge is, how it's layered, how the loop works, and where each doc section fits.
 ---
-
-import HarnessBoardDiagram from "../../components/HarnessBoardDiagram.astro";
 
 tsforge is a **TypeScript coding harness**. It sits between you and a model, runs edits in your repo, and keeps asking the model to fix things until your project passes a real check. It is not an editor plugin. You point it at a folder, give it a task, and it drives file changes plus validation until the gate is green or the loop stops.
 
@@ -11,19 +9,66 @@ If you already ran the [Quickstart](/quickstart/), this page explains what you j
 
 **How to read the docs:** start here, then [How the gate is built](/loop/gate-floor/) when "what counts as done?" is unclear. Use the glossary below when a term looks unfamiliar. Eval and spec pages are for benchmark contributors, not required for day-to-day use.
 
-## What the harness is made of
+## How it's layered
 
-<HarnessBoardDiagram variant="full" />
+tsforge is built as **one general core plus adapters**. The engine — write, check, steer, repeat — is the same for any TypeScript project. Everything stack-specific (how to scaffold a new app, what a given error *means*, how to verify a feature works) lives in an **adapter** that plugs into a fixed set of seams. The core imports nothing from an adapter; a lint rule fails the build if it tries.
 
-The diagram shows **composition** — what subsystems exist. The loop diagram below shows **flow** — what happens on each turn.
+```mermaid
+flowchart TB
+  subgraph core["Universal core · stack-agnostic"]
+    direction LR
+    A["planning"] --- B["drive-to-green loop"] --- C["gate · ESLint rule-packs"] --- D["tools"] --- E["review panel"]
+  end
+  subgraph seam["The seam — adapters plug in here"]
+    direction LR
+    S1["IStackAdapter"] --- S2["IConventionProvider"] --- S3["IPlanSchema&lt;TUi&gt;"] --- S4["IGate"] --- S5["external-plugins"]
+  end
+  subgraph adapters["Adapters · stack-specific"]
+    direction LR
+    BS["BoringStack — built"] --- PH["Phaser — planned"] --- DD["your own rules — via external-plugins"]
+  end
+  core --> seam --> adapters
+```
+
+An **adapter** is exactly: fill those interfaces. `IStackAdapter` detects a repo and scaffolds it; `IConventionProvider` supplies the "here's how to write it right" guidance; `IPlanSchema` describes the plan/UI shape; `IGate` says how to run and verify. [BoringStack](/scaffold/boringstack/) is the first adapter (a full-stack Bun + Elysia + Drizzle + React stack). You can also bring **your own ESLint rule-packs** without writing an adapter — see [external plugins](/guardrails/config/).
+
+## What runs on a task
+
+The diagram above is **composition** — the subsystems that exist. This is **flow** — what happens when you give it a task:
+
+```mermaid
+flowchart TD
+  you(["You type a task or product description"]) --> repl["CLI · REPL"]
+  repl --> detect{"Stack adapter<br/>detects the repo?"}
+  detect -->|"greenfield"| plan["Plan the product<br/>model proposes feature slices"]
+  detect -->|"existing repo"| loop
+  plan --> approve{"You approve<br/>the plan?"}
+  approve -->|"revise"| plan
+  approve -->|"yes"| loop
+
+  subgraph loop["Drive-to-green loop · repeats per slice"]
+    direction TB
+    write["Model writes / edits code<br/>conventions front-loaded"] --> gate["Gate<br/>tsc + ESLint rule-packs + tests"]
+    gate --> green{"Green?"}
+    green -->|"errors"| steer["Feedback · steer ladder<br/>exact errors + rule help"]
+    steer --> write
+    green -->|"near-green regression"| ckpt["Checkpoint / rollback"]
+    ckpt --> write
+  end
+
+  green -->|"green"| acc["Acceptance<br/>reachability · testids · judge"]
+  acc --> panel["4-model review panel"]
+  panel -->|"pass"| done(["Done · ready to merge"])
+  panel -->|"block"| write
+```
+
+The **model agent** is the loop driver: it calls tools, applies edits, runs the [repair ladder](/uplift/repair-ladder/) when a tool call is malformed, and re-prompts on gate failure. The **gate** is the oracle: if it fails, the harness feeds the error list back and the model gets another turn. A single high crash-guard (1000 turns) plus no-progress guards stop runaway churn without cutting off a productive build — details in [When the gate fails](/loop/validation/).
 
 ## Why tsforge exists
 
-tsforge started as a necessity experiment: could a 27B model running on local hardware produce TypeScript you'd actually merge, if the harness enforced `tsc`, stack rules, and stream-level corrections? It could. That proof shaped every subsystem here.
+tsforge started as a necessity experiment: could a small model running on local hardware produce TypeScript you'd actually merge, if the harness enforced `tsc`, stack rules, and stream-level corrections? It could. That proof shaped every subsystem here.
 
-The project was developed against Qwen 3.6 27B, but that is where the idea was tested, not what the product is for. The same loop works with larger or hosted models. They usually need fewer retries. They still benefit from an external oracle and stack-aware rules.
-
-Guardrails matter most when the model is constrained. They still help when the model is strong.
+The idea was first tested against a 27B local model; today the default local stack is **DeepSeek‑V4‑Flash served on-box via a custom vLLM setup**. The same loop works with larger or hosted models — they usually need fewer retries, and they still benefit from an external oracle and stack-aware rules. Guardrails matter most when the model is constrained; they still help when it is strong.
 
 ## The problem it targets
 
@@ -31,27 +76,11 @@ Models in a chat window can write TypeScript fast. They also skip types, paste `
 
 tsforge closes that gap with three ideas:
 
-1. **A gate you can trust.** Work is not done until a shell command exits 0. For TypeScript repos that usually means `tsc --noEmit`, ESLint from tsforge's own strict config, and often tests or format checks. The model sees structured errors, not a vague "something broke."
+1. **A gate you can trust.** Work is not done until a shell command exits 0. For TypeScript repos that usually means `tsc --noEmit`, ESLint from tsforge's own rule-packs, and often tests or format checks. The model sees structured errors, not a vague "something broke."
 
 2. **Feedback while the model still types.** Stream rules (TTSR) can cut off bad tool arguments mid-generation. Hashline edits tie replacements to a file hash so line numbers do not drift. The TypeScript language service can flag a bad write before the next turn.
 
-3. **Stack-aware rules without hand-wiring.** tsforge reads `package.json`, turns on ESLint packs for React, Drizzle, Elysia, and the rest, and runs them on every validation. You get project-specific guardrails without maintaining a separate lint setup for the harness.
-
-## One task, one loop
-
-```mermaid
-flowchart LR
-  you[You approve a task] --> agent[Model agent]
-  agent --> tools[read / edit / create / run]
-  tools --> gate[Gate: tsc + ESLint + …]
-  gate -->|fail| repair[Errors back to model]
-  repair --> agent
-  gate -->|pass| done[Checkpoint]
-```
-
-The **model agent** is the loop driver: it calls tools, applies edits, runs the [repair ladder](/uplift/repair-ladder/) when a tool call is malformed, and re-prompts on gate failure. The **gate** is the oracle: if it fails, the harness feeds the error list back and the model gets another turn.
-
-Caps prevent infinite churn (for example 12 repair cycles, 3 stalled cycles with no progress). Details live in [When the gate fails](/loop/validation/).
+3. **Stack-aware rules without hand-wiring.** tsforge reads `package.json`, turns on ESLint packs for React, Drizzle, Elysia, and the rest, and runs them on every validation. You get project-specific guardrails without maintaining a separate lint setup — and you can layer your own packs on top ([external plugins](/guardrails/config/)).
 
 ## Why TypeScript specifically
 
@@ -61,13 +90,13 @@ tsforge is opinionated about TypeScript because the language gives you machine-c
 - **The language server** (same engine as VS Code's TypeScript support) runs in-process for symbol search, rename, and diagnostics on every write. See [TypeScript language server](/lsp/typescript-server/).
 - **ESLint packs** encode patterns `tsc` cannot catch (component file layout, no `console.log`, Drizzle query shape, etc.). See [Rule packs](/guardrails/rule-packs/).
 
-For greenfield web apps, the harness stands up the full BoringStack stack (Bun + Elysia + Drizzle API and a Vite/React UI) and builds it resource-by-resource against BoringStack's own gate. See [Greenfield scaffolding](/scaffold/boringstack/).
+For greenfield web apps, the BoringStack adapter stands up a full stack (Bun + Elysia + Drizzle API and a Vite/React UI) and builds it feature-by-feature against its own gate. See [Greenfield scaffolding](/scaffold/boringstack/).
 
 ## Models and deployment
 
 tsforge talks to any OpenAI-compatible HTTP API. Configure endpoints in `~/.tsforge/models.json` or override with environment variables. See [Model adapter](/inference/adapter/).
 
-The default `http://localhost:8000/v1` is a convenience for local inference servers. Point `TSFORGE_BASE_URL` at a hosted API when you want. The gate, packs, and stream rules do not change.
+The default endpoint (`http://localhost:8000/v1`) is a convenience for a local inference server; point `TSFORGE_BASE_URL` at a hosted API when you want. The gate, packs, and stream rules do not change.
 
 ## Doc map (plain language)
 
@@ -77,10 +106,10 @@ The default `http://localhost:8000/v1` is a convenience for local inference serv
 | [Plan mode](/cli/plan-mode/) | Read-only exploration before you let the model edit |
 | [How the gate is built](/loop/gate-floor/) | What acceptance check tsforge runs and how it picks tsc + ESLint |
 | [When the gate fails](/loop/validation/) | Repair loop, stop conditions, error feedback to the model |
-| [TypeScript language server](/lsp/typescript-server/) | Navigation tools and write-time diagnostics |
-| [Greenfield scaffolding](/scaffold/boringstack/) | Standing up a new BoringStack full-stack app |
+| [Greenfield scaffolding](/scaffold/boringstack/) | Standing up a new BoringStack full-stack app (the first adapter) |
 | [Stack detection](/guardrails/stack-detection/) | Which ESLint packs turn on for your dependencies |
-| [Rule packs](/guardrails/rule-packs/) | What each pack enforces |
+| [Rule packs](/guardrails/rule-packs/) | What each pack enforces + bringing your own |
+| [Config & external plugins](/guardrails/config/) | Profiles, and plugging in your own rule-packs |
 | [Fix bad tool calls](/uplift/repair-ladder/) | Malformed tool JSON fixed before re-asking the model |
 | [Safer line edits](/uplift/hashline/) | Line edits anchored to a content hash |
 | [Stop bad output early](/uplift/ttsr/) | Forbidden patterns cut off mid-stream |
@@ -93,6 +122,9 @@ The default `http://localhost:8000/v1` is a convenience for local inference serv
 | --- | --- |
 | **Gate** | Shell command that must pass before tsforge treats work as done. Often `tsc`, ESLint, tests. |
 | **Harness** | The tsforge runtime: CLI, loop, gate, guardrails, and model wiring. |
+| **Core** | The stack-agnostic engine — planning, the drive-to-green loop, the gate, the rule-packs, the review panel. Imports no adapter. |
+| **Adapter** | The stack-specific half behind the seams: how to scaffold, what an error means, how to verify. BoringStack is the first. |
+| **Seam** | An injected interface the adapter fills (`IStackAdapter`, `IConventionProvider`, `IPlanSchema`, `IGate`). |
 | **LSP / language server** | TypeScript's semantic engine (`LanguageService`): go-to-definition, types, rename, diagnostics. tsforge embeds it; you do not run a separate tsserver process. |
 | **TTSR** | **T**ool-**t**ext **s**tream **r**ules. Regex watchers on streaming model output. On match, tsforge aborts the stream and retries with short guidance (for example "no `as any`"). |
 | **Hashline** | Edit format `¶path#HASH` plus line ops. The hash proves the file has not changed since the model read it. |

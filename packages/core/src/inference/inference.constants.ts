@@ -39,5 +39,5 @@ export const PROVIDER_LIMITS = {
  */
 export const PROVIDER_DEFAULTS = {
   baseUrl: "http://localhost:8000/v1",
-  model: "qwen3.6-27b",
+  model: "deepseek-v4-flash",
 } as const;

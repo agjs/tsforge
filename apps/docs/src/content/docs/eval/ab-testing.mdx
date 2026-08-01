@@ -16,7 +16,7 @@ Compare feature settings across benchmark runs before changing a default. The sw
 Core uplifts ([TTSR](/uplift/ttsr/), [hashline](/uplift/hashline/), [write diagnostics](/uplift/write-diagnostics/)) are always on and no longer sweepable — they landed as defaults from earlier sweeps. Full flag reference: [Environment variables](/reference/flags/).
 
 :::note
-Running a sweep drives a real model, so you need an OpenAI-compatible endpoint (the default is local qwen at `http://localhost:8000/v1`; override with `TSFORGE_BASE_URL`/`TSFORGE_MODEL`/`TSFORGE_API_KEY`). The corpus, analysis, and report tooling below ship with the repo and are exercised by the test suite, but the runs themselves need a model.
+Running a sweep drives a real model, so you need an OpenAI-compatible endpoint (the default is a local model at `http://localhost:8000/v1`; override with `TSFORGE_BASE_URL`/`TSFORGE_MODEL`/`TSFORGE_API_KEY`). The corpus, analysis, and report tooling below ship with the repo and are exercised by the test suite, but the runs themselves need a model.
 :::
 
 ## Seeds
@@ -196,14 +196,14 @@ Each run directory contains:
 2. Baseline sweep (small: 2 repeats, temp=0):
 
 ```bash
-TSFORGE_SEED=money TSFORGE_TEMPS=0 TSFORGE_REPEATS=2 \
+TSFORGE_SEED=math TSFORGE_TEMPS=0 TSFORGE_REPEATS=2 \
 bun run eval:sweep
 ```
 
 3. Disable the feature, same seed/temp/repeats:
 
 ```bash
-TSFORGE_SEED=money TSFORGE_TEMPS=0 TSFORGE_REPEATS=2 \
+TSFORGE_SEED=math TSFORGE_TEMPS=0 TSFORGE_REPEATS=2 \
 TSFORGE_<FEATURE>=0 bun run eval:sweep
 ```
 

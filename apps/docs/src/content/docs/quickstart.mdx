@@ -3,8 +3,6 @@ title: Quickstart
 description: Install tsforge, configure your model, and run the CLI against a TypeScript project.
 ---
 
-import HarnessBoardDiagram from "../../components/HarnessBoardDiagram.astro";
-
 From install to a running loop in a few minutes. For the why behind each step, read [Big picture](/big-picture/) first.
 
 ## Before you start
@@ -50,11 +48,11 @@ export PATH="$(bun pm bin -g):${PATH}"
 mkdir -p ~/.tsforge
 cat > ~/.tsforge/models.json <<'EOF'
 {
-  "active": "qwen-local",
+  "active": "local",
   "models": {
-    "qwen-local": {
+    "local": {
       "baseUrl": "http://localhost:8000/v1",
-      "model": "qwen3.6-27b",
+      "model": "deepseek-v4-flash",
       "thinking": true
     }
   }
@@ -74,9 +72,16 @@ Point tsforge at your target project when prompted, or pass `--dir`. See [Intera
 
 ## Harness at a glance
 
-<HarnessBoardDiagram variant="compact" showCaption={false} />
+```mermaid
+flowchart LR
+  you(["task"]) --> agent["model agent"]
+  agent --> tools["read · edit · run"]
+  tools --> gate["gate: tsc + ESLint + tests"]
+  gate -->|"fail"| agent
+  gate -->|"pass"| done(["checkpoint"])
+```
 
-For the full board with captions, see [Big picture](/big-picture/).
+You give it a task; the model edits; the gate decides done. For the full architecture — the general core, the adapters at the seams, and the request flow — see [Big picture](/big-picture/).
 
 ## The loop (short version)
 

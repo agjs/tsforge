@@ -39,6 +39,7 @@ Model endpoint overrides: `TSFORGE_BASE_URL`, `TSFORGE_MODEL` — see [Environme
 | Command | Action |
 | --- | --- |
 | `/help` | list commands |
+| `/scaffold` | create a new full-stack project here (BoringStack / Astro) via the wizard |
 | `/plan` | toggle plan mode (on by default) |
 | `/config` | settings hub — model (switch/add), mode, gate, editable scope, and tools (web, TDD); each with a description + live value |
 | `/gate <cmd>` | set gate command (`/gate` alone clears) |
@@ -65,7 +66,7 @@ Anything else is sent to the agent. While it runs, type to **steer** the next tu
 On a real terminal, a status bar stays **pinned to the bottom** while output scrolls above it — always in view, never scrolled away:
 
 ```
-  ⎯ qwen3.6-27b · ◆ plan · ctx ~8k/32k 25% · 2 turns · 12s · 48 tok/s · done · src/**
+  ⎯ deepseek-v4-flash · ◆ plan · ctx ~8k/32k 25% · 2 turns · 12s · 48 tok/s · done · src/**
 ```
 
 It shows the active model, the current mode chip (`◆ plan` / `◆ normal`), real context-window usage, the last turn's count + elapsed, the current generation rate, the last outcome, and the editable scope. It **ticks live while the model works** — tokens/sec and the context meter update mid-turn (the status reads `● working`), settling to `✓ done` / `✗ stuck` when the turn ends — and it survives terminal resizes. When stdout isn't a TTY (piped output, `--log`, a tiny window) the bar is skipped and the same line prints inline above each prompt instead, so logs and pipes stay clean.

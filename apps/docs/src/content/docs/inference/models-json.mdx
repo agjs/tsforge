@@ -1,6 +1,6 @@
 ---
 title: models.json (any provider)
-description: Configure any OpenAI-compatible model — local qwen, DeepSeek, OpenAI o-series, or a custom gateway — from one registry file. No env vars needed.
+description: Configure any OpenAI-compatible model — a local vLLM model, DeepSeek, OpenAI o-series, or a custom gateway — from one registry file. No env vars needed.
 ---
 
 tsforge reads its model registry from **`~/.tsforge/models.json`** (or `$TSFORGE_HOME/.tsforge/models.json`). It's the one place you configure providers; you never need environment variables. `active` names the entry to use; `/model <name>` switches live.
@@ -21,7 +21,7 @@ tsforge reads its model registry from **`~/.tsforge/models.json`** (or `$TSFORGE
 ```
 
 :::caution
-The entry **key** (`"deepseek"`) is just a local label. The field that's sent to the API is **`model`**. Pointing `baseUrl` at a cloud provider while leaving `model` as the qwen default is the #1 mistake — tsforge warns at startup when it detects this.
+The entry **key** (`"deepseek"`) is just a local label. The field that's sent to the API is **`model`**. Pointing `baseUrl` at a cloud provider while leaving `model` as the local default is the #1 mistake — tsforge warns at startup when it detects this.
 :::
 
 ## Fields
@@ -54,10 +54,10 @@ tsforge **auto-detects** the `deepseek` dialect when `baseUrl`/`model` contains 
 
 ## Examples
 
-### Local qwen (vLLM) — the default
+### Local model (vLLM) — the default
 
 ```jsonc
-{ "baseUrl": "http://localhost:8000/v1", "model": "qwen3.6-27b", "thinking": true }
+{ "baseUrl": "http://localhost:8000/v1", "model": "deepseek-v4-flash", "thinking": true }
 ```
 
 ### DeepSeek
