@@ -16,7 +16,16 @@ import stylistic from "@stylistic/eslint-plugin";
  */
 export default tseslint.config(
   {
-    ignores: ["**/node_modules/**", "**/dist/**", "**/.astro/**", "apps/**"],
+    ignores: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.astro/**",
+      "apps/**",
+      // Throwaway fixture dirs the core↔adapter boundary test writes under the source tree. Globally
+      // ignored so an ORPHAN (left by a SIGKILL/crash mid-test) can never break a later `eslint
+      // packages` run; the test itself lints them with `--no-ignore` to override this.
+      "**/__adapter_boundary_*/**",
+    ],
   },
   {
     files: ["packages/**/*.ts"],
@@ -262,21 +271,25 @@ export default tseslint.config(
       ],
       // no-restricted-imports covers STATIC import/export declarations but NOT runtime module loads
       // — a dynamic `import("../boringstack/x")` (ImportExpression) or a `createRequire(...)(...)`
-      // (CommonJS interop) — which would otherwise reach the adapter and bypass the boundary. Close
-      // every form whose target path is a STATIC STRING somewhere in the AST, via selectors on the
-      // loader argument: (1) any string Literal naming a boringstack segment ANYWHERE in an
-      // import() argument (covers `import("../boringstack/x")`, a ternary, and
-      // `import("../boringstack/" + n)`); (2) any template-literal quasi naming it (covers
-      // `import(`../boringstack/x`)`); (3) an immediately-invoked `createRequire(...)("...boringstack...")`.
-      // DOCUMENTED INHERENT LIMIT (not a gap to chase — the WS2 lesson: close what's statically
-      // matchable, document the rest): a path assembled at RUNTIME is beyond static AST matching for
-      // ANY lint rule — `import(runtimeVar)`, a segment-splitting concat `"../bor" + "ingstack/x"`
-      // where no single node holds the segment, or a require function ALIASED to a variable first
-      // (`const r = createRequire(u); r("../boringstack/x")`). None of these is how a known module is
-      // ever loaded; they are adversarial, and this is a pure-ESM codebase with zero `createRequire`
-      // use. NOTE: this whole rule REPLACES the base `no-restricted-syntax` (the enum ban) for loop
-      // files — flat config overrides a rule wholesale per key — so the enum selector is re-included
-      // here (and a test asserts it still fires in loop files).
+      // (CommonJS interop) — which would otherwise reach the adapter. The two selectors below catch
+      // the DIRECT, unobfuscated loader forms — where the boringstack path is a string Literal or a
+      // template quasi in the loader's own argument, and the loader is spelled `import` /
+      // `createRequire` / `module.createRequire`. That covers the realistic coupling risk:
+      // `import("../boringstack/x")`, its templated/concat/ternary variants, and the createRequire
+      // equivalents.
+      //
+      // WHAT A SYNTACTIC MATCHER CANNOT DO (honest ceiling, per the WS2 lesson — close the direct
+      // forms, don't chase adversarial obfuscation a `no-restricted-syntax` selector fundamentally
+      // can't reach; a lint rule is a coupling guardrail, not an adversarial sandbox): it cannot
+      // follow a RENAMED import binding (`import { createRequire as cr } ...; cr(u)(path)`), resolve
+      // DATAFLOW (`const p = "../boringstack/x"; import(p)`), or evaluate a segment-splitting concat
+      // (`"../bor" + "ingstack/x"`) where no single node holds the segment. Catching those needs
+      // scope/type analysis (a custom type-aware rule) — out of proportion to forms that are
+      // deliberately obfuscated and appear NOWHERE in this pure-ESM, zero-createRequire codebase; the
+      // static import/no-restricted-imports gate already stops every normal way a file couples to the
+      // adapter. NOTE: this whole rule REPLACES the base `no-restricted-syntax` (the enum ban) for
+      // loop files — flat config overrides a rule wholesale per key — so the enum selector is
+      // re-included here (and a test asserts it still fires in loop files).
       "no-restricted-syntax": [
         "error",
         {
@@ -292,7 +305,7 @@ export default tseslint.config(
           // pathological one in the SAFE direction: rooting a require loader at a boringstack path is
           // already adapter-adjacent, and no real code does it.)
           selector:
-            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"]) Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]',
+            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"], CallExpression[callee.callee.property.name="createRequire"]) Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]',
           message:
             "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a dynamic import() or createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
         },
@@ -300,7 +313,7 @@ export default tseslint.config(
           // The templated form of either loader (`import(`../boringstack/x`)` /
           // `createRequire(u)(`../boringstack/x`)`).
           selector:
-            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"]) TemplateElement[value.cooked=/(^|\\u002F)boringstack($|\\u002F)/]',
+            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"], CallExpression[callee.callee.property.name="createRequire"]) TemplateElement[value.cooked=/(^|\\u002F)boringstack($|\\u002F)/]',
           message:
             "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a templated dynamic import() or createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
         },

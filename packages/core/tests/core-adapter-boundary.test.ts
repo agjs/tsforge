@@ -5,28 +5,29 @@ import { writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 // WS4 — the core↔adapter law made MECHANICAL. eslint.config.js forbids the generic core loop
 // (`loop/**` except `loop/boringstack/**`) from importing the BoringStack adapter. WS1–WS3
 // reclaimed the leaks by hand; this test proves the rule that keeps them reclaimed is LIVE — a
-// leak fails `bun run validate`, not just review. It lints throwaway fixtures placed on the CORE
-// side of the boundary (under `loop/`, NOT under `loop/boringstack/`) and asserts the rule fires
-// on static / type-only / dynamic (literal + templated) adapter imports and stays silent on a core
-// import. One eslint spawn (one TS-program load) over all fixtures; the fixture dir is always removed.
-// The intentional-violation fixtures live briefly under the real source tree (they MUST, to match the
-// boundary rule's `loop/**` scope), but `bun run validate` chains its steps with `&&` — lint finishes
-// before this test writes anything — so they never collide with the project lint step.
+// leak fails `bun run validate`, not just review. It lints throwaway fixtures on the CORE side of
+// the boundary (asserting adapter imports are rejected and a core import is not) AND on the ADAPTER
+// side (asserting `loop/boringstack/**` is exempt via the `ignores`). One eslint spawn; both dirs
+// are always removed.
+//
+// The fixtures must live under `loop/` to match the boundary rule's scope, but they carry
+// deliberate violations — so the fixture dirs are GLOBALLY IGNORED in eslint.config.js (see the
+// `__adapter_boundary_*` ignore). That makes an ORPHANED dir (SIGKILL/crash before the `finally`
+// runs) invisible to a normal `eslint packages`, so it can't break a later validate; this test
+// overrides the ignore with `--no-ignore` to lint the fixtures on purpose.
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const ESLINT = join(ROOT, "node_modules", ".bin", "eslint");
-// Suffix the fixture dir with the worker PID so concurrent bun-test processes never share (and
-// race on write/lint/rm of) the same directory.
-const FIXTURE_DIR = join(
-  ROOT,
-  "packages",
-  "core",
-  "src",
-  "loop",
-  `__adapter_boundary_fixture_${process.pid}__`
+const LOOP = join(ROOT, "packages", "core", "src", "loop");
+// PID-suffixed so concurrent bun-test processes never share (and race on) the same directory.
+const CORE_DIR = join(LOOP, `__adapter_boundary_fixture_${process.pid}__`);
+const ADAPTER_DIR = join(
+  LOOP,
+  "boringstack",
+  `__adapter_boundary_exempt_${process.pid}__`
 );
 const RULE = "@typescript-eslint/no-restricted-imports";
-// The dynamic-import escape hatch (`import("../boringstack/x")`) is caught by a no-restricted-syntax
-// AST selector, not no-restricted-imports, so it reports under a different ruleId.
+// The runtime-loader escape hatches (dynamic import(), createRequire) are caught by
+// no-restricted-syntax AST selectors, not no-restricted-imports, so they report under this ruleId.
 const SYNTAX_RULE = "no-restricted-syntax";
 
 interface IFileResult {
@@ -34,10 +35,12 @@ interface IFileResult {
   readonly messages: readonly { readonly ruleId: string | null }[];
 }
 
-/** Write the given `{ name: source }` fixtures under FIXTURE_DIR, lint the dir ONCE, and return a
- *  map of basename → the ruleIds eslint reported for that file. Always cleans up. */
+/** Write `core` fixtures under CORE_DIR and `adapter` fixtures under ADAPTER_DIR, lint both dirs in
+ *  ONE eslint run (with `--no-ignore`, since the dirs are globally ignored), and return a map of
+ *  basename → the ruleIds eslint reported. Always cleans up both dirs. */
 const lintFixtures = (
-  files: Record<string, string>
+  core: Record<string, string>,
+  adapter: Record<string, string>
 ): Map<string, (string | null)[]> => {
   // Fail loudly + specifically if the eslint binary isn't where this repo puts it, rather than
   // letting a failed spawn surface as an opaque empty-stdout JSON error.
@@ -47,15 +50,21 @@ const lintFixtures = (
 
   try {
     // Create + write INSIDE the try so the finally cleanup runs even if mkdir/write throws.
-    mkdirSync(FIXTURE_DIR, { recursive: true });
+    for (const [dir, files] of [
+      [CORE_DIR, core],
+      [ADAPTER_DIR, adapter],
+    ] as const) {
+      mkdirSync(dir, { recursive: true });
 
-    for (const [name, source] of Object.entries(files)) {
-      writeFileSync(join(FIXTURE_DIR, name), source);
+      for (const [name, source] of Object.entries(files)) {
+        writeFileSync(join(dir, name), source);
+      }
     }
 
-    const proc = Bun.spawnSync([ESLINT, "--format", "json", FIXTURE_DIR], {
-      cwd: ROOT,
-    });
+    const proc = Bun.spawnSync(
+      [ESLINT, "--no-ignore", "--format", "json", CORE_DIR, ADAPTER_DIR],
+      { cwd: ROOT }
+    );
     const stdout = proc.stdout.toString();
     // eslint EXITS NON-ZERO here (the fixtures have lint errors — that's the point), but still
     // writes its JSON report to stdout. A crash (missing binary, config load failure) instead
@@ -82,34 +91,46 @@ const lintFixtures = (
 
     return byName;
   } finally {
-    rmSync(FIXTURE_DIR, { recursive: true, force: true });
+    rmSync(CORE_DIR, { recursive: true, force: true });
+    rmSync(ADAPTER_DIR, { recursive: true, force: true });
   }
 };
 
-test("the mechanical core↔adapter boundary rejects a core-loop import of loop/boringstack (value + type + dynamic) and allows a core import", () => {
-  const results = lintFixtures({
-    "leak-value.ts":
-      'import { boringstackPlanSchema } from "../boringstack/plan-extension";\n\nexport const a = boringstackPlanSchema;\n',
-    "leak-type.ts":
-      'import type { IUiIntent } from "../boringstack/plan-extension";\n\nexport type A = IUiIntent;\n',
-    "leak-reexport.ts":
-      'export { boringstackPlanSchema } from "../boringstack/plan-extension";\n',
-    "leak-dynamic.ts":
-      'export async function load() {\n  return import("../boringstack/plan-extension");\n}\n',
-    "leak-dynamic-template.ts":
-      "export async function load() {\n  return import(`../boringstack/plan-extension`);\n}\n",
-    "leak-dynamic-concat.ts":
-      'export async function load() {\n  return import("../boringstack/" + "plan-extension");\n}\n',
-    "leak-dynamic-ternary.ts":
-      'export async function load(b: boolean) {\n  return import(b ? "../boringstack/plan-extension" : "../planning/plan-store");\n}\n',
-    "leak-require.ts":
-      'import { createRequire } from "node:module";\n\nexport const m = createRequire(import.meta.url)("../boringstack/plan-extension");\n',
-    "leak-require-template.ts":
-      'import { createRequire } from "node:module";\n\nexport const m = createRequire(import.meta.url)(`../boringstack/plan-extension`);\n',
-    "enum.ts": "export enum Color {\n  Red,\n  Blue,\n}\n",
-    "core-ok.ts":
-      'import { isProductPlan } from "../planning/plan-store";\n\nexport const b = isProductPlan;\n',
-  });
+test("the mechanical core↔adapter boundary rejects core-loop adapter imports (static/dynamic/require), allows a core import, and exempts the adapter itself", () => {
+  const results = lintFixtures(
+    {
+      "leak-value.ts":
+        'import { boringstackPlanSchema } from "../boringstack/plan-extension";\n\nexport const a = boringstackPlanSchema;\n',
+      "leak-type.ts":
+        'import type { IUiIntent } from "../boringstack/plan-extension";\n\nexport type A = IUiIntent;\n',
+      "leak-reexport.ts":
+        'export { boringstackPlanSchema } from "../boringstack/plan-extension";\n',
+      "leak-dynamic.ts":
+        'export async function load() {\n  return import("../boringstack/plan-extension");\n}\n',
+      "leak-dynamic-template.ts":
+        "export async function load() {\n  return import(`../boringstack/plan-extension`);\n}\n",
+      "leak-dynamic-concat.ts":
+        'export async function load() {\n  return import("../boringstack/" + "plan-extension");\n}\n',
+      "leak-dynamic-ternary.ts":
+        'export async function load(b: boolean) {\n  return import(b ? "../boringstack/plan-extension" : "../planning/plan-store");\n}\n',
+      "leak-require.ts":
+        'import { createRequire } from "node:module";\n\nexport const m = createRequire(import.meta.url)("../boringstack/plan-extension");\n',
+      "leak-require-template.ts":
+        'import { createRequire } from "node:module";\n\nexport const m = createRequire(import.meta.url)(`../boringstack/plan-extension`);\n',
+      "leak-require-member.ts":
+        'import * as mod from "node:module";\n\nexport const m = mod.createRequire(import.meta.url)("../boringstack/plan-extension");\n',
+      "enum.ts": "export enum Color {\n  Red,\n  Blue,\n}\n",
+      "core-ok.ts":
+        'import { isProductPlan } from "../planning/plan-store";\n\nexport const b = isProductPlan;\n',
+    },
+    {
+      // ADAPTER side (loop/boringstack/**): a boringstack-naming import that WOULD trip the boundary
+      // rule if this file were in scope — but the boundary block's `ignores` exempts the adapter, so
+      // it must NOT fire. Locks the exemption: deleting the `ignores` line makes this fire → test fails.
+      "adapter-internal.ts":
+        'import { boringstackPlanSchema } from "../../boringstack/plan-extension";\n\nexport const a = boringstackPlanSchema;\n',
+    }
+  );
 
   // A value import of the adapter fires the boundary rule.
   expect(results.get("leak-value.ts")).toContain(RULE);
@@ -127,9 +148,11 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
   expect(results.get("leak-dynamic-ternary.ts")).toContain(SYNTAX_RULE);
   // An immediately-invoked createRequire(...)(...) (CommonJS-interop runtime load) is caught too —
   // no-restricted-imports only sees the permitted `node:module` import, so the ban lives in the
-  // no-restricted-syntax selectors, which cover the string AND templated createRequire forms.
+  // no-restricted-syntax selectors, which cover the string, templated, AND `module.createRequire`
+  // member forms.
   expect(results.get("leak-require.ts")).toContain(SYNTAX_RULE);
   expect(results.get("leak-require-template.ts")).toContain(SYNTAX_RULE);
+  expect(results.get("leak-require-member.ts")).toContain(SYNTAX_RULE);
   // The boundary block REPLACES the base no-restricted-syntax for loop files, re-including the
   // enum ban. Prove that ban still fires here, so a future edit dropping the TSEnumDeclaration
   // selector can't silently relax the gate for the whole core loop.
@@ -137,10 +160,17 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
   // Importing another CORE module is allowed — the rule targets only the adapter subtree, so it
   // is a real boundary, not a blanket ban that would also block legitimate intra-core imports.
   // Assert the control file was ACTUALLY linted first (a missing entry — ignored / mis-scoped /
-  // basename mismatch — must fail, not green-wash the negative case via a `?? []` default).
+  // basename mismatch — must fail, not green-wash the negative case).
   const coreOk = results.get("core-ok.ts");
 
   expect(coreOk).toBeDefined();
   expect(coreOk).not.toContain(RULE);
   expect(coreOk).not.toContain(SYNTAX_RULE);
+  // The ADAPTER'S OWN file is exempt (via the boundary block's `ignores`) even though it names a
+  // boringstack path — proven linted (defined) and not flagged. This locks the `ignores` line.
+  const adapterInternal = results.get("adapter-internal.ts");
+
+  expect(adapterInternal).toBeDefined();
+  expect(adapterInternal).not.toContain(RULE);
+  expect(adapterInternal).not.toContain(SYNTAX_RULE);
 }, 30000);
