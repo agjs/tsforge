@@ -194,9 +194,11 @@ async function containedRelTargets(
 
     const rel = relative(realRoot, real);
 
-    // Empty (the root itself) or escaping (`..`) can't happen for a contained file,
-    // but guard anyway — an empty arg to prettier expands to the whole tree.
-    if (rel.length === 0 || rel.startsWith("..")) {
+    // Empty (the root itself) or escaping (`..` / `../…`) can't happen for a contained
+    // regular file, but guard anyway — an empty arg to prettier expands to the whole
+    // tree. NB: match only a real parent ref, not a filename that merely starts with
+    // two dots (e.g. `..draft.ts`), which is a legitimate contained file.
+    if (rel.length === 0 || rel === ".." || rel.startsWith(".." + sep)) {
       continue;
     }
 
@@ -304,6 +306,10 @@ export async function formatFiles(
         "-c",
         STRICT_CONFIG,
         "--fix",
+        // `--` terminates options: a contained file literally named like a flag
+        // (e.g. `--config=x.js`) is then treated as a path, never an option — so it
+        // can't alter the formatter or make it load repo-controlled config.
+        "--",
         ...eslintTargets,
       ],
       { timeoutMs, ...signalOpt }
@@ -314,7 +320,7 @@ export async function formatFiles(
 
   await runArgvCommand(
     cwd,
-    [...prettierArgv, "--write", "--ignore-unknown", ...present],
+    [...prettierArgv, "--write", "--ignore-unknown", "--", ...present],
     { timeoutMs, ...signalOpt }
   );
 }

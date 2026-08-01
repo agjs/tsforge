@@ -233,6 +233,39 @@ test("polishOnGreen KEEPS the drop when the injected gate stays green", async ()
   }
 });
 
+// #103 (panel-critical): polish drops+formats ONLY files the model wrote. With a
+// whole-repo scope (the REPL default ["**/*"]) and only a.ts touched, an untouched
+// sibling that has its own droppable annotation must be left byte-identical. A
+// regression back to resolveScopeFiles(task.files) would drop/rewrite the sibling and
+// fail here — the narrow-scope tests above would NOT catch that.
+test("polishOnGreen with whole-repo scope drops ONLY the touched file, not siblings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
+
+  try {
+    const droppable = "const abs: number = Math.abs(1);\n";
+
+    await Bun.write(join(dir, "a.ts"), droppable);
+    await Bun.write(join(dir, "sibling.ts"), droppable);
+
+    const { ctx: base } = ctxWith(dir, true);
+    const ctx: ILoopCtx = {
+      ...base,
+      // Whole-repo scope, but only a.ts was written by the model.
+      task: { ...base.task, files: ["**/*"] },
+      tool: { touched: new Set(["a.ts"]) },
+    };
+
+    await polishOnGreen(ctx);
+
+    // a.ts polished (annotation dropped)…
+    expect(await Bun.file(join(dir, "a.ts")).text()).not.toContain(": number");
+    // …sibling.ts left exactly as it was (never touched by the model).
+    expect(await Bun.file(join(dir, "sibling.ts")).text()).toBe(droppable);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("polishOnGreen with coreFormat on formats the TOUCHED file after the drop", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
 

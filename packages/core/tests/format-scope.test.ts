@@ -7,6 +7,7 @@ import {
   mkdir,
   chmod,
   realpath,
+  symlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,29 +95,34 @@ test("formatFiles refuses a path that escapes cwd (../outside)", async () => {
 // Exercises the project-prettier spawn path: when node_modules/.bin/prettier exists,
 // formatFiles spawns [projectBin, ...] directly (NO "bun" prefix). A fake executable
 // stands in for the project's prettier and proves it was invoked with the file args.
-test("formatFiles spawns the project's own prettier binary directly", async () => {
-  const dir = await tempDir();
+// POSIX-only: on win32 the project bin isn't shell-lessly spawnable, so the
+// implementation deliberately uses bundled prettier (covered by the fallback test).
+test.skipIf(process.platform === "win32")(
+  "formatFiles spawns the project's own prettier binary directly",
+  async () => {
+    const dir = await tempDir();
 
-  try {
-    const binDir = join(dir, "node_modules", ".bin");
+    try {
+      const binDir = join(dir, "node_modules", ".bin");
 
-    await mkdir(binDir, { recursive: true });
-    // Fake prettier: appends a marker to each non-flag arg, proving it ran with the
-    // file list and that the argv had no leading "bun".
-    await writeFile(
-      join(binDir, "prettier"),
-      '#!/bin/sh\nfor a in "$@"; do case "$a" in --*) ;; *) printf "/*fmt*/\\n" >> "$a";; esac; done\n'
-    );
-    await chmod(join(binDir, "prettier"), 0o755);
-    await writeFile(join(dir, "f.ts"), "export const x = 1;\n");
+      await mkdir(binDir, { recursive: true });
+      // Fake prettier: appends a marker to each non-flag arg, proving it ran with the
+      // file list and that the argv had no leading "bun".
+      await writeFile(
+        join(binDir, "prettier"),
+        '#!/bin/sh\nfor a in "$@"; do case "$a" in --*) ;; *) printf "/*fmt*/\\n" >> "$a";; esac; done\n'
+      );
+      await chmod(join(binDir, "prettier"), 0o755);
+      await writeFile(join(dir, "f.ts"), "export const x = 1;\n");
 
-    await formatFiles(dir, ["f.ts"]);
+      await formatFiles(dir, ["f.ts"]);
 
-    expect(await readFile(join(dir, "f.ts"), "utf8")).toContain("/*fmt*/");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
+      expect(await readFile(join(dir, "f.ts"), "utf8")).toContain("/*fmt*/");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
-});
+);
 
 // The eslint autofix moat must actually run — not just prettier. ESLint 10 silently
 // no-ops on ABSOLUTE paths ("File ignored because outside of base path"), so formatFiles
@@ -215,23 +221,53 @@ test("resolveProjectPrettierArgv falls back to the bundled prettier when the pro
   }
 });
 
-test("resolveProjectPrettierArgv prefers the project's own prettier binary when present", async () => {
-  const dir = await tempDir();
+test.skipIf(process.platform === "win32")(
+  "resolveProjectPrettierArgv prefers the project's own prettier binary when present",
+  async () => {
+    const dir = await tempDir();
 
-  try {
-    const binDir = join(dir, "node_modules", ".bin");
+    try {
+      const binDir = join(dir, "node_modules", ".bin");
 
-    await mkdir(binDir, { recursive: true });
-    const projectBin = join(binDir, "prettier");
+      await mkdir(binDir, { recursive: true });
+      const projectBin = join(binDir, "prettier");
 
-    await writeFile(projectBin, "#!/usr/bin/env node\n");
+      await writeFile(projectBin, "#!/usr/bin/env node\n");
 
-    const argv = await resolveProjectPrettierArgv(dir);
+      const argv = await resolveProjectPrettierArgv(dir);
 
-    // The project's own prettier carries its version + can resolve shared/extended
-    // configs from the project's node_modules; we run it directly.
-    expect(argv).toEqual([projectBin]);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
+      // The project's own prettier carries its version + can resolve shared/extended
+      // configs from the project's node_modules; we run it directly.
+      expect(argv).toEqual([projectBin]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
-});
+);
+
+// Symlink escape: a symlink UNDER cwd that points to a file OUTSIDE the workspace must
+// not let a formatter rewrite the external target. realpath-based containment resolves
+// the link and drops it.
+test.skipIf(process.platform === "win32")(
+  "formatFiles refuses an in-workspace symlink that points outside cwd",
+  async () => {
+    const parent = await tempDir();
+
+    try {
+      const dir = join(parent, "workspace");
+
+      await mkdir(dir, { recursive: true });
+      const messy = "export  const   x=1";
+
+      await writeFile(join(parent, "outside.ts"), messy);
+      // link lives inside the workspace but resolves to the outside file.
+      await symlink(join(parent, "outside.ts"), join(dir, "link.ts"));
+
+      await formatFiles(dir, ["link.ts"]);
+
+      expect(await readFile(join(parent, "outside.ts"), "utf8")).toBe(messy);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  }
+);

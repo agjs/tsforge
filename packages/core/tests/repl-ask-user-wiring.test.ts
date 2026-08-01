@@ -27,6 +27,24 @@ test("both REPL Session.create sites (init + /clear) gate interactive on humanAt
   expect(interactiveCount).toBe(createCount);
 });
 
+// #103: the scoped format janitor is opt-in (coreFormat). The interactive REPL enables it,
+// and — like `interactive` — the /clear rebuild does NOT reuse the init config, so a rebuild
+// that dropped the flag would silently revert the session to no formatting. Every REPL
+// Session.create MUST set coreFormat:true. Source-guarded (the /clear rebuild lives in the
+// readline loop, not unit-reachable); Session.create's PROPAGATION of the flag is behavior-
+// tested in format-wiring.test.ts.
+test("both REPL Session.create sites (init + /clear) enable coreFormat", async () => {
+  const src = await Bun.file(
+    join(import.meta.dir, "..", "src", "cli", "repl.ts")
+  ).text();
+
+  const createCount = (src.match(/Session\.create\(/g) ?? []).length;
+  const coreFormatCount = (src.match(/coreFormat: true/g) ?? []).length;
+
+  expect(createCount).toBeGreaterThanOrEqual(2);
+  expect(coreFormatCount).toBe(createCount);
+});
+
 // WS-C: /clear rebuilds the Session, and the gate fires on mutation state (`edited`), not
 // a dirty tree — so a rebuild that dropped the deferred-gate flag would silently skip
 // re-validating an on-disk pre-pause edit. The /clear path must read session.hasDeferredGate
