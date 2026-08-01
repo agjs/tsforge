@@ -979,8 +979,12 @@ async function recheckAfterPolish(
 export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   const { task, cwd, report } = ctx;
 
-  // Resolve globs so a glob scope is polished too (not silently skipped).
-  const files = await resolveScopeFiles(cwd, task.files);
+  // Scope polish (the drop AND its revert snapshot) to the files the model WROTE this
+  // session (`ctx.tool.touched`) — NOT task.files, which defaults to the whole repo in
+  // the interactive REPL. dropRedundantAnnotations mutates each file (stripping the
+  // dropped annotation's semicolon), so scanning the whole tree would rewrite files the
+  // model never touched — the exact thing #103 forbids.
+  const files = [...(ctx.tool.touched ?? [])];
   const snapshot = await snapshotFiles(cwd, files);
   const dropped = await dropRedundantAcross(cwd, files);
 

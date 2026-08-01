@@ -1,4 +1,5 @@
-import { join, extname, resolve, sep } from "node:path";
+import { join, extname, resolve, relative, sep } from "node:path";
+import { realpath } from "node:fs/promises";
 import { ESLint } from "eslint";
 import { runArgvCommand } from "../lib/fs/process";
 import { conventionOverrideRules } from "../infer-rules/eslint-conventions";
@@ -138,15 +139,44 @@ export function makeFileLinter(
  *  `--ignore-unknown`) handle everything else. */
 const ESLINT_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 
-/** Keep only the paths that still exist on disk — a file the model created and
- *  then deleted in the same turn is in the touched set but must not be handed to a
- *  formatter (eslint/prettier error on a missing path). */
-async function filterExisting(absFiles: readonly string[]): Promise<string[]> {
-  const checks = await Promise.all(
-    absFiles.map(async (f) => ((await Bun.file(f).exists()) ? f : null))
-  );
+/** Canonical absolute path with symlinks resolved, or null if it does not exist
+ *  (or can't be resolved). Used both to prove a target still exists and to make the
+ *  containment check symlink-safe. */
+async function realpathOrNull(p: string): Promise<string | null> {
+  try {
+    return await realpath(p);
+  } catch {
+    return null;
+  }
+}
 
-  return checks.filter((f): f is string => f !== null);
+/** From cwd-anchored candidates, keep the files that (a) still exist and (b) whose
+ *  REAL path (symlinks resolved) is inside `realRoot` — then return each as a path
+ *  RELATIVE to `cwd`. Relative is load-bearing: ESLint 10 flat config reports "File
+ *  ignored because outside of base path" and applies ZERO fixes for an ABSOLUTE path,
+ *  silently killing the autofix moat; a cwd-relative path fixes normally. The
+ *  real-path containment stops an in-workspace symlink from redirecting a formatter at
+ *  a file outside the workspace. */
+async function containedRelTargets(
+  cwd: string,
+  realRoot: string,
+  absCandidates: readonly string[]
+): Promise<string[]> {
+  const out: string[] = [];
+
+  for (const abs of absCandidates) {
+    const real = await realpathOrNull(abs);
+
+    if (real === null) {
+      continue;
+    }
+
+    if (real === realRoot || real.startsWith(realRoot + sep)) {
+      out.push(relative(cwd, abs));
+    }
+  }
+
+  return out;
 }
 
 /** Choose which prettier to run in `cwd`. When the target ships its OWN prettier
@@ -212,13 +242,21 @@ export async function formatFiles(
   }
 
   // Containment guard: these argv reach mutating formatters directly, so a caller that
-  // passes an absolute path or a `../` traversal must NOT be able to rewrite files
-  // outside the workspace. Keep only paths that resolve under `cwd`.
-  const root = resolve(cwd);
-  const contained = rels
-    .map((f) => resolve(cwd, f))
-    .filter((f) => f === root || f.startsWith(root + sep));
-  const present = await filterExisting(contained);
+  // passes an absolute path, a `../` traversal, or an in-workspace symlink pointing
+  // out must NOT be able to rewrite files outside the workspace. `containedRelTargets`
+  // resolves symlinks, drops anything whose real path is outside cwd, and returns the
+  // survivors RELATIVE to cwd (required — eslint no-ops on absolute paths).
+  const realRoot = await realpathOrNull(resolve(cwd));
+
+  if (realRoot === null) {
+    return;
+  }
+
+  const present = await containedRelTargets(
+    cwd,
+    realRoot,
+    rels.map((f) => resolve(cwd, f))
+  );
 
   if (present.length === 0) {
     return;

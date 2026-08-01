@@ -23,7 +23,9 @@ function ctxWith(
     tsService: null,
     report: () => undefined,
     messages: [],
-    tool: {},
+    // polishOnGreen now scopes the drop to the files the model wrote (ctx.tool.touched),
+    // not task.files — so the tests must mark a.ts as touched for the drop to run.
+    tool: { touched: new Set(["a.ts"]) },
     gate: {
       parse: undefined,
       runner: {
@@ -81,7 +83,7 @@ test("polishOnGreen REVERTS the drop when the injected gate THROWS (transient ju
       tsService: null,
       report: () => undefined,
       messages: [],
-      tool: {},
+      tool: { touched: new Set(["a.ts"]) },
       gate: {
         parse: undefined,
         runner: {
@@ -122,7 +124,7 @@ test("polishOnGreen re-throws on caller cancellation (honors the signal) but sti
       tsService: null,
       report: () => undefined,
       messages: [],
-      tool: { signal: controller.signal },
+      tool: { signal: controller.signal, touched: new Set(["a.ts"]) },
       gate: {
         parse: undefined,
         runner: {
@@ -172,7 +174,7 @@ test("polishOnGreen wraps a NON-Error abort rejection in an Error (typed re-thro
       tsService: null,
       report: () => undefined,
       messages: [],
-      tool: { signal: controller.signal },
+      tool: { signal: controller.signal, touched: new Set(["a.ts"]) },
       gate: {
         parse: undefined,
         runner: {

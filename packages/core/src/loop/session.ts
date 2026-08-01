@@ -1036,6 +1036,13 @@ export class Session {
     return this.ctx.task.files;
   }
 
+  /** Whether the scoped format janitor is on for this session — i.e. `cfg.coreFormat`
+   *  was threaded into the loop's gate context. Exposed so a test can prove the CLI
+   *  wiring (Session.create propagates the flag) without reaching into private state. */
+  get coreFormat(): boolean {
+    return this.ctx.gate.coreFormat === true;
+  }
+
   /** True when a still-unvalidated edit is pending behind an ask_user pause (an edit
    *  written before the pause whose gate hasn't run). A caller rebuilding the Session
    *  (e.g. /clear) reads this and passes `pausedWithEdit` to `create` so the deferred

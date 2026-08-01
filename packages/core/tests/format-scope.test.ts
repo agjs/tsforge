@@ -117,6 +117,28 @@ test("formatFiles spawns the project's own prettier binary directly", async () =
   }
 });
 
+// The eslint autofix moat must actually run — not just prettier. ESLint 10 silently
+// no-ops on ABSOLUTE paths ("File ignored because outside of base path"), so formatFiles
+// must hand it cwd-RELATIVE paths. `curly` adds the braces prettier never would, so this
+// fails if the eslint --fix step is a no-op.
+test("formatFiles applies the eslint autofix moat (curly), not just prettier", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(
+      join(dir, "g.ts"),
+      "export function f(x: boolean) {\n  if (x) return 1;\n  return 2;\n}\n"
+    );
+
+    await formatFiles(dir, ["g.ts"]);
+
+    // Braces were added by eslint's `curly` autofix (prettier alone never adds them).
+    expect(await readFile(join(dir, "g.ts"), "utf8")).toContain("if (x) {");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("formatFiles is a no-op on an empty list and skips a missing path", async () => {
   const dir = await tempDir();
 
