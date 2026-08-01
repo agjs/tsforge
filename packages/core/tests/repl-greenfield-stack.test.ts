@@ -186,15 +186,18 @@ describe("greenfieldOrSend (the interception branch)", () => {
 // The remaining glue — the readline line handler CALLING greenfieldOrSend with the
 // composition-root registry and both continuations — lives inside repl()'s readline closure,
 // which is not unit-reachable. A source-TEXT guard (regex over the file) cannot distinguish
-// executable code from a string / comment / template / unreachable copy of the same shape. So
-// this guard matches the AST STRUCTURALLY via ast-grep (the repo's own tool — see
-// loop/astgrep-fix.ts): the pattern is the EXACT wiring, and ast-grep matches it only as a real
-// call-expression node. This closes BOTH classes the reviewers raised: (a) code-vs-literal — a
-// string/comment/template copy is not a call node, so it can never match; (b) shape bypasses —
-// the pattern pins ALL THREE arguments, so a sending hasPlan, a block-body onGreenfield, or a
-// send chained onto planning is a DIFFERENT AST node and fails. The one thing outside the call
-// node is a trailing send AFTER it; the terminal-statement check closes that. Plan-XOR-send
-// SEMANTICS are proven by the greenfieldOrSend behavioral test above.
+// executable code from a string/comment/template copy, nor prove the call is reachable rather
+// than nested in a dead block. So this guard matches the AST STRUCTURALLY via ast-grep (the
+// repo's own tool — see loop/astgrep-fix.ts) with ONE pattern that pins the call as the FINAL
+// statement of the runLine handler arrow (matched by its exact signature). That single structural
+// fact closes every class the reviewers raised:
+//   - code-vs-literal: a string/comment/template copy is not a call node → no match;
+//   - shape bypasses: all three args are pinned, so a sending hasPlan / block-body onGreenfield /
+//     send chained onto planning is a DIFFERENT node → no match;
+//   - reachability/nesting: the call must be the arrow body's LAST statement, so a call in an
+//     inner if/try/arrow, or with ANY statement after it in the handler (a trailing send), is not
+//     the last statement → no match. (Verified against real repl.ts and each decoy.)
+// Plan-XOR-send SEMANTICS are proven by the greenfieldOrSend behavioral test above.
 const AST_GREP = join(
   import.meta.dir,
   "..",
@@ -206,41 +209,16 @@ const AST_GREP = join(
 );
 const REPL_TS = join(import.meta.dir, "..", "src", "cli", "repl.ts");
 
-// The EXACT wiring, as an ast-grep pattern (all args pinned, no metavariables). A match is a
-// real call-expression node with this precise shape.
-const STRICT =
-  "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
+// The exact wiring, pinned as the LAST statement (`$$$BODY` absorbs everything before it) of the
+// runLine arrow — identified by its exact signature. All args are literal (no metavariables).
+const ANCHORED =
+  "async (line: string): Promise<void> => { $$$BODY await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line)); }";
 
-interface IMatch {
-  endByte: number;
-}
-
-/** The end byte offset of one ast-grep JSON match, FAILING CLOSED on any unexpected shape
- *  (never masking a schema change as an empty match). No `as` casts (house rule). */
-const toMatch = (m: unknown): IMatch => {
-  if (
-    m !== null &&
-    typeof m === "object" &&
-    "range" in m &&
-    m.range !== null &&
-    typeof m.range === "object" &&
-    "byteOffset" in m.range &&
-    m.range.byteOffset !== null &&
-    typeof m.range.byteOffset === "object" &&
-    "end" in m.range.byteOffset &&
-    typeof m.range.byteOffset.end === "number"
-  ) {
-    return { endByte: m.range.byteOffset.end };
-  }
-
-  throw new Error("ast-grep match missing numeric range.byteOffset.end");
-};
-
-/** Structurally match `pattern` over `file` via ast-grep. ast-grep exits 0 when it finds
- *  matches and 1 when it finds NONE (both print valid JSON — `[…]` / `[]`), so success is
- *  "stdout parses to a JSON array", not the exit code. Throws (never silently passes) if
- *  ast-grep is absent or errors — its stdout won't be a JSON array — so the guard cannot vanish. */
-const astFind = (pattern: string, file: string): IMatch[] => {
+/** Count structural matches of `pattern` over `file` via ast-grep. ast-grep exits 0 with matches
+ *  and 1 with none (both print valid JSON — `[…]` / `[]`), so success is "stdout parses to a JSON
+ *  array", not the exit code. Throws (never silently passes) if ast-grep is absent or errors — its
+ *  stdout won't be a JSON array — so the guard cannot silently vanish. */
+const countMatches = (pattern: string, file: string): number => {
   const proc = Bun.spawnSync([
     AST_GREP,
     "run",
@@ -266,11 +244,11 @@ const astFind = (pattern: string, file: string): IMatch[] => {
     throw new Error(`ast-grep did not return a JSON array on ${file}`);
   }
 
-  return parsed.map(toMatch);
+  return parsed.length;
 };
 
-/** Run STRICT over an arbitrary source string (via a temp file), for negative decoys. */
-const strictOn = async (source: string): Promise<IMatch[]> => {
+/** Count ANCHORED matches over an arbitrary source string (via a temp file), for decoys. */
+const countOn = async (source: string): Promise<number> => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-guard-"));
 
   try {
@@ -278,116 +256,96 @@ const strictOn = async (source: string): Promise<IMatch[]> => {
 
     await writeFile(file, source);
 
-    return astFind(STRICT, file);
+    return countMatches(ANCHORED, file);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 };
 
-/** True iff the greenfieldOrSend call ending at `endByte` is the terminal statement of the
- *  runLine HANDLER ARROW — followed by only `;` `}` `;` (statement terminator, the arrow body's
- *  closing brace, and the `const runLine = … => {…}` assignment's semicolon). Anchoring to the
- *  handler close rejects not just a sequential trailing send but a call hidden in an INNER block
- *  that still sends in the outer handler: `if (false) { call; } await runSend(line);` and
- *  `try { call; } finally { runSend(line); }` are each followed by `}` + MORE code (not `};`), so
- *  they fail — closing the nested/unreachable-block class. */
-const isHandlerTerminal = (source: string, endByte: number): boolean =>
-  /^\s*;\s*\}\s*;/.test(
-    Buffer.from(source, "utf8").subarray(endByte).toString("utf8")
-  );
-
 describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guard)", () => {
-  test("exactly one call node with the EXACT wiring, as the terminal statement", async () => {
-    const src = await Bun.file(REPL_TS).text();
-    const matches = astFind(STRICT, REPL_TS);
-
-    // Exactly ONE real call node matching the full pinned shape — pins the registry, the
-    // hasPlan predicate, and both continuations at the AST level.
-    expect(matches.length).toBe(1);
-
-    // …and it is the terminal statement of the runLine handler arrow, so nothing sends after it.
-    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(true);
+  test("the real handler has exactly one greenfieldOrSend call as its arrow's LAST statement", () => {
+    expect(countMatches(ANCHORED, REPL_TS)).toBe(1);
   });
 
-  // NEGATIVE regression tests — each plan-THEN-send / decoy the reviewers raised must yield ZERO
-  // STRICT matches (or fail the handler-terminal check), proving the guard actually rejects it.
-  const wrap = (call: string): string =>
-    `async function h() {\n  ${call};\n}\n`;
-  // The real handler's shape (`const runLine = … => {…};`), so the handler-terminal check can be
-  // exercised against enclosing-scope decoys exactly as it runs against real repl.ts.
+  // NEGATIVE regression tests — each decoy the reviewers raised must yield ZERO ANCHORED matches.
+  // Every decoy uses the REAL handler-arrow shape, so it is the exact context the guard runs in.
   const wrapArrow = (body: string): string =>
     `const runLine = async (line: string): Promise<void> => {\n  ${body}\n};\n`;
   const CORRECT_CALL =
     "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
 
-  test("rejects a block-body onGreenfield that plans then sends (different AST node)", async () => {
+  test("SANITY: the correct arrow shape matches (so the negatives fail for the right reason)", async () => {
+    expect(await countOn(wrapArrow(`${CORRECT_CALL};`))).toBe(1);
+  });
+
+  // Shape bypasses — a different node for one of the three args, so ANCHORED never matches.
+  test("rejects a block-body onGreenfield that plans then sends", async () => {
     const bypass =
       "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => { runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack); runSend(line); }, () => runSend(line))";
 
-    expect((await strictOn(wrap(bypass))).length).toBe(0);
+    expect(await countOn(wrapArrow(`${bypass};`))).toBe(0);
   });
 
   test("rejects a send chained onto runGreenfieldPlanning (.finally)", async () => {
     const bypass =
       "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack).finally(() => runSend(line)), () => runSend(line))";
 
-    expect((await strictOn(wrap(bypass))).length).toBe(0);
+    expect(await countOn(wrapArrow(`${bypass};`))).toBe(0);
   });
 
-  test("rejects a hasApprovedPlan predicate that sends (different AST node)", async () => {
+  test("rejects a hasApprovedPlan predicate that sends", async () => {
     const bypass =
       "await greenfieldOrSend(args.dir, STACK_ADAPTERS, () => runSend(line).then(() => false), (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
 
-    expect((await strictOn(wrap(bypass))).length).toBe(0);
+    expect(await countOn(wrapArrow(`${bypass};`))).toBe(0);
   });
 
-  test("rejects string / comment / template copies of the exact call (not call nodes)", async () => {
-    const asString = `const a = ${JSON.stringify(CORRECT_CALL)};`;
-    const asComment = `// ${CORRECT_CALL}`;
-    const asTemplate = "const b = `" + CORRECT_CALL + "`;";
-
-    expect((await strictOn(asString)).length).toBe(0);
-    expect((await strictOn(asComment)).length).toBe(0);
-    expect((await strictOn(asTemplate)).length).toBe(0);
+  // Code-vs-literal — a copy in a string/comment/template is not a call node.
+  test("rejects string / comment / template copies of the exact call", async () => {
+    expect(await countOn(`const a = ${JSON.stringify(CORRECT_CALL)};`)).toBe(0);
+    expect(await countOn(`// ${CORRECT_CALL}`)).toBe(0);
+    expect(await countOn("const b = `" + CORRECT_CALL + "`;")).toBe(0);
   });
 
-  // Enclosing-scope decoys: STRICT still matches the (correct) call node, but the call is NOT the
-  // handler arrow's terminal statement — a send happens elsewhere in the handler — so
-  // isHandlerTerminal rejects each. Sanity: the correct arrow shape PASSES the terminal check.
-  test("the handler-terminal check passes for the correct arrow shape", async () => {
-    const src = wrapArrow(`${CORRECT_CALL};`);
-    const matches = await strictOn(src);
-
-    expect(matches.length).toBe(1);
-    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(true);
-  });
-
+  // Reachability / nesting — the call is present but is NOT the arrow's last statement, so the
+  // handler still sends. Each is the class byte-level checks could not close.
   test("rejects a sequential trailing runSend after the correct call", async () => {
-    const src = wrapArrow(`${CORRECT_CALL};\n  await runSend(line);`);
-    const matches = await strictOn(src);
-
-    expect(matches.length).toBe(1);
-    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(false);
+    expect(
+      await countOn(wrapArrow(`${CORRECT_CALL};\n  await runSend(line);`))
+    ).toBe(0);
   });
 
   test("rejects the correct call in an inner dead block with an outer send", async () => {
-    const src = wrapArrow(
-      `if (false) { ${CORRECT_CALL}; }\n  await runSend(line);`
-    );
-    const matches = await strictOn(src);
+    expect(
+      await countOn(
+        wrapArrow(`if (false) { ${CORRECT_CALL}; }\n  await runSend(line);`)
+      )
+    ).toBe(0);
+  });
 
-    // The call node still matches — but it is nested, not the handler's terminal statement.
-    expect(matches.length).toBe(1);
-    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(false);
+  test("rejects an outer send BEFORE the correct call in an inner dead block (r15 bypass)", async () => {
+    expect(
+      await countOn(
+        wrapArrow(`await runSend(line);\n  if (false) { ${CORRECT_CALL}; };`)
+      )
+    ).toBe(0);
   });
 
   test("rejects the correct call in a try whose finally sends", async () => {
-    const src = wrapArrow(
-      `try { ${CORRECT_CALL}; } finally { await runSend(line); }`
-    );
-    const matches = await strictOn(src);
+    expect(
+      await countOn(
+        wrapArrow(`try { ${CORRECT_CALL}; } finally { await runSend(line); }`)
+      )
+    ).toBe(0);
+  });
 
-    expect(matches.length).toBe(1);
-    expect(isHandlerTerminal(src, matches[0]?.endByte ?? -1)).toBe(false);
+  test("rejects the correct call nested in an inner arrow with an outer send", async () => {
+    expect(
+      await countOn(
+        wrapArrow(
+          `const inner = async () => { ${CORRECT_CALL}; };\n  await runSend(line);`
+        )
+      )
+    ).toBe(0);
   });
 });
