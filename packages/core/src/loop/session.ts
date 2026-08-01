@@ -739,6 +739,38 @@ function buildSyntheticHandoff(
   };
 }
 
+/** Build the AUTO-gate runner: a gate that RE-DETECTS the stack each cycle — refreshing
+ *  `ctx.task.accept` (run by validate), the stack profile, and the per-write linter — so a
+ *  greenfield build enables framework rule-packs once its package.json lists them. It reads
+ *  the shared `active` flag; `setGate` flips that off so a manual override wins. Returned
+ *  alongside its `state` so `Session.create` can hand the flag to the constructor, and kept
+ *  module-level so the large factory stays within the complexity budget. */
+function makeAutoGateRunner(
+  ctx: ILoopCtx,
+  resolve: NonNullable<ISessionConfig["autoGate"]>,
+  parse: ErrorParser | undefined
+): { runner: IGate; state: { active: boolean } } {
+  const state = { active: true };
+  const runner: IGate = {
+    async run(cwd, opts) {
+      if (state.active) {
+        const r = await resolve();
+
+        ctx.task.accept = r.command;
+        ctx.gate.stackProfile = r.stackProfile;
+
+        if (r.lintFile !== undefined) {
+          ctx.gate.lintFile = r.lintFile;
+        }
+      }
+
+      return validate(ctx.task, cwd, parse, opts ?? {});
+    },
+  };
+
+  return { runner, state };
+}
+
 export class Session {
   private readonly provider: IProvider;
   private readonly cfg: ISessionConfig;
@@ -1031,34 +1063,16 @@ export class Session {
       ),
     };
 
-    // AUTO gate: swap the runner for one that RE-DETECTS the stack each cycle. It reads
-    // the shared `active` flag — `setGate` flips it off so a manual gate override wins —
-    // and refreshes `ctx.task.accept` (run by validate), the stack profile, and the
-    // per-write linter, so a greenfield build enables framework rules once its
-    // package.json lists them. Only when no explicit `gate` was injected.
+    // AUTO gate: swap in a runner that RE-DETECTS the stack each cycle (only when no
+    // explicit `gate` was injected). `makeAutoGateRunner` owns the closure; the returned
+    // `state` flag is handed to the constructor so `setGate` can flip auto-refresh off.
     let autoGateState: { active: boolean } | undefined;
 
     if (cfg.gate === undefined && cfg.autoGate !== undefined) {
-      const resolve = cfg.autoGate;
-      const state = { active: true };
+      const auto = makeAutoGateRunner(ctx, cfg.autoGate, cfg.parse);
 
-      autoGateState = state;
-      ctx.gate.runner = {
-        async run(cwd, opts) {
-          if (state.active) {
-            const r = await resolve();
-
-            ctx.task.accept = r.command;
-            ctx.gate.stackProfile = r.stackProfile;
-
-            if (r.lintFile !== undefined) {
-              ctx.gate.lintFile = r.lintFile;
-            }
-          }
-
-          return validate(ctx.task, cwd, cfg.parse, opts ?? {});
-        },
-      };
+      ctx.gate.runner = auto.runner;
+      autoGateState = auto.state;
     }
 
     const session = new Session(cfg, ctx, autoGateState);

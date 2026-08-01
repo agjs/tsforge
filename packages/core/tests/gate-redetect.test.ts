@@ -225,11 +225,56 @@ test("resume: auto re-attaches the resolver, manual/off keep their stored gate",
   }
 });
 
-// A second gate-relaxation vector: re-running buildGate every cycle re-discovers the test
-// command, so deleting the project's tests mid-build would drop the test gate. The test
-// command is monotonic too — once discovered, it sticks even if the tests disappear.
-test("auto-gate keeps the test command after the project's tests are deleted", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tsforge-tests-monotonic-"));
+// The test command is captured ONCE and frozen — re-discovering it each cycle let the
+// subject swap a real suite for a noop. Repro 1: capture with a real *.test.ts (`bun test`);
+// then delete it and add a noop `test` script — a re-discovery would SWITCH the gate to
+// `bun run test` (running the noop). Frozen, it stays `bun test`, and never switches.
+test("auto-gate freezes the test command at capture (no mid-build re-discovery, no downgrade)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-tests-frozen-"));
+  const pkg = join(dir, "package.json");
+  const testFile = join(dir, "app.test.ts");
+
+  try {
+    await writeFile(pkg, JSON.stringify({ name: "x" }));
+    await writeFile(testFile, "export const t = 1;\n");
+
+    const resolved = await resolveGate({ ...parseArgs([]), dir }, null);
+    const resolver = resolved.autoGate;
+
+    expect(resolver).toBeDefined();
+
+    if (resolver === undefined) {
+      throw new Error("expected an auto-gate resolver for a fresh project");
+    }
+
+    // Cycle 1: a real test file → the gate runs `bun test`.
+    const first = await resolver();
+
+    expect(first.command).toContain("bun test");
+
+    // The model deletes the test file and adds a noop `test` script.
+    await rm(testFile);
+    await writeFile(
+      pkg,
+      JSON.stringify({ name: "x", scripts: { test: "true" } })
+    );
+
+    // Cycle 2: the gate is FROZEN on `bun test` — it does not switch to `bun run test`.
+    const second = await resolver();
+
+    expect(second.command).toContain("bun test");
+    expect(second.command).not.toContain("bun run test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Repro 2: capture with a real `test` script (`bun run test`); mutating the script body to
+// a noop mid-build must not make the HARNESS re-read it — the gate command is frozen. (The
+// launcher still reads the live script at runtime; that dilution is inherent to any test
+// gate and unchanged here — the harness simply never re-discovers a different command.)
+test("auto-gate does not re-read the test script mid-build (frozen command string)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-tests-frozen2-"));
   const pkg = join(dir, "package.json");
 
   try {
@@ -247,18 +292,19 @@ test("auto-gate keeps the test command after the project's tests are deleted", a
       throw new Error("expected an auto-gate resolver for a fresh project");
     }
 
-    // Cycle 1: a real test script → the gate runs the project's tests.
     const first = await resolver();
 
     expect(first.command).toContain("bun run test");
 
-    // The model deletes its test script…
+    // Mutate the script body to a noop, and remove it entirely — the frozen command holds.
+    await writeFile(
+      pkg,
+      JSON.stringify({ name: "x", scripts: { test: "exit 0" } })
+    );
+    expect((await resolver()).command).toContain("bun run test");
+
     await writeFile(pkg, JSON.stringify({ name: "x" }));
-
-    // Cycle 2: the test gate MUST persist — the subject can't relax it by removing tests.
-    const second = await resolver();
-
-    expect(second.command).toContain("bun run test");
+    expect((await resolver()).command).toContain("bun run test");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

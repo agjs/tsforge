@@ -49,6 +49,13 @@ interface IGatePolicy {
   conventions: IConventions;
   /** The packs detected at capture time — the monotonic floor the gate never drops below. */
   baselinePacks: readonly string[];
+  /** The project's test command discovered ONCE at capture (null when it has no tests /
+   *  `--strict-floor-only`), then FROZEN for the session — never re-discovered per cycle.
+   *  Re-discovering each cycle let the subject swap a real suite for a noop package script;
+   *  freezing matches the pre-re-detection behavior. (The gate cannot force subject-authored
+   *  tests to stay meaningful — a launcher like `bun run test` still reads the live
+   *  `scripts.test`; that limitation is inherent and unchanged.) */
+  testCommand: string | null;
 }
 
 /**
@@ -96,6 +103,8 @@ async function captureGatePolicy(
     profile: resolveProjectProfile(config),
     conventions: resolveConventions(config.conventions),
     baselinePacks: resolveActivePacks(stackProfile.packs, config),
+    // Discover the test command ONCE and freeze it — see IGatePolicy.testCommand.
+    testCommand: strictFloorOnly ? null : await discoverTestCommand(dir),
   };
 }
 
@@ -105,14 +114,12 @@ function overridesOrUndef(
   return Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined;
 }
 
-/** Build the eslint gate command + label for a fixed pack-set under a frozen policy.
- *  `testCommand` is the (monotonic) test command to run; `undefined` lets buildGate
- *  discover it from the project (the initial resolution), a string/`null` is used as-is
- *  (the resolver passes its sticky command so deleting tests can't drop the test gate). */
+/** Build the eslint gate command + label for a fixed pack-set under a frozen policy. Uses
+ *  the policy's FROZEN test command (captured once) so a cycle can't re-discover a weaker
+ *  one — buildGate is told the command explicitly and never re-reads the project. */
 async function eslintFor(
   policy: IGatePolicy,
-  activePacks: readonly string[],
-  testCommand?: string | null
+  activePacks: readonly string[]
 ): Promise<{ command: string; label: string }> {
   const auto = await buildGate(
     policy.dir,
@@ -121,21 +128,15 @@ async function eslintFor(
     {
       enableTypeAware: policy.profile === "strict",
       // "Green" should mean the strict floor AND the project's own tests pass —
-      // not just that it type-checks and lints. Tests run only when the project has
-      // them; --strict-floor-only opts out.
+      // not just that it type-checks and lints. Tests run only when the project had
+      // them at capture; --strict-floor-only opts out.
       includeTests: !policy.strictFloorOnly,
-      ...(testCommand === undefined ? {} : { testCommand }),
+      testCommand: policy.testCommand,
       conventions: policy.conventions,
     }
   );
 
   return { command: auto.command, label: auto.label };
-}
-
-/** The project's current test command, or null — but only when the auto gate runs tests
- *  at all (`--strict-floor-only` skips them, so discovery would be wasted). */
-async function detectTestCommand(policy: IGatePolicy): Promise<string | null> {
-  return policy.strictFloorOnly ? null : discoverTestCommand(policy.dir);
 }
 
 /** Build the per-write lint moat for a pack-set under a frozen policy. */
@@ -178,16 +179,11 @@ export async function resolveAutoGate(
  *  framework. MONOTONIC: packs only ever accumulate — a pack the session (or a prior
  *  cycle) activated is never dropped, so the subject can make the gate stricter by
  *  adding a framework but can NEVER relax it by deleting a dependency. Rule overrides,
- *  profile, and conventions stay frozen (captured once) for the same reason. */
-function makeAutoGateResolver(
-  policy: IGatePolicy,
-  initialTestCommand: string | null
-): AutoGateResolver {
+ *  profile, conventions, and the test command stay frozen (captured once) for the same
+ *  reason — re-discovering the test command each cycle let a real suite be swapped for a
+ *  noop package script. */
+function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
   const activePacks = new Set<string>(policy.baselinePacks);
-  // Monotonic too: a test command, once discovered, is never dropped — deleting the
-  // project's tests mid-build cannot strip the test gate (a relaxation the subject
-  // must not be able to perform).
-  let testCommand = initialTestCommand;
 
   return async () => {
     const { detectStack } = await import("../stack-detection");
@@ -199,14 +195,8 @@ function makeAutoGateResolver(
       activePacks.add(pack);
     }
 
-    const discovered = await detectTestCommand(policy);
-
-    if (discovered !== null) {
-      testCommand = discovered;
-    }
-
     const packs = Array.from(activePacks).sort();
-    const auto = await eslintFor(policy, packs, testCommand);
+    const auto = await eslintFor(policy, packs);
 
     return {
       command: auto.command,
@@ -227,17 +217,12 @@ async function autoGateBranch(args: ICliArgs): Promise<IResolvedGate> {
     args.profile,
     args.strictFloorOnly
   );
-  const initialTestCommand = await detectTestCommand(policy);
-  const initial = await eslintFor(
-    policy,
-    policy.baselinePacks,
-    initialTestCommand
-  );
+  const initial = await eslintFor(policy, policy.baselinePacks);
 
   return {
     accept: initial.command,
     gateLabel: initial.label,
-    autoGate: makeAutoGateResolver(policy, initialTestCommand),
+    autoGate: makeAutoGateResolver(policy),
     lintFile: lintFileFor(policy, policy.baselinePacks),
   };
 }

@@ -12,6 +12,7 @@ test("default profiles keep quality rules ON and only disable STRUCTURE rules", 
   for (const profile of [
     "recommended",
     "strict",
+    "security",
     "frontend",
     "backend",
   ] as const) {

@@ -28,9 +28,9 @@ export async function buildGate(
     enableTypeAware?: boolean;
     includeTests?: boolean;
     /** An explicit test command to use instead of re-discovering one. `undefined`
-     *  discovers from the project (default); a string or `null` is used verbatim.
-     *  The auto-gate resolver passes a MONOTONIC command here so deleting the project's
-     *  tests mid-build can't drop the test gate (a relaxation the subject must not have). */
+     *  discovers from the project (default); a string or `null` is used verbatim. The
+     *  auto-gate passes its FROZEN command (captured once at session start) so a cycle
+     *  can't re-discover a weaker one — e.g. a real suite swapped for a noop script. */
     testCommand?: string | null;
     conventions?: IConventions;
   }
