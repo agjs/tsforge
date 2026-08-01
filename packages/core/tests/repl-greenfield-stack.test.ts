@@ -194,12 +194,18 @@ describe("greenfieldOrSend (the interception branch)", () => {
 // proof that the branch plans XOR sends is the greenfieldOrSend behavioral test above; this
 // only guards that the handler actually routes through that branch with the real callbacks.
 //
-// WIRED pins: greenfieldOrSend(args.dir, STACK_ADAPTERS, <hasPlan>, onGreenfield being EXACTLY
-// `(stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack)`
-// terminated by `),` (so nothing — no `.finally(send)` — can sit between that `)` and the `,`),
-// onSend `() => runSend(line)`, and the call as the handler's TERMINAL statement (`) ; }`).
+// WIRED pins the ENTIRE greenfieldOrSend call to its exact current shape — all three arguments,
+// not just the two continuations. That is the honest endpoint for guarding a not-unit-reachable
+// closure: rather than allow-variation-but-forbid-sends (a regex can't prove any callback is
+// pure — a determined author chains a send onto ANY of the three), pin the exact wiring so ANY
+// deviation (a changed hasPlan/onGreenfield/onSend, a chained or trailing send, a wrong registry)
+// fails the match and forces a reviewer to look. Pins: greenfieldOrSend(args.dir, STACK_ADAPTERS,
+// `async (d) => (await loadApprovedPlan(d)) !== null`, `(stack) => runGreenfieldPlanning(args.dir,
+// line, echo, rl, activeModelEntry, stack)` terminated by `),`, `() => runSend(line)`, and the
+// call as the handler's TERMINAL statement (`) ; }`). Semantic plan-XOR-send is proven by the
+// greenfieldOrSend behavioral test above.
 const WIRED =
-  /greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,[^;]*?\(stack\)\s*=>\s*runGreenfieldPlanning\(\s*args\.dir,\s*line,\s*echo,\s*rl,\s*activeModelEntry,\s*stack\s*\)\s*,\s*\(\)\s*=>\s*runSend\(line\)\s*\)\s*;\s*\}/;
+  /greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,\s*async\s*\(d\)\s*=>\s*\(await loadApprovedPlan\(d\)\)\s*!==\s*null\s*,\s*\(stack\)\s*=>\s*runGreenfieldPlanning\(\s*args\.dir,\s*line,\s*echo,\s*rl,\s*activeModelEntry,\s*stack\s*\)\s*,\s*\(\)\s*=>\s*runSend\(line\)\s*\)\s*;\s*\}/;
 
 /** Strip line + block comments so a matching phrase in prose can't satisfy the guard. */
 const stripComments = (s: string): string =>
@@ -233,6 +239,15 @@ describe("the REPL line handler wires greenfieldOrSend (source guard)", () => {
   test("the guard rejects a bare runSend(line) trailing the greenfieldOrSend call", () => {
     const bypass =
       "greenfieldOrSend( args.dir, STACK_ADAPTERS, h, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); await runSend(line); }";
+
+    expect(stripComments(bypass)).not.toMatch(WIRED);
+  });
+
+  test("the guard rejects a hasApprovedPlan callback that sends (send-while-checking)", () => {
+    // The plan-state predicate is pinned to its exact pure form, so a hasApprovedPlan that
+    // sends — `() => runSend(line).then(() => false)` — no longer matches WIRED.
+    const bypass =
+      "greenfieldOrSend( args.dir, STACK_ADAPTERS, () => runSend(line).then(() => false), (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); }";
 
     expect(stripComments(bypass)).not.toMatch(WIRED);
   });
