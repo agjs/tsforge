@@ -49,7 +49,6 @@ import {
   type IStackAdapter,
 } from "../loop/planning/stack-adapter";
 import { boringstackStackAdapter } from "../loop/boringstack/planning";
-import { boringstackPlanSchema } from "../loop/boringstack/plan-extension";
 import { loadApprovedPlan } from "../loop/planning/plan-store";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
@@ -177,7 +176,7 @@ const STACK_ADAPTERS: readonly IStackAdapter[] = [boringstackStackAdapter];
 export async function resolveGreenfieldStack(
   dir: string,
   adapters: readonly IStackAdapter[],
-  hasApprovedPlan: (dir: string) => Promise<boolean>
+  hasApprovedPlan: (dir: string, stack: IStackAdapter) => Promise<boolean>
 ): Promise<IStackAdapter | null> {
   const stack = await resolveStackAdapter(dir, adapters);
 
@@ -185,7 +184,9 @@ export async function resolveGreenfieldStack(
     return null;
   }
 
-  return (await hasApprovedPlan(dir)) ? null : stack;
+  // hasApprovedPlan receives the RESOLVED adapter, so the approved-plan check parses through the
+  // SAME stack's schema that will drive planning — no hardcoded stack.
+  return (await hasApprovedPlan(dir, stack)) ? null : stack;
 }
 
 /**
@@ -215,7 +216,7 @@ export function greenfieldConstraints(
 export async function greenfieldOrSend(
   dir: string,
   adapters: readonly IStackAdapter[],
-  hasApprovedPlan: (dir: string) => Promise<boolean>,
+  hasApprovedPlan: (dir: string, stack: IStackAdapter) => Promise<boolean>,
   onGreenfield: (stack: IStackAdapter) => Promise<void>,
   onSend: () => Promise<void>
 ): Promise<void> {
@@ -252,8 +253,9 @@ async function runGreenfieldPlanning(
 
   const result = await runPlanning(dir, {
     planner: plannerProvider,
-    // The stack's plan schema (web UI shape, prompt, validator) — BoringStack today.
-    schema: boringstackPlanSchema,
+    // The plan schema comes from the RESOLVED adapter — a project is planned + validated by the
+    // stack that detected it, not a hardcoded one.
+    schema: stack.planSchema,
     // We only reach here when this stack adapter detected the project, so its
     // reserved-slice rule always applies (no gap) and every drop is surfaced.
     constraints: greenfieldConstraints(stack, echo),
@@ -955,7 +957,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     await greenfieldOrSend(
       args.dir,
       STACK_ADAPTERS,
-      async (d) => (await loadApprovedPlan(d, boringstackPlanSchema)) !== null,
+      async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null,
       (stack) =>
         runGreenfieldPlanning(
           args.dir,

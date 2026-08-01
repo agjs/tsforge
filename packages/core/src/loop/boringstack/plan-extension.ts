@@ -201,11 +201,28 @@ ${JSON.stringify(PLANNER_EXAMPLE, null, 2)}`;
  * is the app home (the post-login landing).
  */
 export const boringstackPlanSchema: IPlanSchema<IUiIntent> = {
+  // PLANNER_SYSTEM already embeds the serialized PLANNER_EXAMPLE, so the seam needs no separate
+  // example field. PLANNER_EXAMPLE stays exported for its own regression test.
   system: PLANNER_SYSTEM,
-  example: PLANNER_EXAMPLE,
   validateUi: isBoringstackUiIntent,
   extraCheck: (plan) =>
     plan.slices.filter((s) => s.ui.home === true).length <= 1,
+};
+
+/**
+ * The SAME schema, TYPE-ERASED to `IPlanSchema<unknown>` for the heterogeneous `IStackAdapter`
+ * registry (a concrete `IPlanSchema<IUiIntent>` isn't assignable to `IPlanSchema<unknown>` because
+ * `extraCheck`'s parameter is contravariant). `validateUi` erases directly (a `v is IUiIntent`
+ * guard satisfies `v is unknown`); `extraCheck` re-narrows each slice's opaque `ui` with the same
+ * guard, so the runtime behaviour is identical. The typed `boringstackPlanSchema` stays for the
+ * BoringStack build path, which needs `IProductPlan<IUiIntent>`.
+ */
+export const boringstackPlanSchemaErased: IPlanSchema<unknown> = {
+  system: PLANNER_SYSTEM,
+  validateUi: isBoringstackUiIntent,
+  extraCheck: (plan) =>
+    plan.slices.filter((s) => isBoringstackUiIntent(s.ui) && s.ui.home === true)
+      .length <= 1,
 };
 
 /**

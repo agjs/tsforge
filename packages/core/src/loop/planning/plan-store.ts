@@ -195,21 +195,20 @@ export function isProductPlan<TUi>(
     return false;
   }
 
-  if (!value.slices.every((s) => isSlice(s, validateUi))) {
-    return false;
+  // Validate every slice ONCE, collecting the narrowed slices so the cross-slice `extraCheck` gets
+  // a typed IProductPlan<TUi> without a second validation pass or a cast. A single failure rejects.
+  const slices: ISlice<TUi>[] = [];
+
+  for (const s of value.slices) {
+    if (!isSlice(s, validateUi)) {
+      return false;
+    }
+
+    slices.push(s);
   }
 
-  // `value` is now shape-verified as IProductPlan<TUi>; the narrowing predicate lets us hand it to
-  // the stack's cross-slice rule without a cast.
-  const plan: IProductPlan<TUi> = {
-    product: value.product,
-    slices: value.slices.filter((s): s is ISlice<TUi> =>
-      isSlice(s, validateUi)
-    ),
-  };
-
-  if (extraCheck !== undefined && !extraCheck(plan)) {
-    return false;
+  if (extraCheck !== undefined) {
+    return extraCheck({ product: value.product, slices });
   }
 
   return true;

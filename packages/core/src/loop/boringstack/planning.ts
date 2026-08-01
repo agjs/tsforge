@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { isRecord } from "../../lib/guards";
 import type { IPlanConstraints } from "../planning/plan-types";
 import type { IStackAdapter } from "../planning/stack-adapter";
+import { boringstackPlanSchemaErased } from "./plan-extension";
 
 /** STACK-SPECIFIC planner guidance for BoringStack (kept OUT of the generic
  *  planner). Appended to the system prompt only for a BoringStack project. The
@@ -92,4 +93,5 @@ export const boringstackStackAdapter: IStackAdapter = {
   id: "boringstack",
   detect: (dir) => isBoringstackProject(dir),
   planConstraints: boringstackPlanConstraints,
+  planSchema: boringstackPlanSchemaErased,
 };

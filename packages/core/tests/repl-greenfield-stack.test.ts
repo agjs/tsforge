@@ -19,6 +19,7 @@ const stub = (id: string, matches: boolean): IStackAdapter => ({
     reservedEntities: new Set([`${id}-reserved`]),
     onStripped,
   }),
+  planSchema: { system: "", validateUi: (_v: unknown): _v is unknown => true },
 });
 
 const noApprovedPlan = (): Promise<boolean> => Promise.resolve(false);
@@ -220,7 +221,7 @@ const REPL_TS = join(import.meta.dir, "..", "src", "cli", "repl.ts");
 // The exact wiring, pinned as the LAST statement (`$$$BODY` absorbs everything before it) of the
 // runLine arrow — identified by its exact signature. All args are literal (no metavariables).
 const ANCHORED =
-  "async (line: string): Promise<void> => { $$$BODY await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d, boringstackPlanSchema)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line)); }";
+  "async (line: string): Promise<void> => { $$$BODY await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line)); }";
 
 /** Count structural matches of `pattern` over `file` via ast-grep. ast-grep exits 0 with matches
  *  and 1 with none (both print valid JSON — `[…]` / `[]`), so success is "stdout parses to a JSON
@@ -280,7 +281,7 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
   const wrapArrow = (body: string): string =>
     `const runLine = async (line: string): Promise<void> => {\n  ${body}\n};\n`;
   const CORRECT_CALL =
-    "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d, boringstackPlanSchema)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
+    "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line))";
 
   test("SANITY: the correct arrow shape matches (so the negatives fail for the right reason)", async () => {
     expect(await countOn(wrapArrow(`${CORRECT_CALL};`))).toBe(1);
@@ -289,14 +290,14 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
   // Shape bypasses — a different node for one of the three args, so ANCHORED never matches.
   test("rejects a block-body onGreenfield that plans then sends", async () => {
     const bypass =
-      "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d, boringstackPlanSchema)) !== null, (stack) => { runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack); runSend(line); }, () => runSend(line))";
+      "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null, (stack) => { runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack); runSend(line); }, () => runSend(line))";
 
     expect(await countOn(wrapArrow(`${bypass};`))).toBe(0);
   });
 
   test("rejects a send chained onto runGreenfieldPlanning (.finally)", async () => {
     const bypass =
-      "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d, boringstackPlanSchema)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack).finally(() => runSend(line)), () => runSend(line))";
+      "await greenfieldOrSend(args.dir, STACK_ADAPTERS, async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack).finally(() => runSend(line)), () => runSend(line))";
 
     expect(await countOn(wrapArrow(`${bypass};`))).toBe(0);
   });

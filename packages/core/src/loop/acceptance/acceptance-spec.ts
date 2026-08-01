@@ -8,9 +8,14 @@ import type {
   ITestIds,
 } from "./acceptance.types";
 
-/** The UI fields acceptance generation needs from a slice's `ui` — nav label, shown fields, and
- *  the screen list. Core is generic over the UI-intent type; the stack adapter injects an
- *  extractor (`uiFields`) mapping its concrete UI intent to these, so core never names a web shape. */
+/** The UI fields acceptance generation projects from a slice's `ui` — nav label, shown fields, and
+ *  the screen list. HONEST SCOPE: `nav`/`shows`/`screens` are a WEB/SaaS-flavoured projection, and
+ *  this whole acceptance-generation module is consumed only by the BoringStack adapter (build.ts,
+ *  testid-contract, e2e-generator). The `uiFields` extractor removes core's dependence on the
+ *  concrete UI-intent TYPE (that leak is what WS3 reclaimed from the plan spine), but it does NOT
+ *  make e2e generation stack-neutral — a UI-less adapter (Phaser) would still have to manufacture
+ *  these. Relocating the acceptance subsystem into `loop/boringstack/` is tracked as follow-up; it
+ *  is downstream of the plan spine, not part of it. */
 export interface IAcceptanceUiFields {
   readonly nav: string;
   readonly shows: readonly string[];

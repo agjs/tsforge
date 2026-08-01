@@ -20,6 +20,7 @@ const fake = (id: string, matches: boolean): IStackAdapter => ({
   // guidance-only constraint (no reserved entities) — these fakes exist for resolution
   // order, so planConstraints is never invoked; a valid minimal value keeps types honest.
   planConstraints: () => ({ guidance: id }),
+  planSchema: { system: "", validateUi: (_v: unknown): _v is unknown => true },
 });
 
 describe("resolveStackAdapter", () => {

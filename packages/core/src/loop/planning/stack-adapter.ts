@@ -1,4 +1,4 @@
-import type { IPlanConstraints } from "./plan-types";
+import type { IPlanConstraints, IPlanSchema } from "./plan-types";
 
 /**
  * A STACK adapter as the generic planner/CLI sees it. The core greenfield flow knows
@@ -26,6 +26,14 @@ export interface IStackAdapter {
   planConstraints(
     onStripped: (droppedEntityIds: readonly string[]) => void
   ): IPlanConstraints;
+  /**
+   * The stack's plan schema (prompt + UI validator + cross-slice rule), TYPE-ERASED to
+   * `IPlanSchema<unknown>` so a heterogeneous adapter registry is well-typed. The greenfield flow
+   * drives the planner + parses/loads plans through THIS schema (so a project is planned and
+   * validated by the adapter that detected it — not a hardcoded stack). The adapter keeps a
+   * concretely-typed schema for its own build path; this is the same runtime schema, erased.
+   */
+  readonly planSchema: IPlanSchema<unknown>;
 }
 
 /**

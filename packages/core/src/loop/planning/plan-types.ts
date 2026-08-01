@@ -43,13 +43,14 @@ export interface IProductPlan<TUi = unknown> {
  * a trivial pass-through.
  */
 export interface IPlanSchema<TUi> {
-  /** System-prompt text teaching the model this stack's exact plan/UI shape. */
+  /** System-prompt text teaching the model this stack's exact plan/UI shape. The adapter is
+   *  responsible for embedding any worked example INTO this string (core only feeds `system` to
+   *  the model) — so there is no separate `example` field to keep in sync. */
   readonly system: string;
-  /** A complete, valid example plan (serialized into the prompt) pinning the output shape. */
-  readonly example: IProductPlan<TUi>;
   /** Validates a slice's `ui` field at the parse boundary (reject-by-default). */
   readonly validateUi: (value: unknown) => value is TUi;
-  /** Optional cross-slice rule (e.g. "≤1 home"); returns false to reject the plan. */
+  /** Optional cross-slice rule (e.g. "≤1 home"); returns false to reject the plan. Re-checked
+   *  after reserved-slice stripping, so a transform can't leave the invariant false. */
   readonly extraCheck?: (plan: IProductPlan<TUi>) => boolean;
 }
 

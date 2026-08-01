@@ -95,7 +95,18 @@ export async function proposePlan<TUi>(
 
     const stripped = stripReservedSlices(parsed, reservedEntities);
 
-    return stripped.slices.length > 0 ? stripped : null;
+    if (stripped.slices.length === 0) {
+      return null;
+    }
+
+    // Re-apply the schema's cross-slice rule to the STRIPPED plan: stripping can invalidate an
+    // invariant that held on the full plan (e.g. removing the slice that satisfied it), so a
+    // transformed plan is never returned unchecked.
+    if (schema.extraCheck !== undefined && !schema.extraCheck(stripped)) {
+      return null;
+    }
+
+    return stripped;
   };
 
   // First attempt: temperature 0 (deterministic)

@@ -23,10 +23,11 @@ import type { Reporter, IHandoff, EscalationRung } from "../loop.types";
 import { slicesToFeatures, invalidEntityIds } from "./plan-resources";
 import { toCamelCase } from "./case";
 import { loadApprovedPlan } from "../planning/plan-store";
-import type { ISlice, IProductPlan } from "../planning/plan-types";
+import type { ISlice } from "../planning/plan-types";
 import {
   boringstackPlanSchema,
   boringstackUiFields,
+  type BoringstackProductPlan,
   type IUiIntent,
 } from "./plan-extension";
 import { planToAcceptanceSpec } from "../acceptance/acceptance-spec";
@@ -43,7 +44,7 @@ import { readHostPorts, hostPortOr } from "../../scaffold";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 
 /** BoringStack builds a concrete web plan — the generic spine specialized to IUiIntent. */
-type BsPlan = IProductPlan<IUiIntent>;
+type BsPlan = BoringstackProductPlan;
 type BsSlice = ISlice<IUiIntent>;
 
 /** Apply BoringStack's DETERMINISTIC auto-fixes over both apps before the gate:
