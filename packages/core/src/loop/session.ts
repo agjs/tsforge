@@ -1076,6 +1076,14 @@ export class Session {
     return this.ctx.task.accept;
   }
 
+  /** Whether the AUTO gate (stack re-detection) is still driving this session. False for
+   *  an explicit/manual gate, and flipped false by `setGate`. The REPL reads it to decide
+   *  whether `/clear` re-attaches the auto resolver and whether to persist `auto: true` —
+   *  so a manual override is never silently re-armed by a rebuild or a `--continue`. */
+  get autoGateActive(): boolean {
+    return this.autoGateState?.active ?? false;
+  }
+
   /** The policy posture plan mode toggles OFF to — CLI `--policy-mode` ?? config
    *  `policy.mode` ?? "default". Lets the CLI decide whether a fresh session
    *  should default to plan mode without re-loading the project config. */

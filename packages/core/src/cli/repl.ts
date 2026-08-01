@@ -516,6 +516,17 @@ async function initReplSession(args: ICliArgs): Promise<{
   };
 }
 
+/** The `autoGate` field to spread into a rebuilt Session.create — the resolver only when
+ *  it is present AND still driving (`active`). Kept module-level so the `/clear` handler
+ *  stays branch-free: after a manual `/gate` override the resolver is withheld, so the
+ *  rebuild never silently re-arms the auto gate over the user's command. */
+function autoGateCarry(
+  autoGate: AutoGateResolver | undefined,
+  active: boolean
+): { autoGate?: AutoGateResolver } {
+  return autoGate !== undefined && active ? { autoGate } : {};
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 export async function repl(args: ICliArgs): Promise<number> {
   // Interactive sessions get web tools ON by default (an assistant that can't look
@@ -566,6 +577,10 @@ export async function repl(args: ICliArgs): Promise<number> {
       // scaffold all mutate these mid-session; persisting the originals would
       // silently restore stale settings on --continue. See P2 review.
       accept: session.gate,
+      // Persist whether the AUTO gate is still driving, so --continue re-attaches stack
+      // re-detection for an auto session but keeps a manual override (setGate flipped it
+      // false) verbatim — no silent re-arm of the auto gate on resume.
+      auto: session.autoGateActive,
       files: session.scope,
       updatedAt: Date.now(),
       planMode,
@@ -1030,9 +1045,10 @@ export async function repl(args: ICliArgs): Promise<number> {
           // silently reverts to no formatting for the rest of the session.
           coreFormat: true,
           // Keep the AUTO gate re-detecting across /clear — else the rebuild freezes on
-          // the last static command and stops picking up new framework packs. Passed
-          // directly (optional field): undefined simply means "no auto gate".
-          autoGate,
+          // the last static command and stops picking up new framework packs. Withheld
+          // once a manual /gate has taken over (autoGateActive false), so the rebuild
+          // never silently re-arms the auto gate over the user's command.
+          ...autoGateCarry(autoGate, session.autoGateActive),
           // Plain boolean (no branch): the constructor only seeds the flag when true.
           pausedWithEdit: carryDeferredGate,
           ...(profile === undefined ? {} : { profile }),

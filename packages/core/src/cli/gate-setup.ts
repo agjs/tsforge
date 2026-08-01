@@ -6,6 +6,8 @@ import type { ISessionRecord } from "../session-store";
 import { buildGate, makeFileLinter, type FileLinter } from "../gate";
 import type { IStackProfile } from "../stack-detection";
 import type { IConventions } from "../infer-rules/conventions.types";
+import type { ITsforgeProjectConfig } from "../config/tsforge-config";
+import type { ProfileId } from "../config/profiles";
 
 /** A re-resolution of the AUTO gate for the CURRENT project state. The Session calls
  *  this before each gate cycle (while the auto gate is active) so a greenfield build
@@ -27,6 +29,23 @@ export interface IResolvedGate {
   autoGate?: AutoGateResolver;
 }
 
+/** The FROZEN policy an auto gate runs under, captured ONCE at session start (or on
+ *  `--continue`, which is a human re-invocation, not a mid-build cycle). The rule
+ *  overrides, profile, conventions, and config all come from `tsforge.config.json`;
+ *  freezing them means the code under test cannot relax its own gate by editing that
+ *  file between cycles. Only the STACK (package.json dependencies) is re-read per cycle,
+ *  and only ADDITIVELY (see the resolver's monotonic pack accumulator). */
+interface IGatePolicy {
+  dir: string;
+  strictFloorOnly: boolean;
+  config: ITsforgeProjectConfig;
+  ruleOverrides: Record<string, "error" | "warn" | "off">;
+  profile: ProfileId;
+  conventions: IConventions;
+  /** The packs detected at capture time — the monotonic floor the gate never drops below. */
+  baselinePacks: readonly string[];
+}
+
 /**
  * Resolve the session's gate + label. Returns the base gate (resumed /
  * explicit / auto strict-TS).
@@ -38,15 +57,15 @@ export async function resolveGate(
   return baseGate(args, resumed);
 }
 
-/** Resolve the AUTO gate's command + active packs/overrides/conventions for `dir`.
- *  Runs stack detection FRESH each call so callers (initial setup AND the per-cycle
- *  dynamic gate) always reflect the CURRENT package.json — the fix for greenfield
- *  builds that start empty and add a framework mid-build. */
-export async function resolveAutoGate(
+/** Capture the frozen gate policy for `dir` ONCE: load config (+ CLI/recipe profile
+ *  overlay), detect the current stack, and resolve the baseline packs, rule overrides,
+ *  profile, and conventions. Everything here is read from the project tree exactly once
+ *  per session so the subject can't relax the gate mid-build by rewriting config. */
+async function captureGatePolicy(
   dir: string,
   profileArg: string,
   strictFloorOnly: boolean
-) {
+): Promise<IGatePolicy> {
   const { detectStack } = await import("../stack-detection");
   const {
     loadTsforgeConfig,
@@ -58,89 +77,156 @@ export async function resolveAutoGate(
   const { resolveConventions } = await import("../infer-rules/conventions");
   const { resolveCliProfile } = await import("./args");
 
-  const stackProfile = await detectStack(dir);
   const config = withProfileOverride(
     await loadTsforgeConfig(dir),
     resolveCliProfile(profileArg)
   );
-  const activePacks = resolveActivePacks(stackProfile.packs, config);
-  const ruleOverrides = normalizeRuleOverrides(config);
-  const profile = resolveProjectProfile(config);
-  const conventions = resolveConventions(config.conventions);
+  const stackProfile = await detectStack(dir);
 
-  const auto = await buildGate(
+  return {
     dir,
+    strictFloorOnly,
+    config,
+    ruleOverrides: normalizeRuleOverrides(config),
+    profile: resolveProjectProfile(config),
+    conventions: resolveConventions(config.conventions),
+    baselinePacks: resolveActivePacks(stackProfile.packs, config),
+  };
+}
+
+function overridesOrUndef(
+  ruleOverrides: Record<string, "error" | "warn" | "off">
+): Record<string, "error" | "warn" | "off"> | undefined {
+  return Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined;
+}
+
+/** Build the eslint gate command + label for a fixed pack-set under a frozen policy. */
+async function eslintFor(
+  policy: IGatePolicy,
+  activePacks: readonly string[]
+): Promise<{ command: string; label: string }> {
+  const auto = await buildGate(
+    policy.dir,
     activePacks,
-    Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
+    overridesOrUndef(policy.ruleOverrides),
     {
-      enableTypeAware: profile === "strict",
+      enableTypeAware: policy.profile === "strict",
       // "Green" should mean the strict floor AND the project's own tests pass —
       // not just that it type-checks and lints. discoverTestCommand appends them
       // only when the project actually has tests; --strict-floor-only opts out.
-      includeTests: !strictFloorOnly,
-      conventions,
+      includeTests: !policy.strictFloorOnly,
+      conventions: policy.conventions,
     }
   );
+
+  return { command: auto.command, label: auto.label };
+}
+
+/** Build the per-write lint moat for a pack-set under a frozen policy. */
+function lintFileFor(
+  policy: IGatePolicy,
+  activePacks: readonly string[]
+): FileLinter {
+  return makeFileLinter(
+    "core",
+    policy.dir,
+    activePacks,
+    overridesOrUndef(policy.ruleOverrides),
+    policy.conventions
+  );
+}
+
+/** Resolve the AUTO gate's command + baseline packs/overrides/conventions for `dir`.
+ *  Captures the frozen policy and builds the gate for the packs detected right now.
+ *  Used to seed the initial gate and by the greenfield re-detection test. */
+export async function resolveAutoGate(
+  dir: string,
+  profileArg: string,
+  strictFloorOnly: boolean
+) {
+  const policy = await captureGatePolicy(dir, profileArg, strictFloorOnly);
+  const auto = await eslintFor(policy, policy.baselinePacks);
 
   return {
     command: auto.command,
     label: auto.label,
-    // The effective packs the gate/linter run — detected framework packs PLUS profile
-    // extras + external plugins. Carried as the stack profile so a refresh updates the
-    // change-scoped meta-rules and per-write moat too, not just the eslint command.
-    stackProfile: { ...stackProfile, packs: activePacks },
-    activePacks,
-    ruleOverrides,
-    conventions,
+    activePacks: policy.baselinePacks,
+    ruleOverrides: policy.ruleOverrides,
+    conventions: policy.conventions,
   };
 }
 
-/** Build the per-write lint moat for the CURRENT active packs/overrides/conventions. */
-function lintFileFor(
-  dir: string,
-  activePacks: readonly string[],
-  ruleOverrides: Record<string, "error" | "warn" | "off">,
-  conventions: IConventions
-): FileLinter {
-  return makeFileLinter(
-    "core",
-    dir,
-    activePacks,
-    Object.keys(ruleOverrides).length > 0 ? ruleOverrides : undefined,
-    conventions
-  );
-}
-
-/** A resolver the Session runs before each auto-gate cycle: re-detect the stack and
- *  hand back the fresh eslint command, stack profile, and per-write linter, so a
+/** A resolver the Session runs before each auto-gate cycle. Re-detects the stack and
+ *  hands back the fresh eslint command, stack profile, and per-write linter, so a
  *  greenfield build stops being linted as `generic-ts` once its package.json lists a
- *  framework. Honors user overrides in the Session, which stops calling this once the
- *  user sets a manual gate. */
-function makeAutoGateResolver(
-  dir: string,
-  profileArg: string,
-  strictFloorOnly: boolean
-): AutoGateResolver {
+ *  framework. MONOTONIC: packs only ever accumulate — a pack the session (or a prior
+ *  cycle) activated is never dropped, so the subject can make the gate stricter by
+ *  adding a framework but can NEVER relax it by deleting a dependency. Rule overrides,
+ *  profile, and conventions stay frozen (captured once) for the same reason. */
+function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
+  const activePacks = new Set<string>(policy.baselinePacks);
+
   return async () => {
-    const r = await resolveAutoGate(dir, profileArg, strictFloorOnly);
+    const { detectStack } = await import("../stack-detection");
+    const { resolveActivePacks } = await import("../config/tsforge-config");
+
+    const stack = await detectStack(policy.dir);
+
+    for (const pack of resolveActivePacks(stack.packs, policy.config)) {
+      activePacks.add(pack);
+    }
+
+    const packs = Array.from(activePacks).sort();
+    const auto = await eslintFor(policy, packs);
 
     return {
-      command: r.command,
-      stackProfile: r.stackProfile,
-      lintFile: lintFileFor(dir, r.activePacks, r.ruleOverrides, r.conventions),
+      command: auto.command,
+      // The effective packs the gate/linter run — carried as the stack profile so a
+      // refresh updates the change-scoped meta-rules and per-write moat too.
+      stackProfile: { ...stack, packs },
+      lintFile: lintFileFor(policy, packs),
     };
   };
 }
 
+/** The auto gate: capture the frozen policy once, seed the displayed label / persisted
+ *  `accept` / per-write linter from the baseline packs, and attach a resolver the
+ *  Session refreshes each cycle. */
+async function autoGateBranch(args: ICliArgs): Promise<IResolvedGate> {
+  const policy = await captureGatePolicy(
+    args.dir,
+    args.profile,
+    args.strictFloorOnly
+  );
+  const initial = await eslintFor(policy, policy.baselinePacks);
+
+  return {
+    accept: initial.command,
+    gateLabel: initial.label,
+    autoGate: makeAutoGateResolver(policy),
+    lintFile: lintFileFor(policy, policy.baselinePacks),
+  };
+}
+
 /** The base gate: a resumed session's gate wins, then explicit `--accept`, then
- *  `--no-gate` (off), else tsforge's auto gate (strict-TS / project lint). The auto gate
- *  (fresh OR a resumed session that had no explicit `--accept`) carries an `autoGate`
- *  resolver so the Session re-detects the stack every cycle. */
+ *  `--no-gate` (off), else tsforge's auto gate. A resumed AUTO session (persisted
+ *  `auto: true`) re-attaches the resolver so `--continue` keeps re-detecting the stack;
+ *  a resumed manual/off session keeps its stored gate verbatim (no re-detection, and an
+ *  empty stored accept stays OFF — resuming after `--no-gate` never silently re-arms). */
 async function baseGate(
   args: ICliArgs,
   resumed: ISessionRecord | null
 ): Promise<IResolvedGate> {
-  // An explicit --accept or --no-gate is a manual gate — no auto re-detection.
+  if (resumed !== null) {
+    if (resumed.auto === true) {
+      return autoGateBranch(args);
+    }
+
+    const label = resumed.accept.length > 0 ? resumed.accept : "none";
+
+    return { accept: resumed.accept, gateLabel: label };
+  }
+
   if (args.accept.length > 0) {
     return { accept: args.accept, gateLabel: args.accept };
   }
@@ -149,35 +235,5 @@ async function baseGate(
     return { accept: "", gateLabel: "none (--no-gate)" };
   }
 
-  // A resumed session with a stored explicit gate command keeps it (no re-detection);
-  // one resumed WITHOUT an explicit accept is an auto session — fall through so it gets
-  // the resolver again (fixes --continue freezing a greenfield build on generic-ts).
-  if (resumed !== null && resumed.accept.length > 0) {
-    return { accept: resumed.accept, gateLabel: resumed.accept };
-  }
-
-  const autoGate = makeAutoGateResolver(
-    args.dir,
-    args.profile,
-    args.strictFloorOnly
-  );
-  // Initial resolution seeds the displayed label, the persisted `accept`, and the
-  // per-write linter; the Session refreshes all three from `autoGate` each cycle.
-  const initial = await resolveAutoGate(
-    args.dir,
-    args.profile,
-    args.strictFloorOnly
-  );
-
-  return {
-    accept: initial.command,
-    gateLabel: initial.label,
-    autoGate,
-    lintFile: lintFileFor(
-      args.dir,
-      initial.activePacks,
-      initial.ruleOverrides,
-      initial.conventions
-    ),
-  };
+  return autoGateBranch(args);
 }

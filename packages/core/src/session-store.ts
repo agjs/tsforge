@@ -26,6 +26,11 @@ export interface ISessionRecord {
   cwd: string;
   /** Gate command, if one was set. */
   accept: string;
+  /** The gate was tsforge's AUTO gate (not an explicit `--accept`/manual `/gate`) when
+   *  last saved. On `--continue` an auto session re-attaches the stack re-detection
+   *  resolver instead of freezing on the stored command; a manual/off session keeps
+   *  its stored `accept` verbatim. Absent on pre-existing records → treated as manual. */
+  auto?: boolean;
   /** Editable scope globs. */
   files: string[];
   /** Last-write time (ms) — newest wins for `--continue`. */
@@ -166,6 +171,9 @@ async function readRecord(path: string): Promise<ISessionRecord | null> {
         id: data.id,
         cwd: data.cwd,
         accept: typeof data.accept === "string" ? data.accept : "",
+        // Restored so `--continue` of an auto session re-attaches stack re-detection
+        // instead of freezing on the stored generic-ts command (greenfield resume).
+        ...(typeof data.auto === "boolean" ? { auto: data.auto } : {}),
         files: Array.isArray(data.files)
           ? data.files.filter((f): f is string => typeof f === "string")
           : [],
