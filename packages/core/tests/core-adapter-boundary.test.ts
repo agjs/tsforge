@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 
 // WS4 — the core↔adapter law made MECHANICAL. eslint.config.js forbids the generic core loop
@@ -9,6 +9,9 @@ import { writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 // side of the boundary (under `loop/`, NOT under `loop/boringstack/`) and asserts the rule fires
 // on static / type-only / dynamic (literal + templated) adapter imports and stays silent on a core
 // import. One eslint spawn (one TS-program load) over all fixtures; the fixture dir is always removed.
+// The intentional-violation fixtures live briefly under the real source tree (they MUST, to match the
+// boundary rule's `loop/**` scope), but `bun run validate` chains its steps with `&&` — lint finishes
+// before this test writes anything — so they never collide with the project lint step.
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const ESLINT = join(ROOT, "node_modules", ".bin", "eslint");
 // Suffix the fixture dir with the worker PID so concurrent bun-test processes never share (and
@@ -70,8 +73,9 @@ const lintFixtures = (
     const byName = new Map<string, (string | null)[]>();
 
     for (const r of parsed) {
+      // basename() handles both / and \ separators, so keys match fixture basenames off Unix too.
       byName.set(
-        r.filePath.split("/").pop() ?? r.filePath,
+        basename(r.filePath),
         r.messages.map((m) => m.ruleId)
       );
     }

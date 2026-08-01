@@ -287,7 +287,10 @@ export default tseslint.config(
           // Any boringstack string Literal ANYWHERE in a runtime-loader argument — a dynamic
           // `import(...)` OR an immediately-invoked `createRequire(...)(...)`. Descendant match, so
           // it covers the string, a `"../boringstack/" + n` concat, and a ternary arg uniformly for
-          // BOTH loaders.
+          // BOTH loaders. (Descendant also matches a boringstack literal in the createRequire(FILENAME)
+          // argument — e.g. `createRequire("/x/boringstack/y")("../core/z")` — an over-match, but a
+          // pathological one in the SAFE direction: rooting a require loader at a boringstack path is
+          // already adapter-adjacent, and no real code does it.)
           selector:
             ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"]) Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]',
           message:
