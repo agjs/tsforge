@@ -11,7 +11,7 @@
     "lint:fix": "eslint packages --fix",
     "format": "prettier --write \"packages/**/*.ts\"",
     "format:check": "prettier --check \"packages/**/*.ts\"",
-    "test": "bun test packages --timeout 30000",
+    "test": "bun test packages",
     "check:bun": "bun packages/core/scripts/check-bun-version.ts",
     "e2e": "python3 scripts/e2e-iterm-tui.py && python3 scripts/e2e-iterm-plan-mode.py",
     "e2e:pty": "python3 scripts/e2e-pty.py && python3 scripts/e2e-wizard-pty.py && python3 scripts/e2e-config-repl-pty.py && python3 scripts/e2e-help-menu-pty.py && python3 scripts/e2e-scaffold-command-pty.py && python3 scripts/e2e-editor-pty.py && python3 scripts/e2e-agents-pty.py && python3 scripts/e2e-spawn-agent-pty.py",
