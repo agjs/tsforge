@@ -22,6 +22,9 @@ const FIXTURE_DIR = join(
   `__adapter_boundary_fixture_${process.pid}__`
 );
 const RULE = "@typescript-eslint/no-restricted-imports";
+// The dynamic-import escape hatch (`import("../boringstack/x")`) is caught by a no-restricted-syntax
+// AST selector, not no-restricted-imports, so it reports under a different ruleId.
+const SYNTAX_RULE = "no-restricted-syntax";
 
 interface IFileResult {
   readonly filePath: string;
@@ -72,12 +75,14 @@ const lintFixtures = (
   }
 };
 
-test("the mechanical core↔adapter boundary rejects a core-loop import of loop/boringstack (value + type) and allows a core import", () => {
+test("the mechanical core↔adapter boundary rejects a core-loop import of loop/boringstack (value + type + dynamic) and allows a core import", () => {
   const results = lintFixtures({
     "leak-value.ts":
       'import { boringstackPlanSchema } from "../boringstack/plan-extension";\n\nexport const a = boringstackPlanSchema;\n',
     "leak-type.ts":
       'import type { IUiIntent } from "../boringstack/plan-extension";\n\nexport type A = IUiIntent;\n',
+    "leak-dynamic.ts":
+      'export async function load() {\n  return import("../boringstack/plan-extension");\n}\n',
     "core-ok.ts":
       'import { isProductPlan } from "../planning/plan-store";\n\nexport const b = isProductPlan;\n',
   });
@@ -87,6 +92,9 @@ test("the mechanical core↔adapter boundary rejects a core-loop import of loop/
   // A TYPE-ONLY import of the adapter fires it too — the @typescript-eslint superset of
   // no-restricted-imports catches `import type`, which core no-restricted-imports would miss.
   expect(results.get("leak-type.ts")).toContain(RULE);
+  // A DYNAMIC import() of the adapter is caught too — by the no-restricted-syntax ImportExpression
+  // selector (no-restricted-imports doesn't see dynamic imports), so the boundary has no escape hatch.
+  expect(results.get("leak-dynamic.ts")).toContain(SYNTAX_RULE);
   // Importing another CORE module is allowed — the rule targets only the adapter subtree, so it
   // is a real boundary, not a blanket ban that would also block legitimate intra-core imports.
   // Assert the control file was ACTUALLY linted first (a missing entry — ignored / mis-scoped /

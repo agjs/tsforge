@@ -260,6 +260,24 @@ export default tseslint.config(
           ],
         },
       ],
+      // no-restricted-imports covers STATIC import/export declarations but NOT a dynamic
+      // `import("../boringstack/x")` (an ImportExpression) — which would otherwise reach the adapter
+      // and bypass the boundary. Close that with an AST selector on the dynamic-import argument.
+      // NOTE: this REPLACES the base `no-restricted-syntax` (the enum ban) for loop files — flat
+      // config overrides the whole rule per key — so the enum selector is re-included here.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "TSEnumDeclaration",
+          message: "Use 'as const' object literals instead of enums.",
+        },
+        {
+          selector:
+            "ImportExpression > Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]",
+          message:
+            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via dynamic import(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+        },
+      ],
     },
   }
 );
