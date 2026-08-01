@@ -233,8 +233,12 @@ export default tseslint.config(
      * hand-maintained allow-list — the composition roots that legitimately wire the adapter in
      * (`cli.ts`, `cli/**`), the scripts, and the tests all live OUTSIDE `loop/**` and are never
      * subject to it; the adapter's own intra-`boringstack` imports are excluded via `ignores`.
-     * `no-restricted-paths` resolves PHYSICAL paths, so it catches every relative form
-     * (`../boringstack/x`, `./boringstack/x`, …), which a specifier glob cannot.
+     * Enforced with `@typescript-eslint/no-restricted-imports` matching the SPECIFIER (see the
+     * inline note on the rule below) — every way to reach the adapter from inside `loop/` is a
+     * relative specifier that names the `boringstack/` segment (`../boringstack/x`,
+     * `./boringstack/x`, `../../boringstack/x`), so a specifier glob catches them all with no
+     * path resolver (the physical-path rule `import-x/no-restricted-paths` would need a TS
+     * resolver that isn't installed).
      */
     files: ["packages/core/src/loop/**/*.ts"],
     ignores: ["packages/core/src/loop/boringstack/**"],

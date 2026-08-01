@@ -11,13 +11,15 @@ import { writeFileSync, rmSync, mkdirSync } from "node:fs";
 // over all three fixtures; the fixture dir is always removed.
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const ESLINT = join(ROOT, "node_modules", ".bin", "eslint");
+// Suffix the fixture dir with the worker PID so concurrent bun-test processes never share (and
+// race on write/lint/rm of) the same directory.
 const FIXTURE_DIR = join(
   ROOT,
   "packages",
   "core",
   "src",
   "loop",
-  "__adapter_boundary_fixture__"
+  `__adapter_boundary_fixture_${process.pid}__`
 );
 const RULE = "@typescript-eslint/no-restricted-imports";
 
@@ -41,7 +43,20 @@ const lintFixtures = (
     const proc = Bun.spawnSync([ESLINT, "--format", "json", FIXTURE_DIR], {
       cwd: ROOT,
     });
-    const parsed: IFileResult[] = JSON.parse(proc.stdout.toString());
+    const stdout = proc.stdout.toString();
+    // eslint EXITS NON-ZERO here (the fixtures have lint errors — that's the point), but still
+    // writes its JSON report to stdout. A crash (missing binary, config load failure) instead
+    // yields empty/non-JSON stdout; surface THAT as a clear failure, not a cryptic JSON.parse throw.
+    let parsed: IFileResult[];
+
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      throw new Error(
+        `eslint did not emit a JSON report (exit ${proc.exitCode}). stderr: ${proc.stderr.toString().slice(0, 800)} | stdout: ${stdout.slice(0, 200)}`
+      );
+    }
+
     const byName = new Map<string, (string | null)[]>();
 
     for (const r of parsed) {
