@@ -7,11 +7,22 @@ import {
   loadApprovedPlan,
 } from "../src/loop/planning/plan-store";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
+import {
+  boringstackPlanSchema,
+  type IUiIntent,
+} from "../src/loop/boringstack/plan-extension";
 import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
-const PLAN: IProductPlan = {
+// These tests exercise the BoringStack plan shape (web UI intent, layout archetypes, home flag),
+// so they parse/load through the BoringStack schema — the generic parser is UI-agnostic.
+const parse = (
+  text: string
+): { plan: IProductPlan<IUiIntent>; status: "draft" | "approved" } | null =>
+  parsePlan(text, boringstackPlanSchema);
+
+const PLAN: IProductPlan<IUiIntent> = {
   product: "A team bookmarking app.",
   slices: [
     {
@@ -42,7 +53,7 @@ const PLAN: IProductPlan = {
 
 test("plan round-trips through serialize/parse with status", () => {
   const text = serializePlan(PLAN, "approved");
-  const parsed = parsePlan(text);
+  const parsed = parse(text);
 
   expect(parsed?.status).toBe("approved");
   expect(parsed?.plan.slices[0]?.entity.fields.map((f) => f.name)).toEqual([
@@ -53,7 +64,7 @@ test("plan round-trips through serialize/parse with status", () => {
 
 // Spec 1B — the layout capability: a slice may declare a layout archetype + a home landing.
 test("plan round-trips a slice's layout archetype + home marker", () => {
-  const plan: IProductPlan = {
+  const plan: IProductPlan<IUiIntent> = {
     product: "Todos",
     slices: [
       {
@@ -80,7 +91,7 @@ test("plan round-trips a slice's layout archetype + home marker", () => {
       },
     ],
   };
-  const parsed = parsePlan(serializePlan(plan, "approved"));
+  const parsed = parse(serializePlan(plan, "approved"));
 
   expect(parsed?.plan.slices[0]?.ui.layout).toBe("app-sidebar");
   expect(parsed?.plan.slices[0]?.ui.home).toBe(true);
@@ -115,7 +126,7 @@ const planText = (slices: unknown[]): string =>
 
 test("parsePlan rejects an unknown layout archetype", () => {
   expect(
-    parsePlan(planText([sliceJson("Task", { layout: "carousel" })]))
+    parse(planText([sliceJson("Task", { layout: "carousel" })]))
   ).toBeNull();
 });
 
@@ -124,20 +135,20 @@ test("parsePlan rejects a roadmap-only archetype not yet implemented (public/app
   // mis-build — critically `public` implies unauthenticated but routing wraps everything in
   // ProtectedRoute, so it'd be authenticated. Validation gates on IMPLEMENTED_LAYOUT_ARCHETYPES.
   for (const layout of ["public", "app-topnav", "focused"]) {
-    expect(parsePlan(planText([sliceJson("Task", { layout })]))).toBeNull();
+    expect(parse(planText([sliceJson("Task", { layout })]))).toBeNull();
   }
 });
 
 test("parsePlan rejects more than one home slice", () => {
   expect(
-    parsePlan(
+    parse(
       planText([sliceJson("A", { home: true }), sliceJson("B", { home: true })])
     )
   ).toBeNull();
 });
 
 test("parsePlan accepts exactly one home slice", () => {
-  const parsed = parsePlan(
+  const parsed = parse(
     planText([sliceJson("A", { home: true }), sliceJson("B", {})])
   );
 
@@ -145,18 +156,18 @@ test("parsePlan accepts exactly one home slice", () => {
 });
 
 test("parsePlan rejects a non-boolean home value", () => {
-  expect(parsePlan(planText([sliceJson("A", { home: "true" })]))).toBeNull();
-  expect(parsePlan(planText([sliceJson("A", { home: 1 })]))).toBeNull();
+  expect(parse(planText([sliceJson("A", { home: "true" })]))).toBeNull();
+  expect(parse(planText([sliceJson("A", { home: 1 })]))).toBeNull();
 });
 
 test("parsePlan accepts zero home slices (login falls back to the scaffold default)", () => {
   expect(
-    parsePlan(planText([sliceJson("A", {}), sliceJson("B", {})]))
+    parse(planText([sliceJson("A", {}), sliceJson("B", {})]))
   ).not.toBeNull();
 });
 
 test("parsePlan accepts a slice omitting both layout and home (backward compatible)", () => {
-  const parsed = parsePlan(planText([sliceJson("A", {})]));
+  const parsed = parse(planText([sliceJson("A", {})]));
 
   expect(parsed).not.toBeNull();
   expect(parsed?.plan.slices[0]?.ui.layout).toBeUndefined();
@@ -164,14 +175,14 @@ test("parsePlan accepts a slice omitting both layout and home (backward compatib
 });
 
 test("a malformed artifact parses to null (reject-by-default)", () => {
-  expect(parsePlan("not a plan")).toBeNull();
+  expect(parse("not a plan")).toBeNull();
 });
 
 test("writePlan and readPlan round-trip to disk", async () => {
   const tmpDir = await mkdtemp("/tmp/tsforge-test-");
 
   await writePlan(tmpDir, PLAN, "draft");
-  const result = await readPlan(tmpDir);
+  const result = await readPlan(tmpDir, boringstackPlanSchema);
 
   expect(result?.status).toBe("draft");
   expect(result?.plan.product).toBe("A team bookmarking app.");
@@ -180,7 +191,7 @@ test("writePlan and readPlan round-trip to disk", async () => {
 
 test("readPlan returns null when no plan exists", async () => {
   const tmpDir = await mkdtemp("/tmp/tsforge-test-");
-  const result = await readPlan(tmpDir);
+  const result = await readPlan(tmpDir, boringstackPlanSchema);
 
   expect(result).toBeNull();
 });
@@ -193,7 +204,7 @@ status: draft
 {"slices": []}
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects missing slices field", () => {
@@ -204,7 +215,7 @@ status: draft
 {"product": "test"}
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects missing frontmatter", () => {
@@ -212,7 +223,7 @@ test("parsePlan rejects missing frontmatter", () => {
 {"product": "test", "slices": []}
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects malformed JSON block", () => {
@@ -223,7 +234,7 @@ status: draft
 {invalid json}
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects invalid status value", () => {
@@ -234,7 +245,7 @@ status: invalid
 {"product": "test", "slices": []}
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects slice missing entity", () => {
@@ -253,7 +264,7 @@ status: draft
 }
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects slice missing verification", () => {
@@ -278,7 +289,7 @@ status: draft
 }
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects verification with empty mustNotHappen array", () => {
@@ -315,7 +326,7 @@ status: draft
 }
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects ui.screens with invalid string value", () => {
@@ -352,7 +363,7 @@ status: draft
 }
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects ui.screens with non-string value", () => {
@@ -389,7 +400,7 @@ status: draft
 }
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects entity with empty id", () => {
@@ -426,7 +437,7 @@ status: draft
 }
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("parsePlan rejects field with empty name", () => {
@@ -463,7 +474,7 @@ status: draft
 }
 \`\`\``;
 
-  expect(parsePlan(malformed)).toBeNull();
+  expect(parse(malformed)).toBeNull();
 });
 
 test("loadApprovedPlan returns null for a draft, the plan when approved", async () => {
@@ -471,9 +482,11 @@ test("loadApprovedPlan returns null for a draft, the plan when approved", async 
 
   try {
     await writePlan(dir, PLAN, "draft");
-    expect(await loadApprovedPlan(dir)).toBeNull();
+    expect(await loadApprovedPlan(dir, boringstackPlanSchema)).toBeNull();
     await writePlan(dir, PLAN, "approved");
-    expect((await loadApprovedPlan(dir))?.slices.length).toBe(1);
+    expect(
+      (await loadApprovedPlan(dir, boringstackPlanSchema))?.slices.length
+    ).toBe(1);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

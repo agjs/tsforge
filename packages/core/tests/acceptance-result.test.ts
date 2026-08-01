@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
-import { summarize } from "../src/loop/acceptance/acceptance-outcome";
-import type { IAcceptanceResult } from "../src/loop/acceptance/acceptance.types";
+import { summarize } from "../src/loop/boringstack/acceptance/acceptance-outcome";
+import type { IAcceptanceResult } from "../src/loop/boringstack/acceptance/acceptance.types";
 
 test("summarize: empty results → ok=false", () => {
   const outcome = summarize([]);

@@ -1,4 +1,8 @@
-import type { IProductPlan, IEntitySpec } from "../planning/plan-types";
+import type {
+  IProductPlan,
+  ISlice,
+  IEntitySpec,
+} from "../../planning/plan-types";
 import type {
   IAcceptanceSpec,
   IEntityAcceptance,
@@ -7,6 +11,21 @@ import type {
   INegativeCase,
   ITestIds,
 } from "./acceptance.types";
+
+/** The UI fields acceptance generation projects from a slice's `ui` — nav label, shown fields, and
+ *  the screen list. `nav`/`shows`/`screens` are a WEB/SaaS-flavoured projection, and this whole
+ *  acceptance-generation module is consumed only by the BoringStack adapter (build.ts,
+ *  testid-contract, e2e-generator) — which is why the subsystem now LIVES here, under
+ *  `loop/boringstack/acceptance/` (WS5 relocated it out of core `loop/acceptance/`; WS3 had already
+ *  removed the plan-spine's dependence on the concrete UI-intent TYPE via the `uiFields` extractor).
+ *  It stays generic over `TUi` (a pure projection helper), but it is NOT stack-neutral — a UI-less
+ *  adapter (Phaser) would have to manufacture nav/shows/screens or bring its own acceptance scheme.
+ *  Core keeps only the generic plan spine (`IProductPlan<TUi>`/`ISlice<TUi>` in `planning/`). */
+export interface IAcceptanceUiFields {
+  readonly nav: string;
+  readonly shows: readonly string[];
+  readonly screens: readonly string[];
+}
 
 function camel(s: string): string {
   if (s.length === 0) {
@@ -245,9 +264,10 @@ function deriveNegatives(
 /**
  * Build a single entity acceptance spec from a slice.
  */
-function buildEntityAcceptance(
-  slice: IProductPlan["slices"][number],
-  index: number
+function buildEntityAcceptance<TUi>(
+  slice: ISlice<TUi>,
+  index: number,
+  uiFields: (ui: TUi) => IAcceptanceUiFields
 ): IEntityAcceptance {
   const fields = initializeFields(slice.entity.fields, index);
   const parents = parseParents(slice.entity.relationships);
@@ -261,13 +281,15 @@ function buildEntityAcceptance(
     slice.verification.mustNotHappen
   );
 
+  const ui = uiFields(slice.ui);
+
   return {
     id: slice.entity.id,
     key: camel(slice.entity.id),
-    nav: slice.ui.nav,
+    nav: ui.nav,
     fields,
-    shows: [...slice.ui.shows],
-    screens: slice.ui.screens,
+    shows: [...ui.shows],
+    screens: ui.screens,
     parents,
     negatives,
     acceptanceCheck: slice.verification.acceptanceCheck,
@@ -365,9 +387,12 @@ function addMustNotHappenNegatives(
   }
 }
 
-export function planToAcceptanceSpec(plan: IProductPlan): IAcceptanceSpec {
+export function planToAcceptanceSpec<TUi>(
+  plan: IProductPlan<TUi>,
+  uiFields: (ui: TUi) => IAcceptanceUiFields
+): IAcceptanceSpec {
   const entities = plan.slices.map((slice, i) =>
-    buildEntityAcceptance(slice, i)
+    buildEntityAcceptance(slice, i, uiFields)
   );
 
   return { entities };

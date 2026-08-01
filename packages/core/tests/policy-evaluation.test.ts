@@ -52,6 +52,9 @@ describe("classifyAction", () => {
       ["check", "shell"],
       // WS-C1: ask_user mutates nothing — read_file (zero-risk), NOT unknown.
       ["ask_user", "read_file"],
+      // pull_conventions is a pure read-only convention lookup — read_file, NOT unknown
+      // (absent ⇒ non-interactive deny, the check/ask_user DOA class).
+      ["pull_conventions", "read_file"],
       ["package_info", "network"],
       ["package_docs", "network"],
       ["web_fetch", "network"],

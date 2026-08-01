@@ -25,7 +25,7 @@ import type {
 import { flags } from "../config";
 import type { IStackProfile } from "../stack-detection";
 import { gateFeedback } from "./feedback";
-import { unseenGuidesForErrors } from "./conventions";
+import type { IConventionProvider } from "./conventions-provider";
 import {
   shouldCheckpoint,
   shouldRollback,
@@ -83,7 +83,7 @@ import {
   WEB_BROWSE_TOOL,
   PACKAGE_INFO_TOOL,
   PACKAGE_DOCS_TOOL,
-  PULL_CONVENTIONS_TOOL,
+  buildPullConventionsTool,
   SCRIPT_TOOL,
   GIT_CONTEXT_TOOL,
   READ_IMAGE_TOOL,
@@ -140,7 +140,7 @@ type AdvertisedTool =
   | typeof WEB_BROWSE_TOOL
   | typeof PACKAGE_INFO_TOOL
   | typeof PACKAGE_DOCS_TOOL
-  | typeof PULL_CONVENTIONS_TOOL
+  | ReturnType<typeof buildPullConventionsTool>
   | typeof SCRIPT_TOOL
   | typeof GIT_CONTEXT_TOOL
   | typeof READ_IMAGE_TOOL
@@ -200,7 +200,8 @@ export function toolsFor(
   caps: ICapabilityFlags = {},
   offerConventions = false,
   offerCheck = false,
-  offerAskUser = false
+  offerAskUser = false,
+  conventionTopics: readonly string[] = []
 ): AdvertisedTool[] {
   const web = webTools();
   const git = gitTools(hasExistingCode);
@@ -227,7 +228,7 @@ export function toolsFor(
   // minimal (tools-gating). Decoupled from the web flag on purpose — the conventions
   // are the stack's, not "web".
   const conventions: AdvertisedTool[] = offerConventions
-    ? [PULL_CONVENTIONS_TOOL]
+    ? [buildPullConventionsTool(conventionTopics)]
     : [];
 
   if (flags.noLspTools() || !hasExistingCode) {
@@ -280,6 +281,11 @@ export const BUILD_NUDGE =
  *  spreads). Always-present and mutable: the Session flips these mid-run
  *  (plan mode, per-send signal, setupWeb wiring). */
 export interface ILoopCtxTool {
+  /** The build ADAPTER's convention library (injected seam). Spread into every
+   *  IToolContext (so `pull_conventions` reads it) and read by the reactive PUSH
+   *  (`injectFeedback`). Absent ⇒ no stack conventions. Keeps stack CONTENT out of
+   *  the core loop. */
+  conventions?: IConventionProvider;
   /** Cancellation for the in-flight turn — threaded into tool `run` commands and
    *  the gate so a Ctrl-C (or a kill-timeout) reaches the child processes, not
    *  just the model call. Set per-send by the Session. */
@@ -2171,8 +2177,8 @@ export async function injectFeedback(
   // plain build never gets boringstack-flavored guidance injected.
   state.pushedGuides ??= new Set<string>();
   const guides =
-    state.conventionsEnabled === true
-      ? unseenGuidesForErrors(gateErrors, state.pushedGuides)
+    state.conventionsEnabled === true && ctx.tool.conventions !== undefined
+      ? ctx.tool.conventions.unseenForErrors(gateErrors, state.pushedGuides)
       : [];
   const how =
     guides.length > 0

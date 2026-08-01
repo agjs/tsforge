@@ -5,6 +5,7 @@ import type { SessionSnapshotStore } from "../../files/hashline";
 import type { McpRegistry } from "../../mcp";
 import type { PolicyMode, IPolicyRules } from "../../policy";
 import type { IValidateResult } from "../../validate/validate.types";
+import type { IConventionProvider } from "../conventions-provider";
 
 /** What one on-demand gate run produced for the `check` tool: the standard
  *  validate result PLUS the files the gate's autofix reformatted/rewrote on disk
@@ -93,6 +94,10 @@ export function composeGuards(...guards: readonly EditGuard[]): EditGuard {
 
 export interface IToolContext {
   cwd: string;
+  /** The build ADAPTER's convention library (injected seam) — the `pull_conventions`
+   *  tool reads its `guide`/`topics` from here instead of importing stack content.
+   *  Absent ⇒ `pull_conventions` returns a "not configured" message. */
+  conventions?: IConventionProvider;
   /** Editable scope — `edit`/`create` outside it are rejected. */
   files: string[];
   /** Optional edit guard: vetoes an applied edit (reverted on veto). Absent ⇒ no

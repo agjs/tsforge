@@ -16,7 +16,17 @@ import stylistic from "@stylistic/eslint-plugin";
  */
 export default tseslint.config(
   {
-    ignores: ["**/node_modules/**", "**/dist/**", "**/.astro/**", "apps/**"],
+    ignores: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.astro/**",
+      "apps/**",
+      // Throwaway fixture dirs the core↔adapter boundary test writes under `loop/`. Ignored so an
+      // ORPHAN (left by a SIGKILL/crash mid-test) can never break a later `eslint packages` run; the
+      // test itself lints them with `--no-ignore` to override this. SCOPED to the exact test location
+      // (not a bare `**/…` glob) so it can't shadow real code that happens to share the sentinel name.
+      "packages/core/src/loop/**/__adapter_boundary_*/**",
+    ],
   },
   {
     files: ["packages/**/*.ts"],
@@ -218,6 +228,97 @@ export default tseslint.config(
       "@typescript-eslint/strict-boolean-expressions": "off",
       "@typescript-eslint/naming-convention": "off",
       "@typescript-eslint/no-unnecessary-condition": "off",
+    },
+  },
+  {
+    /*
+     * MECHANICAL core↔adapter boundary (the law made enforceable, WS4). The generic core loop
+     * — everything under `loop/**` EXCEPT the BoringStack adapter itself — must never import the
+     * adapter (`loop/boringstack/**`). WS1–WS3 reclaimed the leaks (conventions, stack-adapter,
+     * plan spine) by hand; this rule keeps them reclaimed: any future core-loop file that reaches
+     * back into `loop/boringstack/**` fails `bun run validate`, not code review.
+     *
+     * The rule's SCOPE is the definition of "core loop": this config block applies to every
+     * `.ts` under `loop/` except the `loop/boringstack/` subtree, so the exemptions fall out of the tree with no
+     * hand-maintained allow-list — the composition roots that legitimately wire the adapter in
+     * (`cli.ts`, `cli/**`), the scripts, and the tests all live OUTSIDE `loop/**` and are never
+     * subject to it; the adapter's own intra-`boringstack` imports are excluded via `ignores`.
+     * Enforced with `@typescript-eslint/no-restricted-imports` matching the SPECIFIER (see the
+     * inline note on the rule below) — every way to reach the adapter from inside `loop/` is a
+     * relative specifier that names the `boringstack/` segment (`../boringstack/x`,
+     * `./boringstack/x`, `../../boringstack/x`), so a specifier glob catches them all with no
+     * path resolver (the physical-path rule `import-x/no-restricted-paths` would need a TS
+     * resolver that isn't installed).
+     */
+    files: ["packages/core/src/loop/**/*.ts"],
+    ignores: ["packages/core/src/loop/boringstack/**"],
+    rules: {
+      // `@typescript-eslint/no-restricted-imports` (a superset of core no-restricted-imports that
+      // ALSO catches `import type`) matches the import SPECIFIER — no path resolver needed. From
+      // within `loop/`, the only way to reach the adapter is a relative specifier that names the
+      // `boringstack/` path segment (`../boringstack/x`, `./boringstack/x`, `../../boringstack/x`),
+      // so the two globs below (the bare dir index + anything under it) catch every form.
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/boringstack", "**/boringstack/**"],
+              message:
+                "Core loop must not import the BoringStack adapter (loop/boringstack/**). Core stays stack-agnostic — inject the adapter behind its seam (IConventionProvider / IStackAdapter / IPlanSchema) and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+            },
+          ],
+        },
+      ],
+      // no-restricted-imports covers STATIC import/export declarations but NOT runtime module loads
+      // — a dynamic `import("../boringstack/x")` (ImportExpression) or a `createRequire(...)(...)`
+      // (CommonJS interop) — which would otherwise reach the adapter. The two selectors below catch
+      // the DIRECT, unobfuscated loader forms — where the boringstack path is a string Literal or a
+      // template quasi in the loader's own argument, and the loader is spelled `import` /
+      // `createRequire` / `module.createRequire`. That covers the realistic coupling risk:
+      // `import("../boringstack/x")`, its templated/concat/ternary variants, and the createRequire
+      // equivalents.
+      //
+      // WHAT A SYNTACTIC MATCHER CANNOT DO (honest ceiling, per the WS2 lesson — close the direct
+      // forms, don't chase adversarial obfuscation a `no-restricted-syntax` selector fundamentally
+      // can't reach; a lint rule is a coupling guardrail, not an adversarial sandbox): it cannot
+      // follow a RENAMED import binding (`import { createRequire as cr } ...; cr(u)(path)`), resolve
+      // DATAFLOW (`const p = "../boringstack/x"; import(p)`), or evaluate a segment-splitting concat
+      // (`"../bor" + "ingstack/x"`) where no single node holds the segment. Catching those needs
+      // scope/type analysis (a custom type-aware rule) — out of proportion to forms that are
+      // deliberately obfuscated and appear NOWHERE in this pure-ESM, zero-createRequire codebase; the
+      // static import/no-restricted-imports gate already stops every normal way a file couples to the
+      // adapter. NOTE: this whole rule REPLACES the base `no-restricted-syntax` (the enum ban) for
+      // loop files — flat config overrides a rule wholesale per key — so the enum selector is
+      // re-included here (and a test asserts it still fires in loop files).
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "TSEnumDeclaration",
+          message: "Use 'as const' object literals instead of enums.",
+        },
+        {
+          // Any boringstack string Literal ANYWHERE in a runtime-loader argument — a dynamic
+          // `import(...)` OR an immediately-invoked `createRequire(...)(...)`. Descendant match, so
+          // it covers the string, a `"../boringstack/" + n` concat, and a ternary arg uniformly for
+          // BOTH loaders. (Descendant also matches a boringstack literal in the createRequire(FILENAME)
+          // argument — e.g. `createRequire("/x/boringstack/y")("../core/z")` — an over-match, but a
+          // pathological one in the SAFE direction: rooting a require loader at a boringstack path is
+          // already adapter-adjacent, and no real code does it.)
+          selector:
+            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"], CallExpression[callee.callee.property.name="createRequire"]) Literal[value=/(^|\\u002F)boringstack($|\\u002F)/]',
+          message:
+            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a dynamic import() or createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+        },
+        {
+          // The templated form of either loader (`import(`../boringstack/x`)` /
+          // `createRequire(u)(`../boringstack/x`)`).
+          selector:
+            ':matches(ImportExpression, CallExpression[callee.callee.name="createRequire"], CallExpression[callee.callee.property.name="createRequire"]) TemplateElement[value.cooked=/(^|\\u002F)boringstack($|\\u002F)/]',
+          message:
+            "Core loop must not import the BoringStack adapter (loop/boringstack/**), including via a templated dynamic import() or createRequire(...)(). Inject the adapter behind its seam and wire it at a composition root (cli.ts, cli/**, scripts/**).",
+        },
+      ],
     },
   }
 );

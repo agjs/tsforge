@@ -36,7 +36,7 @@ import {
   type ErrorSet,
 } from "../validate";
 import { ruleHelp } from "./feedback";
-import { buildConventionGuides } from "./conventions";
+import type { IConventionProvider } from "./conventions-provider";
 import { detectStack } from "../stack-detection";
 import { recallMapBlock } from "../codebase";
 import {
@@ -176,6 +176,12 @@ export interface ISessionConfig {
    *  a convention library (e.g. boringstack) so the model can fetch its how-to
    *  patterns on demand. Decoupled from any flag: a plain session leaves it off. */
   pullConventions?: boolean;
+  /** The build ADAPTER's convention library, injected as a generic provider (see
+   *  `IConventionProvider`), so the core no longer imports stack-specific CONTENT. ALL
+   *  three delivery paths draw from it: the FRONT-LOADED guides in the system prompt
+   *  (gated with `pullConventions`), the reactive PUSH, and the `pull_conventions` tool
+   *  (both via `ILoopCtx.tool.conventions`). Absent ⇒ no stack conventions. */
+  conventions?: IConventionProvider;
   /** Offer the callable, structured `check` tool (WS-G) — set by a build BACKEND
    *  whose gate is authoritative (e.g. boringstack, which injects its gate per-slice
    *  via `setGate`). The tool runs the SAME full evaluation `settleGate` does
@@ -590,6 +596,15 @@ function taskContract(files: string[], accept: string | undefined): string {
     .join("\n");
 }
 
+/** Whether `pull_conventions` is OFFERED — advertised in the system prompt AND exposed by
+ *  `toolsFor`. Both must read this ONE predicate or they drift: the tool is offered only when
+ *  the capability flag is on AND a provider is actually injected (a knowledge tool with no
+ *  provider always returns "no convention library"). Keeping the prompt inventory and the
+ *  advertised tool list in lockstep is the flag↔prompt invariant. */
+function conventionsOffered(cfg: ISessionConfig): boolean {
+  return cfg.pullConventions === true && cfg.conventions !== undefined;
+}
+
 /** The STATIC system policy (identity, tools, conventions, workspace map, guidance) +
  *  the initial dynamic task contract. Base framing is mode-driven: `drive-to-green`
  *  (autonomous builds) gets the strict expert-TS implement contract; `chat` (default)
@@ -605,7 +620,7 @@ function systemPrompt(
       ? buildDriveToGreenSystem(
           conventions,
           cfg.offerCheck === true,
-          cfg.pullConventions === true
+          conventionsOffered(cfg)
         )
       : buildChatSystem(conventions);
 
@@ -628,8 +643,9 @@ function systemPrompt(
   // topic is in the prompt UP FRONT, so the model writes it right the FIRST time — the Bucket-1
   // fix. The reactive PUSH (unseenGuidesForErrors) and `pull_conventions` remain as fallbacks
   // for reinforcement and the long tail, not the primary teaching.
-  const conv =
-    cfg.pullConventions === true ? `${buildConventionGuides()}\n\n` : "";
+  const conv = conventionsOffered(cfg)
+    ? `${cfg.conventions?.buildGuides() ?? ""}\n\n`
+    : "";
 
   const contract = taskContract(cfg.files ?? [], cfg.accept);
 
@@ -792,12 +808,25 @@ export class Session {
     const offerCheck =
       cfg.offerCheck === true && cfg.executionMode === "drive-to-green";
 
+    // pull_conventions is offered only when the capability is on AND a provider is
+    // actually injected — advertising a knowledge tool with no knowledge base would
+    // promise a topic listing the dispatch can't deliver ("no convention library"),
+    // and its free-form schema falsely implies unknown topics return valid ones. The
+    // topic enum is then built from the injected provider's real topics() at offer
+    // time (stack-agnostic — core carries no topic literal).
+    const offerConventions = conventionsOffered(cfg);
+    const conventionTopics =
+      offerConventions && cfg.conventions !== undefined
+        ? cfg.conventions.topics()
+        : [];
+
     this.tools = toolsFor(
       false,
       {},
-      cfg.pullConventions === true,
+      offerConventions,
       offerCheck,
-      cfg.interactive === true
+      cfg.interactive === true,
+      conventionTopics
     );
 
     this.ctx = ctx;
@@ -943,6 +972,14 @@ export class Session {
         // `humanPresent`, NOT `interactive` — the latter is a POLICY signal (approval
         // path) and co-pilot presence must not loosen policy verdicts.
         ...(cfg.interactive === true ? { humanPresent: true } : {}),
+        // The adapter's convention library — spread into every IToolContext (so
+        // `pull_conventions` reads its guides) and read by the reactive push. Gated on
+        // `pullConventions` (the same flag that OFFERS the tool + enables the push), so a
+        // hallucinated pull_conventions call when the feature is off finds no provider
+        // (returns "not configured"), never a withheld-capability that still executes.
+        ...(cfg.pullConventions === true && cfg.conventions !== undefined
+          ? { conventions: cfg.conventions }
+          : {}),
       },
       gate: {
         parse: cfg.parse,

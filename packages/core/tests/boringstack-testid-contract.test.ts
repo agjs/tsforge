@@ -1,6 +1,10 @@
 import { test, expect, describe } from "bun:test";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
 import {
+  boringstackUiFields,
+  type IUiIntent,
+} from "../src/loop/boringstack/plan-extension";
+import {
   buildTestIdGuide,
   checkTestIds,
   checkWiring,
@@ -9,8 +13,8 @@ import {
 import {
   planToAcceptanceSpec,
   testIdsFor,
-} from "../src/loop/acceptance/acceptance-spec";
-import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance-spec";
+import type { IEntityAcceptance } from "../src/loop/boringstack/acceptance/acceptance.types";
 
 /** Build a minimal entity where the FIRST field is a parent FK (the distinguishing case the
  *  Contact fixture can't exercise — its first field "name" is already non-FK). */
@@ -63,7 +67,7 @@ const allFkEntity: IEntityAcceptance = {
 };
 
 // Create a test entity with fields, shows, and a parent relationship
-const testPlan: IProductPlan = {
+const testPlan: IProductPlan<IUiIntent> = {
   product: "Test",
   slices: [
     {
@@ -92,7 +96,7 @@ const testPlan: IProductPlan = {
   ],
 };
 
-const spec = planToAcceptanceSpec(testPlan);
+const spec = planToAcceptanceSpec(testPlan, boringstackUiFields);
 const contact = spec.entities[0];
 
 if (!contact) {

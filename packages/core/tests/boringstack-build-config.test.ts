@@ -30,6 +30,14 @@ test("headless-build.ts wires its host session via createBoringstackHostSession,
 test("the BoringStack build flags keep offerCheck + convention library + drive-to-green", () => {
   expect(BORINGSTACK_BUILD_SESSION.offerCheck).toBe(true);
   expect(BORINGSTACK_BUILD_SESSION.pullConventions).toBe(true);
+  // The convention library is INJECTED as the generic provider seam (core no longer
+  // imports the stack-specific content); dropping it un-front-loads the guides.
+  expect(BORINGSTACK_BUILD_SESSION.conventions).toBeDefined();
+  // Assert REAL guide content, not merely a string — an empty/stub provider would silently
+  // un-front-load the guides on the live host path (createBoringstackHostSession spreads this).
+  expect(BORINGSTACK_BUILD_SESSION.conventions.buildGuides()).toContain(
+    "HOW THIS STACK WRITES CODE"
+  );
   expect(BORINGSTACK_BUILD_SESSION.executionMode).toBe("drive-to-green");
 });
 

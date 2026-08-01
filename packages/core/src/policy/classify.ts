@@ -35,6 +35,11 @@ const KIND_BY_TOOL: Readonly<Record<string, ActionKind>> = {
   // classified `read_file` so it's allowed in every mode (incl. plan). Absent here it
   // would classify `unknown` → deny before the handler runs (the check/script DOA class).
   [TOOL_NAME.askUser]: "read_file",
+  // `pull_conventions` is a pure read-only lookup of the injected convention library — it mutates
+  // nothing, so it classifies `read_file` (allowed in every mode). Absent here it classified
+  // `unknown` → deny before the handler ran, so a model's pull was silently denied in non-interactive
+  // builds (the same check/ask_user DOA class).
+  [TOOL_NAME.pullConventions]: "read_file",
   // Delegating to a read-only subagent — its own class so a repo can deny/ask it
   // specifically; the child's tool calls are re-classified as they dispatch.
   [TOOL_NAME.spawnAgent]: "spawn_agent",

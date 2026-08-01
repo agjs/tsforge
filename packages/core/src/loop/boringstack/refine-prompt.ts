@@ -1,11 +1,12 @@
 import type { IFeature } from "../greenfield/greenfield.types";
 import type { ISlice } from "../planning/plan-types";
+import type { IUiIntent } from "./plan-extension";
 import { toCamelCase } from "./case";
 
 /** Per-slice layout wiring: where the feature's nav link goes (primary app group vs a demoted
  *  Settings group) and, if it's the app home, the post-login redirect. v1 implements app-sidebar
  *  + settings; the other archetypes build as app-sidebar for now (the enum is broad on purpose). */
-function layoutGuidance(slice: ISlice): string {
+function layoutGuidance(slice: ISlice<IUiIntent>): string {
   const layout = slice.ui.layout ?? "app-sidebar";
   const route = `/${toCamelCase(slice.entity.id)}`;
   const lines: string[] = [];
@@ -37,7 +38,7 @@ function layoutGuidance(slice: ISlice): string {
   return lines.join("\n\n");
 }
 
-function productContextSection(slice: ISlice): string {
+function productContextSection(slice: ISlice<IUiIntent>): string {
   const fieldsList = slice.entity.fields
     .map((f) => {
       const optionalMarker = f.optional === true ? " [optional]" : "";
@@ -112,7 +113,10 @@ ${mustNotList}
  * - Includes domain-fill instructions (real fields, real logic, no `as` casts)
  * - States the FREEZE: only this resource's files are editable
  */
-export function refinePrompt(feature: IFeature, slice?: ISlice): string {
+export function refinePrompt(
+  feature: IFeature,
+  slice?: ISlice<IUiIntent>
+): string {
   const camel = toCamelCase(feature.id);
 
   // On a retry, lead with the ACTUAL gate/judge errors from the last attempt so the

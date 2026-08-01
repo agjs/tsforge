@@ -345,44 +345,63 @@ export const PACKAGE_INFO_TOOL = {
   },
 };
 
-export const PULL_CONVENTIONS_TOOL = {
-  type: "function",
-  function: {
-    name: TOOL_NAME.pullConventions,
-    description:
-      "Re-fetch the boringstack HOW-TO guide for a topic on demand. The core guides are ALREADY front-loaded in your system prompt — use this to re-read one you need again, or for a rule you're still unsure how to satisfy. Returns the exact pattern the gate enforces.",
-    parameters: {
-      type: "object",
-      properties: {
-        topic: {
-          type: "string",
-          enum: [
-            "component-anatomy",
-            "file-layout",
-            "jsx",
-            "state",
-            "no-casts",
-            "routing",
-            "forms",
-            "data-fetching",
-            "lint-gotchas",
-            "testing",
-            "api-service",
-            "i18n",
-            "design-tokens",
-            "theming",
-            "responsive",
-            "accessibility",
-            "components-ui",
-          ],
+/**
+ * The pull_conventions tool, built per-offer so its `topic` enum carries the
+ * injected convention provider's REAL topics — the same enum-at-offer pattern
+ * `buildSpawnAgentTool` uses for `subagent_type`. Core stays stack-agnostic: the
+ * topic list comes from the adapter's provider (`IConventionProvider.topics()`)
+ * at offer time, never a hardcoded literal here. With an enum the model gets
+ * structured guidance and can't waste a turn on an invalid topic; the handler's
+ * miss→listing recovery still guards a hallucinated topic. With no topics (an
+ * empty provider) the enum is omitted so the tool stays usable as a free-form
+ * lookup.
+ */
+export function buildPullConventionsTool(topics: readonly string[]): {
+  readonly type: "function";
+  readonly function: {
+    readonly name: typeof TOOL_NAME.pullConventions;
+    readonly description: string;
+    readonly parameters: {
+      readonly type: "object";
+      readonly properties: {
+        readonly topic: {
+          readonly type: "string";
+          readonly description: string;
+          readonly enum?: readonly string[];
+        };
+      };
+      readonly required: readonly ["topic"];
+    };
+  };
+} {
+  const topic =
+    topics.length > 0
+      ? {
+          type: "string" as const,
           description:
-            'which guide: component-anatomy (where a component lives + one-per-file), file-layout (no inline types/constants/helpers), jsx (no computation in markup), state (hooks, not component body), no-casts (type guards instead of `as`/`!`), routing (thin route files), forms, data-fetching (api-client, never raw fetch), lint-gotchas (await promises, no void-expr values, no stringified errors, no duplicate strings), testing (.test.ts vs .test.tsx, the vi.hoisted api-client mock, createApp/app.handle route tests, enforced test rules), api-service (mutating service methods record an audit event; throw ApiError), i18n (add a locale key only when you reference it via t("key") — never pre-declare, or it\'s a dead-key error), design-tokens (never hardcode colors; use CSS-variable Tailwind tokens by role), theming (data-theme-driven, never dark: variants), responsive (mobile-first breakpoints + Sheet mobile drawer), accessibility (satisfy jsx-a11y up front: aria-label/aria-hidden/sr-only, no interactive div, semantic landmarks), components-ui (use @/components/ui Radix primitives, cn() + cva, asChild).',
-        },
+            "which convention guide to fetch — one of the enumerated topics.",
+          enum: topics,
+        }
+      : {
+          type: "string" as const,
+          description:
+            "which convention guide to fetch — one of the topics listed in the front-loaded guides in your system prompt. An unknown topic returns the list of valid ones.",
+        };
+
+  return {
+    type: "function",
+    function: {
+      name: TOOL_NAME.pullConventions,
+      description:
+        "Re-fetch the stack's HOW-TO guide for a convention topic on demand. The guides are ALREADY front-loaded in your system prompt — use this to re-read one you need again, or for a rule you're still unsure how to satisfy. Returns the exact pattern the gate enforces.",
+      parameters: {
+        type: "object",
+        properties: { topic },
+        required: ["topic"],
       },
-      required: ["topic"],
     },
-  },
-} as const;
+  };
+}
 
 export const PACKAGE_DOCS_TOOL = {
   type: "function",

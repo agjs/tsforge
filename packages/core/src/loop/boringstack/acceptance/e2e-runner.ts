@@ -21,8 +21,8 @@ import type {
   IAcceptanceRunCtx,
   IEntityAcceptance,
   IAcceptanceSpec,
-} from "../../acceptance/acceptance.types";
-import { summarize } from "../../acceptance/acceptance-outcome";
+} from "./acceptance.types";
+import { summarize } from "./acceptance-outcome";
 
 /**
  * Type guard to validate a Playwright JSON report structure (nested suites format).

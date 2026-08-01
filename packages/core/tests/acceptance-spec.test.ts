@@ -4,10 +4,25 @@ import {
   planToAcceptanceSpec,
   testIdsFor,
   fieldIsMentioned,
-} from "../src/loop/acceptance/acceptance-spec";
-import type { IAcceptField } from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance-spec";
+import type { IAcceptField } from "../src/loop/boringstack/acceptance/acceptance.types";
+import { type IUiIntent } from "../src/loop/boringstack/plan-extension";
 
-const plan: IProductPlan = {
+// The generic acceptance generator takes an injected UI-field extractor; these tests use the
+// BoringStack web UI intent, so wrap with that extractor.
+const uiFields = (
+  ui: IUiIntent
+): { nav: string; shows: readonly string[]; screens: readonly string[] } => ({
+  nav: ui.nav,
+  shows: ui.shows,
+  screens: ui.screens,
+});
+const toSpec = (
+  plan: IProductPlan<IUiIntent>
+): ReturnType<typeof planToAcceptanceSpec> =>
+  planToAcceptanceSpec(plan, uiFields);
+
+const plan: IProductPlan<IUiIntent> = {
   product: "CRM",
   slices: [
     {
@@ -69,7 +84,7 @@ test("testIdsFor derives the stable contract from the entity key", () => {
 });
 
 test("planToAcceptanceSpec: entity key is camelCase, nav/shows/acceptanceCheck carried", () => {
-  const spec = planToAcceptanceSpec(plan);
+  const spec = toSpec(plan);
   const company = spec.entities[0];
 
   if (!company) {
@@ -83,7 +98,7 @@ test("planToAcceptanceSpec: entity key is camelCase, nav/shows/acceptanceCheck c
 });
 
 test("planToAcceptanceSpec: relationships parse to parent + fkField", () => {
-  const contact = planToAcceptanceSpec(plan).entities[1];
+  const contact = toSpec(plan).entities[1];
 
   if (!contact) {
     throw new Error("contact entity not found");
@@ -95,7 +110,7 @@ test("planToAcceptanceSpec: relationships parse to parent + fkField", () => {
 });
 
 test("planToAcceptanceSpec: 'belongs to a User' (implicit auth owner) yields NO parent — not a phantom `aId`/`userId` select/seed", () => {
-  const spec = planToAcceptanceSpec({
+  const spec = toSpec({
     product: "p",
     slices: [
       {
@@ -125,7 +140,7 @@ test("planToAcceptanceSpec: 'belongs to a User' (implicit auth owner) yields NO 
 });
 
 test("planToAcceptanceSpec: 'belongs to a Company' (leading article) parses to Company, not the article", () => {
-  const spec = planToAcceptanceSpec({
+  const spec = toSpec({
     product: "p",
     slices: [
       {
@@ -152,7 +167,7 @@ test("planToAcceptanceSpec: 'belongs to a Company' (leading article) parses to C
 });
 
 test("planToAcceptanceSpec: negatives derive missing-required + bad-email", () => {
-  const spec = planToAcceptanceSpec(plan);
+  const spec = toSpec(plan);
   const company = spec.entities[0];
   const contact = spec.entities[1];
 
@@ -175,12 +190,12 @@ test("planToAcceptanceSpec: negatives derive missing-required + bad-email", () =
 });
 
 test("planToAcceptanceSpec: sample values are deterministic across calls", () => {
-  expect(planToAcceptanceSpec(plan)).toEqual(planToAcceptanceSpec(plan));
+  expect(toSpec(plan)).toEqual(toSpec(plan));
 });
 
 test("planToAcceptanceSpec: rule-based negatives only for REQUIRED fields", () => {
   // Create a plan with a required field and an optional field, both with rules
-  const planWithOptional: IProductPlan = {
+  const planWithOptional: IProductPlan<IUiIntent> = {
     product: "CRM",
     slices: [
       {
@@ -212,7 +227,7 @@ test("planToAcceptanceSpec: rule-based negatives only for REQUIRED fields", () =
     ],
   };
 
-  const spec = planToAcceptanceSpec(planWithOptional);
+  const spec = toSpec(planWithOptional);
   const product = spec.entities[0];
 
   if (!product) {
@@ -238,7 +253,7 @@ test("planToAcceptanceSpec: rule-based negatives only for REQUIRED fields", () =
 
 test("FIX 7: mustNotHappen uses field-mention scan, matches real plan prose", () => {
   // Real plan prose that previous narrow regex didn't match
-  const planWithRealProse: IProductPlan = {
+  const planWithRealProse: IProductPlan<IUiIntent> = {
     product: "CRM",
     slices: [
       {
@@ -271,7 +286,7 @@ test("FIX 7: mustNotHappen uses field-mention scan, matches real plan prose", ()
     ],
   };
 
-  const spec = planToAcceptanceSpec(planWithRealProse);
+  const spec = toSpec(planWithRealProse);
   const company = spec.entities[0];
 
   if (!company) {
@@ -284,7 +299,7 @@ test("FIX 7: mustNotHappen uses field-mention scan, matches real plan prose", ()
   expect(nameNegatives.some((n) => n.value === "")).toBe(true);
 
   // Phrase mentioning no known field should not create negatives
-  const planWithUnknownField: IProductPlan = {
+  const planWithUnknownField: IProductPlan<IUiIntent> = {
     product: "CRM",
     slices: [
       {
@@ -312,7 +327,7 @@ test("FIX 7: mustNotHappen uses field-mention scan, matches real plan prose", ()
     ],
   };
 
-  const specWithUnknown = planToAcceptanceSpec(planWithUnknownField);
+  const specWithUnknown = toSpec(planWithUnknownField);
   const companyWithUnknown = specWithUnknown.entities[0];
 
   if (!companyWithUnknown) {
@@ -328,7 +343,7 @@ test("FIX 7: mustNotHappen uses field-mention scan, matches real plan prose", ()
 });
 
 test("FIX 7: mustNotHappen does not create duplicate negatives", () => {
-  const planWithDuplicates: IProductPlan = {
+  const planWithDuplicates: IProductPlan<IUiIntent> = {
     product: "CRM",
     slices: [
       {
@@ -356,7 +371,7 @@ test("FIX 7: mustNotHappen does not create duplicate negatives", () => {
     ],
   };
 
-  const spec = planToAcceptanceSpec(planWithDuplicates);
+  const spec = toSpec(planWithDuplicates);
   const company = spec.entities[0];
 
   if (!company) {
@@ -376,7 +391,7 @@ test("FIX 7: mustNotHappen field-mention scan matches real plan prose", () => {
   // FIX 7: mustNotHappen now uses field-MENTION scan to match real prose
   // Test with a field that has NO required constraint (optional field)
   // so mustNotHappen is the only source of the negative
-  const planWithMustNotHappenOptional: IProductPlan = {
+  const planWithMustNotHappenOptional: IProductPlan<IUiIntent> = {
     product: "CRM",
     slices: [
       {
@@ -406,7 +421,7 @@ test("FIX 7: mustNotHappen field-mention scan matches real plan prose", () => {
     ],
   };
 
-  const spec = planToAcceptanceSpec(planWithMustNotHappenOptional);
+  const spec = toSpec(planWithMustNotHappenOptional);
   const company = spec.entities[0];
 
   if (!company) {
@@ -425,7 +440,7 @@ test("FIX 7: mustNotHappen field-mention scan matches real plan prose", () => {
 
 test("FIX 7: mustNotHappen with no matching field is skipped (no pseudo-negatives)", () => {
   // Phrase mentioning no known field should be skipped
-  const planNoMatch: IProductPlan = {
+  const planNoMatch: IProductPlan<IUiIntent> = {
     product: "CRM",
     slices: [
       {
@@ -453,7 +468,7 @@ test("FIX 7: mustNotHappen with no matching field is skipped (no pseudo-negative
     ],
   };
 
-  const spec = planToAcceptanceSpec(planNoMatch);
+  const spec = toSpec(planNoMatch);
   const company = spec.entities[0];
 
   if (!company) {
@@ -470,7 +485,7 @@ test("FIX 7: mustNotHappen with no matching field is skipped (no pseudo-negative
 
 test("FIX 7: mustNotHappen does not duplicate negatives when field already has one", () => {
   // If a field already has a negative from rules, mustNotHappen should not add a duplicate
-  const planDuplicate: IProductPlan = {
+  const planDuplicate: IProductPlan<IUiIntent> = {
     product: "CRM",
     slices: [
       {
@@ -496,7 +511,7 @@ test("FIX 7: mustNotHappen does not duplicate negatives when field already has o
     ],
   };
 
-  const spec = planToAcceptanceSpec(planDuplicate);
+  const spec = toSpec(planDuplicate);
   const company = spec.entities[0];
 
   if (!company) {
@@ -569,7 +584,7 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
   expect(isRealCalendarDate("2024-02-31")).toBe(false);
   expect(isRealCalendarDate("2024-06-15")).toBe(true);
 
-  const datePlan: IProductPlan = {
+  const datePlan: IProductPlan<IUiIntent> = {
     product: "Tracker",
     slices: [
       {
@@ -608,7 +623,7 @@ test("planToAcceptanceSpec: date-typed fields get a REAL calendar date sample (n
     ],
   };
 
-  const task = planToAcceptanceSpec(datePlan).entities[0];
+  const task = toSpec(datePlan).entities[0];
 
   // Cover every date-ish type the production branch handles, incl. a date field whose name
   // matches the email heuristic (emailVerifiedAt) — TYPE must take precedence over name.

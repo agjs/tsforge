@@ -6,6 +6,10 @@ import { runPlanning } from "../src/loop/planning/run-planning";
 import { readPlan } from "../src/loop/planning/plan-store";
 import type { IProvider } from "../src/inference";
 import type { IPlanningDeps } from "../src/loop/planning/run-planning";
+import {
+  boringstackPlanSchema,
+  type IUiIntent,
+} from "../src/loop/boringstack/plan-extension";
 
 const mockPlan = {
   product: "A bookmarking app.",
@@ -46,7 +50,8 @@ test("runPlanning writes an approved plan when the human approves", async () => 
   const dir = await mkdtemp(join(tmpdir(), "plan-"));
 
   try {
-    const deps: IPlanningDeps = {
+    const deps: IPlanningDeps<IUiIntent> = {
+      schema: boringstackPlanSchema,
       planner: fakePlanner(),
       describe: async () => ({ description: "a bookmarking app" }),
       review: async () => ({ action: "approve" as const }),
@@ -54,7 +59,9 @@ test("runPlanning writes an approved plan when the human approves", async () => 
     };
 
     expect(await runPlanning(dir, deps)).toBe("approved");
-    expect((await readPlan(dir))?.status).toBe("approved");
+    expect((await readPlan(dir, boringstackPlanSchema))?.status).toBe(
+      "approved"
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -64,7 +71,8 @@ test("runPlanning returns cancelled when the human cancels", async () => {
   const dir = await mkdtemp(join(tmpdir(), "plan-"));
 
   try {
-    const deps: IPlanningDeps = {
+    const deps: IPlanningDeps<IUiIntent> = {
+      schema: boringstackPlanSchema,
       planner: fakePlanner(),
       describe: async () => ({ description: "a bookmarking app" }),
       review: async () => ({ action: "cancel" as const }),
@@ -72,7 +80,7 @@ test("runPlanning returns cancelled when the human cancels", async () => {
     };
 
     expect(await runPlanning(dir, deps)).toBe("cancelled");
-    expect(await readPlan(dir)).toBeNull();
+    expect(await readPlan(dir, boringstackPlanSchema)).toBeNull();
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -84,7 +92,8 @@ test("runPlanning re-proposes on revise and approves on second review", async ()
   try {
     let reviewCount = 0;
 
-    const deps: IPlanningDeps = {
+    const deps: IPlanningDeps<IUiIntent> = {
+      schema: boringstackPlanSchema,
       planner: fakePlanner(),
       describe: async () => ({ description: "a bookmarking app" }),
       review: async () => {
@@ -100,7 +109,9 @@ test("runPlanning re-proposes on revise and approves on second review", async ()
     };
 
     expect(await runPlanning(dir, deps)).toBe("approved");
-    expect((await readPlan(dir))?.status).toBe("approved");
+    expect((await readPlan(dir, boringstackPlanSchema))?.status).toBe(
+      "approved"
+    );
     expect(reviewCount).toBe(2);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -113,7 +124,8 @@ test("runPlanning cancels after hitting the revision cap", async () => {
   try {
     let reviewCount = 0;
 
-    const deps: IPlanningDeps = {
+    const deps: IPlanningDeps<IUiIntent> = {
+      schema: boringstackPlanSchema,
       planner: fakePlanner(),
       describe: async () => ({ description: "a bookmarking app" }),
       review: async () => {
@@ -125,7 +137,7 @@ test("runPlanning cancels after hitting the revision cap", async () => {
     };
 
     expect(await runPlanning(dir, deps)).toBe("cancelled");
-    expect(await readPlan(dir)).toBeNull();
+    expect(await readPlan(dir, boringstackPlanSchema)).toBeNull();
     expect(reviewCount).toBeLessThanOrEqual(5);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -142,7 +154,8 @@ test("runPlanning cancels when proposePlan returns null", async () => {
 
     const messages: string[] = [];
 
-    const deps: IPlanningDeps = {
+    const deps: IPlanningDeps<IUiIntent> = {
+      schema: boringstackPlanSchema,
       planner: nullPlanner,
       describe: async () => ({ description: "a bookmarking app" }),
       review: async () => ({ action: "cancel" as const }),
@@ -171,7 +184,8 @@ test("runPlanning forwards constraints (guidance) to the planner", async () => {
       },
     };
 
-    const deps: IPlanningDeps = {
+    const deps: IPlanningDeps<IUiIntent> = {
+      schema: boringstackPlanSchema,
       planner: capturingPlanner,
       constraints: { guidance: "STACK-MARKER-XYZ" },
       describe: async () => ({ description: "a bookmarking app" }),
@@ -225,7 +239,8 @@ test("runPlanning forwards reservedEntities + onStripped (a reserved slice is dr
     };
 
     const dropped: string[][] = [];
-    const deps: IPlanningDeps = {
+    const deps: IPlanningDeps<IUiIntent> = {
+      schema: boringstackPlanSchema,
       planner,
       constraints: {
         reservedEntities: new Set(["user"]),
@@ -238,7 +253,7 @@ test("runPlanning forwards reservedEntities + onStripped (a reserved slice is dr
 
     expect(await runPlanning(dir, deps)).toBe("approved");
     // The reserved slice was dropped from the written plan…
-    const written = await readPlan(dir);
+    const written = await readPlan(dir, boringstackPlanSchema);
 
     expect(written?.plan.slices.map((s) => s.entity.id)).toEqual(["Bookmark"]);
     // …AND the drop was surfaced through the reporter (never silent).

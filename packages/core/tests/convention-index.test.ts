@@ -7,10 +7,42 @@ import {
   conventionGuide,
   conventionTopics,
   topicForRule,
-} from "../src/loop/conventions";
-import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
+  boringstackConventionProvider,
+} from "../src/loop/boringstack/conventions";
 import type { IProvider, IChatMessage } from "../src/inference";
+import type { IConventionProvider } from "../src/loop/conventions-provider";
+import type { IGate } from "../src/gate/gate-runner";
+import type { IValidateResult } from "../src/validate";
 import { Session } from "../src/loop";
+import { toolsFor } from "../src/loop/turn";
+import { buildPullConventionsTool, TOOL_NAME } from "../src/agent";
+
+/** A gate that always reports one error, so the drive loop hits a failure after the model's edit
+ *  and fires the reactive convention PUSH. */
+const redGate: IGate = {
+  run: async (): Promise<IValidateResult> => ({
+    passed: false,
+    errors: [
+      {
+        key: "a",
+        file: "a.ts",
+        line: 1,
+        rule: "no-casts",
+        message: "no as",
+      },
+    ],
+    output: "",
+  }),
+};
+
+/** A minimal fake convention provider returning fixed guide text (the rest of the seam
+ *  surface is stubbed — these tests only exercise front-loading). */
+const fakeConventions = (guides: string): IConventionProvider => ({
+  buildGuides: () => guides,
+  unseenForErrors: () => [],
+  guide: () => null,
+  topics: () => [],
+});
 
 // WS-A1: front-load the actual convention GUIDES (the compliant patterns), not merely a
 // topic index — so the model writes it right the FIRST time (Bucket 1) instead of pulling
@@ -67,6 +99,7 @@ test("the convention guides are in the system prompt with pullConventions, absen
       files: ["**/*"],
       executionMode: "drive-to-green",
       pullConventions: true,
+      conventions: boringstackConventionProvider,
     });
 
     await on.send("go");
@@ -91,23 +124,380 @@ test("the convention guides are in the system prompt with pullConventions, absen
   }
 });
 
-// The pull_conventions tool enum is a hand-maintained duplicate of TOPICS — this locks it to
-// conventionTopics() so a new topic (or a dropped one, like data-fetching was) can't silently
-// diverge, leaving a guide the model can't actually pull.
-test("PULL_CONVENTIONS_TOOL enum stays in sync with conventionTopics()", () => {
-  const enumTopics =
-    PULL_CONVENTIONS_TOOL.function.parameters.properties.topic.enum;
+test("front-loaded guides come from the INJECTED provider, not a static import", async () => {
+  // Locks the WS1a seam: with pullConventions on but NO provider injected, the guides must be
+  // ABSENT. A revert to session.ts importing buildConventionGuides directly would re-inject the
+  // BoringStack text here and fail — proving the core no longer sources the content itself.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-seam-"));
 
-  expect([...enumTopics].sort()).toEqual([...conventionTopics()].sort());
+  try {
+    const cap = { system: "" };
+    const s = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+    });
+
+    await s.send("go");
+
+    expect(cap.system).not.toContain("HOW THIS STACK WRITES CODE");
+    expect(cap.system).not.toContain("@/lib/api/client");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
-// Explicit, diff-visible guard for the 5 design-system topics this change added: each must be
-// pullable — present in BOTH the runtime guide registry and the hand-maintained pull-tool enum —
-// so validate can't stay green while the tool schema and registry diverge for these topics.
-test("the new design-system topics are in both the guide registry and the pull enum", () => {
-  const enumTopics =
-    PULL_CONVENTIONS_TOOL.function.parameters.properties.topic.enum;
-  const registry = conventionTopics();
+test("the INJECTED provider's guide content reaches the prompt — not a static import", async () => {
+  // The decisive seam test: a FAKE provider returns a sentinel. If session.ts sourced the guides
+  // itself (static import) the sentinel would be ABSENT and the BoringStack text PRESENT. So we
+  // assert the sentinel IS present and the real BoringStack lib is NOT — content is injected.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-inject-"));
+
+  try {
+    const cap = { system: "" };
+    const s = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      conventions: fakeConventions("FAKE_GUIDE_SENTINEL_9Z"),
+    });
+
+    await s.send("go");
+
+    expect(cap.system).toContain("FAKE_GUIDE_SENTINEL_9Z");
+    expect(cap.system).not.toContain("HOW THIS STACK WRITES CODE");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the pullConventions gate still governs — a provider WITHOUT the flag does not front-load", async () => {
+  // Independently verifies the OTHER half: provider present, but pullConventions omitted ⇒ no
+  // front-load. Guards against a regression to gating on provider-presence alone.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-gate-"));
+
+  try {
+    const cap = { system: "" };
+    const s = await Session.create({
+      provider: systemCapturingProvider(cap),
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      conventions: fakeConventions("FAKE_GUIDE_SENTINEL_9Z"),
+    });
+
+    await s.send("go");
+
+    expect(cap.system).not.toContain("FAKE_GUIDE_SENTINEL_9Z");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Session threads cfg.conventions to the reactive PUSH (real drive loop)", async () => {
+  // The Session-wiring proof: a real drive-to-green session — the model makes an edit, the RED gate
+  // fires, and the reactive push must inject the INJECTED provider's guide (a sentinel) into the
+  // next message the model sees. Deleting session.ts's `ctx.tool.conventions = cfg.conventions`
+  // spread makes the push find no provider ⇒ the sentinel never appears ⇒ this fails.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-push-"));
+
+  await Bun.write(join(dir, "a.ts"), "export const x = 1;\n");
+
+  const seen = { sentinel: false };
+  let turn = 0;
+
+  const provider: IProvider = {
+    async complete(messages: IChatMessage[]) {
+      turn += 1;
+
+      if (
+        messages.some(
+          (m) =>
+            typeof m.content === "string" &&
+            m.content.includes("PUSH_THREAD_SENTINEL")
+        )
+      ) {
+        seen.sentinel = true;
+      }
+
+      if (turn === 1) {
+        // An in-scope edit so the drive loop runs the gate (→ RED → reactive push next turn).
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: "1",
+              name: "edit",
+              arguments: {
+                file: "a.ts",
+                oldString: "const x = 1;",
+                newString: "const x = 2;",
+              },
+            },
+          ],
+        };
+      }
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  const fakeConv: IConventionProvider = {
+    buildGuides: () => "",
+    unseenForErrors: (errors, seenSet) => {
+      if (errors.length === 0 || seenSet.has("x")) {
+        return [];
+      }
+
+      seenSet.add("x");
+
+      return ["PUSH_THREAD_SENTINEL"];
+    },
+    guide: () => null,
+    topics: () => [],
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      conventions: fakeConv,
+      gate: redGate,
+    });
+
+    await s.send("build it");
+
+    expect(seen.sentinel).toBe(true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Session threads cfg.conventions into the pull_conventions tool (real dispatch)", async () => {
+  // The PULL half through the real dispatcher: the model calls pull_conventions and gets back the
+  // INJECTED provider's guide (a sentinel), proving cfg.conventions → ctx.tool.conventions →
+  // doPullConventions. Requires pull_conventions to survive the policy layer (classify.ts).
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-pull-"));
+  const captured: { result: string | null } = { result: null };
+  let turn = 0;
+
+  const provider: IProvider = {
+    async complete(messages: IChatMessage[]) {
+      turn += 1;
+
+      if (turn === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            { id: "1", name: "pull_conventions", arguments: { topic: "x" } },
+          ],
+        };
+      }
+
+      const toolMsg = [...messages].reverse().find((m) => m.role === "tool");
+
+      captured.result =
+        typeof toolMsg?.content === "string" ? toolMsg.content : null;
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  const fakeConv: IConventionProvider = {
+    buildGuides: () => "",
+    unseenForErrors: () => [],
+    guide: () => "TOOL_THREAD_SENTINEL",
+    topics: () => ["x"],
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      conventions: fakeConv,
+    });
+
+    await s.send("go");
+
+    expect(captured.result).toContain("TOOL_THREAD_SENTINEL");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Session advertises pull_conventions with the provider's topics as the enum (offer-time threading)", async () => {
+  // Observes the SCHEMA the Session actually advertises to the model: the tools handed to
+  // provider.complete must contain a pull_conventions tool whose enum is the injected provider's
+  // topics(). This is the end-to-end guard for session.ts threading cfg.conventions.topics()
+  // through toolsFor — swapping that for [] would drop the enum and fail this deep-equal.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-schema-"));
+  const captured: { tools: readonly unknown[] | null } = { tools: null };
+
+  const provider: IProvider = {
+    async complete(_messages: IChatMessage[], opts) {
+      captured.tools = opts?.tools ?? [];
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  const topics = ["ADVERTISED_TOPIC_A", "ADVERTISED_TOPIC_B"];
+  const fakeConv: IConventionProvider = {
+    buildGuides: () => "",
+    unseenForErrors: () => [],
+    guide: () => null,
+    topics: () => topics,
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      conventions: fakeConv,
+    });
+
+    await s.send("go");
+
+    // The advertised set carries EXACTLY the tool built from the provider's topics — not the
+    // empty-provider free-form fallback, proving the topics were threaded (not dropped to []).
+    expect(captured.tools).toContainEqual(buildPullConventionsTool(topics));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Session does NOT advertise pull_conventions when the capability is on but no provider is injected", async () => {
+  // A knowledge tool with no knowledge base is incoherent: dispatch would always return "no
+  // convention library" and the schema would falsely promise a topic listing. So the tool is
+  // offered only when a provider is actually present — pullConventions alone is not enough.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-noprov-"));
+  const captured: { names: readonly string[]; system: string } = {
+    names: [],
+    system: "",
+  };
+
+  const provider: IProvider = {
+    async complete(messages: IChatMessage[], opts) {
+      const sys = messages.find((m) => m.role === "system");
+
+      captured.system = typeof sys?.content === "string" ? sys.content : "";
+
+      const tools = opts?.tools ?? [];
+
+      captured.names = tools.map((t) =>
+        t !== null &&
+        typeof t === "object" &&
+        "function" in t &&
+        t.function !== null &&
+        typeof t.function === "object" &&
+        "name" in t.function &&
+        typeof t.function.name === "string"
+          ? t.function.name
+          : ""
+      );
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      pullConventions: true,
+      // no `conventions` provider injected
+    });
+
+    await s.send("go");
+
+    // Non-vacuous: the provider WAS called with a real tool list (base tools present), so the
+    // absence of pull_conventions is a genuine observation, not an empty captured.names.
+    expect(captured.names).toContain(TOOL_NAME.read);
+    expect(captured.names).not.toContain(TOOL_NAME.pullConventions);
+
+    // The flag↔prompt invariant: the system prompt's tool inventory must NOT advertise
+    // pull_conventions either — otherwise the model is told about a tool the tools list omits.
+    expect(captured.system).not.toContain("pull_conventions");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a hallucinated pull_conventions call with pullConventions OFF gets no provider (no withheld-capability leak)", async () => {
+  // The provider is threaded into the tool context ONLY when pullConventions is on (the flag that
+  // offers the tool). With the flag off, a hallucinated pull_conventions call executes (read-only,
+  // policy-allowed) but finds no provider → "not configured", never the injected guides.
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-conv-withheld-"));
+  const captured: { result: string | null } = { result: null };
+  let turn = 0;
+
+  const provider: IProvider = {
+    async complete(messages: IChatMessage[]) {
+      turn += 1;
+
+      if (turn === 1) {
+        return {
+          content: "",
+          toolCalls: [
+            { id: "1", name: "pull_conventions", arguments: { topic: "x" } },
+          ],
+        };
+      }
+
+      const toolMsg = [...messages].reverse().find((m) => m.role === "tool");
+
+      captured.result =
+        typeof toolMsg?.content === "string" ? toolMsg.content : null;
+
+      return { content: "done", toolCalls: [] };
+    },
+  };
+
+  try {
+    const s = await Session.create({
+      provider,
+      cwd: dir,
+      files: ["**/*"],
+      executionMode: "drive-to-green",
+      // pullConventions OFF — but a provider is still on the config.
+      conventions: {
+        buildGuides: () => "",
+        unseenForErrors: () => [],
+        guide: () => "TOOL_THREAD_SENTINEL",
+        topics: () => ["x"],
+      },
+    });
+
+    await s.send("go");
+
+    expect(captured.result ?? "").not.toContain("TOOL_THREAD_SENTINEL");
+    expect(captured.result ?? "").toContain("no convention library");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The pull_conventions tool no longer carries a hardcoded topic enum (topics come from the
+// injected provider at runtime, listed in the front-loaded guides) — so the old enum↔registry
+// duplicate is gone. What still matters: every design-system topic the guides added is present
+// in the runtime registry, so it's actually PULLABLE via the provider.
+test("the design-system topics are in the convention registry (pullable)", () => {
+  const registry = new Set<string>(conventionTopics());
 
   for (const topic of [
     "design-tokens",
@@ -116,12 +506,56 @@ test("the new design-system topics are in both the guide registry and the pull e
     "accessibility",
     "components-ui",
   ]) {
-    // A Set<string> membership test compares the string cleanly against the typed
-    // ConventionTopic[] / enum tuple — no cast, and eslint won't rewrite it into a
-    // type-narrowing `.includes()` (which fails typecheck: string vs the topic union).
-    expect(new Set<string>(registry).has(topic)).toBe(true);
-    expect(new Set<string>(enumTopics).has(topic)).toBe(true);
+    expect(registry.has(topic)).toBe(true);
   }
+});
+
+// The pull_conventions topic enum is now built AT OFFER TIME from whatever topics are passed —
+// it is NOT a literal baked into core. These pin that contract: the enum mirrors the injected
+// topics exactly (any list, not a hardcoded BoringStack one), and an empty provider degrades to
+// a free-form string rather than an empty/illegal enum.
+test("buildPullConventionsTool builds the topic enum from the injected topics (no core literal)", () => {
+  // Arbitrary topics — proves the enum is whatever you inject, so core carries no topic literal.
+  const arbitrary = buildPullConventionsTool(["alpha", "beta"]);
+
+  expect(arbitrary.function.name).toBe(TOOL_NAME.pullConventions);
+  expect(arbitrary.function.parameters.properties.topic.enum).toEqual([
+    "alpha",
+    "beta",
+  ]);
+
+  // With the real BoringStack topics, the enum equals the provider's registry — the only place
+  // the concrete topic list lives is the adapter's provider, not this tool.
+  const real = buildPullConventionsTool(boringstackConventionProvider.topics());
+
+  expect(real.function.parameters.properties.topic.enum).toEqual([
+    ...boringstackConventionProvider.topics(),
+  ]);
+});
+
+test("buildPullConventionsTool omits the enum for an empty provider (free-form fallback)", () => {
+  const tool = buildPullConventionsTool([]);
+  const { topic } = tool.function.parameters.properties;
+
+  expect(topic.type).toBe("string");
+  expect(topic.enum).toBeUndefined();
+});
+
+// The offer path (session → toolsFor) must PUBLISH the provider's topics in the advertised tool
+// schema — the model sees exactly the pullable topics, and only when the capability is offered.
+test("toolsFor publishes the injected topics as the pull_conventions enum when conventions are offered", () => {
+  const offered = toolsFor(false, {}, true, false, false, ["x", "y"]);
+
+  // The advertised tool is byte-equal to building it directly with those topics — the offer
+  // path threaded the injected topics straight into the published schema.
+  expect(offered).toContainEqual(buildPullConventionsTool(["x", "y"]));
+
+  // Capability off ⇒ the tool isn't advertised at all (no topic surface to leak).
+  const withheld = toolsFor(false, {}, false, false, false, ["x", "y"]);
+
+  expect(
+    withheld.find((t) => t.function.name === TOOL_NAME.pullConventions)
+  ).toBeUndefined();
 });
 
 // The STATE guide must NOT tell the model to use raw fetch (it contradicts DATA-FETCHING's

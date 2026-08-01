@@ -1,106 +1,23 @@
 import type { IProvider } from "../../inference";
 import { extractJson } from "../../lib/json";
 import { isProductPlan } from "./plan-store";
-import type { IProductPlan, IPlanConstraints } from "./plan-types";
+import type { IProductPlan, IPlanConstraints, IPlanSchema } from "./plan-types";
 
 /**
- * A complete, valid example plan shown to the model to pin the exact output
- * shape. Typed as IProductPlan (via `satisfies`) so the compiler guarantees the
- * example we teach the model is itself a legal plan; a regression test asserts
- * `isProductPlan(PLANNER_EXAMPLE)`. Serialized into PLANNER_SYSTEM below.
- */
-export const PLANNER_EXAMPLE = {
-  product:
-    "A personal task tracker for a single user to capture and complete to-dos.",
-  slices: [
-    {
-      entity: {
-        id: "Task",
-        desc: "A single to-do item owned by a user.",
-        fields: [
-          { name: "title", type: "string" },
-          { name: "done", type: "boolean" },
-          { name: "dueDate", type: "Date", optional: true },
-        ],
-        relationships: ["belongs to a User"],
-        rules: ["title must not be empty", "a user only sees their own tasks"],
-      },
-      ui: {
-        screens: ["list", "detail", "form"],
-        action: "create, complete, and delete tasks",
-        shows: ["title", "done", "dueDate"],
-        nav: "Tasks",
-        layout: "app-sidebar",
-        home: true,
-      },
-      verification: {
-        mustRemainTrue: ["only the owner can see or change a task"],
-        mustNotHappen: ["a user must not see another user's tasks"],
-        acceptanceCheck: "bun test",
-      },
-    },
-  ],
-} satisfies IProductPlan;
-
-/**
- * System prompt for the product architect role: turn a product description
- * + optional mockups into a structured product plan (domain model + slices + UI
- * + verification). The schema is pinned with EXACT key names and a flat screen
- * enum, plus the worked PLANNER_EXAMPLE, because a loosely-described shape lets
- * a model invent its own keys (primaryAction/navigationLabel/screen objects)
- * that the strict parser then rejects.
- */
-export const PLANNER_SYSTEM = `You are a product architect. From the product description and any mockups, propose a domain model as feature slices (one per entity). Respond with ONLY a JSON object — no prose, no markdown fences — matching this schema EXACTLY. Use these exact key names and value shapes; do not add, rename, or nest differently.
-
-Schema:
-{
-  "product": "<one short paragraph: what the product is for>",
-  "slices": [
-    {
-      "entity": {
-        "id": "<PascalCase noun, e.g. Bookmark>",
-        "desc": "<one line>",
-        "fields": [ { "name": "<camelCase>", "type": "<string|number|boolean|Date|string[]>", "optional": <true if omittable, else omit this key> } ],
-        "relationships": [ "<plain-English sentence, e.g. 'belongs to a User'>" ],
-        "rules": [ "<plain-English invariant, e.g. 'title must not be empty'>" ]
-      },
-      "ui": {
-        "screens": [ <any of "list", "detail", "form", "dashboard" — these EXACT lowercase words only, nothing else> ],
-        "action": "<the primary thing a user does, one line>",
-        "shows": [ "<field or thing shown on screen>" ],
-        "nav": "<navigation label, e.g. Bookmarks>",
-        "layout": "<OPTIONAL: app-sidebar (default) | settings — where this feature lives in the app shell. These are the only accepted values right now; other archetypes are roadmap-only and rejected>",
-        "home": <OPTIONAL boolean: true on the ONE feature that is the app's main landing page after login (omit on the rest)>
-      },
-      "verification": {
-        "mustRemainTrue": [ "<invariant that must always hold>" ],
-        "mustNotHappen": [ "<at least one thing that must never happen>" ],
-        "acceptanceCheck": "<a shell command that verifies the slice, e.g. bun test>"
-      }
-    }
-  ]
-}
-
-Rules for the JSON:
-- "screens" is a flat array of the literal words list/detail/form/dashboard ONLY — never objects, never other words.
-- "relationships" and "rules" are arrays of plain STRINGS, never objects.
-- "fields" uses "optional" (boolean), never "required".
-- Use "desc" (not "description"), "action" (not "primaryAction"), "nav" (not "navigationLabel"), "acceptanceCheck" (not "acceptanceCheckCommand").
-- "mustNotHappen" must have at least one entry.
-- LAYOUT: give the app a real shape. Mark the ONE primary feature the user should land in with "home": true and "layout": "app-sidebar" (the app opens there, not on a generic dashboard). Put configuration/account features (profile, preferences, billing) at "layout": "settings" so they're grouped as a demoted settings area, not the main app. Most product features are "app-sidebar" (the default — you may omit "layout"). Use "home"/"layout" only from the allowed set above; never invent other values.
-
-Complete example (follow this shape precisely):
-${JSON.stringify(PLANNER_EXAMPLE, null, 2)}`;
-
-/**
- * Parse the planner's raw JSON reply into an IProductPlan, or null on failure.
+ * Parse the planner's raw JSON reply into an IProductPlan, or null on failure. Generic over the
+ * UI-intent type: the slice `ui` and any cross-slice rule are validated by the injected schema
+ * (`validateUi` / `extraCheck`), so no web-specific plan shape lives in this generic planner.
  * Pure — split out so it can be unit-tested without a provider.
  */
-export function parsePlanJson(raw: string): IProductPlan | null {
+export function parsePlanJson<TUi>(
+  raw: string,
+  validateUi: (v: unknown) => v is TUi,
+  extraCheck?: (plan: IProductPlan<TUi>) => boolean
+): IProductPlan<TUi> | null {
   try {
     const json: unknown = JSON.parse(extractJson(raw));
 
-    return isProductPlan(json) ? json : null;
+    return isProductPlan(json, validateUi, extraCheck) ? json : null;
   } catch {
     return null;
   }
@@ -111,10 +28,10 @@ export function parsePlanJson(raw: string): IProductPlan | null {
  *  return a plan with ZERO slices — an all-reserved response is mis-scoped, and the
  *  caller turns an empty result into null (a FINITE planning failure), strictly
  *  better than re-emitting the reserved slices into an infinite build loop. */
-export function stripReservedSlices(
-  plan: IProductPlan,
+export function stripReservedSlices<TUi>(
+  plan: IProductPlan<TUi>,
   reserved: ReadonlySet<string>
-): IProductPlan {
+): IProductPlan<TUi> {
   return {
     ...plan,
     slices: plan.slices.filter(
@@ -135,21 +52,27 @@ export function stripReservedSlices(
  * (all-reserved, mis-scoped) the result is null — a finite planning failure, never
  * a plan that re-emits the reserved-slice trap.
  */
-export async function proposePlan(
+export async function proposePlan<TUi>(
   deps: { planner: IProvider },
   input: { description: string; mockups?: readonly string[] },
+  schema: IPlanSchema<TUi>,
   constraints: IPlanConstraints = {}
-): Promise<IProductPlan | null> {
+): Promise<IProductPlan<TUi> | null> {
   const system =
     constraints.guidance === undefined
-      ? PLANNER_SYSTEM
-      : `${PLANNER_SYSTEM}\n\n${constraints.guidance}`;
+      ? schema.system
+      : `${schema.system}\n\n${constraints.guidance}`;
   const userMessage =
     input.mockups !== undefined && input.mockups.length > 0
       ? `Product description: ${input.description}\n\nMockup refs: ${input.mockups.join(", ")}`
       : `Product description: ${input.description}`;
 
-  const usable = (parsed: IProductPlan | null): IProductPlan | null => {
+  const parse = (raw: string): IProductPlan<TUi> | null =>
+    parsePlanJson(raw, schema.validateUi, schema.extraCheck);
+
+  const usable = (
+    parsed: IProductPlan<TUi> | null
+  ): IProductPlan<TUi> | null => {
     if (parsed === null) {
       return null;
     }
@@ -172,7 +95,18 @@ export async function proposePlan(
 
     const stripped = stripReservedSlices(parsed, reservedEntities);
 
-    return stripped.slices.length > 0 ? stripped : null;
+    if (stripped.slices.length === 0) {
+      return null;
+    }
+
+    // Re-apply the schema's cross-slice rule to the STRIPPED plan: stripping can invalidate an
+    // invariant that held on the full plan (e.g. removing the slice that satisfied it), so a
+    // transformed plan is never returned unchecked.
+    if (schema.extraCheck !== undefined && !schema.extraCheck(stripped)) {
+      return null;
+    }
+
+    return stripped;
   };
 
   // First attempt: temperature 0 (deterministic)
@@ -187,7 +121,7 @@ export async function proposePlan(
   // A first attempt that fails to parse OR strips to zero usable slices both fall
   // through to the higher-temperature retry — a fresh attempt may yield real domain
   // slices. Only when the retry also yields nothing usable is the result null.
-  const first = usable(parsePlanJson(res1.content));
+  const first = usable(parse(res1.content));
 
   if (first !== null) {
     return first;
@@ -202,5 +136,5 @@ export async function proposePlan(
     { temperature: 0.7 }
   );
 
-  return usable(parsePlanJson(res2.content));
+  return usable(parse(res2.content));
 }

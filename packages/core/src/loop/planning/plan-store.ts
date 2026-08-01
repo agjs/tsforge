@@ -5,16 +5,15 @@ import type {
   IProductPlan,
   ISlice,
   IEntitySpec,
-  IUiIntent,
+  IPlanSchema,
   IVerificationContract,
 } from "./plan-types";
-import { IMPLEMENTED_LAYOUT_ARCHETYPES } from "./plan-types";
 
 /**
  * Serialize a plan to YAML frontmatter + fenced JSON format.
  */
-export function serializePlan(
-  plan: IProductPlan,
+export function serializePlan<TUi>(
+  plan: IProductPlan<TUi>,
   status: "draft" | "approved"
 ): string {
   const frontmatter = `---
@@ -107,65 +106,6 @@ function isEntitySpec(value: unknown): value is IEntitySpec {
 }
 
 /**
- * Guard: validate a UI intent shape.
- */
-function isUiIntent(value: unknown): value is IUiIntent {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  if (!isArray(value.screens)) {
-    return false;
-  }
-
-  const validScreens = ["list", "detail", "form", "dashboard"];
-
-  if (
-    !value.screens.every(
-      (s) => typeof s === "string" && validScreens.includes(s)
-    )
-  ) {
-    return false;
-  }
-
-  if (typeof value.action !== "string" || value.action === "") {
-    return false;
-  }
-
-  if (!isArray(value.shows)) {
-    return false;
-  }
-
-  if (!value.shows.every((x) => typeof x === "string")) {
-    return false;
-  }
-
-  if (typeof value.nav !== "string" || value.nav === "") {
-    return false;
-  }
-
-  // Optional layout archetype: if present it must be one the harness IMPLEMENTS. Validation gates
-  // on IMPLEMENTED_LAYOUT_ARCHETYPES (a subset of the LayoutArchetype vocabulary) — a not-yet-built
-  // archetype (e.g. `public`, which implies unauthenticated but would be wrapped in ProtectedRoute)
-  // is REJECTED rather than silently mis-built.
-  const validLayouts: readonly string[] = IMPLEMENTED_LAYOUT_ARCHETYPES;
-
-  if (
-    value.layout !== undefined &&
-    !(typeof value.layout === "string" && validLayouts.includes(value.layout))
-  ) {
-    return false;
-  }
-
-  // Optional home flag: post-login landing marker.
-  if (value.home !== undefined && typeof value.home !== "boolean") {
-    return false;
-  }
-
-  return true;
-}
-
-/**
  * Guard: validate a verification contract shape.
  */
 function isVerificationContract(
@@ -206,9 +146,13 @@ function isVerificationContract(
 }
 
 /**
- * Guard: validate a slice shape.
+ * Guard: validate a slice shape. Generic over the UI-intent type — the caller injects `validateUi`
+ * (the stack adapter's `IPlanSchema.validateUi`), so core never names a concrete web UI shape.
  */
-function isSlice(value: unknown): value is ISlice {
+function isSlice<TUi>(
+  value: unknown,
+  validateUi: (v: unknown) => v is TUi
+): value is ISlice<TUi> {
   if (!isRecord(value)) {
     return false;
   }
@@ -217,7 +161,7 @@ function isSlice(value: unknown): value is ISlice {
     return false;
   }
 
-  if (!isUiIntent(value.ui)) {
+  if (!validateUi(value.ui)) {
     return false;
   }
 
@@ -229,9 +173,16 @@ function isSlice(value: unknown): value is ISlice {
 }
 
 /**
- * Guard: validate a product plan shape.
+ * Guard: validate a product plan shape. Core validates the SPINE (product + each slice's entity +
+ * verification); the slice `ui` is validated by the injected `validateUi`, and any cross-slice rule
+ * (e.g. BoringStack's "≤1 home") by the optional `extraCheck` — both supplied by the stack's
+ * `IPlanSchema`, so no web-specific rule lives in core.
  */
-export function isProductPlan(value: unknown): value is IProductPlan {
+export function isProductPlan<TUi>(
+  value: unknown,
+  validateUi: (v: unknown) => v is TUi,
+  extraCheck?: (plan: IProductPlan<TUi>) => boolean
+): value is IProductPlan<TUi> {
   if (!isRecord(value)) {
     return false;
   }
@@ -244,18 +195,20 @@ export function isProductPlan(value: unknown): value is IProductPlan {
     return false;
   }
 
-  if (!value.slices.every(isSlice)) {
-    return false;
+  // Validate every slice ONCE, collecting the narrowed slices so the cross-slice `extraCheck` gets
+  // a typed IProductPlan<TUi> without a second validation pass or a cast. A single failure rejects.
+  const slices: ISlice<TUi>[] = [];
+
+  for (const s of value.slices) {
+    if (!isSlice(s, validateUi)) {
+      return false;
+    }
+
+    slices.push(s);
   }
 
-  // At most ONE slice may be the app home (the post-login landing). isRecord guards keep this
-  // cast-free even though `value.slices` is still `unknown[]` at this point.
-  const homeCount = value.slices.filter(
-    (s) => isRecord(s) && isRecord(s.ui) && s.ui.home === true
-  ).length;
-
-  if (homeCount > 1) {
-    return false;
+  if (extraCheck !== undefined) {
+    return extraCheck({ product: value.product, slices });
   }
 
   return true;
@@ -316,9 +269,10 @@ function extractJsonBlock(text: string, startIndex: number): string | null {
  * Parse a serialized plan. Returns null if the artifact is malformed.
  * Reject-by-default: any shape mismatch returns null, never a partial plan.
  */
-export function parsePlan(
-  text: string
-): { plan: IProductPlan; status: "draft" | "approved" } | null {
+export function parsePlan<TUi>(
+  text: string,
+  schema: IPlanSchema<TUi>
+): { plan: IProductPlan<TUi>; status: "draft" | "approved" } | null {
   const fmResult = extractFrontmatter(text);
 
   if (!fmResult) {
@@ -343,7 +297,7 @@ export function parsePlan(
     return null;
   }
 
-  if (!isProductPlan(plan)) {
+  if (!isProductPlan(plan, schema.validateUi, schema.extraCheck)) {
     return null;
   }
 
@@ -356,9 +310,9 @@ export function parsePlan(
 /**
  * Write a plan to ${cwd}/.specs/next.md, creating .specs/ if needed.
  */
-export async function writePlan(
+export async function writePlan<TUi>(
   cwd: string,
-  plan: IProductPlan,
+  plan: IProductPlan<TUi>,
   status: "draft" | "approved"
 ): Promise<void> {
   const specsDir = join(cwd, ".specs");
@@ -372,16 +326,18 @@ export async function writePlan(
 
 /**
  * Read a plan from ${cwd}/.specs/next.md. Returns null if the file doesn't exist or is malformed.
+ * `schema` (the stack's `IPlanSchema`) validates the slice `ui` at the parse boundary.
  */
-export async function readPlan(
-  cwd: string
-): Promise<{ plan: IProductPlan; status: "draft" | "approved" } | null> {
+export async function readPlan<TUi>(
+  cwd: string,
+  schema: IPlanSchema<TUi>
+): Promise<{ plan: IProductPlan<TUi>; status: "draft" | "approved" } | null> {
   const filePath = join(cwd, ".specs", "next.md");
 
   try {
     const content = await Bun.file(filePath).text();
 
-    return parsePlan(content);
+    return parsePlan(content, schema);
   } catch {
     return null;
   }
@@ -391,10 +347,11 @@ export async function readPlan(
  * Load an approved plan from ${cwd}/.specs/next.md.
  * Returns the plan only when status === "approved", else null.
  */
-export async function loadApprovedPlan(
-  cwd: string
-): Promise<IProductPlan | null> {
-  const result = await readPlan(cwd);
+export async function loadApprovedPlan<TUi>(
+  cwd: string,
+  schema: IPlanSchema<TUi>
+): Promise<IProductPlan<TUi> | null> {
+  const result = await readPlan(cwd, schema);
 
   if (result === null) {
     return null;

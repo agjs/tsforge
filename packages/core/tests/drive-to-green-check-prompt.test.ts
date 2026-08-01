@@ -6,6 +6,7 @@ import { buildDriveToGreenSystem } from "../src/loop/prompt/prompt";
 import { DEFAULT_CONVENTIONS } from "../src/infer-rules/conventions";
 import type { IProvider, IChatMessage } from "../src/inference";
 import { Session } from "../src/loop";
+import { boringstackConventionProvider } from "../src/loop/boringstack/conventions";
 
 // WS-A4: the drive-to-green system prompt must not CONTRADICT the check tool. When
 // check is offered (the boringstack build), the execution guidance promotes it; when
@@ -188,6 +189,7 @@ test("a resumed pullConventions session (no offerCheck) refreshes to include the
       files: ["**/*"],
       executionMode: "drive-to-green",
       pullConventions: true,
+      conventions: boringstackConventionProvider,
       history: staleHistory,
     });
 

@@ -43,10 +43,12 @@ import {
   type ILoopEvent,
 } from "../loop";
 import { runPlanning } from "../loop/planning/run-planning";
+import type { IPlanConstraints } from "../loop/planning/plan-types";
 import {
-  isBoringstackProject,
-  boringstackPlanConstraints,
-} from "../loop/planning/boringstack-planning";
+  resolveStackAdapter,
+  type IStackAdapter,
+} from "../loop/planning/stack-adapter";
+import { boringstackStackAdapter } from "../loop/boringstack/planning";
 import { loadApprovedPlan } from "../loop/planning/plan-store";
 import { loadRecipes } from "../config/recipes";
 import { loadAgentSpecs } from "../config/agent-specs";
@@ -158,17 +160,89 @@ export function parseReviewResponse(
   return { action: "revise", note: response };
 }
 
-/** The greenfield BoringStack planning flow (description → proposed plan → human
+/** The stack adapters the CLI (composition root) registers. The generic planner/CLI
+ *  flow resolves the matching one per project; adding a stack (Phaser next) is a one-line
+ *  registration here, not a change to the planning logic. */
+const STACK_ADAPTERS: readonly IStackAdapter[] = [boringstackStackAdapter];
+
+/**
+ * The greenfield-planning DECISION: which registered stack adapter (if any) should
+ * intercept `dir` for planning. Returns the adapter to plan with — a stack detected the
+ * project AND it has no approved plan yet — or null to proceed normally (no stack detected,
+ * or already planned). Detection and the planner constraints then come from this SAME
+ * returned adapter, so there is no gap. Pure + injectable (`hasApprovedPlan`) so the
+ * interception rule is unit-testable without driving the REPL.
+ */
+export async function resolveGreenfieldStack(
+  dir: string,
+  adapters: readonly IStackAdapter[],
+  hasApprovedPlan: (dir: string, stack: IStackAdapter) => Promise<boolean>
+): Promise<IStackAdapter | null> {
+  const stack = await resolveStackAdapter(dir, adapters);
+
+  if (stack === null) {
+    return null;
+  }
+
+  // hasApprovedPlan receives the RESOLVED adapter, so the approved-plan check parses through the
+  // SAME stack's schema that will drive planning — no hardcoded stack.
+  return (await hasApprovedPlan(dir, stack)) ? null : stack;
+}
+
+/**
+ * Build the planner constraints for the greenfield flow from the RESOLVED stack adapter,
+ * wiring its drop reporter to `echo` so every stripped slice is surfaced to the user. Kept
+ * separate + exported so the "resolved adapter supplies the constraints, and drops reach
+ * the echo sink" wiring is testable without running the whole planner.
+ */
+export function greenfieldConstraints(
+  stack: IStackAdapter,
+  echo: (s: string) => void
+): IPlanConstraints {
+  return stack.planConstraints((dropped) => {
+    echo(
+      `▸ dropped slice(s) the ${stack.id} starter already provides: ${dropped.join(", ")}\n`
+    );
+  });
+}
+
+/**
+ * Route ONE input line: if a registered stack adapter claims the project (fresh + unplanned)
+ * hand the RESOLVED adapter to `onGreenfield`; otherwise fall through to `onSend` (the normal
+ * agent turn). EXACTLY ONE of the two runs. This encapsulates the interception BRANCH so its
+ * behavior — the resolved stack controls the planning path, and an unmatched/already-planned
+ * project falls through to the normal send — is unit-tested, not merely source-probed.
+ */
+export async function greenfieldOrSend(
+  dir: string,
+  adapters: readonly IStackAdapter[],
+  hasApprovedPlan: (dir: string, stack: IStackAdapter) => Promise<boolean>,
+  onGreenfield: (stack: IStackAdapter) => Promise<void>,
+  onSend: () => Promise<void>
+): Promise<void> {
+  const stack = await resolveGreenfieldStack(dir, adapters, hasApprovedPlan);
+
+  if (stack !== null) {
+    await onGreenfield(stack);
+
+    return;
+  }
+
+  await onSend();
+}
+
+/** The greenfield planning flow (description → proposed plan → human
  *  approve/revise/cancel → approved plan on disk). Extracted from the line handler
- *  to keep its cognitive complexity down; the stack detection + planner constraints
- *  live in the tested boringstack-planning module, and this only glues them to the
- *  interactive prompt. */
+ *  to keep its cognitive complexity down; the resolved stack adapter supplies the
+ *  planner constraints (guidance + reserved-entity stripping) and this only glues them
+ *  to the interactive prompt — it names no concrete stack. */
 async function runGreenfieldPlanning(
   dir: string,
   description: string,
   echo: (s: string) => void,
   rl: ReturnType<typeof createInterface> | null,
-  activeModelEntry: IModelEntry
+  activeModelEntry: IModelEntry,
+  stack: IStackAdapter
 ): Promise<void> {
   echo("▸ planning your product first...\n");
 
@@ -179,13 +253,12 @@ async function runGreenfieldPlanning(
 
   const result = await runPlanning(dir, {
     planner: plannerProvider,
-    // We only reach here when looksLikeBoringstack is true, so the BoringStack
+    // The plan schema comes from the RESOLVED adapter — a project is planned + validated by the
+    // stack that detected it, not a hardcoded one.
+    schema: stack.planSchema,
+    // We only reach here when this stack adapter detected the project, so its
     // reserved-slice rule always applies (no gap) and every drop is surfaced.
-    constraints: boringstackPlanConstraints((dropped) => {
-      echo(
-        `▸ dropped auth slice(s) BoringStack already provides: ${dropped.join(", ")}\n`
-      );
-    }),
+    constraints: greenfieldConstraints(stack, echo),
     describe: async () => {
       await Promise.resolve();
 
@@ -875,23 +948,27 @@ export async function repl(args: ICliArgs): Promise<number> {
       return;
     }
 
-    // GREENFIELD BORINGSTACK INTERCEPTION: a fresh boringstack project with no
-    // approved plan routes into planning first. Detection + planner constraints
-    // share ONE structural signal (looksLikeBoringstack) so there is no gap where a
-    // project is planned as boringstack but not given the reserved-slice rule.
-    if (
-      (await isBoringstackProject(args.dir)) &&
-      (await loadApprovedPlan(args.dir)) === null
-    ) {
-      await runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry);
-
-      return;
-    }
-
-    // No up-front classifier: the AGENT decides. It calls `scaffold_web` itself
-    // when the request is a from-scratch web app, and just answers/edits otherwise
-    // (so "render a table in the CLI" is no longer mis-scaffolded as a Vite app).
-    await runSend(line);
+    // GREENFIELD INTERCEPTION vs NORMAL SEND. A fresh project a stack adapter claims, with
+    // no approved plan, routes into planning first (detection AND the planner constraints
+    // from the SAME resolved adapter — no gap). Otherwise the AGENT decides: it calls
+    // `scaffold_web` itself for a from-scratch web app, and just answers/edits otherwise (so
+    // "render a table in the CLI" is no longer mis-scaffolded as a Vite app). The branch
+    // itself is greenfieldOrSend (unit-tested); this only supplies the two continuations.
+    await greenfieldOrSend(
+      args.dir,
+      STACK_ADAPTERS,
+      async (d, s) => (await loadApprovedPlan(d, s.planSchema)) !== null,
+      (stack) =>
+        runGreenfieldPlanning(
+          args.dir,
+          line,
+          echo,
+          rl,
+          activeModelEntry,
+          stack
+        ),
+      () => runSend(line)
+    );
   };
 
   // Placeholder declarations; defined after runLine / editorControl are available.

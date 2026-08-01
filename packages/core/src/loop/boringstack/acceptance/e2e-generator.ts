@@ -3,8 +3,8 @@ import type {
   IEntityAcceptance,
   IAcceptanceSpec,
   IParentRef,
-} from "../../acceptance/acceptance.types";
-import { testIdsFor } from "../../acceptance/acceptance-spec";
+} from "./acceptance.types";
+import { testIdsFor } from "./acceptance-spec";
 
 /**
  * Generate a canonical test title for a given acceptance step.

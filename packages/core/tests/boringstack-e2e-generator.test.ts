@@ -5,13 +5,17 @@ import {
   generateChainSpec,
   chainSpecPath,
 } from "../src/loop/boringstack/acceptance/e2e-generator";
-import { planToAcceptanceSpec } from "../src/loop/acceptance/acceptance-spec";
+import { planToAcceptanceSpec } from "../src/loop/boringstack/acceptance/acceptance-spec";
 import type {
   IEntityAcceptance,
   IAcceptanceSpec,
   IAcceptField,
-} from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance.types";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
+import {
+  boringstackUiFields,
+  type IUiIntent,
+} from "../src/loop/boringstack/plan-extension";
 
 const company: IEntityAcceptance = {
   id: "Company",
@@ -802,7 +806,7 @@ describe("E2E spec generator - Relationships", () => {
 
 describe("FIX 11: planToAcceptanceSpec FK dedup", () => {
   test("a plan already declaring the FK field yields exactly one occurrence", () => {
-    const planWithDeclaredFk: IProductPlan = {
+    const planWithDeclaredFk: IProductPlan<IUiIntent> = {
       product: "CRM",
       slices: [
         {
@@ -852,7 +856,7 @@ describe("FIX 11: planToAcceptanceSpec FK dedup", () => {
       ],
     };
 
-    const spec = planToAcceptanceSpec(planWithDeclaredFk);
+    const spec = planToAcceptanceSpec(planWithDeclaredFk, boringstackUiFields);
     const contact = spec.entities[1];
 
     if (!contact) {

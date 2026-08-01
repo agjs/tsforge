@@ -11,6 +11,8 @@
  * wall. Each guide maps 1:1 to the rules that reject its violation.
  */
 
+import type { IConventionProvider } from "../conventions-provider";
+
 /** The convention topics the model can be handed or pull. Single source of truth:
  *  the const tuple drives both the type and the runtime list (no `as` cast). */
 const TOPICS = [
@@ -457,3 +459,18 @@ export function unseenGuidesForErrors(
 
   return out;
 }
+
+/**
+ * The BoringStack convention library packaged as the generic `IConventionProvider`
+ * seam. The core loop (system-prompt front-load, reactive push, `pull_conventions`
+ * tool) depends only on the INTERFACE — injected via `ISessionConfig.conventions` /
+ * `ILoopCtx.tool.conventions`; this concrete provider is the BoringStack CONTENT,
+ * supplied by the boringstack adapter (`build-config.ts`). This module lives under
+ * `loop/boringstack/`, so no core file outside the adapter imports it.
+ */
+export const boringstackConventionProvider: IConventionProvider = {
+  buildGuides: buildConventionGuides,
+  unseenForErrors: unseenGuidesForErrors,
+  guide: (topic) => (isConventionTopic(topic) ? conventionGuide(topic) : null),
+  topics: conventionTopics,
+};

@@ -6,8 +6,8 @@ import {
   isConventionTopic,
   topicForRule,
   unseenGuidesForErrors,
-} from "../src/loop/conventions";
-import { PULL_CONVENTIONS_TOOL } from "../src/agent/agent.constants";
+  boringstackConventionProvider,
+} from "../src/loop/boringstack/conventions";
 import { injectFeedback, type ILoopCtx } from "../src/loop/turn";
 import type { ILoopState, ILoopEvent } from "../src/loop";
 import type { IErrorItem } from "../src/validate";
@@ -94,17 +94,13 @@ describe("convention registry", () => {
     expect(g).toContain("BYPASSES validation");
   });
 
-  test("i18n is a first-class pullable topic — registry AND pull_conventions enum agree (no drift)", () => {
-    // The three hand-maintained surfaces for a topic must all carry `i18n`, or the model
-    // hits a live guide it can't `pull_conventions` for (enum reject) — the exact drift the
-    // reviewers flagged. convention-index.test.ts locks the full enum↔topics parity; this pins
-    // the NEW topic explicitly in its own change so the guard is visible beside the addition.
+  test("i18n is a first-class pullable topic — present in the runtime registry", () => {
+    // `i18n` must be in the topic registry, or the model hits a live guide it can't
+    // `pull_conventions` for. The pull tool no longer carries a hardcoded enum (topics come
+    // from the injected provider at runtime), so registry membership is the single surface
+    // that makes a topic pullable — this pins the NEW topic beside its addition.
     expect(conventionTopics()).toContain("i18n");
     expect(isConventionTopic("i18n")).toBe(true);
-    const enumTopics =
-      PULL_CONVENTIONS_TOOL.function.parameters.properties.topic.enum;
-
-    expect(enumTopics).toContain("i18n");
   });
 
   test("forms guide steers away from the invented FormEvent + deprecated z.string().email() (live-build residuals)", () => {
@@ -306,7 +302,9 @@ describe("convention PUSH delivery (the guide actually reaches the model + is ob
         events.push(e);
       },
       messages: [],
-      tool: {},
+      // The reactive PUSH reads its guides from the injected provider (ctx.tool.conventions) —
+      // the adapter sets this on the live build; the test supplies the same BoringStack provider.
+      tool: { conventions: boringstackConventionProvider },
       gate: {
         parse: undefined,
         runner: commandGate(
@@ -400,5 +398,21 @@ describe("convention PUSH delivery (the guide actually reaches the model + is ob
     expect(
       events.some((e) => e.kind === "tool" && e.message.includes("📐 pushed"))
     ).toBe(false);
+  });
+
+  test("conventionsEnabled ON but NO provider injected ⇒ no push (WS1b provider gate)", async () => {
+    // The new push guard is `conventionsEnabled && ctx.tool.conventions !== undefined`. With the
+    // flag on but the provider absent (no adapter injected it), the push must be silent — proving
+    // the guides come from the injected provider, not a lingering static import.
+    const events: ILoopEvent[] = [];
+    const ctx = makeCtx(events);
+
+    ctx.tool = {};
+
+    await injectFeedback(ctx, { ...freshState() }, [asCastError], [], []);
+
+    expect(ctx.messages.at(-1)?.content ?? "").not.toContain(
+      "HOW TO WRITE THIS RIGHT"
+    );
   });
 });

@@ -1,5 +1,5 @@
-import type { IEntityAcceptance } from "../../acceptance/acceptance.types";
-import { testIdsFor } from "../../acceptance/acceptance-spec";
+import type { IEntityAcceptance } from "./acceptance.types";
+import { testIdsFor } from "./acceptance-spec";
 
 /**
  * Compute the COMPLETE set of required testids for an entity.

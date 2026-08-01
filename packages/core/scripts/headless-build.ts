@@ -22,6 +22,7 @@ import { detectContextWindow } from "../src/cli/model-setup";
 import { renderEvent } from "../src/render";
 import { logsDir } from "../src/session-store";
 import { loadApprovedPlan, parsePlan } from "../src/loop/planning/plan-store";
+import { boringstackPlanSchema } from "../src/loop/boringstack/plan-extension";
 import { readHostPorts, hostPortOr } from "../src/scaffold";
 import {
   preflightOrExit,
@@ -45,7 +46,7 @@ async function installPlanFile(
 ): Promise<string | null> {
   try {
     const planContent = await Bun.file(planPath).text();
-    const parsed = parsePlan(planContent);
+    const parsed = parsePlan(planContent, boringstackPlanSchema);
 
     if (parsed === null) {
       return `plan file is malformed or missing required fields: ${planPath}`;
@@ -349,7 +350,7 @@ async function main(): Promise<void> {
   // For a greenfield boringstack clone (has apps/api directory), enforce that an
   // approved plan is either already in place or supplied via --plan.
   if (existsSync(join(dir, "apps", "api"))) {
-    const approvedPlan = await loadApprovedPlan(dir);
+    const approvedPlan = await loadApprovedPlan(dir, boringstackPlanSchema);
 
     if (approvedPlan === null && args.planPath === undefined) {
       process.stderr.write(

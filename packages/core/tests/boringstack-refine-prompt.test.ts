@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
 import type { ISlice } from "../src/loop/planning/plan-types";
+import { type IUiIntent } from "../src/loop/boringstack/plan-extension";
 import { refinePrompt } from "../src/loop/boringstack/refine-prompt";
 
 describe("refinePrompt", () => {
@@ -377,7 +378,7 @@ describe("refinePrompt", () => {
       passes: false,
       attempts: 0,
     };
-    const slice: ISlice = {
+    const slice: ISlice<IUiIntent> = {
       entity: {
         id: "Bookmark",
         desc: "a link",
@@ -418,7 +419,7 @@ describe("refinePrompt", () => {
       passes: false,
       attempts: 0,
     };
-    const slice: ISlice = {
+    const slice: ISlice<IUiIntent> = {
       entity: {
         id: "Task",
         desc: "a task",
@@ -461,7 +462,7 @@ describe("refinePrompt", () => {
       passes: false,
       attempts: 0,
     };
-    const slice: ISlice = {
+    const slice: ISlice<IUiIntent> = {
       entity: {
         id: "Bookmark",
         desc: "a link",
@@ -499,7 +500,7 @@ describe("refinePrompt", () => {
       passes: false,
       attempts: 0,
     };
-    const slice: ISlice = {
+    const slice: ISlice<IUiIntent> = {
       entity: {
         id: "NotificationPrefs",
         desc: "prefs",
