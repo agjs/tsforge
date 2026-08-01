@@ -1,9 +1,11 @@
-import { join } from "node:path";
+import { join, extname, resolve, relative, dirname, sep } from "node:path";
+import { realpath, stat } from "node:fs/promises";
 import { ESLint } from "eslint";
 import { runArgvCommand } from "../lib/fs/process";
 import { conventionOverrideRules } from "../infer-rules/eslint-conventions";
 import type { IConventions } from "../infer-rules/conventions.types";
 import { trace } from "../lib/trace";
+import { isWin32 } from "../lib/platform";
 import { ESLINT_BIN, PRETTIER_BIN, STRICT_CONFIG } from "./tool-paths";
 import type { FileLinter } from "./types";
 
@@ -131,39 +133,233 @@ export function makeFileLinter(
   };
 }
 
+/** Extensions the strict ESLint config actually has rules for. It must mirror the
+ *  `TS_FILES` globs in `strict.eslint.config.mjs` (the config `formatFiles` runs via
+ *  `STRICT_CONFIG`) — the flat config only applies rules to TypeScript
+ *  (`.ts/.tsx/.mts/.cts`). Handing eslint any other path (a `.js`, or a `.json`/`.md`/`.css`)
+ *  just makes it emit "File ignored" and burn the timeout on a file it won't lint — so the
+ *  scoped fix filters eslint's targets to these, and lets prettier (with `--ignore-unknown`)
+ *  format everything else. */
+const ESLINT_EXTS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+
+/** Canonical absolute path with symlinks resolved, or null if it does not exist
+ *  (or can't be resolved). Used both to prove a target still exists and to make the
+ *  containment check symlink-safe. */
+async function realpathOrNull(p: string): Promise<string | null> {
+  try {
+    return await realpath(p);
+  } catch {
+    return null;
+  }
+}
+
+/** True if `p` is a regular file. Directories must never reach the formatters:
+ *  `prettier --write <dir>` expands to the whole subtree, reintroducing the
+ *  whole-repo rewrite this module exists to prevent. */
+async function isRegularFile(p: string): Promise<boolean> {
+  try {
+    return (await stat(p)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** From cwd-anchored candidates, keep the ones that (a) exist, (b) are a regular FILE
+ *  (never a directory), and (c) whose REAL path (symlinks resolved) is inside
+ *  `realRoot` — then return each RELATIVE TO `realRoot`. Two things are load-bearing:
+ *
+ *  - RELATIVE, not absolute: ESLint 10 flat config reports "File ignored because
+ *    outside of base path" and applies ZERO fixes for an absolute path, silently
+ *    killing the autofix moat; a relative path fixes normally.
+ *  - relative to the REAL root, not the caller's `cwd`: on macOS `cwd` can be the
+ *    logical `/var/…` form while a resolved input is `/private/var/…`; relativizing
+ *    against the unresolved forms yields a `../../private/var/…` path ESLint again
+ *    treats as outside-base. Both sides realpath'd, the relative path is clean.
+ *
+ *  The real-path containment also stops an in-workspace symlink from redirecting a
+ *  formatter at a file outside the workspace. */
+async function containedRelTargets(
+  realRoot: string,
+  absCandidates: readonly string[]
+): Promise<string[]> {
+  const out: string[] = [];
+
+  for (const abs of absCandidates) {
+    const real = await realpathOrNull(abs);
+
+    if (real === null || !(await isRegularFile(real))) {
+      continue;
+    }
+
+    if (real !== realRoot && !real.startsWith(realRoot + sep)) {
+      continue;
+    }
+
+    const rel = relative(realRoot, real);
+
+    // Empty (the root itself) or escaping (`..` / `../…`) can't happen for a contained
+    // regular file, but guard anyway — an empty arg to prettier expands to the whole
+    // tree. NB: match only a real parent ref, not a filename that merely starts with
+    // two dots (e.g. `..draft.ts`), which is a legitimate contained file.
+    if (rel.length === 0 || rel === ".." || rel.startsWith(".." + sep)) {
+      continue;
+    }
+
+    out.push(rel);
+  }
+
+  return out;
+}
+
+/** Choose which prettier to run in `cwd`. When the target ships its OWN prettier
+ *  (a local `node_modules/.bin/prettier`), run THAT binary: it carries the project's
+ *  prettier VERSION and can resolve a shared/extended config that lives in the
+ *  project's own `node_modules` (e.g. `"prettier": "@acme/prettier-config"`) — which
+ *  tsforge's bundled prettier cannot see. So a file tsforge edits comes out formatted
+ *  exactly as the project's own `prettier` / CI would format it, and an
+ *  already-correct file is left byte-unchanged. Only when the project has no prettier
+ *  of its own do we fall back to tsforge's bundled prettier, which still resolves a
+ *  project `.prettierrc` if one exists and otherwise applies the tsforge default
+ *  written by `bringConstitution`. */
+export async function resolveProjectPrettierArgv(
+  cwd: string
+): Promise<string[]> {
+  // POSIX only. `node_modules/.bin/prettier` is a directly-spawnable shell script here;
+  // on Windows the runnable entry is `prettier.cmd`, which the shell-less runner can't
+  // spawn — so on win32 we always use the bundled prettier (spawned via `bun`), which
+  // still resolves a project `.prettierrc`. Preferring the project binary is a POSIX
+  // fidelity win, not a correctness requirement.
+  if (!isWin32()) {
+    // Walk up from cwd like Node's module resolution: in a monorepo a package subdir may
+    // have prettier hoisted to the workspace root's node_modules. At each level trust the
+    // bin only when prettier is actually INSTALLED as a package there (its manifest
+    // exists) — not a lone `.bin/prettier` shim someone dropped in. tsforge already runs
+    // the project's own scripts/binaries in the gate, so this is the same "only point
+    // tsforge at repos you trust" boundary, narrowed to "prettier is a real dependency".
+    let dir = resolve(cwd);
+
+    for (;;) {
+      const projectBin = join(dir, "node_modules", ".bin", "prettier");
+      const manifest = join(dir, "node_modules", "prettier", "package.json");
+
+      if (
+        (await Bun.file(projectBin).exists()) &&
+        (await Bun.file(manifest).exists())
+      ) {
+        return [projectBin];
+      }
+
+      const parent = dirname(dir);
+
+      if (parent === dir) {
+        break;
+      }
+
+      dir = parent;
+    }
+  }
+
+  return ["bun", PRETTIER_BIN];
+}
+
 /**
- * Auto-format ONE just-written file in place: `eslint --fix` (squashes the
- * auto-fixable mechanical rules — padding-line, curly, prefer-template, quotes)
- * then `prettier --write` (whitespace/quotes/width). Run at WRITE time (in the
- * write guard) so the model never sees — nor hand-chases — formatting noise.
- * Deferring all of this to the settle-time gate let the model self-run eslint
- * mid-build, see the un-squashed mechanical lint, and spiral fixing blank lines
- * and braces by hand to the turn cap. Best-effort + per-file (cheap): any failure
- * is swallowed and the settle gate stays the authority.
+ * Apply the strict eslint autofix + prettier to an EXPLICIT list of files — never
+ * the whole tree. This is the scoping guarantee behind tsforge's formatting: it only
+ * rewrites files it actually touched (each write via `formatFile`, and the
+ * end-of-turn janitor over `ctx.tool.touched`), so running a build inside someone's
+ * repo never reformats thousands of files it never edited. The file list is passed
+ * in, so this is git-independent — it works the same in a fresh, non-git directory.
+ *
+ * Prettier defers to the project's own config and version (see
+ * `resolveProjectPrettierArgv`); the eslint `--fix` keeps tsforge's strictness moat
+ * (the `no-as` ban, `I`-prefix, …) on the files tsforge writes.
+ *
+ * Best-effort, like the rest of the format path: `runArgvCommand` never throws and a
+ * non-zero exit / timeout is ignored — the settle gate stays the authority.
  */
-export async function formatFile(cwd: string, file: string): Promise<void> {
-  const abs = join(cwd, file);
+export async function formatFiles(
+  cwd: string,
+  files: readonly string[],
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {}
+): Promise<void> {
+  // Do NOT normalize separators. On POSIX a backslash is a legal filename character, so
+  // rewriting `dir\file.ts` → `dir/file.ts` would retarget a different, untouched file.
+  // But we also can't safely resolve such a path: macOS `realpath("…/a\b.ts")` itself
+  // normalizes the backslash and returns `…/a/b.ts`. So on POSIX, DROP any input path
+  // containing a backslash up front — before resolve/realpath can retarget it. Real
+  // touched paths are already forward-slashed (recordTouched), so this only guards a
+  // pathological input.
+  const rels = [...new Set(files.filter((f) => f.length > 0))].filter(
+    (f) => isWin32() || !f.includes("\\")
+  );
+
+  if (rels.length === 0) {
+    return;
+  }
+
+  // Containment guard: these argv reach mutating formatters directly, so a caller that
+  // passes an absolute path, a `../` traversal, or an in-workspace symlink pointing
+  // out must NOT be able to rewrite files outside the workspace. `containedRelTargets`
+  // resolves symlinks, drops anything whose real path is outside cwd, and returns the
+  // survivors RELATIVE to cwd (required — eslint no-ops on absolute paths).
+  const realRoot = await realpathOrNull(resolve(cwd));
+
+  if (realRoot === null) {
+    return;
+  }
+
+  const present = await containedRelTargets(
+    realRoot,
+    rels.map((f) => resolve(cwd, f))
+  );
+
+  if (present.length === 0) {
+    return;
+  }
+
+  const timeoutMs = opts.timeoutMs ?? FORMAT_TIMEOUT_MS;
+  const signalOpt = opts.signal === undefined ? {} : { signal: opts.signal };
 
   // Route through the shared runner so a hung eslint/prettier is killed by the
-  // timeout instead of wedging this per-write path (it runs inside the write-guard).
-  // runArgvCommand never throws and captures output, so this stays best-effort: a
-  // non-zero exit or timeout is ignored — the settle gate is still the authority.
+  // timeout instead of wedging the caller (this runs inside the write-guard hot
+  // path AND the end-of-turn janitor). Order mirrors the app pipeline: eslint --fix
+  // first, prettier LAST, so prettier has the final say on formatting.
+  const eslintTargets = present.filter((f) => ESLINT_EXTS.has(extname(f)));
+
+  if (eslintTargets.length > 0) {
+    await runArgvCommand(
+      cwd,
+      [
+        "bun",
+        ESLINT_BIN,
+        "--no-config-lookup",
+        "-c",
+        STRICT_CONFIG,
+        "--fix",
+        // `--` terminates options: a contained file literally named like a flag
+        // (e.g. `--config=x.js`) is then treated as a path, never an option — so it
+        // can't alter the formatter or make it load repo-controlled config.
+        "--",
+        ...eslintTargets,
+      ],
+      { timeoutMs, ...signalOpt }
+    );
+  }
+
+  const prettierArgv = await resolveProjectPrettierArgv(cwd);
+
   await runArgvCommand(
     cwd,
-    [
-      "bun",
-      ESLINT_BIN,
-      "--no-config-lookup",
-      "-c",
-      STRICT_CONFIG,
-      "--fix",
-      abs,
-    ],
-    { timeoutMs: FORMAT_TIMEOUT_MS }
+    [...prettierArgv, "--write", "--ignore-unknown", "--", ...present],
+    { timeoutMs, ...signalOpt }
   );
-  await runArgvCommand(cwd, ["bun", PRETTIER_BIN, "--write", abs], {
-    timeoutMs: FORMAT_TIMEOUT_MS,
-  });
+}
+
+/** Format a single file — the per-write path (write-guard). Thin wrapper over
+ *  `formatFiles` so the per-write and janitor paths share one prettier-fidelity and
+ *  eslint-moat implementation. */
+export async function formatFile(cwd: string, file: string): Promise<void> {
+  await formatFiles(cwd, [file]);
 }
 
 /** The bundled `prettier --write` command. Prepended to the EVAL gate so the

@@ -83,7 +83,6 @@ import {
   type IAgentRow,
 } from "../render";
 import { loadLedger, activeRules, forgetMemory } from "../loop/memory";
-import { buildCoreFix } from "../gate";
 import {
   saveSession,
   latestSession,
@@ -458,7 +457,13 @@ async function initReplSession(args: ICliArgs): Promise<{
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
     ...(resumed === null ? {} : { history: resumed.messages }),
-    fix: buildCoreFix(),
+    // Opt into the SCOPED format janitor (replaces the old whole-repo `fix`): the loop's
+    // autoFixStep runs a strict eslint --fix + prettier over the files the model wrote
+    // this session (ctx.tool.touched — NOT task.files, which defaults to ["**/*"] here),
+    // deferring to the project's own prettier — so a build never reformats files it
+    // didn't touch, and never with the wrong prettier. (A spec may still set its own
+    // per-task `fix`.) MUST also be set on the /clear rebuild below.
+    coreFormat: true,
     // A resumed session with a still-unvalidated pre-pause edit re-seeds the deferred
     // gate so it re-gates on the first send — never silently dropped across --continue
     // (WS-C; the persisted counterpart of the /clear carry).
@@ -1011,6 +1016,9 @@ export async function repl(args: ICliArgs): Promise<number> {
           // on the TTY like the init session, so a piped REPL doesn't advertise a pause
           // nobody can answer.
           interactive: humanAtKeyboard(),
+          // Keep the SCOPED format janitor on across /clear — else the rebuilt session
+          // silently reverts to no formatting for the rest of the session.
+          coreFormat: true,
           // Plain boolean (no branch): the constructor only seeds the flag when true.
           pausedWithEdit: carryDeferredGate,
           ...(profile === undefined ? {} : { profile }),

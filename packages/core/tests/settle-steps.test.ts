@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkStuck, autoFixStep, type ILoopCtx } from "../src/loop/turn";
@@ -253,6 +253,112 @@ describe("autoFixStep", () => {
     expect(tool[0]?.message).toContain("auto-fixed 1 file(s)");
     // Generous timeout: the fix command sleeps 1s to move mtime forward, and a
     // loaded machine can stretch the spawn well past bun's 5s default.
+  }, 30_000);
+
+  // Regression guard: the scoped format janitor must be OPT-IN. It was briefly made
+  // unconditional, which spawned eslint+prettier every turn and blew the 5s budget of
+  // the real-drive-loop tests. With coreFormat off (the default), autoFixStep runs NO
+  // formatter — a touched-but-messy file is left exactly as written.
+  test("coreFormat off (default) → autoFixStep does not format touched files", async () => {
+    const events: ILoopEvent[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
+    const messy = "export  const   x=1";
+
+    writeFileSync(join(dir, "m.ts"), messy);
+
+    const base = makeCtx(events, dir);
+    const ctx: ILoopCtx = {
+      ...base,
+      task: { ...base.task, files: ["m.ts"] },
+      tool: { touched: new Set(["m.ts"]) },
+    };
+
+    await autoFixStep(ctx);
+
+    expect(readFileSync(join(dir, "m.ts"), "utf8")).toBe(messy);
+  });
+
+  test("coreFormat on → autoFixStep formats a TOUCHED file", async () => {
+    const events: ILoopEvent[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
+
+    writeFileSync(join(dir, "m.ts"), "export  const   x=1");
+
+    const base = makeCtx(events, dir);
+    const ctx: ILoopCtx = {
+      ...base,
+      task: { ...base.task, files: ["m.ts"] },
+      tool: { touched: new Set(["m.ts"]) },
+      gate: { ...base.gate, coreFormat: true },
+    };
+
+    await autoFixStep(ctx);
+
+    expect(readFileSync(join(dir, "m.ts"), "utf8")).toBe(
+      "export const x = 1;\n"
+    );
+  }, 30_000);
+
+  // THE #103 regression: in the interactive REPL, task.files defaults to the WHOLE
+  // repo (["**/*"]). Scoping the janitor to the resolved scope would still rewrite the
+  // whole tree. It must scope to ctx.tool.touched — the files the model actually wrote.
+  // Here only m.ts is touched; a whole-repo scope must leave the untouched sibling
+  // byte-identical.
+  test("coreFormat on + whole-repo scope → formats only TOUCHED, sibling untouched", async () => {
+    const events: ILoopEvent[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
+    const messy = "export  const   x=1";
+
+    writeFileSync(join(dir, "m.ts"), messy);
+    writeFileSync(join(dir, "sibling.ts"), messy);
+
+    const base = makeCtx(events, dir);
+    const ctx: ILoopCtx = {
+      ...base,
+      task: { ...base.task, files: ["**/*"] },
+      tool: { touched: new Set(["m.ts"]) },
+      gate: { ...base.gate, coreFormat: true },
+    };
+
+    await autoFixStep(ctx);
+
+    // The touched file is formatted…
+    expect(readFileSync(join(dir, "m.ts"), "utf8")).toBe(
+      "export const x = 1;\n"
+    );
+    // …and the untouched sibling — in scope, but never written by the model — is left
+    // exactly as it was. This is the guarantee #103 is about.
+    expect(readFileSync(join(dir, "sibling.ts"), "utf8")).toBe(messy);
+  }, 30_000);
+
+  // touched is session-lifetime, but /files can NARROW task.files mid-session. The janitor
+  // must intersect the two (touchedInScope): a file the model wrote earlier but that is no
+  // longer in the editable scope must NOT be formatted (the re-gate wouldn't cover it).
+  test("coreFormat on → does not format a touched file now OUTSIDE the scope", async () => {
+    const events: ILoopEvent[] = [];
+    const dir = mkdtempSync(join(tmpdir(), "settle-autofix-"));
+    const messy = "export  const   x=1";
+
+    writeFileSync(join(dir, "a.ts"), messy);
+    writeFileSync(join(dir, "out.ts"), messy);
+
+    const base = makeCtx(events, dir);
+    const ctx: ILoopCtx = {
+      ...base,
+      // Scope narrowed (e.g. via /files) to a.ts only — out.ts was touched earlier.
+      task: { ...base.task, files: ["a.ts"] },
+      tool: { touched: new Set(["a.ts", "out.ts"]) },
+      gate: { ...base.gate, coreFormat: true },
+    };
+
+    await autoFixStep(ctx);
+
+    // In-scope touched file is formatted…
+    expect(readFileSync(join(dir, "a.ts"), "utf8")).toBe(
+      "export const x = 1;\n"
+    );
+    // …the now-out-of-scope touched file is left exactly as it was.
+    expect(readFileSync(join(dir, "out.ts"), "utf8")).toBe(messy);
   }, 30_000);
 });
 

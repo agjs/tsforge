@@ -18,6 +18,11 @@ import tseslint from "typescript-eslint";
 import stylistic from "@stylistic/eslint-plugin";
 import sonarjs from "eslint-plugin-sonarjs";
 
+// Every TypeScript source extension the strict floor lints — including the ESM/CJS
+// module variants `.mts`/`.cts`, which are TS and must get the same moat as `.ts`.
+// Single source so the pack and base blocks below can't drift apart.
+const TS_FILES = ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"];
+
 // Load stack-aware packs if TSFORGE_PACKS env var is set
 let packConfig = [];
 const packIds = (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
@@ -40,7 +45,7 @@ if (packIds.length > 0) {
     const { plugin, rules } = buildPackEslintConfig(packIds, ruleOverrides);
     packConfig = [
       {
-        files: ["**/*.ts", "**/*.tsx"],
+        files: TS_FILES,
         plugins: { tsforge: plugin },
         rules,
       },
@@ -130,7 +135,7 @@ const rules = applyBundledOverrides({ ...bundledRules, ...conventionRules });
 export default tseslint.config(
   { ignores: ["**/node_modules/**", "**/dist/**", "**/build/**"] },
   {
-    files: ["**/*.ts", "**/*.tsx"],
+    files: TS_FILES,
     languageOptions: { parser: tseslint.parser },
     plugins: {
       "@typescript-eslint": tseslint.plugin,

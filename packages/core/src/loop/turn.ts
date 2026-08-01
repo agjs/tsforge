@@ -94,6 +94,7 @@ import {
 import { TsService } from "../lsp";
 import type { McpRegistry } from "../mcp";
 import type { FileLinter } from "../gate";
+import { formatFiles } from "../gate";
 import type { IGate } from "../gate/gate-runner";
 import {
   buildMetaRuleContext,
@@ -336,6 +337,11 @@ export interface ILoopCtxGate {
   /** Write-time single-file linter (the gate's eslint rules, applied per write so
    *  moat violations tsc can't see surface inline). Omitted ⇒ type-only guard. */
   lintFile?: FileLinter;
+  /** Opt into the SCOPED format janitor in the auto-fix step: a strict eslint --fix +
+   *  prettier over the files the model wrote this session (`ctx.tool.touched`), deferring
+   *  to the project's own prettier. Set by the interactive CLI. Off ⇒ no formatter
+   *  subprocess per turn (bare test/eval loops stay fast). */
+  coreFormat?: boolean;
   /** Detected stack profile — determines which rule packs are enabled. */
   stackProfile?: IStackProfile;
   /** Rule severity overrides from tsforge.config.json (maps rule ID to "error" | "warn" | "off"). */
@@ -870,22 +876,6 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
   }
 }
 
-/** Snapshot the current on-disk contents of every existing file in `files`. */
-async function snapshotFiles(
-  cwd: string,
-  files: readonly string[]
-): Promise<Map<string, string>> {
-  const snapshot = new Map<string, string>();
-
-  for (const f of files) {
-    if (await fileExists(cwd, f)) {
-      snapshot.set(f, await Bun.file(join(cwd, f)).text());
-    }
-  }
-
-  return snapshot;
-}
-
 /** Drop redundant annotations across `files`, degrading silently per-file. */
 async function dropRedundantAcross(
   cwd: string,
@@ -973,22 +963,49 @@ async function recheckAfterPolish(
 export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   const { task, cwd, report } = ctx;
 
-  // Resolve globs so a glob scope is polished too (not silently skipped).
-  const files = await resolveScopeFiles(cwd, task.files);
-  const snapshot = await snapshotFiles(cwd, files);
+  // Scope the DROP + FORMAT to the files the model WROTE this session that are STILL in
+  // the editable scope (`touchedInScope`) — NOT task.files, which defaults to the whole
+  // repo in the interactive REPL. dropRedundantAnnotations mutates each file (stripping
+  // the dropped annotation's semicolon), so scanning the whole tree would rewrite files
+  // the model never touched (the exact thing #103 forbids), and a session-lifetime
+  // `touched` could drop annotations in a file `/files` has since removed from scope,
+  // which the re-gate wouldn't cover.
+  const files = touchedInScope(ctx);
+
+  // The revert SNAPSHOT must cover everything polish could mutate, so a failed re-gate
+  // rolls back cleanly. The drop/format only touch `files`, but a spec-provided `task.fix`
+  // is an arbitrary command that may EDIT any in-scope file or CREATE new ones — so when
+  // one is set, snapshot the whole task scope with the robust rollback substrate: it is
+  // uncapped, binary-safe, and TOMBSTONES files the fix created (a plain content map would
+  // leave those on disk). No fix ⇒ snapshot just the touched files the drop edits.
+  const snapshotScope =
+    task.fix !== undefined && task.fix.length > 0
+      ? [...new Set([...files, ...task.files])]
+      : files;
+  const snapshot = await snapshotFilesForRollback(cwd, snapshotScope);
   const dropped = await dropRedundantAcross(cwd, files);
 
   if (dropped === 0) {
     return;
   }
 
-  // Re-format (the drop strips trailing semicolons) before re-gating.
+  // Re-format (the drop strips trailing semicolons) before re-gating. Scoped to the
+  // files the model wrote (`ctx.tool.touched`), deferring to the project's own
+  // prettier — same guarantee as the auto-fix janitor. A spec-provided `task.fix`
+  // still runs too.
   if (task.fix !== undefined && task.fix.length > 0) {
     await runAccept(
       { ...task, accept: task.fix },
       cwd,
       ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
     );
+  }
+
+  if (ctx.gate.coreFormat === true) {
+    await formatFiles(cwd, files, {
+      timeoutMs: JANITOR_TIMEOUT_MS,
+      ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
+    });
   }
 
   const { passed, abortErr } = await recheckAfterPolish(ctx, cwd);
@@ -1004,10 +1021,9 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   }
 
   // A drop changed an inferred type (or the recheck failed/was aborted) — roll the whole
-  // file set back to the pre-polish green state.
-  for (const [f, content] of snapshot) {
-    await Bun.write(join(cwd, f), content);
-  }
+  // file set back to the pre-polish green state (rewrites edited files and tombstones any
+  // the fix created).
+  await restoreFiles(snapshot);
 
   // Cancellation was deferred past the rollback so the tree is restored — now honor it.
   if (abortErr !== null) {
@@ -1257,10 +1273,27 @@ export function persistDetail(e: IErrorItem): string {
  * optional fix command, validate, and return a terminal result (done/stuck) or
  * null to keep going (having fed the failures back into the conversation).
  */
+/** Timeout for the scoped format janitor. Higher than the per-write ceiling
+ *  (`FORMAT_TIMEOUT_MS`, 30s) because it may format a whole task scope at once (many
+ *  files), where a per-write path formats exactly one. */
+const JANITOR_TIMEOUT_MS = 120_000;
+
+/** The files the model WROTE this session that are ALSO still in the editable scope.
+ *  `ctx.tool.touched` is session-lifetime, but `/files` can narrow `task.files`
+ *  mid-session — so the janitor/polish intersect the two: only mutate files the model
+ *  wrote AND that the gate (scoped to task.files) will re-validate, never a now-out-of-
+ *  scope leftover. With the default whole-repo glob scope this is just `touched`. */
+function touchedInScope(ctx: ILoopCtx): string[] {
+  return [...(ctx.tool.touched ?? [])].filter((f) =>
+    isInScope(f, ctx.task.files)
+  );
+}
+
 /** STEP 1 — deterministic auto-fix: run the janitor fixers (TS quick-fixes,
- *  ast-grep, the optional `task.fix` command) and return which files they changed,
- *  so the model is told exactly what moved under it (else it re-fixes already-
- *  fixed style and edits now-stale text → rejects). Exported for unit tests. */
+ *  ast-grep, the optional `task.fix` command, then a scoped eslint --fix + prettier)
+ *  and return which files they changed, so the model is told exactly what moved under
+ *  it (else it re-fixes already-fixed style and edits now-stale text → rejects).
+ *  Exported for unit tests. */
 export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
   const { task, cwd, report } = ctx;
   const beforeFix = await snapshotMtimes(cwd, task.files);
@@ -1273,6 +1306,21 @@ export async function autoFixStep(ctx: ILoopCtx): Promise<string[]> {
       cwd,
       ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }
     );
+  }
+
+  // Scoped format janitor: strict eslint --fix + prettier over the files the model
+  // ACTUALLY wrote this session (`ctx.tool.touched`) — never the whole tree, and NOT
+  // `task.files`, which in the interactive REPL defaults to the whole repo (`["**/*"]`)
+  // and would re-expand to it. The old whole-repo `prettier --write .` reformatted
+  // thousands of untouched files (with tsforge's bundled prettier, not the project's),
+  // producing huge spurious diffs in real repos. `formatFiles` defers to the project's
+  // own prettier. Opt-in (the CLI sets it) so a bare test/eval loop doesn't spawn a
+  // formatter every turn.
+  if (ctx.gate.coreFormat === true) {
+    await formatFiles(cwd, touchedInScope(ctx), {
+      timeoutMs: JANITOR_TIMEOUT_MS,
+      ...(ctx.tool.signal === undefined ? {} : { signal: ctx.tool.signal }),
+    });
   }
 
   const autoFixed = changedSince(

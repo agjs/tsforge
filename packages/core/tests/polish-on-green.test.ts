@@ -23,7 +23,9 @@ function ctxWith(
     tsService: null,
     report: () => undefined,
     messages: [],
-    tool: {},
+    // polishOnGreen now scopes the drop to the files the model wrote (ctx.tool.touched),
+    // not task.files — so the tests must mark a.ts as touched for the drop to run.
+    tool: { touched: new Set(["a.ts"]) },
     gate: {
       parse: undefined,
       runner: {
@@ -81,7 +83,7 @@ test("polishOnGreen REVERTS the drop when the injected gate THROWS (transient ju
       tsService: null,
       report: () => undefined,
       messages: [],
-      tool: {},
+      tool: { touched: new Set(["a.ts"]) },
       gate: {
         parse: undefined,
         runner: {
@@ -122,7 +124,7 @@ test("polishOnGreen re-throws on caller cancellation (honors the signal) but sti
       tsService: null,
       report: () => undefined,
       messages: [],
-      tool: { signal: controller.signal },
+      tool: { signal: controller.signal, touched: new Set(["a.ts"]) },
       gate: {
         parse: undefined,
         runner: {
@@ -172,7 +174,7 @@ test("polishOnGreen wraps a NON-Error abort rejection in an Error (typed re-thro
       tsService: null,
       report: () => undefined,
       messages: [],
-      tool: { signal: controller.signal },
+      tool: { signal: controller.signal, touched: new Set(["a.ts"]) },
       gate: {
         parse: undefined,
         runner: {
@@ -230,3 +232,135 @@ test("polishOnGreen KEEPS the drop when the injected gate stays green", async ()
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// #103 (panel-critical): polish drops+formats ONLY files the model wrote. With a
+// whole-repo scope (the REPL default ["**/*"]) and only a.ts touched, an untouched
+// sibling that has its own droppable annotation must be left byte-identical. A
+// regression back to resolveScopeFiles(task.files) would drop/rewrite the sibling and
+// fail here — the narrow-scope tests above would NOT catch that.
+test("polishOnGreen with whole-repo scope drops ONLY the touched file, not siblings", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
+
+  try {
+    const droppable = "const abs: number = Math.abs(1);\n";
+
+    await Bun.write(join(dir, "a.ts"), droppable);
+    await Bun.write(join(dir, "sibling.ts"), droppable);
+
+    const { ctx: base } = ctxWith(dir, true);
+    const ctx: ILoopCtx = {
+      ...base,
+      // Whole-repo scope, but only a.ts was written by the model.
+      task: { ...base.task, files: ["**/*"] },
+      tool: { touched: new Set(["a.ts"]) },
+    };
+
+    await polishOnGreen(ctx);
+
+    // a.ts polished (annotation dropped)…
+    expect(await Bun.file(join(dir, "a.ts")).text()).not.toContain(": number");
+    // …sibling.ts left exactly as it was (never touched by the model).
+    expect(await Bun.file(join(dir, "sibling.ts")).text()).toBe(droppable);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+// When a spec-provided task.fix is set, the revert snapshot must ALSO cover the resolved
+// scope (task.fix is an arbitrary command that can edit an in-scope sibling outside
+// touched). On a failed re-gate, that sibling mutation must roll back too. A regression to
+// snapshotting only touched would leave the fix's damage on disk.
+test("polishOnGreen rolls back a task.fix mutation to a NON-touched sibling on a failed re-gate", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
+
+  try {
+    const originalSibling = "const sibling = 1;\n";
+
+    await Bun.write(join(dir, "a.ts"), SOURCE); // touched + droppable → polish proceeds
+    await Bun.write(join(dir, "sibling.ts"), originalSibling);
+
+    const { ctx: base } = ctxWith(dir, false); // gate RED → recheck fails → revert
+    const ctx: ILoopCtx = {
+      ...base,
+      task: {
+        ...base.task,
+        files: ["**/*"],
+        // The fix mutates a sibling the model never wrote (not in touched).
+        fix: "printf 'const sibling = 999;\\n' > sibling.ts",
+      },
+      tool: { touched: new Set(["a.ts"]) },
+    };
+
+    await polishOnGreen(ctx);
+
+    // The failed re-gate rolled EVERYTHING back — including the fix's sibling mutation.
+    expect(await Bun.file(join(dir, "sibling.ts")).text()).toBe(
+      originalSibling
+    );
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe(SOURCE);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+// The robust rollback must also TOMBSTONE a file task.fix CREATED (a plain content map
+// only rewrites captured paths and would leave a created file on disk). On a failed
+// re-gate, a fix-created file must be gone.
+test("polishOnGreen tombstones a file task.fix CREATED on a failed re-gate", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
+
+  try {
+    await Bun.write(join(dir, "a.ts"), SOURCE); // touched + droppable → polish proceeds
+
+    const { ctx: base } = ctxWith(dir, false); // gate RED → recheck fails → revert
+    const ctx: ILoopCtx = {
+      ...base,
+      task: {
+        ...base.task,
+        files: ["**/*"],
+        // The fix CREATES a brand-new in-scope file (not present at snapshot time).
+        fix: "printf 'export const created = 1;\\n' > created.ts",
+      },
+      tool: { touched: new Set(["a.ts"]) },
+    };
+
+    await polishOnGreen(ctx);
+
+    // The fix-created file was tombstoned (deleted), not left behind.
+    expect(await Bun.file(join(dir, "created.ts")).exists()).toBe(false);
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe(SOURCE);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("polishOnGreen with coreFormat on formats the TOUCHED file after the drop", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
+
+  try {
+    // Messy AND has a droppable `: number` annotation, so polish proceeds past the
+    // drop guard; the scoped format janitor should then clean the messiness.
+    await Bun.write(
+      join(dir, "a.ts"),
+      "const  cents=1;\nconst abs: number = Math.abs(cents);\n"
+    );
+
+    const { ctx: base } = ctxWith(dir, true);
+    const ctx: ILoopCtx = {
+      ...base,
+      // The model wrote a.ts, so it is the janitor's target (NOT task.files scope).
+      tool: { touched: new Set(["a.ts"]) },
+      gate: { ...base.gate, coreFormat: true },
+    };
+
+    await polishOnGreen(ctx);
+
+    const out = await Bun.file(join(dir, "a.ts")).text();
+
+    // Dropped (`: number` gone) AND formatted (`const  cents=1` → `const cents = 1;`).
+    expect(out).not.toContain(": number");
+    expect(out).toContain("const cents = 1;");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);

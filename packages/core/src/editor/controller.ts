@@ -5,6 +5,7 @@ import { createPasteScanner } from "./paste";
 import { renderEditor } from "./view";
 import { graphemes } from "./segments";
 import { trace } from "../lib/trace";
+import { isWin32 } from "../lib/platform";
 import { createCompletion, type IEditorCompletionSource } from "./completion";
 
 // Re-exported: the host-facing completion-source contract moved to
@@ -664,7 +665,7 @@ export function startEditor(deps: IStartEditorDeps): IEditorHandle {
 
   // Enable Kitty keyboard + modifyOtherKeys (gated by env)
   const shouldSkipKitty =
-    process.platform === "win32" ||
+    isWin32() ||
     (process.env.SSH_CONNECTION ?? "") !== "" ||
     (process.env.SSH_TTY ?? "") !== "" ||
     (process.env.WSL_DISTRO_NAME ?? "") !== "";

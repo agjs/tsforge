@@ -118,6 +118,12 @@ export interface ISessionConfig {
   accept?: string;
   /** Auto-fix command run before re-validating (e.g. `eslint --fix`). */
   fix?: string;
+  /** Opt into the core format janitor: a strict `eslint --fix` + prettier over the files
+   *  the model wrote this session (`ctx.tool.touched`, never the whole tree — and NOT
+   *  `task.files`, which defaults to a whole-repo glob in the REPL), deferring to the
+   *  project's own prettier. The interactive CLI sets this; bare test/eval loops leave it
+   *  off so they don't pay per-turn formatter subprocess latency. Independent of `fix`. */
+  coreFormat?: boolean;
   /** Read-only context files. */
   context?: string[];
   parse?: ErrorParser;
@@ -984,6 +990,7 @@ export class Session {
       gate: {
         parse: cfg.parse,
         stackProfile,
+        ...(cfg.coreFormat === true ? { coreFormat: true } : {}),
         ...(lintFile === undefined ? {} : { lintFile }),
         ...(Object.keys(ruleOverrides).length > 0 ? { ruleOverrides } : {}),
         ...(cfg.metaBaseline === undefined
@@ -1028,6 +1035,13 @@ export class Session {
   /** The editable scope globs. */
   get scope(): string[] {
     return this.ctx.task.files;
+  }
+
+  /** Whether the scoped format janitor is on for this session — i.e. `cfg.coreFormat`
+   *  was threaded into the loop's gate context. Exposed so a test can prove the CLI
+   *  wiring (Session.create propagates the flag) without reaching into private state. */
+  get coreFormat(): boolean {
+    return this.ctx.gate.coreFormat === true;
   }
 
   /** True when a still-unvalidated edit is pending behind an ask_user pause (an edit
