@@ -27,6 +27,7 @@ import {
   type IGitRunner,
   type IValidateRunner,
 } from "../reviewers/harness-review";
+import { type IValidateSummary } from "../reviewers/schema";
 import { parseVerdict, type IVerdict } from "../reviewers/aggregate";
 
 interface IArgs {
@@ -185,23 +186,42 @@ async function gitRunner(
   return { stdout, code };
 }
 
-async function validateRunner(): Promise<{
-  passed: boolean;
-  failCount: number;
-  firstErrors: string[];
-}> {
+/**
+ * Map a `bun run validate` run (its combined stdout+stderr `text` and exit `code`) into the panel's
+ * IValidateSummary. Pure + exported so the passed/errors mapping is unit-tested.
+ *
+ * On PASS (exit 0) the summary is EMPTY errors — regardless of the word "error" appearing in green
+ * output ("0 errors", a test name like "…error handling…", a fixture string). The old code
+ * substring-matched `/error/iu` unconditionally, so a passing validate carried spurious diagnostics
+ * that (a) misled the block message and (b) polluted the verdict CACHE KEY (which includes the
+ * summary), varying run-to-run on identical green diffs → the cache never hit and every panel re-ran
+ * the full 4-model review. Only when validate actually FAILS (exit ≠ 0) do we extract error lines.
+ */
+export function summarizeValidateOutput(
+  text: string,
+  code: number
+): IValidateSummary {
+  if (code === 0) {
+    return { passed: true, failCount: 0, firstErrors: [] };
+  }
+
+  const firstErrors = text
+    .split("\n")
+    .filter((l) => /error/iu.test(l))
+    .slice(0, 20);
+
+  return { passed: false, failCount: firstErrors.length, firstErrors };
+}
+
+async function validateRunner(): Promise<IValidateSummary> {
   const proc = Bun.spawn(["bun", "run", "validate"], {
     stdout: "pipe",
     stderr: "pipe",
   });
   const text = `${await new Response(proc.stdout).text()}\n${await new Response(proc.stderr).text()}`;
   const code = await proc.exited;
-  const firstErrors = text
-    .split("\n")
-    .filter((l) => /error/iu.test(l))
-    .slice(0, 20);
 
-  return { passed: code === 0, failCount: firstErrors.length, firstErrors };
+  return summarizeValidateOutput(text, code);
 }
 
 export const CACHE_DIR = join(".tsforge", "harness-review");
