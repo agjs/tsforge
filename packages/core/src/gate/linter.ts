@@ -1,5 +1,5 @@
 import { join, extname, resolve, relative, sep } from "node:path";
-import { realpath } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { ESLint } from "eslint";
 import { runArgvCommand } from "../lib/fs/process";
 import { conventionOverrideRules } from "../infer-rules/eslint-conventions";
@@ -150,15 +150,32 @@ async function realpathOrNull(p: string): Promise<string | null> {
   }
 }
 
-/** From cwd-anchored candidates, keep the files that (a) still exist and (b) whose
- *  REAL path (symlinks resolved) is inside `realRoot` — then return each as a path
- *  RELATIVE to `cwd`. Relative is load-bearing: ESLint 10 flat config reports "File
- *  ignored because outside of base path" and applies ZERO fixes for an ABSOLUTE path,
- *  silently killing the autofix moat; a cwd-relative path fixes normally. The
- *  real-path containment stops an in-workspace symlink from redirecting a formatter at
- *  a file outside the workspace. */
+/** True if `p` is a regular file. Directories must never reach the formatters:
+ *  `prettier --write <dir>` expands to the whole subtree, reintroducing the
+ *  whole-repo rewrite this module exists to prevent. */
+async function isRegularFile(p: string): Promise<boolean> {
+  try {
+    return (await stat(p)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** From cwd-anchored candidates, keep the ones that (a) exist, (b) are a regular FILE
+ *  (never a directory), and (c) whose REAL path (symlinks resolved) is inside
+ *  `realRoot` — then return each RELATIVE TO `realRoot`. Two things are load-bearing:
+ *
+ *  - RELATIVE, not absolute: ESLint 10 flat config reports "File ignored because
+ *    outside of base path" and applies ZERO fixes for an absolute path, silently
+ *    killing the autofix moat; a relative path fixes normally.
+ *  - relative to the REAL root, not the caller's `cwd`: on macOS `cwd` can be the
+ *    logical `/var/…` form while a resolved input is `/private/var/…`; relativizing
+ *    against the unresolved forms yields a `../../private/var/…` path ESLint again
+ *    treats as outside-base. Both sides realpath'd, the relative path is clean.
+ *
+ *  The real-path containment also stops an in-workspace symlink from redirecting a
+ *  formatter at a file outside the workspace. */
 async function containedRelTargets(
-  cwd: string,
   realRoot: string,
   absCandidates: readonly string[]
 ): Promise<string[]> {
@@ -167,13 +184,23 @@ async function containedRelTargets(
   for (const abs of absCandidates) {
     const real = await realpathOrNull(abs);
 
-    if (real === null) {
+    if (real === null || !(await isRegularFile(real))) {
       continue;
     }
 
-    if (real === realRoot || real.startsWith(realRoot + sep)) {
-      out.push(relative(cwd, abs));
+    if (real !== realRoot && !real.startsWith(realRoot + sep)) {
+      continue;
     }
+
+    const rel = relative(realRoot, real);
+
+    // Empty (the root itself) or escaping (`..`) can't happen for a contained file,
+    // but guard anyway — an empty arg to prettier expands to the whole tree.
+    if (rel.length === 0 || rel.startsWith("..")) {
+      continue;
+    }
+
+    out.push(rel);
   }
 
   return out;
@@ -192,19 +219,16 @@ async function containedRelTargets(
 export async function resolveProjectPrettierArgv(
   cwd: string
 ): Promise<string[]> {
-  const binDir = join(cwd, "node_modules", ".bin");
-  // On Windows npm writes `prettier.cmd` (the extensionless file is a POSIX shell
-  // script cmd.exe can't spawn directly); everywhere else it's `prettier`. Prefer the
-  // `.cmd` on win32 so the project binary is actually executable, else the fidelity
-  // goal silently falls back to the bundled prettier.
-  const candidates =
-    process.platform === "win32"
-      ? [join(binDir, "prettier.cmd"), join(binDir, "prettier")]
-      : [join(binDir, "prettier")];
+  // POSIX only. `node_modules/.bin/prettier` is a directly-spawnable shell script here;
+  // on Windows the runnable entry is `prettier.cmd`, which the shell-less runner can't
+  // spawn — so on win32 we always use the bundled prettier (spawned via `bun`), which
+  // still resolves a project `.prettierrc`. Preferring the project binary is a POSIX
+  // fidelity win, not a correctness requirement.
+  if (process.platform !== "win32") {
+    const projectBin = join(cwd, "node_modules", ".bin", "prettier");
 
-  for (const bin of candidates) {
-    if (await Bun.file(bin).exists()) {
-      return [bin];
+    if (await Bun.file(projectBin).exists()) {
+      return [projectBin];
     }
   }
 
@@ -253,7 +277,6 @@ export async function formatFiles(
   }
 
   const present = await containedRelTargets(
-    cwd,
     realRoot,
     rels.map((f) => resolve(cwd, f))
   );

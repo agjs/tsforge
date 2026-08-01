@@ -6,6 +6,7 @@ import {
   readFile,
   mkdir,
   chmod,
+  realpath,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -136,6 +137,54 @@ test("formatFiles applies the eslint autofix moat (curly), not just prettier", a
     expect(await readFile(join(dir, "g.ts"), "utf8")).toContain("if (x) {");
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+// A DIRECTORY must never reach the formatters: `prettier --write .`/`sub` expands to
+// the whole (sub)tree — the #103 whole-repo rewrite in disguise. formatFiles must drop
+// directory args (including "." and the workspace root) and format nothing.
+test("formatFiles never formats a directory arg (., root, or subdir)", async () => {
+  const dir = await tempDir();
+
+  try {
+    const messy = "export  const   x=1";
+
+    await mkdir(join(dir, "sub"), { recursive: true });
+    await writeFile(join(dir, "sub", "a.ts"), messy);
+    await writeFile(join(dir, "top.ts"), messy);
+
+    // "." and the absolute root are directories; "sub" is a directory.
+    await formatFiles(dir, [".", dir, "sub"]);
+
+    // Nothing under them was touched.
+    expect(await readFile(join(dir, "sub", "a.ts"), "utf8")).toBe(messy);
+    expect(await readFile(join(dir, "top.ts"), "utf8")).toBe(messy);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// macOS tmpdir dualism: cwd may be the logical `/var/…` form while a caller passes an
+// already-resolved `/private/var/…` path. Relativizing against the real root keeps the
+// eslint moat alive (a `../../private/var/…` arg would make ESLint no-op again).
+test("formatFiles still runs the eslint moat for a realpath-form absolute input", async () => {
+  const logicalDir = await tempDir();
+  const realDir = await realpath(logicalDir);
+
+  try {
+    await writeFile(
+      join(logicalDir, "g.ts"),
+      "export function f(x: boolean) {\n  if (x) return 1;\n  return 2;\n}\n"
+    );
+
+    // cwd = logical form; the file path = resolved (real) form. This is the dualism.
+    await formatFiles(logicalDir, [join(realDir, "g.ts")]);
+
+    expect(await readFile(join(logicalDir, "g.ts"), "utf8")).toContain(
+      "if (x) {"
+    );
+  } finally {
+    await rm(logicalDir, { recursive: true, force: true });
   }
 }, 30_000);
 

@@ -338,9 +338,9 @@ export interface ILoopCtxGate {
    *  moat violations tsc can't see surface inline). Omitted ⇒ type-only guard. */
   lintFile?: FileLinter;
   /** Opt into the SCOPED format janitor in the auto-fix step: a strict eslint --fix +
-   *  prettier over the task's resolved scope, deferring to the project's own prettier.
-   *  Set by the interactive CLI. Off ⇒ no formatter subprocess per turn (bare test/eval
-   *  loops stay fast). */
+   *  prettier over the files the model wrote this session (`ctx.tool.touched`), deferring
+   *  to the project's own prettier. Set by the interactive CLI. Off ⇒ no formatter
+   *  subprocess per turn (bare test/eval loops stay fast). */
   coreFormat?: boolean;
   /** Detected stack profile — determines which rule packs are enabled. */
   stackProfile?: IStackProfile;
