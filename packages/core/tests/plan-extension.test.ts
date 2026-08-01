@@ -93,15 +93,34 @@ describe("boringstackPlanSchema.extraCheck (≤1 home)", () => {
 });
 
 describe("boringstackPlanSchemaErased (type-erased parity)", () => {
-  test("its extraCheck matches the typed schema on the ≤1-home rule", () => {
-    // The erased schema re-narrows each opaque ui with isBoringstackUiIntent, so it agrees with
-    // the typed one — including that a non-UI slice (ui not a valid intent) contributes no home.
-    const nonUiSlice = { entity, ui: {}, verification };
+  test("its extraCheck returns the SAME verdict as the typed schema on every valid plan", () => {
+    // Both schemas' extraCheck call the SAME boringstackAtMostOneHome helper, so they can never
+    // drift. Prove it: on each valid plan the typed and erased verdicts are identical.
+    const cases = [
+      plan([homeSlice(false), homeSlice(false)]), // 0 homes → true
+      plan([homeSlice(true), homeSlice(false)]), // 1 home  → true
+      plan([homeSlice(true), homeSlice(true)]), // 2 homes → false
+    ];
+
+    for (const p of cases) {
+      const typed = boringstackPlanSchema.extraCheck?.(p);
+
+      expect(boringstackPlanSchemaErased.extraCheck?.(p)).toBe(typed);
+    }
+  });
+
+  test("a slice whose ui is not a valid intent contributes no home (the documented divergence case)", () => {
+    // The one input the typed extraCheck can't be TYPED to receive (invalid ui): { home: true }
+    // with no screens is NOT a valid IUiIntent. The shared helper re-narrows with
+    // isBoringstackUiIntent, so it counts as NO home — a plan pairing one real home with such an
+    // invalid-ui slice stays ≤1 home (true). This is where the two bodies used to be able to
+    // diverge; sharing the helper removes the risk.
+    const invalidHomeSlice = { entity, ui: { home: true }, verification };
 
     expect(
       boringstackPlanSchemaErased.extraCheck?.({
         product: "p",
-        slices: [homeSlice(true), nonUiSlice],
+        slices: [homeSlice(true), invalidHomeSlice],
       })
     ).toBe(true);
     expect(

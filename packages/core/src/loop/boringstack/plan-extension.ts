@@ -196,6 +196,23 @@ Complete example (follow this shape precisely):
 ${JSON.stringify(PLANNER_EXAMPLE, null, 2)}`;
 
 /**
+ * The BoringStack cross-slice rule — at most ONE slice is the app home (the post-login landing) —
+ * as ONE implementation shared by BOTH schemas below, so their `extraCheck` behaviour can never
+ * drift (a rule edit touches one place). Takes the slices' `ui` values as `unknown[]` and
+ * re-narrows each with `isBoringstackUiIntent` (a plain `ui` variable narrows cleanly), so it
+ * behaves identically whether `ui` is a statically-typed IUiIntent or an opaque `unknown` — a
+ * `ui` that is not a valid intent (e.g. `{ home: true }` with no screens) counts as no home in
+ * BOTH. In the real flow `extraCheck` runs only after every slice passed `validateUi`, so this
+ * only matters for direct callers, but keeping the two bodies identical removes the drift risk.
+ */
+function boringstackAtMostOneHome(uis: readonly unknown[]): boolean {
+  return (
+    uis.filter((ui) => isBoringstackUiIntent(ui) && ui.home === true).length <=
+    1
+  );
+}
+
+/**
  * BoringStack's plan schema, injected into core's generic planner + parser: the web UI-schema
  * prompt, the worked example, the `ui` validator, and the cross-slice rule that at most ONE slice
  * is the app home (the post-login landing).
@@ -205,24 +222,21 @@ export const boringstackPlanSchema: IPlanSchema<IUiIntent> = {
   // example field. PLANNER_EXAMPLE stays exported for its own regression test.
   system: PLANNER_SYSTEM,
   validateUi: isBoringstackUiIntent,
-  extraCheck: (plan) =>
-    plan.slices.filter((s) => s.ui.home === true).length <= 1,
+  extraCheck: (plan) => boringstackAtMostOneHome(plan.slices.map((s) => s.ui)),
 };
 
 /**
  * The SAME schema, TYPE-ERASED to `IPlanSchema<unknown>` for the heterogeneous `IStackAdapter`
  * registry (a concrete `IPlanSchema<IUiIntent>` isn't assignable to `IPlanSchema<unknown>` because
  * `extraCheck`'s parameter is contravariant). `validateUi` erases directly (a `v is IUiIntent`
- * guard satisfies `v is unknown`); `extraCheck` re-narrows each slice's opaque `ui` with the same
- * guard, so the runtime behaviour is identical. The typed `boringstackPlanSchema` stays for the
+ * guard satisfies `v is unknown`); both `extraCheck`s call the SAME `boringstackAtMostOneHome`, so
+ * there is no second hand-maintained body to drift. The typed `boringstackPlanSchema` stays for the
  * BoringStack build path, which needs `IProductPlan<IUiIntent>`.
  */
 export const boringstackPlanSchemaErased: IPlanSchema<unknown> = {
   system: PLANNER_SYSTEM,
   validateUi: isBoringstackUiIntent,
-  extraCheck: (plan) =>
-    plan.slices.filter((s) => isBoringstackUiIntent(s.ui) && s.ui.home === true)
-      .length <= 1,
+  extraCheck: (plan) => boringstackAtMostOneHome(plan.slices.map((s) => s.ui)),
 };
 
 /**

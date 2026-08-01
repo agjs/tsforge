@@ -19,8 +19,10 @@ import type {
   IProductPlan,
   ISlice,
   IPlanConstraints,
+  IPlanSchema,
 } from "../src/loop/planning/plan-types";
 import { isProductPlan } from "../src/loop/planning/plan-store";
+import { isRecord } from "../src/lib/guards";
 import type { IProvider } from "../src/inference";
 
 // The BoringStack plan schema specializes the generic planner/parser to the web UI intent — these
@@ -392,6 +394,79 @@ test("BoringStack opt-in: stripping also applies on the temperature-0.7 retry pa
 
   expect(call).toBe(2);
   expect(plan?.slices.map((s) => s.entity.id)).toEqual(["Bookmark"]);
+});
+
+// ── proposePlan re-applies the injected extraCheck to the STRIPPED plan ──────────────────────────
+// The core soundness fix: stripReservedSlices can invalidate a cross-slice invariant that held on
+// the full plan, so proposePlan must re-run schema.extraCheck on the stripped result. The boringstack
+// ≤1-home rule can't exercise this (removal only DECREASES homes, so a ≤1-home plan stays ≤1-home).
+// Use a removal-SENSITIVE rule via a custom schema — "at least one home slice must remain" — which is
+// exactly the class of invariant the re-check protects.
+interface IHomeUi {
+  readonly home: boolean;
+}
+const isHomeUi = (v: unknown): v is IHomeUi =>
+  isRecord(v) && typeof v.home === "boolean";
+const homeSchema: IPlanSchema<IHomeUi> = {
+  system: "home schema",
+  validateUi: isHomeUi,
+  extraCheck: (plan) => plan.slices.some((s) => s.ui.home),
+};
+const homeSlice = (id: string, home: boolean): ISlice<IHomeUi> => ({
+  entity: { id, desc: "d", fields: [], relationships: [], rules: [] },
+  ui: { home },
+  verification: {
+    mustRemainTrue: [],
+    mustNotHappen: ["x"],
+    acceptanceCheck: "bun test",
+  },
+});
+const homePlannerOf = (slices: ISlice<IHomeUi>[]): IProvider => ({
+  complete: async () => ({
+    content: JSON.stringify({ product: "p", slices }),
+    toolCalls: [],
+  }),
+});
+const RESERVED_HOME = {
+  reservedEntities: new Set(["reserved"]),
+  onStripped: () => undefined,
+};
+
+test("proposePlan REJECTS (null) when stripping invalidates the injected extraCheck", async () => {
+  // Pre-strip the plan has a home (on the reserved slice) so it parses; stripping the reserved
+  // slice removes the only home, so the re-check must fail the plan. Without the post-strip
+  // re-check this would wrongly return the surviving [Real] slice.
+  const plan = await proposePlan(
+    {
+      planner: homePlannerOf([
+        homeSlice("Reserved", true),
+        homeSlice("Real", false),
+      ]),
+    },
+    { description: "x" },
+    homeSchema,
+    RESERVED_HOME
+  );
+
+  expect(plan).toBeNull();
+});
+
+test("proposePlan ACCEPTS the stripped plan when the injected extraCheck still holds", async () => {
+  // A home survives stripping (Real is also home), so the re-check passes and the stripped plan
+  // is returned — proving the re-check rejects only genuine post-strip violations.
+  const plan = await proposePlan(
+    {
+      planner: homePlannerOf([
+        homeSlice("Reserved", true),
+        homeSlice("Real", true),
+      ]),
+    },
+    { description: "x" },
+    homeSchema,
+    RESERVED_HOME
+  );
+
+  expect(plan?.slices.map((s) => s.entity.id)).toEqual(["Real"]);
 });
 
 test("PLANNER_EXAMPLE proposes no reserved identity entity", () => {

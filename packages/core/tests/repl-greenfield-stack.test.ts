@@ -256,8 +256,8 @@ const countMatches = (pattern: string, file: string): number => {
   return parsed.length;
 };
 
-/** Count ANCHORED matches over an arbitrary source string (via a temp file), for decoys. */
-const countOn = async (source: string): Promise<number> => {
+/** Count matches of `pattern` over an arbitrary source string (via a temp file), for decoys. */
+const countOnPat = async (pattern: string, source: string): Promise<number> => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-guard-"));
 
   try {
@@ -265,11 +265,15 @@ const countOn = async (source: string): Promise<number> => {
 
     await writeFile(file, source);
 
-    return countMatches(ANCHORED, file);
+    return countMatches(pattern, file);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 };
+
+/** Count ANCHORED matches over an arbitrary source string (via a temp file), for decoys. */
+const countOn = (source: string): Promise<number> =>
+  countOnPat(ANCHORED, source);
 
 describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guard)", () => {
   test("the real handler has exactly one greenfieldOrSend call as its arrow's LAST statement", () => {
@@ -368,5 +372,34 @@ describe("the REPL line handler wires greenfieldOrSend (ast-grep structural guar
     expect(
       await countOn(wrapArrow(`await runSend(line);\n  ${CORRECT_CALL};`))
     ).toBe(1);
+  });
+});
+
+// The multi-adapter planning claim: runGreenfieldPlanning must plan through the RESOLVED adapter's
+// schema (`schema: stack.planSchema`), not a hardcoded boringstack schema — else the whole
+// IStackAdapter.planSchema seam is decorative and a second adapter would silently be planned by
+// boringstack's schema. runGreenfieldPlanning is module-private (its runPlanning call runs real
+// capability resolution, so it is not unit-reachable), so this is a source-guard: the runPlanning
+// call inside repl.ts must carry `schema: stack.planSchema`. A hardcoded schema drops it to 0.
+const SCHEMA_WIRING =
+  "runPlanning($D, { $$$A schema: stack.planSchema, $$$B })";
+
+describe("runGreenfieldPlanning plans through the RESOLVED adapter's schema (ast-grep guard)", () => {
+  test("the real runPlanning call passes schema: stack.planSchema (the resolved adapter's)", () => {
+    expect(countMatches(SCHEMA_WIRING, REPL_TS)).toBe(1);
+  });
+
+  test("SANITY: the resolved-schema call shape matches (so the negative fails for the right reason)", async () => {
+    const ok =
+      "runPlanning(dir, { planner: p, schema: stack.planSchema, constraints: c });";
+
+    expect(await countOnPat(SCHEMA_WIRING, ok)).toBe(1);
+  });
+
+  test("rejects a runPlanning call that hardcodes a concrete schema (the seam-bypass regression)", async () => {
+    const hardcoded =
+      "runPlanning(dir, { planner: p, schema: boringstackPlanSchema, constraints: c });";
+
+    expect(await countOnPat(SCHEMA_WIRING, hardcoded)).toBe(0);
   });
 });
