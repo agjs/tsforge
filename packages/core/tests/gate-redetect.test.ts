@@ -427,3 +427,96 @@ test("the session record round-trips the `auto` flag through save/load", async (
     await rm(home, { recursive: true, force: true });
   }
 });
+
+// The RESUME FLOOR: `--continue` of an auto session must resume NO WEAKER than where it
+// left off. A persisted gatePolicy floor (packs the session accumulated, the profile it
+// ran under, the frozen test command) is unioned with fresh detection: a pack the subject
+// deleted before restart still holds, the profile isn't silently downgraded, and the test
+// gate isn't dropped — while a NEWLY added framework is still picked up on top.
+test("resume unions the persisted policy floor (packs + profile + testCommand survive --continue)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-floor-"));
+
+  try {
+    // A plain project on disk — NO react, NO strict CLI flag, NO test script.
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+
+    const resumed = await resolveGate(
+      { ...parseArgs([]), dir },
+      {
+        id: "s",
+        cwd: dir,
+        accept: "eslint .",
+        auto: true,
+        files: [],
+        updatedAt: 0,
+        messages: [],
+        gatePolicy: {
+          packs: ["react-component-architecture"],
+          profile: "strict",
+          testCommand: "bun run test",
+        },
+      }
+    );
+
+    // The pack the last session reached survives (floor union), even though the tree no
+    // longer has react.
+    expect(resumed.accept).toContain("react-component-architecture");
+    // The profile isn't downgraded: `strict` restores its `typescript-core` extra pack
+    // although the CLI passed no --profile this run.
+    expect(resumed.accept).toContain("typescript-core");
+    // The frozen test command is kept even though the tree now has no test script.
+    expect(resumed.accept).toContain("bun run test");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The persistence boundary for the floor: gatePolicy must round-trip through
+// saveSession/loadSession (the real --continue path), and a malformed floor is dropped.
+test("the session record round-trips the gatePolicy floor through save/load", async () => {
+  const prevHome = process.env.TSFORGE_HOME;
+  const home = await mkdtemp(join(tmpdir(), "tsforge-home-floor-"));
+
+  process.env.TSFORGE_HOME = home;
+
+  const base: Omit<ISessionRecord, "id" | "gatePolicy"> = {
+    cwd: "/x",
+    accept: "eslint .",
+    auto: true,
+    files: [],
+    updatedAt: 1,
+    messages: [],
+  };
+
+  try {
+    await saveSession({
+      ...base,
+      id: "floored",
+      gatePolicy: {
+        packs: ["react-component-architecture", "typescript-core"],
+        profile: "strict",
+        testCommand: "bun run test",
+      },
+    });
+    await saveSession({ ...base, id: "no-floor" });
+
+    const floored = await loadSession("floored");
+
+    expect(floored?.gatePolicy?.packs).toEqual([
+      "react-component-architecture",
+      "typescript-core",
+    ]);
+    expect(floored?.gatePolicy?.profile).toBe("strict");
+    expect(floored?.gatePolicy?.testCommand).toBe("bun run test");
+
+    expect((await loadSession("no-floor"))?.gatePolicy).toBeUndefined();
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.TSFORGE_HOME;
+    } else {
+      process.env.TSFORGE_HOME = prevHome;
+    }
+
+    await rm(home, { recursive: true, force: true });
+  }
+});

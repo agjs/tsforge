@@ -63,9 +63,11 @@ test("buildGate caches the syntactic eslint pass, dir made in-process + git-igno
   try {
     const gate = await buildGate(dir, []);
 
-    // The syntactic strict pass caches results across repair cycles…
-    expect(gate.command).toContain(
-      '--cache --cache-location ".tsforge/eslint-gate.cache"'
+    // The syntactic strict pass caches results across repair cycles, in a cache file
+    // KEYED by the active ruleset (eslint-gate-<hash>.cache) so a mid-session pack change
+    // invalidates it instead of reusing entries linted under a weaker ruleset.
+    expect(gate.command).toMatch(
+      /--cache --cache-location "\.tsforge\/eslint-gate-[a-z0-9]+\.cache"/
     );
     // …the type-aware pass must NOT (editing one file changes another's errors).
     expect(gate.command).not.toContain("type-aware");
@@ -73,10 +75,10 @@ test("buildGate caches the syntactic eslint pass, dir made in-process + git-igno
     // cwd, cross-platform) before the gate runs.
     expect(gate.command).not.toContain("mkdir");
     expect(existsSync(join(dir, ".tsforge"))).toBe(true);
-    // The cache file is git-ignored alongside the tsc buildinfo.
+    // The cache files are git-ignored alongside the tsc buildinfo (glob covers the hash).
     const ignore = readFileSync(join(dir, ".tsforge", ".gitignore"), "utf8");
 
-    expect(ignore).toContain("eslint-gate.cache");
+    expect(ignore).toContain("eslint-gate*.cache");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -93,7 +95,7 @@ test("buildGate creates the cache dir even for a lint-only project (no tsconfig)
     const gate = await buildGate(dir, []);
 
     expect(gate.command).not.toContain("tsc");
-    expect(gate.command).toContain("eslint-gate.cache");
+    expect(gate.command).toContain("eslint-gate-");
     expect(existsSync(join(dir, ".tsforge"))).toBe(true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -144,6 +146,78 @@ test("incremental gate still catches a newly-introduced type error (no stale gre
     writeFileSync(join(dir, "src", "m.ts"), "export const n: number = 2;\n");
 
     expect(await runTsc()).toBe(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The auto gate changes packs mid-session; the eslint cache path must be KEYED by the
+// active ruleset (packs/overrides are injected via env, which eslint's cache ignores) so
+// files cached under a weaker ruleset can't keep passing after new rules activate.
+test("buildGate keys the eslint cache path by the active ruleset", async () => {
+  const dir = project();
+
+  const cacheOf = (command: string): string => {
+    const m = /--cache-location "([^"]+)"/.exec(command);
+
+    return m?.[1] ?? "";
+  };
+
+  try {
+    const generic = await buildGate(dir, ["generic-ts"]);
+    const react = await buildGate(dir, ["react-component-architecture"]);
+    const withOverride = await buildGate(dir, ["generic-ts"], {
+      "no-explicit-any": "off",
+    });
+
+    // Different pack sets → different cache files (no cross-ruleset reuse).
+    expect(cacheOf(generic.command)).not.toBe(cacheOf(react.command));
+    // Different rule overrides under the same packs → different cache file too.
+    expect(cacheOf(generic.command)).not.toBe(cacheOf(withOverride.command));
+    // The SAME ruleset is stable (a warm cache still hits across cycles).
+    expect(cacheOf(generic.command)).toBe(
+      cacheOf((await buildGate(dir, ["generic-ts"])).command)
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// buildGate's explicit `testCommand` override (used by the auto gate to freeze the test
+// command): undefined discovers; a string is used verbatim; null omits the test step.
+test("buildGate honors an explicit testCommand override", async () => {
+  const dir = project();
+
+  try {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "x", scripts: { test: "vitest run" } })
+    );
+
+    // Explicit string → used verbatim, discovery skipped.
+    const explicit = await buildGate(dir, [], undefined, {
+      includeTests: true,
+      testCommand: "echo frozen-tests",
+    });
+
+    expect(explicit.command).toContain("echo frozen-tests");
+    expect(explicit.command).not.toContain("bun run test");
+
+    // Explicit null → no test step even though the project has a test script.
+    const none = await buildGate(dir, [], undefined, {
+      includeTests: true,
+      testCommand: null,
+    });
+
+    expect(none.command).not.toContain("bun run test");
+    expect(none.command).not.toContain("bun test");
+
+    // Undefined (omitted) → discovers the project's command.
+    const discovered = await buildGate(dir, [], undefined, {
+      includeTests: true,
+    });
+
+    expect(discovered.command).toContain("bun run test");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

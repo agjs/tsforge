@@ -19,6 +19,17 @@ export function persistenceEnabled(): boolean {
  * session under `~/.tsforge/sessions/`, rewritten after each turn. Deliberately
  * simple (flat files, no index) — a session is small and there are never many.
  */
+/** The auto gate's persisted policy FLOOR — the strictness the session reached, saved so
+ *  `--continue` never resumes weaker than where it left off. On resume the harness unions
+ *  fresh stack detection ON TOP of `packs` (so a new framework is still picked up, but a
+ *  removed one can't drop the floor), restores `profile` (so `--profile strict` isn't
+ *  silently downgraded), and keeps `testCommand` unless the project newly gained one. */
+export interface IGateFloor {
+  packs: string[];
+  profile: string;
+  testCommand: string | null;
+}
+
 export interface ISessionRecord {
   /** Stable id (also the filename stem). */
   id: string;
@@ -38,6 +49,9 @@ export interface ISessionRecord {
   /** Plan mode was on when last saved — restored on `--continue` so a resumed
    *  session doesn't silently drop its read-only guarantee. */
   planMode?: boolean;
+  /** The auto gate's policy floor at save time (see IGateFloor) — restored on `--continue`
+   *  so a resumed session can only get STRICTER, never weaker. Absent for manual/off gates. */
+  gatePolicy?: IGateFloor;
   /** A still-unvalidated edit was pending behind an ask_user pause when last saved —
    *  restored on `--continue`/`--resume` so a resumed session re-gates that edit on its
    *  first send instead of silently dropping the deferred gate (WS-C, same as /clear). */
@@ -156,6 +170,25 @@ export async function loadSession(id: string): Promise<ISessionRecord | null> {
   return readRecord(join(storeDir(), `${id}.json`));
 }
 
+/** Validate an untrusted persisted `gatePolicy` into an IGateFloor, or null if malformed
+ *  (a bad/partial floor is dropped, not trusted — the resume then re-captures fresh). */
+function parseGateFloor(value: unknown): IGateFloor | null {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.packs) ||
+    typeof value.profile !== "string" ||
+    !(typeof value.testCommand === "string" || value.testCommand === null)
+  ) {
+    return null;
+  }
+
+  return {
+    packs: value.packs.filter((p): p is string => typeof p === "string"),
+    profile: value.profile,
+    testCommand: value.testCommand,
+  };
+}
+
 async function readRecord(path: string): Promise<ISessionRecord | null> {
   try {
     const data: unknown = JSON.parse(await Bun.file(path).text());
@@ -167,6 +200,8 @@ async function readRecord(path: string): Promise<ISessionRecord | null> {
       typeof data.updatedAt === "number" &&
       Array.isArray(data.messages)
     ) {
+      const gatePolicy = parseGateFloor(data.gatePolicy);
+
       return {
         id: data.id,
         cwd: data.cwd,
@@ -188,6 +223,8 @@ async function readRecord(path: string): Promise<ISessionRecord | null> {
         ...(typeof data.pausedWithEdit === "boolean"
           ? { pausedWithEdit: data.pausedWithEdit }
           : {}),
+        // The auto-gate policy floor — restored so `--continue` resumes no weaker.
+        ...(gatePolicy === null ? {} : { gatePolicy }),
         messages: toMessages(data.messages),
       };
     }

@@ -2,7 +2,7 @@
  *  explicit --accept, then --no-gate, else tsforge's auto strict-TS gate
  *  (with the per-write lint moat). */
 import type { ICliArgs } from "./args";
-import type { ISessionRecord } from "../session-store";
+import type { ISessionRecord, IGateFloor } from "../session-store";
 import {
   buildGate,
   discoverTestCommand,
@@ -32,6 +32,9 @@ export interface IResolvedGate {
    *  profile and per-write linter) from this each cycle, and stops the moment the user
    *  overrides the gate (`/gate`, a recipe). Absent for explicit/`--no-gate` gates. */
   autoGate?: AutoGateResolver;
+  /** The frozen policy knobs (auto gate only) the caller persists as the resume FLOOR
+   *  alongside the session's accumulated packs — so `--continue` resumes no weaker. */
+  policy?: { profile: string; testCommand: string | null };
 }
 
 /** The FROZEN policy an auto gate runs under, captured ONCE at session start (or on
@@ -76,7 +79,8 @@ export async function resolveGate(
 async function captureGatePolicy(
   dir: string,
   profileArg: string,
-  strictFloorOnly: boolean
+  strictFloorOnly: boolean,
+  floor?: IGateFloor
 ): Promise<IGatePolicy> {
   const { detectStack } = await import("../stack-detection");
   const {
@@ -89,11 +93,17 @@ async function captureGatePolicy(
   const { resolveConventions } = await import("../infer-rules/conventions");
   const { resolveCliProfile } = await import("./args");
 
+  // A resume floor's profile is applied (unless the user passes one THIS run) so
+  // `--profile strict` isn't silently downgraded across `--continue`.
+  const effectiveProfileArg =
+    profileArg.length > 0 ? profileArg : (floor?.profile ?? "");
   const config = withProfileOverride(
     await loadTsforgeConfig(dir),
-    resolveCliProfile(profileArg)
+    resolveCliProfile(effectiveProfileArg)
   );
   const stackProfile = await detectStack(dir);
+  const freshPacks = resolveActivePacks(stackProfile.packs, config);
+  const freshTest = strictFloorOnly ? null : await discoverTestCommand(dir);
 
   return {
     dir,
@@ -102,9 +112,15 @@ async function captureGatePolicy(
     ruleOverrides: normalizeRuleOverrides(config),
     profile: resolveProjectProfile(config),
     conventions: resolveConventions(config.conventions),
-    baselinePacks: resolveActivePacks(stackProfile.packs, config),
-    // Discover the test command ONCE and freeze it — see IGatePolicy.testCommand.
-    testCommand: strictFloorOnly ? null : await discoverTestCommand(dir),
+    // Union fresh detection ON TOP of the resume floor — a new framework is still picked
+    // up, but a removed one can't drop the floor the last session reached.
+    baselinePacks:
+      floor === undefined
+        ? freshPacks
+        : Array.from(new Set([...floor.packs, ...freshPacks])).sort(),
+    // Keep the floor's test command unless the project newly gained one (never drop it).
+    testCommand:
+      floor === undefined ? freshTest : (floor.testCommand ?? freshTest),
   };
 }
 
@@ -208,14 +224,19 @@ function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
   };
 }
 
-/** The auto gate: capture the frozen policy once, seed the displayed label / persisted
- *  `accept` / per-write linter from the baseline packs, and attach a resolver the
- *  Session refreshes each cycle. */
-async function autoGateBranch(args: ICliArgs): Promise<IResolvedGate> {
+/** The auto gate: capture the frozen policy once (overlaying a resume `floor` when present
+ *  so it resumes no weaker), seed the displayed label / persisted `accept` / per-write
+ *  linter from the baseline packs, attach a resolver the Session refreshes each cycle, and
+ *  expose the frozen knobs as `policy` for the caller to persist as the next floor. */
+async function autoGateBranch(
+  args: ICliArgs,
+  floor?: IGateFloor
+): Promise<IResolvedGate> {
   const policy = await captureGatePolicy(
     args.dir,
     args.profile,
-    args.strictFloorOnly
+    args.strictFloorOnly,
+    floor
   );
   const initial = await eslintFor(policy, policy.baselinePacks);
 
@@ -224,6 +245,7 @@ async function autoGateBranch(args: ICliArgs): Promise<IResolvedGate> {
     gateLabel: initial.label,
     autoGate: makeAutoGateResolver(policy),
     lintFile: lintFileFor(policy, policy.baselinePacks),
+    policy: { profile: policy.profile, testCommand: policy.testCommand },
   };
 }
 
@@ -238,7 +260,9 @@ async function baseGate(
 ): Promise<IResolvedGate> {
   if (resumed !== null) {
     if (resumed.auto === true) {
-      return autoGateBranch(args);
+      // Resume onto the persisted policy floor (union packs, restore profile, keep the
+      // test command) so `--continue` can only get stricter, never weaker.
+      return autoGateBranch(args, resumed.gatePolicy);
     }
 
     const label = resumed.accept.length > 0 ? resumed.accept : "none";

@@ -390,6 +390,7 @@ async function initReplSession(args: ICliArgs): Promise<{
   files: string[];
   activeModelEntry: IModelEntry;
   autoGate?: AutoGateResolver;
+  policy?: { profile: string; testCommand: string | null };
 }> {
   const activeModel = await modelForRun(args);
   const provider = makeProvider(activeModel.entry);
@@ -413,7 +414,7 @@ async function initReplSession(args: ICliArgs): Promise<{
   }
 
   const id = resumed?.id ?? newSessionId();
-  const { accept, gateLabel, lintFile, autoGate } = await resolveGate(
+  const { accept, gateLabel, lintFile, autoGate, policy } = await resolveGate(
     args,
     resumed
   );
@@ -513,6 +514,7 @@ async function initReplSession(args: ICliArgs): Promise<{
     files,
     activeModelEntry: activeModel.entry,
     ...(autoGate === undefined ? {} : { autoGate }),
+    ...(policy === undefined ? {} : { policy }),
   };
 }
 
@@ -546,6 +548,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     files,
     activeModelEntry,
     autoGate,
+    policy,
   } = await initReplSession(args);
 
   // Load delegation inputs HERE — before readline is created below. Any `await`
@@ -581,6 +584,17 @@ export async function repl(args: ICliArgs): Promise<number> {
       // re-detection for an auto session but keeps a manual override (setGate flipped it
       // false) verbatim — no silent re-arm of the auto gate on resume.
       auto: session.autoGateActive,
+      // Persist the policy FLOOR (accumulated packs + frozen profile/testCommand) so a
+      // resumed auto session unions fresh detection on top and can only get stricter.
+      ...(session.autoGateActive && policy !== undefined
+        ? {
+            gatePolicy: {
+              packs: [...session.stackPacks],
+              profile: policy.profile,
+              testCommand: policy.testCommand,
+            },
+          }
+        : {}),
       files: session.scope,
       updatedAt: Date.now(),
       planMode,

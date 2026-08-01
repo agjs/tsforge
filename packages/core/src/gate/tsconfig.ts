@@ -66,10 +66,11 @@ export const PROJECT_TSCONFIG = "tsconfig.json";
  *  authority, just amortized. */
 const GATE_TSBUILDINFO_FILE = "gate.tsbuildinfo";
 const INCREMENTAL_FLAGS = `--incremental --tsBuildInfoFile ${GATE_TSCONFIG_DIR}/${GATE_TSBUILDINFO_FILE}`;
-/** The syntactic-lint result cache (`.tsforge/eslint-gate.cache`, see
- *  core-gate.ts). Git-ignored alongside the tsc buildinfo so a warm gate never
- *  shows a cache file in `git status`. */
-const GATE_ESLINT_CACHE_FILE = "eslint-gate.cache";
+/** The syntactic-lint result cache (`.tsforge/eslint-gate-<rulesetHash>.cache`, see
+ *  core-gate.ts — the path is keyed by the active ruleset). A glob so every per-ruleset
+ *  cache file (and the pre-hash `eslint-gate.cache` from older runs) is git-ignored
+ *  alongside the tsc buildinfo, so a warm gate never shows a cache file in `git status`. */
+const GATE_ESLINT_CACHE_FILE = "eslint-gate*.cache";
 
 /** Compute new `.gitignore` content with any missing `entries` appended, PRESERVING
  *  the file's EOL style (a CRLF file stays all-CRLF — appending `\n` after CRLF
