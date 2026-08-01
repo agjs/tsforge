@@ -28,7 +28,7 @@ These load without waiting for a dependency match:
 | `security` | Command injection, ReDoS, DOM XSS, silent catch blocks, no tokens in storage |
 | `runtime-boundaries` | Open redirects, SSRF fetches, prototype pollution, webhook verify, upload limits |
 
-These run on every project alongside `tsc`; stack detection layers framework packs (`react-component-architecture`, `elysia`, `nextjs`, …) on top. (`generic-ts` and `react` in the list below are **detection labels only** — they name a stack for reporting and carry no rules of their own.)
+These run on every project alongside `tsc`; stack detection layers framework packs (`react-component-architecture`, `elysia`, `nextjs`, …) on top. (`generic-ts` and `react` in the list below are **detection labels only**. They name a stack for reporting and carry no rules of their own.)
 
 ## Pack list
 
@@ -56,7 +56,7 @@ Every implemented rule with severity and fix text: [Rule catalog](/reference/rul
 
 ## Bring your own rules
 
-You are not limited to the built-in packs. Point `tsforge.config.json` at your own ESLint rule-pack module and tsforge loads it into the gate alongside everything above — no fork required:
+You are not limited to the built-in packs. Point `tsforge.config.json` at your own ESLint rule-pack module and tsforge loads it into the gate alongside everything above. No fork required:
 
 ```json
 {
@@ -64,7 +64,7 @@ You are not limited to the built-in packs. Point `tsforge.config.json` at your o
 }
 ```
 
-Your pack's rules run on every validation, exactly like the built-ins — they can't shadow a built-in rule, and a name collision is reported at startup. This is how you enforce a company's or repo's own conventions through tsforge. See [Config & external plugins](/guardrails/config/) for the full shape.
+Your pack's rules run on every validation, exactly like the built-ins. They can't shadow a built-in rule, and a name collision is reported at startup. This is how you enforce a company's or repo's own conventions through tsforge. See [Config & external plugins](/guardrails/config/) for the full shape.
 
 ## Web stacks and accessibility
 
@@ -79,8 +79,8 @@ When the `react-component-architecture` pack is enabled (React in `package.json`
 | `no-jsx-computation` | `.map()` / `.filter()` / arithmetic / chained logic inside JSX `{…}` |
 | `no-state-in-component-body` | `useState`, `useEffect`, etc. directly in component `.tsx` files |
 | `no-inline-jsx-functions` | Inline arrow/function handlers in JSX attributes |
-| `no-loading-text-use-skeleton` | `"Loading…"` text / spinners in loading branches — render a `<Skeleton/>` instead |
-| `component-file-purity` | A component `.tsx` holds **only** imports + the component — no inline types, constants, or helper functions |
+| `no-loading-text-use-skeleton` | `"Loading…"` text / spinners in loading branches. Render a `<Skeleton/>` instead |
+| `component-file-purity` | A component `.tsx` holds **only** imports + the component. No inline types, constants, or helper functions |
 | `component-folder-structure` | A component `.tsx` must live in `src/views/<Feature>/components/`, be the view root `src/views/<Feature>/index.tsx`, or a shared primitive in `src/components/ui/` |
 | `no-cross-feature-imports` | Cross-feature runtime imports |
 

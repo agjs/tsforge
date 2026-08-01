@@ -1,6 +1,6 @@
 ---
 title: MCP servers
-description: Give the agent extra tools from external Model Context Protocol servers — live library docs, search, and more.
+description: Give the agent extra tools from external Model Context Protocol servers. Live library docs, search, and more.
 ---
 
 tsforge can connect to external **MCP (Model Context Protocol) servers** and offer their tools to the agent during an interactive session. The classic use is **[Context7](https://github.com/upstash/context7)** for up-to-date library documentation, but any stdio MCP server works.
@@ -39,13 +39,13 @@ On startup tsforge connects each server, lists its tools, and advertises them to
 
 MCP fits tsforge's deterministic, local-first design as an **opt-in context source**:
 
-- MCP tools **never touch your editable scope** and **cannot satisfy or bypass the acceptance gate** — they add context, they don't certify "done".
+- MCP tools **never touch your editable scope** and **cannot satisfy or bypass the acceptance gate**. They add context, they don't certify "done".
 - Because they don't write the workspace, they remain available in **plan mode** (e.g. look up docs while planning).
-- A server that fails to connect, crashes, or times out is **reported and skipped** — it can never block a session from starting or wedge the loop. A failed tool call comes back as an error string the model can react to.
+- A server that fails to connect, crashes, or times out is **reported and skipped**. It can never block a session from starting or wedge the loop. A failed tool call comes back as an error string the model can react to.
 
 ## Limits today
 
-- **stdio transport only** — `http` entries are reported and skipped (HTTP/SSE is planned).
+- **stdio transport only**: `http` entries are reported and skipped (HTTP/SSE is planned).
 - MCP tools are offered in the **interactive CLI**; the headless eval path does not load them.
 - Connected servers are child processes; they exit with the tsforge process.
 

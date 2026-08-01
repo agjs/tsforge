@@ -1,19 +1,19 @@
 ---
 title: Delegate to subagents
-description: "tsforge's orchestrator delegates focused, read-only investigation to specialist subagents on its own — you describe a task, it decides what to explore, research, or verify — and renders them as a live tree while they work."
+description: "tsforge's orchestrator delegates focused, read-only investigation to specialist subagents on its own. You describe a task, it decides what to explore, research, or verify, and renders them as a live tree while they work."
 ---
 
-You think in tasks, bugs, and features — never in subagents. So delegation in tsforge is **orchestrator-driven**: the model you're talking to decides, on its own, when a task needs focused investigation, hands it to a specialist subagent, and folds the findings back into its answer. You never name an agent, pass ids, or run a command for it.
+You think in tasks, bugs, and features. Never in subagents. So delegation in tsforge is **orchestrator-driven**: the model you're talking to decides, on its own, when a task needs focused investigation, hands it to a specialist subagent, and folds the findings back into its answer. You never name an agent, pass ids, or run a command for it.
 
-Ask it to "figure out how the gate decides a run is done and check there's no race in the scheduler," and it may spawn an `explore` agent for the first and a `verify` agent for the second — in parallel — while it keeps working.
+Ask it to "figure out how the gate decides a run is done and check there's no race in the scheduler," and it may spawn an `explore` agent for the first and a `verify` agent for the second in parallel while it keeps working.
 
 ## Why delegate
 
-A subagent runs in its **own context window** and returns only a concise, cited summary. That keeps the orchestrator's context small on exploration-heavy work (it doesn't have to read twenty files itself), and — when several run at once — shortens wall-clock. Subagents are **read-only**: they explore, research, and verify; only the orchestrator edits files.
+A subagent runs in its **own context window** and returns only a concise, cited summary. That keeps the orchestrator's context small on exploration-heavy work (it doesn't have to read twenty files itself), and when several run at once, it shortens wall-clock. Subagents are **read-only**: they explore, research, and verify; only the orchestrator edits files.
 
 ## Built-in specialists
 
-These ship in the binary — delegation works with zero configuration:
+These ship in the binary. Delegation works with zero configuration:
 
 | Specialist | What it does |
 | ---------- | ------------ |
@@ -22,9 +22,9 @@ These ship in the binary — delegation works with zero configuration:
 | `verify` | Adversarially checks a specific claim or finding against the real code; returns a verdict. |
 | `review-lens` | Reviews a change for correctness / regressions from a senior-engineer lens. |
 
-Each is a read-only agent with a prompt that mandates real investigation and cited findings — it must read before it answers.
+Each is a read-only agent with a prompt that mandates real investigation and cited findings. It must read before it answers.
 
-**Structured findings.** A specialist doesn't return a wall of prose. It finishes by calling `agent_result` with a **structured** payload — a one-line `summary` plus a list of `findings`, each carrying its own `source` (a `file:line` for code, a URL for external docs) and a `confidence`. The schema *forces* evidence onto every point, which is exactly what separates a grounded answer from a confident hallucination; the orchestrator receives a consistent `summary + cited findings` block it can act on directly.
+**Structured findings.** A specialist doesn't return a wall of prose. It finishes by calling `agent_result` with a **structured** payload: a one-line `summary` plus a list of `findings`, each carrying its own `source` (a `file:line` for code, a URL for external docs) and a `confidence`. The schema *forces* evidence onto every point, which is exactly what separates a grounded answer from a confident hallucination; the orchestrator receives a consistent `summary + cited findings` block it can act on directly.
 
 ### Add or override a specialist
 
@@ -39,11 +39,11 @@ Drop a JSON file in `.tsforge/agents/<id>.json` (project) or `~/.tsforge/agents/
 }
 ```
 
-`tools` is intersected with the read-only tool set — a spec can never grant a subagent the ability to write.
+`tools` is intersected with the read-only tool set. A spec can never grant a subagent the ability to write.
 
 ## The live agent tree
 
-While subagents run, they render as a live tree pinned above the input row — so a delegated run is never a black box:
+While subagents run, they render as a live tree pinned above the input row. A delegated run is never a black box:
 
 ```
 ● agents · 1 running · 1/2 done
@@ -51,9 +51,9 @@ While subagents run, they render as a live tree pinned above the input row — s
 └─ ⠹ verify
 ```
 
-Rows appear the moment they're spawned, animate a spinner while running, and finish with their wall-clock and turn count. Beneath the tree, a detail pane streams the **focused** agent's live output (the files it reads, what it finds) — it follows the newest running agent automatically. The tree repaints in place (it never scrolls your transcript) and collapses to `… +N more` past a dozen rows. Ctrl-C cancels the turn and all its subagents.
+Rows appear the moment they're spawned, animate a spinner while running, and finish with their wall-clock and turn count. Beneath the tree, a detail pane streams the **focused** agent's live output (the files it reads, what it finds). It follows the newest running agent automatically. The tree repaints in place (it never scrolls your transcript) and collapses to `… +N more` past a dozen rows. Ctrl-C cancels the turn and all its subagents.
 
-**Watch any agent.** Press **↑/↓** while subagents are running to move the detail pane between them — pick one and watch what it's doing, instead of only seeing the newest. This works in both input modes (the default multi-line editor and the basic input row); in the editor it's only bound while the input is empty, so the arrows still edit a message you're composing mid-run. Auto-follow resumes on a fresh turn.
+**Watch any agent.** Press **↑/↓** while subagents are running to move the detail pane between them. Pick one and watch what it's doing, instead of only seeing the newest. This works in both input modes (the default multi-line editor and the basic input row); in the editor it's only bound while the input is empty, so the arrows still edit a message you're composing mid-run. Auto-follow resumes on a fresh turn.
 
 ## Concurrency
 
@@ -63,7 +63,7 @@ How many subagents run at once is capped by [`agents.concurrency`](/guardrails/c
 { "agents": { "concurrency": 4 } }
 ```
 
-When the orchestrator spawns several agents in one turn, up to this many run in parallel; the rest queue (shown as pending `○` rows) until a slot frees. At `concurrency: 1` they run one at a time — you still get the context-isolation win, just no wall-clock overlap. The config is discovered by walking up from the working directory, so it applies even when tsforge runs from a subdirectory. The REPL prints the resolved setup at startup:
+When the orchestrator spawns several agents in one turn, up to this many run in parallel; the rest queue (shown as pending `○` rows) until a slot frees. At `concurrency: 1` they run one at a time. You still get the context-isolation win, just no wall-clock overlap. The config is discovered by walking up from the working directory, so it applies even when tsforge runs from a subdirectory. The REPL prints the resolved setup at startup:
 
 ```
 ↳ delegation: 4 specialists (explore, research, review-lens, verify) · cap 4
@@ -75,9 +75,9 @@ If you set `concurrency` above 1 but agents still run serially, either the cap i
 
 - **Read-only.** A subagent's tools are the read-only set ∩ its spec; the executor hard-rejects any mutation, and the policy layer evaluates every call.
 - **No recursion.** A subagent is never offered `spawn_agent`, so delegation depth is capped at one.
-- **Never overflows.** A subagent auto-compacts its own conversation before a request would exceed the model's context window (and recovers from an overflow rejection by compacting and retrying) — so a long, read-heavy investigation can't fail on length.
-- **Policy-aware.** Delegation is its own policy action class — a repo can `deny`/`ask` it via [permissions](/guardrails/policy/), and each subagent inherits the session's policy mode.
+- **Never overflows.** A subagent auto-compacts its own conversation before a request would exceed the model's context window (and recovers from an overflow rejection by compacting and retrying). A long, read-heavy investigation can't fail on length.
+- **Policy-aware.** Delegation is its own policy action class. A repo can `deny`/`ask` it via [permissions](/guardrails/policy/), and each subagent inherits the session's policy mode.
 
 ## Turning it off
 
-Delegation is on by default. Set `TSFORGE_NO_DELEGATION=1` to withhold the `spawn_agent` tool entirely — the orchestrator runs as a single stream with no subagents (the startup line reads `↳ delegation: OFF`). Useful as a control when measuring delegation's effect, or to force a pure single-agent run.
+Delegation is on by default. Set `TSFORGE_NO_DELEGATION=1` to withhold the `spawn_agent` tool entirely. The orchestrator runs as a single stream with no subagents (the startup line reads `↳ delegation: OFF`). Useful as a control when measuring delegation's effect, or to force a pure single-agent run.

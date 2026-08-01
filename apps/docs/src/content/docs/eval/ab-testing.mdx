@@ -3,7 +3,7 @@ title: A/B testing
 description: Run feature sweeps, compare edit mechanisms, and land defaults from measured wins.
 ---
 
-Compare feature settings across benchmark runs before changing a default. The sweep harness A/Bs any **tool-availability dimension** — whether the model is offered a given tool — by toggling the env var behind it per run. See [Big picture](/big-picture/) for what each feature does.
+Compare feature settings across benchmark runs before changing a default. The sweep harness A/Bs any **tool-availability dimension**: whether the model is offered a given tool. Toggle the env var behind it per run. See [Big picture](/big-picture/) for what each feature does.
 
 ## Sweepable dimensions
 
@@ -13,7 +13,7 @@ Compare feature settings across benchmark runs before changing a default. The sw
 | `script` | `script` tool available | `TSFORGE_NO_SCRIPT=1` |
 | `web` | web research tools available (`TSFORGE_WEB=1`) | off |
 
-Core uplifts ([TTSR](/uplift/ttsr/), [hashline](/uplift/hashline/), [write diagnostics](/uplift/write-diagnostics/)) are always on and no longer sweepable — they landed as defaults from earlier sweeps. Full flag reference: [Environment variables](/reference/flags/).
+Core uplifts ([TTSR](/uplift/ttsr/), [hashline](/uplift/hashline/), [write diagnostics](/uplift/write-diagnostics/)) are always on and no longer sweepable. They landed as defaults from earlier sweeps. Full flag reference: [Environment variables](/reference/flags/).
 
 :::note
 Running a sweep drives a real model, so you need an OpenAI-compatible endpoint (the default is a local model at `http://localhost:8000/v1`; override with `TSFORGE_BASE_URL`/`TSFORGE_MODEL`/`TSFORGE_API_KEY`). The corpus, analysis, and report tooling below ship with the repo and are exercised by the test suite, but the runs themselves need a model.
@@ -23,24 +23,24 @@ Running a sweep drives a real model, so you need an OpenAI-compatible endpoint (
 
 A **seed** is the task you run the model against. Committed seeds live in [`evals/corpus/`](https://github.com/agjs/tsforge/tree/main/evals/corpus) and ship with the repo, so the examples work on a fresh clone:
 
-- `math` — single-file pure logic (currency-safe cent arithmetic with half-up rounding).
-- `slugify` — single-file string normalization with Unicode edge cases.
-- `checkout` — multi-file pricing engine (cart + coupons + tax, integer cents).
-- `auth` — multi-file session service (password policy + lockout + token expiry).
-- `query` — multi-file mini-SQL engine (lexer → recursive-descent parser → executor).
-- `fix-regression` — **brownfield**: an existing repo with git history where a recent commit broke `slugify`; the fix is a `git diff` away. Used to exercise [`git_context`](/reference/flags/#git-context).
+- `math`: single-file pure logic (currency-safe cent arithmetic with half-up rounding).
+- `slugify`: single-file string normalization with Unicode edge cases.
+- `checkout`: multi-file pricing engine (cart + coupons + tax, integer cents).
+- `auth`: multi-file session service (password policy + lockout + token expiry).
+- `query`: multi-file mini-SQL engine (lexer → recursive-descent parser → executor).
+- `fix-regression` (**brownfield**): an existing repo with git history where a recent commit broke `slugify`; the fix is a `git diff` away. Used to exercise [`git_context`](/reference/flags/#git-context).
 
 The first two are warm-ups a strong model one-shots; the next three are multi-file and deliberately harder, so a feature has room to move the pass rate (and the [failure breakdown](#why-runs-failed)) off the ceiling.
 
-Pick one with `TSFORGE_SEED=<name>`. A sweep first looks for a local working copy at `evals/<name>/`, then falls back to the committed `evals/corpus/<name>/`. To add your own, drop a folder under `evals/corpus/` with a `<name>.spec.md` plus its fixture files — see [Spec format](/spec/format/).
+Pick one with `TSFORGE_SEED=<name>`. A sweep first looks for a local working copy at `evals/<name>/`, then falls back to the committed `evals/corpus/<name>/`. To add your own, drop a folder under `evals/corpus/` with a `<name>.spec.md` plus its fixture files. See [Spec format](/spec/format/).
 
 ### Brownfield seeds
 
-A greenfield seed is regenerated from scratch (the sweep deletes the task's files and the model rebuilds them). A **brownfield** seed instead sets `mode: existing` in its spec, so the buggy code is kept and the model edits it in place. Such a seed may also ship a `setup.sh`, which the sweep runs in the run directory after laying down the files — it `git init`s, makes the commits, and leaves the red working tree. That is how a `git_context` task has real history (`log`/`blame`/`show`) and a working-tree `diff` to inspect. Greenfield seeds have no `setup.sh` and are unaffected.
+A greenfield seed is regenerated from scratch (the sweep deletes the task's files and the model rebuilds them). A **brownfield** seed instead sets `mode: existing` in its spec, so the buggy code is kept and the model edits it in place. Such a seed may also ship a `setup.sh`, which the sweep runs in the run directory after laying down the files. It `git init`s, makes the commits, and leaves the red working tree. That is how a `git_context` task has real history (`log`/`blame`/`show`) and a working-tree `diff` to inspect. Greenfield seeds have no `setup.sh` and are unaffected.
 
 ## Running a sweep
 
-`bun run eval:sweep` accepts `TSFORGE_FEATURE_VARIANTS` — a comma-separated list of dimensions to sweep (cartesian product).
+`bun run eval:sweep` accepts `TSFORGE_FEATURE_VARIANTS`: a comma-separated list of dimensions to sweep (cartesian product).
 
 ### script on/off
 
@@ -82,7 +82,7 @@ Each run directory contains `run.log` (human transcript) and `result.json` (stru
 
 ## Statistical report
 
-`bun run eval:report` turns a sweep's JSON into a Markdown table: per-variant pass rate with a **95% Wilson confidence interval**, average cycles/ms/quality, **turns-to-green (T2G)** — the average turns *passed* runs took to go green, the loop-efficiency signal — and, when you name a baseline, a **two-proportion z-test** of each variant's pass-rate difference (a `*` marks p < 0.05).
+`bun run eval:report` turns a sweep's JSON into a Markdown table: per-variant pass rate with a **95% Wilson confidence interval**, average cycles/ms/quality, **turns-to-green (T2G)** (the average turns *passed* runs took to go green, the loop-efficiency signal), and when you name a baseline, a **two-proportion z-test** of each variant's pass-rate difference (a `*` marks p < 0.05).
 
 ```bash
 # newest sweep under evals/runs, comparing every variant to the all-off baseline
@@ -101,7 +101,7 @@ It prints the table and writes it next to the sweep JSON as `…​.report.md`:
 | git=on,script=on temp=0   | 10 | 90% | 60%–98% | 4.7 | 33000 | 4.2 | +30% (z=2.13) * |
 ```
 
-Wilson intervals (not naive ±) keep the bounds sane at small N, and the z-test tells you whether a pass-rate gap is signal or noise — the bar for "measured wins" before flipping a default.
+Wilson intervals (not naive ±) keep the bounds sane at small N, and the z-test tells you whether a pass-rate gap is signal or noise. The bar for "measured wins" before flipping a default is determined by statistical significance.
 
 ### Why runs failed
 
@@ -113,11 +113,11 @@ Pass rate tells you *how often* a variant failed; the **failure breakdown** tell
 - git=on,script=on temp=0: type-error×1
 ```
 
-Each failed run is classified from its event stream into one of: `type-error`, `lint-rule`, `hallucinated-import`, `tool-malformed`, `edit-reject`, `degeneration`, `no-progress`, `build-fail`, `browser-fail`, `route-phantom`, or `timeout`. This turns a sweep from "feature X passes more" into "feature X eliminates the `type-error` failures" — pointing at the next rule, prompt, or fixer to build. The same classifier powers the `failure class` line in [`cli-metrics`](/observability/metrics/) for a single `--log` run.
+Each failed run is classified from its event stream into one of: `type-error`, `lint-rule`, `hallucinated-import`, `tool-malformed`, `edit-reject`, `degeneration`, `no-progress`, `build-fail`, `browser-fail`, `route-phantom`, or `timeout`. This turns a sweep from "feature X passes more" into "feature X eliminates the `type-error` failures." It points at the next rule, prompt, or fixer to build. The same classifier powers the `failure class` line in [`cli-metrics`](/observability/metrics/) for a single `--log` run.
 
 ## Compare edit mechanisms
 
-`bun run eval:benchmark` reports edit-tool performance across a set of run directories — useful for spotting how `edit` vs `edit_lines` behave, stale-anchor recovery rates, and token cost across models or seeds:
+`bun run eval:benchmark` reports edit-tool performance across a set of run directories. It helps spot how `edit` vs `edit_lines` behave, stale-anchor recovery rates, and token cost across models or seeds:
 
 ```bash
 bun run eval:benchmark evals/checkout-*
@@ -146,8 +146,8 @@ bun run eval:benchmark \
 
 Each run directory contains:
 
-- **`run.log`** — live event transcript (`renderEvent()` pipeline; source of truth for analysis)
-- **`result.json`** — structured metrics, for example:
+- **`run.log`**: live event transcript (`renderEvent()` pipeline; source of truth for analysis)
+- **`result.json`**: structured metrics, for example:
 
 ```json
 {
@@ -180,15 +180,15 @@ Each run directory contains:
 
 ## How to read results
 
-**Edit success** — higher `edit_lines` success rate (vs `edit` rejections) means the hashline mechanism is reducing stale-anchor failures.
+**Edit success**: Higher `edit_lines` success rate (vs `edit` rejections) means the hashline mechanism is reducing stale-anchor failures.
 
-**Stale recovery** — non-zero recovery counts show the 3-way merge is active; correlate with pass rate.
+**Stale recovery**: Non-zero recovery counts show the 3-way merge is active; correlate with pass rate.
 
-**Turns to green** — lower on a variant means less loop churn.
+**Turns to green**: Lower on a variant means less loop churn.
 
-**Token efficiency** — smaller `mean args (bytes)` at similar success rate is better.
+**Token efficiency**: Smaller `mean args (bytes)` at similar success rate is better.
 
-**Pass rate + quality** — confirm enabling a feature does not regress outcomes beyond noise.
+**Pass rate + quality**: Confirm enabling a feature does not regress outcomes beyond noise.
 
 ## Landing a new feature
 

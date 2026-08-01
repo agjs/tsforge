@@ -1,6 +1,6 @@
 ---
 title: models.json (any provider)
-description: Configure any OpenAI-compatible model — a local vLLM model, DeepSeek, OpenAI o-series, or a custom gateway — from one registry file. No env vars needed.
+description: Configure any OpenAI-compatible model (local vLLM, DeepSeek, OpenAI o-series, or a custom gateway) from one registry file. No env vars needed.
 ---
 
 tsforge reads its model registry from **`~/.tsforge/models.json`** (or `$TSFORGE_HOME/.tsforge/models.json`). It's the one place you configure providers; you never need environment variables. `active` names the entry to use; `/model <name>` switches live.
@@ -21,7 +21,7 @@ tsforge reads its model registry from **`~/.tsforge/models.json`** (or `$TSFORGE
 ```
 
 :::caution
-The entry **key** (`"deepseek"`) is just a local label. The field that's sent to the API is **`model`**. Pointing `baseUrl` at a cloud provider while leaving `model` as the local default is the #1 mistake — tsforge warns at startup when it detects this.
+The entry **key** (`"deepseek"`) is just a local label. The field that's sent to the API is **`model`**. Pointing `baseUrl` at a cloud provider while leaving `model` as the local default is the #1 mistake. tsforge warns at startup when it detects this.
 :::
 
 ## Fields
@@ -30,14 +30,14 @@ The entry **key** (`"deepseek"`) is just a local label. The field that's sent to
 | --- | --- | --- |
 | `baseUrl` | yes | OpenAI-compatible API root, e.g. `https://api.deepseek.com/v1`. `/chat/completions` is appended (and not double-appended). |
 | `model` | yes | The model id sent to the API. |
-| `apiKey` / `apiKeyEnv` | no | Inline key, or the name of an env var holding it (preferred — keeps secrets out of the file). |
-| `reasoning` | no | Provider thinking dialect: `qwen` (default), `deepseek`, `openai`, `none` — see below. **Auto-detected as `deepseek`** when `baseUrl` or `model` contains "deepseek", so a DeepSeek model usually needs no explicit value. |
+| `apiKey` / `apiKeyEnv` | no | Inline key, or the name of an env var holding it (preferred: keeps secrets out of the file). |
+| `reasoning` | no | Provider thinking dialect: `qwen` (default), `deepseek`, `openai`, `none`. See below. **Auto-detected as `deepseek`** when `baseUrl` or `model` contains "deepseek", so a DeepSeek model usually needs no explicit value. |
 | `reasoningEffort` | no | `low` / `medium` / `high` for `deepseek`/`openai`. |
 | `contextWindow` | no | Tokens, for the status gauge + auto-compaction. Auto-detected from `/models` when omitted. |
 | `maxTokens` | no | Output-token cap (default 16384). |
-| `extraBody` | no | Arbitrary JSON merged into the request body (overrides built-ins) — the escape hatch for any provider param. |
+| `extraBody` | no | Arbitrary JSON merged into the request body (overrides built-ins). The escape hatch for any provider param. |
 | `extraHeaders` | no | Arbitrary request headers; `${VAR}` values are interpolated from the environment. |
-| `imageApi` | no | For an `imageGen` capability entry only: wire shape — `chat-modalities` (default; `/chat/completions` with `modalities:["image","text"]`, e.g. OpenRouter/Gemini) or `images-generations` (OpenAI `/images/generations`). |
+| `imageApi` | no | For an `imageGen` capability entry only: wire shape. `chat-modalities` (default; `/chat/completions` with `modalities:["image","text"]`, e.g. OpenRouter/Gemini) or `images-generations` (OpenAI `/images/generations`). |
 
 ## Reasoning dialects
 
@@ -46,15 +46,15 @@ Providers express "thinking" differently. `reasoning` picks the wire shape:
 | `reasoning` | Sends | Notes |
 | --- | --- | --- |
 | `qwen` (default) | `chat_template_kwargs.enable_thinking`, `thinking_token_budget` | vLLM/Qwen. |
-| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, `reasoning_effort` | Omits `tool_choice` entirely (DeepSeek's thinking mode rejects an explicit one) — the model still gets the tools and decides. |
+| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, `reasoning_effort` | Omits `tool_choice` entirely (DeepSeek's thinking mode rejects an explicit one). The model still gets the tools and decides. |
 | `openai` | `reasoning_effort` | Uses `max_completion_tokens` and omits `temperature` (o-series rejects both). |
 | `none` | — | No reasoning params. |
 
-tsforge **auto-detects** the `deepseek` dialect when `baseUrl`/`model` contains "deepseek", so DeepSeek thinking models work out of the box — the `reasoning_content` from each turn is replayed on the next request (DeepSeek 400s otherwise). Set `reasoning` explicitly only when a DeepSeek-compatible gateway hides that string in its URL/model name.
+tsforge **auto-detects** the `deepseek` dialect when `baseUrl`/`model` contains "deepseek", so DeepSeek thinking models work out of the box. The `reasoning_content` from each turn is replayed on the next request (DeepSeek 400s otherwise). Set `reasoning` explicitly only when a DeepSeek-compatible gateway hides that string in its URL/model name.
 
 ## Examples
 
-### Local model (vLLM) — the default
+### Local model (vLLM): the default
 
 ```jsonc
 { "baseUrl": "http://localhost:8000/v1", "model": "deepseek-v4-flash", "thinking": true }
@@ -86,7 +86,7 @@ tsforge **auto-detects** the `deepseek` dialect when `baseUrl`/`model` contains 
 
 ## Extra capabilities (vision, image generation)
 
-The primary chat model is often text-only (e.g. a local DeepSeek). When it can't read or generate images, route **just those capabilities** to a separate backend with a top-level `capabilities` block — a sibling of `active`/`models`, **not** inside `models`. Each value names a `models` entry, so the vision/image backend reuses the same endpoint config (key resolution, headers) as any chat model. Absent → the capability (and its `read_image` / `generate_image` tool + the drag/paste/`@` attachment UX) stays off.
+The primary chat model is often text-only (e.g. a local DeepSeek). When it can't read or generate images, route **just those capabilities** to a separate backend with a top-level `capabilities` block (a sibling of `active`/`models`, **not** inside `models`). Each value names a `models` entry, so the vision/image backend reuses the same endpoint config (key resolution, headers) as any chat model. When absent, the capability (and its `read_image` / `generate_image` tool, the drag/paste/`@` attachment UX) stays off.
 
 ```jsonc
 {
@@ -103,7 +103,7 @@ The primary chat model is often text-only (e.g. a local DeepSeek). When it can't
 }
 ```
 
-How it works: an attached image is sent to the `vision` backend and only its **text** description enters the conversation (the chat model stays text-only). `generate_image` calls the `imageGen` backend, saves the result under `.tsforge/images/`, and previews it inline in iTerm2. When local hardware arrives, point `capabilities.vision`/`imageGen` at a local entry — no code change.
+How it works: an attached image is sent to the `vision` backend and only its **text** description enters the conversation (the chat model stays text-only). `generate_image` calls the `imageGen` backend, saves the result under `.tsforge/images/`, and previews it inline in iTerm2. When local hardware arrives, point `capabilities.vision`/`imageGen` at a local entry. No code change needed.
 
 Env overrides (an ad-hoc backend without editing the file): `TSFORGE_VISION_BASE_URL` / `TSFORGE_VISION_MODEL` / `TSFORGE_VISION_API_KEY` and the `TSFORGE_IMAGE_*` equivalents (+ `TSFORGE_IMAGE_API`). See the [attachment UX](/cli/interactive/) and the [flags reference](/reference/flags/).
 
@@ -111,7 +111,7 @@ Env overrides (an ad-hoc backend without editing the file): `TSFORGE_VISION_BASE
 `apiKeyEnv` is the **name of an environment variable**, not the key. Putting a literal `sk-...` as its value makes tsforge look up an env var named `sk-...` → no auth. Use `apiKey` for an inline key.
 :::
 
-### Any other provider — `extraBody` / `extraHeaders`
+### Any other provider: `extraBody` / `extraHeaders`
 
 When a provider needs a param or auth scheme tsforge doesn't model, express it directly. `extraBody` is merged **last** (so it overrides anything), and `extraHeaders` can set a non-Bearer scheme:
 

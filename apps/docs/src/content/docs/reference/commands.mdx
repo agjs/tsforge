@@ -29,7 +29,7 @@ tsforge scaffold --dest ./site --archetype astro       # Astro static site
 tsforge scaffold --dest ./my-app --set WITH_OBSERVABILITY=0 --no-boot
 ```
 
-`tsforge scaffold` stands up a new project from [BoringStack](https://boringstack.xyz) —
+`tsforge scaffold` stands up a new project from [BoringStack](https://boringstack.xyz):
 clone → configure (via BoringStack's own scripts) → boot → hands off the build gate.
 Interactively it previews the container topology + required secrets before applying.
 Greenfield only; editing an existing repo never scaffolds. See
@@ -42,7 +42,7 @@ tsforge setup          # the interactive conventions wizard
 tsforge setup --yes    # write the scan's recommendations, no prompts
 ```
 
-`tsforge setup` (or `/setup` in a session) scans the repo and writes a `conventions` block to `tsforge.config.json` so the guardrails match your repo's taste — interface naming, enums, test layout, component folders. It never weakens the safety floor (no `any`/`as`/`!`, complexity cap, `===`), and writes nothing until you Apply. Outside a terminal it prints the proposal and writes nothing unless you pass `--yes`. See [Set up a repo](/cli/setup/).
+`tsforge setup` (or `/setup` in a session) scans the repo and writes a `conventions` block to `tsforge.config.json` so the guardrails match your repo's taste: interface naming, enums, test layout, component folders. It never weakens the safety floor (no `any`/`as`/`!`, complexity cap, `===`), and writes nothing until you Apply. Outside a terminal it prints the proposal and writes nothing unless you pass `--yes`. See [Set up a repo](/cli/setup/).
 
 ## Review the change you're on
 
@@ -53,9 +53,9 @@ tsforge review --base develop  # diff against an explicit base ref
 tsforge review --with-gate     # run the gate first; skip what it already covers
 ```
 
-`tsforge review` reviews the change you're working on — the working tree (committed **and** uncommitted edits) vs the auto-detected base (merge-base with `main`/`master`). No commit or push required.
+`tsforge review` reviews the change you're working on: the working tree (committed **and** uncommitted edits) vs the auto-detected base (merge-base with `main`/`master`). No commit or push required.
 
-It is **functional** review — logic, regressions, edge cases, and business rules — guided by a built-in senior-review rubric (lenses), with each finding adversarially re-checked against the real code so false positives are dropped. Types, structure, and style are out of scope (the gate covers those). When a `tsconfig.json` is present it also feeds the reviewer a **caller blast-radius** signal (who calls each changed export, computed type-exactly) so the regression lens has concrete call sites to check. Exits non-zero if any **error**-severity finding survives, so it's CI-usable.
+It is **functional** review: logic, regressions, edge cases, and business rules, guided by a built-in senior-review rubric (lenses), with each finding adversarially re-checked against the real code so false positives are dropped. Types, structure, and style are out of scope (the gate covers those). When a `tsconfig.json` is present it also feeds the reviewer a **caller blast-radius** signal (who calls each changed export, computed type-exactly) so the regression lens has concrete call sites to check. Exits non-zero if any **error**-severity finding survives, so it's CI-usable.
 
 The same review is available inside an interactive session as **`/review`** (optionally `/review <base>` to diff against a specific ref).
 
@@ -67,7 +67,7 @@ tsforge run api-endpoint "add a route"   # run a saved recipe by name
 tsforge run api-endpoint --files lib/**  # ...with a CLI override (CLI wins)
 ```
 
-A recipe is declarative JSON in `.tsforge/recipes/<id>.json` (project) or `~/.tsforge/recipes/<id>.json` (global) that composes a run's options — model, gate, scope, limits, policy mode. See [Recipes](/cli/recipes/).
+A recipe is declarative JSON in `.tsforge/recipes/<id>.json` (project) or `~/.tsforge/recipes/<id>.json` (global) that composes a run's options: model, gate, scope, limits, policy mode. See [Recipes](/cli/recipes/).
 
 ## Build a whole app (greenfield)
 
@@ -94,7 +94,7 @@ tsforge map status     # when it was built, files/hubs, how much drifted
 tsforge map forget     # delete it
 ```
 
-`tsforge map` (or `/map` in a session) builds a deterministic structural map of a TypeScript repo — the directory shape, what each module exports, and the **hub modules** everything imports — and persists it under `.tsforge/`. On the next session it's injected into the agent's context so it starts oriented instead of exploring from scratch. All compiler facts (no AI guessing, no extra dependencies); it primes future sessions (run `/clear` to apply mid-session). Best for existing repos; greenfield builds don't need it.
+`tsforge map` (or `/map` in a session) builds a deterministic structural map of a TypeScript repo: the directory shape, what each module exports, and the **hub modules** everything imports. It persists under `.tsforge/`, and on the next session it's injected into the agent's context so it starts oriented instead of exploring from scratch. All compiler facts (no AI guessing, no extra dependencies); it primes future sessions (run `/clear` to apply mid-session). Best for existing repos; greenfield builds don't need it.
 
 ## Trace a run
 
@@ -103,7 +103,7 @@ tsforge trace            # summarize the newest --log run
 tsforge trace run.jsonl  # a specific log file
 ```
 
-`tsforge trace` (or `/trace` in a session) reads a `--log` ledger and prints a one-screen summary — model/tool calls, **policy decisions** (allow/ask/deny by risk), gate verdicts, turns-to-green, and the **accept rate / cost-per-accepted-change** (how many edits stuck vs were reverted) — deterministically, with no model call. See [Trace a run](/observability/trace/).
+`tsforge trace` (or `/trace` in a session) reads a `--log` ledger and prints a one-screen summary: model/tool calls, **policy decisions** (allow/ask/deny by risk), gate verdicts, turns-to-green, and the **accept rate / cost-per-accepted-change** (how many edits stuck vs were reverted). All deterministically, with no model call. See [Trace a run](/observability/trace/).
 
 ## Merge gate (repo root)
 

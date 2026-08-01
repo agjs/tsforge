@@ -11,7 +11,7 @@ If you already ran the [Quickstart](/quickstart/), this page explains what you j
 
 ## How it's layered
 
-tsforge is built as **one general core plus adapters**. The engine — write, check, steer, repeat — is the same for any TypeScript project. Everything stack-specific (how to scaffold a new app, what a given error *means*, how to verify a feature works) lives in an **adapter** that plugs into a fixed set of seams. The core imports nothing from an adapter; a lint rule fails the build if it tries.
+tsforge is built as **one general core plus adapters**. The engine (write, check, steer, repeat) is the same for any TypeScript project. Everything stack-specific (how to scaffold a new app, what a given error *means*, how to verify a feature works) lives in an **adapter** that plugs into a fixed set of seams. The core imports nothing from an adapter; a lint rule fails the build if it tries.
 
 ```mermaid
 flowchart TB
@@ -19,22 +19,22 @@ flowchart TB
     direction LR
     A["planning"] --- B["drive-to-green loop"] --- C["gate · ESLint rule-packs"] --- D["tools"] --- E["review panel"]
   end
-  subgraph seam["The seam — adapters plug in here"]
+  subgraph seam["The seam · adapters plug in here"]
     direction LR
     S1["IStackAdapter"] --- S2["IConventionProvider"] --- S3["IPlanSchema&lt;TUi&gt;"] --- S4["IGate"] --- S5["external-plugins"]
   end
   subgraph adapters["Adapters · stack-specific"]
     direction LR
-    BS["BoringStack — built"] --- PH["Phaser — planned"] --- DD["your own rules — via external-plugins"]
+    BS["BoringStack (built)"] --- PH["Phaser (planned)"] --- DD["your own rules (via external-plugins)"]
   end
   core --> seam --> adapters
 ```
 
-An **adapter** is exactly: fill those interfaces. `IStackAdapter` detects a repo and scaffolds it; `IConventionProvider` supplies the "here's how to write it right" guidance; `IPlanSchema` describes the plan/UI shape; `IGate` says how to run and verify. [BoringStack](/scaffold/boringstack/) is the first adapter (a full-stack Bun + Elysia + Drizzle + React stack). You can also bring **your own ESLint rule-packs** without writing an adapter — see [external plugins](/guardrails/config/).
+An **adapter** is exactly: fill those interfaces. `IStackAdapter` detects a repo and scaffolds it; `IConventionProvider` supplies the "here's how to write it right" guidance; `IPlanSchema` describes the plan/UI shape; `IGate` says how to run and verify. [BoringStack](/scaffold/boringstack/) is the first adapter (a full-stack Bun + Elysia + Drizzle + React stack). You can also bring **your own ESLint rule-packs** without writing an adapter. See [external plugins](/guardrails/config/).
 
 ## What runs on a task
 
-The diagram above is **composition** — the subsystems that exist. This is **flow** — what happens when you give it a task:
+The diagram above is **composition**: the subsystems that exist. This is **flow**: what happens when you give it a task:
 
 ```mermaid
 flowchart TD
@@ -62,13 +62,13 @@ flowchart TD
   panel -->|"block"| write
 ```
 
-The **model agent** is the loop driver: it calls tools, applies edits, runs the [repair ladder](/uplift/repair-ladder/) when a tool call is malformed, and re-prompts on gate failure. The **gate** is the oracle: if it fails, the harness feeds the error list back and the model gets another turn. A single high crash-guard (1000 turns) plus no-progress guards stop runaway churn without cutting off a productive build — details in [When the gate fails](/loop/validation/).
+The **model agent** is the loop driver: it calls tools, applies edits, runs the [repair ladder](/uplift/repair-ladder/) when a tool call is malformed, and re-prompts on gate failure. The **gate** is the oracle: if it fails, the harness feeds the error list back and the model gets another turn. A single high crash-guard (1000 turns) plus no-progress guards stop runaway churn without cutting off a productive build. See [When the gate fails](/loop/validation/) for details.
 
 ## Why tsforge exists
 
 tsforge started as a necessity experiment: could a small model running on local hardware produce TypeScript you'd actually merge, if the harness enforced `tsc`, stack rules, and stream-level corrections? It could. That proof shaped every subsystem here.
 
-The idea was first tested against a 27B local model; today the default local stack is **DeepSeek‑V4‑Flash served on-box via a custom vLLM setup**. The same loop works with larger or hosted models — they usually need fewer retries, and they still benefit from an external oracle and stack-aware rules. Guardrails matter most when the model is constrained; they still help when it is strong.
+The idea was first tested against a 27B local model; today the default local stack is **DeepSeek‑V4‑Flash served on-box via a custom vLLM setup**. The same loop works with larger or hosted models. They usually need fewer retries and still benefit from an external oracle and stack-aware rules. Guardrails matter most when the model is constrained; they still help when it is strong.
 
 ## The problem it targets
 
@@ -80,7 +80,7 @@ tsforge closes that gap with three ideas:
 
 2. **Feedback while the model still types.** Stream rules (TTSR) can cut off bad tool arguments mid-generation. Hashline edits tie replacements to a file hash so line numbers do not drift. The TypeScript language service can flag a bad write before the next turn.
 
-3. **Stack-aware rules without hand-wiring.** tsforge reads `package.json`, turns on ESLint packs for React, Drizzle, Elysia, and the rest, and runs them on every validation. You get project-specific guardrails without maintaining a separate lint setup — and you can layer your own packs on top ([external plugins](/guardrails/config/)).
+3. **Stack-aware rules without hand-wiring.** tsforge reads `package.json`, turns on ESLint packs for React, Drizzle, Elysia, and the rest, and runs them on every validation. You get project-specific guardrails without maintaining a separate lint setup, and you can layer your own packs on top ([external plugins](/guardrails/config/)).
 
 ## Why TypeScript specifically
 
@@ -122,7 +122,7 @@ The default endpoint (`http://localhost:8000/v1`) is a convenience for a local i
 | --- | --- |
 | **Gate** | Shell command that must pass before tsforge treats work as done. Often `tsc`, ESLint, tests. |
 | **Harness** | The tsforge runtime: CLI, loop, gate, guardrails, and model wiring. |
-| **Core** | The stack-agnostic engine — planning, the drive-to-green loop, the gate, the rule-packs, the review panel. Imports no adapter. |
+| **Core** | The stack-agnostic engine: planning, the drive-to-green loop, the gate, the rule-packs, the review panel. Imports no adapter. |
 | **Adapter** | The stack-specific half behind the seams: how to scaffold, what an error means, how to verify. BoringStack is the first. |
 | **Seam** | An injected interface the adapter fills (`IStackAdapter`, `IConventionProvider`, `IPlanSchema`, `IGate`). |
 | **LSP / language server** | TypeScript's semantic engine (`LanguageService`): go-to-definition, types, rename, diagnostics. tsforge embeds it; you do not run a separate tsserver process. |

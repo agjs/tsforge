@@ -1,11 +1,11 @@
 ---
 title: Token metrics & tokens/sec
-description: See how fast the model is generating — live in the status line, on demand with /metrics, or in the logs for deeper analysis.
+description: See how fast the model is generating. Live in the status line, on demand with /metrics, or in the logs for deeper analysis.
 ---
 
 Want to know how fast your model is actually going? tsforge surfaces real token throughput in three places, from "glance at it" to "analyse a whole run."
 
-## 1. The status bar — always on
+## 1. The status bar: always on
 
 On a real terminal a status bar stays pinned to the bottom (see [Interactive CLI](/cli/interactive/#status-bar)), showing the **last call's generation rate** next to the context gauge:
 
@@ -13,9 +13,9 @@ On a real terminal a status bar stays pinned to the bottom (see [Interactive CLI
   ⎯ deepseek-v4-flash · ctx ~8k/32k 25% · 2 turns · 12s · 47 tok/s · done · src/**
 ```
 
-`47 tok/s` is how many output tokens per second the model produced on that call. Nothing to enable — it appears as soon as the first model call returns. (Piped/`--log` runs show the same line inline instead.)
+`47 tok/s` is how many output tokens per second the model produced on that call. Nothing to enable; it appears as soon as the first model call returns. (Piped/`--log` runs show the same line inline instead.)
 
-## 2. `/metrics` — the running total
+## 2. `/metrics`: the running total
 
 Type `/metrics` at the prompt for the whole session so far:
 
@@ -31,17 +31,17 @@ Type `/metrics` at the prompt for the whole session so far:
 | `in` / `out` | total prompt (input) and completion (output) tokens |
 | `tok/s last` | output rate of the most recent call |
 | `tok/s avg` | output rate averaged across all calls |
-| `turns to green` | how many turns the last successful run took to pass the gate — the loop-efficiency signal (lower is better) |
+| `turns to green` | how many turns the last successful run took to pass the gate. The loop-efficiency signal is lower values = better. |
 
 ## What "tokens/sec" measures
 
-It's **output decode speed** — measured from the *first* streamed token to the end of the call. That deliberately excludes prompt-processing / time-to-first-token, so a big prompt doesn't make the model look slow. It reflects how fast tokens come out once they start.
+It's **output decode speed**: measured from the *first* streamed token to the end of the call. That deliberately excludes prompt-processing and time-to-first-token, so a big prompt doesn't make the model look slow. It reflects how fast tokens come out once they start.
 
-A low number usually points at the *serving* setup (quantization, batch size, GPU), not the model — "measure, don't assume."
+A low number usually points at the *serving* setup (quantization, batch size, GPU), not the model. Measure, don't assume.
 
-## 3. `--log` — analyse a whole run
+## 3. `--log`: analyse a whole run
 
-Start the CLI (or an eval) with `--log` and the whole run is written to `~/.tsforge/logs/<timestamp>.jsonl` as a typed ledger — one event per line, each wrapped in a `payload` (model calls, tool calls, policy decisions, gate verdicts):
+Start the CLI (or an eval) with `--log` and the whole run is written to `~/.tsforge/logs/<timestamp>.jsonl` as a typed ledger. One event per line, each wrapped in a `payload` (model calls, tool calls, policy decisions, gate verdicts):
 
 ```json
 { "type": "model_call_finished", "runId": "…", "timestamp": "…",
@@ -49,7 +49,7 @@ Start the CLI (or an eval) with `--log` and the whole run is written to `~/.tsfo
                "completionTokens": 240, "tokensPerSecond": 46, "ms": 5200 } }
 ```
 
-Turn a log into a one-screen summary — including **policy denials by risk** — with [`tsforge trace`](/observability/trace/):
+Turn a log into a one-screen summary (including **policy denials by risk**) with [`tsforge trace`](/observability/trace/):
 
 ```bash
 tsforge trace            # newest log
@@ -63,6 +63,6 @@ bun run packages/core/scripts/cli-metrics.ts            # newest log
 bun run packages/core/scripts/cli-metrics.ts run.jsonl  # a specific one
 ```
 
-It reports tokens-to-solution, peak context, edits, gate runs, and — for a run that didn't reach green — a **`failure class`** (e.g. `type-error (TS18048)`, `tool-malformed`, `hallucinated-import`): one structured reason for *why* it failed, so a failure points at the rule, prompt, or fixer to build next. The same distillation is available programmatically as `analyzeEvents(events)` from `@agjs/tsforge`'s eval module, and feeds the [A/B sweep report](/eval/ab-testing/#why-runs-failed).
+It reports tokens-to-solution, peak context, edits, gate runs, and for runs that didn't reach green, a **`failure class`** (e.g. `type-error (TS18048)`, `tool-malformed`, `hallucinated-import`). This is one structured reason for *why* it failed, so a failure points at the rule, prompt, or fixer to build next. The same distillation is available programmatically as `analyzeEvents(events)` from `@agjs/tsforge`'s eval module, and feeds the [A/B sweep report](/eval/ab-testing/#why-runs-failed).
 
 → [Interactive CLI](/cli/interactive/) · [A/B testing](/eval/ab-testing/) · [Model adapter](/inference/adapter/)

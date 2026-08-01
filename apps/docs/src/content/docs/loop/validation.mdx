@@ -32,14 +32,14 @@ The loop stops when one of these happens:
 | --- | --- |
 | **Done** | Gate passed. Task complete. |
 | **Stalled (no progress)** | The model keeps failing at the **same thing**. tsforge stops and hands back a blocker diagnosis. |
-| **Cap (runaway backstop)** | A turn ceiling hit. Rarely reached — the no-progress guard stops first. |
+| **Cap (runaway backstop)** | A turn ceiling hit. Rarely reached; the no-progress guard stops first. |
 
 tsforge's primary stop is **lack of progress, not a raw turn count**. Two guards detect it:
 
-- **Same-error persistence** — if one specific error (the same `file` + `rule`) survives **5 consecutive** fix cycles, tsforge stops, even if _other_ errors are changing around it. The stop names the blocker: `stuck on no-explicit-any in src/views/Foo/index.tsx after 5 attempts (last: …)`. Interactively, you get that diagnosis and the prompt back — the session stays alive, so you can re-steer.
-- **Whole-set stall** — a coarser net: the entire error set unchanged for 6 cycles.
+- **Same-error persistence**: if one specific error (the same `file` + `rule`) survives **5 consecutive** fix cycles, tsforge stops, even if _other_ errors are changing around it. The stop names the blocker: `stuck on no-explicit-any in src/views/Foo/index.tsx after 5 attempts (last: …)`. Interactively, you get that diagnosis and the prompt back. The session stays alive, so you can re-steer.
+- **Whole-set stall**: a coarser net. The entire error set unchanged for 6 cycles.
 
-The **turn cap** is only a runaway backstop now — a single high ceiling (1000 turns) shared by every mode, set far above any converging build. It's a crash-guard, not a task limit: what actually stops a run is the no-progress guard above, not the turn count.
+The **turn cap** is only a runaway backstop now. A single high ceiling (1000 turns) shared by every mode, set far above any converging build. It's a crash-guard, not a task limit: what actually stops a run is the no-progress guard above, not the turn count.
 
 When the gate fails, tsforge sends structured errors (file, line, rule name, message) back to the model, not a generic failure blob. That is what makes repair workable.
 

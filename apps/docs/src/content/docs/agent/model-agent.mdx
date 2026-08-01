@@ -1,6 +1,6 @@
 ---
 title: Model agent
-description: One turn of the loop — prompt, tools, edits, gate, repair.
+description: "One turn of the loop: prompt, tools, edits, gate, repair."
 ---
 
 The **model agent** is what runs when you give tsforge a task. It is not a separate program you invoke. It is the loop inside tsforge: send context to the model, run tool calls, check the gate, feed errors back, repeat.
@@ -21,10 +21,10 @@ One approved task can involve many agent cycles until the gate passes or tsforge
 | --- | --- | --- |
 | Core | `read`, `run`, `edit`, `create` | always |
 | Line edits | `edit_lines` | always (line-number edits with hash verification) |
-| Script | `script` | always (programmatic tool calling — batch multi-step tool use in one program); withhold with `TSFORGE_NO_SCRIPT=1` for eval |
+| Script | `script` | always (programmatic tool calling: batch multi-step tool use in one program); withhold with `TSFORGE_NO_SCRIPT=1` for eval |
 | Navigation | `search`, `symbol_search`, `find_references`, `type_at`, `diagnostics`, `rename_symbol`, `move_file`, `organize_imports` | existing-code repos |
 | Git context | `git_context` | existing-code repos (read-only: diff/log/blame/show to scope a change) |
-| Conventions | `pull_conventions` | build backends that ship a convention library (BoringStack) — fetch a how-to guide on demand |
+| Conventions | `pull_conventions` | build backends that ship a convention library (BoringStack): fetch a how-to guide on demand |
 | Web research | `package_info`, `package_docs`, `web_fetch`, `web_search`, `web_browse` | when **Web tools** is on in `/config` (no required API keys or paid browser/search service) |
 
 On greenfield specs, navigation tools are often withheld so the model focuses on creating files instead of exploring an empty tree. See [TypeScript language server](/lsp/typescript-server/).
@@ -35,6 +35,6 @@ On greenfield specs, navigation tools are often withheld so the model focuses on
 
 ## File context
 
-The model cannot edit a file it has not read. Specs and tasks should list which files are in scope (`files:` / `context:`). See [Spec format](/spec/format/). Some paths are **always** read-only regardless of scope — see [Vendored & read-only scope](/edit/engine/#vendored--read-only-scope).
+The model cannot edit a file it has not read. Specs and tasks should list which files are in scope (`files:` / `context:`). See [Spec format](/spec/format/). Some paths are **always** read-only regardless of scope. See [Vendored & read-only scope](/edit/engine/#vendored--read-only-scope).
 
 → [Big picture](/big-picture/) · [When the gate fails](/loop/validation/)

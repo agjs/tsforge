@@ -1,9 +1,9 @@
 ---
 title: Trace a run
-description: Turn a --log run into a human-readable summary — model/tool calls, policy decisions, gate verdicts, and turns-to-green — with tsforge trace.
+description: Turn a --log run into a human-readable summary (model/tool calls, policy decisions, gate verdicts, and turns-to-green) with tsforge trace.
 ---
 
-When you run with `--log`, tsforge writes the whole run to `~/.tsforge/logs/<timestamp>.jsonl` as a typed [ledger](#the-log-ledger). `tsforge trace` reads that ledger back and prints a one-screen summary of what actually happened — **deterministically, with no model call**.
+When you run with `--log`, tsforge writes the whole run to `~/.tsforge/logs/<timestamp>.jsonl` as a typed [ledger](#the-log-ledger). `tsforge trace` reads that ledger back and prints a one-screen summary of what actually happened (deterministically, with no model call).
 
 ## `tsforge trace`
 
@@ -37,11 +37,11 @@ wall clock         0s
 
 | Field | Meaning |
 | --- | --- |
-| `final status` / `failure class` | how the run ended, and — if it didn't reach green — one structured reason why (e.g. `type-error (TS18048)`) |
+| `final status` / `failure class` | how the run ended (if it didn't reach green, one structured reason why, e.g. `type-error (TS18048)`) |
 | `turns` / `turns to green` | repair iterations, and how many it took to first pass the gate (lower is better) |
 | `model calls` / `tokens out` / `peak context` | call count, completion tokens, and the context high-water mark |
 | `edits/creates` / `gate runs` | file mutations and how many times the gate ran |
-| `accept rate` / `cost/accepted` | share of edits that stuck (vs were reverted), and completion tokens per durable change — tokens mean little if most edits get reverted |
+| `accept rate` / `cost/accepted` | share of edits that stuck (vs were reverted), and completion tokens per durable change (tokens mean little if most edits get reverted) |
 | `policy denials` / `policy asks` | [action-policy](/guardrails/config/) verdicts that blocked or paused an action, denials bucketed by risk |
 
 ## The `--log` ledger
@@ -54,7 +54,7 @@ Each line is one typed event (valid JSON), so a run is fully reconstructable. Ev
                "message": "blocked rm -rf /", "rules": ["no-destructive-shell"] } }
 ```
 
-Policy decisions — allow / ask / deny, with their risk and the rules that matched — are recorded alongside model calls, tool calls, and gate verdicts. `tsforge trace` surfaces the denials and asks so you can see where the harness stepped in.
+Policy decisions (allow / ask / deny, with their risk and the rules that matched) are recorded alongside model calls, tool calls, and gate verdicts. `tsforge trace` surfaces the denials and asks so you can see where the harness stepped in.
 
 ## Programmatic access
 

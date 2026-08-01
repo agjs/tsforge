@@ -1,6 +1,6 @@
 ---
 title: Review your changes
-description: "tsforge review — a functional code review of the change you're on (logic, regressions, edge cases), with every finding re-checked against the code so it doesn't invent problems."
+description: "tsforge review: a functional code review of the change you're on (logic, regressions, edge cases), with every finding re-checked against the code so it doesn't invent problems."
 ---
 
 `tsforge review` reviews the change you're working on and prints a focused list of **functional** problems, the things a linter can't catch.
@@ -16,7 +16,7 @@ Inside a session, the same review is available as `/review`.
 
 ## Gate-aware review
 
-With `--with-gate`, tsforge runs [the gate](/loop/gate-floor/) once before reviewing and tells the reviewer **which rules are already failing**, so it won't spend its attention re-reporting a type or lint error the gate loop will fix anyway. The review focuses on the behaviour of the code the gate already accepts — exactly the part the gate is blind to. The report notes how many gate rules were skipped. Without the flag, review runs as before (no gate run).
+With `--with-gate`, tsforge runs [the gate](/loop/gate-floor/) once before reviewing and tells the reviewer **which rules are already failing**, so it won't spend its attention re-reporting a type or lint error the gate loop will fix anyway. The review focuses on the behaviour of the code the gate already accepts (exactly the part the gate is blind to). The report notes how many gate rules were skipped. Without the flag, review runs as before (no gate run).
 
 ## What it reviews
 
@@ -45,7 +45,7 @@ By default the per-file find pass and per-finding verify pass run one model call
 { "agents": { "concurrency": 4 } }
 ```
 
-Review then fans out up to that many calls at once — each with a fresh provider — and prints a live `agents: 2 running, 5/16 done (…)` progress line. Results are identical in structure and order to a sequential run; only the wall-clock changes (≈2× measured at cap 8 on a batching endpoint). Keep the cap a couple below your server's `max_num_seqs` so an interactive session is never starved, and leave it at 1 for endpoints that serialize requests anyway.
+Review then fans out up to that many calls at once (each with a fresh provider) and prints a live `agents: 2 running, 5/16 done (…)` progress line. Results are identical in structure and order to a sequential run; only the wall-clock changes (≈2× measured at cap 8 on a batching endpoint). Keep the cap a couple below your server's `max_num_seqs` so an interactive session is never starved, and leave it at 1 for endpoints that serialize requests anyway.
 
 ## In CI
 
