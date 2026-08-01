@@ -9,6 +9,7 @@ import {
   saveSession,
   loadSession,
   type ISessionRecord,
+  type IGateFloor,
 } from "../src/session-store";
 import type { IProvider } from "../src/inference";
 import type { IStackProfile } from "../src/stack-detection";
@@ -489,8 +490,8 @@ test("resume keeps the floor's test command even under --strict-floor-only", asy
   try {
     await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
 
-    const floor = {
-      packs: [] as string[],
+    const floor: IGateFloor = {
+      packs: [],
       profile: "",
       ruleOverrides: {},
       testCommand: "bun run test",
@@ -573,6 +574,72 @@ test("the session record round-trips the gatePolicy floor through save/load", as
     expect(floored?.gatePolicy?.testCommand).toBe("bun run test");
 
     expect((await loadSession("no-floor"))?.gatePolicy).toBeUndefined();
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.TSFORGE_HOME;
+    } else {
+      process.env.TSFORGE_HOME = prevHome;
+    }
+
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+// parseGateFloor is security-boundary code (untrusted persisted JSON). A wholly malformed
+// floor is DROPPED (the record still loads, minus the floor); a partially-valid one is
+// sanitized (non-string packs removed, non-severity rule values filtered out).
+test("loadSession sanitizes a malformed gatePolicy floor", async () => {
+  const prevHome = process.env.TSFORGE_HOME;
+  const home = await mkdtemp(join(tmpdir(), "tsforge-home-bad-"));
+  const sessions = join(home, ".tsforge", "sessions");
+
+  process.env.TSFORGE_HOME = home;
+
+  const writeRaw = async (id: string, gatePolicy: unknown): Promise<void> => {
+    await writeFile(
+      join(sessions, `${id}.json`),
+      JSON.stringify({
+        id,
+        cwd: "/x",
+        accept: "eslint .",
+        auto: true,
+        files: [],
+        updatedAt: 1,
+        messages: [],
+        gatePolicy,
+      })
+    );
+  };
+
+  try {
+    const { mkdir } = await import("node:fs/promises");
+
+    await mkdir(sessions, { recursive: true });
+
+    // Wholly malformed (testCommand is a number) → the floor is dropped, record still loads.
+    await writeRaw("broken", {
+      packs: ["ok"],
+      profile: "strict",
+      ruleOverrides: {},
+      testCommand: 7,
+    });
+    const broken = await loadSession("broken");
+
+    expect(broken).not.toBeNull();
+    expect(broken?.gatePolicy).toBeUndefined();
+
+    // Partially valid → non-string packs dropped, non-severity rule values filtered.
+    await writeRaw("dirty", {
+      packs: ["good", 123, "also-good"],
+      profile: "strict",
+      ruleOverrides: { keep: "off", drop: "nonsense" },
+      testCommand: null,
+    });
+    const dirty = await loadSession("dirty");
+
+    expect(dirty?.gatePolicy?.packs).toEqual(["good", "also-good"]);
+    expect(dirty?.gatePolicy?.ruleOverrides).toEqual({ keep: "off" });
+    expect(dirty?.gatePolicy?.testCommand).toBeNull();
   } finally {
     if (prevHome === undefined) {
       delete process.env.TSFORGE_HOME;

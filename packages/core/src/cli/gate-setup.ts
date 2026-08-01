@@ -52,7 +52,6 @@ export interface IResolvedGate {
  *  and only ADDITIVELY (see the resolver's monotonic pack accumulator). */
 interface IGatePolicy {
   dir: string;
-  strictFloorOnly: boolean;
   config: ITsforgeProjectConfig;
   ruleOverrides: Record<string, "error" | "warn" | "off">;
   profile: ProfileId;
@@ -100,10 +99,11 @@ async function captureGatePolicy(
   const { resolveConventions } = await import("../infer-rules/conventions");
   const { resolveCliProfile } = await import("./args");
 
-  // A resume floor's profile is applied (unless the user passes one THIS run) so
-  // `--profile strict` isn't silently downgraded across `--continue`.
-  const effectiveProfileArg =
-    profileArg.length > 0 ? profileArg : (floor?.profile ?? "");
+  // On resume the FLOOR profile wins — a `--continue --profile recommended` must not
+  // downgrade a session floored as `strict` (which would drop the type-aware pass). Like
+  // the restored accept/packs/overrides, the profile is part of the frozen session state;
+  // changing it needs a fresh session. A fresh (non-resumed) run uses the CLI profile.
+  const effectiveProfileArg = floor !== undefined ? floor.profile : profileArg;
   const config = withProfileOverride(
     await loadTsforgeConfig(dir),
     resolveCliProfile(effectiveProfileArg)
@@ -114,7 +114,6 @@ async function captureGatePolicy(
 
   return {
     dir,
-    strictFloorOnly,
     config,
     // Keep the floor's frozen rule-severity overrides (never re-read a weaker set from a
     // config the subject may have edited between processes); else the fresh config's.
