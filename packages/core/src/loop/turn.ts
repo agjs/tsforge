@@ -876,22 +876,6 @@ async function applyDeterministicFixes(ctx: ILoopCtx): Promise<void> {
   }
 }
 
-/** Snapshot the current on-disk contents of every existing file in `files`. */
-async function snapshotFiles(
-  cwd: string,
-  files: readonly string[]
-): Promise<Map<string, string>> {
-  const snapshot = new Map<string, string>();
-
-  for (const f of files) {
-    if (await fileExists(cwd, f)) {
-      snapshot.set(f, await Bun.file(join(cwd, f)).text());
-    }
-  }
-
-  return snapshot;
-}
-
 /** Drop redundant annotations across `files`, degrading silently per-file. */
 async function dropRedundantAcross(
   cwd: string,
@@ -987,14 +971,16 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   const files = [...(ctx.tool.touched ?? [])];
 
   // The revert SNAPSHOT must cover everything polish could mutate, so a failed re-gate
-  // rolls back cleanly. The drop/format only touch `files`, but a spec-provided
-  // `task.fix` is an arbitrary command that may edit any in-scope file — so when one is
-  // set, also snapshot the resolved scope (reads only; the mutations stay touched-scoped).
+  // rolls back cleanly. The drop/format only touch `files`, but a spec-provided `task.fix`
+  // is an arbitrary command that may EDIT any in-scope file or CREATE new ones — so when
+  // one is set, snapshot the whole task scope with the robust rollback substrate: it is
+  // uncapped, binary-safe, and TOMBSTONES files the fix created (a plain content map would
+  // leave those on disk). No fix ⇒ snapshot just the touched files the drop edits.
   const snapshotScope =
     task.fix !== undefined && task.fix.length > 0
-      ? [...new Set([...files, ...(await resolveScopeFiles(cwd, task.files))])]
+      ? [...new Set([...files, ...task.files])]
       : files;
-  const snapshot = await snapshotFiles(cwd, snapshotScope);
+  const snapshot = await snapshotFilesForRollback(cwd, snapshotScope);
   const dropped = await dropRedundantAcross(cwd, files);
 
   if (dropped === 0) {
@@ -1033,10 +1019,9 @@ export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   }
 
   // A drop changed an inferred type (or the recheck failed/was aborted) — roll the whole
-  // file set back to the pre-polish green state.
-  for (const [f, content] of snapshot) {
-    await Bun.write(join(cwd, f), content);
-  }
+  // file set back to the pre-polish green state (rewrites edited files and tombstones any
+  // the fix created).
+  await restoreFiles(snapshot);
 
   // Cancellation was deferred past the rollback so the tree is restored — now honor it.
   if (abortErr !== null) {

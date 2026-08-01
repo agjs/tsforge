@@ -303,6 +303,37 @@ test("polishOnGreen rolls back a task.fix mutation to a NON-touched sibling on a
   }
 }, 30_000);
 
+// The robust rollback must also TOMBSTONE a file task.fix CREATED (a plain content map
+// only rewrites captured paths and would leave a created file on disk). On a failed
+// re-gate, a fix-created file must be gone.
+test("polishOnGreen tombstones a file task.fix CREATED on a failed re-gate", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
+
+  try {
+    await Bun.write(join(dir, "a.ts"), SOURCE); // touched + droppable → polish proceeds
+
+    const { ctx: base } = ctxWith(dir, false); // gate RED → recheck fails → revert
+    const ctx: ILoopCtx = {
+      ...base,
+      task: {
+        ...base.task,
+        files: ["**/*"],
+        // The fix CREATES a brand-new in-scope file (not present at snapshot time).
+        fix: "printf 'export const created = 1;\\n' > created.ts",
+      },
+      tool: { touched: new Set(["a.ts"]) },
+    };
+
+    await polishOnGreen(ctx);
+
+    // The fix-created file was tombstoned (deleted), not left behind.
+    expect(await Bun.file(join(dir, "created.ts")).exists()).toBe(false);
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe(SOURCE);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("polishOnGreen with coreFormat on formats the TOUCHED file after the drop", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-polish-"));
 
