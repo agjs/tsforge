@@ -453,6 +453,7 @@ test("resume unions the persisted policy floor (packs + profile + testCommand su
         gatePolicy: {
           packs: ["react-component-architecture"],
           profile: "strict",
+          ruleOverrides: { "no-explicit-any": "off" },
           testCommand: "bun run test",
         },
       }
@@ -466,6 +467,64 @@ test("resume unions the persisted policy floor (packs + profile + testCommand su
     expect(resumed.accept).toContain("typescript-core");
     // The frozen test command is kept even though the tree now has no test script.
     expect(resumed.accept).toContain("bun run test");
+    // The returned `policy.packs` carries the floor (unioned) — this is what the REPL
+    // seeds its persist accumulator from, so a later weaker stackPacks (post-/clear or a
+    // no-edit turn) can't write back a floor that has lost the react pack.
+    expect(resumed.policy?.packs).toContain("react-component-architecture");
+    expect(resumed.policy?.packs).toContain("typescript-core");
+    // The floor's frozen rule-severity overrides are applied — not re-read from a config
+    // the subject may have weakened between processes.
+    expect(resumed.accept).toContain("no-explicit-any");
+    expect(resumed.policy?.ruleOverrides["no-explicit-any"]).toBe("off");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// `--strict-floor-only` opts a FRESH session out of tests, but it must NOT drop a resume
+// FLOOR's test command — the prior session established tests as part of green.
+test("resume keeps the floor's test command even under --strict-floor-only", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-floor-sfo-"));
+
+  try {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+
+    const floor = {
+      packs: [] as string[],
+      profile: "",
+      ruleOverrides: {},
+      testCommand: "bun run test",
+    };
+    const record = {
+      id: "s",
+      cwd: dir,
+      accept: "eslint .",
+      auto: true,
+      files: [],
+      updatedAt: 0,
+      messages: [],
+      gatePolicy: floor,
+    };
+
+    // With a floor test command, --strict-floor-only still runs the tests…
+    const resumed = await resolveGate(
+      { ...parseArgs([]), dir, strictFloorOnly: true },
+      record
+    );
+
+    expect(resumed.accept).toContain("bun run test");
+
+    // …but a FRESH --strict-floor-only session (no floor) drops them even with a script.
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "x", scripts: { test: "vitest run" } })
+    );
+    const fresh = await resolveGate(
+      { ...parseArgs([]), dir, strictFloorOnly: true },
+      null
+    );
+
+    expect(fresh.accept).not.toContain("bun run test");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -495,6 +554,7 @@ test("the session record round-trips the gatePolicy floor through save/load", as
       gatePolicy: {
         packs: ["react-component-architecture", "typescript-core"],
         profile: "strict",
+        ruleOverrides: { "no-explicit-any": "error" },
         testCommand: "bun run test",
       },
     });
@@ -507,6 +567,9 @@ test("the session record round-trips the gatePolicy floor through save/load", as
       "typescript-core",
     ]);
     expect(floored?.gatePolicy?.profile).toBe("strict");
+    expect(floored?.gatePolicy?.ruleOverrides).toEqual({
+      "no-explicit-any": "error",
+    });
     expect(floored?.gatePolicy?.testCommand).toBe("bun run test");
 
     expect((await loadSession("no-floor"))?.gatePolicy).toBeUndefined();

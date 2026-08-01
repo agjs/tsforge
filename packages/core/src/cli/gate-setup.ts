@@ -32,9 +32,16 @@ export interface IResolvedGate {
    *  profile and per-write linter) from this each cycle, and stops the moment the user
    *  overrides the gate (`/gate`, a recipe). Absent for explicit/`--no-gate` gates. */
   autoGate?: AutoGateResolver;
-  /** The frozen policy knobs (auto gate only) the caller persists as the resume FLOOR
-   *  alongside the session's accumulated packs — so `--continue` resumes no weaker. */
-  policy?: { profile: string; testCommand: string | null };
+  /** The frozen policy knobs (auto gate only) the caller persists as the resume FLOOR. The
+   *  caller unions `packs` with the session's accumulated packs before persisting (so a
+   *  `/clear` rebuild or a no-edit turn can't write back a weaker list), and stores the
+   *  frozen `profile`/`ruleOverrides`/`testCommand` — so `--continue` resumes no weaker. */
+  policy?: {
+    profile: string;
+    ruleOverrides: Record<string, "error" | "warn" | "off">;
+    testCommand: string | null;
+    packs: readonly string[];
+  };
 }
 
 /** The FROZEN policy an auto gate runs under, captured ONCE at session start (or on
@@ -109,7 +116,9 @@ async function captureGatePolicy(
     dir,
     strictFloorOnly,
     config,
-    ruleOverrides: normalizeRuleOverrides(config),
+    // Keep the floor's frozen rule-severity overrides (never re-read a weaker set from a
+    // config the subject may have edited between processes); else the fresh config's.
+    ruleOverrides: floor?.ruleOverrides ?? normalizeRuleOverrides(config),
     profile: resolveProjectProfile(config),
     conventions: resolveConventions(config.conventions),
     // Union fresh detection ON TOP of the resume floor — a new framework is still picked
@@ -143,10 +152,12 @@ async function eslintFor(
     overridesOrUndef(policy.ruleOverrides),
     {
       enableTypeAware: policy.profile === "strict",
-      // "Green" should mean the strict floor AND the project's own tests pass —
-      // not just that it type-checks and lints. Tests run only when the project had
-      // them at capture; --strict-floor-only opts out.
-      includeTests: !policy.strictFloorOnly,
+      // "Green" should mean the strict floor AND the project's own tests pass — not just
+      // that it type-checks and lints. Run tests exactly when a command exists:
+      // captureGatePolicy already nulls the test command under --strict-floor-only for a
+      // fresh session, but a resume FLOOR's test command survives that flag (the session
+      // established tests as part of green — a resume must not drop them).
+      includeTests: policy.testCommand !== null,
       testCommand: policy.testCommand,
       conventions: policy.conventions,
     }
@@ -245,7 +256,12 @@ async function autoGateBranch(
     gateLabel: initial.label,
     autoGate: makeAutoGateResolver(policy),
     lintFile: lintFileFor(policy, policy.baselinePacks),
-    policy: { profile: policy.profile, testCommand: policy.testCommand },
+    policy: {
+      profile: policy.profile,
+      ruleOverrides: policy.ruleOverrides,
+      testCommand: policy.testCommand,
+      packs: policy.baselinePacks,
+    },
   };
 }
 

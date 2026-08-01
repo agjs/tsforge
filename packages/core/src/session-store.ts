@@ -27,6 +27,7 @@ export function persistenceEnabled(): boolean {
 export interface IGateFloor {
   packs: string[];
   profile: string;
+  ruleOverrides: Record<string, "error" | "warn" | "off">;
   testCommand: string | null;
 }
 
@@ -185,8 +186,28 @@ function parseGateFloor(value: unknown): IGateFloor | null {
   return {
     packs: value.packs.filter((p): p is string => typeof p === "string"),
     profile: value.profile,
+    ruleOverrides: parseSeverityMap(value.ruleOverrides),
     testCommand: value.testCommand,
   };
+}
+
+/** Validate an untrusted severity-override map, keeping only "error"/"warn"/"off" values. */
+function parseSeverityMap(
+  value: unknown
+): Record<string, "error" | "warn" | "off"> {
+  const out: Record<string, "error" | "warn" | "off"> = {};
+
+  if (!isRecord(value)) {
+    return out;
+  }
+
+  for (const [key, severity] of Object.entries(value)) {
+    if (severity === "error" || severity === "warn" || severity === "off") {
+      out[key] = severity;
+    }
+  }
+
+  return out;
 }
 
 async function readRecord(path: string): Promise<ISessionRecord | null> {
