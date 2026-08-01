@@ -194,6 +194,45 @@ test("formatFiles still runs the eslint moat for a realpath-form absolute input"
   }
 }, 30_000);
 
+// Security: a contained file whose NAME looks like a flag (`--config=x.ts`) must be
+// formatted as a PATH, not interpreted as a formatter option (which could load
+// repo-controlled config). The `--` argv terminator guarantees this — without it, the
+// formatters treat the name as an option and leave the file untouched, so "it got
+// formatted" is the proof `--` is present and working.
+test("formatFiles formats a flag-named file (the -- terminator holds)", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(join(dir, "--config=x.ts"), "export  const   x=1");
+
+    await formatFiles(dir, ["--config=x.ts"]);
+
+    expect(await readFile(join(dir, "--config=x.ts"), "utf8")).toBe(
+      "export const x = 1;\n"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+// The escape guard rejects only a real parent ref (`..`, `../…`), NOT a legitimately
+// contained filename that merely starts with two dots. `..draft.ts` must still format.
+test("formatFiles formats a contained file whose name starts with '..'", async () => {
+  const dir = await tempDir();
+
+  try {
+    await writeFile(join(dir, "..draft.ts"), "export  const   x=1");
+
+    await formatFiles(dir, ["..draft.ts"]);
+
+    expect(await readFile(join(dir, "..draft.ts"), "utf8")).toBe(
+      "export const x = 1;\n"
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("formatFiles is a no-op on an empty list and skips a missing path", async () => {
   const dir = await tempDir();
 

@@ -118,10 +118,11 @@ export interface ISessionConfig {
   accept?: string;
   /** Auto-fix command run before re-validating (e.g. `eslint --fix`). */
   fix?: string;
-  /** Opt into the core format janitor: a strict `eslint --fix` + prettier over the
-   *  task's SCOPED files (never the whole tree), deferring to the project's own
-   *  prettier. The interactive CLI sets this; bare test/eval loops leave it off so
-   *  they don't pay per-turn formatter subprocess latency. Independent of `fix`. */
+  /** Opt into the core format janitor: a strict `eslint --fix` + prettier over the files
+   *  the model wrote this session (`ctx.tool.touched`, never the whole tree — and NOT
+   *  `task.files`, which defaults to a whole-repo glob in the REPL), deferring to the
+   *  project's own prettier. The interactive CLI sets this; bare test/eval loops leave it
+   *  off so they don't pay per-turn formatter subprocess latency. Independent of `fix`. */
   coreFormat?: boolean;
   /** Read-only context files. */
   context?: string[];

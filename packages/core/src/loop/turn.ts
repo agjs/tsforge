@@ -979,13 +979,22 @@ async function recheckAfterPolish(
 export async function polishOnGreen(ctx: ILoopCtx): Promise<void> {
   const { task, cwd, report } = ctx;
 
-  // Scope polish (the drop AND its revert snapshot) to the files the model WROTE this
-  // session (`ctx.tool.touched`) — NOT task.files, which defaults to the whole repo in
-  // the interactive REPL. dropRedundantAnnotations mutates each file (stripping the
-  // dropped annotation's semicolon), so scanning the whole tree would rewrite files the
-  // model never touched — the exact thing #103 forbids.
+  // Scope the DROP + FORMAT to the files the model WROTE this session (`ctx.tool.touched`)
+  // — NOT task.files, which defaults to the whole repo in the interactive REPL.
+  // dropRedundantAnnotations mutates each file (stripping the dropped annotation's
+  // semicolon), so scanning the whole tree would rewrite files the model never touched —
+  // the exact thing #103 forbids.
   const files = [...(ctx.tool.touched ?? [])];
-  const snapshot = await snapshotFiles(cwd, files);
+
+  // The revert SNAPSHOT must cover everything polish could mutate, so a failed re-gate
+  // rolls back cleanly. The drop/format only touch `files`, but a spec-provided
+  // `task.fix` is an arbitrary command that may edit any in-scope file — so when one is
+  // set, also snapshot the resolved scope (reads only; the mutations stay touched-scoped).
+  const snapshotScope =
+    task.fix !== undefined && task.fix.length > 0
+      ? [...new Set([...files, ...(await resolveScopeFiles(cwd, task.files))])]
+      : files;
+  const snapshot = await snapshotFiles(cwd, snapshotScope);
   const dropped = await dropRedundantAcross(cwd, files);
 
   if (dropped === 0) {

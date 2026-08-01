@@ -257,11 +257,12 @@ export async function formatFiles(
   files: readonly string[],
   opts: { signal?: AbortSignal; timeoutMs?: number } = {}
 ): Promise<void> {
-  const rels = [
-    ...new Set(
-      files.map((f) => f.replaceAll("\\", "/")).filter((f) => f.length > 0)
-    ),
-  ];
+  // Normalize path separators ONLY on Windows. On POSIX a backslash is a legal
+  // filename character, so rewriting `dir\file.ts` → `dir/file.ts` would redirect the
+  // formatter at a different, untouched file — breaking the touched-only guarantee.
+  const norm = (f: string): string =>
+    process.platform === "win32" ? f.replaceAll("\\", "/") : f;
+  const rels = [...new Set(files.map(norm).filter((f) => f.length > 0))];
 
   if (rels.length === 0) {
     return;
