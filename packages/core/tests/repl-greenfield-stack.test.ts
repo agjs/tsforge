@@ -204,16 +204,23 @@ describe("greenfieldOrSend (the interception branch)", () => {
 // line, echo, rl, activeModelEntry, stack)` terminated by `),`, `() => runSend(line)`, and the
 // call as the handler's TERMINAL statement (`) ; }`). Semantic plan-XOR-send is proven by the
 // greenfieldOrSend behavioral test above.
-// `(?<![.\w])` anchors the callee: it must be a bare `greenfieldOrSend(`, not a member-call
-// decoy like `shim.greenfieldOrSend(` or a word-prefixed name. (A regex over source can't
-// exclude every conceivable decoy — a nested dead block or template-literal copy is out of
-// scope; that is what the greenfieldOrSend BEHAVIORAL test covers.)
+// `(?<=await\s)` anchors the callee to its exact STATEMENT form `await greenfieldOrSend(` —
+// nothing may sit between `await ` and the name, so every prefixed-callee decoy is rejected:
+// `shim.greenfieldOrSend`, `this.#greenfieldOrSend`, `$greenfieldOrSend`, `égreenfieldOrSend`,
+// etc. (`.`, `#`, `$`, Unicode id chars all break the lookbehind). The only decoy a source regex
+// still cannot exclude is the exact call sitting UNREACHABLE (a nested `if (false)` block) — that
+// needs reachability analysis, not a regex; the greenfieldOrSend BEHAVIORAL test is the proof
+// there. Template-literal copies are stripped below alongside comments.
 const WIRED =
-  /(?<![.\w])greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,\s*async\s*\(d\)\s*=>\s*\(await loadApprovedPlan\(d\)\)\s*!==\s*null\s*,\s*\(stack\)\s*=>\s*runGreenfieldPlanning\(\s*args\.dir,\s*line,\s*echo,\s*rl,\s*activeModelEntry,\s*stack\s*\)\s*,\s*\(\)\s*=>\s*runSend\(line\)\s*\)\s*;\s*\}/;
+  /(?<=await\s)greenfieldOrSend\(\s*args\.dir,\s*STACK_ADAPTERS,\s*async\s*\(d\)\s*=>\s*\(await loadApprovedPlan\(d\)\)\s*!==\s*null\s*,\s*\(stack\)\s*=>\s*runGreenfieldPlanning\(\s*args\.dir,\s*line,\s*echo,\s*rl,\s*activeModelEntry,\s*stack\s*\)\s*,\s*\(\)\s*=>\s*runSend\(line\)\s*\)\s*;\s*\}/;
 
-/** Strip line + block comments so a matching phrase in prose can't satisfy the guard. */
-const stripComments = (s: string): string =>
-  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+/** Reduce source to executable code the guard can match: strip block + line comments AND
+ *  template literals, so a matching phrase in prose or a backtick decoy can't satisfy WIRED. */
+const codeOnly = (s: string): string =>
+  s
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
 
 describe("the REPL line handler wires greenfieldOrSend (source guard)", () => {
   test("the real handler source matches the exact wiring shape", async () => {
@@ -221,47 +228,61 @@ describe("the REPL line handler wires greenfieldOrSend (source guard)", () => {
       join(import.meta.dir, "..", "src", "cli", "repl.ts")
     ).text();
 
-    expect(stripComments(raw)).toMatch(WIRED);
+    expect(codeOnly(raw)).toMatch(WIRED);
   });
 
   // Regression-test the guard's NEGATIVE guarantees in-file (not just out of band): each
   // plan-THEN-send bypass the reviewers raised must FAIL the same WIRED regex.
   test("the guard rejects a block-body onGreenfield that plans then sends", () => {
     const bypass =
-      "greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => { runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack); runSend(line); }, () => runSend(line) ); }";
+      "await greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => { runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack); runSend(line); }, () => runSend(line) ); }";
 
-    expect(stripComments(bypass)).not.toMatch(WIRED);
+    expect(codeOnly(bypass)).not.toMatch(WIRED);
   });
 
   test("the guard rejects a send chained onto runGreenfieldPlanning (.finally)", () => {
     const bypass =
-      "greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack).finally(() => runSend(line)), () => runSend(line) ); }";
+      "await greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack).finally(() => runSend(line)), () => runSend(line) ); }";
 
-    expect(stripComments(bypass)).not.toMatch(WIRED);
+    expect(codeOnly(bypass)).not.toMatch(WIRED);
   });
 
   test("the guard rejects a bare runSend(line) trailing the greenfieldOrSend call", () => {
     const bypass =
-      "greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); await runSend(line); }";
+      "await greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); await runSend(line); }";
 
-    expect(stripComments(bypass)).not.toMatch(WIRED);
+    expect(codeOnly(bypass)).not.toMatch(WIRED);
   });
 
   test("the guard rejects a hasApprovedPlan callback that sends (send-while-checking)", () => {
     // The plan-state predicate is pinned to its exact pure form, so a hasApprovedPlan that
     // sends — `() => runSend(line).then(() => false)` — no longer matches WIRED.
     const bypass =
-      "greenfieldOrSend( args.dir, STACK_ADAPTERS, () => runSend(line).then(() => false), (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); }";
+      "await greenfieldOrSend( args.dir, STACK_ADAPTERS, () => runSend(line).then(() => false), (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); }";
 
-    expect(stripComments(bypass)).not.toMatch(WIRED);
+    expect(codeOnly(bypass)).not.toMatch(WIRED);
   });
 
-  test("the guard rejects a member-call decoy (shim.greenfieldOrSend) via the callee anchor", () => {
-    // An otherwise-perfectly-shaped call on a DIFFERENT object must not satisfy the guard —
-    // the `(?<![.\w])` anchor requires a bare `greenfieldOrSend(`, not `shim.greenfieldOrSend(`.
-    const decoy =
-      "shim.greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); }";
+  test("the guard rejects prefixed-callee decoys (member call / $ / # / Unicode) via the await anchor", () => {
+    // The `(?<=await\s)` anchor requires the name IMMEDIATELY after `await ` — so any prefix
+    // (`.`, `$`, `#`, a Unicode id char) breaks it. A different callee cannot satisfy the guard.
+    for (const callee of [
+      "shim.greenfieldOrSend",
+      "$greenfieldOrSend",
+      "this.#greenfieldOrSend",
+    ]) {
+      const decoy = `await ${callee}( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); }`;
 
-    expect(stripComments(decoy)).not.toMatch(WIRED);
+      expect(codeOnly(decoy)).not.toMatch(WIRED);
+    }
+  });
+
+  test("the guard rejects an exact call hidden inside a template literal (stripped as non-code)", () => {
+    // A perfectly-shaped call sitting in a backtick string is NOT executable wiring; codeOnly
+    // strips template literals (like comments), so a template-literal decoy cannot satisfy WIRED.
+    const decoy =
+      "const x = `await greenfieldOrSend( args.dir, STACK_ADAPTERS, async (d) => (await loadApprovedPlan(d)) !== null, (stack) => runGreenfieldPlanning(args.dir, line, echo, rl, activeModelEntry, stack), () => runSend(line) ); }`;";
+
+    expect(codeOnly(decoy)).not.toMatch(WIRED);
   });
 });
