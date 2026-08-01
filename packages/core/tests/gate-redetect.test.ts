@@ -441,8 +441,10 @@ test("resume unions the persisted policy floor (packs + profile + testCommand su
     // A plain project on disk — NO react, NO strict CLI flag, NO test script.
     await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
 
+    // Resume with an EXPLICIT weaker CLI profile — the floor's `strict` must still win
+    // (else `--continue --profile recommended` would drop type-aware / strict extras).
     const resumed = await resolveGate(
-      { ...parseArgs([]), dir },
+      { ...parseArgs([]), dir, profile: "recommended" },
       {
         id: "s",
         cwd: dir,
@@ -463,8 +465,8 @@ test("resume unions the persisted policy floor (packs + profile + testCommand su
     // The pack the last session reached survives (floor union), even though the tree no
     // longer has react.
     expect(resumed.accept).toContain("react-component-architecture");
-    // The profile isn't downgraded: `strict` restores its `typescript-core` extra pack
-    // although the CLI passed no --profile this run.
+    // The floor's `strict` beats the weaker `--profile recommended`: its `typescript-core`
+    // extra pack is present (a CLI-profile-wins bug would drop it).
     expect(resumed.accept).toContain("typescript-core");
     // The frozen test command is kept even though the tree now has no test script.
     expect(resumed.accept).toContain("bun run test");
@@ -640,6 +642,27 @@ test("loadSession sanitizes a malformed gatePolicy floor", async () => {
     expect(dirty?.gatePolicy?.packs).toEqual(["good", "also-good"]);
     expect(dirty?.gatePolicy?.ruleOverrides).toEqual({ keep: "off" });
     expect(dirty?.gatePolicy?.testCommand).toBeNull();
+
+    // Missing ruleOverrides → the WHOLE floor is dropped (else resume would freeze an
+    // empty override set, silently dropping strict meta-rules).
+    await writeRaw("no-overrides", {
+      packs: ["ok"],
+      profile: "strict",
+      testCommand: null,
+    });
+
+    expect((await loadSession("no-overrides"))?.gatePolicy).toBeUndefined();
+
+    // A present-but-invalid profile → floor dropped (a bogus profile must not suppress
+    // the CLI profile on resume).
+    await writeRaw("bad-profile", {
+      packs: ["ok"],
+      profile: "not-a-real-profile",
+      ruleOverrides: {},
+      testCommand: null,
+    });
+
+    expect((await loadSession("bad-profile"))?.gatePolicy).toBeUndefined();
   } finally {
     if (prevHome === undefined) {
       delete process.env.TSFORGE_HOME;

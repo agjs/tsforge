@@ -45,11 +45,14 @@ export interface IResolvedGate {
 }
 
 /** The FROZEN policy an auto gate runs under, captured ONCE at session start (or on
- *  `--continue`, which is a human re-invocation, not a mid-build cycle). The rule
- *  overrides, profile, conventions, and config all come from `tsforge.config.json`;
- *  freezing them means the code under test cannot relax its own gate by editing that
- *  file between cycles. Only the STACK (package.json dependencies) is re-read per cycle,
- *  and only ADDITIVELY (see the resolver's monotonic pack accumulator). */
+ *  `--continue`). WITHIN a running session the rule overrides, profile, conventions, and
+ *  config are all frozen — the code under test can't relax its own gate by editing
+ *  `tsforge.config.json` between cycles; only the STACK (package.json deps) is re-read per
+ *  cycle, and only ADDITIVELY (the resolver's monotonic pack accumulator). ACROSS a
+ *  `--continue`, the resume FLOOR restores packs (unioned), profile, ruleOverrides, and the
+ *  test command so the gate resumes no weaker — EXCEPT conventions, which are re-derived
+ *  from the current config on resume (a deliberate boundary: they're advisory guides and
+ *  the config is a tracked file the human owns between sessions). */
 interface IGatePolicy {
   dir: string;
   config: ITsforgeProjectConfig;

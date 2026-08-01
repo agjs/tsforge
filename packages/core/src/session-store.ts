@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { readdir, mkdir, chmod, stat, unlink } from "node:fs/promises";
 import type { IChatMessage, IToolCall } from "./inference";
 import { isRecord } from "./lib/guards";
+import { isProfileId } from "./config/profiles";
 
 /** Days to keep a session before `pruneSessions` deletes it (env-overridable). */
 const DEFAULT_TTL_DAYS = 30;
@@ -178,6 +179,12 @@ function parseGateFloor(value: unknown): IGateFloor | null {
     !isRecord(value) ||
     !Array.isArray(value.packs) ||
     typeof value.profile !== "string" ||
+    // "" = the session had no explicit profile; anything else must be a real ProfileId,
+    // else the floor is dropped (a bogus profile must NOT suppress the CLI profile).
+    !(value.profile === "" || isProfileId(value.profile)) ||
+    // ruleOverrides MUST be present as a map — a missing one would otherwise freeze an
+    // EMPTY override set on resume, silently dropping strict meta-rules / user severities.
+    !isRecord(value.ruleOverrides) ||
     !(typeof value.testCommand === "string" || value.testCommand === null)
   ) {
     return null;
