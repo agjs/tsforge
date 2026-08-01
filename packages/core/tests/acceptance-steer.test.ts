@@ -1,9 +1,9 @@
 import { test, expect } from "bun:test";
-import { acceptanceSteer } from "../src/loop/acceptance/acceptance-steer";
+import { acceptanceSteer } from "../src/loop/boringstack/acceptance/acceptance-steer";
 import type {
   IEntityAcceptance,
   IAcceptanceOutcome,
-} from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance.types";
 
 const makeEntity = (id: string): IEntityAcceptance => ({
   id,

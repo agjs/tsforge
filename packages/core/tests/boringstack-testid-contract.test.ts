@@ -13,8 +13,8 @@ import {
 import {
   planToAcceptanceSpec,
   testIdsFor,
-} from "../src/loop/acceptance/acceptance-spec";
-import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance-spec";
+import type { IEntityAcceptance } from "../src/loop/boringstack/acceptance/acceptance.types";
 
 /** Build a minimal entity where the FIRST field is a parent FK (the distinguishing case the
  *  Contact fixture can't exercise — its first field "name" is already non-FK). */

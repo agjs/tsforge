@@ -1,4 +1,4 @@
-import type { IEntityAcceptance } from "../acceptance/acceptance.types";
+import type { IEntityAcceptance } from "./acceptance/acceptance.types";
 import type { IErrorItem } from "../../validate";
 import type { Exec } from "./exec";
 

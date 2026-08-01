@@ -4,8 +4,8 @@ import {
   planToAcceptanceSpec,
   testIdsFor,
   fieldIsMentioned,
-} from "../src/loop/acceptance/acceptance-spec";
-import type { IAcceptField } from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance-spec";
+import type { IAcceptField } from "../src/loop/boringstack/acceptance/acceptance.types";
 import { type IUiIntent } from "../src/loop/boringstack/plan-extension";
 
 // The generic acceptance generator takes an injected UI-field extractor; these tests use the

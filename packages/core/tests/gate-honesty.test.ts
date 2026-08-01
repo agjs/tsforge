@@ -3,7 +3,7 @@ import { composeBoringstackGate } from "../src/loop/boringstack/gate-stages";
 import type { Exec, IExecResult } from "../src/loop/boringstack/exec";
 import type { SpecFetcher } from "../src/loop/boringstack/openapi-routes";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";
-import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
+import type { IEntityAcceptance } from "../src/loop/boringstack/acceptance/acceptance.types";
 import type { IProvider } from "../src/inference";
 
 /**

@@ -5,7 +5,7 @@ import {
   schemaMismatchError,
 } from "../src/loop/boringstack/db-oracle";
 import type { Exec } from "../src/loop/boringstack/exec";
-import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
+import type { IEntityAcceptance } from "../src/loop/boringstack/acceptance/acceptance.types";
 
 /** A minimal plan-derived entity. `fields` already includes any parent-FK fields (the
  *  acceptance spec adds them), so this is exactly what the gate sees. */

@@ -26,7 +26,7 @@ import type {
   IAcceptanceRunner,
   IAcceptanceOutcome,
   IEntityAcceptance,
-} from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance.types";
 import type { IProvider } from "../src/inference";
 import type { IGate } from "../src/gate/gate-runner";
 import { writePlan } from "../src/loop/planning/plan-store";

@@ -3,7 +3,7 @@ import type {
   IAcceptanceOutcome,
   IAcceptanceRunner,
   IEntityAcceptance,
-} from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance.types";
 import { boringstackDeps } from "../src/loop/boringstack/build";
 import type {
   IFeature,

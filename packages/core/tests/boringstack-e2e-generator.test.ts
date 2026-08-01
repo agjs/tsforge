@@ -5,12 +5,12 @@ import {
   generateChainSpec,
   chainSpecPath,
 } from "../src/loop/boringstack/acceptance/e2e-generator";
-import { planToAcceptanceSpec } from "../src/loop/acceptance/acceptance-spec";
+import { planToAcceptanceSpec } from "../src/loop/boringstack/acceptance/acceptance-spec";
 import type {
   IEntityAcceptance,
   IAcceptanceSpec,
   IAcceptField,
-} from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance.types";
 import type { IProductPlan } from "../src/loop/planning/plan-types";
 import {
   boringstackUiFields,

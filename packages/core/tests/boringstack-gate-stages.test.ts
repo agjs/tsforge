@@ -12,8 +12,8 @@ import {
   testIdStage,
 } from "../src/loop/boringstack/gate-stages";
 import { scopeFor, featureOwnedGlobs } from "../src/loop/boringstack/build";
-import { testIdsFor } from "../src/loop/acceptance/acceptance-spec";
-import type { IEntityAcceptance } from "../src/loop/acceptance/acceptance.types";
+import { testIdsFor } from "../src/loop/boringstack/acceptance/acceptance-spec";
+import type { IEntityAcceptance } from "../src/loop/boringstack/acceptance/acceptance.types";
 import type { Exec } from "../src/loop/boringstack/exec";
 import type { SpecFetcher } from "../src/loop/boringstack/openapi-routes";
 import type { IFeature } from "../src/loop/greenfield/greenfield.types";

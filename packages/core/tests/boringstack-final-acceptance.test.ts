@@ -4,7 +4,7 @@ import type {
   IAcceptanceRunner,
   IAcceptanceSpec,
   IEntityAcceptance,
-} from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance.types";
 import { runFinalAcceptance } from "../src/loop/boringstack/build";
 import type { Exec } from "../src/loop/boringstack/exec";
 import type { IGreenfieldResult } from "../src/loop/greenfield/greenfield.types";

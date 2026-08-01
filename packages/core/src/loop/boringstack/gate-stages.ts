@@ -27,7 +27,7 @@ import {
   readResourceCode,
   rescueFileFor,
 } from "./build";
-import type { IEntityAcceptance } from "../acceptance/acceptance.types";
+import type { IEntityAcceptance } from "./acceptance/acceptance.types";
 import { checkTestIds, checkWiring } from "./acceptance/testid-contract";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 

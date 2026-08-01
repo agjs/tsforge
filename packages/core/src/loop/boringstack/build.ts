@@ -30,7 +30,7 @@ import {
   type BoringstackProductPlan,
   type IUiIntent,
 } from "./plan-extension";
-import { planToAcceptanceSpec } from "../acceptance/acceptance-spec";
+import { planToAcceptanceSpec } from "./acceptance/acceptance-spec";
 import { buildTestIdGuide } from "./acceptance/testid-contract";
 import type {
   IEntityAcceptance,
@@ -38,8 +38,8 @@ import type {
   IAcceptanceRunCtx,
   IAcceptanceSpec,
   IAcceptanceOutcome,
-} from "../acceptance/acceptance.types";
-import { acceptanceSteer } from "../acceptance/acceptance-steer";
+} from "./acceptance/acceptance.types";
+import { acceptanceSteer } from "./acceptance/acceptance-steer";
 import { readHostPorts, hostPortOr } from "../../scaffold";
 import { FLAG_ON, ENV_FLAG } from "../../config/config.constants";
 

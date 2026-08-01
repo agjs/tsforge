@@ -1,4 +1,8 @@
-import type { IProductPlan, ISlice, IEntitySpec } from "../planning/plan-types";
+import type {
+  IProductPlan,
+  ISlice,
+  IEntitySpec,
+} from "../../planning/plan-types";
 import type {
   IAcceptanceSpec,
   IEntityAcceptance,
@@ -9,13 +13,14 @@ import type {
 } from "./acceptance.types";
 
 /** The UI fields acceptance generation projects from a slice's `ui` — nav label, shown fields, and
- *  the screen list. HONEST SCOPE: `nav`/`shows`/`screens` are a WEB/SaaS-flavoured projection, and
- *  this whole acceptance-generation module is consumed only by the BoringStack adapter (build.ts,
- *  testid-contract, e2e-generator). The `uiFields` extractor removes core's dependence on the
- *  concrete UI-intent TYPE (that leak is what WS3 reclaimed from the plan spine), but it does NOT
- *  make e2e generation stack-neutral — a UI-less adapter (Phaser) would still have to manufacture
- *  these. Relocating the acceptance subsystem into `loop/boringstack/` is tracked as follow-up; it
- *  is downstream of the plan spine, not part of it. */
+ *  the screen list. `nav`/`shows`/`screens` are a WEB/SaaS-flavoured projection, and this whole
+ *  acceptance-generation module is consumed only by the BoringStack adapter (build.ts,
+ *  testid-contract, e2e-generator) — which is why the subsystem now LIVES here, under
+ *  `loop/boringstack/acceptance/` (WS5 relocated it out of core `loop/acceptance/`; WS3 had already
+ *  removed the plan-spine's dependence on the concrete UI-intent TYPE via the `uiFields` extractor).
+ *  It stays generic over `TUi` (a pure projection helper), but it is NOT stack-neutral — a UI-less
+ *  adapter (Phaser) would have to manufacture nav/shows/screens or bring its own acceptance scheme.
+ *  Core keeps only the generic plan spine (`IProductPlan<TUi>`/`ISlice<TUi>` in `planning/`). */
 export interface IAcceptanceUiFields {
   readonly nav: string;
   readonly shows: readonly string[];

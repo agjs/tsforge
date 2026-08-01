@@ -12,7 +12,7 @@ import { chainCreateTitle } from "../src/loop/boringstack/acceptance/e2e-generat
 import type {
   IEntityAcceptance,
   IAcceptanceRunCtx,
-} from "../src/loop/acceptance/acceptance.types";
+} from "../src/loop/boringstack/acceptance/acceptance.types";
 
 /**
  * Create a test context with a temporary directory.
