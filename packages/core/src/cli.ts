@@ -770,6 +770,19 @@ export async function main(): Promise<number> {
     return harnessDiagnoseMode(raw.slice(1));
   }
 
+  // BEFORE any dispatch, including --version/--help/recipes and the recipe overlay.
+  // A malformed invocation must not quietly do something else first: `tsforge
+  // recipes --dir --plan` would otherwise list recipes for the wrong directory and
+  // exit 0, and a recipe lookup would run its I/O before the error surfaced.
+  // (The subcommands above parse their own argv, so they are exempt.)
+  const valueErr = valueFlagError(raw);
+
+  if (valueErr !== null) {
+    process.stdout.write(`${valueErr}\n`);
+
+    return 1;
+  }
+
   const args = parseArgs(raw);
 
   // `--version`/`--help` print and exit — before this fix an unknown flag fell
@@ -805,16 +818,6 @@ export async function main(): Promise<number> {
 
   if (recipeAbort !== null) {
     return recipeAbort;
-  }
-
-  // A value flag handed no value — or handed the next flag — must fail loudly rather
-  // than run on the default, silently dropping what the user asked for.
-  const valueErr = valueFlagError(raw);
-
-  if (valueErr !== null) {
-    process.stdout.write(`${valueErr}\n`);
-
-    return 1;
   }
 
   // A typo'd `--profile` must fail loudly too: `--profile stict` parses fine but would

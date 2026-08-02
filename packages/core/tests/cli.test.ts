@@ -581,3 +581,58 @@ describe("a value flag never swallows the flag after it", () => {
     expect(valueFlagError(["--plan", "--continue"])).toBeNull();
   });
 });
+
+// The guard has to abort BEFORE any dispatch, so these spawn the real CLI rather
+// than calling the pure helper: a correct valueFlagError wired in too late still
+// lets `tsforge recipes --dir --plan` list recipes for the wrong directory and
+// exit 0. Only running the binary catches placement.
+describe("the real CLI aborts on a malformed value flag", () => {
+  const CLI = join(import.meta.dir, "..", "src", "cli.ts");
+
+  async function run(
+    argv: readonly string[]
+  ): Promise<{ code: number; out: string }> {
+    const proc = Bun.spawn(["bun", CLI, ...argv], {
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: "ignore",
+      env: { ...process.env, TSFORGE_NO_PERSIST: "1" },
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    return { code, out: stdout + stderr };
+  }
+
+  test("exits non-zero naming the flag", async () => {
+    const r = await run(["--dir", "--plan"]);
+
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("--dir");
+  });
+
+  test("beats the --help early return", async () => {
+    const r = await run(["--profile", "--help"]);
+
+    expect(r.code).toBe(1);
+    expect(r.out).not.toContain("Usage");
+  });
+
+  test("beats the recipes subcommand", async () => {
+    // The bug this catches: recipes ran against the default cwd and exited 0.
+    const r = await run(["recipes", "--dir", "--plan"]);
+
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("--dir");
+  });
+
+  test("a valid invocation still reaches its command", async () => {
+    const r = await run(["--help"]);
+
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("tsforge");
+  });
+});
