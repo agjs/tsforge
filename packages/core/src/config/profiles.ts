@@ -93,7 +93,7 @@ export const PROFILE_DEFINITIONS: Readonly<
     description:
       "Full house-style architecture rules including component folder structure.",
     // Every entry is `error`: this is the strictest profile, so it must never set
-    // a rule below its pack default. Enforced by tests/profile-severity.test.ts.
+    // a rule below its pack default. Enforced by tests/profiles.test.ts.
     ruleOverrides: {
       "component-folder-structure": "error",
       "no-state-in-component-body": "error",
