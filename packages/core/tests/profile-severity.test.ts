@@ -7,15 +7,10 @@ import {
 } from "../src/config/profiles";
 
 /**
- * A profile must never make the gate WEAKER than the rule pack it sits on top of,
- * except where that is a documented, deliberate product decision.
- *
- * This has been the same bug three times — `no-inline-jsx-functions` (#105),
- * then `max-hooks-per-file`, then the `frontend` profile's two React rules —
- * each fixed at the line that broke rather than as a class. This suite is the
- * class: any profile override weaker than its pack default must appear in
- * INTENTIONAL_RELAXATIONS with a reason, so a new one cannot be introduced
- * silently. Keep that list as close to empty as the product allows.
+ * A profile must never set a rule below the severity its own pack ships it at.
+ * Any exception must be declared in INTENTIONAL_RELAXATIONS with a reason, so a
+ * weaker gate cannot be introduced silently. Keep that list as close to empty as
+ * the product allows.
  */
 
 const RANK: Readonly<Record<string, number>> = { off: 0, warn: 1, error: 2 };

@@ -75,13 +75,9 @@ export const PROFILE_DEFINITIONS: Readonly<
     label: "Frontend",
     description:
       "Recommended, scoped to frontend work; React/Next rules keep their pack severities.",
-    // This block used to read `no-html-img-element`/`no-anonymous-useEffect`/
-    // `no-derived-state-in-effect` at "warn". That was one no-op and two real
-    // downgrades: the nextjs pack already ships no-html-img-element at warn,
-    // while react-component-architecture ships the other two at ERROR — which
-    // `recommended` leaves alone. So `--profile frontend`, the profile you would
-    // pick FOR a React app, was weaker on two React correctness rules than the
-    // default. Removed, so the pack severities stand.
+    // No React/Next severity overrides: the packs already ship those rules at the
+    // severity this profile wants, and lowering any of them would make the React
+    // profile weaker than `recommended` on React rules.
     ruleOverrides: structureOffOverrides,
   },
   backend: {
@@ -96,19 +92,14 @@ export const PROFILE_DEFINITIONS: Readonly<
     label: "Opinionated",
     description:
       "Full house-style architecture rules including component folder structure.",
+    // Every entry is `error`: this is the strictest profile, so it must never set
+    // a rule below its pack default. Enforced by tests/profile-severity.test.ts.
     ruleOverrides: {
       "component-folder-structure": "error",
       "no-state-in-component-body": "error",
-      // `error`, NOT `warn` — the strictest profile must never lower a quality rule below
-      // the default (where no-inline-jsx-functions is already on). warn here was a leftover
-      // from when this rule was off by default.
       "no-inline-jsx-functions": "error",
       "index-must-reexport-default": "error",
       "forwardref-display-name": "error",
-      // Same reason, same leftover: the pack ships this at `error`, and this
-      // profile exists to turn the structure rules ON, so `warn` made the
-      // strictest profile weaker than the pack it sits on.
-      // tests/profile-severity.test.ts now enforces this for every profile.
       "max-hooks-per-file": "error",
       "prefer-early-return": "error",
     },
