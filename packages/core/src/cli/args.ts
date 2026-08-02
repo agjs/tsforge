@@ -1,6 +1,6 @@
 import { join, isAbsolute } from "node:path";
 import type { ITaskRecipe } from "../config/recipes";
-import { isProfileId, type ProfileId } from "../config/profiles";
+import { isProfileId, PROFILE_IDS, type ProfileId } from "../config/profiles";
 
 /**
  * CLI argument parsing + recipe overlay — pure, no I/O, no module state. Extracted
@@ -86,7 +86,8 @@ export interface ICliArgs {
   maxTurns: number;
   /** Reasoning-token cap (from a recipe); 0 = the env/default. */
   thinkingBudget: number;
-  /** Rule profile override (from a recipe); "" = use tsforge.config.json. */
+  /** Rule profile override — `--profile <id>` or a recipe; "" = use tsforge.config.json /
+   *  the default. Persisted so `--continue` keeps the strictness a build was started with. */
   profile: string;
   /** Base policy mode (`--policy-mode <plan|default|acceptEdits|ci|dontAsk|
    *  bypassPermissions>`); overrides the config file's policy.mode. */
@@ -144,6 +145,7 @@ const VALUE_FLAGS = new Set([
   "--resume",
   "--base",
   "--policy-mode",
+  "--profile",
   "--recipe",
   "--notify",
 ]);
@@ -173,6 +175,7 @@ export function cliUsage(): string {
     "  --plan              pause after the design phase for plan review",
     "  --log               append the run's event stream to ~/.tsforge/logs/",
     "  --policy-mode <m>   plan|default|acceptEdits|ci|dontAsk|bypassPermissions",
+    "  --profile <id>      strictness: recommended|strict|security|frontend|backend|opinionated",
     "  --notify <cmd>      run a command when an unattended run finishes",
     "  --version, -V       print the version and exit",
     "  --help, -h          this help",
@@ -297,6 +300,8 @@ function applyValueFlag(flag: string, value: string, out: ICliArgs): void {
     out.base = value;
   } else if (flag === "--policy-mode") {
     out.policyMode = value;
+  } else if (flag === "--profile") {
+    out.profile = value;
   } else if (flag === "--recipe") {
     out.recipe = value;
   } else if (flag === "--notify") {
@@ -364,6 +369,25 @@ export function resolveCliProfile(profile: string): ProfileId | undefined {
   const trimmed = profile.trim();
 
   return trimmed.length > 0 && isProfileId(trimmed) ? trimmed : undefined;
+}
+
+/** Error message for an invalid `--profile`, or null when the profile is fine. A profile
+ *  is "indicated" when a value was set OR the `--profile` flag was present (a trailing
+ *  `--profile` with no value must fail loudly, not silently run at the default). Not
+ *  indicated (no value, no flag) → null (the project config / default drives it). */
+export function profileFlagError(
+  profile: string,
+  flagPresent: boolean
+): string | null {
+  if (!flagPresent && profile.length === 0) {
+    return null;
+  }
+
+  if (isProfileId(profile)) {
+    return null;
+  }
+
+  return `unknown --profile "${profile}" — valid: ${PROFILE_IDS.join(", ")}`;
 }
 
 /** Recipe greenfield role models (split out to keep applyRecipe's complexity in

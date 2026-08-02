@@ -18,7 +18,19 @@ import type { IConventions } from "../infer-rules/conventions.types";
 /** tsforge's per-project cache namespace (git-ignored, next to the tsc
  *  buildinfo). The syntactic-lint result cache lives here. */
 const GATE_CACHE_DIR = ".tsforge";
-const ESLINT_CACHE = `${GATE_CACHE_DIR}/eslint-gate.cache`;
+
+/** The eslint result cache path, KEYED BY the active ruleset. eslint caches on file
+ *  content + the static config PATH — NOT the packs/overrides/conventions we inject via
+ *  env (TSFORGE_PACKS, …). The auto gate can change packs mid-session (a greenfield project
+ *  gains `react`), so a single fixed cache path would let files cached under the weaker
+ *  ruleset keep passing without the newly activated rules. Hashing the env prefix (the
+ *  exact ruleset) into the filename means a ruleset change → a fresh cache → a real re-lint,
+ *  while an unchanged ruleset still hits the cache. */
+function eslintCachePath(envPrefix: string): string {
+  const key = Bun.hash(`v1:${envPrefix}`).toString(36);
+
+  return `${GATE_CACHE_DIR}/eslint-gate-${key}.cache`;
+}
 
 export async function buildGate(
   cwd: string,
@@ -27,6 +39,11 @@ export async function buildGate(
   options?: {
     enableTypeAware?: boolean;
     includeTests?: boolean;
+    /** An explicit test command to use instead of re-discovering one. `undefined`
+     *  discovers from the project (default); a string or `null` is used verbatim. The
+     *  auto-gate passes its FROZEN command (captured once at session start) so a cycle
+     *  can't re-discover a weaker one — e.g. a real suite swapped for a noop script. */
+    testCommand?: string | null;
     conventions?: IConventions;
   }
 ): Promise<IGateSpec> {
@@ -66,7 +83,10 @@ export async function buildGate(
   // fast without paying for a test run. Only appended when the project actually
   // has tests to run — a strict-floor-only run, or a project with none, skips it.
   if (options?.includeTests === true) {
-    const test = await discoverTestCommand(cwd);
+    const test =
+      options.testCommand === undefined
+        ? await discoverTestCommand(cwd)
+        : options.testCommand;
 
     if (test !== null) {
       parts.push(test);
@@ -136,15 +156,18 @@ function lintPart(
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
   conventions?: IConventions
 ): IGateSpec {
-  // Result caching is sound here because this pass is syntactic-only: a file's
-  // lint result depends on that file alone, and eslint keys cache entries on
-  // file content + resolved config hash. The type-aware pass below must stay
-  // UNCACHED — editing one file can change type errors in an untouched one.
-  // Every repair cycle re-runs the gate, so on all but the first cycle this
-  // skips re-linting the (usually vast) majority of unchanged files. buildGate
-  // creates the .tsforge/ cache dir in-process before this runs.
+  // Result caching is sound here because this pass is syntactic-only: a file's lint
+  // result depends on that file alone plus the active ruleset. eslint keys cache entries
+  // on file content + the static config path — NOT the packs/overrides we inject via env,
+  // so the cache path is keyed by the ruleset (eslintCachePath) to stay correct when the
+  // auto gate changes packs mid-session. The type-aware pass below must stay UNCACHED —
+  // editing one file can change type errors in an untouched one. Every repair cycle
+  // re-runs the gate, so on all but the first cycle this skips re-linting the (usually
+  // vast) majority of unchanged files. buildGate creates the .tsforge/ dir before this runs.
+  const envPrefix = packEnvPrefix(packs, ruleOverrides, conventions);
+
   return {
-    command: `${packEnvPrefix(packs, ruleOverrides, conventions)}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --cache --cache-location "${ESLINT_CACHE}" --format json .`,
+    command: `${envPrefix}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --cache --cache-location "${eslintCachePath(envPrefix)}" --format json .`,
     label: "strict TypeScript (tsforge)",
   };
 }

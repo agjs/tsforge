@@ -58,6 +58,7 @@ import {
 } from "../config/tsforge-config";
 import { makeSpawnAgentFn } from "./spawn-runner";
 import { scopeOf, WHOLE_REPO, resolveCliProfile, type ICliArgs } from "./args";
+import { isProfileId } from "../config/profiles";
 import { isPolicyMode } from "../policy";
 import { startEditor, type IEditorHandle } from "../editor";
 import { renderEditor } from "../editor/view";
@@ -118,7 +119,7 @@ import {
   printHeader,
   maybePrintNoConfigHint,
 } from "./banner";
-import { resolveGate } from "./gate-setup";
+import { resolveGate, type AutoGateResolver } from "./gate-setup";
 import {
   printSessions,
   turnsToGreenLine,
@@ -389,6 +390,7 @@ async function initReplSession(args: ICliArgs): Promise<{
   resumed: ISessionRecord | null;
   files: string[];
   activeModelEntry: IModelEntry;
+  autoGate?: AutoGateResolver;
 }> {
   const activeModel = await modelForRun(args);
   const provider = makeProvider(activeModel.entry);
@@ -411,8 +413,18 @@ async function initReplSession(args: ICliArgs): Promise<{
     process.stdout.write("(no matching saved session — starting fresh)\n");
   }
 
+  // Keep the strictness a resumed build was started with: re-apply its saved `--profile`
+  // so `--continue` doesn't silently drop to the default (users shouldn't have to re-pass
+  // flags to keep building at the level they chose). Flows to BOTH the gate (resolveGate)
+  // and the Session's rule severities (Session.create reads args.profile). An explicit
+  // `--profile` THIS run still wins.
+  args.profile = resumedProfileArg(args.profile, resumed);
+
   const id = resumed?.id ?? newSessionId();
-  const { accept, gateLabel, lintFile } = await resolveGate(args, resumed);
+  const { accept, gateLabel, lintFile, autoGate } = await resolveGate(
+    args,
+    resumed
+  );
   const files = resumed !== null ? resumed.files : scopeOf(args);
   const logFile = resolveLogPath(id, args.log);
 
@@ -456,6 +468,10 @@ async function initReplSession(args: ICliArgs): Promise<{
     // PER-WRITE lint moat (eslint rules per file as it's written), so violations
     // surface immediately instead of piling up at the end-of-turn gate.
     ...(lintFile === undefined ? {} : { lintFile }),
+    // The DYNAMIC auto-gate: re-detects the stack every cycle so a greenfield build
+    // enables framework rule-packs (React, etc.) as soon as the model writes them,
+    // instead of staying on the empty-dir `generic-ts` fallback. Absent ⇒ commandGate.
+    ...(autoGate === undefined ? {} : { autoGate }),
     ...(resumed === null ? {} : { history: resumed.messages }),
     // Opt into the SCOPED format janitor (replaces the old whole-repo `fix`): the loop's
     // autoFixStep runs a strict eslint --fix + prettier over the files the model wrote
@@ -504,7 +520,32 @@ async function initReplSession(args: ICliArgs): Promise<{
     resumed,
     files,
     activeModelEntry: activeModel.entry,
+    ...(autoGate === undefined ? {} : { autoGate }),
   };
+}
+
+/** The `autoGate` field to spread into a rebuilt Session.create — the resolver only when
+ *  it is present AND still driving (`active`). Kept module-level so the `/clear` handler
+ *  stays branch-free: after a manual `/gate` override the resolver is withheld, so the
+ *  rebuild never silently re-arms the auto gate over the user's command. */
+export function autoGateCarry(
+  autoGate: AutoGateResolver | undefined,
+  active: boolean
+): { autoGate?: AutoGateResolver } {
+  return autoGate !== undefined && active ? { autoGate } : {};
+}
+
+/** The effective `--profile` for a run: a resumed session's saved profile fills in when the
+ *  user didn't pass one THIS run, so `--continue` keeps the strictness the build was started
+ *  with. An explicit CLI `--profile` always wins. Only a VALID saved id is restored — a
+ *  corrupted / hand-edited record's bad profile is ignored (never applied or re-persisted). */
+export function resumedProfileArg(
+  cliProfile: string,
+  resumed: ISessionRecord | null
+): string {
+  const saved = resumed?.profile ?? "";
+
+  return cliProfile.length === 0 && isProfileId(saved) ? saved : cliProfile;
 }
 
 /** Interactive REPL: a persistent gate-anchored conversation. */
@@ -525,6 +566,7 @@ export async function repl(args: ICliArgs): Promise<number> {
     resumed,
     files,
     activeModelEntry,
+    autoGate,
   } = await initReplSession(args);
 
   // Load delegation inputs HERE — before readline is created below. Any `await`
@@ -556,6 +598,12 @@ export async function repl(args: ICliArgs): Promise<number> {
       // scaffold all mutate these mid-session; persisting the originals would
       // silently restore stale settings on --continue. See P2 review.
       accept: session.gate,
+      // Persist whether the AUTO gate is still driving, so --continue re-attaches stack
+      // re-detection for an auto session but keeps a manual override (setGate flipped it
+      // false) verbatim — no silent re-arm of the auto gate on resume.
+      auto: session.autoGateActive,
+      // Persist the strictness (--profile) so --continue keeps it without re-passing flags.
+      ...(args.profile.length > 0 ? { profile: args.profile } : {}),
       files: session.scope,
       updatedAt: Date.now(),
       planMode,
@@ -1019,6 +1067,11 @@ export async function repl(args: ICliArgs): Promise<number> {
           // Keep the SCOPED format janitor on across /clear — else the rebuilt session
           // silently reverts to no formatting for the rest of the session.
           coreFormat: true,
+          // Keep the AUTO gate re-detecting across /clear — else the rebuild freezes on
+          // the last static command and stops picking up new framework packs. Withheld
+          // once a manual /gate has taken over (autoGateActive false), so the rebuild
+          // never silently re-arms the auto gate over the user's command.
+          ...autoGateCarry(autoGate, session.autoGateActive),
           // Plain boolean (no branch): the constructor only seeds the flag when true.
           pausedWithEdit: carryDeferredGate,
           ...(profile === undefined ? {} : { profile }),

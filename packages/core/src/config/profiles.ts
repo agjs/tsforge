@@ -14,18 +14,23 @@ export interface IProfileDefinition {
   readonly metaRulesAtError?: readonly string[];
 }
 
-/** Architecture-tier rules enabled only in the opinionated profile. */
-export const ARCHITECTURE_RULES = [
+/** Rules that impose tsforge's SPECIFIC file/folder organization — WHERE code must
+ *  live (a `src/views/<Feature>/` tree, hooks in a colocated `.hooks.ts`, an `index`
+ *  re-export). These are off by default so tsforge stays adoptable on an EXISTING repo
+ *  that has its own valid structure; they turn on when the project opts into the
+ *  `opinionated` profile (tsforge.config.json or `--profile opinionated`) — e.g. a
+ *  greenfield app where tsforge owns the tree. The strictness moat — the
+ *  layout-AGNOSTIC best practices (no `as`, no `any`, no JSX computation, component-file
+ *  purity, named JSX handlers, forwardRef display names, …) — is ON in every profile. */
+export const STRUCTURE_RULES = [
   "component-folder-structure",
-  "no-state-in-component-body",
-  "no-inline-jsx-functions",
   "index-must-reexport-default",
-  "forwardref-display-name",
+  "no-state-in-component-body",
   "max-hooks-per-file",
 ] as const;
 
-const architectureOffOverrides = Object.fromEntries(
-  ARCHITECTURE_RULES.map((rule) => [rule, "off" as const])
+const structureOffOverrides = Object.fromEntries(
+  STRUCTURE_RULES.map((rule) => [rule, "off" as const])
 );
 
 export const PROFILE_DEFINITIONS: Readonly<
@@ -37,7 +42,7 @@ export const PROFILE_DEFINITIONS: Readonly<
     description:
       "Safety + framework packs from stack detection; architecture opinions off by default.",
     ruleOverrides: {
-      ...architectureOffOverrides,
+      ...structureOffOverrides,
       "prefer-early-return": "warn",
     },
   },
@@ -48,7 +53,7 @@ export const PROFILE_DEFINITIONS: Readonly<
       "Recommended plus CI/supply-chain meta-rules at error and type-aware async rules.",
     extraPacks: ["typescript-core"],
     ruleOverrides: {
-      ...architectureOffOverrides,
+      ...structureOffOverrides,
       "prefer-early-return": "warn",
     },
     metaRulesAtError: [
@@ -63,7 +68,7 @@ export const PROFILE_DEFINITIONS: Readonly<
     description:
       "Recommended plus runtime-boundaries and experimental authorization heuristics.",
     extraPacks: ["runtime-boundaries", "authorization"],
-    ruleOverrides: architectureOffOverrides,
+    ruleOverrides: structureOffOverrides,
   },
   frontend: {
     id: "frontend",
@@ -73,7 +78,7 @@ export const PROFILE_DEFINITIONS: Readonly<
       "no-html-img-element": "warn",
       "no-anonymous-useEffect": "warn",
       "no-derived-state-in-effect": "warn",
-      ...architectureOffOverrides,
+      ...structureOffOverrides,
     },
   },
   backend: {
@@ -81,7 +86,7 @@ export const PROFILE_DEFINITIONS: Readonly<
     label: "Backend",
     description:
       "Recommended; stack detection adds Fastify/Elysia/Drizzle/BullMQ packs.",
-    ruleOverrides: architectureOffOverrides,
+    ruleOverrides: structureOffOverrides,
   },
   opinionated: {
     id: "opinionated",
@@ -91,7 +96,10 @@ export const PROFILE_DEFINITIONS: Readonly<
     ruleOverrides: {
       "component-folder-structure": "error",
       "no-state-in-component-body": "error",
-      "no-inline-jsx-functions": "warn",
+      // `error`, NOT `warn` — the strictest profile must never lower a quality rule below
+      // the default (where no-inline-jsx-functions is already on). warn here was a leftover
+      // from when this rule was off by default.
+      "no-inline-jsx-functions": "error",
       "index-must-reexport-default": "error",
       "forwardref-display-name": "error",
       "max-hooks-per-file": "warn",
@@ -102,8 +110,13 @@ export const PROFILE_DEFINITIONS: Readonly<
 
 export const DEFAULT_PROFILE: ProfileId = "recommended";
 
+/** The valid profile ids, for `--profile` validation + error messages. */
+export const PROFILE_IDS: readonly string[] = Object.keys(PROFILE_DEFINITIONS);
+
 export function isProfileId(value: string): value is ProfileId {
-  return value in PROFILE_DEFINITIONS;
+  // `Object.hasOwn`, NOT the `in` operator — `in` walks the prototype chain, so
+  // "constructor"/"toString"/"__proto__" would falsely validate as profile ids.
+  return Object.hasOwn(PROFILE_DEFINITIONS, value);
 }
 
 /** Merge profile overrides with user config overrides (user wins). */

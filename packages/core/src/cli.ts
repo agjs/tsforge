@@ -23,6 +23,7 @@ import {
   scopeOf,
   cliUsage,
   resolveCliProfile,
+  profileFlagError,
   type ICliArgs,
 } from "./cli/args";
 import { validate } from "./validate";
@@ -803,6 +804,18 @@ export async function main(): Promise<number> {
 
   if (recipeAbort !== null) {
     return recipeAbort;
+  }
+
+  // A typo'd OR value-less `--profile` must fail loudly, not silently run at the default
+  // (which would quietly drop the strictness the user asked for). Checked after the recipe
+  // overlay so it covers CLI and recipe-set profiles; `raw.includes` also catches a
+  // trailing `--profile` that parseArgs drops (leaving profile "").
+  const profileErr = profileFlagError(args.profile, raw.includes("--profile"));
+
+  if (profileErr !== null) {
+    process.stdout.write(`${profileErr}\n`);
+
+    return 1;
   }
 
   if (args.review) {

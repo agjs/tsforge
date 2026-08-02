@@ -8,6 +8,7 @@ import type { ITask } from "../spec";
 import type { FileLinter } from "../gate";
 import { makeFileLinter } from "../gate";
 import { commandGate, type IGate } from "../gate/gate-runner";
+import type { IStackProfile } from "../stack-detection";
 import {
   type ADD_DEPENDENCY_TOOL,
   TOOL_NAME,
@@ -212,6 +213,16 @@ export interface ISessionConfig {
   /** Composed gate the session's loop checks each cycle. Defaults to a command
    *  gate from `accept`. Use `setGate` to swap it per unit mid-build. */
   gate?: IGate;
+  /** AUTO gate re-detection: when set, the session re-resolves this before each gate
+   *  cycle and refreshes `task.accept` + the stack profile + the per-write linter — so a
+   *  greenfield build enables framework rule-packs once its package.json lists them,
+   *  instead of freezing on the empty-dir `generic-ts` fallback. Disabled the moment the
+   *  user overrides the gate (`setGate`). Ignored when an explicit `gate` is given. */
+  autoGate?: () => Promise<{
+    command: string;
+    stackProfile: IStackProfile;
+    lintFile?: FileLinter;
+  }>;
   /** Pristine-scaffold meta-rule baseline to subtract from each cycle's violations.
    *  Usually captured mid-build via `captureMetaBaseline()`; this is for callers that
    *  already hold one at construction time. */
@@ -728,6 +739,38 @@ function buildSyntheticHandoff(
   };
 }
 
+/** Build the AUTO-gate runner: a gate that RE-DETECTS the stack each cycle — refreshing
+ *  `ctx.task.accept` (run by validate), the stack profile, and the per-write linter — so a
+ *  greenfield build enables framework rule-packs once its package.json lists them. It reads
+ *  the shared `active` flag; `setGate` flips that off so a manual override wins. Returned
+ *  alongside its `state` so `Session.create` can hand the flag to the constructor, and kept
+ *  module-level so the large factory stays within the complexity budget. */
+function makeAutoGateRunner(
+  ctx: ILoopCtx,
+  resolve: NonNullable<ISessionConfig["autoGate"]>,
+  parse: ErrorParser | undefined
+): { runner: IGate; state: { active: boolean } } {
+  const state = { active: true };
+  const runner: IGate = {
+    async run(cwd, opts) {
+      if (state.active) {
+        const r = await resolve();
+
+        ctx.task.accept = r.command;
+        ctx.gate.stackProfile = r.stackProfile;
+
+        if (r.lintFile !== undefined) {
+          ctx.gate.lintFile = r.lintFile;
+        }
+      }
+
+      return validate(ctx.task, cwd, parse, opts ?? {});
+    },
+  };
+
+  return { runner, state };
+}
+
 export class Session {
   private readonly provider: IProvider;
   private readonly cfg: ISessionConfig;
@@ -738,6 +781,10 @@ export class Session {
     | NonNullable<ReturnType<typeof buildSpawnAgentTool>>
   )[];
   private hasGate: boolean;
+  /** Shared with the auto-gate runner: while `active`, the runner re-detects the stack
+   *  each cycle. `setGate` flips it off — a manual gate override stops re-detection.
+   *  Absent when the session has no auto gate. */
+  private readonly autoGateState?: { active: boolean };
   private readonly ctx: ILoopCtx;
   private readonly state: ILoopState;
   /** Token usage from the most recent model call — `promptTokens` is the real
@@ -785,12 +832,18 @@ export class Session {
    *  post-send memory hook can mine the run for failure→fix lessons. */
   private readonly sendEvents: ILoopEvent[] = [];
 
-  private constructor(cfg: ISessionConfig, ctx: ILoopCtx) {
+  private constructor(
+    cfg: ISessionConfig,
+    ctx: ILoopCtx,
+    autoGateState?: { active: boolean }
+  ) {
     this.provider = cfg.provider;
     this.cfg = cfg;
     this.report = cfg.report ?? ((): void => undefined);
+    this.autoGateState = autoGateState;
     this.hasGate =
       cfg.gate !== undefined ||
+      cfg.autoGate !== undefined ||
       (cfg.accept !== undefined && cfg.accept.length > 0);
     this.incrementalCheck = cfg.incrementalCheck ?? "";
     // Start with the 4 BASE tools (read/run/edit/create). Measured: the bigger
@@ -1010,7 +1063,19 @@ export class Session {
       ),
     };
 
-    const session = new Session(cfg, ctx);
+    // AUTO gate: swap in a runner that RE-DETECTS the stack each cycle (only when no
+    // explicit `gate` was injected). `makeAutoGateRunner` owns the closure; the returned
+    // `state` flag is handed to the constructor so `setGate` can flip auto-refresh off.
+    let autoGateState: { active: boolean } | undefined;
+
+    if (cfg.gate === undefined && cfg.autoGate !== undefined) {
+      const auto = makeAutoGateRunner(ctx, cfg.autoGate, cfg.parse);
+
+      ctx.gate.runner = auto.runner;
+      autoGateState = auto.state;
+    }
+
+    const session = new Session(cfg, ctx, autoGateState);
 
     // Build the TTSR manager (built-in + project + memory-learned rules) so the
     // interactive loop gets the SAME mid-stream guidance the headless loop does —
@@ -1023,6 +1088,14 @@ export class Session {
   /** The current gate command (empty when none). */
   get gate(): string {
     return this.ctx.task.accept;
+  }
+
+  /** Whether the AUTO gate (stack re-detection) is still driving this session. False for
+   *  an explicit/manual gate, and flipped false by `setGate`. The REPL reads it to decide
+   *  whether `/clear` re-attaches the auto resolver and whether to persist `auto: true` —
+   *  so a manual override is never silently re-armed by a rebuild or a `--continue`. */
+  get autoGateActive(): boolean {
+    return this.autoGateState?.active ?? false;
   }
 
   /** The policy posture plan mode toggles OFF to — CLI `--policy-mode` ?? config
@@ -1116,6 +1189,12 @@ export class Session {
    *  gate mid-build (one per unit/feature). For a gate runner, flips hasGate on so
    *  the loop actually runs it and the escalation ladder sees its failures. */
   setGate(arg: string | IGate): void {
+    // A manual gate override (a per-slice command or a composed IGate) takes control:
+    // stop the auto-gate runner from re-detecting + overwriting `task.accept` each cycle.
+    if (this.autoGateState !== undefined) {
+      this.autoGateState.active = false;
+    }
+
     if (typeof arg === "string") {
       this.ctx.task.accept = arg;
       this.hasGate = arg.length > 0;
