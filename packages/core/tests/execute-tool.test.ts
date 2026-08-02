@@ -865,6 +865,49 @@ describe("the shared scope boundary holds for every write path", () => {
     }
   });
 
+  test("edit_lines accepts an in-scope file addressed absolutely or as ./", async () => {
+    for (const file of ["<abs>impl.ts", "./impl.ts"]) {
+      // edit_lines needs the hashline anchor from a prior `read`, so the file is
+      // read through the same context before the edit is attempted.
+      const dir0 = await mkdtemp(join(tmpdir(), "tsforge-scope-"));
+
+      await Bun.write(join(dir0, "impl.ts"), "export const a = 1;\n");
+
+      const c = ctx(dir0, ["impl.ts"]);
+      const read = await executeTool(
+        { name: "read", arguments: { file: "impl.ts" } },
+        c
+      );
+      const anchor = /¶\S+/u.exec(read)?.[0] ?? "";
+      const spelled = file.startsWith("<abs>")
+        ? join(dir0, file.slice("<abs>".length))
+        : file;
+      const out = await executeTool(
+        {
+          name: "edit_lines",
+          arguments: {
+            file: spelled,
+            input: `${anchor}\nreplace 1..1:\n+export const a = 42;`,
+          },
+        },
+        c
+      );
+      const dir = dir0;
+
+      try {
+        expect({ file, rejected: out.includes("REJECTED") }).toEqual({
+          file,
+          rejected: false,
+        });
+        // The edit must actually land — a rejection-only test would pass even if
+        // normalisation broke every valid path for this tool.
+        expect(await Bun.file(join(dir, "impl.ts")).text()).toContain("a = 42");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("run's shell-write check sees through an absolute or ./ redirect", async () => {
     // The `run` call site resolves shell redirect targets through the same helper:
     // an in-scope file must be steered back to create/edit however it is spelled,
