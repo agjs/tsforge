@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -789,4 +789,111 @@ test("ask_user in an unattended run returns proceed-with-judgment (never hangs)"
   );
 
   expect(r).toContain("No human is available");
+});
+
+// resolveWritable (tool-context) is the single normalize-then-scope-check step
+// behind every single-file write path. Centralising it means one regression there
+// would silently move the scope boundary for all of them, so each call site is
+// pinned here: an in-scope file addressed absolutely or as "./x" is ACCEPTED (the
+// globs are workspace-relative), and a "../" escape is still REJECTED — normalizing
+// must not become a way out of the workspace.
+describe("the shared scope boundary holds for every write path", () => {
+  async function attempt(
+    call: { name: string; arguments: Record<string, unknown> },
+    scope: string[] = ["impl.ts"]
+  ): Promise<{ out: string; dir: string }> {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-scope-"));
+
+    await Bun.write(join(dir, "impl.ts"), "export const a = 1;\n");
+
+    const args = { ...call.arguments };
+    const file = args.file;
+
+    if (typeof file === "string" && file.startsWith("<abs>")) {
+      args.file = join(dir, file.slice("<abs>".length));
+    }
+
+    const out = await executeTool(
+      { ...call, arguments: args },
+      ctx(dir, scope)
+    );
+
+    return { out, dir };
+  }
+
+  test("create accepts a new in-scope file addressed absolutely or as ./", async () => {
+    // NOTE: `create` on an EXISTING file is refused by overwrite protection, not
+    // scope — so this must target a file that does not exist yet, or it would
+    // pass for the wrong reason.
+    for (const file of ["<abs>new.ts", "./new.ts"]) {
+      const { out, dir } = await attempt(
+        {
+          name: "create",
+          arguments: { file, content: "export const b = 2;\n" },
+        },
+        ["impl.ts", "new.ts"]
+      );
+
+      try {
+        expect({ file, rejected: out.includes("REJECTED") }).toEqual({
+          file,
+          rejected: false,
+        });
+        expect(await Bun.file(join(dir, "new.ts")).text()).toContain("b = 2");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("edit accepts an in-scope file addressed absolutely or as ./", async () => {
+    for (const file of ["<abs>impl.ts", "./impl.ts"]) {
+      const { out, dir } = await attempt({
+        name: "edit",
+        arguments: { file, oldString: "a = 1", newString: "a = 42" },
+      });
+
+      try {
+        expect({ file, rejected: out.includes("REJECTED") }).toEqual({
+          file,
+          rejected: false,
+        });
+        expect(await Bun.file(join(dir, "impl.ts")).text()).toContain("a = 42");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("no write path lets a traversal path escape the workspace", async () => {
+    const CALLS: readonly [string, Record<string, unknown>][] = [
+      ["create", { file: "../escaped.ts", content: "x" }],
+      ["edit", { file: "../escaped.ts", oldString: "a", newString: "b" }],
+      ["edit_lines", { file: "../escaped.ts", input: "1: x" }],
+      ["organize_imports", { file: "../escaped.ts" }],
+    ];
+
+    for (const [name, args] of CALLS) {
+      const { out, dir } = await attempt({ name, arguments: args });
+
+      try {
+        // The load-bearing assertion is the filesystem: whatever the tool says,
+        // nothing may land outside the workspace.
+        const escapedPath = join(dir, "..", "escaped.ts");
+
+        expect({ name, wrote: await Bun.file(escapedPath).exists() }).toEqual({
+          name,
+          wrote: false,
+        });
+        expect({ name, refused: out.includes("REJECTED") }).toEqual({
+          name,
+          // organize_imports needs a LanguageService, absent in this fixture, so
+          // it reports unavailable before reaching the scope check.
+          refused: name !== "organize_imports",
+        });
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
 });

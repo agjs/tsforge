@@ -146,25 +146,55 @@ test("organize_imports runs with only `file` (no symbol required)", async () => 
 // risk for this subsystem ("scope check on the raw arg instead of the normalized
 // written path"). Models emit both forms routinely.
 test("organize_imports accepts an in-scope file addressed absolutely or as ./", async () => {
-  const ctx = await setup(["types.ts", "use.ts"]);
+  const ctx = await setup(["types.ts", "a.ts", "b.ts"]);
+  const dirty =
+    'import type { IThing } from "./types";\nimport { f as unused } from "./types";\nexport const f = (t: IThing): number => t.value;\n';
 
   try {
-    await Bun.write(
-      join(ctx.cwd, "use.ts"),
-      'import type { IThing } from "./types";\nimport { f as unused } from "./types";\nexport const f = (t: IThing): number => t.value;\n'
-    );
+    // A separate file per form: sharing one would make the second call a no-op
+    // after the first succeeded, so it would pass without proving anything.
+    await Bun.write(join(ctx.cwd, "a.ts"), dirty);
+    await Bun.write(join(ctx.cwd, "b.ts"), dirty);
 
-    for (const file of [join(ctx.cwd, "use.ts"), "./use.ts"]) {
+    const reported: string[] = [];
+    const spy = {
+      ...ctx,
+      // setup() builds its TsService before these files exist, so it would not
+      // know them — rebuild after writing.
+      tsService: new TsService(ctx.cwd),
+      report: (e: { mutated?: string[] }) => {
+        reported.push(...(e.mutated ?? []));
+      },
+    };
+
+    for (const [file, name] of [
+      [join(ctx.cwd, "a.ts"), "a.ts"],
+      ["./b.ts", "b.ts"],
+    ] as const) {
       const r = await executeTool(
         { name: "organize_imports", arguments: { file } },
-        ctx
+        spy as never
       );
 
       expect({ file, rejected: r.includes("REJECTED") }).toEqual({
         file,
         rejected: false,
       });
+      // It must actually operate on the file, not merely pass the scope check:
+      // a fix that normalized only for the check and passed the raw path
+      // downstream would leave the unused import in place.
+      expect({
+        name,
+        text: await Bun.file(join(ctx.cwd, name)).text(),
+      }).toEqual({
+        name,
+        text: 'import type { IThing } from "./types";\nexport const f = (t: IThing): number => t.value;\n',
+      });
     }
+
+    // The change scope records the NORMALIZED path, matching what edit/create
+    // report — not the absolute or "./" form the model happened to send.
+    expect([...reported].sort()).toEqual(["a.ts", "b.ts"]);
   } finally {
     await rm(ctx.cwd, { recursive: true, force: true });
   }
