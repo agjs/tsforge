@@ -102,7 +102,11 @@ export const PROFILE_DEFINITIONS: Readonly<
       "no-inline-jsx-functions": "error",
       "index-must-reexport-default": "error",
       "forwardref-display-name": "error",
-      "max-hooks-per-file": "warn",
+      // Same reason, same leftover: the pack ships this at `error`, and this
+      // profile exists to turn the structure rules ON, so `warn` made the
+      // strictest profile weaker than the pack it sits on.
+      // tests/profile-severity.test.ts now enforces this for every profile.
+      "max-hooks-per-file": "error",
       "prefer-early-return": "error",
     },
   },
