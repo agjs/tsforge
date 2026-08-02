@@ -1,6 +1,5 @@
 import { conventionsEnvValue } from "../infer-rules/eslint-conventions";
 import type { IConventions } from "../infer-rules/conventions.types";
-import type { IExternalPlugin } from "../config/external-plugins";
 
 /** POSIX-safe single-quote a value for interpolation into a `sh -c` command:
  *  wrap in single quotes and rewrite each embedded `'` as `'\''` (close quote,
@@ -20,21 +19,12 @@ function shSingleQuote(value: string): string {
 export function packEnvPrefix(
   packs?: readonly string[],
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
-  conventions?: IConventions,
-  plugins?: readonly IExternalPlugin[]
+  conventions?: IConventions
 ): string {
   const envParts: string[] = [];
 
   if (packs !== undefined && packs.length > 0) {
     envParts.push(`TSFORGE_PACKS=${shSingleQuote(packs.join(","))}`);
-  }
-
-  // External packs are registered in the ORCHESTRATOR process, but the gate runs
-  // in a fresh one with an empty registry — so their ids arrived unresolvable and
-  // the config dropped every pack. Hand the plugin specs over so the gate can
-  // register them itself before building the pack config.
-  if (plugins !== undefined && plugins.length > 0) {
-    envParts.push(`TSFORGE_PLUGINS=${shSingleQuote(JSON.stringify(plugins))}`);
   }
 
   if (ruleOverrides !== undefined && Object.keys(ruleOverrides).length > 0) {

@@ -45,7 +45,7 @@ if (packIds.length > 0) {
   // turned a single bad pack id (or any configured external plugin, whose ids
   // never resolved in this process) into zero pack rules AND a green gate.
   const { buildEnvPackConfig } = await import("./src/gate/pack-config.ts");
-  packConfig = await buildEnvPackConfig(TS_FILES, ruleOverrides);
+  packConfig = buildEnvPackConfig(TS_FILES, ruleOverrides);
 }
 
 // The convention-managed rules. Default to tsforge's house style (I-prefix +

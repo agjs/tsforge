@@ -1,8 +1,4 @@
 import { buildPackEslintConfig } from "../rule-packs";
-import {
-  loadAndRegisterPlugins,
-  parsePlugins,
-} from "../config/external-plugins";
 
 /** The eslint flat-config block carrying the active packs' plugin + rules. */
 export interface IPackConfigBlock {
@@ -21,59 +17,34 @@ function envPackIds(): string[] {
  *
  * The single source of truth for both bundled configs (core + web), which
  * previously each carried their own copy of this logic — and their own
- * `catch {}` around it.
+ * `catch { /* continue without them *\/ }` around it.
  *
- * Two properties this must hold, both learned the hard way:
+ * **Fail CLOSED.** A pack that cannot be resolved is an error, never a silently
+ * dropped rule set. The old catch turned ONE unresolvable id into zero pack rules
+ * for the entire gate while it still reported green, so a config typo — or any
+ * configured external plugin, whose pack ids never resolve in this process —
+ * silently disabled every framework rule.
  *
- * 1. **Fail CLOSED.** A pack that cannot be resolved is an error, never a
- *    silently-dropped rule set. The old `catch { /* continue without them *\/ }`
- *    turned ONE bad id into zero pack rules for the whole gate, and the gate
- *    still reported green — a config typo silently disabled every framework rule.
- * 2. **Register external plugins first.** Plugin packs are registered in the
- *    orchestrator process, but the gate runs in a fresh one with an empty
- *    registry. Without re-registering here, every configured plugin's pack id is
- *    unresolvable — which, under the old catch, silently dropped ALL packs.
- *
- * KNOWN LIMITATION (tracked, deliberately not fixed here). Only the plugin
- * SPECS are frozen by the gate policy, not the plugin module's CONTENT: each
- * spawned gate re-imports the path, so a plugin file living inside the workspace
- * could be edited mid-session to weaken its own rules under the same pack id.
- * Freezing content needs a hash captured at policy time and verified here, and
- * an entry-file hash does not cover a plugin's transitive imports — a design
- * decision of its own. This is strictly better than the behavior it replaces
- * (where a configured plugin silently dropped EVERY pack, built-ins included),
- * but it is not yet the same guarantee as the frozen overrides/profile/test
- * command.
+ * NOTE ON EXTERNAL PLUGINS. Plugin packs are registered in the orchestrator
+ * process; this one starts with an empty registry, so a plugin's pack id is
+ * unresolvable here and the gate now FAILS loudly instead of dropping everything.
+ * That is deliberate: making it resolve would mean importing a module from a
+ * workspace-controlled path into the gate process on every cycle, which is
+ * arbitrary code execution inside the gate — a replaced plugin calling
+ * `process.exit(0)` would make the lint stage report success without linting.
+ * Supporting plugins in the gate needs content-freezing (a hash captured at
+ * policy time and verified here, covering the module's transitive imports), which
+ * is a design decision of its own. Until then: loud failure, never silent
+ * weakening.
  */
-export async function buildEnvPackConfig(
+export function buildEnvPackConfig(
   files: readonly string[],
   ruleOverrides: Readonly<Record<string, "error" | "warn" | "off">>
-): Promise<IPackConfigBlock[]> {
+): IPackConfigBlock[] {
   const packIds = envPackIds();
 
   if (packIds.length === 0) {
     return [];
-  }
-
-  const raw = process.env.TSFORGE_PLUGINS;
-
-  if (raw !== undefined && raw.length > 0) {
-    // A malformed blob must not pass for "no plugins" — that would take us
-    // straight back to unresolvable ids and a silently pack-less gate.
-    let parsed: unknown;
-
-    try {
-      parsed = JSON.parse(raw);
-    } catch (err) {
-      throw new Error(
-        "tsforge gate: TSFORGE_PLUGINS is not valid JSON — refusing to lint without the packs it carries",
-        { cause: err }
-      );
-    }
-
-    await loadAndRegisterPlugins(parsePlugins(parsed), process.cwd(), (msg) => {
-      process.stderr.write(`tsforge gate: ${msg}\n`);
-    });
   }
 
   try {
@@ -84,7 +55,7 @@ export async function buildEnvPackConfig(
     // Re-throw with context, never swallow: this failure HARD-FAILS the gate, so
     // the operator has to see which pack and why without reading a stack trace.
     throw new Error(
-      `tsforge gate: could not build the rule packs [${packIds.join(", ")}] — ${err instanceof Error ? err.message : String(err)}. Refusing to lint without them (fix the pack id in tsforge.config.json, or the plugin that should provide it).`,
+      `tsforge gate: could not build the rule packs [${packIds.join(", ")}] — ${err instanceof Error ? err.message : String(err)}. Refusing to lint without them. Fix the pack id in tsforge.config.json; note that rule packs from external \`plugins\` are not supported in the gate process.`,
       { cause: err }
     );
   }

@@ -14,7 +14,6 @@ import { packEnvPrefix } from "./shell";
 import { tscPart, PROJECT_TSCONFIG } from "./tsconfig";
 import { discoverTestCommand } from "./test-discovery";
 import type { IConventions } from "../infer-rules/conventions.types";
-import type { IExternalPlugin } from "../config/external-plugins";
 
 /** tsforge's per-project cache namespace (git-ignored, next to the tsc
  *  buildinfo). The syntactic-lint result cache lives here. */
@@ -46,9 +45,6 @@ export async function buildGate(
      *  can't re-discover a weaker one — e.g. a real suite swapped for a noop script. */
     testCommand?: string | null;
     conventions?: IConventions;
-    /** External rule-pack plugins to register inside the spawned gate, so their
-     *  pack ids resolve there as they do in the orchestrator process. */
-    plugins?: readonly IExternalPlugin[];
   }
 ): Promise<IGateSpec> {
   const parts: string[] = [];
@@ -69,12 +65,7 @@ export async function buildGate(
   // wrong-directory.
   mkdirSync(join(cwd, GATE_CACHE_DIR), { recursive: true });
 
-  const lint = lintPart(
-    packs,
-    ruleOverrides,
-    options?.conventions,
-    options?.plugins
-  );
+  const lint = lintPart(packs, ruleOverrides, options?.conventions);
 
   parts.push(lint.command);
   labels.push(lint.label);
@@ -163,8 +154,7 @@ export function buildCoreFix(): string {
 function lintPart(
   packs?: readonly string[],
   ruleOverrides?: Readonly<Record<string, "error" | "warn" | "off">>,
-  conventions?: IConventions,
-  plugins?: readonly IExternalPlugin[]
+  conventions?: IConventions
 ): IGateSpec {
   // Result caching is sound here because this pass is syntactic-only: a file's lint
   // result depends on that file alone plus the active ruleset. eslint keys cache entries
@@ -174,7 +164,7 @@ function lintPart(
   // editing one file can change type errors in an untouched one. Every repair cycle
   // re-runs the gate, so on all but the first cycle this skips re-linting the (usually
   // vast) majority of unchanged files. buildGate creates the .tsforge/ dir before this runs.
-  const envPrefix = packEnvPrefix(packs, ruleOverrides, conventions, plugins);
+  const envPrefix = packEnvPrefix(packs, ruleOverrides, conventions);
 
   return {
     command: `${envPrefix}bun "${ESLINT_BIN}" --no-config-lookup -c "${STRICT_CONFIG}" --cache --cache-location "${eslintCachePath(envPrefix)}" --format json .`,

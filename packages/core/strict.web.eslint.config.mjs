@@ -41,7 +41,7 @@ if (packIds.length > 0) {
   // gate that cannot load its rule packs must fail rather than lint as though it
   // had none.
   const { buildEnvPackConfig } = await import("./src/gate/pack-config.ts");
-  packConfig = await buildEnvPackConfig(["**/*.ts", "**/*.tsx"], ruleOverrides);
+  packConfig = buildEnvPackConfig(["**/*.ts", "**/*.tsx"], ruleOverrides);
 }
 
 // Convention-managed rules — default to the web house style (BARE PascalCase

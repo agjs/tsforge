@@ -131,11 +131,6 @@ async function eslintFor(
       includeTests: policy.testCommand !== null,
       testCommand: policy.testCommand,
       conventions: policy.conventions,
-      // Hand the plugin specs to the spawned gate: it registers external packs in
-      // its OWN process, so without these their ids don't resolve there.
-      ...(policy.config.plugins === undefined
-        ? {}
-        : { plugins: policy.config.plugins }),
     }
   );
 
