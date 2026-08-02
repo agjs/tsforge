@@ -73,13 +73,16 @@ export const PROFILE_DEFINITIONS: Readonly<
   frontend: {
     id: "frontend",
     label: "Frontend",
-    description: "Recommended with React/Next architecture rules at warn.",
-    ruleOverrides: {
-      "no-html-img-element": "warn",
-      "no-anonymous-useEffect": "warn",
-      "no-derived-state-in-effect": "warn",
-      ...structureOffOverrides,
-    },
+    description:
+      "Recommended, scoped to frontend work; React/Next rules keep their pack severities.",
+    // This block used to read `no-html-img-element`/`no-anonymous-useEffect`/
+    // `no-derived-state-in-effect` at "warn". That was one no-op and two real
+    // downgrades: the nextjs pack already ships no-html-img-element at warn,
+    // while react-component-architecture ships the other two at ERROR — which
+    // `recommended` leaves alone. So `--profile frontend`, the profile you would
+    // pick FOR a React app, was weaker on two React correctness rules than the
+    // default. Removed, so the pack severities stand.
+    ruleOverrides: structureOffOverrides,
   },
   backend: {
     id: "backend",

@@ -10,11 +10,12 @@ import {
  * A profile must never make the gate WEAKER than the rule pack it sits on top of,
  * except where that is a documented, deliberate product decision.
  *
- * This has now been the same bug three times — `no-inline-jsx-functions` (#105),
- * then `max-hooks-per-file`, each fixed at the line that broke rather than as a
- * class. This suite is the class: any profile override weaker than its pack
- * default must appear in INTENTIONAL_RELAXATIONS with a reason, so a new one
- * cannot be introduced silently.
+ * This has been the same bug three times — `no-inline-jsx-functions` (#105),
+ * then `max-hooks-per-file`, then the `frontend` profile's two React rules —
+ * each fixed at the line that broke rather than as a class. This suite is the
+ * class: any profile override weaker than its pack default must appear in
+ * INTENTIONAL_RELAXATIONS with a reason, so a new one cannot be introduced
+ * silently. Keep that list as close to empty as the product allows.
  */
 
 const RANK: Readonly<Record<string, number>> = { off: 0, warn: 1, error: 2 };
@@ -37,15 +38,10 @@ const INTENTIONAL_RELAXATIONS: Readonly<Record<string, string>> = {
         ])
     )
   ),
-  // NOTE: these two are NOT structure rules — they are layout-agnostic React
-  // correctness rules, and `recommended` leaves both at error. So `frontend`,
-  // the profile you would pick FOR a React app, is weaker here than the default.
-  // Allowlisted to record the status quo, not to endorse it: flagged for review
-  // as audit finding F20.
-  "frontend:no-anonymous-useEffect":
-    "frontend describes itself as 'React/Next architecture rules at warn' — under review (F20)",
-  "frontend:no-derived-state-in-effect":
-    "frontend describes itself as 'React/Next architecture rules at warn' — under review (F20)",
+  // Nothing else. The `frontend` profile used to downgrade
+  // no-anonymous-useEffect and no-derived-state-in-effect from error to warn;
+  // those overrides were removed rather than allowlisted (F20), so the only
+  // accepted relaxations are the documented opt-in structure rules above.
 };
 
 interface IPackDefault {
