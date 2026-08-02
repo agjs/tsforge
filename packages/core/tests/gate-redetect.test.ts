@@ -427,3 +427,41 @@ test("the session record round-trips the `auto` flag through save/load", async (
     await rm(home, { recursive: true, force: true });
   }
 });
+
+// The load-bearing WITHIN-SESSION freeze: the policy (rule overrides / profile / conventions)
+// is captured ONCE, so the code under test cannot relax its own gate by editing
+// tsforge.config.json between cycles. Only the stack re-detects (additively). A frozen
+// policy means the gate command is byte-identical across a mid-build config mutation.
+test("within-session freeze: mutating tsforge.config.json mid-build does not change the gate", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-freeze-cfg-"));
+
+  try {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+
+    const resolved = await resolveGate({ ...parseArgs([]), dir }, null);
+    const resolver = resolved.autoGate;
+
+    expect(resolver).toBeDefined();
+
+    if (resolver === undefined) {
+      throw new Error("expected an auto-gate resolver for a fresh project");
+    }
+
+    const first = await resolver();
+
+    // The subject writes a config that turns rules OFF mid-build.
+    await writeFile(
+      join(dir, "tsforge.config.json"),
+      JSON.stringify({
+        rules: { "no-explicit-any": "off", "no-console": "off" },
+      })
+    );
+
+    const second = await resolver();
+
+    // Frozen: identical command — the resolver never re-reads the config's overrides.
+    expect(second.command).toBe(first.command);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
