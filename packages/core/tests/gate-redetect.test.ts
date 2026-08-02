@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAutoGate, resolveGate } from "../src/cli/gate-setup";
 import { parseArgs } from "../src/cli";
-import { autoGateCarry } from "../src/cli/repl";
+import { autoGateCarry, resumedProfileArg } from "../src/cli/repl";
 import {
   saveSession,
   loadSession,
@@ -463,5 +463,80 @@ test("within-session freeze: mutating tsforge.config.json mid-build does not cha
     expect(second.command).toBe(first.command);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Strictness must survive `--continue`: a build started with `--profile strict` keeps it on
+// resume without the user re-typing the flag (a project resumed months later stays at the
+// level it was built at). resumedProfileArg fills the saved profile in when none is passed
+// THIS run; an explicit CLI profile still wins.
+test("resumedProfileArg keeps a resumed session's profile unless the CLI passes one", () => {
+  const rec = (profile?: string): ISessionRecord => ({
+    id: "s",
+    cwd: "/x",
+    accept: "",
+    files: [],
+    updatedAt: 0,
+    messages: [],
+    ...(profile === undefined ? {} : { profile }),
+  });
+
+  // No CLI profile + a saved one → the saved profile is restored.
+  expect(resumedProfileArg("", rec("strict"))).toBe("strict");
+  // An explicit CLI profile THIS run wins over the saved one.
+  expect(resumedProfileArg("security", rec("strict"))).toBe("security");
+  // No saved profile (or no session) → whatever the CLI passed (incl. none).
+  expect(resumedProfileArg("", rec(undefined))).toBe("");
+  expect(resumedProfileArg("", null)).toBe("");
+});
+
+// End-to-end: the profile round-trips through save/load, and once applied the gate resolves
+// at that strictness — `strict` brings its `typescript-core` extra pack that the default lacks.
+test("resume persists --profile strict and the resolved gate reflects it", async () => {
+  const prevHome = process.env.TSFORGE_HOME;
+  const home = await mkdtemp(join(tmpdir(), "tsforge-home-profile-"));
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-profile-"));
+
+  process.env.TSFORGE_HOME = home;
+
+  try {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+
+    // A session started with --profile strict round-trips the profile.
+    await saveSession({
+      id: "strict-sess",
+      cwd: dir,
+      accept: "eslint .",
+      auto: true,
+      profile: "strict",
+      files: [],
+      updatedAt: 1,
+      messages: [],
+    });
+    const loaded = await loadSession("strict-sess");
+
+    expect(loaded?.profile).toBe("strict");
+
+    // Applying that profile (what the resume overlay does) resolves the gate at strict — its
+    // typescript-core extra pack is present; the default profile does not carry it.
+    const strict = await resolveGate(
+      { ...parseArgs([]), dir, profile: resumedProfileArg("", loaded) },
+      loaded
+    );
+
+    expect(strict.accept).toContain("typescript-core");
+
+    const dflt = await resolveGate({ ...parseArgs([]), dir }, null);
+
+    expect(dflt.accept).not.toContain("typescript-core");
+  } finally {
+    if (prevHome === undefined) {
+      delete process.env.TSFORGE_HOME;
+    } else {
+      process.env.TSFORGE_HOME = prevHome;
+    }
+
+    await rm(dir, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
   }
 });

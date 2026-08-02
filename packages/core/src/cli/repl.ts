@@ -412,6 +412,13 @@ async function initReplSession(args: ICliArgs): Promise<{
     process.stdout.write("(no matching saved session — starting fresh)\n");
   }
 
+  // Keep the strictness a resumed build was started with: re-apply its saved `--profile`
+  // so `--continue` doesn't silently drop to the default (users shouldn't have to re-pass
+  // flags to keep building at the level they chose). Flows to BOTH the gate (resolveGate)
+  // and the Session's rule severities (Session.create reads args.profile). An explicit
+  // `--profile` THIS run still wins.
+  args.profile = resumedProfileArg(args.profile, resumed);
+
   const id = resumed?.id ?? newSessionId();
   const { accept, gateLabel, lintFile, autoGate } = await resolveGate(
     args,
@@ -527,6 +534,18 @@ export function autoGateCarry(
   return autoGate !== undefined && active ? { autoGate } : {};
 }
 
+/** The effective `--profile` for a run: a resumed session's saved profile fills in when the
+ *  user didn't pass one THIS run, so `--continue` keeps the strictness the build was started
+ *  with. An explicit CLI `--profile` always wins. */
+export function resumedProfileArg(
+  cliProfile: string,
+  resumed: ISessionRecord | null
+): string {
+  const saved = resumed?.profile ?? "";
+
+  return cliProfile.length === 0 && saved.length > 0 ? saved : cliProfile;
+}
+
 /** Interactive REPL: a persistent gate-anchored conversation. */
 export async function repl(args: ICliArgs): Promise<number> {
   // Interactive sessions get web tools ON by default (an assistant that can't look
@@ -581,6 +600,8 @@ export async function repl(args: ICliArgs): Promise<number> {
       // re-detection for an auto session but keeps a manual override (setGate flipped it
       // false) verbatim — no silent re-arm of the auto gate on resume.
       auto: session.autoGateActive,
+      // Persist the strictness (--profile) so --continue keeps it without re-passing flags.
+      ...(args.profile.length > 0 ? { profile: args.profile } : {}),
       files: session.scope,
       updatedAt: Date.now(),
       planMode,

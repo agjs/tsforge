@@ -108,7 +108,9 @@ export const PROFILE_DEFINITIONS: Readonly<
 export const DEFAULT_PROFILE: ProfileId = "recommended";
 
 export function isProfileId(value: string): value is ProfileId {
-  return value in PROFILE_DEFINITIONS;
+  // `Object.hasOwn`, NOT the `in` operator — `in` walks the prototype chain, so
+  // "constructor"/"toString"/"__proto__" would falsely validate as profile ids.
+  return Object.hasOwn(PROFILE_DEFINITIONS, value);
 }
 
 /** Merge profile overrides with user config overrides (user wins). */
