@@ -7,8 +7,10 @@ export interface IPackConfigBlock {
   rules: Record<string, "error" | "warn">;
 }
 
-/** Pack ids handed to the spawned gate by `packEnvPrefix`. */
-function envPackIds(): string[] {
+/** Pack ids handed to the spawned gate by `packEnvPrefix`. The one place that
+ *  parses TSFORGE_PACKS — both bundled configs read it through here rather than
+ *  each re-splitting the variable. */
+export function envPackIds(): string[] {
   return (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
 }
 
@@ -55,7 +57,10 @@ export function buildEnvPackConfig(
     // Re-throw with context, never swallow: this failure HARD-FAILS the gate, so
     // the operator has to see which pack and why without reading a stack trace.
     throw new Error(
-      `tsforge gate: could not build the rule packs [${packIds.join(", ")}] — ${err instanceof Error ? err.message : String(err)}. Refusing to lint without them. Fix the pack id in tsforge.config.json; note that rule packs from external \`plugins\` are not supported in the gate process.`,
+      // Report the cause verbatim and nothing speculative: appending a blanket
+      // "external plugins are unsupported" note to EVERY failure made a plain
+      // typo read as a plugin problem.
+      `tsforge gate: could not build the rule packs [${packIds.join(", ")}] — ${err instanceof Error ? err.message : String(err)}. Refusing to lint without them; fix the pack id in tsforge.config.json.`,
       { cause: err }
     );
   }

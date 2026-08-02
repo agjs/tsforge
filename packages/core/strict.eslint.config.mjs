@@ -23,9 +23,13 @@ import sonarjs from "eslint-plugin-sonarjs";
 // Single source so the pack and base blocks below can't drift apart.
 const TS_FILES = ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"];
 
-// Load stack-aware packs if TSFORGE_PACKS env var is set
+// Load stack-aware packs if TSFORGE_PACKS env var is set. pack-config.ts is the
+// single place that parses TSFORGE_PACKS — don't re-split it here.
 let packConfig = [];
-const packIds = (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
+const { buildEnvPackConfig, envPackIds } = await import(
+  "./src/gate/pack-config.ts"
+);
+const packIds = envPackIds();
 let ruleOverrides = {};
 
 if (process.env.TSFORGE_RULE_OVERRIDES !== undefined) {
@@ -43,8 +47,7 @@ if (packIds.length > 0) {
   // NO catch here, deliberately. A gate that cannot load the rule packs it was
   // told to run must FAIL, not lint as though it had none: the old silent catch
   // turned a single bad pack id (or any configured external plugin, whose ids
-  // never resolved in this process) into zero pack rules AND a green gate.
-  const { buildEnvPackConfig } = await import("./src/gate/pack-config.ts");
+  // never resolve in this process) into zero pack rules AND a green gate.
   packConfig = buildEnvPackConfig(TS_FILES, ruleOverrides);
 }
 

@@ -162,10 +162,12 @@ function warnReadError(msg: string): void {
 }
 
 function warnUnknownPackInInclude(packId: string): void {
-  // NOT "will be ignored" — the id stays in the active list, and the gate now
-  // FAILS on an id it cannot resolve rather than silently linting without its
-  // packs. Saying "ignored" would describe the opposite of what happens.
-  const msg = `tsforge.config.json: unknown pack in packs.include: "${packId}" — the gate will fail until this is a real pack id or a plugin provides it`;
+  // NOT "will be ignored" — the id stays in the active list and the gate FAILS on
+  // an id it cannot resolve, rather than silently linting without its packs.
+  // Nor "or a plugin provides it": external plugin packs register in the
+  // orchestrator process only, so they never resolve in the gate either. Both
+  // phrasings would point the user at an outcome that cannot happen.
+  const msg = `tsforge.config.json: unknown pack in packs.include: "${packId}" — not a built-in pack, so the gate will fail on it (packs from external \`plugins\` do not resolve in the gate process)`;
 
   warnConfig(msg);
 }

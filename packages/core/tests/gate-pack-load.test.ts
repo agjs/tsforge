@@ -106,7 +106,9 @@ describe("the gate never silently runs without its rule packs", () => {
 
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr).toContain("house-external-pack");
-    expect(r.stderr).toContain("plugins");
+    expect(r.stderr).toContain("Unknown rule pack");
+    // The built-ins alongside it must not have been quietly dropped instead.
+    expect(r.stderr).toContain("Refusing to lint");
   });
 });
 
@@ -143,7 +145,13 @@ describe("registry lookups reject prototype keys", () => {
     // The control proves the warning path works at all; the prototype keys are
     // the ids that used to slip past it via the `in` operator.
     for (const id of [...PROTOTYPE_IDS, "not-a-pack"]) {
-      expect(warnings.some((w) => w.includes(id))).toBe(true);
+      const warning = warnings.find((w) => w.includes(id));
+
+      expect(warning).toBeDefined();
+      // Assert the CLAIM, not just the id: the message used to say the pack
+      // "will be ignored" when in fact the id stays and the gate fails on it.
+      expect(warning).toContain("the gate will fail on it");
+      expect(warning).not.toContain("will be ignored");
     }
   });
 });
