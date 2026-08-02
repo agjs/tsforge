@@ -60,6 +60,45 @@ test("auto-gate re-detects: generic-ts on an empty dir, react pack once package.
   }
 });
 
+// THE core fix, exercised on a SINGLE resolver (not two independent resolutions): a build
+// starts empty (generic-ts), writes a framework's package.json MID-SESSION, and the SAME
+// resolver's next cycle activates that pack. A regression that only ever re-used the
+// captured baseline packs (never re-detecting) would fail this — the whole point of #105.
+test("a single resolver activates a framework pack when package.json gains it mid-session", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-midsession-"));
+
+  try {
+    // Start EMPTY → the resolver's first cycle is generic-ts, no framework packs.
+    const resolved = await resolveGate({ ...parseArgs([]), dir }, null);
+    const resolver = resolved.autoGate;
+
+    expect(resolver).toBeDefined();
+
+    if (resolver === undefined) {
+      throw new Error("expected an auto-gate resolver for a fresh project");
+    }
+
+    const before = await resolver();
+
+    expect(before.command).toContain("generic-ts");
+    expect(before.command).not.toContain("react-component-architecture");
+
+    // The build writes a React package.json partway through…
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "x", dependencies: { react: "19.0.0" } })
+    );
+
+    // …the SAME resolver's next cycle now enables the React pack (live re-detection).
+    const after = await resolver();
+
+    expect(after.command).toContain("react-component-architecture");
+    expect(after.stackProfile.packs).toContain("react-component-architecture");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // The ENFORCEMENT boundary: the Session must run the auto-gate resolver every gate cycle
 // (re-detecting), and a manual gate override (setGate) must STOP it — otherwise a user
 // `/gate <cmd>` would be a silent no-op while the loop keeps running the auto command.

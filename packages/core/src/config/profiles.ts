@@ -107,6 +107,9 @@ export const PROFILE_DEFINITIONS: Readonly<
 
 export const DEFAULT_PROFILE: ProfileId = "recommended";
 
+/** The valid profile ids, for `--profile` validation + error messages. */
+export const PROFILE_IDS: readonly string[] = Object.keys(PROFILE_DEFINITIONS);
+
 export function isProfileId(value: string): value is ProfileId {
   // `Object.hasOwn`, NOT the `in` operator — `in` walks the prototype chain, so
   // "constructor"/"toString"/"__proto__" would falsely validate as profile ids.

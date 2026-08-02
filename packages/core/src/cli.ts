@@ -16,6 +16,7 @@ import { AgentScheduler } from "./agent/agent-scheduler";
 import { loadAgentSpecs, findAgentSpec } from "./config/agent-specs";
 import { isPolicyMode } from "./policy";
 import { loadRecipes, findRecipe } from "./config/recipes";
+import { isProfileId, PROFILE_IDS } from "./config/profiles";
 import {
   parseArgs,
   applyRecipe,
@@ -803,6 +804,17 @@ export async function main(): Promise<number> {
 
   if (recipeAbort !== null) {
     return recipeAbort;
+  }
+
+  // A typo'd `--profile` must fail loudly, not silently run at the default (which would
+  // quietly drop the strictness the user asked for). Checked after the recipe overlay so
+  // it covers both CLI and recipe-set profiles.
+  if (args.profile.length > 0 && !isProfileId(args.profile)) {
+    process.stdout.write(
+      `unknown --profile "${args.profile}" — valid: ${PROFILE_IDS.join(", ")}\n`
+    );
+
+    return 1;
   }
 
   if (args.review) {
