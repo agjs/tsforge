@@ -58,6 +58,7 @@ import {
 } from "../config/tsforge-config";
 import { makeSpawnAgentFn } from "./spawn-runner";
 import { scopeOf, WHOLE_REPO, resolveCliProfile, type ICliArgs } from "./args";
+import { isProfileId } from "../config/profiles";
 import { isPolicyMode } from "../policy";
 import { startEditor, type IEditorHandle } from "../editor";
 import { renderEditor } from "../editor/view";
@@ -536,14 +537,15 @@ export function autoGateCarry(
 
 /** The effective `--profile` for a run: a resumed session's saved profile fills in when the
  *  user didn't pass one THIS run, so `--continue` keeps the strictness the build was started
- *  with. An explicit CLI `--profile` always wins. */
+ *  with. An explicit CLI `--profile` always wins. Only a VALID saved id is restored — a
+ *  corrupted / hand-edited record's bad profile is ignored (never applied or re-persisted). */
 export function resumedProfileArg(
   cliProfile: string,
   resumed: ISessionRecord | null
 ): string {
   const saved = resumed?.profile ?? "";
 
-  return cliProfile.length === 0 && saved.length > 0 ? saved : cliProfile;
+  return cliProfile.length === 0 && isProfileId(saved) ? saved : cliProfile;
 }
 
 /** Interactive REPL: a persistent gate-anchored conversation. */

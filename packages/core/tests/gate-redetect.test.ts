@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveGate } from "../src/cli/gate-setup";
 import { parseArgs } from "../src/cli";
+import { profileFlagError } from "../src/cli/args";
 import { isProfileId } from "../src/config/profiles";
 import { autoGateCarry, resumedProfileArg } from "../src/cli/repl";
 import {
@@ -540,6 +541,67 @@ test("resumedProfileArg keeps a resumed session's profile unless the CLI passes 
   // No saved profile (or no session) → whatever the CLI passed (incl. none).
   expect(resumedProfileArg("", rec(undefined))).toBe("");
   expect(resumedProfileArg("", null)).toBe("");
+  // A corrupted / hand-edited saved profile is IGNORED (never applied or re-persisted).
+  expect(resumedProfileArg("", rec("bogus"))).toBe("");
+  expect(resumedProfileArg("", rec("__proto__"))).toBe("");
+});
+
+// A typo'd or value-less `--profile` must fail loudly (return an error), not silently run
+// at the default and quietly drop the strictness the user asked for.
+test("profileFlagError rejects invalid/value-less --profile, accepts valid or absent", () => {
+  // Valid id → no error.
+  expect(profileFlagError("strict", true)).toBeNull();
+  expect(profileFlagError("recommended", false)).toBeNull();
+  // Not indicated at all (no value, no flag) → no error (config/default drives it).
+  expect(profileFlagError("", false)).toBeNull();
+  // A typo → error.
+  expect(profileFlagError("strcit", true)).toContain(
+    'unknown --profile "strcit"'
+  );
+  // A trailing `--profile` with no value (flag present, value empty) → error.
+  expect(profileFlagError("", true)).toContain("unknown --profile");
+  // A prototype-chain name → error (not a real id).
+  expect(profileFlagError("constructor", true)).toContain("unknown --profile");
+});
+
+// A THIS-run explicit gate override must win over a resumed AUTO session — `--continue
+// --accept "..."` uses that command, and `--continue --no-gate` actually turns the gate
+// off, instead of silently re-arming the auto resolver.
+test("baseGate: explicit --accept / --no-gate win over a resumed auto session", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-resume-override-"));
+  const autoRecord: ISessionRecord = {
+    id: "s",
+    cwd: dir,
+    accept: "eslint .",
+    auto: true,
+    files: [],
+    updatedAt: 0,
+    messages: [],
+  };
+
+  try {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "x" }));
+
+    // --continue --accept "npm test" → uses npm test, NOT the auto resolver.
+    const withAccept = await resolveGate(
+      { ...parseArgs([]), dir, accept: "npm test" },
+      autoRecord
+    );
+
+    expect(withAccept.accept).toBe("npm test");
+    expect(withAccept.autoGate).toBeUndefined();
+
+    // --continue --no-gate → gate OFF, not a silent auto re-arm.
+    const withNoGate = await resolveGate(
+      { ...parseArgs([]), dir, noGate: true },
+      autoRecord
+    );
+
+    expect(withNoGate.accept).toBe("");
+    expect(withNoGate.autoGate).toBeUndefined();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 // End-to-end: the profile round-trips through save/load, and once applied the gate resolves

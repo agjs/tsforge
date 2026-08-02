@@ -16,7 +16,6 @@ import { AgentScheduler } from "./agent/agent-scheduler";
 import { loadAgentSpecs, findAgentSpec } from "./config/agent-specs";
 import { isPolicyMode } from "./policy";
 import { loadRecipes, findRecipe } from "./config/recipes";
-import { isProfileId, PROFILE_IDS } from "./config/profiles";
 import {
   parseArgs,
   applyRecipe,
@@ -24,6 +23,7 @@ import {
   scopeOf,
   cliUsage,
   resolveCliProfile,
+  profileFlagError,
   type ICliArgs,
 } from "./cli/args";
 import { validate } from "./validate";
@@ -806,13 +806,14 @@ export async function main(): Promise<number> {
     return recipeAbort;
   }
 
-  // A typo'd `--profile` must fail loudly, not silently run at the default (which would
-  // quietly drop the strictness the user asked for). Checked after the recipe overlay so
-  // it covers both CLI and recipe-set profiles.
-  if (args.profile.length > 0 && !isProfileId(args.profile)) {
-    process.stdout.write(
-      `unknown --profile "${args.profile}" — valid: ${PROFILE_IDS.join(", ")}\n`
-    );
+  // A typo'd OR value-less `--profile` must fail loudly, not silently run at the default
+  // (which would quietly drop the strictness the user asked for). Checked after the recipe
+  // overlay so it covers CLI and recipe-set profiles; `raw.includes` also catches a
+  // trailing `--profile` that parseArgs drops (leaving profile "").
+  const profileErr = profileFlagError(args.profile, raw.includes("--profile"));
+
+  if (profileErr !== null) {
+    process.stdout.write(`${profileErr}\n`);
 
     return 1;
   }

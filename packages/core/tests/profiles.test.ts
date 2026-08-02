@@ -35,6 +35,11 @@ test("opinionated profile enables the STRUCTURE rules", () => {
 
   expect(overrides["component-folder-structure"]).toBe("error");
   expect(overrides["no-state-in-component-body"]).toBe("error");
+  expect(overrides["index-must-reexport-default"]).toBe("error");
+  // The strictest profile must never LOWER a quality rule below the default — these are
+  // "error", never "warn" (a past leftover) or "off".
+  expect(overrides["no-inline-jsx-functions"]).toBe("error");
+  expect(overrides["forwardref-display-name"]).toBe("error");
 
   // no rule is forced off in opinionated.
   for (const rule of STRUCTURE_RULES) {

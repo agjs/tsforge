@@ -96,7 +96,10 @@ export const PROFILE_DEFINITIONS: Readonly<
     ruleOverrides: {
       "component-folder-structure": "error",
       "no-state-in-component-body": "error",
-      "no-inline-jsx-functions": "warn",
+      // `error`, NOT `warn` — the strictest profile must never lower a quality rule below
+      // the default (where no-inline-jsx-functions is already on). warn here was a leftover
+      // from when this rule was off by default.
+      "no-inline-jsx-functions": "error",
       "index-must-reexport-default": "error",
       "forwardref-display-name": "error",
       "max-hooks-per-file": "warn",

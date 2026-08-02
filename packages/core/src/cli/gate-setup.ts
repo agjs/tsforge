@@ -214,6 +214,17 @@ async function baseGate(
   args: ICliArgs,
   resumed: ISessionRecord | null
 ): Promise<IResolvedGate> {
+  // An explicit THIS-run override always wins — even on `--continue`. Checked BEFORE the
+  // resumed record so `tsforge --continue --accept "..."` uses that command and
+  // `--continue --no-gate` actually turns the gate off (not a silent auto re-arm).
+  if (args.accept.length > 0) {
+    return { accept: args.accept, gateLabel: args.accept };
+  }
+
+  if (args.noGate) {
+    return { accept: "", gateLabel: "none (--no-gate)" };
+  }
+
   if (resumed !== null) {
     if (resumed.auto === true) {
       // A resumed AUTO session re-attaches the resolver and re-detects from the CURRENT
@@ -225,14 +236,6 @@ async function baseGate(
     const label = resumed.accept.length > 0 ? resumed.accept : "none";
 
     return { accept: resumed.accept, gateLabel: label };
-  }
-
-  if (args.accept.length > 0) {
-    return { accept: args.accept, gateLabel: args.accept };
-  }
-
-  if (args.noGate) {
-    return { accept: "", gateLabel: "none (--no-gate)" };
   }
 
   return autoGateBranch(args);
