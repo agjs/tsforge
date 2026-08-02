@@ -150,6 +150,46 @@ const VALUE_FLAGS = new Set([
   "--notify",
 ]);
 
+/** True for any token the parser recognises as a flag, boolean or value-taking. */
+function isKnownFlag(token: string): boolean {
+  return Object.hasOwn(BOOL_FLAGS, token) || VALUE_FLAGS.has(token);
+}
+
+/**
+ * The first value-taking flag that was given no value — either nothing follows it
+ * or the next token is another flag. Null when every value flag has one.
+ *
+ * A value flag that quietly takes the default is the failure #105 hit with
+ * `--profile`: the user asks for something, the run proceeds without it, and
+ * nothing says so. That guard covered one flag; this covers all of them.
+ *
+ * A value may itself contain dashes (`--accept "bun test -- x.ts"`), so the check
+ * is "the next token is a flag the parser knows", never "it starts with -".
+ */
+export function valueFlagError(argv: readonly string[]): string | null {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+
+    if (arg === undefined || !VALUE_FLAGS.has(arg)) {
+      continue;
+    }
+
+    const value = argv[i + 1];
+
+    if (value === undefined) {
+      return `${arg} needs a value`;
+    }
+
+    if (isKnownFlag(value)) {
+      return `${arg} needs a value, but got the flag "${value}"`;
+    }
+
+    i += 1;
+  }
+
+  return null;
+}
+
 /** The `tsforge --help` usage text — kept next to the flag tables it documents
  *  so a new flag is added in one file. Pure so it's directly testable. */
 export function cliUsage(): string {
@@ -241,10 +281,19 @@ export function parseArgs(argv: readonly string[]): ICliArgs {
 
     if (boolKey !== undefined) {
       out[boolKey] = true;
-    } else if (VALUE_FLAGS.has(arg) && argv[i + 1] !== undefined) {
-      applyValueFlag(arg, argv[i + 1] ?? "", out);
-      i += 1;
-    } else if (!VALUE_FLAGS.has(arg)) {
+    } else if (VALUE_FLAGS.has(arg)) {
+      const value = argv[i + 1];
+
+      // Only consume the next token when it is a real value. Handing a value flag
+      // another flag (`--notify --continue`) must not eat it — that silently
+      // dropped the second flag and set the first to the flag's own name.
+      // `valueFlagError` aborts the run before this matters; the parse stays
+      // honest so the surviving flag still reads correctly.
+      if (value !== undefined && !isKnownFlag(value)) {
+        applyValueFlag(arg, value, out);
+        i += 1;
+      }
+    } else {
       positional.push(arg);
     }
   }

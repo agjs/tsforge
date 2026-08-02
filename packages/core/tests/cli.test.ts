@@ -1,9 +1,9 @@
-import { test, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, isOneShot, applyRecipe, runNotify } from "../src/cli";
-import { cliUsage } from "../src/cli/args";
+import { cliUsage, valueFlagError } from "../src/cli/args";
 import type { ITaskRecipe } from "../src/config/recipes";
 
 // Regression: runNotify used to spawn `sh -c cmd` with a bare `await proc.exited`
@@ -518,4 +518,66 @@ test("agents subcommand: list mode, ids+task mode, recipe fill", () => {
 
   applyRecipe(explicit, { id: "sweep", agents: ["verify"] });
   expect(explicit.agentIds).toBe("explore");
+});
+
+// A value-taking flag whose value is missing — or is another flag — used to be
+// swallowed silently: `--notify --continue` set notify to "--continue" and lost
+// the resume entirely. #105 added a loud guard for `--profile` alone; this is the
+// same guard for every value flag, at the parser rather than per flag.
+describe("a value flag never swallows the flag after it", () => {
+  const CASES: readonly [readonly string[], string][] = [
+    [["--notify", "--continue"], "--notify"],
+    [["--files", "--web"], "--files"],
+    [["--accept", "--no-gate"], "--accept"],
+    [["--dir", "--plan"], "--dir"],
+    [["--base", "--staged"], "--base"],
+    [["--recipe", "--scout"], "--recipe"],
+    [["--browser", "--log"], "--browser"],
+    [["--resume", "--greenfield"], "--resume"],
+    [["--policy-mode", "--plan"], "--policy-mode"],
+    [["--gate", "--web"], "--gate"],
+    [["--profile", "--help"], "--profile"],
+  ];
+
+  test("every value flag reports the flag it was handed instead of a value", () => {
+    for (const [argv, flag] of CASES) {
+      const err = valueFlagError(argv);
+
+      expect({ argv, named: err?.includes(flag) === true }).toEqual({
+        argv,
+        named: true,
+      });
+    }
+  });
+
+  test("the following flag still takes effect rather than being eaten", () => {
+    // Even though the run aborts on the error, the parse must not silently
+    // reinterpret the next flag as a value.
+    expect(parseArgs(["--notify", "--continue"]).continue).toBe(true);
+    expect(parseArgs(["--files", "--web"]).web).toBe(true);
+    expect(parseArgs(["--accept", "--no-gate"]).noGate).toBe(true);
+    expect(parseArgs(["--notify", "--continue"]).notify).toBe("");
+    expect(parseArgs(["--files", "--web"]).files).toEqual([]);
+  });
+
+  test("--dir does not path-join the flag that follows it", () => {
+    expect(parseArgs(["--dir", "--plan"]).dir).not.toContain("--plan");
+    expect(parseArgs(["--dir", "--plan"]).plan).toBe(true);
+  });
+
+  test("a trailing value flag with no value at all is reported", () => {
+    for (const flag of ["--notify", "--dir", "--accept", "--profile"]) {
+      expect(valueFlagError([flag])?.includes(flag)).toBe(true);
+    }
+  });
+
+  test("a legitimate value is accepted, including one containing dashes", () => {
+    expect(valueFlagError(["--accept", "bun test -- src/x.ts"])).toBeNull();
+    expect(parseArgs(["--accept", "bun test -- src/x.ts"]).accept).toBe(
+      "bun test -- src/x.ts"
+    );
+    expect(valueFlagError(["--dir", "./pkg", "--plan"])).toBeNull();
+    expect(valueFlagError([])).toBeNull();
+    expect(valueFlagError(["--plan", "--continue"])).toBeNull();
+  });
 });

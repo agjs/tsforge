@@ -24,6 +24,7 @@ import {
   cliUsage,
   resolveCliProfile,
   profileFlagError,
+  valueFlagError,
   type ICliArgs,
 } from "./cli/args";
 import { validate } from "./validate";
@@ -806,10 +807,19 @@ export async function main(): Promise<number> {
     return recipeAbort;
   }
 
-  // A typo'd OR value-less `--profile` must fail loudly, not silently run at the default
-  // (which would quietly drop the strictness the user asked for). Checked after the recipe
-  // overlay so it covers CLI and recipe-set profiles; `raw.includes` also catches a
-  // trailing `--profile` that parseArgs drops (leaving profile "").
+  // A value flag handed no value — or handed the next flag — must fail loudly rather
+  // than run on the default, silently dropping what the user asked for.
+  const valueErr = valueFlagError(raw);
+
+  if (valueErr !== null) {
+    process.stdout.write(`${valueErr}\n`);
+
+    return 1;
+  }
+
+  // A typo'd `--profile` must fail loudly too: `--profile stict` parses fine but would
+  // quietly run at the default strictness. Checked after the recipe overlay so it covers
+  // CLI and recipe-set profiles.
   const profileErr = profileFlagError(args.profile, raw.includes("--profile"));
 
   if (profileErr !== null) {
