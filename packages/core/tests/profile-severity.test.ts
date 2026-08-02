@@ -19,24 +19,43 @@ const RANK: Readonly<Record<string, number>> = { off: 0, warn: 1, error: 2 };
  * Every relaxation we accept, `profile:rule` -> why. Adding an entry is a
  * deliberate act; that is the point.
  */
+/**
+ * The rule names below are written out rather than imported from
+ * STRUCTURE_RULES ON PURPOSE, and must stay that way.
+ *
+ * STRUCTURE_RULES drives `structureOffOverrides`, i.e. the very relaxations this
+ * list authorises. Deriving the allowlist from it would mean adding a rule there
+ * turns it off in five profiles AND writes its own permission slip, and both
+ * tests below would still pass. Duplicating the names forces a second, deliberate
+ * edit here before a new rule may be switched off.
+ */
+const OPT_IN_STRUCTURE_RULES = [
+  "component-folder-structure",
+  "index-must-reexport-default",
+  "no-state-in-component-body",
+  "max-hooks-per-file",
+] as const;
+
+const NON_OPINIONATED_PROFILES = [
+  "recommended",
+  "strict",
+  "security",
+  "frontend",
+  "backend",
+] as const;
+
 const INTENTIONAL_RELAXATIONS: Readonly<Record<string, string>> = {
-  // The STRUCTURE_RULES impose tsforge's specific file/folder layout. They are
-  // opt-in so tsforge stays adoptable on an existing repo with its own valid
-  // structure, and turn on with the `opinionated` profile. Documented at the
-  // STRUCTURE_RULES declaration in src/config/profiles.ts.
+  // These impose tsforge's specific file/folder layout, so they stay off unless a
+  // project opts into `opinionated` — otherwise tsforge could not be adopted on an
+  // existing repo with its own valid structure.
   ...Object.fromEntries(
-    ["recommended", "strict", "security", "frontend", "backend"].flatMap(
-      (profile) =>
-        STRUCTURE_RULES.map((rule) => [
-          `${profile}:${rule}`,
-          "opt-in structure rule, off outside the opinionated profile",
-        ])
+    NON_OPINIONATED_PROFILES.flatMap((profile) =>
+      OPT_IN_STRUCTURE_RULES.map((rule) => [
+        `${profile}:${rule}`,
+        "opt-in structure rule, off outside the opinionated profile",
+      ])
     )
   ),
-  // Nothing else. The `frontend` profile used to downgrade
-  // no-anonymous-useEffect and no-derived-state-in-effect from error to warn;
-  // those overrides were removed rather than allowlisted (F20), so the only
-  // accepted relaxations are the documented opt-in structure rules above.
 };
 
 interface IPackDefault {
@@ -118,6 +137,14 @@ describe("no profile silently weakens its pack's rules", () => {
     for (const rule of STRUCTURE_RULES) {
       expect(overrides[rule]).toBe("error");
     }
+  });
+
+  test("the allowlist's structure-rule list matches production", () => {
+    // The duplication above is deliberate, but it must not silently fall behind:
+    // a rule added to STRUCTURE_RULES has to be considered here explicitly.
+    expect([...OPT_IN_STRUCTURE_RULES].sort()).toEqual(
+      [...STRUCTURE_RULES].sort()
+    );
   });
 
   test("the allowlist has no stale entries", () => {
