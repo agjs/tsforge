@@ -24,6 +24,7 @@ import {
   cliUsage,
   resolveCliProfile,
   profileFlagError,
+  valueFlagError,
   type ICliArgs,
 } from "./cli/args";
 import { validate } from "./validate";
@@ -769,6 +770,19 @@ export async function main(): Promise<number> {
     return harnessDiagnoseMode(raw.slice(1));
   }
 
+  // BEFORE any dispatch, including --version/--help/recipes and the recipe overlay.
+  // A malformed invocation must not quietly do something else first: `tsforge
+  // recipes --dir --plan` would otherwise list recipes for the wrong directory and
+  // exit 0, and a recipe lookup would run its I/O before the error surfaced.
+  // (The subcommands above parse their own argv, so they are exempt.)
+  const valueErr = valueFlagError(raw);
+
+  if (valueErr !== null) {
+    process.stdout.write(`${valueErr}\n`);
+
+    return 1;
+  }
+
   const args = parseArgs(raw);
 
   // `--version`/`--help` print and exit — before this fix an unknown flag fell
@@ -806,10 +820,9 @@ export async function main(): Promise<number> {
     return recipeAbort;
   }
 
-  // A typo'd OR value-less `--profile` must fail loudly, not silently run at the default
-  // (which would quietly drop the strictness the user asked for). Checked after the recipe
-  // overlay so it covers CLI and recipe-set profiles; `raw.includes` also catches a
-  // trailing `--profile` that parseArgs drops (leaving profile "").
+  // A typo'd `--profile` must fail loudly too: `--profile stict` parses fine but would
+  // quietly run at the default strictness. Checked after the recipe overlay so it covers
+  // CLI and recipe-set profiles.
   const profileErr = profileFlagError(args.profile, raw.includes("--profile"));
 
   if (profileErr !== null) {
