@@ -694,9 +694,12 @@ export async function loadTsforgeConfig(
  * Rules:
  *  1. Start with detected packs (from stack detection)
  *  2. If config.stack is set, force-add its packs (as if detected)
- *  3. Apply packs.include (add unknown packs with warning)
+ *  3. Apply packs.include (unknown ids are added, and collected for a warning)
  *  4. Apply packs.exclude (remove known and unknown packs silently)
- *  5. Return deduplicated pack list
+ *  5. Warn for unknown included ids that SURVIVED the excludes — one excluded
+ *     again never reaches the gate, so warning that the gate will fail on it
+ *     would be a false claim
+ *  6. Return deduplicated pack list
  */
 export function resolveActivePacks(
   detectedPacks: readonly string[],
@@ -716,7 +719,11 @@ export function resolveActivePacks(
     }
   }
 
-  // Include: add packs (unknown ids are kept out of the registry lookup warning only)
+  // Include: add packs. Unknown ids are collected, not warned about yet — the
+  // warning states the gate will fail on the id, which is only true if it is
+  // still active once excludes have been applied.
+  const unknownIncluded: string[] = [];
+
   for (const packId of config.packs?.include ?? []) {
     if (packId.length === 0) {
       continue;
@@ -725,7 +732,7 @@ export function resolveActivePacks(
     // `Object.hasOwn`, NOT the `in` operator — `in` walks the prototype chain, so
     // "constructor"/"toString" would look like known packs and skip this warning.
     if (!Object.hasOwn(PACK_REGISTRY, packId)) {
-      warnUnknownPackInInclude(packId);
+      unknownIncluded.push(packId);
     }
 
     packs.add(packId);
@@ -734,6 +741,14 @@ export function resolveActivePacks(
   // Exclude: remove packs
   for (const packId of config.packs?.exclude ?? []) {
     packs.delete(packId);
+  }
+
+  // Now that the final set is known, warn only for unknown ids that are still in
+  // it. An id both included and excluded never reaches the gate.
+  for (const packId of unknownIncluded) {
+    if (packs.has(packId)) {
+      warnUnknownPackInInclude(packId);
+    }
   }
 
   // Return as sorted array for determinism

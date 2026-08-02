@@ -63,6 +63,24 @@ afterAll(() => {
   rmSync(fixtureDir, { recursive: true, force: true });
 });
 
+/** Run `fn` with stderr captured — warnConfig writes there, not to console. */
+function captureStderr<T>(fn: () => T): { result: T; warnings: string[] } {
+  const warnings: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+
+  process.stderr.write = (chunk: unknown): boolean => {
+    warnings.push(String(chunk));
+
+    return true;
+  };
+
+  try {
+    return { result: fn(), warnings };
+  } finally {
+    process.stderr.write = original;
+  }
+}
+
 describe("the gate never silently runs without its rule packs", () => {
   test("valid pack ids load their rules", async () => {
     const r = await loadGateConfig(STRICT_CONFIG, {
@@ -124,23 +142,11 @@ describe("registry lookups reject prototype keys", () => {
   });
 
   test("resolveActivePacks warns for a prototype key like any unknown id", () => {
-    // warnConfig writes to stderr, so capture there rather than on console.
-    const warnings: string[] = [];
-    const original = process.stderr.write.bind(process.stderr);
-
-    process.stderr.write = (chunk: unknown): boolean => {
-      warnings.push(String(chunk));
-
-      return true;
-    };
-
-    try {
+    const { warnings } = captureStderr(() => {
       for (const id of [...PROTOTYPE_IDS, "not-a-pack"]) {
         resolveActivePacks([], { packs: { include: [id] } });
       }
-    } finally {
-      process.stderr.write = original;
-    }
+    });
 
     // The control proves the warning path works at all; the prototype keys are
     // the ids that used to slip past it via the `in` operator.
@@ -153,5 +159,18 @@ describe("registry lookups reject prototype keys", () => {
       expect(warning).toContain("the gate will fail on it");
       expect(warning).not.toContain("will be ignored");
     }
+  });
+
+  test("an unknown id that is also excluded is not warned about", () => {
+    // The warning claims the gate will fail on the id. Excluding it again means
+    // it never reaches the gate, so the claim would be false.
+    const { result, warnings } = captureStderr(() =>
+      resolveActivePacks([], {
+        packs: { include: ["typo-pack"], exclude: ["typo-pack"] },
+      })
+    );
+
+    expect(result).not.toContain("typo-pack");
+    expect(warnings.some((w) => w.includes("typo-pack"))).toBe(false);
   });
 });
