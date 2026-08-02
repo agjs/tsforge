@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPackEslintConfig } from "../src/rule-packs";
 import { resolveActivePacks } from "../src/config/tsforge-config";
+import { packEnvPrefix } from "../src/gate/shell";
+import { buildGate } from "../src/gate";
 
 const STRICT_CONFIG = join(import.meta.dir, "..", "strict.eslint.config.mjs");
 const WEB_CONFIG = join(import.meta.dir, "..", "strict.web.eslint.config.mjs");
@@ -124,6 +126,83 @@ describe("the gate never silently runs without its rule packs", () => {
     });
 
     expect(r.ruleCount).toBe(withoutPlugin.ruleCount + 1);
+  });
+});
+
+describe("plugin specs reach the spawned gate", () => {
+  test("packEnvPrefix emits TSFORGE_PLUGINS, shell-quoted", () => {
+    const prefix = packEnvPrefix(["react"], undefined, undefined, [
+      { path: "./plugins/house.mjs" },
+    ]);
+
+    expect(prefix).toContain("TSFORGE_PLUGINS=");
+    // The JSON blob must be single-quoted or the shell strips its double quotes
+    // and JSON.parse fails in the config — the same trap TSFORGE_RULE_OVERRIDES hit.
+    expect(prefix).toContain(
+      `TSFORGE_PLUGINS='${JSON.stringify([{ path: "./plugins/house.mjs" }])}'`
+    );
+  });
+
+  test("packEnvPrefix omits TSFORGE_PLUGINS when there are none", () => {
+    expect(packEnvPrefix(["react"], undefined, undefined, [])).not.toContain(
+      "TSFORGE_PLUGINS"
+    );
+    expect(packEnvPrefix(["react"])).not.toContain("TSFORGE_PLUGINS");
+  });
+
+  test("a plugin path embedding a quote cannot break out of the env prefix", async () => {
+    // A hostile tsforge.config.json is why shSingleQuote escapes embedded quotes.
+    // Assert the SHELL's own parse, not the escaped text: the payload must arrive
+    // byte-identical in the variable and must not execute as a command.
+    const plugins = [{ path: "./x'; touch /tmp/tsforge-pwned; echo '" }];
+    const prefix = packEnvPrefix(["react"], undefined, undefined, plugins);
+
+    // `VAR=v cmd` exports to CMD's environment, so the reader has to be the child
+    // (exactly how the real gate consumes it: `TSFORGE_PLUGINS=… bun eslint …`).
+    const proc = Bun.spawn(
+      ["sh", "-c", `${prefix}sh -c 'printf "%s" "$TSFORGE_PLUGINS"'`],
+      { stdout: "pipe", stderr: "pipe" }
+    );
+    const [out, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+
+    expect(code).toBe(0);
+    expect(out).toBe(JSON.stringify(plugins));
+  });
+
+  test("buildGate propagates configured plugins into the gate command", async () => {
+    const withPlugins = await buildGate(fixtureDir, ["react"], undefined, {
+      plugins: [{ path: pluginPath }],
+    });
+    const without = await buildGate(fixtureDir, ["react"]);
+
+    expect(withPlugins.command).toContain("TSFORGE_PLUGINS=");
+    expect(withPlugins.command).toContain(pluginPath);
+    expect(without.command).not.toContain("TSFORGE_PLUGINS");
+  });
+
+  test("plugins change the eslint cache key, so a pack-set swap can't reuse results", async () => {
+    const cacheOf = (command: string): string =>
+      /--cache-location "([^"]+)"/u.exec(command)?.[1] ?? "";
+
+    const withPlugins = await buildGate(fixtureDir, ["react"], undefined, {
+      plugins: [{ path: pluginPath }],
+    });
+    const without = await buildGate(fixtureDir, ["react"]);
+
+    expect(cacheOf(withPlugins.command)).not.toBe(cacheOf(without.command));
+  });
+
+  test("a malformed TSFORGE_PLUGINS blob fails closed, not silently pack-less", async () => {
+    const r = await loadGateConfig(STRICT_CONFIG, {
+      TSFORGE_PACKS: "react,drizzle",
+      TSFORGE_PLUGINS: "{not json",
+    });
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain("TSFORGE_PLUGINS");
   });
 });
 

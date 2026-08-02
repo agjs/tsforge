@@ -33,6 +33,17 @@ function envPackIds(): string[] {
  *    orchestrator process, but the gate runs in a fresh one with an empty
  *    registry. Without re-registering here, every configured plugin's pack id is
  *    unresolvable — which, under the old catch, silently dropped ALL packs.
+ *
+ * KNOWN LIMITATION (tracked, deliberately not fixed here). Only the plugin
+ * SPECS are frozen by the gate policy, not the plugin module's CONTENT: each
+ * spawned gate re-imports the path, so a plugin file living inside the workspace
+ * could be edited mid-session to weaken its own rules under the same pack id.
+ * Freezing content needs a hash captured at policy time and verified here, and
+ * an entry-file hash does not cover a plugin's transitive imports — a design
+ * decision of its own. This is strictly better than the behavior it replaces
+ * (where a configured plugin silently dropped EVERY pack, built-ins included),
+ * but it is not yet the same guarantee as the frozen overrides/profile/test
+ * command.
  */
 export async function buildEnvPackConfig(
   files: readonly string[],

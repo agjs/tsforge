@@ -162,7 +162,10 @@ function warnReadError(msg: string): void {
 }
 
 function warnUnknownPackInInclude(packId: string): void {
-  const msg = `tsforge.config.json: unknown pack in packs.include: "${packId}" (will be ignored)`;
+  // NOT "will be ignored" — the id stays in the active list, and the gate now
+  // FAILS on an id it cannot resolve rather than silently linting without its
+  // packs. Saying "ignored" would describe the opposite of what happens.
+  const msg = `tsforge.config.json: unknown pack in packs.include: "${packId}" — the gate will fail until this is a real pack id or a plugin provides it`;
 
   warnConfig(msg);
 }
