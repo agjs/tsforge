@@ -19,9 +19,13 @@ import pluginReactHooks from "eslint-plugin-react-hooks";
 import pluginJsxA11y from "eslint-plugin-jsx-a11y";
 import sonarjs from "eslint-plugin-sonarjs";
 
-// Load stack-aware packs if TSFORGE_PACKS env var is set
+// Load stack-aware packs if TSFORGE_PACKS env var is set. pack-config.ts is the
+// single place that parses TSFORGE_PACKS — don't re-split it here.
 let packConfig = [];
-const packIds = (process.env.TSFORGE_PACKS ?? "").split(",").filter(Boolean);
+const { buildEnvPackConfig, envPackIds } = await import(
+  "./src/gate/pack-config.ts"
+);
+const packIds = envPackIds();
 const isWebStack = packIds.length > 0;
 let ruleOverrides = {};
 
@@ -37,21 +41,10 @@ if (process.env.TSFORGE_RULE_OVERRIDES !== undefined) {
 }
 
 if (packIds.length > 0) {
-  try {
-    const { buildPackEslintConfig } = await import(
-      "./src/rule-packs/index.ts"
-    );
-    const { plugin, rules } = buildPackEslintConfig(packIds, ruleOverrides);
-    packConfig = [
-      {
-        files: ["**/*.ts", "**/*.tsx"],
-        plugins: { tsforge: plugin },
-        rules,
-      },
-    ];
-  } catch {
-    // If pack loading fails, silently continue without them
-  }
+  // NO catch here, deliberately — see the note in strict.eslint.config.mjs: a
+  // gate that cannot load its rule packs must fail rather than lint as though it
+  // had none.
+  packConfig = buildEnvPackConfig(["**/*.ts", "**/*.tsx"], ruleOverrides);
 }
 
 // Convention-managed rules — default to the web house style (BARE PascalCase
