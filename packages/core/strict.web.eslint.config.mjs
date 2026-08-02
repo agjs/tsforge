@@ -37,21 +37,11 @@ if (process.env.TSFORGE_RULE_OVERRIDES !== undefined) {
 }
 
 if (packIds.length > 0) {
-  try {
-    const { buildPackEslintConfig } = await import(
-      "./src/rule-packs/index.ts"
-    );
-    const { plugin, rules } = buildPackEslintConfig(packIds, ruleOverrides);
-    packConfig = [
-      {
-        files: ["**/*.ts", "**/*.tsx"],
-        plugins: { tsforge: plugin },
-        rules,
-      },
-    ];
-  } catch {
-    // If pack loading fails, silently continue without them
-  }
+  // NO catch here, deliberately — see the note in strict.eslint.config.mjs: a
+  // gate that cannot load its rule packs must fail rather than lint as though it
+  // had none.
+  const { buildEnvPackConfig } = await import("./src/gate/pack-config.ts");
+  packConfig = await buildEnvPackConfig(["**/*.ts", "**/*.tsx"], ruleOverrides);
 }
 
 // Convention-managed rules — default to the web house style (BARE PascalCase

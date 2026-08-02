@@ -53,7 +53,10 @@ export type IRulePackId = keyof typeof RULE_PACKS;
 
 /** Type guard: check if a string is a valid RULE_PACKS key. */
 function isRulePackId(id: unknown): id is IRulePackId {
-  return typeof id === "string" && id in RULE_PACKS;
+  // `Object.hasOwn`, NOT the `in` operator — `in` walks the prototype chain, so
+  // "constructor"/"toString"/"__proto__" would falsely validate as pack ids and
+  // resolve to an Object.prototype member instead of a pack.
+  return typeof id === "string" && Object.hasOwn(RULE_PACKS, id);
 }
 
 /** Externally-registered rule packs (from tsforge.config.json `plugins`). Kept
@@ -135,7 +138,7 @@ export function buildPackEslintConfig(
 
     // Skip pack IDs known to stack-detection but absent from RULE_PACKS
     if (pack === undefined) {
-      const knownInRegistry = packId in PACK_REGISTRY;
+      const knownInRegistry = Object.hasOwn(PACK_REGISTRY, packId);
 
       if (!knownInRegistry) {
         throw new Error(`Unknown rule pack: ${packId}`);

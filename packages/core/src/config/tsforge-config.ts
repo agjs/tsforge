@@ -706,7 +706,7 @@ export function resolveActivePacks(
 
   // Profile extra packs (runtime-boundaries, authorization, typescript-core, …)
   for (const packId of resolveProfileExtraPacks(config.profile)) {
-    if (packId in PACK_REGISTRY) {
+    if (Object.hasOwn(PACK_REGISTRY, packId)) {
       packs.add(packId);
     }
   }
@@ -717,7 +717,9 @@ export function resolveActivePacks(
       continue;
     }
 
-    if (!(packId in PACK_REGISTRY)) {
+    // `Object.hasOwn`, NOT the `in` operator — `in` walks the prototype chain, so
+    // "constructor"/"toString" would look like known packs and skip this warning.
+    if (!Object.hasOwn(PACK_REGISTRY, packId)) {
       warnUnknownPackInInclude(packId);
     }
 

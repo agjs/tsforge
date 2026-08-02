@@ -40,19 +40,12 @@ if (process.env.TSFORGE_RULE_OVERRIDES !== undefined) {
 }
 
 if (packIds.length > 0) {
-  try {
-    const { buildPackEslintConfig } = await import("./src/rule-packs/index.ts");
-    const { plugin, rules } = buildPackEslintConfig(packIds, ruleOverrides);
-    packConfig = [
-      {
-        files: TS_FILES,
-        plugins: { tsforge: plugin },
-        rules,
-      },
-    ];
-  } catch {
-    // If pack loading fails, silently continue without them
-  }
+  // NO catch here, deliberately. A gate that cannot load the rule packs it was
+  // told to run must FAIL, not lint as though it had none: the old silent catch
+  // turned a single bad pack id (or any configured external plugin, whose ids
+  // never resolved in this process) into zero pack rules AND a green gate.
+  const { buildEnvPackConfig } = await import("./src/gate/pack-config.ts");
+  packConfig = await buildEnvPackConfig(TS_FILES, ruleOverrides);
 }
 
 // The convention-managed rules. Default to tsforge's house style (I-prefix +
