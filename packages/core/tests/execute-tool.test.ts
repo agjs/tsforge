@@ -865,12 +865,45 @@ describe("the shared scope boundary holds for every write path", () => {
     }
   });
 
+  test("run's shell-write check sees through an absolute or ./ redirect", async () => {
+    // The `run` call site resolves shell redirect targets through the same helper:
+    // an in-scope file must be steered back to create/edit however it is spelled,
+    // or a redirect becomes a way around the write guard and the scope check.
+    for (const target of ["impl.ts", "./impl.ts", "<abs>impl.ts"]) {
+      const dir = await mkdtemp(join(tmpdir(), "tsforge-scope-"));
+
+      await Bun.write(join(dir, "impl.ts"), "export const a = 1;\n");
+
+      const spelled = target.startsWith("<abs>")
+        ? join(dir, target.slice("<abs>".length))
+        : target;
+
+      try {
+        const out = await executeTool(
+          { name: "run", arguments: { command: `echo x > ${spelled}` } },
+          ctx(dir, ["impl.ts"])
+        );
+
+        expect({ target, steered: out.includes("REJECTED") }).toEqual({
+          target,
+          steered: true,
+        });
+        // Untouched: the redirect never ran.
+        expect(await Bun.file(join(dir, "impl.ts")).text()).toContain("a = 1");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("no write path lets a traversal path escape the workspace", async () => {
+    // organize_imports is covered in execute-lsp.test.ts, which has a real
+    // LanguageService; without one it reports "unavailable" before reaching the
+    // scope check, so asserting it here would only look like coverage.
     const CALLS: readonly [string, Record<string, unknown>][] = [
       ["create", { file: "../escaped.ts", content: "x" }],
       ["edit", { file: "../escaped.ts", oldString: "a", newString: "b" }],
       ["edit_lines", { file: "../escaped.ts", input: "1: x" }],
-      ["organize_imports", { file: "../escaped.ts" }],
     ];
 
     for (const [name, args] of CALLS) {
@@ -887,9 +920,7 @@ describe("the shared scope boundary holds for every write path", () => {
         });
         expect({ name, refused: out.includes("REJECTED") }).toEqual({
           name,
-          // organize_imports needs a LanguageService, absent in this fixture, so
-          // it reports unavailable before reaching the scope check.
-          refused: name !== "organize_imports",
+          refused: true,
         });
       } finally {
         await rm(dir, { recursive: true, force: true });

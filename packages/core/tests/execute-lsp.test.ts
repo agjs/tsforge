@@ -157,13 +157,13 @@ test("organize_imports accepts an in-scope file addressed absolutely or as ./", 
     await Bun.write(join(ctx.cwd, "b.ts"), dirty);
 
     const reported: string[] = [];
-    const spy = {
+    const spy: IToolContext = {
       ...ctx,
       // setup() builds its TsService before these files exist, so it would not
       // know them — rebuild after writing.
       tsService: new TsService(ctx.cwd),
-      report: (e: { mutated?: string[] }) => {
-        reported.push(...(e.mutated ?? []));
+      report: (event) => {
+        reported.push(...(event.mutated ?? []));
       },
     };
 
@@ -173,7 +173,7 @@ test("organize_imports accepts an in-scope file addressed absolutely or as ./", 
     ] as const) {
       const r = await executeTool(
         { name: "organize_imports", arguments: { file } },
-        spy as never
+        spy
       );
 
       expect({ file, rejected: r.includes("REJECTED") }).toEqual({
