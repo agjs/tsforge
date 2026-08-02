@@ -151,26 +151,6 @@ function lintFileFor(
   );
 }
 
-/** Resolve the AUTO gate's command + baseline packs/overrides/conventions for `dir`.
- *  Captures the frozen policy and builds the gate for the packs detected right now.
- *  Used to seed the initial gate and by the greenfield re-detection test. */
-export async function resolveAutoGate(
-  dir: string,
-  profileArg: string,
-  strictFloorOnly: boolean
-) {
-  const policy = await captureGatePolicy(dir, profileArg, strictFloorOnly);
-  const auto = await eslintFor(policy, policy.baselinePacks);
-
-  return {
-    command: auto.command,
-    label: auto.label,
-    activePacks: policy.baselinePacks,
-    ruleOverrides: policy.ruleOverrides,
-    conventions: policy.conventions,
-  };
-}
-
 /** A resolver the Session runs before each auto-gate cycle. Re-detects the stack and
  *  hands back the fresh eslint command, stack profile, and per-write linter, so a
  *  greenfield build stops being linted as `generic-ts` once its package.json lists a

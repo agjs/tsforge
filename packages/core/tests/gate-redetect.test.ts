@@ -2,8 +2,9 @@ import { test, expect } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveAutoGate, resolveGate } from "../src/cli/gate-setup";
+import { resolveGate } from "../src/cli/gate-setup";
 import { parseArgs } from "../src/cli";
+import { isProfileId } from "../src/config/profiles";
 import { autoGateCarry, resumedProfileArg } from "../src/cli/repl";
 import {
   saveSession,
@@ -17,17 +18,17 @@ import { Session } from "../src/loop";
 // THE greenfield bug: stack detection ran once at session start. Starting in an empty
 // dir → no package.json → the rule-LESS `generic-ts` fallback, frozen for the whole
 // build. As the model wrote a React app, the gate stayed generic-ts, so NO React rules
-// ever ran. The auto-gate now re-resolves detection every cycle: resolveAutoGate reads
-// the CURRENT package.json each call, so once `react` appears the pack turns on.
+// ever ran. The auto gate now re-resolves detection every cycle: resolveGate reads the
+// CURRENT package.json each call, so once `react` appears the pack turns on.
 test("auto-gate re-detects: generic-ts on an empty dir, react pack once package.json has react", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tsforge-redetect-"));
 
   try {
     // Cycle 1: empty dir → the generic-ts fallback, no framework rules.
-    const empty = await resolveAutoGate(dir, "", true);
+    const empty = await resolveGate({ ...parseArgs([]), dir }, null);
 
-    expect(empty.command).toContain("generic-ts");
-    expect(empty.command).not.toContain("react-component-architecture");
+    expect(empty.accept).toContain("generic-ts");
+    expect(empty.accept).not.toContain("react-component-architecture");
 
     // The model writes a React app's package.json…
     await writeFile(
@@ -38,10 +39,22 @@ test("auto-gate re-detects: generic-ts on an empty dir, react pack once package.
     // A fresh resolution now enables the React pack — detection reads the CURRENT
     // package.json each call (two independent resolutions here model two session starts;
     // the WITHIN-session monotonic accumulation is covered by its own test below).
-    const withReact = await resolveAutoGate(dir, "", true);
+    const withReact = await resolveGate({ ...parseArgs([]), dir }, null);
 
-    expect(withReact.command).toContain("react-component-architecture");
-    expect(withReact.activePacks).toContain("react-component-architecture");
+    expect(withReact.accept).toContain("react-component-architecture");
+
+    // …and the session resolver carries it too (the per-cycle refresh).
+    const resolver = withReact.autoGate;
+
+    expect(resolver).toBeDefined();
+
+    if (resolver === undefined) {
+      throw new Error("expected an auto-gate resolver for a fresh project");
+    }
+
+    expect((await resolver()).stackProfile.packs).toContain(
+      "react-component-architecture"
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -539,4 +552,29 @@ test("resume persists --profile strict and the resolved gate reflects it", async
     await rm(dir, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
   }
+});
+
+// The `--profile <id>` CLI flag must actually parse into args.profile (it feeds the gate,
+// the Session, and the persisted strictness). A bare word after it is the VALUE, not task.
+test("parseArgs reads --profile as a value flag", () => {
+  expect(parseArgs(["--profile", "strict"]).profile).toBe("strict");
+  expect(parseArgs(["--profile", "strict", "--continue"]).profile).toBe(
+    "strict"
+  );
+  // No flag → empty (config/default drives the profile).
+  expect(parseArgs([]).profile).toBe("");
+});
+
+// isProfileId is a validation boundary for persisted/CLI profile strings — it must accept
+// real profile ids and REJECT prototype-chain names ("constructor", "__proto__", …).
+test("isProfileId accepts real ids and rejects prototype-chain names", () => {
+  expect(isProfileId("strict")).toBe(true);
+  expect(isProfileId("recommended")).toBe(true);
+  expect(isProfileId("opinionated")).toBe(true);
+
+  expect(isProfileId("constructor")).toBe(false);
+  expect(isProfileId("__proto__")).toBe(false);
+  expect(isProfileId("toString")).toBe(false);
+  expect(isProfileId("nope")).toBe(false);
+  expect(isProfileId("")).toBe(false);
 });
