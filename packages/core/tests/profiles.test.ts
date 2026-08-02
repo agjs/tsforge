@@ -185,6 +185,17 @@ describe("no profile silently weakens its pack's rules", () => {
     }
   });
 
+  test("every allowlist entry carries a real reason", () => {
+    // Object.hasOwn alone would accept `"frontend:some-rule": ""`, letting a
+    // downgrade be waved through with no justification.
+    for (const [key, reason] of Object.entries(INTENTIONAL_RELAXATIONS)) {
+      expect({ key, reason: reason.trim().length >= 20 }).toEqual({
+        key,
+        reason: true,
+      });
+    }
+  });
+
   test("the allowlist's structure-rule list matches production", () => {
     // The duplication above is deliberate, but it must not silently fall behind:
     // a rule added to STRUCTURE_RULES has to be considered here explicitly.
