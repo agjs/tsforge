@@ -1098,13 +1098,6 @@ export class Session {
     return this.autoGateState?.active ?? false;
   }
 
-  /** The gate's CURRENT active pack set — the auto gate accumulates these monotonically
-   *  each cycle. Persisted as the resume floor so `--continue` unions fresh detection ON
-   *  TOP of it and can never drop below the packs this session reached. */
-  get stackPacks(): readonly string[] {
-    return this.ctx.gate.stackProfile?.packs ?? [];
-  }
-
   /** The policy posture plan mode toggles OFF to — CLI `--policy-mode` ?? config
    *  `policy.mode` ?? "default". Lets the CLI decide whether a fresh session
    *  should default to plan mode without re-loading the project config. */

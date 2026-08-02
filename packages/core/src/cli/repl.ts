@@ -390,12 +390,6 @@ async function initReplSession(args: ICliArgs): Promise<{
   files: string[];
   activeModelEntry: IModelEntry;
   autoGate?: AutoGateResolver;
-  policy?: {
-    profile: string;
-    ruleOverrides: Record<string, "error" | "warn" | "off">;
-    testCommand: string | null;
-    packs: readonly string[];
-  };
 }> {
   const activeModel = await modelForRun(args);
   const provider = makeProvider(activeModel.entry);
@@ -419,7 +413,7 @@ async function initReplSession(args: ICliArgs): Promise<{
   }
 
   const id = resumed?.id ?? newSessionId();
-  const { accept, gateLabel, lintFile, autoGate, policy } = await resolveGate(
+  const { accept, gateLabel, lintFile, autoGate } = await resolveGate(
     args,
     resumed
   );
@@ -519,7 +513,6 @@ async function initReplSession(args: ICliArgs): Promise<{
     files,
     activeModelEntry: activeModel.entry,
     ...(autoGate === undefined ? {} : { autoGate }),
-    ...(policy === undefined ? {} : { policy }),
   };
 }
 
@@ -553,7 +546,6 @@ export async function repl(args: ICliArgs): Promise<number> {
     files,
     activeModelEntry,
     autoGate,
-    policy,
   } = await initReplSession(args);
 
   // Load delegation inputs HERE — before readline is created below. Any `await`
@@ -570,15 +562,6 @@ export async function repl(args: ICliArgs): Promise<number> {
   const imageCaps = await resolveImageCapabilityFlags();
 
   let session = initialSession;
-  // The resume pack FLOOR, accumulated HERE (not read live off the session) so it survives
-  // a /clear rebuild and a no-edit turn — both re-seed the session's stackProfile from the
-  // live tree, which would otherwise persist a WEAKER pack list and permanently lower the
-  // floor. Seeded from any resume floor + the initial resolved packs, unioned with the
-  // session's accumulated packs at each persist. Only grows.
-  const floorPacks = new Set<string>([
-    ...(resumed?.gatePolicy?.packs ?? []),
-    ...(policy?.packs ?? []),
-  ]);
   let activeName = initialActiveName;
   let contextWindow = initialContextWindow;
   // A human label for the gate (e.g. "strict TypeScript / project lint"), shown in
@@ -587,12 +570,6 @@ export async function repl(args: ICliArgs): Promise<number> {
   let gateLabel = initialGateLabel;
 
   const persist = async (): Promise<void> => {
-    // Fold the session's current packs into the monotonic floor before saving — never
-    // read stackPacks straight into the record (it can be a fresh, weaker post-/clear list).
-    for (const pack of session.stackPacks) {
-      floorPacks.add(pack);
-    }
-
     await saveSession({
       id,
       cwd: args.dir,
@@ -604,18 +581,6 @@ export async function repl(args: ICliArgs): Promise<number> {
       // re-detection for an auto session but keeps a manual override (setGate flipped it
       // false) verbatim — no silent re-arm of the auto gate on resume.
       auto: session.autoGateActive,
-      // Persist the policy FLOOR (accumulated packs + frozen profile/overrides/testCommand)
-      // so a resumed auto session unions fresh detection on top and can only get stricter.
-      ...(session.autoGateActive && policy !== undefined
-        ? {
-            gatePolicy: {
-              packs: [...floorPacks],
-              profile: policy.profile,
-              ruleOverrides: policy.ruleOverrides,
-              testCommand: policy.testCommand,
-            },
-          }
-        : {}),
       files: session.scope,
       updatedAt: Date.now(),
       planMode,

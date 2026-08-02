@@ -2,7 +2,7 @@
  *  explicit --accept, then --no-gate, else tsforge's auto strict-TS gate
  *  (with the per-write lint moat). */
 import type { ICliArgs } from "./args";
-import type { ISessionRecord, IGateFloor } from "../session-store";
+import type { ISessionRecord } from "../session-store";
 import {
   buildGate,
   discoverTestCommand,
@@ -32,27 +32,14 @@ export interface IResolvedGate {
    *  profile and per-write linter) from this each cycle, and stops the moment the user
    *  overrides the gate (`/gate`, a recipe). Absent for explicit/`--no-gate` gates. */
   autoGate?: AutoGateResolver;
-  /** The frozen policy knobs (auto gate only) the caller persists as the resume FLOOR. The
-   *  caller unions `packs` with the session's accumulated packs before persisting (so a
-   *  `/clear` rebuild or a no-edit turn can't write back a weaker list), and stores the
-   *  frozen `profile`/`ruleOverrides`/`testCommand` — so `--continue` resumes no weaker. */
-  policy?: {
-    profile: string;
-    ruleOverrides: Record<string, "error" | "warn" | "off">;
-    testCommand: string | null;
-    packs: readonly string[];
-  };
 }
 
-/** The FROZEN policy an auto gate runs under, captured ONCE at session start (or on
- *  `--continue`). WITHIN a running session the rule overrides, profile, conventions, and
- *  config are all frozen — the code under test can't relax its own gate by editing
- *  `tsforge.config.json` between cycles; only the STACK (package.json deps) is re-read per
- *  cycle, and only ADDITIVELY (the resolver's monotonic pack accumulator). ACROSS a
- *  `--continue`, the resume FLOOR restores packs (unioned), profile, ruleOverrides, and the
- *  test command so the gate resumes no weaker — EXCEPT conventions, which are re-derived
- *  from the current config on resume (a deliberate boundary: they're advisory guides and
- *  the config is a tracked file the human owns between sessions). */
+/** The FROZEN policy an auto gate runs under, captured ONCE at session start (and afresh on
+ *  each `--continue`, which is a human re-invocation that reflects the current project).
+ *  WITHIN a running session the rule overrides, profile, conventions, and config are all
+ *  frozen — the code under test can't relax its own gate by editing `tsforge.config.json`
+ *  between cycles; only the STACK (package.json deps) is re-read per cycle, and only
+ *  ADDITIVELY (the resolver's monotonic pack accumulator). */
 interface IGatePolicy {
   dir: string;
   config: ITsforgeProjectConfig;
@@ -88,8 +75,7 @@ export async function resolveGate(
 async function captureGatePolicy(
   dir: string,
   profileArg: string,
-  strictFloorOnly: boolean,
-  floor?: IGateFloor
+  strictFloorOnly: boolean
 ): Promise<IGatePolicy> {
   const { detectStack } = await import("../stack-detection");
   const {
@@ -102,36 +88,21 @@ async function captureGatePolicy(
   const { resolveConventions } = await import("../infer-rules/conventions");
   const { resolveCliProfile } = await import("./args");
 
-  // On resume the FLOOR profile wins — a `--continue --profile recommended` must not
-  // downgrade a session floored as `strict` (which would drop the type-aware pass). Like
-  // the restored accept/packs/overrides, the profile is part of the frozen session state;
-  // changing it needs a fresh session. A fresh (non-resumed) run uses the CLI profile.
-  const effectiveProfileArg = floor !== undefined ? floor.profile : profileArg;
   const config = withProfileOverride(
     await loadTsforgeConfig(dir),
-    resolveCliProfile(effectiveProfileArg)
+    resolveCliProfile(profileArg)
   );
   const stackProfile = await detectStack(dir);
-  const freshPacks = resolveActivePacks(stackProfile.packs, config);
-  const freshTest = strictFloorOnly ? null : await discoverTestCommand(dir);
 
   return {
     dir,
     config,
-    // Keep the floor's frozen rule-severity overrides (never re-read a weaker set from a
-    // config the subject may have edited between processes); else the fresh config's.
-    ruleOverrides: floor?.ruleOverrides ?? normalizeRuleOverrides(config),
+    ruleOverrides: normalizeRuleOverrides(config),
     profile: resolveProjectProfile(config),
     conventions: resolveConventions(config.conventions),
-    // Union fresh detection ON TOP of the resume floor — a new framework is still picked
-    // up, but a removed one can't drop the floor the last session reached.
-    baselinePacks:
-      floor === undefined
-        ? freshPacks
-        : Array.from(new Set([...floor.packs, ...freshPacks])).sort(),
-    // Keep the floor's test command unless the project newly gained one (never drop it).
-    testCommand:
-      floor === undefined ? freshTest : (floor.testCommand ?? freshTest),
+    baselinePacks: resolveActivePacks(stackProfile.packs, config),
+    // Discover the test command ONCE and freeze it — see IGatePolicy.testCommand.
+    testCommand: strictFloorOnly ? null : await discoverTestCommand(dir),
   };
 }
 
@@ -155,10 +126,8 @@ async function eslintFor(
     {
       enableTypeAware: policy.profile === "strict",
       // "Green" should mean the strict floor AND the project's own tests pass — not just
-      // that it type-checks and lints. Run tests exactly when a command exists:
-      // captureGatePolicy already nulls the test command under --strict-floor-only for a
-      // fresh session, but a resume FLOOR's test command survives that flag (the session
-      // established tests as part of green — a resume must not drop them).
+      // that it type-checks and lints. Run tests exactly when a (frozen) command exists;
+      // captureGatePolicy nulls it under --strict-floor-only or when the project has none.
       includeTests: policy.testCommand !== null,
       testCommand: policy.testCommand,
       conventions: policy.conventions,
@@ -237,19 +206,14 @@ function makeAutoGateResolver(policy: IGatePolicy): AutoGateResolver {
   };
 }
 
-/** The auto gate: capture the frozen policy once (overlaying a resume `floor` when present
- *  so it resumes no weaker), seed the displayed label / persisted `accept` / per-write
- *  linter from the baseline packs, attach a resolver the Session refreshes each cycle, and
- *  expose the frozen knobs as `policy` for the caller to persist as the next floor. */
-async function autoGateBranch(
-  args: ICliArgs,
-  floor?: IGateFloor
-): Promise<IResolvedGate> {
+/** The auto gate: capture the frozen policy once, seed the displayed label / persisted
+ *  `accept` / per-write linter from the baseline packs, and attach a resolver the Session
+ *  refreshes each cycle. */
+async function autoGateBranch(args: ICliArgs): Promise<IResolvedGate> {
   const policy = await captureGatePolicy(
     args.dir,
     args.profile,
-    args.strictFloorOnly,
-    floor
+    args.strictFloorOnly
   );
   const initial = await eslintFor(policy, policy.baselinePacks);
 
@@ -258,12 +222,6 @@ async function autoGateBranch(
     gateLabel: initial.label,
     autoGate: makeAutoGateResolver(policy),
     lintFile: lintFileFor(policy, policy.baselinePacks),
-    policy: {
-      profile: policy.profile,
-      ruleOverrides: policy.ruleOverrides,
-      testCommand: policy.testCommand,
-      packs: policy.baselinePacks,
-    },
   };
 }
 
@@ -278,9 +236,10 @@ async function baseGate(
 ): Promise<IResolvedGate> {
   if (resumed !== null) {
     if (resumed.auto === true) {
-      // Resume onto the persisted policy floor (union packs, restore profile, keep the
-      // test command) so `--continue` can only get stricter, never weaker.
-      return autoGateBranch(args, resumed.gatePolicy);
+      // A resumed AUTO session re-attaches the resolver and re-detects from the CURRENT
+      // project (a `--continue` is a fresh human invocation). The within-session freeze +
+      // monotonic packs still hold for the drive that follows.
+      return autoGateBranch(args);
     }
 
     const label = resumed.accept.length > 0 ? resumed.accept : "none";
