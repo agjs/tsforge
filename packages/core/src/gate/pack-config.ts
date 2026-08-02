@@ -15,29 +15,20 @@ export function envPackIds(): string[] {
 }
 
 /**
- * Build the rule-pack block for a BUNDLED gate config from the environment.
+ * Build the rule-pack block for a bundled gate config from the environment.
+ * Shared by both bundled configs (core + web).
  *
- * The single source of truth for both bundled configs (core + web), which
- * previously each carried their own copy of this logic — and their own
- * `catch { /* continue without them *\/ }` around it.
+ * Fails CLOSED: an unresolvable pack id throws rather than yielding a config with
+ * no pack rules, which would lint green while enforcing nothing.
  *
- * **Fail CLOSED.** A pack that cannot be resolved is an error, never a silently
- * dropped rule set. The old catch turned ONE unresolvable id into zero pack rules
- * for the entire gate while it still reported green, so a config typo — or any
- * configured external plugin, whose pack ids never resolve in this process —
- * silently disabled every framework rule.
- *
- * NOTE ON EXTERNAL PLUGINS. Plugin packs are registered in the orchestrator
- * process; this one starts with an empty registry, so a plugin's pack id is
- * unresolvable here and the gate now FAILS loudly instead of dropping everything.
- * That is deliberate: making it resolve would mean importing a module from a
- * workspace-controlled path into the gate process on every cycle, which is
- * arbitrary code execution inside the gate — a replaced plugin calling
- * `process.exit(0)` would make the lint stage report success without linting.
- * Supporting plugins in the gate needs content-freezing (a hash captured at
- * policy time and verified here, covering the module's transitive imports), which
- * is a design decision of its own. Until then: loud failure, never silent
- * weakening.
+ * External plugin packs do NOT resolve here — they are registered in the
+ * orchestrator process and this one starts with an empty registry, so they hit
+ * the same hard failure. That is deliberate, not an oversight to fix: resolving
+ * them means importing a module from a workspace-controlled path into the gate
+ * on every cycle, and a replaced plugin calling `process.exit(0)` would make the
+ * lint stage report success without linting. Supporting them safely requires
+ * freezing plugin content (a hash over the module's transitive imports, captured
+ * at policy time and verified here).
  */
 export function buildEnvPackConfig(
   files: readonly string[],

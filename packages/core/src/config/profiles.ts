@@ -73,13 +73,12 @@ export const PROFILE_DEFINITIONS: Readonly<
   frontend: {
     id: "frontend",
     label: "Frontend",
-    description: "Recommended with React/Next architecture rules at warn.",
-    ruleOverrides: {
-      "no-html-img-element": "warn",
-      "no-anonymous-useEffect": "warn",
-      "no-derived-state-in-effect": "warn",
-      ...structureOffOverrides,
-    },
+    description:
+      "Recommended, scoped to frontend work; React/Next rules keep their pack severities.",
+    // No React/Next severity overrides: the packs already ship those rules at the
+    // severity this profile wants, and lowering any of them would make the React
+    // profile weaker than `recommended` on React rules.
+    ruleOverrides: structureOffOverrides,
   },
   backend: {
     id: "backend",
@@ -93,16 +92,15 @@ export const PROFILE_DEFINITIONS: Readonly<
     label: "Opinionated",
     description:
       "Full house-style architecture rules including component folder structure.",
+    // Every entry is `error`: this is the strictest profile, so it must never set
+    // a rule below its pack default. Enforced by tests/profiles.test.ts.
     ruleOverrides: {
       "component-folder-structure": "error",
       "no-state-in-component-body": "error",
-      // `error`, NOT `warn` — the strictest profile must never lower a quality rule below
-      // the default (where no-inline-jsx-functions is already on). warn here was a leftover
-      // from when this rule was off by default.
       "no-inline-jsx-functions": "error",
       "index-must-reexport-default": "error",
       "forwardref-display-name": "error",
-      "max-hooks-per-file": "warn",
+      "max-hooks-per-file": "error",
       "prefer-early-return": "error",
     },
   },
