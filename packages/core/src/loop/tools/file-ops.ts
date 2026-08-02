@@ -4,7 +4,7 @@ import { applyEdits } from "../../files/edit";
 import type { EditsResult } from "../../files/files.types";
 import { applyCreate } from "../../files/create";
 import { EDIT_FAIL_REASON } from "../../files";
-import { writable, normalizeWorkspacePath } from "../../lib/scope";
+import { normalizeWorkspacePath } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
@@ -14,6 +14,7 @@ import {
   reject,
   guardVeto,
   type IToolContext,
+  resolveWritable,
 } from "./tool-context";
 import { formatHashHeader, HL_LINE_SEP } from "../../files/hashline-format";
 import { SessionSnapshotStore } from "../../files/hashline";
@@ -501,8 +502,8 @@ export async function runShell(
   // gate), the scope check, and hashline snapshots. Steer it back to create/edit —
   // `create` can now fully overwrite a file the model authored this session, so
   // this closes the hole WITHOUT trapping it. /tmp + out-of-scope targets are fine.
-  const scopedWrite = shellWriteTargets(r.command).find((t) =>
-    writable(normalizeWorkspacePath(ctx.cwd, t), ctx.files)
+  const scopedWrite = shellWriteTargets(r.command).find(
+    (t) => resolveWritable(ctx, t).writable
   );
 
   if (scopedWrite !== undefined) {
@@ -637,9 +638,11 @@ export async function doEdit(
     return "edit: malformed args (need `file` plus either `oldString`/`newString` or an `edits` array of {oldString,newString})";
   }
 
-  edit.file = normalizeWorkspacePath(ctx.cwd, edit.file);
+  const editTarget = resolveWritable(ctx, edit.file);
 
-  if (!writable(edit.file, ctx.files)) {
+  edit.file = editTarget.path;
+
+  if (!editTarget.writable) {
     return reject(
       ctx,
       "edit",
@@ -853,9 +856,11 @@ export async function doCreate(
     return "create: malformed args (need file, content)";
   }
 
-  create.file = normalizeWorkspacePath(ctx.cwd, create.file);
+  const createTarget = resolveWritable(ctx, create.file);
 
-  if (!writable(create.file, ctx.files)) {
+  create.file = createTarget.path;
+
+  if (!createTarget.writable) {
     return reject(
       ctx,
       "create",

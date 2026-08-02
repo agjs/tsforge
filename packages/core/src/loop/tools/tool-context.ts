@@ -1,4 +1,5 @@
 import { repairArgs } from "../../agent/tool-repair";
+import { writable, normalizeWorkspacePath } from "../../lib/scope";
 import type { TsService } from "../../lsp";
 import type { Reporter } from "../loop.types";
 import type { SessionSnapshotStore } from "../../files/hashline";
@@ -167,6 +168,25 @@ export function str(args: Record<string, unknown>, key: string): string {
   const v = args[key];
 
   return typeof v === "string" ? v : "";
+}
+
+/**
+ * Resolve a model-supplied path against the workspace and scope-check it, as one
+ * step. Every tool that writes a single named file goes through here.
+ *
+ * The two must not be done separately: scope-checking the RAW argument rejects
+ * in-scope files the model addressed absolutely or as `./x` (the globs are
+ * workspace-relative), while normalizing without checking would let a `../` path
+ * out of the workspace. `organize_imports` did the former and was the one write
+ * tool that refused paths `edit`/`create`/`edit_lines` accepted.
+ */
+export function resolveWritable(
+  ctx: IToolContext,
+  file: string
+): { path: string; writable: boolean } {
+  const path = normalizeWorkspacePath(ctx.cwd, file);
+
+  return { path, writable: writable(path, ctx.files) };
 }
 
 export interface IParseResult<T> {

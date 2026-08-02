@@ -140,6 +140,53 @@ test("organize_imports runs with only `file` (no symbol required)", async () => 
   }
 });
 
+// organize_imports scope-checked the RAW model argument while edit/create/
+// edit_lines all normalize first, so an in-scope file addressed absolutely or as
+// "./x" was rejected as out of scope by this tool alone — the manifest's stated
+// risk for this subsystem ("scope check on the raw arg instead of the normalized
+// written path"). Models emit both forms routinely.
+test("organize_imports accepts an in-scope file addressed absolutely or as ./", async () => {
+  const ctx = await setup(["types.ts", "use.ts"]);
+
+  try {
+    await Bun.write(
+      join(ctx.cwd, "use.ts"),
+      'import type { IThing } from "./types";\nimport { f as unused } from "./types";\nexport const f = (t: IThing): number => t.value;\n'
+    );
+
+    for (const file of [join(ctx.cwd, "use.ts"), "./use.ts"]) {
+      const r = await executeTool(
+        { name: "organize_imports", arguments: { file } },
+        ctx
+      );
+
+      expect({ file, rejected: r.includes("REJECTED") }).toEqual({
+        file,
+        rejected: false,
+      });
+    }
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
+// A path that ESCAPES the workspace must still be rejected — normalizing must
+// not become a way in.
+test("organize_imports still rejects a traversal path", async () => {
+  const ctx = await setup(["use.ts"]);
+
+  try {
+    const r = await executeTool(
+      { name: "organize_imports", arguments: { file: "../outside.ts" } },
+      ctx
+    );
+
+    expect(r).toContain("REJECTED");
+  } finally {
+    await rm(ctx.cwd, { recursive: true, force: true });
+  }
+});
+
 test("organize_imports is REJECTED for an out-of-scope file", async () => {
   const ctx = await setup(["types.ts"]); // use.ts read-only
 
