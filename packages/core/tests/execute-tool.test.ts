@@ -940,34 +940,67 @@ describe("the shared scope boundary holds for every write path", () => {
   });
 
   test("no write path lets a traversal path escape the workspace", async () => {
-    // organize_imports is covered in execute-lsp.test.ts, which has a real
-    // LanguageService; without one it reports "unavailable" before reaching the
-    // scope check, so asserting it here would only look like coverage.
-    const CALLS: readonly [string, Record<string, unknown>][] = [
-      ["create", { file: "../escaped.ts", content: "x" }],
-      ["edit", { file: "../escaped.ts", oldString: "a", newString: "b" }],
-      ["edit_lines", { file: "../escaped.ts", input: "1: x" }],
-    ];
+    // The sibling must EXIST and be genuinely editable, in a parent of our own:
+    // against a nonexistent target every tool rejects for its own unrelated
+    // reason (missing file, missing hashline anchor) and "nothing was written" is
+    // vacuously true, so the test would pass with no scope enforcement at all.
+    // A fixed /tmp parent could also collide with another process.
+    const parent = await mkdtemp(join(tmpdir(), "tsforge-escape-"));
+    const dir = join(parent, "ws");
+    const escaped = join(parent, "escaped.ts");
+    const ORIGINAL = "export const secret = 1;\n";
 
-    for (const [name, args] of CALLS) {
-      const { out, dir } = await attempt({ name, arguments: args });
+    await mkdir(dir, { recursive: true });
+    await Bun.write(join(dir, "impl.ts"), "export const a = 1;\n");
+    await Bun.write(escaped, ORIGINAL);
 
-      try {
-        // The load-bearing assertion is the filesystem: whatever the tool says,
-        // nothing may land outside the workspace.
-        const escapedPath = join(dir, "..", "escaped.ts");
+    const c = ctx(dir, ["impl.ts"]);
 
-        expect({ name, wrote: await Bun.file(escapedPath).exists() }).toEqual({
-          name,
-          wrote: false,
-        });
+    try {
+      // Reads are not scope-limited, so a valid anchor for the sibling is
+      // obtainable — edit_lines must then be refused on SCOPE, not on the anchor.
+      const read = await executeTool(
+        { name: "read", arguments: { file: "../escaped.ts" } },
+        c
+      );
+      const anchor = /¶\S+/u.exec(read)?.[0] ?? "";
+
+      const CALLS: readonly [string, Record<string, unknown>][] = [
+        [
+          "edit",
+          {
+            file: "../escaped.ts",
+            oldString: "secret = 1",
+            newString: "secret = 2",
+          },
+        ],
+        [
+          "edit_lines",
+          {
+            file: "../escaped.ts",
+            input: `${anchor}\nreplace 1..1:\n+export const secret = 2;`,
+          },
+        ],
+        ["create", { file: "../new-escape.ts", content: "x" }],
+      ];
+
+      for (const [name, args] of CALLS) {
+        const out = await executeTool({ name, arguments: args }, c);
+
         expect({ name, refused: out.includes("REJECTED") }).toEqual({
           name,
           refused: true,
         });
-      } finally {
-        await rm(dir, { recursive: true, force: true });
       }
+
+      // The load-bearing assertions: the existing sibling is BYTE-UNCHANGED, and
+      // no new file appeared outside the workspace.
+      expect(await Bun.file(escaped).text()).toBe(ORIGINAL);
+      expect(await Bun.file(join(parent, "new-escape.ts")).exists()).toBe(
+        false
+      );
+    } finally {
+      await rm(parent, { recursive: true, force: true });
     }
   });
 });
