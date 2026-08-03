@@ -361,9 +361,11 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     good: "redirect('/dashboard');",
   },
   "tsforge/no-user-controlled-fetch-url": {
-    what: "fetch/axios URLs must be literals or pass through an allowlisted URL builder.",
-    bad: "await fetch(userSuppliedUrl);",
-    good: "await fetch('https://api.example.com/v1/status');",
+    what: "The request ORIGIN must be fixed in source. Interpolating the path is fine; interpolating the host is not. There is no allowlist or builder to opt into — write the host literally.",
+    bad: "await fetch(url); await fetch(`https://${host}/todos`);",
+    good: "await fetch(`/api/todos/${id}`); await fetch(`https://api.example.com/v1/${id}`);",
+    procedure:
+      'Put the whole origin before the first ${...}, and close it with / ? or # — `https://api.example.com${p}` is still rejected because p="@evil.com/x" rewrites the host. For a caller-supplied host, validate it against a fixed allowlist yourself and branch to literal URLs.',
   },
   "tsforge/no-prototype-polluting-merge": {
     what: "Do not merge request body/query/params into objects wholesale.",
