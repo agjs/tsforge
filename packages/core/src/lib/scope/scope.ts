@@ -28,11 +28,19 @@ export function isInScope(file: string, patterns: string[]): boolean {
 }
 
 /** True when a NORMALIZED path stays inside the workspace — i.e. it neither
- *  escapes via `../` nor is absolute. Distinct from {@link writable}: a project
- *  file the model may not edit is still inside the workspace, and that is exactly
- *  the case a shell redirect must not be allowed to write. */
+ *  escapes via a `..` path SEGMENT nor is absolute. Distinct from {@link writable}:
+ *  a project file the model may not edit is still inside the workspace, and that is
+ *  exactly the case a shell redirect must not be allowed to write.
+ *
+ *  Compares segments, not prefixes: `..secret.ts` is an ordinary filename that
+ *  merely starts with two dots. Treating it as outside would skip the guard for a
+ *  real workspace file — failing OPEN, the wrong direction for this predicate. */
 export function insideWorkspace(file: string): boolean {
-  return !file.startsWith("..") && !file.startsWith("/");
+  if (file.startsWith("/")) {
+    return false;
+  }
+
+  return !file.split("/").includes("..");
 }
 
 /** A file the model may write: its editable scope, OR a throwaway scratch file.

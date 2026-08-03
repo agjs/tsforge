@@ -1,5 +1,10 @@
 import { test, expect } from "bun:test";
-import { isInScope, writable, normalizeWorkspacePath } from "../src/lib/scope";
+import {
+  isInScope,
+  writable,
+  insideWorkspace,
+  normalizeWorkspacePath,
+} from "../src/lib/scope";
 
 // The vendored "you cannot edit this file" concept was removed entirely — a model
 // may edit anything in scope, including generated files (the build regenerates
@@ -80,4 +85,38 @@ test("writable allows the co-located test sibling of an in-scope source", () => 
   // allowance lives in writable, not isInScope).
   expect(writable("lexer.ts", scope)).toBe(true);
   expect(isInScope("lexer.test.ts", scope)).toBe(false);
+});
+
+// insideWorkspace decides whether the shell-redirect guard looks at a target at
+// all, so a false negative SKIPS the guard — it must fail closed, treating a path
+// as inside unless a `..` SEGMENT or an absolute root proves otherwise.
+test("insideWorkspace compares path segments, not prefixes", () => {
+  // Ordinary filenames that merely begin with dots are INSIDE.
+  for (const file of ["..secret.ts", "...rc", "..", ".." + "x"]) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: file !== "..",
+    });
+  }
+
+  // Real escapes and absolute paths are OUTSIDE.
+  for (const file of [
+    "../escaped.ts",
+    "../../x",
+    "a/../../b.ts",
+    "/etc/passwd",
+  ]) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: false,
+    });
+  }
+
+  // Plain in-workspace paths are inside.
+  for (const file of ["src/x.ts", "x.ts", "a/b/c.tsx"]) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: true,
+    });
+  }
 });

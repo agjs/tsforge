@@ -965,6 +965,39 @@ describe("resolveWritable behaves identically at every call site", () => {
     }
   });
 
+  test("run still allows creating a NEW out-of-scope file in the workspace", async () => {
+    // Load-bearing, not cosmetic: a task may run with NO editable scope and
+    // legitimately produce a marker or build artifact this way. Refusing every
+    // in-workspace target broke three repair-loop tests. Existence is what
+    // separates clobbering a project file from producing an artifact.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-scope-"));
+
+    await Bun.write(join(dir, "impl.ts"), "export const a = 1;\n");
+
+    try {
+      // A distinct target per case: reusing one would make the second call see a
+      // file the first created, i.e. an EXISTING out-of-scope file, which is
+      // correctly refused — the test would fail for the rule working.
+      for (const [scope, marker] of [
+        [["impl.ts"], "marker-a.txt"],
+        [[], "marker-b.txt"],
+      ] as const) {
+        const out = await executeTool(
+          { name: "run", arguments: { command: `echo x > ${marker}` } },
+          ctx(dir, [...scope])
+        );
+
+        expect({ marker, rejected: out.includes("REJECTED") }).toEqual({
+          marker,
+          rejected: false,
+        });
+        expect(await Bun.file(join(dir, marker)).exists()).toBe(true);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // Beyond the workspace, `run` is deliberately a shell — /tmp and build logs are
   // its documented targets, and its reach there is governed by the policy layer,
   // not by the editable scope. Pinned so a change to it is a deliberate one.

@@ -478,10 +478,21 @@ interface IProjectWrite {
   writable: boolean;
 }
 
-/** The first shell redirect target that must not be written: one in the editable
- *  scope (write-guard bypass) or an EXISTING file inside the workspace that is out
- *  of scope (scope bypass). Null when every target is outside the workspace or is
- *  a new file the shell may legitimately create. */
+/**
+ * The first shell redirect target that must not be written: one in the editable
+ * scope (write-guard bypass) or an EXISTING file inside the workspace that is out
+ * of scope. Null when every target is outside the workspace or is a new file the
+ * shell may legitimately create.
+ *
+ * BEST-EFFORT STEERING, NOT A CONTAINMENT BOUNDARY. It reads redirect targets out
+ * of the command text, and command text cannot be resolved without running it:
+ * `> "$f"` resolves at runtime, `> "a file.ts"` and `> a\ file.ts` carry the
+ * separator the scanner splits on, and `sed -i` / `cp` / `tee` / any script writes
+ * without a redirect at all. Its job is to stop the model reaching for
+ * `cat > src/foo.ts` out of edit-tool friction, and to close the easy overwrite of
+ * an out-of-scope file — not to sandbox the shell. What actually bounds `run` is
+ * the policy layer; see audit findings F16 and F22.
+ */
 async function findProjectWrite(
   command: string,
   ctx: IToolContext
