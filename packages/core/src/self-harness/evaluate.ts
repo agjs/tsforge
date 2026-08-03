@@ -150,7 +150,9 @@ async function runTaskOnce(
   // Owned by the CALLER so a throw mid-run does not lose the usage already
   // reported: an attempt that made several model calls then died has a real cost,
   // and dropping it excluded the most expensive runs from the token averages.
-  events: ILoopEvent[]
+  events: ILoopEvent[],
+  // Likewise the clock, so both outcomes measure the same span.
+  elapsedMs: () => number
 ): Promise<ITaskRunOutput> {
   const seedDir = join(opts.corpusDir, taskId);
 
@@ -172,14 +174,10 @@ async function runTaskOnce(
     void logFile.flush();
   };
 
-  // Real elapsed wall-clock. `ms: 0` was hardcoded here, so avgMs read 0 for
-  // every variant of every campaign while presenting as a measurement.
-  const startedAt = performance.now();
   const result = await runSpec(gated, runDir, opts.provider, {
     onEvent,
     temperature: opts.temperature ?? 0,
   });
-  const elapsedMs = Math.round(performance.now() - startedAt);
 
   await logFile.end();
 
@@ -205,13 +203,24 @@ async function runTaskOnce(
           firstTask.files.map((f) => Bun.file(join(runDir, f)).text())
         )
       ).join("\n\n");
-      const score = await judge(opts.judgeProvider, {
-        goal: spec.title,
-        criteria: specText,
-        code,
-      });
 
-      quality = score.scored ? score.overall : undefined;
+      // The judge is a MEASUREMENT, not part of the build. If it throws (endpoint
+      // timeout, connection reset) the implementation still succeeded — letting it
+      // propagate turned a GREEN run into an errored one with passed:false and
+      // cycles:0, biasing pass-rate and efficiency against whichever variant
+      // happened to meet bad weather. Degrade to "quality unknown" instead, as the
+      // sweep script already did.
+      try {
+        const score = await judge(opts.judgeProvider, {
+          goal: spec.title,
+          criteria: specText,
+          code,
+        });
+
+        quality = score.scored ? score.overall : undefined;
+      } catch {
+        quality = undefined;
+      }
     }
   }
 
@@ -223,7 +232,10 @@ async function runTaskOnce(
         label: taskId,
         passed,
         cycles,
-        elapsedMs,
+        // Measured by the CALLER, over the same span as the error path — a success
+        // timed only around runSpec while a throw was timed from setup made avgMs
+        // depend on the error rate, the bias F12 exists to remove.
+        elapsedMs: elapsedMs(),
         metrics: analyzeEvents(events),
       }),
       ...(quality === undefined ? {} : { quality }),
@@ -309,10 +321,17 @@ async function runOneSpec(
   // unreliable variant look faster the more often it crashed — the same bias the
   // token averages are careful to avoid.
   const startedAt = performance.now();
+  const elapsed = (): number => Math.round(performance.now() - startedAt);
   const events: ILoopEvent[] = [];
 
   try {
-    const { record, run } = await runTaskOnce(taskId, runDir, opts, events);
+    const { record, run } = await runTaskOnce(
+      taskId,
+      runDir,
+      opts,
+      events,
+      elapsed
+    );
 
     sink.records.push(record);
     sink.runs.push(run);
@@ -324,7 +343,7 @@ async function runOneSpec(
         label: taskId,
         passed: false,
         cycles: 0,
-        elapsedMs: Math.round(performance.now() - startedAt),
+        elapsedMs: elapsed(),
         // Whatever the attempt spent before it died still counts.
         metrics: analyzeEvents(events),
       })

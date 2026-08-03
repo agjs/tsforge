@@ -201,7 +201,9 @@ for (const seed of seeds) {
         // tokens the attempt actually consumed; recording 0 made a variant that
         // crashes after several model calls read as instant and free.
         const startedAt = performance.now();
+        const elapsed = (): number => Math.round(performance.now() - startedAt);
         const runEvents: ILoopEvent[] = [];
+        const recordLabel = `${vLabel} temp=${temp}`;
 
         try {
           records.push(
@@ -214,7 +216,9 @@ for (const seed of seeds) {
               temp,
               i,
               variantEnv,
-              runEvents
+              runEvents,
+              elapsed,
+              recordLabel
             )
           );
         } catch (err) {
@@ -222,15 +226,15 @@ for (const seed of seeds) {
 
           records.push(
             buildRunRecord({
-              label: `${vLabel} temp=${temp}`,
+              label: recordLabel,
               passed: false,
               cycles: 0,
-              elapsedMs: Math.round(performance.now() - startedAt),
+              elapsedMs: elapsed(),
               metrics: analyzeEvents(runEvents),
             })
           );
           process.stdout.write(
-            `  ${seed} ${vLabel} temp=${temp} #${i + 1}: ERRORED (${message}) → ${runId}\n`
+            `  ${seed} ${recordLabel} #${i + 1}: ERRORED (${message}) → ${runId}\n`
           );
         }
       }
@@ -323,7 +327,16 @@ async function runOne(
   variantEnv: Record<string, string> = {},
   // Owned by the caller so a throw mid-run keeps the events (and the token cost)
   // the attempt already produced.
-  runEvents: ILoopEvent[] = []
+  runEvents: ILoopEvent[] = [],
+  // The caller's clock, so a success and a throw measure the SAME span. A success
+  // used to time only runSpec while a throw was timed from setup, which made avgMs
+  // depend on the error rate.
+  elapsedMs: () => number = () => 0,
+  // The caller's label too: the success path derived its own from the ENV VARS
+  // (`TSFORGE_NO_GIT_TOOL=off`) while the error path used the feature dimensions
+  // (`git=on`), so one variant split into two summarize() buckets and errors never
+  // reduced the variant's pass rate.
+  recordLabel = ""
 ): Promise<IRunRecord> {
   const restore = setVariantEnv(variantEnv);
 
@@ -483,21 +496,20 @@ async function runOne(
       0
     );
 
-    const vLabel = variantLabel(variantEnv);
     const failureClass = passed
       ? undefined
       : classifyRun(runEvents).failureClass;
 
     process.stdout.write(
-      `  ${seed} ${vLabel} temp=${temp} #${i + 1}: ${passed ? "done" : `blocked[${failureClass ?? "unknown"}]`} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${ms}ms${quality === undefined ? "" : `, Q${quality}/5`}${loc === undefined ? "" : `, ${String(loc)} loc`}) → ${runId}\n`
+      `  ${seed} ${recordLabel} #${i + 1}: ${passed ? "done" : `blocked[${failureClass ?? "unknown"}]`} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${ms}ms${quality === undefined ? "" : `, Q${quality}/5`}${loc === undefined ? "" : `, ${String(loc)} loc`}) → ${runId}\n`
     );
 
     return {
       ...buildRunRecord({
-        label: `${vLabel} temp=${temp}`,
+        label: recordLabel,
         passed,
         cycles,
-        elapsedMs: ms,
+        elapsedMs: elapsedMs(),
         metrics: runMetrics,
       }),
       quality,

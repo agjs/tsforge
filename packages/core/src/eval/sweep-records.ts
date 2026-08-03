@@ -2,6 +2,27 @@ import { isRecord } from "../lib/guards";
 import { FAILURE_CLASS, type FailureClass } from "./failure-class";
 import type { IRunRecord } from "./eval.types";
 
+/** A cost figure worth keeping: finite and positive. A saved `0` (or NaN, from a
+ *  hand-edited file) must be treated as ABSENT exactly as buildRunRecord treats it,
+ *  or it re-enters the averaging denominator and drags the reported cost down —
+ *  the "cheaper when zeroed" bias the omit rules exist to prevent. */
+function costOrAbsent(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+/** `{ [key]: value }` when the figure is real, `{}` when it is absent — so the
+ *  narrowed number, not the raw unknown, reaches the record. */
+function spreadCost(
+  key: "tokensOut" | "costPerAcceptedChange",
+  value: unknown
+): Partial<Pick<IRunRecord, "tokensOut" | "costPerAcceptedChange">> {
+  const kept = costOrAbsent(value);
+
+  return kept === undefined ? {} : { [key]: kept };
+}
+
 /** True for a value that is one of the known failure classes, so a hand-edited or
  *  older sweep JSON cannot smuggle an arbitrary string through. */
 function isFailureClass(value: unknown): value is FailureClass {
@@ -45,10 +66,8 @@ export function parseSweepRecords(value: unknown): IRunRecord[] {
         ms: r.ms,
         ...(typeof r.quality === "number" ? { quality: r.quality } : {}),
         ...(typeof r.loc === "number" ? { loc: r.loc } : {}),
-        ...(typeof r.tokensOut === "number" ? { tokensOut: r.tokensOut } : {}),
-        ...(typeof r.costPerAcceptedChange === "number"
-          ? { costPerAcceptedChange: r.costPerAcceptedChange }
-          : {}),
+        ...spreadCost("tokensOut", r.tokensOut),
+        ...spreadCost("costPerAcceptedChange", r.costPerAcceptedChange),
         ...(isFailureClass(r.failureClass)
           ? { failureClass: r.failureClass }
           : {}),

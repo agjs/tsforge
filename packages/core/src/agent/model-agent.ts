@@ -71,6 +71,22 @@ export function modelAgent(
         }
       );
 
+      // Report usage so this agent's tokens are counted like the implement loop's.
+      // Without it the quality-repair phase contributed its EDITS to the
+      // net-accepted count but none of its tokens, so costPerAcceptedChange came
+      // out systematically low on green runs — and quality repair is on by default,
+      // which meant the variants that passed most often looked cheapest.
+      if (res.usage !== undefined) {
+        ctx.report?.({
+          kind: "usage",
+          task: ctx.task.id,
+          message: `tokens ${String(res.usage.promptTokens)} in / ${String(res.usage.completionTokens)} out`,
+          promptTokens: res.usage.promptTokens,
+          completionTokens: res.usage.completionTokens,
+          totalTokens: res.usage.totalTokens,
+        });
+      }
+
       const failures: string[] = [];
 
       for (const call of res.toolCalls) {

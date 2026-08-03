@@ -75,6 +75,44 @@ test("omits absent optional metrics rather than inventing zeros", () => {
   expect(record).toEqual({ label: "a", passed: true, cycles: 1, ms: 5 });
 });
 
+// buildRunRecord omits a non-positive cost so it is treated as ABSENT and skipped by
+// the averages. Reading a saved 0 back as a real figure would put it in the
+// denominator and drag the reported cost down — cheaper the more runs spent nothing.
+test("treats a saved zero or non-finite cost as absent", () => {
+  const [zeroed] = parseSweepRecords({
+    records: [
+      {
+        label: "a",
+        passed: false,
+        cycles: 4,
+        ms: 10,
+        tokensOut: 0,
+        costPerAcceptedChange: 0,
+      },
+    ],
+  });
+
+  expect(zeroed?.tokensOut).toBeUndefined();
+  expect(zeroed?.costPerAcceptedChange).toBeUndefined();
+
+  // A hand-edited or corrupted file must not inject NaN into an average either.
+  const [nan] = parseSweepRecords({
+    records: [
+      {
+        label: "a",
+        passed: true,
+        cycles: 1,
+        ms: 10,
+        tokensOut: Number.NaN,
+        costPerAcceptedChange: -5,
+      },
+    ],
+  });
+
+  expect(nan?.tokensOut).toBeUndefined();
+  expect(nan?.costPerAcceptedChange).toBeUndefined();
+});
+
 test("ignores malformed rows and non-sweep input", () => {
   expect(parseSweepRecords({ records: [{ label: "a" }] })).toEqual([]);
   expect(parseSweepRecords({})).toEqual([]);

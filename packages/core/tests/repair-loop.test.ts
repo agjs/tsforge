@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { runTask, LOOP_LIMITS } from "../src/loop";
 import { STEER_LADDER_MAX } from "../src/loop/feedback/steer";
 import { scripted, runStep, STOP } from "./stub-provider";
+import { analyzeEvents } from "../src/eval";
+import type { ILoopEvent } from "../src/loop/loop.types";
 
 async function tmp(): Promise<string> {
   return mkdtemp(join(tmpdir(), "tsforge-repair-"));
@@ -124,6 +126,49 @@ test("stuck immediately when the streamed model response degenerates", async () 
     expect(r.reason).toBe("handoff");
     expect(r.handoff?.block).toBe("degeneration");
     expect(r.cycles).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The headless loop did not emit `usage` at all — only the interactive Session
+// path did — so analyzeEvents reported zero tokens for every eval run and the A/B
+// sweep compared variants while blind to cost. Asserted here at the loop level,
+// not only through the self-harness evaluator.
+test("the headless loop reports the provider's token usage", async () => {
+  const dir = await tmp();
+
+  try {
+    const steps = [runStep("echo x > fixed.txt"), STOP];
+    let i = 0;
+    const provider = {
+      async complete() {
+        const step = steps[Math.min(i, steps.length - 1)] ?? STOP;
+
+        i += 1;
+
+        return {
+          ...step,
+          usage: { promptTokens: 11, completionTokens: 42, totalTokens: 53 },
+        };
+      },
+    };
+    const events: ILoopEvent[] = [];
+    const result = await runTask(
+      { id: "1", accept: "test -f fixed.txt", files: [] },
+      dir,
+      provider,
+      { onEvent: (e) => events.push(e) }
+    );
+
+    expect(result.status).toBe("done");
+
+    const usage = events.filter((e) => e.kind === "usage");
+
+    expect(usage.length).toBeGreaterThan(0);
+    // The metrics library reads these fields; a usage event without them is inert.
+    expect(analyzeEvents(events).tokensOut).toBe(42 * usage.length);
+    expect(analyzeEvents(events).modelCalls).toBe(usage.length);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
