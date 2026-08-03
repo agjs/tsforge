@@ -5,22 +5,21 @@ import { join } from "node:path";
 import { evaluateHarness } from "../src/self-harness";
 import { buildRunRecord } from "../src/eval";
 import type { IModelResponse, IProvider } from "../src/inference";
-import { editStep, STOP } from "./stub-provider";
+import { createStep, STOP } from "./stub-provider";
 
 const CORPUS = join(import.meta.dir, "..", "..", "..", "evals", "corpus");
 
-/** [file, stub body, correct body] — a tuple list rather than a lookup, so no
- *  entry needs a non-null assertion to use. */
+/** [file, correct contents]. The run dir starts with each task's files REMOVED
+ *  (startRed), so the model creates them — an `edit` has nothing to match against,
+ *  which is why an edit-driven script never reached green and the judge never ran. */
 const FIXTURES = [
   [
     "add.ts",
-    "export function add(_a: number, _b: number): number {\n  return 0;\n}",
-    "export function add(a: number, b: number): number {\n  return a + b;\n}",
+    "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
   ],
   [
     "mul.ts",
-    "export function mul(_amount: number, _qty: number): number {\n  return 0;\n}",
-    "export function mul(amount: number, qty: number): number {\n  return amount * qty;\n}",
+    "export function mul(amount: number, qty: number): number {\n  return amount * qty;\n}\n",
   ],
 ] as const;
 
@@ -65,8 +64,8 @@ test("a completed evaluation records real elapsed time and token cost", async ()
       corpusDir: CORPUS,
       runsDir,
       provider: scriptedWithUsage(
-        FIXTURES.flatMap(([file, stub, fixed]) => [
-          editStep(file, stub, fixed),
+        FIXTURES.flatMap(([file, contents]) => [
+          createStep(file, contents),
           STOP,
         ]),
         700
@@ -84,8 +83,10 @@ test("a completed evaluation records real elapsed time and token cost", async ()
     // The cost side of the comparison, derived from the run's usage events —
     // which the headless loop did not emit at all until this change.
     expect(record?.tokensOut ?? 0).toBeGreaterThan(0);
-    // costPerAcceptedChange needs an ACCEPTED edit, which a scripted run cannot
-    // be relied on to produce here — it is pinned directly below instead.
+    // Now that the run reaches GREEN, the ratio is real and can be asserted here
+    // rather than only in the unit test below.
+    expect(record?.costPerAcceptedChange ?? 0).toBeGreaterThan(0);
+    expect(record?.passed).toBe(true);
   } finally {
     await rm(runsDir, { recursive: true, force: true });
   }
@@ -142,16 +143,31 @@ test("buildRunRecord carries cost, and omits the ratio when nothing was accepted
 // A run that dies after doing work must still report the time it burned. Recording
 // `ms: 0` for it made an unreliable variant look FASTER the more often it crashed
 // — the same bias the token averages are careful to avoid.
-test("an errored run records the time it actually consumed", async () => {
+test("an errored run records the time AND tokens it consumed", async () => {
   const runsDir = await mkdtemp(join(tmpdir(), "tsforge-selferr-"));
+  let calls = 0;
 
   try {
     const outcome = await evaluateHarness(["math"], {
       corpusDir: CORPUS,
       runsDir,
       provider: {
+        // Succeeds with usage first, THEN dies. Throwing immediately left no cost
+        // to lose, so the test could not tell whether the catch path kept it.
         async complete() {
-          await new Promise((resolve) => setTimeout(resolve, 60));
+          calls += 1;
+
+          if (calls === 1) {
+            return {
+              content: "thinking",
+              toolCalls: [],
+              usage: {
+                promptTokens: 100,
+                completionTokens: 250,
+                totalTokens: 350,
+              },
+            };
+          }
 
           throw new Error("endpoint exploded");
         },
@@ -164,6 +180,48 @@ test("an errored run records the time it actually consumed", async () => {
 
     expect(record?.passed).toBe(false);
     expect(record?.ms ?? 0).toBeGreaterThan(0);
+    // The usage reported before the throw must survive into the record. Dropping
+    // analyzeEvents from the catch would silently exclude the most expensive runs
+    // — the ones that died mid-way — from the token averages.
+    expect(record?.tokensOut ?? 0).toBeGreaterThan(0);
+  } finally {
+    await rm(runsDir, { recursive: true, force: true });
+  }
+}, 120000);
+
+// The judge is a MEASUREMENT. A transient judge failure used to propagate and turn a
+// GREEN run into an errored record (passed:false, cycles:0), biasing pass-rate
+// against whichever variant happened to meet bad weather.
+test("a throwing judge leaves a green run green, with quality unknown", async () => {
+  const runsDir = await mkdtemp(join(tmpdir(), "tsforge-selfjudge-"));
+
+  try {
+    const outcome = await evaluateHarness(["math"], {
+      corpusDir: CORPUS,
+      runsDir,
+      provider: scriptedWithUsage(
+        FIXTURES.flatMap(([file, contents]) => [
+          createStep(file, contents),
+          STOP,
+        ]),
+        700
+      ),
+      judgeProvider: {
+        async complete() {
+          throw new Error("judge endpoint down");
+        },
+      },
+      repeats: 1,
+      overlay: null,
+    });
+
+    const [record] = outcome.records;
+
+    // The implementation succeeded; only the MEASUREMENT failed. The run must stay
+    // green with quality unknown, not become an errored passed:false/cycles:0 row.
+    expect(record?.passed).toBe(true);
+    expect(record?.cycles ?? 0).toBeGreaterThan(0);
+    expect(record?.quality).toBeUndefined();
   } finally {
     await rm(runsDir, { recursive: true, force: true });
   }

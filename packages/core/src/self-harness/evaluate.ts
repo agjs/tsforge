@@ -204,23 +204,18 @@ async function runTaskOnce(
         )
       ).join("\n\n");
 
-      // The judge is a MEASUREMENT, not part of the build. If it throws (endpoint
-      // timeout, connection reset) the implementation still succeeded — letting it
-      // propagate turned a GREEN run into an errored one with passed:false and
-      // cycles:0, biasing pass-rate and efficiency against whichever variant
-      // happened to meet bad weather. Degrade to "quality unknown" instead, as the
-      // sweep script already did.
-      try {
-        const score = await judge(opts.judgeProvider, {
-          goal: spec.title,
-          criteria: specText,
-          code,
-        });
+      // No try/catch here on purpose: `judge` already swallows a provider failure
+      // and returns an unparseable verdict (see eval/judge.ts), so a dead endpoint
+      // leaves the run GREEN with quality unknown. Wrapping it would be unreachable
+      // code. Verified by tests/self-harness-evaluate.test.ts, which runs a green
+      // task against a judge provider that throws.
+      const score = await judge(opts.judgeProvider, {
+        goal: spec.title,
+        criteria: specText,
+        code,
+      });
 
-        quality = score.scored ? score.overall : undefined;
-      } catch {
-        quality = undefined;
-      }
+      quality = score.scored ? score.overall : undefined;
     }
   }
 

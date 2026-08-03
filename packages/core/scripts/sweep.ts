@@ -399,7 +399,6 @@ async function runOne(
         ? {}
         : { thinkingTokenBudget: Number(process.env.TSFORGE_THINKING_BUDGET) }),
     });
-    const started = performance.now();
     const result = await runSpec(gatedSpec, runDir, provider, {
       onEvent,
       temperature: temp,
@@ -409,7 +408,6 @@ async function runOne(
         : { thinkingTokenBudget: Number(process.env.TSFORGE_THINKING_BUDGET) }),
     });
 
-    const ms = Math.round(performance.now() - started);
     const cycles = result.results.reduce((acc, r) => acc + r.cycles, 0);
     const passed = result.status === "done";
 
@@ -470,7 +468,7 @@ async function runOne(
           features: variantEnv,
           status: result.status,
           cycles,
-          ms,
+          ms: elapsedMs(),
           // Same omit rules as the record: a run that accepted nothing has an
           // UNDEFINED ratio, and writing 0 here would make the per-run artifact
           // report a meaningful zero.
@@ -501,7 +499,7 @@ async function runOne(
       : classifyRun(runEvents).failureClass;
 
     process.stdout.write(
-      `  ${seed} ${recordLabel} #${i + 1}: ${passed ? "done" : `blocked[${failureClass ?? "unknown"}]`} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${ms}ms${quality === undefined ? "" : `, Q${quality}/5`}${loc === undefined ? "" : `, ${String(loc)} loc`}) → ${runId}\n`
+      `  ${seed} ${recordLabel} #${i + 1}: ${passed ? "done" : `blocked[${failureClass ?? "unknown"}]`} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${elapsedMs()}ms${quality === undefined ? "" : `, Q${quality}/5`}${loc === undefined ? "" : `, ${String(loc)} loc`}) → ${runId}\n`
     );
 
     return {

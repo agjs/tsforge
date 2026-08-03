@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { modelAgent } from "../src/agent";
 import type { IProvider, IChatMessage } from "../src/inference";
+import type { ILoopEvent } from "../src/loop/loop.types";
 
 function providerReturning(
   toolCalls: { name: string; arguments: Record<string, unknown> }[]
@@ -287,4 +288,45 @@ test("system prompt states the house rules", async () => {
   expect(lower).toContain("non-null");
   expect(lower).toContain("guard");
   expect(lower).toContain("interface");
+});
+
+// modelAgent backs the QUALITY-REPAIR pass, which is on by default. It reported its
+// edits but not its tokens, so quality-phase edits entered the net-accepted count
+// while its cost did not — costPerAcceptedChange came out systematically low on
+// green runs, making the variants that passed most often look cheapest.
+test("reports the provider's token usage so quality-phase cost is counted", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-model-"));
+
+  try {
+    await Bun.write(join(dir, "a.ts"), "keep\n");
+
+    const events: ILoopEvent[] = [];
+    const agent = modelAgent({
+      async complete() {
+        return {
+          content: "no change needed",
+          toolCalls: [],
+          usage: { promptTokens: 120, completionTokens: 340, totalTokens: 460 },
+        };
+      },
+    });
+
+    await agent.implement({
+      cwd: dir,
+      task: { id: "1", accept: "true", files: ["a.ts"] },
+      errors: [],
+      cycle: 1,
+      report: (event) => events.push(event),
+    });
+
+    const usage = events.filter((e) => e.kind === "usage");
+
+    expect(usage.length).toBe(1);
+    // The fields the metrics library actually reads — a usage event without them is
+    // inert, and tokensOut would stay 0.
+    expect(usage[0]?.completionTokens).toBe(340);
+    expect(usage[0]?.promptTokens).toBe(120);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
