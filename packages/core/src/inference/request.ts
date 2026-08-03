@@ -173,11 +173,14 @@ function toolsBlock(
   return { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" };
 }
 
-/** Whether to omit `tool_choice`. Precedence: the explicit `guidedDecoding`
- *  override, then the profile's own declaration, then auto-detection by host —
- *  only DeepSeek's CLOUD API (api.deepseek.com) 400s on an explicit
- *  `tool_choice`; a self-hosted endpoint accepts it and grammar-constrains the
- *  call, so it is sent. */
+/** Whether to omit `tool_choice`. Two steps only: the explicit `guidedDecoding`
+ *  override, then the profile's own `omitToolChoice`.
+ *
+ *  There is deliberately NO host check here. The one endpoint that rejects an
+ *  explicit `tool_choice` is DeepSeek's cloud API, and its preset declares the
+ *  suppression as data — which is what makes the preset name and a copy of the
+ *  preset behave identically. A hand-written profile pointed at that host must
+ *  set the flag itself; re-adding a host check would silently override it. */
 function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
   const override = guidedOverride(cfg);
 
@@ -192,7 +195,7 @@ function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
 }
 
 /** Normalize the optional `guidedDecoding` override — tolerates a stringified
- *  boolean from a hand-edited models.json; undefined ⇒ auto-detect by host. */
+ *  boolean from a hand-edited models.json; undefined ⇒ defer to the profile. */
 function guidedOverride(cfg: IOpenAICompatibleConfig): boolean | undefined {
   const value: unknown = cfg.guidedDecoding;
 
@@ -297,14 +300,10 @@ function isPrivateHost(baseUrl: string): boolean {
   );
 }
 
-/** True for the DeepSeek CLOUD API host (api.deepseek.com / *.deepseek.com) — the
- *  only endpoint known to reject an explicit `tool_choice`. Tolerates a scheme-less
- *  baseUrl (e.g. `api.deepseek.com/v1` from a hand-edited config): without a scheme
- *  `new URL()` throws, which would miss the cloud host and wrongly SEND tool_choice
- *  — the exact 400 this guards against — so prepend `https://` before parsing. */
-/** Build the request body object (pure). Field order keeps the qwen default
- *  byte-for-byte identical; `extraBody` is merged last so it can override
- *  anything for a fully custom provider. */
+/** Build the request body object (pure). `extraBody` is merged LAST so it can
+ *  override anything for a fully custom provider. Field ORDER is not part of the
+ *  contract: profile-driven fields are written together, ahead of temperature
+ *  and tools, so that nested paths sharing a parent cannot clobber each other. */
 export function buildRequestBody(
   cfg: IOpenAICompatibleConfig,
   messages: IChatMessage[],
