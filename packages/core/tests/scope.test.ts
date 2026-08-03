@@ -5,6 +5,7 @@ import {
   insideWorkspace,
   normalizeWorkspacePath,
 } from "../src/lib/scope";
+import { isWin32 } from "../src/lib/platform";
 
 // The vendored "you cannot edit this file" concept was removed entirely — a model
 // may edit anything in scope, including generated files (the build regenerates
@@ -148,6 +149,36 @@ test("writable and insideWorkspace agree on what escapes the workspace", () => {
     expect({ file, writable: writable(file, ["**/*"]) }).toEqual({
       file,
       writable: allowed,
+    });
+  }
+});
+
+// What counts as absolute is platform-dependent, so this pins the semantics of the
+// platform the suite runs on. Hand-rolling the check instead of using
+// node:path.isAbsolute failed OPEN on POSIX: `D:/secret.ts` is an ordinary relative
+// path there (a directory named `D:`), and calling it absolute skipped the
+// shell-write guard for a real workspace file.
+test("insideWorkspace uses this platform's notion of absolute", () => {
+  const windowsForms = [
+    "D:/secret.ts",
+    "D:\\secret.ts",
+    "\\\\server\\share\\x.ts",
+  ];
+
+  for (const file of windowsForms) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      // On Windows these are absolute (outside); on POSIX they are ordinary
+      // relative names (inside) and MUST stay guarded.
+      inside: !isWin32(),
+    });
+  }
+
+  // Always outside, on every platform.
+  for (const file of ["/etc/passwd", "../escaped.ts", "a/../b.ts"]) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: false,
     });
   }
 });

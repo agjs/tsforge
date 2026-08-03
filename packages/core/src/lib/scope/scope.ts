@@ -1,4 +1,5 @@
-import { resolve, relative } from "node:path";
+import { resolve, relative, isAbsolute } from "node:path";
+import { isWin32 } from "../platform";
 import { SCRATCH_PREFIX } from "./scope.constants";
 
 /**
@@ -27,19 +28,6 @@ export function isInScope(file: string, patterns: string[]): boolean {
   return patterns.some((pattern) => new Bun.Glob(pattern).match(file));
 }
 
-/** Absolute on ANY platform, checked explicitly rather than via `node:path` so the
- *  answer does not depend on where this runs: a POSIX root, a Windows UNC share
- *  (`\\\\server\\share`), or a drive-letter root (`D:\\…`). `node:path.relative`
- *  returns a drive-absolute path when the target is on another volume, and that
- *  carries no `..` segment — so a segment check alone would call it "inside". */
-function isAbsolutePath(file: string): boolean {
-  return (
-    file.startsWith("/") ||
-    file.startsWith("\\\\") ||
-    /^[A-Za-z]:[\\/]/u.test(file)
-  );
-}
-
 /** True when a NORMALIZED path stays inside the workspace — i.e. it neither
  *  escapes via a `..` path SEGMENT nor is absolute. Distinct from {@link writable}:
  *  a project file the model may not edit is still inside the workspace, and that is
@@ -49,14 +37,21 @@ function isAbsolutePath(file: string): boolean {
  *  merely starts with two dots. Treating it as outside would skip the guard for a
  *  real workspace file — failing OPEN, the wrong direction for this predicate. */
 export function insideWorkspace(file: string): boolean {
-  if (isAbsolutePath(file)) {
+  // `node:path.isAbsolute`, NOT a hand-rolled pattern: what counts as absolute is
+  // platform-dependent, and applying Windows syntax on POSIX fails OPEN. There,
+  // `D:/secret.ts` is an ordinary relative path (a directory named `D:`) — calling
+  // it absolute made this return false and skipped the shell-write guard for a real
+  // workspace file, while the edit tools refused a legitimate path.
+  if (isAbsolute(file)) {
     return false;
   }
 
-  // Split on BOTH separators: node:path emits `\` on Windows, and splitting only
-  // on `/` would read `..\secret.ts` as one ordinary filename — inside the
-  // workspace — and skip the guard there.
-  return !file.split(/[\\/]/u).includes("..");
+  // Windows accepts either separator, so a `..` segment can arrive spelled with
+  // both. On POSIX a backslash is a legal filename character and must NOT be read
+  // as one.
+  const segments = isWin32() ? file.split(/[\\/]/u) : file.split("/");
+
+  return !segments.includes("..");
 }
 
 /** A file the model may write: its editable scope, OR a throwaway scratch file.
