@@ -75,6 +75,7 @@ describe("eval report: buildSweepReport", () => {
             cycles: 2,
             ms: 100,
             tokensOut: 4200,
+            tokensIn: 9100,
             costPerAcceptedChange: 1400,
           },
         ],
@@ -82,8 +83,12 @@ describe("eval report: buildSweepReport", () => {
       )
     );
 
-    expect(md).toContain("Tokens");
+    // Prompt AND completion tokens: a variant can enlarge the prompt every call
+    // while completion tokens stay flat, so showing only one hides that cost.
+    expect(md).toContain("Tok in");
+    expect(md).toContain("Tok out");
     expect(md).toContain("Tok/change");
+    expect(md).toContain("9100");
     expect(md).toContain("4200");
     expect(md).toContain("1400");
   });

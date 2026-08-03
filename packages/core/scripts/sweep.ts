@@ -444,7 +444,7 @@ async function runOne(
         quality = qr.quality;
         judgeNotes = qr.notes;
       } catch (err) {
-        judgeNotes = `judge unavailable: ${err instanceof Error ? err.message : String(err)}`;
+        judgeNotes = `judge unavailable: ${errorMessage(err)}`;
       }
     }
 

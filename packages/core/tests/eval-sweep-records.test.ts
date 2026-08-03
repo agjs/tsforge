@@ -16,6 +16,7 @@ test("rehydrates every metric a saved record carries", () => {
         quality: 4,
         loc: 22,
         tokensOut: 8000,
+        tokensIn: 3000,
         costPerAcceptedChange: 2000,
       },
     ],
@@ -30,6 +31,7 @@ test("rehydrates every metric a saved record carries", () => {
       quality: 4,
       loc: 22,
       tokensOut: 8000,
+      tokensIn: 3000,
       costPerAcceptedChange: 2000,
     },
   ]);
@@ -87,12 +89,14 @@ test("treats a saved zero or non-finite cost as absent", () => {
         cycles: 4,
         ms: 10,
         tokensOut: 0,
+        tokensIn: 0,
         costPerAcceptedChange: 0,
       },
     ],
   });
 
   expect(zeroed?.tokensOut).toBeUndefined();
+  expect(zeroed?.tokensIn).toBeUndefined();
   expect(zeroed?.costPerAcceptedChange).toBeUndefined();
 
   // A hand-edited or corrupted file must not inject NaN into an average either.

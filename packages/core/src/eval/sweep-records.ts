@@ -15,9 +15,11 @@ function costOrAbsent(value: unknown): number | undefined {
 /** `{ [key]: value }` when the figure is real, `{}` when it is absent — so the
  *  narrowed number, not the raw unknown, reaches the record. */
 function spreadCost(
-  key: "tokensOut" | "costPerAcceptedChange",
+  key: "tokensOut" | "tokensIn" | "costPerAcceptedChange",
   value: unknown
-): Partial<Pick<IRunRecord, "tokensOut" | "costPerAcceptedChange">> {
+): Partial<
+  Pick<IRunRecord, "tokensOut" | "tokensIn" | "costPerAcceptedChange">
+> {
   const kept = costOrAbsent(value);
 
   return kept === undefined ? {} : { [key]: kept };
@@ -67,6 +69,7 @@ export function parseSweepRecords(value: unknown): IRunRecord[] {
         ...(typeof r.quality === "number" ? { quality: r.quality } : {}),
         ...(typeof r.loc === "number" ? { loc: r.loc } : {}),
         ...spreadCost("tokensOut", r.tokensOut),
+        ...spreadCost("tokensIn", r.tokensIn),
         ...spreadCost("costPerAcceptedChange", r.costPerAcceptedChange),
         ...(isFailureClass(r.failureClass)
           ? { failureClass: r.failureClass }

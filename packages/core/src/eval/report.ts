@@ -155,8 +155,8 @@ export function renderSweepReportMarkdown(report: ISweepReport): string {
   // variant that passes a little more often while costing several times as much
   // reads as a straight win.
   const header =
-    "| Variant | Runs | Pass | 95% CI | Cycles | T2G | Ms | Tokens | Tok/change | Quality | LOC | vs baseline |\n" +
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |";
+    "| Variant | Runs | Pass | 95% CI | Cycles | T2G | Ms | Tok in | Tok out | Tok/change | Quality | LOC | vs baseline |\n" +
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |";
 
   const rows = report.variants.map((v) => {
     const ci = `${pct(v.passRateCI[0])}–${pct(v.passRateCI[1])}`;
@@ -165,7 +165,7 @@ export function renderSweepReportMarkdown(report: ISweepReport): string {
     return (
       `| ${v.label} | ${String(v.runs)} | ${pct(v.passRate)} | ${ci} | ` +
       `${v.avgCycles.toFixed(1)} | ${t2g} | ${String(Math.round(v.avgMs))} | ` +
-      `${cost(v.avgTokensOut)} | ${cost(v.avgCostPerAcceptedChange)} | ` +
+      `${cost(v.avgTokensIn)} | ${cost(v.avgTokensOut)} | ${cost(v.avgCostPerAcceptedChange)} | ` +
       `${v.avgQuality.toFixed(1)} | ${v.avgLoc.toFixed(1)} | ${baselineCell(v, report.baseline)} |`
     );
   });

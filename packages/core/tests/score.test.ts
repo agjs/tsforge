@@ -46,6 +46,20 @@ test("averages cost over the runs that recorded it, not over all runs", () => {
   expect(a?.runs).toBe(3);
 });
 
+// Prompt cost is the half output tokens hide: a variant can enlarge the prompt or
+// tool context on every call while tokensOut stays flat.
+test("averages prompt tokens over the runs that recorded them", () => {
+  const summaries = summarize([
+    { label: "a", passed: true, cycles: 1, ms: 1, tokensIn: 1000 },
+    { label: "a", passed: true, cycles: 1, ms: 1, tokensIn: 3000 },
+    // No prompt figure: must not be averaged in as a zero.
+    { label: "a", passed: false, cycles: 0, ms: 0 },
+  ]);
+  const a = summaries.find((s) => s.label === "a");
+
+  expect(a?.avgTokensIn).toBe(2000);
+});
+
 test("averages cost-per-accepted-change independently of token totals", () => {
   const summaries = summarize([
     {
