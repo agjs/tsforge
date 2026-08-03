@@ -32,45 +32,28 @@ export function latchesThinking(cfg: IOpenAICompatibleConfig): boolean {
   return profile(cfg).latchThinking === true;
 }
 
-/** The resolved profile AND whether it is DeepSeek's cloud dialect. These are
- *  returned together deliberately: computed separately they drifted, and an
- *  entry could end up with cloud thinking fields while still being sent
- *  `tool_choice` — which that endpoint rejects. */
-function resolve(cfg: IOpenAICompatibleConfig): {
-  profile: IReasoningProfile;
-  cloudDialect: boolean;
-} {
+/** Resolve the endpoint's reasoning profile: an explicit object wins, a preset
+ *  name expands, and anything else falls back to auto-detection.
+ *
+ *  Every behaviour is carried BY the profile, so there is no second notion of
+ *  "which dialect is this" to drift out of sync with the returned object. The
+ *  presets are deep-frozen, so the reference handed back cannot be mutated. */
+export function profile(cfg: IOpenAICompatibleConfig): IReasoningProfile {
   const declared = cfg.reasoning;
 
   if (isReasoningStyle(declared)) {
-    return {
-      profile: REASONING_PRESETS[declared],
-      cloudDialect: declared === "deepseek",
-    };
+    return REASONING_PRESETS[declared];
   }
 
-  // A custom profile is never treated as the cloud dialect by resemblance: it
-  // has full control and should declare `omitToolChoice` outright.
   if (isReasoningProfile(declared)) {
-    return { profile: declared, cloudDialect: false };
+    return declared;
   }
 
   // Anything else — undefined, JSON `null`, a typo'd preset name, a malformed
   // object — falls back to auto-detection. models-config rejects these loudly
   // at load; this is the last line of defence so a hand-edited registry cannot
   // crash a live turn (JSON null is NOT undefined and used to throw here).
-  const auto = autoPreset(cfg);
-
-  return {
-    profile: REASONING_PRESETS[auto],
-    cloudDialect: auto === "deepseek",
-  };
-}
-
-/** Resolve the endpoint's reasoning profile: an explicit object wins, a preset
- *  name expands, and anything else falls back to auto-detection. */
-export function profile(cfg: IOpenAICompatibleConfig): IReasoningProfile {
-  return resolve(cfg).profile;
+  return REASONING_PRESETS[autoPreset(cfg)];
 }
 
 /** Best-effort preset for an entry that declared nothing. Only a convenience:
@@ -168,9 +151,9 @@ function profileFields(
 
 /** The `tools` (+ `tool_choice`) request fields. `tool_choice` is sent by default
  *  — it grammar-constrains the call to a well-formed schema instead of free-form
- *  text the harness would have to salvage — and is suppressed ONLY for the deepseek
- *  style on DeepSeek's CLOUD host, whose thinking API 400s on it (see
- *  `suppressesToolChoice`). No configuration needed for the common local case. */
+ *  text the harness would have to salvage — and is suppressed only when the
+ *  resolved profile says so (the `deepseek` cloud preset does, because its
+ *  thinking API 400s on it). No configuration needed for the common local case. */
 function toolsBlock(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
@@ -202,18 +185,10 @@ function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
     return !override;
   }
 
-  const { profile: p, cloudDialect } = resolve(cfg);
-
-  if (p.omitToolChoice !== undefined) {
-    return p.omitToolChoice;
-  }
-
-  // The host heuristic applies ONLY to the DeepSeek cloud dialect, preserving
-  // the old `style === "deepseek"` gate: an entry that picks another dialect
-  // against api.deepseek.com has opted out and must keep getting `tool_choice`.
-  // `cloudDialect` comes from the same resolution as the profile, so a request
-  // can never carry cloud thinking fields while also sending `tool_choice`.
-  return cloudDialect && isDeepSeekCloudHost(cfg.baseUrl);
+  // Declared by the profile itself, so it travels with the dialect: a request
+  // can never carry DeepSeek cloud's thinking fields while also sending
+  // `tool_choice`, and a spread copy of the preset behaves like the name.
+  return profile(cfg).omitToolChoice === true;
 }
 
 /** Normalize the optional `guidedDecoding` override — tolerates a stringified
@@ -259,7 +234,7 @@ function firstTwoOctets(host: string): [number, number] | null {
  *  i.e. something the user is self-hosting. Used to tell a local vLLM apart from
  *  a public endpoint (which may be a reverse proxy in front of a cloud API), so
  *  only the former gets the vLLM reasoning dialect. Scheme-less input is
- *  tolerated the same way `isDeepSeekCloudHost` tolerates it. */
+ *  tolerated: a scheme-less baseUrl is prefixed before parsing. */
 function isPrivateHost(baseUrl: string): boolean {
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(baseUrl)
     ? baseUrl
@@ -327,18 +302,6 @@ function isPrivateHost(baseUrl: string): boolean {
  *  baseUrl (e.g. `api.deepseek.com/v1` from a hand-edited config): without a scheme
  *  `new URL()` throws, which would miss the cloud host and wrongly SEND tool_choice
  *  — the exact 400 this guards against — so prepend `https://` before parsing. */
-function isDeepSeekCloudHost(baseUrl: string): boolean {
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(baseUrl)
-    ? baseUrl
-    : `https://${baseUrl}`;
-
-  try {
-    return /(^|\.)deepseek\.com$/iu.test(new URL(withScheme).hostname);
-  } catch {
-    return false;
-  }
-}
-
 /** Build the request body object (pure). Field order keeps the qwen default
  *  byte-for-byte identical; `extraBody` is merged last so it can override
  *  anything for a fully custom provider. */

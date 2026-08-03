@@ -63,8 +63,12 @@ export const REASONING_PRESETS: Readonly<
     budget: "thinking_token_budget",
   },
 
-  /** DeepSeek's CLOUD API: a top-level object, plus two protocol quirks that
-   *  are behavioural rather than cosmetic. */
+  /** DeepSeek's CLOUD API: a top-level object, plus three protocol quirks that
+   *  are behavioural rather than cosmetic. Self-hosted DeepSeek resolves to
+   *  `deepseek-local`, so this preset now means the cloud API unambiguously —
+   *  which is why `omitToolChoice` rides here as DATA rather than being decided
+   *  by a host check. That also makes the name and the object true aliases: a
+   *  hand-written or spread copy behaves identically. */
   deepseek: {
     thinking: {
       path: "thinking",
@@ -72,6 +76,9 @@ export const REASONING_PRESETS: Readonly<
       offValue: { type: "disabled" },
     },
     effort: "reasoning_effort",
+    // Its thinking API 400s on an explicit tool_choice. The model still gets
+    // the tools and decides for itself.
+    omitToolChoice: true,
     replayReasoning: true,
     latchThinking: true,
   },
@@ -96,6 +103,25 @@ export const REASONING_PRESETS: Readonly<
   /** Endpoint exposes no reasoning controls. */
   none: {},
 };
+
+/** Recursively freeze, so a caller that gets a preset back from `profile()`
+ *  cannot mutate it and corrupt every later request in the process. `Readonly`
+ *  is type-only and does nothing at runtime. */
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+
+  Object.freeze(value);
+
+  for (const v of Object.values(value)) {
+    deepFreeze(v);
+  }
+
+  return value;
+}
+
+deepFreeze(REASONING_PRESETS);
 
 export function isReasoningStyle(value: unknown): value is ReasoningStyle {
   return typeof value === "string" && Object.hasOwn(REASONING_PRESETS, value);

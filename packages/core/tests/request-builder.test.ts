@@ -4,11 +4,13 @@ import type {
   IOpenAICompatibleConfig,
   ICompleteOptions,
 } from "../src/inference";
+import { REASONING_PRESETS } from "../src/inference/reasoning-profile";
 import {
   buildRequestBody,
   buildRequestHeaders,
   chatCompletionsUrl,
   latchesThinking,
+  profile,
 } from "../src/inference/request";
 
 const MSGS: IChatMessage[] = [{ role: "user", content: "hi" }];
@@ -242,14 +244,29 @@ describe("buildRequestBody: reasoning styles", () => {
     );
   });
 
-  test("local deepseek auto-sends tool_choice (no config — vLLM accepts it)", () => {
+  test("a local deepseek endpoint sends tool_choice (vLLM accepts it)", () => {
+    // A self-hosted DeepSeek auto-detects as `deepseek-local`, which declares no
+    // tool_choice suppression, so the call stays grammar-constrained.
+    const b = body(
+      { baseUrl: "http://localhost:8000/v1", model: "deepseek-v4-flash" },
+      { tools: [{}], toolChoice: "required" }
+    );
+
+    expect(b.tools).toBeDefined();
+    expect(b.tool_choice).toBe("required");
+  });
+
+  test("naming the CLOUD preset for a local server omits tool_choice", () => {
+    // Suppression rides on the profile as data, so explicitly choosing the
+    // cloud dialect applies its quirks wherever it points. The fix for a local
+    // server is to use `deepseek-local`, not to rely on a host check.
     const b = body(
       { reasoning: "deepseek", baseUrl: "http://localhost:8000/v1" },
       { tools: [{}], toolChoice: "required" }
     );
 
     expect(b.tools).toBeDefined();
-    expect(b.tool_choice).toBe("required");
+    expect(b.tool_choice).toBeUndefined();
   });
 
   test("DeepSeek CLOUD host auto-omits tool_choice (its thinking API 400s on it)", () => {
@@ -491,9 +508,10 @@ describe("reasoning_content round-trip", () => {
     );
   });
 
-  test("auto-detected deepseek on a non-cloud host still sends tool_choice", () => {
-    // Style is auto-detected as deepseek from the model name (for reasoning
-    // replay), but the host isn't api.deepseek.com, so tool_choice is sent.
+  test("auto-detected deepseek on a PUBLIC host omits tool_choice", () => {
+    // A public host with a deepseek model is the cloud API or a proxy in front
+    // of it — both reject an explicit tool_choice. Self-hosting resolves to
+    // `deepseek-local` instead, so this no longer catches a local server.
     const b = buildRequestBody(
       cfg({ model: "deepseek-pro-4" }),
       MSGS,
@@ -502,7 +520,7 @@ describe("reasoning_content round-trip", () => {
     );
 
     expect(b.tools).toBeDefined();
-    expect(b.tool_choice).toBe("auto");
+    expect(b.tool_choice).toBeUndefined();
   });
 });
 
@@ -860,5 +878,42 @@ describe("buildRequestBody: fully-qualified hostnames", () => {
 
     expect(b.chat_template_kwargs).toEqual({ thinking: false });
     expect(b.thinking).toBeUndefined();
+  });
+});
+
+describe("preset name and preset object are behavioural aliases", () => {
+  const cloud = {
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-v4-pro",
+  };
+  const opts: ICompleteOptions = {
+    enableThinking: true,
+    tools: [{}],
+    toolChoice: "required",
+  };
+
+  test("a spread copy of the deepseek preset behaves like the name", () => {
+    // The suppression used to be decided outside the profile, so a copy of the
+    // preset silently lost it and DeepSeek cloud 400'd on tool turns.
+    const byName = body({ ...cloud, reasoning: "deepseek" }, opts);
+    const byValue = body(
+      { ...cloud, reasoning: { ...REASONING_PRESETS.deepseek } },
+      opts
+    );
+
+    expect(byValue.thinking).toEqual(byName.thinking);
+    expect(byValue.tool_choice).toEqual(byName.tool_choice);
+    expect(byValue.tool_choice).toBeUndefined();
+    expect(latchesThinking({ ...cfg(), ...cloud, reasoning: "deepseek" })).toBe(
+      true
+    );
+  });
+
+  test("the presets are deep-frozen, so a caller cannot corrupt them", () => {
+    const p = profile(cfg({ ...cloud, reasoning: "deepseek" }));
+
+    expect(Object.isFrozen(p)).toBe(true);
+    expect(Object.isFrozen(p.thinking)).toBe(true);
+    expect(Object.isFrozen(p.thinking?.onValue)).toBe(true);
   });
 });

@@ -50,7 +50,7 @@ The profile is the real interface. Presets are just aliases over it, so a model 
 | Name | Expands to |
 | --- | --- |
 | `qwen` (default) | `chat_template_kwargs.enable_thinking`, budget at `thinking_token_budget` |
-| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, effort at `reasoning_effort`, plus `replayReasoning` and `latchThinking` |
+| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, effort at `reasoning_effort`, plus `omitToolChoice`, `replayReasoning` and `latchThinking` |
 | `deepseek-local` | `chat_template_kwargs: { thinking, reasoning_effort }`, budget at `thinking_token_budget` |
 | `openai` | effort at `reasoning_effort`, token cap renamed to `max_completion_tokens`, `omitTemperature` |
 | `none` | nothing |
@@ -82,7 +82,11 @@ Every field is optional, and **an omitted control means the endpoint doesn't hav
 "thinking": { "path": "mode", "onValue": { "kind": "deep" }, "offValue": { "kind": "off" } }
 ```
 
-The last two flags are behavioural rather than cosmetic, and exist because DeepSeek's cloud API demands them: `replayReasoning` re-sends each prior turn's `reasoning_content` (it 400s without), and `latchThinking` pins thinking to the session's first value (it 400s if it flips mid-conversation).
+The last three flags are behavioural rather than cosmetic, and exist because DeepSeek's cloud API demands them: `omitToolChoice` drops an explicit `tool_choice` (it 400s on one, and the model still gets the tools and decides), `replayReasoning` re-sends each prior turn's `reasoning_content` (it 400s without), and `latchThinking` pins thinking to the session's first value (it 400s if it flips mid-conversation).
+
+:::caution
+Writing your own profile for a DeepSeek **cloud** endpoint? Set `"omitToolChoice": true`. These quirks travel with the profile as data, so a hand-written one that omits the flag will send `tool_choice` and get a 400 on any turn with tools. Using the `deepseek` preset name — or a copy of it — carries them for you.
+:::
 
 ### Auto-detection
 
