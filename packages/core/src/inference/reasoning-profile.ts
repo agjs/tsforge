@@ -37,7 +37,9 @@ export interface IReasoningProfile {
   tokenCap?: string;
   /** Never send `temperature` (OpenAI o-series rejects it outright). */
   omitTemperature?: boolean;
-  /** Never send `tool_choice`. Omit to auto-detect from the host. */
+  /** Never send `tool_choice`. Omitting it auto-detects from the host, but ONLY
+   *  for the `deepseek` preset and for auto-detection — a custom profile should
+   *  state this outright rather than inherit a vendor quirk by resemblance. */
   omitToolChoice?: boolean;
   /** Replay each prior assistant turn's `reasoning_content`. DeepSeek's cloud
    *  thinking API 400s without it; nothing else wants it. */
@@ -102,6 +104,21 @@ export function isReasoningStyle(value: unknown): value is ReasoningStyle {
 /** Where the output-token cap goes when a profile does not say. Exported so the
  *  request builder and the overlap check cannot drift apart. */
 export const DEFAULT_TOKEN_CAP = "max_tokens";
+
+/** Top-level fields the request builder owns. A profile path may not target one
+ *  or nest under one: `{"tokenCap":"messages"}` would replace the conversation,
+ *  `{"thinking":{"path":"model"}}` the model id, and `temperature`/`tools`/
+ *  `stream` would be silently overwritten by the normal fields spread after. */
+const RESERVED_ROOTS = new Set([
+  "model",
+  "messages",
+  "temperature",
+  "repetition_penalty",
+  "tools",
+  "tool_choice",
+  "stream",
+  "stream_options",
+]);
 
 /** Path-valued profile keys. */
 const PATH_KEYS = ["effort", "budget", "tokenCap"] as const;
@@ -214,7 +231,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  *  `__proto__.polluted` must not be able to write to Object.prototype. */
 const UNSAFE_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
 
-/** True when every segment of a dot path is present and safe to write. */
+/** True when every segment of a dot path is present and safe to write, and the
+ *  path does not target a field the request builder owns. */
 export function isSafePath(path: string): boolean {
   if (path === "") {
     return false;
@@ -222,7 +240,11 @@ export function isSafePath(path: string): boolean {
 
   const parts = path.split(".");
 
-  return parts.every((p) => p !== "" && !UNSAFE_SEGMENTS.has(p));
+  if (!parts.every((p) => p !== "" && !UNSAFE_SEGMENTS.has(p))) {
+    return false;
+  }
+
+  return !RESERVED_ROOTS.has(parts[0] ?? "");
 }
 
 /** Write `value` at a dot path, creating intermediate objects. Mutates `target`

@@ -80,6 +80,15 @@ describe("isSafePath", () => {
     ["a.__proto__.b"],
     ["constructor"],
     ["prototype"],
+    // reserved: owned by the request builder
+    ["model"],
+    ["messages"],
+    ["temperature"],
+    ["tools"],
+    ["tool_choice"],
+    ["stream"],
+    ["stream_options.include_usage"],
+    ["repetition_penalty"],
   ])("rejects %p", (p) => expect(isSafePath(p)).toBe(false));
 });
 
@@ -157,6 +166,15 @@ describe("isReasoningProfile", () => {
       "thinking colliding with the default token cap",
     ],
     [{ budget: "max_tokens.x" }, "a path nested under the default token cap"],
+    // A profile must not be able to reach fields the request builder owns.
+    [{ tokenCap: "messages" }, "targeting the conversation"],
+    [{ thinking: { path: "model" } }, "targeting the model id"],
+    [{ effort: "temperature" }, "targeting temperature"],
+    [{ budget: "tools.0" }, "nesting under tools"],
+    [
+      { effort: "stream_options.include_usage" },
+      "nesting under stream_options",
+    ],
   ])("rejects %p (%s)", (value) => {
     expect(isReasoningProfile(value)).toBe(false);
   });

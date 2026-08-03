@@ -734,3 +734,60 @@ describe("tool_choice suppression is gated on the DeepSeek CLOUD dialect", () =>
     ).toBeUndefined();
   });
 });
+
+describe("buildRequestBody: isolation and documented host cases", () => {
+  test("a single-label host is NOT private (documented, indistinguishable from a proxy alias)", () => {
+    const b = body(
+      { baseUrl: "http://spark2:8888/v1", model: "deepseek-v4-flash" },
+      { enableThinking: false }
+    );
+
+    expect(b.thinking).toEqual({ type: "disabled" });
+    expect(b.chat_template_kwargs).toBeUndefined();
+  });
+
+  test("mutating a built body cannot corrupt the shared preset", () => {
+    // profile() returns the SHARED preset object (Readonly is type-only), so a
+    // by-reference write would leak into every later request in the process.
+    const first = body({ reasoning: "deepseek" }, { enableThinking: true });
+
+    expect(first.thinking).toEqual({ type: "enabled" });
+
+    const mutable = first.thinking;
+
+    if (typeof mutable === "object" && mutable !== null) {
+      Object.assign(mutable, { type: "CORRUPTED" });
+    }
+
+    const second = body({ reasoning: "deepseek" }, { enableThinking: true });
+
+    expect(second.thinking).toEqual({ type: "enabled" });
+  });
+
+  test("an equivalent hand-written cloud profile behaves predictably", () => {
+    // Identity comparison against the preset used to decide this; keying on how
+    // the dialect was chosen makes a data profile explicit rather than magic.
+    const asData = {
+      thinking: {
+        path: "thinking",
+        onValue: { type: "enabled" },
+        offValue: { type: "disabled" },
+      },
+      effort: "reasoning_effort",
+      replayReasoning: true,
+      latchThinking: true,
+      omitToolChoice: true,
+    };
+    const b = body(
+      {
+        baseUrl: "https://api.deepseek.com/v1",
+        model: "deepseek-v4-pro",
+        reasoning: asData,
+      },
+      { tools: [{}], toolChoice: "required", enableThinking: true }
+    );
+
+    expect(b.thinking).toEqual({ type: "enabled" });
+    expect(b.tool_choice).toBeUndefined();
+  });
+});

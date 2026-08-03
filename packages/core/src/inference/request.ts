@@ -76,6 +76,14 @@ function autoPreset(cfg: IOpenAICompatibleConfig): ReasoningStyle {
   return "qwen";
 }
 
+/** A structural copy, so a value taken from a shared preset never enters the
+ *  request body by reference. Primitives pass through untouched. */
+function detach(value: unknown): unknown {
+  return typeof value === "object" && value !== null
+    ? structuredClone(value)
+    : value;
+}
+
 /** Every profile-driven field — the token cap plus the reasoning controls —
  *  written into ONE object.
  *
@@ -111,8 +119,13 @@ function profileFields(
 
   if (p.thinking !== undefined && opts.enableThinking !== undefined) {
     const { path, onValue = true, offValue = false } = p.thinking;
+    const value = opts.enableThinking ? onValue : offValue;
 
-    setPath(body, path, opts.enableThinking ? onValue : offValue);
+    // Copy before writing. `profile()` hands back the SHARED preset object
+    // (Readonly is type-only), so putting `onValue` into the body by reference
+    // would let a caller mutating the returned body corrupt the preset for
+    // every later request in the process.
+    setPath(body, path, detach(value));
   }
 
   if (p.effort !== undefined && effort !== undefined) {
@@ -168,19 +181,34 @@ function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
     return !override;
   }
 
-  const p = profile(cfg);
-  const declared = p.omitToolChoice;
+  const declared = profile(cfg).omitToolChoice;
 
   if (declared !== undefined) {
     return declared;
   }
 
-  // The host heuristic applies ONLY to the DeepSeek cloud dialect. Gating on
-  // the resolved profile preserves the old `style === "deepseek"` check: an
-  // entry that explicitly picks `none`/`qwen`/`openai`/a custom profile against
-  // api.deepseek.com has opted out of that dialect, and must keep getting
-  // `tool_choice` — dropping the gate silently removed that escape hatch.
-  return p === REASONING_PRESETS.deepseek && isDeepSeekCloudHost(cfg.baseUrl);
+  // The host heuristic applies ONLY to the DeepSeek cloud dialect, preserving
+  // the old `style === "deepseek"` gate: an entry that picks another dialect
+  // against api.deepseek.com has opted out and must keep getting `tool_choice`.
+  //
+  // Keyed on HOW the dialect was chosen, not on object identity — comparing
+  // against the shared preset would treat an equivalent hand-written profile as
+  // a different dialect purely because it is a different object.
+  return usesCloudDeepseekDialect(cfg) && isDeepSeekCloudHost(cfg.baseUrl);
+}
+
+/** True when this entry is on DeepSeek's cloud dialect: either it named the
+ *  `deepseek` preset, or it declared nothing and auto-detection chose it. A
+ *  custom profile is deliberately excluded — it has full control and should say
+ *  `omitToolChoice` outright rather than inherit a vendor quirk by resemblance. */
+function usesCloudDeepseekDialect(cfg: IOpenAICompatibleConfig): boolean {
+  const declared = cfg.reasoning;
+
+  if (declared === undefined) {
+    return autoPreset(cfg) === "deepseek";
+  }
+
+  return declared === "deepseek";
 }
 
 /** Normalize the optional `guidedDecoding` override — tolerates a stringified
