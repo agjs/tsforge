@@ -4,7 +4,7 @@ import { applyEdits } from "../../files/edit";
 import type { EditsResult } from "../../files/files.types";
 import { applyCreate } from "../../files/create";
 import { EDIT_FAIL_REASON } from "../../files";
-import { normalizeWorkspacePath, insideWorkspace } from "../../lib/scope";
+import { normalizeWorkspacePath } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
@@ -473,48 +473,6 @@ export function isLongRunningServerCommand(command: string): boolean {
     .some((segment) => segmentIsServer(segment));
 }
 
-interface IProjectWrite {
-  path: string;
-  writable: boolean;
-}
-
-/**
- * The first shell redirect target that must not be written: one in the editable
- * scope (write-guard bypass) or an EXISTING file inside the workspace that is out
- * of scope. Null when every target is outside the workspace or is a new file the
- * shell may legitimately create.
- *
- * BEST-EFFORT STEERING, NOT A CONTAINMENT BOUNDARY. It reads redirect targets out
- * of the command text, and command text cannot be resolved without running it:
- * `> "$f"` resolves at runtime, `> "a file.ts"` and `> a\ file.ts` carry the
- * separator the scanner splits on, and `sed -i` / `cp` / `tee` / any script writes
- * without a redirect at all. Its job is to stop the model reaching for
- * `cat > src/foo.ts` out of edit-tool friction, and to close the easy overwrite of
- * an out-of-scope file — not to sandbox the shell. What actually bounds `run` is
- * the policy layer; see audit findings F16 and F22.
- */
-async function findProjectWrite(
-  command: string,
-  ctx: IToolContext
-): Promise<IProjectWrite | null> {
-  for (const target of shellWriteTargets(command)) {
-    const resolved = resolveWritable(ctx, target);
-
-    if (!insideWorkspace(resolved.path)) {
-      continue;
-    }
-
-    if (
-      resolved.writable ||
-      (await Bun.file(join(ctx.cwd, resolved.path)).exists())
-    ) {
-      return { path: resolved.path, writable: resolved.writable };
-    }
-  }
-
-  return null;
-}
-
 export async function runShell(
   args: Record<string, unknown>,
   ctx: IToolContext
@@ -538,25 +496,23 @@ export async function runShell(
     );
   }
 
-  // Refuse a shell redirect/tee that writes an EXISTING project file, or any file
-  // in the editable scope. Two distinct holes: an in-scope target bypasses the
-  // write-guard (no per-file type/lint feedback → errors pile to the gate) and
-  // hashline snapshots, and an existing out-of-scope one bypasses the scope itself
-  // — `edit secret.ts` is refused while `echo x > secret.ts` used to overwrite it.
-  // Creating a NEW out-of-scope file is still allowed: markers, build artifacts and
-  // logs are legitimate shell output, and a task may run with no editable scope at
-  // all. Targets outside the workspace (/tmp) stay allowed too — `run` is
-  // deliberately a shell, and its reach beyond the workspace is the policy layer's
-  // concern, not the scope's.
-  const projectWrite = await findProjectWrite(r.command, ctx);
+  // Refuse a shell redirect/tee that WRITES an in-scope project file. The model
+  // reaches for `cat > src/foo.tsx << EOF` to escape edit-tool friction, but that
+  // bypasses the write-guard (no per-file type/lint feedback → errors pile to the
+  // gate), the scope check, and hashline snapshots. Steer it back to create/edit —
+  // `create` can now fully overwrite a file the model authored this session, so
+  // this closes the hole WITHOUT trapping it. /tmp + out-of-scope targets are fine.
+  // Resolved through resolveWritable so the target is normalized first, exactly as
+  // the edit tools do it.
+  const scopedWrite = shellWriteTargets(r.command)
+    .map((target) => resolveWritable(ctx, target))
+    .find((resolved) => resolved.writable);
 
-  if (projectWrite !== null) {
+  if (scopedWrite !== undefined) {
     return reject(
       ctx,
       "run:shell-write",
-      projectWrite.writable
-        ? `run ${r.command} REJECTED: writing a project file via a shell redirect (\`> ${projectWrite.path}\`) bypasses the type/lint guard and scope checks. Use \`create\` to write or fully rewrite ${projectWrite.path} (it overwrites a file you created this session), or \`edit\`/\`edit_lines\` for targeted changes — those get checked the instant you write.`
-        : `run ${r.command} REJECTED: \`> ${projectWrite.path}\` writes a project file that is OUTSIDE your editable scope. You may only edit/create: ${ctx.files.join(", ")}. A shell redirect is not a way around the scope.`
+      `run ${r.command} REJECTED: writing a project file via a shell redirect (\`> ${scopedWrite.path}\`) bypasses the type/lint guard and scope checks. Use \`create\` to write or fully rewrite ${scopedWrite.path} (it overwrites a file you created this session), or \`edit\`/\`edit_lines\` for targeted changes — those get checked the instant you write.`
     );
   }
 
