@@ -32,24 +32,45 @@ export function latchesThinking(cfg: IOpenAICompatibleConfig): boolean {
   return profile(cfg).latchThinking === true;
 }
 
-/** Resolve the endpoint's reasoning profile: an explicit object wins, a preset
- *  name expands, and an absent value falls back to auto-detection. */
-export function profile(cfg: IOpenAICompatibleConfig): IReasoningProfile {
+/** The resolved profile AND whether it is DeepSeek's cloud dialect. These are
+ *  returned together deliberately: computed separately they drifted, and an
+ *  entry could end up with cloud thinking fields while still being sent
+ *  `tool_choice` — which that endpoint rejects. */
+function resolve(cfg: IOpenAICompatibleConfig): {
+  profile: IReasoningProfile;
+  cloudDialect: boolean;
+} {
   const declared = cfg.reasoning;
 
   if (isReasoningStyle(declared)) {
-    return REASONING_PRESETS[declared];
+    return {
+      profile: REASONING_PRESETS[declared],
+      cloudDialect: declared === "deepseek",
+    };
   }
 
+  // A custom profile is never treated as the cloud dialect by resemblance: it
+  // has full control and should declare `omitToolChoice` outright.
   if (isReasoningProfile(declared)) {
-    return declared;
+    return { profile: declared, cloudDialect: false };
   }
 
   // Anything else — undefined, JSON `null`, a typo'd preset name, a malformed
   // object — falls back to auto-detection. models-config rejects these loudly
   // at load; this is the last line of defence so a hand-edited registry cannot
   // crash a live turn (JSON null is NOT undefined and used to throw here).
-  return REASONING_PRESETS[autoPreset(cfg)];
+  const auto = autoPreset(cfg);
+
+  return {
+    profile: REASONING_PRESETS[auto],
+    cloudDialect: auto === "deepseek",
+  };
+}
+
+/** Resolve the endpoint's reasoning profile: an explicit object wins, a preset
+ *  name expands, and anything else falls back to auto-detection. */
+export function profile(cfg: IOpenAICompatibleConfig): IReasoningProfile {
+  return resolve(cfg).profile;
 }
 
 /** Best-effort preset for an entry that declared nothing. Only a convenience:
@@ -181,34 +202,18 @@ function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
     return !override;
   }
 
-  const declared = profile(cfg).omitToolChoice;
+  const { profile: p, cloudDialect } = resolve(cfg);
 
-  if (declared !== undefined) {
-    return declared;
+  if (p.omitToolChoice !== undefined) {
+    return p.omitToolChoice;
   }
 
   // The host heuristic applies ONLY to the DeepSeek cloud dialect, preserving
   // the old `style === "deepseek"` gate: an entry that picks another dialect
   // against api.deepseek.com has opted out and must keep getting `tool_choice`.
-  //
-  // Keyed on HOW the dialect was chosen, not on object identity — comparing
-  // against the shared preset would treat an equivalent hand-written profile as
-  // a different dialect purely because it is a different object.
-  return usesCloudDeepseekDialect(cfg) && isDeepSeekCloudHost(cfg.baseUrl);
-}
-
-/** True when this entry is on DeepSeek's cloud dialect: either it named the
- *  `deepseek` preset, or it declared nothing and auto-detection chose it. A
- *  custom profile is deliberately excluded — it has full control and should say
- *  `omitToolChoice` outright rather than inherit a vendor quirk by resemblance. */
-function usesCloudDeepseekDialect(cfg: IOpenAICompatibleConfig): boolean {
-  const declared = cfg.reasoning;
-
-  if (declared === undefined) {
-    return autoPreset(cfg) === "deepseek";
-  }
-
-  return declared === "deepseek";
+  // `cloudDialect` comes from the same resolution as the profile, so a request
+  // can never carry cloud thinking fields while also sending `tool_choice`.
+  return cloudDialect && isDeepSeekCloudHost(cfg.baseUrl);
 }
 
 /** Normalize the optional `guidedDecoding` override — tolerates a stringified
@@ -263,7 +268,9 @@ function isPrivateHost(baseUrl: string): boolean {
   let host: string;
 
   try {
-    host = new URL(withScheme).hostname.toLowerCase();
+    // A fully-qualified name may carry a trailing root dot (`localhost.`,
+    // `spark2.lan.`); it is the same host, so normalize it away before matching.
+    host = new URL(withScheme).hostname.toLowerCase().replace(/\.$/u, "");
   } catch {
     return false;
   }

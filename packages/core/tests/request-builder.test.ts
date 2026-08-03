@@ -791,3 +791,74 @@ describe("buildRequestBody: isolation and documented host cases", () => {
     expect(b.tool_choice).toBeUndefined();
   });
 });
+
+describe("buildRequestBody: malformed reasoning on the DeepSeek cloud host", () => {
+  const cloud = {
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-v4-pro",
+  };
+
+  test.each([
+    [null, "null"],
+    ["qwne", "a typo'd preset"],
+    [{ budegt: "x" }, "a malformed profile"],
+  ])(
+    "a bad reasoning value (%s) resolves to the cloud dialect CONSISTENTLY",
+    (bad) => {
+      // The fallback used to disagree with the tool_choice gate: the request
+      // got cloud thinking fields AND tool_choice, which that endpoint rejects.
+      const raw: Record<string, unknown> = { ...cloud, reasoning: bad };
+      const b = buildRequestBody(
+        { ...cfg(), ...raw },
+        MSGS,
+        { enableThinking: true, tools: [{}], toolChoice: "required" },
+        false
+      );
+
+      // cloud thinking shape...
+      expect(b.thinking).toEqual({ type: "enabled" });
+      // ...so tool_choice MUST be omitted, not sent.
+      expect(b.tool_choice).toBeUndefined();
+      expect(b.tools).toBeDefined();
+    }
+  );
+
+  test("the same fallback also latches thinking and replays reasoning", () => {
+    const raw: Record<string, unknown> = { ...cloud, reasoning: null };
+    const merged = { ...cfg(), ...raw };
+
+    expect(latchesThinking(merged)).toBe(true);
+
+    const b = buildRequestBody(
+      merged,
+      [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "a", reasoningContent: "thought" },
+      ],
+      {},
+      false
+    );
+
+    expect(JSON.stringify(b.messages)).toContain(
+      '"reasoning_content":"thought"'
+    );
+  });
+});
+
+describe("buildRequestBody: fully-qualified hostnames", () => {
+  test.each([
+    ["http://localhost.:8000/v1"],
+    ["http://spark2.lan.:8888/v1"],
+    ["http://box.internal.:8000/v1"],
+  ])("a trailing root dot in %s is still private", (baseUrl) => {
+    // `localhost.` is the same host as `localhost`; failing to normalize it
+    // silently selected the cloud dialect for a local runtime.
+    const b = body(
+      { baseUrl, model: "deepseek-v4-flash" },
+      { enableThinking: false }
+    );
+
+    expect(b.chat_template_kwargs).toEqual({ thinking: false });
+    expect(b.thinking).toBeUndefined();
+  });
+});
