@@ -3,9 +3,12 @@ import { RULE_PACKS } from "../src/rule-packs";
 import {
   resolveProfileRuleOverrides,
   PROFILE_DEFINITIONS,
+  PROFILE_IDS,
   STRUCTURE_RULES,
+  isProfileId,
   type IProfileDefinition,
 } from "../src/config/profiles";
+import { cliUsage, profileFlagError } from "../src/cli/args";
 
 // Strict-by-default: the layout-AGNOSTIC best practices (no-inline-jsx-functions,
 // forwardref-display-name) must NOT be disabled in the default profiles — only the
@@ -211,6 +214,55 @@ describe("no profile silently weakens its pack's rules", () => {
         key,
         stillRelaxed: true,
       });
+    }
+  });
+});
+
+// F21: `frontend` was removed because its only distinguishing content was a
+// relaxation — it downgraded two React rules that `recommended` leaves at error, so
+// the profile you would pick FOR a React app was the weaker one. Without a
+// regression here, deleting it from the type is undone by anyone re-adding it, and
+// the audit decision lives only in a commit message.
+describe("the profile set is the authoritative list", () => {
+  test("is exactly the five intended ids", () => {
+    expect([...PROFILE_IDS].sort()).toEqual([
+      "backend",
+      "opinionated",
+      "recommended",
+      "security",
+      "strict",
+    ]);
+    // The runtime table and the exported id list cannot drift apart.
+    expect([...PROFILE_IDS].sort()).toEqual(
+      Object.keys(PROFILE_DEFINITIONS).sort()
+    );
+  });
+
+  test("rejects `frontend` as a profile id", () => {
+    expect(isProfileId("frontend")).toBe(false);
+    expect(PROFILE_IDS).not.toContain("frontend");
+  });
+
+  // The valid-id list used to be hand-maintained in three places, which is exactly
+  // what goes stale when a profile is added or removed. These assert the strings are
+  // DERIVED, so a hardcoded copy fails rather than quietly lying to the user.
+  test("--help lists the ids from the same source", () => {
+    const usage = cliUsage();
+
+    for (const id of PROFILE_IDS) {
+      expect(usage).toContain(id);
+    }
+
+    expect(usage).not.toContain("frontend");
+  });
+
+  test("the unknown-profile error lists the ids from the same source", () => {
+    const message = profileFlagError("frontend", true) ?? "";
+
+    expect(message).toContain('unknown --profile "frontend"');
+
+    for (const id of PROFILE_IDS) {
+      expect(message).toContain(id);
     }
   });
 });
