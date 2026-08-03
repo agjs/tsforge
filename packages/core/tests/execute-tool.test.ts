@@ -797,7 +797,7 @@ test("ask_user in an unattended run returns proceed-with-judgment (never hangs)"
 // pinned here: an in-scope file addressed absolutely or as "./x" is ACCEPTED (the
 // globs are workspace-relative), and a "../" escape is still REJECTED — normalizing
 // must not become a way out of the workspace.
-describe("the shared scope boundary holds for every write path", () => {
+describe("resolveWritable behaves identically at every call site", () => {
   async function attempt(
     call: { name: string; arguments: Record<string, unknown> },
     scope: string[] = ["impl.ts"]
@@ -908,10 +908,13 @@ describe("the shared scope boundary holds for every write path", () => {
     }
   });
 
-  test("run's shell-write check sees through an absolute or ./ redirect", async () => {
-    // The `run` call site resolves shell redirect targets through the same helper:
-    // an in-scope file must be steered back to create/edit however it is spelled,
-    // or a redirect becomes a way around the write guard and the scope check.
+  test("run steers an in-scope redirect back to the edit tools, however spelled", async () => {
+    // NOTE what this does and does not guarantee. `run` is deliberately a shell:
+    // its resolveWritable call exists to stop the model writing PROJECT files via
+    // a redirect (which would skip the write guard, the per-file lint feedback and
+    // hashline snapshots), NOT to sandbox the shell. Out-of-scope and traversal
+    // targets execute — see the test below. The reach of `run` is governed by the
+    // policy layer, not by the editable scope.
     for (const target of ["impl.ts", "./impl.ts", "<abs>impl.ts"]) {
       const dir = await mkdtemp(join(tmpdir(), "tsforge-scope-"));
 
@@ -939,7 +942,28 @@ describe("the shared scope boundary holds for every write path", () => {
     }
   });
 
-  test("no write path lets a traversal path escape the workspace", async () => {
+  // The edit TOOLS are the scope boundary. `run` is not one of them, and pretending
+  // otherwise in a test would misrepresent where the boundary actually is.
+  test("run's shell is NOT bounded by the editable scope (documented behavior)", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "tsforge-runreach-"));
+    const dir = join(parent, "ws");
+
+    await mkdir(dir, { recursive: true });
+
+    try {
+      const out = await executeTool(
+        { name: "run", arguments: { command: "echo pwned > ../escaped.ts" } },
+        ctx(dir, ["impl.ts"])
+      );
+
+      expect(out).not.toContain("REJECTED");
+      expect(await Bun.file(join(parent, "escaped.ts")).exists()).toBe(true);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("no EDIT TOOL lets a traversal path escape the workspace", async () => {
     // The sibling must EXIST and be genuinely editable, in a parent of our own:
     // against a nonexistent target every tool rejects for its own unrelated
     // reason (missing file, missing hashline anchor) and "nothing was written" is
