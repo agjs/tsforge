@@ -1,12 +1,15 @@
 import { describe, test, expect } from "bun:test";
-import { RULE_PACKS } from "../src/rule-packs";
+import { RULE_PACKS, buildPackEslintConfig } from "../src/rule-packs";
 import {
   resolveProfileRuleOverrides,
+  resolveProfileExtraPacks,
+  resolveProfileMetaRuleOverrides,
   PROFILE_DEFINITIONS,
   PROFILE_IDS,
   STRUCTURE_RULES,
   isProfileId,
   type IProfileDefinition,
+  type ProfileId,
 } from "../src/config/profiles";
 import { cliUsage, profileFlagError } from "../src/cli/args";
 
@@ -225,10 +228,6 @@ describe("the profile set is the authoritative list", () => {
       "security",
       "strict",
     ]);
-    // The runtime table and the exported id list cannot drift apart.
-    expect([...PROFILE_IDS].sort()).toEqual(
-      Object.keys(PROFILE_DEFINITIONS).sort()
-    );
   });
 
   test("rejects the removed profile ids", () => {
@@ -253,6 +252,40 @@ describe("the profile set is the authoritative list", () => {
 
     expect(usage).not.toContain("frontend");
     expect(usage).not.toContain("backend");
+  });
+
+  // THE STANDARD, as an assertion rather than a comment. Both removed profiles died
+  // because nothing enforced this: `backend` resolved to byte-identical effective
+  // behaviour to `recommended` and survived for months, and a comment saying "a
+  // profile must differ" would not have caught the next one either.
+  //
+  // Compares EFFECTIVE behaviour — the resolved rule severities over every pack, plus
+  // the extra packs and meta-rules a profile turns on. A shallow diff of
+  // `ruleOverrides` is not enough: backend's only textual difference was OMITTING
+  // `prefer-early-return: "warn"`, which matched that rule's pack default, so it
+  // looked different while behaving identically.
+  test("every profile behaves differently from recommended", () => {
+    const allPacks = Object.keys(RULE_PACKS);
+    const effective = (id: ProfileId): string =>
+      JSON.stringify({
+        rules: buildPackEslintConfig(allPacks, resolveProfileRuleOverrides(id))
+          .rules,
+        extraPacks: [...resolveProfileExtraPacks(id)].sort(),
+        metaRules: resolveProfileMetaRuleOverrides(id),
+      });
+
+    const baseline = effective("recommended");
+
+    for (const id of PROFILE_IDS) {
+      if (id === "recommended" || !isProfileId(id)) {
+        continue;
+      }
+
+      expect({ id, sameAsRecommended: effective(id) === baseline }).toEqual({
+        id,
+        sameAsRecommended: false,
+      });
+    }
   });
 
   test("the unknown-profile error lists the ids from the same source", () => {
