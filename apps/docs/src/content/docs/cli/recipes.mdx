@@ -54,7 +54,7 @@ A project recipe **overrides** a global one with the same id. `tsforge recipes` 
 | `withReview` | `--with-review` | after green, run the review and feed verified findings into one repair cycle |
 | `mode` | `--greenfield` | `"greenfield"` selects the [feature-checklist build loop](/loop/greenfield/) |
 | `plannerModel`, `workModel`, `evaluatorModel` | greenfield roles | per-role model names; each falls back to `model`/active |
-| `profile` | `tsforge.config.json` `profile` | `recommended`, `strict`, `security`, `frontend`, `backend`, `opinionated` |
+| `profile` | `tsforge.config.json` `profile` | `recommended`, `strict`, `security`, `backend`, `opinionated` |
 | `agents` | `tsforge agents <ids>` | agent spec ids to fan out over the task. Resolved from `.tsforge/agents/` (project) and `~/.tsforge/agents/` (global, project wins) |
 | `web`, `plan`, `log`, `strictFloorOnly` | the matching flags | booleans |
 

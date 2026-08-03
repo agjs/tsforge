@@ -16,7 +16,6 @@ test("default profiles keep quality rules ON and only disable STRUCTURE rules", 
     "recommended",
     "strict",
     "security",
-    "frontend",
     "backend",
   ] as const) {
     const overrides = resolveProfileRuleOverrides(profile);
@@ -79,7 +78,6 @@ const NON_OPINIONATED_PROFILES = [
   "recommended",
   "strict",
   "security",
-  "frontend",
   "backend",
 ] as const;
 

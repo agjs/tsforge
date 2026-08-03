@@ -7,7 +7,6 @@ Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` t
 - **recommended**: Safety + framework packs from stack detection; architecture opinions off by default.
 - **strict**: Recommended plus CI/supply-chain meta-rules at error and type-aware async rules.
 - **security**: Recommended plus runtime-boundaries and experimental authorization heuristics.
-- **frontend**: Recommended, scoped to frontend work; React/Next rules keep their pack severities.
 - **backend**: Recommended; stack detection adds Fastify/Elysia/Drizzle/BullMQ packs.
 - **opinionated**: Full house-style architecture rules including component folder structure.
 

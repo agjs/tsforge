@@ -11,7 +11,7 @@ Add **`tsforge.config.json`** at your repo root when you want to override what t
 
 | Field | Type | Purpose |
 | --- | --- | --- |
-| `profile` | string | Rule preset: `recommended` (default), `strict`, `security`, `frontend`, `backend`, `opinionated` |
+| `profile` | string | Rule preset: `recommended` (default), `strict`, `security`, `backend`, `opinionated` |
 | `stack` | string | Force-enable a stack and its packs |
 | `packs.include` | string[] | Add packs after detection |
 | `packs.exclude` | string[] | Remove packs after detection |
@@ -35,7 +35,6 @@ Profiles control which **extra packs** load and which **default severities** app
 | `recommended` | Safety + always-on packs + stack-detected framework packs. Architecture opinions **off**. |
 | `strict` | `recommended` + `typescript-core` pack, CI/supply-chain meta-rules at **error**, optional type-aware async ESLint when `tsconfig.json` exists |
 | `security` | `recommended` + experimental **`authorization`** heuristics (mutating routes/actions without authz calls) |
-| `frontend` | `recommended` with React/Next effect and image rules at **warn** |
 | `backend` | `recommended`. Stack detection adds Fastify/Elysia/Drizzle/BullMQ as usual |
 | `opinionated` | Full house-style architecture rules (component folder structure, hooks layout, early returns at **error**) |
 

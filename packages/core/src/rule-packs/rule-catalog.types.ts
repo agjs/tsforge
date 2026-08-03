@@ -13,9 +13,4 @@ export interface IRuleCatalogEntry {
 }
 
 export type ProfileId =
-  | "recommended"
-  | "strict"
-  | "security"
-  | "frontend"
-  | "backend"
-  | "opinionated";
+  "recommended" | "strict" | "security" | "backend" | "opinionated";
