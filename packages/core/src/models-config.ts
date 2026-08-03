@@ -55,8 +55,8 @@ export interface IModelEntry {
   /** Reasoning effort for `deepseek`/`deepseek-local`/`openai` styles. */
   reasoningEffort?: "low" | "medium" | "high";
   /** OPTIONAL override for guided-decoding (structured tool-call) support.
-   *  Normally leave unset — it's auto-detected per endpoint (local on, DeepSeek
-   *  cloud off). Set true/false only to correct a misdetection. */
+   *  Normally leave unset — whether `tool_choice` is sent comes from the reasoning
+   *  profile's `omitToolChoice`. Set true/false to force it either way. */
   guidedDecoding?: boolean;
   /** Arbitrary fields merged into the request body (override built-ins) — the
    *  escape hatch for any provider-specific param. */

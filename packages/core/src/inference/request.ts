@@ -257,7 +257,7 @@ function isPrivateHost(baseUrl: string): boolean {
     return true;
   }
 
-  if (/\.(local|lan|internal|home|localdomain)$/u.test(host)) {
+  if (/\.(local|lan|internal|home|localdomain|localhost)$/u.test(host)) {
     return true;
   }
 

@@ -158,9 +158,10 @@ export interface IOpenAICompatibleConfig {
   reasoningEffort?: "low" | "medium" | "high";
   /**
    * OPTIONAL override for guided-decoding (structured tool-call) support. Normally
-   * unset: the harness auto-detects it — every local/self-hosted endpoint sends
-   * `tool_choice`, and only DeepSeek's CLOUD thinking API (api.deepseek.com), which
-   * 400s on it, is suppressed. Set `true`/`false` only to override a misdetection.
+   * unset: whether `tool_choice` is sent is declared by the resolved reasoning
+   * profile's `omitToolChoice` (the `deepseek` cloud preset sets it, because that
+   * API 400s on an explicit one). Set `true`/`false` to force the decision either
+   * way regardless of the profile.
    */
   guidedDecoding?: boolean;
   /** Arbitrary fields merged into the request body LAST (override anything above) —

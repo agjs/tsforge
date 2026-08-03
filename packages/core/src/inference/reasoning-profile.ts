@@ -37,9 +37,10 @@ export interface IReasoningProfile {
   tokenCap?: string;
   /** Never send `temperature` (OpenAI o-series rejects it outright). */
   omitTemperature?: boolean;
-  /** Never send `tool_choice`. Omitting it auto-detects from the host, but ONLY
-   *  for the `deepseek` preset and for auto-detection — a custom profile should
-   *  state this outright rather than inherit a vendor quirk by resemblance. */
+  /** Never send `tool_choice`. There is no host fallback: a profile pointed at
+   *  DeepSeek's cloud API must set this, or the call 400s on any turn with
+   *  tools. The `deepseek` preset sets it, so the name and a copy of it behave
+   *  the same. */
   omitToolChoice?: boolean;
   /** Replay each prior assistant turn's `reasoning_content`. DeepSeek's cloud
    *  thinking API 400s without it; nothing else wants it. */
@@ -187,23 +188,52 @@ export function isReasoningProfile(value: unknown): value is IReasoningProfile {
     return false;
   }
 
-  const declared: string[] = [];
+  if (!hasValidWireFlag(value) || !hasValidFlags(value)) {
+    return false;
+  }
+
+  const paths = collectPaths(value);
+
+  return paths !== null && !anyOverlap(paths);
+}
+
+/** The `thinking` member, when present, must be a wire flag with a safe path and
+ *  no stray keys — `onValu` would otherwise validate and silently fall back to
+ *  the default `true`. */
+function hasValidWireFlag(value: Record<string, unknown>): boolean {
   const flag = value.thinking;
 
-  if (flag !== undefined) {
-    if (!isPlainObject(flag) || typeof flag.path !== "string") {
-      return false;
-    }
+  if (flag === undefined) {
+    return true;
+  }
 
-    if (!Object.keys(flag).every((k) => WIRE_FLAG_KEYS.has(k))) {
-      return false;
-    }
+  return (
+    isPlainObject(flag) &&
+    typeof flag.path === "string" &&
+    isSafePath(flag.path) &&
+    Object.keys(flag).every((k) => WIRE_FLAG_KEYS.has(k))
+  );
+}
 
-    if (!isSafePath(flag.path)) {
-      return false;
-    }
+/** Every boolean member must actually be a boolean. */
+function hasValidFlags(value: Record<string, unknown>): boolean {
+  return FLAG_KEYS.every((key) => {
+    const v = value[key];
 
-    declared.push(flag.path);
+    return v === undefined || typeof v === "boolean";
+  });
+}
+
+/** Every path this profile will write, or null if any is malformed. Includes
+ *  the DEFAULT token cap when unset, because it is written regardless — without
+ *  it `{ "effort": "max_tokens" }` validates and then overwrites the output
+ *  limit with an effort string. */
+function collectPaths(value: Record<string, unknown>): string[] | null {
+  const paths: string[] = [];
+  const flag = value.thinking;
+
+  if (isPlainObject(flag) && typeof flag.path === "string") {
+    paths.push(flag.path);
   }
 
   for (const key of PATH_KEYS) {
@@ -214,38 +244,24 @@ export function isReasoningProfile(value: unknown): value is IReasoningProfile {
     }
 
     if (typeof path !== "string" || !isSafePath(path)) {
-      return false;
+      return null;
     }
 
-    declared.push(path);
+    paths.push(path);
   }
 
-  // The token cap is ALWAYS written, at its default when unset, so it has to
-  // take part in the overlap check even when the profile never mentions it.
-  // Otherwise `{ "effort": "max_tokens" }` validates and then overwrites the
-  // output limit with an effort string — the same clobber the guard exists for.
   if (value.tokenCap === undefined) {
-    declared.push(DEFAULT_TOKEN_CAP);
+    paths.push(DEFAULT_TOKEN_CAP);
   }
 
-  // Two controls writing to overlapping paths would clobber each other.
-  if (
-    declared.some((a, i) =>
-      declared.slice(i + 1).some((b) => pathsOverlap(a, b))
-    )
-  ) {
-    return false;
-  }
+  return paths;
+}
 
-  for (const key of FLAG_KEYS) {
-    const v = value[key];
-
-    if (v !== undefined && typeof v !== "boolean") {
-      return false;
-    }
-  }
-
-  return true;
+/** True when any two paths would clobber each other. */
+function anyOverlap(paths: string[]): boolean {
+  return paths.some((a, i) =>
+    paths.slice(i + 1).some((b) => pathsOverlap(a, b))
+  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

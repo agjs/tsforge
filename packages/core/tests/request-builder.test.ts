@@ -146,6 +146,8 @@ describe("buildRequestBody: reasoning styles", () => {
     ["http://172.16.4.9:8000/v1"],
     ["http://169.254.7.7:8000/v1"],
     ["http://spark2.lan:8888/v1"],
+    // RFC 6761 reserves the whole .localhost namespace for loopback.
+    ["http://deepseek.localhost:8000/v1"],
     // IPv6: URL.hostname KEEPS the brackets, so these only pass if stripped.
     ["http://[::1]:8000/v1"],
     ["http://[fd12:3456::1]:8000/v1"],
