@@ -1,3 +1,11 @@
+import type { IReasoningProfile, ReasoningStyle } from "./reasoning-profile";
+
+export type {
+  IReasoningProfile,
+  IWireFlag,
+  ReasoningStyle,
+} from "./reasoning-profile";
+
 export type Role = "system" | "user" | "assistant" | "tool";
 
 export interface IChatMessage {
@@ -137,19 +145,16 @@ export interface IOpenAICompatibleConfig {
    */
   repetitionPenalty?: number;
   /**
-   * How this provider wants reasoning/thinking expressed on the wire:
-   *  - `qwen` (default): `chat_template_kwargs.enable_thinking` + `thinking_token_budget` (vLLM).
-   *  - `deepseek`: top-level `thinking: { type }` + `reasoning_effort`; `tool_choice`
-   *    is suppressed ONLY on the DeepSeek CLOUD host (api.deepseek.com), which 400s
-   *    on it — a local/self-hosted DeepSeek still gets it.
-   *  - `vllm`: `chat_template_kwargs.thinking` + `reasoning_effort` — a self-hosted
-   *    vLLM IGNORES the `deepseek` dialect's `thinking: { type }`, so the two cannot
-   *    share a style. Auto-detected for a "deepseek" model on a private address.
-   *  - `openai`: `reasoning_effort`; uses `max_completion_tokens` and omits `temperature` (o-series).
-   *  - `none`: no reasoning fields.
+   * How this endpoint expresses reasoning on the wire. Either a preset NAME for
+   * a common case (`qwen` | `deepseek` | `deepseek-local` | `openai` | `none`)
+   * or a full `IReasoningProfile` declaring the field paths itself — the latter
+   * is what makes an arbitrary model supportable by config rather than by a code
+   * change. Omitted → best-effort auto-detection from the url/model.
+   *
+   * See `reasoning-profile.ts` for the shape and what each preset expands to.
    */
-  reasoning?: ReasoningStyle;
-  /** Reasoning effort for `deepseek`/`openai` styles (maps to `reasoning_effort`). */
+  reasoning?: ReasoningStyle | IReasoningProfile;
+  /** Reasoning effort for `deepseek`/`deepseek-local`/`openai` styles (maps to `reasoning_effort`). */
   reasoningEffort?: "low" | "medium" | "high";
   /**
    * OPTIONAL override for guided-decoding (structured tool-call) support. Normally
@@ -167,9 +172,3 @@ export interface IOpenAICompatibleConfig {
   /** Injectable for tests; defaults to global fetch. */
   fetch?: typeof fetch;
 }
-
-/** Provider reasoning-param dialect.
- *  `vllm` is for a self-hosted vLLM serving a reasoning checkpoint: it reads
- *  `chat_template_kwargs.thinking` and IGNORES DeepSeek cloud's `thinking:{type}`,
- *  so the two cannot share a dialect even for the same model family. */
-export type ReasoningStyle = "qwen" | "deepseek" | "vllm" | "openai" | "none";

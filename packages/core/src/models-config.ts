@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import { isRecord } from "./lib/guards";
 import { PROVIDER_DEFAULTS } from "./inference/inference.constants";
-import type { ReasoningStyle } from "./inference/inference.types";
+import type {
+  IReasoningProfile,
+  ReasoningStyle,
+} from "./inference/inference.types";
 
 /**
  * The model registry — `~/.tsforge/models.json`, the central place a user
@@ -30,16 +33,17 @@ export interface IModelEntry {
   /** Per-response token cap override. */
   maxTokens?: number;
   /** Provider reasoning dialect: how thinking/reasoning is expressed on the wire.
-   *  `qwen` (default) | `deepseek` | `vllm` | `openai` | `none`. Set `deepseek`
-   *  for DeepSeek's CLOUD API, `vllm` for a self-hosted vLLM, `openai` for OpenAI
-   *  o-series. A "deepseek" model/url auto-detects to `vllm` ONLY on a private
-   *  address (loopback / RFC1918 / link-local / .local / .lan / .internal), and
+   *  `qwen` (default) | `deepseek` | `deepseek-local` | `openai` | `none`. Set `deepseek`
+   *  for DeepSeek's CLOUD API, `deepseek-local` for a self-hosted vLLM, `openai` for OpenAI
+   *  o-series. A "deepseek" model/url auto-detects to `deepseek-local` ONLY on a private
+   *  address (loopback / RFC1918 / IPv6 ULA+link-local / .local / .lan / .internal /
+   *  .home / .localdomain), and
    *  stays `deepseek` on any public host — a public one may be a reverse proxy in
    *  front of DeepSeek cloud, which still needs the cloud dialect and its
    *  reasoning_content replay. Set it explicitly for a self-hosted endpoint that
    *  is reachable on a public address. */
-  reasoning?: ReasoningStyle;
-  /** Reasoning effort for `deepseek`/`openai` styles. */
+  reasoning?: ReasoningStyle | IReasoningProfile;
+  /** Reasoning effort for `deepseek`/`deepseek-local`/`openai` styles. */
   reasoningEffort?: "low" | "medium" | "high";
   /** OPTIONAL override for guided-decoding (structured tool-call) support.
    *  Normally leave unset — it's auto-detected per endpoint (local on, DeepSeek

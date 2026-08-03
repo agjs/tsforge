@@ -8,7 +8,7 @@ import {
   buildRequestBody,
   buildRequestHeaders,
   chatCompletionsUrl,
-  isDeepseekStyle,
+  latchesThinking,
 } from "../src/inference/request";
 
 const MSGS: IChatMessage[] = [{ role: "user", content: "hi" }];
@@ -48,33 +48,47 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.chat_template_kwargs).toBeUndefined();
   });
 
-  test("vllm emits chat_template_kwargs.thinking + reasoning_effort", () => {
+  test("deepseek-local emits chat_template_kwargs.thinking + reasoning_effort", () => {
     const b = body(
-      { reasoning: "vllm", reasoningEffort: "low" },
+      { reasoning: "deepseek-local", reasoningEffort: "low" },
       { enableThinking: true }
     );
 
     // vLLM reads `thinking` inside the template kwargs — NOT qwen's
     // `enable_thinking`, and NOT DeepSeek cloud's top-level `thinking:{type}`.
-    expect(b.chat_template_kwargs).toEqual({ thinking: true });
-    expect(b.reasoning_effort).toBe("low");
+    // Effort rides in the SAME object (upstream's server default is literally
+    // `{"thinking":true,"reasoning_effort":"low"}`), not top-level.
+    expect(b.chat_template_kwargs).toEqual({
+      thinking: true,
+      reasoning_effort: "low",
+    });
+    expect(b.reasoning_effort).toBeUndefined();
     expect(b.thinking).toBeUndefined();
   });
 
-  test("vllm can turn thinking OFF (the field vLLM actually honours)", () => {
-    const b = body({ reasoning: "vllm" }, { enableThinking: false });
+  test("deepseek-local sends effort even when thinking is not explicitly toggled", () => {
+    const b = body(
+      { reasoning: "deepseek-local", reasoningEffort: "high" },
+      {}
+    );
+
+    expect(b.chat_template_kwargs).toEqual({ reasoning_effort: "high" });
+  });
+
+  test("deepseek-local can turn thinking OFF (the field vLLM actually honours)", () => {
+    const b = body({ reasoning: "deepseek-local" }, { enableThinking: false });
 
     expect(b.chat_template_kwargs).toEqual({ thinking: false });
   });
 
-  test("vllm omits reasoning fields entirely when nothing is requested", () => {
-    const b = body({ reasoning: "vllm" }, {});
+  test("deepseek-local omits reasoning fields entirely when nothing is requested", () => {
+    const b = body({ reasoning: "deepseek-local" }, {});
 
     expect(b.chat_template_kwargs).toBeUndefined();
     expect(b.reasoning_effort).toBeUndefined();
   });
 
-  test("a LOCAL deepseek model auto-detects as vllm, not deepseek", () => {
+  test("a LOCAL deepseek model auto-detects as deepseek-local, not deepseek", () => {
     // Regression: a self-hosted DeepSeek checkpoint used to auto-detect as
     // `deepseek`, so thinking was sent as `thinking:{type}` — which vLLM accepts
     // and silently ignores. Thinking was therefore uncontrollable from config.
@@ -113,9 +127,9 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.chat_template_kwargs).toBeUndefined();
   });
 
-  test("vllm forwards thinking_token_budget (a vLLM param, like qwen)", () => {
+  test("deepseek-local forwards thinking_token_budget (a vLLM param, like qwen)", () => {
     const b = body(
-      { reasoning: "vllm" },
+      { reasoning: "deepseek-local" },
       { enableThinking: true, thinkingTokenBudget: 2048 }
     );
 
@@ -135,7 +149,7 @@ describe("buildRequestBody: reasoning styles", () => {
     ["http://[fd12:3456::1]:8000/v1"],
     ["http://[fe80::1]:8000/v1"],
     ["http://[::ffff:192.168.1.9]:8000/v1"],
-  ])("private host %s auto-detects as vllm", (baseUrl) => {
+  ])("private host %s auto-detects as deepseek-local", (baseUrl) => {
     const b = body(
       { baseUrl, model: "deepseek-v4-flash" },
       {
@@ -152,6 +166,14 @@ describe("buildRequestBody: reasoning styles", () => {
     ["https://proxy.example.com/v1"],
     ["http://8.8.8.8:8000/v1"],
     ["http://[2001:4860::8888]:8000/v1"],
+    // DNS labels that COLLIDE with the IPv6 private prefixes. The range checks
+    // must be gated on the host actually being an IPv6 literal, or these public
+    // names get misread as unique-local/link-local and silently switch dialect.
+    ["https://fda.gov/v1"],
+    ["https://fcm.example.com/v1"],
+    ["https://fd12.corp.example.com/v1"],
+    ["https://fe80.example.com/v1"],
+    ["https://feb-proxy.example.com/v1"],
   ])("public host %s stays deepseek", (baseUrl) => {
     const b = body(
       { baseUrl, model: "deepseek-v4-flash" },
@@ -164,12 +186,12 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.chat_template_kwargs).toBeUndefined();
   });
 
-  test("private deepseek is NOT deepseek-style, so thinking is never latched", () => {
+  test("a private deepseek endpoint does not latch thinking", () => {
     // The session latch (withPinnedThinking) keys off isDeepseekStyle. If a
     // private host were still classified deepseek, per-turn thinking control
     // would be silently pinned to the session's first value.
     expect(
-      isDeepseekStyle(
+      latchesThinking(
         cfg({
           baseUrl: "http://192.168.20.108:8888/v1",
           model: "deepseek-v4-flash",
@@ -178,7 +200,7 @@ describe("buildRequestBody: reasoning styles", () => {
     ).toBe(false);
 
     expect(
-      isDeepseekStyle(
+      latchesThinking(
         cfg({
           baseUrl: "https://api.deepseek.com/v1",
           model: "deepseek-v4-pro",
@@ -497,6 +519,80 @@ describe("chatCompletionsUrl", () => {
     );
     expect(chatCompletionsUrl("https://x/v1/chat/completions")).toBe(
       "https://x/v1/chat/completions"
+    );
+  });
+});
+
+describe("buildRequestBody: declarative reasoning profiles", () => {
+  // The point of the profile: a model nobody hardcoded, configured from data.
+  const custom = {
+    thinking: { path: "params.reasoning.enabled" },
+    effort: "params.reasoning.level",
+    budget: "params.reasoning.max_tokens",
+    tokenCap: "output_limit",
+  };
+
+  test("writes every declared field at its dot path, creating nesting", () => {
+    const b = body(
+      { reasoning: custom, reasoningEffort: "high", maxTokens: 4096 },
+      { enableThinking: true, thinkingTokenBudget: 512 }
+    );
+
+    expect(b.params).toEqual({
+      reasoning: { enabled: true, level: "high", max_tokens: 512 },
+    });
+    expect(b.output_limit).toBe(4096);
+    expect(b.max_tokens).toBeUndefined();
+  });
+
+  test("a control the profile omits is never sent", () => {
+    // No `thinking` path declared → the endpoint has no such toggle, so asking
+    // for thinking must produce nothing rather than a field it would ignore.
+    const b = body(
+      { reasoning: { effort: "effort" } },
+      { enableThinking: true, thinkingTokenBudget: 999 }
+    );
+
+    expect(b.thinking).toBeUndefined();
+    expect(b.chat_template_kwargs).toBeUndefined();
+    expect(b.thinking_token_budget).toBeUndefined();
+  });
+
+  test("onValue/offValue express non-boolean flags", () => {
+    const shape = {
+      thinking: {
+        path: "mode",
+        onValue: { kind: "deep" },
+        offValue: { kind: "off" },
+      },
+    };
+
+    expect(body({ reasoning: shape }, { enableThinking: true }).mode).toEqual({
+      kind: "deep",
+    });
+    expect(body({ reasoning: shape }, { enableThinking: false }).mode).toEqual({
+      kind: "off",
+    });
+  });
+
+  test("profile can declare the temperature and tool_choice quirks", () => {
+    const b = body(
+      { reasoning: { omitTemperature: true, omitToolChoice: true } },
+      { temperature: 0.5, tools: [{}], toolChoice: "required" }
+    );
+
+    expect(b.temperature).toBeUndefined();
+    expect(b.tools).toBeDefined();
+    expect(b.tool_choice).toBeUndefined();
+  });
+
+  test("presets are just profiles — deepseek still latches, custom does not", () => {
+    expect(
+      latchesThinking(cfg({ baseUrl: "https://api.deepseek.com/v1" }))
+    ).toBe(true);
+    expect(latchesThinking(cfg({ reasoning: custom }))).toBe(false);
+    expect(latchesThinking(cfg({ reasoning: { latchThinking: true } }))).toBe(
+      true
     );
   });
 });

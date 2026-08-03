@@ -2,8 +2,13 @@ import type {
   IChatMessage,
   ICompleteOptions,
   IOpenAICompatibleConfig,
-  ReasoningStyle,
 } from "./inference.types";
+import type { IReasoningProfile, ReasoningStyle } from "./reasoning-profile";
+import {
+  REASONING_PRESETS,
+  isReasoningStyle,
+  setPath,
+} from "./reasoning-profile";
 import { PROVIDER_LIMITS } from "./inference.constants";
 import { toWire } from "./wire";
 
@@ -18,18 +23,28 @@ function interpolateEnv(
   );
 }
 
-/** True when this config talks to DeepSeek's thinking API (explicit `reasoning:
- *  "deepseek"` or auto-detected from the url/model). DeepSeek 400s if thinking is
- *  toggled mid-conversation, so the provider latches one mode per session. */
-export function isDeepseekStyle(cfg: IOpenAICompatibleConfig): boolean {
-  return style(cfg) === "deepseek";
+/** True when the endpoint requires thinking pinned to the session's first value
+ *  (DeepSeek's cloud API 400s if it flips mid-conversation). Declared by the
+ *  profile, so a new endpoint with the same constraint needs no code change. */
+export function latchesThinking(cfg: IOpenAICompatibleConfig): boolean {
+  return profile(cfg).latchThinking === true;
 }
 
-function style(cfg: IOpenAICompatibleConfig): ReasoningStyle {
-  if (cfg.reasoning !== undefined) {
-    return cfg.reasoning;
+/** Resolve the endpoint's reasoning profile: an explicit object wins, a preset
+ *  name expands, and an absent value falls back to auto-detection. */
+export function profile(cfg: IOpenAICompatibleConfig): IReasoningProfile {
+  const declared = cfg.reasoning;
+
+  if (declared === undefined) {
+    return REASONING_PRESETS[autoPreset(cfg)];
   }
 
+  return isReasoningStyle(declared) ? REASONING_PRESETS[declared] : declared;
+}
+
+/** Best-effort preset for an entry that declared nothing. Only a convenience:
+ *  anything this guesses wrong is fixed by declaring `reasoning` explicitly. */
+function autoPreset(cfg: IOpenAICompatibleConfig): ReasoningStyle {
   // Auto-detect DeepSeek when not explicitly configured, so its thinking-mode
   // round-trip works out of the box: DeepSeek requires each prior assistant
   // turn's `reasoning_content` replayed, and 400s otherwise ("The
@@ -45,71 +60,45 @@ function style(cfg: IOpenAICompatibleConfig): ReasoningStyle {
     // evidence of self-hosting — a public hostname may be a reverse proxy in
     // front of DeepSeek cloud, which still needs the cloud dialect and the
     // reasoning_content replay.
-    return isPrivateHost(cfg.baseUrl) ? "vllm" : "deepseek";
+    return isPrivateHost(cfg.baseUrl) ? "deepseek-local" : "deepseek";
   }
 
   return "qwen";
 }
 
-/** Provider-specific reasoning/thinking fields for the request body. Per-call
- *  overrides (opts) take precedence over config defaults (cfg).reasoningEffort. */
+/** Write the reasoning controls the PROFILE declares. A control the profile
+ *  omits is a control the endpoint does not have, so nothing is sent for it —
+ *  that is what stops a field being accepted-and-ignored. Per-call options
+ *  override config defaults. */
 function reasoningFields(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
 ): Record<string, unknown> {
-  // Per-call reasoning effort overrides config when set.
-  const reasoningEffort = opts.reasoningEffort ?? cfg.reasoningEffort;
+  const p = profile(cfg);
+  const body: Record<string, unknown> = {};
+  const effort = opts.reasoningEffort ?? cfg.reasoningEffort;
 
-  switch (style(cfg)) {
-    case "qwen":
-      return {
-        ...(opts.enableThinking === undefined
-          ? {}
-          : { chat_template_kwargs: { enable_thinking: opts.enableThinking } }),
-        ...(opts.thinkingTokenBudget === undefined ||
-        !Number.isFinite(opts.thinkingTokenBudget)
-          ? {}
-          : { thinking_token_budget: opts.thinkingTokenBudget }),
-      };
-    case "deepseek":
-      return {
-        ...(opts.enableThinking === undefined
-          ? {}
-          : {
-              thinking: {
-                type: opts.enableThinking ? "enabled" : "disabled",
-              },
-            }),
-        ...(reasoningEffort === undefined
-          ? {}
-          : { reasoning_effort: reasoningEffort }),
-      };
-    // Self-hosted vLLM: thinking rides in the chat template kwargs, and
-    // `reasoning_effort` is read straight off the request body. Both are
-    // per-call, so the session never latches a mode.
-    case "vllm":
-      return {
-        ...(opts.enableThinking === undefined
-          ? {}
-          : { chat_template_kwargs: { thinking: opts.enableThinking } }),
-        // `thinking_token_budget` is a vLLM param, so it applies here exactly as
-        // it does for qwen — dropping it would silently disable the caller's
-        // reasoning-token cap the moment this dialect is selected.
-        ...(opts.thinkingTokenBudget === undefined ||
-        !Number.isFinite(opts.thinkingTokenBudget)
-          ? {}
-          : { thinking_token_budget: opts.thinkingTokenBudget }),
-        ...(reasoningEffort === undefined
-          ? {}
-          : { reasoning_effort: reasoningEffort }),
-      };
-    case "openai":
-      return reasoningEffort === undefined
-        ? {}
-        : { reasoning_effort: reasoningEffort };
-    case "none":
-      return {};
+  if (p.thinking !== undefined && opts.enableThinking !== undefined) {
+    const { path, onValue = true, offValue = false } = p.thinking;
+
+    setPath(body, path, opts.enableThinking ? onValue : offValue);
   }
+
+  if (p.effort !== undefined && effort !== undefined) {
+    setPath(body, p.effort, effort);
+  }
+
+  // A NaN/Infinity budget would JSON.stringify to `null`, which a server reads
+  // as an explicit choice rather than "unset".
+  if (
+    p.budget !== undefined &&
+    opts.thinkingTokenBudget !== undefined &&
+    Number.isFinite(opts.thinkingTokenBudget)
+  ) {
+    setPath(body, p.budget, opts.thinkingTokenBudget);
+  }
+
+  return body;
 }
 
 /** The output-token cap field — o-series renamed `max_tokens` → `max_completion_tokens`. */
@@ -123,9 +112,7 @@ function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, number> {
       ? configured
       : PROVIDER_LIMITS.maxTokens;
 
-  return style(cfg) === "openai"
-    ? { max_completion_tokens: max }
-    : { max_tokens: max };
+  return { [profile(cfg).tokenCap ?? "max_tokens"]: max };
 }
 
 /** The `tools` (+ `tool_choice`) request fields. `tool_choice` is sent by default
@@ -145,24 +132,29 @@ function toolsBlock(
     return {};
   }
 
-  if (style(cfg) === "deepseek" && suppressesToolChoice(cfg)) {
+  if (suppressesToolChoice(cfg)) {
     return { tools: opts.tools };
   }
 
   return { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" };
 }
 
-/** Whether to omit `tool_choice` for a deepseek-style endpoint. AUTO by default,
- *  so a normal user never configures anything: only DeepSeek's CLOUD thinking API
- *  (api.deepseek.com) 400s on an explicit `tool_choice`; a local / self-hosted
- *  DeepSeek (vLLM/SGLang/llama.cpp) accepts it and grammar-constrains the call, so
- *  it's sent. The optional `guidedDecoding` flag only exists to override a
- *  misdetection (true = always send, false = always omit). */
+/** Whether to omit `tool_choice`. Precedence: the explicit `guidedDecoding`
+ *  override, then the profile's own declaration, then auto-detection by host —
+ *  only DeepSeek's CLOUD API (api.deepseek.com) 400s on an explicit
+ *  `tool_choice`; a self-hosted endpoint accepts it and grammar-constrains the
+ *  call, so it is sent. */
 function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
   const override = guidedOverride(cfg);
 
   if (override !== undefined) {
     return !override;
+  }
+
+  const declared = profile(cfg).omitToolChoice;
+
+  if (declared !== undefined) {
+    return declared;
   }
 
   return isDeepSeekCloudHost(cfg.baseUrl);
@@ -237,10 +229,16 @@ function isPrivateHost(baseUrl: string): boolean {
   // hostname `[::1]`), so strip them before matching.
   const bare = host.replace(/^\[|\]$/gu, "");
 
+  // Gate the IPv6 range checks on the host actually BEING an IPv6 literal.
+  // Without this, `/^f[cd]/` matches DNS names like `fda.gov` or
+  // `fcm.example.com` and would wrongly mark a public proxy private.
+  const isIpv6 = bare.includes(":");
+
   if (
-    bare === "::1" || // loopback
-    /^f[cd]/u.test(bare) || // unique-local fc00::/7
-    /^fe[89ab]/u.test(bare) // link-local fe80::/10
+    isIpv6 &&
+    (bare === "::1" || // loopback
+      /^f[cd]/u.test(bare) || // unique-local fc00::/7
+      /^fe[89ab]/u.test(bare)) // link-local fe80::/10
   ) {
     return true;
   }
@@ -291,17 +289,19 @@ export function buildRequestBody(
   opts: ICompleteOptions,
   streaming: boolean
 ): Record<string, unknown> {
-  // o-series rejects `temperature` entirely; everywhere else send it only when set
-  // AND finite — a NaN/Infinity (bad config/env) would JSON.stringify to `null`,
-  // which a server reads as an explicit choice, not "unset". Drop it instead.
+  const p = profile(cfg);
+
+  // Some endpoints reject `temperature` outright; everywhere else send it only
+  // when set AND finite — a NaN/Infinity (bad config/env) would JSON.stringify
+  // to `null`, which a server reads as an explicit choice, not "unset".
   const omitTemperature =
-    style(cfg) === "openai" ||
+    p.omitTemperature === true ||
     opts.temperature === undefined ||
     !Number.isFinite(opts.temperature);
 
-  // DeepSeek's thinking mode requires each prior assistant turn's
-  // `reasoning_content` replayed; other providers don't want it.
-  const includeReasoning = style(cfg) === "deepseek";
+  // Only endpoints that declare it want each prior assistant turn's
+  // `reasoning_content` replayed (DeepSeek's cloud API 400s without it).
+  const includeReasoning = p.replayReasoning === true;
 
   return {
     model: cfg.model,

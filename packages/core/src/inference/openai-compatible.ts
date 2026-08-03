@@ -13,7 +13,7 @@ import {
   buildRequestBody,
   buildRequestHeaders,
   chatCompletionsUrl,
-  isDeepseekStyle,
+  latchesThinking,
 } from "./request";
 
 export { salvageToolCalls, salvageFusedToolName } from "./wire";
@@ -53,7 +53,7 @@ export class OpenAICompatibleProvider implements IProvider {
   /** For DeepSeek, force every turn to the session's first thinking mode (see
    *  `thinkingPinned`); a no-op for other providers. */
   private withPinnedThinking(opts: ICompleteOptions): ICompleteOptions {
-    if (!isDeepseekStyle(this.cfg)) {
+    if (!latchesThinking(this.cfg)) {
       return opts;
     }
 
