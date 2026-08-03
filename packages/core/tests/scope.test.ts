@@ -120,3 +120,34 @@ test("insideWorkspace compares path segments, not prefixes", () => {
     });
   }
 });
+
+// writable() and insideWorkspace() must apply the SAME segment rule. writable used
+// its own startsWith("..") test, which (a) made every ordinary name beginning with
+// two dots unwritable through every edit tool, and (b) because the shell-redirect
+// guard reads writable, let `run` create such a file even under a scope as broad as
+// ["**/*"] — the very bypass that guard exists to close.
+test("writable and insideWorkspace agree on what escapes the workspace", () => {
+  const CASES: readonly [string, boolean][] = [
+    // Ordinary filenames that merely begin with dots — INSIDE, so writable
+    // whenever the scope matches.
+    ["..secret.ts", true],
+    ["...rc", true],
+    ["..x", true],
+    // Real escapes and absolute paths.
+    ["../escaped.ts", false],
+    ["..", false],
+    ["a/../b.ts", false],
+    ["/etc/passwd", false],
+  ];
+
+  for (const [file, allowed] of CASES) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: allowed,
+    });
+    expect({ file, writable: writable(file, ["**/*"]) }).toEqual({
+      file,
+      writable: allowed,
+    });
+  }
+});

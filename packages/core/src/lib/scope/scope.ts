@@ -40,15 +40,24 @@ export function insideWorkspace(file: string): boolean {
     return false;
   }
 
-  return !file.split("/").includes("..");
+  // Split on BOTH separators: node:path emits `\` on Windows, and splitting only
+  // on `/` would read `..\secret.ts` as one ordinary filename — inside the
+  // workspace — and skip the guard there.
+  return !file.split(/[\\/]/u).includes("..");
 }
 
 /** A file the model may write: its editable scope, OR a throwaway scratch file.
  *  A path that escapes the workspace (`../…`) or is absolute is NEVER writable —
  *  a recursive glob would otherwise match a traversal path. Normalize with
- *  `normalizeWorkspacePath` first so this sees the workspace-relative form. */
+ *  `normalizeWorkspacePath` first so this sees the workspace-relative form.
+ *
+ *  Escape detection goes through {@link insideWorkspace} so both predicates use the
+ *  SAME segment rule. A `startsWith("..")` test here made every ordinary name
+ *  beginning with two dots (`..secret.ts`, `...rc`) unwritable through every edit
+ *  tool, and — because the shell-redirect guard reads this — let `run` create such
+ *  a file even under a scope as broad as `["**\/*"]`. */
 export function writable(file: string, patterns: string[]): boolean {
-  if (file.startsWith("..") || file.startsWith("/")) {
+  if (!insideWorkspace(file)) {
     return false;
   }
 

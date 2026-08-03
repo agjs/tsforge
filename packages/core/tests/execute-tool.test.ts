@@ -998,6 +998,51 @@ describe("resolveWritable behaves identically at every call site", () => {
     }
   });
 
+  test("a dotted-but-ordinary filename is editable, and run cannot clobber it", async () => {
+    // "..secret.ts" is a normal workspace file. The scope must govern it like any
+    // other: editable when in scope, and NOT creatable/overwritable via a shell
+    // redirect when it is not.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-dotted-"));
+
+    await Bun.write(
+      join(dir, "..secret.ts"),
+      'export const KEY = "original";\n'
+    );
+
+    try {
+      // In scope → the edit tool may change it.
+      const edited = await executeTool(
+        {
+          name: "edit",
+          arguments: {
+            file: "..secret.ts",
+            oldString: "original",
+            newString: "changed",
+          },
+        },
+        ctx(dir, ["..secret.ts"])
+      );
+
+      expect(edited).not.toContain("REJECTED");
+      expect(await Bun.file(join(dir, "..secret.ts")).text()).toContain(
+        "changed"
+      );
+
+      // Out of scope → a redirect must not overwrite it either.
+      const viaShell = await executeTool(
+        { name: "run", arguments: { command: "echo pwned > ..secret.ts" } },
+        ctx(dir, ["impl.ts"])
+      );
+
+      expect(viaShell).toContain("REJECTED");
+      expect(await Bun.file(join(dir, "..secret.ts")).text()).toContain(
+        "changed"
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // Beyond the workspace, `run` is deliberately a shell — /tmp and build logs are
   // its documented targets, and its reach there is governed by the policy layer,
   // not by the editable scope. Pinned so a change to it is a deliberate one.
