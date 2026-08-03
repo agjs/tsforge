@@ -34,6 +34,15 @@ export interface IRunRecord {
   /** Structured reason a failed run failed (from classifyRun); omitted/`none`
    *  for a passing run. The substrate for turning failures into interventions. */
   failureClass?: FailureClass;
+  /** Completion tokens the run spent. Omitted when the run errored before
+   *  producing any. Without it a sweep compares variants on pass-rate alone, so a
+   *  variant that passes slightly more often while costing several times as much
+   *  reads as a straight win. */
+  tokensOut?: number;
+  /** Completion tokens per edit that SURVIVED (`tokensOut` / net-accepted) — the
+   *  cost of one durable change rather than one attempt. Omitted when nothing was
+   *  accepted, since the ratio is undefined rather than zero. */
+  costPerAcceptedChange?: number;
 }
 
 /** Aggregated metrics for a variant across its runs. */
@@ -48,6 +57,11 @@ export interface IVariantSummary {
    *  in fewer rounds. Distinct from avgCycles, which dilutes with failed runs. */
   avgTurnsToGreen: number | null;
   avgMs: number;
+  /** Mean completion tokens per run, over runs that recorded any (0 if none).
+   *  Read next to `passRate`: a variant is only better if it is not much dearer. */
+  avgTokensOut: number;
+  /** Mean cost per surviving edit, over runs that recorded one (0 if none). */
+  avgCostPerAcceptedChange: number;
   /** Average quality across runs that were scored (0 if none). */
   avgQuality: number;
   /** Average LOC across runs that recorded it — i.e. green runs (0 if none). The

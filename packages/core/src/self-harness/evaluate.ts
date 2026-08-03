@@ -16,7 +16,13 @@ import { buildGate, buildCoreFix } from "../gate";
 import { runSpec } from "../loop";
 import type { ILoopEvent } from "../loop";
 import type { IProvider } from "../inference";
-import { classifyRun, countTaskLoc, judge, summarize } from "../eval";
+import {
+  analyzeEvents,
+  classifyRun,
+  countTaskLoc,
+  judge,
+  summarize,
+} from "../eval";
 import type { IRunRecord } from "../eval";
 import { renderEvent } from "../render";
 import { resetOverlayCache } from "./overlay";
@@ -162,10 +168,14 @@ async function runTaskOnce(
     void logFile.flush();
   };
 
+  // Real elapsed wall-clock. `ms: 0` was hardcoded here, so avgMs read 0 for
+  // every variant of every campaign while presenting as a measurement.
+  const startedAt = performance.now();
   const result = await runSpec(gated, runDir, opts.provider, {
     onEvent,
     temperature: opts.temperature ?? 0,
   });
+  const elapsedMs = Math.round(performance.now() - startedAt);
 
   await logFile.end();
 
@@ -202,13 +212,23 @@ async function runTaskOnce(
   }
 
   const failureClass = passed ? undefined : classifyRun(events).failureClass;
+  // The cost side of the comparison. analyzeEvents already derives these from the
+  // same event stream; they simply never reached the record, so a sweep could only
+  // compare variants on pass-rate and turns.
+  const metrics = analyzeEvents(events);
+  const cost =
+    metrics.costPerAcceptedChange > 0
+      ? { costPerAcceptedChange: metrics.costPerAcceptedChange }
+      : {};
 
   return {
     record: {
       label: taskId,
       passed,
       cycles,
-      ms: 0,
+      ms: elapsedMs,
+      ...(metrics.tokensOut > 0 ? { tokensOut: metrics.tokensOut } : {}),
+      ...cost,
       ...(quality === undefined ? {} : { quality }),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),

@@ -63,6 +63,31 @@ describe("eval report: buildSweepReport", () => {
     expect(md).toContain("*");
   });
 
+  test("the table carries cost next to pass-rate", () => {
+    // Cost has to be visible in the artifact a human reads, or the comparison is
+    // still pass-rate-only in practice however well the record is populated.
+    const md = renderSweepReportMarkdown(
+      buildSweepReport(
+        [
+          {
+            label: "A",
+            passed: true,
+            cycles: 2,
+            ms: 100,
+            tokensOut: 4200,
+            costPerAcceptedChange: 1400,
+          },
+        ],
+        "A"
+      )
+    );
+
+    expect(md).toContain("Tokens");
+    expect(md).toContain("Tok/change");
+    expect(md).toContain("4200");
+    expect(md).toContain("1400");
+  });
+
   test("omits comparisons when no baseline matches", () => {
     const report = buildSweepReport(records);
 

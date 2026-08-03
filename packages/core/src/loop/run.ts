@@ -703,6 +703,21 @@ async function runMainLoop(args: {
       })
     );
 
+    // Report server-reported token usage. The interactive Session path emits this,
+    // the headless one did not — so `analyzeEvents` saw zero tokens for every eval
+    // run, and the A/B sweep could only compare variants on pass-rate and turns
+    // while being blind to what they cost.
+    if (res.usage !== undefined) {
+      args.report({
+        kind: "usage",
+        task: args.taskId,
+        message: `tokens ${String(res.usage.promptTokens)} in / ${String(res.usage.completionTokens)} out`,
+        promptTokens: res.usage.promptTokens,
+        completionTokens: res.usage.completionTokens,
+        totalTokens: res.usage.totalTokens,
+      });
+    }
+
     // TTSR-aware: on a mid-stream abort this drops the partial (never-executed)
     // tool_calls so the history has no dangling `tool_calls` (strict APIs 400 otherwise).
     args.messages.push(assistantMessage(res));

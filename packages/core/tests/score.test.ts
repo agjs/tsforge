@@ -27,3 +27,49 @@ test("aggregates run records per variant label", () => {
   expect(b?.runs).toBe(1);
   expect(b?.avgTurnsToGreen).toBe(1);
 });
+
+// A sweep that cannot see cost compares variants on pass-rate and turns alone, so a
+// variant that passes slightly more often while burning several times the tokens
+// reads as a straight win. These fields are the other half of that comparison.
+test("averages cost over the runs that recorded it, not over all runs", () => {
+  const summaries = summarize([
+    { label: "a", passed: true, cycles: 2, ms: 100, tokensOut: 1000 },
+    { label: "a", passed: true, cycles: 2, ms: 100, tokensOut: 3000 },
+    // Errored before spending anything: it records no tokens, and must NOT be
+    // averaged in as a zero — that would report a variant as cheaper the more
+    // often it crashed.
+    { label: "a", passed: false, cycles: 0, ms: 0 },
+  ]);
+  const a = summaries.find((s) => s.label === "a");
+
+  expect(a?.avgTokensOut).toBe(2000);
+  expect(a?.runs).toBe(3);
+});
+
+test("averages cost-per-accepted-change independently of token totals", () => {
+  const summaries = summarize([
+    {
+      label: "a",
+      passed: true,
+      cycles: 2,
+      ms: 100,
+      tokensOut: 900,
+      costPerAcceptedChange: 300,
+    },
+    // Same tokens, nothing accepted → no ratio recorded, so it cannot drag the
+    // per-change figure toward zero.
+    { label: "a", passed: false, cycles: 5, ms: 100, tokensOut: 900 },
+  ]);
+  const a = summaries.find((s) => s.label === "a");
+
+  expect(a?.avgCostPerAcceptedChange).toBe(300);
+  expect(a?.avgTokensOut).toBe(900);
+});
+
+test("reports zero cost only when no run recorded any", () => {
+  const summaries = summarize([{ label: "a", passed: true, cycles: 1, ms: 1 }]);
+  const a = summaries.find((s) => s.label === "a");
+
+  expect(a?.avgTokensOut).toBe(0);
+  expect(a?.avgCostPerAcceptedChange).toBe(0);
+});
