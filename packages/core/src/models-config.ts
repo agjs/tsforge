@@ -30,8 +30,10 @@ export interface IModelEntry {
   /** Per-response token cap override. */
   maxTokens?: number;
   /** Provider reasoning dialect: how thinking/reasoning is expressed on the wire.
-   *  `qwen` (default) | `deepseek` | `openai` | `none`. Set `deepseek` for the
-   *  DeepSeek API, `openai` for OpenAI o-series. */
+   *  `qwen` (default) | `deepseek` | `vllm` | `openai` | `none`. Set `deepseek`
+   *  for DeepSeek's CLOUD API, `vllm` for a self-hosted vLLM, `openai` for OpenAI
+   *  o-series. A "deepseek" model/url auto-detects to `deepseek` on
+   *  *.deepseek.com and to `vllm` anywhere else. */
   reasoning?: ReasoningStyle;
   /** Reasoning effort for `deepseek`/`openai` styles. */
   reasoningEffort?: "low" | "medium" | "high";

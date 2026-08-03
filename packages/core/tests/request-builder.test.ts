@@ -47,6 +47,87 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.chat_template_kwargs).toBeUndefined();
   });
 
+  test("vllm emits chat_template_kwargs.thinking + reasoning_effort", () => {
+    const b = body(
+      { reasoning: "vllm", reasoningEffort: "low" },
+      { enableThinking: true }
+    );
+
+    // vLLM reads `thinking` inside the template kwargs — NOT qwen's
+    // `enable_thinking`, and NOT DeepSeek cloud's top-level `thinking:{type}`.
+    expect(b.chat_template_kwargs).toEqual({ thinking: true });
+    expect(b.reasoning_effort).toBe("low");
+    expect(b.thinking).toBeUndefined();
+  });
+
+  test("vllm can turn thinking OFF (the field vLLM actually honours)", () => {
+    const b = body({ reasoning: "vllm" }, { enableThinking: false });
+
+    expect(b.chat_template_kwargs).toEqual({ thinking: false });
+  });
+
+  test("vllm omits reasoning fields entirely when nothing is requested", () => {
+    const b = body({ reasoning: "vllm" }, {});
+
+    expect(b.chat_template_kwargs).toBeUndefined();
+    expect(b.reasoning_effort).toBeUndefined();
+  });
+
+  test("a LOCAL deepseek model auto-detects as vllm, not deepseek", () => {
+    // Regression: a self-hosted DeepSeek checkpoint used to auto-detect as
+    // `deepseek`, so thinking was sent as `thinking:{type}` — which vLLM accepts
+    // and silently ignores. Thinking was therefore uncontrollable from config.
+    const b = body(
+      {
+        baseUrl: "http://192.168.20.108:8888/v1",
+        model: "deepseek-v4-flash-0731",
+      },
+      { enableThinking: false }
+    );
+
+    expect(b.chat_template_kwargs).toEqual({ thinking: false });
+    expect(b.thinking).toBeUndefined();
+  });
+
+  test("a CLOUD deepseek model still auto-detects as deepseek", () => {
+    const b = body(
+      { baseUrl: "https://api.deepseek.com/v1", model: "deepseek-v4-pro" },
+      { enableThinking: false }
+    );
+
+    expect(b.thinking).toEqual({ type: "disabled" });
+    expect(b.chat_template_kwargs).toBeUndefined();
+  });
+
+  test("a PUBLIC-host deepseek model stays deepseek (may be a cloud proxy)", () => {
+    // Only a private address is evidence of self-hosting. A public hostname can
+    // be a reverse proxy in front of DeepSeek cloud, which needs the cloud
+    // dialect and the reasoning_content replay — reclassifying it would 400.
+    const b = body(
+      { baseUrl: "https://proxy.example.com/v1", model: "deepseek-pro-4" },
+      { enableThinking: false }
+    );
+
+    expect(b.thinking).toEqual({ type: "disabled" });
+    expect(b.chat_template_kwargs).toBeUndefined();
+  });
+
+  test.each([
+    ["http://localhost:8000/v1"],
+    ["http://127.0.0.1:8000/v1"],
+    ["http://192.168.20.108:8888/v1"],
+    ["http://10.0.0.5:8000/v1"],
+    ["http://172.16.4.9:8000/v1"],
+    ["http://spark2.lan:8888/v1"],
+  ])("private host %s auto-detects as vllm", (baseUrl) => {
+    const b = body({ baseUrl, model: "deepseek-v4-flash" }, {
+      enableThinking: false,
+    });
+
+    expect(b.chat_template_kwargs).toEqual({ thinking: false });
+    expect(b.thinking).toBeUndefined();
+  });
+
   test("local deepseek auto-sends tool_choice (no config — vLLM accepts it)", () => {
     const b = body(
       { reasoning: "deepseek", baseUrl: "http://localhost:8000/v1" },

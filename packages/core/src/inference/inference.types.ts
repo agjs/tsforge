@@ -165,5 +165,13 @@ export interface IOpenAICompatibleConfig {
   fetch?: typeof fetch;
 }
 
-/** Provider reasoning-param dialect. */
-export type ReasoningStyle = "qwen" | "deepseek" | "openai" | "none";
+/** Provider reasoning-param dialect.
+ *  `vllm` is for a self-hosted vLLM serving a reasoning checkpoint: it reads
+ *  `chat_template_kwargs.thinking` and IGNORES DeepSeek cloud's `thinking:{type}`,
+ *  so the two cannot share a dialect even for the same model family. */
+export type ReasoningStyle =
+  | "qwen"
+  | "deepseek"
+  | "vllm"
+  | "openai"
+  | "none";

@@ -37,7 +37,15 @@ function style(cfg: IOpenAICompatibleConfig): ReasoningStyle {
   // Without this, a DeepSeek model added with just { baseUrl, model } gets the
   // `qwen` default, which strips reasoning_content on replay → that 400.
   if (`${cfg.baseUrl} ${cfg.model}`.toLowerCase().includes("deepseek")) {
-    return "deepseek";
+    // ...but a SELF-HOSTED vLLM serving a DeepSeek checkpoint speaks a different
+    // dialect: it reads `chat_template_kwargs.thinking` and silently ignores
+    // `thinking:{type}`. Classifying it as `deepseek` makes thinking
+    // UNCONTROLLABLE (the field is accepted and does nothing) and latches it for
+    // the session. Only reclassify on a PRIVATE address, which is unambiguous
+    // evidence of self-hosting — a public hostname may be a reverse proxy in
+    // front of DeepSeek cloud, which still needs the cloud dialect and the
+    // reasoning_content replay.
+    return isPrivateHost(cfg.baseUrl) ? "vllm" : "deepseek";
   }
 
   return "qwen";
@@ -72,6 +80,18 @@ function reasoningFields(
                 type: opts.enableThinking ? "enabled" : "disabled",
               },
             }),
+        ...(reasoningEffort === undefined
+          ? {}
+          : { reasoning_effort: reasoningEffort }),
+      };
+    // Self-hosted vLLM: thinking rides in the chat template kwargs, and
+    // `reasoning_effort` is read straight off the request body. Both are
+    // per-call, so the session never latches a mode.
+    case "vllm":
+      return {
+        ...(opts.enableThinking === undefined
+          ? {}
+          : { chat_template_kwargs: { thinking: opts.enableThinking } }),
         ...(reasoningEffort === undefined
           ? {}
           : { reasoning_effort: reasoningEffort }),
@@ -162,6 +182,47 @@ function guidedOverride(cfg: IOpenAICompatibleConfig): boolean | undefined {
  *  baseUrl (e.g. `api.deepseek.com/v1` from a hand-edited config): without a scheme
  *  `new URL()` throws, which would miss the cloud host and wrongly SEND tool_choice
  *  — the exact 400 this guards against — so prepend `https://` before parsing. */
+/** True when `baseUrl` points at a private/loopback address or a LAN-only TLD —
+ *  i.e. something the user is self-hosting. Used to tell a local vLLM apart from
+ *  a public endpoint (which may be a reverse proxy in front of a cloud API), so
+ *  only the former gets the vLLM reasoning dialect. Scheme-less input is
+ *  tolerated the same way `isDeepSeekCloudHost` tolerates it. */
+function isPrivateHost(baseUrl: string): boolean {
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(baseUrl)
+    ? baseUrl
+    : `https://${baseUrl}`;
+
+  let host: string;
+  try {
+    host = new URL(withScheme).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+
+  // IPv6 loopback arrives bracket-stripped by URL as "::1".
+  if (host === "localhost" || host === "::1") {
+    return true;
+  }
+
+  if (/\.(local|lan|internal|home|localdomain)$/u.test(host)) {
+    return true;
+  }
+
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(host);
+  if (v4 === null) {
+    return false;
+  }
+
+  const [a, b] = [Number(v4[1]), Number(v4[2])];
+  return (
+    a === 127 || // loopback
+    a === 10 || // 10/8
+    (a === 172 && b >= 16 && b <= 31) || // 172.16/12
+    (a === 192 && b === 168) || // 192.168/16
+    (a === 169 && b === 254) // link-local
+  );
+}
+
 function isDeepSeekCloudHost(baseUrl: string): boolean {
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(baseUrl)
     ? baseUrl
