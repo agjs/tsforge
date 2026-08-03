@@ -70,13 +70,6 @@ export const PROFILE_DEFINITIONS: Readonly<
     extraPacks: ["runtime-boundaries", "authorization"],
     ruleOverrides: structureOffOverrides,
   },
-  backend: {
-    id: "backend",
-    label: "Backend",
-    description:
-      "Recommended; stack detection adds Fastify/Elysia/Drizzle/BullMQ packs.",
-    ruleOverrides: structureOffOverrides,
-  },
   opinionated: {
     id: "opinionated",
     label: "Opinionated",

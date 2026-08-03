@@ -12,5 +12,4 @@ export interface IRuleCatalogEntry {
   readonly profiles?: readonly ProfileId[];
 }
 
-export type ProfileId =
-  "recommended" | "strict" | "security" | "backend" | "opinionated";
+export type ProfileId = "recommended" | "strict" | "security" | "opinionated";

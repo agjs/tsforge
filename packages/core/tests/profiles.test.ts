@@ -15,12 +15,7 @@ import { cliUsage, profileFlagError } from "../src/cli/args";
 // STRUCTURE rules (tsforge's specific file/folder layout) are off by default so tsforge
 // stays adoptable on an existing repo.
 test("default profiles keep quality rules ON and only disable STRUCTURE rules", () => {
-  for (const profile of [
-    "recommended",
-    "strict",
-    "security",
-    "backend",
-  ] as const) {
+  for (const profile of ["recommended", "strict", "security"] as const) {
     const overrides = resolveProfileRuleOverrides(profile);
 
     // Quality best-practices are NOT forced off (they run at their pack default).
@@ -77,12 +72,7 @@ const OPT_IN_STRUCTURE_RULES = [
   "max-hooks-per-file",
 ] as const;
 
-const NON_OPINIONATED_PROFILES = [
-  "recommended",
-  "strict",
-  "security",
-  "backend",
-] as const;
+const NON_OPINIONATED_PROFILES = ["recommended", "strict", "security"] as const;
 
 const INTENTIONAL_RELAXATIONS: Readonly<Record<string, string>> = {
   // These impose tsforge's specific file/folder layout, so they stay off unless a
@@ -224,9 +214,12 @@ describe("no profile silently weakens its pack's rules", () => {
 // regression here, deleting it from the type is undone by anyone re-adding it, and
 // the audit decision lives only in a commit message.
 describe("the profile set is the authoritative list", () => {
-  test("is exactly the five intended ids", () => {
+  // Every remaining profile must EARN its place — differ from `recommended` by more
+  // than nothing. `frontend` (F21) and `backend` (F24) were both removed for failing
+  // that: one relaxed two React rules, the other differed only by omitting an
+  // override that matched its rule's pack default.
+  test("is exactly the four intended ids", () => {
     expect([...PROFILE_IDS].sort()).toEqual([
-      "backend",
       "opinionated",
       "recommended",
       "security",
@@ -238,9 +231,14 @@ describe("the profile set is the authoritative list", () => {
     );
   });
 
-  test("rejects `frontend` as a profile id", () => {
-    expect(isProfileId("frontend")).toBe(false);
-    expect(PROFILE_IDS).not.toContain("frontend");
+  test("rejects the removed profile ids", () => {
+    for (const removed of ["frontend", "backend"]) {
+      expect({ removed, valid: isProfileId(removed) }).toEqual({
+        removed,
+        valid: false,
+      });
+      expect(PROFILE_IDS).not.toContain(removed);
+    }
   });
 
   // The valid-id list used to be hand-maintained in three places, which is exactly
@@ -254,6 +252,7 @@ describe("the profile set is the authoritative list", () => {
     }
 
     expect(usage).not.toContain("frontend");
+    expect(usage).not.toContain("backend");
   });
 
   test("the unknown-profile error lists the ids from the same source", () => {
@@ -261,8 +260,12 @@ describe("the profile set is the authoritative list", () => {
 
     expect(message).toContain('unknown --profile "frontend"');
 
-    for (const id of PROFILE_IDS) {
-      expect(message).toContain(id);
-    }
+    // Compare the LISTED ids exactly. "Contains every current id" passes a stale
+    // hardcoded list that still advertises `frontend` as valid, because `frontend`
+    // is also in the message as the REJECTED value — the same hole as the config
+    // warning, which is why both compare the list rather than scanning it.
+    const listed = /valid: (.+)$/u.exec(message)?.[1];
+
+    expect(listed).toBe(PROFILE_IDS.join(", "));
   });
 });
