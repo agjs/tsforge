@@ -5,6 +5,7 @@ import type {
 } from "./inference.types";
 import type { IReasoningProfile, ReasoningStyle } from "./reasoning-profile";
 import {
+  DEFAULT_TOKEN_CAP,
   REASONING_PRESETS,
   isReasoningProfile,
   isReasoningStyle,
@@ -102,7 +103,7 @@ function profileFields(
 
   setPath(
     body,
-    p.tokenCap ?? "max_tokens",
+    p.tokenCap ?? DEFAULT_TOKEN_CAP,
     configured !== undefined && Number.isFinite(configured)
       ? configured
       : PROVIDER_LIMITS.maxTokens

@@ -102,6 +102,14 @@ describe("isReasoningStyle", () => {
 });
 
 describe("isReasoningProfile", () => {
+  test("an explicit tokenCap frees up the default path for another control", () => {
+    // Only the DEFAULT participates when tokenCap is unset; moving the cap
+    // elsewhere makes max_tokens available again.
+    expect(
+      isReasoningProfile({ tokenCap: "output_limit", effort: "max_tokens" })
+    ).toBe(true);
+  });
+
   test("accepts an empty object and a full one", () => {
     expect(isReasoningProfile({})).toBe(true);
     expect(
@@ -141,6 +149,14 @@ describe("isReasoningProfile", () => {
     ],
     [{ effort: "a.b", budget: "a.b" }, "two identical paths"],
     [{ tokenCap: "a", effort: "a.b.c" }, "a path nested under another"],
+    // The token cap is written even when unset, so its DEFAULT must take part
+    // in the overlap check or a reasoning field silently destroys it.
+    [{ effort: "max_tokens" }, "effort colliding with the default token cap"],
+    [
+      { thinking: { path: "max_tokens" } },
+      "thinking colliding with the default token cap",
+    ],
+    [{ budget: "max_tokens.x" }, "a path nested under the default token cap"],
   ])("rejects %p (%s)", (value) => {
     expect(isReasoningProfile(value)).toBe(false);
   });

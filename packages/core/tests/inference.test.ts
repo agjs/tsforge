@@ -511,13 +511,22 @@ test("a response without reasoning_content carries no reasoning channel", () => 
   ).toBeUndefined();
 });
 
-/** Capture the JSON body of every request the provider makes. */
+/** Capture the JSON body of every request the provider makes. Composed with
+ *  `Object.assign` because Bun's `typeof fetch` also carries `preconnect`, so a
+ *  bare function does not satisfy it — and a cast is not allowed here. */
 function recordingFetch(sink: Record<string, unknown>[]): typeof fetch {
-  return (async (_url: unknown, init: { body?: string }) => {
-    sink.push(JSON.parse(init.body ?? "{}"));
+  const impl = async (
+    _input: URL | RequestInfo,
+    init?: RequestInit
+  ): Promise<Response> => {
+    const body = typeof init?.body === "string" ? init.body : "{}";
+
+    sink.push(JSON.parse(body));
 
     return okResponse();
-  }) as unknown as typeof fetch;
+  };
+
+  return Object.assign(impl, { preconnect: globalThis.fetch.preconnect });
 }
 
 test("a latching profile pins thinking to the session's first value", async () => {

@@ -491,9 +491,13 @@ test("a reasoning profile survives save → load → providerConfig → request 
   const loaded = await loadModelsConfig();
   const entry = loaded.models.local;
 
-  expect(entry?.reasoning).toEqual(profile);
+  if (entry === undefined) {
+    throw new Error("expected the saved entry to load back");
+  }
 
-  const cfg = providerConfig(entry!);
+  expect(entry.reasoning).toEqual(profile);
+
+  const cfg = providerConfig(entry);
 
   expect(cfg.reasoning).toEqual(profile);
 
@@ -525,7 +529,12 @@ test("a preset NAME still round-trips through the wizard's providerConfig", asyn
 
   const loaded = await loadModelsConfig();
   const entry = loaded.models.cloud;
-  const cfg = providerConfig(entry!);
+
+  if (entry === undefined) {
+    throw new Error("expected the saved entry to load back");
+  }
+
+  const cfg = providerConfig(entry);
 
   expect(cfg.reasoning).toBe("deepseek");
 

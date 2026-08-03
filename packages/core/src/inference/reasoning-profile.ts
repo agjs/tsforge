@@ -99,6 +99,10 @@ export function isReasoningStyle(value: unknown): value is ReasoningStyle {
   return typeof value === "string" && Object.hasOwn(REASONING_PRESETS, value);
 }
 
+/** Where the output-token cap goes when a profile does not say. Exported so the
+ *  request builder and the overlap check cannot drift apart. */
+export const DEFAULT_TOKEN_CAP = "max_tokens";
+
 /** Path-valued profile keys. */
 const PATH_KEYS = ["effort", "budget", "tokenCap"] as const;
 
@@ -171,6 +175,14 @@ export function isReasoningProfile(value: unknown): value is IReasoningProfile {
     }
 
     declared.push(path);
+  }
+
+  // The token cap is ALWAYS written, at its default when unset, so it has to
+  // take part in the overlap check even when the profile never mentions it.
+  // Otherwise `{ "effort": "max_tokens" }` validates and then overwrites the
+  // output limit with an effort string — the same clobber the guard exists for.
+  if (value.tokenCap === undefined) {
+    declared.push(DEFAULT_TOKEN_CAP);
   }
 
   // Two controls writing to overlapping paths would clobber each other.
