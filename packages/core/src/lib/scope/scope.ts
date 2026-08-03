@@ -27,6 +27,14 @@ export function isInScope(file: string, patterns: string[]): boolean {
   return patterns.some((pattern) => new Bun.Glob(pattern).match(file));
 }
 
+/** True when a NORMALIZED path stays inside the workspace — i.e. it neither
+ *  escapes via `../` nor is absolute. Distinct from {@link writable}: a project
+ *  file the model may not edit is still inside the workspace, and that is exactly
+ *  the case a shell redirect must not be allowed to write. */
+export function insideWorkspace(file: string): boolean {
+  return !file.startsWith("..") && !file.startsWith("/");
+}
+
 /** A file the model may write: its editable scope, OR a throwaway scratch file.
  *  A path that escapes the workspace (`../…`) or is absolute is NEVER writable —
  *  a recursive glob would otherwise match a traversal path. Normalize with

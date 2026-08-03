@@ -942,9 +942,33 @@ describe("resolveWritable behaves identically at every call site", () => {
     }
   });
 
-  // The edit TOOLS are the scope boundary. `run` is not one of them, and pretending
-  // otherwise in a test would misrepresent where the boundary actually is.
-  test("run's shell is NOT bounded by the editable scope (documented behavior)", async () => {
+  test("run refuses a redirect to an in-workspace file OUTSIDE the scope", async () => {
+    // `edit secret.ts` is refused as out of scope, but `echo x > secret.ts` used
+    // to overwrite it — a one-line way around the scope on a project file. The
+    // scope must mean the same thing whichever tool is used.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-scope-"));
+    const ORIGINAL = 'export const KEY = "original";\n';
+
+    await Bun.write(join(dir, "impl.ts"), "export const a = 1;\n");
+    await Bun.write(join(dir, "secret.ts"), ORIGINAL);
+
+    try {
+      const out = await executeTool(
+        { name: "run", arguments: { command: "echo pwned > secret.ts" } },
+        ctx(dir, ["impl.ts"])
+      );
+
+      expect(out).toContain("REJECTED");
+      expect(await Bun.file(join(dir, "secret.ts")).text()).toBe(ORIGINAL);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Beyond the workspace, `run` is deliberately a shell — /tmp and build logs are
+  // its documented targets, and its reach there is governed by the policy layer,
+  // not by the editable scope. Pinned so a change to it is a deliberate one.
+  test("run's shell still reaches OUTSIDE the workspace (documented behavior)", async () => {
     const parent = await mkdtemp(join(tmpdir(), "tsforge-runreach-"));
     const dir = join(parent, "ws");
 
