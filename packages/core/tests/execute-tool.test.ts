@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -789,4 +789,255 @@ test("ask_user in an unattended run returns proceed-with-judgment (never hangs)"
   );
 
   expect(r).toContain("No human is available");
+});
+
+// resolveWritable (tool-context) is the single normalize-then-scope-check step
+// behind every single-file write path. Centralising it means one regression there
+// would silently move the scope boundary for all of them, so each call site is
+// pinned here: an in-scope file addressed absolutely or as "./x" is ACCEPTED (the
+// globs are workspace-relative), and a "../" escape is still REJECTED — normalizing
+// must not become a way out of the workspace.
+describe("resolveWritable behaves identically at every call site", () => {
+  async function attempt(
+    call: { name: string; arguments: Record<string, unknown> },
+    scope: string[] = ["impl.ts"]
+  ): Promise<{ out: string; dir: string }> {
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-scope-"));
+
+    await Bun.write(join(dir, "impl.ts"), "export const a = 1;\n");
+
+    const args = { ...call.arguments };
+    const file = args.file;
+
+    if (typeof file === "string" && file.startsWith("<abs>")) {
+      args.file = join(dir, file.slice("<abs>".length));
+    }
+
+    const out = await executeTool(
+      { ...call, arguments: args },
+      ctx(dir, scope)
+    );
+
+    return { out, dir };
+  }
+
+  test("create accepts a new in-scope file addressed absolutely or as ./", async () => {
+    // NOTE: `create` on an EXISTING file is refused by overwrite protection, not
+    // scope — so this must target a file that does not exist yet, or it would
+    // pass for the wrong reason.
+    for (const file of ["<abs>new.ts", "./new.ts"]) {
+      const { out, dir } = await attempt(
+        {
+          name: "create",
+          arguments: { file, content: "export const b = 2;\n" },
+        },
+        ["impl.ts", "new.ts"]
+      );
+
+      try {
+        expect({ file, rejected: out.includes("REJECTED") }).toEqual({
+          file,
+          rejected: false,
+        });
+        expect(await Bun.file(join(dir, "new.ts")).text()).toContain("b = 2");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("edit accepts an in-scope file addressed absolutely or as ./", async () => {
+    for (const file of ["<abs>impl.ts", "./impl.ts"]) {
+      const { out, dir } = await attempt({
+        name: "edit",
+        arguments: { file, oldString: "a = 1", newString: "a = 42" },
+      });
+
+      try {
+        expect({ file, rejected: out.includes("REJECTED") }).toEqual({
+          file,
+          rejected: false,
+        });
+        expect(await Bun.file(join(dir, "impl.ts")).text()).toContain("a = 42");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("edit_lines accepts an in-scope file addressed absolutely or as ./", async () => {
+    for (const file of ["<abs>impl.ts", "./impl.ts"]) {
+      // edit_lines needs the hashline anchor from a prior `read`, so the file is
+      // read through the same context before the edit is attempted.
+      const dir0 = await mkdtemp(join(tmpdir(), "tsforge-scope-"));
+
+      await Bun.write(join(dir0, "impl.ts"), "export const a = 1;\n");
+
+      const c = ctx(dir0, ["impl.ts"]);
+      const read = await executeTool(
+        { name: "read", arguments: { file: "impl.ts" } },
+        c
+      );
+      const anchor = /¶\S+/u.exec(read)?.[0] ?? "";
+      const spelled = file.startsWith("<abs>")
+        ? join(dir0, file.slice("<abs>".length))
+        : file;
+      const out = await executeTool(
+        {
+          name: "edit_lines",
+          arguments: {
+            file: spelled,
+            input: `${anchor}\nreplace 1..1:\n+export const a = 42;`,
+          },
+        },
+        c
+      );
+      const dir = dir0;
+
+      try {
+        expect({ file, rejected: out.includes("REJECTED") }).toEqual({
+          file,
+          rejected: false,
+        });
+        // The edit must actually land — a rejection-only test would pass even if
+        // normalisation broke every valid path for this tool.
+        expect(await Bun.file(join(dir, "impl.ts")).text()).toContain("a = 42");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("run steers an in-scope redirect back to the edit tools, however spelled", async () => {
+    // NOTE what this does and does not guarantee. `run` is deliberately a shell:
+    // its resolveWritable call exists to stop the model writing PROJECT files via
+    // a redirect (which would skip the write guard, the per-file lint feedback and
+    // hashline snapshots), NOT to sandbox the shell. Out-of-scope and traversal
+    // targets execute — see the test below. The reach of `run` is governed by the
+    // policy layer, not by the editable scope.
+    for (const target of ["impl.ts", "./impl.ts", "<abs>impl.ts"]) {
+      const dir = await mkdtemp(join(tmpdir(), "tsforge-scope-"));
+
+      await Bun.write(join(dir, "impl.ts"), "export const a = 1;\n");
+
+      const spelled = target.startsWith("<abs>")
+        ? join(dir, target.slice("<abs>".length))
+        : target;
+
+      try {
+        const out = await executeTool(
+          { name: "run", arguments: { command: `echo x > ${spelled}` } },
+          ctx(dir, ["impl.ts"])
+        );
+
+        expect({ target, steered: out.includes("REJECTED") }).toEqual({
+          target,
+          steered: true,
+        });
+        // Untouched: the redirect never ran.
+        expect(await Bun.file(join(dir, "impl.ts")).text()).toContain("a = 1");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a dotted-but-ordinary filename is editable when in scope", async () => {
+    // "..secret.ts" is a normal workspace file. The scope must govern it like any
+    // other: editable when in scope, and NOT creatable/overwritable via a shell
+    // redirect when it is not.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-dotted-"));
+
+    await Bun.write(
+      join(dir, "..secret.ts"),
+      'export const KEY = "original";\n'
+    );
+
+    try {
+      // In scope → the edit tool may change it.
+      const edited = await executeTool(
+        {
+          name: "edit",
+          arguments: {
+            file: "..secret.ts",
+            oldString: "original",
+            newString: "changed",
+          },
+        },
+        ctx(dir, ["..secret.ts"])
+      );
+
+      expect(edited).not.toContain("REJECTED");
+      expect(await Bun.file(join(dir, "..secret.ts")).text()).toContain(
+        "changed"
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("no EDIT TOOL lets a traversal path escape the workspace", async () => {
+    // The sibling must EXIST and be genuinely editable, in a parent of our own:
+    // against a nonexistent target every tool rejects for its own unrelated
+    // reason (missing file, missing hashline anchor) and "nothing was written" is
+    // vacuously true, so the test would pass with no scope enforcement at all.
+    // A fixed /tmp parent could also collide with another process.
+    const parent = await mkdtemp(join(tmpdir(), "tsforge-escape-"));
+    const dir = join(parent, "ws");
+    const escaped = join(parent, "escaped.ts");
+    const ORIGINAL = "export const secret = 1;\n";
+
+    await mkdir(dir, { recursive: true });
+    await Bun.write(join(dir, "impl.ts"), "export const a = 1;\n");
+    await Bun.write(escaped, ORIGINAL);
+
+    const c = ctx(dir, ["impl.ts"]);
+
+    try {
+      // Reads are not scope-limited, so a valid anchor for the sibling is
+      // obtainable — edit_lines must then be refused on SCOPE, not on the anchor.
+      const read = await executeTool(
+        { name: "read", arguments: { file: "../escaped.ts" } },
+        c
+      );
+      const anchor = /¶\S+/u.exec(read)?.[0] ?? "";
+
+      const CALLS: readonly [string, Record<string, unknown>][] = [
+        [
+          "edit",
+          {
+            file: "../escaped.ts",
+            oldString: "secret = 1",
+            newString: "secret = 2",
+          },
+        ],
+        [
+          "edit_lines",
+          {
+            file: "../escaped.ts",
+            input: `${anchor}\nreplace 1..1:\n+export const secret = 2;`,
+          },
+        ],
+        ["create", { file: "../new-escape.ts", content: "x" }],
+      ];
+
+      for (const [name, args] of CALLS) {
+        const out = await executeTool({ name, arguments: args }, c);
+
+        expect({ name, refused: out.includes("REJECTED") }).toEqual({
+          name,
+          refused: true,
+        });
+      }
+
+      // The load-bearing assertions: the existing sibling is BYTE-UNCHANGED, and
+      // no new file appeared outside the workspace.
+      expect(await Bun.file(escaped).text()).toBe(ORIGINAL);
+      expect(await Bun.file(join(parent, "new-escape.ts")).exists()).toBe(
+        false
+      );
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
 });

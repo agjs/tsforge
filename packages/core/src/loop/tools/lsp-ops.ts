@@ -3,7 +3,12 @@ import { fileArg, TOOL_NAME, type ToolName } from "../../agent";
 import { runArgvCommand } from "../../lib/fs";
 import { writable } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
-import { str, reject, type IToolContext } from "./tool-context";
+import {
+  str,
+  reject,
+  resolveWritable,
+  type IToolContext,
+} from "./tool-context";
 
 /** ripgrep search over the working dir — the model's primary navigation at
  *  scale (structural/text, fast). Falls back gracefully if `rg` is absent. */
@@ -139,24 +144,26 @@ function doOrganizeImports(
     return "organize_imports: need `file`";
   }
 
-  if (!writable(file, ctx.files)) {
+  const target = resolveWritable(ctx, file);
+
+  if (!target.writable) {
     return reject(
       ctx,
       "organize_imports",
-      `organize_imports ${file} REJECTED: out of scope.`
+      `organize_imports ${target.path} REJECTED: out of scope.`
     );
   }
 
-  const n = svc.organizeImports(file);
+  const n = svc.organizeImports(target.path);
 
   ctx.report({
     kind: "tool",
     task: ctx.task,
-    message: `organize_imports ${file} (${n})`,
-    ...(n > 0 ? { mutated: [file] } : {}),
+    message: `organize_imports ${target.path} (${n})`,
+    ...(n > 0 ? { mutated: [target.path] } : {}),
   });
 
-  return `organize_imports: ${n} change(s) in ${file}`;
+  return `organize_imports: ${n} change(s) in ${target.path}`;
 }
 
 /** move_file: relocate a file and rewrite every importer's specifier. */

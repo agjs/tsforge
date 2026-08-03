@@ -1,4 +1,5 @@
-import { resolve, relative } from "node:path";
+import { resolve, relative, isAbsolute } from "node:path";
+import { isWin32 } from "../platform";
 import { SCRATCH_PREFIX } from "./scope.constants";
 
 /**
@@ -27,12 +28,44 @@ export function isInScope(file: string, patterns: string[]): boolean {
   return patterns.some((pattern) => new Bun.Glob(pattern).match(file));
 }
 
+/** True when a NORMALIZED path stays inside the workspace — i.e. it neither
+ *  escapes via a `..` path SEGMENT nor is absolute. Distinct from {@link writable}:
+ *  a project file the model may not edit is still inside the workspace, and that is
+ *  exactly the case a shell redirect must not be allowed to write.
+ *
+ *  Compares segments, not prefixes: `..secret.ts` is an ordinary filename that
+ *  merely starts with two dots. Treating it as outside would skip the guard for a
+ *  real workspace file — failing OPEN, the wrong direction for this predicate. */
+export function insideWorkspace(file: string): boolean {
+  // `node:path.isAbsolute`, NOT a hand-rolled pattern: what counts as absolute is
+  // platform-dependent, and applying Windows syntax on POSIX fails OPEN. There,
+  // `D:/secret.ts` is an ordinary relative path (a directory named `D:`) — calling
+  // it absolute made this return false and skipped the shell-write guard for a real
+  // workspace file, while the edit tools refused a legitimate path.
+  if (isAbsolute(file)) {
+    return false;
+  }
+
+  // Windows accepts either separator, so a `..` segment can arrive spelled with
+  // both. On POSIX a backslash is a legal filename character and must NOT be read
+  // as one.
+  const segments = isWin32() ? file.split(/[\\/]/u) : file.split("/");
+
+  return !segments.includes("..");
+}
+
 /** A file the model may write: its editable scope, OR a throwaway scratch file.
  *  A path that escapes the workspace (`../…`) or is absolute is NEVER writable —
  *  a recursive glob would otherwise match a traversal path. Normalize with
- *  `normalizeWorkspacePath` first so this sees the workspace-relative form. */
+ *  `normalizeWorkspacePath` first so this sees the workspace-relative form.
+ *
+ *  Escape detection goes through {@link insideWorkspace} so both predicates use the
+ *  SAME segment rule. A `startsWith("..")` test here made every ordinary name
+ *  beginning with two dots (`..secret.ts`, `...rc`) unwritable through every edit
+ *  tool, and — because the shell-redirect guard reads this — let `run` create such
+ *  a file even under a scope as broad as `["**\/*"]`. */
 export function writable(file: string, patterns: string[]): boolean {
-  if (file.startsWith("..") || file.startsWith("/")) {
+  if (!insideWorkspace(file)) {
     return false;
   }
 

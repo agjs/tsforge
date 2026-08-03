@@ -11,9 +11,9 @@ import {
   reject,
   guardVeto,
   type IToolContext,
+  resolveWritable,
 } from "./tool-context";
 import { toHashlineEdit } from "../../agent";
-import { writable, normalizeWorkspacePath } from "../../lib/scope";
 
 /**
  * Hashline edit handler: content-hash-anchored line edits with stale-anchor recovery.
@@ -42,9 +42,11 @@ export async function doHashlineEdit(
   // Same write policy as `edit`/`create` (file-ops): normalize the path, then
   // refuse anything outside the editable scope. Without this `edit_lines` was a
   // hole — a `../` path reached applyHashlineEdit unchecked.
-  edit.file = normalizeWorkspacePath(ctx.cwd, edit.file);
+  const target = resolveWritable(ctx, edit.file);
 
-  if (!writable(edit.file, ctx.files)) {
+  edit.file = target.path;
+
+  if (!target.writable) {
     return reject(
       ctx,
       "edit_lines",

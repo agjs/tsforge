@@ -1,5 +1,11 @@
 import { test, expect } from "bun:test";
-import { isInScope, writable, normalizeWorkspacePath } from "../src/lib/scope";
+import {
+  isInScope,
+  writable,
+  insideWorkspace,
+  normalizeWorkspacePath,
+} from "../src/lib/scope";
+import { isWin32 } from "../src/lib/platform";
 
 // The vendored "you cannot edit this file" concept was removed entirely — a model
 // may edit anything in scope, including generated files (the build regenerates
@@ -80,4 +86,99 @@ test("writable allows the co-located test sibling of an in-scope source", () => 
   // allowance lives in writable, not isInScope).
   expect(writable("lexer.ts", scope)).toBe(true);
   expect(isInScope("lexer.test.ts", scope)).toBe(false);
+});
+
+// insideWorkspace decides whether the shell-redirect guard looks at a target at
+// all, so a false negative SKIPS the guard — it must fail closed, treating a path
+// as inside unless a `..` SEGMENT or an absolute root proves otherwise.
+test("insideWorkspace compares path segments, not prefixes", () => {
+  // Ordinary filenames that merely begin with dots are INSIDE.
+  for (const file of ["..secret.ts", "...rc", "..", ".." + "x"]) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: file !== "..",
+    });
+  }
+
+  // Real escapes and absolute paths are OUTSIDE.
+  for (const file of [
+    "../escaped.ts",
+    "../../x",
+    "a/../../b.ts",
+    "/etc/passwd",
+  ]) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: false,
+    });
+  }
+
+  // Plain in-workspace paths are inside.
+  for (const file of ["src/x.ts", "x.ts", "a/b/c.tsx"]) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: true,
+    });
+  }
+});
+
+// writable() and insideWorkspace() must apply the SAME segment rule. writable used
+// its own startsWith("..") test, which (a) made every ordinary name beginning with
+// two dots unwritable through every edit tool, and (b) because the shell-redirect
+// guard reads writable, let `run` create such a file even under a scope as broad as
+// ["**/*"] — the very bypass that guard exists to close.
+test("writable and insideWorkspace agree on what escapes the workspace", () => {
+  const CASES: readonly [string, boolean][] = [
+    // Ordinary filenames that merely begin with dots — INSIDE, so writable
+    // whenever the scope matches.
+    ["..secret.ts", true],
+    ["...rc", true],
+    ["..x", true],
+    // Real escapes and absolute paths.
+    ["../escaped.ts", false],
+    ["..", false],
+    ["a/../b.ts", false],
+    ["/etc/passwd", false],
+  ];
+
+  for (const [file, allowed] of CASES) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: allowed,
+    });
+    expect({ file, writable: writable(file, ["**/*"]) }).toEqual({
+      file,
+      writable: allowed,
+    });
+  }
+});
+
+// What counts as absolute is platform-dependent, so this pins the semantics of the
+// platform the suite runs on. Hand-rolling the check instead of using
+// node:path.isAbsolute failed OPEN on POSIX: `D:/secret.ts` is an ordinary relative
+// path there (a directory named `D:`), and calling it absolute skipped the
+// shell-write guard for a real workspace file.
+test("insideWorkspace uses this platform's notion of absolute", () => {
+  const windowsForms = [
+    "D:/secret.ts",
+    "D:\\secret.ts",
+    "\\\\server\\share\\x.ts",
+  ];
+
+  for (const file of windowsForms) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      // On Windows these are absolute (outside); on POSIX they are ordinary
+      // relative names (inside) and MUST stay guarded.
+      inside: !isWin32(),
+    });
+  }
+
+  // Always outside, on every platform.
+  for (const file of ["/etc/passwd", "../escaped.ts", "a/../b.ts"]) {
+    expect({ file, inside: insideWorkspace(file) }).toEqual({
+      file,
+      inside: false,
+    });
+  }
 });
