@@ -3,7 +3,15 @@ import { join } from "node:path";
 import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import { isRecord } from "./lib/guards";
 import { PROVIDER_DEFAULTS } from "./inference/inference.constants";
-import type { ReasoningStyle } from "./inference/inference.types";
+import type {
+  IReasoningProfile,
+  ReasoningStyle,
+} from "./inference/inference.types";
+import {
+  REASONING_PRESETS,
+  isReasoningProfile,
+  isReasoningStyle,
+} from "./inference/reasoning-profile";
 
 /**
  * The model registry — `~/.tsforge/models.json`, the central place a user
@@ -29,15 +37,26 @@ export interface IModelEntry {
   thinking?: boolean;
   /** Per-response token cap override. */
   maxTokens?: number;
-  /** Provider reasoning dialect: how thinking/reasoning is expressed on the wire.
-   *  `qwen` (default) | `deepseek` | `openai` | `none`. Set `deepseek` for the
-   *  DeepSeek API, `openai` for OpenAI o-series. */
-  reasoning?: ReasoningStyle;
-  /** Reasoning effort for `deepseek`/`openai` styles. */
+  /** How this endpoint expresses reasoning on the wire. Either a preset NAME
+   *  (`qwen` | `deepseek` | `deepseek-local` | `openai` | `none`) or a full
+   *  `IReasoningProfile` declaring the field paths itself — the latter is what
+   *  makes an arbitrary model supportable by config rather than by a code change.
+   *
+   *  Omitted → auto-detected: a "deepseek" model/url resolves to `deepseek-local`
+   *  on a PRIVATE address (loopback, RFC1918, CGNAT, IPv6 ULA/link-local,
+   *  .local/.lan/.internal/.home/.localdomain) and to `deepseek` on any public
+   *  one, since a public host may be a reverse proxy in front of DeepSeek cloud.
+   *  Declare it explicitly for a self-host on a public address, or for a
+   *  single-label hostname (e.g. `http://spark2:8888`), which is not treated as
+   *  private because it is indistinguishable from a proxy alias.
+   *
+   *  Validated at load — an unknown name or malformed profile throws. */
+  reasoning?: ReasoningStyle | IReasoningProfile;
+  /** Reasoning effort for `deepseek`/`deepseek-local`/`openai` styles. */
   reasoningEffort?: "low" | "medium" | "high";
   /** OPTIONAL override for guided-decoding (structured tool-call) support.
-   *  Normally leave unset — it's auto-detected per endpoint (local on, DeepSeek
-   *  cloud off). Set true/false only to correct a misdetection. */
+   *  Normally leave unset — whether `tool_choice` is sent comes from the reasoning
+   *  profile's `omitToolChoice`. Set true/false to force it either way. */
   guidedDecoding?: boolean;
   /** Arbitrary fields merged into the request body (override built-ins) — the
    *  escape hatch for any provider-specific param. */
@@ -174,6 +193,32 @@ function assertImageApi(name: string, entry: unknown): void {
   }
 }
 
+/** `reasoning` is either a known preset NAME or a well-formed profile object.
+ *  Anything else is rejected here, at the JSON boundary: a typo'd preset would
+ *  otherwise behave as an empty profile (silently sending no reasoning fields),
+ *  and `null` or a malformed profile would surface as a TypeError mid-turn.
+ *  Matches the fail-loud contract of the maxTokens/imageApi guards. */
+function assertReasoning(name: string, entry: unknown): void {
+  if (!isRecord(entry) || entry.reasoning === undefined) {
+    return;
+  }
+
+  const value = entry.reasoning;
+
+  if (isReasoningStyle(value) || isReasoningProfile(value)) {
+    return;
+  }
+
+  const presets = Object.keys(REASONING_PRESETS).join(", ");
+
+  throw new Error(
+    `models.json: model "${name}" reasoning must be one of [${presets}] ` +
+      `or a profile object { thinking?: { path }, effort?, budget?, tokenCap?, ` +
+      `omitTemperature?, omitToolChoice?, replayReasoning?, latchThinking? } ` +
+      `with string dot-paths (no __proto__/constructor/prototype segments)`
+  );
+}
+
 function isInputMode(v: unknown): v is BinaryInputMode {
   return v === "stdin" || v === "arg" || v === "tempfile";
 }
@@ -296,6 +341,7 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
 
     assertNumericFields(name, entry);
     assertImageApi(name, entry);
+    assertReasoning(name, entry);
     models[name] = entry;
   }
 

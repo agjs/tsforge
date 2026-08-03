@@ -31,26 +31,79 @@ The entry **key** (`"deepseek"`) is just a local label. The field that's sent to
 | `baseUrl` | yes | OpenAI-compatible API root, e.g. `https://api.deepseek.com/v1`. `/chat/completions` is appended (and not double-appended). |
 | `model` | yes | The model id sent to the API. |
 | `apiKey` / `apiKeyEnv` | no | Inline key, or the name of an env var holding it (preferred: keeps secrets out of the file). |
-| `reasoning` | no | Provider thinking dialect: `qwen` (default), `deepseek`, `openai`, `none`. See below. **Auto-detected as `deepseek`** when `baseUrl` or `model` contains "deepseek", so a DeepSeek model usually needs no explicit value. |
-| `reasoningEffort` | no | `low` / `medium` / `high` for `deepseek`/`openai`. |
+| `reasoning` | no | Either a preset name (`qwen` default, `deepseek`, `deepseek-local`, `openai`, `none`) or a profile object declaring the field paths itself. See below. Validated at load. |
+| `reasoningEffort` | no | `low` / `medium` / `high` for `deepseek`/`deepseek-local`/`openai`. |
 | `contextWindow` | no | Tokens, for the status gauge + auto-compaction. Auto-detected from `/models` when omitted. |
 | `maxTokens` | no | Output-token cap (default 16384). |
 | `extraBody` | no | Arbitrary JSON merged into the request body (overrides built-ins). The escape hatch for any provider param. |
 | `extraHeaders` | no | Arbitrary request headers; `${VAR}` values are interpolated from the environment. |
 | `imageApi` | no | For an `imageGen` capability entry only: wire shape. `chat-modalities` (default; `/chat/completions` with `modalities:["image","text"]`, e.g. OpenRouter/Gemini) or `images-generations` (OpenAI `/images/generations`). |
 
-## Reasoning dialects
+## Reasoning: presets, or declare your own
 
-Providers express "thinking" differently. `reasoning` picks the wire shape:
+tsforge has three internal reasoning concepts — thinking on/off, effort, token budget — and every endpoint spells them differently on the wire. `reasoning` says how *yours* spells them. It takes either a **preset name** for a common case, or a **profile object** that declares the field paths itself.
 
-| `reasoning` | Sends | Notes |
-| --- | --- | --- |
-| `qwen` (default) | `chat_template_kwargs.enable_thinking`, `thinking_token_budget` | vLLM/Qwen. |
-| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, `reasoning_effort` | Omits `tool_choice` entirely (DeepSeek's thinking mode rejects an explicit one). The model still gets the tools and decides. |
-| `openai` | `reasoning_effort` | Uses `max_completion_tokens` and omits `temperature` (o-series rejects both). |
-| `none` | — | No reasoning params. |
+The profile is the real interface. Presets are just aliases over it, so a model nobody has heard of is a config edit, not a code change and a release.
 
-tsforge **auto-detects** the `deepseek` dialect when `baseUrl`/`model` contains "deepseek", so DeepSeek thinking models work out of the box. The `reasoning_content` from each turn is replayed on the next request (DeepSeek 400s otherwise). Set `reasoning` explicitly only when a DeepSeek-compatible gateway hides that string in its URL/model name.
+### Presets
+
+| Name | Expands to |
+| --- | --- |
+| `qwen` (default) | `chat_template_kwargs.enable_thinking`, budget at `thinking_token_budget` |
+| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, effort at `reasoning_effort`, plus `omitToolChoice`, `replayReasoning` and `latchThinking` |
+| `deepseek-local` | `chat_template_kwargs: { thinking, reasoning_effort }`, budget at `thinking_token_budget` |
+| `openai` | effort at `reasoning_effort`, token cap renamed to `max_completion_tokens`, `omitTemperature` |
+| `none` | nothing |
+
+### Declaring a profile
+
+```jsonc
+{
+  "baseUrl": "http://my-server:8000/v1",
+  "model": "some-model",
+  "reasoning": {
+    "thinking": { "path": "params.reasoning.enabled" },  // dot path into the body
+    "effort":   "params.reasoning.level",
+    "budget":   "params.reasoning.max_tokens",
+    "tokenCap": "output_limit",                          // default: max_tokens
+    "omitTemperature": false,
+    "omitToolChoice":  false,
+    "replayReasoning": false,
+    "latchThinking":   false
+  }
+}
+```
+
+Every field is optional, and **an omitted control means the endpoint doesn't have one**, so nothing is sent for it. That's the point: a field the server would accept-and-ignore is never sent in the first place.
+
+`thinking` takes `onValue`/`offValue` when the flag isn't a plain boolean:
+
+```jsonc
+"thinking": { "path": "mode", "onValue": { "kind": "deep" }, "offValue": { "kind": "off" } }
+```
+
+The last three flags are behavioural rather than cosmetic, and exist because DeepSeek's cloud API demands them: `omitToolChoice` drops an explicit `tool_choice` (it 400s on one, and the model still gets the tools and decides), `replayReasoning` re-sends each prior turn's `reasoning_content` (it 400s without), and `latchThinking` pins thinking to the session's first value (it 400s if it flips mid-conversation).
+
+:::caution
+Writing your own profile for a DeepSeek **cloud** endpoint? Set `"omitToolChoice": true`. These quirks travel with the profile as data, so a hand-written one that omits the flag will send `tool_choice` and get a 400 on any turn with tools. Using the `deepseek` preset name — or a copy of it — carries them for you.
+:::
+
+### Auto-detection
+
+When `baseUrl`/`model` contains "deepseek", tsforge picks the dialect by address:
+
+- **private** → `deepseek-local`. Loopback, `10.x`, `172.16–31.x`, `192.168.x`, `169.254.x`, CGNAT `100.64–100.127.x` (Tailscale and friends), IPv6 loopback / unique-local (`fc00::/7`) / link-local (`fe80::/10`) / IPv4-mapped, and the `.local` `.lan` `.internal` `.home` `.localdomain` TLDs.
+- **public** → `deepseek`, and each turn's `reasoning_content` is replayed on the next request (the cloud API 400s otherwise)
+
+The split matters because the two speak different wire formats for the same feature. A locally served DeepSeek checkpoint reads `chat_template_kwargs.thinking` and **silently ignores** DeepSeek cloud's `thinking: { type }` — it accepts the field and does nothing with it. Sending the cloud dialect to a local server therefore makes `thinking` inert: it only appears to work when the server's own default happens to match what you wanted.
+
+:::caution
+`deepseek-local` is named for the **model family**, not the server. The `thinking` flag is a kwarg of the DeepSeek-V4 chat template, which a runtime like vLLM merely forwards — it is not a vLLM-wide field. Qwen's template declares `enable_thinking` instead (that's the `qwen` dialect), and a Llama or Mistral behind the same vLLM declares neither. Don't set `deepseek-local` on a non-DeepSeek model just because it's self-hosted; the field would be accepted and ignored.
+:::
+
+A **single-label** hostname such as `http://spark2:8888` is deliberately NOT treated as private: it is indistinguishable from a proxy alias. Declare `reasoning` explicitly for those.
+
+Detection is deliberately conservative on public hosts, since one may be a reverse proxy in front of DeepSeek cloud, which still needs the cloud dialect. Set `reasoning` explicitly for a self-hosted endpoint on a public address, or for a DeepSeek-compatible gateway that hides the string in its URL/model name.
 
 ## Examples
 

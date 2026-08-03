@@ -26,9 +26,16 @@ id = "GHSA-cmwh-pvxp-8882"
 ignoreUntil = 2026-09-12T00:00:00Z
 reason = "dompurify (transitive via mermaid in the docs-site workspace) is a build-time/docs dev dependency only; not shipped in the published package. Re-evaluate when mermaid ships a patched dompurify range."
 
-# undici 7.24.8 reaches us only via wrangler → miniflare (docs-site deploy tooling,
-# a dev dependency). The PUBLISHED package's undici (via jsdom) is already 7.28.0,
-# i.e. patched — so there is no runtime or published-artifact exposure to either CVE.
+# SUPERSEDED 2026-08-03: undici is now pinned to ^7.29.0 in package.json
+# `overrides`, so none of the entries below match anything in bun.lock. They are
+# kept only until the next allowlist review (ignoreUntil below).
+#
+# The original rationale — "the published package's undici (via jsdom) is already
+# 7.28.0, i.e. patched" — EXPIRED: five advisories published against 7.28.0 itself
+# (GHSA-4cwx-7wf7-3272, GHSA-8xcm-r25x-g524, GHSA-jr45-8vmc-qm54,
+# GHSA-m8rv-5g2x-5cg5, GHSA-v3r7-h72x-cjcm) made the runtime copy vulnerable too,
+# which is exactly the exposure the accepted risk assumed did not exist. Bumped
+# rather than allowlisted, because it reaches the published package.
 [[IgnoredVulns]]
 id = "CVE-2026-9678"
 ignoreUntil = 2026-09-12T00:00:00Z

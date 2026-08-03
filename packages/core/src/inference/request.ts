@@ -2,8 +2,15 @@ import type {
   IChatMessage,
   ICompleteOptions,
   IOpenAICompatibleConfig,
-  ReasoningStyle,
 } from "./inference.types";
+import type { IReasoningProfile, ReasoningStyle } from "./reasoning-profile";
+import {
+  DEFAULT_TOKEN_CAP,
+  REASONING_PRESETS,
+  isReasoningProfile,
+  isReasoningStyle,
+  setPath,
+} from "./reasoning-profile";
 import { PROVIDER_LIMITS } from "./inference.constants";
 import { toWire } from "./wire";
 
@@ -18,18 +25,40 @@ function interpolateEnv(
   );
 }
 
-/** True when this config talks to DeepSeek's thinking API (explicit `reasoning:
- *  "deepseek"` or auto-detected from the url/model). DeepSeek 400s if thinking is
- *  toggled mid-conversation, so the provider latches one mode per session. */
-export function isDeepseekStyle(cfg: IOpenAICompatibleConfig): boolean {
-  return style(cfg) === "deepseek";
+/** True when the endpoint requires thinking pinned to the session's first value
+ *  (DeepSeek's cloud API 400s if it flips mid-conversation). Declared by the
+ *  profile, so a new endpoint with the same constraint needs no code change. */
+export function latchesThinking(cfg: IOpenAICompatibleConfig): boolean {
+  return profile(cfg).latchThinking === true;
 }
 
-function style(cfg: IOpenAICompatibleConfig): ReasoningStyle {
-  if (cfg.reasoning !== undefined) {
-    return cfg.reasoning;
+/** Resolve the endpoint's reasoning profile: an explicit object wins, a preset
+ *  name expands, and anything else falls back to auto-detection.
+ *
+ *  Every behaviour is carried BY the profile, so there is no second notion of
+ *  "which dialect is this" to drift out of sync with the returned object. The
+ *  presets are deep-frozen, so the reference handed back cannot be mutated. */
+export function profile(cfg: IOpenAICompatibleConfig): IReasoningProfile {
+  const declared = cfg.reasoning;
+
+  if (isReasoningStyle(declared)) {
+    return REASONING_PRESETS[declared];
   }
 
+  if (isReasoningProfile(declared)) {
+    return declared;
+  }
+
+  // Anything else — undefined, JSON `null`, a typo'd preset name, a malformed
+  // object — falls back to auto-detection. models-config rejects these loudly
+  // at load; this is the last line of defence so a hand-edited registry cannot
+  // crash a live turn (JSON null is NOT undefined and used to throw here).
+  return REASONING_PRESETS[autoPreset(cfg)];
+}
+
+/** Best-effort preset for an entry that declared nothing. Only a convenience:
+ *  anything this guesses wrong is fixed by declaring `reasoning` explicitly. */
+function autoPreset(cfg: IOpenAICompatibleConfig): ReasoningStyle {
   // Auto-detect DeepSeek when not explicitly configured, so its thinking-mode
   // round-trip works out of the box: DeepSeek requires each prior assistant
   // turn's `reasoning_content` replayed, and 400s otherwise ("The
@@ -37,75 +66,94 @@ function style(cfg: IOpenAICompatibleConfig): ReasoningStyle {
   // Without this, a DeepSeek model added with just { baseUrl, model } gets the
   // `qwen` default, which strips reasoning_content on replay → that 400.
   if (`${cfg.baseUrl} ${cfg.model}`.toLowerCase().includes("deepseek")) {
-    return "deepseek";
+    // ...but a SELF-HOSTED vLLM serving a DeepSeek checkpoint speaks a different
+    // dialect: it reads `chat_template_kwargs.thinking` and silently ignores
+    // `thinking:{type}`. Classifying it as `deepseek` makes thinking
+    // UNCONTROLLABLE (the field is accepted and does nothing) and latches it for
+    // the session. Only reclassify on a PRIVATE address, which is unambiguous
+    // evidence of self-hosting — a public hostname may be a reverse proxy in
+    // front of DeepSeek cloud, which still needs the cloud dialect and the
+    // reasoning_content replay.
+    return isPrivateHost(cfg.baseUrl) ? "deepseek-local" : "deepseek";
   }
 
   return "qwen";
 }
 
-/** Provider-specific reasoning/thinking fields for the request body. Per-call
- *  overrides (opts) take precedence over config defaults (cfg).reasoningEffort. */
-function reasoningFields(
+/** A structural copy, so a value taken from a shared preset never enters the
+ *  request body by reference. Primitives pass through untouched. */
+function detach(value: unknown): unknown {
+  return typeof value === "object" && value !== null
+    ? structuredClone(value)
+    : value;
+}
+
+/** Every profile-driven field — the token cap plus the reasoning controls —
+ *  written into ONE object.
+ *
+ *  These must share a target. Built separately and shallow-spread, two paths
+ *  under a common parent would clobber each other: `tokenCap:
+ *  "params.output_limit"` with `effort: "params.reasoning.level"` produces two
+ *  objects each holding a different `params`, and the later spread wins, so a
+ *  field is silently dropped.
+ *
+ *  A control the profile omits is a control the endpoint does not have, so
+ *  nothing is sent for it — that is what stops a field being accepted and
+ *  ignored. Per-call options override config defaults. */
+function profileFields(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
 ): Record<string, unknown> {
-  // Per-call reasoning effort overrides config when set.
-  const reasoningEffort = opts.reasoningEffort ?? cfg.reasoningEffort;
+  const p = profile(cfg);
+  const body: Record<string, unknown> = {};
+  const effort = opts.reasoningEffort ?? cfg.reasoningEffort;
 
-  switch (style(cfg)) {
-    case "qwen":
-      return {
-        ...(opts.enableThinking === undefined
-          ? {}
-          : { chat_template_kwargs: { enable_thinking: opts.enableThinking } }),
-        ...(opts.thinkingTokenBudget === undefined ||
-        !Number.isFinite(opts.thinkingTokenBudget)
-          ? {}
-          : { thinking_token_budget: opts.thinkingTokenBudget }),
-      };
-    case "deepseek":
-      return {
-        ...(opts.enableThinking === undefined
-          ? {}
-          : {
-              thinking: {
-                type: opts.enableThinking ? "enabled" : "disabled",
-              },
-            }),
-        ...(reasoningEffort === undefined
-          ? {}
-          : { reasoning_effort: reasoningEffort }),
-      };
-    case "openai":
-      return reasoningEffort === undefined
-        ? {}
-        : { reasoning_effort: reasoningEffort };
-    case "none":
-      return {};
-  }
-}
-
-/** The output-token cap field — o-series renamed `max_tokens` → `max_completion_tokens`. */
-function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, number> {
   // A NaN/Infinity maxTokens (bad config/env) would JSON.stringify to `null`,
   // which a server reads as an explicit choice, not "unset" — fall back to the
   // provider default instead (matches the temperature/repetitionPenalty guard).
   const configured = cfg.maxTokens;
-  const max =
+
+  setPath(
+    body,
+    p.tokenCap ?? DEFAULT_TOKEN_CAP,
     configured !== undefined && Number.isFinite(configured)
       ? configured
-      : PROVIDER_LIMITS.maxTokens;
+      : PROVIDER_LIMITS.maxTokens
+  );
 
-  return style(cfg) === "openai"
-    ? { max_completion_tokens: max }
-    : { max_tokens: max };
+  if (p.thinking !== undefined && opts.enableThinking !== undefined) {
+    const { path, onValue = true, offValue = false } = p.thinking;
+    const value = opts.enableThinking ? onValue : offValue;
+
+    // Copy before writing. `profile()` hands back the SHARED preset object
+    // (Readonly is type-only), so putting `onValue` into the body by reference
+    // would let a caller mutating the returned body corrupt the preset for
+    // every later request in the process.
+    setPath(body, path, detach(value));
+  }
+
+  if (p.effort !== undefined && effort !== undefined) {
+    setPath(body, p.effort, effort);
+  }
+
+  // A NaN/Infinity budget would JSON.stringify to `null`, which a server reads
+  // as an explicit choice rather than "unset".
+  if (
+    p.budget !== undefined &&
+    opts.thinkingTokenBudget !== undefined &&
+    Number.isFinite(opts.thinkingTokenBudget)
+  ) {
+    setPath(body, p.budget, opts.thinkingTokenBudget);
+  }
+
+  return body;
 }
 
 /** The `tools` (+ `tool_choice`) request fields. `tool_choice` is sent by default
  *  — it grammar-constrains the call to a well-formed schema instead of free-form
- *  text the harness would have to salvage — and is suppressed ONLY for the deepseek
- *  style on DeepSeek's CLOUD host, whose thinking API 400s on it (see
- *  `suppressesToolChoice`). No configuration needed for the common local case. */
+ *  text the harness would have to salvage — and is suppressed only when the
+ *  resolved profile says so (the `deepseek` cloud preset does, because its
+ *  thinking API 400s on it). No configuration needed for the common local case. */
 function toolsBlock(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
@@ -118,19 +166,21 @@ function toolsBlock(
     return {};
   }
 
-  if (style(cfg) === "deepseek" && suppressesToolChoice(cfg)) {
+  if (suppressesToolChoice(cfg)) {
     return { tools: opts.tools };
   }
 
   return { tools: opts.tools, tool_choice: opts.toolChoice ?? "auto" };
 }
 
-/** Whether to omit `tool_choice` for a deepseek-style endpoint. AUTO by default,
- *  so a normal user never configures anything: only DeepSeek's CLOUD thinking API
- *  (api.deepseek.com) 400s on an explicit `tool_choice`; a local / self-hosted
- *  DeepSeek (vLLM/SGLang/llama.cpp) accepts it and grammar-constrains the call, so
- *  it's sent. The optional `guidedDecoding` flag only exists to override a
- *  misdetection (true = always send, false = always omit). */
+/** Whether to omit `tool_choice`. Two steps only: the explicit `guidedDecoding`
+ *  override, then the profile's own `omitToolChoice`.
+ *
+ *  There is deliberately NO host check here. The one endpoint that rejects an
+ *  explicit `tool_choice` is DeepSeek's cloud API, and its preset declares the
+ *  suppression as data — which is what makes the preset name and a copy of the
+ *  preset behave identically. A hand-written profile pointed at that host must
+ *  set the flag itself; re-adding a host check would silently override it. */
 function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
   const override = guidedOverride(cfg);
 
@@ -138,11 +188,14 @@ function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
     return !override;
   }
 
-  return isDeepSeekCloudHost(cfg.baseUrl);
+  // Declared by the profile itself, so it travels with the dialect: a request
+  // can never carry DeepSeek cloud's thinking fields while also sending
+  // `tool_choice`, and a spread copy of the preset behaves like the name.
+  return profile(cfg).omitToolChoice === true;
 }
 
 /** Normalize the optional `guidedDecoding` override — tolerates a stringified
- *  boolean from a hand-edited models.json; undefined ⇒ auto-detect by host. */
+ *  boolean from a hand-edited models.json; undefined ⇒ defer to the profile. */
 function guidedOverride(cfg: IOpenAICompatibleConfig): boolean | undefined {
   const value: unknown = cfg.guidedDecoding;
 
@@ -157,55 +210,130 @@ function guidedOverride(cfg: IOpenAICompatibleConfig): boolean | undefined {
   return undefined;
 }
 
-/** True for the DeepSeek CLOUD API host (api.deepseek.com / *.deepseek.com) — the
- *  only endpoint known to reject an explicit `tool_choice`. Tolerates a scheme-less
- *  baseUrl (e.g. `api.deepseek.com/v1` from a hand-edited config): without a scheme
- *  `new URL()` throws, which would miss the cloud host and wrongly SEND tool_choice
- *  — the exact 400 this guards against — so prepend `https://` before parsing. */
-function isDeepSeekCloudHost(baseUrl: string): boolean {
+/** The first two octets of a dotted-quad IPv4 address, or of the embedded v4 in
+ *  an IPv4-mapped IPv6 one. Returns null when `host` is neither. WHATWG URL
+ *  normalizes `::ffff:192.168.1.9` to `::ffff:c0a8:109`, so the mapped form has
+ *  to be read as hex: the first hextet packs both octets. */
+function firstTwoOctets(host: string): [number, number] | null {
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(host);
+
+  if (v4 !== null) {
+    return [Number(v4[1]), Number(v4[2])];
+  }
+
+  const mapped = /^::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/iu.exec(host);
+  const high = mapped?.[1];
+
+  if (high !== undefined) {
+    const hextet = Number.parseInt(high, 16);
+
+    return [(hextet >> 8) & 0xff, hextet & 0xff];
+  }
+
+  return null;
+}
+
+/** True when `baseUrl` points at a private/loopback address or a LAN-only TLD —
+ *  i.e. something the user is self-hosting. Used to tell a local vLLM apart from
+ *  a public endpoint (which may be a reverse proxy in front of a cloud API), so
+ *  only the former gets the vLLM reasoning dialect. Scheme-less input is
+ *  tolerated: a scheme-less baseUrl is prefixed before parsing. */
+function isPrivateHost(baseUrl: string): boolean {
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(baseUrl)
     ? baseUrl
     : `https://${baseUrl}`;
 
+  let host: string;
+
   try {
-    return /(^|\.)deepseek\.com$/iu.test(new URL(withScheme).hostname);
+    // A fully-qualified name may carry a trailing root dot (`localhost.`,
+    // `spark2.lan.`); it is the same host, so normalize it away before matching.
+    host = new URL(withScheme).hostname.toLowerCase().replace(/\.$/u, "");
   } catch {
     return false;
   }
+
+  if (host === "localhost") {
+    return true;
+  }
+
+  if (/\.(local|lan|internal|home|localdomain|localhost)$/u.test(host)) {
+    return true;
+  }
+
+  // WHATWG URL keeps the brackets on an IPv6 literal (`http://[::1]` →
+  // hostname `[::1]`), so strip them before matching.
+  const bare = host.replace(/^\[|\]$/gu, "");
+
+  // Gate the IPv6 range checks on the host actually BEING an IPv6 literal.
+  // Without this, `/^f[cd]/` matches DNS names like `fda.gov` or
+  // `fcm.example.com` and would wrongly mark a public proxy private.
+  const isIpv6 = bare.includes(":");
+
+  if (
+    isIpv6 &&
+    (bare === "::1" || // loopback
+      /^f[cd]/u.test(bare) || // unique-local fc00::/7
+      /^fe[89ab]/u.test(bare)) // link-local fe80::/10
+  ) {
+    return true;
+  }
+
+  // An IPv4-mapped address is private iff its v4 part is. WHATWG URL rewrites
+  // `::ffff:192.168.1.9` into hex (`::ffff:c0a8:109`), so match that form too —
+  // the dotted spelling never survives parsing.
+  const octets = firstTwoOctets(bare);
+
+  if (octets === null) {
+    return false;
+  }
+
+  const [a, b] = octets;
+
+  return (
+    a === 127 || // loopback
+    a === 10 || // 10/8
+    (a === 172 && b >= 16 && b <= 31) || // 172.16/12
+    (a === 192 && b === 168) || // 192.168/16
+    (a === 169 && b === 254) || // link-local
+    (a === 100 && b >= 64 && b <= 127) // CGNAT 100.64/10 (Tailscale et al)
+  );
 }
 
-/** Build the request body object (pure). Field order keeps the qwen default
- *  byte-for-byte identical; `extraBody` is merged last so it can override
- *  anything for a fully custom provider. */
+/** Build the request body object (pure). `extraBody` is merged LAST so it can
+ *  override anything for a fully custom provider. Field ORDER is not part of the
+ *  contract: profile-driven fields are written together, ahead of temperature
+ *  and tools, so that nested paths sharing a parent cannot clobber each other. */
 export function buildRequestBody(
   cfg: IOpenAICompatibleConfig,
   messages: IChatMessage[],
   opts: ICompleteOptions,
   streaming: boolean
 ): Record<string, unknown> {
-  // o-series rejects `temperature` entirely; everywhere else send it only when set
-  // AND finite — a NaN/Infinity (bad config/env) would JSON.stringify to `null`,
-  // which a server reads as an explicit choice, not "unset". Drop it instead.
+  const p = profile(cfg);
+
+  // Some endpoints reject `temperature` outright; everywhere else send it only
+  // when set AND finite — a NaN/Infinity (bad config/env) would JSON.stringify
+  // to `null`, which a server reads as an explicit choice, not "unset".
   const omitTemperature =
-    style(cfg) === "openai" ||
+    p.omitTemperature === true ||
     opts.temperature === undefined ||
     !Number.isFinite(opts.temperature);
 
-  // DeepSeek's thinking mode requires each prior assistant turn's
-  // `reasoning_content` replayed; other providers don't want it.
-  const includeReasoning = style(cfg) === "deepseek";
+  // Only endpoints that declare it want each prior assistant turn's
+  // `reasoning_content` replayed (DeepSeek's cloud API 400s without it).
+  const includeReasoning = p.replayReasoning === true;
 
   return {
     model: cfg.model,
     messages: messages.map((m) => toWire(m, includeReasoning)),
-    ...tokenCapField(cfg),
+    ...profileFields(cfg, opts),
     ...(omitTemperature ? {} : { temperature: opts.temperature }),
     ...(cfg.repetitionPenalty === undefined ||
     !Number.isFinite(cfg.repetitionPenalty)
       ? {}
       : { repetition_penalty: cfg.repetitionPenalty }),
     ...toolsBlock(cfg, opts),
-    ...reasoningFields(cfg, opts),
     ...(streaming
       ? { stream: true, stream_options: { include_usage: true } }
       : {}),
