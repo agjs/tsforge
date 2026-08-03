@@ -207,7 +207,7 @@ for (const seed of seeds) {
         const runEvents: ILoopEvent[] = [];
         const recordLabel = `${vLabel} temp=${temp}`;
 
-        const { record, error } = await recordAttempt({
+        const outcome = await recordAttempt({
           label: recordLabel,
           events: runEvents,
           elapsedMs: elapsed,
@@ -227,10 +227,10 @@ for (const seed of seeds) {
             ),
         });
 
-        records.push(record);
+        records.push(outcome.record);
 
-        if (error !== undefined) {
-          const message = errorMessage(error);
+        if (outcome.failed) {
+          const message = errorMessage(outcome.error);
 
           process.stdout.write(
             `  ${seed} ${recordLabel} #${i + 1}: ERRORED (${message}) → ${runId}\n`

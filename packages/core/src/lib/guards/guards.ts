@@ -20,28 +20,29 @@ export function isArray(value: unknown): value is unknown[] {
  * without a fallback.
  */
 export function errorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-
-  if (typeof err === "string") {
-    return err;
-  }
-
+  // The WHOLE body is guarded, not just the stringify. `err instanceof Error` invokes
+  // a prototype trap, and Object.prototype.toString consults Symbol.toStringTag — a
+  // revoked Proxy or a throwing getter makes either of those throw. Callers run this
+  // inside a catch, AFTER the failure was contained, so a throw here would abort the
+  // batch the catch exists to keep alive: a contained failure becoming a total one is
+  // strictly worse than an ugly message.
   try {
+    if (err instanceof Error) {
+      return err.message;
+    }
+
+    if (typeof err === "string") {
+      return err;
+    }
+
     const json = JSON.stringify(err);
 
     if (typeof json === "string") {
       return json;
     }
-  } catch {
-    // Circular, BigInt, or a toJSON that throws — fall through.
-  }
 
-  try {
     return String(err);
   } catch {
-    // A Symbol, or an object with a throwing toString.
-    return Object.prototype.toString.call(err);
+    return "an unprintable value was thrown";
   }
 }

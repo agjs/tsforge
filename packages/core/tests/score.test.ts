@@ -87,3 +87,20 @@ test("reports zero cost only when no run recorded any", () => {
   expect(a?.avgTokensOut).toBe(0);
   expect(a?.avgCostPerAcceptedChange).toBe(0);
 });
+
+// An attempt that THREW has no meaningful cycle count. Averaging its 0 in made
+// avgCycles improve the more often a variant crashed — the same under-report bias
+// the ms and token averages are careful to avoid.
+test("avgCycles skips errored runs instead of averaging in a fake zero", () => {
+  const summaries = summarize([
+    { label: "a", passed: true, cycles: 4, ms: 100 },
+    { label: "a", passed: true, cycles: 6, ms: 100 },
+    { label: "a", passed: false, cycles: 0, ms: 80, errored: true },
+  ]);
+  const a = summaries.find((s) => s.label === "a");
+
+  expect(a?.avgCycles).toBe(5);
+  // The crash is still a run, and the time it burned is still real.
+  expect(a?.runs).toBe(3);
+  expect(a?.avgMs).toBeCloseTo((100 + 100 + 80) / 3, 5);
+});

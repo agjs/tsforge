@@ -143,6 +143,34 @@ describe("eval metrics: analyzeEvents", () => {
     { kind: "done", task: "1", message: "" },
   ];
 
+  test("sums PROMPT tokens too, not just completion", () => {
+    // peakContext is a high-water mark; a variant that enlarges the prompt pays on
+    // every call, so the total has to be summed separately.
+    const m = analyzeEvents([
+      {
+        kind: "usage",
+        task: "t",
+        message: "u",
+        promptTokens: 500,
+        completionTokens: 100,
+        totalTokens: 600,
+      },
+      {
+        kind: "usage",
+        task: "t",
+        message: "u",
+        promptTokens: 700,
+        completionTokens: 200,
+        totalTokens: 900,
+      },
+    ]);
+
+    expect(m.tokensIn).toBe(1200);
+    expect(m.tokensOut).toBe(300);
+    // Still the MAX, not the sum — the two answer different questions.
+    expect(m.peakContext).toBe(700);
+  });
+
   test("distills turns, tokens, edits, gate runs, and rate", () => {
     const m = analyzeEvents(events);
 

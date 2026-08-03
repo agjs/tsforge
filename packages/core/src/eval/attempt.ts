@@ -3,11 +3,13 @@ import type { IRunRecord } from "./eval.types";
 import { analyzeEvents } from "./metrics";
 import { buildRunRecord } from "./score";
 
-export interface IAttemptOutcome {
-  record: IRunRecord;
-  /** The failure, when the attempt threw. `undefined` on success. */
-  error?: unknown;
-}
+export type IAttemptOutcome =
+  | { failed: false; record: IRunRecord }
+  /** `error` may itself be `undefined` (`throw undefined`, `Promise.reject()`), so
+   *  the FLAG discriminates, never the error's presence. Keying off `error !== undefined`
+   *  made a rejection with `undefined` look like a success: the caller filed an
+   *  infrastructure crash as an ordinary red task and never counted it as errored. */
+  | { failed: true; record: IRunRecord; error: unknown };
 
 /**
  * Run one eval attempt and always come back with a record.
@@ -35,16 +37,23 @@ export async function recordAttempt(args: {
   run: () => Promise<IRunRecord>;
 }): Promise<IAttemptOutcome> {
   try {
-    return { record: await args.run() };
+    return { failed: false, record: await args.run() };
   } catch (error) {
     return {
-      record: buildRunRecord({
-        label: args.label,
-        passed: false,
-        cycles: 0,
-        elapsedMs: args.elapsedMs(),
-        metrics: analyzeEvents(args.events),
-      }),
+      failed: true,
+      record: {
+        ...buildRunRecord({
+          label: args.label,
+          passed: false,
+          // Unknowable after a throw. Flagged as errored so the averages that would
+          // be DRAGGED DOWN by a fake 0 can skip it — a crash after N turns must not
+          // improve the reported cycle count.
+          cycles: 0,
+          elapsedMs: args.elapsedMs(),
+          metrics: analyzeEvents(args.events),
+        }),
+        errored: true,
+      },
       error,
     };
   }

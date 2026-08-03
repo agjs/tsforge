@@ -1,7 +1,32 @@
 import type { IRunRecord, IVariantSummary } from "./eval.types";
 import type { IRunMetrics } from "./metrics";
 
-/** One eval run's outcome. */
+/**
+ * Mean of `select` over the records that RECORDED a value, 0 when none did.
+ *
+ * The load-bearing part is the FILTER. Dividing by every run would report a
+ * variant as cheaper (or faster, or better) the more often it recorded nothing —
+ * a crash before the first model call would improve its numbers.
+ */
+function meanOfRecorded(
+  list: readonly IRunRecord[],
+  select: (record: IRunRecord) => number | undefined
+): number {
+  const values: number[] = [];
+
+  for (const record of list) {
+    const value = select(record);
+
+    if (value !== undefined) {
+      values.push(value);
+    }
+  }
+
+  return values.length > 0
+    ? values.reduce((acc, v) => acc + v, 0) / values.length
+    : 0;
+}
+
 /** Aggregate run records per variant label. */
 export function summarize(records: IRunRecord[]): IVariantSummary[] {
   const byLabel = new Map<string, IRunRecord[]>();
@@ -20,11 +45,6 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
     const total = list.length;
     const sum = (select: (r: IRunRecord) => number): number =>
       list.reduce((acc, r) => acc + select(r), 0);
-    const scored = list.filter((r) => r.quality !== undefined);
-    const costed = list.filter((r) => r.tokensOut !== undefined);
-    const prompted = list.filter((r) => r.tokensIn !== undefined);
-    const perChange = list.filter((r) => r.costPerAcceptedChange !== undefined);
-    const sized = list.filter((r) => r.loc !== undefined);
     // Turns-to-green only counts runs that actually reached green — averaging in
     // failed runs' (capped) turn counts would muddy the loop-efficiency signal.
     const green = list.filter((r) => r.passed);
@@ -43,40 +63,29 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
       runs: total,
       passed,
       passRate: passed / total,
-      avgCycles: sum((r) => r.cycles) / total,
+      // A throw has no meaningful cycle count; averaging its 0 in made avgCycles
+      // IMPROVE with the error rate.
+      avgCycles: meanOfRecorded(list, (r) =>
+        r.errored === true ? undefined : r.cycles
+      ),
+      // Turns-to-green counts only runs that actually reached green — averaging in
+      // failed runs' (capped) counts would muddy the loop-efficiency signal. Null,
+      // not 0, when none did: "no data" is not "instant".
       avgTurnsToGreen:
         green.length > 0
           ? green.reduce((acc, r) => acc + r.cycles, 0) / green.length
           : null,
+      // Every run reports real elapsed time, including a crash, so this divides by
+      // all of them.
       avgMs: sum((r) => r.ms) / total,
-      // Averaged over the runs that RECORDED a figure, not all runs: dividing by
-      // `total` would quietly report a cheaper variant whenever a run errored
-      // before spending anything.
-      avgTokensOut:
-        costed.length > 0
-          ? costed.reduce((acc, r) => acc + (r.tokensOut ?? 0), 0) /
-            costed.length
-          : 0,
-      avgTokensIn:
-        prompted.length > 0
-          ? prompted.reduce((acc, r) => acc + (r.tokensIn ?? 0), 0) /
-            prompted.length
-          : 0,
-      avgCostPerAcceptedChange:
-        perChange.length > 0
-          ? perChange.reduce(
-              (acc, r) => acc + (r.costPerAcceptedChange ?? 0),
-              0
-            ) / perChange.length
-          : 0,
-      avgQuality:
-        scored.length > 0
-          ? scored.reduce((acc, r) => acc + (r.quality ?? 0), 0) / scored.length
-          : 0,
-      avgLoc:
-        sized.length > 0
-          ? sized.reduce((acc, r) => acc + (r.loc ?? 0), 0) / sized.length
-          : 0,
+      avgTokensOut: meanOfRecorded(list, (r) => r.tokensOut),
+      avgTokensIn: meanOfRecorded(list, (r) => r.tokensIn),
+      avgCostPerAcceptedChange: meanOfRecorded(
+        list,
+        (r) => r.costPerAcceptedChange
+      ),
+      avgQuality: meanOfRecorded(list, (r) => r.quality),
+      avgLoc: meanOfRecorded(list, (r) => r.loc),
       failureClasses,
     });
   }

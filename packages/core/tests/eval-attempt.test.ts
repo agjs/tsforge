@@ -35,7 +35,8 @@ test("a thrown attempt records the time and tokens it consumed", async () => {
     },
   });
 
-  expect(outcome.error).toBeInstanceOf(Error);
+  expect(outcome.failed).toBe(true);
+  expect(outcome.failed && outcome.error).toBeInstanceOf(Error);
   expect(outcome.record.ms).toBe(8500);
   expect(outcome.record.tokensOut).toBe(1000);
   expect(outcome.record.tokensIn).toBe(200);
@@ -88,7 +89,7 @@ test("a successful attempt is returned untouched, with no error", async () => {
   // The run's own record wins — the caller's clock/events are the FALLBACK for a
   // throw, not an override of a completed run.
   expect(outcome.record).toEqual(record);
-  expect(outcome.error).toBeUndefined();
+  expect(outcome.failed).toBe(false);
 });
 
 test("an attempt that dies before spending anything records no cost", async () => {
@@ -104,4 +105,34 @@ test("an attempt that dies before spending anything records no cost", async () =
   expect(outcome.record.ms).toBe(40);
   expect(outcome.record.tokensOut).toBeUndefined();
   expect(outcome.record.costPerAcceptedChange).toBeUndefined();
+});
+
+// `error` cannot discriminate success from failure: a rejection can CARRY undefined.
+// Keying off its presence made `throw undefined` look like a success, so the caller
+// filed an infrastructure crash as an ordinary red task and never counted it errored.
+test("a rejection carrying undefined is still a failure", async () => {
+  // Typed as Error so the no-non-Error-throw rules are satisfied, but the RUNTIME
+  // value is undefined/null/0/"" — which is the whole point: `error !== undefined`
+  // could not tell those apart from a success.
+  const values: Error[] = [undefined, null, 0, ""].map(
+    (v) => v as unknown as Error
+  );
+
+  for (const thrown of values) {
+    const outcome = await recordAttempt({
+      label: "a",
+      events: [],
+      elapsedMs: () => 12,
+      run: async () => {
+        throw thrown;
+      },
+    });
+
+    expect({ thrown, failed: outcome.failed }).toEqual({
+      thrown,
+      failed: true,
+    });
+    expect(outcome.record.passed).toBe(false);
+    expect(outcome.record.errored).toBe(true);
+  }
 });

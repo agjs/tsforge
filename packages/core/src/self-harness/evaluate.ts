@@ -323,7 +323,7 @@ async function runOneSpec(
 
   let mined: IMinedRun | undefined;
 
-  const { record, error } = await recordAttempt({
+  const outcome = await recordAttempt({
     label: taskId,
     events,
     elapsedMs: elapsed,
@@ -336,21 +336,21 @@ async function runOneSpec(
     },
   });
 
-  sink.records.push(record);
+  sink.records.push(outcome.record);
 
-  if (error === undefined) {
+  if (!outcome.failed) {
     if (mined !== undefined) {
       sink.runs.push(mined);
     }
 
-    sink.log(verdictLine(taskId, attempt, record));
+    sink.log(verdictLine(taskId, attempt, outcome.record));
 
     return;
   }
 
   sink.erroredCount += 1;
   sink.log(
-    `    ${taskId} #${String(attempt)}: ERRORED (${errorMessage(error)})`
+    `    ${taskId} #${String(attempt)}: ERRORED (${errorMessage(outcome.error)})`
   );
 }
 

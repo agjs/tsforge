@@ -169,6 +169,9 @@ test("the headless loop reports the provider's token usage", async () => {
     // The metrics library reads these fields; a usage event without them is inert.
     expect(analyzeEvents(events).tokensOut).toBe(42 * usage.length);
     expect(analyzeEvents(events).modelCalls).toBe(usage.length);
+    // PROMPT tokens too: dropping promptTokens from the report would leave the
+    // report's "Tok in" column permanently blank while "Tok out" kept working.
+    expect(analyzeEvents(events).tokensIn).toBe(11 * usage.length);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

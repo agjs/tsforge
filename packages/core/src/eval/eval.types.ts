@@ -42,6 +42,10 @@ export interface IRunRecord {
   /** Total prompt tokens the run sent. A variant that grows the prompt costs more
    *  per call while producing the same output, so output tokens alone hide it. */
   tokensIn?: number;
+  /** The attempt THREW (infrastructure weather), rather than running and failing.
+   *  Its `cycles` is unknowable, so averages that would be skewed by a fake 0 skip
+   *  it — the time and tokens it burned are real and still counted. */
+  errored?: boolean;
   /** Completion tokens per edit that SURVIVED (`tokensOut` / net-accepted) — the
    *  cost of one durable change rather than one attempt. Omitted when nothing was
    *  accepted, since the ratio is undefined rather than zero. */

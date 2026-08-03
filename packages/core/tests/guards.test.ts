@@ -42,10 +42,24 @@ test("errorMessage is total — it never throws, whatever was thrown", () => {
     },
   };
 
+  // A REVOKED proxy throws on every operation, including `instanceof` and
+  // Object.prototype.toString — the cases a guard around only the stringify misses.
+  const revocable = Proxy.revocable({}, {});
+
+  revocable.revoke();
+
+  const throwingTag = {
+    get [Symbol.toStringTag](): string {
+      throw new Error("nope");
+    },
+  };
+
   for (const value of [
     circular,
     throwingToJson,
     throwingToString,
+    revocable.proxy,
+    throwingTag,
     undefined,
     null,
     Symbol("s"),
