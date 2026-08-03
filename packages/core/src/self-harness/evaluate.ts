@@ -19,11 +19,12 @@ import type { IProvider } from "../inference";
 import {
   analyzeEvents,
   classifyRun,
+  type IRunMetrics,
   countTaskLoc,
   judge,
   summarize,
+  type IRunRecord,
 } from "../eval";
-import type { IRunRecord } from "../eval";
 import { renderEvent } from "../render";
 import { resetOverlayCache } from "./overlay";
 import type { IHarnessOverlay, ISplitScore } from "./self-harness.types";
@@ -142,6 +143,33 @@ interface ITaskRunOutput {
   readonly run: IMinedRun;
 }
 
+/**
+ * The metrics half of a run record. Pure and exported so the cost wiring has a
+ * direct test: the numbers are derived from a real event stream, and a run that
+ * accepted nothing must OMIT the ratio rather than report 0 — a zero would be
+ * averaged in and make a variant look cheaper the less of its work survived.
+ */
+export function buildRunRecord(args: {
+  label: string;
+  passed: boolean;
+  cycles: number;
+  elapsedMs: number;
+  metrics: Pick<IRunMetrics, "tokensOut" | "costPerAcceptedChange">;
+}): IRunRecord {
+  const { metrics } = args;
+
+  return {
+    label: args.label,
+    passed: args.passed,
+    cycles: args.cycles,
+    ms: args.elapsedMs,
+    ...(metrics.tokensOut > 0 ? { tokensOut: metrics.tokensOut } : {}),
+    ...(metrics.costPerAcceptedChange > 0
+      ? { costPerAcceptedChange: metrics.costPerAcceptedChange }
+      : {}),
+  };
+}
+
 async function runTaskOnce(
   taskId: string,
   runDir: string,
@@ -212,23 +240,16 @@ async function runTaskOnce(
   }
 
   const failureClass = passed ? undefined : classifyRun(events).failureClass;
-  // The cost side of the comparison. analyzeEvents already derives these from the
-  // same event stream; they simply never reached the record, so a sweep could only
-  // compare variants on pass-rate and turns.
-  const metrics = analyzeEvents(events);
-  const cost =
-    metrics.costPerAcceptedChange > 0
-      ? { costPerAcceptedChange: metrics.costPerAcceptedChange }
-      : {};
 
   return {
     record: {
-      label: taskId,
-      passed,
-      cycles,
-      ms: elapsedMs,
-      ...(metrics.tokensOut > 0 ? { tokensOut: metrics.tokensOut } : {}),
-      ...cost,
+      ...buildRunRecord({
+        label: taskId,
+        passed,
+        cycles,
+        elapsedMs,
+        metrics: analyzeEvents(events),
+      }),
       ...(quality === undefined ? {} : { quality }),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
@@ -307,6 +328,12 @@ async function runOneSpec(
   opts: IEvaluateOptions,
   sink: IRunSink
 ): Promise<void> {
+  // Timed OUT here so a throw still records what the attempt actually consumed.
+  // Reporting `ms: 0` for a run that died after several model calls made an
+  // unreliable variant look faster the more often it crashed — the same bias the
+  // token averages are careful to avoid.
+  const startedAt = performance.now();
+
   try {
     const { record, run } = await runTaskOnce(taskId, runDir, opts);
 
@@ -315,7 +342,12 @@ async function runOneSpec(
     sink.log(verdictLine(taskId, attempt, record));
   } catch (err) {
     sink.erroredCount += 1;
-    sink.records.push({ label: taskId, passed: false, cycles: 0, ms: 0 });
+    sink.records.push({
+      label: taskId,
+      passed: false,
+      cycles: 0,
+      ms: Math.round(performance.now() - startedAt),
+    });
     sink.log(
       `    ${taskId} #${String(attempt)}: ERRORED (${err instanceof Error ? err.message : String(err)})`
     );

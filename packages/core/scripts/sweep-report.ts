@@ -13,6 +13,7 @@ import {
   renderSweepReportMarkdown,
   type IRunRecord,
 } from "../src/eval";
+import { FAILURE_CLASS, type FailureClass } from "../src/eval/failure-class";
 
 const RUNS_DIR = "evals/runs";
 
@@ -27,6 +28,19 @@ async function newestSweep(): Promise<string> {
   }
 
   return join(RUNS_DIR, latest);
+}
+
+/** True for a value that is one of the known failure classes — a guard, so a
+ *  hand-edited or older sweep JSON cannot smuggle an arbitrary string through. */
+function isFailureClass(value: unknown): value is FailureClass {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  // Widened to string[] so the lookup needs no type assertion (house rule).
+  const known: readonly string[] = Object.values(FAILURE_CLASS);
+
+  return known.includes(value);
 }
 
 function toRecords(value: unknown): IRunRecord[] {
@@ -44,12 +58,23 @@ function toRecords(value: unknown): IRunRecord[] {
       typeof r.cycles === "number" &&
       typeof r.ms === "number"
     ) {
+      // Rehydrate EVERY metric the record can carry. Dropping fields here meant a
+      // re-rendered report showed empty cost columns (and had already been losing
+      // loc / failureClass) for data that was present on disk.
       out.push({
         label: r.label,
         passed: r.passed,
         cycles: r.cycles,
         ms: r.ms,
         ...(typeof r.quality === "number" ? { quality: r.quality } : {}),
+        ...(typeof r.loc === "number" ? { loc: r.loc } : {}),
+        ...(typeof r.tokensOut === "number" ? { tokensOut: r.tokensOut } : {}),
+        ...(typeof r.costPerAcceptedChange === "number"
+          ? { costPerAcceptedChange: r.costPerAcceptedChange }
+          : {}),
+        ...(isFailureClass(r.failureClass)
+          ? { failureClass: r.failureClass }
+          : {}),
       });
     }
   }

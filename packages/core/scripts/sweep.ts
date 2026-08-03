@@ -16,6 +16,7 @@ import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { providerConfig } from "../src/cli";
 import {
   summarize,
+  analyzeEvents,
   classifyRun,
   countTaskLoc,
   renderSweepReportMarkdown,
@@ -428,6 +429,11 @@ async function runOne(
 
     await log.end();
 
+    // Cost, from the same event stream classifyRun reads. Without it this sweep —
+    // the primary one — would keep printing the Tokens columns as 0 while
+    // pass-rate decided the comparison.
+    const runMetrics = analyzeEvents(runEvents);
+
     // Structured per-run artifact for comparison alongside run.log + the code.
     // Include the feature variant so analysis can reconstruct the conditions.
     await Bun.write(
@@ -441,6 +447,8 @@ async function runOne(
           status: result.status,
           cycles,
           ms,
+          tokensOut: runMetrics.tokensOut,
+          costPerAcceptedChange: runMetrics.costPerAcceptedChange,
           quality,
           loc,
           judgeNotes,
@@ -472,6 +480,10 @@ async function runOne(
       cycles,
       ms,
       quality,
+      ...(runMetrics.tokensOut > 0 ? { tokensOut: runMetrics.tokensOut } : {}),
+      ...(runMetrics.costPerAcceptedChange > 0
+        ? { costPerAcceptedChange: runMetrics.costPerAcceptedChange }
+        : {}),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
     };
