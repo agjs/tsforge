@@ -22,6 +22,7 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
       list.reduce((acc, r) => acc + select(r), 0);
     const scored = list.filter((r) => r.quality !== undefined);
     const costed = list.filter((r) => r.tokensOut !== undefined);
+    const prompted = list.filter((r) => r.tokensIn !== undefined);
     const perChange = list.filter((r) => r.costPerAcceptedChange !== undefined);
     const sized = list.filter((r) => r.loc !== undefined);
     // Turns-to-green only counts runs that actually reached green — averaging in
@@ -55,6 +56,11 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
         costed.length > 0
           ? costed.reduce((acc, r) => acc + (r.tokensOut ?? 0), 0) /
             costed.length
+          : 0,
+      avgTokensIn:
+        prompted.length > 0
+          ? prompted.reduce((acc, r) => acc + (r.tokensIn ?? 0), 0) /
+            prompted.length
           : 0,
       avgCostPerAcceptedChange:
         perChange.length > 0
@@ -94,7 +100,10 @@ export function buildRunRecord(args: {
   passed: boolean;
   cycles: number;
   elapsedMs: number;
-  metrics: Pick<IRunMetrics, "tokensOut" | "costPerAcceptedChange">;
+  metrics: Pick<
+    IRunMetrics,
+    "tokensOut" | "tokensIn" | "costPerAcceptedChange"
+  >;
 }): IRunRecord {
   const { metrics } = args;
 
@@ -104,6 +113,7 @@ export function buildRunRecord(args: {
     cycles: args.cycles,
     ms: args.elapsedMs,
     ...(metrics.tokensOut > 0 ? { tokensOut: metrics.tokensOut } : {}),
+    ...(metrics.tokensIn > 0 ? { tokensIn: metrics.tokensIn } : {}),
     ...(metrics.costPerAcceptedChange > 0
       ? { costPerAcceptedChange: metrics.costPerAcceptedChange }
       : {}),

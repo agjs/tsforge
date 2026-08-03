@@ -20,11 +20,13 @@ import {
   analyzeEvents,
   buildRunRecord,
   classifyRun,
+  recordAttempt,
   countTaskLoc,
   judge,
   summarize,
   type IRunRecord,
 } from "../eval";
+import { errorMessage } from "../lib/guards";
 import { renderEvent } from "../render";
 import { resetOverlayCache } from "./overlay";
 import type { IHarnessOverlay, ISplitScore } from "./self-harness.types";
@@ -319,34 +321,37 @@ async function runOneSpec(
   const elapsed = (): number => Math.round(performance.now() - startedAt);
   const events: ILoopEvent[] = [];
 
-  try {
-    const { record, run } = await runTaskOnce(
-      taskId,
-      runDir,
-      opts,
-      events,
-      elapsed
-    );
+  let mined: IMinedRun | undefined;
 
-    sink.records.push(record);
-    sink.runs.push(run);
+  const { record, error } = await recordAttempt({
+    label: taskId,
+    events,
+    elapsedMs: elapsed,
+    run: async () => {
+      const out = await runTaskOnce(taskId, runDir, opts, events, elapsed);
+
+      mined = out.run;
+
+      return out.record;
+    },
+  });
+
+  sink.records.push(record);
+
+  if (error === undefined) {
+    if (mined !== undefined) {
+      sink.runs.push(mined);
+    }
+
     sink.log(verdictLine(taskId, attempt, record));
-  } catch (err) {
-    sink.erroredCount += 1;
-    sink.records.push(
-      buildRunRecord({
-        label: taskId,
-        passed: false,
-        cycles: 0,
-        elapsedMs: elapsed(),
-        // Whatever the attempt spent before it died still counts.
-        metrics: analyzeEvents(events),
-      })
-    );
-    sink.log(
-      `    ${taskId} #${String(attempt)}: ERRORED (${err instanceof Error ? err.message : String(err)})`
-    );
+
+    return;
   }
+
+  sink.erroredCount += 1;
+  sink.log(
+    `    ${taskId} #${String(attempt)}: ERRORED (${errorMessage(error)})`
+  );
 }
 
 /**

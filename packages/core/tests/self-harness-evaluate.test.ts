@@ -101,7 +101,7 @@ test("buildRunRecord carries cost, and omits the ratio when nothing was accepted
     passed: true,
     cycles: 3,
     elapsedMs: 1234,
-    metrics: { tokensOut: 9000, costPerAcceptedChange: 3000 },
+    metrics: { tokensOut: 9000, tokensIn: 4000, costPerAcceptedChange: 3000 },
   });
 
   expect(withCost).toEqual({
@@ -110,6 +110,7 @@ test("buildRunRecord carries cost, and omits the ratio when nothing was accepted
     cycles: 3,
     ms: 1234,
     tokensOut: 9000,
+    tokensIn: 4000,
     costPerAcceptedChange: 3000,
   });
 
@@ -121,7 +122,7 @@ test("buildRunRecord carries cost, and omits the ratio when nothing was accepted
     passed: false,
     cycles: 9,
     elapsedMs: 50,
-    metrics: { tokensOut: 9000, costPerAcceptedChange: 0 },
+    metrics: { tokensOut: 9000, tokensIn: 4000, costPerAcceptedChange: 0 },
   });
 
   expect(nothingAccepted.tokensOut).toBe(9000);
@@ -133,7 +134,7 @@ test("buildRunRecord carries cost, and omits the ratio when nothing was accepted
     passed: false,
     cycles: 0,
     elapsedMs: 7,
-    metrics: { tokensOut: 0, costPerAcceptedChange: 0 },
+    metrics: { tokensOut: 0, tokensIn: 0, costPerAcceptedChange: 0 },
   });
 
   expect(spentNothing.tokensOut).toBeUndefined();

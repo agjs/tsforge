@@ -17,6 +17,10 @@ export interface IRunMetrics {
   modelCalls: number;
   /** Total completion tokens generated. */
   tokensOut: number;
+  /** Total PROMPT tokens sent. Summed, unlike `peakContext` which is the high-water
+   *  mark: a variant that enlarges the prompt or the tool context pays for it on
+   *  every call, and comparing on output tokens alone reported it as free. */
+  tokensIn: number;
   /** Largest prompt-token count seen (the run's context high-water mark). */
   peakContext: number;
   /** File mutations (`edit` + `create`). */
@@ -58,6 +62,7 @@ function emptyMetrics(): IRunMetrics {
     turns: 0,
     modelCalls: 0,
     tokensOut: 0,
+    tokensIn: 0,
     peakContext: 0,
     edits: 0,
     editsReverted: 0,
@@ -101,6 +106,7 @@ interface IAccum {
 function tallyUsage(m: IRunMetrics, event: ILoopEvent, acc: IAccum): void {
   m.modelCalls += 1;
   m.tokensOut += event.completionTokens ?? 0;
+  m.tokensIn += event.promptTokens ?? 0;
   m.peakContext = Math.max(m.peakContext, event.promptTokens ?? 0);
 
   if (event.tokensPerSecond !== undefined && event.tokensPerSecond > 0) {

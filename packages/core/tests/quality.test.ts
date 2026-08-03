@@ -257,3 +257,64 @@ test("an unparseable judge response is no-signal — no improvement attempt", as
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// A quality attempt that half-applies and then THROWS was rolled back off disk but
+// never reported as reverted. So its edit/create events still counted as
+// net-accepted, and both accept-rate and costPerAcceptedChange were flattered
+// exactly when a quality attempt failed part-way — and quality repair is on by
+// default, so this hit the runs that otherwise looked best.
+test("reports a revert when an attempt throws after editing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-quality-throw-"));
+
+  try {
+    await Bun.write(join(dir, "a.ts"), "original");
+
+    const agent: IAgent = {
+      async implement(ctx) {
+        await Bun.write(join(ctx.cwd, "a.ts"), "half-applied");
+        ctx.report?.({
+          kind: "edit",
+          task: "1",
+          message: "a.ts",
+          file: "a.ts",
+        });
+        ctx.report?.({
+          kind: "edit",
+          task: "1",
+          message: "a.ts",
+          file: "a.ts",
+        });
+
+        throw new Error("agent exploded mid-attempt");
+      },
+    };
+    const events: { kind: string; count?: number }[] = [];
+
+    await expect(
+      qualityRepair(
+        { id: "1", accept: "true", files: ["a.ts"] },
+        dir,
+        agent,
+        risingJudge([3]),
+        { goal: "g", criteria: "c" },
+        {
+          target: 5,
+          maxAttempts: 1,
+          onEvent: (e) => events.push({ kind: e.kind, count: e.count }),
+        }
+      )
+    ).rejects.toThrow("agent exploded");
+
+    // Rolled back on disk...
+    expect(await Bun.file(join(dir, "a.ts")).text()).toBe("original");
+
+    // ...AND reported, carrying the whole batch so accept-rate subtracts both edits
+    // rather than one.
+    const reverted = events.filter((e) => e.kind === "reverted");
+
+    expect(reverted.length).toBe(1);
+    expect(reverted[0]?.count).toBe(2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

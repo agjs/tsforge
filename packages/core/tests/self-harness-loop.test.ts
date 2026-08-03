@@ -127,6 +127,7 @@ function taskSummary(turnsToGreen: number | null): IVariantSummary {
     avgTurnsToGreen: turnsToGreen,
     avgMs: 0,
     avgTokensOut: 0,
+    avgTokensIn: 0,
     avgCostPerAcceptedChange: 0,
     avgQuality: 0,
     avgLoc: 0,

@@ -127,6 +127,17 @@ export async function qualityRepair(
       gate = await validate(task, cwd, opts.parse);
     } catch (error) {
       await restoreFiles(snapshot);
+      // Report the revert on the THROW path too, not just the gate-broken one. The
+      // edits were rolled off disk either way, and without this the attempt's
+      // edit/create events still counted as net-accepted — so accept-rate and
+      // costPerAcceptedChange were both flattered exactly when a quality attempt
+      // half-applied and then failed.
+      report({
+        kind: "reverted",
+        task: task.id,
+        count: mutations,
+        message: `quality attempt ${attempts}: threw — reverted`,
+      });
 
       throw error;
     }

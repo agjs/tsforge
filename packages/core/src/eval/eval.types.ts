@@ -39,6 +39,9 @@ export interface IRunRecord {
    *  variant that passes slightly more often while costing several times as much
    *  reads as a straight win. */
   tokensOut?: number;
+  /** Total prompt tokens the run sent. A variant that grows the prompt costs more
+   *  per call while producing the same output, so output tokens alone hide it. */
+  tokensIn?: number;
   /** Completion tokens per edit that SURVIVED (`tokensOut` / net-accepted) — the
    *  cost of one durable change rather than one attempt. Omitted when nothing was
    *  accepted, since the ratio is undefined rather than zero. */
@@ -60,6 +63,8 @@ export interface IVariantSummary {
   /** Mean completion tokens per run, over runs that recorded any (0 if none).
    *  Read next to `passRate`: a variant is only better if it is not much dearer. */
   avgTokensOut: number;
+  /** Mean prompt tokens per run, over runs that recorded any (0 if none). */
+  avgTokensIn: number;
   /** Mean cost per surviving edit, over runs that recorded one (0 if none). */
   avgCostPerAcceptedChange: number;
   /** Average quality across runs that were scored (0 if none). */

@@ -18,12 +18,14 @@ import {
   summarize,
   analyzeEvents,
   buildRunRecord,
+  recordAttempt,
   classifyRun,
   countTaskLoc,
   renderSweepReportMarkdown,
   buildSweepReport,
   type IRunRecord,
 } from "../src/eval";
+import { errorMessage } from "../src/lib/guards";
 import { renderEvent } from "../src/render";
 import type { ILoopEvent } from "../src/loop";
 
@@ -205,9 +207,12 @@ for (const seed of seeds) {
         const runEvents: ILoopEvent[] = [];
         const recordLabel = `${vLabel} temp=${temp}`;
 
-        try {
-          records.push(
-            await runOne(
+        const { record, error } = await recordAttempt({
+          label: recordLabel,
+          events: runEvents,
+          elapsedMs: elapsed,
+          run: () =>
+            runOne(
               seed,
               seedDir,
               seedFiles,
@@ -219,20 +224,14 @@ for (const seed of seeds) {
               runEvents,
               elapsed,
               recordLabel
-            )
-          );
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+            ),
+        });
 
-          records.push(
-            buildRunRecord({
-              label: recordLabel,
-              passed: false,
-              cycles: 0,
-              elapsedMs: elapsed(),
-              metrics: analyzeEvents(runEvents),
-            })
-          );
+        records.push(record);
+
+        if (error !== undefined) {
+          const message = errorMessage(error);
+
           process.stdout.write(
             `  ${seed} ${recordLabel} #${i + 1}: ERRORED (${message}) → ${runId}\n`
           );
@@ -324,19 +323,19 @@ async function runOne(
   runDir: string,
   temp: number,
   i: number,
-  variantEnv: Record<string, string> = {},
+  variantEnv: Record<string, string>,
   // Owned by the caller so a throw mid-run keeps the events (and the token cost)
   // the attempt already produced.
-  runEvents: ILoopEvent[] = [],
+  runEvents: ILoopEvent[],
   // The caller's clock, so a success and a throw measure the SAME span. A success
   // used to time only runSpec while a throw was timed from setup, which made avgMs
   // depend on the error rate.
-  elapsedMs: () => number = () => 0,
+  elapsedMs: () => number,
   // The caller's label too: the success path derived its own from the ENV VARS
   // (`TSFORGE_NO_GIT_TOOL=off`) while the error path used the feature dimensions
   // (`git=on`), so one variant split into two summarize() buckets and errors never
   // reduced the variant's pass rate.
-  recordLabel = ""
+  recordLabel: string
 ): Promise<IRunRecord> {
   const restore = setVariantEnv(variantEnv);
 
@@ -455,6 +454,18 @@ async function runOne(
     // the primary one — would keep printing the Tokens columns as 0 while
     // pass-rate decided the comparison.
     const runMetrics = analyzeEvents(runEvents);
+    // ONE record, built once. result.json and the progress line read from it, so
+    // the omit rules live only in buildRunRecord and every surface reports the same
+    // numbers for the same attempt — calling elapsedMs() per surface gave each a
+    // slightly different ms, and re-deriving the cost fields inline is exactly the
+    // drift that left the campaign blind to cost.
+    const base = buildRunRecord({
+      label: recordLabel,
+      passed,
+      cycles,
+      elapsedMs: elapsedMs(),
+      metrics: runMetrics,
+    });
 
     // Structured per-run artifact for comparison alongside run.log + the code.
     // Include the feature variant so analysis can reconstruct the conditions.
@@ -468,16 +479,14 @@ async function runOne(
           features: variantEnv,
           status: result.status,
           cycles,
-          ms: elapsedMs(),
-          // Same omit rules as the record: a run that accepted nothing has an
-          // UNDEFINED ratio, and writing 0 here would make the per-run artifact
-          // report a meaningful zero.
-          ...(runMetrics.tokensOut > 0
-            ? { tokensOut: runMetrics.tokensOut }
-            : {}),
-          ...(runMetrics.costPerAcceptedChange > 0
-            ? { costPerAcceptedChange: runMetrics.costPerAcceptedChange }
-            : {}),
+          ms: base.ms,
+          ...(base.tokensOut === undefined
+            ? {}
+            : { tokensOut: base.tokensOut }),
+          ...(base.tokensIn === undefined ? {} : { tokensIn: base.tokensIn }),
+          ...(base.costPerAcceptedChange === undefined
+            ? {}
+            : { costPerAcceptedChange: base.costPerAcceptedChange }),
           quality,
           loc,
           judgeNotes,
@@ -499,17 +508,11 @@ async function runOne(
       : classifyRun(runEvents).failureClass;
 
     process.stdout.write(
-      `  ${seed} ${recordLabel} #${i + 1}: ${passed ? "done" : `blocked[${failureClass ?? "unknown"}]`} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${elapsedMs()}ms${quality === undefined ? "" : `, Q${quality}/5`}${loc === undefined ? "" : `, ${String(loc)} loc`}) → ${runId}\n`
+      `  ${seed} ${recordLabel} #${i + 1}: ${passed ? "done" : `blocked[${failureClass ?? "unknown"}]`} (${cycles} cyc, ${edits} edits, ${regressions} regress, ${base.ms}ms${quality === undefined ? "" : `, Q${quality}/5`}${loc === undefined ? "" : `, ${String(loc)} loc`}) → ${runId}\n`
     );
 
     return {
-      ...buildRunRecord({
-        label: recordLabel,
-        passed,
-        cycles,
-        elapsedMs: elapsedMs(),
-        metrics: runMetrics,
-      }),
+      ...base,
       quality,
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
