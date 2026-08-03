@@ -96,31 +96,98 @@ export const REASONING_PRESETS: Readonly<
 };
 
 export function isReasoningStyle(value: unknown): value is ReasoningStyle {
-  return typeof value === "string" && value in REASONING_PRESETS;
+  return typeof value === "string" && Object.hasOwn(REASONING_PRESETS, value);
+}
+
+/** True when `value` is usable as a profile. Config is hand-editable, so a
+ *  wrong shape has to be rejected at the boundary rather than throwing deep in
+ *  a request. Only checks structure; unknown extra keys are tolerated. */
+export function isReasoningProfile(value: unknown): value is IReasoningProfile {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+
+  const flag = value.thinking;
+
+  if (flag !== undefined) {
+    if (!isPlainObject(flag) || typeof flag.path !== "string") {
+      return false;
+    }
+
+    if (!isSafePath(flag.path)) {
+      return false;
+    }
+  }
+
+  for (const key of ["effort", "budget", "tokenCap"]) {
+    const path = value[key];
+
+    if (path !== undefined && (typeof path !== "string" || !isSafePath(path))) {
+      return false;
+    }
+  }
+
+  for (const key of [
+    "omitTemperature",
+    "omitToolChoice",
+    "replayReasoning",
+    "latchThinking",
+  ]) {
+    const v = value[key];
+
+    if (v !== undefined && typeof v !== "boolean") {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Path segments that would escape the request body and reach into the
+ *  prototype chain. A models.json is user-editable config, so a path like
+ *  `__proto__.polluted` must not be able to write to Object.prototype. */
+const UNSAFE_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** True when every segment of a dot path is present and safe to write. */
+export function isSafePath(path: string): boolean {
+  if (path === "") {
+    return false;
+  }
+
+  const parts = path.split(".");
+
+  return parts.every((p) => p !== "" && !UNSAFE_SEGMENTS.has(p));
+}
+
 /** Write `value` at a dot path, creating intermediate objects. Mutates `target`
- *  and returns it, so several fields can be layered into one body fragment. */
+ *  and returns it, so several fields can be layered into one body fragment.
+ *  A malformed or unsafe path is ignored rather than throwing — this runs on
+ *  hand-edited config, and a bad path should not take down a live turn. */
 export function setPath(
   target: Record<string, unknown>,
   path: string,
   value: unknown
 ): Record<string, unknown> {
+  if (typeof path !== "string" || !isSafePath(path)) {
+    return target;
+  }
+
   const parts = path.split(".");
   const last = parts.pop();
 
-  if (last === undefined || last === "") {
+  if (last === undefined) {
     return target;
   }
 
   let node = target;
 
   for (const part of parts) {
-    const next = node[part];
+    // Own properties only: an inherited value must never be descended into.
+    const next = Object.hasOwn(node, part) ? node[part] : undefined;
     // Overwrite anything that isn't a plain object: a scalar or array sitting
     // at an intermediate path can't be descended into, and silently bailing
     // would drop the field the caller asked for.

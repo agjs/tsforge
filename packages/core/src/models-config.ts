@@ -7,6 +7,11 @@ import type {
   IReasoningProfile,
   ReasoningStyle,
 } from "./inference/inference.types";
+import {
+  REASONING_PRESETS,
+  isReasoningProfile,
+  isReasoningStyle,
+} from "./inference/reasoning-profile";
 
 /**
  * The model registry — `~/.tsforge/models.json`, the central place a user
@@ -32,16 +37,20 @@ export interface IModelEntry {
   thinking?: boolean;
   /** Per-response token cap override. */
   maxTokens?: number;
-  /** Provider reasoning dialect: how thinking/reasoning is expressed on the wire.
-   *  `qwen` (default) | `deepseek` | `deepseek-local` | `openai` | `none`. Set `deepseek`
-   *  for DeepSeek's CLOUD API, `deepseek-local` for a self-hosted vLLM, `openai` for OpenAI
-   *  o-series. A "deepseek" model/url auto-detects to `deepseek-local` ONLY on a private
-   *  address (loopback / RFC1918 / IPv6 ULA+link-local / .local / .lan / .internal /
-   *  .home / .localdomain), and
-   *  stays `deepseek` on any public host — a public one may be a reverse proxy in
-   *  front of DeepSeek cloud, which still needs the cloud dialect and its
-   *  reasoning_content replay. Set it explicitly for a self-hosted endpoint that
-   *  is reachable on a public address. */
+  /** How this endpoint expresses reasoning on the wire. Either a preset NAME
+   *  (`qwen` | `deepseek` | `deepseek-local` | `openai` | `none`) or a full
+   *  `IReasoningProfile` declaring the field paths itself — the latter is what
+   *  makes an arbitrary model supportable by config rather than by a code change.
+   *
+   *  Omitted → auto-detected: a "deepseek" model/url resolves to `deepseek-local`
+   *  on a PRIVATE address (loopback, RFC1918, CGNAT, IPv6 ULA/link-local,
+   *  .local/.lan/.internal/.home/.localdomain) and to `deepseek` on any public
+   *  one, since a public host may be a reverse proxy in front of DeepSeek cloud.
+   *  Declare it explicitly for a self-host on a public address, or for a
+   *  single-label hostname (e.g. `http://spark2:8888`), which is not treated as
+   *  private because it is indistinguishable from a proxy alias.
+   *
+   *  Validated at load — an unknown name or malformed profile throws. */
   reasoning?: ReasoningStyle | IReasoningProfile;
   /** Reasoning effort for `deepseek`/`deepseek-local`/`openai` styles. */
   reasoningEffort?: "low" | "medium" | "high";
@@ -184,6 +193,32 @@ function assertImageApi(name: string, entry: unknown): void {
   }
 }
 
+/** `reasoning` is either a known preset NAME or a well-formed profile object.
+ *  Anything else is rejected here, at the JSON boundary: a typo'd preset would
+ *  otherwise behave as an empty profile (silently sending no reasoning fields),
+ *  and `null` or a malformed profile would surface as a TypeError mid-turn.
+ *  Matches the fail-loud contract of the maxTokens/imageApi guards. */
+function assertReasoning(name: string, entry: unknown): void {
+  if (!isRecord(entry) || entry.reasoning === undefined) {
+    return;
+  }
+
+  const value = entry.reasoning;
+
+  if (isReasoningStyle(value) || isReasoningProfile(value)) {
+    return;
+  }
+
+  const presets = Object.keys(REASONING_PRESETS).join(", ");
+
+  throw new Error(
+    `models.json: model "${name}" reasoning must be one of [${presets}] ` +
+      `or a profile object { thinking?: { path }, effort?, budget?, tokenCap?, ` +
+      `omitTemperature?, omitToolChoice?, replayReasoning?, latchThinking? } ` +
+      `with string dot-paths (no __proto__/constructor/prototype segments)`
+  );
+}
+
 function isInputMode(v: unknown): v is BinaryInputMode {
   return v === "stdin" || v === "arg" || v === "tempfile";
 }
@@ -306,6 +341,7 @@ export function parseModelsConfig(raw: unknown): IModelsConfig {
 
     assertNumericFields(name, entry);
     assertImageApi(name, entry);
+    assertReasoning(name, entry);
     models[name] = entry;
   }
 

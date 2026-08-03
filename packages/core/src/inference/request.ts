@@ -6,6 +6,7 @@ import type {
 import type { IReasoningProfile, ReasoningStyle } from "./reasoning-profile";
 import {
   REASONING_PRESETS,
+  isReasoningProfile,
   isReasoningStyle,
   setPath,
 } from "./reasoning-profile";
@@ -35,11 +36,19 @@ export function latchesThinking(cfg: IOpenAICompatibleConfig): boolean {
 export function profile(cfg: IOpenAICompatibleConfig): IReasoningProfile {
   const declared = cfg.reasoning;
 
-  if (declared === undefined) {
-    return REASONING_PRESETS[autoPreset(cfg)];
+  if (isReasoningStyle(declared)) {
+    return REASONING_PRESETS[declared];
   }
 
-  return isReasoningStyle(declared) ? REASONING_PRESETS[declared] : declared;
+  if (isReasoningProfile(declared)) {
+    return declared;
+  }
+
+  // Anything else — undefined, JSON `null`, a typo'd preset name, a malformed
+  // object — falls back to auto-detection. models-config rejects these loudly
+  // at load; this is the last line of defence so a hand-edited registry cannot
+  // crash a live turn (JSON null is NOT undefined and used to throw here).
+  return REASONING_PRESETS[autoPreset(cfg)];
 }
 
 /** Best-effort preset for an entry that declared nothing. Only a convenience:
@@ -102,7 +111,7 @@ function reasoningFields(
 }
 
 /** The output-token cap field — o-series renamed `max_tokens` → `max_completion_tokens`. */
-function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, number> {
+function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, unknown> {
   // A NaN/Infinity maxTokens (bad config/env) would JSON.stringify to `null`,
   // which a server reads as an explicit choice, not "unset" — fall back to the
   // provider default instead (matches the temperature/repetitionPenalty guard).
@@ -112,7 +121,7 @@ function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, number> {
       ? configured
       : PROVIDER_LIMITS.maxTokens;
 
-  return { [profile(cfg).tokenCap ?? "max_tokens"]: max };
+  return setPath({}, profile(cfg).tokenCap ?? "max_tokens", max);
 }
 
 /** The `tools` (+ `tool_choice`) request fields. `tool_choice` is sent by default
@@ -259,7 +268,8 @@ function isPrivateHost(baseUrl: string): boolean {
     a === 10 || // 10/8
     (a === 172 && b >= 16 && b <= 31) || // 172.16/12
     (a === 192 && b === 168) || // 192.168/16
-    (a === 169 && b === 254) // link-local
+    (a === 169 && b === 254) || // link-local
+    (a === 100 && b >= 64 && b <= 127) // CGNAT 100.64/10 (Tailscale et al)
   );
 }
 
