@@ -32,8 +32,12 @@ export interface IModelEntry {
   /** Provider reasoning dialect: how thinking/reasoning is expressed on the wire.
    *  `qwen` (default) | `deepseek` | `vllm` | `openai` | `none`. Set `deepseek`
    *  for DeepSeek's CLOUD API, `vllm` for a self-hosted vLLM, `openai` for OpenAI
-   *  o-series. A "deepseek" model/url auto-detects to `deepseek` on
-   *  *.deepseek.com and to `vllm` anywhere else. */
+   *  o-series. A "deepseek" model/url auto-detects to `vllm` ONLY on a private
+   *  address (loopback / RFC1918 / link-local / .local / .lan / .internal), and
+   *  stays `deepseek` on any public host — a public one may be a reverse proxy in
+   *  front of DeepSeek cloud, which still needs the cloud dialect and its
+   *  reasoning_content replay. Set it explicitly for a self-hosted endpoint that
+   *  is reachable on a public address. */
   reasoning?: ReasoningStyle;
   /** Reasoning effort for `deepseek`/`openai` styles. */
   reasoningEffort?: "low" | "medium" | "high";

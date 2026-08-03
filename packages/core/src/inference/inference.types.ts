@@ -142,6 +142,9 @@ export interface IOpenAICompatibleConfig {
    *  - `deepseek`: top-level `thinking: { type }` + `reasoning_effort`; `tool_choice`
    *    is suppressed ONLY on the DeepSeek CLOUD host (api.deepseek.com), which 400s
    *    on it — a local/self-hosted DeepSeek still gets it.
+   *  - `vllm`: `chat_template_kwargs.thinking` + `reasoning_effort` — a self-hosted
+   *    vLLM IGNORES the `deepseek` dialect's `thinking: { type }`, so the two cannot
+   *    share a style. Auto-detected for a "deepseek" model on a private address.
    *  - `openai`: `reasoning_effort`; uses `max_completion_tokens` and omits `temperature` (o-series).
    *  - `none`: no reasoning fields.
    */
@@ -169,9 +172,4 @@ export interface IOpenAICompatibleConfig {
  *  `vllm` is for a self-hosted vLLM serving a reasoning checkpoint: it reads
  *  `chat_template_kwargs.thinking` and IGNORES DeepSeek cloud's `thinking:{type}`,
  *  so the two cannot share a dialect even for the same model family. */
-export type ReasoningStyle =
-  | "qwen"
-  | "deepseek"
-  | "vllm"
-  | "openai"
-  | "none";
+export type ReasoningStyle = "qwen" | "deepseek" | "vllm" | "openai" | "none";

@@ -8,6 +8,7 @@ import {
   buildRequestBody,
   buildRequestHeaders,
   chatCompletionsUrl,
+  isDeepseekStyle,
 } from "../src/inference/request";
 
 const MSGS: IChatMessage[] = [{ role: "user", content: "hi" }];
@@ -112,20 +113,111 @@ describe("buildRequestBody: reasoning styles", () => {
     expect(b.chat_template_kwargs).toBeUndefined();
   });
 
+  test("vllm forwards thinking_token_budget (a vLLM param, like qwen)", () => {
+    const b = body(
+      { reasoning: "vllm" },
+      { enableThinking: true, thinkingTokenBudget: 2048 }
+    );
+
+    expect(b.thinking_token_budget).toBe(2048);
+  });
+
   test.each([
     ["http://localhost:8000/v1"],
     ["http://127.0.0.1:8000/v1"],
     ["http://192.168.20.108:8888/v1"],
     ["http://10.0.0.5:8000/v1"],
     ["http://172.16.4.9:8000/v1"],
+    ["http://169.254.7.7:8000/v1"],
     ["http://spark2.lan:8888/v1"],
+    // IPv6: URL.hostname KEEPS the brackets, so these only pass if stripped.
+    ["http://[::1]:8000/v1"],
+    ["http://[fd12:3456::1]:8000/v1"],
+    ["http://[fe80::1]:8000/v1"],
+    ["http://[::ffff:192.168.1.9]:8000/v1"],
   ])("private host %s auto-detects as vllm", (baseUrl) => {
-    const b = body({ baseUrl, model: "deepseek-v4-flash" }, {
-      enableThinking: false,
-    });
+    const b = body(
+      { baseUrl, model: "deepseek-v4-flash" },
+      {
+        enableThinking: false,
+      }
+    );
 
     expect(b.chat_template_kwargs).toEqual({ thinking: false });
     expect(b.thinking).toBeUndefined();
+  });
+
+  test.each([
+    ["https://api.deepseek.com/v1"],
+    ["https://proxy.example.com/v1"],
+    ["http://8.8.8.8:8000/v1"],
+    ["http://[2001:4860::8888]:8000/v1"],
+  ])("public host %s stays deepseek", (baseUrl) => {
+    const b = body(
+      { baseUrl, model: "deepseek-v4-flash" },
+      {
+        enableThinking: false,
+      }
+    );
+
+    expect(b.thinking).toEqual({ type: "disabled" });
+    expect(b.chat_template_kwargs).toBeUndefined();
+  });
+
+  test("private deepseek is NOT deepseek-style, so thinking is never latched", () => {
+    // The session latch (withPinnedThinking) keys off isDeepseekStyle. If a
+    // private host were still classified deepseek, per-turn thinking control
+    // would be silently pinned to the session's first value.
+    expect(
+      isDeepseekStyle(
+        cfg({
+          baseUrl: "http://192.168.20.108:8888/v1",
+          model: "deepseek-v4-flash",
+        })
+      )
+    ).toBe(false);
+
+    expect(
+      isDeepseekStyle(
+        cfg({
+          baseUrl: "https://api.deepseek.com/v1",
+          model: "deepseek-v4-pro",
+        })
+      )
+    ).toBe(true);
+  });
+
+  test("private deepseek does NOT replay reasoning_content", () => {
+    // includeReasoning is `style === "deepseek"`. Replay exists to stop the
+    // CLOUD API 400ing; a local vLLM neither needs nor expects it.
+    const hist: IChatMessage[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "ans", reasoningContent: "my thought" },
+    ];
+
+    const local = buildRequestBody(
+      cfg({
+        baseUrl: "http://192.168.20.108:8888/v1",
+        model: "deepseek-v4-flash",
+      }),
+      hist,
+      {},
+      false
+    );
+
+    expect(JSON.stringify(local.messages)).not.toContain("reasoning_content");
+
+    // ...but a public/proxied deepseek still must replay it.
+    const proxied = buildRequestBody(
+      cfg({ baseUrl: "https://proxy.example.com/v1", model: "deepseek-pro-4" }),
+      hist,
+      {},
+      false
+    );
+
+    expect(JSON.stringify(proxied.messages)).toContain(
+      '"reasoning_content":"my thought"'
+    );
   });
 
   test("local deepseek auto-sends tool_choice (no config — vLLM accepts it)", () => {

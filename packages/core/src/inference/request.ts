@@ -92,6 +92,13 @@ function reasoningFields(
         ...(opts.enableThinking === undefined
           ? {}
           : { chat_template_kwargs: { thinking: opts.enableThinking } }),
+        // `thinking_token_budget` is a vLLM param, so it applies here exactly as
+        // it does for qwen — dropping it would silently disable the caller's
+        // reasoning-token cap the moment this dialect is selected.
+        ...(opts.thinkingTokenBudget === undefined ||
+        !Number.isFinite(opts.thinkingTokenBudget)
+          ? {}
+          : { thinking_token_budget: opts.thinkingTokenBudget }),
         ...(reasoningEffort === undefined
           ? {}
           : { reasoning_effort: reasoningEffort }),
@@ -177,11 +184,29 @@ function guidedOverride(cfg: IOpenAICompatibleConfig): boolean | undefined {
   return undefined;
 }
 
-/** True for the DeepSeek CLOUD API host (api.deepseek.com / *.deepseek.com) — the
- *  only endpoint known to reject an explicit `tool_choice`. Tolerates a scheme-less
- *  baseUrl (e.g. `api.deepseek.com/v1` from a hand-edited config): without a scheme
- *  `new URL()` throws, which would miss the cloud host and wrongly SEND tool_choice
- *  — the exact 400 this guards against — so prepend `https://` before parsing. */
+/** The first two octets of a dotted-quad IPv4 address, or of the embedded v4 in
+ *  an IPv4-mapped IPv6 one. Returns null when `host` is neither. WHATWG URL
+ *  normalizes `::ffff:192.168.1.9` to `::ffff:c0a8:109`, so the mapped form has
+ *  to be read as hex: the first hextet packs both octets. */
+function firstTwoOctets(host: string): [number, number] | null {
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(host);
+
+  if (v4 !== null) {
+    return [Number(v4[1]), Number(v4[2])];
+  }
+
+  const mapped = /^::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/iu.exec(host);
+  const high = mapped?.[1];
+
+  if (high !== undefined) {
+    const hextet = Number.parseInt(high, 16);
+
+    return [(hextet >> 8) & 0xff, hextet & 0xff];
+  }
+
+  return null;
+}
+
 /** True when `baseUrl` points at a private/loopback address or a LAN-only TLD —
  *  i.e. something the user is self-hosting. Used to tell a local vLLM apart from
  *  a public endpoint (which may be a reverse proxy in front of a cloud API), so
@@ -193,14 +218,14 @@ function isPrivateHost(baseUrl: string): boolean {
     : `https://${baseUrl}`;
 
   let host: string;
+
   try {
     host = new URL(withScheme).hostname.toLowerCase();
   } catch {
     return false;
   }
 
-  // IPv6 loopback arrives bracket-stripped by URL as "::1".
-  if (host === "localhost" || host === "::1") {
+  if (host === "localhost") {
     return true;
   }
 
@@ -208,12 +233,29 @@ function isPrivateHost(baseUrl: string): boolean {
     return true;
   }
 
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(host);
-  if (v4 === null) {
+  // WHATWG URL keeps the brackets on an IPv6 literal (`http://[::1]` →
+  // hostname `[::1]`), so strip them before matching.
+  const bare = host.replace(/^\[|\]$/gu, "");
+
+  if (
+    bare === "::1" || // loopback
+    /^f[cd]/u.test(bare) || // unique-local fc00::/7
+    /^fe[89ab]/u.test(bare) // link-local fe80::/10
+  ) {
+    return true;
+  }
+
+  // An IPv4-mapped address is private iff its v4 part is. WHATWG URL rewrites
+  // `::ffff:192.168.1.9` into hex (`::ffff:c0a8:109`), so match that form too —
+  // the dotted spelling never survives parsing.
+  const octets = firstTwoOctets(bare);
+
+  if (octets === null) {
     return false;
   }
 
-  const [a, b] = [Number(v4[1]), Number(v4[2])];
+  const [a, b] = octets;
+
   return (
     a === 127 || // loopback
     a === 10 || // 10/8
@@ -223,6 +265,11 @@ function isPrivateHost(baseUrl: string): boolean {
   );
 }
 
+/** True for the DeepSeek CLOUD API host (api.deepseek.com / *.deepseek.com) — the
+ *  only endpoint known to reject an explicit `tool_choice`. Tolerates a scheme-less
+ *  baseUrl (e.g. `api.deepseek.com/v1` from a hand-edited config): without a scheme
+ *  `new URL()` throws, which would miss the cloud host and wrongly SEND tool_choice
+ *  — the exact 400 this guards against — so prepend `https://` before parsing. */
 function isDeepSeekCloudHost(baseUrl: string): boolean {
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//iu.test(baseUrl)
     ? baseUrl

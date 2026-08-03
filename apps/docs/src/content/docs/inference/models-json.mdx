@@ -31,8 +31,8 @@ The entry **key** (`"deepseek"`) is just a local label. The field that's sent to
 | `baseUrl` | yes | OpenAI-compatible API root, e.g. `https://api.deepseek.com/v1`. `/chat/completions` is appended (and not double-appended). |
 | `model` | yes | The model id sent to the API. |
 | `apiKey` / `apiKeyEnv` | no | Inline key, or the name of an env var holding it (preferred: keeps secrets out of the file). |
-| `reasoning` | no | Provider thinking dialect: `qwen` (default), `deepseek`, `openai`, `none`. See below. **Auto-detected as `deepseek`** when `baseUrl` or `model` contains "deepseek", so a DeepSeek model usually needs no explicit value. |
-| `reasoningEffort` | no | `low` / `medium` / `high` for `deepseek`/`openai`. |
+| `reasoning` | no | Provider thinking dialect: `qwen` (default), `deepseek`, `vllm`, `openai`, `none`. See below. Auto-detected when `baseUrl` or `model` contains "deepseek": **`vllm`** on a private address, **`deepseek`** on a public one. |
+| `reasoningEffort` | no | `low` / `medium` / `high` for `deepseek`/`vllm`/`openai`. |
 | `contextWindow` | no | Tokens, for the status gauge + auto-compaction. Auto-detected from `/models` when omitted. |
 | `maxTokens` | no | Output-token cap (default 16384). |
 | `extraBody` | no | Arbitrary JSON merged into the request body (overrides built-ins). The escape hatch for any provider param. |
@@ -46,11 +46,21 @@ Providers express "thinking" differently. `reasoning` picks the wire shape:
 | `reasoning` | Sends | Notes |
 | --- | --- | --- |
 | `qwen` (default) | `chat_template_kwargs.enable_thinking`, `thinking_token_budget` | vLLM/Qwen. |
-| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, `reasoning_effort` | Omits `tool_choice` entirely (DeepSeek's thinking mode rejects an explicit one). The model still gets the tools and decides. |
+| `deepseek` | `thinking: { type: "enabled"\|"disabled" }`, `reasoning_effort` | DeepSeek's **cloud** API. Omits `tool_choice` entirely (its thinking mode rejects an explicit one). The model still gets the tools and decides. Thinking is latched to the session's first value, because the API 400s if it flips mid-conversation. |
+| `vllm` | `chat_template_kwargs.thinking`, `reasoning_effort` | A **self-hosted** vLLM serving a reasoning checkpoint. Per-call, never latched. |
 | `openai` | `reasoning_effort` | Uses `max_completion_tokens` and omits `temperature` (o-series rejects both). |
 | `none` | — | No reasoning params. |
 
-tsforge **auto-detects** the `deepseek` dialect when `baseUrl`/`model` contains "deepseek", so DeepSeek thinking models work out of the box. The `reasoning_content` from each turn is replayed on the next request (DeepSeek 400s otherwise). Set `reasoning` explicitly only when a DeepSeek-compatible gateway hides that string in its URL/model name.
+### Auto-detection
+
+When `baseUrl`/`model` contains "deepseek", tsforge picks the dialect by address:
+
+- **private** (loopback, `10.x`, `172.16–31.x`, `192.168.x`, `169.254.x`, `.local`/`.lan`/`.internal`) → `vllm`
+- **public** → `deepseek`, and each turn's `reasoning_content` is replayed on the next request (the cloud API 400s otherwise)
+
+The split matters because the two speak different wire formats for the same feature. A self-hosted vLLM reads `chat_template_kwargs.thinking` and **silently ignores** DeepSeek cloud's `thinking: { type }` — it accepts the field and does nothing with it. Sending the cloud dialect to a local server therefore makes `thinking` inert: it only appears to work when the server's own default happens to match what you wanted.
+
+Detection is deliberately conservative on public hosts, since one may be a reverse proxy in front of DeepSeek cloud, which still needs the cloud dialect. Set `reasoning` explicitly for a self-hosted endpoint on a public address, or for a DeepSeek-compatible gateway that hides the string in its URL/model name.
 
 ## Examples
 
