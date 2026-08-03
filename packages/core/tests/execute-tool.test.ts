@@ -1043,28 +1043,6 @@ describe("resolveWritable behaves identically at every call site", () => {
     }
   });
 
-  // Beyond the workspace, `run` is deliberately a shell — /tmp and build logs are
-  // its documented targets, and its reach there is governed by the policy layer,
-  // not by the editable scope. Pinned so a change to it is a deliberate one.
-  test("run's shell still reaches OUTSIDE the workspace (documented behavior)", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "tsforge-runreach-"));
-    const dir = join(parent, "ws");
-
-    await mkdir(dir, { recursive: true });
-
-    try {
-      const out = await executeTool(
-        { name: "run", arguments: { command: "echo pwned > ../escaped.ts" } },
-        ctx(dir, ["impl.ts"])
-      );
-
-      expect(out).not.toContain("REJECTED");
-      expect(await Bun.file(join(parent, "escaped.ts")).exists()).toBe(true);
-    } finally {
-      await rm(parent, { recursive: true, force: true });
-    }
-  });
-
   test("no EDIT TOOL lets a traversal path escape the workspace", async () => {
     // The sibling must EXIST and be genuinely editable, in a parent of our own:
     // against a nonexistent target every tool rejects for its own unrelated

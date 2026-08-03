@@ -27,6 +27,19 @@ export function isInScope(file: string, patterns: string[]): boolean {
   return patterns.some((pattern) => new Bun.Glob(pattern).match(file));
 }
 
+/** Absolute on ANY platform, checked explicitly rather than via `node:path` so the
+ *  answer does not depend on where this runs: a POSIX root, a Windows UNC share
+ *  (`\\\\server\\share`), or a drive-letter root (`D:\\…`). `node:path.relative`
+ *  returns a drive-absolute path when the target is on another volume, and that
+ *  carries no `..` segment — so a segment check alone would call it "inside". */
+function isAbsolutePath(file: string): boolean {
+  return (
+    file.startsWith("/") ||
+    file.startsWith("\\\\") ||
+    /^[A-Za-z]:[\\/]/u.test(file)
+  );
+}
+
 /** True when a NORMALIZED path stays inside the workspace — i.e. it neither
  *  escapes via a `..` path SEGMENT nor is absolute. Distinct from {@link writable}:
  *  a project file the model may not edit is still inside the workspace, and that is
@@ -36,7 +49,7 @@ export function isInScope(file: string, patterns: string[]): boolean {
  *  merely starts with two dots. Treating it as outside would skip the guard for a
  *  real workspace file — failing OPEN, the wrong direction for this predicate. */
 export function insideWorkspace(file: string): boolean {
-  if (file.startsWith("/")) {
+  if (isAbsolutePath(file)) {
     return false;
   }
 
