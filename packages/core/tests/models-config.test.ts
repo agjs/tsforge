@@ -1,4 +1,7 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { providerConfig } from "../src/cli/model-setup";
+import { buildRequestBody } from "../src/inference/request";
+import type { ReasoningStyle } from "../src/inference/reasoning-profile";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -396,4 +399,143 @@ test("resolveCapabilityModel: env names a registry entry; imageApi override pars
 
 test("planner is a routable capability role", () => {
   expect(CAPABILITY_NAMES).toContain("planner");
+});
+
+test("parseModelsConfig accepts a preset NAME or a well-formed reasoning profile", () => {
+  const entry = (reasoning: unknown) => ({
+    active: "a",
+    models: { a: { baseUrl: "u", model: "m", reasoning } },
+  });
+
+  const presets: ReasoningStyle[] = [
+    "qwen",
+    "deepseek",
+    "deepseek-local",
+    "openai",
+    "none",
+  ];
+
+  for (const name of presets) {
+    expect(parseModelsConfig(entry(name)).models.a?.reasoning).toBe(name);
+  }
+
+  const profile = {
+    thinking: { path: "chat_template_kwargs.thinking" },
+    effort: "chat_template_kwargs.reasoning_effort",
+    budget: "thinking_token_budget",
+    latchThinking: false,
+  };
+
+  expect(parseModelsConfig(entry(profile)).models.a?.reasoning).toEqual(
+    profile
+  );
+
+  // absent stays absent (auto-detection applies at request time)
+  expect(
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m" } },
+    }).models.a?.reasoning
+  ).toBeUndefined();
+});
+
+test("parseModelsConfig rejects a bad reasoning value at the JSON boundary", () => {
+  const bad = (reasoning: unknown) => () =>
+    parseModelsConfig({
+      active: "a",
+      models: { a: { baseUrl: "u", model: "m", reasoning } },
+    });
+
+  // A typo would otherwise behave as an empty profile: load fine, then silently
+  // send no reasoning fields at all.
+  expect(bad("qwne")).toThrow(/reasoning must be/);
+  // null is not undefined — it used to reach the request builder and throw.
+  expect(bad(null)).toThrow(/reasoning must be/);
+  expect(bad(42)).toThrow(/reasoning must be/);
+  expect(bad([])).toThrow(/reasoning must be/);
+  // misspelled profile keys must not validate
+  expect(bad({ budegt: "x" })).toThrow(/reasoning must be/);
+  // structurally wrong members
+  expect(bad({ thinking: true })).toThrow(/reasoning must be/);
+  expect(bad({ thinking: {} })).toThrow(/reasoning must be/);
+  expect(bad({ effort: 5 })).toThrow(/reasoning must be/);
+  expect(bad({ latchThinking: "yes" })).toThrow(/reasoning must be/);
+  // a path that would escape into the prototype chain
+  expect(bad({ thinking: { path: "__proto__.x" } })).toThrow(
+    /reasoning must be/
+  );
+  expect(bad({ budget: "a..b" })).toThrow(/reasoning must be/);
+});
+
+test("a reasoning profile survives save → load → providerConfig → request body", async () => {
+  // The CLI wizard and /model write entries through this same path, so a
+  // profile must round-trip end to end, not just validate at parse time.
+  const profile = {
+    thinking: { path: "chat_template_kwargs.thinking" },
+    effort: "chat_template_kwargs.reasoning_effort",
+    budget: "thinking_token_budget",
+  };
+
+  await saveModelsConfig({
+    active: "local",
+    models: {
+      local: {
+        baseUrl: "http://192.168.1.10:8000/v1",
+        model: "deepseek-v4-flash",
+        reasoning: profile,
+        reasoningEffort: "low",
+      },
+    },
+  });
+
+  const loaded = await loadModelsConfig();
+  const entry = loaded.models.local;
+
+  expect(entry?.reasoning).toEqual(profile);
+
+  const cfg = providerConfig(entry!);
+
+  expect(cfg.reasoning).toEqual(profile);
+
+  const bodyOut = buildRequestBody(
+    cfg,
+    [{ role: "user", content: "hi" }],
+    { enableThinking: false },
+    false
+  );
+
+  expect(bodyOut.chat_template_kwargs).toEqual({
+    thinking: false,
+    reasoning_effort: "low",
+  });
+});
+
+test("a preset NAME still round-trips through the wizard's providerConfig", async () => {
+  await saveModelsConfig({
+    active: "cloud",
+    models: {
+      cloud: {
+        baseUrl: "https://api.deepseek.com/v1",
+        model: "deepseek-v4-pro",
+        reasoning: "deepseek",
+        reasoningEffort: "high",
+      },
+    },
+  });
+
+  const loaded = await loadModelsConfig();
+  const entry = loaded.models.cloud;
+  const cfg = providerConfig(entry!);
+
+  expect(cfg.reasoning).toBe("deepseek");
+
+  const bodyOut = buildRequestBody(
+    cfg,
+    [{ role: "user", content: "hi" }],
+    { enableThinking: true },
+    false
+  );
+
+  expect(bodyOut.thinking).toEqual({ type: "enabled" });
+  expect(bodyOut.reasoning_effort).toBe("high");
 });

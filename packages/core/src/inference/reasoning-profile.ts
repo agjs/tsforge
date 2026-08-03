@@ -99,11 +99,31 @@ export function isReasoningStyle(value: unknown): value is ReasoningStyle {
   return typeof value === "string" && Object.hasOwn(REASONING_PRESETS, value);
 }
 
+/** Path-valued profile keys. */
+const PATH_KEYS = ["effort", "budget", "tokenCap"] as const;
+
+/** Boolean-valued profile keys. */
+const FLAG_KEYS = [
+  "omitTemperature",
+  "omitToolChoice",
+  "replayReasoning",
+  "latchThinking",
+] as const;
+
+/** Every key a profile may carry. Anything else is a typo, and a typo must not
+ *  validate: `{"budegt": "..."}` would otherwise load fine and then silently
+ *  send no budget at all. */
+const PROFILE_KEYS = new Set<string>(["thinking", ...PATH_KEYS, ...FLAG_KEYS]);
+
 /** True when `value` is usable as a profile. Config is hand-editable, so a
  *  wrong shape has to be rejected at the boundary rather than throwing deep in
- *  a request. Only checks structure; unknown extra keys are tolerated. */
+ *  a request, or worse, being accepted and doing nothing. */
 export function isReasoningProfile(value: unknown): value is IReasoningProfile {
   if (!isPlainObject(value)) {
+    return false;
+  }
+
+  if (!Object.keys(value).every((k) => PROFILE_KEYS.has(k))) {
     return false;
   }
 
@@ -119,7 +139,7 @@ export function isReasoningProfile(value: unknown): value is IReasoningProfile {
     }
   }
 
-  for (const key of ["effort", "budget", "tokenCap"]) {
+  for (const key of PATH_KEYS) {
     const path = value[key];
 
     if (path !== undefined && (typeof path !== "string" || !isSafePath(path))) {
@@ -127,12 +147,7 @@ export function isReasoningProfile(value: unknown): value is IReasoningProfile {
     }
   }
 
-  for (const key of [
-    "omitTemperature",
-    "omitToolChoice",
-    "replayReasoning",
-    "latchThinking",
-  ]) {
+  for (const key of FLAG_KEYS) {
     const v = value[key];
 
     if (v !== undefined && typeof v !== "boolean") {

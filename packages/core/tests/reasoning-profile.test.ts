@@ -49,14 +49,14 @@ describe("setPath", () => {
     setPath(target, "constructor.prototype.polluted", "yes");
     setPath(target, "a.__proto__.polluted", "yes");
 
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-    expect(Object.prototype).not.toHaveProperty("polluted");
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+    expect(Object.hasOwn({}, "polluted")).toBe(false);
     expect(target.polluted).toBeUndefined();
   });
 
   test("does not descend into an inherited property", () => {
     const base = { shared: { hi: true } };
-    const target = Object.create(base) as Record<string, unknown>;
+    const target: Record<string, unknown> = Object.create(base);
 
     setPath(target, "shared.mine", 1);
 
@@ -131,6 +131,9 @@ describe("isReasoningProfile", () => {
     [{ budget: "a..b" }, "a malformed budget path"],
     [{ tokenCap: "constructor.x" }, "an unsafe tokenCap path"],
     [{ latchThinking: "yes" }, "a non-boolean flag"],
+    [{ budegt: "reasoning.max_tokens" }, "a misspelled key"],
+    [{ thnking: { path: "mode" } }, "a misspelled thinking key"],
+    [{ thinking: { path: "a" }, extra: 1 }, "an unknown extra key"],
   ])("rejects %p (%s)", (value) => {
     expect(isReasoningProfile(value)).toBe(false);
   });

@@ -596,3 +596,85 @@ describe("buildRequestBody: declarative reasoning profiles", () => {
     );
   });
 });
+
+describe("buildRequestBody: profile edge cases", () => {
+  test("tokenCap and a reasoning field under a SHARED parent both survive", () => {
+    // Regression: these were built as separate objects and shallow-spread, so
+    // the second `params` replaced the first and one field vanished silently.
+    const b = body(
+      {
+        reasoning: {
+          tokenCap: "params.output_limit",
+          effort: "params.reasoning.level",
+          thinking: { path: "params.reasoning.enabled" },
+        },
+        reasoningEffort: "high",
+        maxTokens: 4096,
+      },
+      { enableThinking: true }
+    );
+
+    expect(b.params).toEqual({
+      output_limit: 4096,
+      reasoning: { level: "high", enabled: true },
+    });
+  });
+
+  test.each([
+    ["http://100.64.0.1:8000/v1"],
+    ["http://100.127.255.254:8000/v1"],
+  ])("CGNAT host %s is private (Tailscale-style self-host)", (baseUrl) => {
+    const b = body(
+      { baseUrl, model: "deepseek-v4-flash" },
+      { enableThinking: false }
+    );
+
+    expect(b.chat_template_kwargs).toEqual({ thinking: false });
+  });
+
+  test("100.63.x and 100.128.x are OUTSIDE CGNAT and stay public", () => {
+    for (const baseUrl of [
+      "http://100.63.0.1:8000/v1",
+      "http://100.128.0.1:8000/v1",
+    ]) {
+      const b = body(
+        { baseUrl, model: "deepseek-v4-flash" },
+        { enableThinking: false }
+      );
+
+      expect(b.thinking).toEqual({ type: "disabled" });
+    }
+  });
+
+  test.each([
+    [null, "null"],
+    ["qwne", "a typo'd preset"],
+    [{ budegt: "x" }, "a misspelled profile key"],
+    [{ thinking: true }, "a malformed thinking flag"],
+    [42, "a number"],
+  ])("a bad reasoning value (%s) falls back instead of throwing", (bad) => {
+    // The loader rejects these loudly; this is the last line of defence so a
+    // hand-edited registry cannot kill a live turn mid-flight.
+    const build = () =>
+      buildRequestBody(
+        cfg({ reasoning: bad as never, baseUrl: "https://x/v1", model: "m" }),
+        MSGS,
+        { enableThinking: true },
+        false
+      );
+
+    expect(build).not.toThrow();
+    // Falls back to the qwen auto-preset for a non-deepseek model.
+    expect(build().chat_template_kwargs).toEqual({ enable_thinking: true });
+  });
+
+  test("an unsafe path in a profile writes nothing, and never pollutes", () => {
+    const b = body(
+      { reasoning: { thinking: { path: "__proto__.polluted" } } },
+      { enableThinking: true }
+    );
+
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+    expect(b.polluted).toBeUndefined();
+  });
+});

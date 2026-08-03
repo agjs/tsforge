@@ -75,17 +75,38 @@ function autoPreset(cfg: IOpenAICompatibleConfig): ReasoningStyle {
   return "qwen";
 }
 
-/** Write the reasoning controls the PROFILE declares. A control the profile
- *  omits is a control the endpoint does not have, so nothing is sent for it —
- *  that is what stops a field being accepted-and-ignored. Per-call options
- *  override config defaults. */
-function reasoningFields(
+/** Every profile-driven field — the token cap plus the reasoning controls —
+ *  written into ONE object.
+ *
+ *  These must share a target. Built separately and shallow-spread, two paths
+ *  under a common parent would clobber each other: `tokenCap:
+ *  "params.output_limit"` with `effort: "params.reasoning.level"` produces two
+ *  objects each holding a different `params`, and the later spread wins, so a
+ *  field is silently dropped.
+ *
+ *  A control the profile omits is a control the endpoint does not have, so
+ *  nothing is sent for it — that is what stops a field being accepted and
+ *  ignored. Per-call options override config defaults. */
+function profileFields(
   cfg: IOpenAICompatibleConfig,
   opts: ICompleteOptions
 ): Record<string, unknown> {
   const p = profile(cfg);
   const body: Record<string, unknown> = {};
   const effort = opts.reasoningEffort ?? cfg.reasoningEffort;
+
+  // A NaN/Infinity maxTokens (bad config/env) would JSON.stringify to `null`,
+  // which a server reads as an explicit choice, not "unset" — fall back to the
+  // provider default instead (matches the temperature/repetitionPenalty guard).
+  const configured = cfg.maxTokens;
+
+  setPath(
+    body,
+    p.tokenCap ?? "max_tokens",
+    configured !== undefined && Number.isFinite(configured)
+      ? configured
+      : PROVIDER_LIMITS.maxTokens
+  );
 
   if (p.thinking !== undefined && opts.enableThinking !== undefined) {
     const { path, onValue = true, offValue = false } = p.thinking;
@@ -108,20 +129,6 @@ function reasoningFields(
   }
 
   return body;
-}
-
-/** The output-token cap field — o-series renamed `max_tokens` → `max_completion_tokens`. */
-function tokenCapField(cfg: IOpenAICompatibleConfig): Record<string, unknown> {
-  // A NaN/Infinity maxTokens (bad config/env) would JSON.stringify to `null`,
-  // which a server reads as an explicit choice, not "unset" — fall back to the
-  // provider default instead (matches the temperature/repetitionPenalty guard).
-  const configured = cfg.maxTokens;
-  const max =
-    configured !== undefined && Number.isFinite(configured)
-      ? configured
-      : PROVIDER_LIMITS.maxTokens;
-
-  return setPath({}, profile(cfg).tokenCap ?? "max_tokens", max);
 }
 
 /** The `tools` (+ `tool_choice`) request fields. `tool_choice` is sent by default
@@ -316,14 +323,13 @@ export function buildRequestBody(
   return {
     model: cfg.model,
     messages: messages.map((m) => toWire(m, includeReasoning)),
-    ...tokenCapField(cfg),
+    ...profileFields(cfg, opts),
     ...(omitTemperature ? {} : { temperature: opts.temperature }),
     ...(cfg.repetitionPenalty === undefined ||
     !Number.isFinite(cfg.repetitionPenalty)
       ? {}
       : { repetition_penalty: cfg.repetitionPenalty }),
     ...toolsBlock(cfg, opts),
-    ...reasoningFields(cfg, opts),
     ...(streaming
       ? { stream: true, stream_options: { include_usage: true } }
       : {}),
