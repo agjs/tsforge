@@ -510,3 +510,48 @@ test("a response without reasoning_content carries no reasoning channel", () => 
       .reasoning_content
   ).toBeUndefined();
 });
+
+/** Capture the JSON body of every request the provider makes. */
+function recordingFetch(sink: Record<string, unknown>[]): typeof fetch {
+  return (async (_url: unknown, init: { body?: string }) => {
+    sink.push(JSON.parse(init.body ?? "{}"));
+
+    return okResponse();
+  }) as unknown as typeof fetch;
+}
+
+test("a latching profile pins thinking to the session's first value", async () => {
+  // DeepSeek's cloud API 400s if thinking flips mid-conversation, so the
+  // provider latches it. The constraint is declared by the profile, not by a
+  // vendor name — latchThinking is what withPinnedThinking keys off.
+  const sent: Record<string, unknown>[] = [];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-v4-pro",
+    fetch: recordingFetch(sent),
+  });
+
+  await p.complete([{ role: "user", content: "a" }], { enableThinking: true });
+  await p.complete([{ role: "user", content: "b" }], { enableThinking: false });
+
+  // Second turn asked for OFF but is pinned to the session's first value.
+  expect(sent[0]?.thinking).toEqual({ type: "enabled" });
+  expect(sent[1]?.thinking).toEqual({ type: "enabled" });
+});
+
+test("a non-latching profile keeps per-turn thinking control", async () => {
+  // A self-hosted endpoint has no such constraint, so the harness must be able
+  // to flip thinking per request — this is what the latch used to prevent.
+  const sent: Record<string, unknown>[] = [];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://192.168.20.108:8888/v1",
+    model: "deepseek-v4-flash",
+    fetch: recordingFetch(sent),
+  });
+
+  await p.complete([{ role: "user", content: "a" }], { enableThinking: true });
+  await p.complete([{ role: "user", content: "b" }], { enableThinking: false });
+
+  expect(sent[0]?.chat_template_kwargs).toEqual({ thinking: true });
+  expect(sent[1]?.chat_template_kwargs).toEqual({ thinking: false });
+});

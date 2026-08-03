@@ -115,6 +115,19 @@ const FLAG_KEYS = [
  *  send no budget at all. */
 const PROFILE_KEYS = new Set<string>(["thinking", ...PATH_KEYS, ...FLAG_KEYS]);
 
+/** Same rule one level down: `onValu` would otherwise validate and silently
+ *  fall back to the default `true`. */
+const WIRE_FLAG_KEYS = new Set<string>(["path", "onValue", "offValue"]);
+
+/** True when one path is the same as, or nested under, another. Two such paths
+ *  cannot both be written: `tokenCap: "params"` then
+ *  `thinking: "params.enabled"` replaces the cap with an object, and the
+ *  reverse order erases the nested field. Rejected at validation rather than
+ *  silently dropping a control the user configured. */
+function pathsOverlap(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
+}
+
 /** True when `value` is usable as a profile. Config is hand-editable, so a
  *  wrong shape has to be rejected at the boundary rather than throwing deep in
  *  a request, or worse, being accepted and doing nothing. */
@@ -127,6 +140,7 @@ export function isReasoningProfile(value: unknown): value is IReasoningProfile {
     return false;
   }
 
+  const declared: string[] = [];
   const flag = value.thinking;
 
   if (flag !== undefined) {
@@ -134,17 +148,38 @@ export function isReasoningProfile(value: unknown): value is IReasoningProfile {
       return false;
     }
 
+    if (!Object.keys(flag).every((k) => WIRE_FLAG_KEYS.has(k))) {
+      return false;
+    }
+
     if (!isSafePath(flag.path)) {
       return false;
     }
+
+    declared.push(flag.path);
   }
 
   for (const key of PATH_KEYS) {
     const path = value[key];
 
-    if (path !== undefined && (typeof path !== "string" || !isSafePath(path))) {
+    if (path === undefined) {
+      continue;
+    }
+
+    if (typeof path !== "string" || !isSafePath(path)) {
       return false;
     }
+
+    declared.push(path);
+  }
+
+  // Two controls writing to overlapping paths would clobber each other.
+  if (
+    declared.some((a, i) =>
+      declared.slice(i + 1).some((b) => pathsOverlap(a, b))
+    )
+  ) {
+    return false;
   }
 
   for (const key of FLAG_KEYS) {
@@ -191,13 +226,9 @@ export function setPath(
     return target;
   }
 
+  // isSafePath guarantees at least one non-empty segment, so pop() is defined.
   const parts = path.split(".");
-  const last = parts.pop();
-
-  if (last === undefined) {
-    return target;
-  }
-
+  const last = parts.pop() ?? path;
   let node = target;
 
   for (const part of parts) {

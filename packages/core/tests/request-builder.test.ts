@@ -655,9 +655,16 @@ describe("buildRequestBody: profile edge cases", () => {
   ])("a bad reasoning value (%s) falls back instead of throwing", (bad) => {
     // The loader rejects these loudly; this is the last line of defence so a
     // hand-edited registry cannot kill a live turn mid-flight.
+    // A hand-edited registry can hold anything, so the value is injected the
+    // way JSON.parse would deliver it rather than through the typed field.
+    const raw: Record<string, unknown> = {
+      baseUrl: "https://x/v1",
+      model: "m",
+      reasoning: bad,
+    };
     const build = () =>
       buildRequestBody(
-        cfg({ reasoning: bad as never, baseUrl: "https://x/v1", model: "m" }),
+        { ...cfg(), ...raw },
         MSGS,
         { enableThinking: true },
         false
@@ -676,5 +683,54 @@ describe("buildRequestBody: profile edge cases", () => {
 
     expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
     expect(b.polluted).toBeUndefined();
+  });
+});
+
+describe("tool_choice suppression is gated on the DeepSeek CLOUD dialect", () => {
+  const cloud = "https://api.deepseek.com/v1";
+  const withTools: ICompleteOptions = { tools: [{}], toolChoice: "required" };
+
+  test("auto-detected cloud deepseek omits tool_choice", () => {
+    expect(
+      body({ baseUrl: cloud, model: "deepseek-v4-pro" }, withTools).tool_choice
+    ).toBeUndefined();
+  });
+
+  test.each([["none"], ["qwen"], ["openai"]] as const)(
+    "an explicit %s profile on the cloud host STILL sends tool_choice",
+    (reasoning) => {
+      // Regression guard: dropping the dialect gate made the host heuristic
+      // apply to every profile, silently removing the escape hatch for
+      // non-thinking DeepSeek cloud tool use.
+      expect(
+        body({ baseUrl: cloud, model: "deepseek-v4-pro", reasoning }, withTools)
+          .tool_choice
+      ).toBe("required");
+    }
+  );
+
+  test("a custom profile on the cloud host still sends tool_choice", () => {
+    expect(
+      body(
+        {
+          baseUrl: cloud,
+          model: "deepseek-v4-pro",
+          reasoning: { effort: "reasoning_effort" },
+        },
+        withTools
+      ).tool_choice
+    ).toBe("required");
+  });
+
+  test("a profile may declare the suppression itself, on any host", () => {
+    expect(
+      body(
+        {
+          baseUrl: "http://localhost:8000/v1",
+          reasoning: { omitToolChoice: true },
+        },
+        withTools
+      ).tool_choice
+    ).toBeUndefined();
   });
 });

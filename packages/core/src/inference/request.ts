@@ -167,13 +167,19 @@ function suppressesToolChoice(cfg: IOpenAICompatibleConfig): boolean {
     return !override;
   }
 
-  const declared = profile(cfg).omitToolChoice;
+  const p = profile(cfg);
+  const declared = p.omitToolChoice;
 
   if (declared !== undefined) {
     return declared;
   }
 
-  return isDeepSeekCloudHost(cfg.baseUrl);
+  // The host heuristic applies ONLY to the DeepSeek cloud dialect. Gating on
+  // the resolved profile preserves the old `style === "deepseek"` check: an
+  // entry that explicitly picks `none`/`qwen`/`openai`/a custom profile against
+  // api.deepseek.com has opted out of that dialect, and must keep getting
+  // `tool_choice` — dropping the gate silently removed that escape hatch.
+  return p === REASONING_PRESETS.deepseek && isDeepSeekCloudHost(cfg.baseUrl);
 }
 
 /** Normalize the optional `guidedDecoding` override — tolerates a stringified

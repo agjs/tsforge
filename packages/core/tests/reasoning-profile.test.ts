@@ -134,6 +134,13 @@ describe("isReasoningProfile", () => {
     [{ budegt: "reasoning.max_tokens" }, "a misspelled key"],
     [{ thnking: { path: "mode" } }, "a misspelled thinking key"],
     [{ thinking: { path: "a" }, extra: 1 }, "an unknown extra key"],
+    [{ thinking: { path: "a", onValu: 1 } }, "a typo inside thinking"],
+    [
+      { tokenCap: "params", thinking: { path: "params.enabled" } },
+      "an ancestor/descendant path pair",
+    ],
+    [{ effort: "a.b", budget: "a.b" }, "two identical paths"],
+    [{ tokenCap: "a", effort: "a.b.c" }, "a path nested under another"],
   ])("rejects %p (%s)", (value) => {
     expect(isReasoningProfile(value)).toBe(false);
   });
