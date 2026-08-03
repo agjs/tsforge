@@ -10,6 +10,7 @@ import {
   resolveAgentConcurrency,
   type ITsforgeProjectConfig,
 } from "../src/config/tsforge-config";
+import { PROFILE_IDS } from "../src/config/profiles";
 import { makeFileLinter } from "../src/gate";
 
 let fixtureDir: string;
@@ -433,6 +434,48 @@ describe("tsforge.config.json integration", () => {
 });
 
 describe("profiles", () => {
+  // A config naming a REMOVED profile must fail loudly and keep going, not crash and
+  // not silently honour an id that no longer exists. The warning's id list is derived
+  // from PROFILE_IDS, so removing a profile updates the message — a hardcoded copy
+  // would keep telling the user `frontend` is valid.
+  test("a removed profile warns with the CURRENT ids and falls back", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tsforge-profile-gone-"));
+    const warnings: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+
+    writeFileSync(
+      join(dir, "tsforge.config.json"),
+      JSON.stringify({ profile: "frontend" })
+    );
+
+    process.stderr.write = (chunk: unknown): boolean => {
+      warnings.push(String(chunk));
+
+      return true;
+    };
+
+    try {
+      const config = await loadTsforgeConfig(dir);
+
+      // Falls back to the default rather than carrying a dead id forward.
+      expect(config.profile).toBeUndefined();
+
+      const warning = warnings.find((w) => w.includes("profile")) ?? "";
+
+      expect(warning).toContain('got "frontend"');
+
+      // Compare the LISTED ids exactly. Asserting "contains each current id" would
+      // pass a stale hardcoded list that still advertises `frontend` as valid — the
+      // very thing that goes wrong when a profile is removed.
+      const listed = /must be one of (.+?) — got/u.exec(warning)?.[1];
+
+      expect(listed).toBe(PROFILE_IDS.join(", "));
+    } finally {
+      process.stderr.write = original;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("recommended profile disables architecture rules by default", () => {
     const overrides = normalizeRuleOverrides({ profile: "recommended" });
 

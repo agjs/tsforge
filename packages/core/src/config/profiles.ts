@@ -70,23 +70,6 @@ export const PROFILE_DEFINITIONS: Readonly<
     extraPacks: ["runtime-boundaries", "authorization"],
     ruleOverrides: structureOffOverrides,
   },
-  frontend: {
-    id: "frontend",
-    label: "Frontend",
-    description:
-      "Recommended, scoped to frontend work; React/Next rules keep their pack severities.",
-    // No React/Next severity overrides: the packs already ship those rules at the
-    // severity this profile wants, and lowering any of them would make the React
-    // profile weaker than `recommended` on React rules.
-    ruleOverrides: structureOffOverrides,
-  },
-  backend: {
-    id: "backend",
-    label: "Backend",
-    description:
-      "Recommended; stack detection adds Fastify/Elysia/Drizzle/BullMQ packs.",
-    ruleOverrides: structureOffOverrides,
-  },
   opinionated: {
     id: "opinionated",
     label: "Opinionated",

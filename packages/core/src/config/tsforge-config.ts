@@ -21,6 +21,7 @@ import { parsePlugins, type IExternalPlugin } from "./external-plugins";
 import {
   DEFAULT_PROFILE,
   isProfileId,
+  PROFILE_IDS,
   mergeRuleOverrides,
   resolveProfileExtraPacks,
   resolveProfileMetaRuleOverrides,
@@ -33,7 +34,7 @@ import {
  * include/exclude packs, and tune rule severities (eslint packs + meta-rules).
  */
 export interface ITsforgeProjectConfig {
-  /** Rule profile: recommended (default), strict, security, frontend, backend, opinionated. */
+  /** Rule profile; see PROFILE_IDS for the current set (`recommended` is the default). */
   readonly profile?: ProfileId;
 
   /** Force-enable a stack by name (skip detection heuristics, force-add its packs). */
@@ -174,7 +175,7 @@ function warnUnknownPackInInclude(packId: string): void {
 
 function warnInvalidProfile(profileValue: unknown): void {
   warnConfig(
-    `tsforge.config.json: "profile" must be one of recommended, strict, security, frontend, backend, opinionated — got "${String(profileValue)}"`
+    `tsforge.config.json: "profile" must be one of ${PROFILE_IDS.join(", ")} — got "${String(profileValue)}"`
   );
 }
 

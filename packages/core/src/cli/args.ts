@@ -215,7 +215,7 @@ export function cliUsage(): string {
     "  --plan              pause after the design phase for plan review",
     "  --log               append the run's event stream to ~/.tsforge/logs/",
     "  --policy-mode <m>   plan|default|acceptEdits|ci|dontAsk|bypassPermissions",
-    "  --profile <id>      strictness: recommended|strict|security|frontend|backend|opinionated",
+    `  --profile <id>      strictness: ${PROFILE_IDS.join("|")}`,
     "  --notify <cmd>      run a command when an unattended run finishes",
     "  --version, -V       print the version and exit",
     "  --help, -h          this help",
