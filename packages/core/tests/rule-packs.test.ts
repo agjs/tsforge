@@ -3587,6 +3587,78 @@ export function go() { redirect("/dashboard"); }`;
     expect(messages).toHaveLength(0);
   });
 
+  test.each([
+    ["`/api/todos/${id}`", "a relative path with an interpolated segment"],
+    ["`api/todos/${id}`", "a relative path without a leading slash"],
+    ["`https://api.example.com/v1/${id}`", "a fixed host, interpolated path"],
+    ["`https://api.example.com/?q=${q}`", "a fixed host, interpolated query"],
+    [
+      "`https://api.example.com/#${frag}`",
+      "a fixed host, interpolated fragment",
+    ],
+    ["`/api/todos`", "a template with no interpolation at all"],
+  ])("no-user-controlled-fetch-url: ALLOWS %s (%s)", (url) => {
+    // SSRF is control of the HOST. These cannot reach another origin however
+    // hostile the interpolated value is, and forbidding them made an ordinary
+    // resource-by-id client impossible to write.
+    const code = `export async function load(id: string, q: string, frag: string) { return fetch(${url}); }`;
+    const messages = lint(
+      "runtime-boundaries",
+      "no-user-controlled-fetch-url",
+      code,
+      "src/client.ts"
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test.each([
+    ["url", "a bare identifier"],
+    ["`${base}/api/todos`", "an empty first quasi — the whole URL is runtime"],
+    ["`https://${host}/todos`", "an expression in the host position"],
+    ["`//${host}/todos`", "protocol-relative with a runtime host"],
+    [
+      "`https://api.example.com${path}`",
+      "an unterminated authority — `@evil.com/x` rewrites the host via userinfo",
+    ],
+    [
+      "`https://api.example.com:${port}`",
+      "an unterminated authority in the port position",
+    ],
+  ])("no-user-controlled-fetch-url: FLAGS %s (%s)", (url) => {
+    const code = `export async function load(url: string, base: string, host: string, path: string, port: string) { return fetch(${url}); }`;
+    const messages = lint(
+      "runtime-boundaries",
+      "no-user-controlled-fetch-url",
+      code,
+      "src/client.ts"
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain(
+      "userControlledFetchUrl"
+    );
+  });
+
+  test("no-user-controlled-fetch-url: the origin rule applies to axios too", () => {
+    const ok = lint(
+      "runtime-boundaries",
+      "no-user-controlled-fetch-url",
+      "export const go = (id: string) => axios.get(`/api/todos/${id}`);",
+      "src/client.ts"
+    );
+
+    expect(ok).toHaveLength(0);
+
+    const bad = lint(
+      "runtime-boundaries",
+      "no-user-controlled-fetch-url",
+      "export const go = (h: string) => axios.get(`https://${h}/todos`);",
+      "src/client.ts"
+    );
+
+    expect(bad.map((m) => m.messageId)).toContain("userControlledFetchUrl");
+  });
+
   test("no-prototype-polluting-merge: reports Object.assign with req.body", () => {
     const code = `export function merge(req: { body: object }, target: object) {
   return Object.assign(target, req.body);

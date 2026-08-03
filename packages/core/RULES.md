@@ -20,7 +20,7 @@ Rules are grouped by **adoption tier**. Use `profile` in `tsforge.config.json` t
 - **jwt-cookies/jwt-must-verify-not-decode** [ERROR]: Disallow `jwt.decode` / `decodeJwt` — decoding without verification accepts forged tokens. Use `jwt.verify` or `jwtVerify` instead.
 - **nextjs/no-secret-props-to-client** [WARN]: Warn when Server Components pass secret-looking props to JSX — values may cross the client boundary.
 - **runtime-boundaries/no-prototype-polluting-merge** [ERROR]: Disallow merging request body/query/params into objects — enables prototype pollution.
-- **runtime-boundaries/no-user-controlled-fetch-url** [ERROR]: Disallow fetch/axios requests to non-literal URLs — dynamic URLs enable SSRF.
+- **runtime-boundaries/no-user-controlled-fetch-url** [ERROR]: Disallow fetch/axios requests whose ORIGIN is not fixed at author time — a runtime-controlled host enables SSRF.
 - **runtime-boundaries/no-user-controlled-redirect** [ERROR]: Disallow redirects to non-literal URLs — user-controlled redirects enable open redirects.
 - **runtime-boundaries/upload-must-set-limits** [WARN]: Multipart upload handlers should declare `limits` or `maxFileSize` to bound request size.
 - **runtime-boundaries/webhook-must-verify-signature-before-parse** [WARN]: Webhook handlers must verify signatures before calling `.json()` on the request body.

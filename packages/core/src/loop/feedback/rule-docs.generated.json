@@ -565,7 +565,7 @@
     "good": ""
   },
   "tsforge/no-user-controlled-fetch-url": {
-    "what": "Disallow fetch/axios requests to non-literal URLs — dynamic URLs enable SSRF.",
+    "what": "Disallow fetch/axios requests whose ORIGIN is not fixed at author time — a runtime-controlled host enables SSRF.",
     "bad": "",
     "good": ""
   },

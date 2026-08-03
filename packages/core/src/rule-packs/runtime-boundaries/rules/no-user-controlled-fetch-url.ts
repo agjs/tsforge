@@ -1,6 +1,6 @@
 import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
 
-import { isExpression, isStringLiteral } from "../../boundary-utils";
+import { hasFixedOrigin, isExpression } from "../../boundary-utils";
 import { createRule } from "../../create-rule";
 
 export const RULE_NAME = "no-user-controlled-fetch-url";
@@ -38,12 +38,12 @@ export const noUserControlledFetchUrlRule = createRule<[], MessageIds>({
     type: "problem",
     docs: {
       description:
-        "Disallow fetch/axios requests to non-literal URLs — dynamic URLs enable SSRF.",
+        "Disallow fetch/axios requests whose ORIGIN is not fixed at author time — a runtime-controlled host enables SSRF.",
     },
     schema: [],
     messages: {
       userControlledFetchUrl:
-        "HTTP request URL must be a string literal — do not pass user-controlled values to `fetch()` or `axios`.",
+        "HTTP request URL must have a fixed origin. Use a literal, or a template whose host is author-written before the first `${...}` — `fetch(`/api/todos/${id}`)` is fine; `fetch(url)` and `fetch(`https://${host}/x`)` are not.",
     },
   },
   defaultOptions: [],
@@ -60,7 +60,7 @@ export const noUserControlledFetchUrlRule = createRule<[], MessageIds>({
           return;
         }
 
-        if (!isStringLiteral(urlArg)) {
+        if (!hasFixedOrigin(urlArg)) {
           context.report({ node, messageId: "userControlledFetchUrl" });
         }
       },
