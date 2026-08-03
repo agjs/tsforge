@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluateHarness } from "../src/self-harness";
-import { buildRunRecord } from "../src/self-harness/evaluate";
+import { buildRunRecord } from "../src/eval";
 import type { IModelResponse, IProvider } from "../src/inference";
 import { editStep, STOP } from "./stub-provider";
 

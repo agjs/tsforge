@@ -18,8 +18,8 @@ import type { ILoopEvent } from "../loop";
 import type { IProvider } from "../inference";
 import {
   analyzeEvents,
+  buildRunRecord,
   classifyRun,
-  type IRunMetrics,
   countTaskLoc,
   judge,
   summarize,
@@ -143,37 +143,14 @@ interface ITaskRunOutput {
   readonly run: IMinedRun;
 }
 
-/**
- * The metrics half of a run record. Pure and exported so the cost wiring has a
- * direct test: the numbers are derived from a real event stream, and a run that
- * accepted nothing must OMIT the ratio rather than report 0 — a zero would be
- * averaged in and make a variant look cheaper the less of its work survived.
- */
-export function buildRunRecord(args: {
-  label: string;
-  passed: boolean;
-  cycles: number;
-  elapsedMs: number;
-  metrics: Pick<IRunMetrics, "tokensOut" | "costPerAcceptedChange">;
-}): IRunRecord {
-  const { metrics } = args;
-
-  return {
-    label: args.label,
-    passed: args.passed,
-    cycles: args.cycles,
-    ms: args.elapsedMs,
-    ...(metrics.tokensOut > 0 ? { tokensOut: metrics.tokensOut } : {}),
-    ...(metrics.costPerAcceptedChange > 0
-      ? { costPerAcceptedChange: metrics.costPerAcceptedChange }
-      : {}),
-  };
-}
-
 async function runTaskOnce(
   taskId: string,
   runDir: string,
-  opts: IEvaluateOptions
+  opts: IEvaluateOptions,
+  // Owned by the CALLER so a throw mid-run does not lose the usage already
+  // reported: an attempt that made several model calls then died has a real cost,
+  // and dropping it excluded the most expensive runs from the token averages.
+  events: ILoopEvent[]
 ): Promise<ITaskRunOutput> {
   const seedDir = join(opts.corpusDir, taskId);
 
@@ -188,7 +165,6 @@ async function runTaskOnce(
 
   const gated = await gateSpec(runDir, spec);
   const logFile = Bun.file(join(runDir, "run.log")).writer();
-  const events: ILoopEvent[] = [];
 
   const onEvent = (e: ILoopEvent): void => {
     events.push(e);
@@ -333,21 +309,26 @@ async function runOneSpec(
   // unreliable variant look faster the more often it crashed — the same bias the
   // token averages are careful to avoid.
   const startedAt = performance.now();
+  const events: ILoopEvent[] = [];
 
   try {
-    const { record, run } = await runTaskOnce(taskId, runDir, opts);
+    const { record, run } = await runTaskOnce(taskId, runDir, opts, events);
 
     sink.records.push(record);
     sink.runs.push(run);
     sink.log(verdictLine(taskId, attempt, record));
   } catch (err) {
     sink.erroredCount += 1;
-    sink.records.push({
-      label: taskId,
-      passed: false,
-      cycles: 0,
-      ms: Math.round(performance.now() - startedAt),
-    });
+    sink.records.push(
+      buildRunRecord({
+        label: taskId,
+        passed: false,
+        cycles: 0,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        // Whatever the attempt spent before it died still counts.
+        metrics: analyzeEvents(events),
+      })
+    );
     sink.log(
       `    ${taskId} #${String(attempt)}: ERRORED (${err instanceof Error ? err.message : String(err)})`
     );

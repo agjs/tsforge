@@ -140,6 +140,14 @@ function baselineCell(report: IVariantReport, baseline: string | null): string {
   return `${sign}${pct(v.deltaPassRate)} (z=${v.z.toFixed(2)})${mark}`;
 }
 
+/** A cost cell: an em dash when NOTHING recorded a figure, not "0". A rendered 0
+ *  reads as "this variant was free", which is how a re-rendered pre-cost sweep (or
+ *  a variant whose every run errored) would silently become a pass-rate-only
+ *  comparison again. */
+function cost(value: number): string {
+  return value > 0 ? String(Math.round(value)) : "—";
+}
+
 /** Render a sweep report as a Markdown table. `*` marks a significant difference
  *  (p < 0.05) from the baseline. */
 export function renderSweepReportMarkdown(report: ISweepReport): string {
@@ -157,7 +165,7 @@ export function renderSweepReportMarkdown(report: ISweepReport): string {
     return (
       `| ${v.label} | ${String(v.runs)} | ${pct(v.passRate)} | ${ci} | ` +
       `${v.avgCycles.toFixed(1)} | ${t2g} | ${String(Math.round(v.avgMs))} | ` +
-      `${String(Math.round(v.avgTokensOut))} | ${String(Math.round(v.avgCostPerAcceptedChange))} | ` +
+      `${cost(v.avgTokensOut)} | ${cost(v.avgCostPerAcceptedChange)} | ` +
       `${v.avgQuality.toFixed(1)} | ${v.avgLoc.toFixed(1)} | ${baselineCell(v, report.baseline)} |`
     );
   });

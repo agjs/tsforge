@@ -1,4 +1,5 @@
 import type { IRunRecord, IVariantSummary } from "./eval.types";
+import type { IRunMetrics } from "./metrics";
 
 /** One eval run's outcome. */
 /** Aggregate run records per variant label. */
@@ -75,4 +76,36 @@ export function summarize(records: IRunRecord[]): IVariantSummary[] {
   }
 
   return summaries;
+}
+
+/**
+ * The metric half of a run record, built from a run's measured elapsed time and
+ * its event-derived metrics. The ONE place the omit rules live, shared by the
+ * self-harness evaluator and the `eval:sweep` campaign — they had diverged once
+ * already, which is how the primary sweep ended up printing zeros.
+ *
+ * A run that accepted nothing OMITS `costPerAcceptedChange` rather than reporting
+ * 0: the ratio is undefined, and a 0 averaged in makes a variant look cheaper the
+ * less of its work survived. Same for `tokensOut` on a run that never reached the
+ * model.
+ */
+export function buildRunRecord(args: {
+  label: string;
+  passed: boolean;
+  cycles: number;
+  elapsedMs: number;
+  metrics: Pick<IRunMetrics, "tokensOut" | "costPerAcceptedChange">;
+}): IRunRecord {
+  const { metrics } = args;
+
+  return {
+    label: args.label,
+    passed: args.passed,
+    cycles: args.cycles,
+    ms: args.elapsedMs,
+    ...(metrics.tokensOut > 0 ? { tokensOut: metrics.tokensOut } : {}),
+    ...(metrics.costPerAcceptedChange > 0
+      ? { costPerAcceptedChange: metrics.costPerAcceptedChange }
+      : {}),
+  };
 }

@@ -88,6 +88,18 @@ describe("eval report: buildSweepReport", () => {
     expect(md).toContain("1400");
   });
 
+  test("shows an em dash, not 0, when no run recorded cost", () => {
+    // A rendered 0 reads as "free". An older sweep with no cost data, or a variant
+    // whose every run errored, would otherwise look measured-and-cheap and the
+    // comparison silently returns to pass-rate only.
+    const md = renderSweepReportMarkdown(
+      buildSweepReport([{ label: "A", passed: true, cycles: 2, ms: 100 }], "A")
+    );
+
+    expect(md).toContain("—");
+    expect(md).not.toMatch(/\|\s0\s\|\s0\s\|/u);
+  });
+
   test("omits comparisons when no baseline matches", () => {
     const report = buildSweepReport(records);
 

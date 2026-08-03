@@ -17,6 +17,7 @@ import { providerConfig } from "../src/cli";
 import {
   summarize,
   analyzeEvents,
+  buildRunRecord,
   classifyRun,
   countTaskLoc,
   renderSweepReportMarkdown,
@@ -196,6 +197,12 @@ for (const seed of seeds) {
 
         // One run's failure (e.g. a request timing out) must not abort the sweep —
         // record it as a blocked run and carry on, so a long batch is resilient.
+        // Timer and event sink live HERE so a throw still reports the time and the
+        // tokens the attempt actually consumed; recording 0 made a variant that
+        // crashes after several model calls read as instant and free.
+        const startedAt = performance.now();
+        const runEvents: ILoopEvent[] = [];
+
         try {
           records.push(
             await runOne(
@@ -206,18 +213,22 @@ for (const seed of seeds) {
               runDir,
               temp,
               i,
-              variantEnv
+              variantEnv,
+              runEvents
             )
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
 
-          records.push({
-            label: `${vLabel} temp=${temp}`,
-            passed: false,
-            cycles: 0,
-            ms: 0,
-          });
+          records.push(
+            buildRunRecord({
+              label: `${vLabel} temp=${temp}`,
+              passed: false,
+              cycles: 0,
+              elapsedMs: Math.round(performance.now() - startedAt),
+              metrics: analyzeEvents(runEvents),
+            })
+          );
           process.stdout.write(
             `  ${seed} ${vLabel} temp=${temp} #${i + 1}: ERRORED (${message}) → ${runId}\n`
           );
@@ -309,7 +320,10 @@ async function runOne(
   runDir: string,
   temp: number,
   i: number,
-  variantEnv: Record<string, string> = {}
+  variantEnv: Record<string, string> = {},
+  // Owned by the caller so a throw mid-run keeps the events (and the token cost)
+  // the attempt already produced.
+  runEvents: ILoopEvent[] = []
 ): Promise<IRunRecord> {
   const restore = setVariantEnv(variantEnv);
 
@@ -353,9 +367,6 @@ async function runOne(
     // Every run gets a full transcript at <runDir>/run.log; stream to the
     // terminal too when TSFORGE_STREAM=1.
     const log = Bun.file(join(runDir, "run.log")).writer();
-    // Keep the structured events so a failed run can be classified (WHY it
-    // failed), not just counted — fed to classifyRun below.
-    const runEvents: ILoopEvent[] = [];
 
     const onEvent = (e: ILoopEvent): void => {
       runEvents.push(e);
@@ -447,8 +458,15 @@ async function runOne(
           status: result.status,
           cycles,
           ms,
-          tokensOut: runMetrics.tokensOut,
-          costPerAcceptedChange: runMetrics.costPerAcceptedChange,
+          // Same omit rules as the record: a run that accepted nothing has an
+          // UNDEFINED ratio, and writing 0 here would make the per-run artifact
+          // report a meaningful zero.
+          ...(runMetrics.tokensOut > 0
+            ? { tokensOut: runMetrics.tokensOut }
+            : {}),
+          ...(runMetrics.costPerAcceptedChange > 0
+            ? { costPerAcceptedChange: runMetrics.costPerAcceptedChange }
+            : {}),
           quality,
           loc,
           judgeNotes,
@@ -475,15 +493,14 @@ async function runOne(
     );
 
     return {
-      label: `${vLabel} temp=${temp}`,
-      passed,
-      cycles,
-      ms,
+      ...buildRunRecord({
+        label: `${vLabel} temp=${temp}`,
+        passed,
+        cycles,
+        elapsedMs: ms,
+        metrics: runMetrics,
+      }),
       quality,
-      ...(runMetrics.tokensOut > 0 ? { tokensOut: runMetrics.tokensOut } : {}),
-      ...(runMetrics.costPerAcceptedChange > 0
-        ? { costPerAcceptedChange: runMetrics.costPerAcceptedChange }
-        : {}),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
     };
