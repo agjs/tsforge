@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, isOneShot, applyRecipe, runNotify } from "../src/cli";
 import { cliUsage, valueFlagError } from "../src/cli/args";
+import { PROFILE_IDS } from "../src/config/profiles";
 import type { ITaskRecipe } from "../src/config/recipes";
 
 // Regression: runNotify used to spawn `sh -c cmd` with a bare `await proc.exited`
@@ -635,4 +636,19 @@ describe("the real CLI aborts on a malformed value flag", () => {
     expect(r.code).toBe(0);
     expect(r.out).toContain("tsforge");
   });
+});
+
+// The --profile line is generated from PROFILE_IDS. It was hand-maintained, which is
+// exactly what goes stale when a profile is added or removed — two were removed and
+// the help text would have kept advertising them.
+test("--help's profile list is generated from PROFILE_IDS", () => {
+  // Compare the token list EXACTLY. Banning the removed names as substrings across
+  // the whole help blob would false-fail the day help text uses those words in
+  // another sense, and would not catch a stale list either.
+  const line = cliUsage()
+    .split("\n")
+    .find((l) => l.includes("--profile <id>"));
+  const listed = /strictness: (\S+)/u.exec(line ?? "")?.[1];
+
+  expect(listed).toBe(PROFILE_IDS.join("|"));
 });

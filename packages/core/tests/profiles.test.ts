@@ -1,9 +1,8 @@
 import { describe, test, expect } from "bun:test";
 import { RULE_PACKS, buildPackEslintConfig } from "../src/rule-packs";
+import { resolveActivePacks } from "../src/config/tsforge-config";
 import {
   resolveProfileRuleOverrides,
-  resolveProfileExtraPacks,
-  resolveProfileMetaRuleOverrides,
   PROFILE_DEFINITIONS,
   PROFILE_IDS,
   STRUCTURE_RULES,
@@ -11,7 +10,7 @@ import {
   type IProfileDefinition,
   type ProfileId,
 } from "../src/config/profiles";
-import { cliUsage, profileFlagError } from "../src/cli/args";
+import { profileFlagError } from "../src/cli/args";
 
 // Strict-by-default: the layout-AGNOSTIC best practices (no-inline-jsx-functions,
 // forwardref-display-name) must NOT be disabled in the default profiles — only the
@@ -243,35 +242,33 @@ describe("the profile set is the authoritative list", () => {
   // The valid-id list used to be hand-maintained in three places, which is exactly
   // what goes stale when a profile is added or removed. These assert the strings are
   // DERIVED, so a hardcoded copy fails rather than quietly lying to the user.
-  test("--help lists the ids from the same source", () => {
-    const usage = cliUsage();
-
-    for (const id of PROFILE_IDS) {
-      expect(usage).toContain(id);
-    }
-
-    expect(usage).not.toContain("frontend");
-    expect(usage).not.toContain("backend");
-  });
-
   // THE STANDARD, as an assertion rather than a comment. Both removed profiles died
-  // because nothing enforced this: `backend` resolved to byte-identical effective
-  // behaviour to `recommended` and survived for months, and a comment saying "a
-  // profile must differ" would not have caught the next one either.
+  // because nothing enforced this: `backend` resolved to identical behaviour to
+  // `recommended` and survived for months, and prose saying "a profile must differ"
+  // would not have caught the next one either.
   //
-  // Compares EFFECTIVE behaviour — the resolved rule severities over every pack, plus
-  // the extra packs and meta-rules a profile turns on. A shallow diff of
-  // `ruleOverrides` is not enough: backend's only textual difference was OMITTING
-  // `prefer-early-return: "warn"`, which matched that rule's pack default, so it
-  // looked different while behaving identically.
+  // Everything here goes through the PRODUCTION resolvers, not the declarations.
+  // `resolveActivePacks` is what actually decides the pack set — it filters against
+  // PACK_REGISTRY — so a profile declaring `extraPacks: ["not-a-real-pack"]` would
+  // look different while resolving identically. Comparing what a profile DECLARES is
+  // the same declaration-vs-effect confusion that let `backend` survive: its only
+  // textual difference was omitting an override matching its rule's pack default.
+  //
+  // Meta-rule elevations are deliberately NOT part of the snapshot: the meta-rule
+  // layer exposes no default-severity table to resolve against, so "elevate to error"
+  // cannot be distinguished from a no-op elevation of a rule already at error. A
+  // profile whose ONLY difference is a meta-rule elevation therefore fails this test
+  // until that table exists — a false positive, which is the safe direction.
   test("every profile behaves differently from recommended", () => {
     const allPacks = Object.keys(RULE_PACKS);
     const effective = (id: ProfileId): string =>
       JSON.stringify({
+        // The resolved pack set, filtered exactly as production filters it.
+        packs: [...resolveActivePacks([], { profile: id })].sort(),
+        // Rule severities over every pack, so an override's effect is visible even
+        // when the profile enables no packs of its own.
         rules: buildPackEslintConfig(allPacks, resolveProfileRuleOverrides(id))
           .rules,
-        extraPacks: [...resolveProfileExtraPacks(id)].sort(),
-        metaRules: resolveProfileMetaRuleOverrides(id),
       });
 
     const baseline = effective("recommended");
