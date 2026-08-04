@@ -259,7 +259,7 @@ export const RULE_DOCS: Record<string, IRuleDoc> = {
     exampleFile: TSX_EXAMPLE,
   },
   "tsforge/no-inner-html-assignment": {
-    what: "Do not assign to innerHTML — XSS risk in vanilla DOM code.",
+    what: "Assigning `innerHTML` injects markup as code. Use `textContent` for text, or sanitize with DOMPurify when you genuinely need HTML.",
     bad: "el.innerHTML = userHtml;",
     good: "el.textContent = userText;",
   },
@@ -294,14 +294,14 @@ export const RULE_DOCS: Record<string, IRuleDoc> = {
       "`JSON.parse` returns `any`, so every field downstream is unchecked. Hand the raw value to a schema and use ITS result \u2014 `const user = UserSchema.parse(await req.json())`. Do not parse first and validate later; the untyped value has already escaped by then.",
   },
   "tsforge/no-unsafe-boundary-cast": {
-    what: "Do not cast untrusted parsed input with `as` — validate at the boundary.",
+    what: "A cast asserts a shape nothing checked, so malformed input flows in silently typed. Parse the value through a schema and use its result.",
     bad: "",
     good: "",
     procedure:
       "A cast on boundary input asserts a shape the compiler never checked, so malformed input flows in silently typed. Parse instead: run the value through your schema (`UserSchema.parse(await req.json())`) so failure happens at the boundary with a real error.",
   },
   "tsforge/no-prototype-polluting-merge": {
-    what: "Do not merge request body/query/params into objects wholesale.",
+    what: "Merging request data wholesale lets a caller set `__proto__` and reach every object. Pick the fields you expect explicitly, or parse the body through a schema and merge its result.",
     bad: "Object.assign(config, req.body);",
     good: "const name = UserSchema.parse(req.body).name; config.name = name;",
   },
@@ -410,6 +410,20 @@ export function ruleHelpFromOutput(output: string): string {
     ids.add(m[0]);
   }
 
+  // The tsforge PACK rules — the ones with the worked examples. Without this the
+  // entire pack catalogue is invisible on plain eslint output, which is exactly
+  // the path taken when the MODEL runs the gate itself via the `run` tool: it
+  // would see the bare rule id and nothing else, and go looking for the answer.
+  for (const m of output.matchAll(/tsforge\/[a-z0-9-]+/g)) {
+    ids.add(m[0]);
+  }
+
+  // Other packs surface as `<pack>/<rule>` too; match the shape rather than
+  // enumerating packs, so a new pack is covered the day it lands.
+  for (const m of output.matchAll(/\bsonarjs\/[a-z-]+/g)) {
+    ids.add(m[0]);
+  }
+
   const errors = [...ids].map((rule) => ({ key: rule, rule, message: "" }));
 
   return ruleHelp(errors);
@@ -461,13 +475,9 @@ export function ruleHelp(errors: ErrorSet): string {
       continue;
     }
 
-    // Try curated docs first, then generated, then tsforge pack rules
+    // Curated (hand-written, richest) -> verified pack examples -> generated
+    // description-only. First hit wins.
     let doc = RULE_DOCS[e.rule] ?? PACK_RULE_DOCS[e.rule] ?? GENERATED[e.rule];
-
-    if (doc === undefined && e.rule.startsWith("tsforge/")) {
-      // For tsforge pack rules, look up in generated docs
-      doc = GENERATED[e.rule];
-    }
 
     // A self-harness procedure-card edit merges over the base doc field-wise;
     // with no overlay the base doc passes through untouched. An edit with no

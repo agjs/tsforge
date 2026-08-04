@@ -34,13 +34,10 @@ function lint(
   }
 
   // The pack stores TSESLint rule modules; ESLint's Linter wants its own shape.
-  // Structurally identical at the points Linter touches, so bridge through an
-  // unknown-typed local rather than an `as` cast (banned by the house rules).
-  const bridge: Record<string, unknown> = { [ruleName]: rule };
-  const plugins: Record<string, { rules: Record<string, Rule.RuleModule> }> =
-    Object.assign(Object.create(null), {
-      tsforge: { rules: bridge },
-    });
+  // They are structurally compatible at every point Linter touches, so the
+  // parameter is typed as what Linter needs and the pack value is handed over
+  // through a narrowing guard rather than a cast.
+  const plugins = { tsforge: { rules: { [ruleName]: toLinterRule(rule) } } };
   const isTsx = filename.endsWith(".tsx");
   const linter = new Linter();
 
@@ -82,13 +79,72 @@ function assertParses(messages: string[], label: string): void {
 
 /** Which pack owns a rule name (rule ids are unique across packs). */
 function packOf(ruleName: string): keyof typeof RULE_PACKS | undefined {
-  for (const [packId, pack] of Object.entries(RULE_PACKS)) {
-    if (ruleName in pack.rules) {
-      return packId as keyof typeof RULE_PACKS;
+  // Iterate the KEYS of the typed record, so packId is already narrowed and no
+  // cast is needed to widen Object.entries' `string` back to the union.
+  for (const packId of Object.keys(RULE_PACKS)) {
+    if (!isPackId(packId)) {
+      continue;
+    }
+
+    if (ruleName in RULE_PACKS[packId].rules) {
+      return packId;
     }
   }
 
   return undefined;
+}
+
+function isPackId(value: string): value is keyof typeof RULE_PACKS {
+  return Object.hasOwn(RULE_PACKS, value);
+}
+
+/** The pack's rule module in the shape ESLint's Linter accepts.
+ *
+ *  A pack rule is a TSESLint module; Linter wants its own. They are structurally
+ *  compatible at every point Linter touches, but the two `create` signatures are
+ *  nominally different, so this re-declares the one member Linter calls and
+ *  forwards to it. No `as`, and no laundering through an `any`-returning helper —
+ *  dodging the cast ban that way is worse than the cast itself. */
+function toLinterRule(rule: unknown): Rule.RuleModule {
+  if (typeof rule !== "object" || rule === null || !("create" in rule)) {
+    throw new Error("rule module has no create()");
+  }
+
+  const create: unknown = Reflect.get(rule, "create");
+
+  if (typeof create !== "function") {
+    throw new Error("rule module create() is not callable");
+  }
+
+  // `meta` carries the messages table; without it a rule reporting by messageId
+  // throws instead of producing a diagnostic.
+  const meta: unknown = Reflect.get(rule, "meta");
+
+  return {
+    ...(typeof meta === "object" && meta !== null ? { meta } : {}),
+    create(context: Rule.RuleContext): Rule.RuleListener {
+      const returned: unknown = Reflect.apply(create, rule, [context]);
+
+      if (typeof returned !== "object" || returned === null) {
+        throw new Error("rule create() did not return a listener");
+      }
+
+      // A RuleListener is a string-keyed map of visitor callbacks. Rebuild it
+      // from own entries so the value carries that index signature honestly
+      // rather than being asserted into it.
+      const listener: Rule.RuleListener = {};
+
+      for (const [selector, visitor] of Object.entries(returned)) {
+        // Visitors are usually functions, but a selector may also carry an
+        // { enter, exit } pair — keep both or half the rules stop firing.
+        if (typeof visitor === "function" || typeof visitor === "object") {
+          listener[selector] = visitor;
+        }
+      }
+
+      return listener;
+    },
+  };
 }
 
 interface IDocumented {
@@ -247,4 +303,23 @@ describe("rule docs: the ✓ must be a FIX, not an evasion", () => {
       expect(stripped).not.toBe(squash(entry.doc.bad));
     }
   );
+});
+
+describe("rule docs: guidance says what to DO", () => {
+  // "Disallow X" restates the linter. The model already knows what it did
+  // wrong; what it needs is the sanctioned shape. Every entry must therefore
+  // name a remedy somewhere — in the `what`, the ✓, or the procedure.
+  const REMEDY =
+    /\b(use|instead|prefer|move|add|wrap|return|pass|import|call|set|declare|extract|split|parse|mask|derive|sanitize|scope|filter|guard|throw|chain|annotate|revalidate|register|write|assign|put|store|name|create|replace|delete|configure|close|bound|keep|give|drop|pick|redirect)\b/iu;
+
+  test.each(
+    Object.entries(ALL_DOCS).filter(([id]) => id.startsWith("tsforge/"))
+  )("%s: names a remedy, not just a prohibition", (_id, doc) => {
+    const carriesRemedy =
+      REMEDY.test(doc.what) ||
+      REMEDY.test(doc.procedure ?? "") ||
+      doc.good.length > 0;
+
+    expect(carriesRemedy).toBe(true);
+  });
 });

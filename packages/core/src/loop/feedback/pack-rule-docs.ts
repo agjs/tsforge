@@ -34,7 +34,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     exampleFile: "app/page.tsx",
   },
   "tsforge/bcrypt-rounds-min": {
-    what: "Disallow `bcrypt.hash` / `bcrypt.hashSync` calls with a numeric-literal rounds value below the configured minimum (default 10).",
+    what: "A low bcrypt cost factor makes stolen hashes cheap to crack. Pass at least the configured minimum (default 10) as the rounds argument.",
     bad: '\n      import bcrypt from "bcrypt";\n      bcrypt.hash(password, 8);\n    ',
     good: '\n      import bcrypt from "bcrypt";\n      bcrypt.hash(password, 10);\n    ',
   },
@@ -116,7 +116,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     exampleFile: "src/billing/billing.service.ts",
   },
   "tsforge/mask-pii-fields": {
-    what: "Disallow unmasked PII (email, phone, password, token, ...) in structured-logger payloads \u2014 the #1 way data leaks quietly.",
+    what: "PII in a log payload leaks quietly and is hard to purge afterwards. Mask or drop the field before logging \u2014 log an id or a hash instead of the value.",
     bad: '\n      logger.info({ event: "user_created", email: user.email });\n    ',
     good: '\n      logger.info({ event: "user_created", email: maskEmailForLogging(user.email) });\n    ',
   },
@@ -146,7 +146,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: 'import { now, randomId } from "./utils/clock";\n\nexport function stamp() {\n  return { at: now(), id: randomId() };\n}',
   },
   "tsforge/no-blocking-concurrency-zero": {
-    what: "Disallow `new Worker(name, processor, { concurrency: <numericLiteral \u2264 0> })` \u2014 non-positive concurrency blocks job processing.",
+    what: "A non-positive `concurrency` stops the worker processing anything. Set it to a positive integer sized to the job's cost \u2014 start at 1 and raise it.",
     bad: '\n      import { Worker } from "bullmq";\n      new Worker("queue", async () => {}, { concurrency: 0 });\n    ',
     good: '\n      import { Worker } from "bullmq";\n      new Worker("queue", async () => {}, { concurrency: 5 });\n    ',
   },
@@ -163,14 +163,14 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     exampleFile: "src/parse.test.ts",
   },
   "tsforge/no-decorate-state-collision": {
-    what: "Disallow duplicate keys across `.decorate()` / `.state()` / `.derive()` / `.resolve()` calls on a single Elysia instance \u2014 duplicates silently overwrite and break plugin composition.",
+    what: "Two `.decorate()`/`.state()`/`.derive()`/`.resolve()` calls sharing a key silently overwrite each other. Give each one a distinct key, or namespace them per plugin.",
     bad: '\n      const app = new Elysia()\n        .decorate("db", createDb())\n        .decorate("db", createCache());\n    ',
     good: '\n      const app = new Elysia()\n        .decorate("db", createDb())\n        .decorate("cache", createCache());\n    ',
   },
   "tsforge/no-derived-state-in-effect": {
-    what: "Disallow setting local state inside useEffect when the value can be derived during render (or memoized with useMemo).",
-    bad: 'import { useEffect, useState } from "react";\nexport function Counter({ seed }: { seed: number }) {\n  const [count, setCount] = useState(0);\n  useEffect(() => { setCount(seed); }, [seed]);\n  return <span>{count}</span>;\n}',
-    good: 'import { useState } from "react";\nexport function Counter() {\n  const [count, setCount] = useState(0);\n  function increment() { setCount((c) => c + 1); }\n  return <button onClick={increment}>{count}</button>;\n}',
+    what: "State set from an effect renders twice and can tear. If the value can be computed from props or other state, derive it during render \u2014 `useMemo` when the computation is expensive.",
+    bad: "export function Total({ items }: { items: number[] }) {\n  const [total, setTotal] = useState(0);\n\n  useEffect(() => {\n    setTotal(items.reduce((a, b) => a + b, 0));\n  }, [items]);\n\n  return <p>{total}</p>;\n}",
+    good: "export function Total({ items }: { items: number[] }) {\n  const total = useMemo(() => items.reduce((a, b) => a + b, 0), [items]);\n\n  return <p>{total}</p>;\n}",
     exampleFile: "src/Counter.tsx",
   },
   "tsforge/no-direct-process-env": {
@@ -293,7 +293,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: "\n      const UserSchema = t.Object({ name: t.String() });\n      interface Profile { bio: string; }\n    ",
   },
   "tsforge/no-spawn-with-shell": {
-    what: "Disallow child_process.spawn/spawnSync with shell: true \u2014 shell execution enables command injection.",
+    what: "`shell: true` runs the string through a shell, so any interpolated value can inject commands. Drop it and pass the program and its arguments as an array.",
     bad: 'import { spawn } from "child_process";\nspawn("sh", ["-c", cmd], { shell: true });',
     good: 'import { spawn } from "child_process";\nspawn("node", ["script.js"]);',
     exampleFile: "src/runner.ts",
@@ -308,13 +308,14 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
       "1) Create/open `Component.hooks.ts` next to the component. 2) Move the state/effect hooks into a `useComponent()` custom hook that returns the values and handlers the JSX needs. 3) Call the hook once at the top of the component and destructure. (`useId`/`useTransition`/`useDeferredValue` may stay inline.)",
   },
   "tsforge/no-user-controlled-fetch-url": {
-    what: "Disallow fetch/axios requests whose ORIGIN is not fixed at author time \u2014 a runtime-controlled host enables SSRF.",
-    bad: "export async function load(url: string) { return fetch(url); }",
-    good: 'export async function load() { return fetch("https://api.example.com"); }',
-    exampleFile: "src/client.ts",
+    what: "The request ORIGIN must be fixed in source. Interpolating the path is fine; interpolating the host is not. There is no allowlist or builder to opt into \u2014 write the host literally.",
+    bad: "export async function load(url: string, host: string) {\n  await fetch(url);\n\n  return fetch(`https://${host}/todos`);\n}",
+    good: "export async function load(id: string) {\n  await fetch(`/api/todos/${id}`);\n\n  return fetch(`https://api.example.com/v1/${id}`);\n}",
+    procedure:
+      'Put the whole origin before the first ${...} and close it with / ? or # \u2014 `https://api.example.com${p}` is still rejected because p="@evil.com/x" rewrites the host through userinfo. For a caller-supplied host, validate it against a fixed allowlist yourself and branch to literal URLs.',
   },
   "tsforge/no-user-controlled-redirect": {
-    what: "Disallow redirects to non-literal URLs \u2014 user-controlled redirects enable open redirects.",
+    what: "A runtime-controlled redirect target lets an attacker bounce your users anywhere. Redirect to a literal path, or map the caller's value through a fixed allowlist of destinations.",
     bad: 'import { redirect } from "next/navigation";\nexport function go(target: string) { redirect(target); }',
     good: 'import { redirect } from "next/navigation";\nexport function go() { redirect("/dashboard"); }',
     exampleFile: "src/actions.ts",
@@ -412,7 +413,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   "tsforge/upload-must-set-limits": {
     what: "Multipart upload handlers should declare `limits` or `maxFileSize` to bound request size.",
     bad: 'import multipart from "@fastify/multipart";\nexport async function handleUpload(request: { file: () => Promise<unknown> }) {\n  return request.file();\n}',
-    good: 'import multipart from "@fastify/multipart";\n\nexport async function register(app: FastifyInstance) {\n  await app.register(multipart, { limits: { fileSize: 5_000_000, files: 1 } });\n}\n\nexport async function handleUpload(request: { file: () => Promise<unknown> }) {\n  return request.file();\n}',
+    good: 'import multipart from "@fastify/multipart";\n\nexport async function registerUploads(app: FastifyInstance) {\n  await app.register(multipart, { limits: { fileSize: 5_000_000, files: 1 } });\n\n  app.post("/upload", async (request) => request.file());\n}',
     exampleFile: "src/routes/upload.ts",
   },
   "tsforge/webhook-must-verify-signature-before-parse": {
@@ -432,27 +433,6 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: 'import { Worker } from "bullmq";\n\nconst worker = new Worker("emails", handler).on("failed", (job, err) => {\n  logger.error({ event: "job.failed", jobId: job?.id, cause: err });\n});',
     procedure:
       'Chain `.on("failed", ...)` directly onto `new Worker(...)`. Registering the same listener on a following statement is functionally identical but this rule does not currently detect it.',
-  },
-  "tsforge/index-must-reexport-default": {
-    what: "See procedure.",
-    bad: "",
-    good: "",
-    procedure:
-      'A component folder\'s `index` must re-export the component as the default, so importers can write `import Card from "./Card"`. Add `export { default } from "./Card";` (or `export { Card as default }`) alongside any named re-exports.',
-  },
-  "tsforge/fetch-must-check-ok": {
-    what: "See procedure.",
-    bad: "",
-    good: "",
-    procedure:
-      "`fetch` only rejects on network failure \u2014 a 4xx/5xx resolves normally and `.json()` then parses an error body as if it were data. Check `res.ok` (or the status) and throw or return early BEFORE reading the body.",
-  },
-  "tsforge/no-unsafe-boundary-cast": {
-    what: "See procedure.",
-    bad: "",
-    good: "",
-    procedure:
-      "A cast on boundary input asserts a shape the compiler never checked, so malformed input flows in silently typed. Parse it instead: run the value through your schema (`UserSchema.parse(await req.json())`) so the failure happens at the boundary with a real error.",
   },
   "tsforge/no-template-trim-empty-ternary": {
     what: "Inline `x.trim() === '' ? fallback : x.trim()` is unreadable and evaluates twice. Extract a named utility.",

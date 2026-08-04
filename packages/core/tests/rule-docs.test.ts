@@ -5,6 +5,7 @@ import {
   parseRuleMdx,
 } from "../src/loop/feedback/rule-docs";
 import generatedDocs from "../src/loop/feedback/rule-docs.generated.json";
+import { RULE_PACKS } from "../src/rule-packs";
 
 const SAMPLE_MDX = `---
 description: 'Disallow returning a value with type \`any\` from a function.'
@@ -281,4 +282,27 @@ test("ruleHelp: a multi-line example keeps its indentation under the marker", ()
 
   expect(continuation).toBeDefined();
   expect(continuation?.startsWith("    ")).toBe(true);
+});
+
+test("ruleHelp: test-only metadata never reaches the model", () => {
+  // exampleFile / goodFile / exampleIsProse / fixIsDirective exist so the
+  // verification test can lint path-sensitive examples. Like `reference`, they
+  // are maintainer data: a tsforge-relative path dangles in the user's project
+  // and would waste a repair turn.
+  const h = ruleHelp(
+    Object.values(RULE_PACKS).flatMap((pack) =>
+      Object.keys(pack.rules).map((rule) => ({
+        key: rule,
+        rule: `tsforge/${rule}`,
+        message: "",
+      }))
+    )
+  );
+
+  expect(h).not.toContain("exampleFile");
+  expect(h).not.toContain("goodFile");
+  expect(h).not.toContain("exampleIsProse");
+  expect(h).not.toContain("fixIsDirective");
+  expect(h).not.toContain("src/example.ts");
+  expect(h).not.toContain("packages/core");
 });
