@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { Linter, type Rule } from "eslint";
+import { TSESLint } from "@typescript-eslint/utils";
 import tsParser from "@typescript-eslint/parser";
 import { RULE_PACKS } from "../src/rule-packs";
 import { RULE_DOCS, type IRuleDoc } from "../src/loop/feedback/rule-docs";
@@ -33,18 +33,13 @@ function lint(
     throw new Error(`Rule ${ruleName} not found in pack ${packId}`);
   }
 
-  // The pack stores TSESLint rule modules; ESLint's Linter wants its own shape.
-  // They are structurally compatible at every point Linter touches, so the
-  // parameter is typed as what Linter needs and the pack value is handed over
-  // through a narrowing guard rather than a cast.
-  // Same bridge the other rule tests use: the pack stores TSESLint modules and
-  // Linter wants its own, structurally identical at every point it touches.
-  // eslint.config.js relaxes type assertions for packages/**/tests/**, which is
-  // why this is a plain cast here and would not be in src.
-  const ruleModule = rule as unknown as Rule.RuleModule;
-  const plugins = { tsforge: { rules: { [ruleName]: ruleModule } } };
+  // TSESLint ships a Linter typed for TSESLint rule modules, which is what the
+  // packs hold. Using it instead of ESLint's own Linter removes the type bridge
+  // entirely — no cast, and a genuine shape mismatch would now fail typecheck
+  // instead of being asserted away.
+  const plugins = { tsforge: { rules: { [ruleName]: rule } } };
   const isTsx = filename.endsWith(".tsx");
-  const linter = new Linter();
+  const linter = new TSESLint.Linter();
 
   const messages = linter.verify(
     code,

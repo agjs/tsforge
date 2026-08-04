@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { Linter, type Rule } from "eslint";
+import { TSESLint } from "@typescript-eslint/utils";
 import tsParser from "@typescript-eslint/parser";
 
 import { RULE_PACKS, buildPackEslintConfig } from "../src/rule-packs";
@@ -16,7 +16,7 @@ function lint(
   filename = "src/example.ts",
   options?: unknown[]
 ) {
-  const linter = new Linter();
+  const linter = new TSESLint.Linter();
   const pack = RULE_PACKS[packId];
   const rule = pack.rules[ruleName];
 
@@ -24,15 +24,14 @@ function lint(
     throw new Error(`Rule ${ruleName} not found in pack ${packId}`);
   }
 
-  // Bridge the type gap: cast the TSESLint.RuleModule to ESLint's Rule.RuleModule
-  // (The eslint.config.js override at lines 185 relaxes type assertions for test files,
-  // and this single bridge point is within that scope.)
-  const ruleModule = rule as unknown as Rule.RuleModule;
+  // TSESLint's own Linter is typed for the rule modules the packs hold, so the
+  // rule goes in as-is — no cast to bridge, and no way to assert away a real
+  // shape mismatch.
   const isTsx = filename.endsWith(".tsx");
 
   const config = {
     files: [isTsx ? "**/*.tsx" : "**/*.ts"],
-    plugins: { tsforge: { rules: { [ruleName]: ruleModule } } },
+    plugins: { tsforge: { rules: { [ruleName]: rule } } },
     rules: {
       [`tsforge/${ruleName}`]: options ? ["error", ...options] : "error",
     },
@@ -44,7 +43,7 @@ function lint(
         ecmaFeatures: isTsx ? { jsx: true } : undefined,
       },
     },
-  } as unknown as Linter.Config;
+  } satisfies TSESLint.FlatConfig.Config;
 
   return linter.verify(code, config, filename);
 }
@@ -4083,6 +4082,66 @@ describe("typescript-core: fetch-must-check-ok", () => {
     );
 
     expect(messages).toHaveLength(0);
+  });
+
+  test("reports a check that only happens after the body is parsed", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); const data = await res.json(); if (!res.ok) { throw new Error("failed"); } return data; }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports a status read that is recorded rather than acted on", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); metrics.observe(res.status); return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports an ok read bound to a variable and never tested", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); const ok = res.ok; log(ok); return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("allows an ok read bound to a variable and then tested", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); const ok = res.ok; if (!ok) { throw new Error("failed"); } return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows an assertion helper as the check", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); invariant(res.ok, "failed"); return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("reports a then-callback that parses before it checks", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'const data = fetch("/api/users").then((res) => { const body = res.json(); if (!res.ok) { throw new Error("failed"); } return body; });'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
   });
 
   test("ignores a response whose body is never parsed", () => {

@@ -423,7 +423,13 @@ export function ruleHelpFromOutput(output: string): string {
   // Without this the pack catalogue is invisible on the path the MODEL takes
   // when it runs the gate itself via `run`: it sees a bare rule id and goes
   // looking for the answer in the harness source.
-  for (const m of output.matchAll(/[a-z][a-z0-9-]*\/[a-z][a-z0-9-]+/gu)) {
+  // The boundary guards keep file paths out: in `/app/src/api.ts`, `app/src` is
+  // preceded by `/` and `src/api` is followed by `.`, so neither is offered as
+  // a rule id. A path fragment that happened to collide with a real doc key
+  // would otherwise attach guidance to a line that is not a violation.
+  for (const m of output.matchAll(
+    /(?<![\w./-])[a-z][a-z0-9-]*\/[a-z][a-z0-9-]+(?![\w./-])/gu
+  )) {
     ids.add(m[0]);
   }
 

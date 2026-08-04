@@ -337,3 +337,15 @@ test("ruleHelpFromOutput: still recovers TS codes and eslint-core ids", () => {
   expect(h).toContain("TS2532");
   expect(h).toContain("@typescript-eslint/no-explicit-any");
 });
+
+test("ruleHelpFromOutput: a file path is never mistaken for a rule id", () => {
+  // `/app/src/api.ts` contains `app/src` and `src/api`, both rule-id shaped.
+  // Only the real id on the line should pull guidance.
+  const h = ruleHelpFromOutput(
+    "/app/src/api.ts\n  12:3  error  Something  tsforge/no-unsafe-boundary-cast"
+  );
+
+  expect(h).toContain("tsforge/no-unsafe-boundary-cast");
+  expect(h).not.toContain("app/src");
+  expect(h).not.toContain("src/api");
+});
