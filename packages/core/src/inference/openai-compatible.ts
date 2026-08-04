@@ -5,6 +5,7 @@ import type {
   IProvider,
   IOpenAICompatibleConfig,
 } from "./inference.types";
+import { ModelRequestError } from "./inference.types";
 import { PROVIDER_LIMITS } from "./inference.constants";
 import { fetchWithRetry } from "./transport";
 import { parseResponse } from "./wire";
@@ -81,6 +82,28 @@ export class OpenAICompatibleProvider implements IProvider {
     messages: IChatMessage[],
     opts: ICompleteOptions = {}
   ): Promise<IModelResponse> {
+    try {
+      return await this.send(messages, opts);
+    } catch (err) {
+      // An endpoint that rejects ONE optional field would otherwise fail every
+      // call for the life of the process. vLLM's V2 model runner does exactly
+      // this with `thinking_token_budget`, which the scratch path sets by
+      // default — so every from-scratch build 400s, and (before this) each
+      // failure looked like the model simply saying nothing.
+      const retry = withoutUnsupportedField(opts, err);
+
+      if (retry === null) {
+        throw err;
+      }
+
+      return await this.send(messages, retry);
+    }
+  }
+
+  private async send(
+    messages: IChatMessage[],
+    opts: ICompleteOptions
+  ): Promise<IModelResponse> {
     const effectiveOpts = this.withPinnedThinking(opts);
     const doFetch = this.cfg.fetch ?? fetch;
     const streaming = effectiveOpts.onToken !== undefined;
@@ -107,11 +130,7 @@ export class OpenAICompatibleProvider implements IProvider {
     );
 
     if (!res.ok) {
-      const detail = await responseDetail(res);
-
-      throw new Error(
-        `model request failed: ${res.status}${detail.length > 0 ? ` ${detail}` : ""}`
-      );
+      throw new ModelRequestError(res.status, await responseDetail(res));
     }
 
     if (effectiveOpts.onToken !== undefined) {
@@ -126,6 +145,57 @@ export class OpenAICompatibleProvider implements IProvider {
 
     return parseResponse(data);
   }
+}
+
+/** Optional request fields, paired with the option that produces them, so a
+ *  "not supported" rejection can be answered by dropping just that one. */
+const OPTIONAL_FIELDS: readonly {
+  wire: string;
+  option: keyof ICompleteOptions;
+}[] = [
+  { wire: "thinking_token_budget", option: "thinkingTokenBudget" },
+  { wire: "response_format", option: "responseFormat" },
+  { wire: "reasoning_effort", option: "reasoningEffort" },
+];
+
+/**
+ * The same options minus one field the server just said it does not support,
+ * or null when this error is not that.
+ *
+ * Deliberately narrow: only a 4xx that NAMES a field we sent, and only fields
+ * that are optimisations rather than instructions. Retrying blind would hide
+ * real request errors; dropping `messages` or `tools` would silently change
+ * what was asked.
+ */
+function withoutUnsupportedField(
+  opts: ICompleteOptions,
+  err: unknown
+): ICompleteOptions | null {
+  if (!(err instanceof ModelRequestError) || !err.isPermanent) {
+    return null;
+  }
+
+  const detail = err.detail.toLowerCase();
+  const offending = OPTIONAL_FIELDS.find(
+    (f) =>
+      opts[f.option] !== undefined &&
+      detail.includes(f.wire) &&
+      (detail.includes("not supported") ||
+        detail.includes("unsupported") ||
+        detail.includes("not yet supported") ||
+        detail.includes("unrecognized") ||
+        detail.includes("unknown"))
+  );
+
+  if (offending === undefined) {
+    return null;
+  }
+
+  // Rebuilt without the key rather than deleted, so the retry carries exactly
+  // the fields we still intend to send.
+  return Object.fromEntries(
+    Object.entries(opts).filter(([key]) => key !== offending.option)
+  );
 }
 
 async function responseDetail(res: Response): Promise<string> {

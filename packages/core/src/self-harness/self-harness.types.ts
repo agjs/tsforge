@@ -39,6 +39,25 @@ export interface IAgentSpecOverride {
   readonly maxTurns?: number;
 }
 
+/**
+ * An edit to how an EXISTING tool is offered to the model: reword its
+ * description, or stop offering it.
+ *
+ * The paper lists `tools` among the editable surfaces of the harness file while
+ * holding *"the … tool set … unchanged"* across variants. That asymmetry is the
+ * whole guard: an id that names no offered tool does nothing, so there is no
+ * path by which an edit grants capability the harness did not already have.
+ * Hiding a tool the model needs is allowed and self-correcting — the pass rate
+ * falls and the acceptance rule rejects the edit.
+ */
+export interface IToolOverride {
+  /** The tool's advertised name. Must already be offered; unknown ids no-op. */
+  readonly id: string;
+  readonly description?: string;
+  /** `false` stops offering the tool. There is no `true` that adds one. */
+  readonly enabled?: boolean;
+}
+
 /** A procedure-card override for one gate rule id — merged over the curated /
  *  generated doc at `ruleHelp()` time, field-wise. */
 export interface IProcedureCardEdit {
@@ -62,6 +81,8 @@ export interface IHarnessOverlay {
   readonly promptBlocks: Partial<Record<PromptBlockName, IPromptBlockEdit>>;
   /** Keyed by the exact rule id the validators emit (e.g. "TS2307"). */
   readonly procedureCards: Record<string, IProcedureCardEdit>;
+  /** Re-wiring of tools the harness already offers. */
+  readonly toolOverrides: readonly IToolOverride[];
 }
 
 /** A candidate edit Δj: a partial overlay to merge onto h_t. */

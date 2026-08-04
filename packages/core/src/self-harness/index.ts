@@ -32,3 +32,17 @@ export {
 } from "./validate";
 export { runSelfHarness, type ISelfHarnessOptions } from "./loop";
 export { emitReport, type IReport } from "./report";
+export {
+  promotionVerdict,
+  regressed,
+  installOverlay,
+  revertOverlay,
+  previousPath,
+} from "./promote";
+export {
+  buildEvidenceFrom,
+  parseEventLog,
+  runPassed,
+  BUILD_SLOW_THRESHOLD,
+  type IBuildEvidenceOptions,
+} from "./build-evidence";

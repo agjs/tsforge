@@ -88,7 +88,33 @@ export interface ICompleteOptions {
   signal?: AbortSignal;
   /** TTSR watcher for stream-interrupting rules (wired by the loop, not the provider). */
   ttsrManager?: ITtsrWatcher;
+  /**
+   * Constrain the reply to JSON — `json_object` for "valid JSON", or
+   * `json_schema` to pin the SHAPE as well. Runtimes that support it (vLLM,
+   * SGLang, OpenAI) enforce this during decoding, so the answer parses by
+   * construction rather than by luck.
+   *
+   * The self-harness proposer needs this: asking DeepSeek for "a JSON patch,
+   * no prose" lost 4 of 6 candidates to `unparseable proposer response`, which
+   * silently cut the paper's proposal width K from 3 to 1.
+   *
+   * Endpoints that do not understand the field ignore it, so a caller must
+   * still handle a non-JSON reply.
+   */
+  responseFormat?: IResponseFormat;
 }
+
+/** How a reply is constrained. `schema` is an opaque JSON Schema — the shape
+ *  belongs to the caller, and the inference layer only forwards it. */
+export type IResponseFormat =
+  | { readonly type: "json_object" }
+  | {
+      readonly type: "json_schema";
+      readonly name: string;
+      readonly schema: unknown;
+      /** Reject anything the schema does not allow, rather than best-effort. */
+      readonly strict?: boolean;
+    };
 
 /** Structural view of the loop's TtsrManager — keeps the inference layer free of
  *  a hard dependency on loop internals while staying fully typed. */
@@ -172,4 +198,40 @@ export interface IOpenAICompatibleConfig {
   extraHeaders?: Record<string, string>;
   /** Injectable for tests; defaults to global fetch. */
   fetch?: typeof fetch;
+}
+
+/**
+ * A model endpoint answered with an HTTP error.
+ *
+ * Carries the status so callers can tell a PERMANENT rejection (a malformed or
+ * unsupported request — retrying changes nothing) from a transient one. Before
+ * this existed, a 400 was an ordinary Error and the loop retried it like a
+ * blip: vLLM's V2 runner rejecting `thinking_token_budget` turned every
+ * from-scratch build into nine silent no-op turns that read as the model
+ * refusing to work.
+ */
+export class ModelRequestError extends Error {
+  readonly status: number;
+  /** The server's own explanation, which usually names the offending field. */
+  readonly detail: string;
+
+  constructor(status: number, detail: string) {
+    super(
+      `model request failed: ${String(status)}${detail.length > 0 ? ` ${detail}` : ""}`
+    );
+    this.name = "ModelRequestError";
+    this.status = status;
+    this.detail = detail;
+  }
+
+  /** 4xx means the request itself is wrong — except 408/429, which are the
+   *  server asking for the same request again later. */
+  get isPermanent(): boolean {
+    return (
+      this.status >= 400 &&
+      this.status < 500 &&
+      this.status !== 408 &&
+      this.status !== 429
+    );
+  }
 }

@@ -301,3 +301,75 @@ describe("merge patch typing", () => {
     expect(Object.keys(merged.procedureCards)).toEqual(["no-as"]);
   });
 });
+
+describe("tool overrides", () => {
+  afterEach(() => {
+    restoreEnv();
+    resetOverlayCache();
+  });
+
+  test("an installed overlay's tool edits reach the runtime", async () => {
+    // The whole path: a file on disk → activeOverlay() → the value the session
+    // hands to offeredToolsFor. Unit tests cover the filter itself; this pins
+    // that a promoted overlay actually carries tool edits to the model call.
+    const dir = await mkdtemp(join(tmpdir(), "tsforge-tool-overlay-"));
+    const path = join(dir, "overlay.json");
+
+    try {
+      await writeFile(
+        path,
+        JSON.stringify({
+          version: 1,
+          toolOverrides: [
+            { id: "read", description: "read a file; paths are relative" },
+            { id: "run", enabled: false },
+          ],
+        })
+      );
+      process.env.TSFORGE_SELF_HARNESS_OVERLAY = path;
+      resetOverlayCache();
+
+      const overrides = activeOverlay()?.toolOverrides ?? [];
+
+      expect(overrides).toHaveLength(2);
+      expect(overrides[0]).toEqual({
+        id: "read",
+        description: "read a file; paths are relative",
+      });
+      expect(overrides[1]).toEqual({ id: "run", enabled: false });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a tool edit without an id is dropped, not carried half-formed", () => {
+    const parsed = parseOverlay({
+      version: 1,
+      toolOverrides: [{ description: "no id here" }, { id: "read" }],
+    });
+
+    expect(parsed?.toolOverrides).toEqual([{ id: "read" }]);
+  });
+
+  test("a patch that only edits tools is not an empty patch", () => {
+    // isEmptyPatch decides whether a candidate is rejected outright. Missing
+    // the new surface here would silently discard every tool proposal.
+    const patch: IOverlayPatch = { toolOverrides: [{ id: "read" }] };
+
+    expect(isEmptyPatch(patch)).toBe(false);
+  });
+
+  test("tool edits merge by id, field-wise", () => {
+    const base = mergeOverlay(emptyOverlay(), {
+      toolOverrides: [{ id: "read", description: "first" }],
+    });
+    const merged = mergeOverlay(base, {
+      toolOverrides: [{ id: "read", enabled: false }, { id: "edit" }],
+    });
+
+    expect(merged.toolOverrides).toEqual([
+      { id: "read", description: "first", enabled: false },
+      { id: "edit" },
+    ]);
+  });
+});

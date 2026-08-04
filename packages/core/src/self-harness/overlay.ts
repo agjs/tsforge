@@ -23,6 +23,7 @@ import {
   type IHarnessOverlay,
   type IOverlayPatch,
   type IProcedureCardEdit,
+  type IToolOverride,
   type IPromptBlockEdit,
   type PromptBlockName,
 } from "./self-harness.types";
@@ -34,7 +35,30 @@ export function emptyOverlay(): IHarnessOverlay {
     agentSpecOverrides: [],
     promptBlocks: {},
     procedureCards: {},
+    toolOverrides: [],
   };
+}
+
+/** A tool edit is only meaningful with an id; everything else is optional, and
+ *  a stray field is dropped rather than carried into the live harness. */
+function parseToolOverride(value: unknown): IToolOverride | null {
+  if (!isRecord(value) || typeof value.id !== "string" || value.id === "") {
+    return null;
+  }
+
+  const override: { id: string; description?: string; enabled?: boolean } = {
+    id: value.id,
+  };
+
+  if (typeof value.description === "string") {
+    override.description = value.description;
+  }
+
+  if (typeof value.enabled === "boolean") {
+    override.enabled = value.enabled;
+  }
+
+  return override;
 }
 
 function parseAgentOverride(value: unknown): IAgentSpecOverride | null {
@@ -172,6 +196,11 @@ export function parseOverlay(value: unknown): IHarnessOverlay | null {
       : [],
     promptBlocks: parsePromptBlocks(value.promptBlocks),
     procedureCards: parseProcedureCards(value.procedureCards),
+    toolOverrides: Array.isArray(value.toolOverrides)
+      ? value.toolOverrides
+          .map(parseToolOverride)
+          .filter((o): o is IToolOverride => o !== null)
+      : [],
   };
 }
 
@@ -222,12 +251,19 @@ export function mergeOverlay(
     procedureCards[rule] = { ...procedureCards[rule], ...card };
   }
 
+  const toolsById = new Map(base.toolOverrides.map((o) => [o.id, o]));
+
+  for (const o of patch.toolOverrides ?? []) {
+    toolsById.set(o.id, { ...toolsById.get(o.id), ...o });
+  }
+
   return {
     version: 1,
     ttsrRules,
     agentSpecOverrides: [...overridesById.values()],
     promptBlocks,
     procedureCards,
+    toolOverrides: [...toolsById.values()],
   };
 }
 
@@ -239,7 +275,8 @@ export function isEmptyPatch(patch: IOverlayPatch): boolean {
     (patch.ttsrRules ?? []).length === 0 &&
     (patch.agentSpecOverrides ?? []).length === 0 &&
     Object.keys(patch.promptBlocks ?? {}).length === 0 &&
-    Object.keys(patch.procedureCards ?? {}).length === 0
+    Object.keys(patch.procedureCards ?? {}).length === 0 &&
+    (patch.toolOverrides ?? []).length === 0
   );
 }
 

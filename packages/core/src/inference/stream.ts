@@ -5,6 +5,7 @@ import type {
   ITtsrWatcher,
   TokenChannel,
 } from "./inference.types";
+import { ModelRequestError } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import {
   parseArgs,
@@ -226,6 +227,22 @@ function assemble(acc: IStreamAcc, degenerated: boolean): IModelResponse {
   };
 }
 
+/** Raise a stream-borne error, preserving the server's own status code so a
+ *  caller can tell a permanent rejection from a transient one. */
+function throwIfStreamError(parsed: Record<string, unknown>): void {
+  const error = parsed.error;
+
+  if (!isRecord(error)) {
+    return;
+  }
+
+  const message =
+    typeof error.message === "string" ? error.message : JSON.stringify(error);
+  const status = typeof error.code === "number" ? error.code : 502;
+
+  throw new ModelRequestError(status, message);
+}
+
 function parseSseLine(line: string): IStreamDelta | null {
   const trimmed = line.trim();
 
@@ -250,6 +267,14 @@ function parseSseLine(line: string): IStreamDelta | null {
   if (!isRecord(parsed)) {
     return null;
   }
+
+  // An SSE stream can carry a SERVER ERROR with a 200 status: vLLM answers a
+  // rejected parameter with `data: {"error": {...}}` and then `[DONE]`.
+  // Ignoring it produced the worst possible outcome — an empty completion that
+  // reads as "the model chose to say nothing", so the loop retried the same
+  // doomed request for its whole turn budget and the task failed as if the
+  // model could not do the work. Every such error must surface as an error.
+  throwIfStreamError(parsed);
 
   // The trailing usage chunk has an empty `choices` array — capture its usage
   // even though there's no delta to forward.

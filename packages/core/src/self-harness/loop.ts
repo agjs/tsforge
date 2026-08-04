@@ -11,7 +11,7 @@
  * automatic.
  */
 import { emptyOverlay, isEmptyPatch, mergeOverlay } from "./overlay";
-import { mineWeaknesses } from "./mine";
+import { mineWeaknesses, type IMinedRun } from "./mine";
 import { propose } from "./propose";
 import { validateCandidate, type HarnessEvaluator } from "./validate";
 import type { IProvider } from "../inference";
@@ -36,6 +36,19 @@ export interface ISelfHarnessOptions {
   readonly evaluator: HarnessEvaluator;
   /** Start from an already-promoted overlay to continue a lineage. */
   readonly initialOverlay?: IHarnessOverlay;
+  /**
+   * Extra mining evidence from REAL runs — the model's own build logs, rather
+   * than corpus tasks.
+   *
+   * A corpus the model passes 8/8 has nothing left to teach it, while the work
+   * it does every day is full of failures worth mining. This only widens what
+   * the proposer SEES; the corpus splits still decide accept/reject, because a
+   * one-off build cannot measure a delta.
+   *
+   * Re-read each round: a long campaign should mine what the current harness
+   * is doing now, not a snapshot from before its first accepted edit.
+   */
+  readonly extraEvidence?: () => Promise<readonly IMinedRun[]>;
   /** Await endpoint recovery before retrying an errored baseline — without
    *  this the retry fires straight into the same outage and the session
    *  aborts for weather it could have waited out. */
@@ -53,6 +66,27 @@ function attemptSummary(result: IValidationResult): string {
   const { candidate } = result;
 
   return `${candidate.id} (${result.accepted ? "ACCEPTED" : "rejected"}): targets ${candidate.audit.targetPattern} via ${candidate.audit.surface} — ${candidate.audit.expectedEffect} [Δin=${String(result.deltaIn)}, Δho=${String(result.deltaOut)}: ${result.reason}]`;
+}
+
+/** Pull in the model's own build logs as extra mining evidence, announcing what
+ *  arrived so a report reader can tell corpus-mined patterns from build-mined
+ *  ones. */
+async function realBuildEvidence(
+  opts: ISelfHarnessOptions,
+  round: number,
+  log: (line: string) => void
+): Promise<readonly IMinedRun[]> {
+  const runs = (await opts.extraEvidence?.()) ?? [];
+
+  if (runs.length > 0) {
+    const failed = runs.filter((r) => !r.passed).length;
+
+    log(
+      `round ${String(round)}: ${String(runs.length)} real build run(s) as evidence (${String(failed)} failed)`
+    );
+  }
+
+  return runs;
 }
 
 export async function runSelfHarness(
@@ -102,11 +136,14 @@ export async function runSelfHarness(
       `round ${String(t)}: baseline pass held-in ${String(base.evaluation.heldIn.passed)}/${String(base.evaluation.heldIn.runs)}, held-out ${String(base.evaluation.heldOut.passed)}/${String(base.evaluation.heldOut.runs)}`
     );
 
-    const evidence = mineWeaknesses(base.heldInRuns);
+    const evidence = mineWeaknesses([
+      ...base.heldInRuns,
+      ...(await realBuildEvidence(opts, t, log)),
+    ]);
 
     if (evidence.patterns.length === 0) {
       notes.push(
-        `round ${String(t)}: no held-in failures to mine — loop stops early`
+        `round ${String(t)}: no failures to mine (held-in green, no build evidence) — loop stops early`
       );
       rounds.push({
         round: t,

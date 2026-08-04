@@ -919,3 +919,75 @@ describe("preset name and preset object are behavioural aliases", () => {
     expect(Object.isFrozen(p.thinking?.onValue)).toBe(true);
   });
 });
+
+describe("response format", () => {
+  test("omitted by default — an endpoint that never asked for it sees no field", () => {
+    expect(buildRequestBody(cfg(), MSGS, {}, false)).not.toHaveProperty(
+      "response_format"
+    );
+  });
+
+  test("json_object passes through", () => {
+    const body = buildRequestBody(
+      cfg(),
+      MSGS,
+      { responseFormat: { type: "json_object" } },
+      false
+    );
+
+    expect(body.response_format).toEqual({ type: "json_object" });
+  });
+
+  test("json_schema is nested under json_schema, as the wire expects", () => {
+    // The schema does NOT sit at response_format.schema — a flat shape is
+    // accepted by some servers and silently ignored by others, which would
+    // leave the decode unconstrained while looking configured.
+    const schema = { type: "object", properties: { a: { type: "string" } } };
+    const body = buildRequestBody(
+      cfg(),
+      MSGS,
+      {
+        responseFormat: { type: "json_schema", name: "patch", schema },
+      },
+      false
+    );
+
+    expect(body.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "patch", schema },
+    });
+  });
+
+  test("strict is forwarded only when set", () => {
+    const body = buildRequestBody(
+      cfg(),
+      MSGS,
+      {
+        responseFormat: {
+          type: "json_schema",
+          name: "patch",
+          schema: {},
+          strict: true,
+        },
+      },
+      false
+    );
+
+    expect(body.response_format).toMatchObject({
+      json_schema: { strict: true },
+    });
+  });
+
+  test("a per-model extraBody still wins, for an endpoint with its own spelling", () => {
+    // vLLM also accepts `guided_json`; a model entry must be able to override
+    // the default spelling without a code change.
+    const body = buildRequestBody(
+      cfg({ extraBody: { response_format: { type: "text" } } }),
+      MSGS,
+      { responseFormat: { type: "json_object" } },
+      false
+    );
+
+    expect(body.response_format).toEqual({ type: "text" });
+  });
+});
