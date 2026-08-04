@@ -4,7 +4,11 @@ import { applyEdits } from "../../files/edit";
 import type { EditsResult } from "../../files/files.types";
 import { applyCreate } from "../../files/create";
 import { EDIT_FAIL_REASON } from "../../files";
-import { normalizeWorkspacePath } from "../../lib/scope";
+import {
+  normalizeWorkspacePath,
+  isForeignHarnessRead,
+  foreignHarnessReadRefusal,
+} from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
 import { ruleHelpFromOutput } from "../feedback/rule-docs";
@@ -44,6 +48,18 @@ export async function readFile(
   }
 
   r.file = normalizeWorkspacePath(ctx.cwd, r.file);
+
+  // The one read the harness refuses: its own implementation, from a workspace
+  // that is not the harness. See `isForeignHarnessRead`.
+  if (isForeignHarnessRead(ctx.cwd, r.file)) {
+    ctx.report({
+      kind: "tool",
+      task: ctx.task,
+      message: `read ${r.file} — refused (harness source)`,
+    });
+
+    return foreignHarnessReadRefusal(r.file);
+  }
 
   ctx.report({ kind: "tool", task: ctx.task, message: `read ${r.file}` });
 
