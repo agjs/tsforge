@@ -12,8 +12,14 @@ type MessageIds = "missingOkCheck";
  *  enough — see `isConditionPosition`. */
 const OK_PROPS = new Set(["ok", "status"]);
 
-/** Calls that act as a check even though they are not syntactically a test. */
-const ASSERTION_CALLEES = /^(assert|invariant|ensure|expect)/iu;
+/** Calls that act as a check even though they are not syntactically a test.
+ *
+ * Anchored on purpose. An open prefix match would accept `expectedStatus` and
+ * `asserted`, letting a plain read masquerade as a check — a false negative in
+ * a security gate. A camelCase continuation (`assertResponseOk`) is a real
+ * assertion helper and still matches; a lowercase one is a different word. */
+const ASSERTION_NAMES =
+  /^(?:[Aa]ssert|[Ii]nvariant|[Ee]nsure|[Ee]xpect)(?:[A-Z_]\w*)?$/u;
 
 /** A non-computed `<object>.<prop>` read, e.g. `res.json` or `res.ok`. */
 function propReadOn(
@@ -101,23 +107,73 @@ function isConditionPosition(node: TSESTree.Node): boolean {
   return false;
 }
 
+/** Either half of a member callee can carry the meaning: `assert.ok(res.ok)`
+ *  and `assert.equal(res.status, 200)` are named by the RECEIVER, while
+ *  `t.assert(res.ok)` is named by the method. Checking only the method rejected
+ *  the Node-standard forms and flagged correct guard code. */
 function isAssertionCallee(callee: TSESTree.Node): boolean {
   if (callee.type === AST_NODE_TYPES.Identifier) {
-    return ASSERTION_CALLEES.test(callee.name);
+    return ASSERTION_NAMES.test(callee.name);
   }
 
-  return (
-    callee.type === AST_NODE_TYPES.MemberExpression &&
-    !callee.computed &&
+  if (callee.type !== AST_NODE_TYPES.MemberExpression || callee.computed) {
+    return false;
+  }
+
+  const receiver =
+    callee.object.type === AST_NODE_TYPES.Identifier &&
+    ASSERTION_NAMES.test(callee.object.name);
+
+  const method =
     callee.property.type === AST_NODE_TYPES.Identifier &&
-    ASSERTION_CALLEES.test(callee.property.name)
-  );
+    ASSERTION_NAMES.test(callee.property.name);
+
+  return receiver || method;
+}
+
+/** The function (or Program) a node sits in. */
+function functionOf(node: TSESTree.Node): TSESTree.Node {
+  let current: TSESTree.Node | undefined = node.parent;
+
+  while (current !== undefined) {
+    if (
+      current.type === AST_NODE_TYPES.FunctionDeclaration ||
+      current.type === AST_NODE_TYPES.FunctionExpression ||
+      current.type === AST_NODE_TYPES.ArrowFunctionExpression ||
+      current.type === AST_NODE_TYPES.Program
+    ) {
+      return current;
+    }
+
+    current = current.parent;
+  }
+
+  return node;
+}
+
+/** True when `node` sits in the same function as the parse, or in one that
+ *  encloses it.
+ *
+ * Matching by name alone crosses scopes: after `const ok = res.ok`, a nested
+ * `function f(ok: boolean) { if (!ok) ... }` tests a DIFFERENT `ok`, and a
+ * nested function with its own `const res` tests a different response. Neither
+ * says anything about this fetch. A function that contains the parse does — the
+ * guard genuinely runs first. Range containment decides it, since an enclosing
+ * function spans the parse and a nested or sibling one cannot. */
+function governsParse(node: TSESTree.Node, jsonRead: TSESTree.Node): boolean {
+  const fn = functionOf(node);
+
+  return fn.range[0] <= jsonRead.range[0] && fn.range[1] >= jsonRead.range[1];
 }
 
 /** Names bound directly from the response's own status, e.g.
  *  `const ok = res.ok`. Checking the alias is checking the response, and
  *  refusing to see that would flag correct code. */
-function statusAliases(root: TSESTree.Node, name: string): Set<string> {
+function statusAliases(
+  root: TSESTree.Node,
+  name: string,
+  jsonRead: TSESTree.Node
+): Set<string> {
   const aliases = new Set<string>();
 
   walkSome(root, (node) => {
@@ -125,7 +181,8 @@ function statusAliases(root: TSESTree.Node, name: string): Set<string> {
       node.type === AST_NODE_TYPES.VariableDeclarator &&
       node.id.type === AST_NODE_TYPES.Identifier &&
       node.init !== null &&
-      propReadOn(node.init, name, OK_PROPS)
+      propReadOn(node.init, name, OK_PROPS) &&
+      governsParse(node, jsonRead)
     ) {
       aliases.add(node.id.name);
     }
@@ -146,7 +203,7 @@ function hasOkCheckBefore(
   name: string,
   jsonRead: TSESTree.MemberExpression
 ): boolean {
-  const aliases = statusAliases(root, name);
+  const aliases = statusAliases(root, name, jsonRead);
   const parseStart = jsonRead.range[0];
 
   return walkSome(root, (node) => {
@@ -154,7 +211,12 @@ function hasOkCheckBefore(
       propReadOn(node, name, OK_PROPS) ||
       (node.type === AST_NODE_TYPES.Identifier && aliases.has(node.name));
 
-    return isRead && node.range[1] <= parseStart && isConditionPosition(node);
+    return (
+      isRead &&
+      node.range[1] <= parseStart &&
+      governsParse(node, jsonRead) &&
+      isConditionPosition(node)
+    );
   });
 }
 

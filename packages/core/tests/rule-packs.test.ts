@@ -4144,6 +4144,66 @@ describe("typescript-core: fetch-must-check-ok", () => {
     expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
   });
 
+  test("allows assert.ok on the response", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); assert.ok(res.ok); return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows assert.equal on the status", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); assert.equal(res.status, 200); return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("reports a helper whose name merely starts with an assertion word", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); expectedStatus(res.status); return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports when a nested function tests a shadowed alias name", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); const ok = res.ok; function guard(ok: boolean) { if (!ok) { throw new Error("nope"); } } return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports when only a nested function checks its own response", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); function other(res: Response) { if (!res.ok) { throw new Error("nope"); } } return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("allows a check in an enclosing function around the parse", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (!res.ok) { throw new Error("failed"); } return () => res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
   test("ignores a response whose body is never parsed", () => {
     const messages = lint(
       "typescript-core",
