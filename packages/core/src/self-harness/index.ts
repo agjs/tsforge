@@ -32,3 +32,10 @@ export {
 } from "./validate";
 export { runSelfHarness, type ISelfHarnessOptions } from "./loop";
 export { emitReport, type IReport } from "./report";
+export {
+  promotionVerdict,
+  regressed,
+  installOverlay,
+  revertOverlay,
+  previousPath,
+} from "./promote";

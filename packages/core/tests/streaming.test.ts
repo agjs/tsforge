@@ -145,3 +145,87 @@ test("streams a final SSE line even when it has no trailing newline", async () =
 
   expect(r.content).toBe("tail");
 });
+
+test("an error carried INSIDE a 200 stream is raised, not read as silence", async () => {
+  // vLLM answers a rejected parameter with HTTP 200 and an error object in the
+  // SSE body. Ignoring it produced an empty completion that read as "the model
+  // chose to say nothing" — so the loop retried the same doomed request for its
+  // whole turn budget and the task failed as if the model could not do the work.
+  const chunks = [
+    `data: {"error": {"message": "thinking_token_budget is not yet supported by the V2 model runner.", "type": "BadRequestError", "code": 400}}\n`,
+    `data: [DONE]\n`,
+  ];
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: (async () => sseResponse(chunks)) as unknown as typeof fetch,
+  });
+
+  expect(
+    p.complete([{ role: "user", content: "hi" }], { onToken: () => undefined })
+  ).rejects.toThrow(/thinking_token_budget/u);
+});
+
+test("a rejected optional field is dropped and the call retried once", async () => {
+  // Self-healing across runtime versions: the same harness has to work against
+  // a vLLM that supports thinking_token_budget and one that does not.
+  const bodies: string[] = [];
+  const fakeFetch = (async (_url: string, init: { body: string }) => {
+    bodies.push(init.body);
+
+    return bodies.length === 1
+      ? sseResponse([
+          `data: {"error": {"message": "thinking_token_budget is not yet supported by the V2 model runner.", "code": 400}}\n`,
+          `data: [DONE]\n`,
+        ])
+      : sseResponse([
+          `data: {"choices":[{"delta":{"content":"ok"}}]}\n`,
+          `data: [DONE]\n`,
+        ]);
+  }) as unknown as typeof fetch;
+
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fakeFetch,
+    reasoning: "deepseek-local",
+  });
+
+  const r = await p.complete([{ role: "user", content: "hi" }], {
+    onToken: () => undefined,
+    thinkingTokenBudget: 2048,
+  });
+
+  expect(r.content).toBe("ok");
+  expect(bodies).toHaveLength(2);
+  expect(bodies[0]).toContain("thinking_token_budget");
+  expect(bodies[1]).not.toContain("thinking_token_budget");
+});
+
+test("a rejection that names nothing we sent is not retried", async () => {
+  // Blind retry would hide real request errors. Only a 4xx naming an optional
+  // field we actually sent earns a second attempt.
+  let calls = 0;
+  const fakeFetch = (async () => {
+    calls += 1;
+
+    return sseResponse([
+      `data: {"error": {"message": "context length exceeded", "code": 400}}\n`,
+      `data: [DONE]\n`,
+    ]);
+  }) as unknown as typeof fetch;
+
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fakeFetch,
+  });
+
+  expect(
+    p.complete([{ role: "user", content: "hi" }], {
+      onToken: () => undefined,
+      thinkingTokenBudget: 2048,
+    })
+  ).rejects.toThrow(/context length/u);
+  expect(calls).toBe(1);
+});

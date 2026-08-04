@@ -27,13 +27,18 @@ import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { providerConfig } from "../src/cli";
 import {
   evaluateHarness,
+  installOverlay,
+  overlayPathFor,
+  promotionVerdict,
+  regressed,
+  revertOverlay,
   parseOverlay,
   isEmptyPatch,
   mergeOverlay,
   emptyOverlay,
   type IHarnessOverlay,
 } from "../src/self-harness";
-import type { IRunRecord } from "../src/eval";
+import type { IRunRecord, ISweepReport } from "../src/eval";
 import { buildSweepReport, renderSweepReportMarkdown } from "../src/eval";
 import { isRecord } from "../src/lib/guards";
 
@@ -338,6 +343,57 @@ async function writeProof(
 
   await Bun.write(proofPath, md);
   say(`proof → ${proofPath}`);
+
+  await settlePromotion(report, overlay, sessionsDone);
+}
+
+/**
+ * Act on the proof measurement: install, roll back, or leave live use alone.
+ *
+ * This is the only place the campaign touches `~/.tsforge`. Everything before
+ * it operates on the campaign's own overlay, so a run that never clears the bar
+ * cannot change what the human's interactive sessions use.
+ */
+async function settlePromotion(
+  report: ISweepReport,
+  overlay: IHarnessOverlay,
+  sessionsDone: number
+): Promise<void> {
+  const live = overlayPathFor(entry.model);
+  const installed = existsSync(live);
+
+  if (installed) {
+    const { yes, reason } = regressed(report);
+
+    if (yes) {
+      const restored = await revertOverlay(entry.model);
+
+      await appendLog(
+        `| — | ${now()} | ROLLBACK | — | — | installed overlay regressed on the proof split (${reason}); ${restored ? "restored the previous overlay" : "removed it — base harness"}; campaign halted |`
+      );
+      say(`ROLLBACK: ${reason} — halting`);
+      await Bun.write(stopFile, "");
+
+      return;
+    }
+  }
+
+  const { promote, reason } = promotionVerdict(report);
+
+  if (!promote) {
+    say(`promotion withheld: ${reason}`);
+    await appendLog(
+      `| — | ${now()} | proof after ${String(sessionsDone)} session(s) | — | — | not promoted: ${reason} |`
+    );
+
+    return;
+  }
+
+  await installOverlay(entry.model, overlay);
+  say(`PROMOTED → ${live} (${reason})`);
+  await appendLog(
+    `| — | ${now()} | proof after ${String(sessionsDone)} session(s) | — | — | PROMOTED to live use: ${reason} |`
+  );
 }
 
 interface ISessionOutcome {

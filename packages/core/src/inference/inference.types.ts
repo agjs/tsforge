@@ -199,3 +199,39 @@ export interface IOpenAICompatibleConfig {
   /** Injectable for tests; defaults to global fetch. */
   fetch?: typeof fetch;
 }
+
+/**
+ * A model endpoint answered with an HTTP error.
+ *
+ * Carries the status so callers can tell a PERMANENT rejection (a malformed or
+ * unsupported request — retrying changes nothing) from a transient one. Before
+ * this existed, a 400 was an ordinary Error and the loop retried it like a
+ * blip: vLLM's V2 runner rejecting `thinking_token_budget` turned every
+ * from-scratch build into nine silent no-op turns that read as the model
+ * refusing to work.
+ */
+export class ModelRequestError extends Error {
+  readonly status: number;
+  /** The server's own explanation, which usually names the offending field. */
+  readonly detail: string;
+
+  constructor(status: number, detail: string) {
+    super(
+      `model request failed: ${String(status)}${detail.length > 0 ? ` ${detail}` : ""}`
+    );
+    this.name = "ModelRequestError";
+    this.status = status;
+    this.detail = detail;
+  }
+
+  /** 4xx means the request itself is wrong — except 408/429, which are the
+   *  server asking for the same request again later. */
+  get isPermanent(): boolean {
+    return (
+      this.status >= 400 &&
+      this.status < 500 &&
+      this.status !== 408 &&
+      this.status !== 429
+    );
+  }
+}
