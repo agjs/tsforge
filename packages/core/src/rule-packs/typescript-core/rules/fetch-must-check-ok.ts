@@ -26,13 +26,97 @@ const COMPARISONS = new Set(["===", "!==", "==", "!=", "<", "<=", ">", ">="]);
 
 /** What a test says about the response when it is true.
  *
- * `res.ok` means the response succeeded, `!res.ok` means it failed, and
- * `res.status !== 200` means neither — the direction is not decidable
- * syntactically. Polarity picks which BRANCH is safe to parse in: a body may be
- * read where the response is known good, never where it is known bad. `opaque`
- * is allowed either way, since refusing a comparison the rule cannot interpret
- * would flag ordinary code. */
+ * `res.ok` and `res.status < 400` mean it succeeded; `!res.ok` and
+ * `res.status >= 400` mean it failed. Polarity picks which BRANCH is safe to
+ * parse in: a body may be read where the response is known good, never where it
+ * is known bad — `if (res.ok === false) return res.json()` parses precisely the
+ * error payload.
+ *
+ * `opaque` is a comparison the rule cannot place, such as `res.status === 404`.
+ * It guards ONE failure and says nothing about the rest, so it counts as no
+ * check at all rather than as a check in whichever direction is convenient. */
 type Polarity = "positive" | "negative" | "opaque";
+
+/** Where success ends. 1xx-3xx are not errors; `res.ok` itself is `< 400`. */
+const FIRST_ERROR_STATUS = 400;
+
+function literalValue(node: TSESTree.Node): number | boolean | undefined {
+  if (node.type !== AST_NODE_TYPES.Literal) {
+    return undefined;
+  }
+
+  return typeof node.value === "number" || typeof node.value === "boolean"
+    ? node.value
+    : undefined;
+}
+
+/** Read the comparison as if the response were on the left. */
+function mirror(operator: string): string {
+  switch (operator) {
+    case "<":
+      return ">";
+    case "<=":
+      return ">=";
+    case ">":
+      return "<";
+    case ">=":
+      return "<=";
+    default:
+      return operator;
+  }
+}
+
+function booleanPolarity(operator: string, value: boolean): Polarity {
+  if (operator === "===" || operator === "==") {
+    return value ? "positive" : "negative";
+  }
+
+  if (operator === "!==" || operator === "!=") {
+    return value ? "negative" : "positive";
+  }
+
+  return "opaque";
+}
+
+/** A status comparison only takes a side when it splits success from failure.
+ *  `=== 404` does not: it catches one error and lets every other one through. */
+function statusPolarity(operator: string, value: number): Polarity {
+  const isSuccessCode = value >= 200 && value < 300;
+
+  switch (operator) {
+    case "===":
+    case "==":
+      return isSuccessCode ? "positive" : "opaque";
+    case "!==":
+    case "!=":
+      return isSuccessCode ? "negative" : "opaque";
+    case "<":
+      return value <= FIRST_ERROR_STATUS ? "positive" : "opaque";
+    case "<=":
+      return value < FIRST_ERROR_STATUS ? "positive" : "opaque";
+    case ">=":
+      return value >= 300 ? "negative" : "opaque";
+    case ">":
+      return value >= 299 ? "negative" : "opaque";
+    default:
+      return "opaque";
+  }
+}
+
+/** Which way a comparison points, given which side the response sits on. */
+function comparisonPolarity(
+  node: TSESTree.BinaryExpression,
+  readIsLeft: boolean
+): Polarity {
+  const value = literalValue(readIsLeft ? node.right : node.left);
+  const operator = readIsLeft ? node.operator : mirror(node.operator);
+
+  if (typeof value === "boolean") {
+    return booleanPolarity(operator, value);
+  }
+
+  return typeof value === "number" ? statusPolarity(operator, value) : "opaque";
+}
 
 /** A syntactic check of the response, resolved back to what governs it. */
 interface ICheck {
@@ -147,14 +231,19 @@ function terminalCheck(
 
     case AST_NODE_TYPES.SwitchStatement:
       return parent.discriminant === child
-        ? { ...check, compared: true }
+        ? { ...check, compared: true, polarity: "opaque" }
         : null;
 
-    // An assertion compares for us, so the argument needs no comparison of its
-    // own — `assert.equal(res.status, 200)` is a status check.
+    // An assertion compares for us when it is GIVEN something to compare
+    // against: `assert.equal(res.status, 200)` is a status check, while
+    // `assert.ok(res.status)` asserts that a number is truthy — which every
+    // response that arrived satisfies, 500 included.
     case AST_NODE_TYPES.CallExpression:
       return isAssertionCallee(parent.callee) && parent.callee !== child
-        ? { ...check, compared: true }
+        ? {
+            ...check,
+            compared: state.compared || parent.arguments.length > 1,
+          }
         : null;
 
     default:
@@ -168,7 +257,8 @@ function terminalCheck(
 function combinatorStep(
   parent: TSESTree.Node,
   child: TSESTree.Node,
-  state: IClimbState
+  state: IClimbState,
+  parse: TSESTree.Node
 ): ICheck | "continue" | "stop" {
   switch (parent.type) {
     case AST_NODE_TYPES.UnaryExpression:
@@ -185,17 +275,20 @@ function combinatorStep(
 
       return "continue";
 
-    case AST_NODE_TYPES.BinaryExpression:
+    case AST_NODE_TYPES.BinaryExpression: {
       if (!COMPARISONS.has(parent.operator)) {
         return "stop";
       }
 
-      // Which side of `res.status < 400` means success is not decidable
-      // syntactically, so the branch requirement relaxes rather than guesses.
-      state.compared = true;
-      state.polarity = "opaque";
+      const polarity = comparisonPolarity(parent, parent.left === child);
 
-      return "continue";
+      state.compared = true;
+      // A comparison replaces whatever the walk carried: `res.status >= 400`
+      // says failure regardless of how the read got here.
+      state.polarity = polarity;
+
+      return polarity === "opaque" ? "stop" : "continue";
+    }
 
     case AST_NODE_TYPES.LogicalExpression:
       if (parent.operator === "&&") {
@@ -203,8 +296,13 @@ function combinatorStep(
       }
 
       // `res.ok && res.json()` — the parse is the right operand, so it runs
-      // only when the check passed. That is a guard, not just a read.
-      return parent.left === child ? { owner: parent, ...state } : "continue";
+      // only when the check passed. That is a guard, not just a read. Only
+      // when the parse is actually THERE, though: in `if (a || !res.ok)` the
+      // operator is part of a larger test, and the walk must go on to the
+      // `if` rather than stopping at an operand the parse is nowhere near.
+      return parent.left === child && contains(parent.right, parse)
+        ? { owner: parent, ...state }
+        : "continue";
 
     case AST_NODE_TYPES.ChainExpression:
     case AST_NODE_TYPES.TSNonNullExpression:
@@ -219,7 +317,7 @@ function combinatorStep(
  *  happened on the way. Returns null when the read is not part of a test at
  *  all — `metrics.observe(res.status)` reads the status and still parses an
  *  error body as data. */
-function climb(read: TSESTree.Node): ICheck | null {
+function climb(read: TSESTree.Node, parse: TSESTree.Node): ICheck | null {
   const state: IClimbState = {
     polarity: "positive",
     compared: false,
@@ -233,7 +331,7 @@ function climb(read: TSESTree.Node): ICheck | null {
       return terminalCheck(parent, child, state);
     }
 
-    const step = combinatorStep(parent, child, state);
+    const step = combinatorStep(parent, child, state, parse);
 
     if (step === "stop") {
       return null;
@@ -286,6 +384,123 @@ function scopeOfCheck(node: TSESTree.Node): TSESTree.Node {
   return current.parent ?? current;
 }
 
+/** The `case` arm a parse sits in, when that arm belongs to `owner`. */
+function caseArmOf(
+  owner: TSESTree.SwitchStatement,
+  parse: TSESTree.Node
+): TSESTree.SwitchCase | null {
+  for (const arm of owner.cases) {
+    if (contains(arm, parse)) {
+      return arm;
+    }
+  }
+
+  return null;
+}
+
+/** `switch (res.status) { case 200: return res.json(); }` is a real check —
+ *  but only for the arms that name a success code. `default:` and `case 500:`
+ *  parse an error body. */
+function switchArmProtects(
+  owner: TSESTree.SwitchStatement,
+  parse: TSESTree.Node
+): boolean {
+  // A `default:` arm has no test, and it is where the error cases land.
+  const test = caseArmOf(owner, parse)?.test;
+
+  if (test === undefined || test === null) {
+    return false;
+  }
+
+  const value = literalValue(test);
+
+  return typeof value === "number" && value >= 200 && value < 300;
+}
+
+/** True when the parse sits in a branch this check permits. */
+function branchProtects(check: ICheck, parse: TSESTree.Node): boolean {
+  const { owner } = check;
+
+  if (owner.type === AST_NODE_TYPES.SwitchStatement) {
+    return switchArmProtects(owner, parse);
+  }
+
+  if (owner.type === AST_NODE_TYPES.LogicalExpression) {
+    if (!contains(owner.right, parse)) {
+      return false;
+    }
+
+    // `&&` runs the right side when the test HOLDS, `||` when it fails. So
+    // `res.ok && res.json()` is a guard and `res.ok || res.json()` is the
+    // same parse on exactly the error path.
+    if (owner.operator === "&&") {
+      return check.polarity === "positive";
+    }
+
+    return owner.operator === "||" && check.polarity === "negative";
+  }
+
+  if (
+    owner.type === AST_NODE_TYPES.WhileStatement ||
+    owner.type === AST_NODE_TYPES.DoWhileStatement
+  ) {
+    return contains(owner.body, parse) && check.polarity === "positive";
+  }
+
+  if (
+    owner.type !== AST_NODE_TYPES.ConditionalExpression &&
+    owner.type !== AST_NODE_TYPES.IfStatement
+  ) {
+    return false;
+  }
+
+  if (contains(owner.consequent, parse)) {
+    return check.polarity === "positive";
+  }
+
+  return (
+    owner.alternate !== null &&
+    contains(owner.alternate, parse) &&
+    check.polarity === "negative"
+  );
+}
+
+/** True when the check leaves — throw or return — before the parse is reached,
+ *  from a scope that encloses it. */
+function guardProtects(check: ICheck, parse: TSESTree.Node): boolean {
+  const { owner } = check;
+
+  if (owner.type === AST_NODE_TYPES.CallExpression) {
+    return (
+      check.polarity === "positive" &&
+      owner.range[1] <= parse.range[0] &&
+      contains(scopeOfCheck(owner), parse)
+    );
+  }
+
+  // A guard under `&&` is not guaranteed to run at all.
+  if (owner.type !== AST_NODE_TYPES.IfStatement || check.underAnd) {
+    return false;
+  }
+
+  if (
+    owner.range[1] > parse.range[0] ||
+    !contains(scopeOfCheck(owner), parse)
+  ) {
+    return false;
+  }
+
+  if (alwaysExits(owner.consequent)) {
+    return check.polarity === "negative";
+  }
+
+  return (
+    owner.alternate !== null &&
+    alwaysExits(owner.alternate) &&
+    check.polarity === "positive"
+  );
+}
+
 /** True when this check actually protects `parse`.
  *
  * Two shapes qualify, and merely reading the response is neither of them:
@@ -303,58 +518,7 @@ function protects(check: ICheck, parse: TSESTree.Node): boolean {
     return false;
   }
 
-  const { owner } = check;
-
-  if (owner.type === AST_NODE_TYPES.CallExpression) {
-    return (
-      owner.range[1] <= parse.range[0] && contains(scopeOfCheck(owner), parse)
-    );
-  }
-
-  if (owner.type === AST_NODE_TYPES.LogicalExpression) {
-    return contains(owner.right, parse) && check.polarity !== "negative";
-  }
-
-  if (
-    owner.type === AST_NODE_TYPES.ConditionalExpression ||
-    owner.type === AST_NODE_TYPES.IfStatement
-  ) {
-    if (contains(owner.consequent, parse)) {
-      return check.polarity !== "negative";
-    }
-
-    if (owner.alternate !== null && contains(owner.alternate, parse)) {
-      return check.polarity !== "positive";
-    }
-  }
-
-  if (
-    owner.type === AST_NODE_TYPES.WhileStatement ||
-    owner.type === AST_NODE_TYPES.DoWhileStatement
-  ) {
-    return contains(owner.body, parse) && check.polarity !== "negative";
-  }
-
-  // Not inside a branch, so the only way this check helps is by leaving first
-  // — and a guard under `&&` is not guaranteed to run at all.
-  if (owner.type !== AST_NODE_TYPES.IfStatement || check.underAnd) {
-    return false;
-  }
-
-  if (
-    owner.range[1] > parse.range[0] ||
-    !contains(scopeOfCheck(owner), parse)
-  ) {
-    return false;
-  }
-
-  if (alwaysExits(owner.consequent)) {
-    return check.polarity !== "positive";
-  }
-
-  return owner.alternate !== null && alwaysExits(owner.alternate)
-    ? check.polarity !== "negative"
-    : false;
+  return branchProtects(check, parse) || guardProtects(check, parse);
 }
 
 /** Names bound directly from the response, mapped to the property they carry —
@@ -411,7 +575,7 @@ function isProtected(
       return false;
     }
 
-    const check = climb(node);
+    const check = climb(node, parse);
 
     if (check === null) {
       return false;
