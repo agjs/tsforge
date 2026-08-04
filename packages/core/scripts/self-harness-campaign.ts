@@ -56,12 +56,16 @@ const PROOF_SPLIT = ["auth", "fix-regression"] as const;
  *  Alternate per session. (Also succeeded by a BoringStack corpus in future.) */
 const ROTATIONS = [
   {
-    heldIn: "checkout,debounce,validators,handlers",
-    heldOut: "query,rate-limit",
+    // task-pool sits in held-in on BOTH rotations on purpose: measured at 7-10
+    // cycles against a corpus that otherwise greens in 1-2, it is the only task
+    // with room left to improve. The pass bit cannot see that, but the
+    // efficiency dimension of the acceptance rule can (≥2 cycles and ≥20%).
+    heldIn: "task-pool,query,checkout,validators",
+    heldOut: "json-patch,handlers",
   },
   {
-    heldIn: "slugify,math,fixtures,migrate",
-    heldOut: "query,rate-limit",
+    heldIn: "task-pool,json-patch,migrate,fixtures",
+    heldOut: "extract-dup,debounce",
   },
 ] as const;
 
