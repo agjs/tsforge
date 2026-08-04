@@ -33,7 +33,14 @@ function lint(
     throw new Error(`Rule ${ruleName} not found in pack ${packId}`);
   }
 
-  const ruleModule = rule as unknown as Rule.RuleModule;
+  // The pack stores TSESLint rule modules; ESLint's Linter wants its own shape.
+  // Structurally identical at the points Linter touches, so bridge through an
+  // unknown-typed local rather than an `as` cast (banned by the house rules).
+  const bridge: Record<string, unknown> = { [ruleName]: rule };
+  const plugins: Record<string, { rules: Record<string, Rule.RuleModule> }> =
+    Object.assign(Object.create(null), {
+      tsforge: { rules: bridge },
+    });
   const isTsx = filename.endsWith(".tsx");
   const linter = new Linter();
 
@@ -50,7 +57,7 @@ function lint(
             ...(isTsx ? { ecmaFeatures: { jsx: true } } : {}),
           },
         },
-        plugins: { tsforge: { rules: { [ruleName]: ruleModule } } },
+        plugins,
         rules: { [`tsforge/${ruleName}`]: "error" },
       },
     ],
@@ -165,8 +172,14 @@ describe("rule docs: coverage", () => {
     for (const [, pack] of Object.entries(RULE_PACKS)) {
       for (const ruleName of Object.keys(pack.rules)) {
         const doc = ALL_DOCS[`tsforge/${ruleName}`];
+        // A prose entry is exempt from EXECUTION, not from carrying guidance:
+        // its bad/good are file layouts, so only the procedure actually tells
+        // the model what to do.
         const hasExample =
-          doc !== undefined && doc.bad.length > 0 && doc.good.length > 0;
+          doc !== undefined &&
+          doc.exampleIsProse !== true &&
+          doc.bad.length > 0 &&
+          doc.good.length > 0;
         const hasProcedure =
           doc?.procedure !== undefined && doc.procedure.length > 0;
 
@@ -182,10 +195,56 @@ describe("rule docs: coverage", () => {
   test("a doc with no example must explain itself in a procedure", () => {
     const silent = Object.entries(ALL_DOCS)
       .filter(([id]) => id.startsWith("tsforge/"))
-      .filter(([, doc]) => doc.bad.length === 0 || doc.good.length === 0)
+      .filter(
+        ([, doc]) =>
+          doc.exampleIsProse === true ||
+          doc.bad.length === 0 ||
+          doc.good.length === 0
+      )
       .filter(([, doc]) => (doc.procedure ?? "").length === 0)
       .map(([id]) => id);
 
     expect(silent).toEqual([]);
   });
+});
+
+/** Strip whitespace so two snippets can be compared for structural sameness. */
+function squash(code: string): string {
+  return code.replace(/\s+/gu, " ").trim();
+}
+
+describe("rule docs: the ✓ must be a FIX, not an evasion", () => {
+  // The executable checks only prove the ✓ does not trip the rule. A snippet can
+  // achieve that by escaping the rule's scope instead of repairing the code —
+  // adding "use client" while keeping the offending fetch, or deleting the
+  // triggering line and teaching nothing. Those pass linting and mislead the
+  // model, which is the exact defect this whole file exists to prevent.
+
+  test.each(documented.map((d) => [d.id, d]))(
+    "%s: the ✓ is not the ✗ with the offending code simply removed",
+    (_id, entry) => {
+      const bad = squash(entry.doc.bad);
+      const good = squash(entry.doc.good);
+
+      // A ✓ that is a strict substring of the ✗ is a deletion, not a fix.
+      expect(bad.includes(good)).toBe(false);
+    }
+  );
+
+  test.each(documented.map((d) => [d.id, d]))(
+    "%s: the ✓ does not merely bolt a directive onto the ✗",
+    (_id, entry) => {
+      if (entry.doc.fixIsDirective === true) {
+        return; // for these rules the directive IS the fix
+      }
+
+      const stripped = squash(
+        entry.doc.good.replace(/^\s*["']use (client|server)["'];?\s*$/gmu, "")
+      );
+
+      // Removing an added directive must not collapse the ✓ back into the ✗:
+      // that means the only "fix" was moving the file out of the rule's scope.
+      expect(stripped).not.toBe(squash(entry.doc.bad));
+    }
+  );
 });

@@ -54,6 +54,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     bad: 'import { useState } from "react";\nexport default function Page() { const [n] = useState(0); return null; }',
     good: '"use client";\nimport { useState } from "react";\nexport default function Page() { const [n] = useState(0); return null; }',
     exampleFile: "app/dashboard/page.ts",
+    fixIsDirective: true,
   },
   "tsforge/component-file-purity": {
     what: "A component .tsx contains only imports and the component itself \u2014 types go to <feature>.types.ts, constants to <feature>.constants.ts, helpers to src/lib",
@@ -77,6 +78,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "export default function Error({ error }: { error: Error }) {\n  return <div>{error.message}</div>;\n}",
     good: '"use client";\nexport default function Error({ error }: { error: Error }) {\n  return <div>{error.message}</div>;\n}',
     exampleFile: "app/dashboard/error.tsx",
+    fixIsDirective: true,
   },
   "tsforge/exported-functions-require-return-type": {
     what: "An exported function is an API. Annotate its return type so a body change cannot silently change the contract.",
@@ -134,7 +136,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   "tsforge/no-auth-token-in-storage": {
     what: "Disallow storing or reading auth tokens from localStorage/sessionStorage \u2014 use httpOnly cookies instead.",
     bad: 'localStorage.setItem("auth_token", token);',
-    good: 'localStorage.setItem("theme", "dark");',
+    good: 'export async function login(credentials: Credentials): Promise<void> {\n  // The server sets an httpOnly cookie; the token never touches JS storage.\n  await fetch("/api/session", {\n    method: "POST",\n    credentials: "include",\n    body: JSON.stringify(credentials),\n  });\n}',
     exampleFile: "src/auth.ts",
     goodFile: "src/ui.ts",
   },
@@ -213,13 +215,13 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   "tsforge/no-internal-api-fetch": {
     what: "Disallow Server Components from fetching the app's own /api routes \u2014 import services or ORM modules directly to avoid loopback HTTP overhead.",
     bad: 'export default async function Page() {\n  const res = await fetch("/api/users");\n  return null;\n}',
-    good: '"use client";\nexport default function Page() {\n  fetch("/api/users");\n  return null;\n}',
+    good: 'import { listUsers } from "@/services/users";\n\nexport default async function Page() {\n  const users = await listUsers();\n\n  return null;\n}',
     exampleFile: "app/dashboard/page.tsx",
   },
   "tsforge/no-jsx-computation": {
     what: "Move complex computations out of JSX into hooks or helper functions",
     bad: "export function List({ items }: { items: number[] }) {\n  return <ul>{items.filter((i) => i > 0).map((i) => <li key={i}>{i}</li>)}</ul>;\n}",
-    good: "export function List({ items }: { items: number[] }) {\n  const visible = useMemo(() => items.filter((i) => i > 0), [items]);\n\n  return <ul>{visible.map((i) => <li key={i}>{i}</li>)}</ul>;\n}",
+    good: 'import { useMemo } from "react";\n\nexport function List({ items }: { items: number[] }) {\n  const visible = useMemo(() => items.filter((i) => i > 0), [items]);\n\n  return <ul>{visible.map((i) => <li key={i}>{i}</li>)}</ul>;\n}',
     goodFile: "src/Greeting.tsx",
     exampleFile: "src/List.tsx",
   },
@@ -342,7 +344,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   "tsforge/prefer-throw-status": {
     what: "Inside Elysia route handlers, prefer `throw status(...)` over try/catch blocks that build their own Response \u2014 local catches bypass Elysia's typed onError pipeline.",
     bad: '\n      const app = new Elysia();\n      app.post("/users", async () => {\n        try {\n          return await createUser();\n        } catch (e) {\n          return new Response("Error", { status: 500 });\n        }\n      });\n    ',
-    good: "\n      function safeCreate() {\n        try {\n          return createUser();\n        } catch (e) {\n          return null;\n        }\n      }\n    ",
+    good: 'const app = new Elysia();\n\napp.post("/users", async ({ status }) => {\n  const user = await createUser();\n\n  if (user === null) {\n    throw status(500, "could not create user");\n  }\n\n  return user;\n});',
   },
   "tsforge/queue-options-must-set-removeoncomplete": {
     what: "Every `<queue>.add(...)` must configure `removeOnComplete` (per-call or via `defaultJobOptions`) so completed jobs don't accumulate in Redis.",
@@ -410,7 +412,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   "tsforge/upload-must-set-limits": {
     what: "Multipart upload handlers should declare `limits` or `maxFileSize` to bound request size.",
     bad: 'import multipart from "@fastify/multipart";\nexport async function handleUpload(request: { file: () => Promise<unknown> }) {\n  return request.file();\n}',
-    good: 'import multipart from "@fastify/multipart";\nconst limits = { fileSize: 1024 };\nexport async function handleUpload(request: { file: () => Promise<unknown> }) {\n  return request.file();\n}',
+    good: 'import multipart from "@fastify/multipart";\n\nexport async function register(app: FastifyInstance) {\n  await app.register(multipart, { limits: { fileSize: 5_000_000, files: 1 } });\n}\n\nexport async function handleUpload(request: { file: () => Promise<unknown> }) {\n  return request.file();\n}',
     exampleFile: "src/routes/upload.ts",
   },
   "tsforge/webhook-must-verify-signature-before-parse": {

@@ -28,6 +28,11 @@ export interface IRuleDoc {
    *  an unverified example is how a doc came to promise a mechanism that did not
    *  exist. */
   exampleIsProse?: boolean;
+  /** Set when adding a `"use client"` / `"use server"` directive IS the whole
+   *  fix, as for the `*-require-use-client` rules. Exempts the entry from the
+   *  evasion check, which otherwise treats a bolted-on directive as escaping
+   *  the rule's scope rather than repairing the code. */
+  fixIsDirective?: boolean;
   /** Maintainer-only pointer to the rule's implementation or deeper guidance
    *  (tsforge-repo-relative). NEVER emitted into runtime feedback — the model
    *  runs in the user's project where the path dangles. Anything the model
@@ -212,7 +217,7 @@ export const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "",
     good: "",
     procedure:
-      "1) Open the folder's `index.ts`. 2) Replace its body with `export { default as Component } from './Component'`. 3) Keep only type re-exports alongside (`export * from './Component.types'`); move any other code into its own module.",
+      '1) Open the folder\'s `index.ts`. 2) Re-export the component as the DEFAULT: `export { default } from "./Component";` \u2014 `export { default as Component }` creates a named export only and leaves the same gate failing. 3) Keep type re-exports alongside (`export * from "./Component.types"`); move any other code into its own module.',
   },
   "tsforge/max-hooks-per-file": {
     what: "A `*.hooks.ts`/`*.queries.ts`/`*.mutations.ts` module may export at most 4 hooks — split god files by concern before they grow.",

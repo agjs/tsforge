@@ -265,3 +265,20 @@ test("generated docs the reader imports include the tsforge pack rules (guards t
   expect(tsforgeKeys.length).toBeGreaterThan(50);
   expect(keys).toContain("tsforge/component-folder-structure");
 });
+
+test("ruleHelp: a multi-line example keeps its indentation under the marker", () => {
+  // Model-facing formatting: left-flushing continuation lines destroys the
+  // snippet's own structure and makes a multi-statement fix hard to read.
+  const h = ruleHelp([
+    { key: "k", rule: "tsforge/logger-not-console", message: "" },
+  ]);
+  const lines = h.split("\n");
+  const markerAt = lines.findIndex((l) => l.includes("✗"));
+
+  expect(markerAt).toBeGreaterThan(-1);
+
+  const continuation = lines[markerAt + 1];
+
+  expect(continuation).toBeDefined();
+  expect(continuation?.startsWith("    ")).toBe(true);
+});
