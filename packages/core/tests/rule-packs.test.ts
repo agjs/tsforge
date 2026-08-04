@@ -4023,3 +4023,75 @@ describe("typescript-core: no-self-import", () => {
     expect(messages.map((m) => m.messageId)).toContain("selfImport");
   });
 });
+
+describe("typescript-core: fetch-must-check-ok", () => {
+  test("reports a bound response parsed without a check", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports an inline parse with no binding at all", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { return (await fetch("/api/users")).json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports a then-callback that parses without a check", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'const data = fetch("/api/users").then((res) => res.json());'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("allows a guard clause on res.ok", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (!res.ok) { throw new Error("failed"); } return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows a status comparison instead of ok", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (res.status !== 200) { return null; } return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows a then-callback that checks ok", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'const data = fetch("/api/users").then((res) => (res.ok ? res.json() : null));'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("ignores a response whose body is never parsed", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function ping() { const res = await fetch("/api/health"); return res.text(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+});

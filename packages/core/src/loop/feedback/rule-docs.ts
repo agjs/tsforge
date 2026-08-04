@@ -285,23 +285,23 @@ export const RULE_DOCS: Record<string, IRuleDoc> = {
     good: "process.env.STRIPE_SECRET_KEY // server-only, no NEXT_PUBLIC prefix",
   },
   "tsforge/fetch-must-check-ok": {
-    what: "Check response.ok before calling .json() on fetch results.",
-    bad: "",
-    good: "",
+    what: "`fetch` only rejects on a network failure \u2014 a 4xx/5xx resolves normally, and `.json()` then parses the error body as if it were data. Check the response before reading it.",
+    bad: "export async function loadUser(id: string) {\n  const res = await fetch(`/api/users/${id}`);\n\n  return res.json();\n}",
+    good: "export async function loadUser(id: string) {\n  const res = await fetch(`/api/users/${id}`);\n\n  if (!res.ok) {\n    throw new Error(`user request failed: ${res.status}`);\n  }\n\n  return res.json();\n}",
     procedure:
       "`fetch` only rejects on network failure \u2014 a 4xx/5xx resolves normally and `.json()` then parses an error body as if it were data. Check `res.ok` (or the status) and throw or return early BEFORE reading the body.",
   },
   "tsforge/json-parse-must-validate": {
-    what: "Parse external JSON through a schema library, not bare JSON.parse.",
-    bad: "",
-    good: "",
+    what: "`JSON.parse` returns `any`, so every field downstream is unchecked. Hand its result to a schema and use what the schema returns.",
+    bad: "export function loadUser(raw: string) {\n  return JSON.parse(raw);\n}",
+    good: 'import { z } from "zod";\n\nconst UserSchema = z.object({ id: z.string(), email: z.string() });\n\nexport function loadUser(raw: string) {\n  return UserSchema.parse(JSON.parse(raw));\n}',
     procedure:
-      "`JSON.parse` returns `any`, so every field downstream is unchecked. Hand the raw value to a schema and use ITS result \u2014 `const user = UserSchema.parse(await req.json())`. Do not parse first and validate later; the untyped value has already escaped by then.",
+      "Parse THEN validate, and use the validator's return value \u2014 not the raw parse result. `JSON.parse` alone hands back `any`, so the fields are unchecked no matter how they are typed afterwards.",
   },
   "tsforge/no-unsafe-boundary-cast": {
-    what: "A cast asserts a shape nothing checked, so malformed input flows in silently typed. Parse the value through a schema and use its result.",
-    bad: "",
-    good: "",
+    what: "A cast on parsed boundary input asserts a shape nothing checked, so malformed data flows in silently typed. Validate it and use the validator's return value.",
+    bad: "export function loadUser(raw: string) {\n  const user = JSON.parse(raw) as { email: string };\n\n  return user.email;\n}",
+    good: 'import { z } from "zod";\n\nconst UserSchema = z.object({ email: z.string() });\n\nexport function loadUser(raw: string) {\n  const user = UserSchema.parse(JSON.parse(raw));\n\n  return user.email;\n}',
     procedure:
       "A cast on boundary input asserts a shape the compiler never checked, so malformed input flows in silently typed. Parse instead: run the value through your schema (`UserSchema.parse(await req.json())`) so failure happens at the boundary with a real error.",
   },

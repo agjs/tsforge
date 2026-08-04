@@ -37,7 +37,12 @@ function lint(
   // They are structurally compatible at every point Linter touches, so the
   // parameter is typed as what Linter needs and the pack value is handed over
   // through a narrowing guard rather than a cast.
-  const plugins = { tsforge: { rules: { [ruleName]: toLinterRule(rule) } } };
+  // Same bridge the other rule tests use: the pack stores TSESLint modules and
+  // Linter wants its own, structurally identical at every point it touches.
+  // eslint.config.js relaxes type assertions for packages/**/tests/**, which is
+  // why this is a plain cast here and would not be in src.
+  const ruleModule = rule as unknown as Rule.RuleModule;
+  const plugins = { tsforge: { rules: { [ruleName]: ruleModule } } };
   const isTsx = filename.endsWith(".tsx");
   const linter = new Linter();
 
@@ -96,49 +101,6 @@ function packOf(ruleName: string): keyof typeof RULE_PACKS | undefined {
 
 function isPackId(value: string): value is keyof typeof RULE_PACKS {
   return Object.hasOwn(RULE_PACKS, value);
-}
-
-/** A RuleListener is a string-keyed map of visitor callbacks, so any non-null
- *  object satisfies its declared shape. Narrowing through a guard keeps this
- *  honest without an `as` cast and without laundering an `any`. */
-function isRuleListener(value: unknown): value is Rule.RuleListener {
-  return typeof value === "object" && value !== null;
-}
-
-/** The pack's rule module in the shape ESLint's Linter accepts.
- *
- *  A pack rule is a TSESLint module; Linter wants its own. They are structurally
- *  compatible at every point Linter touches, but the two `create` signatures are
- *  nominally different, so this re-declares the one member Linter calls and
- *  forwards to it. No `as`, and no laundering through an `any`-returning helper —
- *  dodging the cast ban that way is worse than the cast itself. */
-function toLinterRule(rule: unknown): Rule.RuleModule {
-  if (typeof rule !== "object" || rule === null || !("create" in rule)) {
-    throw new Error("rule module has no create()");
-  }
-
-  const create: unknown = Reflect.get(rule, "create");
-
-  if (typeof create !== "function") {
-    throw new Error("rule module create() is not callable");
-  }
-
-  // `meta` carries the messages table; without it a rule reporting by messageId
-  // throws instead of producing a diagnostic.
-  const meta: unknown = Reflect.get(rule, "meta");
-
-  return {
-    ...(typeof meta === "object" && meta !== null ? { meta } : {}),
-    create(context: Rule.RuleContext): Rule.RuleListener {
-      const returned: unknown = Reflect.apply(create, rule, [context]);
-
-      if (!isRuleListener(returned)) {
-        throw new Error("rule create() did not return a listener");
-      }
-
-      return returned;
-    },
-  };
 }
 
 interface IDocumented {
@@ -381,4 +343,25 @@ describe("rule docs: a relocation fix must actually need the move", () => {
       });
     }
   );
+});
+
+describe("rule docs: no orphaned entries", () => {
+  test("every tsforge doc key names a rule that actually exists", () => {
+    // A doc for a renamed or deleted rule is never looked up: no error will
+    // carry that id, so it rots unnoticed. The coverage test iterates rules,
+    // not doc keys, so it cannot see this.
+    const real = new Set<string>();
+
+    for (const pack of Object.values(RULE_PACKS)) {
+      for (const ruleName of Object.keys(pack.rules)) {
+        real.add(`tsforge/${ruleName}`);
+      }
+    }
+
+    const orphans = Object.keys(ALL_DOCS)
+      .filter((id) => id.startsWith("tsforge/"))
+      .filter((id) => !real.has(id));
+
+    expect(orphans).toEqual([]);
+  });
 });

@@ -64,8 +64,8 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/consistent-status-via-set": {
     what: "Inside Elysia route handlers, set HTTP status via `set.status = N`, not by returning a `new Response(body, { status: N })`.",
-    bad: '\n      const app = new Elysia();\n      app.get("/", () => {\n        return new Response("Hello", { status: 200 });\n      });\n    ',
-    good: '\n      const app = new Elysia();\n      app.get("/", () => {\n        return "Hello";\n      });\n    ',
+    bad: 'const app = new Elysia();\n\napp.get("/users", () => {\n  return new Response("created", { status: 201 });\n});',
+    good: 'const app = new Elysia();\n\napp.get("/users", ({ set }) => {\n  set.status = 201;\n\n  return "created";\n});',
   },
   "tsforge/dangerous-html-requires-sanitize": {
     what: "dangerouslySetInnerHTML requires a sanitization library (DOMPurify or equivalent) imported in the same file.",
@@ -270,8 +270,8 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/no-react-in-services": {
     what: "A service/data-layer file must not import React \u2014 keep React in components and hooks.",
-    bad: 'import { useState } from "react";\n\nexport function loadUsers(): void {\n  useState();\n}',
-    good: "export async function loadUsers(): Promise<string[]> {\n  return db.user.findMany();\n}",
+    bad: 'import { useState } from "react";\n\nexport function useUserCache() {\n  const [users, setUsers] = useState<string[]>([]);\n\n  return { users, setUsers };\n}',
+    good: "// Plain module state \u2014 no React in the service layer. The component wraps\n// this in its own useState/useSyncExternalStore.\nlet users: string[] = [];\n\nexport function getUsers(): string[] {\n  return users;\n}\n\nexport function setUsers(next: string[]): void {\n  users = next;\n}",
     exampleFile: "src/services/users.ts",
   },
   "tsforge/no-real-network-in-unit-tests": {
@@ -294,8 +294,8 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/no-spawn-with-shell": {
     what: "`shell: true` runs the string through a shell, so any interpolated value can inject commands. Drop it and pass the program and its arguments as an array.",
-    bad: 'import { spawn } from "child_process";\nspawn("sh", ["-c", cmd], { shell: true });',
-    good: 'import { spawn } from "child_process";\nspawn("node", ["script.js"]);',
+    bad: 'import { spawn } from "node:child_process";\n\nexport function run(dir: string) {\n  return spawn("ls -la " + dir, { shell: true });\n}',
+    good: 'import { spawn } from "node:child_process";\n\nexport function run(dir: string) {\n  // Same command, no shell: the directory can no longer inject one.\n  return spawn("ls", ["-la", dir]);\n}',
     exampleFile: "src/runner.ts",
   },
   "tsforge/no-state-in-component-body": {
@@ -384,8 +384,10 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/require-route-schema": {
     what: "Fastify POST/PUT/PATCH routes must declare schema.body; GET/DELETE routes must declare schema.querystring or schema.params.",
-    bad: '\nimport Fastify from "fastify";\nconst fastify = Fastify();\nfastify.post("/users", { schema: {} }, async () => ({ ok: true }));\n',
-    good: '\nimport Fastify from "fastify";\nconst UserSchema = {};\nconst fastify = Fastify();\nfastify.post("/users", { schema: { body: UserSchema } }, async () => ({ ok: true }));\n',
+    bad: 'import Fastify from "fastify";\n\nconst fastify = Fastify();\n\nfastify.post("/users", { schema: {} }, async () => ({ ok: true }));',
+    good: 'import Fastify from "fastify";\n\nconst fastify = Fastify();\n\nfastify.post(\n  "/users",\n  {\n    schema: {\n      body: {\n        type: "object",\n        required: ["email"],\n        properties: { email: { type: "string", format: "email" } },\n      },\n    },\n  },\n  async () => ({ ok: true })\n);',
+    procedure:
+      "Describe every field the route accepts. An empty or permissive schema satisfies the rule while validating nothing \u2014 the point is that unexpected input is REJECTED, not that a schema key exists.",
     exampleFile: "src/routes/users.ts",
   },
   "tsforge/server-action-requires-authz": {
@@ -544,15 +546,15 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/auth-cookie-must-set-samesite": {
     what: "An auth cookie without `sameSite` is sent on cross-site requests \u2014 the classic CSRF opening.",
-    bad: "",
-    good: "",
+    bad: 'setCookie("session", token, { httpOnly: true, secure: true });',
+    good: 'setCookie("session", token, {\n  httpOnly: true,\n  secure: true,\n  sameSite: "lax",\n});',
     procedure:
       'Set `sameSite: "lax"` (or `"strict"` if no cross-site navigation needs the session) when writing the cookie.',
   },
   "tsforge/auth-cookie-must-set-maxage-or-expires": {
     what: "A session cookie with no lifetime lives until the browser closes \u2014 which on a phone is never.",
-    bad: "",
-    good: "",
+    bad: 'setCookie("session", token, {\n  httpOnly: true,\n  secure: true,\n  sameSite: "lax",\n});',
+    good: 'setCookie("session", token, {\n  httpOnly: true,\n  secure: true,\n  sameSite: "lax",\n  maxAge: 60 * 60,\n});',
     procedure:
       "Set `maxAge` (seconds) or `expires` when writing the cookie, and keep it in step with the token's own expiry.",
   },
