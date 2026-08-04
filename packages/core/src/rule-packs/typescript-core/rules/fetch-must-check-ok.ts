@@ -97,12 +97,14 @@ function statusPolarity(operator: string, value: number): Polarity {
       return value <= FIRST_ERROR_STATUS ? "positive" : "opaque";
     case "<=":
       return value < FIRST_ERROR_STATUS ? "positive" : "opaque";
-    // Only the error boundary itself bipartitions. `>= 500` leaves every 4xx
-    // on the fall-through side, so it proves nothing about what follows.
+    // A failure test is only useful for what it says about the OTHER side, so
+    // what matters is that everything below the threshold is a success:
+    // `>= 300` and `>= 400` both leave only good responses behind, while
+    // `>= 500` leaves every 4xx there.
     case ">=":
-      return value === FIRST_ERROR_STATUS ? "negative" : "opaque";
+      return value <= FIRST_ERROR_STATUS ? "negative" : "opaque";
     case ">":
-      return value === FIRST_ERROR_STATUS - 1 ? "negative" : "opaque";
+      return value < FIRST_ERROR_STATUS ? "negative" : "opaque";
     default:
       return "opaque";
   }
@@ -567,16 +569,18 @@ function skipsOnSuccess(check: ICheck): boolean {
 function guardProtects(check: ICheck, parse: TSESTree.Node): boolean {
   const { owner } = check;
 
+  // Execution continued past the assertion, so it held. `assert(res.ok ||
+  // force)` can hold with the response bad, which is why this asks the same
+  // question the then-branch does.
   if (owner.type === AST_NODE_TYPES.CallExpression) {
     return (
-      check.polarity === "positive" &&
+      entersOnSuccess(check) &&
       owner.range[1] <= parse.range[0] &&
       contains(scopeOfCheck(owner), parse)
     );
   }
 
-  // A guard under `&&` is not guaranteed to run at all.
-  if (owner.type !== AST_NODE_TYPES.IfStatement || check.underAnd) {
+  if (owner.type !== AST_NODE_TYPES.IfStatement) {
     return false;
   }
 
@@ -587,14 +591,20 @@ function guardProtects(check: ICheck, parse: TSESTree.Node): boolean {
     return false;
   }
 
+  // Falling PAST an exiting then-branch means the test was false. With `&&`
+  // the test can be false while the response is bad, so that operand form
+  // proves nothing here — but `||` is fine, since false means every operand
+  // was false.
   if (alwaysExits(owner.consequent)) {
-    return check.polarity === "negative";
+    return skipsOnSuccess(check);
   }
 
+  // The else-branch exits, so reaching the parse means the then-branch RAN and
+  // the test was true. Mirror image: `||` can be true with the response bad.
   return (
     owner.alternate !== null &&
     alwaysExits(owner.alternate) &&
-    check.polarity === "positive"
+    entersOnSuccess(check)
   );
 }
 

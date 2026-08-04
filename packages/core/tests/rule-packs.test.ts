@@ -4514,6 +4514,66 @@ describe("typescript-core: fetch-must-check-ok", () => {
     expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
   });
 
+  test("reports an exiting else whose test another operand can satisfy", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (res.ok || force) { log(); } else { throw new Error("failed"); } return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports an assertion another operand can satisfy", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); assert(res.ok || force); return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("allows an exiting guard where either operand means failure", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (!res.ok || force) { throw new Error("failed"); } return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows an exiting else whose test requires success", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (res.ok && enabled) { log(); } else { throw new Error("failed"); } return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows a complementary guard below the error boundary", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (res.status >= 300) { return null; } return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows a strict complementary guard below the error boundary", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (res.status > 350) { return null; } return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
   test("ignores a response whose body is never parsed", () => {
     const messages = lint(
       "typescript-core",
