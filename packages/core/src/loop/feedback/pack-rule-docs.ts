@@ -137,7 +137,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   "tsforge/no-auth-token-in-storage": {
     what: "Disallow storing or reading auth tokens from localStorage/sessionStorage \u2014 use httpOnly cookies instead.",
     bad: 'export function saveSession(token: string): void {\n  localStorage.setItem("auth_token", token);\n}',
-    good: 'export async function saveSession(token: string): Promise<void> {\n  // Hand the token to the server, which sets it as an httpOnly cookie.\n  // Nothing readable by JS ever holds it.\n  await fetch("/api/session", {\n    method: "POST",\n    credentials: "include",\n    headers: { authorization: `Bearer ${token}` },\n  });\n}',
+    good: 'export async function saveSession(token: string): Promise<void> {\n  // Exchanged immediately for an httpOnly cookie and never persisted:\n  // it lives only as an argument, so no XSS-readable copy survives.\n  await fetch("/api/session", {\n    method: "POST",\n    credentials: "include",\n    headers: { authorization: `Bearer ${token}` },\n  });\n}',
     exampleFile: "src/auth.ts",
   },
   "tsforge/no-bare-date-now": {
@@ -202,8 +202,8 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/no-import-build-output": {
     what: "Disallow importing from build/output directories within the project. Source must import source, not compiled artifacts, to avoid stale-code drift and broken module boundaries.",
-    bad: 'import { x } from "../dist/index";',
-    good: 'import { x } from "some-pkg/dist/lib";',
+    bad: 'import { helper } from "../dist/index";\n\nexport const value = helper();',
+    good: 'import { helper } from "../src/index";\n\nexport const value = helper();',
     exampleFile: "src/a.ts",
   },
   "tsforge/no-import-test-from-source": {

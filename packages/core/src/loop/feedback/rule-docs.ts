@@ -415,17 +415,15 @@ export function ruleHelpFromOutput(output: string): string {
     ids.add(m[0]);
   }
 
-  // The tsforge PACK rules — the ones with the worked examples. Without this the
-  // entire pack catalogue is invisible on plain eslint output, which is exactly
-  // the path taken when the MODEL runs the gate itself via the `run` tool: it
-  // would see the bare rule id and nothing else, and go looking for the answer.
-  for (const m of output.matchAll(/tsforge\/[a-z0-9-]+/g)) {
-    ids.add(m[0]);
-  }
-
-  // Other packs surface as `<pack>/<rule>` too; match the shape rather than
-  // enumerating packs, so a new pack is covered the day it lands.
-  for (const m of output.matchAll(/\bsonarjs\/[a-z-]+/g)) {
+  // Any `<pack>/<rule>` id in plain eslint text — tsforge's own packs, sonarjs,
+  // module-boundaries, and whatever ships next. Matching by SHAPE rather than
+  // enumerating packs is what makes a new pack work the day it lands; ruleHelp
+  // drops ids it has no doc for, so over-matching costs nothing.
+  //
+  // Without this the pack catalogue is invisible on the path the MODEL takes
+  // when it runs the gate itself via `run`: it sees a bare rule id and goes
+  // looking for the answer in the harness source.
+  for (const m of output.matchAll(/[a-z][a-z0-9-]*\/[a-z][a-z0-9-]+/gu)) {
     ids.add(m[0]);
   }
 

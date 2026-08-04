@@ -303,6 +303,7 @@ test("ruleHelp: test-only metadata never reaches the model", () => {
   expect(h).not.toContain("goodFile");
   expect(h).not.toContain("exampleIsProse");
   expect(h).not.toContain("fixIsDirective");
+  expect(h).not.toContain("fixIsRelocation");
   expect(h).not.toContain("src/example.ts");
   expect(h).not.toContain("packages/core");
 });
