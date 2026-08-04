@@ -241,12 +241,16 @@ test("ruleHelp: i18n-locale-keys-used steers WIRE-UP, never delete-what-you-wrot
 });
 
 test("ruleHelp: a pack rule with no worked example shows only its description (no fake ✗/✓)", () => {
-  // job-name-must-be-constant has a generated (empty bad/good) entry, no curated one.
+  // A rule whose fix is structural carries a procedure INSTEAD of an example —
+  // a fabricated ✗/✓ is worse than none, which is how one doc came to promise
+  // an "allowlisted URL builder" the rule never had. (job-name-must-be-constant
+  // used to sit here; it now ships a verified example of its own.)
   const h = ruleHelp([
-    { key: "k", rule: "tsforge/job-name-must-be-constant", message: "" },
+    { key: "k", rule: "tsforge/fetch-must-check-ok", message: "" },
   ]);
 
-  expect(h).toContain("tsforge/job-name-must-be-constant");
+  expect(h).toContain("tsforge/fetch-must-check-ok");
+  expect(h).toContain("procedure:");
   expect(h).not.toContain("✗");
   expect(h).not.toContain("✓");
 });

@@ -1,6 +1,7 @@
 import type { ErrorSet } from "../../validate";
 import generatedJson from "./rule-docs.generated.json";
 import { activeOverlay } from "../../self-harness/overlay";
+import { PACK_RULE_DOCS } from "./pack-rule-docs";
 
 export interface IRuleDoc {
   /** One-line statement of what the rule requires. */
@@ -11,6 +12,22 @@ export interface IRuleDoc {
   good: string;
   /** Optional multi-step fix workflow for architecture or meta-rules. */
   procedure?: string;
+  /** Filename to lint `bad`/`good` under, for rules whose behaviour depends on
+   *  the path (test mirrors, client components, schema files). Consumed only by
+   *  `tests/rule-docs-examples.test.ts`, which PROVES every published example
+   *  really does trip its rule and that the fix really does satisfy it — a doc
+   *  that describes a mechanism the rule does not have sends the model hunting
+   *  for something that was never built. Defaults to `src/example.ts`. */
+  exampleFile?: string;
+  /** Filename for the ✓ example when the fix IS the path (a component that must
+   *  move, a test that must mirror its source). Defaults to `exampleFile`. */
+  goodFile?: string;
+  /** Set when `bad`/`good` are illustrative FILE LAYOUTS rather than compilable
+   *  code (a rule whose fix is moving files). Exempts the entry from the
+   *  executable-example test — which must stay strict for everything else, since
+   *  an unverified example is how a doc came to promise a mechanism that did not
+   *  exist. */
+  exampleIsProse?: boolean;
   /** Maintainer-only pointer to the rule's implementation or deeper guidance
    *  (tsforge-repo-relative). NEVER emitted into runtime feedback — the model
    *  runs in the user's project where the path dangles. Anything the model
@@ -32,7 +49,10 @@ const GENERATED: Record<string, IRuleDoc> = generatedJson;
  * ids (`@typescript-eslint/...`). Surfacing the rule's own bad→good next to the
  * failure beats making the model re-derive the fix from scratch.
  */
-const RULE_DOCS: Record<string, IRuleDoc> = {
+/** Default filename for JSX examples: several rules only fire in a .tsx file. */
+const TSX_EXAMPLE = "src/Example.tsx";
+
+export const RULE_DOCS: Record<string, IRuleDoc> = {
   // --- Type-aware: implicit-`any` containment (no `any` token to see) ---
   // (no-unsafe-assignment / -member-access / -return are curated further below)
   "@typescript-eslint/no-unsafe-call": {
@@ -51,21 +71,6 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     good: "function handle(x) { return isA(x) ? doA(x) : doB(x); } // branches extracted",
   },
   // --- AI-SDK pack ---
-  "tsforge/no-api-key-in-client": {
-    what: "An AI provider client constructed in a `'use client'` file ships the API key to the browser. Call the model from a server route/action.",
-    bad: "'use client';\nconst client = new OpenAI({ apiKey: process.env.KEY });",
-    good: "// server action / route handler:\nconst client = new OpenAI({ apiKey: process.env.KEY });",
-  },
-  "tsforge/require-completion-token-limit": {
-    what: "AI completion calls must bound output tokens to cap cost/latency.",
-    bad: "await generateText({ model, prompt });",
-    good: "await generateText({ model, prompt, maxTokens: 512 });",
-  },
-  "tsforge/no-user-input-in-system-prompt": {
-    what: "Don't splice request/user data into the system prompt (injection). Keep the system prompt constant; pass user input as a user message.",
-    bad: "generateText({ system: `You are ${role}`, prompt });",
-    good: "generateText({ system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userInput }] });",
-  },
   TS2532: {
     what: "Indexed access is `T | undefined` (noUncheckedIndexedAccess). Bind and guard before use; never `!`.",
     bad: "total += arr[i];",
@@ -194,41 +199,25 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     bad: "items.map((it, i) => <li key={i}>{it.text}</li>)",
     good: "items.map((it) => <li key={it.id}>{it.text}</li>)",
   },
-  "tsforge/no-jsx-computation": {
-    what: "No `.map()`/`.filter()`/arithmetic/chained logic inside JSX `{…}` — extract to a hook or pre-prep variable first.",
-    bad: "<ul>{items.filter((i) => i.visible).map((i) => <li key={i.id}>{i.label}</li>)}</ul>",
-    good: "const rows = useMemo(() => items.filter(...).map(...), [items]); return <ul>{rows}</ul>;",
-  },
-  "tsforge/no-loading-text-use-skeleton": {
-    what: "Loading states render a <Skeleton/> shaped like the content — never 'Loading…' text or a spinner. Add `skeleton` via scaffold_ui.",
-    bad: "if (isLoading) { return <p>Loading…</p>; }",
-    good: 'if (isLoading) { return <Skeleton className="h-8 w-full" />; }',
-  },
-  "tsforge/no-state-in-component-body": {
-    what: "State hooks (`useState`, `useEffect`, `useMemo`, …) belong in `Component.hooks.ts`, not in the `.tsx` component body.",
-    bad: "export function Button() { const [open, setOpen] = useState(false); return <button />; }",
-    good: "export function useButton() { const [open, setOpen] = useState(false); return { open }; }",
-    procedure:
-      "1) Create/open `Component.hooks.ts` next to the component. 2) Move the state/effect hooks into a `useComponent()` custom hook that returns the values and handlers the JSX needs. 3) Call the hook once at the top of the component and destructure. (`useId`/`useTransition`/`useDeferredValue` may stay inline.)",
-  },
   "tsforge/no-inline-jsx-functions": {
     what: "No inline arrow/function expressions in JSX attributes — bind handlers in the hook and pass a reference.",
     bad: "<button onClick={() => doThing(id)} />",
     good: "const onClickRow = useCallback(() => doThing(id), [id]); <button onClick={onClickRow} />",
     procedure:
       "1) Define the handler in the component's hook file, wrapped in `useCallback` with its dependencies. 2) Return it from the hook and destructure it in the component. 3) Pass the reference (`onClick={onClickRow}`). For per-item handlers in a list, extract a row component that receives the item and binds internally.",
+    exampleFile: TSX_EXAMPLE,
   },
   "tsforge/index-must-reexport-default": {
     what: "A component folder's `index.ts` may only re-export: the component's default plus optional type re-exports — no logic.",
-    bad: "import Button from './Button'; export default Button;  // logic in Button/index.ts",
-    good: "export { default as Button } from './Button'; export * from './Button.types';",
+    bad: "",
+    good: "",
     procedure:
       "1) Open the folder's `index.ts`. 2) Replace its body with `export { default as Component } from './Component'`. 3) Keep only type re-exports alongside (`export * from './Component.types'`); move any other code into its own module.",
   },
   "tsforge/max-hooks-per-file": {
     what: "A `*.hooks.ts`/`*.queries.ts`/`*.mutations.ts` module may export at most 4 hooks — split god files by concern before they grow.",
-    bad: "users.queries.ts exporting 7 use* hooks",
-    good: "users.list.queries.ts + users.detail.queries.ts + users.mutations.ts, each ≤ 4 hooks",
+    bad: "",
+    good: "",
     procedure:
       "1) Group the file's exported hooks by concern (list vs detail vs mutations). 2) Create one module per group (e.g. `users.list.queries.ts`, `users.mutations.ts`), each ≤ 4 hooks. 3) Move each hook with the imports it needs and update the import sites. 4) Delete the original file once it is empty.",
   },
@@ -239,6 +228,7 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     procedure:
       "1) Create `Component/` folder. 2) Move hooks to `Component.hooks.ts`. 3) Add `index.ts` with `export { default } from './Component'`. 4) Update imports to the folder path.",
     reference: "packages/core/src/rule-packs/react-component-architecture/",
+    exampleIsProse: true,
   },
   "tsforge/no-throw-literal": {
     what: "Throw `Error` instances, not string or number literals.",
@@ -249,153 +239,73 @@ const RULE_DOCS: Record<string, IRuleDoc> = {
     what: "Do not use React.FC — type props on the function parameter.",
     bad: "const Button: React.FC<IButtonProps> = ({ onClick }) => <button onClick={onClick} />;",
     good: "function Button({ onClick }: IButtonProps) { return <button onClick={onClick} />; }",
+    exampleFile: TSX_EXAMPLE,
   },
   "tsforge/no-component-invocation": {
     what: "Render components as JSX, not function calls.",
     bad: "<div>{Header()}</div>",
     good: "<div><Header /></div>",
+    exampleFile: TSX_EXAMPLE,
   },
   "tsforge/no-nested-component": {
     what: "Declare components at module scope, not inside another component.",
     bad: "function App() { function Inner() { return <span />; } return <Inner />; }",
     good: "function Inner() { return <span />; } function App() { return <Inner />; }",
-  },
-  "tsforge/dangerous-html-requires-sanitize": {
-    what: "Sanitize HTML before dangerouslySetInnerHTML — import DOMPurify.",
-    bad: "<div dangerouslySetInnerHTML={{ __html: rawHtml }} />",
-    good: "import DOMPurify from 'isomorphic-dompurify'; <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(rawHtml) }} />",
-  },
-  "tsforge/no-child-process-exec": {
-    what: "Do not use child_process.exec/execSync — shell execution enables command injection.",
-    bad: "import { exec } from 'child_process'; exec(`rm -rf ${dir}`);",
-    good: "import { execFile } from 'child_process'; execFile('rm', ['-rf', dir], callback);",
-  },
-  "tsforge/no-spawn-with-shell": {
-    what: "Do not pass `{ shell: true }` to spawn/spawnSync.",
-    bad: "spawn('sh', ['-c', cmd], { shell: true });",
-    good: "spawn('node', ['script.js', arg]);",
-  },
-  "tsforge/no-dynamic-regexp": {
-    what: "Do not build RegExp from runtime input — ReDoS risk.",
-    bad: "const re = new RegExp(userPattern);",
-    good: "const re = /^fixed-pattern$/;",
+    exampleFile: TSX_EXAMPLE,
   },
   "tsforge/no-inner-html-assignment": {
     what: "Do not assign to innerHTML — XSS risk in vanilla DOM code.",
     bad: "el.innerHTML = userHtml;",
     good: "el.textContent = userText;",
   },
-  "tsforge/catch-must-handle": {
-    what: "Catch blocks must log, rethrow, or return a typed error — not silently mask failure.",
-    bad: "catch (e) { return null; }",
-    good: "catch (e) { logger.error(e); throw e; }",
-  },
-  "tsforge/no-react-in-services": {
-    what: "Service/data modules must not import React — keep business logic decoupled from UI.",
-    bad: "import { useMemo } from 'react'; // in src/services/users.ts",
-    good: "Move React hooks to components; keep services as plain TypeScript.",
-  },
   "tsforge/no-anonymous-useEffect": {
     what: "Pass a named function to useEffect for debuggable stack traces.",
     bad: "useEffect(() => { sync(); }, [id]);",
     good: "useEffect(function syncOnIdChange() { sync(); }, [id]);",
   },
-  "tsforge/no-derived-state-in-effect": {
-    what: "Do not set local state inside useEffect when the value can be derived during render.",
-    bad: "useEffect(() => { setFullName(first + ' ' + last); }, [first, last]);",
-    good: "const fullName = `${first} ${last}`;",
-  },
-  "tsforge/no-internal-api-fetch": {
-    what: "Server Components must not fetch the app's own /api routes.",
-    bad: "await fetch('/api/users');",
-    good: "import { listUsers } from '@/services/users'; const users = await listUsers();",
-  },
-  "tsforge/await-dynamic-request-apis": {
-    what: "Await Next.js dynamic request APIs in Server Components.",
-    bad: "const jar = cookies();",
-    good: "const jar = await cookies();",
-  },
-  "tsforge/error-boundary-require-use-client": {
-    what: "error.tsx and global-error.tsx must be Client Components.",
-    bad: "export default function Error() { return <div />; }",
-    good: "'use client'; export default function Error() { return <div />; }",
-  },
   "tsforge/no-html-img-element": {
     what: "Prefer next/image over raw img elements.",
     bad: "<img src='/hero.jpg' alt='hero' />",
     good: "import Image from 'next/image'; <Image src='/hero.jpg' alt='hero' width={800} height={400} />",
+    exampleFile: TSX_EXAMPLE,
   },
   "tsforge/no-sensitive-next-public-env": {
     what: "NEXT_PUBLIC_* vars are exposed in the client bundle — never use for secrets.",
     bad: "process.env.NEXT_PUBLIC_STRIPE_SECRET",
     good: "process.env.STRIPE_SECRET_KEY // server-only, no NEXT_PUBLIC prefix",
   },
-  "tsforge/prefer-lazy-use-state-init": {
-    what: "Use lazy useState when parsing localStorage on mount.",
-    bad: "useState(JSON.parse(localStorage.getItem('cfg') ?? '{}'))",
-    good: "useState(() => JSON.parse(localStorage.getItem('cfg') ?? '{}'))",
-  },
-  "tsforge/no-auth-token-in-storage": {
-    what: "Never store auth tokens in localStorage/sessionStorage.",
-    bad: "localStorage.setItem('auth_token', token);",
-    good: "Set an httpOnly session cookie on the server instead.",
-  },
   "tsforge/fetch-must-check-ok": {
     what: "Check response.ok before calling .json() on fetch results.",
-    bad: "const data = await fetch(url).then(r => r.json());",
-    good: "const res = await fetch(url); if (!res.ok) { throw new Error('fetch failed'); } const data = await res.json();",
+    bad: "",
+    good: "",
+    procedure:
+      "`fetch` only rejects on network failure \u2014 a 4xx/5xx resolves normally and `.json()` then parses an error body as if it were data. Check `res.ok` (or the status) and throw or return early BEFORE reading the body.",
   },
   "tsforge/json-parse-must-validate": {
     what: "Parse external JSON through a schema library, not bare JSON.parse.",
-    bad: "const body = JSON.parse(raw);",
-    good: "const body = UserSchema.parse(JSON.parse(raw));",
+    bad: "",
+    good: "",
+    procedure:
+      "`JSON.parse` returns `any`, so every field downstream is unchecked. Hand the raw value to a schema and use ITS result \u2014 `const user = UserSchema.parse(await req.json())`. Do not parse first and validate later; the untyped value has already escaped by then.",
   },
   "tsforge/no-unsafe-boundary-cast": {
     what: "Do not cast untrusted parsed input with `as` — validate at the boundary.",
-    bad: "const user = (await req.json()) as IUser;",
-    good: "const user = UserSchema.parse(await req.json());",
-  },
-  "tsforge/no-user-controlled-redirect": {
-    what: "Redirect URLs must be string literals or allowlisted helpers — not user input.",
-    bad: "redirect(searchParams.get('next')!);",
-    good: "redirect('/dashboard');",
-  },
-  "tsforge/no-user-controlled-fetch-url": {
-    what: "The request ORIGIN must be fixed in source. Interpolating the path is fine; interpolating the host is not. There is no allowlist or builder to opt into — write the host literally.",
-    bad: "await fetch(url); await fetch(`https://${host}/todos`);",
-    good: "await fetch(`/api/todos/${id}`); await fetch(`https://api.example.com/v1/${id}`);",
+    bad: "",
+    good: "",
     procedure:
-      'Put the whole origin before the first ${...}, and close it with / ? or # — `https://api.example.com${p}` is still rejected because p="@evil.com/x" rewrites the host. For a caller-supplied host, validate it against a fixed allowlist yourself and branch to literal URLs.',
+      "A cast on boundary input asserts a shape the compiler never checked, so malformed input flows in silently typed. Parse instead: run the value through your schema (`UserSchema.parse(await req.json())`) so failure happens at the boundary with a real error.",
   },
   "tsforge/no-prototype-polluting-merge": {
     what: "Do not merge request body/query/params into objects wholesale.",
     bad: "Object.assign(config, req.body);",
     good: "const name = UserSchema.parse(req.body).name; config.name = name;",
   },
-  "tsforge/server-only-modules-import-server-only": {
-    what: "Server-only modules importing DB/env must include `import 'server-only'`.",
-    bad: "import { db } from '@/lib/db'; // in lib/admin.ts",
-    good: "import 'server-only'; import { db } from '@/lib/db';",
-  },
   "tsforge/server-action-requires-authz-and-validation": {
     what: "Server actions must validate input and call authz before mutations.",
-    bad: "'use server'; export async function deleteUser(id: string) { await db.delete(users).where(eq(users.id, id)); }",
-    good: "'use server'; export async function deleteUser(raw: unknown) { const user = await requireUser(); const { id } = IdSchema.parse(raw); await authorize(user, id); ... }",
-  },
-  "tsforge/require-route-schema": {
-    what: "Fastify routes need a schema object with input validation.",
-    bad: "fastify.post('/users', async () => ({ ok: true }));",
-    good: "fastify.post('/users', { schema: { body: UserSchema } }, async () => ({ ok: true }));",
-  },
-  "tsforge/require-fastify-plugin-name": {
-    what: "fastify-plugin wrappers need a name option.",
-    bad: "export default fp(dbPlugin);",
-    good: "export default fp(dbPlugin, { name: 'db-connector', fastify: '5.x' });",
-  },
-  "tsforge/require-elysia-plugin-name": {
-    what: "Exported Elysia plugin instances need a name so the runtime can dedupe re-imports.",
-    bad: "export const plugin = new Elysia();",
-    good: "export const plugin = new Elysia({ name: 'auth-plugin' });",
+    bad: "",
+    good: "",
+    procedure:
+      "A server action needs BOTH: resolve the caller with your authorization helper and fail closed, then parse the arguments through a schema before touching the database. Typed parameters are not validation \u2014 the client controls what it sends.",
   },
   // BoringStack module-boundaries: a file must hold ONE semantic category. The
   // message lists the mixed categories (type / schema / constant / function / class /
@@ -529,6 +439,13 @@ function applyCardOverlay(
   return procedure === undefined ? merged : { ...merged, procedure };
 }
 
+/** Keep a multi-line example readable under its ✗/✓ marker: continuation lines
+ *  are indented to sit under the first, so the model sees the snippet's own
+ *  structure instead of a left-flushed wall. */
+function indentExample(code: string): string {
+  return code.split("\n").join("\n    ");
+}
+
 /** Format the rule docs for whichever rules appear in the current error set. */
 export function ruleHelp(errors: ErrorSet): string {
   const seen = new Set<string>();
@@ -540,7 +457,7 @@ export function ruleHelp(errors: ErrorSet): string {
     }
 
     // Try curated docs first, then generated, then tsforge pack rules
-    let doc = RULE_DOCS[e.rule] ?? GENERATED[e.rule];
+    let doc = RULE_DOCS[e.rule] ?? PACK_RULE_DOCS[e.rule] ?? GENERATED[e.rule];
 
     if (doc === undefined && e.rule.startsWith("tsforge/")) {
       // For tsforge pack rules, look up in generated docs
@@ -564,7 +481,7 @@ export function ruleHelp(errors: ErrorSet): string {
     const hasExample = doc.bad.length > 0 && doc.good.length > 0;
 
     let block = hasExample
-      ? `${e.rule}: ${doc.what}\n  ✗ ${doc.bad}\n  ✓ ${doc.good}`
+      ? `${e.rule}: ${doc.what}\n  ✗ ${indentExample(doc.bad)}\n  ✓ ${indentExample(doc.good)}`
       : `${e.rule}: ${doc.what}`;
 
     if (doc.procedure !== undefined && doc.procedure.length > 0) {
