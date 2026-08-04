@@ -49,6 +49,15 @@ export class OpenAICompatibleProvider implements IProvider {
   private thinkingPinned = false;
   private pinnedThinking: boolean | undefined;
 
+  /** Optional fields THIS endpoint has already rejected as unsupported.
+   *
+   *  Retrying per call fixes the call but keeps sending a request the server
+   *  will refuse — measured on a live box: ~300 rejections an hour, every one
+   *  a wasted round trip, and every one an error in the server's own metrics
+   *  pointing at a bug that was already handled. Learning it once takes that
+   *  to a single rejection per endpoint. */
+  private readonly unsupported = new Set<keyof ICompleteOptions>();
+
   constructor(private cfg: IOpenAICompatibleConfig) {}
 
   /** For DeepSeek, force every turn to the session's first thinking mode (see
@@ -71,6 +80,8 @@ export class OpenAICompatibleProvider implements IProvider {
    *  its next request — no restart. */
   reconfigure(cfg: IOpenAICompatibleConfig): void {
     this.cfg = cfg;
+    // What one endpoint refuses says nothing about the next one.
+    this.unsupported.clear();
   }
 
   /** The current config — read by the CLI for the model/endpoint status line. */
@@ -82,22 +93,47 @@ export class OpenAICompatibleProvider implements IProvider {
     messages: IChatMessage[],
     opts: ICompleteOptions = {}
   ): Promise<IModelResponse> {
+    const known = this.withoutKnownUnsupported(opts);
+
     try {
-      return await this.send(messages, opts);
+      return await this.send(messages, known);
     } catch (err) {
       // An endpoint that rejects ONE optional field would otherwise fail every
       // call for the life of the process. vLLM's V2 model runner does exactly
       // this with `thinking_token_budget`, which the scratch path sets by
       // default — so every from-scratch build 400s, and (before this) each
       // failure looked like the model simply saying nothing.
-      const retry = withoutUnsupportedField(opts, err);
+      const offending = unsupportedField(known, err);
 
-      if (retry === null) {
+      if (offending === null) {
         throw err;
       }
 
-      return await this.send(messages, retry);
+      // Remember, so the next call never asks for it again.
+      this.unsupported.add(offending);
+
+      return await this.send(messages, this.withoutKnownUnsupported(known));
     }
+  }
+
+  private withoutKnownUnsupported(opts: ICompleteOptions): ICompleteOptions {
+    if (this.unsupported.size === 0) {
+      return opts;
+    }
+
+    // Cleared to undefined rather than filtered out: every one of these is an
+    // optional field, and the request builder already treats undefined as
+    // "don't send". Walking the KNOWN field list keeps this typed — filtering
+    // `Object.entries` would hand back plain strings.
+    const next: ICompleteOptions = { ...opts };
+
+    for (const { option } of OPTIONAL_FIELDS) {
+      if (this.unsupported.has(option)) {
+        next[option] = undefined;
+      }
+    }
+
+    return next;
   }
 
   private async send(
@@ -167,10 +203,10 @@ const OPTIONAL_FIELDS: readonly {
  * real request errors; dropping `messages` or `tools` would silently change
  * what was asked.
  */
-function withoutUnsupportedField(
+function unsupportedField(
   opts: ICompleteOptions,
   err: unknown
-): ICompleteOptions | null {
+): keyof ICompleteOptions | null {
   if (!(err instanceof ModelRequestError) || !err.isPermanent) {
     return null;
   }
@@ -187,15 +223,7 @@ function withoutUnsupportedField(
         detail.includes("unknown"))
   );
 
-  if (offending === undefined) {
-    return null;
-  }
-
-  // Rebuilt without the key rather than deleted, so the retry carries exactly
-  // the fields we still intend to send.
-  return Object.fromEntries(
-    Object.entries(opts).filter(([key]) => key !== offending.option)
-  );
+  return offending?.option ?? null;
 }
 
 async function responseDetail(res: Response): Promise<string> {
