@@ -1,9 +1,10 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   isForeignHarnessRead,
+  isForeignRead,
   foreignHarnessReadRefusal,
 } from "../src/lib/scope";
 import { readFile, runShell } from "../src/loop/tools/file-ops";
@@ -165,6 +166,67 @@ test("the read tool still reads an ordinary workspace file", async () => {
     const out = await readFile({ file: "src/a.ts" }, ctx(dir));
 
     expect(out).toContain("export const a = 1;");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/** The layout that matters most: tsforge as a dependency of the project being
+ *  worked on. Roots are injected so the real install location is irrelevant. */
+const INSTALLED = ["/proj/node_modules/tsforge"];
+
+test("an installed harness is refused from the consumer project", () => {
+  // The consumer workspace CONTAINS node_modules/tsforge. Counting that as
+  // harness development switched the guard off in the one scenario it exists
+  // for — a real project, with tsforge pulled in as a dependency.
+  expect(
+    isForeignRead(INSTALLED, "/proj", "/proj/node_modules/tsforge/src/cli.ts")
+  ).toBe(true);
+});
+
+test("an installed harness is refused from a subdirectory of the consumer", () => {
+  expect(
+    isForeignRead(
+      INSTALLED,
+      "/proj/src/features",
+      "/proj/node_modules/tsforge/src/cli.ts"
+    )
+  ).toBe(true);
+});
+
+test("a directory merely sitting above the harness is not harness work", () => {
+  // `~/Documents/Code` holds every project; running there does not make
+  // tsforge's source part of the task.
+  expect(
+    isForeignRead(["/code/tsforge"], "/code", "/code/tsforge/src/a.ts")
+  ).toBe(true);
+});
+
+test("the consumer's own files are untouched by an installed harness", () => {
+  expect(isForeignRead(INSTALLED, "/proj", "/proj/src/index.ts")).toBe(false);
+});
+
+test("working inside an installed copy still reads it", () => {
+  expect(
+    isForeignRead(
+      INSTALLED,
+      "/proj/node_modules/tsforge",
+      "/proj/node_modules/tsforge/src/cli.ts"
+    )
+  ).toBe(false);
+});
+
+test("a symlink into the harness is followed, not taken at face value", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-symlink-"));
+
+  try {
+    // A link inside the workspace resolves to the same bytes; comparing the
+    // link's own path would call it a workspace file.
+    await symlink(join(HARNESS_ROOT, "src"), join(dir, "peek"));
+
+    expect(isForeignHarnessRead(dir, "peek/loop/feedback/rule-docs.ts")).toBe(
+      true
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isWin32 } from "../platform";
 
@@ -107,29 +107,49 @@ function contains(parent: string, child: string): boolean {
   return !segments.includes("..");
 }
 
+/** Follow symlinks where possible. A link inside the workspace pointing at the
+ *  harness resolves to the same bytes, and comparing the link's own path would
+ *  miss it. Paths that do not exist keep their resolved form — `run` is checked
+ *  before anything runs, so its targets may legitimately be absent. */
+function realpathOrSelf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 /**
  * True when reading this path would open the harness's own source from a
  * workspace that is not the harness.
  *
  * `file` may be absolute or relative to `cwd`; both resolve to the same answer.
+ * `roots` is injectable so the install layouts can be tested directly.
  */
-export function isForeignHarnessRead(cwd: string, file: string): boolean {
-  const roots = harnessRoots();
-  const target = resolve(cwd, file);
-  const workspace = resolve(cwd);
+export function isForeignRead(
+  roots: readonly string[],
+  cwd: string,
+  file: string
+): boolean {
+  const target = realpathOrSelf(resolve(cwd, file));
+  const workspace = realpathOrSelf(resolve(cwd));
 
   const insideHarness = roots.some((root) => contains(root, target));
 
-  // Overlap with ANY root, in EITHER direction, means the harness is the
-  // project in hand: the workspace may be the monorepo root, the shipped
-  // package, or a sibling package beside it. Asking this per-root and OR-ing
-  // the refusals instead would flag a sibling package, which is disjoint from
-  // `packages/core` while plainly being harness work.
-  const workingOnHarness = roots.some(
-    (root) => contains(workspace, root) || contains(root, workspace)
-  );
+  // The workspace must be INSIDE a root — the monorepo root, the package, or
+  // anything under them, which covers a sibling package and the repo root
+  // itself since that is a root. Accepting "the workspace CONTAINS a root" as
+  // well is what disabled the guard where it matters most: a consumer project
+  // contains `node_modules/tsforge`, and so would have been treated as harness
+  // development. A directory that merely sits above the harness is not working
+  // on it either.
+  const workingOnHarness = roots.some((root) => contains(root, workspace));
 
   return insideHarness && !workingOnHarness;
+}
+
+export function isForeignHarnessRead(cwd: string, file: string): boolean {
+  return isForeignRead(harnessRoots(), cwd, file);
 }
 
 /** What to say instead of the file. The model reached for the source because
