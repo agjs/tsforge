@@ -15,6 +15,7 @@ const sampleData = [
 // SELECT * tests
 test("SELECT * returns all columns", () => {
   const result = query("SELECT * FROM users", sampleData);
+
   expect(result).toHaveLength(7);
   expect(result[0]).toHaveProperty("id");
   expect(result[0]).toHaveProperty("name");
@@ -24,12 +25,14 @@ test("SELECT * returns all columns", () => {
 
 test("SELECT * row count matches input", () => {
   const result = query("SELECT * FROM users", sampleData);
+
   expect(result).toHaveLength(7);
 });
 
 // Column projection tests
 test("SELECT specific columns projects subset", () => {
   const result = query("SELECT id, name FROM users", sampleData);
+
   expect(result).toHaveLength(7);
   expect(result[0]).toHaveProperty("id");
   expect(result[0]).toHaveProperty("name");
@@ -39,6 +42,7 @@ test("SELECT specific columns projects subset", () => {
 
 test("SELECT single column", () => {
   const result = query("SELECT name FROM users", sampleData);
+
   expect(result).toHaveLength(7);
   expect(result[0]).toHaveProperty("name");
   expect(result[0]).not.toHaveProperty("id");
@@ -46,6 +50,7 @@ test("SELECT single column", () => {
 
 test("SELECT columns in different order than source", () => {
   const result = query("SELECT name, id FROM users", sampleData);
+
   expect(result[0].name).toBe("Alice");
   expect(result[0].id).toBe(1);
 });
@@ -53,61 +58,72 @@ test("SELECT columns in different order than source", () => {
 // WHERE equality tests
 test("WHERE with = on number column", () => {
   const result = query("SELECT * FROM users WHERE id = 2", sampleData);
+
   expect(result).toHaveLength(1);
   expect(result[0].name).toBe("Bob");
 });
 
 test("WHERE with = on string column", () => {
   const result = query("SELECT * FROM users WHERE region = 'US'", sampleData);
+
   expect(result).toHaveLength(3);
 });
 
 test("WHERE = with no matches returns empty", () => {
   const result = query("SELECT * FROM users WHERE id = 999", sampleData);
+
   expect(result).toHaveLength(0);
 });
 
 // WHERE inequality tests
 test("WHERE with !=", () => {
   const result = query("SELECT * FROM users WHERE region != 'EU'", sampleData);
+
   // US: Alice, Charlie, Eve (3), APAC: Diana (1), null: Frank (0) = 4 rows (Frank's null region doesn't match != 'EU')
   expect(result).toHaveLength(4);
 });
 
 test("WHERE with < comparison", () => {
   const result = query("SELECT * FROM users WHERE score < 90", sampleData);
+
   expect(result).toHaveLength(3); // Bob (87), Diana (88), Grace (85)
 });
 
 test("WHERE with > comparison", () => {
   const result = query("SELECT * FROM users WHERE score > 90", sampleData);
+
   expect(result).toHaveLength(3); // Alice (95), Charlie (92), Frank (95)
 });
 
 test("WHERE with <= comparison", () => {
   const result = query("SELECT * FROM users WHERE score <= 88", sampleData);
+
   expect(result).toHaveLength(3); // Bob (87), Diana (88), Grace (85)
 });
 
 test("WHERE with >= comparison", () => {
   const result = query("SELECT * FROM users WHERE score >= 92", sampleData);
+
   expect(result).toHaveLength(3); // Alice (95), Charlie (92), Frank (95)
 });
 
 // Null handling tests
 test("NULL = NULL is false", () => {
   const result = query("SELECT * FROM users WHERE score = null", sampleData);
+
   expect(result).toHaveLength(0);
 });
 
 test("NULL != x is true for non-null", () => {
   const result = query("SELECT * FROM users WHERE score != null", sampleData);
+
   // score != null returns true only for rows where score is not null
   expect(result).toHaveLength(6); // All non-null scores: Alice, Bob, Charlie, Diana, Frank, Grace
 });
 
 test("NULL in comparisons always fails", () => {
   const result = query("SELECT * FROM users WHERE region = null", sampleData);
+
   expect(result).toHaveLength(0);
 });
 
@@ -117,6 +133,7 @@ test("WHERE with AND", () => {
     "SELECT * FROM users WHERE region = 'US' AND score > 90",
     sampleData
   );
+
   expect(result).toHaveLength(2); // Alice, Charlie
 });
 
@@ -125,6 +142,7 @@ test("WHERE with AND multiple conditions", () => {
     "SELECT * FROM users WHERE id > 2 AND score < 90",
     sampleData
   );
+
   expect(result).toHaveLength(2); // Diana (88), Grace (85)
 });
 
@@ -134,6 +152,7 @@ test("WHERE with OR", () => {
     "SELECT * FROM users WHERE region = 'EU' OR region = 'APAC'",
     sampleData
   );
+
   expect(result).toHaveLength(3); // Bob, Diana, Grace
 });
 
@@ -143,6 +162,7 @@ test("WHERE AND binds tighter than OR", () => {
     "SELECT * FROM users WHERE region = 'US' AND score > 90 OR id = 2",
     sampleData
   );
+
   // (region='US' AND score>90) OR id=2
   // = (Alice, Charlie) OR (Bob) = Alice, Bob, Charlie
   expect(result).toHaveLength(3);
@@ -153,6 +173,7 @@ test("WHERE parentheses override precedence", () => {
     "SELECT * FROM users WHERE region = 'US' OR id = 2 AND score < 88",
     sampleData
   );
+
   // region='US' OR (id=2 AND score<88)
   // region='US': Alice, Charlie, Eve, Frank
   // (id=2 AND score<88): Bob (87<88, id=2)
@@ -166,6 +187,7 @@ test("WHERE parentheses group OR before AND", () => {
     "SELECT * FROM users WHERE (region = 'US' OR region = 'EU') AND score > 85",
     sampleData
   );
+
   // (region='US' OR region='EU') AND score>85
   // US or EU: Alice, Bob, Charlie, Eve, Grace
   // score > 85: Alice(95), Bob(87), Charlie(92), Diana(88), Frank(95), Grace(85)
@@ -176,12 +198,14 @@ test("WHERE parentheses group OR before AND", () => {
 // ORDER BY tests
 test("ORDER BY ASC on number column", () => {
   const result = query("SELECT * FROM users ORDER BY score ASC", sampleData);
+
   expect(result[0].name).toBe("Grace"); // 85
   expect(result[result.length - 1].name).toBe("Eve"); // null goes last
 });
 
 test("ORDER BY DESC on number column", () => {
   const result = query("SELECT * FROM users ORDER BY score DESC", sampleData);
+
   // DESC order: Frank(95), Alice(95), Charlie(92), Diana(88), Bob(87), Grace(85), Eve(null)
   expect(result[0].score).toBe(95);
   expect(result[result.length - 1].name).toBe("Eve"); // null goes last even in DESC
@@ -189,12 +213,14 @@ test("ORDER BY DESC on number column", () => {
 
 test("ORDER BY string column", () => {
   const result = query("SELECT * FROM users ORDER BY name ASC", sampleData);
+
   expect(result[0].name).toBe("Alice");
   expect(result[1].name).toBe("Bob");
 });
 
 test("ORDER BY puts nulls last", () => {
   const result = query("SELECT * FROM users ORDER BY score ASC", sampleData);
+
   // Eve has null score, should be last
   expect(result[result.length - 1].name).toBe("Eve");
 });
@@ -204,22 +230,26 @@ test("ORDER BY stable sort preserves original order for equal values", () => {
   // Alice (95) and Frank (95): Alice appears first in original, Frank second
   const aliceIdx = result.findIndex((r) => r.name === "Alice");
   const frankIdx = result.findIndex((r) => r.name === "Frank");
+
   expect(aliceIdx < frankIdx).toBe(true);
 });
 
 // LIMIT tests
 test("LIMIT truncates results", () => {
   const result = query("SELECT * FROM users LIMIT 3", sampleData);
+
   expect(result).toHaveLength(3);
 });
 
 test("LIMIT 0 returns empty", () => {
   const result = query("SELECT * FROM users LIMIT 0", sampleData);
+
   expect(result).toHaveLength(0);
 });
 
 test("LIMIT greater than result count", () => {
   const result = query("SELECT * FROM users LIMIT 100", sampleData);
+
   expect(result).toHaveLength(7);
 });
 
@@ -229,6 +259,7 @@ test("SELECT, WHERE, ORDER BY together", () => {
     "SELECT id, name FROM users WHERE score > 85 ORDER BY name ASC LIMIT 3",
     sampleData
   );
+
   expect(result).toHaveLength(3);
   expect(result[0].name).toBe("Alice");
 });
@@ -238,6 +269,7 @@ test("Complex query with projection, AND condition, ORDER BY DESC, LIMIT", () =>
     "SELECT name, score FROM users WHERE region = 'US' AND score != null ORDER BY score DESC LIMIT 2",
     sampleData
   );
+
   // Region US: Alice(95), Charlie(92), Eve(null)
   // score != null: Alice(95), Charlie(92) (Eve excluded due to null score)
   expect(result).toHaveLength(2);

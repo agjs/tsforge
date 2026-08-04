@@ -16,9 +16,11 @@ export function execute(
   // Apply ORDER BY with stable sort
   if (query.orderBy) {
     const { column, direction } = query.orderBy;
+
     result = stableSort(result, (a, b) => {
       const aVal = a[column];
       const bVal = b[column];
+
       return compareValues(aVal, bVal, direction);
     });
   }
@@ -37,6 +39,7 @@ export function execute(
 function evaluateExpression(expr: IExpression, row: RowType): boolean {
   if (expr.type === "comparison") {
     const val = row[expr.column];
+
     return compareColumn(val, expr.operator, expr.value);
   }
 
@@ -69,9 +72,11 @@ function compareColumn(
     if (operator === "=") {
       return false;
     }
+
     if (operator === "!=") {
       return columnVal !== null; // true if column is not null
     }
+
     // For <, >, <=, >= with null, return false
     return false;
   }
@@ -85,11 +90,13 @@ function compareColumn(
   // Treat numeric strings as numbers if comparing to numbers
   if (typeof columnVal === "string" && typeof compareVal === "number") {
     const numVal = Number(columnVal);
+
     if (!Number.isNaN(numVal)) {
       columnVal = numVal;
     }
   } else if (typeof columnVal === "number" && typeof compareVal === "string") {
     const numVal = Number(compareVal);
+
     if (!Number.isNaN(numVal)) {
       compareVal = numVal;
     }
@@ -122,9 +129,11 @@ function compareValues(
   if (a === null && b === null) {
     return 0;
   }
+
   if (a === null) {
     return 1; // a goes after b (last position)
   }
+
   if (b === null) {
     return -1; // b goes after a (last position)
   }
@@ -135,6 +144,7 @@ function compareValues(
 
   if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) {
     const cmp = aNum - bNum;
+
     return direction === "ASC" ? cmp : -cmp;
   }
 
@@ -142,15 +152,19 @@ function compareValues(
   const aStr = String(a);
   const bStr = String(b);
   const cmp = aStr.localeCompare(bStr);
+
   return direction === "ASC" ? cmp : -cmp;
 }
 
 function stableSort<T>(arr: T[], compareFn: (a: T, b: T) => number): T[] {
   const indexed = arr.map((val, idx) => ({ val, idx }));
+
   indexed.sort((a, b) => {
     const cmp = compareFn(a.val, b.val);
+
     return cmp !== 0 ? cmp : a.idx - b.idx; // Use original index as tiebreaker for stability
   });
+
   return indexed.map((item) => item.val);
 }
 
@@ -162,14 +176,18 @@ function projectColumns(
     if (columns[0] === "*") {
       return { ...row };
     }
+
     const projected: RowType = {};
+
     for (const col of columns) {
       // Validate column exists in row
       if (!(col in row)) {
         throw new Error(`Column ${col} not found in row`);
       }
+
       projected[col] = row[col];
     }
+
     return projected;
   });
 }

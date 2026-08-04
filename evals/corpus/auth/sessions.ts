@@ -10,12 +10,14 @@ export function issueSession(
 ): ISessionToken {
   const expiry = now + ttlMs;
   const token = generateDeterministicToken(userId, now, ttlMs);
+
   return { token, expiry };
 }
 
 export function validateSession(token: string, now: number): boolean {
   try {
     const parts = token.split(".");
+
     if (parts.length !== 3) {
       return false;
     }

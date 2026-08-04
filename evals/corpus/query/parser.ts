@@ -64,18 +64,23 @@ class Parser {
 
   private expect(type: string, value?: string | number | null): Token {
     const token = this.current();
+
     if (!token || token.type !== type) {
       throw new Error(`Expected ${type}, got ${token?.type}`);
     }
+
     if (value !== undefined && token.value !== value) {
       throw new Error(`Expected value ${value}, got ${token.value}`);
     }
+
     this.advance();
+
     return token;
   }
 
   private isKeyword(value?: string): boolean {
     const token = this.current();
+
     return (
       token?.type === "keyword" &&
       (value === undefined || token.value === value)
@@ -90,6 +95,7 @@ class Parser {
     if (!this.isKeyword("SELECT")) {
       throw new Error("Query must start with SELECT");
     }
+
     this.advance();
 
     const columns = this.parseColumns();
@@ -97,11 +103,13 @@ class Parser {
     if (!this.isKeyword("FROM")) {
       throw new Error("Expected FROM clause");
     }
+
     this.advance();
 
     const table = this.parseIdentifier();
 
     let where: IExpression | undefined;
+
     if (this.isKeyword("WHERE")) {
       this.advance();
       where = this.parseOrExpression();
@@ -110,30 +118,38 @@ class Parser {
     let orderBy:
       | { readonly column: string; readonly direction: "ASC" | "DESC" }
       | undefined;
+
     if (this.isKeyword("ORDER")) {
       this.advance();
+
       if (!this.isKeyword("BY")) {
         throw new Error("Expected BY after ORDER");
       }
+
       this.advance();
       const column = this.parseIdentifier();
       let direction: "ASC" | "DESC" = "ASC";
+
       if (this.isKeyword("ASC")) {
         this.advance();
       } else if (this.isKeyword("DESC")) {
         this.advance();
         direction = "DESC";
       }
+
       orderBy = { column, direction };
     }
 
     let limit: number | undefined;
+
     if (this.isKeyword("LIMIT")) {
       this.advance();
       const token = this.expect("number");
+
       if (typeof token.value !== "number") {
         throw new Error("LIMIT value must be a number");
       }
+
       limit = token.value;
     }
 
@@ -149,6 +165,7 @@ class Parser {
 
     if (this.current()?.type === "delimiter" && this.current()?.value === "*") {
       this.advance();
+
       return ["*"];
     }
 
@@ -167,9 +184,11 @@ class Parser {
 
   private parseIdentifier(): string {
     const token = this.expect("identifier");
+
     if (typeof token.value !== "string") {
       throw new Error("Expected identifier");
     }
+
     return token.value;
   }
 
@@ -179,6 +198,7 @@ class Parser {
     while (this.isKeyword("OR")) {
       this.advance();
       const right = this.parseAndExpression();
+
       left = { type: "or", left, right };
     }
 
@@ -191,6 +211,7 @@ class Parser {
     while (this.isKeyword("AND")) {
       this.advance();
       const right = this.parsePrimaryExpression();
+
       left = { type: "and", left, right };
     }
 
@@ -202,13 +223,16 @@ class Parser {
     if (this.current()?.type === "delimiter" && this.current()?.value === "(") {
       this.advance();
       const expr = this.parseOrExpression();
+
       if (
         this.current()?.type !== "delimiter" ||
         this.current()?.value !== ")"
       ) {
         throw new Error("Expected closing parenthesis");
       }
+
       this.advance();
+
       return expr;
     }
 
@@ -220,12 +244,15 @@ class Parser {
     }
 
     const opToken = this.expect("operator");
+
     if (typeof opToken.value !== "string") {
       throw new Error("Expected operator");
     }
+
     if (!isOperatorValue(opToken.value)) {
       throw new Error("Invalid operator");
     }
+
     const operator = opToken.value;
 
     let value: string | number | null;
@@ -237,15 +264,19 @@ class Parser {
 
     if (token.type === "string") {
       this.advance();
+
       if (typeof token.value !== "string") {
         throw new Error("Expected string value");
       }
+
       value = token.value;
     } else if (token.type === "number") {
       this.advance();
+
       if (typeof token.value !== "number") {
         throw new Error("Expected number value");
       }
+
       value = token.value;
     } else if (token.type === "null") {
       this.advance();

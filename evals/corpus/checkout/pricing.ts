@@ -9,6 +9,7 @@ export function calculateDiscount(
   percentOff: number
 ): number {
   const discountAmount = (subtotalCents * percentOff) / 100;
+
   return roundHalfUp(discountAmount);
 }
 
@@ -21,5 +22,6 @@ export function applyFixedDiscount(
 
 export function calculateTax(amountCents: number, taxRatePpm: number): number {
   const taxAmount = (amountCents * taxRatePpm) / 1000000;
+
   return roundHalfUp(taxAmount);
 }

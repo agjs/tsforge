@@ -21,21 +21,29 @@ function applySingleCoupon(
       const discountAmount = Math.floor(
         (currentAmount * coupon.off) / 100 + 0.5
       );
+
       return Math.min(discountAmount, currentAmount);
     }
+
     case "fixed": {
       return Math.min(coupon.cents, currentAmount);
     }
+
     case "bogo": {
       const matchingLine = lines.find((line) => line.sku === coupon.sku);
+
       if (!matchingLine || matchingLine.qty < 2) {
         return 0;
       }
+
       const freeQty = Math.floor(matchingLine.qty / 2);
+
       return freeQty * matchingLine.unitCents;
     }
+
     default: {
       const _exhaustive: never = coupon;
+
       return _exhaustive;
     }
   }
@@ -55,6 +63,7 @@ export function applyCoupons(
       coupon,
       lines
     );
+
     totalDiscount += discountForThisCoupon;
     currentAmount -= discountForThisCoupon;
   }
