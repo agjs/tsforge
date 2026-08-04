@@ -6,12 +6,14 @@ import {
   isForeignHarnessRead,
   foreignHarnessReadRefusal,
 } from "../src/lib/scope";
-import { readFile } from "../src/loop/tools/file-ops";
+import { readFile, runShell } from "../src/loop/tools/file-ops";
 
 /** This test file lives inside the harness, so its own directory is a path the
  *  predicate must treat as harness source. */
 const HARNESS_FILE = "src/loop/feedback/rule-docs.ts";
 const HARNESS_ROOT = resolve(import.meta.dir, "..");
+/** The monorepo root — `packages/core` is only one of the harness's roots. */
+const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..");
 
 function ctx(cwd: string) {
   return {
@@ -57,9 +59,74 @@ test("an ordinary project file is unaffected", () => {
 test("a sibling directory sharing the harness's name prefix is not harness source", () => {
   // `contains` compares segments: `/code/tsforge-notes` is not inside
   // `/code/tsforge`, and a prefix test would have wrongly refused it.
-  expect(isForeignHarnessRead("/tmp/other", `${HARNESS_ROOT}-notes/a.ts`)).toBe(
+  expect(isForeignHarnessRead("/tmp/other", `${REPO_ROOT}-notes/a.ts`)).toBe(
     false
   );
+});
+
+test("files at the monorepo root are harness source too", () => {
+  // `packages/` carries no manifest, so climbing "while ancestors are packages"
+  // stopped at packages/core and left the repo root readable.
+  expect(isForeignHarnessRead("/tmp/other", join(REPO_ROOT, "README.md"))).toBe(
+    true
+  );
+});
+
+test("a sibling package inside the monorepo may read the harness", () => {
+  // Disjoint from packages/core, but plainly harness work — the overlap test
+  // has to consider every root, not each one in isolation.
+  expect(
+    isForeignHarnessRead(
+      join(REPO_ROOT, "packages", "other"),
+      join(HARNESS_ROOT, HARNESS_FILE)
+    )
+  ).toBe(false);
+});
+
+test("the run tool refuses a shell command that reads the harness source", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-shell-read-"));
+
+  try {
+    const out = await runShell(
+      { command: `cat ${join(HARNESS_ROOT, HARNESS_FILE)}` },
+      ctx(dir)
+    );
+
+    expect(out).toContain("not part of this workspace");
+    expect(out).not.toContain("export function ruleHelp");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the run tool refuses a grep into the harness source", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-shell-grep-"));
+
+  try {
+    const out = await runShell(
+      { command: `rg ruleHelp ${join(HARNESS_ROOT, "src")}` },
+      ctx(dir)
+    );
+
+    expect(out).toContain("not part of this workspace");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the run tool still runs an ordinary workspace command", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tsforge-shell-ok-"));
+
+  try {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await Bun.write(join(dir, "src", "a.ts"), "export const a = 1;\n");
+
+    const out = await runShell({ command: "cat src/a.ts" }, ctx(dir));
+
+    expect(out).toContain("export const a = 1;");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("the refusal names what to do instead of reading the source", () => {

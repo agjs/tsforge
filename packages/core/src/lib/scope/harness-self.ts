@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { isWin32 } from "../platform";
 
 /**
  * Stop the harness reading its OWN implementation while it works on someone
@@ -19,16 +20,33 @@ import { dirname, join, relative, resolve } from "node:path";
  * in hand, not about which files they are.
  */
 
-/** The harness's own package root(s), computed once from this module's location.
- *
- * Walks up while ancestors keep declaring themselves packages, so both layouts
- * are covered: an installed single package, and this monorepo, where
- * `packages/core` and the repo root each carry a `package.json`. */
+/** The monorepo root's package name. Climbing "while ancestors have manifests"
+ *  does not reach it — `packages/` carries none — and climbing past that would
+ *  swallow a CONSUMER's repo when tsforge is installed as a dependency, turning
+ *  the guard off exactly where it is needed. Matching the name is precise. */
+const HARNESS_PACKAGE_NAME = "tsforge";
+
+function manifestName(dir: string): string | undefined {
+  try {
+    const raw: unknown = JSON.parse(
+      readFileSync(join(dir, "package.json"), "utf8")
+    );
+
+    return typeof raw === "object" && raw !== null && "name" in raw
+      ? String(raw.name)
+      : undefined;
+  } catch {
+    // No manifest, or one that does not parse. Neither identifies a root.
+    return undefined;
+  }
+}
+
+/** The harness's own roots, computed once from this module's location: the
+ *  package it ships in, plus the monorepo root when running from source. */
 function computeHarnessRoots(): string[] {
   const roots: string[] = [];
   let dir = import.meta.dir;
 
-  // Find the nearest package root.
   while (!existsSync(join(dir, "package.json"))) {
     const parent = dirname(dir);
 
@@ -41,16 +59,20 @@ function computeHarnessRoots(): string[] {
 
   roots.push(dir);
 
-  // Then keep climbing while the ancestors are packages too (a workspace root).
-  for (;;) {
-    const parent = dirname(dir);
+  for (let cur = dir; ;) {
+    const parent = dirname(cur);
 
-    if (parent === dir || !existsSync(join(parent, "package.json"))) {
+    if (parent === cur) {
       return roots;
     }
 
-    dir = parent;
-    roots.push(dir);
+    cur = parent;
+
+    if (manifestName(cur) === HARNESS_PACKAGE_NAME) {
+      roots.push(cur);
+
+      return roots;
+    }
   }
 }
 
@@ -62,13 +84,27 @@ function harnessRoots(): string[] {
   return cachedRoots;
 }
 
-/** True when `child` is `parent` or sits underneath it. Segment-wise via
- *  `relative`, so a sibling directory whose name merely starts the same
- *  (`/code/tsforge-notes` next to `/code/tsforge`) is not a match. */
+/** True when `child` is `parent` or sits underneath it.
+ *
+ * Segment-wise, so a sibling whose name merely starts the same
+ * (`/code/tsforge-notes` next to `/code/tsforge`) is not a match, and a name
+ * that merely begins with two dots (`..notes.ts`) is not read as an escape.
+ * An ABSOLUTE result means no relative path exists at all — Windows returns one
+ * for a cross-drive pair — which is the opposite of containment. */
 function contains(parent: string, child: string): boolean {
   const rel = relative(parent, child);
 
-  return rel === "" || (!rel.startsWith("..") && !rel.startsWith("/"));
+  if (rel === "") {
+    return true;
+  }
+
+  if (isAbsolute(rel)) {
+    return false;
+  }
+
+  const segments = isWin32() ? rel.split(/[\\/]/u) : rel.split("/");
+
+  return !segments.includes("..");
 }
 
 /**
@@ -78,18 +114,22 @@ function contains(parent: string, child: string): boolean {
  * `file` may be absolute or relative to `cwd`; both resolve to the same answer.
  */
 export function isForeignHarnessRead(cwd: string, file: string): boolean {
+  const roots = harnessRoots();
   const target = resolve(cwd, file);
   const workspace = resolve(cwd);
 
-  return harnessRoots().some(
-    // Overlap in EITHER direction means the harness is the project in hand:
-    // the workspace may be the repo root, or a package inside it. Only a
-    // workspace disjoint from the harness is reaching outside its own work.
-    (root) =>
-      contains(root, target) &&
-      !contains(workspace, root) &&
-      !contains(root, workspace)
+  const insideHarness = roots.some((root) => contains(root, target));
+
+  // Overlap with ANY root, in EITHER direction, means the harness is the
+  // project in hand: the workspace may be the monorepo root, the shipped
+  // package, or a sibling package beside it. Asking this per-root and OR-ing
+  // the refusals instead would flag a sibling package, which is disjoint from
+  // `packages/core` while plainly being harness work.
+  const workingOnHarness = roots.some(
+    (root) => contains(workspace, root) || contains(root, workspace)
   );
+
+  return insideHarness && !workingOnHarness;
 }
 
 /** What to say instead of the file. The model reached for the source because
@@ -104,4 +144,33 @@ export function foreignHarnessReadRefusal(file: string): string {
     `guidance is the bug. Say so in your answer, take the closest correct ` +
     `approach the rule does allow, and leave the rule alone.`
   );
+}
+
+/** A shell token that looks like a filesystem path rather than a flag, an
+ *  operator, or a bare command name. */
+function isPathLike(token: string): boolean {
+  if (token === "" || token.startsWith("-")) {
+    return false;
+  }
+
+  return token.includes("/") || token.includes("\\");
+}
+
+/**
+ * The harness path a shell command would read, if any.
+ *
+ * `read` refusing while `cat` succeeds would be theatre — the same bytes, one
+ * door over. Every path-shaped token is checked, not just the ones belonging to
+ * known readers, because the argument order of an arbitrary command is not
+ * knowable and a token pointing INTO the harness has no other purpose here.
+ */
+export function foreignHarnessShellRead(
+  cwd: string,
+  command: string
+): string | null {
+  const tokens = command
+    .split(/[\s;|&<>()"']+/u)
+    .filter((token) => isPathLike(token));
+
+  return tokens.find((token) => isForeignHarnessRead(cwd, token)) ?? null;
 }

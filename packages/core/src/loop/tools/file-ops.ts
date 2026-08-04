@@ -8,6 +8,7 @@ import {
   normalizeWorkspacePath,
   isForeignHarnessRead,
   foreignHarnessReadRefusal,
+  foreignHarnessShellRead,
 } from "../../lib/scope";
 import { LOOP_LIMITS } from "../loop.constants";
 import { toEdits, toCreate, toRun, toRead, runCommand } from "../../agent";
@@ -501,6 +502,15 @@ export async function runShell(
     }
 
     return "run: malformed args (need `command`)";
+  }
+
+  // Same refusal as `read`. Leaving the shell open would make the read guard
+  // theatre: `cat`, `rg`, `sed` and friends fetch the same bytes one door over,
+  // and the plan-mode allowlist is made of exactly those commands.
+  const harnessPath = foreignHarnessShellRead(ctx.cwd, r.command);
+
+  if (harnessPath !== null) {
+    return reject(ctx, "run", foreignHarnessReadRefusal(harnessPath));
   }
 
   if (ctx.readOnly === true && !isReadOnlyCommand(r.command)) {
