@@ -37,7 +37,10 @@ const COMPARISONS = new Set(["===", "!==", "==", "!=", "<", "<=", ">", ">="]);
  * check at all rather than as a check in whichever direction is convenient. */
 type Polarity = "positive" | "negative" | "opaque";
 
-/** Where success ends. 1xx-3xx are not errors; `res.ok` itself is `< 400`. */
+/** Where errors begin. `res.ok` is narrower than this — it is true only for
+ *  200-299 — but 3xx are redirects rather than failures, and code that tests
+ *  `status < 400` is making the usual success/error split. A threshold that
+ *  sits anywhere else splits neither. */
 const FIRST_ERROR_STATUS = 400;
 
 function literalValue(node: TSESTree.Node): number | boolean | undefined {
@@ -94,10 +97,12 @@ function statusPolarity(operator: string, value: number): Polarity {
       return value <= FIRST_ERROR_STATUS ? "positive" : "opaque";
     case "<=":
       return value < FIRST_ERROR_STATUS ? "positive" : "opaque";
+    // Only the error boundary itself bipartitions. `>= 500` leaves every 4xx
+    // on the fall-through side, so it proves nothing about what follows.
     case ">=":
-      return value >= 300 ? "negative" : "opaque";
+      return value === FIRST_ERROR_STATUS ? "negative" : "opaque";
     case ">":
-      return value >= 299 ? "negative" : "opaque";
+      return value === FIRST_ERROR_STATUS - 1 ? "negative" : "opaque";
     default:
       return "opaque";
   }
@@ -126,8 +131,12 @@ interface ICheck {
   /** The read was compared to something, or handed to an assertion. A bare
    *  `if (res.status)` is neither, and is true for 404 as much as for 200. */
   compared: boolean;
-  /** The read sits under `&&`, so a guard clause built on it may not run. */
+  /** The read is one operand of a larger `&&`. The test can then be false
+   *  while the response is fine, so the ELSE branch proves nothing. */
   underAnd: boolean;
+  /** The read is one operand of a larger `||`. The test can then be true while
+   *  the response is bad, so the THEN branch proves nothing. */
+  underOr: boolean;
 }
 
 /** A non-computed `<object>.<prop>` read, e.g. `res.json` or `res.ok`. */
@@ -201,6 +210,7 @@ interface IClimbState {
   polarity: Polarity;
   compared: boolean;
   underAnd: boolean;
+  underOr: boolean;
 }
 
 /** Nodes that CONSUME a condition. Reaching one ends the walk either way: it
@@ -214,6 +224,64 @@ const TERMINAL_TYPES = new Set<string>([
   AST_NODE_TYPES.SwitchStatement,
   AST_NODE_TYPES.CallExpression,
 ]);
+
+/** Assertions that compare, mapped to the operator they stand for. */
+const ASSERTION_OPERATORS = new Map<string, string>([
+  ["equal", "==="],
+  ["equals", "==="],
+  ["strictEqual", "==="],
+  ["deepEqual", "==="],
+  ["deepStrictEqual", "==="],
+  ["toBe", "==="],
+  ["toEqual", "==="],
+  ["notEqual", "!=="],
+  ["notStrictEqual", "!=="],
+  ["notDeepEqual", "!=="],
+]);
+
+function assertionOperator(callee: TSESTree.Node): string | undefined {
+  return callee.type === AST_NODE_TYPES.MemberExpression &&
+    !callee.computed &&
+    callee.property.type === AST_NODE_TYPES.Identifier
+    ? ASSERTION_OPERATORS.get(callee.property.name)
+    : undefined;
+}
+
+/** What an assertion call establishes about the response. */
+function assertionCheck(
+  parent: TSESTree.CallExpression,
+  child: TSESTree.Node,
+  check: ICheck
+): ICheck | null {
+  // The read was already compared on the way up — `assert(res.status === 200)`.
+  if (check.compared) {
+    return check;
+  }
+
+  const operator = assertionOperator(parent.callee);
+
+  if (operator === undefined) {
+    // A truthiness assertion. Fine for `res.ok`, which IS the verdict; the
+    // caller forces `compared` for that property.
+    return check;
+  }
+
+  // `assert.equal(res.status, 200)` — the other argument is the comparison.
+  const other = parent.arguments.find((arg) => arg !== child);
+  const value = other === undefined ? undefined : literalValue(other);
+
+  if (typeof value === "boolean") {
+    return {
+      ...check,
+      compared: true,
+      polarity: booleanPolarity(operator, value),
+    };
+  }
+
+  return typeof value === "number"
+    ? { ...check, compared: true, polarity: statusPolarity(operator, value) }
+    : check;
+}
 
 function terminalCheck(
   parent: TSESTree.Node,
@@ -234,16 +302,14 @@ function terminalCheck(
         ? { ...check, compared: true, polarity: "opaque" }
         : null;
 
-    // An assertion compares for us when it is GIVEN something to compare
-    // against: `assert.equal(res.status, 200)` is a status check, while
-    // `assert.ok(res.status)` asserts that a number is truthy — which every
-    // response that arrived satisfies, 500 included.
+    // An assertion settles a status only when it COMPARES it.
+    // `assert.equal(res.status, 200)` does; `assert.ok(res.status)` asserts a
+    // number is truthy, which every response that arrived satisfies. Arity
+    // cannot tell them apart — `assert.ok(res.status, "message")` also has two
+    // arguments — so the comparison is read from the assertion's own name.
     case AST_NODE_TYPES.CallExpression:
       return isAssertionCallee(parent.callee) && parent.callee !== child
-        ? {
-            ...check,
-            compared: state.compared || parent.arguments.length > 1,
-          }
+        ? assertionCheck(parent, child, check)
         : null;
 
     default:
@@ -295,6 +361,10 @@ function combinatorStep(
         state.underAnd = true;
       }
 
+      if (parent.operator === "||") {
+        state.underOr = true;
+      }
+
       // `res.ok && res.json()` — the parse is the right operand, so it runs
       // only when the check passed. That is a guard, not just a read. Only
       // when the parse is actually THERE, though: in `if (a || !res.ok)` the
@@ -322,6 +392,7 @@ function climb(read: TSESTree.Node, parse: TSESTree.Node): ICheck | null {
     polarity: "positive",
     compared: false,
     underAnd: false,
+    underOr: false,
   };
   let child: TSESTree.Node = read;
   let parent: TSESTree.Node | undefined = read.parent;
@@ -384,37 +455,47 @@ function scopeOfCheck(node: TSESTree.Node): TSESTree.Node {
   return current.parent ?? current;
 }
 
-/** The `case` arm a parse sits in, when that arm belongs to `owner`. */
-function caseArmOf(
-  owner: TSESTree.SwitchStatement,
-  parse: TSESTree.Node
-): TSESTree.SwitchCase | null {
-  for (const arm of owner.cases) {
-    if (contains(arm, parse)) {
-      return arm;
-    }
+function isSuccessCase(arm: TSESTree.SwitchCase): boolean {
+  // A `default:` arm has no test, and it is where the error cases land.
+  if (arm.test === null) {
+    return false;
   }
 
-  return null;
+  const value = literalValue(arm.test);
+
+  return typeof value === "number" && value >= 200 && value < 300;
 }
 
 /** `switch (res.status) { case 200: return res.json(); }` is a real check —
- *  but only for the arms that name a success code. `default:` and `case 500:`
- *  parse an error body. */
+ *  but only when every code that REACHES the body is a success code.
+ *  `case 500: case 200: return res.json();` falls through from 500 into the
+ *  same statements, so the arm the parse sits in is not the whole story. */
 function switchArmProtects(
   owner: TSESTree.SwitchStatement,
   parse: TSESTree.Node
 ): boolean {
-  // A `default:` arm has no test, and it is where the error cases land.
-  const test = caseArmOf(owner, parse)?.test;
+  const index = owner.cases.findIndex((arm) => contains(arm, parse));
+  const own = owner.cases[index];
 
-  if (test === undefined || test === null) {
+  if (own === undefined || !isSuccessCase(own)) {
     return false;
   }
 
-  const value = literalValue(test);
+  // Walk back over the empty arms stacked above this one; each is another
+  // entry point into the same body.
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const arm = owner.cases[i];
 
-  return typeof value === "number" && value >= 200 && value < 300;
+    if (arm === undefined || arm.consequent.length > 0) {
+      break;
+    }
+
+    if (!isSuccessCase(arm)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /** True when the parse sits in a branch this check permits. */
@@ -444,7 +525,7 @@ function branchProtects(check: ICheck, parse: TSESTree.Node): boolean {
     owner.type === AST_NODE_TYPES.WhileStatement ||
     owner.type === AST_NODE_TYPES.DoWhileStatement
   ) {
-    return contains(owner.body, parse) && check.polarity === "positive";
+    return contains(owner.body, parse) && entersOnSuccess(check);
   }
 
   if (
@@ -455,14 +536,30 @@ function branchProtects(check: ICheck, parse: TSESTree.Node): boolean {
   }
 
   if (contains(owner.consequent, parse)) {
-    return check.polarity === "positive";
+    return entersOnSuccess(check);
   }
 
   return (
     owner.alternate !== null &&
     contains(owner.alternate, parse) &&
-    check.polarity === "negative"
+    skipsOnSuccess(check)
   );
+}
+
+/** True when reaching the THEN side proves the response was good.
+ *
+ * It has to be the whole test. In `if (res.ok || force)` the branch is entered
+ * for a failed response whenever `force` is set, so a check that is only one
+ * operand of an `||` proves nothing there. */
+function entersOnSuccess(check: ICheck): boolean {
+  return check.polarity === "positive" && !check.underOr;
+}
+
+/** True when reaching the ELSE side proves the response was good. Mirror image:
+ *  `if (!res.ok && enabled)` falls to the else branch for a failed response
+ *  whenever `enabled` is false. */
+function skipsOnSuccess(check: ICheck): boolean {
+  return check.polarity === "negative" && !check.underAnd;
 }
 
 /** True when the check leaves — throw or return — before the parse is reached,
