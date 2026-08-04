@@ -132,13 +132,13 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     good: 'import OpenAI from "openai";\nconst client = new OpenAI({ apiKey: process.env.KEY });\nexport function getClient() {\n  return client;\n}',
     exampleFile: "src/chat.tsx",
     goodFile: "src/server/ai.ts",
+    fixIsRelocation: true,
   },
   "tsforge/no-auth-token-in-storage": {
     what: "Disallow storing or reading auth tokens from localStorage/sessionStorage \u2014 use httpOnly cookies instead.",
-    bad: 'localStorage.setItem("auth_token", token);',
-    good: 'export async function login(credentials: Credentials): Promise<void> {\n  // The server sets an httpOnly cookie; the token never touches JS storage.\n  await fetch("/api/session", {\n    method: "POST",\n    credentials: "include",\n    body: JSON.stringify(credentials),\n  });\n}',
+    bad: 'export function saveSession(token: string): void {\n  localStorage.setItem("auth_token", token);\n}',
+    good: 'export async function saveSession(token: string): Promise<void> {\n  // Hand the token to the server, which sets it as an httpOnly cookie.\n  // Nothing readable by JS ever holds it.\n  await fetch("/api/session", {\n    method: "POST",\n    credentials: "include",\n    headers: { authorization: `Bearer ${token}` },\n  });\n}',
     exampleFile: "src/auth.ts",
-    goodFile: "src/ui.ts",
   },
   "tsforge/no-bare-date-now": {
     what: "Time and randomness must come from an injectable util, or snapshots, replays and time-travel tests cannot be deterministic.",
@@ -222,7 +222,6 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
     what: "Move complex computations out of JSX into hooks or helper functions",
     bad: "export function List({ items }: { items: number[] }) {\n  return <ul>{items.filter((i) => i > 0).map((i) => <li key={i}>{i}</li>)}</ul>;\n}",
     good: 'import { useMemo } from "react";\n\nexport function List({ items }: { items: number[] }) {\n  const visible = useMemo(() => items.filter((i) => i > 0), [items]);\n\n  return <ul>{visible.map((i) => <li key={i}>{i}</li>)}</ul>;\n}',
-    goodFile: "src/Greeting.tsx",
     exampleFile: "src/List.tsx",
   },
   "tsforge/no-loading-text-use-skeleton": {
@@ -289,8 +288,10 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/no-separate-model-interfaces": {
     what: "Disallow TypeScript interfaces that duplicate the shape of a runtime schema with a matching name. Use `typeof Schema.static` (or your project's equivalent) instead.",
-    bad: "\n      const UserSchema = t.Object({ name: t.String() });\n      interface User { name: string; }\n    ",
-    good: "\n      const UserSchema = t.Object({ name: t.String() });\n      interface Profile { bio: string; }\n    ",
+    bad: 'import { t } from "elysia";\n\nexport const UserSchema = t.Object({ id: t.String(), name: t.String() });\n\nexport interface User {\n  id: string;\n  name: string;\n}',
+    good: 'import { t } from "elysia";\n\nexport const UserSchema = t.Object({ id: t.String(), name: t.String() });\n\n// Derived from the schema, so the type cannot drift from what is validated.\nexport type User = typeof UserSchema.static;',
+    procedure:
+      "Derive the type from the schema with `typeof Schema.static` rather than declaring a parallel interface. Renaming the interface silences the rule but leaves two definitions that drift apart \u2014 the schema validates one shape while the type promises another.",
   },
   "tsforge/no-spawn-with-shell": {
     what: "`shell: true` runs the string through a shell, so any interpolated value can inject commands. Drop it and pass the program and its arguments as an array.",
@@ -300,10 +301,8 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/no-state-in-component-body": {
     what: "State hooks must be in .hooks.ts files, not directly in components",
-    bad: '\n      import { useState } from "react";\n      export function Button() {\n        const [open, setOpen] = useState(false);\n        return <button>{open ? "Open" : "Closed"}</button>;\n      }\n    ',
-    good: '\n      import { useId } from "react";\n      export function Field() {\n        const id = useId();\n        return <input id={id} />;\n      }\n    ',
-    exampleFile: "src/Button.tsx",
-    goodFile: "src/Field.tsx",
+    bad: "",
+    good: "",
     procedure:
       "1) Create/open `Component.hooks.ts` next to the component. 2) Move the state/effect hooks into a `useComponent()` custom hook that returns the values and handlers the JSX needs. 3) Call the hook once at the top of the component and destructure. (`useId`/`useTransition`/`useDeferredValue` may stay inline.)",
   },

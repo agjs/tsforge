@@ -33,6 +33,11 @@ export interface IRuleDoc {
    *  evasion check, which otherwise treats a bolted-on directive as escaping
    *  the rule's scope rather than repairing the code. */
   fixIsDirective?: boolean;
+  /** Set when MOVING the code to another file is the documented fix (a secret
+   *  that must leave the client bundle, a component that must live elsewhere).
+   *  Exempts the entry from the path-escape check, which otherwise treats a
+   *  differing `goodFile` as sneaking the snippet out of the rule's scope. */
+  fixIsRelocation?: boolean;
   /** Maintainer-only pointer to the rule's implementation or deeper guidance
    *  (tsforge-repo-relative). NEVER emitted into runtime feedback — the model
    *  runs in the user's project where the path dangles. Anything the model

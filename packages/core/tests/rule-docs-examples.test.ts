@@ -98,6 +98,13 @@ function isPackId(value: string): value is keyof typeof RULE_PACKS {
   return Object.hasOwn(RULE_PACKS, value);
 }
 
+/** A RuleListener is a string-keyed map of visitor callbacks, so any non-null
+ *  object satisfies its declared shape. Narrowing through a guard keeps this
+ *  honest without an `as` cast and without laundering an `any`. */
+function isRuleListener(value: unknown): value is Rule.RuleListener {
+  return typeof value === "object" && value !== null;
+}
+
 /** The pack's rule module in the shape ESLint's Linter accepts.
  *
  *  A pack rule is a TSESLint module; Linter wants its own. They are structurally
@@ -125,24 +132,11 @@ function toLinterRule(rule: unknown): Rule.RuleModule {
     create(context: Rule.RuleContext): Rule.RuleListener {
       const returned: unknown = Reflect.apply(create, rule, [context]);
 
-      if (typeof returned !== "object" || returned === null) {
+      if (!isRuleListener(returned)) {
         throw new Error("rule create() did not return a listener");
       }
 
-      // A RuleListener is a string-keyed map of visitor callbacks. Rebuild it
-      // from own entries so the value carries that index signature honestly
-      // rather than being asserted into it.
-      const listener: Rule.RuleListener = {};
-
-      for (const [selector, visitor] of Object.entries(returned)) {
-        // Visitors are usually functions, but a selector may also carry an
-        // { enter, exit } pair — keep both or half the rules stop firing.
-        if (typeof visitor === "function" || typeof visitor === "object") {
-          listener[selector] = visitor;
-        }
-      }
-
-      return listener;
+      return returned;
     },
   };
 }
@@ -284,6 +278,42 @@ describe("rule docs: the ✓ must be a FIX, not an evasion", () => {
 
       // A ✓ that is a strict substring of the ✗ is a deletion, not a fix.
       expect(bad.includes(good)).toBe(false);
+    }
+  );
+
+  test.each(documented.map((d) => [d.id, d]))(
+    "%s: the ✓ repairs the ✗ rather than replacing it with unrelated code",
+    (_id, entry) => {
+      // Rename-to-escape and swap-in-unrelated-code both dodge the rule while
+      // passing the lint check. A real fix keeps most of the original's
+      // vocabulary; an unrelated snippet shares almost none of it.
+      const ids = (code: string): Set<string> =>
+        new Set(code.match(/[A-Za-z_$][\w$]*/gu) ?? []);
+      const bad = ids(entry.doc.bad);
+      const good = ids(entry.doc.good);
+      const shared = [...bad].filter((t) => good.has(t)).length;
+      const overlap = bad.size === 0 ? 1 : shared / bad.size;
+
+      expect({ id: _id, overlapAtLeast30Percent: overlap >= 0.3 }).toEqual({
+        id: _id,
+        overlapAtLeast30Percent: true,
+      });
+    }
+  );
+
+  test.each(documented.map((d) => [d.id, d]))(
+    "%s: the ✓ does not escape by moving to another file",
+    (_id, entry) => {
+      // goodFile may differ ONLY where relocating the file IS the documented
+      // fix — otherwise a different path silently takes the snippet out of the
+      // rule's scope and the example proves nothing.
+      const escapes =
+        entry.doc.goodFile !== undefined &&
+        entry.doc.goodFile !== entry.doc.exampleFile &&
+        entry.doc.exampleIsProse !== true &&
+        entry.doc.fixIsRelocation !== true;
+
+      expect({ id: _id, escapes }).toEqual({ id: _id, escapes: false });
     }
   );
 

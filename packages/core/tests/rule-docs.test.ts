@@ -306,3 +306,31 @@ test("ruleHelp: test-only metadata never reaches the model", () => {
   expect(h).not.toContain("src/example.ts");
   expect(h).not.toContain("packages/core");
 });
+
+test("ruleHelpFromOutput: recovers pack docs from PLAIN eslint text", () => {
+  // The path the MODEL takes when it runs the gate itself via the `run` tool.
+  // Before this, only TS codes, JSON ruleId fields and @typescript-eslint ids
+  // were matched, so the entire tsforge catalogue was invisible here — the model
+  // saw a bare rule id and went looking for the answer in the harness source.
+  const plain = [
+    "/app/src/api.ts",
+    "  12:3  error  HTTP request URL must have a fixed origin  tsforge/no-user-controlled-fetch-url",
+    "  20:1  error  console in a service                       tsforge/logger-not-console",
+  ].join("\n");
+
+  const h = ruleHelpFromOutput(plain);
+
+  expect(h).toContain("tsforge/no-user-controlled-fetch-url");
+  expect(h).toContain("tsforge/logger-not-console");
+  // and it carries the worked example, not just the id
+  expect(h).toContain("✓");
+});
+
+test("ruleHelpFromOutput: still recovers TS codes and eslint-core ids", () => {
+  const h = ruleHelpFromOutput(
+    "error TS2532: Object is possibly undefined\n  @typescript-eslint/no-explicit-any"
+  );
+
+  expect(h).toContain("TS2532");
+  expect(h).toContain("@typescript-eslint/no-explicit-any");
+});
