@@ -353,3 +353,32 @@ describe("rule docs: guidance says what to DO", () => {
     expect(carriesRemedy).toBe(true);
   });
 });
+
+describe("rule docs: a relocation fix must actually need the move", () => {
+  // `fixIsRelocation` exempts an entry from the path-escape check. Without
+  // proving the move is what does the work, that flag is just a way to smuggle
+  // a same-file evasion past the suite — drop the directive, keep everything
+  // else, and call it a relocation.
+  const relocations = documented.filter(
+    (d) => d.doc.fixIsRelocation === true && d.doc.goodFile !== undefined
+  );
+
+  test.each(relocations.map((d) => [d.id, d]))(
+    "%s: the ✓ still trips the rule at the ORIGINAL path",
+    (_id, entry) => {
+      const atOriginal = lint(
+        entry.packId,
+        entry.ruleName,
+        entry.doc.good,
+        entry.doc.exampleFile ?? "src/example.ts"
+      );
+
+      // If the ✓ passes where the ✗ lived, the move was decorative and the real
+      // change was something else — which the reader is not being shown.
+      expect({ id: _id, needsTheMove: atOriginal.length > 0 }).toEqual({
+        id: _id,
+        needsTheMove: true,
+      });
+    }
+  );
+});

@@ -128,11 +128,10 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/no-api-key-in-client": {
     what: "Disallow constructing an AI provider client in a client component \u2014 it leaks the API key into the browser bundle. Call the model from a server route/action.",
-    bad: '"use client";\nimport OpenAI from "openai";\nconst client = new OpenAI({ apiKey: "sk-x" });\nexport function Chat() {\n  return client;\n}',
-    good: 'import OpenAI from "openai";\nconst client = new OpenAI({ apiKey: process.env.KEY });\nexport function getClient() {\n  return client;\n}',
-    exampleFile: "src/chat.tsx",
-    goodFile: "src/server/ai.ts",
-    fixIsRelocation: true,
+    bad: "",
+    good: "",
+    procedure:
+      'MOVE the client construction into a server module \u2014 a route handler, a server action, or a file never imported from a "use client" tree \u2014 and call it from the component. There is no same-file fix worth showing: deleting the directive silences the rule while the key still ships in whatever bundle imports that module. What must change is WHERE the key is read, not how the file is labelled.',
   },
   "tsforge/no-auth-token-in-storage": {
     what: "Disallow storing or reading auth tokens from localStorage/sessionStorage \u2014 use httpOnly cookies instead.",
@@ -428,7 +427,7 @@ export const PACK_RULE_DOCS: Record<string, IRuleDoc> = {
   },
   "tsforge/worker-must-listen-failed": {
     what: "A BullMQ worker swallows failures unless a `failed` listener is attached. NOTE: this rule only recognises the CHAINED form \u2014 `.on()` on a separate statement is not detected, even though it is equivalent.",
-    bad: 'import { Worker } from "bullmq";\n\nconst worker = new Worker("emails", handler);\n\nworker.on("failed", () => {});',
+    bad: 'import { Worker } from "bullmq";\n\nconst worker = new Worker("emails", handler);',
     good: 'import { Worker } from "bullmq";\n\nconst worker = new Worker("emails", handler).on("failed", (job, err) => {\n  logger.error({ event: "job.failed", jobId: job?.id, cause: err });\n});',
     procedure:
       'Chain `.on("failed", ...)` directly onto `new Worker(...)`. Registering the same listener on a following statement is functionally identical but this rule does not currently detect it.',
