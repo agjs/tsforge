@@ -429,7 +429,7 @@ describe("runSelfHarness — Algorithm 1 end-to-end (deterministic)", () => {
     // Round 1: h_1 is fully green held-in → early stop (not 3 full rounds).
     expect(lineage.rounds).toHaveLength(2);
     expect(lineage.rounds[1]?.candidates).toEqual([]);
-    expect(lineage.notes.some((n) => n.includes("no held-in failures"))).toBe(
+    expect(lineage.notes.some((n) => n.includes("no failures to mine"))).toBe(
       true
     );
   });

@@ -6,14 +6,16 @@
 //
 // Run:  bun packages/core/scripts/self-harness.ts [--rounds 3] [--width 3]
 //         [--repeats 2] [--held-in a,b,..] [--held-out c,d,..]
-//         [--dry-run] [--no-judge]
+//         [--dry-run] [--no-judge] [--build-logs [dir]] [--build-logs-limit 40]
 // Judge override (else the active model judges): TSFORGE_JUDGE_URL/MODEL/KEY.
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { OpenAICompatibleProvider } from "../src/inference";
 import { resolveActiveModel, resolveApiKey } from "../src/models-config";
 import { providerConfig } from "../src/cli";
 import {
+  buildEvidenceFrom,
   emitReport,
   evaluateHarness,
   mineWeaknesses,
@@ -68,6 +70,17 @@ const repeats = Number(argValue("repeats") ?? "2");
 const dryRun = hasFlag("dry-run");
 const useJudge = !hasFlag("no-judge");
 const initialOverlayPath = argValue("initial-overlay");
+// Mine the model's OWN build logs alongside the corpus. `--build-logs` with no
+// value means the default log directory; omit the flag entirely for
+// corpus-only evidence (the paper's setup).
+const buildLogsRaw = argValue("build-logs");
+const buildLogsDir = hasFlag("build-logs")
+  ? (buildLogsRaw ?? join(homedir(), ".tsforge", "logs"))
+  : undefined;
+// Newest N logs. This is also what keeps the evidence current: as new builds
+// land they push older ones out, so a campaign that has already fixed something
+// stops mining the failures it fixed.
+const buildEvidenceLimit = Number(argValue("build-logs-limit") ?? "40");
 
 /** Continue a lineage: start from a previous session's accepted overlay so
  *  improvements COMPOUND across sessions. Fails loudly on a bad path/file —
@@ -380,6 +393,12 @@ const lineage = await runSelfHarness({
   provider,
   evaluator,
   ...(initialOverlay === undefined ? {} : { initialOverlay }),
+  ...(buildLogsDir === undefined
+    ? {}
+    : {
+        extraEvidence: () =>
+          buildEvidenceFrom(buildLogsDir, { limit: buildEvidenceLimit }),
+      }),
   waitHealthy,
   log: say,
 });

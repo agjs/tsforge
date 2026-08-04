@@ -452,6 +452,9 @@ async function runSession(index: number): Promise<ISessionOutcome> {
     // mining session judged at a different repeat count is not comparable to it.
     "--repeats",
     repeats,
+    // Mine the model's own build logs alongside the corpus. The corpus is the
+    // measuring instrument; real work is where the failures are.
+    "--build-logs",
     "--held-in",
     rotation.heldIn,
     "--held-out",

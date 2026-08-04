@@ -39,3 +39,10 @@ export {
   revertOverlay,
   previousPath,
 } from "./promote";
+export {
+  buildEvidenceFrom,
+  parseEventLog,
+  runPassed,
+  BUILD_SLOW_THRESHOLD,
+  type IBuildEvidenceOptions,
+} from "./build-evidence";
