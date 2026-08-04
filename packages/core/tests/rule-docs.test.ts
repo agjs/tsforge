@@ -5,6 +5,7 @@ import {
   parseRuleMdx,
 } from "../src/loop/feedback/rule-docs";
 import generatedDocs from "../src/loop/feedback/rule-docs.generated.json";
+import { RULE_PACKS } from "../src/rule-packs";
 
 const SAMPLE_MDX = `---
 description: 'Disallow returning a value with type \`any\` from a function.'
@@ -241,12 +242,18 @@ test("ruleHelp: i18n-locale-keys-used steers WIRE-UP, never delete-what-you-wrot
 });
 
 test("ruleHelp: a pack rule with no worked example shows only its description (no fake ✗/✓)", () => {
-  // job-name-must-be-constant has a generated (empty bad/good) entry, no curated one.
+  // A rule whose fix is structural carries a procedure INSTEAD of an example —
+  // a fabricated ✗/✓ is worse than none, which is how one doc came to promise
+  // an "allowlisted URL builder" the rule never had. Moving a file cannot be
+  // shown as a same-file before/after, so this rule stays procedure-only.
+  // (job-name-must-be-constant and fetch-must-check-ok used to sit here; both
+  // now ship verified examples of their own.)
   const h = ruleHelp([
-    { key: "k", rule: "tsforge/job-name-must-be-constant", message: "" },
+    { key: "k", rule: "tsforge/test-file-mirrors-source", message: "" },
   ]);
 
-  expect(h).toContain("tsforge/job-name-must-be-constant");
+  expect(h).toContain("tsforge/test-file-mirrors-source");
+  expect(h).toContain("procedure:");
   expect(h).not.toContain("✗");
   expect(h).not.toContain("✓");
 });
@@ -260,4 +267,97 @@ test("generated docs the reader imports include the tsforge pack rules (guards t
 
   expect(tsforgeKeys.length).toBeGreaterThan(50);
   expect(keys).toContain("tsforge/component-folder-structure");
+});
+
+test("ruleHelp: a multi-line example keeps its indentation under the marker", () => {
+  // Model-facing formatting: left-flushing continuation lines destroys the
+  // snippet's own structure and makes a multi-statement fix hard to read.
+  const h = ruleHelp([
+    { key: "k", rule: "tsforge/logger-not-console", message: "" },
+  ]);
+  const lines = h.split("\n");
+  const markerAt = lines.findIndex((l) => l.includes("✗"));
+
+  expect(markerAt).toBeGreaterThan(-1);
+
+  const continuation = lines[markerAt + 1];
+
+  expect(continuation).toBeDefined();
+  expect(continuation?.startsWith("    ")).toBe(true);
+});
+
+test("ruleHelp: test-only metadata never reaches the model", () => {
+  // exampleFile / goodFile / exampleIsProse / fixIsDirective exist so the
+  // verification test can lint path-sensitive examples. Like `reference`, they
+  // are maintainer data: a tsforge-relative path dangles in the user's project
+  // and would waste a repair turn.
+  const h = ruleHelp(
+    Object.values(RULE_PACKS).flatMap((pack) =>
+      Object.keys(pack.rules).map((rule) => ({
+        key: rule,
+        rule: `tsforge/${rule}`,
+        message: "",
+      }))
+    )
+  );
+
+  expect(h).not.toContain("exampleFile");
+  expect(h).not.toContain("goodFile");
+  expect(h).not.toContain("exampleIsProse");
+  expect(h).not.toContain("fixIsDirective");
+  expect(h).not.toContain("fixIsRelocation");
+  expect(h).not.toContain("src/example.ts");
+  expect(h).not.toContain("packages/core");
+});
+
+test("ruleHelpFromOutput: recovers pack docs from PLAIN eslint text", () => {
+  // The path the MODEL takes when it runs the gate itself via the `run` tool.
+  // Before this, only TS codes, JSON ruleId fields and @typescript-eslint ids
+  // were matched, so the entire tsforge catalogue was invisible here — the model
+  // saw a bare rule id and went looking for the answer in the harness source.
+  const plain = [
+    "/app/src/api.ts",
+    "  12:3  error  HTTP request URL must have a fixed origin  tsforge/no-user-controlled-fetch-url",
+    "  20:1  error  console in a service                       tsforge/logger-not-console",
+  ].join("\n");
+
+  const h = ruleHelpFromOutput(plain);
+
+  expect(h).toContain("tsforge/no-user-controlled-fetch-url");
+  expect(h).toContain("tsforge/logger-not-console");
+  // and it carries the worked example, not just the id
+  expect(h).toContain("✓");
+});
+
+test("ruleHelpFromOutput: still recovers TS codes and eslint-core ids", () => {
+  const h = ruleHelpFromOutput(
+    "error TS2532: Object is possibly undefined\n  @typescript-eslint/no-explicit-any"
+  );
+
+  expect(h).toContain("TS2532");
+  expect(h).toContain("@typescript-eslint/no-explicit-any");
+});
+
+test("ruleHelpFromOutput: a file path is never mistaken for a rule id", () => {
+  // `/app/src/api.ts` contains `app/src` and `src/api`, both rule-id shaped.
+  // Only the real id on the line should pull guidance.
+  const h = ruleHelpFromOutput(
+    "/app/src/api.ts\n  12:3  error  Something  tsforge/no-unsafe-boundary-cast"
+  );
+
+  expect(h).toContain("tsforge/no-unsafe-boundary-cast");
+  expect(h).not.toContain("app/src");
+  expect(h).not.toContain("src/api");
+});
+
+test("ruleHelp: an example written with a leading newline shows no blank line", () => {
+  // Several pack docs are template literals that open with a newline. Indenting
+  // that empty line puts the snippet a row below its marker behind stray
+  // whitespace, which reads as part of the example.
+  const h = ruleHelp([
+    { key: "k", rule: "tsforge/auth-cookie-must-be-httponly", message: "" },
+  ]);
+
+  expect(h).not.toMatch(/✗\s*\n\s*\n/u);
+  expect(h).not.toMatch(/✗ *\n/u);
 });
