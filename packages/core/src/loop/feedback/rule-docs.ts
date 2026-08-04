@@ -469,9 +469,14 @@ function applyCardOverlay(
 
 /** Keep a multi-line example readable under its ✗/✓ marker: continuation lines
  *  are indented to sit under the first, so the model sees the snippet's own
- *  structure instead of a left-flushed wall. */
+ *  structure instead of a left-flushed wall.
+ *
+ *  Surrounding blank lines are dropped first. Several docs are written as
+ *  template literals that open with a newline, and indenting that empty first
+ *  line puts the snippet a line below its own marker with stray whitespace
+ *  between — noise the model has to read past. */
 function indentExample(code: string): string {
-  return code.split("\n").join("\n    ");
+  return code.trim().split("\n").join("\n    ");
 }
 
 /** Format the rule docs for whichever rules appear in the current error set. */

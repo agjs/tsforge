@@ -349,3 +349,15 @@ test("ruleHelpFromOutput: a file path is never mistaken for a rule id", () => {
   expect(h).not.toContain("app/src");
   expect(h).not.toContain("src/api");
 });
+
+test("ruleHelp: an example written with a leading newline shows no blank line", () => {
+  // Several pack docs are template literals that open with a newline. Indenting
+  // that empty line puts the snippet a row below its marker behind stray
+  // whitespace, which reads as part of the example.
+  const h = ruleHelp([
+    { key: "k", rule: "tsforge/auth-cookie-must-be-httponly", message: "" },
+  ]);
+
+  expect(h).not.toMatch(/✗\s*\n\s*\n/u);
+  expect(h).not.toMatch(/✗ *\n/u);
+});

@@ -4204,6 +4204,116 @@ describe("typescript-core: fetch-must-check-ok", () => {
     expect(messages).toHaveLength(0);
   });
 
+  test("reports a check whose branch does not prevent the parse", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (res.ok) { metrics.hit(); } return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports a guard that only runs when another flag is set", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (debug && !res.ok) { throw new Error("failed"); } return res.json(); }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports a bare truthiness test of the status", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (res.status) { return res.json(); } return null; }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports a typeof test of the status", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (typeof res.status === "number") { return res.json(); } return null; }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("reports a second parse that the guard does not reach", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load(preview: boolean) { const res = await fetch("/api/users"); if (preview) { if (!res.ok) { throw new Error("failed"); } return res.json(); } return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(1);
+  });
+
+  test("reports a parse in the failure branch of a check", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (!res.ok) { return res.json(); } return null; }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
+  test("allows a short-circuit guard", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); return res.ok && res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows a parse in the success branch of a check", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (res.ok) { return res.json(); } return null; }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows a parse in the else branch of a failure check", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); if (!res.ok) { return null; } else { return res.json(); } }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("allows a status comparison guard for a status alias", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); const code = res.status; if (code >= 400) { throw new Error("failed"); } return res.json(); }'
+    );
+
+    expect(messages).toHaveLength(0);
+  });
+
+  test("reports a bare truthiness test of a status alias", () => {
+    const messages = lint(
+      "typescript-core",
+      "fetch-must-check-ok",
+      'async function load() { const res = await fetch("/api/users"); const code = res.status; if (code) { return res.json(); } return null; }'
+    );
+
+    expect(messages.map((m) => m.messageId)).toContain("missingOkCheck");
+  });
+
   test("ignores a response whose body is never parsed", () => {
     const messages = lint(
       "typescript-core",
