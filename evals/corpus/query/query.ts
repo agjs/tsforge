@@ -14,5 +14,6 @@ export function query(
 
   const tokens = lex(queryString);
   const ast = parse(tokens);
+
   return execute(ast, rows);
 }

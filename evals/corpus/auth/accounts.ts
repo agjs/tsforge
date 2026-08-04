@@ -43,6 +43,7 @@ export function signup(
   now: number
 ): SignupResult {
   const validation = validatePassword(password);
+
   if (!validation.ok) {
     return { ok: false, reasons: validation.reasons };
   }
@@ -59,6 +60,7 @@ export function signup(
   };
 
   accounts.set(email, record);
+
   return { ok: true };
 }
 
@@ -105,5 +107,6 @@ export function login(
 
 function hashPassword(password: string): string {
   const buffer = Buffer.from(password);
+
   return buffer.toString("base64");
 }

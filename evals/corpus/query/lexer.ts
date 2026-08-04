@@ -85,13 +85,16 @@ export function lex(input: string): Token[] {
     if (input[i] === "'") {
       i += 1;
       let stringValue = "";
+
       while (i < input.length && input[i] !== "'") {
         stringValue += input[i];
         i += 1;
       }
+
       if (i >= input.length) {
         throw new Error("Unterminated string literal");
       }
+
       i += 1; // closing quote
       tokens.push({ type: "string", value: stringValue });
       continue;
@@ -100,16 +103,19 @@ export function lex(input: string): Token[] {
     // Operators (two-char first)
     if (i + 1 < input.length) {
       const twoChar = input.substring(i, i + 2);
+
       if (twoChar === "!=") {
         tokens.push({ type: "operator", value: "!=" });
         i += 2;
         continue;
       }
+
       if (twoChar === "<=") {
         tokens.push({ type: "operator", value: "<=" });
         i += 2;
         continue;
       }
+
       if (twoChar === ">=") {
         tokens.push({ type: "operator", value: ">=" });
         i += 2;
@@ -123,11 +129,13 @@ export function lex(input: string): Token[] {
       i += 1;
       continue;
     }
+
     if (input[i] === "<") {
       tokens.push({ type: "operator", value: "<" });
       i += 1;
       continue;
     }
+
     if (input[i] === ">") {
       tokens.push({ type: "operator", value: ">" });
       i += 1;
@@ -140,16 +148,19 @@ export function lex(input: string): Token[] {
       i += 1;
       continue;
     }
+
     if (input[i] === ")") {
       tokens.push({ type: "delimiter", value: ")" });
       i += 1;
       continue;
     }
+
     if (input[i] === ",") {
       tokens.push({ type: "delimiter", value: "," });
       i += 1;
       continue;
     }
+
     if (input[i] === "*") {
       tokens.push({ type: "delimiter", value: "*" });
       i += 1;
@@ -159,10 +170,12 @@ export function lex(input: string): Token[] {
     // Numbers
     if (/\d/.test(input[i])) {
       let numStr = "";
+
       while (i < input.length && /\d/.test(input[i])) {
         numStr += input[i];
         i += 1;
       }
+
       tokens.push({ type: "number", value: Number(numStr) });
       continue;
     }
@@ -170,12 +183,14 @@ export function lex(input: string): Token[] {
     // Identifiers and keywords
     if (/[a-zA-Z_]/.test(input[i])) {
       let ident = "";
+
       while (i < input.length && /[a-zA-Z0-9_]/.test(input[i])) {
         ident += input[i];
         i += 1;
       }
 
       const upper = ident.toUpperCase();
+
       if (upper === "SELECT") {
         tokens.push({ type: "keyword", value: "SELECT" });
       } else if (upper === "FROM") {
@@ -201,6 +216,7 @@ export function lex(input: string): Token[] {
       } else {
         tokens.push({ type: "identifier", value: ident });
       }
+
       continue;
     }
 
