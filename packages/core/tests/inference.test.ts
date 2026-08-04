@@ -564,3 +564,38 @@ test("a non-latching profile keeps per-turn thinking control", async () => {
   expect(sent[0]?.chat_template_kwargs).toEqual({ thinking: true });
   expect(sent[1]?.chat_template_kwargs).toEqual({ thinking: false });
 });
+
+test("a non-streaming 200 whose body is an error is raised, not read as silence", () => {
+  // The path the self-harness proposer, the judge and the planner all use.
+  // An empty completion here is indistinguishable from the model declining to
+  // answer — which is how a rejected parameter produced months of
+  // "unparseable proposer response" with nothing pointing at the endpoint.
+  expect(() =>
+    parseResponse({
+      error: {
+        message: "thinking_token_budget is not yet supported",
+        code: 400,
+      },
+    })
+  ).toThrow(/thinking_token_budget/u);
+});
+
+test("an error body with no code is still raised", () => {
+  expect(() => parseResponse({ error: { message: "overloaded" } })).toThrow(
+    /overloaded/u
+  );
+});
+
+test("an ordinary response is untouched by the error check", () => {
+  const res = parseResponse({
+    choices: [{ message: { content: "hello" } }],
+  });
+
+  expect(res.content).toBe("hello");
+});
+
+test("a body with no choices and no error is still an empty response", () => {
+  // Only an `error` object means failure; an unfamiliar-but-benign body must
+  // stay a soft empty, as before.
+  expect(parseResponse({ id: "x" }).content).toBe("");
+});

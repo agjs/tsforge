@@ -4,6 +4,7 @@ import type {
   IToolCall,
   ITokenUsage,
 } from "./inference.types";
+import { ModelRequestError } from "./inference.types";
 import { isArray, isRecord } from "../lib/guards";
 import { TOOL_NAME } from "../agent";
 
@@ -46,12 +47,35 @@ export function toWire(
 }
 
 /** Non-streaming: narrow the response shape with guards — no type assertions. */
+/** Raise a body-borne error, keeping the server's own status when it gives one
+ *  so a permanent rejection stays distinguishable from a blip. */
+function throwIfErrorBody(data: Record<string, unknown>): void {
+  const error = data.error;
+
+  if (!isRecord(error)) {
+    return;
+  }
+
+  const message =
+    typeof error.message === "string" ? error.message : JSON.stringify(error);
+  const status = typeof error.code === "number" ? error.code : 502;
+
+  throw new ModelRequestError(status, message);
+}
+
 export function parseResponse(data: unknown): IModelResponse {
   const empty: IModelResponse = { content: "", toolCalls: [] };
 
   if (!isRecord(data)) {
     return empty;
   }
+
+  // A 200 whose BODY is an error. The streaming path already refuses to read
+  // this as silence; the non-streaming path is what the self-harness proposer,
+  // the judge and the planner use, and there an empty completion is
+  // indistinguishable from the model declining to answer. That is how a dead
+  // endpoint produced months of "unparseable proposer response".
+  throwIfErrorBody(data);
 
   const choices = data.choices;
   const first = isArray(choices) ? choices[0] : undefined;
