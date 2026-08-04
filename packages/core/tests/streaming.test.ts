@@ -229,3 +229,85 @@ test("a rejection that names nothing we sent is not retried", async () => {
   ).rejects.toThrow(/context length/u);
   expect(calls).toBe(1);
 });
+
+test("an endpoint's rejection is remembered — the next call does not ask again", async () => {
+  // Retrying per call fixed each call and still sent a request the server
+  // refuses, forever: measured on a live box at ~305 wasted round trips an
+  // hour, every one an error in the server's own log for a bug already handled.
+  const bodies: string[] = [];
+  const fakeFetch = (async (_url: string, init: { body: string }) => {
+    bodies.push(init.body);
+
+    return init.body.includes("thinking_token_budget")
+      ? sseResponse([
+          `data: {"error": {"message": "thinking_token_budget is not yet supported by the V2 model runner.", "code": 400}}\n`,
+          `data: [DONE]\n`,
+        ])
+      : sseResponse([
+          `data: {"choices":[{"delta":{"content":"ok"}}]}\n`,
+          `data: [DONE]\n`,
+        ]);
+  }) as unknown as typeof fetch;
+
+  const p = new OpenAICompatibleProvider({
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fakeFetch,
+    reasoning: "deepseek-local",
+  });
+  const call = async (): Promise<string> =>
+    (
+      await p.complete([{ role: "user", content: "hi" }], {
+        onToken: () => undefined,
+        thinkingTokenBudget: 2048,
+      })
+    ).content;
+
+  expect(await call()).toBe("ok");
+  expect(await call()).toBe("ok");
+  expect(await call()).toBe("ok");
+
+  // One probe, then never again — 4 requests for 3 calls, not 6.
+  expect(bodies).toHaveLength(4);
+  expect(
+    bodies.filter((b) => b.includes("thinking_token_budget"))
+  ).toHaveLength(1);
+});
+
+test("switching endpoints forgets what the old one refused", async () => {
+  // What one server rejects says nothing about the next; a stale memory would
+  // silently drop a field the new endpoint supports.
+  const bodies: string[] = [];
+  const fakeFetch = (async (_url: string, init: { body: string }) => {
+    bodies.push(init.body);
+
+    return init.body.includes("thinking_token_budget")
+      ? sseResponse([
+          `data: {"error": {"message": "thinking_token_budget is not supported", "code": 400}}\n`,
+          `data: [DONE]\n`,
+        ])
+      : sseResponse([
+          `data: {"choices":[{"delta":{"content":"ok"}}]}\n`,
+          `data: [DONE]\n`,
+        ]);
+  }) as unknown as typeof fetch;
+
+  const cfg = {
+    baseUrl: "http://x/v1",
+    model: "m",
+    fetch: fakeFetch,
+    reasoning: "deepseek-local" as const,
+  };
+  const p = new OpenAICompatibleProvider(cfg);
+  const opts = { onToken: () => undefined, thinkingTokenBudget: 2048 };
+
+  await p.complete([{ role: "user", content: "hi" }], opts);
+  p.reconfigure({ ...cfg, baseUrl: "http://y/v1" });
+  await p.complete([{ role: "user", content: "hi" }], opts);
+
+  // Probed again after the swap, rather than assuming the new endpoint is the
+  // same as the old one.
+  expect(
+    bodies.filter((b) => b.includes("thinking_token_budget"))
+  ).toHaveLength(2);
+});
