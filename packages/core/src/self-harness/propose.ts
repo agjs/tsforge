@@ -9,6 +9,7 @@
  */
 import type { IProvider } from "../inference";
 import { extractJson } from "../lib/json";
+import { PROPOSAL_SCHEMA, PROPOSAL_SCHEMA_NAME } from "./proposal-schema";
 import { isRecord } from "../lib/guards";
 import { isEmptyPatch, parseOverlay } from "./overlay";
 import type {
@@ -35,10 +36,13 @@ const SURFACE_CATALOG = `You may edit ONLY these declared harness surfaces, expr
 3. "procedureCards": per-gate-rule repair guidance shown when that rule fails, keyed by the exact rule id (e.g. "TS2307", "no-as").
    Shape: {"<ruleId>": {"what": "...", "bad": "...", "good": "...", "procedure": "step-by-step fix workflow"}}
 
-4. "agentSpecOverrides": bounded overrides of existing subagents (explore, research, verify, review-lens). Only systemPrompt, task, and maxTurns — tools and model are NOT editable.
+4. "agentSpecOverrides": bounded overrides of existing subagents (explore, research, verify, review-lens). Only systemPrompt, task, and maxTurns — model is NOT editable.
    Shape: [{"id": "explore", "systemPrompt": "..."?, "task": "..."?, "maxTurns": number?}]
 
-NOT editable (do not attempt): the gate/verifier, its strictness or rules, tool availability, model routing, the control loop.`;
+5. "toolOverrides": how an EXISTING tool is offered — reword its description so its purpose or its failure modes are clearer, or stop offering one that the traces show being misused. You cannot ADD a tool: an id naming a tool the harness does not already offer has no effect. Withdrawing a tool the task needs will show up as a lower pass rate and be rejected.
+   Shape: [{"id": "<advertised tool name>", "description": "..."?, "enabled": false?}]
+
+NOT editable (do not attempt): the gate/verifier, its strictness or rules, WHICH tools exist, model routing, the control loop.`;
 
 const PROPOSER_SYSTEM = `You are the harness-improvement proposer inside tsforge (Self-Harness loop). A fixed model — you — runs coding tasks under a harness; the harness is the object of improvement, not the model or the verifier.
 
@@ -113,6 +117,7 @@ function editCount(patch: IOverlayPatch): number {
   return (
     (patch.ttsrRules?.length ?? 0) +
     (patch.agentSpecOverrides?.length ?? 0) +
+    (patch.toolOverrides?.length ?? 0) +
     Object.keys(patch.promptBlocks ?? {}).length +
     Object.keys(patch.procedureCards ?? {}).length
   );
@@ -238,9 +243,18 @@ export async function propose(
             ),
           },
         ],
-        // Mild temperature: K identical greedy calls would defeat the
-        // parallel-proposal diversity the paper relies on.
-        { temperature: 0.7 }
+        {
+          // Mild temperature: K identical greedy calls would defeat the
+          // parallel-proposal diversity the paper relies on.
+          temperature: 0.7,
+          // Shape the decode. An endpoint without guided decoding ignores this
+          // and the salvage re-ask below still covers it.
+          responseFormat: {
+            type: "json_schema",
+            name: PROPOSAL_SCHEMA_NAME,
+            schema: PROPOSAL_SCHEMA,
+          },
+        }
       );
 
       content = res.content;
@@ -278,7 +292,14 @@ export async function propose(
               content: `Your response was unusable: ${reason ?? "invalid"}. Reply again with ONLY the corrected JSON object — same schema, no prose, no code fences.`,
             },
           ],
-          { temperature: 0 }
+          {
+            temperature: 0,
+            responseFormat: {
+              type: "json_schema",
+              name: PROPOSAL_SCHEMA_NAME,
+              schema: PROPOSAL_SCHEMA,
+            },
+          }
         );
 
         ({ candidate, reason } = parseCandidate(retry.content, id));

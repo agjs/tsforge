@@ -7,7 +7,14 @@ import { READ_ONLY_TOOL_NAMES, TOOL_NAME } from "../agent";
 
 /** The minimal shape shared by advertised tools and MCP tool schemas. */
 interface INamedTool {
-  readonly function: { readonly name: string };
+  readonly function: { readonly name: string; readonly description?: string };
+}
+
+/** One harness-overlay edit to how an EXISTING tool is offered. */
+interface IToolWiring {
+  readonly id: string;
+  readonly description?: string;
+  readonly enabled?: boolean;
 }
 
 /**
@@ -47,7 +54,8 @@ export function selectThinking(opts: {
 export function offeredToolsFor<T extends INamedTool, U extends INamedTool>(
   tools: readonly T[],
   planMode: boolean,
-  mcpSchemas: readonly U[]
+  mcpSchemas: readonly U[],
+  wiring: readonly IToolWiring[] = []
 ): (T | U)[] {
   const base = planMode
     ? tools.filter(
@@ -57,5 +65,52 @@ export function offeredToolsFor<T extends INamedTool, U extends INamedTool>(
       )
     : [...tools];
 
-  return mcpSchemas.length > 0 ? [...base, ...mcpSchemas] : base;
+  const offered = mcpSchemas.length > 0 ? [...base, ...mcpSchemas] : base;
+
+  return wiring.length > 0 ? applyToolWiring(offered, wiring) : offered;
+}
+
+/**
+ * Apply the overlay's tool edits to the offered set.
+ *
+ * The paper puts `tools` in the editable harness file while holding the TOOL
+ * SET itself constant across variants, and that asymmetry is the whole safety
+ * story here: this can hide a tool or reword how one is described, never
+ * introduce one. An id that names no offered tool does nothing — there is no
+ * path by which a name grants capability.
+ *
+ * Hiding a tool the model needs is allowed and self-correcting: the pass rate
+ * falls, the acceptance rule rejects the edit. That is the loop working, not a
+ * hole in it.
+ */
+function applyToolWiring<T extends INamedTool>(
+  offered: readonly T[],
+  wiring: readonly IToolWiring[]
+): T[] {
+  const byId = new Map(wiring.map((w) => [w.id, w]));
+  const result: T[] = [];
+
+  for (const tool of offered) {
+    const edit = byId.get(tool.function.name);
+
+    if (edit === undefined) {
+      result.push(tool);
+      continue;
+    }
+
+    if (edit.enabled === false) {
+      continue;
+    }
+
+    result.push(
+      edit.description === undefined
+        ? tool
+        : {
+            ...tool,
+            function: { ...tool.function, description: edit.description },
+          }
+    );
+  }
+
+  return result;
 }

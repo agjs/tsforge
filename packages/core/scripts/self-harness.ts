@@ -5,7 +5,7 @@
 // is auto-installed.
 //
 // Run:  bun packages/core/scripts/self-harness.ts [--rounds 3] [--width 3]
-//         [--repeats 1] [--held-in a,b,..] [--held-out c,d,..]
+//         [--repeats 2] [--held-in a,b,..] [--held-out c,d,..]
 //         [--dry-run] [--no-judge]
 // Judge override (else the active model judges): TSFORGE_JUDGE_URL/MODEL/KEY.
 import { mkdir } from "node:fs/promises";
@@ -60,7 +60,11 @@ function stamp(): string {
 
 const rounds = Number(argValue("rounds") ?? "3");
 const width = Number(argValue("width") ?? "3");
-const repeats = Number(argValue("repeats") ?? "1");
+// Two, matching the paper: "Pass (%) computed over two repeated attempts for
+// each harness candidate". At one attempt a single flaky task is
+// indistinguishable from a real gain, and the acceptance rule compares integer
+// pass counts — so noise reads as signal in both directions.
+const repeats = Number(argValue("repeats") ?? "2");
 const dryRun = hasFlag("dry-run");
 const useJudge = !hasFlag("no-judge");
 const initialOverlayPath = argValue("initial-overlay");

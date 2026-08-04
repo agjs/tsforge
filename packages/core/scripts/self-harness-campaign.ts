@@ -16,7 +16,7 @@
 // traffic is sequential (single-connection endpoint).
 //
 // Run:  bun packages/core/scripts/self-harness-campaign.ts
-//         [--max-sessions N] [--proof-every 3] [--rounds 3] [--width 3]
+//         [--max-sessions N] [--proof-every 3] [--rounds 3] [--width 3] [--repeats 2]
 // Stop: touch evals/self-harness/campaign/STOP  (in-flight session finishes)
 import { mkdir, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -71,6 +71,9 @@ const maxSessions = Number(argValue("max-sessions") ?? "1000");
 const proofEvery = Number(argValue("proof-every") ?? "3");
 const rounds = argValue("rounds") ?? "3";
 const width = argValue("width") ?? "3";
+// Mining repeats. Matches the proof split's 2 so a session verdict and the
+// campaign's own exam are measured on the same footing.
+const repeats = argValue("repeats") ?? "2";
 // Concurrent mining sessions per batch. The endpoint batches up to 10 seqs on
 // recipe-stock config; 2 leaves headroom for the human user's own coding.
 const parallel = Math.max(
@@ -389,6 +392,10 @@ async function runSession(index: number): Promise<ISessionOutcome> {
     rounds,
     "--width",
     width,
+    // Explicit rather than inherited: the proof split is measured at 2, and a
+    // mining session judged at a different repeat count is not comparable to it.
+    "--repeats",
+    repeats,
     "--held-in",
     rotation.heldIn,
     "--held-out",

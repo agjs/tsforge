@@ -60,6 +60,7 @@ import type { TtsrManager } from "./ttsr";
 import { initTtsrManager, applyTtsrInterrupt } from "./ttsr-init";
 import { assistantMessage } from "./assistant-message";
 import { selectThinking, offeredToolsFor } from "./model-call";
+import { activeOverlay } from "../self-harness/overlay";
 import {
   mineLessons,
   consolidate as consolidateMemory,
@@ -1642,7 +1643,8 @@ export class Session {
     const offeredTools = offeredToolsFor(
       this.tools,
       this.planMode,
-      this.ctx.tool.mcpRegistry?.toolSchemas() ?? []
+      this.ctx.tool.mcpRegistry?.toolSchemas() ?? [],
+      activeOverlay()?.toolOverrides ?? []
     );
     const callStart = performance.now();
     let firstTokenAt = 0;

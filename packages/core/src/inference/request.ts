@@ -334,10 +334,37 @@ export function buildRequestBody(
       ? {}
       : { repetition_penalty: cfg.repetitionPenalty }),
     ...toolsBlock(cfg, opts),
+    ...responseFormatBlock(opts),
     ...(streaming
       ? { stream: true, stream_options: { include_usage: true } }
       : {}),
     ...(cfg.extraBody ?? {}),
+  };
+}
+
+/** Wire form of {@link IResponseFormat}. Written ahead of `extraBody` so a
+ *  per-model override can still replace it for an endpoint with its own
+ *  spelling (some want `guided_json` instead). */
+function responseFormatBlock(opts: ICompleteOptions): Record<string, unknown> {
+  const format = opts.responseFormat;
+
+  if (format === undefined) {
+    return {};
+  }
+
+  if (format.type === "json_object") {
+    return { response_format: { type: "json_object" } };
+  }
+
+  return {
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: format.name,
+        schema: format.schema,
+        ...(format.strict === undefined ? {} : { strict: format.strict }),
+      },
+    },
   };
 }
 
