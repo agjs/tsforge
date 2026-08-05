@@ -27,7 +27,13 @@ export type ReviewOutcome =
  *  means the budget was too small for the work (raise it, or drop the reviewer);
  *  `exit` means the binary is broken (the budget is irrelevant). Collapsing those
  *  two into one message is what made this undiagnosable. */
-const FAILURE_CAUSES = ["timeout", "exit", "unparseable", "threw"] as const;
+const FAILURE_CAUSES = [
+  "timeout",
+  "exit",
+  "truncated",
+  "unparseable",
+  "threw",
+] as const;
 
 export type ReviewFailureCause = (typeof FAILURE_CAUSES)[number];
 

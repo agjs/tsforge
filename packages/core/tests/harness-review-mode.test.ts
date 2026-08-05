@@ -104,7 +104,12 @@ function makeInput(over: { quick?: boolean; ci?: boolean }) {
           },
         };
       },
-      runBinary: async () => ({ ok: true, stdout: "", timedOut: false }),
+      runBinary: async () => ({
+        ok: true,
+        stdout: "",
+        timedOut: false,
+        truncated: false,
+      }),
       readCache: async (key: string) => {
         log.readKeys.push(key);
 

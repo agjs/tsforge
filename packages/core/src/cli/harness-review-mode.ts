@@ -138,62 +138,113 @@ const KILL_GRACE_MS = 2_000;
  */
 const POST_EXIT_DRAIN_MS = 1_000;
 
-/** Sentinel for the give-up branch of the read race. */
-const GIVE_UP = Symbol("give-up");
+/**
+ * Hard ceiling on a reviewer's stdout. A review is a small JSON object; anything
+ * past this is a runaway, and reading it to EOF would let one noisy reviewer
+ * exhaust the harness.
+ */
+const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
+
+/** Mutable read state, held in an object so a closure can flip it. */
+interface IReadState {
+  expired: boolean;
+  stoppedBy: IBoundedRead["stoppedBy"];
+}
+
+/** What a bounded read produced, and why it stopped. */
+interface IBoundedRead {
+  text: string;
+  /**
+   * Why the read ended, because the two early exits mean different things.
+   *
+   * `size` is the reviewer flooding us — its answer really is cut off. `deadline`
+   * is the pipe still being open a second after the PROCESS was gone, which
+   * happens when a descendant inherited it; if the reviewer exited cleanly it
+   * had already finished writing, and calling that a truncated review would
+   * discard a perfectly good answer for an orphan's file handle. `eof` is the
+   * normal end.
+   */
+  stoppedBy: "eof" | "size" | "deadline";
+}
 
 /**
- * Read a stream to EOF, or give up shortly after the process is gone — keeping
- * whatever arrived before that.
+ * Read a stream to EOF, or stop shortly after the process is gone — keeping
+ * whatever arrived, and saying so when it stopped early.
  *
- * Bounded by a PROMISE, not a poll. A `while (!done) await sleep(50)` loop keeps
- * scheduling itself forever when it loses the race — Promise.race abandons the
- * loser's value, never its work — so every successful call leaked a poller for
- * the life of the process.
+ * Bounded by a FLAG, not by racing the deadline each iteration. `Promise.race`
+ * resolves with the first ALREADY-SETTLED entry in array order, so once a
+ * descendant keeps the pipe permanently readable, `reader.read()` wins every
+ * round forever and the deadline never gets a turn — the bound silently stops
+ * bounding for exactly the noisy-child case it exists to handle.
  *
- * Chunk by chunk, because racing a whole `Response.text()` throws away
- * everything already read the moment it gives up: a reviewer that answered and
- * exited, leaving a background child holding the pipe, would have its complete
- * answer discarded for the sake of the child. Partial output beats none, and on
- * the timeout path it is discarded by the caller anyway.
+ * Chunk by chunk, because racing a whole `Response.text()` discards everything
+ * already read the moment it gives up: a reviewer that answered and exited,
+ * leaving a background child holding the pipe, would lose a complete answer for
+ * the sake of the child.
  */
 async function readBounded(
   stream: ReadableStream<Uint8Array>,
   gone: Promise<unknown>
-): Promise<string> {
+): Promise<IBoundedRead> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
-  const giveUp = gone
-    .then(() => Bun.sleep(POST_EXIT_DRAIN_MS))
-    .then(() => GIVE_UP);
+  // One mutable object rather than locals: the deadline flips `expired` from a
+  // callback, and control-flow analysis cannot see an assignment made inside a
+  // closure — with plain locals it narrows the flag to a constant and calls the
+  // check dead code.
+  const state: IReadState = { expired: false, stoppedBy: "eof" };
+  let bytes = 0;
   let text = "";
+
+  const deadline = gone
+    .then(() => Bun.sleep(POST_EXIT_DRAIN_MS))
+    .then(() => {
+      state.expired = true;
+    });
 
   try {
     for (;;) {
-      const next = await Promise.race([reader.read(), giveUp]);
-
-      // typeof, because `.then(() => GIVE_UP)` widens the unique symbol back to
-      // `symbol` and equality alone will not narrow the union.
-      if (typeof next === "symbol") {
+      if (bytes >= MAX_STDOUT_BYTES) {
+        state.stoppedBy = "size";
         break;
+      }
+
+      if (state.expired) {
+        state.stoppedBy = "deadline";
+        break;
+      }
+
+      const next = await Promise.race([reader.read(), deadline]);
+
+      // `deadline` resolves to undefined; the flag above ends the loop on the
+      // next pass, so this only skips one iteration.
+      if (next === undefined) {
+        continue;
       }
 
       if (next.done) {
         break;
       }
 
+      bytes += next.value.length;
       text += decoder.decode(next.value, { stream: true });
     }
   } finally {
     await reader.cancel().catch(() => undefined);
   }
 
-  return text + decoder.decode();
+  return { text: text + decoder.decode(), stoppedBy: state.stoppedBy };
 }
 
 export async function runBinary(
   r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
   stdin: string
-): Promise<{ ok: boolean; stdout: string; timedOut: boolean }> {
+): Promise<{
+  ok: boolean;
+  stdout: string;
+  timedOut: boolean;
+  truncated: boolean;
+}> {
   const tmpPath =
     r.input === "tempfile"
       ? join(tmpdir(), `tsforge-review-${randomUUID()}.txt`)
@@ -221,9 +272,11 @@ export async function runBinary(
   // Recorded rather than inferred: a killed process exits non-zero, so the exit
   // code alone cannot distinguish "we killed it at the budget" from "it failed
   // on its own". Only the killer knows.
-  let timedOut = false;
+  // In an object for the same reason as the read state below: the timer flips
+  // this from a callback, and control-flow analysis cannot see that.
+  const kill = { timedOut: false };
   const timer = setTimeout(() => {
-    timedOut = true;
+    kill.timedOut = true;
     proc.kill();
     // SIGTERM is a request. A reviewer that ignores it — or installs a handler
     // and takes its time — would otherwise keep the whole panel blocked past a
@@ -254,10 +307,25 @@ export async function runBinary(
 
       return code;
     });
-    const stdout = await readBounded(proc.stdout, exited);
+    const read = await readBounded(proc.stdout, exited);
     const code = await exited;
 
-    return { ok: code === 0 && !timedOut, stdout, timedOut };
+    // A reviewer that FLOODED us really was cut off, and passing the prefix on
+    // as though it were the whole answer makes that look like a malformed review
+    // — sending the next person to debug the reviewer rather than the bound.
+    //
+    // A deadline stop after a CLEAN exit is different: the reviewer had already
+    // finished writing, and what still holds the pipe is a descendant. Treating
+    // that as truncation would reject a good review over an orphan's file
+    // handle. A deadline stop after a KILL is already covered by `timedOut`.
+    const truncated = read.stoppedBy === "size";
+
+    return {
+      ok: code === 0 && !kill.timedOut && !truncated,
+      stdout: read.text,
+      timedOut: kill.timedOut,
+      truncated,
+    };
   } finally {
     clearTimeout(timer);
     clearTimeout(killHard);

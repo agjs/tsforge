@@ -277,6 +277,31 @@ describe("runBinary reports WHICH failure it was", () => {
     expect(Date.now() - started).toBeLessThan(2_500);
   }, 30_000);
 
+  test("a reviewer that floods stdout is cut off and SAID to be", async () => {
+    // The size ceiling. A review is a small JSON object; a reviewer emitting
+    // megabytes is a runaway, and reading it to EOF lets one of them exhaust the
+    // harness. Reporting it as truncated rather than as a bad answer points at
+    // the right problem — we stopped listening.
+    const r = await runBinary(
+      {
+        // ~16MB, past the 8MB ceiling, as fast as the shell can produce it.
+        argv: [
+          "sh",
+          "-c",
+          "yes 0123456789012345678901234567890123456789 | head -c 16000000",
+        ],
+        input: "arg",
+        timeoutMs: 30_000,
+      },
+      ""
+    );
+
+    expect(r.truncated).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.timedOut).toBe(false);
+    expect(r.stdout.length).toBeLessThan(16_000_000);
+  }, 60_000);
+
   test("a process that exits non-zero on its own is NOT marked timedOut", async () => {
     const r = await runBinary(
       { argv: ["sh", "-c", "exit 3"], input: "arg", timeoutMs: 30_000 },
@@ -337,7 +362,12 @@ describe("cause classification through reviewerInvoke", () => {
     const out = await reviewerInvoke(binaryPanel(1234), request, {
       makeProvider: deadProvider,
       runBinary: () =>
-        Promise.resolve({ ok: false, stdout: "", timedOut: true }),
+        Promise.resolve({
+          ok: false,
+          stdout: "",
+          timedOut: true,
+          truncated: false,
+        }),
     });
 
     expect(out[0]?.status).toBe("errored");
@@ -351,10 +381,32 @@ describe("cause classification through reviewerInvoke", () => {
     const out = await reviewerInvoke(binaryPanel(), request, {
       makeProvider: deadProvider,
       runBinary: () =>
-        Promise.resolve({ ok: false, stdout: "", timedOut: false }),
+        Promise.resolve({
+          ok: false,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+        }),
     });
 
     expect(out[0]).toMatchObject({ cause: "exit" });
+  });
+
+  test("a truncated read is cause=truncated, not unparseable", async () => {
+    // We stopped listening; the reviewer may have been perfectly fine. Calling
+    // its prefix unparseable sends the next person to debug the wrong thing.
+    const out = await reviewerInvoke(binaryPanel(), request, {
+      makeProvider: deadProvider,
+      runBinary: () =>
+        Promise.resolve({
+          ok: false,
+          stdout: '{"verdict":"appr',
+          timedOut: false,
+          truncated: true,
+        }),
+    });
+
+    expect(out[0]).toMatchObject({ cause: "truncated" });
   });
 
   test("a binary that answers in the wrong shape is cause=unparseable", async () => {
@@ -365,6 +417,7 @@ describe("cause classification through reviewerInvoke", () => {
           ok: true,
           stdout: "sure, looks fine!",
           timedOut: false,
+          truncated: false,
         }),
     });
 
@@ -377,7 +430,12 @@ describe("cause classification through reviewerInvoke", () => {
     const out = await reviewerInvoke(binaryPanel(), request, {
       makeProvider: deadProvider,
       runBinary: () =>
-        Promise.resolve({ ok: false, stdout: "", timedOut: false }),
+        Promise.resolve({
+          ok: false,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+        }),
     });
     const outcome = out[0];
 
@@ -400,7 +458,12 @@ describe("cause classification through reviewerInvoke", () => {
     const out = await reviewerInvoke(panel, request, {
       makeProvider: deadProvider,
       runBinary: () =>
-        Promise.resolve({ ok: false, stdout: "", timedOut: false }),
+        Promise.resolve({
+          ok: false,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+        }),
     });
 
     expect(out[0]).toMatchObject({ cause: "threw" });
@@ -417,6 +480,7 @@ describe("cause classification through reviewerInvoke", () => {
           ok: true,
           stdout: '{"verdict":"approve","summary":"","findings":[]}',
           timedOut: false,
+          truncated: false,
         }),
     });
 
@@ -443,6 +507,7 @@ describe("cause classification through reviewerInvoke", () => {
           ok: true,
           stdout: '{"verdict":"approve","summary":"","findings":[]}',
           timedOut: true,
+          truncated: false,
         }),
     });
 

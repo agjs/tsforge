@@ -428,7 +428,12 @@ describe("reviewRequest (success path: invoke the panel on a gathered request â†
           },
         };
       },
-      runBinary: async () => ({ ok: true, stdout: "", timedOut: false }),
+      runBinary: async () => ({
+        ok: true,
+        stdout: "",
+        timedOut: false,
+        truncated: false,
+      }),
       panel,
       identity: "local/flash",
     });

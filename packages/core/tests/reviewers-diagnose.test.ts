@@ -144,7 +144,12 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
         complete: () => Promise.resolve(modelResponse(GOOD_DIAGNOSIS)),
       }),
       runBinary: () =>
-        Promise.resolve({ ok: true, stdout: "", timedOut: false }),
+        Promise.resolve({
+          ok: true,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -173,7 +178,12 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
           ),
       }),
       runBinary: () =>
-        Promise.resolve({ ok: true, stdout: "", timedOut: false }),
+        Promise.resolve({
+          ok: true,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -194,7 +204,12 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
         complete: () => Promise.resolve(modelResponse("not json")),
       }),
       runBinary: () =>
-        Promise.resolve({ ok: true, stdout: "", timedOut: false }),
+        Promise.resolve({
+          ok: true,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -222,7 +237,12 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
         complete: () => Promise.resolve(modelResponse("")),
       }),
       runBinary: () =>
-        Promise.resolve({ ok: false, stdout: "", timedOut: false }),
+        Promise.resolve({
+          ok: false,
+          stdout: "",
+          timedOut: false,
+          truncated: false,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -256,7 +276,12 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       // Deliberately VALID output: the point is that it is refused for having
       // been cut off, not for being malformed.
       runBinary: () =>
-        Promise.resolve({ ok: true, stdout: GOOD_DIAGNOSIS, timedOut: true }),
+        Promise.resolve({
+          ok: true,
+          stdout: GOOD_DIAGNOSIS,
+          timedOut: true,
+          truncated: false,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -289,7 +314,12 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
         complete: () => Promise.resolve(modelResponse("")),
       }),
       runBinary: () =>
-        Promise.resolve({ ok: true, stdout: GOOD_DIAGNOSIS, timedOut: false }),
+        Promise.resolve({
+          ok: true,
+          stdout: GOOD_DIAGNOSIS,
+          timedOut: false,
+          truncated: false,
+        }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);

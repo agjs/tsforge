@@ -22,7 +22,14 @@ export interface IInvokeDeps {
     // compiles without reporting it, and every omitted timeout is then
     // classified as a non-zero exit — restoring the exact conflation this
     // change exists to remove, silently.
-  ) => Promise<{ ok: boolean; stdout: string; timedOut: boolean }>;
+  ) => Promise<{
+    ok: boolean;
+    stdout: string;
+    timedOut: boolean;
+    /** True when the read stopped early, so `stdout` is a PREFIX. Distinct from
+     *  a bad answer: the reviewer may have been perfectly fine. */
+    truncated: boolean;
+  }>;
 }
 
 function reviewFrom(id: string, rawText: string, ms: number): ReviewOutcome {
@@ -123,6 +130,19 @@ async function invokeBinary(
     // it, or drop the reviewer. A non-zero exit means the binary is broken and
     // the budget is irrelevant. Told apart, the fix is obvious; conflated, the
     // only way to find out is to time the binary by hand.
+    // Truncation is OURS, not the reviewer's. Handing the prefix on as though it
+    // were the whole answer makes a cut-off review look malformed, which sends
+    // the next person to debug the reviewer instead of the read bound.
+    if (res.truncated) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: "reviewer output was truncated before it finished",
+        cause: "truncated",
+        ms: Date.now() - started,
+      };
+    }
+
     if (!res.ok) {
       return {
         status: "errored",
