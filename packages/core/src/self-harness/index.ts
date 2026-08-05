@@ -22,6 +22,8 @@ export {
   solutionFiles,
   guardQuality,
   solutionFitsJudge,
+  scoreSolution,
+  MAX_SOLUTION_FILES,
   SPEC_SLOW_THRESHOLD,
   type IEvaluateOptions,
   type IEvaluateOutcome,

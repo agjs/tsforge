@@ -143,6 +143,27 @@ export function overBudgetScore(): IJudgeScore {
   return { ...OVER_BUDGET };
 }
 
+/** Nothing to review — the declared scope matched no files.
+ *
+ *  A distinct outcome from `oversized`, because they are opposite problems and
+ *  reusing one for the other leaves a trap: nothing is over budget here, there
+ *  is no artifact at all. It floors for the same reason everything
+ *  candidate-side floors — silence would skip the guard. */
+export function emptyScopeScore(): IJudgeScore {
+  return {
+    overall: 1,
+    correctness: 1,
+    design: 1,
+    readability: 1,
+    notes: "no files in scope to review",
+    // scored:false, like the others: there is no verdict for the improvement
+    // loop to act on. NOT quality 0 — qualityRepair returns that, and copying it
+    // here would hand the acceptance guard a zero it reads as unsignaled.
+    scored: false,
+    outcome: "empty",
+  };
+}
+
 /** Whether this input is small enough to judge honestly. Every field is checked
  *  individually AND against a total, so no single field can consume the whole
  *  ceiling and no combination can exceed it. */
@@ -326,21 +347,29 @@ export async function judge(
   }
 
   const overall = clampScore(data.overall);
+  const correctness = clampScore(data.correctness);
+  const design = clampScore(data.design);
+  const readability = clampScore(data.readability);
 
+  // EVERY dimension, not just `overall`. The contract asks for four 1-5 scores
+  // and IJudgeScore promises them; accepting a reply that carries one and
+  // garbage for the rest lets a partially-injected response through as a real
+  // verdict, with the missing dimensions silently reading 0.
+  //
   // Parseable, but with no valid 1–5 `overall` (missing, or out of range) —
   // which candidate code can ask the model for just as easily as it can ask for
   // prose. Every route out of a SUCCESSFUL call scores; only a failed call is
   // allowed to return no signal, or the guard is switchable off from inside the
   // artifact being guarded. Third door into the same bypass, and the last one.
-  if (overall === 0) {
+  if (overall === 0 || correctness === 0 || design === 0 || readability === 0) {
     return { ...UNSCOREABLE };
   }
 
   return {
     overall,
-    correctness: clampScore(data.correctness),
-    design: clampScore(data.design),
-    readability: clampScore(data.readability),
+    correctness,
+    design,
+    readability,
     notes: typeof data.notes === "string" ? data.notes : "",
     scored: true,
     outcome: "scored",

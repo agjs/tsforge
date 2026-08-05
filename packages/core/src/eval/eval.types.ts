@@ -34,7 +34,7 @@ export interface IJudgeScore {
    * floors them, while the improvement loop ignores them. `unreachable` is
    * infrastructure, attributable to nobody, and both ignore it.
    */
-  outcome: "scored" | "unusable" | "oversized" | "unreachable";
+  outcome: "scored" | "unusable" | "oversized" | "empty" | "unreachable";
 }
 
 export interface IRunRecord {

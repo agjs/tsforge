@@ -23,6 +23,7 @@ import {
   countTaskLoc,
   judge,
   overBudgetScore,
+  emptyScopeScore,
   sizeWithinBudget,
   summarize,
 } from "../eval";
@@ -234,11 +235,24 @@ export async function solutionFiles(
       onlyFiles: true,
     })) {
       seen.add(rel);
+
+      // Stop ENUMERATING, not just reading. The byte budget bounds content, but
+      // discovery ran ahead of it: a scope matching a hundred thousand empty
+      // files costs a hundred thousand directory entries and stats before
+      // anything concludes it was too big. Past this the solution is
+      // unreviewable by count alone, and the caller refuses it.
+      if (seen.size > MAX_SOLUTION_FILES) {
+        return [...seen];
+      }
     }
   }
 
   return [...seen];
 }
+
+/** More files than any real solution has. Past this the scope is not a solution
+ *  scope, and enumerating further only costs. */
+export const MAX_SOLUTION_FILES = 2_000;
 
 /**
  * Score the solution, or refuse to — and an EMPTY scope is refused.
@@ -256,7 +270,7 @@ export async function solutionFiles(
  * Refusing means the FLOOR, not silence — silence skips the guard, which is a
  * pass.
  */
-async function scoreSolution(
+export async function scoreSolution(
   provider: IProvider,
   runDir: string,
   files: readonly string[],
@@ -264,6 +278,13 @@ async function scoreSolution(
   criteria: string
 ): Promise<IJudgeScore> {
   if (files.length === 0) {
+    return emptyScopeScore();
+  }
+
+  // By COUNT, before any stat: solutionFiles stops enumerating past this, so a
+  // scope matching more than a real solution ever does is refused without the
+  // filesystem work of measuring it.
+  if (files.length > MAX_SOLUTION_FILES) {
     return overBudgetScore();
   }
 

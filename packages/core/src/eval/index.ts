@@ -2,6 +2,7 @@ export * from "./eval.types";
 export {
   judge,
   overBudgetScore,
+  emptyScopeScore,
   withinBudget,
   sizeWithinBudget,
   JUDGE_INPUT_SHAPE,

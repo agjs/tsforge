@@ -6,7 +6,9 @@ import {
   solutionFiles,
   guardQuality,
   solutionFitsJudge,
+  scoreSolution,
 } from "../src/self-harness";
+import type { IProvider } from "../src/inference";
 import { withinBudget, JUDGE_BUDGET } from "../src/eval";
 import type { IJudgeScore } from "../src/eval";
 
@@ -191,6 +193,99 @@ describe("solutionFitsJudge", () => {
       expect(solutionFitsJudge(dir, ["big.ts"], "g", "c")).toBe(
         withinBudget({ goal: "g", criteria: "c", code })
       );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("scoreSolution — the composed refusal path", () => {
+  /**
+   * The end-to-end assertion the isolated helpers cannot make. Each piece was
+   * covered separately — globbing can return [], oversized floors — while the
+   * branch that JOINS them was not, so swapping the empty-scope refusal for a
+   * skip would leave every other test green and hand back the free pass this
+   * round exists to close.
+   */
+  const neverCalled: IProvider = {
+    complete: () => {
+      throw new Error("the judge must not be called with an empty scope");
+    },
+  };
+
+  test("an empty scope is refused with a FLOOR the guard can read", async () => {
+    const dir = await corpus();
+
+    try {
+      const score = await scoreSolution(neverCalled, dir, [], "g", "c");
+
+      // Not "unreachable" and not absent: either would make heldOutGuards treat
+      // avgQuality as unsignaled and skip the quality comparison entirely.
+      expect(score.outcome).toBe("empty");
+      expect(guardQuality(score)).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty scope is a DIFFERENT refusal from oversized", async () => {
+    // Nothing is over budget here; there is no artifact at all. Reusing the
+    // oversized value works only because guardQuality floors every
+    // candidate-side outcome — a trap for the next edit.
+    const dir = await corpus();
+
+    try {
+      const empty = await scoreSolution(neverCalled, dir, [], "g", "c");
+
+      expect(empty.notes).toContain("no files in scope");
+      expect(empty.outcome).not.toBe("oversized");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an oversized solution never reaches the judge", async () => {
+    const dir = await corpus();
+
+    try {
+      await writeFile(join(dir, "big.ts"), "x".repeat(JUDGE_BUDGET.code + 1));
+
+      const score = await scoreSolution(neverCalled, dir, ["big.ts"], "g", "c");
+
+      expect(score.outcome).toBe("oversized");
+      expect(guardQuality(score)).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a normal solution DOES reach the judge", async () => {
+    // The other half: refusing everything would also pass the assertions above.
+    const dir = await corpus();
+    let called = 0;
+    const provider: IProvider = {
+      complete: () => {
+        called += 1;
+
+        return Promise.resolve({
+          content: JSON.stringify({
+            overall: 4,
+            correctness: 4,
+            design: 4,
+            readability: 4,
+            notes: "ok",
+          }),
+          toolCalls: [],
+        });
+      },
+    };
+
+    try {
+      const score = await scoreSolution(provider, dir, ["a.ts"], "g", "c");
+
+      expect(called).toBe(1);
+      expect(score.outcome).toBe("scored");
+      expect(guardQuality(score)).toBe(4);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

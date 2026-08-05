@@ -110,7 +110,10 @@ describe("judge input budget", () => {
     };
     const score = await judge(dead, { goal: "g", criteria: "c", code: "a" });
 
-    expect(score.scored).toBe(false);
+    // `outcome`, not `scored`. Unreachable and unusable BOTH carry scored:false,
+    // so asserting that alone passes even if transport errors were floored —
+    // which is the mistake this split exists to prevent.
+    expect(score.outcome).toBe("unreachable");
   });
 });
 
@@ -383,5 +386,50 @@ describe("a failed CALL is classified by whose fault it was", () => {
     });
 
     expect(score.outcome).toBe("unreachable");
+  });
+});
+
+describe("every dimension must be a real score", () => {
+  const replying = (body: unknown): IProvider => ({
+    complete: () =>
+      Promise.resolve({ content: JSON.stringify(body), toolCalls: [] }),
+  });
+
+  test("a reply carrying only `overall` is not a verdict", async () => {
+    // The contract asks for four 1-5 scores and IJudgeScore promises them.
+    // Validating `overall` alone let a partially-injected reply through as real,
+    // with the missing dimensions silently reading 0.
+    const score = await judge(replying({ overall: 5, notes: "trust me" }), {
+      goal: "g",
+      criteria: "c",
+      code: "const a = 1;",
+    });
+
+    expect(score.outcome).toBe("unusable");
+  });
+
+  test("one out-of-range dimension invalidates the whole reply", async () => {
+    const score = await judge(
+      replying({ overall: 4, correctness: 4, design: 99, readability: 4 }),
+      { goal: "g", criteria: "c", code: "const a = 1;" }
+    );
+
+    expect(score.outcome).toBe("unusable");
+  });
+
+  test("all four present and in range is a verdict", async () => {
+    const score = await judge(
+      replying({
+        overall: 3,
+        correctness: 2,
+        design: 4,
+        readability: 5,
+        notes: "n",
+      }),
+      { goal: "g", criteria: "c", code: "const a = 1;" }
+    );
+
+    expect(score.outcome).toBe("scored");
+    expect(score.correctness).toBe(2);
   });
 });
