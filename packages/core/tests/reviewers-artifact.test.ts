@@ -111,6 +111,17 @@ describe("reviewRequestKey (cache key = fingerprint of the ACTUAL review request
     );
   });
 
+  test("CACHE_VERSION moved past 3, so pre-noQuorum artifacts are retired", () => {
+    // The bump is load-bearing, not cosmetic. Artifacts written at version 3
+    // predate the noQuorum flag, so a cached outage block from that era carries
+    // nothing for honorCachedVerdict to test and would be honored as a real
+    // verdict — the poison the flag exists to stop, still live on disk.
+    //
+    // Asserting "not 3" rather than "is 4" pins the invalidation this change
+    // required without freezing every future bump.
+    expect(CACHE_VERSION).not.toBe("3");
+  });
+
   test("CACHE_VERSION is mixed into the key — bumping it retires ALL legacy artifacts in one shot", () => {
     // The ONLY lever that invalidates every already-on-disk artifact (e.g. legacy diff-hash
     // keys, or a poisoned pre-review block). If a regression dropped CACHE_VERSION from the

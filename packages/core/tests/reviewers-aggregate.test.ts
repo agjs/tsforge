@@ -6,7 +6,10 @@ import {
   type IVerdict,
 } from "../src/reviewers/aggregate";
 import type { IReview, IFinding } from "../src/reviewers/schema";
-import { shouldCacheVerdict } from "../src/reviewers/harness-review";
+import {
+  shouldCacheVerdict,
+  honorCachedVerdict,
+} from "../src/reviewers/harness-review";
 
 function ok(
   id: string,
@@ -273,6 +276,46 @@ describe("parseVerdict", () => {
     expect(parsed?.ranked).toHaveLength(1);
     expect(parsed?.ranked[0]?.agreement).toBe(2);
     expect(parsed?.perReviewer).toHaveLength(2);
+  });
+
+  test("round-trips the noQuorum flag through the REAL read path", () => {
+    // The production read is readCachedVerdict -> parseVerdict ->
+    // honorCachedVerdict. The honorCachedVerdict unit test hands it an object
+    // directly and so bypasses parseVerdict entirely: if a refactor dropped the
+    // flag on read, that test stays green while the cache-poison bug quietly
+    // returns. This is the only assertion that covers the seam.
+    const raw = JSON.parse(
+      JSON.stringify({
+        blocked: true,
+        reason: "insufficient reviewers (0 of 2 required)",
+        reviewers: { ok: 0, errored: 4 },
+        ranked: [],
+        perReviewer: [],
+        identity: "local/flash",
+        noQuorum: true,
+      })
+    ) as unknown;
+    const parsed = parseVerdict(raw);
+
+    expect(parsed?.noQuorum).toBe(true);
+    expect(honorCachedVerdict(parsed)).toBeNull();
+  });
+
+  test("a verdict without noQuorum parses to undefined (not injected)", () => {
+    // The mirror: injecting the flag where it was absent would make every
+    // cached verdict unusable and silently disable the cache.
+    const v = {
+      blocked: false,
+      reason: "",
+      reviewers: { ok: 4, errored: 0 },
+      ranked: [],
+      perReviewer: [],
+      identity: "local/flash",
+    };
+    const parsed = parseVerdict(v);
+
+    expect(parsed?.noQuorum).toBeUndefined();
+    expect(honorCachedVerdict(parsed)).toBe(parsed);
   });
 
   test("round-trips the preReview flag (cache-poison guard survives serialize→parse)", () => {
