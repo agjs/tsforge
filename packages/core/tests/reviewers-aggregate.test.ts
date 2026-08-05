@@ -6,6 +6,7 @@ import {
   type IVerdict,
 } from "../src/reviewers/aggregate";
 import type { IReview, IFinding } from "../src/reviewers/schema";
+import { shouldCacheVerdict } from "../src/reviewers/harness-review";
 
 function ok(
   id: string,
@@ -38,6 +39,52 @@ describe("aggregate", () => {
     expect(
       aggregate([ok("a", "approve"), ok("b", "reject")], opts).preReview
     ).toBeUndefined();
+  });
+
+  test("a short panel is FLAGGED noQuorum, so its block is never cached", () => {
+    // The production wiring. shouldCacheVerdict and honorCachedVerdict both test
+    // this flag; if aggregate never set it, both guards would be dead code and
+    // an outage would keep poisoning the cache exactly as before.
+    const allErrored = aggregate(
+      [
+        { status: "errored", reviewerId: "a", error: "connection refused" },
+        { status: "errored", reviewerId: "b", error: "connection refused" },
+      ],
+      opts
+    );
+
+    expect(allErrored.reviewers).toEqual({ ok: 0, errored: 2 });
+    expect(allErrored.noQuorum).toBe(true);
+    expect(shouldCacheVerdict(allErrored)).toBe(false);
+
+    // One short of quorum is the same category: not enough opinions to be a
+    // judgment about the code.
+    const oneShort = aggregate(
+      [
+        ok("a", "approve"),
+        { status: "errored", reviewerId: "b", error: "timeout" },
+      ],
+      opts
+    );
+
+    expect(oneShort.noQuorum).toBe(true);
+    expect(shouldCacheVerdict(oneShort)).toBe(false);
+  });
+
+  test("a panel that REACHED quorum is cached, block or pass", () => {
+    // The other half of the invariant: this must not turn into "never cache a
+    // block". A real reject is a judgment about the code and caching it is the
+    // whole point of the cache.
+    const reject = aggregate([ok("a", "approve"), ok("b", "reject")], opts);
+
+    expect(reject.blocked).toBe(true);
+    expect(reject.noQuorum).toBeUndefined();
+    expect(shouldCacheVerdict(reject)).toBe(true);
+
+    const pass = aggregate([ok("a", "approve"), ok("b", "approve")], opts);
+
+    expect(pass.noQuorum).toBeUndefined();
+    expect(shouldCacheVerdict(pass)).toBe(true);
   });
 
   test("insufficient reviewers → block", () => {

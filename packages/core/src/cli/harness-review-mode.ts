@@ -219,8 +219,9 @@ async function readCachedVerdict(
       return null;
     }
 
-    // honorCachedVerdict drops any cached pre-review gate block (defense in depth
-    // beside the CACHE_VERSION bump) so a transient precondition never re-serves.
+    // honorCachedVerdict drops any cached pre-review gate block OR no-quorum
+    // block (defense in depth beside the CACHE_VERSION bump) so neither a
+    // transient precondition nor an endpoint outage ever re-serves.
     return honorCachedVerdict(parseVerdict(parsed.verdict));
   } catch {
     return null;

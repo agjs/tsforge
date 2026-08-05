@@ -333,6 +333,21 @@ describe("runReviewFlow (the CLI wiring invariant: gather-before-cache, block-ne
 });
 
 describe("read-side + artifact", () => {
+  test("honorCachedVerdict drops a cached NO-QUORUM block", () => {
+    // Belt and suspenders beside the CACHE_VERSION bump: an outage block written
+    // by an older build carries no flag, and one written by this build must
+    // still never be honored if it somehow reaches disk.
+    expect(
+      honorCachedVerdict({
+        ...v,
+        blocked: true,
+        reason: "insufficient reviewers (0 of 2 required)",
+        reviewers: { ok: 0, errored: 4 },
+        noQuorum: true,
+      })
+    ).toBeNull();
+  });
+
   test("honorCachedVerdict drops a cached pre-review block, passes a real verdict through", () => {
     expect(honorCachedVerdict(null)).toBeNull();
     expect(

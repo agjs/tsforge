@@ -24,6 +24,18 @@ const preReviewBlock: IVerdict = {
   preReview: true,
 };
 
+/** What an endpoint outage actually produces: the panel RAN, and nothing came
+ *  back. `aggregate` sets `noQuorum` and the reason names the shortfall. */
+const noQuorumBlock: IVerdict = {
+  blocked: true,
+  reason: "insufficient reviewers (0 of 2 required)",
+  reviewers: { ok: 0, errored: 4 },
+  ranked: [],
+  perReviewer: [],
+  identity: "local/flash",
+  noQuorum: true,
+};
+
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "hr-cache-"));
 
@@ -42,6 +54,20 @@ describe("persistVerdict (cache-poison guard at the write site)", () => {
       // The exact regression: a transient validate block must never reach disk, or
       // it re-serves as a permanent block for that tree. Prove the file is absent —
       // this catches an omitted/inverted guard the pure predicate test cannot.
+      const files = await readdir(dir).catch(() => []);
+
+      expect(files).toHaveLength(0);
+    });
+  });
+
+  test("a NO-QUORUM block writes NO cache artifact either", async () => {
+    await withTempDir(async (dir) => {
+      await persistVerdict(noQuorumBlock, "key1", "t1", "p1", dir);
+
+      // Observed live on 2026-08-05: every reviewer errored, the resulting BLOCK
+      // was cached against the tree hash, and the next run replayed it as a
+      // cache hit. One endpoint hiccup blocking that exact tree forever, with no
+      // way past but touching a file or changing the intent string.
       const files = await readdir(dir).catch(() => []);
 
       expect(files).toHaveLength(0);
