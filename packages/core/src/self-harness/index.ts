@@ -19,6 +19,7 @@ export { mineWeaknesses, dominantSignal, type IMinedRun } from "./mine";
 export {
   evaluateHarness,
   allMustRun,
+  solutionFiles,
   SPEC_SLOW_THRESHOLD,
   type IEvaluateOptions,
   type IEvaluateOutcome,

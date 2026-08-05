@@ -128,3 +128,44 @@ describe("buildRequestBody: per-call temperature override", () => {
     expect(b.temperature).toBeUndefined();
   });
 });
+
+describe("buildRequestBody: per-call maxTokens", () => {
+  test("a per-call cap reaches the wire", () => {
+    expect(body({}, { maxTokens: 512 }).max_tokens).toBe(512);
+  });
+
+  test("it overrides the config default", () => {
+    expect(body({ maxTokens: 16_384 }, { maxTokens: 512 }).max_tokens).toBe(
+      512
+    );
+  });
+
+  test("without one, the config default still applies", () => {
+    expect(body({ maxTokens: 16_384 }, {}).max_tokens).toBe(16_384);
+  });
+
+  test("a per-call cap beats extraBody, which is merged last", () => {
+    // extraBody is a per-model escape hatch and overriding the profile is its
+    // job — but a per-call cap is a caller saying THIS request must not run
+    // long. A config shipping extraBody.max_tokens would otherwise silently
+    // defeat a side call's ceiling, which is the one bound that has to hold.
+    expect(
+      body({ extraBody: { max_tokens: 99_999 } }, { maxTokens: 512 }).max_tokens
+    ).toBe(512);
+  });
+
+  test("extraBody still wins when the caller passed no cap", () => {
+    expect(body({ extraBody: { max_tokens: 99_999 } }, {}).max_tokens).toBe(
+      99_999
+    );
+  });
+
+  test("a non-finite per-call cap is ignored, not sent as null", () => {
+    // JSON.stringify turns NaN into null, which a server reads as an explicit
+    // choice rather than "unset" — the same trap the config path already
+    // guards.
+    expect(
+      body({ maxTokens: 4096 }, { maxTokens: Number.NaN }).max_tokens
+    ).toBe(4096);
+  });
+});

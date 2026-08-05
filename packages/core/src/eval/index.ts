@@ -1,5 +1,12 @@
 export * from "./eval.types";
-export { judge, JUDGE_INPUT_SHAPE } from "./judge";
+export {
+  judge,
+  overBudgetScore,
+  withinBudget,
+  JUDGE_INPUT_SHAPE,
+  JUDGE_BUDGET,
+  JUDGE_MAX_TOKENS,
+} from "./judge";
 export { summarize } from "./score";
 export { countLoc, countTaskLoc, type ITaskLoc } from "./loc";
 export { analyzeEvents, type IRunMetrics } from "./metrics";

@@ -60,10 +60,22 @@ const SYSTEM =
  * built from model-generated text — the shape of request you do not want a
  * self-improving loop able to grow at will.
  *
- * Over-budget yields NO SIGNAL rather than a truncated read. A judge scoring
- * half a file returns a number that looks like a measurement and is not one, and
- * this score feeds an acceptance guard; the guard is skipped when either side
- * lacks signal, so silence degrades safely and a wrong number does not.
+ * Over-budget is SCORED, at the floor — not skipped, and not truncated.
+ *
+ * Skipping was the first attempt and it was worse than the hole it closed. The
+ * quality guard is skipped when either side lacks signal, so "no signal" is a
+ * pass: a candidate could emit one enormous string, deterministically disable
+ * avgQuality, and never face the guard at all. That trades an injection gradient
+ * for a size gradient, which is the same reward hacking wearing a different hat.
+ *
+ * Truncating is no better — a score computed from half a file looks like a
+ * measurement and is not one.
+ *
+ * So it scores 1. The distinction that makes this fair: a FAILED CALL (endpoint
+ * down, timeout) is infrastructure and not attributable to the candidate, and
+ * still yields no signal. Input this size is entirely the candidate's doing, and
+ * code too large to review is not neutral — it is bad, on the one axis this
+ * function exists to measure.
  */
 export const JUDGE_BUDGET = {
   goal: 2_000,
@@ -72,19 +84,35 @@ export const JUDGE_BUDGET = {
   total: 64_000,
 } as const;
 
+/** The fixed framing the user message adds around the three fields ("Goal:",
+ *  "Acceptance criteria:", "Solution:", separators) plus the system prompt,
+ *  counted so the total is a bound on what actually goes on the wire rather than
+ *  on the payload alone. */
+const FRAMING_BYTES = 256;
+
 /** Response cap. The reply is one small JSON object; the model-wide default is
  *  sized for whole-file tool output and is thousands of times larger than this
  *  call can legitimately need. */
 export const JUDGE_MAX_TOKENS = 512;
 
+/** The floor, SCORED — see the budget note. `scored: true` is the whole point:
+ *  an unscored result is a skipped guard, which is exactly the free pass a
+ *  candidate would aim for. */
 const OVER_BUDGET: IJudgeScore = {
-  overall: 0,
-  correctness: 0,
-  design: 0,
-  readability: 0,
-  notes: "judge input over budget",
-  scored: false,
+  overall: 1,
+  correctness: 1,
+  design: 1,
+  readability: 1,
+  notes: "solution exceeds the reviewable size budget",
+  scored: true,
 };
+
+/** The floor score as a value the caller can return without building a request —
+ *  used by the evaluator when file SIZES alone show the solution is
+ *  unreviewable, so nothing has to be read to find out. */
+export function overBudgetScore(): IJudgeScore {
+  return { ...OVER_BUDGET };
+}
 
 /** Whether this input is small enough to judge honestly. Every field is checked
  *  individually AND against a total, so no single field can consume the whole
@@ -98,7 +126,7 @@ export function withinBudget(input: IJudgeInput): boolean {
     goal <= JUDGE_BUDGET.goal &&
     criteria <= JUDGE_BUDGET.criteria &&
     code <= JUDGE_BUDGET.code &&
-    goal + criteria + code <= JUDGE_BUDGET.total
+    goal + criteria + code + FRAMING_BYTES <= JUDGE_BUDGET.total
   );
 }
 

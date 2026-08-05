@@ -114,7 +114,14 @@ function profileFields(
   // Per-call first, then config. A side call (judge, classifier) knows its own
   // ceiling better than the model-wide default, which is sized for whole-file
   // tool-call output.
-  const configured = opts.maxTokens ?? cfg.maxTokens;
+  //
+  // The finiteness check is on the per-call value SPECIFICALLY, not just the
+  // result: `??` does not catch NaN, so a bad per-call value would sail past it
+  // and then fail the check below — discarding the config's perfectly good cap
+  // along with it and falling all the way back to the provider default.
+  const perCall = opts.maxTokens;
+  const configured =
+    perCall !== undefined && Number.isFinite(perCall) ? perCall : cfg.maxTokens;
 
   setPath(
     body,
@@ -342,7 +349,33 @@ export function buildRequestBody(
       ? { stream: true, stream_options: { include_usage: true } }
       : {}),
     ...(cfg.extraBody ?? {}),
+    // AFTER extraBody, deliberately. extraBody is a per-model escape hatch and
+    // overriding the profile is its job — but a per-call cap is a caller saying
+    // "this specific request must not be allowed to run long", and a config
+    // shipping `extraBody.max_tokens` would silently defeat it. A side call
+    // (judge, classifier) that quietly loses its ceiling is exactly the bound
+    // that has to hold.
+    ...perCallTokenCap(cfg, opts),
   };
+}
+
+/** The per-call token cap, re-asserted over `extraBody`. Empty unless the caller
+ *  actually passed one, so a model's own override still wins by default. */
+function perCallTokenCap(
+  cfg: IOpenAICompatibleConfig,
+  opts: ICompleteOptions
+): Record<string, unknown> {
+  const cap = opts.maxTokens;
+
+  if (cap === undefined || !Number.isFinite(cap)) {
+    return {};
+  }
+
+  const body: Record<string, unknown> = {};
+
+  setPath(body, profile(cfg).tokenCap ?? DEFAULT_TOKEN_CAP, cap);
+
+  return body;
 }
 
 /** Wire form of {@link IResponseFormat}. Written ahead of `extraBody` so a

@@ -18,8 +18,15 @@ import { runSpec } from "../loop";
 import { runAccept, parserFor } from "../validate";
 import type { ILoopEvent } from "../loop";
 import type { IProvider } from "../inference";
-import { classifyRun, countTaskLoc, judge, summarize } from "../eval";
-import type { IRunRecord } from "../eval";
+import {
+  classifyRun,
+  countTaskLoc,
+  judge,
+  overBudgetScore,
+  JUDGE_BUDGET,
+  summarize,
+} from "../eval";
+import type { IJudgeScore, IRunRecord } from "../eval";
 import { renderEvent } from "../render";
 import { resetOverlayCache } from "./overlay";
 import { meanProgress, runProgress } from "./progress";
@@ -200,6 +207,38 @@ function gateSpec(
   };
 }
 
+/**
+ * Every file the spec's solution lives in, deduped, in first-mention order.
+ *
+ * ALL tasks, not `spec.tasks[0]`. The judge used to read the first task's files
+ * while `countTaskLoc` two lines away measured every task's — so quality and
+ * size described different artifacts, and on a multi-task spec most of what the
+ * model wrote was never looked at. Deduped because two tasks may legitimately
+ * name the same file, and sending it twice would both waste budget and show the
+ * judge a doubled artifact.
+ */
+export function solutionFiles(spec: {
+  tasks: readonly { files: readonly string[] }[];
+}): string[] {
+  return [...new Set(spec.tasks.flatMap((t) => t.files))];
+}
+
+/** Read the solution and score it. Split out so the size check above can refuse
+ *  without this ever running — the point of checking before reading. */
+async function judgeFiles(
+  provider: IProvider,
+  runDir: string,
+  files: readonly string[],
+  goal: string,
+  criteria: string
+): Promise<IJudgeScore> {
+  const code = (
+    await Promise.all(files.map((f) => Bun.file(join(runDir, f)).text()))
+  ).join("\n\n");
+
+  return judge(provider, { goal, criteria, code });
+}
+
 interface ITaskRunOutput {
   readonly record: IRunRecord;
   readonly run: IMinedRun;
@@ -265,15 +304,19 @@ async function runTaskOnce(
       // measures the whole spec, so scoring quality on task 1 alone judged a
       // different artifact than the one being measured — and on a multi-task
       // spec it silently ignored most of what the model wrote.
-      const files = [...new Set(spec.tasks.flatMap((t) => t.files))];
-      const code = (
-        await Promise.all(files.map((f) => Bun.file(join(runDir, f)).text()))
-      ).join("\n\n");
-      const score = await judge(opts.judgeProvider, {
-        goal: spec.title,
-        criteria: specText,
-        code,
-      });
+      const files = solutionFiles(spec);
+      // Sized BEFORE reading. Reading every file, joining, then encoding to
+      // count bytes copies the whole artifact twice before deciding it was too
+      // big to look at — so the path the budget is supposed to bound stays
+      // unbounded locally, just short of the model call. `size` is a stat, not a
+      // read.
+      const bytes = files.reduce(
+        (sum, f) => sum + Bun.file(join(runDir, f)).size,
+        0
+      );
+      const score = await (bytes > JUDGE_BUDGET.code
+        ? Promise.resolve(overBudgetScore())
+        : judgeFiles(opts.judgeProvider, runDir, files, spec.title, specText));
 
       quality = score.scored ? score.overall : undefined;
     }
