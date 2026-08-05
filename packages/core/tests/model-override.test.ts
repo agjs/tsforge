@@ -169,3 +169,19 @@ describe("buildRequestBody: per-call maxTokens", () => {
     ).toBe(4096);
   });
 });
+
+describe("buildRequestBody: a NESTED per-call cap keeps its siblings", () => {
+  test("writing a nested cap does not erase the rest of its parent", () => {
+    // The cap may live at a nested path for a custom profile. Spreading a
+    // freshly built { params: { ... } } over the assembled body replaces the
+    // WHOLE parent, silently dropping every sibling the profile and extraBody
+    // had just written there.
+    const out = body(
+      { extraBody: { params: { keep_me: "yes", max_tokens: 99_999 } } },
+      { maxTokens: 512 }
+    );
+    const params = out.params;
+
+    expect(params).toMatchObject({ keep_me: "yes" });
+  });
+});

@@ -6,6 +6,7 @@ import {
   JUDGE_BUDGET,
   JUDGE_MAX_TOKENS,
 } from "../src/eval/judge";
+import { ModelRequestError } from "../src/inference";
 import type {
   IProvider,
   ICompleteOptions,
@@ -86,8 +87,9 @@ describe("judge input budget", () => {
     // when either side lacks signal, so returning "no signal" made an oversized
     // solution a free pass: emit one enormous string, disable avgQuality,
     // never face the guard. That swaps an injection gradient for a size
-    // gradient. Scoring it — and `scored: true` is the load-bearing part —
-    // removes the incentive.
+    // gradient. What removes the incentive is the guard seeing a NUMBER, which
+    // it gets from `outcome`; `scored` stays false so the improvement loop is
+    // not handed "too big" as a critique to act on.
     const { provider, calls } = recordingProvider();
     const score = await judge(provider, {
       goal: "g",
@@ -320,5 +322,62 @@ describe("byte counting is bounded", () => {
         code: "x".repeat(JUDGE_BUDGET.code),
       })
     ).toBe(true);
+  });
+});
+
+describe("a failed CALL is classified by whose fault it was", () => {
+  /**
+   * The third route into the bypass, and the least obvious: make the REQUEST
+   * invalid rather than the answer unusable. A token-dense solution can sit
+   * under the byte budget and still blow the endpoint's context window, and a
+   * 4xx read as "unreachable" hands back no signal — which skips the guard.
+   */
+  const throwing = (err: Error): IProvider => ({
+    complete: () => Promise.reject(err),
+  });
+
+  test("a 400 is the candidate's doing, so it scores", async () => {
+    const score = await judge(
+      throwing(new ModelRequestError(400, "context length exceeded")),
+      { goal: "g", criteria: "c", code: "a" }
+    );
+
+    expect(score.outcome).toBe("unusable");
+  });
+
+  test("a 500 is the endpoint's own problem, so it does not", async () => {
+    const score = await judge(
+      throwing(new ModelRequestError(503, "overloaded")),
+      {
+        goal: "g",
+        criteria: "c",
+        code: "a",
+      }
+    );
+
+    expect(score.outcome).toBe("unreachable");
+  });
+
+  test("a 429 is the server asking for the same request later", async () => {
+    const score = await judge(
+      throwing(new ModelRequestError(429, "slow down")),
+      {
+        goal: "g",
+        criteria: "c",
+        code: "a",
+      }
+    );
+
+    expect(score.outcome).toBe("unreachable");
+  });
+
+  test("a transport error carries no status and is not attributable", async () => {
+    const score = await judge(throwing(new Error("ECONNRESET")), {
+      goal: "g",
+      criteria: "c",
+      code: "a",
+    });
+
+    expect(score.outcome).toBe("unreachable");
   });
 });

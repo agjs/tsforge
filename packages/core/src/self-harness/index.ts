@@ -20,6 +20,7 @@ export {
   evaluateHarness,
   allMustRun,
   solutionFiles,
+  guardQuality,
   SPEC_SLOW_THRESHOLD,
   type IEvaluateOptions,
   type IEvaluateOutcome,

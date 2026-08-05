@@ -1,5 +1,6 @@
 import type { IJudgeInput, IJudgeScore } from "./eval.types";
 import type { IProvider } from "../inference";
+import { ModelRequestError } from "../inference";
 import { isRecord } from "../lib/guards";
 import { extractJson } from "../lib/json";
 
@@ -84,8 +85,16 @@ export const JUDGE_BUDGET = {
   total: 64_000,
 } as const;
 
-/** The labels and separators the user message wraps around the three fields. */
-const USER_FRAMING = "Goal: \n\nAcceptance criteria:\n\n\nSolution:\n";
+/** The user message, as a function of its three fields — so the framing counted
+ *  in the budget and the framing actually sent are the same string by
+ *  construction. A second hand-written template beside this one is the same
+ *  silent-undercount trap the derived FRAMING_BYTES exists to remove. */
+function userMessage(input: IJudgeInput): string {
+  return `Goal: ${input.goal}\n\nAcceptance criteria:\n${input.criteria}\n\nSolution:\n${input.code}`;
+}
+
+/** The framing alone: the same template with nothing in it. */
+const USER_FRAMING = userMessage({ goal: "", criteria: "", code: "" });
 
 /**
  * Everything on the wire that is not the three payload fields: the system prompt
@@ -240,6 +249,25 @@ const UNSCOREABLE: IJudgeScore = {
   outcome: "unusable",
 };
 
+/**
+ * Whether a failed judge call was the ENDPOINT's problem rather than the
+ * candidate's.
+ *
+ * Only this class may return no signal, because no signal skips the acceptance
+ * guard. A transport error arrives as a plain Error and is not attributable to
+ * anyone; a server that answered with a status is classified by it — 4xx means
+ * "your request is wrong", and for this call the request is mostly candidate
+ * code, while 408/429/5xx are the server asking for the same request later or
+ * failing on its own.
+ */
+function isInfrastructureFailure(err: unknown): boolean {
+  if (!(err instanceof ModelRequestError)) {
+    return true;
+  }
+
+  return !err.isPermanent;
+}
+
 export async function judge(
   provider: IProvider,
   input: IJudgeInput
@@ -256,16 +284,24 @@ export async function judge(
         { role: "system", content: SYSTEM },
         {
           role: "user",
-          content: `Goal: ${input.goal}\n\nAcceptance criteria:\n${input.criteria}\n\nSolution:\n${input.code}`,
+          content: userMessage(input),
         },
       ],
       { temperature: 0, maxTokens: JUDGE_MAX_TOKENS }
     );
-  } catch {
-    // A judge call that errors (non-2xx, timeout, connection) is no signal — not a
-    // crash of the (best-effort) quality pass, and not a real 0/5. Treat it like an
-    // unparseable response so the caller skips the loop.
-    return { ...NO_SIGNAL };
+  } catch (err) {
+    // NOT every failure is infrastructure. A 4xx means the server understood the
+    // request and rejected it — and the request is mostly candidate code, so a
+    // token-dense solution can sit under the byte budget and still blow the
+    // context window. Calling that "unreachable" returns no signal, which SKIPS
+    // the guard: the same bypass, reached by making the REQUEST invalid rather
+    // than the answer unusable.
+    //
+    // A connection failure, timeout, 429 or 5xx is the endpoint's own problem
+    // and stays unmeasured — the mechanical gate is the real oracle anyway.
+    return isInfrastructureFailure(err)
+      ? { ...NO_SIGNAL }
+      : { ...UNSCOREABLE, notes: "judge rejected the request" };
   }
 
   let data: unknown;

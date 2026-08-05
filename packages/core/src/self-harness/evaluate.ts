@@ -213,20 +213,37 @@ function gateSpec(
  * ALL tasks, not `spec.tasks[0]`. The judge used to read the first task's files
  * while `countTaskLoc` two lines away measured every task's — so quality and
  * size described different artifacts, and on a multi-task spec most of what the
- * model wrote was never looked at. Deduped because two tasks may legitimately
- * name the same file, and sending it twice would both waste budget and show the
- * judge a doubled artifact.
+ * model wrote was never looked at.
+ *
+ * GLOBBED, for the same reason. `ITask.files` holds scope patterns, not paths,
+ * so treating `src/**\/*.ts` as a filename either errors on a file that does not
+ * exist or silently reviews nothing — and `countTaskLoc` expands them, so a
+ * literal reading would put quality and size back on different sets by another
+ * route. Deduped because two tasks may legitimately name the same file, and
+ * sending it twice wastes budget and shows the judge a doubled artifact.
  */
-export function solutionFiles(spec: {
-  tasks: readonly { files: readonly string[] }[];
-}): string[] {
-  return [...new Set(spec.tasks.flatMap((t) => t.files))];
+export async function solutionFiles(
+  cwd: string,
+  spec: { tasks: readonly { files: readonly string[] }[] }
+): Promise<string[]> {
+  const seen = new Set<string>();
+
+  for (const pattern of spec.tasks.flatMap((t) => t.files)) {
+    for await (const rel of new Bun.Glob(pattern).scan({
+      cwd,
+      onlyFiles: true,
+    })) {
+      seen.add(rel);
+    }
+  }
+
+  return [...seen];
 }
 
 /** The quality figure the acceptance guard should see, or undefined for "not
  *  measured". See the call site for why an unusable answer is a 1 and not a
  *  skip. */
-function guardQuality(score: IJudgeScore): number | undefined {
+export function guardQuality(score: IJudgeScore): number | undefined {
   if (score.outcome === "scored") {
     return score.overall;
   }
@@ -353,7 +370,7 @@ async function runTaskOnce(
       // measures the whole spec, so scoring quality on task 1 alone judged a
       // different artifact than the one being measured — and on a multi-task
       // spec it silently ignored most of what the model wrote.
-      const files = solutionFiles(spec);
+      const files = await solutionFiles(runDir, spec);
       const score = await (solutionFitsJudge(
         runDir,
         files,
