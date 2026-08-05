@@ -13,8 +13,8 @@ import type { IMinedRun } from "./mine";
 import type {
   ICandidate,
   IHarnessEval,
-  IHarnessOverlay,
   ISplitScore,
+  IHarnessOverlay,
   ISplits,
   IValidationResult,
 } from "./self-harness.types";
@@ -24,13 +24,61 @@ const QUALITY_TOLERANCE = 0.5;
 /** Held-out solutions may grow at most this factor before the edit reads as
  *  buying passes with slop. */
 const LOC_TOLERANCE_FACTOR = 1.25;
-/** Efficiency tie-break (pass counts identical on BOTH splits): held-in
- *  commonly-green cycles must improve by at least this fraction AND this many
- *  absolute cycles (noise floor at repeats=1)… */
-const EFFICIENCY_MIN_REL = 0.2;
-const EFFICIENCY_MIN_ABS = 2;
-/** …while held-out commonly-green cycles may grow at most this fraction. */
-const EFFICIENCY_HO_TOLERANCE = 0.1;
+/**
+ * The graded criterion, used when pass counts are unchanged on both splits.
+ *
+ * Replaces an efficiency tie-break on commonly-green CYCLES, which was measured
+ * accepting noise: on 2026-08-04 it took seven edits, and the lineage's own
+ * re-measurement of the very next round contradicted them (a claimed −49%
+ * delivered −11% when the merged overlay was measured fresh). Cycle counts swing
+ * 4-10 on a single task, so a 20% threshold sat inside the noise.
+ *
+ * Progress is a fraction of starting gate errors resolved per run, so it is
+ * bounded, comparable across tasks, and moves for reasons the pass bit cannot
+ * see — a run going from 50 residual errors to 1 is a real improvement that
+ * pass/fail scores as nothing.
+ */
+const PROGRESS_MIN_GAIN = 0.05;
+/*
+ * There is deliberately no headroom-relative relaxation of that floor.
+ *
+ * On a nearly-green split every passing run contributes 1.0, so the most a
+ * candidate can gain is roughly failed/total, and the graded dimension goes
+ * quiet. Scaling the bar down to keep it talking — it briefly fell to 0.005 —
+ * means accepting half-a-point moves, which is the measurement noise this whole
+ * change exists to exclude. Going quiet when there is nothing to measure is the
+ * correct behaviour; the fix for a corpus with no headroom is harder tasks, not
+ * a lower bar.
+ */
+/** Held-out progress may not fall AT ALL. The paper's rule is non-regression on
+ *  the held-out split; a tolerance here would permit promoting a candidate with
+ *  measurably worse held-out behaviour, which is precisely what that split
+ *  exists to catch. Noise is handled by requiring a material held-in GAIN, not
+ *  by forgiving held-out losses. */
+const PROGRESS_HO_TOLERANCE = 0;
+/**
+ * Held-out commonly-green cycles may not blow up past this factor.
+ *
+ * A BLOWUP GUARD, not an acceptance signal — that distinction is the point.
+ * Cycles as a signal accepted noise (a claimed −49% delivered −11% on
+ * re-measurement), which is why they no longer decide anything. But dropping
+ * them entirely left held-out free to get arbitrarily slower as long as its
+ * progress held, and a harness that reaches the same place while thrashing for
+ * twice as long is worse.
+ *
+ * Kept at the 1.1× the previous rule used, and applied to a wider population:
+ * every task shared by both evaluations rather than only those green on both
+ * sides, so it now fires on the path where the old bar compared nothing.
+ *
+ * A looser bar was tried and rejected twice on review, correctly. The argument
+ * for it — that cycles swing 4-10 on a task, so 10% of a noisier sum sits
+ * inside the jitter and will false-reject real gains — is a theory, and the
+ * house rule against relaxing a threshold is not. If it does false-reject in
+ * practice, that will show up as candidates dying on this veto with flat
+ * held-out progress, which is a measurable thing to come back with. Loosening
+ * a bar on a prediction is how the loop accepted noise in the first place.
+ */
+const HO_CYCLE_BLOWUP_FACTOR = 1.1;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop
@@ -53,10 +101,15 @@ export interface IAcceptanceDecision {
   readonly deltaOut: number;
 }
 
-/** Summed avgTurnsToGreen over tasks green in BOTH evaluations of one split —
- *  the only apples-to-apples efficiency comparison (a task green on one side
- *  only would smuggle a pass delta into a cycle delta). */
-function commonGreenCycles(
+/** Summed avgCycles over tasks present in BOTH evaluations of one split.
+ *
+ *  Cycles spent, green or not. The green-only version of this guard did not run
+ *  where it was needed: on the path this whole feature exists for — equal pass
+ *  counts, progress driven by residual-error reduction — there are few or no
+ *  commonly-green tasks, so the comparison had zero tasks and silently passed
+ *  everything. A candidate could thrash for arbitrarily long and still clear the
+ *  progress bar. Counting every run's cycles makes the guard actually fire. */
+function commonCycles(
   base: ISplitScore,
   cand: ISplitScore
 ): { base: number; cand: number; tasks: number } {
@@ -65,15 +118,11 @@ function commonGreenCycles(
   let tasks = 0;
 
   for (const [task, summary] of Object.entries(base.perTask)) {
-    const candTurns = cand.perTask[task]?.avgTurnsToGreen;
+    const candCycles = cand.perTask[task]?.avgCycles;
 
-    if (
-      summary.avgTurnsToGreen !== null &&
-      candTurns !== null &&
-      candTurns !== undefined
-    ) {
-      baseSum += summary.avgTurnsToGreen;
-      candSum += candTurns;
+    if (candCycles !== undefined) {
+      baseSum += summary.avgCycles;
+      candSum += candCycles;
       tasks += 1;
     }
   }
@@ -117,57 +166,119 @@ function heldOutGuards(
   return null;
 }
 
-/** The efficiency tie-break, reached ONLY at Δin=0 ∧ Δho=0: equal pass counts
- *  may still promote an edit that makes the harness materially FASTER to green
- *  — the signal the paper's pass-only metric can't see. Pass regression never
- *  reaches here; nothing about the pass rule is loosened. */
-function efficiencyDecision(
+/**
+ * A usable graded figure: present, finite, and inside the range it claims.
+ *
+ * `HarnessEvaluator` is a runtime boundary — injectable, and in production fed
+ * by arithmetic over measured counts — so the type says `number` and nothing
+ * enforces it. Checking only for undefined let NaN through, and NaN makes EVERY
+ * comparison below false: the minimum-gain check does not reject it and neither
+ * does the regression check, so a candidate whose held-in score was not a number
+ * sailed past both and was accepted. Out-of-range values are the same class of
+ * problem with a quieter symptom.
+ */
+function scored(value: number | undefined): value is number {
+  return (
+    value !== undefined && Number.isFinite(value) && value >= 0 && value <= 1
+  );
+}
+
+/**
+ * The graded decision, reached when pass counts are identical on both splits.
+ *
+ * Asks whether the candidate got FURTHER, not merely whether it arrived: mean
+ * fraction of starting gate errors resolved per run. A held-in gain must clear
+ * the noise floor, and held-out progress must not fall — otherwise an edit can
+ * buy held-in progress by damaging generalisation, which is the failure the
+ * paper's held-out split exists to catch.
+ */
+function progressDecision(
   baseline: IHarnessEval,
   candidate: IHarnessEval,
   guard: IAcceptanceDecision | null
 ): IAcceptanceDecision {
-  const heldIn = commonGreenCycles(baseline.heldIn, candidate.heldIn);
-  const heldOut = commonGreenCycles(baseline.heldOut, candidate.heldOut);
-  const gain = heldIn.base - heldIn.cand;
-  const material =
-    heldIn.tasks > 0 &&
-    heldIn.base > 0 &&
-    gain >= EFFICIENCY_MIN_ABS &&
-    gain / heldIn.base >= EFFICIENCY_MIN_REL;
+  const inBase = baseline.heldIn.avgProgress;
+  const inCand = candidate.heldIn.avgProgress;
+  const outBase = baseline.heldOut.avgProgress;
+  const outCand = candidate.heldOut.avgProgress;
+  const no = (reason: string): IAcceptanceDecision => ({
+    accepted: false,
+    deltaIn: 0,
+    deltaOut: 0,
+    reason,
+  });
 
-  if (!material) {
-    return {
-      accepted: false,
-      deltaIn: 0,
-      deltaOut: 0,
-      reason:
-        "no strict gain on either split (Δin=0, Δho=0) and no material efficiency gain",
-    };
+  // FAIL CLOSED on a missing score, on either split. A split with no graded
+  // figure is a split that was not measured, and an unmeasured held-out split
+  // cannot show non-regression — accepting there would promote an edit on no
+  // evidence that it generalises, which is the one thing the held-out split
+  // exists to prevent.
+  //
+  // This governs THIS path only — the graded one. A candidate with a strict pass
+  // gain is decided by the paper's rule and never reaches here, so it is still
+  // accepted with no graded figure at all. That is deliberate: requiring one
+  // would be stricter than Δin ≥ 0 ∧ Δho ≥ 0 ∧ max > 0 and would reject real
+  // wins over a measurement that is only the tie-break.
+  if (
+    !scored(inBase) ||
+    !scored(inCand) ||
+    !scored(outBase) ||
+    !scored(outCand)
+  ) {
+    return no(
+      "no strict gain on either split (Δin=0, Δho=0) and progress was not measured on both splits"
+    );
   }
 
-  if (
-    heldOut.tasks > 0 &&
-    heldOut.cand > heldOut.base * (1 + EFFICIENCY_HO_TOLERANCE)
-  ) {
-    return {
-      accepted: false,
-      deltaIn: 0,
-      deltaOut: 0,
-      reason: `held-out efficiency regressed (${heldOut.cand.toFixed(1)} > ${heldOut.base.toFixed(1)} cycles × ${String(1 + EFFICIENCY_HO_TOLERANCE)})`,
-    };
+  const pct = (v: number): string => (v * 100).toFixed(1);
+  const gain = inCand - inBase;
+
+  // Epsilon, because 0.45 - 0.40 is 0.04999999999999999 in binary floating
+  // point and a mathematically valid 5pp gain would be rejected.
+  if (gain < PROGRESS_MIN_GAIN - 1e-9) {
+    return no(
+      `no strict gain on either split (Δin=0, Δho=0) and progress moved only ${pct(inBase)}%→${pct(inCand)}% (needs +${pct(PROGRESS_MIN_GAIN)}pp)`
+    );
+  }
+
+  // Epsilon here too, for the same reason the other two comparisons carry one:
+  // held-out holding exactly level must not read as a regression because the two
+  // means differ in the last bit.
+  if (outCand < outBase - PROGRESS_HO_TOLERANCE - 1e-9) {
+    return no(
+      `held-out progress regressed (${pct(outBase)}%→${pct(outCand)}%)`
+    );
+  }
+
+  // The cycle guard, unconditional at the bar the previous rule used.
+  //
+  // A waiver was tried — the veto lifted, up to a hard ceiling, when held-out
+  // progress improved materially — on the argument that spending more cycles to
+  // get FURTHER is the behaviour this feature exists to reward, and that vetoing
+  // it makes the graded dimension self-defeating when the baseline fails fast.
+  // Reviewers called every version of it a relaxation, and they were right: the
+  // waiver made a candidate acceptable that the previous rule rejected, and the
+  // reasoning for why that was safe was mine, not evidence. A stricter bar can
+  // only cost false REJECTIONS, which for a loop that edits itself is the safe
+  // direction to be wrong in. If real candidates start dying here with genuine
+  // held-out progress, that is a measurement to bring back — not a prediction.
+  const cycles = commonCycles(baseline.heldOut, candidate.heldOut);
+
+  if (cycles.tasks > 0 && cycles.cand > cycles.base * HO_CYCLE_BLOWUP_FACTOR) {
+    return no(
+      `held-out cycles blew up (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_BLOWUP_FACTOR)}×)`
+    );
   }
 
   if (guard !== null) {
     return guard;
   }
 
-  const rel = Math.round((gain / heldIn.base) * 100);
-
   return {
     accepted: true,
     deltaIn: 0,
     deltaOut: 0,
-    reason: `efficiency gain: held-in ${heldIn.base.toFixed(1)}→${heldIn.cand.toFixed(1)} cycles (−${String(rel)}%), held-out ${heldOut.base.toFixed(1)}→${heldOut.cand.toFixed(1)}`,
+    reason: `progress gain: held-in ${pct(inBase)}%→${pct(inCand)}% of gate errors resolved, held-out ${pct(outBase)}%→${pct(outCand)}%`,
   };
 }
 
@@ -191,7 +302,7 @@ export function acceptanceDecision(
   const guard = heldOutGuards(baseline, candidate, deltaIn, deltaOut);
 
   if (deltaIn === 0 && deltaOut === 0) {
-    return efficiencyDecision(baseline, candidate, guard);
+    return progressDecision(baseline, candidate, guard);
   }
 
   if (guard !== null) {

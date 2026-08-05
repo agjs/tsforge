@@ -96,7 +96,17 @@ export async function buildGate(
 
   appendOptInOracles(parts, labels, process.env);
 
-  return { command: parts.join(" && "), label: labels.join(" + ") };
+  // `parts` is returned alongside the joined command because `&&` is fail-fast
+  // BY DESIGN here — the cheap static floor should reject before anything pays
+  // for a test run — but that makes the error count of a failing gate "whatever
+  // stage died first" rather than total residual. A caller that needs to MEASURE
+  // residual errors, rather than gate on them, has to run every stage; it cannot
+  // recover the stages from the joined string.
+  return {
+    command: parts.join(" && "),
+    parts: [...parts],
+    label: labels.join(" + "),
+  };
 }
 
 /**

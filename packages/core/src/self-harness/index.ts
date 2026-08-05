@@ -18,6 +18,7 @@ export {
 export { mineWeaknesses, dominantSignal, type IMinedRun } from "./mine";
 export {
   evaluateHarness,
+  allMustRun,
   SPEC_SLOW_THRESHOLD,
   type IEvaluateOptions,
   type IEvaluateOutcome,
@@ -46,3 +47,4 @@ export {
   BUILD_SLOW_THRESHOLD,
   type IBuildEvidenceOptions,
 } from "./build-evidence";
+export { runProgress, meanProgress } from "./progress";

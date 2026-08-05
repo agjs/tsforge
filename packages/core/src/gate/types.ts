@@ -14,6 +14,13 @@
 export interface IGateSpec {
   /** The shell command run to verify (must exit 0). */
   command: string;
+  /** The individual stages `command` joins with `&&`, in order. That join is
+   *  fail-fast by design — the cheap static floor rejects before anything pays
+   *  for a test run — so a failing gate's error count is whichever stage died
+   *  first, not total residual. A caller that MEASURES residual errors rather
+   *  than gating on them needs the stages to run them all; it cannot recover
+   *  them from the joined string. Optional: hand-built specs need not supply it. */
+  parts?: readonly string[];
   /** A short human label for the banner. */
   label: string;
 }

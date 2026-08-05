@@ -19,7 +19,6 @@ import type {
   ISplits,
 } from "../src/self-harness/self-harness.types";
 import type { IMinedRun } from "../src/self-harness/mine";
-import type { IVariantSummary } from "../src/eval/eval.types";
 import type { IChatMessage, IModelResponse, IProvider } from "../src/inference";
 import type { ILoopEvent } from "../src/loop/loop.types";
 
@@ -116,136 +115,303 @@ describe("acceptanceDecision — the paper's rule, exactly", () => {
   });
 });
 
-/** Per-task summary carrying only what the efficiency comparison reads. */
-function taskSummary(turnsToGreen: number | null): IVariantSummary {
-  return {
-    label: "t",
-    runs: 1,
-    passed: turnsToGreen === null ? 0 : 1,
-    passRate: turnsToGreen === null ? 0 : 1,
-    avgCycles: turnsToGreen ?? 0,
-    avgTurnsToGreen: turnsToGreen,
-    avgMs: 0,
-    avgQuality: 0,
-    avgLoc: 0,
-    failureClasses: {},
-  };
-}
-
-function withTurns(
+/** A split score carrying a graded progress figure. */
+function withProgress(
   base: IHarnessEval,
-  heldIn: Record<string, number | null>,
-  heldOut: Record<string, number | null>
+  heldIn: number | undefined,
+  heldOut: number | undefined
 ): IHarnessEval {
-  const toPerTask = (
-    turns: Record<string, number | null>
-  ): Record<string, IVariantSummary> =>
-    Object.fromEntries(
-      Object.entries(turns).map(([task, t]) => [task, taskSummary(t)])
-    );
-
   return {
-    heldIn: { ...base.heldIn, perTask: toPerTask(heldIn) },
-    heldOut: { ...base.heldOut, perTask: toPerTask(heldOut) },
+    heldIn: {
+      ...base.heldIn,
+      ...(heldIn === undefined ? {} : { avgProgress: heldIn }),
+    },
+    heldOut: {
+      ...base.heldOut,
+      ...(heldOut === undefined ? {} : { avgProgress: heldOut }),
+    },
   };
 }
 
-describe("acceptanceDecision — efficiency tie-break (Δin=0 ∧ Δho=0)", () => {
+describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
   const passes = { in: { passed: 4 }, out: { passed: 2 } };
-  const baseline = withTurns(
-    evalOf(passes.in, passes.out),
-    { query: 15, math: 2, slugify: 1 },
-    { auth: 4, checkout: 2 }
-  );
+  const base = evalOf(passes.in, passes.out);
 
-  test("material held-in cycle gain with stable held-out is accepted with an efficiency reason", () => {
-    const candidate = withTurns(
-      evalOf(passes.in, passes.out),
-      { query: 8, math: 2, slugify: 1 },
-      { auth: 4, checkout: 2 }
+  test("a material held-in progress gain with stable held-out is accepted", () => {
+    // The case pass/fail cannot see: nothing flipped red→green, but the runs
+    // resolved far more of their gate errors than before. Cycles are REAL here,
+    // not an empty perTask: with no shared tasks `commonCycles` reports zero and
+    // the veto never runs, so a regression that always reported `tasks === 0`
+    // would leave this test — the primary accept path — green.
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.4, 0.5), 8),
+      withCyclesOn(withProgress(base, 0.62, 0.5), 8)
     );
-    const d = acceptanceDecision(baseline, candidate);
 
     expect(d.accepted).toBe(true);
-    expect(d.reason).toContain("efficiency gain");
-    expect(d.reason).toContain("18.0→11.0");
+    expect(d.reason).toContain("progress gain");
+    expect(d.reason).toContain("gate errors resolved");
   });
 
-  test("a below-floor gain still rejects (noise is not signal)", () => {
-    // 18→17 total: above neither the 20% relative nor... below 2-cycle floor
-    const candidate = withTurns(
-      evalOf(passes.in, passes.out),
-      { query: 14, math: 2, slugify: 1 },
-      { auth: 4, checkout: 2 }
+  test("a gain below the noise floor is rejected", () => {
+    // The specific failure being fixed: the old cycle tie-break took a 20%
+    // move as signal when single-task cycles swing 4-10, and its acceptances
+    // did not survive the next round's re-measurement.
+    const d = acceptanceDecision(
+      withProgress(base, 0.5, 0.5),
+      withProgress(base, 0.53, 0.5)
     );
-    const d = acceptanceDecision(baseline, candidate);
 
     expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("no material efficiency gain");
+    expect(d.reason).toContain("progress moved only");
   });
 
-  test("held-in gain bought with a held-out cycle blowup is rejected", () => {
-    const candidate = withTurns(
-      evalOf(passes.in, passes.out),
-      { query: 8, math: 2, slugify: 1 },
-      { auth: 7, checkout: 2 } // 6 → 9 cycles: +50%
+  test("held-in progress bought by damaging held-out is rejected", () => {
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.6),
+      withProgress(base, 0.7, 0.4)
     );
-    const d = acceptanceDecision(baseline, candidate);
 
     expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("held-out efficiency regressed");
+    expect(d.reason).toContain("held-out progress regressed");
   });
 
-  test("pass regression rejects before any efficiency math (pass rule dominates)", () => {
-    const candidate = withTurns(
-      evalOf({ passed: 4 }, { passed: 1 }),
-      { query: 4, math: 1, slugify: 1 },
-      { auth: 1, checkout: 1 }
+  test("even a tiny held-out dip blocks a large held-in gain", () => {
+    // No tolerance: the paper's rule is non-regression on held-out. Forgiving a
+    // measurable held-out loss is exactly what that split exists to catch.
+    // Noise is handled by demanding a material held-in GAIN, not by excusing
+    // held-out losses.
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.6),
+      withProgress(base, 0.9, 0.59)
     );
-    const d = acceptanceDecision(baseline, candidate);
 
     expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("regresses held-out");
+    expect(d.reason).toContain("held-out progress regressed");
   });
 
-  test("tasks green on only one side are excluded from the comparison", () => {
-    // query green only in candidate — its 3 cycles must not count as a gain;
-    // remaining common tasks are unchanged → no material gain → reject.
-    const lopsidedBaseline = withTurns(
-      evalOf(passes.in, passes.out),
-      { query: null, math: 2, slugify: 1 },
-      { auth: 4 }
-    );
-    const candidate = withTurns(
-      evalOf(passes.in, passes.out),
-      { query: 3, math: 2, slugify: 1 },
-      { auth: 4 }
-    );
-    const d = acceptanceDecision(lopsidedBaseline, candidate);
-
-    expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("no material efficiency gain");
+  const withCyclesOn = (e: IHarnessEval, turns: number): IHarnessEval => ({
+    ...e,
+    heldOut: {
+      ...e.heldOut,
+      perTask: {
+        t: {
+          label: "t",
+          runs: 1,
+          passed: 0,
+          passRate: 0,
+          avgCycles: turns,
+          avgTurnsToGreen: null,
+          avgMs: 0,
+          avgQuality: 0,
+          avgLoc: 0,
+          failureClasses: {},
+        },
+      },
+    },
   });
 
-  test("efficiency acceptance still honors the quality guard", () => {
-    const withQuality = (e: IHarnessEval, q: number): IHarnessEval => ({
+  test("held-out cycles blowing up blocks the gain, even with NO greens", () => {
+    // avgTurnsToGreen is null here — nothing went green — which is exactly the
+    // path this feature exists for. The previous guard compared only
+    // commonly-GREEN tasks, so it saw zero tasks here and passed everything
+    // while the candidate thrashed for four times as long.
+    const withCycles = (e: IHarnessEval, turns: number): IHarnessEval => ({
       ...e,
-      heldOut: { ...e.heldOut, avgQuality: q },
+      heldOut: {
+        ...e.heldOut,
+        perTask: {
+          t: {
+            label: "t",
+            runs: 1,
+            passed: 0,
+            passRate: 0,
+            avgCycles: turns,
+            avgTurnsToGreen: null,
+            avgMs: 0,
+            avgQuality: 0,
+            avgLoc: 0,
+            failureClasses: {},
+          },
+        },
+      },
     });
     const d = acceptanceDecision(
-      withQuality(baseline, 4.0),
-      withQuality(
-        withTurns(
-          evalOf(passes.in, passes.out),
-          { query: 8, math: 2, slugify: 1 },
-          { auth: 4, checkout: 2 }
-        ),
-        3.0
-      )
+      withCycles(withProgress(base, 0.4, 0.6), 10),
+      withCycles(withProgress(base, 0.8, 0.6), 40)
     );
 
     expect(d.accepted).toBe(false);
-    expect(d.reason).toContain("quality regressed");
+    expect(d.reason).toContain("held-out cycles blew up");
+  });
+
+  test("held-out level to the last bit is not a regression", () => {
+    // 0.1 + 0.2 is 0.30000000000000004; a bare `<` reads the mirror of that as a
+    // regression and rejects a candidate whose held-out did not move at all.
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.1 + 0.2),
+      withProgress(base, 0.7, 0.3)
+    );
+
+    expect(d.accepted).toBe(true);
+  });
+
+  test("the 5pp floor is NOT relaxed on a nearly-green split", () => {
+    // Briefly the bar scaled with headroom and could fall to 0.005, accepting
+    // half-a-point moves — the exact noise this change exists to exclude.
+    // Going quiet when a split has no headroom left is correct; the answer to a
+    // corpus with nothing to measure is harder tasks, not a lower bar.
+    const d = acceptanceDecision(
+      withProgress(base, 0.95, 0.9),
+      withProgress(base, 0.98, 0.9)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("needs +5.0pp");
+  });
+
+  test("held-out cycles blowing up is vetoed however much ground was gained", () => {
+    // The bar is unconditional. A waiver for candidates that got further was
+    // tried in three shapes and each one was a relaxation: it accepted what the
+    // previous rule rejected, on my reasoning rather than on evidence.
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.4), 10),
+      withCyclesOn(withProgress(base, 0.8, 0.9), 40)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("held-out cycles blew up");
+  });
+
+  test("more cycles within the bar is fine", () => {
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.4), 10),
+      withCyclesOn(withProgress(base, 0.8, 0.5), 11)
+    );
+
+    expect(d.accepted).toBe(true);
+  });
+
+  test("a baseline that spent NO cycles vetoes any candidate cycles", () => {
+    // Zero baseline has no ratio — every bar multiplies out to zero. Vetoing is
+    // the strict reading, and strict is the safe direction to be wrong in.
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.4), 0),
+      withCyclesOn(withProgress(base, 0.8, 0.9), 12)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("held-out cycles blew up");
+  });
+
+  test("a NaN graded figure fails closed, it does not sail through", () => {
+    // NaN makes every comparison below false: neither the minimum-gain check nor
+    // the regression check rejects it, so a candidate whose held-in score was not
+    // a number was accepted. HarnessEvaluator is a runtime boundary — the type
+    // saying `number` enforces nothing.
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.5),
+      withProgress(base, Number.NaN, 0.5)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("not measured");
+  });
+
+  test("an out-of-range graded figure fails closed too", () => {
+    for (const bad of [-0.5, 1.5, Number.POSITIVE_INFINITY]) {
+      const d = acceptanceDecision(
+        withProgress(base, 0.4, 0.5),
+        withProgress(base, bad, 0.5)
+      );
+
+      expect(d.accepted).toBe(false);
+    }
+  });
+
+  test("held-out holding exactly level is fine", () => {
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.6),
+      withProgress(base, 0.7, 0.6)
+    );
+
+    expect(d.accepted).toBe(true);
+  });
+
+  test("an unmeasured BASELINE fails closed too, not just a candidate", () => {
+    // A regression that only checked the candidate side would pass every other
+    // fail-closed test in this file.
+    const d = acceptanceDecision(
+      withProgress(base, undefined, undefined),
+      withProgress(base, 0.9, 0.9)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("not measured on both splits");
+  });
+
+  test("an exact 5pp gain is accepted despite binary floating point", () => {
+    // 0.45 - 0.40 is 0.04999999999999999.
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.5),
+      withProgress(base, 0.45, 0.5)
+    );
+
+    expect(d.accepted).toBe(true);
+  });
+
+  test("an unmeasured split fails CLOSED, on either side", () => {
+    // A split with no graded figure was not measured. An unmeasured held-out
+    // split cannot show non-regression, so accepting there promotes an edit on
+    // no evidence that it generalises.
+    for (const [i, o] of [
+      [undefined, undefined],
+      [0.9, undefined],
+      [undefined, 0.9],
+    ] as const) {
+      const d = acceptanceDecision(
+        withProgress(base, 0.4, 0.5),
+        withProgress(base, i, o)
+      );
+
+      expect(d.accepted).toBe(false);
+      expect(d.reason).toContain("not measured on both splits");
+    }
+  });
+
+  test("a missing held-out candidate score is never reported as unchanged", () => {
+    // The accept message used `outCand ?? outBase`, which printed "50%→50%"
+    // for a candidate whose held-out progress was never recorded — fabricating
+    // the evidence for its own acceptance.
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.5),
+      withProgress(base, 0.9, undefined)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).not.toContain("50.0%→50.0%");
+  });
+
+  test("a progress gain still honours the held-out quality guard", () => {
+    const d = acceptanceDecision(
+      withProgress(evalOf(passes.in, { passed: 2, avgQuality: 4.0 }), 0.4, 0.5),
+      withProgress(evalOf(passes.in, { passed: 2, avgQuality: 3.0 }), 0.8, 0.5)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("held-out quality regressed");
+  });
+
+  test("a REGRESSED pass count is never rescued by better progress", () => {
+    // Passing dominates: getting further on tasks it now fails is not a trade
+    // the rule may make.
+    const d = acceptanceDecision(
+      withProgress(evalOf({ passed: 4 }, passes.out), 0.3, 0.5),
+      withProgress(evalOf({ passed: 3 }, passes.out), 0.95, 0.5)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("regresses");
   });
 });
 
