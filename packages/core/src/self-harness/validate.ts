@@ -66,18 +66,19 @@ const PROGRESS_HO_TOLERANCE = 0;
  * progress held, and a harness that reaches the same place while thrashing for
  * twice as long is worse.
  *
- * The 1.1× of the old rule measured something else: commonly-GREEN cycles,
- * where both sides reached the same outcome and the comparison is quiet. This
- * sums cycles over every shared task, green or not, which is a far noisier
- * quantity — cycles swing 4-10 on a single task, and a 10% bar sits inside that
- * jitter, so it would false-reject real progress gains for weather.
+ * Kept at the 1.1× the previous rule used, and applied to a wider population:
+ * every task shared by both evaluations rather than only those green on both
+ * sides, so it now fires on the path where the old bar compared nothing.
  *
- * 1.5× is the right bar for the noisier measure, and it is not a relaxation in
- * effect: the old bar only fired when tasks were green on both sides, so on the
- * path this feature exists for it compared nothing and vetoed nothing. This one
- * fires there, and only catches blowups large enough to be real.
+ * A looser bar was tried and rejected twice on review, correctly. The argument
+ * for it — that cycles swing 4-10 on a task, so 10% of a noisier sum sits
+ * inside the jitter and will false-reject real gains — is a theory, and the
+ * house rule against relaxing a threshold is not. If it does false-reject in
+ * practice, that will show up as candidates dying on this veto with flat
+ * held-out progress, which is a measurable thing to come back with. Loosening
+ * a bar on a prediction is how the loop accepted noise in the first place.
  */
-const HO_CYCLE_BLOWUP_FACTOR = 1.5;
+const HO_CYCLE_BLOWUP_FACTOR = 1.1;
 /** How much held-out progress must improve before extra cycles read as
  *  productive work rather than thrash. The SAME floor promotion uses: a move
  *  this change calls noise on held-in cannot simultaneously be evidence of
@@ -238,7 +239,11 @@ function progressDecision(
   const cycles = commonCycles(baseline.heldOut, candidate.heldOut);
   // A MATERIAL increase, not any epsilon: a 0.1pp blip would otherwise disable
   // the guard entirely and let a candidate thrash held-out for free.
-  const wentFurther = outCand - outBase >= HO_PROGRESS_MATERIAL;
+  // Same epsilon as the held-in comparison: 0.45 - 0.40 is
+  // 0.04999999999999999, and without it an exact 5pp held-out improvement
+  // fails the material check, leaving the veto on and rejecting a candidate
+  // that spent cycles to get further — the path this feature rewards.
+  const wentFurther = outCand - outBase >= HO_PROGRESS_MATERIAL - 1e-9;
 
   if (
     !wentFurther &&

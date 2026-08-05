@@ -121,6 +121,12 @@ describe("runProgress", () => {
     expect(runProgress([ev("red", 4), ev("validated", 20)], false)).toBe(0);
   });
 
+  test("a run that opened clean and still failed scores 0", () => {
+    // Failed for a reason that is not an error count — a timeout, a guard. There
+    // is no graded claim to make beyond "not a pass", and 0/0 is not 100%.
+    expect(runProgress([ev("red", 0), ev("stuck")], false)).toBe(0);
+  });
+
   test("a completed run with no gate readings scores 0, not nothing", () => {
     // Returning undefined here was a hole: a candidate could turn a
     // low-scoring failure into an UNSCORED one and lift the mean for free.

@@ -221,8 +221,8 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
           t: {
             label: "t",
             runs: 1,
-            passed: 1,
-            passRate: 1,
+            passed: 0,
+            passRate: 0,
             avgCycles: turns,
             avgTurnsToGreen: null,
             avgMs: 0,
@@ -277,6 +277,17 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
 
     expect(d.accepted).toBe(false);
     expect(d.reason).toContain("needs +5.0pp");
+  });
+
+  test("an exact 5pp held-out gain counts as going further, despite floats", () => {
+    // 0.45 - 0.40 is 0.04999999999999999. Without an epsilon the veto stays on
+    // and rejects exactly the candidate this feature exists to reward.
+    const d = acceptanceDecision(
+      withCyclesOn(withProgress(base, 0.3, 0.4), 5),
+      withCyclesOn(withProgress(base, 0.8, 0.45), 50)
+    );
+
+    expect(d.accepted).toBe(true);
   });
 
   test("a microscopic held-out gain does not buy a cycle blowup", () => {
