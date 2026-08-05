@@ -123,7 +123,7 @@ export function runProgress(
   // Denominator is every task the spec ASKED for, not the ones that opened.
   // Dividing by what was attempted rewarded giving up early: clearing task 1
   // and never opening task 2 beat clearing task 1 and part of task 2.
-  const denominator = Math.max(taskIds.length, scored.length, 1);
+  const denominator = Math.max(taskIds.length, 1);
   const sum = scored.reduce((acc, t) => acc + taskProgress(t), 0);
 
   return Math.min(FAILED_RUN_CEILING, clamp01(sum / denominator));

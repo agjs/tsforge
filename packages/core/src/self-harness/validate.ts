@@ -55,13 +55,12 @@ const PROGRESS_HO_TOLERANCE = 0;
  * progress held, and a harness that reaches the same place while thrashing for
  * twice as long is worse.
  *
- * Looser in threshold than the 1.1× this replaced, and far stricter in reach:
- * the old bar only compared tasks green on BOTH sides, so on the path this
- * feature exists for — few or no greens — it compared nothing and passed
- * everything. A bar that runs at 1.25× catches more real regressions than a
- * tighter one that never fires.
+ * Keeps the 1.1× bar the previous rule used — no threshold is relaxed — and
+ * widens its REACH: the old comparison only covered tasks green on BOTH sides,
+ * so on the path this feature exists for (few or no greens) it compared nothing
+ * and passed everything. Same bar, applied where it was previously blind.
  */
-const HO_CYCLE_BLOWUP_FACTOR = 1.25;
+const HO_CYCLE_BLOWUP_FACTOR = 1.1;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop

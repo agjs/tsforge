@@ -158,10 +158,9 @@ describe("evaluateHarness records the graded score", () => {
   }, 120_000);
 
   test("solving one of two tasks scores in BETWEEN, not 0 and not 1", () => {
-    // Guards the task-id whitelist. The inert-model test above expects 0, which
-    // is ALSO what a broken filter produces — so it cannot tell "no progress"
-    // from "every task excluded". This one can: if the filter stopped matching
-    // real task ids, this would be 0 and the test fails.
+    // Guards the task-id whitelist. Asserting only "scores 0" cannot tell "no
+    // progress" from "every task excluded", since a broken filter yields 0 too.
+    // A mid-range score can only happen if real task ids matched.
     return (async () => {
       const corpusDir = await twoTaskCorpus();
       const runsDir = await mkdtemp(join(tmpdir(), "tsforge-progress-pair-"));
