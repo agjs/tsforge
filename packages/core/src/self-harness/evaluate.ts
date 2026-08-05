@@ -259,14 +259,15 @@ async function runTaskOnce(
       )
     ).totalLoc;
 
-    const firstTask = spec.tasks[0];
-
-    if (opts.judgeProvider !== undefined && firstTask !== undefined) {
+    if (opts.judgeProvider !== undefined && spec.tasks.length > 0) {
       const specText = await Bun.file(join(runDir, `${taskId}.spec.md`)).text();
+      // EVERY task's files, not just the first. `loc` two lines up already
+      // measures the whole spec, so scoring quality on task 1 alone judged a
+      // different artifact than the one being measured — and on a multi-task
+      // spec it silently ignored most of what the model wrote.
+      const files = [...new Set(spec.tasks.flatMap((t) => t.files))];
       const code = (
-        await Promise.all(
-          firstTask.files.map((f) => Bun.file(join(runDir, f)).text())
-        )
+        await Promise.all(files.map((f) => Bun.file(join(runDir, f)).text()))
       ).join("\n\n");
       const score = await judge(opts.judgeProvider, {
         goal: spec.title,

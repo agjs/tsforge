@@ -111,7 +111,10 @@ function profileFields(
   // A NaN/Infinity maxTokens (bad config/env) would JSON.stringify to `null`,
   // which a server reads as an explicit choice, not "unset" — fall back to the
   // provider default instead (matches the temperature/repetitionPenalty guard).
-  const configured = cfg.maxTokens;
+  // Per-call first, then config. A side call (judge, classifier) knows its own
+  // ceiling better than the model-wide default, which is sized for whole-file
+  // tool-call output.
+  const configured = opts.maxTokens ?? cfg.maxTokens;
 
   setPath(
     body,
