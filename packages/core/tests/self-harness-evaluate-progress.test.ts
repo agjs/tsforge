@@ -97,12 +97,16 @@ describe("evaluateHarness records the graded score", () => {
       const record = out.records[0];
 
       expect(record).toBeDefined();
-      expect(typeof record?.progress).toBe("number");
 
-      // And it reaches the split score the acceptance rule reads.
-      expect(typeof out.score.avgProgress).toBe("number");
-      expect(out.score.avgProgress).toBeGreaterThanOrEqual(0);
-      expect(out.score.avgProgress).toBeLessThanOrEqual(1);
+      // Pin the SEMANTICS, not just the type. A model that writes nothing
+      // resolves nothing, so this must be exactly 0 — and critically NOT 1,
+      // which is the defect class that nearly shipped (a failed run scoring
+      // what a pass scores).
+      expect(record?.progress).toBe(0);
+      expect(record?.progress).not.toBe(1);
+
+      // And it reaches the split score the acceptance rule actually reads.
+      expect(out.score.avgProgress).toBe(0);
     } finally {
       await rm(corpusDir, { recursive: true, force: true });
       await rm(runsDir, { recursive: true, force: true });

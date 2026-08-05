@@ -38,9 +38,12 @@ const LOC_TOLERANCE_FACTOR = 1.25;
  * pass/fail scores as nothing.
  */
 const PROGRESS_MIN_GAIN = 0.05;
-/** Held-out progress may fall at most this much before the edit reads as
- *  buying held-in progress by damaging generalisation. */
-const PROGRESS_HO_TOLERANCE = 0.02;
+/** Held-out progress may not fall AT ALL. The paper's rule is non-regression on
+ *  the held-out split; a tolerance here would permit promoting a candidate with
+ *  measurably worse held-out behaviour, which is precisely what that split
+ *  exists to catch. Noise is handled by requiring a material held-in GAIN, not
+ *  by forgiving held-out losses. */
+const PROGRESS_HO_TOLERANCE = 0;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop

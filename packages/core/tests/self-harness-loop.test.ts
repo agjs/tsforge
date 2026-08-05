@@ -173,10 +173,24 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     expect(d.reason).toContain("held-out progress regressed");
   });
 
-  test("a tiny held-out dip inside tolerance does not block a real gain", () => {
+  test("even a tiny held-out dip blocks a large held-in gain", () => {
+    // No tolerance: the paper's rule is non-regression on held-out. Forgiving a
+    // measurable held-out loss is exactly what that split exists to catch.
+    // Noise is handled by demanding a material held-in GAIN, not by excusing
+    // held-out losses.
     const d = acceptanceDecision(
       withProgress(base, 0.4, 0.6),
-      withProgress(base, 0.7, 0.59)
+      withProgress(base, 0.9, 0.59)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("held-out progress regressed");
+  });
+
+  test("held-out holding exactly level is fine", () => {
+    const d = acceptanceDecision(
+      withProgress(base, 0.4, 0.6),
+      withProgress(base, 0.7, 0.6)
     );
 
     expect(d.accepted).toBe(true);

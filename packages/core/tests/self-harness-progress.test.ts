@@ -59,6 +59,23 @@ describe("runProgress", () => {
     expect(runProgress(events, false)).toBeCloseTo(0.98, 2);
   });
 
+  test("a failed run whose gate went fully clean is still NOT a pass", () => {
+    // The defect in its narrowest form: every task reaches zero errors — type
+    // clean, lint clean — but the run failed on behavioural acceptance. Scoring
+    // that 1.0 lets it tie with a genuine pass and win the tie-break.
+    const events = [
+      ev("red", 6, "1"),
+      ev("validated", 0, "1"),
+      ev("red", 3, "2"),
+      ev("validated", 0, "2"),
+    ];
+    const score = runProgress(events, false);
+
+    expect(score).toBeLessThan(1);
+    expect(score).toBeGreaterThan(0.9);
+    expect(score).toBeLessThan(runProgress(events, true));
+  });
+
   test("a failed multi-task run is NOT 1 just because one task greened", () => {
     // The bug the reviewers caught: one `Math.min` over the flat stream saw the
     // greened task's zero and scored the whole failed run 1.0 — identical to a
@@ -127,10 +144,18 @@ describe("meanProgress", () => {
     expect(meanProgress([1, 0.5])).toBeCloseTo(0.75, 5);
   });
 
-  test("no run can be removed from the denominator", () => {
-    // Three runs, one of them zero: the mean is 0.67, not 1.0. There is no
-    // longer any way to drop an unflattering run.
+  test("no COMPLETED run can be removed from the denominator", () => {
+    // Three runs, one of them zero: the mean is 0.67, not 1.0. Every completed
+    // run always carries a number, so none can be dropped.
     expect(meanProgress([1, 0, 1])).toBeCloseTo(0.6667, 3);
+  });
+
+  test("an errored run is skipped, not scored as zero progress", () => {
+    // Errored runs never reach scoring and carry no figure. Reading them as 0
+    // put infrastructure weather into the graded measure — a split of nothing
+    // but timeouts reported 0% progress as though it had been measured.
+    expect(meanProgress([1, undefined, 1])).toBe(1);
+    expect(meanProgress([undefined, undefined])).toBeUndefined();
   });
 
   test("an empty split yields undefined", () => {

@@ -72,6 +72,17 @@ function taskProgress(trace: ITaskTrace): number {
 }
 
 /**
+ * A failed run can never score a full 1, however clean its gate got.
+ *
+ * Without this cap the original defect survives in a narrower form: a run whose
+ * every task reached zero errors — type-clean and lint-clean — but which still
+ * failed on behavioural acceptance scores exactly what a pass scores, and can
+ * win the equal-pass-count tie-break against a candidate that genuinely passes.
+ * Full credit is reserved for runs that actually went green.
+ */
+const FAILED_RUN_CEILING = 0.99;
+
+/**
  * Fraction of its starting gate errors this run resolved.
  *
  * A pass is 1 by definition. A failure is the mean over its tasks, so a spec
@@ -100,8 +111,9 @@ export function runProgress(
   }
 
   const scores = traces.map((t) => taskProgress(t));
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
 
-  return clamp01(scores.reduce((a, b) => a + b, 0) / scores.length);
+  return Math.min(FAILED_RUN_CEILING, clamp01(mean));
 }
 
 function clamp01(value: number): number {
@@ -112,13 +124,26 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-/** Mean progress across a split's runs, or undefined when the split had no runs
- *  at all. Every run counts: there is no way to remove an unflattering run from
- *  the denominator. */
-export function meanProgress(scores: readonly number[]): number | undefined {
-  if (scores.length === 0) {
+/**
+ * Mean progress across a split's runs, or undefined when no run recorded one.
+ *
+ * Only runs that never produced a result lack a score — they are the `errored`
+ * ones, which bypass scoring entirely — and those are SKIPPED rather than read
+ * as zero: a dead endpoint is not a run that made no progress. Defaulting them
+ * to 0 put infrastructure weather into the graded figure, so a split of nothing
+ * but timeouts reported `avgProgress: 0` as though it had been measured.
+ *
+ * Every COMPLETED run always carries a number (see `runProgress`), so there is
+ * no way for a candidate to drop an unflattering run out of the denominator.
+ */
+export function meanProgress(
+  scores: readonly (number | undefined)[]
+): number | undefined {
+  const known = scores.filter((s): s is number => s !== undefined);
+
+  if (known.length === 0) {
     return undefined;
   }
 
-  return scores.reduce((a, b) => a + b, 0) / scores.length;
+  return known.reduce((a, b) => a + b, 0) / known.length;
 }
