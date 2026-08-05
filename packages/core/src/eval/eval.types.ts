@@ -34,6 +34,12 @@ export interface IRunRecord {
   /** Structured reason a failed run failed (from classifyRun); omitted/`none`
    *  for a passing run. The substrate for turning failures into interventions. */
   failureClass?: FailureClass;
+  /** Fraction of the starting gate errors this run resolved, in [0, 1]; 1 for a
+   *  pass. The graded signal the pass bit hides — a failed run that clears 49 of
+   *  50 errors scores 0.98 rather than being indistinguishable from one that
+   *  cleared none. Omitted when the run recorded no gate settlements (an
+   *  infrastructure failure, which must not read as progress of zero). */
+  progress?: number;
 }
 
 /** Aggregated metrics for a variant across its runs. */

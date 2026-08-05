@@ -153,6 +153,17 @@ export interface ISplitScore {
   readonly avgQuality: number;
   /** Mean of per-task avgLoc over tasks that recorded one (0 if none). */
   readonly avgLoc: number;
+  /**
+   * Mean fraction of starting gate errors resolved across the split's runs, or
+   * undefined when no run recorded one.
+   *
+   * This is the GRADED score the acceptance rule reads. The pass count alone
+   * cannot see a candidate that takes a task from 50 residual errors to 1,
+   * which is the state a real failed run was measured in — so on a corpus whose
+   * one failing task flips 60/40 by itself, pass-rate acceptance can only ever
+   * fire on a fluke. Every edit accepted on 2026-08-04 was one.
+   */
+  readonly avgProgress?: number;
   readonly perTask: Record<string, IVariantSummary>;
 }
 

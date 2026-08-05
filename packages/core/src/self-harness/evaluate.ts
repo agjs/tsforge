@@ -20,6 +20,7 @@ import { classifyRun, countTaskLoc, judge, summarize } from "../eval";
 import type { IRunRecord } from "../eval";
 import { renderEvent } from "../render";
 import { resetOverlayCache } from "./overlay";
+import { meanProgress, runProgress } from "./progress";
 import type { IHarnessOverlay, ISplitScore } from "./self-harness.types";
 import type { IMinedRun } from "./mine";
 
@@ -202,6 +203,8 @@ async function runTaskOnce(
   }
 
   const failureClass = passed ? undefined : classifyRun(events).failureClass;
+  // How far the run got, not merely whether it arrived. See ./progress.ts.
+  const progress = runProgress(events, passed);
 
   return {
     record: {
@@ -212,6 +215,7 @@ async function runTaskOnce(
       ...(quality === undefined ? {} : { quality }),
       ...(loc === undefined ? {} : { loc }),
       ...(failureClass === undefined ? {} : { failureClass }),
+      ...(progress === undefined ? {} : { progress }),
     },
     run: {
       taskId,
@@ -355,6 +359,10 @@ export async function evaluateHarness(
       errored,
       avgQuality: meanOfSignaled(summaries.map((s) => s.avgQuality)),
       avgLoc: meanOfSignaled(summaries.map((s) => s.avgLoc)),
+      // Mean over RUNS, not over tasks: a task measured twice should weigh
+      // twice, and a run with no gate settlements is skipped rather than
+      // counted as zero progress.
+      avgProgress: meanProgress(records.map((r) => r.progress)),
       perTask,
     };
 

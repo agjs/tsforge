@@ -14,7 +14,6 @@ import type {
   ICandidate,
   IHarnessEval,
   IHarnessOverlay,
-  ISplitScore,
   ISplits,
   IValidationResult,
 } from "./self-harness.types";
@@ -24,13 +23,24 @@ const QUALITY_TOLERANCE = 0.5;
 /** Held-out solutions may grow at most this factor before the edit reads as
  *  buying passes with slop. */
 const LOC_TOLERANCE_FACTOR = 1.25;
-/** Efficiency tie-break (pass counts identical on BOTH splits): held-in
- *  commonly-green cycles must improve by at least this fraction AND this many
- *  absolute cycles (noise floor at repeats=1)… */
-const EFFICIENCY_MIN_REL = 0.2;
-const EFFICIENCY_MIN_ABS = 2;
-/** …while held-out commonly-green cycles may grow at most this fraction. */
-const EFFICIENCY_HO_TOLERANCE = 0.1;
+/**
+ * The graded criterion, used when pass counts are unchanged on both splits.
+ *
+ * Replaces an efficiency tie-break on commonly-green CYCLES, which was measured
+ * accepting noise: on 2026-08-04 it took seven edits, and the lineage's own
+ * re-measurement of the very next round contradicted them (a claimed −49%
+ * delivered −11% when the merged overlay was measured fresh). Cycle counts swing
+ * 4-10 on a single task, so a 20% threshold sat inside the noise.
+ *
+ * Progress is a fraction of starting gate errors resolved per run, so it is
+ * bounded, comparable across tasks, and moves for reasons the pass bit cannot
+ * see — a run going from 50 residual errors to 1 is a real improvement that
+ * pass/fail scores as nothing.
+ */
+const PROGRESS_MIN_GAIN = 0.05;
+/** Held-out progress may fall at most this much before the edit reads as
+ *  buying held-in progress by damaging generalisation. */
+const PROGRESS_HO_TOLERANCE = 0.02;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop
@@ -51,34 +61,6 @@ export interface IAcceptanceDecision {
   readonly reason: string;
   readonly deltaIn: number;
   readonly deltaOut: number;
-}
-
-/** Summed avgTurnsToGreen over tasks green in BOTH evaluations of one split —
- *  the only apples-to-apples efficiency comparison (a task green on one side
- *  only would smuggle a pass delta into a cycle delta). */
-function commonGreenCycles(
-  base: ISplitScore,
-  cand: ISplitScore
-): { base: number; cand: number; tasks: number } {
-  let baseSum = 0;
-  let candSum = 0;
-  let tasks = 0;
-
-  for (const [task, summary] of Object.entries(base.perTask)) {
-    const candTurns = cand.perTask[task]?.avgTurnsToGreen;
-
-    if (
-      summary.avgTurnsToGreen !== null &&
-      candTurns !== null &&
-      candTurns !== undefined
-    ) {
-      baseSum += summary.avgTurnsToGreen;
-      candSum += candTurns;
-      tasks += 1;
-    }
-  }
-
-  return { base: baseSum, cand: candSum, tasks };
 }
 
 /** Held-out quality + concision guards; null = no objection. */
@@ -121,39 +103,60 @@ function heldOutGuards(
  *  may still promote an edit that makes the harness materially FASTER to green
  *  — the signal the paper's pass-only metric can't see. Pass regression never
  *  reaches here; nothing about the pass rule is loosened. */
-function efficiencyDecision(
+/**
+ * The graded decision, reached when pass counts are identical on both splits.
+ *
+ * Asks whether the candidate got FURTHER, not merely whether it arrived: mean
+ * fraction of starting gate errors resolved per run. A held-in gain must clear
+ * the noise floor, and held-out progress must not fall — otherwise an edit can
+ * buy held-in progress by damaging generalisation, which is the failure the
+ * paper's held-out split exists to catch.
+ */
+function progressDecision(
   baseline: IHarnessEval,
   candidate: IHarnessEval,
   guard: IAcceptanceDecision | null
 ): IAcceptanceDecision {
-  const heldIn = commonGreenCycles(baseline.heldIn, candidate.heldIn);
-  const heldOut = commonGreenCycles(baseline.heldOut, candidate.heldOut);
-  const gain = heldIn.base - heldIn.cand;
-  const material =
-    heldIn.tasks > 0 &&
-    heldIn.base > 0 &&
-    gain >= EFFICIENCY_MIN_ABS &&
-    gain / heldIn.base >= EFFICIENCY_MIN_REL;
+  const inBase = baseline.heldIn.avgProgress;
+  const inCand = candidate.heldIn.avgProgress;
 
-  if (!material) {
+  // No graded claim is possible when either side recorded no progress at all —
+  // typically an endpoint failure. Silence is not evidence of improvement.
+  if (inBase === undefined || inCand === undefined) {
     return {
       accepted: false,
       deltaIn: 0,
       deltaOut: 0,
       reason:
-        "no strict gain on either split (Δin=0, Δho=0) and no material efficiency gain",
+        "no strict gain on either split (Δin=0, Δho=0) and no graded progress recorded",
     };
   }
 
+  const gain = inCand - inBase;
+  const pct = (v: number): string => (v * 100).toFixed(1);
+
+  if (gain < PROGRESS_MIN_GAIN) {
+    return {
+      accepted: false,
+      deltaIn: 0,
+      deltaOut: 0,
+      reason: `no strict gain on either split (Δin=0, Δho=0) and progress moved only ${pct(inBase)}%→${pct(inCand)}% (needs +${pct(PROGRESS_MIN_GAIN)}pp)`,
+    };
+  }
+
+  const outBase = baseline.heldOut.avgProgress;
+  const outCand = candidate.heldOut.avgProgress;
+
   if (
-    heldOut.tasks > 0 &&
-    heldOut.cand > heldOut.base * (1 + EFFICIENCY_HO_TOLERANCE)
+    outBase !== undefined &&
+    outCand !== undefined &&
+    outCand < outBase - PROGRESS_HO_TOLERANCE
   ) {
     return {
       accepted: false,
       deltaIn: 0,
       deltaOut: 0,
-      reason: `held-out efficiency regressed (${heldOut.cand.toFixed(1)} > ${heldOut.base.toFixed(1)} cycles × ${String(1 + EFFICIENCY_HO_TOLERANCE)})`,
+      reason: `held-out progress regressed (${pct(outBase)}%→${pct(outCand)}%)`,
     };
   }
 
@@ -161,13 +164,11 @@ function efficiencyDecision(
     return guard;
   }
 
-  const rel = Math.round((gain / heldIn.base) * 100);
-
   return {
     accepted: true,
     deltaIn: 0,
     deltaOut: 0,
-    reason: `efficiency gain: held-in ${heldIn.base.toFixed(1)}→${heldIn.cand.toFixed(1)} cycles (−${String(rel)}%), held-out ${heldOut.base.toFixed(1)}→${heldOut.cand.toFixed(1)}`,
+    reason: `progress gain: held-in ${pct(inBase)}%→${pct(inCand)}% of gate errors resolved, held-out ${outBase === undefined ? "n/a" : `${pct(outBase)}%→${pct(outCand ?? outBase)}%`}`,
   };
 }
 
@@ -191,7 +192,7 @@ export function acceptanceDecision(
   const guard = heldOutGuards(baseline, candidate, deltaIn, deltaOut);
 
   if (deltaIn === 0 && deltaOut === 0) {
-    return efficiencyDecision(baseline, candidate, guard);
+    return progressDecision(baseline, candidate, guard);
   }
 
   if (guard !== null) {
