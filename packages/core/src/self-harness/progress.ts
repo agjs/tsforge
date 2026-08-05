@@ -99,27 +99,34 @@ const FAILED_RUN_CEILING = 0.99;
 export function runProgress(
   events: readonly ILoopEvent[],
   passed: boolean,
-  taskCount: number
+  taskIds: readonly string[]
 ): number {
   if (passed) {
     return 1;
   }
 
-  // The denominator is the spec's task count, NOT the number of tasks that
-  // happened to open. Dividing by what was attempted rewarded giving up early:
-  // a run that cleared task 1 and never opened task 2 scored the ceiling, while
-  // a run that cleared task 1 AND made real progress on task 2 scored far less.
-  // A task never attempted resolved nothing, so it counts as zero.
-  const denominator = Math.max(taskCount, taskTraces(events).length, 1);
-  const scores = taskTraces(events).map((t) => taskProgress(t));
+  // Only the spec's REAL tasks. run-spec also settles a whole-spec gate under
+  // the pseudo-task `verify` once every task is green, and counting that as a
+  // task inverted the measure: a single-task spec that GREENED its task and
+  // then failed verify scored 0.5 (one full task over a denominator of two),
+  // while a run still stuck at 1-of-10 errors mid-task scored 0.9. Getting
+  // further scored worse — the same defect as early-quit, one step later.
+  // Failing verify is already reflected by the run not passing, which the
+  // ceiling below caps.
+  const wanted = new Set(taskIds);
+  const scored = taskTraces(events).filter((t) => wanted.has(t.task));
 
-  if (scores.length === 0) {
+  if (scored.length === 0) {
     return 0;
   }
 
-  const mean = scores.reduce((a, b) => a + b, 0) / denominator;
+  // Denominator is every task the spec ASKED for, not the ones that opened.
+  // Dividing by what was attempted rewarded giving up early: clearing task 1
+  // and never opening task 2 beat clearing task 1 and part of task 2.
+  const denominator = Math.max(taskIds.length, scored.length, 1);
+  const sum = scored.reduce((acc, t) => acc + taskProgress(t), 0);
 
-  return Math.min(FAILED_RUN_CEILING, clamp01(mean));
+  return Math.min(FAILED_RUN_CEILING, clamp01(sum / denominator));
 }
 
 function clamp01(value: number): number {

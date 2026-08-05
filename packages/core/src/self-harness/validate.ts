@@ -13,6 +13,7 @@ import type { IMinedRun } from "./mine";
 import type {
   ICandidate,
   IHarnessEval,
+  ISplitScore,
   IHarnessOverlay,
   ISplits,
   IValidationResult,
@@ -44,6 +45,18 @@ const PROGRESS_MIN_GAIN = 0.05;
  *  exists to catch. Noise is handled by requiring a material held-in GAIN, not
  *  by forgiving held-out losses. */
 const PROGRESS_HO_TOLERANCE = 0;
+/**
+ * Held-out commonly-green cycles may not blow up past this factor.
+ *
+ * A BLOWUP GUARD, not an acceptance signal — that distinction is the point.
+ * Cycles as a signal accepted noise (a claimed −49% delivered −11% on
+ * re-measurement), which is why they no longer decide anything. But dropping
+ * them entirely left held-out free to get arbitrarily slower as long as its
+ * progress held, and a harness that reaches the same place while thrashing for
+ * twice as long is worse. A loose one-way threshold catches that without
+ * letting noise promote anything.
+ */
+const HO_CYCLE_BLOWUP_FACTOR = 1.5;
 
 /** What one full evaluation of a harness variant yields: the per-split score
  *  plus the held-in run traces (the mining substrate). Injectable so the loop
@@ -64,6 +77,35 @@ export interface IAcceptanceDecision {
   readonly reason: string;
   readonly deltaIn: number;
   readonly deltaOut: number;
+}
+
+/** Summed avgTurnsToGreen over tasks green in BOTH evaluations of one split —
+ *  the only apples-to-apples cycle comparison (a task green on one side only
+ *  would smuggle a pass delta into a cycle delta). Used solely as a blowup
+ *  guard; nothing is accepted on the strength of a cycle number. */
+function commonGreenCycles(
+  base: ISplitScore,
+  cand: ISplitScore
+): { base: number; cand: number; tasks: number } {
+  let baseSum = 0;
+  let candSum = 0;
+  let tasks = 0;
+
+  for (const [task, summary] of Object.entries(base.perTask)) {
+    const candTurns = cand.perTask[task]?.avgTurnsToGreen;
+
+    if (
+      summary.avgTurnsToGreen !== null &&
+      candTurns !== null &&
+      candTurns !== undefined
+    ) {
+      baseSum += summary.avgTurnsToGreen;
+      candSum += candTurns;
+      tasks += 1;
+    }
+  }
+
+  return { base: baseSum, cand: candSum, tasks };
 }
 
 /** Held-out quality + concision guards; null = no objection. */
@@ -155,6 +197,18 @@ function progressDecision(
   if (outCand < outBase - PROGRESS_HO_TOLERANCE) {
     return no(
       `held-out progress regressed (${pct(outBase)}%→${pct(outCand)}%)`
+    );
+  }
+
+  const cycles = commonGreenCycles(baseline.heldOut, candidate.heldOut);
+
+  if (
+    cycles.tasks > 0 &&
+    cycles.base > 0 &&
+    cycles.cand > cycles.base * HO_CYCLE_BLOWUP_FACTOR
+  ) {
+    return no(
+      `held-out cycles blew up (${cycles.base.toFixed(1)}→${cycles.cand.toFixed(1)}, past ${String(HO_CYCLE_BLOWUP_FACTOR)}×)`
     );
   }
 

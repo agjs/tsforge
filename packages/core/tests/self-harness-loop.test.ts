@@ -187,6 +187,40 @@ describe("acceptanceDecision — graded progress (Δin=0 ∧ Δho=0)", () => {
     expect(d.reason).toContain("held-out progress regressed");
   });
 
+  test("held-out cycles blowing up blocks the gain", () => {
+    // Cycles no longer ACCEPT anything (as a signal they took noise: a claimed
+    // −49% delivered −11% on re-measurement). But a harness that reaches the
+    // same place while thrashing for twice as long is worse, so a loose one-way
+    // blowup guard stays.
+    const withCycles = (e: IHarnessEval, turns: number): IHarnessEval => ({
+      ...e,
+      heldOut: {
+        ...e.heldOut,
+        perTask: {
+          t: {
+            label: "t",
+            runs: 1,
+            passed: 1,
+            passRate: 1,
+            avgCycles: turns,
+            avgTurnsToGreen: turns,
+            avgMs: 0,
+            avgQuality: 0,
+            avgLoc: 0,
+            failureClasses: {},
+          },
+        },
+      },
+    });
+    const d = acceptanceDecision(
+      withCycles(withProgress(base, 0.4, 0.6), 10),
+      withCycles(withProgress(base, 0.8, 0.6), 40)
+    );
+
+    expect(d.accepted).toBe(false);
+    expect(d.reason).toContain("held-out cycles blew up");
+  });
+
   test("held-out holding exactly level is fine", () => {
     const d = acceptanceDecision(
       withProgress(base, 0.4, 0.6),
