@@ -149,6 +149,23 @@ describe("reviewer failure detail", () => {
     expect(parsed?.failures?.[0]?.reviewerId).toBe("ok-one");
   });
 
+  test("missing failure detail is SAID, not silently a shorter list", () => {
+    // A cached artifact from an older build carries counts but no detail. Left
+    // alone the printed verdict shows a complete-looking (empty) list beside
+    // "errored: 2" and silently regresses to the count-only state this change
+    // exists to leave behind.
+    const v = aggregate([okOutcome("a"), okOutcome("b")], opts);
+    const raw: unknown = {
+      ...JSON.parse(JSON.stringify(v)),
+      reviewers: { ok: 2, errored: 2 },
+    };
+    const parsed = parseVerdict(raw);
+
+    expect(formatVerdict(parsed ?? v)).toContain(
+      "2 further reviewer failure(s) with no readable detail"
+    );
+  });
+
   test("a non-finite ms is dropped rather than printed as NaNs", () => {
     const v = aggregate([okOutcome("a"), okOutcome("b")], opts);
     const raw: unknown = {
@@ -187,6 +204,29 @@ describe("runBinary reports WHICH failure it was", () => {
 
     expect(r.ok).toBe(false);
     expect(r.timedOut).toBe(true);
+  }, 30_000);
+
+  test("a binary that TRAPS the kill and exits 0 is still not ok", async () => {
+    // The case `ok: code === 0` alone gets wrong, and the reason the plain
+    // `sleep` test above does not cover it: sleep dies on SIGTERM and exits
+    // non-zero, so ok is false either way and the suite would still pass with
+    // `&& !timedOut` deleted. A binary that handles SIGTERM cleanly exits 0
+    // while having produced only a partial answer.
+    const r = await runBinary(
+      {
+        // `& wait` so the trap fires on arrival: with a FOREGROUND sleep, sh
+        // defers the handler until the child finishes, and the kill looks slow
+        // rather than trapped. (The backgrounded child also holds the stdout
+        // pipe open until it exits, which is why this sleeps 2s and not 30.)
+        argv: ["sh", "-c", "trap 'exit 0' TERM; echo partial; sleep 2 & wait"],
+        input: "arg",
+        timeoutMs: 800,
+      },
+      ""
+    );
+
+    expect(r.timedOut).toBe(true);
+    expect(r.ok).toBe(false);
   }, 30_000);
 
   test("a process that exits non-zero on its own is NOT marked timedOut", async () => {
@@ -314,7 +354,33 @@ describe("cause classification through reviewerInvoke", () => {
         }),
     });
 
-    expect(out[0]?.status).toBe("ok");
-    expect(typeof (out[0] as { ms?: number }).ms).toBe("number");
+    const outcome = out[0];
+
+    // Narrowed on status, not cast: the house rule forbids `as` (except
+    // `as const`), and narrowing is what makes ms reachable honestly.
+    expect(outcome?.status).toBe("ok");
+
+    if (outcome?.status === "ok") {
+      expect(typeof outcome.ms).toBe("number");
+    }
+  });
+
+  test("a runner reporting ok WITH timedOut is still not a review", async () => {
+    // Defence in depth. runBinary forces ok=false on a kill, but invokeBinary
+    // must not depend on that: any runner meeting the contract could report
+    // `ok: true, timedOut: true`, and parsing stdout there counts a reviewer we
+    // killed mid-sentence as having reviewed.
+    const out = await reviewerInvoke(binaryPanel(999), request, {
+      makeProvider: deadProvider,
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: '{"verdict":"approve","summary":"","findings":[]}',
+          timedOut: true,
+        }),
+    });
+
+    expect(out[0]?.status).toBe("errored");
+    expect(out[0]).toMatchObject({ cause: "timeout" });
   });
 });

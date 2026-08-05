@@ -284,12 +284,26 @@ export function formatVerdict(v: IVerdict): string {
   // Name every reviewer that dropped out, with why and how long it took. A bare
   // "errored: 2" is the same line whether two binaries are misconfigured or the
   // whole panel timed out, and those need opposite responses.
-  for (const f of v.failures ?? []) {
+  const failures = v.failures ?? [];
+
+  for (const f of failures) {
     const took =
       f.ms === undefined ? "" : ` after ${(f.ms / 1000).toFixed(1)}s`;
 
     lines.push(
       `  ! ${f.reviewerId} did not review (${f.cause ?? "error"})${took}: ${f.error}`
+    );
+  }
+
+  // SAY when detail is missing rather than printing a shorter list that looks
+  // complete. A cached artifact from an older build, or one whose entries did
+  // not survive parsing, otherwise silently regresses to count-only — the state
+  // this change exists to leave behind — with nothing to indicate it.
+  const undetailed = v.reviewers.errored - failures.length;
+
+  if (undetailed > 0) {
+    lines.push(
+      `  ! ${String(undetailed)} further reviewer failure(s) with no readable detail`
     );
   }
 

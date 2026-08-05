@@ -102,21 +102,33 @@ async function invokeBinary(
       stdin
     );
 
-    if (!res.ok) {
-      // Timeout and non-zero exit are DIFFERENT facts and the old message
-      // reported them as one. A timeout means the budget is too small for the
-      // work — raise it, or drop the reviewer. A non-zero exit means it is
-      // broken — the budget is irrelevant. Told apart, the fix is obvious;
-      // conflated, the only way to find out is to time the binary by hand.
-      const timedOut = res.timedOut;
-
+    // Checked BEFORE ok, not inside the failure branch. runBinary already forces
+    // ok=false on a kill, but this must not depend on that: any runner meeting
+    // the contract could report `ok: true, timedOut: true`, and reading stdout
+    // there would count a reviewer we killed mid-sentence as having reviewed.
+    // Whatever it printed before the kill is a partial answer, and a partial
+    // answer is not a review.
+    if (res.timedOut) {
       return {
         status: "errored",
         reviewerId: reviewer.id,
-        error: timedOut
-          ? `binary hit its ${String(reviewer.timeoutMs)}ms timeout`
-          : "binary exited non-zero",
-        cause: timedOut ? "timeout" : "exit",
+        error: `binary hit its ${String(reviewer.timeoutMs)}ms timeout`,
+        cause: "timeout",
+        ms: Date.now() - started,
+      };
+    }
+
+    // Timeout and non-zero exit are DIFFERENT facts and the old message reported
+    // them as one. A timeout means the budget is too small for the work — raise
+    // it, or drop the reviewer. A non-zero exit means the binary is broken and
+    // the budget is irrelevant. Told apart, the fix is obvious; conflated, the
+    // only way to find out is to time the binary by hand.
+    if (!res.ok) {
+      return {
+        status: "errored",
+        reviewerId: reviewer.id,
+        error: "binary exited non-zero",
+        cause: "exit",
         ms: Date.now() - started,
       };
     }
