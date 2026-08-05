@@ -47,4 +47,4 @@ export {
   BUILD_SLOW_THRESHOLD,
   type IBuildEvidenceOptions,
 } from "./build-evidence";
-export { runProgress, meanProgress, errorTrace } from "./progress";
+export { runProgress, meanProgress } from "./progress";

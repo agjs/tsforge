@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { parseSpec } from "../spec";
 import { buildGate, buildCoreFix } from "../gate";
 import { runSpec } from "../loop";
+import { validate } from "../validate";
 import type { ILoopEvent } from "../loop";
 import type { IProvider } from "../inference";
 import { classifyRun, countTaskLoc, judge, summarize } from "../eval";
@@ -129,14 +130,36 @@ async function runSeedSetup(dir: string): Promise<void> {
  * price of a count that means the same thing at every reading.
  */
 export function bothMustPass(gate: string, own: string): string {
-  return `{ ${gate}; }; __tsf_gate=$?; { ${own}; }; __tsf_own=$?; [ "$__tsf_gate" -eq 0 ] && [ "$__tsf_own" -eq 0 ]`;
+  // SUBSHELLS, not brace groups. Both sides are opaque strings assembled
+  // elsewhere; run in this shell, an `exit 0`, a `set -e`, a trap, or an
+  // assignment to one of the status variables would escape the wrapper and
+  // report success for a failing gate. A subshell contains all of that, and its
+  // exit status is still what the command reported.
+  return `( ${gate} ); __tsf_gate=$?; ( ${own} ); __tsf_own=$?; [ "$__tsf_gate" -eq 0 ] && [ "$__tsf_own" -eq 0 ]`;
 }
 
-async function gateSpec(
+/**
+ * Gate errors right now, as one number — the fixed measurement the graded run
+ * score is built from (see ./progress.ts). Deliberately the BARE gate, with no
+ * task acceptance composed onto it, so the reading means the same thing whenever
+ * it is taken and whatever the run was doing at the time.
+ */
+async function gateErrorCount(
   runDir: string,
+  gateCommand: string
+): Promise<number> {
+  const result = await validate(
+    { id: "__progress__", accept: gateCommand, files: [] },
+    runDir
+  );
+
+  return result.passed ? 0 : result.errors.length;
+}
+
+function gateSpec(
+  gateCommand: string,
   spec: ReturnType<typeof parseSpec>
-): Promise<ReturnType<typeof parseSpec>> {
-  const gateCommand = (await buildGate(runDir)).command;
+): ReturnType<typeof parseSpec> {
   const fixCommand = buildCoreFix();
 
   return {
@@ -174,7 +197,12 @@ async function runTaskOnce(
   await startRed(runDir, spec);
   await runSeedSetup(runDir);
 
-  const gated = await gateSpec(runDir, spec);
+  const gateCommand = (await buildGate(runDir)).command;
+  // Measured BEFORE the model starts, on the same command measured again after
+  // it stops. startRed has already removed the task files, so this is the run's
+  // honest opening state.
+  const startErrors = await gateErrorCount(runDir, gateCommand);
+  const gated = gateSpec(gateCommand, spec);
   const logFile = Bun.file(join(runDir, "run.log")).writer();
   const events: ILoopEvent[] = [];
 
@@ -225,7 +253,11 @@ async function runTaskOnce(
 
   const failureClass = passed ? undefined : classifyRun(events).failureClass;
   // How far the run got, not merely whether it arrived. See ./progress.ts.
-  const progress = runProgress(events, passed);
+  const progress = runProgress(
+    startErrors,
+    passed ? 0 : await gateErrorCount(runDir, gateCommand),
+    passed
+  );
 
   return {
     record: {

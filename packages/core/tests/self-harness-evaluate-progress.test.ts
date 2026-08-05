@@ -6,7 +6,6 @@ import {
   bothMustPass,
   evaluateHarness,
   meanProgress,
-  runProgress,
 } from "../src/self-harness";
 import { runShellCommand } from "../src/lib/fs/process";
 
@@ -213,16 +212,18 @@ describe("evaluateHarness records the graded score", () => {
         expect(scores.every((v) => typeof v === "number")).toBe(true);
         expect(out.score.avgProgress).toBe(meanProgress(scores));
 
-        // And prove it is runProgress OF THE RUN'S OWN EVENTS that gets
-        // recorded, not some constant that happens to satisfy the mean. Both
-        // assertions above hold for `progress: 0` on every record; this one
-        // recomputes the score from the same event stream the evaluator saw.
+        // And the invariant a constant cannot satisfy: a PASSING run records
+        // exactly 1, a failed one strictly less. `progress: 0` everywhere
+        // satisfies both assertions above; it cannot satisfy this one.
         expect(out.runs).toHaveLength(out.records.length);
 
-        for (const [i, run] of out.runs.entries()) {
-          expect(out.records[i]?.progress).toBe(
-            runProgress(run.events, run.passed)
-          );
+        for (const r of out.records) {
+          if (r.passed) {
+            expect(r.progress).toBe(1);
+          } else {
+            expect(r.progress).toBeGreaterThanOrEqual(0);
+            expect(r.progress).toBeLessThan(1);
+          }
         }
       } finally {
         await rm(corpusDir, { recursive: true, force: true });

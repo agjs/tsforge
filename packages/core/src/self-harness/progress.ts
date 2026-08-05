@@ -1,5 +1,3 @@
-import type { ILoopEvent } from "../loop";
-
 /**
  * How far a run got, as a number in [0, 1] — the graded signal the pass bit
  * cannot see.
@@ -12,42 +10,21 @@ import type { ILoopEvent } from "../loop";
  * one failing task flips 60/40 by itself, nothing but a fluke ever clears the
  * bar. Every edit the loop accepted on 2026-08-04 was such a fluke.
  *
- * ONE SERIES, NOT PER TASK. `gateSpec` prefixes the same repo-wide gate command
- * to every task's accept, so each reading is a snapshot of one global error
- * count, not an independent task-local measure. An earlier version grouped by
- * task and averaged, which was a wrong model of the data and produced a bug for
- * every way of choosing a denominator: quitting early scored higher than doing
- * more work, the whole-spec `verify` pseudo-task inverted the score, and one
- * task reaching zero credited the entire run. Reading the run as the single
- * series it is removes all of them at once — 20 → 10 → 5 is 15 of 20 resolved,
- * which is simply what happened.
- *
- * That prefix used to be joined with `&&`, which made the readings NOT
- * comparable: a reading was the error count of whichever stage failed first, so
- * a run that broke the type check hid every downstream test failure behind it
- * and read as one error while being further from passing. Scoring progress by
- * getting worse, and unbounded by the acceptance rule — the same stage switch
- * inflates held-in and held-out together. `bothMustPass` in ./evaluate.ts now
- * runs both sides every time, so a count means the same thing at every reading.
+ * TWO READINGS OF ONE FIXED COMMAND. The score is the repo-wide gate, run once
+ * before the model starts and once after it stops. That is the whole design, and
+ * it is the third attempt at it: the first two derived the score from the gate
+ * readings already in the event stream, and those readings are not comparable to
+ * each other. `gateSpec` composes each task's acceptance onto the gate, so a
+ * reading taken during task 1 measures a different command than one taken during
+ * task 2 or at the whole-spec verify. A run that stopped after an easy task
+ * ended on a narrow check and outscored a run that reached a broad, failure-heavy
+ * one — not because it left the repo better, but because it was measured against
+ * less. Every fix for that (group by task, whitelist ids, pick a denominator)
+ * was a way of guessing at what a reading meant. Measuring the same command at
+ * both ends means never having to guess: the two numbers are the same
+ * quantity, so their difference is a fact about the run rather than about where
+ * it happened to stop.
  */
-
-/** Gate error counts over the run, oldest first. */
-export function errorTrace(events: readonly ILoopEvent[]): number[] {
-  const counts: number[] = [];
-
-  for (const e of events) {
-    // `red` opens a task with the current global error count; `validated`
-    // reports each gate settlement. Both carry `errors`.
-    if (
-      (e.kind === "red" || e.kind === "validated") &&
-      e.errors !== undefined
-    ) {
-      counts.push(e.errors);
-    }
-  }
-
-  return counts;
-}
 
 /**
  * A failed run can never score a full 1, however clean its gate got.
@@ -76,50 +53,42 @@ const FAILED_RUN_CEILING = 0.99;
 const PROGRESS_SHRINKAGE = 5;
 
 /**
- * Fraction of the run's starting gate errors that it resolved, shrunk so that
- * clearing a handful is not worth what clearing fifty is (`PROGRESS_SHRINKAGE`).
+ * Fraction of the gate errors the run started with that it had resolved when it
+ * stopped, shrunk so clearing a handful is not worth what clearing fifty is.
  *
- * A pass is 1 by definition. A failure is scored on the state it KEPT — first
- * reading against last — not the best it passed through. Crediting a transient
- * low would score 10 → 1 → 6 as 0.9 while it ended at 6; the near-green
- * checkpoint that once justified this is flag-gated and stops reverting after
- * MAX_NEAR_GREEN_ROLLBACKS, so a run is not guaranteed to end where it banked.
- * When the checkpoint does restore, the final reading IS the best one.
+ * Both counts come from the SAME command (see the module note), so this is a
+ * like-for-like difference. It scores the state the run KEPT: a trajectory that
+ * dips to near-green and rebounds gets credit for where it ended, because the
+ * near-green checkpoint that might have restored it is flag-gated and stops
+ * reverting after MAX_NEAR_GREEN_ROLLBACKS.
  *
- * Every COMPLETED run gets a number, including one that produced no gate
- * readings at all: that scores 0. Returning undefined there was a gap a
- * candidate could walk through — turn a low-scoring failure into an unscored
- * one and the mean rises for free. Runs that never produced a result are
- * tracked separately as `errored` and excluded upstream, so nothing here has to
+ * Every COMPLETED run gets a number, including one that opened on a clean gate:
+ * that scores 0, since there is no graded claim to make about a failure that was
+ * never about error counts. Returning undefined anywhere here would be a gap a
+ * candidate could walk through — turn a low-scoring failure into an unscored one
+ * and the mean rises for free. Runs that never produced a result are tracked
+ * separately as `errored` and excluded upstream, so nothing here has to
  * represent infrastructure weather.
  */
 export function runProgress(
-  events: readonly ILoopEvent[],
+  startErrors: number,
+  endErrors: number,
   passed: boolean
 ): number {
   if (passed) {
     return 1;
   }
 
-  const counts = errorTrace(events);
-  const start = counts[0];
-  const end = counts[counts.length - 1];
-
-  if (start === undefined || end === undefined) {
+  if (!Number.isFinite(startErrors) || startErrors <= 0) {
     return 0;
   }
 
-  if (start <= 0) {
-    // Opened green and still failed — a timeout, a guard, something that is not
-    // an error count. No graded claim to make beyond "not a pass".
-    return 0;
-  }
-
-  const resolved = Math.max(0, start - end);
+  const end = Number.isFinite(endErrors) ? Math.max(0, endErrors) : startErrors;
+  const resolved = Math.max(0, startErrors - end);
 
   return Math.min(
     FAILED_RUN_CEILING,
-    clamp01(resolved / (start + PROGRESS_SHRINKAGE))
+    clamp01(resolved / (startErrors + PROGRESS_SHRINKAGE))
   );
 }
 
