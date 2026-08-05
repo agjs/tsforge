@@ -42,14 +42,25 @@ import type { IRunRecord, ISweepReport } from "../src/eval";
 import { buildSweepReport, renderSweepReportMarkdown } from "../src/eval";
 import { isRecord } from "../src/lib/guards";
 
-/** The exam: never shown to a mining session. Retargeted to the SPEC corpus
- *  (`evals/corpus/*`) after the UI-only web build corpus was removed — use the
- *  two hardest held-out tasks (a multi-file greenfield `auth` + the brownfield
- *  `fix-regression`) so a promoted overlay must generalize across task shapes with
- *  real headroom, not the trivially-green single-module tasks.
- *  FUTURE: once a BoringStack full-stack corpus exists, point this at it — that is
- *  the successor to the removed web corpus and the strictest regression floor. */
-const PROOF_SPLIT = ["auth", "fix-regression"] as const;
+/**
+ * The exam: never shown to a mining session.
+ *
+ * `query` is here because it is the only corpus task this model actually fails.
+ * That matters more than it sounds: promotion is decided by a pass-rate z-test
+ * against the frozen baseline, so an exam everything already passes can never
+ * show an uplift, and no overlay could EVER be installed no matter how much the
+ * loop learned. Measured 2026-08-05 — auth and fix-regression both green at 1
+ * cycle, query red at 23 on its own `as` casts, which is a real and
+ * harness-addressable weakness.
+ *
+ * It costs the rotations their one failing task, and that is the right trade:
+ * the mining evidence now comes from the model's own build logs (`--build-logs`),
+ * which is where the failures actually are, while the corpus goes back to being
+ * purely an instrument. Exam and homework must not overlap.
+ *
+ * FUTURE: once a BoringStack full-stack corpus exists, point this at it — that is
+ * the successor to the removed web corpus and the strictest regression floor. */
+const PROOF_SPLIT = ["query", "auth", "fix-regression"] as const;
 
 /** Mining rotations over the SPEC corpus (disjoint from the proof split), the
  *  tasks with real weaknesses to mine and headroom for an overlay to prove itself.
@@ -60,7 +71,7 @@ const ROTATIONS = [
     // cycles against a corpus that otherwise greens in 1-2, it is the only task
     // with room left to improve. The pass bit cannot see that, but the
     // efficiency dimension of the acceptance rule can (≥2 cycles and ≥20%).
-    heldIn: "task-pool,query,checkout,validators",
+    heldIn: "task-pool,checkout,validators,slugify",
     heldOut: "json-patch,handlers",
   },
   {
