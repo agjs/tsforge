@@ -18,7 +18,11 @@ export interface IInvokeDeps {
   runBinary: (
     r: { argv: string[]; input: BinaryInputMode; timeoutMs: number },
     stdin: string
-  ) => Promise<{ ok: boolean; stdout: string; timedOut?: boolean }>;
+    // REQUIRED, not optional. Optional means an existing or alternative runner
+    // compiles without reporting it, and every omitted timeout is then
+    // classified as a non-zero exit — restoring the exact conflation this
+    // change exists to remove, silently.
+  ) => Promise<{ ok: boolean; stdout: string; timedOut: boolean }>;
 }
 
 function reviewFrom(id: string, rawText: string, ms: number): ReviewOutcome {
@@ -104,7 +108,7 @@ async function invokeBinary(
       // work — raise it, or drop the reviewer. A non-zero exit means it is
       // broken — the budget is irrelevant. Told apart, the fix is obvious;
       // conflated, the only way to find out is to time the binary by hand.
-      const timedOut = res.timedOut === true;
+      const timedOut = res.timedOut;
 
       return {
         status: "errored",

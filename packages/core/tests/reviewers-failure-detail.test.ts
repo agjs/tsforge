@@ -2,6 +2,10 @@ import { test, expect, describe } from "bun:test";
 import { aggregate, parseVerdict } from "../src/reviewers/aggregate";
 import type { ReviewOutcome } from "../src/reviewers/aggregate";
 import { formatVerdict, runBinary } from "../src/cli/harness-review-mode";
+import { reviewerInvoke } from "../src/reviewers/invoke";
+import type { IPanel } from "../src/reviewers/registry";
+import type { IReviewRequest } from "../src/reviewers/schema";
+import type { IProvider } from "../src/inference";
 
 /**
  * Why a reviewer dropped out, kept rather than discarded.
@@ -21,6 +25,7 @@ function okOutcome(id: string): ReviewOutcome {
   return {
     status: "ok",
     review: { reviewerId: id, verdict: "approve", findings: [], summary: "" },
+    ms: 0,
   };
 }
 
@@ -45,6 +50,7 @@ describe("reviewer failure detail", () => {
     expect(v.failures).toHaveLength(1);
     expect(v.failures?.[0]?.reviewerId).toBe("codex");
     expect(v.failures?.[0]?.cause).toBe("timeout");
+    expect(v.failures?.[0]?.ms).toBe(300_012);
   });
 
   test("a timeout and a crash are DIFFERENT causes, not one string", () => {
@@ -143,6 +149,18 @@ describe("reviewer failure detail", () => {
     expect(parsed?.failures?.[0]?.reviewerId).toBe("ok-one");
   });
 
+  test("a non-finite ms is dropped rather than printed as NaNs", () => {
+    const v = aggregate([okOutcome("a"), okOutcome("b")], opts);
+    const raw: unknown = {
+      ...JSON.parse(JSON.stringify(v)),
+      failures: [{ reviewerId: "x", error: "boom", ms: Number.NaN }],
+    };
+    const parsed = parseVerdict(raw);
+
+    expect(parsed?.failures?.[0]?.ms).toBeUndefined();
+    expect(formatVerdict(parsed ?? v)).not.toContain("NaN");
+  });
+
   test("an unknown cause string is dropped rather than trusted", () => {
     const v = aggregate([okOutcome("a"), okOutcome("b")], opts);
     const raw: unknown = {
@@ -190,4 +208,113 @@ describe("runBinary reports WHICH failure it was", () => {
     expect(r.ok).toBe(true);
     expect(r.timedOut).toBe(false);
   }, 30_000);
+});
+
+describe("cause classification through reviewerInvoke", () => {
+  /**
+   * The glue. runBinary proves the subprocess reports timedOut and aggregate
+   * proves causes round-trip, but invokeBinary/invokeModel is where the old
+   * "binary exited non-zero or timed out" conflation actually lived — so an
+   * implementation that always emitted `exit`, or dropped cause/ms entirely,
+   * would pass every other test in this suite.
+   */
+  const request: IReviewRequest = {
+    title: "t",
+    intent: "i",
+    diff: "d",
+    validateSummary: { passed: true, failCount: 0, firstErrors: [] },
+    rubricVersion: "1",
+  };
+
+  const binaryPanel = (timeoutMs = 1000): IPanel => ({
+    minReviewers: 1,
+    skipped: [],
+    reviewers: [
+      {
+        kind: "binary",
+        id: "bin",
+        argv: ["x"],
+        input: "arg",
+        timeoutMs,
+        parse: "raw",
+      },
+    ],
+  });
+
+  const deadProvider = (): IProvider => ({
+    complete: () => Promise.reject(new Error("connection refused")),
+  });
+
+  test("a binary killed at its budget is cause=timeout, not exit", async () => {
+    const out = await reviewerInvoke(binaryPanel(1234), request, {
+      makeProvider: deadProvider,
+      runBinary: () =>
+        Promise.resolve({ ok: false, stdout: "", timedOut: true }),
+    });
+
+    expect(out[0]?.status).toBe("errored");
+    expect(out[0]).toMatchObject({ cause: "timeout" });
+    // The budget is named, so the fix (raise it, or drop the reviewer) is
+    // readable straight off the line.
+    expect(out[0]).toMatchObject({ error: expect.stringContaining("1234") });
+  });
+
+  test("a binary that fails on its own is cause=exit, not timeout", async () => {
+    const out = await reviewerInvoke(binaryPanel(), request, {
+      makeProvider: deadProvider,
+      runBinary: () =>
+        Promise.resolve({ ok: false, stdout: "", timedOut: false }),
+    });
+
+    expect(out[0]).toMatchObject({ cause: "exit" });
+  });
+
+  test("a binary that answers in the wrong shape is cause=unparseable", async () => {
+    const out = await reviewerInvoke(binaryPanel(), request, {
+      makeProvider: deadProvider,
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: "sure, looks fine!",
+          timedOut: false,
+        }),
+    });
+
+    expect(out[0]).toMatchObject({ cause: "unparseable" });
+  });
+
+  test("a model whose call throws is cause=threw", async () => {
+    const panel: IPanel = {
+      minReviewers: 1,
+      skipped: [],
+      reviewers: [
+        { kind: "model", id: "m", entry: { model: "x", baseUrl: "u" } },
+      ],
+    };
+    const out = await reviewerInvoke(panel, request, {
+      makeProvider: deadProvider,
+      runBinary: () =>
+        Promise.resolve({ ok: false, stdout: "", timedOut: false }),
+    });
+
+    expect(out[0]).toMatchObject({ cause: "threw" });
+    expect(out[0]).toMatchObject({
+      error: expect.stringContaining("connection refused"),
+    });
+  });
+
+  test("every outcome carries elapsed time, successes included", async () => {
+    const out = await reviewerInvoke(binaryPanel(), request, {
+      makeProvider: deadProvider,
+      runBinary: () =>
+        Promise.resolve({
+          ok: true,
+          stdout: '{"verdict":"approve","summary":"","findings":[]}',
+          timedOut: false,
+        }),
+    });
+
+    expect(out[0]?.status).toBe("ok");
+    expect(typeof (out[0] as { ms?: number }).ms).toBe("number");
+  });
 });

@@ -3,7 +3,7 @@ import { isRecord } from "../lib/guards";
 import type { IReview, IFinding, FindingCode } from "./schema";
 
 export type ReviewOutcome =
-  | { status: "ok"; review: IReview; ms?: number }
+  | { status: "ok"; review: IReview; ms: number }
   | {
       status: "errored";
       reviewerId: string;
@@ -14,13 +14,13 @@ export type ReviewOutcome =
        *  reviewer die instantly, or did it burn its whole budget doing work that
        *  was then thrown away? Diagnosing that once took an afternoon of timing
        *  the binaries by hand. */
-      ms?: number;
+      ms: number;
       /** Why it failed, as a category rather than prose: `timeout` (killed at
        *  the budget), `exit` (ran, exited non-zero), `unparseable` (answered,
        *  but not in the review schema), `threw` (the call itself failed). The
        *  old string said "binary exited non-zero or timed out" for the first two
        *  at once and so could not tell them apart. */
-      cause?: ReviewFailureCause;
+      cause: ReviewFailureCause;
     };
 
 /** The failure taxonomy, and the single source of the union below. `timeout`
@@ -214,11 +214,14 @@ export function aggregate(
     if (o.status === "ok") {
       reviews.push(o.review);
     } else {
+      // No optional spreads: the outcome contract requires both, which is the
+      // point of requiring them — a runner cannot omit a cause and have it
+      // quietly read as an exit.
       failures.push({
         reviewerId: o.reviewerId,
         error: o.error,
-        ...(o.cause === undefined ? {} : { cause: o.cause }),
-        ...(o.ms === undefined ? {} : { ms: o.ms }),
+        cause: o.cause,
+        ms: o.ms,
       });
     }
   }
@@ -269,7 +272,12 @@ function parseFailures(raw: unknown): IReviewerFailure[] {
         reviewerId: f.reviewerId,
         error: f.error,
         ...(isFailureCause(f.cause) ? { cause: f.cause } : {}),
-        ...(typeof f.ms === "number" ? { ms: f.ms } : {}),
+        // Finite, not merely numeric: a NaN or Infinity off disk would be
+        // printed as "NaNs" / "Infinitys" in the verdict, which is worse than
+        // omitting the duration.
+        ...(typeof f.ms === "number" && Number.isFinite(f.ms)
+          ? { ms: f.ms }
+          : {}),
       });
     }
   }

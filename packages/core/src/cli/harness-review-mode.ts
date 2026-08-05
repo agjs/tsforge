@@ -165,7 +165,13 @@ export async function runBinary(
     const stdout = await new Response(proc.stdout).text();
     const code = await proc.exited;
 
-    return { ok: code === 0, stdout, timedOut };
+    // A killed process is NOT a success, whatever it exited with. A binary can
+    // trap SIGTERM and exit 0, which would otherwise report `ok: true,
+    // timedOut: true` — and invokeBinary only inspects timedOut on the failure
+    // branch, so an over-budget reviewer would be parsed and counted as having
+    // reviewed. Whatever it managed to print before we killed it is a partial
+    // answer, and a partial answer is not a review.
+    return { ok: code === 0 && !timedOut, stdout, timedOut };
   } finally {
     clearTimeout(timer);
 

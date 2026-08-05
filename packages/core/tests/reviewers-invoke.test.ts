@@ -29,7 +29,7 @@ describe("reviewerInvoke", () => {
     const deps: IInvokeDeps = {
       makeProvider: () =>
         jsonProvider({ verdict: "approve", summary: "", findings: [] }),
-      runBinary: async () => ({ ok: true, stdout: "" }),
+      runBinary: async () => ({ ok: true, stdout: "", timedOut: false }),
     };
     const out = await reviewerInvoke(
       panelWith({
@@ -55,7 +55,7 @@ describe("reviewerInvoke", () => {
         e.model === "bad"
           ? throwing
           : jsonProvider({ verdict: "approve", summary: "", findings: [] }),
-      runBinary: async () => ({ ok: true, stdout: "" }),
+      runBinary: async () => ({ ok: true, stdout: "", timedOut: false }),
     };
     const out = await reviewerInvoke(
       panelWith(
@@ -91,7 +91,7 @@ describe("reviewerInvoke", () => {
           return { content: "not json", toolCalls: [] };
         },
       }),
-      runBinary: async () => ({ ok: true, stdout: "" }),
+      runBinary: async () => ({ ok: true, stdout: "", timedOut: false }),
     };
     const out = await reviewerInvoke(
       panelWith({
@@ -111,7 +111,7 @@ describe("reviewerInvoke", () => {
       'reasoning...\n```json\n{"verdict":"reject","summary":"no","findings":[]}\n```\n';
     const deps: IInvokeDeps = {
       makeProvider: () => jsonProvider({}),
-      runBinary: async () => ({ ok: true, stdout: fenced }),
+      runBinary: async () => ({ ok: true, stdout: fenced, timedOut: false }),
     };
     const out = await reviewerInvoke(
       panelWith({
@@ -142,7 +142,7 @@ describe("reviewerInvoke", () => {
   test("a binary that exits non-zero → errored", async () => {
     const deps: IInvokeDeps = {
       makeProvider: () => jsonProvider({}),
-      runBinary: async () => ({ ok: false, stdout: "" }),
+      runBinary: async () => ({ ok: false, stdout: "", timedOut: false }),
     };
     const out = await reviewerInvoke(
       panelWith({
@@ -173,6 +173,7 @@ describe("reviewerInvoke", () => {
         return {
           ok: true,
           stdout: '{"verdict":"approve","summary":"","findings":[]}',
+          timedOut: false,
         };
       },
     };

@@ -143,7 +143,8 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       makeProvider: () => ({
         complete: () => Promise.resolve(modelResponse(GOOD_DIAGNOSIS)),
       }),
-      runBinary: () => Promise.resolve({ ok: true, stdout: "" }),
+      runBinary: () =>
+        Promise.resolve({ ok: true, stdout: "", timedOut: false }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -171,7 +172,8 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
             modelResponse(`Sure, here you go:\n${GOOD_DIAGNOSIS}\nThanks`)
           ),
       }),
-      runBinary: () => Promise.resolve({ ok: true, stdout: "" }),
+      runBinary: () =>
+        Promise.resolve({ ok: true, stdout: "", timedOut: false }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -191,7 +193,8 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       makeProvider: () => ({
         complete: () => Promise.resolve(modelResponse("not json")),
       }),
-      runBinary: () => Promise.resolve({ ok: true, stdout: "" }),
+      runBinary: () =>
+        Promise.resolve({ ok: true, stdout: "", timedOut: false }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -218,7 +221,8 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       makeProvider: () => ({
         complete: () => Promise.resolve(modelResponse("")),
       }),
-      runBinary: () => Promise.resolve({ ok: false, stdout: "" }),
+      runBinary: () =>
+        Promise.resolve({ ok: false, stdout: "", timedOut: false }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
@@ -245,7 +249,8 @@ describe("diagnoseInvoke (invoke → parse → outcome)", () => {
       makeProvider: () => ({
         complete: () => Promise.resolve(modelResponse("")),
       }),
-      runBinary: () => Promise.resolve({ ok: true, stdout: GOOD_DIAGNOSIS }),
+      runBinary: () =>
+        Promise.resolve({ ok: true, stdout: GOOD_DIAGNOSIS, timedOut: false }),
     };
 
     const [outcome] = await diagnoseInvoke(panel, REQUEST, deps);
